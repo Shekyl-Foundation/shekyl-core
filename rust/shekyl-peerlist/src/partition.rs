@@ -10,12 +10,25 @@
 //! of this module sees another connector's entries.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
 use shekyl_timing_engine::Tick;
 
-use crate::{EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP};
+use crate::outcome::SessionId;
+use crate::{
+    DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS,
+    SESSION_INTAKE_CAP, WHITE_CAP,
+};
+
+/// The connector's cached disclosure sample (D3): drawn once, kept for the
+/// window, sent unchanged to every requester in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Sample {
+    drawn_at: Tick,
+    addresses: Vec<NetworkAddress>,
+}
 
 /// A confirmed address's one clock: when this process last confirmed it on
 /// a connection this node opened (brief §4). Not a sort key, not a rank.
@@ -40,6 +53,15 @@ pub(crate) struct Partition {
     /// Gray addresses the dialer drew and has not yet reported on. A draw
     /// that was not outstanding cannot promote (§5).
     outstanding: BTreeSet<NetworkAddress>,
+    /// The cached disclosure sample and when it was drawn (D3).
+    sample: Option<Sample>,
+    /// This node's own dialable address on this connector, when known: one
+    /// uniform member of the disclosure population (the handshake-address
+    /// ruling), never a white entry.
+    own_address: Option<NetworkAddress>,
+    /// Per session, the distinct addresses it has offered and when each
+    /// last arrived (D-S1). Pruned to the intake span on every touch.
+    intake: BTreeMap<SessionId, BTreeMap<NetworkAddress, Tick>>,
 }
 
 impl Partition {
@@ -211,6 +233,112 @@ impl Partition {
     /// together, for the file (§7).
     pub(crate) fn persistable(&self) -> impl Iterator<Item = &NetworkAddress> {
         self.gray.iter().chain(self.white.keys())
+    }
+
+    /// D4: move every white entry under an active ban to gray. The clock is
+    /// not copied. Only an address with an IP can be banned (D7), so a Tor
+    /// partition never demotes here. Returns how many moved.
+    pub(crate) fn demote_banned(
+        &mut self,
+        is_banned: &mut dyn FnMut(IpAddr, Tick) -> bool,
+        now: Tick,
+    ) -> usize {
+        let banned: Vec<NetworkAddress> = self
+            .white
+            .keys()
+            .filter(|a| a.ip().is_some_and(|ip| is_banned(ip, now)))
+            .cloned()
+            .collect();
+        for address in &banned {
+            self.demote(address);
+        }
+        banned.len()
+    }
+
+    /// D-S1: record that `session` offered `address` at `now`. `false` when
+    /// the session has already offered `SESSION_INTAKE_CAP` other distinct
+    /// addresses within the intake span — the refusal. A re-offer of an
+    /// address the session already sent counts once.
+    pub(crate) fn record_intake(
+        &mut self,
+        session: SessionId,
+        address: &NetworkAddress,
+        now: Tick,
+    ) -> bool {
+        let ledger = self.intake.entry(session).or_default();
+        ledger.retain(|_, at| now.get().saturating_sub(at.get()) < INTAKE_SPAN_NANOS);
+        if let Some(at) = ledger.get_mut(address) {
+            *at = now;
+            return true;
+        }
+        if ledger.len() >= SESSION_INTAKE_CAP {
+            return false;
+        }
+        ledger.insert(address.clone(), now);
+        true
+    }
+
+    /// The session ended: its intake ledger goes with it.
+    pub(crate) fn forget_session(&mut self, session: SessionId) {
+        self.intake.remove(&session);
+    }
+
+    /// Distinct addresses `session` has offered within the intake span.
+    pub(crate) fn intake_count(&mut self, session: SessionId, now: Tick) -> usize {
+        match self.intake.get_mut(&session) {
+            Some(ledger) => {
+                ledger.retain(|_, at| now.get().saturating_sub(at.get()) < INTAKE_SPAN_NANOS);
+                ledger.len()
+            }
+            None => 0,
+        }
+    }
+
+    pub(crate) fn set_own_address(&mut self, address: Option<NetworkAddress>) {
+        self.own_address = address;
+    }
+
+    /// D3: the connector's cached sample. `eligible` is the white count
+    /// after demotion and expiry; below `floor` nothing is disclosed and
+    /// no sample is drawn. Otherwise the cached sample while its window
+    /// lasts, else a fresh uniform draw of `min(DISCLOSE_COUNT, population)`
+    /// over white plus this node's own address, cached for the window. A
+    /// ban does not rebuild the sample.
+    pub(crate) fn disclose<R: RelayRng + ?Sized>(
+        &mut self,
+        floor: usize,
+        now: Tick,
+        rng: &mut R,
+    ) -> Vec<NetworkAddress> {
+        if self.white.len() < floor {
+            return Vec::new();
+        }
+        if let Some(sample) = &self.sample {
+            if now.get().saturating_sub(sample.drawn_at.get()) < DISCLOSE_WINDOW_NANOS {
+                return sample.addresses.clone();
+            }
+        }
+        let mut population: Vec<NetworkAddress> = self.white.keys().cloned().collect();
+        if let Some(own) = &self.own_address {
+            if !population.contains(own) {
+                population.push(own.clone());
+            }
+        }
+        // Partial Fisher-Yates: `DISCLOSE_COUNT` distinct members, uniform,
+        // in a random order.
+        let take = DISCLOSE_COUNT.min(population.len());
+        for i in 0..take {
+            let remaining = population.len() - i;
+            let pick = i + usize::try_from(bounded_uniform(rng, (remaining - 1) as u64))
+                .expect("the draw is bounded by the population");
+            population.swap(i, pick);
+        }
+        population.truncate(take);
+        self.sample = Some(Sample {
+            drawn_at: now,
+            addresses: population.clone(),
+        });
+        population
     }
 
     fn pick_gray<R: RelayRng + ?Sized>(

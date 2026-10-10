@@ -5,14 +5,40 @@
 
 //! The lists, one partition per connector, and the door.
 
+use std::net::IpAddr;
+
 use shekyl_net_address::NetworkAddress;
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{connector_for, ConnectorId};
+use shekyl_transport_layer::{connector_for, BanList, ConnectorId};
 
-use crate::outcome::{DialOutcome, ListName, Refusal, Source};
+use crate::outcome::{DialOutcome, ListName, Refusal, SessionId, Source};
 use crate::partition::Partition;
-use crate::WHITE_REFILL_LINE;
+use crate::{white_diversity_floor, DISCLOSE_COUNT, WHITE_REFILL_LINE};
+
+/// The ban list as the peer list reads it (D4): a question, never a write.
+/// The transport layer's [`BanList`] answers it; [`NoBans`] answers "no"
+/// for a connector whose addresses cannot be banned, and for tests.
+pub trait BanQuery {
+    /// Whether `host` is under an active ban at `now`.
+    fn is_banned(&mut self, host: IpAddr, now: Tick) -> bool;
+}
+
+impl BanQuery for BanList {
+    fn is_banned(&mut self, host: IpAddr, now: Tick) -> bool {
+        BanList::is_banned(self, host, now)
+    }
+}
+
+/// No host is banned.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoBans;
+
+impl BanQuery for NoBans {
+    fn is_banned(&mut self, _host: IpAddr, _now: Tick) -> bool {
+        false
+    }
+}
 
 /// Every address the lists hold and which list it is on. For the RPC
 /// `peers` grant: no clock, no order, no outstanding-draw state.
@@ -61,12 +87,18 @@ impl Peerlist {
 
     /// Admit one address to gray (brief §6). The connector comes from the
     /// address type; an address learned over a session is admitted only
-    /// when that connector is the session's. A white entry at the address
-    /// is untouched. Returns whether the address was new to gray.
+    /// when that connector is the session's. An address under an active
+    /// ban is refused (D4). A session that has offered
+    /// [`crate::SESSION_INTAKE_CAP`] other distinct addresses within the
+    /// intake span is refused (D-S1); the caller applies that to the
+    /// session. A white entry at the address is untouched. Returns whether
+    /// the address was new to gray.
     pub fn admit_gray<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
         source: Source,
+        now: Tick,
+        bans: &mut dyn BanQuery,
         rng: &mut R,
     ) -> Result<bool, Refusal> {
         let connector = Self::connector_of(address).ok_or(Refusal::NoConnector)?;
@@ -78,20 +110,37 @@ impl Peerlist {
                 return Err(Refusal::ForeignConnector);
             }
         }
-        Ok(self.partition_mut(connector).insert_gray(address, rng))
+        if address.ip().is_some_and(|ip| bans.is_banned(ip, now)) {
+            return Err(Refusal::Banned);
+        }
+        let partition = self.partition_mut(connector);
+        if let Source::Session { id, .. } = source {
+            if !partition.record_intake(id, address, now) {
+                return Err(Refusal::PeerlistRefused);
+            }
+        }
+        Ok(partition.insert_gray(address, rng))
     }
 
     /// Admit a list a peer sent over `session` on `connector` (brief §2).
-    /// One entry whose type no connector serves, or whose connector is not
-    /// the session's, rejects the whole list before anything is admitted
-    /// (`net_node.inl:2460` to `:2466`). Returns how many were new.
+    /// More than [`DISCLOSE_COUNT`] addresses is `PeerlistRefused` (D3's
+    /// receiver limit): the message is not trimmed and kept. One entry
+    /// whose type no connector serves, or whose connector is not the
+    /// session's, rejects the whole list before anything is admitted
+    /// (`net_node.inl:2460` to `:2466`). A banned entry is skipped, not a
+    /// rejection of the list (D4). Returns how many were new.
     pub fn admit_received_list<R: RelayRng + ?Sized>(
         &mut self,
         addresses: &[NetworkAddress],
-        session: crate::SessionId,
+        session: SessionId,
         connector: ConnectorId,
+        now: Tick,
+        bans: &mut dyn BanQuery,
         rng: &mut R,
     ) -> Result<usize, Refusal> {
+        if addresses.len() > DISCLOSE_COUNT {
+            return Err(Refusal::PeerlistRefused);
+        }
         for address in addresses {
             match Self::connector_of(address) {
                 None => return Err(Refusal::NoConnector),
@@ -101,18 +150,64 @@ impl Peerlist {
         }
         let mut admitted = 0;
         for address in addresses {
-            if self.admit_gray(
+            match self.admit_gray(
                 address,
                 Source::Session {
                     id: session,
                     connector,
                 },
+                now,
+                bans,
                 rng,
-            )? {
-                admitted += 1;
+            ) {
+                Ok(true) => admitted += 1,
+                Ok(false) | Err(Refusal::Banned) => {}
+                Err(refusal) => return Err(refusal),
             }
         }
         Ok(admitted)
+    }
+
+    /// The session ended; its intake ledger goes with it.
+    pub fn forget_session(&mut self, connector: ConnectorId, session: SessionId) {
+        self.partition_mut(connector).forget_session(session);
+    }
+
+    /// Distinct addresses `session` has offered on `connector` within the
+    /// intake span (D-S1).
+    pub fn intake_count(&mut self, connector: ConnectorId, session: SessionId, now: Tick) -> usize {
+        self.partition_mut(connector).intake_count(session, now)
+    }
+
+    /// The dialer's pre-dial check (D4): a gray entry under an active ban
+    /// is skipped while the ban lasts. `true` is "may dial".
+    pub fn pre_dial_check(address: &NetworkAddress, now: Tick, bans: &mut dyn BanQuery) -> bool {
+        !address.ip().is_some_and(|ip| bans.is_banned(ip, now))
+    }
+
+    /// This node's own dialable address on `connector`, or none: one
+    /// uniform member of the disclosure population when set (the
+    /// handshake-address ruling). Never a white entry.
+    pub fn set_own_address(&mut self, connector: ConnectorId, address: Option<NetworkAddress>) {
+        self.partition_mut(connector).set_own_address(address);
+    }
+
+    /// The connector's disclosure sample (D3): empty while the eligible
+    /// white list is below [`white_diversity_floor`]; otherwise the cached
+    /// sample for the window, drawn uniformly from white plus this node's
+    /// own address. Demotion (D4) and expiry run first; a ban does not
+    /// rebuild the sample.
+    pub fn disclose<R: RelayRng + ?Sized>(
+        &mut self,
+        connector: ConnectorId,
+        now: Tick,
+        bans: &mut dyn BanQuery,
+        rng: &mut R,
+    ) -> Vec<NetworkAddress> {
+        let partition = self.partition_mut(connector);
+        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now);
+        partition.expire(now);
+        partition.disclose(white_diversity_floor(), now, rng)
     }
 
     /// One uniform gray address of `connector`, remembered as an
@@ -125,15 +220,17 @@ impl Peerlist {
         self.partition_mut(connector).draw_gray(rng)
     }
 
-    /// One uniform white address of `connector`, after expiry has been
-    /// evaluated at `now`. A re-contact draw: not a promotion.
+    /// One uniform white address of `connector`, after demotion (D4) and
+    /// expiry at `now`. A re-contact draw: not a promotion.
     pub fn draw_white<R: RelayRng + ?Sized>(
         &mut self,
         connector: ConnectorId,
         now: Tick,
+        bans: &mut dyn BanQuery,
         rng: &mut R,
     ) -> Option<NetworkAddress> {
         let partition = self.partition_mut(connector);
+        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now);
         partition.expire(now);
         partition.draw_white(rng)
     }
@@ -170,9 +267,16 @@ impl Peerlist {
         }
     }
 
-    /// White entries of `connector` at `now`, after expiry.
-    pub fn white_count(&mut self, connector: ConnectorId, now: Tick) -> usize {
+    /// White entries of `connector` at `now`, after demotion (D4) and
+    /// expiry: the eligible count the floor and the refill line read.
+    pub fn white_count(
+        &mut self,
+        connector: ConnectorId,
+        now: Tick,
+        bans: &mut dyn BanQuery,
+    ) -> usize {
         let partition = self.partition_mut(connector);
+        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now);
         partition.expire(now);
         partition.white_len()
     }
@@ -198,8 +302,13 @@ impl Peerlist {
     /// Whether `connector`'s white list is below [`WHITE_REFILL_LINE`] at
     /// `now`: the refill trigger (brief §2). Reported at once when it is;
     /// otherwise [`Self::next_expiry`] is when to ask again.
-    pub fn below_refill_line(&mut self, connector: ConnectorId, now: Tick) -> bool {
-        self.white_count(connector, now) < WHITE_REFILL_LINE
+    pub fn below_refill_line(
+        &mut self,
+        connector: ConnectorId,
+        now: Tick,
+        bans: &mut dyn BanQuery,
+    ) -> bool {
+        self.white_count(connector, now, bans) < WHITE_REFILL_LINE
     }
 
     /// The earliest white expiry of `connector`: the one deadline the
@@ -230,7 +339,9 @@ impl Peerlist {
     ) -> usize {
         addresses
             .into_iter()
-            .filter(|address| self.admit_gray(address, Source::Reload, rng) == Ok(true))
+            .filter(|address| {
+                self.admit_gray(address, Source::Reload, Tick::new(0), &mut NoBans, rng) == Ok(true)
+            })
             .count()
     }
 

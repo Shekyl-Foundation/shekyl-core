@@ -51,7 +51,7 @@ mod partition;
 mod peerlist;
 
 pub use outcome::{DialOutcome, ListName, Refusal, SessionId, Source};
-pub use peerlist::{Peerlist, Snapshot};
+pub use peerlist::{BanQuery, NoBans, Peerlist, Snapshot};
 pub use shekyl_net_address::NetworkAddress;
 pub use shekyl_timing_engine::Tick;
 pub use shekyl_transport_layer::{connector_for, ConnectorId};
