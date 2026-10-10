@@ -133,8 +133,10 @@ SCOPE = (
 # birth rather than recorded); 152 at the I13/I15 fixture split (2026-10-08:
 # moving `at` / `anchor` onto `Grown` and the validator-tree reads onto
 # `GrownTree` typed those ordinals as `BlockHeight` instead of re-recording
-# them).
-GRANDFATHER_CEILING = 152
+# them); 151 at the slash-log retirement (2026-10-09, `SLK-Q1`:
+# `prune_at_boundary` grew a rule-set operand and its height was typed as
+# `BlockHeight` — the slash floor is built from it — rather than re-recorded).
+GRANDFATHER_CEILING = 151
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

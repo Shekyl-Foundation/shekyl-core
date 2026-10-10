@@ -710,6 +710,16 @@ impl SlashLogKey {
             None => None,
         }
     }
+
+    /// Every row at a height **strictly below** `floor`: `.. (floor, 0)` —
+    /// the range the boundary batch retires (`PDM-Q-F19`, `SLK-Q1`). Rows
+    /// at the floor are the first kept, so the retirement's range and the
+    /// read's soundness (`start ≥ floor`, SI-26) are one edge, read off the
+    /// same key.
+    #[must_use]
+    pub const fn below(floor: BlockHeight) -> core::ops::RangeTo<SlashLogTuple> {
+        ..(floor.to_raw(), 0)
+    }
 }
 
 #[cfg(test)]

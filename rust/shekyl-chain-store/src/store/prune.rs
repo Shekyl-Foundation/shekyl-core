@@ -7,16 +7,24 @@
 //! batch that runs **inside the connect transaction** of the block at
 //! `E·SEB`, and the pop floor it establishes.
 //!
-//! # Two horizons and a floor (§3)
+//! # Three horizons and a floor (§3)
 //!
 //! | Horizon | Retires | When |
 //! | --- | --- | --- |
 //! | Bodies (`txs_prunable`, `txs_pqc_auths`) | shard `k`, whole | the epoch boundary after `k`'s freeze epoch: `close_epoch(k) + 2 ≤ E` |
 //! | Pop-undo journal (`undo_log`) | rows below `tip − retention` | every boundary; `retention` is `D_max` in production |
+//! | Slash log (`archival_slash_log`) | rows below `tip − ((k + n)·SEB + reorg_cap)` | every boundary; the cap is the in-force rule set's (`SLK-Q1`) |
 //!
 //! The body horizon is a rule of the epoch calendar — there is no constant
-//! to name and no watermark to store. The undo floor is the one number the
-//! store keeps ([`UndoLogFloorCell`]), because `pop` must tell *pruned
+//! to name and no watermark to store. The slash log's horizon is a
+//! consensus expression ([`SlashLogFloor`], `DRS_E4_SLASH_LOG_ROUND.md`):
+//! the batch computes it from the rule set `connect` holds — its epoch and
+//! its **reorg cap**, never the store's `undo_retention`, which an operator
+//! may set deeper (`SLK-2`) — and keeps no cell for it (`SLK-3`): a reorg
+//! across the boundary re-runs the same expression at the same height and
+//! the deletion is idempotent, and the reader asserts the same floor at
+//! the read (SI-26) rather than trusting a watermark. The undo floor is the
+//! one number the store keeps ([`UndoLogFloorCell`]), because `pop` must tell *pruned
 //! below* from *lost* and nothing else records what was retired: S-CHAIN-W
 //! §5.4 read the floor as the journal's first key, and that reading holds
 //! while a row stands — but a `pop` sequence past the retention empties the
@@ -122,14 +130,16 @@
 use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
-use shekyl_chain_rules::RuleSet;
+use shekyl_chain_rules::{RuleSet, SlashLogFloor};
 use shekyl_types::{
     shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
 };
 
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
+use crate::ids::{SlashLogKey, SlashLogTuple};
 use crate::schema::{
-    BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
+    ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE,
+    UNDO_LOG,
 };
 
 use super::chain_reads::{self, ReadFault, ReadTables};
@@ -319,8 +329,8 @@ impl Horizons {
 }
 
 /// What a boundary connect retired (§4): the shard range whose bodies were
-/// discarded — empty when no shard closed in the window — and the undo
-/// floor the store now keeps.
+/// discarded — empty when no shard closed in the window — the undo floor
+/// the store now keeps, and the slash log's floor it retired below.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pruned {
     /// The first shard `k` whose `txs_prunable` and `txs_pqc_auths` rows
@@ -332,6 +342,10 @@ pub struct Pruned {
     pub shard_end: u64,
     /// The lowest height whose `undo_log` row is kept after this boundary.
     pub undo_floor: BlockHeight,
+    /// The slash log's retirement floor at this boundary under the in-force
+    /// rule set: rows below it are gone, rows at or above it kept. `NONE`
+    /// while the chain is shorter than the window.
+    pub slash_floor: SlashLogFloor,
 }
 
 impl Pruned {
@@ -345,28 +359,72 @@ impl Pruned {
 impl WriteBatch<'_, '_> {
     /// **The boundary batch.** Called by `connect` after the block's undo
     /// row is sealed; a no-op unless `height` is `E·SEB` with `E ≥ 2`.
+    /// `in_force` is the rule set the block was judged under — the slash
+    /// log's floor is its expression (`SLK-2`), not the store's.
     ///
     /// # Errors
     ///
     /// SI-7 (poisons) if a `block_info` row the calendar names is absent or
     /// does not decode; engine faults.
-    pub(super) fn prune_at_boundary(&self, height: u64) -> Result<Option<Pruned>, StoreError> {
+    pub(super) fn prune_at_boundary(
+        &self,
+        height: BlockHeight,
+        in_force: &RuleSet,
+    ) -> Result<Option<Pruned>, StoreError> {
         let horizons = self.horizons();
-        if !horizons.is_pruning_boundary(height) {
+        if !horizons.is_pruning_boundary(height.to_raw()) {
             return Ok(None);
         }
-        let discard = discard_at(self.txn(), horizons, horizons.epoch_of(height))
+        let discard = discard_at(self.txn(), horizons, horizons.epoch_of(height.to_raw()))
             .map_err(|f| self.arm_read_fault(f))?;
         if !discard.ids.is_empty() {
             discard_range(self.txn(), TXS_PRUNABLE, discard.ids.clone())?;
             discard_range(self.txn(), TXS_PQC_AUTHS, discard.ids)?;
         }
-        let undo_floor = self.retire_undo_rows(height)?;
+        let undo_floor = self.retire_undo_rows(height.to_raw())?;
+        // Both operands are the rule set's (SLK-2); `check_against` has
+        // already held its epoch equal to the pinned one at this height.
+        let slash_floor = SlashLogFloor::under(
+            height,
+            in_force.settlement_schedule().blocks(),
+            in_force.reorg_cap(),
+        );
+        self.retire_slash_rows(slash_floor)?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
             shard_end: discard.shards.end,
             undo_floor,
+            slash_floor,
         }))
+    }
+
+    /// Delete `archival_slash_log` rows below the floor — the slash log's
+    /// retirement (`PDM-Q-F19`; `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`), the
+    /// first enforcement of the horizon `journal_horizon` has stated since
+    /// the writer landed. Nothing while the chain is under the window.
+    ///
+    /// No floor is persisted and none is checked here (`SLK-3`): the
+    /// expression is the floor, a re-run at the same height deletes the
+    /// same empty range, and the one reader of the log asserts the floor
+    /// where it reads (SI-26, `archival_reads::slash_log_after`) — a
+    /// derived floor and an asserting read, rather than a watermark the
+    /// read would trust. Not pop-reversible, like the body discards: the
+    /// row for the boundary block was sealed before this ran, and `pop`
+    /// cannot reach a height this retires — the undo floor is `retention`
+    /// below the tip with `retention < SEB` ([`Horizons::new`]), the slash
+    /// floor at least `SEB + reorg_cap` below it, and a pop below the undo
+    /// floor is `PopBelowFloor`.
+    fn retire_slash_rows(&self, floor: SlashLogFloor) -> Result<(), StoreError> {
+        let Some(floor) = floor.height() else {
+            return Ok(());
+        };
+        let mut log = self
+            .txn()
+            .open_table(ARCHIVAL_SLASH_LOG)
+            .map_err(EngineError::Table)?;
+        log.retain_in::<SlashLogTuple, _>(SlashLogKey::below(floor), |_, _| false)
+            .map_err(EngineError::Storage)?;
+        Ok(())
     }
 
     /// Delete `undo_log` rows below `height − retention` and raise the
