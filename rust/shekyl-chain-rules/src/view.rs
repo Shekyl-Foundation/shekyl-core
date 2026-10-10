@@ -484,10 +484,17 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// over the record to say whether a shard was held *as of* `height`
     /// (CEN-J8's operand at the fire height; CEN-L16). Scoped to the persona
     /// by the read, so the fold need not re-check it.
+    ///
+    /// `floor` is the log's retirement floor under the rule set the caller
+    /// runs ([`SlashLogFloor`](crate::SlashLogFloor), `SLK-Q1`): a read
+    /// whose range starts below it would fold a retired range as "never
+    /// slashed", so the store refuses it (SI-26) rather than answer. The
+    /// caller computes the floor from its rule set; the view compares.
     fn slash_log_after(
         &self,
         persona: &PCanonicalId,
         height: BlockHeight,
+        floor: crate::SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, Self::Fault>;
 
     /// **A3.** The latest settlement epoch `persona` earned a pass bit in
@@ -691,9 +698,13 @@ macro_rules! archival_reads {
             (persona);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; slash_log_after;
-            (persona: &shekyl_types::PCanonicalId, height: shekyl_types::BlockHeight);
+            (
+                persona: &shekyl_types::PCanonicalId,
+                height: shekyl_types::BlockHeight,
+                floor: $crate::SlashLogFloor
+            );
             (::std::vec::Vec<shekyl_types::archival::SlashLogEntry>);
-            (persona, height);
+            (persona, height, floor);
             (::std::vec::Vec::new()));
         $crate::archival_reads!(@emit $policy; last_served_epoch;
             (persona: &shekyl_types::PCanonicalId, shard: shekyl_types::ShardId);

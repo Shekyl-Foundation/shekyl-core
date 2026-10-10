@@ -4150,8 +4150,14 @@ name = "shekyl-daemon-image"
 version = "3.1.0"
 dependencies = [
  "shekyl-archival-fetch-sched",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-crypto-pq",
  "shekyl-daemon-rpc",
  "shekyl-ffi",
+ "shekyl-p-fetch",
+ "shekyl-types",
+ "shekyl-wire",
 ]
 
 [[package]]
@@ -4283,6 +4289,7 @@ dependencies = [
  "shekyl-operator-alarm",
  "shekyl-p-host",
  "shekyl-p-loopback",
+ "shekyl-p-store",
  "shekyl-p-transport",
  "shekyl-proofs",
  "shekyl-rpc-client",
@@ -4633,6 +4640,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-p-host",
  "shekyl-p-serve",
+ "shekyl-p-store",
  "shekyl-runtime",
  "shekyl-thread-priority",
  "shekyl-tor-control-wallet",
@@ -4667,8 +4675,22 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-tree",
  "shekyl-p-serve",
+ "shekyl-p-store",
  "shekyl-types",
  "tokio",
+]
+
+[[package]]
+name = "shekyl-p-store"
+version = "3.1.0"
+dependencies = [
+ "rand_core 0.6.4",
+ "redb",
+ "shekyl-chacha",
+ "shekyl-crypto-hash",
+ "shekyl-types",
+ "tempfile",
+ "zeroize",
 ]
 
 [[package]]
@@ -4713,6 +4735,17 @@ dependencies = [
 [[package]]
 name = "shekyl-peer-policy"
 version = "3.1.0"
+
+[[package]]
+name = "shekyl-peerlist"
+version = "3.1.0"
+dependencies = [
+ "shekyl-net-address",
+ "shekyl-peerlist",
+ "shekyl-relay-privacy",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+]
 
 [[package]]
 name = "shekyl-portable-storage"

@@ -68,6 +68,24 @@
 //! walker. A change to these bytes is a §3.8.1 / codec change and is
 //! re-pinned with its version bump, never silently.
 //!
+//! **The chain and the slash log's window** (`SLK-5`,
+//! `DRS_E4_SLASH_LOG_ROUND.md`). The log is retired below
+//! `tip − ((k + n)·SEB + reorg_cap)` at every boundary (`prune.rs`), so a
+//! retiring node's `0x04` `slash_log` family is *rows at or above the
+//! floor*, and a reader of the log hands A2 the floor (SI-26). The
+//! witness runs to [`WITNESS_TIP`], `slash_deadline_height(M)` =
+//! `(M + 2)·SEB − 1`, which sits under [`WINDOW`], `(k + n)·SEB + cap`
+//! under the same pair ([`SlashLogFloor::window`]) — a relation asserted
+//! at compile time where both are declared, not a header claim: the floor
+//! is `None` and the family is the whole log. Nothing here assumes that:
+//! every read of the log starts from the floor at the snapshot's tip
+//! ([`whole_log_from`]), so a witness that grows past the window reads
+//! from the floor, not from `0`, and the snapshot pin spells rows at the
+//! slashing height, above any floor. The two accidental passes this file
+//! has carried — the ignored bench's sixty-four joins overrunning epoch 0,
+//! and a from-`0` read sound only because the chain was short — are the
+//! reason both lengths are derived and the read is not a literal.
+//!
 //! **`slash_scan_bench`** (`#[ignore]`) is the measurement §3.1 owes for
 //! "the scan runs once per epoch on the floor": [`MAX_PERSONAS`] personas
 //! by default, and it prints
@@ -106,7 +124,9 @@ use std::time::{Duration, Instant};
 use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Corrupt, FakechainSchedule, RuleSet, SettlementCheck, Trust};
+use shekyl_chain_rules::{
+    Corrupt, FakechainSchedule, RuleSet, SettlementCheck, SlashLogFloor, Trust,
+};
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{
@@ -141,6 +161,34 @@ const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
         Err(_) => panic!("the cap is not inside the epoch"),
     }
 }
+
+/// The witness's tip: the epoch-`M` slashing connect, `(M + 2)·SEB − 1`
+/// under the schedule — the schedule's expression, not a literal.
+/// (`u64::from` is not `const`.)
+#[allow(clippy::cast_lossless)]
+const WITNESS_TIP: u64 = RULES
+    .settlement_schedule()
+    .slash_deadline_height(FAILURE_WINDOW_M as u64);
+/// The slash log's window under the same pair, `(k + n)·SEB + cap`
+/// ([`SlashLogFloor::window`], `SLK-5`).
+const WINDOW: u64 =
+    match SlashLogFloor::window(RULES.settlement_schedule().blocks(), RULES.reorg_cap()) {
+        Some(window) => window.to_raw(),
+        None => panic!("the window fits"),
+    };
+/// Where the witness sits against the window, stated where both are
+/// declared rather than in a header a reader has to recompute: under it,
+/// so the floor at the tip is `None` and the `0x04` family pinned below is
+/// the whole log. If a constant moves this past the window, every read
+/// here already starts from the floor ([`whole_log_from`]) and the pin's
+/// rows sit at the slashing height, above any floor — re-read the header's
+/// claim and this assertion's message, then move the assertion to the
+/// side the witness is now on.
+const _: () = assert!(
+    WITNESS_TIP < WINDOW,
+    "the witness has crossed the slash log's window: its tip's floor is Some, and the header's \
+     'the floor is None' claim is false"
+);
 
 /// Blocks carrying padded serve credits, [`CREDITS_PER_BLOCK`] each of
 /// [`CREDIT_PAD`] record bytes: eleven × two × 140 KB is past one shard
@@ -203,6 +251,31 @@ fn credit_epoch(slot: u64) -> u64 {
         .settlement_schedule()
         .epoch_at_height(join_height(slot).to_raw())
         + 1
+}
+
+/// The slash log's retirement floor at `snap`'s tip under `RULES` — the
+/// operand a reader of the log hands A2 (SI-26), and the height every
+/// whole-log read here starts from ([`whole_log_from`]). `None` while the
+/// chain is under the window (`SLK-5`); carried rather than
+/// `SlashLogFloor::NONE` so a chain that crosses it reads from the floor.
+fn slash_floor_at(snap: &ReadSnapshot<'_>) -> SlashLogFloor {
+    let tip = snap
+        .tip()
+        .expect("read")
+        .recorded
+        .expect("a built chain has a tip")
+        .height;
+    SlashLogFloor::under(tip, RULES.settlement_schedule().blocks(), RULES.reorg_cap())
+}
+
+/// The height a whole-log A2 read starts strictly above: one under the
+/// floor when there is one — the rows below it are retired, so the read
+/// starts at the first retained — else `0`. The lowest `height` SI-26
+/// admits, derived from the floor rather than written as `0`.
+fn whole_log_from(floor: SlashLogFloor) -> BlockHeight {
+    floor.height().map_or(BlockHeight::ZERO, |first_kept| {
+        BlockHeight::from_raw(first_kept.to_raw().saturating_sub(1))
+    })
 }
 
 /// The `personas` bench personas' ids **in bond-table order** — the order
@@ -398,9 +471,7 @@ impl SlashedChain {
     /// The witness's chain: every pair misses every epoch from 1, built to
     /// the epoch-`M` slashing connect.
     fn build(label: &str, personas: u64) -> Self {
-        let m = u64::from(FAILURE_WINDOW_M);
-        let through = RULES.settlement_schedule().slash_deadline_height(m);
-        Self::build_with(label, personas, through, every_epoch_missed)
+        Self::build_with(label, personas, WITNESS_TIP, every_epoch_missed)
     }
 
     /// A chain through height `through`, each epoch's draws issued by
@@ -522,8 +593,9 @@ impl SlashedChain {
                     .expect("read"),
                 "slash_applied({p:?}, 0, {m})"
             );
+            let log_floor = slash_floor_at(&snap);
             let log = snap
-                .slash_log_after(&p, BlockHeight::from_raw(0))
+                .slash_log_after(&p, whole_log_from(log_floor), log_floor)
                 .expect("read");
             assert_eq!(log.len(), 1, "one slash logged for {p:?}: {log:?}");
             assert_eq!(log[0].shard, ShardId::from_raw(0));

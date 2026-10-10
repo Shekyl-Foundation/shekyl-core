@@ -103,7 +103,7 @@ use shekyl_engine_state::pscan_state::PScanState;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch};
 
 use crate::engine::pscan::accrual::PScanAccrual;
-use crate::engine::stake_engine::test_fixtures::derive_bundle;
+use crate::engine::stake_engine::test_fixtures::{derive_bundle, ephemeral_body_store};
 use crate::engine::stake_engine::{
     persona_canonical_id, FundedSlots, PSlot, RetireOutcome, RetirementWitness, StakeEngineError,
     StakeEngineHandle,
@@ -139,7 +139,12 @@ fn spawn_walk_actor() -> (StakeEngineHandle, PCanonicalId) {
     .into_iter()
     .collect();
     let bonded: BTreeSet<PSlot> = [PSlot::from_raw(RETIRE_SLOT)].into_iter().collect();
-    let handle = StakeEngineHandle::spawn(bundles, bonded, Some(PSlot::from_raw(ACTIVE_SLOT)));
+    let handle = StakeEngineHandle::spawn(
+        bundles,
+        bonded,
+        Some(PSlot::from_raw(ACTIVE_SLOT)),
+        ephemeral_body_store(),
+    );
     (handle, id)
 }
 

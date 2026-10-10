@@ -9,11 +9,12 @@ description = "PR-A persona serving loop: loopback shard server + store pin/read
 publish = false
 
 [dependencies]
-# The shard store: `frozen_segment_leaf_bytes` is the serving read and
-# `pin_segment` is what keeps a bonded shard's bytes across `prune_frozen`.
-# `recompute_segment_r_k` is re-exported for the witness-side check the
-# integration test mirrors.
+# The request-header codec lives here (`serving_route`); the shard body
+# no longer does. Pin/freeze stay on this crate until the class-C rename.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# `P`'s serving body store: `StoreShardProvider` streams `shard_frame`
+# bytes from a read-only `BodyStoreReader` (`WSS-Q1`(a)).
+shekyl-p-store = { path = "../shekyl-p-store" }
 # Same async runtime surface as the SP-T3 spike's serve endpoint whose
 # hardening shape this crate productionizes: net + io-util for the loopback
 # listener, sync for the in-flight semaphore, time for the per-step bounds.

@@ -822,7 +822,12 @@ impl ArchivalReads {
         let epoch = shekyl_types::SettlementEpoch::from_raw(3);
         Ok(Self {
             bond: view.bond_record(&persona)?,
-            slashes: view.slash_log_after(&persona, BlockHeight::ZERO)?,
+            // No boundary has run on either side: the floor is `NONE`.
+            slashes: view.slash_log_after(
+                &persona,
+                BlockHeight::ZERO,
+                shekyl_chain_rules::SlashLogFloor::NONE,
+            )?,
             last_served: view.last_served_epoch(&persona, shard)?,
             served: view.served_shards(&persona)?,
             passes: view.pass_count(&persona, shard, epoch)?,

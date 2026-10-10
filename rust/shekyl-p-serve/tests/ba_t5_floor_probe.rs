@@ -23,9 +23,9 @@
 //! production's:
 //!
 //! * **`full-store`** is the production path end to end: an on-disk
-//!   `LeafStore` with one frozen, pinned segment behind
-//!   `StoreShardProvider`. A frozen segment is always a full one, so this
-//!   is also the smallest frame production can serve.
+//!   `BodyStore` with one held `shard_frame` behind
+//!   `StoreShardProvider`. The frame is sized as a full retired segment
+//!   so the probe's size ladder stays comparable.
 //! * **`one-leaf`, `eighth` and `full-memory`** are synthetic bodies from
 //!   memory. The first two are sizes production cannot serve today; they
 //!   are projections, there to show how cost moves with size. The third
@@ -63,14 +63,13 @@ use std::time::{Duration, Instant};
 use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS};
 use shekyl_archival_retention::pass_delivery_digest;
 use shekyl_curve_tree::serving_route::encode_request_header;
-use shekyl_curve_tree::{
-    leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity, ServingReader,
-    TargetKind,
-};
+use shekyl_curve_tree::{leaves_per_segment, BlockHeight};
 use shekyl_p_serve::{
     PServeEndpoint, PassKey, PassSigner, ProviderError, ShardBody, ShardProvider,
     StoreShardProvider, TestKeySigner, REQUEST_HEADER_NAME, SIGNATURE_ENVELOPE_LEN,
 };
+use shekyl_p_store::{BodyStore, StoreKey};
+use shekyl_types::ShardId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::runtime::{Builder, Runtime};
@@ -88,28 +87,6 @@ fn env(name: &str) -> Option<String> {
 
 fn env_usize(name: &str, default: usize) -> usize {
     env(name).and_then(|v| v.parse().ok()).unwrap_or(default)
-}
-
-fn segment_entries() -> Vec<LeafEntry> {
-    (0..leaves_per_segment())
-        .map(|i| {
-            let gindex = as_u64(i);
-            let mut leaf = [1u8; LEAF_BYTES];
-            leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
-            LeafEntry {
-                gindex: Gindex::from_raw(gindex),
-                maturity: BlockHeight::from_raw(0),
-                creation_height: BlockHeight::from_raw(0),
-                leaf,
-                identity: OutputIdentity {
-                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([1u8; 32]),
-                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes([2u8; 32])),
-                    cm: [3u8; 32],
-                    target: TargetKind::TaggedKey,
-                },
-            }
-        })
-        .collect()
 }
 
 /// Shard 0 from the on-disk store, shard 1 and 2 from memory at one leaf
@@ -340,7 +317,7 @@ impl Served {
         // The probe's own child, so that deleting it between blocks can
         // never take anything else in the directory with it.
         let dir = format!("{parent}/ba-t5-store");
-        let store_file = format!("{dir}/leaves.redb");
+        let store_file = format!("{dir}/p.store");
         // `BAT5_REUSE`: open the store a previous invocation left, without
         // writing it again. A cold block needs this: a store written by
         // this process is in the store's own in-process cache whatever the
@@ -359,22 +336,20 @@ impl Served {
             std::fs::remove_dir_all(&dir).ok();
             std::fs::create_dir_all(&dir).expect("mkdir");
         }
-        let store = Arc::new(LeafStore::open(&store_file).expect("open store"));
+        let key = StoreKey::from_bytes([0xba; 32]);
+        let store = BodyStore::open(&store_file, key).expect("open store");
         if !reuse {
+            let frame = synthetic(leaves_per_segment() * LEAF_BYTES);
             store
-                .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
-                .expect("append and freeze segment 0");
-            store.pin_serve_set(&[0]).expect("pin");
+                .put_shard(ShardId::from_raw(0), &frame)
+                .expect("put shard 0");
         }
         let provider = Arc::new(Shards {
-            store: StoreShardProvider::new(ServingReader::new(Arc::clone(&store))),
+            store: StoreShardProvider::new(store.reader()),
             one_leaf: synthetic(size_of(1).1),
             eighth: synthetic(size_of(2).1),
             full: synthetic(size_of(3).1),
         });
-        if !reuse {
-            store.prune_frozen(&[]).expect("prune");
-        }
 
         let runtime = Builder::new_multi_thread()
             .worker_threads(4)

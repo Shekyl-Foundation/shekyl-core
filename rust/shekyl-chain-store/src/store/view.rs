@@ -89,7 +89,7 @@ use std::collections::BTreeMap;
 
 use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
-    Tip, TreeFrontier,
+    SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow};
 use shekyl_types::{
@@ -301,8 +301,10 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         &self,
         persona: &PCanonicalId,
         height: BlockHeight,
+        floor: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
-        archival_reads::slash_log_after(self.batch.txn(), persona, height).map_err(|f| self.arm(f))
+        archival_reads::slash_log_after(self.batch.txn(), persona, height, floor)
+            .map_err(|f| self.arm(f))
     }
 
     fn last_served_epoch(

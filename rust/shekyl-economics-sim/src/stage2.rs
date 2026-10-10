@@ -2151,9 +2151,10 @@ mod tests {
     /// Ignored by default: the report folds every scenario to 60 years
     /// (100–150 s per arm in release, far longer in a debug test). Run with
     /// `cargo test --release -p shekyl-economics-sim -- --ignored
-    /// matches_the_committed_fixture` (both arms).
+    /// matches_the_committed_fixture` (both arms). The nightly
+    /// `economics-sim-ignored` job runs both.
     #[test]
-    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored"]
+    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored; nightly economics-sim-ignored"]
     fn stage2_narration_matches_the_committed_fixture() {
         assert_narration_matches(&PRODUCTION_ARM);
     }
@@ -2164,7 +2165,7 @@ mod tests {
     /// and print its fee, and it moves only when a fold operand shared by
     /// both arms does.
     #[test]
-    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored"]
+    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored; nightly economics-sim-ignored"]
     fn stage2_narration_flat_control_matches_the_committed_fixture() {
         assert_narration_matches(&FLAT_CONTROL_ARM);
     }

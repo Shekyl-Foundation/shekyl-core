@@ -61,8 +61,12 @@ Three consequences follow immediately:
   draw sends originated traffic on a link that carries no relayed traffic,
   which is ProxyMark's root cause
   (`DAEMON_RELAY_PRIVACY.md` §95.3). The confirming measurement is that
-  section. The relay lane's deletion of `own_edge()` waits on review of
-  the run; it is not in the measurement change.
+  section. **UPDATE 2026-10-09:** PR-1 (#1018) shipped it: slot 0 is
+  reserved for the hidden outbound sessions, the local source pins on
+  its peer plus one alternate (`DAEMON_RELAY_PRIVACY.md` §98, D-PR1-1
+  (c′)), and `own_edge()` is deleted. *Records-was: "The relay lane's
+  deletion of `own_edge()` waits on review of the run; it is not in the
+  measurement change."*
 - **Every fixed-slot artifact stops having a subject on this zone** —
   fragmentation, `MAX_FRAGMENTS`, epoch-miss arithmetic, the in-flight
   remainder, the length leak, the empty-message wedge.
