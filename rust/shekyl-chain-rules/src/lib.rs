@@ -152,7 +152,7 @@ pub mod harness;
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
     closed_and_final, shard_close, shard_close_height, Accrual, ArchivalDelta, ClosedUniverse,
-    EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement, Slash,
+    EpochClose, EpochGather, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement, Slash,
 };
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};

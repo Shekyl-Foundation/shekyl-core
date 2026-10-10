@@ -6,13 +6,18 @@
 //! The close writes an `RMarket` for every shard in its snapshot, zeros
 //! included, and freezes the accrual's post-image as `budget(E)`.
 
+use std::collections::BTreeMap;
+
 use core::marker::PhantomData;
 
 use shekyl_archival_retention::{
-    epoch_close_compute, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose,
+    epoch_close_compute, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
+    SettlementSchedule, ShardClose,
 };
 use shekyl_economics::ClosedShardCount;
-use shekyl_types::archival::{BondRecord, RMarket, SigmaWorkMilli};
+use shekyl_types::archival::{
+    BondRecord, RMarket, SettlementOutcome, SettlementRow, SigmaWorkMilli,
+};
 use shekyl_types::{
     shard_start, ArchivalLength, BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId,
 };
@@ -23,7 +28,7 @@ use crate::rules::miner::{closed_shards_before, closed_shards_through};
 use crate::rules::recorded;
 use crate::view::ChainView;
 
-use super::{Accrual, EpochClose};
+use super::{Accrual, EpochClose, EpochGather};
 
 /// The height at which closed shard `shard` closed, for a non-decreasing
 /// archival fold: the smallest `h ≤ parent` with
@@ -182,6 +187,38 @@ impl ClosedUniverse<'_> {
         })
     }
 
+    /// The universe of shards **closed and final** for a block connecting
+    /// at `connecting`: the bound a persisted commitment takes (type
+    /// docs). The emission gather reads this one
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D11f`): its `RMarket` rows are
+    /// what CEN-J15 prices a join by, and a shard that closed inside the
+    /// last `reorg_cap` blocks is not yet bondable, so a row for it would
+    /// price joins on a shard nobody can hold.
+    ///
+    /// It is [`closed_and_final`] taken over every shard at once, by that
+    /// predicate's own arithmetic. A shard is final as of the parent `p`
+    /// iff its close height is at most `p − reorg_cap`, which is to say it
+    /// is closed for a block connecting `reorg_cap` lower. So this is
+    /// [`Self::before`] at `connecting − reorg_cap`, and empty while the
+    /// chain is not `reorg_cap` deep.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::before`].
+    pub fn final_before<'id, V: ChainView<'id>>(
+        view: &V,
+        connecting: BlockHeight,
+        reorg_cap: BlockCount,
+    ) -> Result<ClosedUniverse<'id>, ViewRead<V::Fault>> {
+        match connecting.checked_sub_count(reorg_cap) {
+            Some(lowered) => Self::before(view, lowered),
+            None => Ok(ClosedUniverse {
+                state: UniverseState::Genesis,
+                _brand: PhantomData,
+            }),
+        }
+    }
+
     /// The closed-shard count. Zero at genesis.
     #[must_use]
     pub const fn count(self) -> ClosedShardCount {
@@ -275,8 +312,8 @@ pub fn closed_and_final<'id, V: ChainView<'id>>(
 /// `Σwork(E)` and every `R_market(E, shard)` from, assembled by
 /// [`gather_epoch_snapshot`].
 ///
-/// One assembly for two readers. The close (`Transition::close`) freezes
-/// what it computes over this; the claim verify (CEN-J23's per-epoch
+/// One assembly for two readers. The slash pass (`Transition::gather`)
+/// freezes what it computes over this; the claim verify (CEN-J23's per-epoch
 /// gather, CEN-J25's `EmissionEpochSource`) recomputes `Σwork(E)` over the
 /// same shape and compares it to the frozen row. The C++ reaches the same
 /// end by having the close and the verify call one LMDB gather (WS-1 §5.5);
@@ -304,13 +341,14 @@ pub(crate) struct EpochSnapshot<'r> {
 /// Assemble the [`EpochSnapshot`] for the epoch whose close read
 /// `universe`.
 ///
-/// `records` are the bond records the reader holds — the close passes its
-/// merged post-images, the verify passes A11's rows — and `credited`
-/// names the shards each persona has a credit on at the epoch, ascending
-/// and distinct ([`recorded_credits`], with the block's own credits added
-/// by the close). A persona whose credited set is empty is not in the
-/// snapshot: it earned nothing at `E`, and a bond with no pair would be a
-/// zero term `epoch_close_compute` never asked for.
+/// `records` are the bond records the reader holds, borrowed and in
+/// persona-key order — the slash pass lends its post-images, the verify
+/// A11's rows — and `credited` names the shards each persona has a
+/// credit on at the epoch, ascending and distinct: its Served settlement
+/// rows (`SO-D11a`), pending in the pass and held by [`ServedAt`] in the
+/// verify. A persona whose credited set is empty is not in the snapshot:
+/// it earned nothing at `E`, and a bond with no pair would be a zero term
+/// `epoch_close_compute` never asked for.
 ///
 /// `claimant` is the persona the verify is judging a claim for, whose
 /// index among the bonds it needs ([`EpochSnapshot::claimant_bond_idx`]);
@@ -327,7 +365,7 @@ pub(crate) struct EpochSnapshot<'r> {
 pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
     view: &V,
     universe: &ClosedUniverse<'id>,
-    records: &'r [(PCanonicalId, BondRecord)],
+    records: impl IntoIterator<Item = (&'r PCanonicalId, &'r BondRecord)>,
     claimant: Option<&PCanonicalId>,
     mut credited: impl FnMut(&PCanonicalId) -> Result<Vec<u64>, ViewRead<V::Fault>>,
 ) -> Result<EpochSnapshot<'r>, ViewRead<V::Fault>> {
@@ -387,36 +425,6 @@ pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
     })
 }
 
-/// The shards `persona` has a **recorded** credit on at `epoch`, ascending
-/// and distinct: A4 narrows the candidates to shards served through
-/// `epoch`, A5 confirms a pass at `epoch` on each. The verify's whole
-/// answer (a closed epoch's credits are all recorded); the close adds the
-/// closing block's own on top.
-///
-/// # Errors
-///
-/// The view's.
-pub(crate) fn recorded_credits<'id, V: ChainView<'id>>(
-    view: &V,
-    persona: PCanonicalId,
-    epoch: SettlementEpoch,
-) -> Result<Vec<u64>, ViewRead<V::Fault>> {
-    let mut out = Vec::new();
-    for served in view.served_shards(&persona).map_err(ViewRead::View)? {
-        if served.last_served >= epoch
-            && view
-                .pass_count(&persona, served.shard, epoch)
-                .map_err(ViewRead::View)?
-                .any()
-        {
-            out.push(served.shard.to_raw());
-        }
-    }
-    out.sort_unstable();
-    out.dedup();
-    Ok(out)
-}
-
 /// The open epoch's accruing budget after adding this block's inflow
 /// (§3.5). CEN-L8's overflow clause: a total that does not fit is a fold
 /// that ran ahead of the chain, [`Corrupt::AccrualOverflow`].
@@ -455,81 +463,184 @@ impl super::Transition {
         })
     }
 
-    /// The epoch close (`process_archival_epoch_close_at_height`), when
-    /// `count` is a settlement boundary.
-    pub(super) fn close<'id, V: ChainView<'id>>(
-        &mut self,
-        view: &V,
-        accrual: Accrual,
-    ) -> Result<Option<EpochClose>, ViewRead<V::Fault>> {
+    /// The epoch close, when `count` is a settlement boundary: it freezes
+    /// the open epoch's accrual as `budget(E)` and nothing else. The
+    /// epoch's co-holder counts and `Σwork` are folded over its settlement
+    /// rows, which the slash pass writes an epoch later
+    /// ([`Self::gather`]; `SO-D11`).
+    pub(super) fn close(&self, accrual: Accrual) -> Option<EpochClose> {
         // The schedule's edge is `u64` (Phase 2g); the count is decoded
         // once, as the count it is.
-        let count = self.count().to_raw();
-        let Some(closing) = self.schedule.close_due_at_height(count) else {
-            return Ok(None);
-        };
+        let closing = self.schedule.close_due_at_height(self.count().to_raw())?;
         let epoch = SettlementEpoch::from_raw(closing);
         // `count = (E + 1) · SEB` puts `connecting` in `E`, so the open
         // epoch's accrual is the closing epoch's budget.
         debug_assert_eq!(accrual.epoch, epoch, "the close's epoch is the open epoch");
-
-        // The snapshot: every closed shard (ARW-Q4) at the close height its
-        // age is measured from — the universe is one read, the count and
-        // the parent it was read through — and every record with a credit
-        // at `epoch`, in persona-key order, after this block's slashes. The
-        // verify re-gathers this same shape from the same universe when a
-        // claim cites `epoch` (CEN-J23).
-        let universe = ClosedUniverse::before(view, self.connecting)?;
-        let records = self.merged(view)?;
-        let EpochSnapshot {
-            bonds,
-            shards,
-            pairs,
-            claimant_bond_idx: _,
-        } = gather_epoch_snapshot(view, &universe, &records, None, |persona| {
-            self.credited_shards(view, *persona, epoch)
-        })?;
-
-        let inputs = EpochCloseInputs::under_schedule(
-            self.schedule,
-            closing,
-            count,
-            &bonds,
-            &shards,
-            &pairs,
-        );
-        let result = epoch_close_compute(&inputs)
-            .expect("every credit pair indexes the bonds and shards it was built from");
-        let r_market = shards
-            .iter()
-            .zip(result.r_market_by_shard)
-            .map(|(shard, r)| (ShardId::from_raw(shard.shard_id), RMarket::from_raw(r)))
-            .collect();
-        Ok(Some(EpochClose {
+        Some(EpochClose {
             epoch,
-            r_market,
-            sigma_work: SigmaWorkMilli::from_raw(result.sigma_work_milli),
             budget: accrual.total,
-        }))
+        })
     }
 
-    /// The shards `persona` has a credit on at `epoch`, ascending and
-    /// distinct: [`recorded_credits`] and this block's.
-    fn credited_shards<'id, V: ChainView<'id>>(
-        &self,
+    /// The emission gather of `epoch`, run by the slash pass after it has
+    /// settled the epoch and slashed on it (`SO-D8c`, `SO-D11`).
+    ///
+    /// A pair is credited iff its settlement row for the epoch is Served
+    /// (`SO-D11a`). The records are the transition's post-images, borrowed
+    /// where they sit: the state as of the pass (`SO-D11f`), and
+    /// specifically **after the epoch's own slashes**. The caller has run
+    /// [`Self::merged`] in this pass, so the map holds every recorded bond.
+    /// A record slashed for `epoch` has the bad interval that opens at
+    /// `epoch`, so it is not in the epoch's market, here or when a claim's
+    /// verify re-reads the record later. Gathering before the slashes would
+    /// freeze a `Σwork` no later reader could reproduce whenever a record
+    /// Served on one shard was slashed on another in the same pass.
+    ///
+    /// It runs for every settled epoch, Served pairs or none: an epoch
+    /// with none gets a zero for each shard and a zero `Σwork` (`ARW-Q4`),
+    /// and that row is what lets a claim cite the epoch at all.
+    pub(super) fn gather<'id, V: ChainView<'id>>(
+        &mut self,
         view: &V,
-        persona: PCanonicalId,
         epoch: SettlementEpoch,
-    ) -> Result<Vec<u64>, ViewRead<V::Fault>> {
-        let mut out = recorded_credits(view, persona, epoch)?;
-        out.extend(
-            self.serve_credits
-                .iter()
-                .filter(|k| k.persona == persona && k.epoch == epoch)
-                .map(|k| k.shard.to_raw()),
-        );
-        out.sort_unstable();
-        out.dedup();
-        Ok(out)
+    ) -> Result<(), ViewRead<V::Fault>> {
+        let universe = gather_universe(view, self.schedule, self.reorg_cap, epoch)?;
+        let settled = &self.settled;
+        let records = self
+            .posts
+            .iter()
+            .map(|(persona, post)| (persona, &post.record));
+        let snapshot = gather_epoch_snapshot(view, &universe, records, None, |persona| {
+            Ok(settled_for(settled, epoch, persona)
+                .filter(|(_, row)| row.outcome() == SettlementOutcome::Served)
+                .map(|(shard, _)| shard.to_raw())
+                .collect())
+        })?;
+        let gathered = fold_epoch(self.schedule, epoch, &snapshot);
+        self.gathers.push(gathered);
+        Ok(())
+    }
+}
+
+/// Rows this pass has settled for one persona in one epoch, in shard order.
+///
+/// The map is keyed `(epoch, persona, shard)`, so one persona's rows are
+/// the range that starts at [`ShardId::ZERO`]. The slash scan reads every
+/// row; the gather keeps the ones whose outcome is Served.
+pub(super) fn settled_for<'a>(
+    settled: &'a BTreeMap<(SettlementEpoch, PCanonicalId, ShardId), SettlementRow>,
+    epoch: SettlementEpoch,
+    persona: &PCanonicalId,
+) -> impl Iterator<Item = (ShardId, &'a SettlementRow)> + 'a {
+    let persona = *persona;
+    settled
+        .range((epoch, persona, ShardId::ZERO)..)
+        .take_while(move |((row_epoch, row_persona, _), _)| {
+            *row_epoch == epoch && *row_persona == persona
+        })
+        .map(|((_, _, shard), row)| (*shard, row))
+}
+
+/// The universe `epoch`'s emission gather reads: every shard **closed and
+/// final** as of the block that runs the epoch's slash pass
+/// ([`ClosedUniverse::final_before`]; `SO-D11f`).
+///
+/// One function for the two readers of the gather. The pass freezes what
+/// it folds over this; the claim verify (CEN-J23) re-gathers over it and
+/// CEN-J25 compares. The height is the epoch's slash deadline — the
+/// connecting height of the first block whose count passes it, which is
+/// the block that settles the epoch — read off the schedule and not off
+/// whichever block the caller is in, so the two cannot name different
+/// universes.
+///
+/// # Errors
+///
+/// As [`ClosedUniverse::before`].
+pub(crate) fn gather_universe<'id, V: ChainView<'id>>(
+    view: &V,
+    schedule: SettlementSchedule,
+    reorg_cap: BlockCount,
+    epoch: SettlementEpoch,
+) -> Result<ClosedUniverse<'id>, ViewRead<V::Fault>> {
+    let settling = BlockHeight::from_raw(schedule.slash_deadline_height(epoch.to_raw()));
+    ClosedUniverse::final_before(view, settling, reorg_cap)
+}
+
+/// The Served shards of the personas a claim gathers over, for every epoch
+/// the claim cites.
+///
+/// One [`ChainView::served_at`] per persona: the store hops that persona's
+/// shards once and point-reads every cited epoch. Each per-epoch snapshot
+/// then looks the persona up. The slash pass does not use this. Its rows
+/// are still pending, and it reads them from the transition's own map.
+pub(crate) struct ServedAt {
+    by_persona: BTreeMap<PCanonicalId, BTreeMap<SettlementEpoch, Vec<ShardId>>>,
+}
+
+impl ServedAt {
+    /// Read `epochs` for each persona. An empty `epochs` reads nothing.
+    ///
+    /// # Errors
+    ///
+    /// The view's, from [`ChainView::served_at`].
+    pub(crate) fn read<'id, V: ChainView<'id>>(
+        view: &V,
+        personas: impl IntoIterator<Item = PCanonicalId>,
+        epochs: &[SettlementEpoch],
+    ) -> Result<Self, ViewRead<V::Fault>> {
+        let mut by_persona = BTreeMap::new();
+        for persona in personas {
+            let served = view.served_at(&persona, epochs).map_err(ViewRead::View)?;
+            if served.is_empty() {
+                continue;
+            }
+            by_persona.insert(persona, served);
+        }
+        Ok(Self { by_persona })
+    }
+
+    /// Shards `persona` was Served on at `epoch`, ascending. Empty when
+    /// that persona has none at `epoch`.
+    #[must_use]
+    pub(crate) fn shards(&self, persona: &PCanonicalId, epoch: SettlementEpoch) -> &[ShardId] {
+        self.by_persona
+            .get(persona)
+            .and_then(|by_epoch| by_epoch.get(&epoch))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+}
+
+/// Fold an [`EpochSnapshot`] into the epoch's gather: each shard's
+/// co-holder count and `Σwork(E)`, with ages read at the epoch's close
+/// height under `schedule`.
+fn fold_epoch(
+    schedule: SettlementSchedule,
+    epoch: SettlementEpoch,
+    snapshot: &EpochSnapshot<'_>,
+) -> EpochGather {
+    let close_height = schedule
+        .close_height(epoch.to_raw())
+        .expect("a settled epoch's close height fits: its slash deadline, which is later, did");
+    let inputs = EpochCloseInputs::under_schedule(
+        schedule,
+        epoch.to_raw(),
+        close_height,
+        &snapshot.bonds,
+        &snapshot.shards,
+        &snapshot.pairs,
+    );
+    let result = epoch_close_compute(&inputs)
+        .expect("every credit pair indexes the bonds and shards it was built from");
+    let r_market = snapshot
+        .shards
+        .iter()
+        .zip(result.r_market_by_shard)
+        .map(|(shard, r)| (ShardId::from_raw(shard.shard_id), RMarket::from_raw(r)))
+        .collect();
+    EpochGather {
+        epoch,
+        r_market,
+        sigma_work: SigmaWorkMilli::from_raw(result.sigma_work_milli),
     }
 }

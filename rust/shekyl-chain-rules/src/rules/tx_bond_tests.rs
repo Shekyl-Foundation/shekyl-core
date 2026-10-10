@@ -512,7 +512,7 @@ fn j15_refuses_a_compact_join_one_operand_from_admissible() {
         )
     };
     let stranger = persona([0x6b; 32]);
-    let cases: [(&str, MockChain, u64); 6] = [
+    let cases: [(&str, MockChain, u64); 8] = [
         (
             "a ghost shard past the frontier",
             priced(admissible_chain(), 7, 0),
@@ -534,8 +534,18 @@ fn j15_refuses_a_compact_join_one_operand_from_admissible() {
             0,
         ),
         (
-            "closed and final, unpriced (Q4)",
+            "closed and final, no epoch settled yet (Q4)",
             chain_closing_shard_zero(CLOSE + cap + 1),
+            0,
+        ),
+        (
+            "closed and final, an epoch settled, the shard not in its gather (Q4)",
+            chain_closing_shard_zero(CLOSE + cap + 1).settled_through(SettlementEpoch::from_raw(0)),
+            0,
+        ),
+        (
+            "priced at an epoch that is not the watermark",
+            priced(admissible_chain(), 0, 0).settled_through(SettlementEpoch::from_raw(1)),
             0,
         ),
         (

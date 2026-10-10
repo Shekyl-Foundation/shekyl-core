@@ -1235,7 +1235,11 @@ resolution window of one epoch.
 
 **To measure, under both timings:**
 
-- the time from serving to a claimable reward;
+- the time from serving to a claimable reward. Under the timing as built
+  (`SO-D11`, 2026-10-09) an epoch's `Σwork` is written by its slash pass,
+  so epoch `E` is claimable from `(E+2)·SEB`: one epoch after its close,
+  where it was claimable the block after. That is the baseline figure the
+  earlier timing would be compared against;
 - the time to slash for a pair that does not serve;
 - the exposure of an honest archiver to a slash during an outage that
   straddles the epoch boundary;
