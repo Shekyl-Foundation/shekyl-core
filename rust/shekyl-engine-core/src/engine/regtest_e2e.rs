@@ -2062,11 +2062,12 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 ///
 /// **What the first run found (2026-09-28), and what this therefore
 /// captures.** The premise was a block *at the limit*. The C++ producer
-/// does not build one: `tx_pool::fill_block_template` stops listing once
-/// the bodies pass the median (*"would exceed median block weight"*, the
-/// arm a block version below 5 takes, and Shekyl's is 1; the reward-aware
-/// comparison beside it, *"would decrease coinbase"*, never runs), so
-/// the template stops one transaction past the **median**
+/// does not build one: `tx_pool::fill_block_template` lists bodies in fee
+/// order, lets one body cross the median, refuses a body that would pass
+/// 13/10 of the median less the coinbase reserve, and then stops. The
+/// reward-aware rule, `shekyl_block_template::Fill`, is not this scan and
+/// does not run here, so the template stops one transaction past the
+/// **median**
 /// — 305 738 bytes, 23 spends, 27 left in the pool, against a limit of
 /// 600 000. The 2 × median bound is the *validator's* refusal (CEN-F14); no
 /// C++ producer reaches it, and a block at it is a Rust-producer-built

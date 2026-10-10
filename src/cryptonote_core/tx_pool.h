@@ -342,7 +342,13 @@ namespace cryptonote
     bool deinit();
 
     /**
-     * @brief Chooses transactions for a block to include
+     * @brief Chooses transactions for a block to include.
+     *
+     * Lists pool bodies in fee order. One body may cross `median_weight`.
+     * That body may not cross 13/10 of the median less the coinbase reserve,
+     * and once the listed weight is already past the median the scan ends.
+     * `shekyl_block_template::Fill` is the ruled replacement and is not this
+     * function (docs/FOLLOWUPS.md).
      *
      * @param bl return-by-reference the block to fill in with transactions
      * @param median_weight the current median block weight

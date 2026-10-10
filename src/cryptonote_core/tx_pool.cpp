@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <boost/filesystem.hpp>
 #include <unordered_set>
 #include <vector>
@@ -160,6 +161,58 @@ namespace cryptonote
       if (std::holds_alternative<txin_to_key>(in))
         return &std::get<txin_to_key>(in).k_image;
       return nullptr;
+    }
+
+    // The live template scan. Bodies are offered in fee order. One body may
+    // cross the median. That body may not cross 13/10 of the median less the
+    // coinbase reserve, and once the listed weight is already past the median
+    // the scan ends. 13/10 equals the inherited 130/100 for every median
+    // whose product fits in size_t.
+    //
+    // shekyl_block_template::Fill::admit is the ruled replacement (admit only
+    // when the body does not lower the gross coinbase, bound 2×median less
+    // the reserve). It is not this scan, and this scan does not call it
+    // (docs/FOLLOWUPS.md). The coinbase reserve is still the pinned 600.
+    constexpr size_t LISTED_WEIGHT_OVERSHOOT_NUMERATOR = 13;
+    constexpr size_t LISTED_WEIGHT_OVERSHOOT_DENOMINATOR = 10;
+
+    // What the scan does with one offered body.
+    // take: list it.
+    // pass: it would pass the cap; try a later, smaller body.
+    // end_scan: the listed weight is already past the median.
+    enum class listed_body_decision
+    {
+      take,
+      pass,
+      end_scan,
+    };
+
+    // The most the listed bodies may weigh. Zero when 13/10 of the median
+    // does not cover the coinbase reserve, or when the product does not fit:
+    // the inherited subtraction wrapped size_t, and neither case is a block
+    // this node builds (the median is half the cumulative weight limit).
+    size_t listed_weight_cap(size_t median_weight)
+    {
+      if (median_weight > std::numeric_limits<size_t>::max() / LISTED_WEIGHT_OVERSHOOT_NUMERATOR)
+        return 0;
+      const size_t overshoot =
+          (LISTED_WEIGHT_OVERSHOOT_NUMERATOR * median_weight) / LISTED_WEIGHT_OVERSHOOT_DENOMINATOR;
+      if (overshoot < CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE)
+        return 0;
+      return overshoot - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
+    }
+
+    // `candidate_weight` is not part of the median compare, so the body just
+    // taken may be the one that crossed. A body already past the cap passes
+    // even at weight 0; the subtraction is reached only when the listed
+    // weight still fits under the cap.
+    listed_body_decision decide_listed_body(size_t listed_weight, size_t candidate_weight, size_t median_weight, size_t listed_cap)
+    {
+      if (listed_weight > listed_cap || candidate_weight > listed_cap - listed_weight)
+        return listed_body_decision::pass;
+      if (listed_weight > median_weight)
+        return listed_body_decision::end_scan;
+      return listed_body_decision::take;
     }
   }
 
@@ -2029,7 +2082,7 @@ namespace cryptonote
     total_weight = 0;
     fee = 0;
 
-    size_t max_total_weight = (130 * median_weight) / 100 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
+    const size_t listed_cap = listed_weight_cap(median_weight);
     std::unordered_set<crypto::key_image> k_images;
     std::unordered_set<std::string> archival_keys;
 
@@ -2049,7 +2102,7 @@ namespace cryptonote
         warned = true;
         continue;
       }
-      LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << max_total_weight << ", relay method " << (unsigned)meta.get_relay_method());
+      LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << listed_cap << ", relay method " << (unsigned)meta.get_relay_method());
 
       // Broadcast-visible only, plus the FAKECHAIN opt-in for anything
       // relayable. The opt-in (m_mine_relayable_txes, set from
@@ -2083,17 +2136,13 @@ namespace cryptonote
         continue;
       }
 
-      // Can not exceed maximum block weight
-      if (max_total_weight < total_weight + meta.weight)
+      const listed_body_decision decision = decide_listed_body(total_weight, meta.weight, median_weight, listed_cap);
+      if (decision == listed_body_decision::pass)
       {
         LOG_PRINT_L2("  would exceed maximum block weight");
         continue;
       }
-
-      // Stop at the median. The reward-aware fill's owner is
-      // shekyl_block_template::Fill::admit; this function does not
-      // recompute the coinbase (docs/FOLLOWUPS.md).
-      if (total_weight > median_weight)
+      if (decision == listed_body_decision::end_scan)
       {
         LOG_PRINT_L2("  would exceed median block weight");
         break;
@@ -2158,12 +2207,12 @@ namespace cryptonote
       total_weight += meta.weight;
       fee += meta.fee;
       append_key_images(k_images, tx);
-      LOG_PRINT_L2("  added, new block weight " << total_weight << "/" << max_total_weight << ", fee " << print_money(fee));
+      LOG_PRINT_L2("  added, new block weight " << total_weight << "/" << listed_cap << ", fee " << print_money(fee));
     }
     lock.commit();
 
     LOG_PRINT_L2("Block template filled with " << bl.tx_hashes.size() << " txes, weight "
-        << total_weight << "/" << max_total_weight << ", " << print_money(fee) << " in fees");
+        << total_weight << "/" << listed_cap << ", " << print_money(fee) << " in fees");
     return true;
   }
   //---------------------------------------------------------------------------------

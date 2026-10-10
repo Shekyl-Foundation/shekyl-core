@@ -79,9 +79,12 @@
 //! miner's (the nonce search over the returned block), and difficulty is
 //! CEN-D4's — a template does not know the target and does not need to.
 //! It holds no **pool**: which bodies are offered, and in what order, is
-//! the mempool's. The one selection decision it owns is the rule a
-//! producer applies to each offered body — [`Fill`], lifted from
-//! `fill_block_template` — and that rule is policy, not consensus.
+//! the mempool's. The selection decision it owns is [`Fill`], the ruled
+//! reward-aware policy: admit a body only when listing it does not lower
+//! the gross coinbase. That rule is policy, not consensus. The daemon's
+//! live scan, `tx_memory_pool::fill_block_template`, is the other policy
+//! (one body may cross the median, then the scan ends). [`Fill`] replaces
+//! that scan once the coinbase reserve is derived; it does not describe it.
 //!
 //! # How it is tested, by design
 //!
