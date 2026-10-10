@@ -1716,8 +1716,10 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
 
 // ---------------------------------------------------------------------------
 // get_info (RK-5c). The five `get_info_*_v1.json` vectors are the C++
-// handler's computation over fixed facts (`build_get_info`), not a
-// hand-built response serialized — `tests/unit_tests/rpc_oracle_vectors.cpp`.
+// handler's own computation over fixed facts, not a hand-built response
+// serialized. The emitter that captured them stood for the two commits
+// before that handler was deleted, and went with it (the README beside the
+// vectors says how to read one).
 // These tests pin the TYPE: that each vector is a `GetInfoResponse` and that
 // the response writes the vector back. The handler's parity is
 // `shekyl-daemon-rpc`'s.

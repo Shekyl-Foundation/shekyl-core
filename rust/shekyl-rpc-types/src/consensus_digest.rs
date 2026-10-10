@@ -86,7 +86,7 @@ pub enum DaemonNetwork {
 }
 
 impl DaemonNetwork {
-    /// The daemon's spelling (`core_rpc_server.cpp`'s `on_get_info`).
+    /// The daemon's spelling, as `get_info`'s `nettype` carries it.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

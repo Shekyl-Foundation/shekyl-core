@@ -44,17 +44,15 @@
 //!
 //! **The predicate is ours; the C++ is provenance, not authority.** What the
 //! conjunction is doing is absorbing the *shape of the response it consumes*.
-//! This constructor reads `get_info`, which has no Rust handler yet: the
-//! Rust listener passes it through to the inherited C++ dispatch table
-//! (`shekyl-daemon-rpc/src/handlers/json_rpc.rs`, the *"still the C++
-//! table's"* list) and adds only `rpc_connections_count`, so the shape is
-//! `core_rpc_server.cpp`'s. That surface
-//! encodes sync state twice: a `synchronized` bool (declared at
-//! `core_rpc_server_commands_defs.h:254`, set from `check_core_ready()` at
-//! `core_rpc_server.cpp:248`) **and** a `target_height` overloaded with a
-//! zero sentinel (`core_rpc_server.cpp:209`,
-//! `is_synchronized() ? 0 : get_target_blockchain_height()`). Those
-//! citations say what the guide *does*; they do not define what we require.
+//! This constructor reads `get_info`. The method is served from Rust since
+//! RK-5c, at parity with the inherited handler it replaced, so the shape it
+//! answers with is still the inherited one. That surface
+//! encodes sync state twice: a `synchronized` bool, the protocol's own
+//! predicate, **and** a `target_height` overloaded with a zero sentinel —
+//! `0` when synchronized, the core's target otherwise. Both are written by
+//! the daemon's `get_info` method (`rust/shekyl-daemon-rpc/src/info.rs`,
+//! which keeps the sentinel until RK-D15's commit retires it). That is what
+//! the guide *does*; it does not define what we require.
 //!
 //! We require both fields because, on that shape, **neither alone is
 //! sufficient**. A daemon that has just started with no peers reports
@@ -99,8 +97,8 @@
 //! # Units
 //!
 //! `get_info.height` is the block **count**, not the tip height:
-//! `core_rpc_server.cpp:206-207` reads the top block's height and then
-//! increments it (*"turn top block height into blockchain height"*). It is
+//! the daemon reads the top block's height and reports one more, the
+//! chain's length. It is
 //! therefore the same quantity as [`EmissionClaimSource::chain_height`]
 //! (`crate::engine::emission_source`), and it is stored here as a [`ChainCount`] so
 //! the count/height confusion cannot be made by a consumer. Consumers that

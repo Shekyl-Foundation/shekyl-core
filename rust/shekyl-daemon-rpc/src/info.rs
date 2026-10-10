@@ -19,9 +19,9 @@
 //!
 //! # Parity
 //!
-//! This commit answers exactly what the C++ handler answered, and five
-//! oracle vectors captured from that handler's own computation hold it to
-//! that. So it still writes what the design retires in later commits, each
+//! The method answers exactly what the C++ handler it replaced answered,
+//! and five oracle vectors captured from that handler's own computation
+//! hold it to that. So it still writes what the design retires in later commits, each
 //! marked where it is written: the `target_height` sentinel, the restricted
 //! stand-ins, the clearnet-only connection counts and their subtraction, a
 //! refused burn computation reported as zero, and a pool count whose
@@ -301,7 +301,8 @@ pub(crate) mod tests {
     }
 
     /// The facts of the emitter's `synced_facts()`
-    /// (`tests/unit_tests/rpc_oracle_vectors.cpp`).
+    /// (the emitter that captured the `get_info_*_v1.json` vectors; it was
+    /// deleted with the C++ handler).
     pub(crate) fn synced_facts() -> FakeInfoFacts {
         FakeInfoFacts {
             chain: InfoChainFacts {

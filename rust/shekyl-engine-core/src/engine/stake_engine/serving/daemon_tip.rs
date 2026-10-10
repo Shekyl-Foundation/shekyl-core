@@ -25,30 +25,28 @@
 //! persona will be slashed against; sourcing it from a drawn peer would let
 //! whoever answers choose which challenges `P` refuses.
 //!
-//! # `get_info` is served by C++ today, and that is why the seam matters
+//! # The seam, now that `get_info` is served from Rust
 //!
-//! The reply this module parses comes from the **C++** daemon
-//! (`src/rpc/core_rpc_server.cpp` — `synchronized` at its `on_get_info`,
-//! `target_height` under the "0 when synchronized" rule). There is no
-//! `get_info` handler in `shekyl-daemon-rpc`: the Rust RPC tree has
-//! `get_version` and `get_height`, not this method.
+//! The reply this module reads is the daemon's `get_info`, served natively
+//! since RK-5c and defined once, as `shekyl_rpc_types::GetInfoResponse`
+//! (`target_height` still under the "0 when synchronized" rule until
+//! RK-D15's commit retires it).
 //!
-//! Per the standing ruling (2026-09-19) we do not build *to* the C++ daemon,
-//! and daemon elements still in flux stay behind a seam the wallet owns. That
-//! is what [`PersonaIsolatedTransport`] and [`TipReading`] are here — the
-//! wallet's own transport type and its own typed reading. The wire shape is
-//! known in two places by design: the fields the submit watchdog and the sync
-//! witness also read decode in the shared `health_from_get_info` (`WSS-Q14`),
-//! and the serving-only flags in [`tip_reading_from_info`]. The
-//! response shape **will move** when DRS lands the Rust chain store, and when
-//! it does this one function changes while the gate, the cache, and every
-//! test above them do not. The seam is load-bearing, not incidental.
+//! Daemon elements still in flux stay behind a seam the wallet owns
+//! (standing ruling, 2026-09-19). That is what [`PersonaIsolatedTransport`]
+//! and [`TipReading`] are here — the wallet's own transport type and its
+//! own typed reading. The reply is read in two places by design: the
+//! members the submit watchdog and the sync witness also read are projected
+//! in the shared `health_from_get_info` (`WSS-Q14`), and the serving-only
+//! flags in [`tip_reading_from_info`]. When the reply's shape moves — the
+//! later commits of RK-5c move it on purpose — these two functions change
+//! while the gate, the cache, and every test above them do not. The seam is
+//! load-bearing, not incidental.
 //!
 //! # Chain height is converted to block height here
 //!
 //! `get_info.height` is the chain height — the top block's height **plus one**
-//! (`core_rpc_server.cpp`: `get_blockchain_top(res.height, top_hash);
-//! ++res.height;`). Admission centres its window on `predecessor_height − 720`,
+//! (the daemon reports the chain's length). Admission centres its window on `predecessor_height − 720`,
 //! a block height, so stamping the chain height unconverted would centre `P`'s
 //! gate one block high and let it sign anchors admission then refuses. The
 //! `−1` happens once, here, through `ChainCount::tip`, at the only place the
@@ -223,8 +221,8 @@ pub(crate) enum TipReading {
 ///
 /// # `--restricted-rpc` zeroes the connection counts *by policy*
 ///
-/// `core_rpc_server.cpp` writes `restricted ? 0 : …` for both connection
-/// counts. On a restricted daemon "no peers" and "not telling you" are the
+/// The daemon's `get_info` writes zero for both connection counts when the
+/// caller is restricted. On a restricted daemon "no peers" and "not telling you" are the
 /// same bytes, so requiring `connections > 0` unconditionally would refuse
 /// every challenge forever on that configuration — the same slash, moved to
 /// a new deployment. The reply carries `restricted`, so the operand is used
@@ -825,7 +823,7 @@ mod tests {
     }
 
     /// `--restricted-rpc` zeroes the connection counts BY POLICY
-    /// (`core_rpc_server.cpp`: `restricted ? 0 : ...`), so on such a daemon
+    /// (the daemon's `get_info` writes zero for a restricted caller), so on such a daemon
     /// "no peers" and "not telling you" are the same bytes. Requiring
     /// `connections > 0` unconditionally would refuse every challenge
     /// forever there — the same slash in a new deployment. The reply says

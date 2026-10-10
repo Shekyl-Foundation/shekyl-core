@@ -28,24 +28,27 @@
 
 // RPC wire-contract regression test for the block-target surface.
 //
-// Two public JSON-RPC fields carry the block target time in seconds:
+// One JSON-RPC field served from C++ carries the block target time in
+// seconds:
 //
 //   * `mining_status.block_target` — uint32_t, sourced from
-//     `SHEKYL_DAA_TARGET_SECONDS` at src/rpc/core_rpc_server.cpp:1452
-//     (commit 6 of the LWMA-1 Phase 4 cutover rewired this).
+//     `SHEKYL_DAA_TARGET_SECONDS` (commit 6 of the LWMA-1 Phase 4 cutover
+//     rewired this).
 //
-//   * `get_info.target` — uint64_t, sourced from
-//     `Blockchain::get_difficulty_target()` which returns
-//     `SHEKYL_DAA_TARGET_SECONDS` (also rewired by commit 6).
+// `get_info.target` was the second. `get_info` is served from Rust since
+// RK-5c, and its target is held there as a value, not as a byte form
+// (RK-D9): `target_is_the_difficulty_target` in
+// `rust/shekyl-daemon-rpc/src/info.rs`, and the five `get_info` oracle
+// vectors, which carry 120.
 //
-// Both fields are pinned to the literal 120 by the public RPC contract.
+// The field is pinned to the literal 120 by the public RPC contract.
 // This test asserts:
 //
 //   1. `SHEKYL_DAA_TARGET_SECONDS` equals 120 (via a static_assert below);
 //      a future JSON-authority change would trip the static_assert before
 //      the daemon ever serializes a wrong value.
 //   2. The epee KV-serialization layer emits the field with the byte
-//      sequence `"block_target":120` (or `"target":120`).
+//      sequence `"block_target":120`.
 //
 // Property (1) protects against arithmetic drift in the Shekyl constant.
 // Property (2) protects against a future epee change silently breaking the
@@ -91,51 +94,6 @@ TEST(rpc_target_wire_contract, mining_status_block_target)
       << "mining_status wire response must carry `\"block_target\": 120`; "
          "got:\n"
       << json;
-}
-
-TEST(rpc_target_wire_contract, get_info_target)
-{
-  cryptonote::COMMAND_RPC_GET_INFO::response res{};
-  res.target = SHEKYL_DAA_TARGET_SECONDS;
-
-  std::string json;
-  ASSERT_TRUE(epee::serialization::store_t_to_json(res, json));
-  EXPECT_NE(json.find("\"target\": 120"), std::string::npos)
-      << "get_info wire response must carry `\"target\": 120`; got:\n"
-      << json;
-}
-
-// The gross emitted total has to survive the wire as itself. A dropped
-// KV field, or a field that round-trips as the zero a missing assignment
-// would serialize, is the bug that printed circulating supply as 0.
-//
-// JSON equality here is the parsed value (RK-D4). The pretty-printed
-// spacing in the older tests in this file is debt those tests already
-// carry (RK-D9); this one does not add to it.
-//
-// This bites against the serializer. It does NOT run on_get_info: the
-// handler's read is the same store accessor the burn percentage already
-// consumes, and the reply field is that read, not a second copy.
-TEST(rpc_target_wire_contract, get_info_already_generated_coins_round_trips_nonzero)
-{
-  cryptonote::COMMAND_RPC_GET_INFO::response res{};
-  // Not zero, and not equal to total_burned. Zero is what a
-  // default-initialized reply emits, so a green test on zero would not
-  // notice the field carrying the wrong quantity.
-  constexpr uint64_t k_generated = 1444065674085133ull;
-  constexpr uint64_t k_burned = 42ull;
-  res.already_generated_coins = k_generated;
-  res.total_burned = k_burned;
-
-  std::string json;
-  ASSERT_TRUE(epee::serialization::store_t_to_json(res, json));
-  EXPECT_NE(json.find("\"already_generated_coins\""), std::string::npos) << json;
-  EXPECT_NE(json.find("\"total_burned\""), std::string::npos) << json;
-
-  cryptonote::COMMAND_RPC_GET_INFO::response back{};
-  ASSERT_TRUE(epee::serialization::load_t_from_json(back, json));
-  EXPECT_EQ(back.already_generated_coins, k_generated);
-  EXPECT_EQ(back.total_burned, k_burned);
 }
 
 // RPC 3.32: calc_pow dropped leftover Cryptonight `major_version`. The

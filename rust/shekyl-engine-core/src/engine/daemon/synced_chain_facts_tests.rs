@@ -107,8 +107,7 @@ fn reaching_or_overtaking_the_target_is_synchronized() {
 }
 
 /// The count/height distinction, pinned. `get_info.height` is the block
-/// **count** (`core_rpc_server.cpp:206-207` increments the top block's
-/// height), so the newest existing block sits one below it. A consumer doing
+/// **count** (the daemon reports the top block's height plus one), so the newest existing block sits one below it. A consumer doing
 /// epoch arithmetic on the count instead of the tip lands one block early at
 /// every boundary — invisible to any test that never crosses one.
 #[test]

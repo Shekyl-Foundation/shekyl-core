@@ -53,7 +53,6 @@ using namespace epee;
 #include "crypto/hash.h"
 #include "rpc/archival_claim_source.h"
 #include "rpc/archival_shard_coverage.h"
-#include "rpc/get_info_build.h"
 #include "rpc/rpc_args.h"
 #include "core_rpc_server_error_codes.h"
 #include "p2p/net_node.h"
@@ -73,11 +72,6 @@ using namespace epee;
 
 namespace
 {
-  uint64_t round_up(uint64_t value, uint64_t quantum)
-  {
-    return (value + quantum - 1) / quantum * quantum;
-  }
-
   void store_128(boost::multiprecision::uint128_t value, uint64_t &slow64, std::string &swide, uint64_t &stop64)
   {
     slow64 = (value & 0xffffffffffffffff).convert_to<uint64_t>();
@@ -196,143 +190,6 @@ namespace cryptonote
 #define CHECK_CORE_READY() do { if(!check_core_ready()){res.status =  CORE_RPC_STATUS_BUSY;return true;} } while(0)
 
   //------------------------------------------------------------------------------------------------------------------------------
-  void build_get_info(const get_info_facts& facts, bool restricted, COMMAND_RPC_GET_INFO::response& res)
-  {
-    res.height = facts.height;
-    res.top_block_hash = string_tools::pod_to_hex(facts.top_hash);
-    res.target_height = facts.protocol_synchronized ? 0 : facts.core_target_height;
-    store_difficulty(facts.difficulty_for_next_block, res.difficulty, res.wide_difficulty, res.difficulty_top64);
-    res.target = facts.difficulty_target;
-    res.tx_count = facts.total_transactions - res.height; //without coinbase
-    res.tx_pool_size = restricted ? facts.pool_count_broadcast : facts.pool_count_all;
-    res.alt_blocks_count = restricted ? 0 : facts.alt_blocks_count;
-    uint64_t total_conn = restricted ? 0 : facts.public_connections;
-    res.outgoing_connections_count = restricted ? 0 : facts.public_outgoing_connections;
-    res.incoming_connections_count = restricted ? 0 : (total_conn - res.outgoing_connections_count);
-    // Socket counts are the transport's, per connector. A restricted caller
-    // receives zero, the same gate as the session counts above.
-    res.public_incoming_socket_count = restricted ? 0 : facts.public_incoming_sockets;
-    res.public_outgoing_socket_count = restricted ? 0 : facts.public_outgoing_sockets;
-    res.tor_incoming_socket_count = restricted ? 0 : facts.tor_incoming_sockets;
-    res.tor_outgoing_socket_count = restricted ? 0 : facts.tor_outgoing_sockets;
-    // Always zero, and the reason is not the restriction. The C++ server has
-    // not owned the RPC connections since the Axum cutover, so the accessor
-    // this read was a literal `return 0` with two identical arms — a dead
-    // conditional shaped like a live restriction gate. The Rust tracker fills
-    // this field over the top of whatever is written here
-    // (`handlers::json::fill_rpc_connections_count`). The literal goes when
-    // `/get_info` itself moves, in RK-5c.
-    res.rpc_connections_count = 0;
-    res.white_peerlist_size = restricted ? 0 : facts.white_peerlist_size;
-    res.grey_peerlist_size = restricted ? 0 : facts.grey_peerlist_size;
-
-    cryptonote::network_type net_type = facts.nettype;
-    res.mainnet = net_type == MAINNET;
-    res.testnet = net_type == TESTNET;
-    res.stagenet = net_type == STAGENET;
-    res.nettype = net_type == MAINNET ? "mainnet" : net_type == TESTNET ? "testnet" : net_type == STAGENET ? "stagenet" : "fakechain";
-    store_difficulty(facts.cumulative_difficulty,
-        res.cumulative_difficulty, res.wide_cumulative_difficulty, res.cumulative_difficulty_top64);
-    res.block_size_limit = res.block_weight_limit = facts.block_weight_limit;
-    res.block_size_median = res.block_weight_median = facts.block_weight_median;
-    res.adjusted_time = facts.adjusted_time;
-
-    res.start_time = restricted ? 0 : facts.start_time;
-    res.free_space = restricted ? std::numeric_limits<uint64_t>::max() : facts.free_space;
-    res.offline = facts.offline;
-    res.database_size = facts.database_size;
-    if (restricted)
-      res.database_size = round_up(res.database_size, 5ull* 1024 * 1024 * 1024);
-    res.version = restricted ? "" : facts.version;
-    res.protocol_version = SHEKYL_PROTOCOL_VERSION;
-    res.synchronized = facts.core_ready;
-    // C2-R1b F-1(a): sticky watermark-refusal flag -- monitoring must see a
-    // node that is knowingly not following the heaviest chain it has seen.
-    res.following_degraded = facts.following_degraded;
-    res.busy_syncing = facts.busy_syncing;
-    res.restricted = restricted;
-
-    // Gross coins emitted through the tip. This field is the burn's supply
-    // operand and the reply's already_generated_coins — one read, not a
-    // local that the reply can forget. Net circulating supply is this minus
-    // total_burned; the reply keeps them separate.
-    res.already_generated_coins = facts.already_generated_coins;
-
-    // Shekyl NG four-component economics fields
-    res.release_multiplier = shekyl_calc_release_multiplier(
-        facts.tx_volume_count_sum, facts.tx_volume_blocks, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
-    // Burn is a pure function of activity and supply — stake was deleted as a
-    // burn input (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md F-D).
-    res.total_burned = facts.total_burned;
-    // The percentage the next coinbase burns: over the DERIVED supply
-    // (already_generated − total_burned, FL-R16c), from the shipped
-    // EconomicParams — the same function consensus pays on. A supply
-    // underflow is a store-invariant violation; the field reports 0 and the
-    // refusal is logged rather than swallowed as a plausible percentage.
-    res.burn_pct = 0;
-    {
-      const int32_t st = shekyl_calc_burn_pct_at(
-          facts.tx_volume_count_sum, facts.tx_volume_blocks, res.already_generated_coins, res.total_burned, &res.burn_pct);
-      if (st != SHEKYL_ECONOMICS_OK)
-        MERROR("get_info: shekyl_calc_burn_pct_at refused (status " << st << "): total_burned "
-            << res.total_burned << " exceeds already_generated " << res.already_generated_coins);
-    }
-
-    // Component 4: effective staker emission share at current height
-    res.staker_emission_share_effective = shekyl_emission_share_at(res.height);
-
-    res.status = CORE_RPC_STATUS_OK;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_info(const COMMAND_RPC_GET_INFO::request& req, COMMAND_RPC_GET_INFO::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_info);
-    const bool restricted = caller_is_restricted(ctx);
-
-    // Gather. Every read is made whoever is asking; what a restricted caller
-    // is shown is decided in build_get_info, from the same facts.
-    get_info_facts facts;
-    m_core.get_blockchain_top(facts.height, facts.top_hash);
-    ++facts.height; // turn top block height into blockchain height
-    facts.protocol_synchronized = m_p2p.get_payload_object().is_synchronized();
-    facts.core_target_height = m_core.get_target_blockchain_height();
-    facts.difficulty_for_next_block = m_core.get_blockchain_storage().get_difficulty_for_next_block();
-    facts.difficulty_target = m_core.get_blockchain_storage().get_difficulty_target();
-    facts.total_transactions = m_core.get_blockchain_storage().get_total_transactions();
-    facts.pool_count_all = m_core.get_pool_transactions_count(true);
-    facts.pool_count_broadcast = m_core.get_pool_transactions_count(false);
-    facts.alt_blocks_count = m_core.get_blockchain_storage().get_alternative_blocks_count();
-    facts.public_connections = m_p2p.get_public_connections_count();
-    facts.public_outgoing_connections = m_p2p.get_public_outgoing_connections_count();
-    facts.public_incoming_sockets = shekyl_seam_socket_count(0, 0);
-    facts.public_outgoing_sockets = shekyl_seam_socket_count(0, 1);
-    facts.tor_incoming_sockets = shekyl_seam_socket_count(1, 0);
-    facts.tor_outgoing_sockets = shekyl_seam_socket_count(1, 1);
-    facts.white_peerlist_size = m_p2p.get_public_white_peers_count();
-    facts.grey_peerlist_size = m_p2p.get_public_gray_peers_count();
-    facts.nettype = nettype();
-    facts.cumulative_difficulty = m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(facts.height - 1);
-    facts.block_weight_limit = m_core.get_blockchain_storage().get_current_cumulative_block_weight_limit();
-    facts.block_weight_median = m_core.get_blockchain_storage().get_current_cumulative_block_weight_median();
-    facts.adjusted_time = m_core.get_blockchain_storage().get_adjusted_time(facts.height);
-    facts.start_time = (uint64_t)m_core.get_start_time();
-    facts.free_space = m_core.get_free_space();
-    facts.offline = m_core.offline();
-    facts.database_size = m_core.get_blockchain_storage().get_db().get_database_size();
-    facts.version = SHEKYL_VERSION_FULL;
-    facts.core_ready = check_core_ready();
-    facts.following_degraded = m_core.get_blockchain_storage().is_following_degraded();
-    facts.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
-    if (facts.height > 0)
-      facts.already_generated_coins = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(facts.height - 1);
-    const shekyl::tx_volume_window tx_volume = m_core.get_blockchain_storage().get_tx_volume_window(facts.height);
-    facts.tx_volume_count_sum = tx_volume.tx_count_sum;
-    facts.tx_volume_blocks = tx_volume.blocks;
-    facts.total_burned = m_core.get_blockchain_storage().get_db().get_total_burned();
-
-    build_get_info(facts, restricted, res);
-    return true;
-  }
   //------------------------------------------------------------------------------------------------------------------------------
   //------------------------------------------------------------------------------------------------------------------------------
     bool core_rpc_server::on_get_alt_blocks_hashes(const COMMAND_RPC_GET_ALT_BLOCKS_HASHES::request& req, COMMAND_RPC_GET_ALT_BLOCKS_HASHES::response& res, const connection_context *ctx)
@@ -1019,16 +876,6 @@ namespace cryptonote
     return m_p2p.stem_tallies_json();
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_info_json(const COMMAND_RPC_GET_INFO::request& req, COMMAND_RPC_GET_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    if (!on_get_info(req, res, ctx) || res.status != CORE_RPC_STATUS_OK)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = res.status;
-      return false;
-    }
-    return true;
-  }
   //------------------------------------------------------------------------------------------------------------------------------
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_bans(const COMMAND_RPC_GETBANS::request& req, COMMAND_RPC_GETBANS::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
