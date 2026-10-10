@@ -170,8 +170,11 @@ QUERIES = {
         "  event(DaemonAcceptsHybrid(s, sk, h)) ==> event(ClientSentFirstRecord(s, sk, h))."),
     "request_secret": "query attacker(first_request).",
     "reply_secret": "query attacker(first_reply).",
+    # Both halves of the client's static identity, each its own query.
     "identity_hidden": "query attacker(exp(g, cs_dh)).",
+    "identity_hidden_kem": "query attacker(kpk(cs_kem)).",
     "identity_hidden_after_leak": "query attacker(exp(g, cs_dh)) phase 1.",
+    "identity_hidden_kem_after_leak": "query attacker(kpk(cs_kem)) phase 1.",
     # Not properties: these must be REACHABLE, or every claim above is true
     # of a protocol that cannot run.
     "reach_client": (
@@ -432,11 +435,14 @@ VARIANTS = [
         "daemon_auth": ATTACK, "client_auth_record": ATTACK, "request_secret": ATTACK}),
     # Section 4.2: the client's identity is hidden from the path, under
     # either break, and stays hidden if the daemon's key leaks later.
-    ("identity", (), (), False, False, {"identity_hidden": HOLDS}),
-    ("identity_x25519_broken", ("dh",), (), False, False, {"identity_hidden": HOLDS}),
-    ("identity_mlkem_broken", ("kem",), (), False, False, {"identity_hidden": HOLDS}),
+    ("identity", (), (), False, False, {
+        "identity_hidden": HOLDS, "identity_hidden_kem": HOLDS}),
+    ("identity_x25519_broken", ("dh",), (), False, False, {
+        "identity_hidden": HOLDS, "identity_hidden_kem": HOLDS}),
+    ("identity_mlkem_broken", ("kem",), (), False, False, {
+        "identity_hidden": HOLDS, "identity_hidden_kem": HOLDS}),
     ("identity_daemon_key_leaks_later", (), (), False, True, {
-        "identity_hidden_after_leak": HOLDS}),
+        "identity_hidden_after_leak": HOLDS, "identity_hidden_kem_after_leak": HOLDS}),
     # Named edits. Each removes one token; the property it carries must fail.
     ("edit_no_skem_in_message_1", ("dh",), ("no_skem_m1",), True, False, {
         "daemon_auth": ATTACK}),
@@ -465,10 +471,21 @@ def proverif_version(binary):
 
 
 def verdicts(output):
-    """ProVerif's RESULT lines, in order, as holds / attack / unknown."""
+    """ProVerif's RESULT lines, in order, as holds / attack / replay-only / unknown.
+
+    When an injective query fails, ProVerif adds a second, parenthesised line
+    for the same query saying whether the non-injective form fails too
+    ("even ...") or holds ("but ..."). It is not another query. "but" means
+    the only attack is a replay, which no expectation here accepts: an
+    expected attack is one on the correspondence itself.
+    """
     found = []
     for line in output.splitlines():
         if not line.startswith("RESULT"):
+            continue
+        if line.startswith("RESULT ("):
+            if found and not line.startswith("RESULT (even "):
+                found[-1] = "replay-only"
             continue
         if "cannot be proved" in line:
             found.append("unknown")

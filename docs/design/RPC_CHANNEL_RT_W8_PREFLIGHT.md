@@ -193,9 +193,11 @@ so the two cannot disagree on a verdict without saying why.
 
 ## 4.2 What the model found by running (commit 7, RT-P7)
 
-Run 2026-10-10 with ProVerif 2.05: **27 verdicts, all as
+Run 2026-10-10 with ProVerif 2.05: **31 verdicts, all as
 `RPC_CHANNEL.md` §4.1 and §4.2 predict.** The table of variants, queries
-and expected verdicts is `rust/shekyl-rpc-channel/model/run.py`.
+and expected verdicts is `rust/shekyl-rpc-channel/model/run.py`. The first
+run had 27; review the same day added the ML-KEM half of the client's
+static identity to each of the four identity variants.
 
 - **Daemon authentication is hybrid:** it holds with X25519 broken and with
   ML-KEM broken.
@@ -206,7 +208,9 @@ and expected verdicts is `rust/shekyl-rpc-channel/model/run.py`.
 - **The first request and the first reply stay secret** under either
   break.
 - **The client's identity is hidden** from the path under either break,
-  and stays hidden when the daemon's static keys leak afterwards.
+  and stays hidden when the daemon's static keys leak afterwards. Both
+  halves of it are queried, the X25519 key and the ML-KEM key, each on its
+  own.
 - **Control:** with both primitives broken, authentication and secrecy
   fail, so the breaks have teeth.
 - **Named edits fail as they must:** without message 1's `skem`, daemon
@@ -262,7 +266,7 @@ Each is one unit of work, pushed as it is made.
 | 2 | Delete `shekyl-rt-p2-spike` | F-17; the lock diff is read and stated |
 | 3 | `shekyl-rpc-channel`: the three constants, the rendezvous-name and fingerprint functions, their vectors written first and observed red, the registry rows | RT-O13, RT-O14 |
 | 4–6 | **Landed as one commit** (accepted 2026-10-09), because the crate's shared test support does not compile warning-free in pieces: the cross-check crate (clatter 2.3.0, default features off) and the clatter gate with its self-test; the classical anchor against the community vector; the hybrid vectors under seeded randomness with their named edits | RT-O11, RT-O12; F-4, F-5, F-7, F-18 |
-| 7 | The ProVerif model, its runner, its install recipe and its CI job — **landed 2026-10-10**, 27 verdicts as predicted (§4.2) | RT-O15; RT-P7 |
+| 7 | The ProVerif model, its runner, its install recipe and its CI job — **landed 2026-10-10**, 27 verdicts as predicted, 31 after review added the ML-KEM half of the identity queries (§4.2) | RT-O15; RT-P7 |
 | 8 | RT-P4 on the floor device and on x86, recorded under `docs/benchmarks/` — **x86 run 2026-10-10, passes; the floor device is not yet run**, so this row is open | Host claimed first |
 
 RT-W9 is not started from this branch.
