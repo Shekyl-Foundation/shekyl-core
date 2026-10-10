@@ -5,8 +5,13 @@
 
 //! Post-quantum cryptographic primitives for Shekyl.
 //!
-//! This crate provides hybrid classical + post-quantum cryptographic operations
-//! using NIST PQC standardized algorithms (ML-DSA, ML-KEM, SLH-DSA).
+//! Hybrid classical + post-quantum operations. Identity, transaction
+//! authorization, and the other long-lived keys use NIST-standardized
+//! algorithms (ML-DSA-65, ML-KEM-768, SLH-DSA). Archival serve receipts and
+//! the witness carrier use a second hybrid, Ed25519 + FN-DSA-1024 (scheme
+//! byte 3, [`fn_dsa_hybrid`]). FN-DSA has no final standard: FIPS 206 is
+//! unpublished, and that scheme's bytes are a property of the pinned
+//! `fn-dsa` crate.
 
 #![deny(unsafe_code)]
 

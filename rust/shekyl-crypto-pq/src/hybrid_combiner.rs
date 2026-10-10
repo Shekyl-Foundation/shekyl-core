@@ -89,9 +89,14 @@ pub(crate) fn sign_nested<P: AsRef<[u8]>>(
 
 /// What a nested signature consists of, as the verifier receives it: the
 /// classical key and the two signature halves.
+///
+/// `sigma_pq` is the one post-quantum signature. Verification of that half
+/// and the classical outer message both read this slice, so a scheme cannot
+/// check one byte string and wrap another.
 pub(crate) struct NestedSignature<'a> {
     pub(crate) ed25519_public: &'a [u8; ED25519_PUBLIC_KEY_LENGTH],
     pub(crate) ed25519_signature: &'a [u8],
+    /// The post-quantum signature, `σ_pq`.
     pub(crate) sigma_pq: &'a [u8],
 }
 
@@ -100,9 +105,13 @@ pub(crate) struct NestedSignature<'a> {
 /// Checks run in a fixed order, the one the ML-DSA scheme has always had:
 /// the Ed25519 key and signature are decoded, then `prepare_pq` decodes the
 /// post-quantum key, then the preimage is built (an empty domain is refused
-/// here), then the post-quantum half is verified over the preimage, and only
-/// then the classical half over `inner ‖ σ_pq`. The PQ half goes first
-/// because the classical outer is meaningless around an invalid inner.
+/// here), then the post-quantum half is verified over the preimage and
+/// `signature.sigma_pq`, and only then the classical half over
+/// `inner ‖ σ_pq`. The PQ half goes first because the classical outer is
+/// meaningless around an invalid inner.
+///
+/// `verify_pq` receives that same `sigma_pq`, the slice the classical
+/// half wraps.
 ///
 /// `Result<()>`, never `Result<bool>`: there is no `Ok(false)` to mishandle.
 pub(crate) fn verify_nested<K>(
@@ -111,7 +120,7 @@ pub(crate) fn verify_nested<K>(
     domain: &[u8],
     message: &[u8],
     prepare_pq: impl FnOnce() -> Result<K, CryptoError>,
-    verify_pq: impl FnOnce(&K, &[u8; 64]) -> bool,
+    verify_pq: impl FnOnce(&K, &[u8; 64], &[u8]) -> bool,
 ) -> Result<(), CryptoError> {
     let verifying_key = VerifyingKey::from_bytes(signature.ed25519_public)
         .map_err(|_| CryptoError::InvalidKeyMaterial)?;
@@ -120,7 +129,7 @@ pub(crate) fn verify_nested<K>(
     let pq_key = prepare_pq()?;
 
     let inner = preimage(scheme_id, domain, message)?;
-    if !verify_pq(&pq_key, &inner) {
+    if !verify_pq(&pq_key, &inner, signature.sigma_pq) {
         return Err(CryptoError::SignatureVerificationFailed);
     }
     verifying_key

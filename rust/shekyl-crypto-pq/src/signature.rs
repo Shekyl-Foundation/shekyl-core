@@ -452,18 +452,12 @@ impl SignatureScheme for HybridEd25519MlDsa {
         public_key.validate()?;
         signature.validate()?;
 
-        let ml_dsa_signature: [u8; ML_DSA_65_SIGNATURE_LENGTH] = signature
-            .ml_dsa
-            .clone()
-            .try_into()
-            .map_err(|_| CryptoError::SignatureVerificationFailed)?;
-
         hybrid_combiner::verify_nested(
             HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
             &hybrid_combiner::NestedSignature {
                 ed25519_public: &public_key.ed25519,
                 ed25519_signature: &signature.ed25519,
-                sigma_pq: &ml_dsa_signature,
+                sigma_pq: &signature.ml_dsa,
             },
             domain,
             message,
@@ -476,7 +470,15 @@ impl SignatureScheme for HybridEd25519MlDsa {
                 ml_dsa_65::PublicKey::try_from_bytes(ml_dsa_public)
                     .map_err(|e| CryptoError::SerializationError(e.into()))
             },
-            |ml_dsa_public_key, inner| ml_dsa_public_key.verify(inner, &ml_dsa_signature, &[]),
+            |ml_dsa_public_key, inner, sigma_pq| {
+                // The header check above already fixed this length. A slice
+                // that is not the ML-DSA signature size fails closed here.
+                let Ok(ml_dsa_signature) = <[u8; ML_DSA_65_SIGNATURE_LENGTH]>::try_from(sigma_pq)
+                else {
+                    return false;
+                };
+                ml_dsa_public_key.verify(inner, &ml_dsa_signature, &[])
+            },
         )
     }
 }

@@ -381,10 +381,10 @@ impl SignatureScheme for HybridEd25519FnDsa {
             || VerifyingKey1024::decode(&public_key.fn_dsa).ok_or(CryptoError::InvalidKeyMaterial),
             // Empty FN-DSA context, raw message: the 64-byte preimage is
             // already domain-separated and scheme-bound, as the ML-DSA half
-            // signs it with an empty ML-DSA context (SA-R-3). Pinned by
-            // vector.
-            |fn_dsa_public, inner| {
-                fn_dsa_public.verify(&signature.fn_dsa, &DOMAIN_NONE, &HASH_ID_RAW, inner)
+            // signs it with an empty ML-DSA context (SA-R-3). `sigma_pq` is
+            // the half the classical signature wraps. Pinned by vector.
+            |fn_dsa_public, inner, sigma_pq| {
+                fn_dsa_public.verify(sigma_pq, &DOMAIN_NONE, &HASH_ID_RAW, inner)
             },
         )
     }
