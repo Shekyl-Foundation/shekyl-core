@@ -681,11 +681,161 @@ whether a ban removes or marks entries, whether banned addresses are
 refused at admit and excluded from disclosure, and what an expiry
 does.*
 
-## 16. PR-2 — pre-flight (rule 26 Round 0)
+## 16. PR-2 — pre-flight (rule 26 Round 0, 2026-10-09)
 
-PR-2 is increments 1 and 2 (§13) on a branch stacked on #1018 and
-rebased onto `dev` when #1018 merges. Its first commit is docs only:
-the D3, D4, D-S1 and handshake-address rulings written here, in the
-dialer brief, in `DAEMON_RELAY_PRIVACY.md` §96 and §97, and in the
-index. The rule 26 Round 0 substrate re-check is recorded in this
-section before the crate's first production commit.
+**Status: OPEN — pre-flight recorded; the crate follows on
+`feat/p2p3-pr2-peerlist`, stacked on #1018 (`487d4550fc`), rebased onto
+`dev` when #1018 merges.** PR-2 is increments 1 and 2 (§13). The
+rulings it implements are D3 (§5a), D4 (§5b), D-S1 (§5c) and the PR-2
+additions (§11.5), written in #1018's docs commit so they reach `dev`
+first. This section is the substrate re-check between those rulings
+and the crate's first production commit. PR-2 mints no identifier
+family. No FFI, no C++: `git diff dev..HEAD --stat -- src/ contrib/`
+is empty at every commit.
+
+### 16.1 Substrate re-check (A2) — read at `dev` `a86ba6d13f` + #1018
+
+**The quarry.** `src/p2p/net_node.inl` is frozen (Ruling A) and every
+citation this brief makes into it is where `f317d979c4` left it:
+`get_ip_seed_nodes` `:771`, the array at `:781`; `append_operator_candidate`
+`:1098`; `do_handshake_with_peer` `:1329`; `set_peer_just_seen` `:1403`
+and `:3363`; `handle_remote_peerlist` `:2448`; `connect_to_peerlist`
+`:2912`; `append_with_peer_white` `:1707`; the `just_take_peerlist`
+close `:1695`; `get_local_node_data` `:2477`; `get_peerlist_head`
+callers `:2721` and `:2843`; `append_with_peer_gray` `:2831`;
+`gray_peerlist_housekeeping` `:3336`; the timed-sync self-insertion
+`:2717` to `:2735`. `src/p2p/net_peerlist.h` has moved by four lines
+since the body citations were written: `by_time` `:188` (was `:184`),
+`trim_white_peerlist` `:217` (`:215`), the gray merge of a received
+list `:243` (`:239`), `set_peer_just_seen` `:338` (`:334`),
+`append_with_peer_white(…, bool trust_last_seen)` `:351` (`:347`), the
+kept previous `last_seen` `:371` (`:367`), the `--add-peer` synthetic
+absence `:446` (`:444`). `src/p2p/net_peerlist.cpp`: the v8 comment that
+anchor and white are gone `:97` (`:82`), load `:171` (`:156`), save
+`:308` and `:317` (`:306`, `:318`). `p2p_protocol_defs.h:66` is still
+`last_seen`. `cryptonote_config.h`: gray cap `:183` (5000), white cap
+`:182` (1000), `P2P_DEFAULT_PEERS_IN_HANDSHAKE` `:193` and
+`P2P_MAX_PEERS_IN_HANDSHAKE` `:194` (both 250, replaced by D3). Nothing
+the brief says about the C++ is contradicted; §8's rows hold.
+
+**The Rust substrate the crate consumes** (B6: values read at the
+line):
+
+| Claim | Where | Holds? |
+| --- | --- | --- |
+| The address union is one type with three variants | `shekyl-net-address/src/lib.rs:19` `NetworkAddress::{Ipv4, Ipv6, Tor}`; `ip()` at `:49` is `None` for Tor | yes |
+| The connector is derived from the address type, not stored | `shekyl-transport-layer/src/declaration.rs:487` `connector_for(&NetworkAddress) -> Option<ConnectorId>`; `addressing_of` at `:123` | yes. `None` is "no local connector serves this type", §2's refusal at admit |
+| The ban list is the transport layer's and is read, never written, by the peer list | `shekyl-transport-layer/src/ban.rs:151` `BanList`; `is_banned(&mut self, IpAddr, Tick)` at `:240`, hosts and IPv4 subnets, expiry on lookup | yes. The crate takes a ban query at every white read (D4); it never holds a `BanList` |
+| Only clearnet addresses can be banned | `is_banned` takes an `IpAddr`; `NetworkAddress::Tor::ip()` is `None` | yes (D7). The Tor partition never demotes on a ban |
+| The clock is `Tick`, nanoseconds, with a hand-moved test clock | `shekyl-timing-engine/src/lib.rs:26` `Tick(u64)`; `ManualClock` `:46` | yes. `last_observed`, the window and the intake span are `Tick`s; `EXPIRATION_PERIOD` is 24 h in nanoseconds |
+| A uniform draw primitive exists and is already a transport-layer dependency | `shekyl-relay-privacy/src/rng.rs:33` `RelayRng`, `bounded_uniform`, `SplitMix64`; `shekyl-transport-layer/Cargo.toml` depends on `shekyl-relay-privacy` | yes. The crate uses it; no new RNG abstraction |
+| The `DialOutcome` variants are the ones §5's `apply` table names | §5 table: `SessionAccepted`, `Confirmed`, `HarvestDone`, `DialFailed`, `PeerlistRefused`, `PayloadRefused` | the dialer crate does not exist yet (PR-3); PR-2 defines the enum here and PR-3 consumes it |
+| The reference draft | local branch `feat/p2p3-slice1-peerlist`, one commit `6faa836dc1` (2026-09-23, base `dbfc07623d`): increment 1 as first drafted, with `Hypothesis`/`Observed` types, a `Reached` token and `complete_dial` | predates the 2026-09-25 partition ruling, the 2026-10-08 revision and D3/D4/D-S1. Read as a reference for the constructor-reachability shape (§11.1); not cherry-picked |
+
+### 16.2 The crate (B4) — `rust/shekyl-peerlist`
+
+One `Peerlist`, holding one partition per connector, keyed by
+`connector_for` at every admit; an address whose type no connector
+serves is refused there. Each partition: gray (a set of addresses, no
+clock), white (address → `last_observed: Tick`), the outstanding gray
+draws, the cached sample and its window, and the per-session intake
+ledger. Constants, each a named item the crate owns and §97 labels
+`Assumption`: `DISCLOSE_COUNT = 12`; `SESSION_INTAKE_CAP = 2 ×
+DISCLOSE_COUNT`; `INTERIM_WHITE_DIVERSITY_MULTIPLE = 4` and
+`white_diversity_floor() = 48`; `WHITE_REFILL_LINE = floor +
+DISCLOSE_COUNT = 60` (one sample of headroom: a window's worth of
+confirmations before the floor; the number is this PR's interim, named
+here for Rick to accept or move, D-PR2-2 below); `GRAY_CAP = 5000`,
+`WHITE_CAP = 1000` (the C++ values, not re-derived);
+`EXPIRATION_PERIOD = DISCLOSE_WINDOW = INTAKE_SPAN = 24 h`.
+
+Operations, as §5 and §6 name them, with the ruling each carries:
+
+- `admit_gray(address, session, now)` → `Result<(), Refusal>`: the
+  connector from the type (none → `Refusal::NoConnector`); a banned
+  address is `Refusal::Banned` (D4); the session's distinct addresses
+  in the last 24 h at the cap is `Refusal::PeerlistRefused` (D-S1);
+  over `GRAY_CAP`, one random gray entry is evicted. A white entry at
+  that address is untouched.
+- `draw_gray(connector, rng)` / `draw_white(connector, bans, now, rng)`:
+  uniform; `draw_white` demotes banned entries first (D4) and evaluates
+  expiry.
+- `apply(outcome, now)`: the only writer of white, the §5 match, total.
+- `disclose(connector, bans, now, rng)`: demotes and expires, counts
+  eligible white; below the floor, empty; else the cached sample if its
+  window has not passed, else `min(DISCLOSE_COUNT, population)` drawn
+  uniformly from white plus this node's own dialable address on that
+  connector when one is set, cached for the window. Not rebuilt on a
+  ban (D4).
+- `set_own_address(connector, Option<NetworkAddress>)`: the handshake
+  carries no address; this is how the node's own entry joins the
+  population.
+- `white_count(connector, bans, now)`, `below_refill_line`,
+  `next_deadline`: the floor and refill reads of §2, after demotion.
+- `snapshot()`: every address and its list, no clock (the RPC `peers`
+  grant).
+- `persistable()` / `restore(addresses)`: an unordered set; restore is
+  gray only. The byte layout is not this PR's (§15).
+
+`White` has no public constructor and no `Deserialize` (§11.1). Every
+operation takes the connector it works in; nothing crosses (§11.2).
+
+### 16.3 Decisions for Rick
+
+**D-PR2-1 — the per-source gray share.** §5 and §97 carry a per-source
+share of gray beside D-S1's per-session count. With D-S1 ruled, the
+share's source key is the open part: a *session* is D-S1's key already,
+and a *host* is what the registered reconnect throttle would count. The
+crate ships D-S1 and names no second share constant until the key is
+ruled; §97's row stays `Assumption` with "named by PR-2" until then.
+Recommendation: fold the share into D-S1 (one intake rule per session)
+and let the reconnect throttle carry the host dimension.
+
+**D-PR2-2 — the refill line.** Named here as `floor + DISCLOSE_COUNT`
+(60). Accept, or set another headroom.
+
+### 16.4 Falsifiers (§11), mapped to tests
+
+§11.1 by construction and a test that the only `White` constructor is
+inside `apply`; §11.2 by partition tests (admit, disclose, evict,
+restore, the whole-list rejection); §11.3's sequences one test each;
+§11.5: the D4 five, D-S1's 25th address, sampling below and above the
+floor with the own address as one uniform member, the snapshot, and
+the D3 exception instrument (16.5).
+
+### 16.5 The D3 exception instrument
+
+A conformance instrument in the crate (feature `conformance`), run
+against the model, not the network: a node with white `W` at or above
+the floor, outbound sessions `O ⊂ W` of size 12 with a hidden subset
+and one hidden stem slot; an observer that polls the cached sample
+every window for `k` windows, once controlling a share of `O` and once
+controlling none. Two observers, because the rule says *no observer
+gains*: the **presence** observer guesses that disclosed addresses are
+outbound sessions; the **absence** observer, who knows `W` from its
+own polling and its controlled peers, guesses that white addresses
+never disclosed are the outbound sessions. Each reports precision and
+recall on `O` and on the hidden slot, under the uniform sample and
+under the sample that leaves `O` out. The exception is adopted only if
+it lowers both observers' success. Results are recorded in §5a.
+
+### 16.6 Commit plan (B5)
+
+1. `docs: PR-2 pre-flight in the slice 1 brief §16` — this section.
+2. `peerlist: the crate — gray, white, the door, the draws, expiry` —
+   increment 1's core with §11.1–§11.3's tests; no caller yet (the
+   dialer is PR-3, named in §10 as the consumer).
+3. `peerlist: the cached sample (D3), ban demotion (D4), the intake cap
+   (D-S1), the snapshot` — §11.5's tests.
+4. `peerlist: the D3 exception instrument` — 16.5, results into §5a.
+5. `docs: the §8 divergence ledger at the increment's pin` — increment
+   2; §97's rows gain the crate's items; this section's status.
+
+### 16.7 Round denominator
+
+Examined and yielding nothing: `shekyl-peer-policy` (the inbound
+ceiling, slice 2's; the crate does not import it); `shekyl-levin`
+(frames the address; the crate does not encode); the C++ `peerlist_manager`
+locks and the anchor list (deleted in v8; nothing to port). Not
+examined: the dialer's fill and its wake (PR-3's), the RPC `peers`
+grant's wire shape (reads the snapshot; its own PR).
