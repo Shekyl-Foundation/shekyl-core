@@ -6,6 +6,8 @@
 //! The close writes an `RMarket` for every shard in its snapshot, zeros
 //! included, and freezes the accrual's post-image as `budget(E)`.
 
+use std::collections::BTreeMap;
+
 use core::marker::PhantomData;
 
 use shekyl_archival_retention::{
@@ -13,7 +15,9 @@ use shekyl_archival_retention::{
     SettlementSchedule, ShardClose,
 };
 use shekyl_economics::ClosedShardCount;
-use shekyl_types::archival::{BondRecord, RMarket, SettlementOutcome, SigmaWorkMilli};
+use shekyl_types::archival::{
+    BondRecord, RMarket, SettlementOutcome, SettlementRow, SigmaWorkMilli,
+};
 use shekyl_types::{
     shard_start, ArchivalLength, BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId,
 };
@@ -337,13 +341,14 @@ pub(crate) struct EpochSnapshot<'r> {
 /// Assemble the [`EpochSnapshot`] for the epoch whose close read
 /// `universe`.
 ///
-/// `records` are the bond records the reader holds — the close passes its
-/// merged post-images, the verify passes A11's rows — and `credited`
-/// names the shards each persona has a credit on at the epoch, ascending
-/// and distinct ([`recorded_credits`], with the block's own credits added
-/// by the close). A persona whose credited set is empty is not in the
-/// snapshot: it earned nothing at `E`, and a bond with no pair would be a
-/// zero term `epoch_close_compute` never asked for.
+/// `records` are the bond records the reader holds, borrowed and in
+/// persona-key order — the slash pass lends its post-images, the verify
+/// A11's rows — and `credited` names the shards each persona has a
+/// credit on at the epoch, ascending and distinct: its Served settlement
+/// rows (`SO-D11a`), pending in the pass and held by [`ServedAt`] in the
+/// verify. A persona whose credited set is empty is not in the snapshot:
+/// it earned nothing at `E`, and a bond with no pair would be a zero term
+/// `epoch_close_compute` never asked for.
 ///
 /// `claimant` is the persona the verify is judging a claim for, whose
 /// index among the bonds it needs ([`EpochSnapshot::claimant_bond_idx`]);
@@ -360,7 +365,7 @@ pub(crate) struct EpochSnapshot<'r> {
 pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
     view: &V,
     universe: &ClosedUniverse<'id>,
-    records: &'r [(PCanonicalId, BondRecord)],
+    records: impl IntoIterator<Item = (&'r PCanonicalId, &'r BondRecord)>,
     claimant: Option<&PCanonicalId>,
     mut credited: impl FnMut(&PCanonicalId) -> Result<Vec<u64>, ViewRead<V::Fault>>,
 ) -> Result<EpochSnapshot<'r>, ViewRead<V::Fault>> {
@@ -481,13 +486,15 @@ impl super::Transition {
     /// settled the epoch and slashed on it (`SO-D8c`, `SO-D11`).
     ///
     /// A pair is credited iff its settlement row for the epoch is Served
-    /// (`SO-D11a`). `records` is the state as of the pass (`SO-D11f`), and
-    /// specifically **after the epoch's own slashes**: a record slashed
-    /// for `epoch` has the bad interval that opens at `epoch`, so it is
-    /// not in the epoch's market, here or when a claim's verify re-reads
-    /// the record later. Gathering before the slashes would freeze a
-    /// `Σwork` no later reader could reproduce whenever a record Served on
-    /// one shard was slashed on another in the same pass.
+    /// (`SO-D11a`). The records are the transition's post-images, borrowed
+    /// where they sit: the state as of the pass (`SO-D11f`), and
+    /// specifically **after the epoch's own slashes**. The caller has run
+    /// [`Self::merged`] in this pass, so the map holds every recorded bond.
+    /// A record slashed for `epoch` has the bad interval that opens at
+    /// `epoch`, so it is not in the epoch's market, here or when a claim's
+    /// verify re-reads the record later. Gathering before the slashes would
+    /// freeze a `Σwork` no later reader could reproduce whenever a record
+    /// Served on one shard was slashed on another in the same pass.
     ///
     /// It runs for every settled epoch, Served pairs or none: an epoch
     /// with none gets a zero for each shard and a zero `Σwork` (`ARW-Q4`),
@@ -496,22 +503,42 @@ impl super::Transition {
         &mut self,
         view: &V,
         epoch: SettlementEpoch,
-        records: &[(PCanonicalId, BondRecord)],
     ) -> Result<(), ViewRead<V::Fault>> {
         let universe = gather_universe(view, self.schedule, self.reorg_cap, epoch)?;
         let settled = &self.settled;
+        let records = self
+            .posts
+            .iter()
+            .map(|(persona, post)| (persona, &post.record));
         let snapshot = gather_epoch_snapshot(view, &universe, records, None, |persona| {
-            Ok(settled
-                .range((epoch, *persona, ShardId::from_raw(0))..)
-                .take_while(|((e, p, _), _)| *e == epoch && p == persona)
+            Ok(settled_for(settled, epoch, persona)
                 .filter(|(_, row)| row.outcome() == SettlementOutcome::Served)
-                .map(|((_, _, shard), _)| shard.to_raw())
+                .map(|(shard, _)| shard.to_raw())
                 .collect())
         })?;
         let gathered = fold_epoch(self.schedule, epoch, &snapshot);
         self.gathers.push(gathered);
         Ok(())
     }
+}
+
+/// Rows this pass has settled for one persona in one epoch, in shard order.
+///
+/// The map is keyed `(epoch, persona, shard)`, so one persona's rows are
+/// the range that starts at [`ShardId::ZERO`]. The slash scan reads every
+/// row; the gather keeps the ones whose outcome is Served.
+pub(super) fn settled_for<'a>(
+    settled: &'a BTreeMap<(SettlementEpoch, PCanonicalId, ShardId), SettlementRow>,
+    epoch: SettlementEpoch,
+    persona: &PCanonicalId,
+) -> impl Iterator<Item = (ShardId, &'a SettlementRow)> + 'a {
+    let persona = *persona;
+    settled
+        .range((epoch, persona, ShardId::ZERO)..)
+        .take_while(move |((row_epoch, row_persona, _), _)| {
+            *row_epoch == epoch && *row_persona == persona
+        })
+        .map(|((_, _, shard), row)| (*shard, row))
 }
 
 /// The universe `epoch`'s emission gather reads: every shard **closed and
@@ -539,24 +566,49 @@ pub(crate) fn gather_universe<'id, V: ChainView<'id>>(
     ClosedUniverse::final_before(view, settling, reorg_cap)
 }
 
-/// The shards `persona` is credited on at `epoch`, ascending and distinct:
-/// those its recorded settlement rows say were Served (A17). The claim
-/// verify's whole answer — a settled epoch's rows are all recorded.
+/// The Served shards of the personas a claim gathers over, for every epoch
+/// the claim cites.
 ///
-/// # Errors
-///
-/// The view's.
-pub(crate) fn recorded_served<'id, V: ChainView<'id>>(
-    view: &V,
-    persona: PCanonicalId,
-    epoch: SettlementEpoch,
-) -> Result<Vec<u64>, ViewRead<V::Fault>> {
-    Ok(view
-        .served_at(&persona, epoch)
-        .map_err(ViewRead::View)?
-        .into_iter()
-        .map(ShardId::to_raw)
-        .collect())
+/// One [`ChainView::served_at`] per persona: the store hops that persona's
+/// shards once and point-reads every cited epoch. Each per-epoch snapshot
+/// then looks the persona up. The slash pass does not use this. Its rows
+/// are still pending, and it reads them from the transition's own map.
+pub(crate) struct ServedAt {
+    by_persona: BTreeMap<PCanonicalId, BTreeMap<SettlementEpoch, Vec<ShardId>>>,
+}
+
+impl ServedAt {
+    /// Read `epochs` for each persona. An empty `epochs` reads nothing.
+    ///
+    /// # Errors
+    ///
+    /// The view's, from [`ChainView::served_at`].
+    pub(crate) fn read<'id, V: ChainView<'id>>(
+        view: &V,
+        personas: impl IntoIterator<Item = PCanonicalId>,
+        epochs: &[SettlementEpoch],
+    ) -> Result<Self, ViewRead<V::Fault>> {
+        let mut by_persona = BTreeMap::new();
+        for persona in personas {
+            let served = view.served_at(&persona, epochs).map_err(ViewRead::View)?;
+            if served.is_empty() {
+                continue;
+            }
+            by_persona.insert(persona, served);
+        }
+        Ok(Self { by_persona })
+    }
+
+    /// Shards `persona` was Served on at `epoch`, ascending. Empty when
+    /// that persona has none at `epoch`.
+    #[must_use]
+    pub(crate) fn shards(&self, persona: &PCanonicalId, epoch: SettlementEpoch) -> &[ShardId] {
+        self.by_persona
+            .get(persona)
+            .and_then(|by_epoch| by_epoch.get(&epoch))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
 }
 
 /// Fold an [`EpochSnapshot`] into the epoch's gather: each shard's

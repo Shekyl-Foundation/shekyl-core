@@ -114,9 +114,7 @@ mod inputs;
 mod slash;
 
 pub(crate) use arm::BondArm;
-pub(crate) use close::{
-    accrue, gather_epoch_snapshot, gather_universe, recorded_served, EpochSnapshot,
-};
+pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
 pub use delta::{
     Accrual, ArchivalDelta, EpochClose, EpochGather, RecordWrite, RecordWriteKind, ServeCreditKey,
@@ -317,17 +315,11 @@ impl Transition {
                 });
             }
         }
-        Ok(self.post_images())
-    }
-
-    /// Every record's post-image so far, in persona-key order, for a
-    /// caller that follows a [`Self::merged`] in the same pass: the map
-    /// already holds every recorded bond, so there is nothing to read.
-    fn post_images(&self) -> Vec<(PCanonicalId, BondRecord)> {
-        self.posts
+        Ok(self
+            .posts
             .iter()
             .map(|(persona, post)| (*persona, post.record.clone()))
-            .collect()
+            .collect())
     }
 
     fn into_delta(self, accrual: Accrual, close: Option<EpochClose>) -> ArchivalDelta {

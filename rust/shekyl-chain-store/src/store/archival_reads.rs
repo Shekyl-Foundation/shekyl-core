@@ -45,8 +45,10 @@
 //!   `(P, shard, h, j)` order.
 //! - **A16** [`issued_digest`] — the running digest that index is checked
 //!   against.
-//! - **A17** [`served_at`] — the shards a persona's rows say were Served in
-//!   an epoch: what the emission gather credits (`SO-D11`).
+//! - **A17** [`served_at`] — the shards a persona's rows say were Served at
+//!   the epochs a caller names: one hop of that persona's shards, then a
+//!   point read of each epoch (`SO-D2`). What the claim's gather credits
+//!   (`SO-D11`).
 //!
 //! # Absence, stated once (`DRS_E1_SARCH.md` §3.3)
 //!
@@ -87,6 +89,8 @@
 //! question is a fold over recorded state, not a read the store composes).
 //! No composed "emission source" read (`SAR-Q4`): the rule that needs
 //! A1 + A5 + A7 + A8 composes them at its call site.
+
+use std::collections::BTreeMap;
 
 use redb::ReadableTable;
 use shekyl_chain_rules::AtHeight;
@@ -472,34 +476,66 @@ pub(super) fn issued_digest<T: ReadTables>(
         .map(Option::unwrap_or_default)
 }
 
-/// **A17.** The shards `persona`'s settlement rows for `epoch` say were
-/// Served, ascending. The table is keyed `(P, shard, E)` (`SO-D2`), so this
-/// walks the persona's rows and keeps the epoch's: one range, bounded by
-/// the persona's shards times the epochs the table retains. A row that
-/// does not decode is SI-7.
+/// **A17.** The shards `persona`'s settlement rows say were Served at each
+/// of `epochs`, ascending per epoch.
+///
+/// The table is keyed `(P, shard, E)` (`SO-D2`), which makes one pair's
+/// epochs a range ([`SettlementKey::shard_range`]) and `(P, E)` not a
+/// range at all. This hops the persona's shards the way [`served_shards`]
+/// hops serve-credit — seek to the next shard, never walk the shard ids
+/// between — and point-reads each requested epoch. An epoch with no Served
+/// shard is absent from the map. Empty `epochs` reads nothing. Only a
+/// requested epoch is decoded; a row that does not decode is SI-7.
 pub(super) fn served_at<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
-    epoch: SettlementEpoch,
-) -> Result<Vec<ShardId>, ReadFault> {
+    epochs: &[SettlementEpoch],
+) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, ReadFault> {
+    let mut out = BTreeMap::new();
+    let epochs = distinct_epochs(epochs);
+    if epochs.is_empty() {
+        return Ok(out);
+    }
     let table = txn.table(ARCHIVAL_SETTLEMENT)?;
-    let p = persona.to_bytes();
-    let mut out = Vec::new();
-    for row in table.range((p, 0, 0)..=(p, u64::MAX, u64::MAX))? {
-        let (key, value) = row?;
-        let (_, shard, e) = key.value();
-        if e != epoch.to_raw() {
-            continue;
+    let span = SettlementKey::persona_range(*persona);
+    let (mut from, persona_hi) = (*span.start(), *span.end());
+    loop {
+        let Some(row) = table.range(from..=persona_hi)?.next() else {
+            break;
+        };
+        let shard = SettlementKey::from_key(row?.0.value()).shard();
+        for &epoch in &epochs {
+            let Some(guard) = table.get(SettlementKey::new(*persona, shard, epoch).key())? else {
+                continue;
+            };
+            let settled: SettlementRow = guard
+                .value()
+                .decode()
+                .map_err(|cause| undecodable(SETTLEMENT, cause))?;
+            if settled.outcome() == SettlementOutcome::Served {
+                out.entry(epoch).or_default().push(shard);
+            }
         }
-        let settled: SettlementRow = value
-            .value()
-            .decode()
-            .map_err(|cause| undecodable(SETTLEMENT, cause))?;
-        if settled.outcome() == SettlementOutcome::Served {
-            out.push(ShardId::from_raw(shard));
-        }
+        let Some(next_shard) = shard.to_raw().checked_add(1) else {
+            break;
+        };
+        from = SettlementKey::new(
+            *persona,
+            ShardId::from_raw(next_shard),
+            SettlementEpoch::ZERO,
+        )
+        .key();
     }
     Ok(out)
+}
+
+/// `epochs` in order, each once. A claim that cites an epoch twice must
+/// not credit its shards twice.
+fn distinct_epochs(epochs: &[SettlementEpoch]) -> Vec<SettlementEpoch> {
+    let mut distinct = epochs.to_vec();
+    distinct.sort_unstable();
+    distinct.dedup();
+    distinct
 }
 
 /// The nine table-backed families of the archival snapshot

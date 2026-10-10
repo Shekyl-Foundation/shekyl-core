@@ -37,6 +37,8 @@
 //! refusal the rule writes, never a pass it arrives at by `?` or
 //! `unwrap_or_default`.
 
+use std::collections::BTreeMap;
+
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
@@ -542,20 +544,19 @@ pub trait ChainView<'id> {
     /// with none: the digest of no draws.
     fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, Self::Fault>;
 
-    /// **A17.** The shards `persona`'s settlement rows for `epoch` say were
-    /// Served, ascending; empty when none was, or when the epoch is not
-    /// settled. What the emission gather credits (`SO-D11a`), read back by
-    /// the claim verify.
+    /// **A17.** The shards `persona`'s settlement rows say were Served at
+    /// each of `epochs`, ascending per epoch. An epoch with no Served shard
+    /// is absent. What the emission gather credits (`SO-D11a`), read back
+    /// by the claim verify.
     ///
-    /// Cost: the table is keyed `(P, shard, E)`, so a store answers by
-    /// walking the persona's rows across every retained epoch and keeping
-    /// one. CEN-J23 asks once per bonded persona per claimed epoch. It is
-    /// part of the walk `BA-T32` is to measure.
+    /// The table is keyed `(P, shard, E)` (`SO-D2`). A store hops the
+    /// persona's shards once and point-reads each requested epoch. CEN-J23
+    /// asks once per bonded persona, for every epoch the claim cites.
     fn served_at(
         &self,
         persona: &PCanonicalId,
-        epoch: SettlementEpoch,
-    ) -> Result<Vec<ShardId>, Self::Fault>;
+        epochs: &[SettlementEpoch],
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Self::Fault>;
 }
 
 /// Implement every archival [`ChainView`] read (A1–A9, A11–A17) as one policy.
@@ -703,10 +704,15 @@ macro_rules! archival_reads {
             (epoch);
             (shekyl_types::archival::IssuedDigest::ZERO));
         $crate::archival_reads!(@emit $policy; served_at;
-            (persona: &shekyl_types::PCanonicalId, epoch: shekyl_types::SettlementEpoch);
-            (::std::vec::Vec<shekyl_types::ShardId>);
-            (persona, epoch);
-            (::std::vec::Vec::new()));
+            (persona: &shekyl_types::PCanonicalId, epochs: &[shekyl_types::SettlementEpoch]);
+            (
+                ::std::collections::BTreeMap<
+                    shekyl_types::SettlementEpoch,
+                    ::std::vec::Vec<shekyl_types::ShardId>,
+                >
+            );
+            (persona, epochs);
+            (::std::collections::BTreeMap::new()));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {

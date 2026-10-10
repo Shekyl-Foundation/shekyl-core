@@ -21,7 +21,8 @@
 //! `ARCHIVAL_SETTLEMENT_WRITER.md` §15, `SO-D11`) — over the same
 //! universe ([`gather_universe`]: the shards closed and final as of the
 //! block that settled `E`) and the same credits: every pair whose
-//! settlement row for `E` is Served ([`recorded_served`]). The verify's
+//! settlement row for `E` is Served ([`ServedAt`], one read per persona
+//! for the epochs the claim cites). The verify's
 //! recompute of `Σwork(E)` is then over the rows the pass saw, and the
 //! compare with the frozen row (`EmissionVerifyError::SigmaWorkMismatch`)
 //! can fail only on a claim that lies, never on a snapshot that drifted.
@@ -72,9 +73,9 @@ use shekyl_archival_retention::{
     emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
     ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
 };
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
-use crate::archival::{gather_epoch_snapshot, gather_universe, recorded_served, EpochSnapshot};
+use crate::archival::{gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::ViewRead;
@@ -99,16 +100,29 @@ use crate::view::{ChainView, Tip};
 /// The gather is [`gather_epoch_snapshot`] over the universe the pass
 /// read ([`gather_universe`]) and A11's records, with the claimant named
 /// so its index among the bonds is the source's `claimant_bond_idx`; the
-/// credits are the Served rows ([`recorded_served`]) — a settled epoch's
-/// rows are all recorded.
+/// credits are the Served rows ([`ServedAt`]) — a settled epoch's rows are
+/// all recorded, and one read per persona covers every epoch the claim cites.
 pub(crate) struct J23;
 
 impl Rule for J23 {
     const ROW: CenRow = CenRow::J23;
 }
 
-/// One claimed epoch's gathered source: the snapshot the close read and
-/// the two values it froze. Kept whole because `EmissionEpochSource`
+/// One claimed epoch the citing gate admitted: a frozen budget, a frozen
+/// `Σwork`, and a close height. The snapshot is gathered after every cited
+/// epoch has passed the gate, so a missing row refuses before any
+/// settlement hop.
+struct CitedEpoch {
+    /// The epoch as the vin spells it.
+    raw: u64,
+    epoch: SettlementEpoch,
+    close_height: BlockHeight,
+    sigma_work_milli: u64,
+    budget: u64,
+}
+
+/// One claimed epoch's gathered source: the snapshot the slash pass read
+/// and the two values it froze. Kept whole because `EmissionEpochSource`
 /// borrows the snapshot's rows.
 struct GatheredEpoch<'r> {
     epoch: u64,
@@ -130,26 +144,46 @@ impl J23 {
         records: &'r [(PCanonicalId, shekyl_types::archival::BondRecord)],
     ) -> Result<Verdict<Vec<GatheredEpoch<'r>>>, ViewRead<V::Fault>> {
         let schedule = rule_set.settlement_schedule();
-        let mut gathered = Vec::with_capacity(vin.settlement_epochs.len());
+        // The citing gate first. A missing budget or Σwork refuses the
+        // claim before any persona's settlement rows are read.
+        let mut cited = Vec::with_capacity(vin.settlement_epochs.len());
         for &epoch in &vin.settlement_epochs {
-            let e = SettlementEpoch::from_raw(epoch);
+            let settled = SettlementEpoch::from_raw(epoch);
             let (Some(budget), Some(sigma_work), Some(close_height)) = (
-                view.budget(e).map_err(ViewRead::View)?,
-                view.sigma_work(e).map_err(ViewRead::View)?,
+                view.budget(settled).map_err(ViewRead::View)?,
+                view.sigma_work(settled).map_err(ViewRead::View)?,
                 schedule.close_height(epoch).map(BlockHeight::from_raw),
             ) else {
                 return Ok(Err(InvalidBlock::new(Self::ROW, cx.locus())));
             };
-            let universe = gather_universe(view, schedule, rule_set.reorg_cap(), e)?;
-            let snapshot = gather_epoch_snapshot(view, &universe, records, Some(persona), |p| {
-                recorded_served(view, *p, e)
-            })?;
-            gathered.push(GatheredEpoch {
-                epoch,
+            cited.push(CitedEpoch {
+                raw: epoch,
+                epoch: settled,
                 close_height,
-                snapshot,
                 sigma_work_milli: sigma_work.to_raw(),
                 budget: budget.to_raw(),
+            });
+        }
+        let epochs: Vec<SettlementEpoch> = cited.iter().map(|cited| cited.epoch).collect();
+        let credits = ServedAt::read(view, records.iter().map(|(persona, _)| *persona), &epochs)?;
+        let mut gathered = Vec::with_capacity(cited.len());
+        for cited in cited {
+            let universe = gather_universe(view, schedule, rule_set.reorg_cap(), cited.epoch)?;
+            let rows = records.iter().map(|(persona, record)| (persona, record));
+            let snapshot = gather_epoch_snapshot(view, &universe, rows, Some(persona), |holder| {
+                Ok(credits
+                    .shards(holder, cited.epoch)
+                    .iter()
+                    .copied()
+                    .map(ShardId::to_raw)
+                    .collect())
+            })?;
+            gathered.push(GatheredEpoch {
+                epoch: cited.raw,
+                close_height: cited.close_height,
+                snapshot,
+                sigma_work_milli: cited.sigma_work_milli,
+                budget: cited.budget,
             });
         }
         Ok(Ok(gathered))

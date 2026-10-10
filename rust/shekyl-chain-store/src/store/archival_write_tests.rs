@@ -406,9 +406,11 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
         snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"),
         Some(zero)
     );
-    assert_eq!(
-        snap.served_at(&p, epoch(CREDIT_EPOCH)).expect("read"),
-        Vec::<ShardId>::new()
+    assert!(
+        snap.served_at(&p, &[epoch(CREDIT_EPOCH)])
+            .expect("read")
+            .is_empty(),
+        "no draw was issued, so no shard is Served"
     );
     for (s, r) in settling.gathers()[0].r_market() {
         assert_eq!(
