@@ -1008,7 +1008,14 @@ called one, and the conclusion drawn — that peers should announce a full `IP:p
 endpoint — would have been a regression. Recorded here because the wrong version
 travelled through comments, a queue row and a PR body before it was caught.
 
-**On clearnet the split is correct and must stay.** The peerlist entry's address comes
+**UPDATE 2026-10-09 (Rick, the handshake-address ruling,
+`P2P_3_SLICE_3_DIALER_BRIEF.md`):** after PR-3's cutover `COMMAND_HANDSHAKE`
+carries no address field on any connector; a node's own dialable address is
+one uniform member of that connector's disclosure population, and the
+self-reported port goes with the field. The correction below is records-was
+of the split as it stood on `dev`.
+
+**On clearnet the split is correct and must stay (records-was).** The peerlist entry's address comes
 from the connection; the port is the only self-reported field **because it is the only
 one observation cannot supply**. An outbound dial's source port is an ephemeral NAT
 mapping bound to that one 5-tuple: the peer observes it, but an unsolicited inbound

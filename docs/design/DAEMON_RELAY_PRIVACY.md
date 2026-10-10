@@ -17099,17 +17099,26 @@ Each item is open. Its carrier is the only thing that closes it.
    first-spy attack onto that share: a clearnet arrival exonerates
    a sender who also has a hidden session, so the origin is sought
    among onion candidates (§95.3). This item carries that cost.
-   **Carrier:** P2P-3 slice 1.
-   **Closes when** slice 1 has landed: the C++ peer lists are gone
-   (`m_peers_white` / `peerlist_manager` absent from `src/p2p`) and
-   the uniform draw within a connector is the dial source. **Re-evaluation:**
-   the slice 1 brief's completion, recorded on its index row.
+   **Carrier:** P2P-3 slice 1, and the ProxyMark reproduction (§99).
+   **Closes when (Rick, 2026-10-09)** the ProxyMark step 2a
+   reproduction (§99, PM-2a: connection occupation, the paper's
+   parameters and metric) has run against the Rust peerlist and relay
+   and its result is recorded there — not on slice 1 landing. D-S1's
+   per-session intake cap (slice 1 brief §5c) is measured as part of
+   this item's instrument: time for an attacker to fill gray and the
+   resulting `p_h`, per connector. **Re-evaluation:** the PM-2a row's
+   dated status. *Records-was: closed when slice 1 had landed, the C++
+   peer lists gone (`m_peers_white` / `peerlist_manager` absent from
+   `src/p2p`) and the uniform draw within a connector the dial source.*
 4. **TRC-1.** On Tor, wire-observer resistance is operator relay
    volume, and that measurement is not finished. **Carrier:**
-   TRC-1 (`TOR_COVER_POSTURE.md` §8, the FOLLOWUPS row). **Closes
-   when** that row's falsifier is met: carried traffic at ordinary
-   operator scale is measured and the row is removed, or the ruling
-   reopens because originated cells stayed distinguishable. **Re-evaluation:**
+   TRC-1 (`TOR_COVER_POSTURE.md` §8, the FOLLOWUPS row). **Test
+   (Rick, 2026-10-09):** the ProxyMark step 3 reproduction (§99,
+   PM-3: the message-rate watermark recovered at a malicious guard)
+   is this item's test. **Closes when** that row's falsifier is met:
+   carried traffic at ordinary operator scale is measured, PM-3 has
+   run against it, and the row is removed, or the ruling reopens
+   because originated cells stayed distinguishable. **Re-evaluation:**
    the TRC-1 index row's next dated status.
 5. **Onion inbound capacity against a ceiling.** Reading 5's tail is
    `h / f` and above, and no inbound ceiling is ruled against it.
@@ -17185,6 +17194,11 @@ row. Pins below were read at `98fbd20acb`.
 | Dial wake spacing | No code yet. Ruled 2026-09-25 as a jittered per-dial wake (`P2P_3_IMPLEMENTATION_ROUND.md` §4.2 slice 3, PWD-B2's per-connection shape). Today's pace is the C++ `m_connections_maker_interval` idle maker and the 60 s housekeeping timer (`net_node.h`) | **Assumption.** The shape is ruled; no number is measured | The fill (dialer brief) | After PR-3, on the Rust dialer: dial pacing, into this register |
 | In-flight dial bound | No code yet. Interim one dial per connector (dialer brief, 2026-10-08) | **Assumption.** The fill is one dial per wake, so the interim needs no measurement | The fill | After PR-3, on the Rust dialer: measured and raised, into this register |
 | D5 thread budgets: transport `workers` 2, `blocking` 1; `executor_workers` 2 | `net_node.inl:3532` to `:3533` and `:1236`; D5 (`P2P_TRANSPORT_LAYER.md`) | **Assumption.** Each is a placeholder "the run record replaces". None of D5's four legs is recorded yet | `shekyl_zone_params`, the asio executor pool | D5's legs on the floor device. Legs 1 to 3 time the Rust transport and are RustPath when run; leg 4 on the interim asio executor is CppPath and is re-run on the Rust `Driver` after the timing-engine round |
+| `DISCLOSE_COUNT`, 12 | PR-2's `shekyl-peerlist` crate (not on `dev` yet); until then `P2P_DEFAULT_PEERS_IN_HANDSHAKE` / `P2P_MAX_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h:193` to `:194`), which it replaces | **Assumption** (D3, Rick 2026-10-09). A protocol constant, the same on every node and every connector; the number is the interim outbound target carried over, not a derivation | The cached disclosure sample (size and the receiver limit), the per-session intake cap below, the white floor below | After PR-3, on the Rust path: from intake diversity, honest fill, and per-reply exposure (slice 1 brief §2); into this register |
+| Per-session gray intake cap, `2 × DISCLOSE_COUNT` = 24 distinct addresses in any 24-hour span | PR-2's `shekyl-peerlist` crate, a named constant derived from `DISCLOSE_COUNT` | **Assumption** (D-S1, Rick 2026-10-09). Twice the sample so an honest peer's cached sample cannot reach it; the multiple is not derived | `admit_gray`'s refusal (`PeerlistRefused`), inbound and outbound sessions alike | After PR-3, on the Rust path, with §96 item 3's instrument: time for an attacker to fill gray and the resulting `p_h`, per connector |
+| White diversity floor, `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) `× DISCLOSE_COUNT` = 48 | PR-2's `shekyl-peerlist` crate; the slice 1 brief §2 and the dialer brief's composition table | **Assumption.** The multiple 4 is the interim stand-in for the floor (slice 1 brief, 2026-10-08) | Disclosure (nothing is disclosed below the floor), the refill trigger | After PR-3, on the Rust path: from draw diversity and the candidate filters (slice 1 brief §2) |
+| White refill line | PR-2's `shekyl-peerlist` crate names it; above the floor by a headroom this register records when PR-2 lands | **Assumption.** The shape is ruled (refill starts above the floor, slice 1 brief §2); the number is PR-2's named interim | The refill trigger slice 3's fill reads | After PR-3, on the Rust path, with the floor |
+| Per-source gray share | PR-2's `shekyl-peerlist` crate names it (slice 1 brief §5, "the crate PR names it; this brief does not pick the number") | **Assumption.** An intake limit so one sender cannot fill gray; distinct from the per-session cap above (one is a share of the list, the other a count per session) | `admit_gray` | After PR-3, on the Rust path, with `DISCLOSE_COUNT`'s derivation |
 
 *Records-was, folded here from `FOLLOWUPS.md` 2026-10-08:* a row asked
 for a derivation check that `fluff_return_ms` equals the max over
@@ -17671,3 +17685,39 @@ produced whenever it slotted a hidden peer, now the steady one, and §20.3
 volume cover on the hidden link is unchanged. Not
 examined: `shekyl-tor` and the connector crates, which PR-1 does not
 touch; the dialer's view of the hidden outbound sessions, which is PR-3's.
+
+## 99. ProxyMark reproduction — REGISTERED 2026-10-09 (PM-1…PM-3)
+
+**Status: OPEN — registered; pass thresholds are Rick's to set and are
+open until ruled.** The paper is `2607.07062v1_TOR_Deanonymizing.pdf`
+(Shi et al., Monero over Tor; referenced from
+`P2P_2_REQUIREMENTS_REGISTER.md` PW-15 and `TOR_COVER_POSTURE.md`),
+which deanonymised hidden-service Monero nodes in three stages: TC-I
+occupying the target's two outgoing Tor connections, TC-II advertising
+falsified fresh block heights so the occupied peers are picked as the
+proxies, TC-III injecting a timing watermark as a peer that a malicious
+guard recovers on the circuit and binds to the source. Reported against
+hidden-service nodes with Monero's white noise on: **precision 100 %,
+recall 93.8 %**. Shekyl's design closes TC-I and TC-II structurally
+(§95.3: own transactions ride a stem slot; stem candidacy is not a
+peer-asserted height; a hidden stem slot is drawn from the hidden
+outbound sessions) and treats TC-III as a Tor-layer threat (TRC-1).
+This section is the reproduction that tests those claims rather than
+asserts them (rule 47), one row per stage, with the identity step the
+peerlist adds in front. **This section mints `PM-1…PM-3`** (rule 94;
+registered in `IMPLEMENTATION_INDEX.md` §2); PM-2 splits into 2a and
+2b, the paper's TC-I and TC-II.
+
+| Step | What it reproduces | Where it runs | When | Closing condition | Paper baseline | Pass threshold |
+| --- | --- | --- | --- | --- | --- | --- |
+| **PM-1** identity in the cached sample | Whether a requester polling a node's cached disclosure sample learns the node's own address or onion — the join the handshake-address ruling removes the field for (dialer brief; slice 1 brief §5a) | The `shekyl-peerlist` sample instrument (PR-2), then the Foundation estate after PR-3, with per-boot and persistent onions, shortly after restart and in steady state | PR-2 for the model; after PR-3 live | Both onion modes measured and recorded here; the result decides whether the onion stays per-boot (PWD-E7) | The paper does not run this step; Monero's handshake carried the node's own entry (the `outgoing_to_same_zone` insertion, `net_node.inl:2730`), so identity was given, not inferred. Baseline: identity recovered with certainty | Rick sets |
+| **PM-2a** connection occupation (TC-I) | An attacker's share of the target's stem slots over time, as a function of its share of the dial candidates and the hidden outbound sessions, with the paper's parameters (two outgoing connections to occupy) and the paper's metric (occupation of both) | `shekyl-relay-privacy` conformance (`simulate_two_slot_occupancy`, `simulate_hidden_slot_churn_exposure`) extended with the PR-2 peerlist model: gray intake under D-S1, the uniform white draw, the hidden slot | PR-2 for the model; after PR-3 against the live dialer | Recorded here with the attacker's time-to-fill and the resulting `p_h` per connector; **closes §96 item 3** | Both outgoing Tor connections occupied for the targeted nodes (the paper's precondition for TC-II; its count is in the paper's table, not transcribed here) | Rick sets |
+| **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | The merged Rust relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). An instrument that gives attacker sessions falsified heights and measures their stem-slot and hidden-slot share against their uniform share | Now, against the relay as merged | Recorded against §96 item 1: attacker share equals its uniform share within tolerance at every falsified height | Falsified heights made the occupied peers the chosen proxies: selection probability 1 for the attacker's peers under Monero's height-ordered selection | Rick sets |
+| **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | After RD, on the Rust path, against operator relay volume (TRC-1, `TOR_COVER_POSTURE.md` §8): the stem leaves inside a stream the relay's own traffic fills | After RD and the TRC-1 measurement | **The test of §96 item 4**: the watermark is not recoverable at the guard under carried traffic at ordinary operator scale, or TRC-1 reopens | Recovered with the paper's overall precision 100 % and recall 93.8 % | Rick sets |
+
+The baseline cells name what the paper's stage achieved; where this
+repository holds only the paper's aggregate figures, the cell says so
+rather than guessing a per-stage number. The lane brief's table of
+2026-10-09 is the source for the per-stage figures when they are
+transcribed, and transcription is a docs change to this table, not a
+measurement.
