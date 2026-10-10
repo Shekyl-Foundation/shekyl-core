@@ -36,12 +36,11 @@ pub const ML_DSA_65_SK_LEN: usize = ml_dsa_65::SK_LEN;
 pub fn keygen_from_seed(
     seed: &[u8; 32],
 ) -> Result<(ml_dsa_65::PublicKey, ml_dsa_65::PrivateKey), CryptoError> {
-    // fips204's try_keygen_with_rng expects a CryptoRng + RngCore.
-    // Use ChaCha20Rng (explicit algorithm) so deterministic derivation remains
-    // stable across rand crate upgrades. StdRng's algorithm is not guaranteed.
-    use rand::SeedableRng;
-
-    let mut rng = rand_chacha::ChaCha20Rng::from_seed(*seed);
+    // fips204's try_keygen_with_rng expects a CryptoRng + RngCore. The
+    // stream is `SeededRng`'s, ChaCha20 by construction, so the derivation
+    // does not move with `rand`'s default generator, and it is wiped when
+    // this function returns.
+    let mut rng = crate::seeded_rng::SeededRng::from_seed(seed);
     ml_dsa_65::try_keygen_with_rng(&mut rng)
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-DSA-65 keygen: {e}")))
 }

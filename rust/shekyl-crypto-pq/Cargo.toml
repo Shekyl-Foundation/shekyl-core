@@ -28,6 +28,13 @@ hex = "0.4"
 zeroize = { workspace = true }
 rand = "0.8"
 rand_chacha = "0.3"
+# The stream cipher under `seeded_rng::SeededRng`, the one RNG a re-derivable
+# key is generated from. `rand_chacha`'s generator gives the same bytes and
+# does not wipe itself; this one does, and only with `zeroize` on (a test in
+# that module stops compiling if the feature is dropped). Already in
+# `Cargo.lock` at this version with this feature, through `shekyl-chacha` —
+# adds no package to the supply chain (`17-dependency-discipline`).
+chacha20 = { version = "0.9", features = ["zeroize"] }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 ciphersuite = "0.4"
 # `zeroize` feature gates `impl Zeroize for Scalar` (verified at source:

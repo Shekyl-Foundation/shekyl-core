@@ -96,8 +96,6 @@
 
 use curve25519_dalek::scalar::Scalar;
 use hkdf::Hkdf;
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
 use sha2::Sha512;
 use sha3::{Digest, Sha3_256};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -453,7 +451,7 @@ pub fn ml_kem_keypair_from_d_z(
     d_z: &[u8; 64],
 ) -> Result<([u8; ML_KEM_768_EK_LEN], MlKem768DecapKey), CryptoError> {
     let chacha_seed = ml_kem_chacha_seed_from_d_z(d_z);
-    let mut rng = ChaCha20Rng::from_seed(chacha_seed);
+    let mut rng = crate::seeded_rng::SeededRng::from_seed(&chacha_seed);
     let (ek, dk) = ml_kem_768::KG::try_keygen_with_rng(&mut rng)
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-KEM-768 keygen: {e}")))?;
 

@@ -92,6 +92,7 @@
 use crate::heap_secret::HeapSecret;
 use crate::hybrid_combiner::{self, decode_canonical, encode_canonical, CANONICAL_OVERHEAD};
 use crate::rng::{key_material32, HedgedOsRng};
+use crate::seeded_rng::SeededRng;
 use crate::signature::{
     SignatureScheme, HYBRID_KEY_VERSION, HYBRID_SCHEME_ID_ED25519_FN_DSA_1024, HYBRID_SIG_VERSION,
 };
@@ -351,8 +352,7 @@ impl HybridEd25519FnDsa {
         message: &[u8],
         rng_seed: &[u8; 32],
     ) -> Result<FnDsaHybridSignature, CryptoError> {
-        use rand::SeedableRng as _;
-        let mut rng = rand_chacha::ChaCha20Rng::from_seed(*rng_seed);
+        let mut rng = SeededRng::from_seed(rng_seed);
         Self::sign_with_rng(secret_key, domain, message, &mut rng)
     }
 }
@@ -415,10 +415,9 @@ fn fn_dsa_keygen(
     [u8; FN_DSA_1024_PUBLIC_KEY_LENGTH],
     HeapSecret<FN_DSA_1024_SECRET_KEY_LENGTH>,
 ) {
-    use rand::SeedableRng as _;
-    // ChaCha20 by name, so the derivation does not move with `rand`'s
-    // default generator.
-    let mut rng = rand_chacha::ChaCha20Rng::from_seed(*seed);
+    // The stream every seeded key in this crate is generated from, wiped
+    // when this function returns.
+    let mut rng = SeededRng::from_seed(seed);
     let mut generator = KeyPairGenerator1024::default();
     // Allocated at its final address and written there: the secret key is
     // never an array on this stack.

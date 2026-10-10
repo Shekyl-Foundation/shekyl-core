@@ -1097,6 +1097,7 @@ dependencies = [
  "base64",
  "bip39",
  "blake2",
+ "chacha20",
  "chacha20poly1305",
  "ciphersuite",
  "curve25519-dalek",
