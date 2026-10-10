@@ -50,6 +50,9 @@ mod outcome;
 mod partition;
 mod peerlist;
 
+#[cfg(feature = "conformance")]
+pub mod conformance;
+
 pub use outcome::{DialOutcome, ListName, Refusal, SessionId, Source};
 pub use peerlist::{BanQuery, NoBans, Peerlist, Snapshot};
 pub use shekyl_net_address::NetworkAddress;
