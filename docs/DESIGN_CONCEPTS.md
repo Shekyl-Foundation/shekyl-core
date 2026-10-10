@@ -670,14 +670,13 @@ The economic system should be visible and comprehensible to participants through
 
 | Element | Description |
 |---|---|
-| Emission progress | Percentage of total supply released, with era boundaries |
+| Emission progress | Percentage of total supply released |
 | Current release tempo | Release multiplier (e.g., "1.12x — moderately active chain") |
 | Burn rate | Current effective burn percentage |
 | Stake ratio gauge | Percentage of circulating supply staked, displayed as a health indicator |
 | Total burned counter | Cumulative SHEKYL destroyed, ticking in real-time |
 | Staker yield | Annualized yield for archival serve-work, with composition (emission vs fees) |
 | Emission share gauge | Current effective staker emission share %, showing decay progress |
-| Emission forecast | "At current pace, Maturity Era begins in ~X years" |
 
 ### Participant identity
 
