@@ -7,13 +7,8 @@
 //! was refused.
 
 use shekyl_net_address::NetworkAddress;
+use shekyl_relay_privacy::ConnectionId;
 use shekyl_transport_layer::ConnectorId;
-
-/// The session an address arrived over. Sixteen bytes, as the connection
-/// table keys sessions, so the dialer and the inbound path can name one
-/// without a conversion. D-S1 counts intake per session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SessionId(pub [u8; 16]);
 
 /// Where an address offered to gray came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,8 +17,9 @@ pub enum Source {
     /// advertisement. Counted against the session's intake cap (D-S1) and
     /// admitted only when the address's connector is the session's.
     Session {
-        /// The session the address arrived over.
-        id: SessionId,
+        /// The session the address arrived over: the daemon's connection
+        /// id, so the dialer does not convert.
+        id: ConnectionId,
         /// That session's connector.
         connector: ConnectorId,
     },

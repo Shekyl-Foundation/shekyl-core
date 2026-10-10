@@ -20,11 +20,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
 use shekyl_net_address::NetworkAddress;
-use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_relay_privacy::{rng::RelayRng, ConnectionId};
 use shekyl_timing_engine::Tick;
 
 use crate::index::Index;
-use crate::outcome::SessionId;
 use crate::sample::sample_prefix;
 use crate::{
     DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS,
@@ -78,7 +77,7 @@ pub(crate) struct Partition {
     own_address: Option<NetworkAddress>,
     /// Per session, the distinct addresses it has offered and when each
     /// last arrived (D-S1). Pruned to the intake span on every touch.
-    intake: BTreeMap<SessionId, BTreeMap<NetworkAddress, Tick>>,
+    intake: BTreeMap<ConnectionId, BTreeMap<NetworkAddress, Tick>>,
 }
 
 impl Partition {
@@ -289,7 +288,7 @@ impl Partition {
     /// (the address left and is entering again inside the span) counts once.
     pub(crate) fn record_intake(
         &mut self,
-        session: SessionId,
+        session: ConnectionId,
         address: &NetworkAddress,
         now: Tick,
     ) -> bool {
@@ -311,7 +310,7 @@ impl Partition {
     /// not newly become gray, so it is not a new charge.
     pub(crate) fn refresh_intake(
         &mut self,
-        session: SessionId,
+        session: ConnectionId,
         address: &NetworkAddress,
         now: Tick,
     ) {
@@ -332,7 +331,7 @@ impl Partition {
     /// offered, and an address that already sits, each count as not fresh.
     pub(crate) fn would_exceed_intake(
         &mut self,
-        session: SessionId,
+        session: ConnectionId,
         candidates: &[&NetworkAddress],
         now: Tick,
     ) -> bool {
@@ -353,12 +352,12 @@ impl Partition {
     }
 
     /// The session ended: its intake ledger goes with it.
-    pub(crate) fn forget_session(&mut self, session: SessionId) {
+    pub(crate) fn forget_session(&mut self, session: ConnectionId) {
         self.intake.remove(&session);
     }
 
     /// Distinct addresses `session` has offered within the intake span.
-    pub(crate) fn intake_count(&mut self, session: SessionId, now: Tick) -> usize {
+    pub(crate) fn intake_count(&mut self, session: ConnectionId, now: Tick) -> usize {
         match self.intake.get_mut(&session) {
             Some(ledger) => {
                 prune_intake(ledger, now);

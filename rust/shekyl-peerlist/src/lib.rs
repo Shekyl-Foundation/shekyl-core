@@ -59,9 +59,14 @@ mod sample;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
-pub use outcome::{DialOutcome, ListName, Refusal, SessionId, Source};
+pub use outcome::{DialOutcome, ListName, Refusal, Source};
+
 pub use peerlist::{BanQuery, NoBans, Peerlist, Snapshot};
 pub use shekyl_net_address::NetworkAddress;
+/// A daemon connection. The type is `shekyl_relay_privacy::ConnectionId`;
+/// re-exported so a peerlist session and a stem source are one id. F4 moves
+/// that vocabulary; this re-export does not.
+pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
 pub use shekyl_transport_layer::{connector_for, ConnectorId};
 

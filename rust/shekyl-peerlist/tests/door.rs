@@ -11,7 +11,7 @@
 use std::net::Ipv4Addr;
 
 use shekyl_peerlist::{
-    DialOutcome, ListName, NetworkAddress, NoBans, Peerlist, Refusal, SessionId, Source, Tick,
+    ConnectionId, DialOutcome, ListName, NetworkAddress, NoBans, Peerlist, Refusal, Source, Tick,
     EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP,
 };
 use shekyl_relay_privacy::rng::SplitMix64;
@@ -37,8 +37,8 @@ fn onion(n: u8) -> NetworkAddress {
     }
 }
 
-fn session(n: u8) -> SessionId {
-    SessionId([n; 16])
+fn session(n: u8) -> ConnectionId {
+    ConnectionId([n; 16])
 }
 
 fn fleet() -> Vec<NetworkAddress> {
@@ -73,7 +73,7 @@ fn no_white_type_is_exported() {
         "DialOutcome",
         "Source",
         "Refusal",
-        "SessionId",
+        "ConnectionId",
         "ListName",
     ];
     assert!(names.contains(&"Peerlist"));

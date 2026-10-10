@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_peerlist::{
-    white_diversity_floor, BanQuery, DialOutcome, NetworkAddress, NoBans, Peerlist, Refusal,
-    SessionId, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, GRAY_CAP, SESSION_INTAKE_CAP,
+    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, NetworkAddress, NoBans, Peerlist,
+    Refusal, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, GRAY_CAP, SESSION_INTAKE_CAP,
     WHITE_REFILL_LINE,
 };
 use shekyl_relay_privacy::rng::SplitMix64;
@@ -36,8 +36,8 @@ fn onion(n: u8) -> NetworkAddress {
     }
 }
 
-fn session(n: u8) -> SessionId {
-    SessionId([n; 16])
+fn session(n: u8) -> ConnectionId {
+    ConnectionId([n; 16])
 }
 
 fn at_hours(h: u64) -> Tick {

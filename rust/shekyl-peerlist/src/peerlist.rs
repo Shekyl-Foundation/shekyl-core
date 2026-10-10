@@ -8,11 +8,11 @@
 use std::net::IpAddr;
 
 use shekyl_net_address::NetworkAddress;
-use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_relay_privacy::{rng::RelayRng, ConnectionId};
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{connector_for, BanList, ConnectorId};
 
-use crate::outcome::{DialOutcome, ListName, Refusal, SessionId, Source};
+use crate::outcome::{DialOutcome, ListName, Refusal, Source};
 use crate::partition::Partition;
 use crate::{white_diversity_floor, DISCLOSE_COUNT, WHITE_REFILL_LINE};
 
@@ -137,7 +137,7 @@ impl Peerlist {
     pub fn admit_received_list<R: RelayRng + ?Sized>(
         &mut self,
         addresses: &[NetworkAddress],
-        session: SessionId,
+        session: ConnectionId,
         connector: ConnectorId,
         now: Tick,
         bans: &mut dyn BanQuery,
@@ -187,13 +187,18 @@ impl Peerlist {
     }
 
     /// The session ended; its intake ledger goes with it.
-    pub fn forget_session(&mut self, connector: ConnectorId, session: SessionId) {
+    pub fn forget_session(&mut self, connector: ConnectorId, session: ConnectionId) {
         self.partition_mut(connector).forget_session(session);
     }
 
     /// Distinct addresses `session` has offered on `connector` within the
     /// intake span (D-S1).
-    pub fn intake_count(&mut self, connector: ConnectorId, session: SessionId, now: Tick) -> usize {
+    pub fn intake_count(
+        &mut self,
+        connector: ConnectorId,
+        session: ConnectionId,
+        now: Tick,
+    ) -> usize {
         self.partition_mut(connector).intake_count(session, now)
     }
 
