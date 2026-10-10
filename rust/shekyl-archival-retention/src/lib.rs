@@ -25,6 +25,9 @@
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
 //! - [`attestation`] — the kept per-record discriminant ([`AttestationKind`]).
+//! - [`secret_draw`] — the secret draw: selection, the `0x0C` commitment,
+//!   the challenge nonce, the serve-credit batch commitment, and the
+//!   count rule (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4, §5.2, §7.3).
 //! - [`settlement_select`] — settlement's fold: three counted draws by beacon, the pair's
 //!   row, and the issued-draw digest term.
 //! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
@@ -72,6 +75,7 @@ pub mod pass_anchor;
 pub mod path;
 pub mod release_cooldown;
 pub mod reward_arithmetic;
+pub mod secret_draw;
 pub mod segment_freeze;
 pub mod serve_eligibility;
 pub mod settlement_select;
@@ -202,6 +206,12 @@ pub use reward_arithmetic::{
     curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_micro,
     work_milli_from_micro, BandedCurveParams, WORK_MICRO_PER_MILLI, WORK_MICRO_SCALE,
     WORK_MILLI_SCALE,
+};
+pub use secret_draw::{
+    challenge_nonce, draw_commit, draw_count, draw_horizon, select_draw,
+    serve_credit_batch_commitment, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS,
+    DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION, DRAW_HORIZON_FLOOR,
+    SERVE_CREDIT_BATCH_CUSTOMIZATION,
 };
 pub use segment_freeze::{
     challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,

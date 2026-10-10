@@ -174,6 +174,16 @@ where
             return Ok(None);
         };
 
+        // Outside the engine lock: the reader is an actor ask, and the
+        // store lives on the stake actor, not on `Engine`. An empty store
+        // answers 404 until fill (`WSS-Q4`) lands. Erase (`WSS-Q8`) is the
+        // same writer's later message. The reader still decrypts (`WSS-Q13`
+        // is not met).
+        let bodies = stake
+            .serving_bodies()
+            .await
+            .map_err(|e| ServingStartError::Identity(Box::new(e)))?;
+
         // Claim only once we know we will start a host. An idle staker must
         // not occupy the slot; a second start after activation must.
         let slot_guard = {
@@ -248,6 +258,7 @@ where
                 // scan (`WSS-24`). The refresher spawned above keeps it
                 // stamped and exits with the last reader.
                 tip,
+                bodies,
             },
             pinner,
             std::sync::Arc::new(shekyl_operator_alarm::OperatorAlarms::new()),
