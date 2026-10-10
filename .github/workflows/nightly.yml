@@ -6,13 +6,22 @@ on:
   workflow_dispatch:
     inputs:
       job:
-        description: "Run only this job (proptest-exhaustive, store-ignored or economics-sim-ignored). Empty runs all three."
-        required: false
-        default: ""
+        description: "Which job to run."
+        type: choice
+        options:
+          - all
+          - proptest-exhaustive
+          - store-ignored
+          - economics-sim-ignored
+        default: all
       ref:
         description: "Run over this one ref (a branch or a commit) in place of main and dev. For proving a lane on a branch."
         required: false
         default: ""
+      report:
+        description: "Open or thread a tracking issue for a red leg, as a scheduled run does. For proving the reporter."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,7 +31,7 @@ env:
 
 jobs:
   proptest-exhaustive:
-    if: ${{ !inputs.job || inputs.job == 'proptest-exhaustive' }}
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'proptest-exhaustive' }}
     # Scheduled workflows always execute from the default branch (main), so the
     # schedule picks up whichever version of this file is on main. The matrix
     # below makes each scheduled run cover both active branches in parallel.
@@ -42,6 +51,9 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
 
       - name: Install Rust toolchain
         # Composite action (.github/actions/install-rust): the one
@@ -67,12 +79,13 @@ jobs:
         working-directory: rust
         env:
           PROPTEST_CASES: "200000"
+          BRANCH: ${{ matrix.branch }}
         run: |
           START=$(date +%s)
           cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip -- --nocapture 2>&1
           END=$(date +%s)
           ELAPSED=$((END - START))
-          echo "::notice::Proptest completed on ${{ matrix.branch }} in ${ELAPSED}s (budget 180m)"
+          echo "::notice::Proptest completed on ${BRANCH} in ${ELAPSED}s (budget 180m)"
 
       - name: Run timing-engine model (8 192 cases)
         working-directory: rust
@@ -85,7 +98,7 @@ jobs:
           cargo test --locked --release -p shekyl-timing-engine --lib -- --exact model::random_ops_match_a_scanned_reference --nocapture
 
   store-ignored:
-    if: ${{ !inputs.job || inputs.job == 'store-ignored' }}
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'store-ignored' }}
     # The chain store's `#[ignore]`d set: the shard-boundary deletion test
     # over real multi-input spends (`prune_tests::
     # the_boundary_batch_discards_closed_shards_on_real_spends`, minutes of
@@ -110,10 +123,6 @@ jobs:
     # until then); `workflow_dispatch` with ref=dev runs the newer config.
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    permissions:
-      contents: read
-      # For the on-failure step: a red must reach a human.
-      issues: write
     strategy:
       fail-fast: false
       matrix:
@@ -123,6 +132,9 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
@@ -146,6 +158,8 @@ jobs:
         # and is counted, and joins the list when it is this lane's to own.
         # The benches run at their defaults: a default that builds a chain
         # the constants refuse is exactly what this lane exists to see.
+        env:
+          BRANCH: ${{ matrix.branch }}
         run: |
           set -eu
           list=$(cargo test --locked --release -p shekyl-chain-store --lib -- --list --ignored)
@@ -162,54 +176,10 @@ jobs:
           START=$(date +%s)
           cargo test --locked --release -p shekyl-chain-store --lib -- --ignored --nocapture 2>&1
           END=$(date +%s)
-          echo "::notice::Chain store ignored set completed on ${{ matrix.branch }} in $((END - START))s (budget 120m)"
-
-      - name: notify on red
-        # A nightly tier without a route to a human "joins a silence"
-        # (`run_live_daemon_gates.sh` header, PR #660): the lane exists
-        # because unrun ignored tests rotted unreported, and a red nobody
-        # reads is the same silence one hop later. Same step as
-        # nightly-live-daemon-slow.yml's: open a tracking issue, or comment
-        # on the open one so repeats thread.
-        if: failure()
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const title = `nightly chain-store ignored set RED (${{ matrix.branch }})`;
-            const body = [
-              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              'Branch: ${{ matrix.branch }}',
-              'The `store-ignored` job (shekyl-chain-store `--ignored`: the real-spend shard-boundary deletion test and the two benches) failed.',
-              'Either an ignored test no longer builds a chain its constants admit, or the boundary test\'s deletions disagree with the calendar.',
-            ].join('\n');
-            // Exact-title match over open issues, not text search: the search
-            // API's in:title is a substring match and lags on freshly created
-            // issues, which would fork the thread on back-to-back nightly reds.
-            const open = await github.paginate(github.rest.issues.listForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              per_page: 100,
-            });
-            const existing = open.find((i) => !i.pull_request && i.title === title);
-            if (existing) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                body,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-              });
-            }
+          echo "::notice::Chain store ignored set completed on ${BRANCH} in $((END - START))s (budget 120m)"
 
   economics-sim-ignored:
-    if: ${{ !inputs.job || inputs.job == 'economics-sim-ignored' }}
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
     # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
     # against their committed fixtures (150 s and 100 s in release), the
     # full-scale challenge-coverage reproduction, and the secret draw's
@@ -229,14 +199,9 @@ jobs:
     # this file over both branches, so the `main` leg is red until the
     # release that carries the tests it names (and threads onto one tracking
     # issue until then); `workflow_dispatch` with ref=dev runs the newer
-    # config. A dispatched red opens no issue; the person who dispatched it
-    # is reading it.
+    # config.
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    permissions:
-      contents: read
-      # For the on-failure step: a red must reach a human.
-      issues: write
     strategy:
       fail-fast: false
       matrix:
@@ -246,6 +211,9 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: ./.github/actions/install-rust
@@ -271,6 +239,8 @@ jobs:
         #
         # The crate is a binary with no library target: the tests are in
         # `--bin shekyl-economics-sim`.
+        env:
+          BRANCH: ${{ matrix.branch }}
         run: |
           set -eu
           run_tests='stage2::tests::stage2_narration_matches_the_committed_fixture
@@ -314,44 +284,86 @@ jobs:
             exit 1
           fi
           END=$(date +%s)
-          echo "::notice::Economics sim ignored tests completed on ${{ matrix.branch }} in $((END - START))s (budget 180m)"
+          echo "::notice::Economics sim ignored tests completed on ${BRANCH} in $((END - START))s (budget 180m)"
 
-      - name: notify on red
-        # Same step as `store-ignored`'s: a nightly red nobody reads is the
-        # silence this lane exists to end.
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        uses: actions/github-script@v8
+  report-red:
+    # A nightly tier without a route to a human "joins a silence"
+    # (`run_live_daemon_gates.sh` header, PR #660): these lanes exist
+    # because unrun ignored tests rotted unreported, and a red nobody reads
+    # is the same silence one hop later. For each red leg of the two
+    # ignored-test lanes this opens a tracking issue, or comments on the
+    # open one so repeats thread.
+    #
+    # Its own job, with the only write permission in this workflow: the
+    # lanes above run the code of the ref they check out, and no job that
+    # does that holds a token that can write. This job checks out nothing.
+    #
+    # Scheduled runs report. A dispatched run reports only when asked
+    # (`report`): the person who dispatched it is reading it.
+    needs: [store-ignored, economics-sim-ignored]
+    if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/github-script@v8
         with:
           script: |
-            const title = `nightly economics-sim ignored tests RED (${{ matrix.branch }})`;
-            const body = [
-              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              'Branch: ${{ matrix.branch }}',
-              'The `economics-sim-ignored` job failed. It runs four `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `full_scale_maturity_reproduces_doc_figures` and `the_evidence_set_runs_and_the_table_renders`.',
-              'If a narration drifted: regenerate with `regen_stage2_narration_fixtures` only if the sim change is intended; otherwise the sim drifted from its record.',
-              'If the job stopped before running anything, the crate\'s ignored set changed: decide in `nightly.yml` whether the new test is run or is a regeneration helper.',
-            ].join('\n');
-            // Exact-title match over open issues, not text search (see
-            // `store-ignored`).
+            const lanes = {
+              'store-ignored': {
+                title: 'nightly chain-store ignored set RED',
+                lines: [
+                  'The `store-ignored` job (shekyl-chain-store `--ignored`: the real-spend shard-boundary deletion test and the two benches) failed.',
+                  'Either an ignored test no longer builds a chain its constants admit, or the boundary test\'s deletions disagree with the calendar.',
+                ],
+              },
+              'economics-sim-ignored': {
+                title: 'nightly economics-sim ignored tests RED',
+                lines: [
+                  'The `economics-sim-ignored` job failed. It runs four `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `full_scale_maturity_reproduces_doc_figures` and `the_evidence_set_runs_and_the_table_renders`.',
+                  'If a narration drifted: regenerate with `regen_stage2_narration_fixtures` only if the sim change is intended; otherwise the sim drifted from its record.',
+                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `nightly.yml` whether the new test is run or is a regeneration helper.',
+                ],
+              },
+            };
+            const { owner, repo } = context.repo;
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner,
+              repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            // A leg is named `<job> (<branch>)`. The branch is read from the
+            // name as data; nothing here evaluates it.
+            const red = jobs
+              .filter((job) => job.conclusion === 'failure')
+              .map((job) => /^(\S+) \((.+)\)$/.exec(job.name))
+              .filter((m) => m && lanes[m[1]]);
+            if (red.length === 0) {
+              core.setFailed('report-red ran and found no red leg of a lane it reports: a job was renamed, or the run failed somewhere this job does not read.');
+              return;
+            }
+            // Exact-title match over open issues, not text search: the search
+            // API's in:title is a substring match and lags on freshly created
+            // issues, which would fork the thread on back-to-back nightly reds.
             const open = await github.paginate(github.rest.issues.listForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner,
+              repo,
               state: 'open',
               per_page: 100,
             });
-            const existing = open.find((i) => !i.pull_request && i.title === title);
-            if (existing) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                body,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-              });
+            for (const [, lane, branch] of red) {
+              const title = `${lanes[lane].title} (${branch})`;
+              const body = [
+                `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+                `Branch: ${branch}`,
+                ...lanes[lane].lines,
+              ].join('\n');
+              const existing = open.find((i) => !i.pull_request && i.title === title);
+              if (existing) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body });
+              } else {
+                await github.rest.issues.create({ owner, repo, title, body });
+              }
             }
