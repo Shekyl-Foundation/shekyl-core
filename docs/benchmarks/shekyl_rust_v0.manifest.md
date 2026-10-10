@@ -936,8 +936,11 @@ message and the receipt scheme domain:
 | `crypto_bench_fn_dsa_hybrid_sign` | The combiner's preimage, decoding the FN-DSA signing key, one FN-DSA-1024 signature, one Ed25519 signature |
 | `crypto_bench_fn_dsa_hybrid_verify` | The preimage, decoding the FN-DSA verifying key, one FN-DSA-1024 verification, one Ed25519 verification |
 
-**Determinism.** FN-DSA signing is rejection sampling, and its signer
-draws 40 bytes per attempt. The gated sign arm enters through
+**Determinism.** FN-DSA signing is rejection sampling. The pinned signer
+draws one 40-byte seed from its RNG per signature, replaces it with
+`SHAKE256(hashed signing key ‖ message representative ‖ seed)`, and drives
+every attempt of the rejection loop from that derived seed and a counter;
+the RNG is not consulted again. The gated sign arm enters through
 `sign_with_rng_seed`, which shares the nested body with the production
 `sign` and replaces only the source of that draw with a fixed ChaCha20
 stream, so the count repeats exactly. The criterion sign arm uses the

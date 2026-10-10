@@ -165,7 +165,13 @@ The tag test fails closed. A pre-release is `MAJOR.MINOR.PATCH` followed by
 `-alpha`, `-beta` or `-RC` with an optional number, in any case, with or
 without the leading `v`; every other shape is treated as genesis and
 refused, `v3.0`, `V3.0.0` and `v3.0.0+mainnet` included. An oddly named
-rehearsal tag has to be re-cut with a suffix.
+rehearsal tag has to be re-cut with a suffix. The suffix takes one
+optional number: `v3.0.0-alpha.1.2` is refused. `gitian.yml` carries the
+same expression for a tree that predates the script, and the script fails
+if the workflow does not hold it verbatim.
+
+A locked `1.0.0-rc.1` is below 1.0: a SemVer pre-release of the crate is
+pre-standard as far as the gate is concerned.
 
 **What "1.0" stands for (ruled 2026-10-09).** The property wanted is that
 the crate implements final FIPS 206; the gate tests the crate's major

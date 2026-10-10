@@ -54,10 +54,20 @@ MANIFEST = "rust/shekyl-crypto-pq/Cargo.toml"
 # `v3.0`, `v3.0.0+mainnet` or `mainnet-3.0.0`. An oddly named rehearsal tag
 # is refused until it is re-cut with a suffix; that is the direction a gate
 # whose job is to keep mainnet off a pre-standard crate has to fail in.
-# `gitian.yml` carries the same expression for a tree that predates this
-# script; the two change together.
-PRERELEASE_TAG = re.compile(r"^v?\d+\.\d+\.\d+-(alpha|beta|rc)(\.?\d+)*$", re.IGNORECASE)
-SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
+# The suffix takes one optional number and no more: `v3.0.0-alpha.1.2` is
+# not a shape the repository cuts, so it is not a pre-release here.
+#
+# Written as a POSIX extended expression, matched without regard to case,
+# because `gitian.yml` hands the same text to `grep -Ei` for a tree that
+# predates this script. This script fails if that workflow does not carry
+# the expression verbatim, so the two cannot drift.
+PRERELEASE_ERE = r"^v?[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)(\.?[0-9]+)?$"
+PRERELEASE_TAG = re.compile(PRERELEASE_ERE, re.IGNORECASE)
+FALLBACK_WORKFLOW = ".github/workflows/gitian.yml"
+
+# A locked version. Group 4 is a SemVer pre-release suffix: `1.0.0-rc.1` is
+# below 1.0.0 and is not the stable release genesis waits for.
+SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$")
 
 
 def locked_versions(lock_text):
@@ -91,6 +101,25 @@ def manifest_pins(manifest_text):
 
 def is_genesis_tag(tag):
     return bool(tag) and not PRERELEASE_TAG.match(tag)
+
+
+def is_pre_standard(version):
+    """True below stable 1.0.0; None if `version` is not a version."""
+    parsed = SEMVER.match(version)
+    if not parsed:
+        return None
+    return int(parsed.group(1)) < 1 or parsed.group(4) is not None
+
+
+def fallback_problems(workflow_text):
+    """The old-tree fallback in the release workflow must use this grammar."""
+    if "'%s'" % PRERELEASE_ERE in workflow_text:
+        return []
+    return [
+        "%s does not carry the pre-release expression '%s'. Its fallback "
+        "for a tree without this script must decide a tag exactly as this "
+        "script does" % (FALLBACK_WORKFLOW, PRERELEASE_ERE)
+    ]
 
 
 def judge(lock_text, manifest_text, tag):
@@ -133,11 +162,10 @@ def judge(lock_text, manifest_text, tag):
                 % (MANIFEST, name, got, versions[name], want)
             )
 
-    parsed = SEMVER.match(version)
-    if not parsed:
+    pre_standard = is_pre_standard(version)
+    if pre_standard is None:
         problems.append("cannot read %r as a version" % version)
         return problems, notes
-    pre_standard = int(parsed.group(1)) < 1
 
     if is_genesis_tag(tag):
         if pre_standard:
@@ -198,6 +226,17 @@ def selftest():
     ok &= case("pre-1.0, RC tag", True, old, exact(old), "v3.0.0-RC1")
     ok &= case("pre-1.0, genesis tag", False, old, exact(old), "v3.0.0")
     ok &= case("1.0, genesis tag", True, new, exact(new), "v3.0.0")
+    # A release candidate of 1.0 is not 1.0.
+    rc = {name: "1.0.0-rc.1" for name in PACKAGES}
+    ok &= case("1.0 release candidate, genesis tag", False, rc, exact(rc), "v3.0.0")
+    ok &= case("1.0 release candidate, pre-release tag", True, rc, exact(rc), "v3.1.0-alpha.9")
+    for version, pre in (("0.4.0", True), ("0.99.9", True), ("1.0.0", False),
+                         ("1.0.0-rc.1", True), ("1.0.0-alpha", True),
+                         ("1.0.0+build.5", False), ("2.3.4", False),
+                         ("1.0", None), ("one", None)):
+        if is_pre_standard(version) != pre:
+            print("selftest FAILED: is_pre_standard(%r)" % (version,), file=sys.stderr)
+            ok = False
     ok &= case("a sub-crate missing from the lock", False,
                without(old, "fn-dsa-sign"), exact(old), None)
     ok &= case("nothing in the lock", False, {}, exact(old), None)
@@ -226,12 +265,25 @@ def selftest():
         ("V3.0.0", True), ("v3.0", True), ("v3.0.0+mainnet", True),
         ("mainnet-3.0.0", True), ("core-v3.1.0", True), ("v3.0.0-final", True),
         ("v3.0.0-rc.1+build", True), ("v3.0.0-alphabet", True), ("genesis", True),
+        # One optional number after the label, not a run of them.
+        ("v3.0.0-alpha.1.2", True), ("v3.0.0-RC1.2", True), ("v3.0.0-beta.", True),
         # No tag at all is an untagged build, not a release.
         ("", False), (None, False),
     ):
         if is_genesis_tag(tag) != genesis:
             print("selftest FAILED: is_genesis_tag(%r)" % (tag,), file=sys.stderr)
             ok = False
+    carries = "grep -Eiq '%s' <<<\"$GITIAN_TAG\"" % PRERELEASE_ERE
+    if fallback_problems("          if %s; then\n" % carries):
+        print("selftest FAILED: fallback carrying the expression", file=sys.stderr)
+        ok = False
+    drifted = carries.replace("(\\.?[0-9]+)?", "(\\.?[0-9]+)*")
+    if drifted == carries or not fallback_problems(drifted):
+        print("selftest FAILED: fallback with a drifted expression", file=sys.stderr)
+        ok = False
+    if not fallback_problems(""):
+        print("selftest FAILED: fallback absent", file=sys.stderr)
+        ok = False
     return ok
 
 
@@ -256,11 +308,14 @@ def main():
             lock_text = f.read()
         with open(MANIFEST, encoding="utf-8") as f:
             manifest_text = f.read()
+        with open(FALLBACK_WORKFLOW, encoding="utf-8") as f:
+            workflow_text = f.read()
     except OSError as error:
         print("fn-dsa genesis gate: cannot read its inputs: %s" % error, file=sys.stderr)
         return 1
 
     problems, notes = judge(lock_text, manifest_text, tag)
+    problems += fallback_problems(workflow_text)
     for note in notes:
         print("fn-dsa genesis gate: %s" % note)
     if problems:

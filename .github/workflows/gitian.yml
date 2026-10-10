@@ -44,9 +44,11 @@ jobs:
         gate=scripts/ci/check_fn_dsa_genesis_gate.py
         if [ ! -f "$gate" ]; then
           # A tag cut before the gate existed. The same rule as the script,
-          # in the same expression: a recognised pre-release passes, and any
-          # other shape is refused, not waved on.
-          if printf '%s\n' "$GITIAN_TAG" | grep -Eiq '^v?[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)(\.?[0-9]+)*$'; then
+          # in the same expression, which the script checks is here verbatim:
+          # a recognised pre-release passes, and any other shape is refused,
+          # not waved on. The tag reaches grep on a here-string, so the
+          # verdict is grep's own exit status and not a pipeline's.
+          if grep -Eiq '^v?[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)(\.?[0-9]+)?$' <<<"$GITIAN_TAG"; then
             echo "::notice::$GITIAN_TAG predates the fn-dsa genesis gate and is a pre-release: nothing to refuse"
             exit 0
           fi
