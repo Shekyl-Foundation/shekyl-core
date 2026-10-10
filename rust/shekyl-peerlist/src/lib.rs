@@ -98,8 +98,8 @@ pub const fn white_diversity_floor() -> usize {
 /// confirmations before the floor is reached — so the node is not probing
 /// stale gray entries once connectivity has already thinned. 60 today.
 ///
-/// **Assumption** (§97): this PR's interim, named in the brief §16.3
-/// (D-PR2-2) for Rick to accept or move.
+/// **Assumption** (§97): RULED as D-PR2-2 (brief §16.3, Rick 2026-10-09),
+/// re-derived on the Rust path after PR-3 with the floor.
 pub const WHITE_REFILL_LINE: usize = white_diversity_floor() + DISCLOSE_COUNT;
 
 /// Gray capacity per connector. The C++ value

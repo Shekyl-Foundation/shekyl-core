@@ -154,9 +154,10 @@ connector's target". Records-was the same day: outbound degree 16,
 `disclose(n)` with `n = 16`, floor about 64. Sixteen was the withdrawn
 §95.2 illustration.* The operating point (`DAEMON_RELAY_PRIVACY.md`
 §95) is still unchosen; under D3 it no longer moves the sample size. **The derivation is not a gate before the cutover
-(Ruling B, 2026-10-08).** The white floor, the refill line and the
-per-source gray share ship as named interim constants, each labelled
-`Assumption` in the register (`DAEMON_RELAY_PRIVACY.md` §97). They are
+(Ruling B, 2026-10-08).** The white floor and the refill line ship as
+named interim constants, each labelled `Assumption` in the register
+(`DAEMON_RELAY_PRIVACY.md` §97); the per-source gray share is folded
+into D-S1's per-session cap (D-PR2-1, §16.3). They are
 derived on the Rust path after the slice 3 cutover: the list's
 behaviour includes dial timing, and dial timing is C++ until then, so
 a derivation made now would rest on a `CppPath` reading. What that
@@ -324,10 +325,12 @@ answers are the join.
 kept. Gray intake is also capped per session (D-S1, §5c): more than
 `2 × DISCLOSE_COUNT` distinct addresses from one session in any
 24-hour span is `PeerlistRefused`, and an honest peer's cached sample
-cannot reach it. Gray also has a per-source share, so one sender
-cannot fill the list; the share ships as a named interim constant,
-labelled `Assumption` in the register, and the crate PR names it —
-this brief does not pick the number. The derivation of all three runs
+cannot reach it. *Records-was: "gray also has a per-source share …
+the crate PR names it."* That share is folded into the per-session cap
+(D-PR2-1, RULED 2026-10-09, §16.3): one intake rule, keyed on the
+session; the clearnet reconnect throttle registered in
+`P2P_TRANSPORT_LAYER.md` covers the host case, and Tor stays a
+residual there. The derivation of `DISCLOSE_COUNT` and the cap runs
 on the Rust path after the cutover: intake diversity, honest fill, and
 per-reply exposure.
 
@@ -696,10 +699,11 @@ neighbor `shekyl-peer-policy` owns the inbound ceiling, not these lists.
   selector.
 - No connection object. Slice 5. Expiry and the clock do not wait for it.
 - The gray cap 5000 and the white cap 1000 are not re-derived. No
-  `--in-peers` number, no refusal-window number. The interim `n` and
-  the per-source gray share are intake limits; both ship as named
-  interim constants, and their derivation runs on the Rust path after
-  the cutover (§97's register carries them as `Assumption`).
+  `--in-peers` number, no refusal-window number. `DISCLOSE_COUNT` and
+  the per-session cap are the intake limits (the per-source share is
+  folded into the cap, D-PR2-1); both ship as named constants, and
+  their derivation runs on the Rust path after the cutover (§97's
+  register carries them as `Assumption`).
 - The failure cache stays where it is. It may cause the dialer to skip an
   address `draw_gray` returned. It does not write white.
 - Disclosure is that connector's cached sample of white, with no clock
@@ -734,7 +738,7 @@ does.*
 **Status: OPEN — pre-flight recorded and increments 1 and 2 built on
 `feat/p2p3-pr2-peerlist`, stacked on #1018 (`487d4550fc`), rebased onto
 `dev` when #1018 merges; the §5a measurement is in and the exception is
-not adopted; D-PR2-1 and D-PR2-2 (§16.3) await Rick.** PR-2 is increments 1 and 2 (§13). The
+not adopted; D-PR2-1 and D-PR2-2 are RULED (§16.3, 2026-10-09).** PR-2 is increments 1 and 2 (§13). The
 rulings it implements are D3 (§5a), D4 (§5b), D-S1 (§5c) and the PR-2
 additions (§11.5), written in #1018's docs commit so they reach `dev`
 first. This section is the substrate re-check between those rulings
@@ -793,8 +797,8 @@ ledger. Constants, each a named item the crate owns and §97 labels
 DISCLOSE_COUNT`; `INTERIM_WHITE_DIVERSITY_MULTIPLE = 4` and
 `white_diversity_floor() = 48`; `WHITE_REFILL_LINE = floor +
 DISCLOSE_COUNT = 60` (one sample of headroom: a window's worth of
-confirmations before the floor; the number is this PR's interim, named
-here for Rick to accept or move, D-PR2-2 below); `GRAY_CAP = 5000`,
+confirmations before the floor; RULED as D-PR2-2 below, labelled
+`Assumption`); `GRAY_CAP = 5000`,
 `WHITE_CAP = 1000` (the C++ values, not re-derived);
 `EXPIRATION_PERIOD = DISCLOSE_WINDOW = INTAKE_SPAN = 24 h`.
 
@@ -829,19 +833,22 @@ Operations, as §5 and §6 name them, with the ruling each carries:
 `White` has no public constructor and no `Deserialize` (§11.1). Every
 operation takes the connector it works in; nothing crosses (§11.2).
 
-### 16.3 Decisions for Rick
+### 16.3 Decisions — RULED (Rick, 2026-10-09)
 
-**D-PR2-1 — the per-source gray share.** §5 and §97 carry a per-source
-share of gray beside D-S1's per-session count. With D-S1 ruled, the
-share's source key is the open part: a *session* is D-S1's key already,
-and a *host* is what the registered reconnect throttle would count. The
-crate ships D-S1 and names no second share constant until the key is
-ruled; §97's row stays `Assumption` with "named by PR-2" until then.
-Recommendation: fold the share into D-S1 (one intake rule per session)
-and let the reconnect throttle carry the host dimension.
+**D-PR2-1 — RULED.** The per-source gray share is folded into D-S1's
+per-session cap: one intake rule, keyed on the session. The reconnect
+throttle (registered in `P2P_TRANSPORT_LAYER.md`, not built in PR-2)
+covers the host case. Tor stays a residual: no host to throttle. No
+second share constant is named; §97's row records the fold.
+*Posed:* §5 and §97 carried a per-source share beside D-S1's count,
+and with D-S1 ruled the share's source key was the open part — a
+*session* being D-S1's key already, a *host* what the throttle would
+count. Recommended and ruled: fold.
 
-**D-PR2-2 — the refill line.** Named here as `floor + DISCLOSE_COUNT`
-(60). Accept, or set another headroom.
+**D-PR2-2 — RULED.** The refill line is `floor + DISCLOSE_COUNT` = 60,
+labelled `Assumption` in §97 and re-derived on the Rust path after
+PR-3 with the floor. *Posed:* named at that value, accept or set
+another headroom.
 
 ### 16.4 Falsifiers (§11), mapped to tests
 

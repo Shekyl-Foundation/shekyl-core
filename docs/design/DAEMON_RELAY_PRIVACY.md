@@ -17204,8 +17204,8 @@ row. Pins below were read at `98fbd20acb`.
 | `DISCLOSE_COUNT`, 12 | `shekyl-peerlist/src/lib.rs` `DISCLOSE_COUNT` (PR-2); until the cutover the C++ still reads `P2P_DEFAULT_PEERS_IN_HANDSHAKE` / `P2P_MAX_PEERS_IN_HANDSHAKE` (250, `cryptonote_config.h:193` to `:194`), which it replaces | **Assumption** (D3, Rick 2026-10-09). A protocol constant, the same on every node and every connector; the number is the interim outbound target carried over, not a derivation | The cached disclosure sample (size and the receiver limit), the per-session intake cap below, the white floor below | After PR-3, on the Rust path: from intake diversity, honest fill, and per-reply exposure (slice 1 brief §2); into this register |
 | Per-session gray intake cap, `2 × DISCLOSE_COUNT` = 24 distinct addresses in any 24-hour span | `shekyl-peerlist/src/lib.rs` `SESSION_INTAKE_CAP`, derived from `DISCLOSE_COUNT`; `INTAKE_SPAN_NANOS` beside it | **Assumption** (D-S1, Rick 2026-10-09). Twice the sample so an honest peer's cached sample cannot reach it; the multiple is not derived | `admit_gray`'s refusal (`PeerlistRefused`), inbound and outbound sessions alike | After PR-3, on the Rust path, with §96 item 3's instrument: time for an attacker to fill gray and the resulting `p_h`, per connector |
 | White diversity floor, `INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) `× DISCLOSE_COUNT` = 48 | `shekyl-peerlist/src/lib.rs` `white_diversity_floor()`; the slice 1 brief §2 and the dialer brief's composition table | **Assumption.** The multiple 4 is the interim stand-in for the floor (slice 1 brief, 2026-10-08) | Disclosure (nothing is disclosed below the floor), the refill trigger | After PR-3, on the Rust path: from draw diversity and the candidate filters (slice 1 brief §2) |
-| White refill line, floor `+ DISCLOSE_COUNT` = 60 | `shekyl-peerlist/src/lib.rs` `WHITE_REFILL_LINE` | **Assumption.** The shape is ruled (refill starts above the floor, slice 1 brief §2); the headroom of one sample is PR-2's interim, put to Rick as D-PR2-2 (brief §16.3) | The refill trigger slice 3's fill reads | After PR-3, on the Rust path, with the floor |
-| Per-source gray share | Not named. PR-2 ships D-S1's per-session count and puts the share's source key to Rick as D-PR2-1 (brief §16.3): a session is D-S1's key already, a host is the registered reconnect throttle's | **Assumption.** An intake limit so one sender cannot fill gray; distinct from the per-session cap above (one is a share of the list, the other a count per session). Open until D-PR2-1 is ruled | `admit_gray` | After PR-3, on the Rust path, with `DISCLOSE_COUNT`'s derivation |
+| White refill line, floor `+ DISCLOSE_COUNT` = 60 | `shekyl-peerlist/src/lib.rs` `WHITE_REFILL_LINE` | **Assumption** (D-PR2-2, RULED Rick 2026-10-09: refill line = floor + `DISCLOSE_COUNT` = 60). The shape is ruled (refill starts above the floor, slice 1 brief §2); the headroom of one sample is the interim the derivation replaces | The refill trigger slice 3's fill reads | After PR-3, on the Rust path, with the floor |
+| Per-source gray share — FOLDED (D-PR2-1, RULED Rick 2026-10-09) | No constant. The share is folded into D-S1's per-session cap (the row above); the reconnect throttle registered in `P2P_TRANSPORT_LAYER.md` covers the host case; Tor stays a residual there | **Folded**, not a basis of its own. *Records-was: an intake limit so one sender cannot fill gray, distinct from the per-session cap, "the crate PR names it; this brief does not pick the number"* | `admit_gray` | After PR-3, on the Rust path, with `DISCLOSE_COUNT`'s derivation |
 
 *Records-was, folded here from `FOLLOWUPS.md` 2026-10-08:* a row asked
 for a derivation check that `fluff_return_ms` equals the max over
@@ -17774,14 +17774,17 @@ The paper's TC-I attacker, against Monero's peerlist as it then stood:
 white 100 — Monero's caps are 5,000 and 1,000); **250 addresses per
 reply** (`P2P_DEFAULT_PEERS_IN_HANDSHAKE`); **first-in-first-out gray
 eviction**, so a flood pushes the honest entries out in order;
-**delayed replies**, so the victim's dials to the attacker's onions
-hold its outbound slots; and, under periodic replacement, **one peer
-dropped every 101 s** to force a refill from the flooded list.
+**delayed replies**, served to keep the newly pushed addresses alive
+longer under that first-in-first-out eviction; and, under periodic
+replacement, **one peer dropped every 101 s** to force a refill from
+the flooded list.
 
 The same attacker against Shekyl meets, at the knobs above: 12
 addresses per reply and at most 24 distinct per session per day (so a
-flood of 5,000 needs hundreds of sessions, each a Tor rendezvous
-priced by proof-of-work); random eviction over a gray list of 5,000,
+flood of 5,000 needs hundreds of sessions to our onion, each of which
+costs proof-of-work only while the onion service is under load — the
+flood itself is what raises the price); random eviction over a gray
+list of 5,000,
 so the flood's share of gray is its share of the admitted addresses,
 not its recency; and a white list the flood reaches only through this
 node's own confirmed dials (slice 1 §2). PM-2a measures what that buys.

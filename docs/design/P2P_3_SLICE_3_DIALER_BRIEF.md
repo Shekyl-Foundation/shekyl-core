@@ -536,8 +536,9 @@ inbound handshake and timed sync, and these three go with it.
 Dial pacing, the handshake gap per connector (D9), and the in-flight
 bound are measured after the cutover, on the Rust dialer, into the
 register (`DAEMON_RELAY_PRIVACY.md` §97, Ruling B). Then the white
-floor, the refill line and the per-source gray share are re-derived
-from those readings. No derivation and no measurement gates the
+floor, the refill line, `DISCLOSE_COUNT` and the per-session intake cap
+(the per-source share is folded into it, slice 1 brief D-PR2-1) are
+re-derived from those readings. No derivation and no measurement gates the
 cutover PR; a number taken with the C++ dial path in front would be
 thrown away.
 
