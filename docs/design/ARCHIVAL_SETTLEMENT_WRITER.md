@@ -1351,3 +1351,89 @@ that function and the writer together, with:
 - the record layout's change carried through the C++ serve-credit gate's
   one read of it, so the daemon parses what the template and the wallet
   write.
+
+### 16.8 Increment 1 as designed — a regenesis, not a type half
+
+**Status:** design text for the first increment, written before its
+code. Decisions 3, 7 and 8 below fix bytes or retire a live path and are
+flagged for the maintainer's eye on the draft.
+
+**What the increment is.** Genesis is judged by the coinbase grammar at
+connect (`prevalidate_miner_transaction`) and at DB add. Requiring `0x0C`
+therefore regenerates all three `GENESIS_TX` constants, and with them
+every genesis hash, the network-id vectors derived from the hash, the six
+captured chains the Rust rules replay, and the coinbase vectors in
+`shekyl-wire` and `shekyl-rpc-types`. It is the regenesis the next tag
+was going to be, landed as one rule-07 change.
+
+**Decisions.**
+
+1. **Position: third.** A coinbase's extra is
+   `0x01 pubkey · 0x02 nonce · 0x0C commitment · 0x06 kem · 0x07 leaf`,
+   and the first three fields when it has no outputs. After the nonce,
+   because the distance from the pubkey to the nonce payload is an
+   operand the daemon's RPC hands to miners
+   (`shekyl_coinbase_nonce_offset_from_pubkey`), and before the two
+   output-count fields so the no-output form stays a prefix of the full
+   one.
+2. **Encoding: tag and 32 bytes, no length.** As the pubkey is encoded.
+   Q13 ruled 32 bytes; a length prefix would say the length varies.
+   33 bytes per coinbase. The largest grammar-valid coinbase extra moves
+   from 18,994 to 19,027 bytes.
+3. **Genesis commits to 32 zero bytes.** The genesis tool is
+   deterministic and holds no seed or key, and the value is permanent.
+   Zero is not a commitment to anything: no `witness_pk ‖ seed` is known
+   to hash to it, so no carrier can reveal height 0, which has no
+   producer. *Flagged: a byte the maintainer is accepting.*
+4. **The smallest writer.** One Rust function behind the FFI: generate a
+   witness key and a seed, compute the commitment, wipe both, return 32
+   bytes. The C++ never holds either secret (rule 36). The daemon calls
+   it once per block template and passes the result to both pricing
+   passes of `construct_miner_tx`, so the two coinbases agree. Until the
+   producer lane keeps the secrets, every block commits to a seed nobody
+   can reveal, which issues nothing (the specification's §9.2). The
+   FN-DSA-1024 key generation is new cost on the template path; it gets
+   a `BA-T` row and is measured, not gated.
+5. **The Rust template.** `TemplateContext` gains the commitment as a
+   field; the crate stays a pure function of its context. The scenario
+   driver derives it from the counter it already derives the transaction
+   secret from. The parity test against the C++ template reads the C++
+   template's commitment back and supplies it.
+6. **Store state, shaped and unwritten.** The per-block draw row
+   (`count`, `carry`, visible shortfall, revealed) and the per-epoch `D`
+   digest cell get their types, codecs, snapshots, undo and view reads,
+   with `SCHEMA_VERSION` 22 to 23, and no block writer: `count` needs
+   `D`, which is increment 2's. The same shape as `SO-D10a`'s empty
+   index.
+7. **Where a carrier's seed and `h` ride.** The specification says kept,
+   once per carrier, and names no field. Proposed: a transaction-extra
+   field `0x0D`, `seed[32] ‖ varint(h)`, with no length prefix. It is
+   required exactly once in a `serve_credit_only` transaction's extra,
+   refused in every other transaction and in a coinbase, and it is in
+   the prefix, so the transaction id covers it. The witness key and
+   signature ride in the prunable section beside the records.
+   *Flagged: new prefix wire.*
+8. **The serve-credit record is replaced, and the C++ gate fails closed
+   on it.** The input keeps its tag and carries `j`; the prunable record
+   carries `attempt`, `anchor_height`, the delivery digest and the
+   receipt. The C++ reads persona, shard and epoch out of the input
+   (`shekyl_archival_serve_credit_extract`) and cannot read them from the
+   new one, so the daemon refuses every serve-credit transaction from
+   this increment until `DEL-008`. Checked before choosing this: nothing
+   outside tests and harnesses produces the old record. *Flagged: with no
+   admissible pass, the C++ beacon fold reads every bonded pair as
+   missing every epoch.* No production code produces a record today, so a chain
+   with a bond on it is already in that state under the C++; the
+   increment does not create it. What it removes is the tests' way of
+   producing a C++ pass. Whether a tagged release may carry bonds before
+   the Rust validator is consensus is the maintainer's call and is not
+   decided here. The C++ tests
+   that drive a pass through the old record are deleted with it, with
+   that reason.
+
+**Commit order.** Design text and census; store tables, schema and view
+reads; the `0x0C` field, grammar, writer, FFI and C++ call sites; the
+smallest writer and the template threading; the Rust template field and
+its two callers; genesis regeneration and every pin; vector recapture;
+the record and carrier wire; test fix-ups.
+

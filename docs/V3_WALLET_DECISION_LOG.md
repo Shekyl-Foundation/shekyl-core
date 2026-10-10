@@ -6464,3 +6464,49 @@ verify also re-gathers on any pass, so it moves with the gather.
    in the implementing change.**
 
 ---
+
+## 2026-10-10 — Admission and the draw: the cut, the stable drawable set, and a required `0x0C` (`SO-D12`)
+
+**Decision (maintainer, relayed 2026-10-10, on the pre-flight in
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md)
+§16).** Step 5 of the settlement writer's build order. The mechanism was
+ruled in the serve-credit specification; this rules how it is built.
+
+1. **Four increments, each its own change:** state and wire types; the
+   drawable set as of the epoch's open with its digest; issuance,
+   staged; the receipt and the switch. The producer side is a separate
+   lane.
+2. **The drawable set is made stable by journaling a Release's holdings
+   pre-image.** This completes Q3 (2026-09-16), which defines the set
+   over the bond journals; the Rust store lacked the unbond journal. The
+   set is built once per epoch into an in-memory cache, never persisted
+   as consensus state, rebuilt from tip and journals, and guarded by the
+   digest. A Reinstate was checked and does not change holdings.
+3. **Increment 3 is staged**, with no network-type branch: no tree
+   admits a carrier without checking its receipts.
+4. **The settlement lane takes FN-DSA increments 2 to 4** (rule 19: one
+   owner for one validation surface).
+5. **Rust deletions land in the increment that replaces each piece; C++
+   deletions at `DEL-008`.**
+6. **The visible shortfall is stored, with undo.**
+7. **The census rows are minted with increment 1's design text; the
+   retired-by-ruling status lands with the first successor row.**
+8. **The same journal fixes the complete-tree flag read by market
+   membership.**
+9. **`0x0C` is required in every coinbase from increment 1, with no
+   height gate.** The coinbase extra is written and judged by one Rust
+   implementation that both validators call, so the change moves both.
+   It refuses existing blocks and each network's genesis coinbase. That
+   is accepted: the testnet runs tagged releases and the next tag is a
+   regenesis. The C++ daemon must accept the tag in increment 1 itself.
+10. **What the two reads on the serve-credit table become is deferred
+    to increment 4's design text.**
+
+**Reason.** The enumerator that landed reads bond records at tip, so a
+Release or a slash inside an epoch would shift the index admission
+derives a record's pair from; and the receipt check has no key until the
+FN-DSA increments land. Both are closed by ordering the build, not by
+changing the mechanism.
+
+---
+
