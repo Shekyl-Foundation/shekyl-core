@@ -41,12 +41,73 @@ pub(crate) struct White {
     pub(crate) last_observed: Tick,
 }
 
+/// A set with uniform random access: a vector for the index draw and a map
+/// from the address to its position, kept in step by swap-remove. Gray
+/// draws and capacity evictions are a uniform index into the vector, so a
+/// full list (5000) costs no walk.
+#[derive(Debug, Default)]
+struct IndexedSet {
+    members: Vec<NetworkAddress>,
+    position: BTreeMap<NetworkAddress, usize>,
+}
+
+impl IndexedSet {
+    fn len(&self) -> usize {
+        self.members.len()
+    }
+
+    fn contains(&self, address: &NetworkAddress) -> bool {
+        self.position.contains_key(address)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &NetworkAddress> {
+        self.members.iter()
+    }
+
+    /// Insert; `false` when already present.
+    fn insert(&mut self, address: NetworkAddress) -> bool {
+        if self.position.contains_key(&address) {
+            return false;
+        }
+        self.position.insert(address.clone(), self.members.len());
+        self.members.push(address);
+        true
+    }
+
+    /// Remove; `false` when absent.
+    fn remove(&mut self, address: &NetworkAddress) -> bool {
+        let Some(at) = self.position.remove(address) else {
+            return false;
+        };
+        let last = self.members.len() - 1;
+        self.members.swap(at, last);
+        self.members.pop();
+        if at < self.members.len() {
+            self.position.insert(self.members[at].clone(), at);
+        }
+        true
+    }
+
+    /// One uniform member, or `None` when empty.
+    fn pick<R: RelayRng + ?Sized>(&self, rng: &mut R) -> Option<&NetworkAddress> {
+        match self.members.len() {
+            0 => None,
+            1 => Some(&self.members[0]),
+            n => {
+                let index = usize::try_from(bounded_uniform(rng, (n - 1) as u64))
+                    .expect("the draw is bounded by the member count");
+                Some(&self.members[index])
+            }
+        }
+    }
+}
+
 /// One connector's gray and white lists and the gray draws the dialer has
 /// outstanding.
 #[derive(Debug, Default)]
 pub(crate) struct Partition {
     /// Arrived, not confirmed. No clock.
-    gray: BTreeSet<NetworkAddress>,
+    gray: IndexedSet,
     /// Confirmed by this node's own dial. Keyed by address; the map's order
     /// carries no meaning.
     white: BTreeMap<NetworkAddress, White>,
@@ -106,12 +167,22 @@ impl Partition {
             return false;
         }
         while self.gray.len() > GRAY_CAP {
-            let victim = self.pick_gray(rng, Some(address));
-            if let Some(victim) = victim {
-                self.gray.remove(&victim);
-                self.outstanding.remove(&victim);
-            } else {
-                break;
+            // Rejection draw: a uniform member that is not the one just
+            // admitted. With thousands of members the retry is rare.
+            let victim = loop {
+                let Some(candidate) = self.gray.pick(rng) else {
+                    break None;
+                };
+                if candidate != address {
+                    break Some(candidate.clone());
+                }
+            };
+            match victim {
+                Some(victim) => {
+                    self.gray.remove(&victim);
+                    self.outstanding.remove(&victim);
+                }
+                None => break,
             }
         }
         true
@@ -123,12 +194,18 @@ impl Partition {
         &mut self,
         rng: &mut R,
     ) -> Option<NetworkAddress> {
-        let candidates: Vec<&NetworkAddress> = self
-            .gray
-            .iter()
-            .filter(|a| !self.outstanding.contains(*a))
-            .collect();
-        let chosen = pick(&candidates, rng)?.clone();
+        if self.outstanding.len() >= self.gray.len() {
+            return None;
+        }
+        // Rejection draw over the members not already outstanding. The
+        // outstanding set is a handful of in-flight dials, so this is a
+        // uniform draw over the rest at one or two picks.
+        let chosen = loop {
+            let candidate = self.gray.pick(rng)?;
+            if !self.outstanding.contains(candidate) {
+                break candidate.clone();
+            }
+        };
         self.outstanding.insert(chosen.clone());
         Some(chosen)
     }
@@ -339,19 +416,6 @@ impl Partition {
             addresses: population.clone(),
         });
         population
-    }
-
-    fn pick_gray<R: RelayRng + ?Sized>(
-        &self,
-        rng: &mut R,
-        keep: Option<&NetworkAddress>,
-    ) -> Option<NetworkAddress> {
-        let candidates: Vec<&NetworkAddress> = self
-            .gray
-            .iter()
-            .filter(|a| keep.is_none_or(|k| *a != k))
-            .collect();
-        pick(&candidates, rng).map(|a| (*a).clone())
     }
 }
 
