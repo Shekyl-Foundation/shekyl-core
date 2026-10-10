@@ -64,9 +64,9 @@ That may already have been true; it was not written in the documents a
 reader walks, and a launch-state fork — genesis shipping while the C++
 daemon still retains everything — was inferred from trajectory to fill
 the gap. There is no such window to design a policy for. **Roadmap node
-(added 2026-10-10):** `DRS-SB` in `DAEMON_REDB_STORE.md` §7 — downstream of
-`DRS-X`, with its own edge into redb-only genesis; until then this sequencing
-constraint was ruled here and drawn nowhere.
+(added 2026-10-10):** `DRS-SB` in `DAEMON_REDB_STORE.md` §7 is the only path
+from `DRS-X` into the D2 diamond, and so into either genesis. The sequencing
+constraint is the shape of that path.
 
 This is not a claim that the pruning *mode* needs a coordinated
 activation. TJ's node-local sentence is about activation not needing a
