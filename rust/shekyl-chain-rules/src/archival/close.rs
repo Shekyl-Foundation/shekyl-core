@@ -6,9 +6,8 @@
 //! The close writes an `RMarket` for every shard in its snapshot, zeros
 //! included, and freezes the accrual's post-image as `budget(E)`.
 
-use std::collections::BTreeMap;
-
 use core::marker::PhantomData;
+use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
     epoch_close_compute, CreditPair, EpochCloseBond, EpochCloseInputs, EpochCloseShard,
@@ -586,7 +585,7 @@ impl ServedAt {
     pub(crate) fn read<'id, V: ChainView<'id>>(
         view: &V,
         personas: impl IntoIterator<Item = PCanonicalId>,
-        epochs: &[SettlementEpoch],
+        epochs: &BTreeSet<SettlementEpoch>,
     ) -> Result<Self, ViewRead<V::Fault>> {
         let mut by_persona = BTreeMap::new();
         for persona in personas {

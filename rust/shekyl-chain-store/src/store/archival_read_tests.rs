@@ -10,7 +10,7 @@
 //! not with any writer, so the reads are tested apart from the writers
 //! (`archival_write_tests`, `slash_scan_bench_tests`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use redb::Value;
 use shekyl_chain_rules::{AtHeight, SlashLogFloor};
@@ -845,11 +845,10 @@ fn a16_issued_digest_is_the_epochs_cell_and_zero_when_nothing_was_folded() {
     cleanup(&path);
 }
 
-/// `(P, 0, 0)..=(P, MAX, MAX)` and `(P, shard, 0)..=(P, shard, MAX)`. The
-/// hop and the window walk are these two ranges; a hand-built tuple would
-/// be a second definition of `SO-D2`.
+/// `(P, 0, 0)..=(P, MAX, MAX)`. The hop is this range; a hand-built tuple
+/// would be a second definition of `SO-D2`.
 #[test]
-fn settlement_key_ranges_are_the_persona_and_the_pair() {
+fn settlement_key_range_is_the_persona() {
     let p = persona(0xa7);
     let persona_span = SettlementKey::persona_range(p);
     assert_eq!(
@@ -865,21 +864,13 @@ fn settlement_key_ranges_are_the_persona_and_the_pair() {
         )
         .key()
     );
-    let pair_span = SettlementKey::shard_range(p, shard(100));
-    assert_eq!(
-        *pair_span.start(),
-        SettlementKey::new(p, shard(100), SettlementEpoch::ZERO).key()
-    );
-    assert_eq!(
-        *pair_span.end(),
-        SettlementKey::new(p, shard(100), SettlementEpoch::from_raw(u64::MAX)).key()
-    );
 }
 
 /// A17 hops shards and point-reads the cited epochs. A gap between shard
 /// ids, a Missed row, a NonObservation, an uncited Served row, another
-/// persona, and a repeated citation each have one answer: the cited
-/// epochs' Served shards, ascending, each shard once. A corrupt row on an
+/// persona, and epochs given out of order each have one answer: the cited
+/// epochs' Served shards, ascending, each shard once. The epochs are a
+/// set, so a repeated citation cannot be asked. A corrupt row on an
 /// epoch the caller did not cite is not decoded; the same bytes on a cited
 /// epoch are SI-7.
 #[test]
@@ -891,7 +882,7 @@ fn a17_served_at_hops_shards_and_point_reads_the_cited_epochs() {
     assert!(store
         .begin_read()
         .unwrap()
-        .served_at(&p, &[epoch(2), epoch(9)])
+        .served_at(&p, &BTreeSet::from([epoch(2), epoch(9)]))
         .unwrap()
         .is_empty());
     drop(store);
@@ -942,14 +933,16 @@ fn a17_served_at_hops_shards_and_point_reads_the_cited_epochs() {
 
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
-    assert!(snap.served_at(&p, &[]).unwrap().is_empty());
-    let cited = snap.served_at(&p, &[epoch(9), epoch(2), epoch(9)]).unwrap();
+    assert!(snap.served_at(&p, &BTreeSet::new()).unwrap().is_empty());
+    let cited = snap
+        .served_at(&p, &BTreeSet::from([epoch(9), epoch(2)]))
+        .unwrap();
     let mut expect = BTreeMap::new();
     expect.insert(epoch(2), vec![shard(100)]);
     expect.insert(epoch(9), vec![shard(1)]);
     assert_eq!(cited, expect);
     assert_eq!(
-        snap.served_at(&other, &[epoch(2)]).unwrap(),
+        snap.served_at(&other, &BTreeSet::from([epoch(2)])).unwrap(),
         BTreeMap::from([(epoch(2), vec![shard(1)])])
     );
     drop(snap);
@@ -967,7 +960,7 @@ fn a17_served_at_hops_shards_and_point_reads_the_cited_epochs() {
     let err = store
         .begin_read()
         .unwrap()
-        .served_at(&p, &[epoch(9)])
+        .served_at(&p, &BTreeSet::from([epoch(9)]))
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_settlement"), "{err}");
     cleanup(&path);
