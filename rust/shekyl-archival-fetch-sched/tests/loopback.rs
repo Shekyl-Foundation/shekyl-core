@@ -422,6 +422,85 @@ async fn a_challenge_read_carries_the_derived_nonce() {
 }
 
 #[tokio::test]
+async fn a_challenge_read_does_not_fall_through_to_another_holder() {
+    // The serve holds a different shard, and the budget names three
+    // holders. A challenge still dials only the persona the draw named:
+    // one 404, and the nonce does not travel.
+    let s = stack(FIXTURE_SHARD_ID + 7, 5).await;
+    let assigned = s
+        .holders
+        .holders_of(SHARD)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("a holder");
+    let err = challenge_read(
+        &s.scheduler,
+        &assigned,
+        SHARD,
+        ChallengeDraw {
+            seed: [0x11; 32],
+            block_hash: [0x22; 32],
+            draw: 0,
+            attempt: 0,
+        },
+        Arc::new(DiscardTxs),
+        budget(3, 1),
+    )
+    .await
+    .unwrap_err();
+    let ChallengeReadError::Read(ReadFailure::Exhausted { attempts }) = err else {
+        panic!("expected exhaustion, got {err:?}");
+    };
+    assert_eq!(attempts.len(), 1, "{attempts:?}");
+    assert_eq!(attempts[0].holder, assigned.id);
+    assert!(matches!(attempts[0].error, FetchError::Miss));
+}
+
+#[tokio::test]
+async fn a_challenge_rejection_retries_the_same_holder_only() {
+    // The requester's tip is far below P's, so every anchor is out of
+    // P's gate. The first 400 earns one fresh anchor on the same
+    // persona; the second ends the need. The budget's other holders
+    // are not dialled.
+    let s = stack(FIXTURE_SHARD_ID, 3).await;
+    *s.facts.tip.lock().unwrap() = OWN_HEIGHT - 100;
+    let assigned = s
+        .holders
+        .holders_of(SHARD)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("a holder");
+    let err = challenge_read(
+        &s.scheduler,
+        &assigned,
+        SHARD,
+        ChallengeDraw {
+            seed: [0x33; 32],
+            block_hash: [0x44; 32],
+            draw: 1,
+            attempt: 0,
+        },
+        Arc::new(DiscardTxs),
+        budget(3, 1),
+    )
+    .await
+    .unwrap_err();
+    let ChallengeReadError::Read(ReadFailure::Exhausted { attempts }) = err else {
+        panic!("expected exhaustion, got {err:?}");
+    };
+    assert_eq!(attempts.len(), 2, "{attempts:?}");
+    assert!(
+        attempts
+            .iter()
+            .all(|attempt| matches!(attempt.error, FetchError::Rejected)
+                && attempt.holder == assigned.id),
+        "{attempts:?}"
+    );
+}
+
+#[tokio::test]
 async fn the_view_is_assembled_cached_and_rekeyed_on_the_close_hash() {
     let s = stack(FIXTURE_SHARD_ID, 2).await;
     let desk = ViewDesk::new(Arc::clone(&s.scheduler), NeedBudget::DEFAULT);
