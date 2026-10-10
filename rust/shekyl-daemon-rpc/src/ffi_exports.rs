@@ -363,58 +363,6 @@ pub unsafe extern "C" fn shekyl_submit_facts_rust_check(
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn hard_fork_facts_filled(seed: u64) -> crate::ffi::HardForkFactsFfi {
-    crate::ffi::HardForkFactsFfi {
-        earliest_height: submit_facts_field_value(seed, 0),
-        window: submit_facts_field_value(seed, 1) as u32,
-        votes: submit_facts_field_value(seed, 2) as u32,
-        threshold: submit_facts_field_value(seed, 3) as u32,
-        state: submit_facts_field_value(seed, 4) as u32,
-        queried_version: submit_facts_field_value(seed, 5) as u8,
-        active_version: submit_facts_field_value(seed, 6) as u8,
-        voting: submit_facts_field_value(seed, 7) as u8,
-        enabled: submit_facts_field_value(seed, 8) as u8,
-        reserved: [0; 4],
-    }
-}
-
-/// Rust-side fill of `shekyl_rpc_hard_fork_facts` (layout twin, RK-D3).
-///
-/// # Safety
-///
-/// `out` must point to a writable `shekyl_rpc_hard_fork_facts`, or be null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_rpc_hard_fork_facts_rust_fill(
-    out: *mut crate::ffi::HardForkFactsFfi,
-    seed: u64,
-) {
-    if out.is_null() {
-        return;
-    }
-    out.write(hard_fork_facts_filled(seed));
-}
-
-/// Rust-side check of `shekyl_rpc_hard_fork_facts`: 0 iff every field matches.
-///
-/// # Safety
-///
-/// `facts` must point to a readable `shekyl_rpc_hard_fork_facts`, or be null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_rpc_hard_fork_facts_rust_check(
-    facts: *const crate::ffi::HardForkFactsFfi,
-    seed: u64,
-) -> i32 {
-    if facts.is_null() {
-        return -1;
-    }
-    if facts.read() == hard_fork_facts_filled(seed) {
-        0
-    } else {
-        -1
-    }
-}
-
-#[allow(clippy::cast_possible_truncation)]
 fn fee_estimate_facts_filled(seed: u64) -> crate::ffi::FeeEstimateFactsFfi {
     crate::ffi::FeeEstimateFactsFfi {
         // Field indices 4 and 5 below are not fee-slot indexes: they seed a
@@ -743,53 +691,6 @@ pub unsafe extern "C" fn shekyl_rpc_block_hash_facts_rust_check(
         return -1;
     }
     if facts.read() == block_hash_facts_filled(seed) {
-        0
-    } else {
-        -1
-    }
-}
-
-// Narrow field on purpose (see chain_tip_facts_filled).
-#[allow(clippy::cast_possible_truncation)]
-fn hardfork_entry_filled(seed: u64) -> crate::ffi::HardforkEntryFfi {
-    crate::ffi::HardforkEntryFfi {
-        version: submit_facts_field_value(seed, 0) as u8,
-        reserved: [0; 7],
-        height: submit_facts_field_value(seed, 1),
-    }
-}
-
-/// Rust-side fill of `shekyl_rpc_hardfork_entry` (layout twin, RK-D3).
-///
-/// # Safety
-///
-/// `out` must point to a writable `shekyl_rpc_hardfork_entry`, or be null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_rpc_hardfork_entry_rust_fill(
-    out: *mut crate::ffi::HardforkEntryFfi,
-    seed: u64,
-) {
-    if out.is_null() {
-        return;
-    }
-    out.write(hardfork_entry_filled(seed));
-}
-
-/// Rust-side check of `shekyl_rpc_hardfork_entry`: 0 iff every field matches
-/// the seed derivation (-1 otherwise, including null input).
-///
-/// # Safety
-///
-/// `entry` must point to a readable `shekyl_rpc_hardfork_entry`, or be null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_rpc_hardfork_entry_rust_check(
-    entry: *const crate::ffi::HardforkEntryFfi,
-    seed: u64,
-) -> i32 {
-    if entry.is_null() {
-        return -1;
-    }
-    if entry.read() == hardfork_entry_filled(seed) {
         0
     } else {
         -1

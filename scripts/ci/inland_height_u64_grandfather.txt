@@ -67,7 +67,6 @@ rust/shekyl-chain-rules/src/harness/fixture/mod.rs	1	pub fn coinbase(height: u64
 rust/shekyl-chain-rules/src/rules/anchors_tests.rs	1	fn anchoring(height: u64, hash: BlockHash) -> ReleaseAnchors {
 rust/shekyl-chain-rules/src/rules/anchors_tests.rs	1	fn hash_at(chain: &MockChain, height: u64) -> BlockHash {
 rust/shekyl-chain-rules/src/rules/anchors_tests.rs	1	let at = |height: u64| AnchorConflict {
-rust/shekyl-chain-rules/src/rules/miner_tests.rs	1	let height: u64 = fields[1].parse().expect("the row's height is an integer");
 rust/shekyl-chain-rules/src/rules/tx_conformance_trips.rs	1	pub(super) fn coinbase_ok(height: u64) -> Transaction {
 rust/shekyl-chain-store/src/archival_snapshot.rs	2	height: u64,
 rust/shekyl-chain-store/src/codec/alt.rs	1	pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {

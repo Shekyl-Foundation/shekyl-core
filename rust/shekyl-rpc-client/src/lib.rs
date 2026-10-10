@@ -352,6 +352,31 @@ struct JsonRpcResponse<T> {
     result: T,
 }
 
+/// A JSON-RPC `error` member the daemon answered with: the method ran and
+/// refused, with a code the caller is meant to branch on.
+///
+/// [`Rpc::json_rpc_call`] folds this into [`RpcError::InvalidNode`] with
+/// the raw body as text, which is right for the calls that have no
+/// refusal to read (a missing `result` *is* a protocol fault there). A
+/// method whose refusals are part of its contract — `request_archival_shard`'s
+/// open / unavailable / absent codes — reads them through
+/// [`Rpc::json_rpc_call_or_refusal`] and gets this value instead.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct JsonRpcRefusal {
+    /// The daemon's error code (`CORE_RPC_ERROR_CODE_*`).
+    pub code: i64,
+    /// The daemon's message. Daemon RPC messages are secret-free by
+    /// contract; a wallet may show them, never parse them.
+    pub message: String,
+}
+
+/// The full envelope, for the calls that read `error` as an answer.
+#[derive(Debug, Deserialize)]
+struct JsonRpcEnvelope<T> {
+    result: Option<T>,
+    error: Option<JsonRpcRefusal>,
+}
+
 fn rpc_hex(value: &str) -> Result<Vec<u8>, RpcError> {
     hex::decode(value).map_err(|_| RpcError::InvalidNode("expected hex wasn't hex".to_string()))
 }
@@ -467,6 +492,42 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
+    /// A JSON-RPC call whose `error` member is an answer, not a fault.
+    ///
+    /// `Ok(Ok(response))` is a `result`; `Ok(Err(refusal))` is the daemon's
+    /// typed refusal, code and message intact; `Err(_)` is the transport or
+    /// a body that is neither (no `result` and no `error`, or both). Use this
+    /// for a method whose refusal codes the caller maps onto its own
+    /// contract; [`Rpc::json_rpc_call`] is for the methods where any
+    /// non-`result` reply is a protocol fault.
+    fn json_rpc_call_or_refusal<Response: DeserializeOwned + Debug>(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> impl Send + Future<Output = Result<Result<Response, JsonRpcRefusal>, RpcError>> {
+        async move {
+            let mut req = json!({ "jsonrpc": "2.0", "id": 0, "method": method });
+            if let Some(params) = params {
+                req.as_object_mut()
+                    .expect("accessing object as object failed?")
+                    .insert("params".into(), params);
+            }
+            let envelope = self
+                .rpc_call::<_, JsonRpcEnvelope<Response>>("json_rpc", Some(req))
+                .await?;
+            match (envelope.result, envelope.error) {
+                (Some(result), None) => Ok(Ok(result)),
+                (None, Some(refusal)) => Ok(Err(refusal)),
+                (Some(_), Some(_)) => Err(RpcError::InvalidNode(
+                    "JSON-RPC reply carried both result and error".to_string(),
+                )),
+                (None, None) => Err(RpcError::InvalidNode(
+                    "JSON-RPC reply carried neither result nor error".to_string(),
+                )),
+            }
+        }
+    }
+
     /// Perform a binary call to the specified route with the provided parameters.
     fn bin_call(
         &self,
@@ -474,41 +535,6 @@ pub trait Rpc: Sync + Clone {
         params: Vec<u8>,
     ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
         async move { self.post(route, params).await }
-    }
-
-    /// Get the active blockchain protocol version.
-    ///
-    /// This is specifically the major version within the most recent block header.
-    fn get_hardfork_version(&self) -> impl Send + Future<Output = Result<u8, RpcError>> {
-        async move {
-            // The shared wire type, for the reason `get_fee_rate` gives: a
-            // locally-declared reply struct is invisible to the daemon's
-            // oracle vectors and parity tests, which is how a removed field
-            // reached a runtime parse failure once already. This one read a
-            // two-field subset, so it would not have *broken* — it would have
-            // kept working while quietly disagreeing about what a header is.
-            let reply: shekyl_rpc_types::GetLastBlockHeaderResponse =
-                self.json_rpc_call("get_last_block_header", None).await?;
-            // **A non-OK status is a refusal, whatever the header holds**, and
-            // this is the exact trap that made the daemon side of this slice
-            // refuse rather than answer `BUSY`: `CHECK_CORE_READY()` returned
-            // `status = BUSY` with a *default-constructed* header, and reading
-            // `major_version` straight through reported fork version 0.
-            //
-            // The daemon this ships with no longer does that — it refuses with
-            // `CORE_BUSY`, which arrives here as a JSON-RPC error. This guard
-            // is for every *other* daemon: an older build, or one this wallet
-            // was merely pointed at. Fixing the producer and trusting every
-            // peer to be the fixed producer is not a fix. Same shape as
-            // `get_height` and `get_block_hash` below.
-            if !reply.status.is_ok() {
-                return Err(RpcError::InvalidNode(format!(
-                    "get_last_block_header returned status {}",
-                    reply.status.0
-                )));
-            }
-            Ok(reply.block_header.major_version)
-        }
     }
 
     /// Get the height of the Shekyl blockchain.
@@ -582,6 +608,17 @@ pub trait Rpc: Sync + Clone {
                     Some(json!({ "height": number })),
                 )
                 .await?;
+            // **A non-OK status is a refusal, whatever the header holds.**
+            // The C++ `CHECK_CORE_READY()` answered `status = BUSY` beside a
+            // *default-constructed* header, and reading the hash straight
+            // through would report 32 zero bytes for a syncing node.
+            //
+            // The daemon this ships with refuses with `CORE_BUSY`, which
+            // arrives here as a JSON-RPC error. This guard is for every
+            // *other* daemon: an older build, or one this wallet was merely
+            // pointed at. Fixing the producer and trusting every peer to be
+            // the fixed producer is not a fix. Pinned by
+            // `tests/reply_status.rs`.
             if !reply.status.is_ok() {
                 return Err(RpcError::InvalidNode(format!(
                     "get_block_header_by_height refused: {}",

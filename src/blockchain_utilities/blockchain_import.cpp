@@ -628,7 +628,6 @@ int main(int argc, char* argv[])
   const command_line::arg_descriptor<uint64_t> arg_block_stop  = {"block-stop", "Stop at block number", block_stop};
   const command_line::arg_descriptor<uint64_t> arg_batch_size  = {"batch-size", "", db_batch_size};
   const command_line::arg_descriptor<uint64_t> arg_pop_blocks  = {"pop-blocks", "Remove blocks from end of blockchain", num_blocks};
-  const command_line::arg_descriptor<bool>        arg_drop_hf  = {"drop-hard-fork", "Drop hard fork subdbs", false};
   const command_line::arg_descriptor<bool>     arg_count_blocks = {
     "count-blocks"
       , "Count blocks in bootstrap file and exit"
@@ -648,7 +647,6 @@ int main(int argc, char* argv[])
 
   command_line::add_arg(desc_cmd_only, arg_count_blocks);
   command_line::add_arg(desc_cmd_only, arg_pop_blocks);
-  command_line::add_arg(desc_cmd_only, arg_drop_hf);
   command_line::add_arg(desc_cmd_only, command_line::arg_help);
 
   // call add_options() directly for these arguments since
@@ -790,14 +788,6 @@ int main(int argc, char* argv[])
     MINFO("height: " << core.get_blockchain_storage().get_current_blockchain_height());
     pop_blocks(core, num_blocks);
     MINFO("height: " << core.get_blockchain_storage().get_current_blockchain_height());
-    return 0;
-  }
-
-  if (!command_line::is_arg_defaulted(vm, arg_drop_hf))
-  {
-    MINFO("Dropping hard fork tables...");
-    core.get_blockchain_storage().get_db().drop_hard_fork_info();
-    core.deinit();
     return 0;
   }
 

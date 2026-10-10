@@ -89,6 +89,28 @@ namespace cryptonote
         `now` rather than only on whatever fraction the system clock happens to
         hold. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17 and sec 22.2. */
     std::time_t relay_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs);
+
+    /*! What `fill_block_template`'s scan does with one offered body.
+        take: list it.
+        pass: it would pass the cap; try a later, smaller body.
+        end_scan: the listed weight is already past the median. */
+    enum class listed_body_decision
+    {
+      take,
+      pass,
+      end_scan,
+    };
+
+    /*! The most the listed bodies may weigh: 13/10 of the median less the
+        coinbase reserve, and zero when that does not cover the reserve or
+        the product does not fit. Declared here so both arms are testable;
+        the production median never reaches the zero arm. */
+    size_t listed_weight_cap(size_t median_weight);
+
+    /*! The scan's decision for one body. The cap is consulted before the
+        median: a body that would pass the cap is passed over even when the
+        listed weight is already past the median. */
+    listed_body_decision decide_listed_body(size_t listed_weight, size_t candidate_weight, size_t median_weight, size_t listed_cap);
   }
   /************************************************************************/
   /*                                                                      */
@@ -142,7 +164,7 @@ namespace cryptonote
 
 
     /**
-     * @copydoc add_tx(transaction&, tx_verification_context&, bool, bool, uint8_t)
+     * @copydoc add_tx(transaction&, tx_verification_context&, relay_method, bool, bool)
      *
      * @param id the transaction's hash
      * @tx_relay how the transaction was received
@@ -150,7 +172,7 @@ namespace cryptonote
      */
     bool add_tx(transaction &tx, const crypto::hash &id, const cryptonote::blobdata &blob,
       size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, uint8_t nic_verified_hf_version = 0);
+      bool nic_verified = false);
 
     /**
      * @brief add a transaction to the transaction pool
@@ -164,19 +186,17 @@ namespace cryptonote
      * @param tvc return-by-reference status about the transaction verification
      * @tx_relay how the transaction was received
      * @param relayed was this transaction from the network or a local client?
-     * @param version the version used to create the transaction
-     * @param nic_verified_hf_version hard fork which "tx" is known to pass non-input consensus test
+     * @param nic_verified "tx" is known to pass the non-input consensus test
      *
-     * If "nic_verified_hf_version" parameter is equal to "version" parameter, then we skip the
-     * asserting `ver_non_input_consensus(tx)`, which greatly speeds up block popping and returning
-     * txs to mempool for txs which we know will pass the test. If nothing is known about how "tx"
-     * passes the non-input consensus tests (e.g. for newly received relayed txs), then leave
-     * "nic_verified_hf_version" as its default value of 0 (there is no v0 fork).
+     * If "nic_verified" is set, then we skip asserting `ver_non_input_consensus(tx)`, which
+     * greatly speeds up block popping and returning txs to mempool for txs which we know will
+     * pass the test. If nothing is known about how "tx" passes the non-input consensus tests
+     * (e.g. for newly received relayed txs), then leave "nic_verified" as its default.
      *
      * @return true if the transaction passes validations, otherwise false
      */
     bool add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, uint8_t nic_verified_hf_version = 0);
+      bool nic_verified = false);
 
     /**
      * @brief RPC-submit commit tail: insert an engine-verified transaction
@@ -344,19 +364,22 @@ namespace cryptonote
     bool deinit();
 
     /**
-     * @brief Chooses transactions for a block to include
+     * @brief Chooses transactions for a block to include.
+     *
+     * Lists pool bodies in fee order. One body may cross `median_weight`.
+     * That body may not cross 13/10 of the median less the coinbase reserve,
+     * and once the listed weight is already past the median the scan ends.
+     * `shekyl_block_template::Fill` is the ruled replacement and is not this
+     * function (docs/FOLLOWUPS.md).
      *
      * @param bl return-by-reference the block to fill in with transactions
      * @param median_weight the current median block weight
-     * @param already_generated_coins the current total number of coins "minted"
      * @param total_weight return-by-reference the total weight of the new block
      * @param fee return-by-reference the total of fees from the included transactions
-     * @param expected_reward return-by-reference the total reward awarded to the miner finding this block, including transaction fees
-     * @param version hard fork version to use for consensus rules
      *
      * @return true
      */
-    bool fill_block_template(block &bl, size_t median_weight, uint64_t already_generated_coins, uint64_t block_height, size_t &total_weight, uint64_t &fee, uint64_t &expected_reward, uint8_t version);
+    bool fill_block_template(block &bl, size_t median_weight, size_t &total_weight, uint64_t &fee);
 
     /**
      * @brief get a list of all transactions in the pool
@@ -518,15 +541,13 @@ namespace cryptonote
     /**
      * @brief remove transactions from the pool which are no longer valid
      *
-     * With new versions of the currency, what conditions render a transaction
-     * invalid may change.  This function clears those which were received
-     * before a version change and no longer conform to requirements.
-     *
-     * @param version the version the transactions must conform to
+     * Re-runs admission on every transaction the pool holds and drops
+     * those this binary refuses. Called once at start-up, on the pool as
+     * it was persisted.
      *
      * @return the number of transactions removed
      */
-    size_t validate(uint8_t version);
+    size_t validate();
 
      /**
       * @brief return the cookie

@@ -3,9 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The header projection's remainder, hard-fork voting info, and the fee
-//! estimate — the RK-5b slice of the daemon RPC KV cutover
-//! (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.1).
+//! The header projection's remainder and the fee estimate — the RK-5b slice
+//! of the daemon RPC KV cutover (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.1).
 //!
 //! Conventions are [`crate::chain`]'s: wire field names, `deny_unknown_fields`,
 //! and every `KV_SERIALIZE_OPT(field, default)` mirrored by `#[serde(default,
@@ -103,8 +102,8 @@ pub struct GetBlockHeaderByHashResponse {
 
 /// Request of `get_block_headers_range` (alias `getblockheadersrange`).
 /// **Deliberately not `Default`.** Every other request in this module has a
-/// meaningful empty form — `get_last_block_header` means the tip,
-/// `hard_fork_info` means the active fork — and a generic params parser can
+/// meaningful empty form — `get_last_block_header` means the tip — and a
+/// generic params parser can
 /// hand them `T::default()` for absent params. A *range* has no such form:
 /// the C++ value-initialised both heights to zero and answered for block 0,
 /// so a client that forgot to set them was told about genesis instead of
@@ -128,63 +127,6 @@ pub struct GetBlockHeadersRangeResponse {
     pub status: RpcStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<BlockHeader>,
-}
-
-/// Request of `hard_fork_info`.
-///
-/// **`version` is an `Option<NonZeroU8>`, because 0 was a sentinel.** The C++
-/// read `req.version > 0 ? req.version : get_next_hard_fork_version()`, so
-/// zero meant "the next fork" — a value hiding in the same field as the
-/// versions it is not. Absent means the next fork; present means that
-/// version.
-///
-/// **The zero is unrepresentable rather than documented away.** An `Option<u8>`
-/// would still deserialize `{"version": 0}` as `Some(0)`, which then means
-/// exactly what `None` means — so the type would claim a distinction the wire
-/// does not have, and a reader would be entitled to believe every present
-/// value is queried literally. `NonZeroU8` makes the sentinel fail to parse,
-/// and the refusal names the shape (`version` is 1-255). This is the same
-/// split the *reply* got: one field that meant two things became two fields
-/// that each mean one.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HardForkInfoRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<core::num::NonZeroU8>,
-}
-
-/// Result of `hard_fork_info`.
-///
-/// **Two versions, named apart.** The C++ reply's `version` was the chain's
-/// *current* fork while every voting field below described the version the
-/// caller asked about, and nothing echoed the query. `show_status` asks with
-/// the sentinel and prints that field beside `earliest_height`, so one status
-/// line carried the current fork's version and the next fork's height with
-/// nothing saying which was which.
-///
-/// The counters are carried **verbatim** from what the daemon reports, and
-/// the daemon writes `window`, `votes` and `threshold` as 0: there is no
-/// vote. CEN-B2 (the reserved minor byte) is ratified in `shekyl-chain-rules`
-/// and is not this struct. CEN-B3 (the height schedule and the class that
-/// owns it) stays bucket 4 until `hard_fork_info` is deleted; this projection
-/// is that surface, not a second model of the schedule.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HardForkInfoResponse {
-    pub status: RpcStatus,
-    /// The version the voting fields below describe — the caller's, or the
-    /// resolved next-fork version when the caller asked with none.
-    pub queried_version: u8,
-    /// The chain's current fork version. **Not** the subject of the fields
-    /// below.
-    pub active_version: u8,
-    pub enabled: bool,
-    pub window: u32,
-    pub votes: u32,
-    pub threshold: u32,
-    pub voting: u8,
-    pub state: u32,
-    pub earliest_height: u64,
 }
 
 /// Which priced rung of the dynamic fee estimate a caller wants.
@@ -274,9 +216,7 @@ const fn is_one(v: &u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetFeeEstimateResponse, HardForkInfoRequest,
-    };
+    use super::{FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetFeeEstimateResponse};
 
     /// The arity is enforced by the type, not trusted. A reply carrying any
     /// count but three is a parse error, including the four-slot shape that
@@ -312,48 +252,6 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&tiers).expect("serialize"),
             "[10,20,30]"
-        );
-    }
-
-    /// The sentinel is gone: absent means "the next fork", and there is no
-    /// value of `version` that means anything other than a version.
-    ///
-    /// **The name claimed this before the body checked it.** With
-    /// `Option<u8>`, `{"version":0}` deserialized to `Some(0)` and the
-    /// handler's `unwrap_or(0)` handed the sentinel straight back to the
-    /// resolver — so zero and absent meant the same thing while the type said
-    /// they did not, and this test passed without ever asking. Found in
-    /// review. `NonZeroU8` makes the sentinel fail to parse, and the last
-    /// assertion is the one that now earns the name.
-    #[test]
-    fn the_hard_fork_request_has_no_sentinel() {
-        let absent: HardForkInfoRequest =
-            serde_json::from_str("{}").expect("an empty request is valid");
-        assert_eq!(absent.version, None);
-        assert_eq!(
-            serde_json::to_string(&absent).expect("serialize"),
-            "{}",
-            "the default omits the field rather than sending 0"
-        );
-
-        let asked: HardForkInfoRequest =
-            serde_json::from_str(r#"{"version":3}"#).expect("an explicit version is valid");
-        assert_eq!(asked.version, core::num::NonZeroU8::new(3));
-
-        // The sentinel itself.
-        assert!(
-            serde_json::from_str::<HardForkInfoRequest>(r#"{"version":0}"#).is_err(),
-            "0 is not a fork version — it was the C++'s spelling of \"absent\", \
-             and a field that means two things is what this type exists to \
-             stop"
-        );
-        // And the range still runs to 255, so the refusal is about zero and
-        // not about a narrower type.
-        assert_eq!(
-            serde_json::from_str::<HardForkInfoRequest>(r#"{"version":255}"#)
-                .expect("255 is a version")
-                .version,
-            core::num::NonZeroU8::new(255)
         );
     }
 

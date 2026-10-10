@@ -34,7 +34,6 @@
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_verification_utils.h"
-#include "hardforks/hardforks.h"
 #include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
 
@@ -47,15 +46,15 @@ using namespace cryptonote;
 
 template <class TxForwardIt>
 static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt tx_end,
-        tx_verification_context& tvc, std::uint8_t hf_version)
+        tx_verification_context& tvc)
 {
     std::vector<const ct::CtSig*> rvv;
     rvv.reserve(static_cast<size_t>(std::distance(tx_begin, tx_end)));
 
-    // Genesis minimum is version 3. The version-1 and version-2 arms were
-    // unreachable: both fork constants are 1.
-    const size_t max_tx_version = 3;
-    const size_t min_tx_version = 3;
+    // The only admitted transaction version. The two locals stay until the
+    // version comparisons collapse (docs/FOLLOWUPS.md).
+    const size_t max_tx_version = CURRENT_TRANSACTION_VERSION;
+    const size_t min_tx_version = CURRENT_TRANSACTION_VERSION;
 
     const size_t tx_weight_limit = get_transaction_weight_limit();
 
@@ -89,11 +88,11 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         }
 
         // Rule 5
-        if (!core::check_tx_semantic(tx, tvc, hf_version))
+        if (!core::check_tx_semantic(tx, tvc))
             return false;
 
         // Rule 6
-        if (!Blockchain::check_tx_outputs(tx, tvc, hf_version) || tvc.m_verifivation_failed)
+        if (!Blockchain::check_tx_outputs(tx, tvc) || tvc.m_verifivation_failed)
             return false;
 
         // Serve-credit txs are non-spending: they carry no RCT output material
@@ -206,7 +205,7 @@ uint64_t get_transaction_weight_limit()
 {
     // Half the minimum block weight, less the coinbase reserve. The pre-v8
     // full-zone arm was unreachable from genesis.
-    return get_min_block_weight(1) / 2 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
+    return get_min_block_weight() / 2 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
 }
 
 bool ver_mixed_ct_semantics(std::vector<const ct::CtSig*> rvv)
@@ -256,17 +255,15 @@ bool ver_mixed_ct_semantics(std::vector<const ct::CtSig*> rvv)
     return true;
 }
 
-bool ver_non_input_consensus(const transaction& tx, tx_verification_context& tvc,
-    std::uint8_t hf_version)
+bool ver_non_input_consensus(const transaction& tx, tx_verification_context& tvc)
 {
-    return ver_non_input_consensus_templated(&tx, &tx + 1, tvc, hf_version);
+    return ver_non_input_consensus_templated(&tx, &tx + 1, tvc);
 }
 
-bool ver_non_input_consensus(const pool_supplement& ps, tx_verification_context& tvc,
-    const std::uint8_t hf_version)
+bool ver_non_input_consensus(const pool_supplement& ps, tx_verification_context& tvc)
 {
-    // We already verified the pool supplement for this hard fork version! Yippee!
-    if (ps.nic_verified_hf_version == hf_version)
+    // The pool supplement is already verified.
+    if (ps.nic_verified)
         return true;
 
     const auto it_transform = [] (const decltype(ps.txs_by_txid)::value_type& in)
@@ -275,11 +272,11 @@ bool ver_non_input_consensus(const pool_supplement& ps, tx_verification_context&
     const auto tx_end = boost::make_transform_iterator(ps.txs_by_txid.cend(), it_transform);
 
     // Perform the checks...
-    const bool verified = ver_non_input_consensus_templated(tx_begin, tx_end, tvc, hf_version);
+    const bool verified = ver_non_input_consensus_templated(tx_begin, tx_end, tvc);
 
-    // Cache the hard fork version on success
+    // Cache the verdict on success
     if (verified)
-        ps.nic_verified_hf_version = hf_version;
+        ps.nic_verified = true;
 
     return verified;
 }

@@ -99,7 +99,7 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, ViewRead};
 use crate::rules::block_weight::{Medians, Weights};
-use crate::rules::miner::{economics, Emission, Subsidy, EMISSION_SPLIT_EPOCH};
+use crate::rules::miner::{economics, Emission, Subsidy};
 use crate::rules::Rule;
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::ChainView;
@@ -263,7 +263,6 @@ pub(crate) fn price(
                 total_fees,
                 supply: burn.supply,
                 closed_shards: burn.closed_shards,
-                split_epoch: EMISSION_SPLIT_EPOCH.to_raw(),
                 params: economics(),
             };
             match price_emission(&inputs) {

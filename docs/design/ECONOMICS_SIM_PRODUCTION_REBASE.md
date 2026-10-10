@@ -199,7 +199,7 @@ tables has one cause. Each item names what would show it wrong.
 | --- | --- | --- |
 | **ESR-1** | The ordinary user's fee comes from `shekyl_economics::corrected_fee_ladder` — the Standard rung, the production default — at the block's own `R`, `C` and median. The flat `0.1 SKL` stays as a **named control arm**. | The control arm reproduces every §12.14 A1-T and A1-L cell **exactly**. If it does not, nothing after it is readable. |
 | **ESR-2** | The stuffer pays the Economy rung from `relay_fee_floor`; the `FEE_PER_BYTE_ATOMIC` mirror is deleted. The A3 claim cost follows. | A4's cost per shard is no longer depth-flat near `1 SKL`: it tracks `R`. `a_shard_costs_about_one_skl_and_depth_barely_moves_it` must go red before it is rewritten. |
-| **ESR-3** | Emission-split epoch read from `shekyl_chain_rules::EMISSION_SPLIT_EPOCH`. | A fold sampled at an exact year-boundary height moves by one decay step; a mid-year sample does not. |
+| **ESR-3** | Emission-split epoch closed over inside `shekyl_economics::emission_share` (`EMISSION_SPLIT_EPOCH`). | A fold sampled at an exact year-boundary height moves by one decay step; a mid-year sample does not. |
 | **ESR-4** | Transaction volume through `TxVolume::window` over `TX_VOLUME_WINDOW`, as the validator reads it. | A step schedule's burn and release ramp over 720 blocks instead of jumping. |
 | **ESR-5** | Net circulating supply (`CirculatingSupply::derive`) in the gate-7 path and the recorder; the fixture is regenerated. | Each regenerated column is justified from the production formula, not from the run that produced it. |
 | **ESR-6** | The weight penalty (`paid_block_reward`) and a block-weight median enter the fold. The pure median fold is **exposed from `shekyl-chain-rules`**, not restated — see §3. What a block carries is the producer's fill rule, lifted from `fill_block_template` to `shekyl_block_template::Fill` and called. | With traffic above the penalty-free zone the median rises and the floor falls as `1/M²` — **amended by §5.6 before the run**: on an all-Standard chain, only once one more transaction's fee covers its penalty. |
@@ -235,7 +235,10 @@ of the production report, the largest by a relative 1.9 × 10⁻⁵, and no
 cell of A1-T or A1-L. The falsifier above ("a mid-year sample does not
 move") was wrong in the small — every sample shifts by one block of the
 within-year interpolation — and right in what it guarded: nothing a reader
-would quote changes.
+would quote changes. **UPDATE 2026-10-09:** those folds call
+`shekyl_economics::emission_share`, which closes over
+`EMISSION_SPLIT_EPOCH`. The chain-rules re-export is gone. Height 0 is
+share 0, the same answer the daemon gives.
 
 **What the control arm is, from here on.** Up to ESR-2 the control
 reproduced the §12.13–§12.14 report exactly, plus 13 added lines; its

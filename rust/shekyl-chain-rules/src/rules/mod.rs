@@ -25,7 +25,7 @@
 //! Two block-level shapes, one per stage (`CHAIN_RULES_SLICE_2.md` §4.2,
 //! Q1/Q9 as ruled). [`FormRule::check`] is the **stateless** shape: the
 //! candidate, the rule set and the clock reading through a
-//! [`FormContext`], nothing else — B1, B2, B7 read only those, so they
+//! [`FormContext`], nothing else — B1, B2 read only those, so they
 //! belong here whatever slice added them. [`BlockRule::check`] is the
 //! **view-bound** shape: a [`BlockContext`] (the candidate, the rule set, and
 //! what `form` established) with the view beside it. A rule that needs a

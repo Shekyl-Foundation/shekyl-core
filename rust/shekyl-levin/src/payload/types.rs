@@ -91,6 +91,10 @@ impl PortableMap for BasicNodeData {
 /// wire — the shape `PWD-I1` forbids. A peer that still sends the key is
 /// decoded with the key ignored; nothing is ever emitted.
 ///
+/// Carries no `top_version` either: the block version is the constant 1, so
+/// a peer's tip version says nothing a receiver could act on. Same wire
+/// treatment — never emitted, ignored when a peer sends it.
+///
 /// `cumulative_difficulty_top64` is **always stored** (even when 0) and
 /// `KV_SERIALIZE_OPT` on load — C++ `is_store` branch in the map.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,8 +107,6 @@ pub struct CoreSyncData {
     pub cumulative_difficulty_top64: u64,
     /// `crypto::hash` POD-as-blob (32 bytes).
     pub top_id: [u8; 32],
-    /// `KV_SERIALIZE_OPT` default 0.
-    pub top_version: u8,
 }
 
 impl PortableMap for CoreSyncData {
@@ -120,7 +122,6 @@ impl PortableMap for CoreSyncData {
             Value::UInt64(self.cumulative_difficulty_top64),
         );
         section.insert("top_id", Value::Bytes(self.top_id.to_vec()));
-        get::insert_opt_u8(&mut section, "top_version", self.top_version, 0);
         Ok(section)
     }
 
@@ -134,7 +135,6 @@ impl PortableMap for CoreSyncData {
                 Some(_) => return Err(get::mismatch("cumulative_difficulty_top64", "uint64")),
             },
             top_id: get::blob(section, "top_id")?,
-            top_version: get::opt_u8(section, "top_version", 0)?,
         })
     }
 }

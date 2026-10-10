@@ -30,8 +30,10 @@ pub struct RenderParameters {
     /// override, no synthetic path, no post-construction tampering. It
     /// does not and cannot attest that the aggregate itself is truthful
     /// chain data; that binding is owned by the layer that produces
-    /// aggregates (`shekyl-shard-source`'s hash-authoritative handle
-    /// guard today, `ArchivalEngine` at Stage 5). A reader treating
+    /// aggregates (the daemon's fetch scheduler, which answers a view
+    /// only after the body verified against its own skeleton rows —
+    /// `SV-D2`; `shekyl-shard-source`'s hash-authoritative handle guard
+    /// for the fixture preview). A reader treating
     /// `canonical` as "verified against the chain" is reading the value
     /// wider than its scope.
     pub(crate) canonical: bool,

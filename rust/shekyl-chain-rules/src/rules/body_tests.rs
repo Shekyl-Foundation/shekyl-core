@@ -478,7 +478,7 @@ fn the_archival_rows_are_vacuous_on_a_block_of_spends() {
 #[test]
 fn cen_g2_refuses_in_form_before_the_identity_is_derived() {
     // Through the stage: the refusal is the stage's verdict, and it is
-    // G2's — B1/B2/B7 pass this header, and the coinbase rows pass its
+    // G2's — B1/B2 pass this header, and the coinbase rows pass its
     // coinbase, so nothing earlier in `judge_form!` claims it.
     let mut reordered = three_bodies();
     reordered.transactions.swap(0, 1);

@@ -18,7 +18,8 @@ globs:
   participant alignment all live in `shekyl-economics` and influence
   emission/burn — not block validity. See `DESIGN_CONCEPTS.md` and
   archival staking: `V3_STAKER_ARCHIVAL.md`,
-  `docs/design/REWARD_EMISSION_LEG.md`.
+  `docs/design/REWARD_EMISSION_LEG.md`. (The stake-ratio term was removed
+  by F-D; the mechanism that replaces it is being derived under EUP.)
 
 This split is deliberate: staking gives small holders economic alignment
 without making them gatekeepers of consensus, and keeps consensus

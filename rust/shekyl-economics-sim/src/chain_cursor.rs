@@ -15,12 +15,11 @@
 
 use shekyl_chain_rules::EffectiveMedian;
 use shekyl_economics::{
-    burn::calc_burn_pct_at, calc_effective_emission_share, CirculatingSupply, EconomicParams,
-    TxVolume,
+    burn::calc_burn_pct_at, emission_share, CirculatingSupply, EconomicParams, TxVolume,
 };
 
 use crate::block_space::{BlockSpace, Filled};
-use crate::engine::{net_supply, SimParams, EMISSION_SPLIT_EPOCH_HEIGHT};
+use crate::engine::{net_supply, SimParams};
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::volume_window::VolumeWindow;
 
@@ -82,9 +81,8 @@ impl ChainCursor {
         let volume = self.window.operand();
         let medians = self.space.medians();
         let supply = net_supply(step.already_generated, step.total_burned);
-        let emission_share = calc_effective_emission_share(
+        let share = emission_share(
             step.chain_height,
-            EMISSION_SPLIT_EPOCH_HEIGHT,
             params.staker_emission_share,
             params.staker_emission_decay,
             params.blocks_per_year,
@@ -96,7 +94,7 @@ impl ChainCursor {
             already_generated: generated,
             volume,
             long_term_median: medians.long_term_effective_median.to_raw(),
-            sigma_scaled: emission_share,
+            sigma_scaled: share,
             burn_pct_scaled: burn_pct,
             chain_leaves: step.leaves,
             params: economic,
@@ -111,7 +109,7 @@ impl ChainCursor {
             medians,
             supply,
             burn_pct,
-            emission_share,
+            emission_share: share,
             fee_point,
             tx,
             filled,

@@ -3,13 +3,19 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! End-to-end on the axis the serving path lives on: store → pin →
-//! endpoint → loopback fetch → **recompute `R_k` from the fetched bytes and
-//! match the chain-committed record** — exactly the check a witness runs on
-//! the far side of the rendezvous (`ARCHIVAL_CHALLENGE_MECHANISM.md` §2:
-//! the response is self-authenticating by content). A corrupted store, a
-//! stride bug in the serving read, or a truncated write all fail *this*
-//! check, which is the one that decides serve credit.
+//! End-to-end on the axis the interim leaf provider lives on: store → pin
+//! → endpoint → loopback fetch → **recompute `R_k` from the fetched bytes
+//! and match the store's frozen record**. A corrupted store, a stride bug
+//! in the serving read, or a truncated write all fail *this* check.
+//!
+//! **Interim.** [`StoreShardProvider`] serves the retired leaf-segment unit
+//! (`PDM-Q-F25`); the shard a requester names is a `W`-byte `tx_id` range
+//! whose body is `shekyl_wire::shard_frame` over archival good (`SF-D8`
+//! amendment 2026-10-08), and a fetch client judging this body against its
+//! skeleton rows refuses it. What this file holds until the `WSS` provider
+//! replaces it is narrower: that the loop streams exactly the bytes the
+//! provider opened, no frame of its own ahead of them, and signs for those.
+//! It is deleted with the provider, not adapted.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -20,8 +26,7 @@ use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{
     leaves_per_segment, recompute_segment_r_k, BlockHeight, Gindex, LeafEntry, LeafStore,
-    OutputIdentity, SegmentId, SegmentPin, ServedFrameHeader, ServingReader, TargetKind,
-    LEAF_BYTES,
+    OutputIdentity, SegmentId, SegmentPin, ServingReader, TargetKind, LEAF_BYTES,
 };
 use shekyl_p_serve::{
     PServeEndpoint, PassSigner, ShardProvider, StoreShardProvider, TestKeySigner,
@@ -87,7 +92,7 @@ async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
     out
 }
 
-/// Split a 200 response after its head into (countersignature, framed body).
+/// Split a 200 response after its head into (countersignature, body).
 /// The countersignature is the response's last bytes.
 fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
     let end = response
@@ -129,7 +134,7 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
     let (ep, signer) = bind(Arc::new(provider)).await;
 
     let response = fetch(ep.addr(), "/shard/0").await;
-    let (signature, mut body) = envelope_of(&response);
+    let (signature, body) = envelope_of(&response);
 
     // The witness's *first* act (`SF-D8`): the response is bound to the
     // request it made. Verified through the same consensus function the
@@ -145,27 +150,17 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
     )
     .expect("the countersignature covers this request's header, shard id and delivered bytes");
 
-    // Then the frame (`RF-D4`): it says how
-    // many leaves the response carries and how many bytes follow them that
-    // are *not* part of the `R_k` input. This test is the nearest thing to
-    // a fetcher that exists, so it reads the format the way one will —
-    // through `ServedFrameHeader::read`, not by assuming the body starts at
-    // byte zero.
-    let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
-    assert_eq!(frame.leaf_count(), leaves_per_segment() as u64);
-    assert_eq!(frame.padding_len(), 0, "writers emit zero padding");
+    // The body is the provider's bytes from the first one: the segment's
+    // leaves in tree order, and nothing the loop added ahead of them.
     assert_eq!(
-        body.len() as u64,
-        frame.segment_bytes() + frame.padding_len(),
-        "the frame accounts for every byte after the header"
+        body.len(),
+        leaves_per_segment() * LEAF_BYTES,
+        "the loop streams the opened body exactly"
     );
 
-    // The witness check: chunk the *segment* bytes back into leaves,
-    // recompute the sub-root, compare against the chain-committed record.
-    // Padding, when a scheme exists, is excluded here by construction —
-    // the slice is taken at `segment_bytes()`, not at the end of the body.
-    let segment = &body[..usize::try_from(frame.segment_bytes()).expect("segment fits usize")];
-    let leaves: Vec<[u8; LEAF_BYTES]> = segment
+    // Chunk the leaves back, recompute the sub-root, compare against the
+    // store's frozen record.
+    let leaves: Vec<[u8; LEAF_BYTES]> = body
         .chunks_exact(LEAF_BYTES)
         .map(|c| c.try_into().expect("whole leaf"))
         .collect();
@@ -176,7 +171,7 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
         .expect("segment 0 frozen");
     assert_eq!(
         recomputed, record.r_k,
-        "served bytes must verify against the committed R_k"
+        "served bytes must recompute to the store's frozen R_k"
     );
     assert_eq!(ep.served_count(), 1);
     assert_eq!(ep.lookup_failure_count(), 0);

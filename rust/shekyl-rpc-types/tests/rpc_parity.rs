@@ -22,7 +22,7 @@ use shekyl_rpc_types::{
     GetBlockHeaderByHashResponse, GetBlockHeaderByHeightResponse, GetBlockHeadersRangeResponse,
     GetBlockResponse, GetConnectionsResponse, GetHeightResponse, GetLastBlockHeaderResponse,
     GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
-    GetTransactionsResponse, GetVersionResponse, HardForkEntry, HashHex, IsKeyImageSpentRequest,
+    GetTransactionsResponse, GetVersionResponse, HashHex, IsKeyImageSpentRequest,
     IsKeyImageSpentResponse, KeyImageStatus, Peer, RpcStatus, SyncInfoPeer, SyncInfoResponse,
     SyncSpan, TxEntry, TxLocation, CORE_RPC_VERSION,
 };
@@ -179,7 +179,6 @@ fn assert_version_parity(vector: &str, built: &GetVersionResponse) {
     );
     let back: GetVersionResponse =
         serde_json::from_str(vector).expect("the oracle vector deserializes");
-    assert_eq!(back.hard_forks, built.hard_forks);
     assert_eq!(back.current_height, built.current_height);
 }
 
@@ -220,16 +219,12 @@ fn get_version_absent_target_matches_the_oracle() {
         release: false,
         current_height: 1_234_567,
         target_height: 0,
-        hard_forks: vec![HardForkEntry {
-            hf_version: 1,
-            height: 0,
-        }],
         consensus_constants_digest: fixture_digest(),
         nettype: DaemonNetwork::Mainnet,
         genesis_hash: fixture_genesis(),
     };
     assert_version_parity(
-        include_str!("vectors/rpc/get_version_synced_v6.json"),
+        include_str!("vectors/rpc/get_version_absent_target_v1.json"),
         &built,
     );
     // Omitted because the core reported no target.
@@ -246,22 +241,12 @@ fn get_version_syncing_matches_the_oracle() {
         release: true,
         current_height: 1000,
         target_height: 2_000_000,
-        hard_forks: vec![
-            HardForkEntry {
-                hf_version: 1,
-                height: 0,
-            },
-            HardForkEntry {
-                hf_version: 2,
-                height: 5000,
-            },
-        ],
         consensus_constants_digest: fixture_digest(),
         nettype: DaemonNetwork::Mainnet,
         genesis_hash: fixture_genesis(),
     };
     assert_version_parity(
-        include_str!("vectors/rpc/get_version_syncing_v2.json"),
+        include_str!("vectors/rpc/get_version_syncing_v3.json"),
         &built,
     );
 }
@@ -274,7 +259,6 @@ fn get_version_all_defaults_matches_the_oracle() {
         release: false,
         current_height: 0,
         target_height: 0,
-        hard_forks: vec![],
         consensus_constants_digest: fixture_digest(),
         nettype: DaemonNetwork::Mainnet,
         genesis_hash: fixture_genesis(),
@@ -284,7 +268,7 @@ fn get_version_all_defaults_matches_the_oracle() {
         &built,
     );
     let wire = serde_json::to_string(&built).unwrap();
-    for omitted in ["current_height", "target_height", "hard_forks"] {
+    for omitted in ["current_height", "target_height"] {
         assert!(
             !wire.contains(omitted),
             "{omitted} must be omitted when default"
@@ -407,7 +391,6 @@ fn integers_are_json_numbers() {
     assert!(v["height"].is_u64());
     let v = parsed(include_str!("vectors/rpc/get_version_syncing_v1.json"));
     assert!(v["version"].is_u64());
-    assert!(v["hard_forks"][0]["hf_version"].is_u64());
 }
 
 /// A whole block: transactions, a filled pow hash, and `orphan_status` set —
@@ -932,7 +915,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 18] = [
+    let links: [(&str, &str); 20] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1005,6 +988,14 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v18.json"),
             include_str!("vectors/rpc/get_version_synced_v19.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v19.json"),
+            include_str!("vectors/rpc/get_version_synced_v20.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v20.json"),
+            include_str!("vectors/rpc/get_version_synced_v21.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1023,7 +1014,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 18] = [
+    const ADDED_AT_LINK: [&[&str]; 20] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1042,11 +1033,45 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &["target_height"], // 3.40 (synced replies carry the core target; 0 is no longer "synchronized")
         &[], // 3.41 (the regtest serve-credit injector returns its receipt `height`, DRS-E4 commit 7; get_version gains nothing)
         &[], // 3.42 (get_info reports already_generated_coins; get_version gains nothing)
+        &[], // 3.43 (request_archival_shard served natively over the W-shard view: archival_len, close_height, the open/absent codes, SV-D3; get_version gains nothing)
+        &[], // 3.44 (get_version drops hard_forks; hard_fork_info deleted; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
         links.len(),
         "every link must declare what it adds, even if that is nothing"
+    );
+
+    // Per link, the members that bump is allowed to retire — the mirror of
+    // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
+    // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
+    // 3.44 one retires nothing.
+    const REMOVED_AT_LINK: [&[&str]; 20] = [
+        &[],             // 3.25
+        &[],             // 3.26
+        &[],             // 3.27
+        &[],             // 3.28
+        &[],             // 3.29
+        &[],             // 3.30
+        &[],             // 3.31
+        &[],             // 3.32
+        &[],             // 3.33
+        &[],             // 3.34
+        &[],             // 3.35
+        &[],             // 3.36
+        &[],             // 3.37
+        &[],             // 3.38
+        &[],             // 3.39
+        &[],             // 3.40
+        &[],             // 3.41
+        &[],             // 3.42
+        &[],             // 3.43 (the shard view; get_version retires nothing)
+        &["hard_forks"], // 3.44 (block version is the constant 1; no schedule to report)
+    ];
+    assert_eq!(
+        REMOVED_AT_LINK.len(),
+        links.len(),
+        "every link must declare what it removes, even if that is nothing"
     );
 
     let mut previous_after: Option<&str> = None;
@@ -1073,10 +1098,11 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         previous_after = Some(after_raw);
 
         // The pair differs by the version, plus exactly the members that
-        // link is *declared* to add. The invariant is not loosened to "some
-        // fields may differ": each addition is named per link, so a field
-        // that appears without being declared still fails, and a declared
-        // field that does not appear fails too.
+        // link is *declared* to add or remove. The invariant is not loosened
+        // to "some fields may differ": each addition and each removal is
+        // named per link, so a field that appears or disappears without
+        // being declared still fails, and a declared change that did not
+        // happen fails too.
         let mut before = parsed(before_raw);
         let obj = before.as_object_mut().expect("vector is an object");
         obj.insert("version".to_string(), serde_json::json!(hi));
@@ -1091,6 +1117,16 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             assert!(
                 obj.insert((*member).to_string(), value).is_none(),
                 "link {i}: `{member}` is declared as added but the older vector already has it"
+            );
+        }
+        for member in REMOVED_AT_LINK[i] {
+            assert!(
+                obj.remove(*member).is_some(),
+                "link {i}: `{member}` is declared as removed but the older vector never had it"
+            );
+            assert!(
+                after.get(*member).is_none(),
+                "link {i}: `{member}` is declared as removed but the newer vector still has it"
             );
         }
         assert_eq!(
@@ -1108,6 +1144,43 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         u64::from(shekyl_rpc_types::CORE_RPC_VERSION),
         "the newest vector must carry the current CORE_RPC_VERSION"
     );
+}
+
+/// **Subtraction.** The two `get_version` cases that sit beside the chain —
+/// a syncing node, and a node whose core reported no target — lose
+/// `hard_forks` at 3.44 and nothing else. Neither is a link of the chain
+/// above (that one is the synced case), so each is derived here from the
+/// vector its parity test read before the bump. `version` is left as the
+/// predecessor's: `assert_version_parity` pins the constant, these files pin
+/// every other member.
+#[test]
+fn the_get_version_side_cases_are_their_predecessors_minus_exactly_hard_forks() {
+    for (before_raw, after_raw) in [
+        (
+            include_str!("vectors/rpc/get_version_syncing_v2.json"),
+            include_str!("vectors/rpc/get_version_syncing_v3.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v6.json"),
+            include_str!("vectors/rpc/get_version_absent_target_v1.json"),
+        ),
+    ] {
+        let mut derived = parsed(before_raw);
+        let removed = derived
+            .as_object_mut()
+            .expect("vector is an object")
+            .remove("hard_forks")
+            .expect("the predecessor must carry the member its sibling retires");
+        assert!(
+            removed.as_array().is_some_and(|rows| !rows.is_empty()),
+            "the retired member was a non-empty schedule, or the subtraction is vacuous"
+        );
+        assert_eq!(
+            derived,
+            parsed(after_raw),
+            "the sibling must differ from its predecessor by that member and nothing else"
+        );
+    }
 }
 
 #[test]
@@ -1432,19 +1505,21 @@ fn sync_info_empty_matches_the_oracle() {
 
 // ── RK-5b: the header remainder, and four deliberate divergences ────────────
 //
-// **A green parity run here does NOT mean "Rust matches C++".** Three of these
-// methods change shape at 3.27, so their `_v1` captures are the *before* half
-// of a pair and the `_v2` files are what the daemon emits now. Each `_v2` is
-// held honest by a delta test below that **re-derives it from `_v1`**, so a
-// hand-edited `_v2` fails rather than passing as its own authority.
+// **A green parity run here does NOT mean "Rust matches C++".** Three of this
+// slice's methods changed shape at 3.27; two are still served (the third,
+// `hard_fork_info`, went at 3.44 with its vectors), so their `_v1` captures
+// are the *before* half of a pair and the `_v2` files are the 3.27 shape.
+// Each `_v2` is held honest by a delta test below that **re-derives it from
+// `_v1`**, so a hand-edited `_v2` fails rather than passing as its own
+// authority.
 //
 // The denominator, stated rather than implied. Compared against `_v1`
 // directly: `get_last_block_header`, `get_block_headers_range` — those two do
 // not diverge. Compared against `_v2` only, with the delta pinned separately:
-// `get_block_header_by_hash` (request and response), `hard_fork_info`,
-// `get_fee_estimate`. No field is excluded from an equality without its own
-// positive assertion in one of the delta tests, which is the thing that makes
-// "excluded" different from "forgotten".
+// `get_block_header_by_hash` (request and response), `get_fee_estimate`. No
+// field is excluded from an equality without its own positive assertion in
+// one of the delta tests, which is the thing that makes "excluded" different
+// from "forgotten".
 
 fn vector_header_v(tag: u8, orphan: bool) -> BlockHeader {
     BlockHeader {
@@ -1582,38 +1657,6 @@ fn a_missing_slot_is_the_case_v1_could_not_express() {
     assert!(
         round_trip.block_headers[0].block_header.is_some()
             && round_trip.block_headers[2].block_header.is_some()
-    );
-}
-
-/// **Rename plus one addition.** `version` becomes `active_version`, and
-/// `queried_version` is information `_v1` does not contain — the C++ never
-/// reported what the caller asked about — so its value is asserted rather than
-/// derived.
-#[test]
-fn hard_fork_v2_renames_version_and_adds_the_query() {
-    let v1 = parsed(include_str!("vectors/rpc/hard_fork_info_v1.json"));
-    let v2 = parsed(include_str!("vectors/rpc/hard_fork_info_v2.json"));
-
-    let queried = v2["queried_version"].as_u64().expect("the added field");
-    assert_eq!(
-        v2["active_version"], v1["version"],
-        "the old `version` is the ACTIVE one — that was the collision"
-    );
-    assert_ne!(
-        queried,
-        v1["version"].as_u64().expect("v1 version"),
-        "the vector deliberately uses different numbers, so a reply that \
-         confused the two would not pass by coincidence"
-    );
-
-    let mut derived = v1.clone();
-    let obj = derived.as_object_mut().expect("object");
-    let old = obj.remove("version").expect("v1 carries it");
-    obj.insert("active_version".to_owned(), old);
-    obj.insert("queried_version".to_owned(), queried.into());
-    assert_eq!(
-        derived, v2,
-        "rename plus exactly one addition, nothing else"
     );
 }
 

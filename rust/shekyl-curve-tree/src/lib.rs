@@ -59,7 +59,6 @@ pub mod frontier;
 pub mod recon;
 pub mod reference;
 pub mod segment;
-pub mod served_frame;
 pub mod serving_route;
 pub mod store;
 pub mod types;
@@ -79,7 +78,6 @@ pub use segment::{
     FINALITY_DEPTH_BLOCKS, LEAF_BYTES, REORG_HASH_WINDOW_BLOCKS,
     SEGMENT_FREEZE_REORG_MARGIN_BLOCKS, SEGMENT_LAYER_J, SPENDABLE_AGE_BLOCKS,
 };
-pub use served_frame::{ServedFrameError, ServedFrameField, ServedFrameHeader};
 pub use store::{
     mixed_composition_root, recompute_segment_r_k, CapturedChunk, FrozenSegmentBody,
     FrozenSegmentRecord, LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader,

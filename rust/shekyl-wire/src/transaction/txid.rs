@@ -500,7 +500,14 @@ fn length_word(archival_len: ArchivalLength) -> [u8; 32] {
 /// The txid's `pqc_auths` component: `keccak256(varint(count) ‖ segment)`.
 /// The count prefix is in the hash and not in the stored segment (see
 /// [`Transaction::pqc_auth_hash`]).
-fn pqc_auth_hash_of(count: usize, pqc_auths_segment: &[u8]) -> PqcAuthHash {
+///
+/// Public for the one caller that holds the segment without the body: the
+/// shard-fetch client checks a fetched `pqc_auths` segment against the
+/// retained `txs_pqc_auth_hash` row through this
+/// (`shard_frame::check_components`), so the row and the check are one
+/// function of the same bytes, as [`prunable_hash_of`] is for the other row.
+#[must_use]
+pub fn pqc_auth_hash_of(count: usize, pqc_auths_segment: &[u8]) -> PqcAuthHash {
     let mut buf = Vec::with_capacity(pqc_auths_segment.len() + 9);
     write_varint(count, &mut buf).expect("Vec write is infallible");
     buf.extend_from_slice(pqc_auths_segment);

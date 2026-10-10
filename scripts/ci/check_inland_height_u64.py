@@ -133,10 +133,13 @@ SCOPE = (
 # birth rather than recorded); 152 at the I13/I15 fixture split (2026-10-08:
 # moving `at` / `anchor` onto `Grown` and the validator-tree reads onto
 # `GrownTree` typed those ordinals as `BlockHeight` instead of re-recording
-# them); 151 at the slash-log retirement (2026-10-09, `SLK-Q1`:
-# `prune_at_boundary` grew a rule-set operand and its height was typed as
-# `BlockHeight` — the slash floor is built from it — rather than re-recorded).
-GRANDFATHER_CEILING = 151
+# them); 151 on 2026-10-08: the test that parsed the hard-fork table for
+# CEN-F21's epoch left with the table; 150 at the slash-log retirement
+# (2026-10-09, `SLK-Q1`: `prune_at_boundary` grew a rule-set operand and
+# its height was typed as `BlockHeight` — the slash floor is built from it
+# — rather than re-recorded; the two lanes each took one row off 152, and
+# the merge of 2026-10-10 is where the ceiling reads both).
+GRANDFATHER_CEILING = 150
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

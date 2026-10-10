@@ -41,7 +41,6 @@ fn sync_data() -> CoreSyncData {
         cumulative_difficulty: 2,
         cumulative_difficulty_top64: 0,
         top_id: [0xab; 32],
-        top_version: 0,
     }
 }
 
@@ -154,6 +153,21 @@ fn deleted_pruning_seed_never_written_still_readable() {
         },
         last_seen: 0,
     });
+}
+
+/// `CORE_SYNC_DATA` carries no `top_version`: the block version is the
+/// constant 1, so a tip version is not information. Never emitted; a peer
+/// that still sends the key — as a `uint8`, the type it had on the wire —
+/// decodes with the key ignored, the same both-directions interop argument
+/// as `pruning_seed` above.
+#[test]
+fn deleted_top_version_never_written_still_readable() {
+    let value = sync_data();
+    let mut section = value.to_section().expect("section");
+    assert!(section.get("top_version").is_none());
+    section.insert("top_version", shekyl_portable_storage::Value::UInt8(1));
+    let bytes = store_to_binary(&section).expect("encode");
+    assert_eq!(CoreSyncData::load(&bytes).expect("load"), value);
 }
 
 #[test]

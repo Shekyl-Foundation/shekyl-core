@@ -48,7 +48,6 @@ fn version_reply(edit: impl FnOnce(&mut GetVersionResponse)) -> String {
         release: false,
         current_height: 1,
         target_height: 0,
-        hard_forks: vec![],
         consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
         nettype: SERVED,
         genesis_hash: HashHex::from_bytes(genesis_hash_for(SERVED)),

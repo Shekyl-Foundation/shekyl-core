@@ -64,6 +64,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod archival;
 pub mod bin_commands;
 pub mod chain;
 pub mod consensus_digest;
@@ -72,6 +73,10 @@ pub mod headers;
 pub mod identity;
 pub mod p2p;
 pub mod transactions;
+pub use archival::{
+    RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,
+    CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
+};
 pub use bin_commands::{
     BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
     GetOIndexesResponse,
@@ -79,12 +84,11 @@ pub use bin_commands::{
 pub use chain::{
     core_rpc_version_string, BlockHeader, ConnectState, GetBlockCountResponse, GetBlockHashParams,
     GetBlockHeaderByHeightRequest, GetBlockHeaderByHeightResponse, GetBlockRequest,
-    GetBlockResponse, GetHeightResponse, GetVersionResponse, HardForkEntry, RestErrorEnvelope,
-    RpcStatus, StoreInvariantRow, CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE,
-    CORE_RPC_ERROR_CODE_CORE_BUSY, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-    CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-    CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION, CORE_RPC_VERSION_MAJOR,
-    CORE_RPC_VERSION_MINOR,
+    GetBlockResponse, GetHeightResponse, GetVersionResponse, RestErrorEnvelope, RpcStatus,
+    StoreInvariantRow, CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE, CORE_RPC_ERROR_CODE_CORE_BUSY,
+    CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_RESTRICTED,
+    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION,
+    CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
 };
 pub use consensus_digest::{
     DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH,
@@ -94,7 +98,6 @@ pub use headers::{
     BlockHeaderSlot, FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
-    HardForkInfoRequest, HardForkInfoResponse,
 };
 pub use identity::{genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch};
 pub use p2p::{
