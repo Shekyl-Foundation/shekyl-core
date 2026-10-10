@@ -1,0 +1,141 @@
+(* Copyright (c) 2026, The Shekyl Foundation
+ *
+ * All rights reserved.
+ * BSD-3-Clause
+ *
+ * The shared ProVerif library for Shekyl's Noise handshakes (RT-W8 part 1).
+ *
+ * One library, two models: the P2P transport's NNhfs (nnhfs/run.py beside
+ * this file) and the RPC channel's hybridXK (RT-P7, rust/shekyl-rpc-channel/
+ * model/run.py, which declared the same primitives inline and adopts this
+ * file when it merges). A primitive is declared here once; a model declares
+ * only its protocol: processes, events, queries, and the constants that name
+ * its messages.
+ *
+ * Load with `proverif -lib docs/formal/proverif/lib/noise.pvl model.pv`.
+ *
+ * WHAT THE SYMBOLIC MODEL IS. Every primitive below is perfect unless a model
+ * says otherwise: the hash has no collisions, the AEAD opens only under its
+ * key, X25519 is a Diffie-Hellman group with exactly the commutation
+ * equation, ML-KEM a ciphertext that opens only under the matching secret
+ * key. A property proved here is a property of the token order and the
+ * transcript hashing, not of the bytes, the constant-time behaviour or the
+ * implementation; those are the pinned vectors, the differential tests and
+ * the timing harness (RT-P4).
+ *
+ * NAMES. The Noise specification's names, lower-case: MixHash is `mixh`,
+ * MixKey is the pair `kdfck` / `kdfk` (HKDF's two outputs), MixKeyAndHash
+ * adds `kdfh` (the third output, which a model mixes into h), Split is
+ * `split1` / `split2`. EncryptAndHash is two steps, `aead` then `mixh` on the
+ * ciphertext, and `eah` / `dah` are those two steps as one letfun each. *)
+
+(* ---------------------------------------------------------------------- *)
+(* Types. `bitstring` is the Noise byte string: hashes, chaining keys, AEAD
+   inputs and outputs, prologues, payloads. The asymmetric material has its
+   own types so a model cannot hand a public key where a ciphertext goes. *)
+
+type scalar.   (* an X25519 private scalar *)
+type point.    (* an X25519 public point *)
+type kemsk.    (* an ML-KEM-768 decapsulation key *)
+type kempk.    (* an ML-KEM-768 encapsulation key *)
+type kemct.    (* an ML-KEM-768 ciphertext *)
+type seed.     (* the randomness one encapsulation draws *)
+type key.      (* an AEAD key: a MixKey or Split output *)
+
+(* ---------------------------------------------------------------------- *)
+(* X25519, as a Diffie-Hellman group: one generator, exponentiation, and the
+   commutation equation. Nothing else about the curve is modelled; in
+   particular low-order points do not exist here, so the implementation's
+   `was_contributory` check (noise.rs) is outside this model's reach. *)
+
+const g: point [data].
+fun exp(point, scalar): point.
+equation forall x: scalar, y: scalar; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+(* ---------------------------------------------------------------------- *)
+(* ML-KEM-768, as an IND-CCA KEM. Encapsulation under a public key with fresh
+   randomness yields a ciphertext and a shared secret; decapsulation with the
+   matching secret key recovers that secret and nothing else does. The seed
+   is what `try_encaps_with_rng` draws (one 32-byte `m` in FIPS 203). *)
+
+fun kpk(kemsk): kempk.                   (* the encapsulation key of a secret key *)
+fun kct(kempk, seed): kemct.             (* the ciphertext *)
+fun kss(kempk, seed): bitstring.         (* the shared secret the encapsulator holds *)
+reduc forall sk: kemsk, r: seed; kdecaps(kct(kpk(sk), r), sk) = kss(kpk(sk), r).
+
+(* ---------------------------------------------------------------------- *)
+(* The symmetric state (Noise §5.2), as free functions over its two values,
+   the handshake hash h and the chaining key ck.
+
+   hinit(name)       InitializeSymmetric: h = ck = HASH(protocol_name) (or the
+                     padded name when it is short; one function either way).
+   mixh(h, data)     MixHash: h' = HASH(h || data).
+   kdfck(ck, ikm)    MixKey, first output:  ck' = HKDF(ck, ikm)[1].
+   kdfk(ck, ikm)     MixKey, second output: k   = HKDF(ck, ikm)[2].
+   kdfh(ck, ikm)     MixKeyAndHash's third output, mixed into h by the model.
+   split1(ck)        Split, first key  (initiator → responder).
+   split2(ck)        Split, second key (responder → initiator).
+
+   The implementation resets the AEAD nonce to zero at every MixKey
+   (noise.rs `mix_key`), so a model names its nonces per key: two
+   encryptions under different keys may both use `n0`. *)
+
+fun hinit(bitstring): bitstring.
+fun mixh(bitstring, bitstring): bitstring.
+fun kdfck(bitstring, bitstring): bitstring.
+fun kdfk(bitstring, bitstring): key.
+fun kdfh(bitstring, bitstring): bitstring.
+fun split1(bitstring): key.
+fun split2(bitstring): key.
+
+(* ---------------------------------------------------------------------- *)
+(* The AEAD (ChaCha20-Poly1305), with the handshake hash as associated data.
+   One destructor: a ciphertext opens only under its key, nonce and
+   associated data, which is what binds every encrypted token to the
+   transcript so far. *)
+
+fun aead(key, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: key, n: bitstring, ad: bitstring, m: bitstring;
+      adec(k, n, ad, aead(k, n, ad, m)) = m.
+
+(* EncryptAndHash / DecryptAndHash with a key present: the AEAD step and the
+   MixHash of the ciphertext, returned as (ciphertext, h'). With no key
+   present (message 1 of NN) a model mixes the plaintext directly. *)
+
+letfun eah(k: key, n: bitstring, h: bitstring, m: bitstring) =
+  let ct = aead(k, n, h, m) in (ct, mixh(h, ct)).
+
+(* ---------------------------------------------------------------------- *)
+(* Type converters, so public keys and ciphertexts can be hashed and sent as
+   byte strings without a model inventing an encoding. `[data]` makes them
+   transparent to the attacker, as the wire bytes are. *)
+
+fun p2b(point): bitstring [data, typeConverter].
+fun kpk2b(kempk): bitstring [data, typeConverter].
+fun ct2b(kemct): bitstring [data, typeConverter].
+
+(* ---------------------------------------------------------------------- *)
+(* Shared constants: the nonces a handshake uses (per key, from zero), and the
+   empty byte string. Protocol names, prologues and payload labels are the
+   model's to declare. *)
+
+const n0: bitstring.
+const n1: bitstring.
+const n2: bitstring.
+const empty: bitstring.
+
+(* ---------------------------------------------------------------------- *)
+(* A broken primitive. A model that asks whether a property is hybrid runs
+   once with X25519 broken and once with ML-KEM broken. A break is modelled
+   as a primitive whose every shared secret is one public constant: the keys
+   and ciphertexts still travel, they just protect nothing. That gives the
+   attacker at least what a real break would (it need not even see the public
+   keys), so a property that survives here survives the real break.
+
+   Two other ways were tried in the RT-P7 model and are recorded there: a
+   discrete-log rule beside the Diffie-Hellman equation, and a rule recovering
+   a KEM secret key from its public key, both made ProVerif's search grow
+   without bound. *)
+
+const broken_dh: point.
+const broken_kem: bitstring.
