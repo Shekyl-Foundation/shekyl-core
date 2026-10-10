@@ -450,9 +450,15 @@ phase is re-run alone when the FN-DSA-1024 receipt key lands.
 ## Files
 
 - `ba_t5_serve_floor_device_20261007_obs.tsv`
-  (sha256 `d427e84c57f9c6d0d9bbc338588b59d79a3e663ebb67456614720a26a7da9502`):
+  (sha256 `abd024e565a511318af54e3c5e261634d126e544b8916cca5bd8b31276105400`):
   the probe's rows, and one `EXIT` row per block. Row kinds and columns
-  are in the probe's header.
+  are in the probe's header. One header line differs from the file the
+  device wrote (sha256
+  `d427e84c57f9c6d0d9bbc338588b59d79a3e663ebb67456614720a26a7da9502`):
+  the `daemon:` line carried the resident daemon's command line, with
+  its binary and configuration paths, and this repository names roles,
+  not hosts, so it now reads "the floor device's resident testnet daemon"
+  (redacted 2026-10-09 in review of PR #1014). No data row is changed.
 - `ba_t5_serve_floor_device_20261007_env.tsv`
   (sha256 `5642decb27e7b9a2d903df86f11fea815f5d39b4bde874c6dddbefffd1c1ff12`):
   one `ENV` row at each block boundary and every 30 s of the sustained

@@ -809,6 +809,21 @@ pub struct StakingInfoResult {
     /// standoff is not yet serving anything.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub posture: Option<String>,
+    /// Serving-runtime threads currently at normal priority because the OS
+    /// refused to lower them (`SH-3`: serving runs below the daemon's
+    /// priority by default). It reports the result of that call for the
+    /// threads that are still running, and nothing more. A thread that
+    /// has exited leaves the count, including a blocking thread the
+    /// runtime retires after it has been idle. Absent when no serving
+    /// lifecycle is parked. `0` is the steady reading: every serving
+    /// thread that is running was lowered. Blocking threads start only
+    /// when a connection needs one, so zero does not claim every thread
+    /// that will ever exist. A positive count means that many threads
+    /// run at normal priority, serving continues, and the wallet logged
+    /// one warning naming the cause. It does not say whether the daemon
+    /// received more CPU (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serving_priority_not_lowered: Option<u32>,
 }
 
 /// `get_drain_balance` result (WI-RPC-5 archival staking actions).
