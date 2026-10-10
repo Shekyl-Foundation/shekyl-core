@@ -701,7 +701,7 @@ pub fn derive_archival_p_keys(
 ///
 /// Byte-identical to `derive_archival_p_keys(..)?.hybrid_bond_id()` — the
 /// **same** KDF labels (`derive_p_account_sign_seed` / `derive_p_ml_dsa_seed`)
-/// feed the same [`build_hybrid`], so no new domain separator exists and the
+/// feed the same private `build_hybrid`, so no new domain separator exists and the
 /// two paths cannot diverge (pinned by
 /// `identity_pk_matches_the_full_bundle`). What it skips is the rest of the
 /// bundle: the ML-KEM-768 keygen, the receive spend/view scalar mults +

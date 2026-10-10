@@ -197,6 +197,16 @@ as retired claim drip).
 
 ## 4. Economics — three-channel reward stack (verifier-side)
 
+> **Two validators (`SO-D11`, 2026-10-09).** Where this section says the
+> snapshot (`R_market`, `Σwork`) is taken or stored **at the epoch close**,
+> or that a credit is the **serve-credit bit**, it describes the C++
+> daemon, consensus until `DEL-008`. In the Rust validator the close
+> freezes the budget only; the epoch's slash pass gathers, an epoch later,
+> over the pairs whose settlement row is Served
+> ([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15).
+> §4.4 and §4.5 states both where the rule is pinned; passages that are not split
+> are the C++'s.
+
 ### 4.0 Genesis pin — `Curve` ∘ servo composition (E-1)
 
 Three expressions appeared across authoritative docs; **one** is genesis-pinned. The
@@ -341,22 +351,46 @@ accumulator**:
 
 Emission vins **read** the finalized accumulator; they do not author it.
 
+**Two validators (`SO-D11`,
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15).** Finalization
+at the close of `E`, over any serve-credit pass, is the C++ daemon's. It is the live
+consensus path and goes with `DEL-008`. The design, and the Rust validator, finalize
+`Σwork(E)` at the **slash pass of `E`**: the block at `slash_deadline_height(E)`,
+connecting height `(E+2)·SEB − 1` under the pinned one-epoch grace. The pass settles
+`E`, slashes on its Missed rows, then gathers `r_market(·, E)` and `Σwork(E)` and
+writes them in that block. A pair `(P, shard)` is credited for `E` iff its settlement
+row for `E` is Served, which is two passes among the three draws the beacon selects.
+A pair issued fewer than three draws earns nothing for that epoch. The close of `E`
+freezes `budget(E)` only. The gather runs for every settled epoch and writes zeros,
+so `Σwork(E)` exists once `E` is settled.
+
 ### 4.5 Lagged read, boundaries, reorg (genesis pin)
 
 §4.4 **is** the all-recorded mechanism: at settlement-epoch `E` close, finalize
 `Σwork(E) = Σ_{P'∈Market} capped_{P'}(E)` from DB state for every market `P` with
-recorded work, claimed or not. §4.5 adds only **how emissions cite it**:
+recorded work, claimed or not (the C++ daemon; the design and the Rust validator
+finalize at `E`'s slash pass, §4.4). §4.5 adds only **how emissions cite it**:
 
 **Lagged read:** Emissions for earned epoch `E` cite `Σwork(E)` stored at **close of
 `E`**, typically in settlement epoch **`E+1`** or later within **`MAX_CLAIM_AGE_W`**
 (§6.6). Batching up to 15 epochs in one vin uses the per-epoch stored totals for each
-`E` claimed.
+`E` claimed. That is the C++ daemon's read and goes with `DEL-008`. In the design
+and in the Rust validator (`SO-D11`) `Σwork(E)` is stored at the **slash pass of
+`E`**, so emissions cite it in settlement epoch **`E+2`** or later: an epoch is
+claimable once its `Σwork` row exists, from connecting height `(E+2)·SEB`.
+`MAX_CLAIM_AGE_W` stays 26, so the claimable span is 25 epochs, `[C − 26, C − 2]`
+for a block in epoch `C`.
 
 **Monetary consequence (accepted):** Offline or forfeiting `P` still contributed
 `capped_P(E)` at close → claimers slightly diluted; that share **unminted** (supply-safe).
 
 **E-3 coupling:** Slashed `P`'s recorded `capped_P(E)` **stays in** `Σwork(E)` for that
-epoch — determinism over slash-order-dependent denominator surgery.
+epoch — determinism over slash-order-dependent denominator surgery. That is the C++
+daemon, which gathers before `E`'s slash pass (goes with `DEL-008`). The Rust
+validator gathers after `E`'s own slashes (`Transition::gather`, `SO-D11`): a record
+slashed for `E` has the bad interval that opens at `E`, is not in `E`'s market, and
+adds nothing to `Σwork(E)`. The stored row is insert-once, so no later slash alters
+it.
 
 **Boundary rules (gate 1 seal — small):** Late emitters after epoch close use the same
 stored `Σwork(E)`; no wallet-local recompute. Reorg: revert finalization and accumulator
@@ -372,6 +406,14 @@ rejects on the missing row. "Settlement epoch `E+1` or later" in the lagged-read
 paragraph above carries this one-block refinement at the epoch's first height. Reorg
 revert cannot strand a citing emission: all citing emissions sit strictly above
 `h_close(E)` and are popped before the finalization reverts.
+**UPDATE 2026-10-09 (`SO-D11`):** this pin is the C++ daemon's and goes with
+`DEL-008`. In the Rust validator `Σwork(E)` is written by the slash pass of `E`, at
+connecting height `(E+2)·SEB − 1 = h_close(E) + SEB − 1`, and an emission citing `E`
+is valid from connecting height `(E+2)·SEB = h_close(E) + SEB`. The `Σwork` row's
+existence is the citing gate (CEN-J23). The strict bound above stays true and no
+longer binds. The verify re-gathers `E` from its Served settlement rows over the
+universe the pass read
+([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15).
 
 **Named reopen (not carried as live fork):** **Claimed-only** denominator — full budget
 to claimers, but requires two-phase / provisional+true-up machinery and inflation-bound

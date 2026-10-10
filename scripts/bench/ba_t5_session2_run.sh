@@ -129,10 +129,10 @@ order_for_pass() {  # the four counts in the order registered for the pass
   echo "# tree $(git -C "$(dirname "$PROBE")/../../../.." rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "# probe sha256 $(sha256sum "$PROBE" | cut -c1-64)"
   echo "# rustc $(rustc --version); RUSTFLAGS unset; release profile"
-  echo "# resident daemon: $(tr '\0' ' ' < /proc/$SYS_PID/cmdline) pid $SYS_PID"
-  # The peer's address stays out of the capture: shekyl-core is public and
-  # names roles, not hosts (rule 37). The port says which service it was.
-  echo "# syncing daemon: $SHEKYLD, own data dir, exclusive peer: a testnet staker on the LAN, port ${PEER##*:} (its address is in the estate ledger, not here), in-peers 0"
+  # Roles only. shekyl-core is public: no binary path, no config path,
+  # no host (rule 37). The port says which service the peer was.
+  echo "# resident daemon: the floor device's resident testnet daemon, pid $SYS_PID"
+  echo "# syncing daemon: a second testnet daemon, own data dir, exclusive peer: a testnet staker on the LAN, port ${PEER##*:} (its address is in the estate ledger, not here), in-peers 0"
   echo "# resident daemon mining_status: $(curl -s -m 5 http://127.0.0.1:12030/mining_status | python3 -c 'import sys,json;d=json.load(sys.stdin);print({k:d.get(k) for k in ("active","threads_count")})' 2>/dev/null)"
   echo "# states idle, sync, nice (sync with the probe under nice -n 19); in-flight counts $IN_FLIGHT; $FETCHES fetches per serving block ($FETCHES_NICE at nice 19); no-serve windows $QUIET_S s; $PASSES passes per state"
   echo "# sync rate from the syncing daemon's own stdout log (Synced H/T lines), not its RPC, which answers in 6 to 9 s under sync load"
