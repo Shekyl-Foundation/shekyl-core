@@ -241,12 +241,11 @@ producers cited at source.
 | `GET /get_info` | `height` | COUNT | C++ still serves: `get_blockchain_top` then `++res.height` (`src/rpc/core_rpc_server.cpp:206-207`). |
 | `GET /get_info` | `target_height` | COUNT or 0-when-synced | `is_synchronized() ? 0 : get_target_blockchain_height()` (`src/rpc/core_rpc_server.cpp:209`). The core stores the peer-advertised count (`core::set_target_blockchain_height`, `src/cryptonote_core/cryptonote_core.cpp`). |
 | `get_version`, `sync_info` | `target_height` | COUNT or 0-absent | The core count, forwarded. `0` only when the core reported none (`rust/shekyl-daemon-rpc/src/methods.rs:115-116`, `rust/shekyl-daemon-rpc/src/methods.rs:138`, `rust/shekyl-daemon-rpc/src/methods.rs:1375-1377`). Inland: `Option<ChainCount>` (C5). The synchronized `0` was retired at `CORE_RPC_VERSION` 3.40. |
-| `get_version` | `current_height` (`rust/shekyl-rpc-types/src/chain.rs:353`) | COUNT | `tip.chain_height.to_raw()` (`rust/shekyl-daemon-rpc/src/methods.rs:137`). |
+| `get_version` | `current_height` (`rust/shekyl-rpc-types/src/chain.rs:394`) | COUNT | `tip.chain_height.to_raw()` (`rust/shekyl-daemon-rpc/src/methods.rs:137`). |
 | `get_block_hash` number / `GetBlockRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:275`) / `GetBlockHeaderByHeightRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:319`) / `GetBlocksByHeightRequest.heights` (`rust/shekyl-rpc-types/src/bin_commands.rs:165`) | those fields | ORDINAL | Zero-indexed position (`rust/shekyl-rpc-client/src/lib.rs:410-413`). Bound vs COUNT is `height >= chain_height` (`src/rpc/rpc_facts_ffi.h:82`). |
 | `BlockHeader.height` (`rust/shekyl-rpc-types/src/chain.rs:225`) | `height` | ORDINAL | Header of that block. |
 | `BlockHeader.depth` (`rust/shekyl-rpc-types/src/chain.rs:227`) | `depth` | DIFFERENCE | `chain_height - height - 1` (`src/rpc/rpc_facts_ffi.h:105`). Inland: `BlockCount`. |
-| `HardForkEntry.height` (`rust/shekyl-rpc-types/src/chain.rs:338`) / `HardForkInfoResponse.earliest_height` (`rust/shekyl-rpc-types/src/headers.rs:186`) | those fields | ORDINAL | Activation / earliest-voted height. |
-| `GetBlockHeadersRangeRequest.start_height` / `end_height` (`rust/shekyl-rpc-types/src/headers.rs:117-119`) | those fields | ORDINAL inclusive | Range of header lookups. |
+| `GetBlockHeadersRangeRequest.start_height` / `end_height` (`rust/shekyl-rpc-types/src/headers.rs:116-118`) | those fields | ORDINAL inclusive | Range of header lookups. |
 | `ConnectionInfo.height` (`rust/shekyl-rpc-types/src/p2p.rs:240`) | `height` | COUNT | Peer's claimed blockchain height. |
 | `SyncInfoResponse.height` (`rust/shekyl-rpc-types/src/p2p.rs:289`) | `height` | COUNT | Local chain height. |
 | `SyncSpan.start_block_height` (`rust/shekyl-rpc-types/src/p2p.rs:270`) | `start_block_height` | ORDINAL | Span origin. |

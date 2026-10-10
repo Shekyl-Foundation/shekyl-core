@@ -160,11 +160,11 @@ difficulty uses an external miner over this node's `get_block_template`
 / `submitblock` RPC — a miner that speaks another coin's template
 dialect will not produce accepted blocks.
 
-**Regtest hard-fork table.**
-`src/cryptonote_core/cryptonote_core.cpp:674–678` defines
-`regtest_hard_forks` to force HF1 at height 0, then jump to the latest
-mainnet HF version at height 1. Regtest activates V3 rules from the
-first non-genesis block.
+**Regtest block version.**
+Regtest uses the same constants as the issued networks:
+`CURRENT_BLOCK_MAJOR_VERSION` (1) and `CURRENT_BLOCK_MINOR_VERSION` (0)
+at every height. There is no fork table and no height at which the
+rules change (`design/CXX_VERSION_GATES.md` §5).
 
 ### Pre-existing harness gaps (not blocking, but worth filing)
 
@@ -237,12 +237,12 @@ Internal C++ name: `COMMAND_RPC_GET_BASE_FEE_ESTIMATE` /
 
 ### Filling logic
 
-`src/rpc/core_rpc_server.cpp:2987–3008`. Because Shekyl's
-`HF_VERSION_2021_SCALING` is `1` (i.e., Shekyl genesis is already in
-the post-2021-scaling regime — confirmed in `cryptonote_config.h`),
-the `fees` vector is **always** populated with the three priced tiers
-by `get_dynamic_base_fee_estimate_2021_scaling`. The legacy
-single-`fee` branch is dead code on Shekyl from genesis.
+`src/rpc/rpc_facts_ffi.cpp:125`. The version gate that once chose a
+legacy single-`fee` branch is deleted. The handler always fills `fees`
+with the three priced tiers from
+`Blockchain::get_dynamic_base_fee_estimate_2021_scaling`, and refuses a
+length other than that array
+(`src/rpc/rpc_facts_ffi.cpp:128-137`).
 
 **Wallet-side consequence (2026-08-17, PR #490; arity FL-R25).** The
 wallet no longer accepts a scalar-only reply. It previously synthesized

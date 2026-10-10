@@ -14,12 +14,10 @@
 //! a rule set *admits* is one of its parameters ([`RuleSet::header_major_version`],
 //! landed with CEN-B1 in slice 1), never its identity.
 //!
-//! [`RuleSchedule`] is where R4's state-dependent activation has its seat.
-//! `rules_at(height)` is a function, seeded as the identity (every network,
-//! every height → [`RuleSet::GENESIS`]), so a second rule set arrives as a
-//! schedule step and no caller changes. Nettype selects **data** (rule 71):
-//! three schedule values, one `rules_at`, no `match network` anywhere a rule
-//! runs.
+//! [`RuleSchedule`] is the identity: every network, every height names
+//! [`RuleSet::GENESIS`]. A later activation is a design document before a
+//! step is added. Nettype selects **data** (rule 71): three schedule values,
+//! one `rules_at`, no `match network` anywhere a rule runs.
 //!
 //! [`AdmissionPolicy`] is relay/pool policy — a separate input with a
 //! separate id, never merged into [`RuleSet`] (ruling §8). Its consumer is
@@ -43,8 +41,9 @@ use crate::rules::difficulty::Target;
 /// `StoreCannot` — the block was judged under rules not in force at its
 /// height, which is not a verdict about the block.
 ///
-/// Not the header's `major_version`, and not comparable to one — the 1:1 is
-/// a fact about today's table, and equality would erase the distinction
+/// Not the header's `major_version`, and not comparable to one. One rule set
+/// and one block version both happen to be 1; that coincidence is not a
+/// definition, and equality would erase the distinction
 /// [`RuleSchedule::rules_at`] exists to preserve:
 ///
 /// ```compile_fail
