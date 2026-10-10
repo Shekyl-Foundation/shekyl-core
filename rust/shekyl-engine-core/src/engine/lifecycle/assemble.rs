@@ -171,10 +171,12 @@ impl Engine<SoloSigner> {
             &file.opened_keys().file_kek,
             file.expected_classical_address(),
         );
-        // `WSS-Q1`(a): the body-store key is from `file_kek`. Derive it
-        // before the transient is wiped; the store itself is opened with
-        // the curve-tree companion below.
-        let p_store_key = shekyl_p_store::derive_store_key(&file.opened_keys().file_kek);
+        // `WSS-Q1`(a): the body store belongs to the stake actor, and only
+        // a staker opens one. `file_kek` is wiped on the next line, so the
+        // key is derived here, and only when a stake engine will spawn.
+        let opens_stake = ledger.staking.staking_enabled || first_stake_intent.is_some();
+        let p_store_key =
+            opens_stake.then(|| shekyl_p_store::derive_store_key(&file.opened_keys().file_kek));
         file.zeroize_transient_file_kek();
         // Construct the producer's view-and-spend material once, from
         // the freshly-derived `AllKeysBlob`, and move it into the
@@ -259,26 +261,20 @@ impl Engine<SoloSigner> {
             )?
         };
 
-        let p_store = {
-            let store_path = shekyl_engine_file::paths::p_store_path_from(file.base_path());
-            shekyl_p_store::BodyStore::open(&store_path, p_store_key).map_err(|e| {
-                OpenError::Io(IoError::PStore {
-                    detail: format!("{e:?}"),
-                })
-            })?
-        };
-
         // ARCHIVAL_BOND_CONSTRUCTION.md §10.2 (Model D): for a staker, derive the
         // derive-forward set from the still-borrowed `master_seed` and spawn the
         // StakeEngine over it. Read `&ledger.staking` *before* `ledger` is moved
         // into the `LocalLedger` aggregate below. Non-stakers (the common case)
-        // get `None` — no derivation, no resident personas, no actor.
+        // get `None` — no derivation, no resident personas, no actor, no
+        // `.pstore`.
         let stake = Self::spawn_stake_engine_if_staker(
             master_seed,
             network_to_derivation(network),
             seed_format,
             &ledger.staking,
             first_stake_intent,
+            p_store_key,
+            file.base_path(),
         )?;
 
         let ledger = std::sync::Arc::new(crate::engine::local_ledger::LocalLedger::new(
@@ -335,7 +331,6 @@ impl Engine<SoloSigner> {
             prefs_hmac_key,
             key,
             curve_tree,
-            p_store,
             merge_view_secret,
             ledger,
             pending,
@@ -393,6 +388,8 @@ impl Engine<SoloSigner> {
         seed_format: SeedFormat,
         staking: &StakingBlock,
         first_stake_intent: Option<FirstStakeIntent>,
+        p_store_key: Option<shekyl_p_store::StoreKey>,
+        wallet_path: &std::path::Path,
     ) -> Result<Option<StakeEngineHandle>, OpenError> {
         // SA-R1-a (ARCHIVAL_STAKE_ACTIVATION_PLAN.md §5.6/§5.7, RATIFIED):
         // first-stake needs a spawned StakeEngine to assemble against BEFORE
@@ -406,6 +403,26 @@ impl Engine<SoloSigner> {
         if !staking.staking_enabled && first_stake_intent.is_none() {
             return Ok(None);
         }
+
+        // The blocking redb open stays here, off the actor's `on_start`.
+        // A spawn without a key is an assemble bug: `file_kek` is already
+        // wiped, so falling through to an ephemeral store would serve from
+        // a file the next open cannot read.
+        let Some(p_store_key) = p_store_key else {
+            return Err(OpenError::Io(IoError::PStore {
+                detail: "a staker's body store key was not derived before file_kek was wiped"
+                    .to_owned(),
+            }));
+        };
+        let bodies = shekyl_p_store::BodyStore::open(
+            shekyl_engine_file::paths::p_store_path_from(wallet_path),
+            p_store_key,
+        )
+        .map_err(|e| {
+            OpenError::Io(IoError::PStore {
+                detail: e.to_string(),
+            })
+        })?;
 
         // The settlement-epoch schedule is consensus, and the wallet's epoch
         // arithmetic (P-scan accrual join epochs, claim-window recomputes)
@@ -462,7 +479,7 @@ impl Engine<SoloSigner> {
         }
 
         // Idle at open: the request path (2c-2b) mints a handle and activates.
-        let handle = StakeEngineHandle::spawn(bundles, bonded, None);
+        let handle = StakeEngineHandle::spawn(bundles, bonded, None, bodies);
 
         // S6 (conformance build only) — eager observation of the actor's
         // `on_start` RNG self-cert. Block wallet-open until the grade completes;

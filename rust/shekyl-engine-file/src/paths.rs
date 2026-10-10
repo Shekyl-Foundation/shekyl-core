@@ -102,7 +102,8 @@ pub const CURVE_TREE_STORE_SUFFIX: &str = ".curvetree";
 pub const P_STORE_SUFFIX: &str = ".pstore";
 
 /// Derive `P`'s body-store path from the `.wallet` base, sibling of
-/// [`.curvetree`](CURVE_TREE_STORE_SUFFIX).
+/// [`.curvetree`](CURVE_TREE_STORE_SUFFIX). Opened when a stake engine
+/// spawns; a non-staker does not create the file.
 ///
 /// # Examples
 ///

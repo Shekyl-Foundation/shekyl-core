@@ -119,8 +119,8 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # names no engine type, which is what lets the pinner seam be the only path
 # to a `ServeSet`.
 shekyl-p-host = { path = "../shekyl-p-host" }
-# `P`'s encrypted body store, opened beside the wallet files at assemble
-# (`WSS-Q1`(a)). The serving host takes a `BodyStoreReader` from it.
+# `P`'s encrypted body store (`WSS-Q1`(a)). StakeEngine owns the writer;
+# the serving host takes a BodyStoreReader. A non-staker does not open one.
 shekyl-p-store = { path = "../shekyl-p-store" }
 # The OA-1 operator alarm channel, re-exported from this crate's root
 # (`src/lib.rs`), alongside `shekyl-address`'s payment-URI codec. A leaf that

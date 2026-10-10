@@ -66,6 +66,15 @@ pub(crate) struct StakeEngine {
     /// into a bond post. **Never persisted**; cleared per-record when the
     /// task's held list drops the record.
     pub(crate) watch_quarantine: BTreeSet<shekyl_types::GlobalOutputIndex>,
+    /// `P`'s serving body store (`WSS-Q1`(a)). The writer stays here: fill
+    /// (`WSS-Q4`) and erase-at-the-second-absent-epoch (`WSS-Q8`) are
+    /// messages that do not exist yet, and `put_shard` / `erase_shard` are
+    /// the API they will call. `ServingBodies` hands the serve task a
+    /// reader. That reader still decrypts, so `WSS-Q13` (the owning actor
+    /// decrypts; the key never leaves it) is not met by this handoff. A
+    /// per-chunk ask on this actor would stall bond signing on bulk redb
+    /// I/O; the decrypt task is a later increment.
+    pub(crate) body_store: shekyl_p_store::BodyStore,
     /// GF-7 measurement-hook observer (injected via [`StakeEngineArgs`];
     /// see the field docs there). Feature-gated out of default builds.
     #[cfg(feature = "gf7-hooks")]
@@ -583,6 +592,7 @@ impl Actor for StakeEngine {
             generation: 0,
             watch_cache: KeyImageWatchSet::new(),
             watch_quarantine: BTreeSet::new(),
+            body_store: args.bodies,
             #[cfg(feature = "gf7-hooks")]
             observer: args.observer,
         })

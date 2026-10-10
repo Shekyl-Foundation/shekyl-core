@@ -146,7 +146,7 @@ where
         // outside this lock — `tor_service_config` creates and chmods a
         // directory, and holding the engine `RwLock` across that would stall
         // every other reader on disk.
-        let (stake, curve_tree, bodies, base_path, device) = {
+        let (stake, curve_tree, base_path, device) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -158,7 +158,6 @@ where
             (
                 stake,
                 g.curve_tree.clone(),
-                g.p_store.reader(),
                 g.persistence().base_path().to_path_buf(),
                 g.prefs().device.clone(),
             )
@@ -174,6 +173,16 @@ where
             // A staker with no active persona has nothing to serve yet.
             return Ok(None);
         };
+
+        // Outside the engine lock: the reader is an actor ask, and the
+        // store lives on the stake actor, not on `Engine`. An empty store
+        // answers 404 until fill (`WSS-Q4`) lands. Erase (`WSS-Q8`) is the
+        // same writer's later message. The reader still decrypts (`WSS-Q13`
+        // is not met).
+        let bodies = stake
+            .serving_bodies()
+            .await
+            .map_err(|e| ServingStartError::Identity(Box::new(e)))?;
 
         // Claim only once we know we will start a host. An idle staker must
         // not occupy the slot; a second start after activation must.
