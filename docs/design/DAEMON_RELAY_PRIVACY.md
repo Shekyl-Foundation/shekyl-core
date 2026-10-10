@@ -17065,6 +17065,21 @@ Each item is open. Its carrier is the only thing that closes it.
    Tor-only until the relay lane confirmed that routing; carrier the
    relay lane after #1004; closes when #1004 is on `dev` and the landed
    §95.3 states the sentence above.
+   **PM-2b run against this routing (2026-10-09, §99).** Height bias,
+   the paper's TC-II: the relay has no height input — a session enters
+   the stem candidate set through `on_session_established(id,
+   direction, connector)` and `outbound_ids` filters on outbound plus
+   an assessed transit, not on recorded height (`graph/mod.rs:820` to
+   `:826`); the C++ stem set is the zone's established outbound
+   sessions with no height filter (`levin_notify.cpp:867` to `:869`).
+   `pm_2b_falsified_heights_buy_no_stem_or_hidden_slot_share`
+   (`graph/proxymark.rs`): twelve hidden sessions, four the attacker's,
+   four clearnet, 3000 epochs — the attacker holds the origin's hop in
+   0.319 of epochs (uniform 4/12 = 0.333), the other slot in 0.244 (the
+   class-blind draw's 0.244), both slots in 0.064 (the product 0.067).
+   A falsified height buys the attacker nothing it does not get by
+   being one of the sessions; TC-II's precondition for TC-I holds at
+   its uniform rate. Recorded, not a pass: the threshold is Rick's.
 2. **The operational replacement for the provisional 3250 ms.**
    The simulation in §95.3 is not this closure: it shows the
    transit-free input is short once Tor transit is on the return
@@ -17712,7 +17727,7 @@ registered in `IMPLEMENTATION_INDEX.md` §2); PM-2 splits into 2a and
 | --- | --- | --- | --- | --- | --- | --- |
 | **PM-1** identity in the cached sample | Whether a requester polling a node's cached disclosure sample learns the node's own address or onion — the join the handshake-address ruling removes the field for (dialer brief; slice 1 brief §5a) | The `shekyl-peerlist` sample instrument (PR-2), then the Foundation estate after PR-3, with per-boot and persistent onions, shortly after restart and in steady state | PR-2 for the model; after PR-3 live | Both onion modes measured and recorded here; the result decides whether the onion stays per-boot (PWD-E7) | The paper does not run this step; Monero's handshake carried the node's own entry (the `outgoing_to_same_zone` insertion, `net_node.inl:2730`), so identity was given, not inferred. Baseline: identity recovered with certainty | Rick sets |
 | **PM-2a** connection occupation (TC-I) | An attacker's share of the target's stem slots over time, as a function of its share of the dial candidates and the hidden outbound sessions, with the paper's parameters (two outgoing connections to occupy) and the paper's metric (occupation of both) | `shekyl-relay-privacy` conformance (`simulate_two_slot_occupancy`, `simulate_hidden_slot_churn_exposure`) extended with the PR-2 peerlist model: gray intake under D-S1, the uniform white draw, the hidden slot | PR-2 for the model; after PR-3 against the live dialer | Recorded here with the attacker's time-to-fill and the resulting `p_h` per connector; **closes §96 item 3** | Both outgoing Tor connections occupied for the targeted nodes (the paper's precondition for TC-II; its count is in the paper's table, not transcribed here) | Rick sets |
-| **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | The merged Rust relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). An instrument that gives attacker sessions falsified heights and measures their stem-slot and hidden-slot share against their uniform share | Now, against the relay as merged | Recorded against §96 item 1: attacker share equals its uniform share within tolerance at every falsified height | Falsified heights made the occupied peers the chosen proxies: selection probability 1 for the attacker's peers under Monero's height-ordered selection | Rick sets |
+| **PM-2b** height bias (TC-II) | Whether a peer advertising falsified fresh block heights gains stem or first-hop selection | The merged Rust relay (`shekyl-relay`): stem candidacy is outbound plus an assessed transit; no height reaches the map (`graph/mod.rs` `stem_candidate`, `on_session_established`). `pm_2b_falsified_heights_buy_no_stem_or_hidden_slot_share` (`graph/proxymark.rs`) measures attacker sessions' stem-slot and hidden-slot share against their uniform share | **Run 2026-10-09** against the relay as merged (#1018) | Recorded against §96 item 1: attacker hop share 0.319 (uniform 0.333), other slot 0.244 (0.244), both 0.064 (0.067) over 3000 epochs | Falsified heights made the occupied peers the chosen proxies: selection probability 1 for the attacker's peers under Monero's height-ordered selection | Rick sets |
 | **PM-3** watermarking (TC-III) | A message-rate watermark injected by a peer and recovered on the circuit by a malicious guard, bound to the source | After RD, on the Rust path, against operator relay volume (TRC-1, `TOR_COVER_POSTURE.md` §8): the stem leaves inside a stream the relay's own traffic fills | After RD and the TRC-1 measurement | **The test of §96 item 4**: the watermark is not recoverable at the guard under carried traffic at ordinary operator scale, or TRC-1 reopens | Recovered with the paper's overall precision 100 % and recall 93.8 % | Rick sets |
 
 The baseline cells name what the paper's stage achieved; where this

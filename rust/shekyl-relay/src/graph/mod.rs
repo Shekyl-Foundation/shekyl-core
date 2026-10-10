@@ -1300,6 +1300,8 @@ impl Relay {
 #[cfg(test)]
 mod edge;
 #[cfg(test)]
+mod proxymark;
+#[cfg(test)]
 mod stem_draw;
 #[cfg(test)]
 mod synthetic;
