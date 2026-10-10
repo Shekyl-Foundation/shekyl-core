@@ -305,13 +305,13 @@ async fn measure_enum(port: u16) {
     let (client_side, daemon_side) = count_established(port);
     let connected = ok.load(Ordering::Relaxed);
 
-    // Is the count exposed by the RPC surface? (grounding says no.)
+    // What the RPC surface reports as its own connection count.
     let probe = open_client(port).await;
-    let info: Value = probe
+    let info: shekyl_rpc_types::GetInfoResponse = probe
         .json_rpc_call("get_info", None)
         .await
         .expect("get_info");
-    let rpc_conn_field = info.get("rpc_connections_count").and_then(Value::as_u64);
+    let rpc_conn_field = info.node.shown().map(|node| node.rpc_connections_count);
 
     stop.store(true, Ordering::Relaxed);
     for h in handles {
@@ -326,8 +326,8 @@ async fn measure_enum(port: u16) {
     eprintln!(
         "get_info.rpc_connections_count {}",
         match rpc_conn_field {
-            Some(v) => format!("= {v}  (does NOT reflect the {N} Axum connections)"),
-            None => "absent".to_string(),
+            Some(v) => format!("= {v}  (this server's live connection count)"),
+            None => "withheld from this caller".to_string(),
         }
     );
     eprintln!("→ N is not capped by the RPC layer; the count is an OS-level (TCP-table)");

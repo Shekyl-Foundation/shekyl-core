@@ -602,16 +602,17 @@ impl Rpc for BracketDaemon {
             .unwrap_or_default();
         self.calls.lock().expect("call log").push(method.clone());
         let result = if method == "get_info" {
-            json!({
-                "height": WITNESS_COUNT,
-                "target_height": 0,
-                "synchronized": true,
-                "top_block_hash": hex::encode(
+            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                chain_count: shekyl_types::ChainCount::from_raw(WITNESS_COUNT),
+                target_height: None,
+                synchronized: true,
+                top_hash: shekyl_types::BlockHash::from_bytes(
                     crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1),
                 ),
-                "outgoing_connections_count": 8,
-                "incoming_connections_count": 0,
-            })
+                outgoing_connections: 8,
+                incoming_connections: 0,
+            }
+            .to_value()
         } else {
             (*self.record).clone()
         };

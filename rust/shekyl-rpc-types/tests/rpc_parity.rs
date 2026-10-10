@@ -23,8 +23,8 @@ use shekyl_rpc_types::{
     GetBlockResponse, GetConnectionsResponse, GetHeightResponse, GetLastBlockHeaderResponse,
     GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
     GetTransactionsResponse, GetVersionResponse, HashHex, IsKeyImageSpentRequest,
-    IsKeyImageSpentResponse, KeyImageStatus, Peer, RpcStatus, SyncInfoPeer, SyncInfoResponse,
-    SyncSpan, TxEntry, TxLocation, CORE_RPC_VERSION,
+    IsKeyImageSpentResponse, KeyImageStatus, Nullable, Peer, RpcStatus, SyncInfoPeer,
+    SyncInfoResponse, SyncSpan, TxEntry, TxLocation, CORE_RPC_VERSION,
 };
 
 /// The emitter's stand-ins for the two strings C++ still produces (RK-D11).
@@ -209,8 +209,8 @@ fn get_height_matches_the_oracle() {
     assert_parity(include_str!("vectors/rpc/get_height_v1.json"), &built);
 }
 
-/// A core-reported target of `0` is an absence, so the field is omitted.
-/// Synchronization is not this field (`CORE_RPC_VERSION` 3.40).
+/// The core reports no target, so the member is `null`: present, and not
+/// `0` (`CORE_RPC_VERSION` 3.46). Synchronization is not this member.
 #[test]
 fn get_version_absent_target_matches_the_oracle() {
     let built = GetVersionResponse {
@@ -218,19 +218,20 @@ fn get_version_absent_target_matches_the_oracle() {
         version: CORE_RPC_VERSION,
         release: false,
         current_height: 1_234_567,
-        target_height: 0,
+        target_height: Nullable::NULL,
         consensus_constants_digest: fixture_digest(),
         nettype: DaemonNetwork::Mainnet,
         genesis_hash: fixture_genesis(),
     };
     assert_version_parity(
-        include_str!("vectors/rpc/get_version_absent_target_v1.json"),
+        include_str!("vectors/rpc/get_version_absent_target_v2.json"),
         &built,
     );
-    // Omitted because the core reported no target.
-    assert!(!serde_json::to_string(&built)
-        .unwrap()
-        .contains("target_height"));
+    // Written as `null`, not omitted and not `0`.
+    assert_eq!(
+        parsed(&serde_json::to_string(&built).unwrap())["target_height"],
+        serde_json::Value::Null
+    );
 }
 
 #[test]
@@ -240,7 +241,7 @@ fn get_version_syncing_matches_the_oracle() {
         version: CORE_RPC_VERSION,
         release: true,
         current_height: 1000,
-        target_height: 2_000_000,
+        target_height: Nullable::value(2_000_000),
         consensus_constants_digest: fixture_digest(),
         nettype: DaemonNetwork::Mainnet,
         genesis_hash: fixture_genesis(),
@@ -258,22 +259,20 @@ fn get_version_all_defaults_matches_the_oracle() {
         version: CORE_RPC_VERSION,
         release: false,
         current_height: 0,
-        target_height: 0,
+        target_height: Nullable::NULL,
         consensus_constants_digest: fixture_digest(),
         nettype: DaemonNetwork::Mainnet,
         genesis_hash: fixture_genesis(),
     };
     assert_version_parity(
-        include_str!("vectors/rpc/get_version_all_defaults_v2.json"),
+        include_str!("vectors/rpc/get_version_all_defaults_v3.json"),
         &built,
     );
-    let wire = serde_json::to_string(&built).unwrap();
-    for omitted in ["current_height", "target_height"] {
-        assert!(
-            !wire.contains(omitted),
-            "{omitted} must be omitted when default"
-        );
-    }
+    // Nothing on this reply is omitted at its zero any more: a height of
+    // `0` is written as `0`, and no target as `null`.
+    let wire = parsed(&serde_json::to_string(&built).unwrap());
+    assert_eq!(wire["current_height"], serde_json::json!(0));
+    assert_eq!(wire["target_height"], serde_json::Value::Null);
 }
 
 #[test]
@@ -915,7 +914,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 20] = [
+    let links: [(&str, &str); 22] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -996,6 +995,14 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v20.json"),
             include_str!("vectors/rpc/get_version_synced_v21.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v21.json"),
+            include_str!("vectors/rpc/get_version_synced_v22.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v22.json"),
+            include_str!("vectors/rpc/get_version_synced_v23.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1014,7 +1021,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 20] = [
+    const ADDED_AT_LINK: [&[&str]; 22] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1035,6 +1042,8 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.42 (get_info reports already_generated_coins; get_version gains nothing)
         &[], // 3.43 (request_archival_shard served natively over the W-shard view: archival_len, close_height, the open/absent codes, SV-D3; get_version gains nothing)
         &[], // 3.44 (get_version drops hard_forks; hard_fork_info deleted; get_version gains nothing)
+        &[], // 3.45 (get_info stops carrying emission_era, RK-D21; get_version gains nothing)
+        &[], // 3.46 (no target is `null`, RK-Q7; this case has a target, so its members do not move)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1046,7 +1055,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 20] = [
+    const REMOVED_AT_LINK: [&[&str]; 22] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1067,6 +1076,8 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[],             // 3.42
         &[],             // 3.43 (the shard view; get_version retires nothing)
         &["hard_forks"], // 3.44 (block version is the constant 1; no schedule to report)
+        &[], // 3.45 (the emission_era deletion is get_info's; get_version retires nothing)
+        &[], // 3.46 (nothing leaves; the side cases gain members, pinned by their own test)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1179,6 +1190,84 @@ fn the_get_version_side_cases_are_their_predecessors_minus_exactly_hard_forks() 
             derived,
             parsed(after_raw),
             "the sibling must differ from its predecessor by that member and nothing else"
+        );
+    }
+}
+
+/// **3.46, by derivation.** `target_height` is the core's target and `null`
+/// when it has none (RK-D15, RK-Q7), and `get_version.current_height` is
+/// always present. Each vector that bump moved is its predecessor with only
+/// the named members set to the named values. A vector whose reply did not
+/// move has no successor: `get_version_syncing_v3`, `sync_info_v3` and
+/// `get_info_syncing_v1` all carried a target already.
+///
+/// What each new value is, and where it comes from:
+/// - no target: `0`, or an omitted member, becomes `null`;
+/// - `get_info` from a synchronized node: the `0` that meant "synchronized"
+///   becomes the core's target. The fixture's is 1234567, and
+///   `shekyl-daemon-rpc`'s method tests reproduce these files from facts
+///   that carry it.
+#[test]
+fn the_3_46_vectors_are_their_predecessors_with_exactly_the_target_restated() {
+    use serde_json::{json, Value};
+
+    /// A member, what it was (`None`: absent), and what it is now.
+    type Restated<'a> = (&'a str, Option<Value>, Value);
+
+    let cases: [(&str, &str, &[Restated<'_>]); 7] = [
+        (
+            include_str!("vectors/rpc/get_version_absent_target_v1.json"),
+            include_str!("vectors/rpc/get_version_absent_target_v2.json"),
+            &[("target_height", None, Value::Null)],
+        ),
+        (
+            include_str!("vectors/rpc/get_version_all_defaults_v2.json"),
+            include_str!("vectors/rpc/get_version_all_defaults_v3.json"),
+            &[
+                ("target_height", None, Value::Null),
+                ("current_height", None, json!(0)),
+            ],
+        ),
+        (
+            include_str!("vectors/rpc/sync_info_empty_v2.json"),
+            include_str!("vectors/rpc/sync_info_empty_v3.json"),
+            &[("target_height", Some(json!(0)), Value::Null)],
+        ),
+        (
+            include_str!("vectors/rpc/get_info_synced_v1.json"),
+            include_str!("vectors/rpc/get_info_synced_v2.json"),
+            &[("target_height", Some(json!(0)), json!(1_234_567))],
+        ),
+        (
+            include_str!("vectors/rpc/get_info_synced_restricted_v1.json"),
+            include_str!("vectors/rpc/get_info_synced_restricted_v2.json"),
+            &[("target_height", Some(json!(0)), json!(1_234_567))],
+        ),
+        (
+            include_str!("vectors/rpc/get_info_burn_refusal_v1.json"),
+            include_str!("vectors/rpc/get_info_burn_refusal_v2.json"),
+            &[("target_height", Some(json!(0)), json!(1_234_567))],
+        ),
+        (
+            include_str!("vectors/rpc/get_info_peerless_startup_v1.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v2.json"),
+            &[("target_height", Some(json!(0)), Value::Null)],
+        ),
+    ];
+    for (i, (before_raw, after_raw, restated)) in cases.iter().enumerate() {
+        let mut derived = parsed(before_raw);
+        let members = derived.as_object_mut().expect("vector is an object");
+        for (member, was, now) in *restated {
+            assert_eq!(
+                members.insert((*member).to_owned(), now.clone()),
+                *was,
+                "case {i}: `{member}` was not what this derivation says it was"
+            );
+        }
+        assert_eq!(
+            derived,
+            parsed(after_raw),
+            "case {i}: the successor is its predecessor with only the named members restated"
         );
     }
 }
@@ -1452,7 +1541,7 @@ fn sync_info_matches_the_oracle() {
     let built = SyncInfoResponse {
         status: RpcStatus::ok(),
         height: 1_234_567,
-        target_height: 1_234_600,
+        target_height: Nullable::value(1_234_600),
         peers: vec![SyncInfoPeer {
             info: vector_connection(),
         }],
@@ -1490,14 +1579,14 @@ fn sync_info_empty_matches_the_oracle() {
     let built = SyncInfoResponse {
         status: RpcStatus::ok(),
         height: 1,
-        // `0` is a core-reported absence, not "synchronized."
-        target_height: 0,
+        // The core reports no target: `null`, not `0`.
+        target_height: Nullable::NULL,
         peers: Vec::new(),
         spans: Vec::new(),
         overview: "[]".to_owned(),
     };
-    assert_parity(include_str!("vectors/rpc/sync_info_empty_v2.json"), &built);
-    let doc = parsed(include_str!("vectors/rpc/sync_info_empty_v2.json"));
+    assert_parity(include_str!("vectors/rpc/sync_info_empty_v3.json"), &built);
+    let doc = parsed(include_str!("vectors/rpc/sync_info_empty_v3.json"));
     assert!(doc["overview"].is_string(), "overview is a string");
     let obj = doc.as_object().expect("object");
     assert!(!obj.contains_key("peers") && !obj.contains_key("spans"));
@@ -1706,4 +1795,319 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
         parsed(include_str!("vectors/rpc/get_fee_estimate_v3.json")),
         "`_v3` is `_v2` minus slot 2 and nothing else"
     );
+}
+
+// ---------------------------------------------------------------------------
+// get_info (RK-5c). The five `get_info_*_v1.json` vectors are the C++
+// handler's own computation over fixed facts, not a hand-built response
+// serialized. The emitter that captured them stood for the two commits
+// before that handler was deleted, and went with it (the README beside the
+// vectors says how to read one). Four of them have a `_v2` successor,
+// derived at 3.46 when the target stopped being a sentinel; the tests below
+// read the newest of each.
+// These tests pin the TYPE: that each vector is a `GetInfoResponse` and that
+// the response writes the vector back. The handler's parity is
+// `shekyl-daemon-rpc`'s.
+// ---------------------------------------------------------------------------
+
+mod get_info {
+    use super::{assert_parity, parsed, tagged_hash};
+    use shekyl_rpc_types::{
+        DaemonNetwork, GetInfoResponse, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
+        InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
+    };
+
+    /// The reply the emitter's `synced_facts()` produces for an unrestricted
+    /// caller.
+    fn synced() -> GetInfoResponse {
+        GetInfoResponse {
+            status: RpcStatus::ok(),
+            health: InfoHealth {
+                height: 1_234_567,
+                top_block_hash: tagged_hash(1),
+                // The core's target. This node is synchronized and reports it
+                // all the same (RK-D15).
+                target_height: Nullable::value(1_234_567),
+                synchronized: true,
+                busy_syncing: false,
+                offline: false,
+                following_degraded: false,
+            },
+            identity: InfoIdentity {
+                nettype: DaemonNetwork::Mainnet,
+                protocol_version: 3,
+            },
+            chain: InfoChain {
+                difficulty: (7u128 << 64) + 123_456_789,
+                cumulative_difficulty: (9u128 << 64) + 987_654_321,
+                target: 120,
+                tx_count: 65_433,
+                block_weight_limit: 600_000,
+                block_weight_median: 300_000,
+                adjusted_time: 1_700_000_123,
+            },
+            economics: InfoEconomics {
+                already_generated_coins: 1_444_065_674_085_133,
+                release_multiplier: 1_200_000,
+                burn_pct: 184,
+                total_burned: 4_200_000_000,
+                staker_emission_share_effective: 91_549,
+            },
+            pool: InfoPool { tx_pool_size: 12 },
+            node: Hidden::Shown(InfoStatus {
+                start_time: 1_699_990_000,
+                free_space: 123_456_789_012,
+                database_size: 7 * 1024 * 1024 * 1024 + 1,
+                version: "3.1.0-oracle".to_owned(),
+                outgoing_connections_count: 8,
+                incoming_connections_count: 12,
+                alt_blocks_count: 3,
+                rpc_connections_count: 0,
+            }),
+            peers: Hidden::Shown(InfoPeers {
+                public_incoming_socket_count: 13,
+                public_outgoing_socket_count: 10,
+                tor_incoming_socket_count: 4,
+                tor_outgoing_socket_count: 2,
+                white_peerlist_size: 500,
+                grey_peerlist_size: 2500,
+            }),
+            restricted: false,
+        }
+    }
+
+    #[test]
+    fn synced_matches_the_oracle() {
+        assert_parity(
+            include_str!("vectors/rpc/get_info_synced_v2.json"),
+            &synced(),
+        );
+    }
+
+    #[test]
+    fn syncing_matches_the_oracle() {
+        let mut built = synced();
+        built.health.synchronized = false;
+        built.health.target_height = Nullable::value(1_300_000);
+        built.health.busy_syncing = true;
+        built.health.following_degraded = true;
+        assert_parity(include_str!("vectors/rpc/get_info_syncing_v1.json"), &built);
+    }
+
+    #[test]
+    fn peerless_startup_matches_the_oracle() {
+        let mut built = synced();
+        built.identity.nettype = DaemonNetwork::Fakechain;
+        built.health.synchronized = false;
+        // Nobody to learn a target from.
+        built.health.target_height = Nullable::NULL;
+        let Hidden::Shown(node) = &mut built.node else {
+            unreachable!("the fixture shows Status")
+        };
+        node.outgoing_connections_count = 0;
+        node.incoming_connections_count = 0;
+        let Hidden::Shown(peers) = &mut built.peers else {
+            unreachable!("the fixture shows Peers")
+        };
+        peers.public_incoming_socket_count = 0;
+        peers.public_outgoing_socket_count = 0;
+        peers.tor_incoming_socket_count = 0;
+        peers.tor_outgoing_socket_count = 0;
+        assert_parity(
+            include_str!("vectors/rpc/get_info_peerless_startup_v2.json"),
+            &built,
+        );
+    }
+
+    /// At parity a restricted reply carries every key, holding the
+    /// stand-ins. So the vector decodes as parts that are *shown*, with
+    /// stand-in values — not as withheld parts. RK-Q8 is where a restricted
+    /// reply stops carrying them.
+    #[test]
+    fn synced_restricted_matches_the_oracle() {
+        let mut built = synced();
+        built.restricted = true;
+        built.pool.tx_pool_size = 9;
+        built.node = Hidden::Shown(InfoStatus {
+            start_time: 0,
+            free_space: u64::MAX,
+            database_size: 10 * 1024 * 1024 * 1024,
+            version: String::new(),
+            outgoing_connections_count: 0,
+            incoming_connections_count: 0,
+            alt_blocks_count: 0,
+            rpc_connections_count: 0,
+        });
+        built.peers = Hidden::Shown(InfoPeers {
+            public_incoming_socket_count: 0,
+            public_outgoing_socket_count: 0,
+            tor_incoming_socket_count: 0,
+            tor_outgoing_socket_count: 0,
+            white_peerlist_size: 0,
+            grey_peerlist_size: 0,
+        });
+        assert_parity(
+            include_str!("vectors/rpc/get_info_synced_restricted_v2.json"),
+            &built,
+        );
+    }
+
+    #[test]
+    fn burn_refusal_matches_the_oracle() {
+        let mut built = synced();
+        built.economics.total_burned = built.economics.already_generated_coins + 1;
+        built.economics.burn_pct = 0;
+        assert_parity(
+            include_str!("vectors/rpc/get_info_burn_refusal_v2.json"),
+            &built,
+        );
+    }
+
+    const STATUS_KEYS: [&str; 8] = [
+        "start_time",
+        "free_space",
+        "database_size",
+        "version",
+        "outgoing_connections_count",
+        "incoming_connections_count",
+        "alt_blocks_count",
+        "rpc_connections_count",
+    ];
+    const PEERS_KEYS: [&str; 6] = [
+        "public_incoming_socket_count",
+        "public_outgoing_socket_count",
+        "tor_incoming_socket_count",
+        "tor_outgoing_socket_count",
+        "white_peerlist_size",
+        "grey_peerlist_size",
+    ];
+
+    fn decode(doc: &serde_json::Value) -> Result<GetInfoResponse, String> {
+        serde_json::from_value(doc.clone()).map_err(|e| e.to_string())
+    }
+
+    /// A part is wholly present or wholly absent. Removing ONE key of a
+    /// hidden part from a full reply is an error naming the part and the
+    /// key, for every key of both parts — never a part read as withheld.
+    #[test]
+    fn a_hidden_part_missing_one_key_is_refused_not_read_as_withheld() {
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+        for (part, keys) in [("status", &STATUS_KEYS[..]), ("peers", &PEERS_KEYS[..])] {
+            for key in keys {
+                let mut doc = full.clone();
+                assert!(
+                    doc.as_object_mut().unwrap().remove(*key).is_some(),
+                    "{key} must be in the vector before it is removed"
+                );
+                let refusal = decode(&doc).expect_err("a partial part must not decode");
+                assert!(
+                    refusal.contains(part) && refusal.contains(key),
+                    "the refusal must name the {part} part and `{key}`; got {refusal:?}"
+                );
+            }
+        }
+    }
+
+    /// With every key of a hidden part gone the part is withheld, the other
+    /// part is unaffected, and the reply writes back without those keys.
+    #[test]
+    fn a_hidden_part_with_no_keys_is_withheld_and_writes_none() {
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+
+        let mut doc = full.clone();
+        for key in STATUS_KEYS {
+            doc.as_object_mut().unwrap().remove(key);
+        }
+        let reply = decode(&doc).expect("a reply without Status decodes");
+        assert_eq!(reply.node, Hidden::Withheld);
+        assert!(matches!(reply.peers, Hidden::Shown(_)));
+        assert_eq!(
+            serde_json::to_value(&reply).unwrap(),
+            doc,
+            "a withheld part writes none of its keys"
+        );
+
+        let mut doc = full;
+        for key in PEERS_KEYS {
+            doc.as_object_mut().unwrap().remove(key);
+        }
+        let reply = decode(&doc).expect("a reply without Peers decodes");
+        assert_eq!(reply.peers, Hidden::Withheld);
+        assert!(matches!(reply.node, Hidden::Shown(_)));
+        assert_eq!(serde_json::to_value(&reply).unwrap(), doc);
+    }
+
+    /// The crate's refusal of unknown keys holds for this reply too, though
+    /// it cannot carry the attribute on a flattened type.
+    #[test]
+    fn an_unknown_key_is_refused() {
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+        doc.as_object_mut()
+            .unwrap()
+            .insert("emission_era".to_owned(), "Founding".into());
+        let refusal = decode(&doc).expect_err("an unknown key must not decode");
+        assert!(refusal.contains("emission_era"), "got {refusal:?}");
+    }
+
+    /// A key outside the hidden parts is required: dropping one is an error,
+    /// not a default.
+    #[test]
+    fn a_missing_required_key_is_refused() {
+        for key in [
+            "height",
+            // Nullable, and still required: absent is not `null` (RK-D23).
+            "target_height",
+            "synchronized",
+            "tx_pool_size",
+            "restricted",
+            "burn_pct",
+        ] {
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+            doc.as_object_mut().unwrap().remove(key);
+            let refusal = decode(&doc).expect_err("a missing required key must not decode");
+            assert!(refusal.contains(key), "{key}: got {refusal:?}");
+        }
+    }
+
+    /// One value under two wire names: a reply whose names disagree does not
+    /// decode. Each case changes one name of a repeated value.
+    #[test]
+    fn two_names_for_one_value_must_agree() {
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+        let cases: [(&str, serde_json::Value); 7] = [
+            ("block_size_limit", 600_001.into()),
+            ("block_size_median", 300_001.into()),
+            ("difficulty", 123_456_788.into()),
+            ("difficulty_top64", 8.into()),
+            ("wide_cumulative_difficulty", "0x9000000003ade68b0".into()),
+            ("mainnet", false.into()),
+            ("testnet", true.into()),
+        ];
+        for (key, value) in cases {
+            let mut doc = full.clone();
+            doc.as_object_mut().unwrap().insert(key.to_owned(), value);
+            let refusal = decode(&doc).expect_err("disagreeing names must not decode");
+            assert!(
+                refusal.contains("disagree"),
+                "{key}: the refusal must say the names disagree; got {refusal:?}"
+            );
+        }
+    }
+
+    /// `KV_SERIALIZE_OPT(block_weight_limit, 0)`: a zero weight limit is
+    /// omitted, its `block_size_limit` twin is not, and the pair still
+    /// decodes as one value.
+    #[test]
+    fn a_zero_weight_limit_is_omitted_and_its_twin_is_not() {
+        let mut built = synced();
+        built.chain.block_weight_limit = 0;
+        built.chain.block_weight_median = 0;
+        let doc = serde_json::to_value(&built).unwrap();
+        let object = doc.as_object().unwrap();
+        assert!(!object.contains_key("block_weight_limit"));
+        assert!(!object.contains_key("block_weight_median"));
+        assert_eq!(object["block_size_limit"], 0);
+        assert_eq!(object["block_size_median"], 0);
+        assert_eq!(decode(&doc).unwrap(), built);
+    }
 }

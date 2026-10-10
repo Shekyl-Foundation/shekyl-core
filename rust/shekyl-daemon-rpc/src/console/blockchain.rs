@@ -44,14 +44,14 @@ fn fetch_block_headers_range(
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn print_blockchain_info(src: &Source, start: i64, end: u64) -> Result<String, String> {
     let (start_height, end_height) = if start < 0 {
-        let info = fetch_get_info(src)?;
+        let height = fetch_get_info(src)?.health.height;
         // `-start` as a magnitude, taken through `unsigned_abs` so
         // `i64::MIN` has no special case.
         let back = start.unsigned_abs();
-        if back >= info.height {
+        if back >= height {
             return Err("start offset is larger than blockchain height".to_owned());
         }
-        let first = info.height.saturating_sub(back);
+        let first = height.saturating_sub(back);
         // The C++ wrote `start + end - 1` with `end == -start`, i.e. the
         // window ends where the tip is. Saturating rather than wrapping: a
         // zero-length window would otherwise underflow past the tip.
@@ -146,6 +146,7 @@ pub(super) fn median(values: &mut [u64]) -> u64 {
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Result<String, String> {
     let info = fetch_get_info(src)?;
+    let height = info.health.height;
     let fees = fetch_fee_estimate(src, 0)?;
     // `res.fee = res.fees[0]` — `on_get_base_fee_estimate` set the scalar
     // from the first tier, which is why RK-5b could retire it. The console
@@ -156,18 +157,16 @@ pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Resu
     let mut out = Vec::new();
     out.push(format!(
         "Height: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",
-        info.height,
-        wide_difficulty_decimal(&info.wide_difficulty),
-        wide_difficulty_decimal(&info.wide_cumulative_difficulty),
+        height, info.chain.difficulty, info.chain.cumulative_difficulty,
     ));
     if nblocks == 0 {
         return Ok(out.join("\n"));
     }
     // The window is the last `nblocks` below the tip; `height` is a count, so
     // the tip's own height is one below it.
-    let window = nblocks.min(info.height);
-    let start = info.height.saturating_sub(window);
-    let end = info.height.saturating_sub(1);
+    let window = nblocks.min(height);
+    let start = height.saturating_sub(window);
+    let end = height.saturating_sub(1);
     let headers = fetch_block_headers_range(src, start, end)?;
     // **The window is checked against what arrived, not assumed from what was
     // asked.** Every figure below is labelled `Last {window}`, so a reply with

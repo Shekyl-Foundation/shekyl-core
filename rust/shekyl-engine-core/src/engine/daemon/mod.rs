@@ -243,11 +243,21 @@ impl DaemonClient {
         &self,
         expected: &DaemonExpectation,
     ) -> Result<(), HandshakeFail> {
-        let reply = fetch_get_version(&self.inner).await?;
+        let result = fetch_get_version(&self.inner).await?;
+        // One read for every client (`RK-D25`): the version first, then the
+        // strict decode, then the rest of the tuple.
         expected
             .pins()
-            .check(&reply)
-            .map_err(HandshakeFail::Mismatch)
+            .read(&result)
+            .map(|_| ())
+            .map_err(|refusal| {
+                if let Some(evidence) = &refusal.evidence {
+                    // The daemon's own text: logged here, not carried in the
+                    // mismatch, which stays a fixed-size value.
+                    tracing::warn!(%evidence, "daemon get_version reply unreadable");
+                }
+                HandshakeFail::Mismatch(refusal.mismatch)
+            })
     }
 
     /// Fetch the block at `number` as a [`ScannableBlock`] via the native
@@ -273,12 +283,14 @@ enum HandshakeFail {
     Mismatch(shekyl_rpc_types::IdentityMismatch),
 }
 
-/// Fetch `get_version` without going through [`DaemonClient::post`] (that
-/// would recurse into the handshake). A JSON-RPC **error** object is
-/// transport — the daemon is reachable but not ready — not a wire mismatch.
-async fn fetch_get_version(
-    inner: &HttpRpc,
-) -> Result<shekyl_rpc_types::GetVersionResponse, HandshakeFail> {
+/// Fetch `get_version`'s `result`, undecoded, without going through
+/// [`DaemonClient::post`] (that would recurse into the handshake). A
+/// JSON-RPC **error** object is transport — the daemon is reachable but not
+/// ready — not a wire mismatch.
+///
+/// The result is returned as it arrived because decoding it is
+/// `IdentityExpectation::read`'s: the version is read before anything else.
+async fn fetch_get_version(inner: &HttpRpc) -> Result<Value, HandshakeFail> {
     let body = serde_json::to_vec(&json!({
         "jsonrpc": "2.0",
         "id": 0,
@@ -300,15 +312,15 @@ async fn fetch_get_version(
             format!("get_version: {message}"),
         )));
     }
-    let result = envelope
+    envelope
         .get("result")
-        .ok_or_else(|| unreadable_reply("malformed get_version reply: no result"))?;
-    serde_json::from_value(result.clone()).map_err(unreadable_reply)
+        .cloned()
+        .ok_or_else(|| unreadable_reply("malformed get_version reply: no result"))
 }
 
-/// A `get_version` reply this build cannot read. What failed to parse is the
-/// daemon's text: it goes to the log here and is not carried in the
-/// mismatch, which stays a fixed-size value.
+/// A `get_version` response with no JSON-RPC envelope this build can read.
+/// What failed to parse is the daemon's text: it goes to the log here and is
+/// not carried in the mismatch, which stays a fixed-size value.
 fn unreadable_reply(evidence: impl std::fmt::Display) -> HandshakeFail {
     tracing::warn!(%evidence, "daemon get_version reply unreadable");
     HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable())
@@ -422,8 +434,9 @@ impl DaemonEngine for DaemonClient {
     /// defensive-parsing rationale moved with it.
     fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
         async move {
-            let info: Value = self.json_rpc_call("get_info", None).await?;
-            Ok(synced_chain_facts::health_from_get_info(&info)?)
+            let info: shekyl_rpc_types::GetInfoResponse =
+                self.json_rpc_call("get_info", None).await?;
+            Ok(synced_chain_facts::health_from_get_info(&info))
         }
     }
 }
@@ -484,7 +497,7 @@ mod tests {
             version: shekyl_rpc_types::CORE_RPC_VERSION,
             release: false,
             current_height: 1,
-            target_height: 0,
+            target_height: shekyl_rpc_types::Nullable::NULL,
             consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
             nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
             genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
@@ -655,24 +668,50 @@ mod tests {
 
     #[tokio::test]
     async fn a_get_version_that_does_not_parse_is_reported_as_a_wire_mismatch() {
-        // VC-D16: the tuple fields are strict, so a daemon whose get_version
-        // shape moved fails deserialization before any axis is read. That IS
-        // the wire axis disagreeing and the operator must be told so.
+        // VC-D16: a reply with no readable version, and one that claims this
+        // build's version and then answers in another shape, are the wire
+        // axis disagreeing, and the operator must be told so.
+        for result in [
+            json!({"status": "OK"}),
+            json!({"status": "OK", "version": shekyl_rpc_types::CORE_RPC_VERSION}),
+        ] {
+            let err = first_request_error(
+                json!({"jsonrpc": "2.0", "id": "0", "result": result}).to_string(),
+                mainnet_expectation(),
+            )
+            .await;
+            assert_eq!(
+                refused_on(&err),
+                shekyl_rpc_types::IdentityMismatch::unreadable()
+            );
+            let out = err.to_string();
+            assert!(out.contains("does not match the RPC contract"), "{out}");
+            assert!(
+                out.contains("cannot be named here"),
+                "it must say the daemon's version is unavailable rather than guess: {out}"
+            );
+        }
+    }
+
+    /// The version is read before the rest (RK-Q11): a daemon of another
+    /// RPC version answers in a shape this build cannot decode, and is
+    /// still named. Before, this was the unreadable case above.
+    #[tokio::test]
+    async fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode() {
         let err = first_request_error(
-            json!({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK", "version": 1}})
-                .to_string(),
+            json!({"jsonrpc": "2.0", "id": "0", "result": {
+                "version": 1, "a_member_this_build_has_never_heard_of": true,
+            }})
+            .to_string(),
             mainnet_expectation(),
         )
         .await;
         assert_eq!(
             refused_on(&err),
-            shekyl_rpc_types::IdentityMismatch::unreadable()
-        );
-        let out = err.to_string();
-        assert!(out.contains("does not match the RPC contract"), "{out}");
-        assert!(
-            out.contains("cannot be named here"),
-            "it must say the daemon's version is unavailable rather than guess: {out}"
+            shekyl_rpc_types::IdentityMismatch::Wire {
+                ours: shekyl_rpc_types::CORE_RPC_VERSION,
+                theirs: 1,
+            }
         );
     }
 

@@ -38,12 +38,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::consensus_digest::DaemonNetwork;
 use crate::hash::HashHex;
+use crate::nullable::Nullable;
 
 /// `CORE_RPC_VERSION_MAJOR` — moved here from
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.44: `get_version` drops `hard_forks` and the
+/// `CORE_RPC_VERSION_MINOR`. 3.46: `target_height` is the core's target, and
+/// `null` when the core reports none, on `get_info`, `get_version` and
+/// `sync_info` together (RK-D15, RK-Q7). `get_info` stops writing `0` for a
+/// synchronized node; `get_version` stops omitting the member and
+/// `sync_info` stops writing `0` when there is no target; and
+/// `get_version.current_height` is always present. 3.45: `get_info` stops carrying `emission_era`
+/// (RK-D21): there never was an emission era, and the field is deleted, not
+/// ported. `get_version` gains nothing. 3.44: `get_version` drops `hard_forks` and the
 /// `hard_fork_info` method is deleted — the block version is the constant 1,
 /// so there is no schedule to report and no activation to query.
 /// `get_version` loses that member and gains nothing else. 3.43:
@@ -122,8 +130,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `SV-D3`, `SV-D5`, `SV-D9`); 3.44 `get_version` loses `hard_forks` and
 /// `hard_fork_info` is deleted. Both branches had written 3.43; the
 /// deletion is chained after the shard view, the same way 3.34 was
-/// chained after 3.33.
-pub const CORE_RPC_VERSION_MINOR: u32 = 44;
+/// chained after 3.33. 3.45 the `get_info.emission_era` deletion, written
+/// as 3.43 and chained twice, after each of those. 3.46 the nullable
+/// target on `get_info`, `get_version` and `sync_info`.
+pub const CORE_RPC_VERSION_MINOR: u32 = 46;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -388,24 +398,21 @@ pub struct GetVersionResponse {
     pub version: u32,
     /// Whether the daemon is a release build (`SHEKYL_VERSION_IS_RELEASE`).
     pub release: bool,
-    /// Current chain height. Omitted on the wire when `0`
-    /// (`KV_SERIALIZE_OPT(current_height, 0)`).
-    #[serde(default, skip_serializing_if = "is_zero")]
+    /// Current chain height. Always present: `0` is a value (`RK-D23`).
     pub current_height: u64,
-    /// The core's target height. `0` — and omitted — only when the core
-    /// reported none. A synchronized node with a target reports that target.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub target_height: u64,
+    /// The core's target height, `null` when the core reports none. A
+    /// synchronized node with a target reports that target; whether the
+    /// node is synchronized is not read from this member.
+    pub target_height: Nullable<u64>,
 
     // The three identity-tuple fields (VC-2). Each is MANDATORY and strict:
     // no `default`, no `Option`, no catch-all variant (VC-D14). `get_version`
     // is the call a client makes *before* it trusts anything, so on a remote
     // arm these are attacker-controlled bytes and an omitted field silently
     // becoming a zero value would turn "these disagree" into "these agree" —
-    // the one outcome the identity check exists to prevent. The three
-    // `KV_SERIALIZE_OPT` fields above keep their defaults because the C++
-    // side genuinely omits them and the oracle vectors depend on it; the rule
-    // is per-field on the tuple, not a sweep of the struct.
+    // the one outcome the identity check exists to prevent. No member of
+    // this reply defaults: the two heights above did, mirroring epee's
+    // omit-at-zero, until 3.46.
     /// Digest of the daemon's consensus-constant authorities
     /// ([`crate::CONSENSUS_CONSTANTS_DIGEST`]) — the **rules** axis.
     ///
@@ -516,10 +523,11 @@ mod tests {
         // number is not a lock.
         // 3.44 drops `hard_forks`. 3.43 was already the native shard view;
         // both branches had written 43, so the deletion took the next minor.
-        assert_eq!(CORE_RPC_VERSION, 196_652);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 44);
+        // 3.46 retires the `target_height` sentinel on three methods.
+        assert_eq!(CORE_RPC_VERSION, 196_654);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 46);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 44);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 46);
     }
 
     #[test]

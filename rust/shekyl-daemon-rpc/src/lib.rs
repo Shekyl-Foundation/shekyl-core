@@ -89,6 +89,8 @@ pub mod ctl_client;
 pub mod ffi;
 pub mod ffi_exports;
 pub mod handlers;
+pub mod info;
+pub mod info_facts;
 pub mod methods;
 pub mod middleware;
 pub mod server;

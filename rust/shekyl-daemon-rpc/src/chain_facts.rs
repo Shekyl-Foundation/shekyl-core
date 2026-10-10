@@ -112,8 +112,8 @@ pub struct ChainTip {
     /// The core's target count. `None` when the core reported `0`: that
     /// raw value is an absence, not a [`ChainCount`] (C5). Synchronization
     /// is [`Self::synchronized`]. `get_version` and `sync_info` forward this
-    /// count (`0` only for `None`). `get_info` still writes `0` when the
-    /// node is synchronized.
+    /// count, and write `None` as `null`; `get_info` reports the same fact
+    /// from its own snapshot.
     pub target_height: Option<ChainCount>,
     /// Whether the protocol layer considers this node synchronized.
     pub synchronized: bool,
@@ -208,6 +208,11 @@ pub enum FactsFault {
     /// index list) that would reach the caller as a fact about their request
     /// rather than a fault of this node.
     Inconsistent,
+    /// The chain store's data file could not be read for its size. Raised on
+    /// this side, by [`crate::info_facts::store_file_size`], and never
+    /// reported as a size of `0` — an empty store is `0`, and a store that
+    /// cannot be read is not that (RK-D23).
+    StoreUnreadable,
     /// A code outside the documented set — a contract violation, never a
     /// guessed fact.
     Unknown(i32),

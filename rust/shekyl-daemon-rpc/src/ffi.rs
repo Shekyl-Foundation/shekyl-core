@@ -649,6 +649,84 @@ pub struct PeerFactsFfi {
     pub blocked: u8,
 }
 
+/// Twin of `shekyl_rpc_info_chain_facts` (RK-5c): `get_info`'s health,
+/// identity, chain and economics operands, read for every caller. Every
+/// member from the chain store is read under one chain lock and carries its
+/// own tip (RK-D20). Layout pinned both directions by
+/// `shekyl_rpc_info_chain_facts_rust_{fill,check}`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InfoChainFactsFfi {
+    /// Top block height + 1.
+    pub chain_height: u64,
+    pub top_hash: [u8; 32],
+    pub difficulty_lo: u64,
+    pub difficulty_hi: u64,
+    pub cumulative_difficulty_lo: u64,
+    pub cumulative_difficulty_hi: u64,
+    pub difficulty_target: u64,
+    /// Coinbases included.
+    pub total_transactions: u64,
+    pub block_weight_limit: u64,
+    pub block_weight_median: u64,
+    pub adjusted_time: u64,
+    pub already_generated_coins: u64,
+    pub total_burned: u64,
+    pub tx_volume_count_sum: u64,
+    pub tx_volume_blocks: u64,
+    /// 0: the core has no target.
+    pub core_target_height: u64,
+    pub synchronized: u8,
+    pub busy_syncing: u8,
+    pub offline: u8,
+    pub following_degraded: u8,
+    /// `cryptonote::network_type`.
+    pub nettype: u8,
+    /// `SHEKYL_PROTOCOL_VERSION`, which only C++ defines.
+    pub protocol_version: u8,
+    pub reserved: [u8; 2],
+}
+
+/// Twin of `shekyl_rpc_info_status_facts` (RK-5c): read only for a caller
+/// who is shown Status. The store's size is not here; it has its own read.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InfoStatusFactsFfi {
+    pub start_time: u64,
+    pub free_space: u64,
+    pub alt_blocks_count: u64,
+    /// The clearnet zone's sessions.
+    pub public_connections: u64,
+    /// Of which outbound.
+    pub public_outgoing_connections: u64,
+}
+
+/// Twin of `shekyl_rpc_info_peers_facts` (RK-5c): read only for a caller who
+/// is shown Peers.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InfoPeersFactsFfi {
+    pub public_incoming_sockets: u64,
+    pub public_outgoing_sockets: u64,
+    pub tor_incoming_sockets: u64,
+    pub tor_outgoing_sockets: u64,
+    pub white_peerlist_size: u64,
+    pub grey_peerlist_size: u64,
+}
+
+// RK-5c layout pins, with their `static_assert` counterparts in
+// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp`.
+const _: () = assert!(std::mem::size_of::<InfoChainFactsFfi>() == 160);
+const _: () = assert!(std::mem::align_of::<InfoChainFactsFfi>() == 8);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, top_hash) == 8);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, difficulty_lo) == 40);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, core_target_height) == 144);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, synchronized) == 152);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, nettype) == 156);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, protocol_version) == 157);
+const _: () = assert!(std::mem::size_of::<InfoStatusFactsFfi>() == 40);
+const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 48);
+
 // RK-5a layout pins. `ConnectionFactsFfi`, `SyncSpanFactsFfi` and
 // `PeerFactsFfi` carry pointers, so there is no fill/check twin to catch a
 // disagreement — these asserts and their `static_assert` counterparts in
@@ -747,6 +825,34 @@ extern "C" {
     /// cannot fail.
     pub fn shekyl_rpc_peerlist_limits(out_white: *mut u32, out_gray: *mut u32);
     pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
+    /// `get_info`'s chain snapshot (RK-5c), read for every caller.
+    pub fn shekyl_rpc_info_chain(h: *mut CoreRpcHandle, out: *mut InfoChainFactsFfi) -> i32;
+    /// The pool's population: the broadcast set, or with `include_unrelayed`
+    /// non-zero every entry. The second is host-only data.
+    pub fn shekyl_rpc_info_pool_count(
+        h: *mut CoreRpcHandle,
+        include_unrelayed: u8,
+        out: *mut u64,
+    ) -> i32;
+    /// `get_info`'s Status facts and the build's version string, which is
+    /// written to `version_buf` without a terminator.
+    pub fn shekyl_rpc_info_status(
+        h: *mut CoreRpcHandle,
+        out: *mut InfoStatusFactsFfi,
+        version_buf: *mut u8,
+        version_cap: usize,
+        version_len: *mut usize,
+    ) -> i32;
+    /// `get_info`'s Peers facts.
+    pub fn shekyl_rpc_info_peers(h: *mut CoreRpcHandle, out: *mut InfoPeersFactsFfi) -> i32;
+    /// The path of the chain store's data file, written to `path_buf`
+    /// without a terminator. The size is read from it on this side.
+    pub fn shekyl_rpc_info_store_file(
+        h: *mut CoreRpcHandle,
+        path_buf: *mut u8,
+        path_cap: usize,
+        path_len: *mut usize,
+    ) -> i32;
     pub fn shekyl_rpc_block_hash_at(
         h: *mut CoreRpcHandle,
         height: u64,
@@ -971,6 +1077,47 @@ mod unit_test_link_stubs {
     pub extern "C" fn shekyl_rpc_net_stats(
         _h: *mut CoreRpcHandle,
         _out: *mut NetStatsFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_chain(
+        _h: *mut CoreRpcHandle,
+        _out: *mut InfoChainFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_pool_count(
+        _h: *mut CoreRpcHandle,
+        _include_unrelayed: u8,
+        _out: *mut u64,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_status(
+        _h: *mut CoreRpcHandle,
+        _out: *mut InfoStatusFactsFfi,
+        _version_buf: *mut u8,
+        _version_cap: usize,
+        _version_len: *mut usize,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_peers(
+        _h: *mut CoreRpcHandle,
+        _out: *mut InfoPeersFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_store_file(
+        _h: *mut CoreRpcHandle,
+        _path_buf: *mut u8,
+        _path_cap: usize,
+        _path_len: *mut usize,
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
     }

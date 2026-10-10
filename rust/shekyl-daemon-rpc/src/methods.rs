@@ -112,8 +112,8 @@ pub fn get_height(facts: &dyn ChainFacts) -> Result<GetHeightResponse, RpcFault>
 /// `get_version` (JSON-RPC, no params): RPC contract version, release flag,
 /// current and target heights, and the identity tuple.
 ///
-/// `target_height` is the core's target. `0` means the core reported none,
-/// not that the node is synchronized.
+/// `target_height` is the core's target, `null` when the core reports none.
+/// It says nothing about whether the node is synchronized.
 pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFault> {
     let tip = facts.chain_tip()?;
     // The identity axes. Two FFI reads inside one handler still produce one
@@ -127,7 +127,7 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
         version: shekyl_rpc_types::CORE_RPC_VERSION,
         release: tip.release_build,
         current_height: tip.chain_height.to_raw(),
-        target_height: tip.target_height.map(ChainCount::to_raw).unwrap_or(0),
+        target_height: tip.target_height.map(ChainCount::to_raw).into(),
         // The rules axis is this build's own constant, read here rather than
         // fetched over FFI: it is compiled from `config/` into this image, so
         // asking C++ for it would give one value two sources.
@@ -1330,9 +1330,9 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
     Ok(SyncInfoResponse {
         status: RpcStatus::ok(),
         height,
-        // The same count `get_version` reports: the core's target, not a
-        // rewrite of it when the node is synchronized.
-        target_height: tip.target_height.map(ChainCount::to_raw).unwrap_or(0),
+        // The same member `get_version` and `get_info` report: the core's
+        // target, `null` when it has none.
+        target_height: tip.target_height.map(ChainCount::to_raw).into(),
         peers: connections
             .connections
             .iter()
@@ -1367,6 +1367,7 @@ pub(crate) mod tests {
     };
     use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
     use serde_json::json;
+    use shekyl_rpc_types::Nullable;
     use shekyl_types::{
         AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
     };
@@ -1993,7 +1994,7 @@ pub(crate) mod tests {
         // source — the digest against the compiled constant, the genesis and
         // nettype against what the facts layer handed up.
         let out = get_version(&facts(true, 999_999)).unwrap();
-        assert_eq!(out.target_height, 999_999);
+        assert_eq!(out.target_height, Nullable::value(999_999));
         assert_eq!(
             out.consensus_constants_digest,
             shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
@@ -2007,10 +2008,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v21` = 3.44). A bump that
+        // Head of the `get_version` chain (`_v23` = 3.46). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v21.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v23.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2029,8 +2030,25 @@ pub(crate) mod tests {
     #[test]
     fn get_version_reports_the_target_while_syncing() {
         let out = get_version(&facts(false, 2_000_000)).unwrap();
-        assert_eq!(out.target_height, 2_000_000);
+        assert_eq!(out.target_height, Nullable::value(2_000_000));
         assert_eq!(out.version, shekyl_rpc_types::CORE_RPC_VERSION);
+    }
+
+    /// **No target is `null`, not `0` and not an omitted member** (RK-Q7),
+    /// and a chain count of `0` is written as `0` (RK-D23). The facts layer
+    /// reports "no target" as `None`; the reply writes that as `null`,
+    /// whether or not the node is synchronized.
+    #[test]
+    fn get_version_writes_no_target_as_null_and_a_zero_height_as_zero() {
+        for synchronized in [true, false] {
+            let mut facts = facts(synchronized, 0);
+            facts.tip.as_mut().expect("a tip").chain_height = ChainCount::from_raw(0);
+            let out = get_version(&facts).unwrap();
+            assert_eq!(out.target_height, Nullable::NULL);
+            let wire = serde_json::to_value(&out).unwrap();
+            assert_eq!(wire["target_height"], serde_json::Value::Null);
+            assert_eq!(wire["current_height"], serde_json::json!(0));
+        }
     }
 
     /// A facts fault is a fault, never a fabricated reply.
@@ -3206,7 +3224,7 @@ pub(crate) mod tests {
         let behind = facts(false, 1_234_600);
         let res = sync_info(&behind, &p2p).expect("sync info");
         assert_eq!(res.height, 1_234_567);
-        assert_eq!(res.target_height, 1_234_600);
+        assert_eq!(res.target_height, Nullable::value(1_234_600));
         assert_eq!(
             res.peers.len(),
             1,
@@ -3218,6 +3236,17 @@ pub(crate) mod tests {
 
         let synced = facts(true, 1_234_600);
         let res = sync_info(&synced, &p2p).expect("sync info");
-        assert_eq!(res.target_height, 1_234_600);
+        assert_eq!(res.target_height, Nullable::value(1_234_600));
+
+        // No target is `null` on this method too, the same encoding as
+        // `get_version` and `get_info` (RK-Q7).
+        for synchronized in [true, false] {
+            let res = sync_info(&facts(synchronized, 0), &p2p).expect("sync info");
+            assert_eq!(res.target_height, Nullable::NULL);
+            assert_eq!(
+                serde_json::to_value(&res).unwrap()["target_height"],
+                serde_json::Value::Null
+            );
+        }
     }
 }

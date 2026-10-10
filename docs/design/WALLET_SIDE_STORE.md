@@ -121,9 +121,12 @@ design-review material awaiting a ruling, and is marked so.
   decides from consensus state is read from the configured daemon. **While the
   daemon reports it is syncing the answer is *unknown*, and unknown fails
   toward the safe side: do not erase, do not post, do not sign.** A daemon that
-  is behind reports it — `synchronized: bool` and `target_height`
-  (`shekyl-daemon-rpc/src/chain_facts.rs:52-55`), with `target_height == 0`
-  once caught up (`methods.rs:112-115`).
+  is behind reports it — `synchronized: bool`
+  (`shekyl-daemon-rpc/src/chain_facts.rs`). As first written this also
+  named `target_height`, which `get_info` then wrote as `0` once caught up.
+  That sentinel was retired at `CORE_RPC_VERSION` 3.46, and the wallet
+  decides on the flag alone: the target is a height peers claim
+  (`DAEMON_RPC_KV_GET_INFO.md` RK-D15).
 
 **What each of steering's earlier answers rules, and what it does not.**
 

@@ -56,6 +56,10 @@ shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-units = { path = "../shekyl-units" }
+# `get_info`'s economics part is one projection in `shekyl-economics`
+# (DAEMON_RPC_KV_GET_INFO.md §4.3, RK-D19); the handler calls it and does
+# nothing else with economics.
+shekyl-economics = { path = "../shekyl-economics" }
 # Bp+ batch verification takes a CSPRNG for the batch weights; same 0.6 pin
 # and `std` (OsRng) feature as shekyl-fcmp's own verify path.
 rand_core = { version = "0.6", features = ["std"] }

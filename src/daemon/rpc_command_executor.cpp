@@ -247,34 +247,8 @@ bool t_rpc_command_executor::hide_hash_rate() {
 }
 
 bool t_rpc_command_executor::show_difficulty() {
-  cryptonote::COMMAND_RPC_GET_INFO::request req;
-  cryptonote::COMMAND_RPC_GET_INFO::response res;
-
-  std::string fail_message = "Problem fetching info";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/getinfo", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_info(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message.c_str(), res.status);
-      return true;
-    }
-  }
-
-  tools::success_msg_writer() <<   "BH: " << res.height
-                              << ", TH: " << res.top_block_hash
-                              << ", DIFF: " << cryptonote::difficulty_type(res.wide_difficulty)
-                              << ", CUM_DIFF: " << cryptonote::difficulty_type(res.wide_cumulative_difficulty)
-                              << ", HR: " << cryptonote::difficulty_type(res.wide_difficulty) / res.target << " H/s";
-
-  return true;
+  // Rendered in Rust since `get_info` moved there (RK-5c).
+  return run_rust_console({"diff"});
 }
 
 static void get_metric_prefix(cryptonote::difficulty_type hr, double& hr_d, char& prefix)
@@ -643,88 +617,10 @@ bool t_rpc_command_executor::print_transaction_pool_short() {
 }
 
 bool t_rpc_command_executor::print_transaction_pool_stats() {
-  cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL_STATS::request req;
-  cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL_STATS::response res;
-  cryptonote::COMMAND_RPC_GET_INFO::request ireq;
-  cryptonote::COMMAND_RPC_GET_INFO::response ires;
-
-  std::string fail_message = "Problem fetching transaction pool stats";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/get_transaction_pool_stats", fail_message.c_str()))
-    {
-      return true;
-    }
-    if (!m_rpc_client->rpc_request(ireq, ires, "/getinfo", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    res.pool_stats = {};
-    if (!m_rpc_server->on_get_transaction_pool_stats(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-    if (!m_rpc_server->on_get_info(ireq, ires) || ires.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, ires.status);
-      return true;
-    }
-  }
-
-  size_t n_transactions = res.pool_stats.txs_total;
-  const uint64_t now = time(NULL);
-  size_t avg_bytes = n_transactions ? res.pool_stats.bytes_total / n_transactions : 0;
-
-  std::string backlog_message;
-  const uint64_t full_reward_zone = ires.block_weight_limit / 2;
-  if (res.pool_stats.bytes_total <= full_reward_zone)
-  {
-    backlog_message = "no backlog";
-  }
-  else
-  {
-    uint64_t backlog = (res.pool_stats.bytes_total + full_reward_zone - 1) / full_reward_zone;
-    backlog_message = (boost::format("estimated %u block (%u minutes) backlog") % backlog % (backlog * SHEKYL_DAA_TARGET_SECONDS / 60)).str();
-  }
-
-  tools::msg_writer() << n_transactions << " tx(es), " << res.pool_stats.bytes_total << " bytes total (min " << res.pool_stats.bytes_min << ", max " << res.pool_stats.bytes_max << ", avg " << avg_bytes << ", median " << res.pool_stats.bytes_med << ")" << std::endl
-      << "fees " << cryptonote::print_money(res.pool_stats.fee_total) << " (avg " << cryptonote::print_money(n_transactions ? res.pool_stats.fee_total / n_transactions : 0) << " per tx" << ", " << cryptonote::print_money(res.pool_stats.bytes_total ? res.pool_stats.fee_total / res.pool_stats.bytes_total : 0) << " per byte)" << std::endl
-      << res.pool_stats.num_double_spends << " double spends, " << res.pool_stats.num_not_relayed << " not relayed, " << res.pool_stats.num_failing << " failing, " << res.pool_stats.num_10m << " older than 10 minutes (oldest " << (res.pool_stats.oldest == 0 ? "-" : get_human_time_ago(res.pool_stats.oldest, now)) << "), " << backlog_message;
-
-  if (n_transactions > 1 && res.pool_stats.histo.size())
-  {
-    std::vector<uint64_t> times;
-    uint64_t numer;
-    size_t i, n = res.pool_stats.histo.size(), denom;
-    times.resize(n);
-    if (res.pool_stats.histo_98pc)
-    {
-      numer = res.pool_stats.histo_98pc;
-      denom = n-1;
-      for (i=0; i<denom; i++)
-        times[i] = i * numer / denom;
-      times[i] = now - res.pool_stats.oldest;
-    } else
-    {
-      numer = now - res.pool_stats.oldest;
-      denom = n;
-      for (i=0; i<denom; i++)
-        times[i] = i * numer / denom;
-    }
-    tools::msg_writer() << "   Age      Txes       Bytes";
-    for (i=0; i<n; i++)
-    {
-      tools::msg_writer() << get_time_hms(times[i]) << std::setw(8) << res.pool_stats.histo[i].txs << std::setw(12) << res.pool_stats.histo[i].bytes;
-    }
-  }
-  tools::msg_writer();
-
-  return true;
+  // Rendered in Rust since `get_info` moved there (RK-5c). It still reads
+  // `/get_transaction_pool_stats` through the bridge; that leg moves with
+  // the pool routes (RK-6).
+  return run_rust_console({"print_pool_stats"});
 }
 
 bool t_rpc_command_executor::start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype, bool do_background_mining, bool ignore_battery) {
@@ -1339,37 +1235,11 @@ bool t_rpc_command_executor::flush_cache(bool bad_blocks)
 
 bool t_rpc_command_executor::version()
 {
-    cryptonote::COMMAND_RPC_GET_INFO::request req;
-    cryptonote::COMMAND_RPC_GET_INFO::response res;
-
-    const char *fail_message = "Problem fetching info";
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->rpc_request(req, res, "/getinfo", fail_message))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_get_info(req, res) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    if (res.version.empty())
-    {
-        tools::fail_msg_writer() << "The daemon software version is not available.";
-    }
-    else
-    {
-        tools::success_msg_writer() << res.version;
-    }
-
-    return true;
+    // Rendered in Rust since `get_info` moved there (RK-5c). On the remote
+    // arm it asks without the identity handshake: its job is to show the
+    // operator what they reached (CLIENT_VERSION_CONSTANTS_VALIDATION.md
+    // §3.6.2).
+    return run_rust_console({"version"});
 }
 
 }// namespace daemonize

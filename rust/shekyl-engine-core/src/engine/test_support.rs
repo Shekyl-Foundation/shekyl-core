@@ -348,7 +348,7 @@ struct State {
     fee_errors: VecDeque<RpcError>,
 
     /// Health snapshot returned by `get_health`. Fixed to a healthy,
-    /// fully-synced daemon (peers present, `target_height == 0`) so the
+    /// fully-synced daemon (peers present, `synchronized`) so the
     /// `DaemonEngine` impl is complete for tests that don't exercise the
     /// health gate. Watchdog health-gating and health-failure paths are
     /// driven through the hermetic `StubDaemon` in the `submit_lifecycle`
@@ -405,7 +405,7 @@ fn default_fee_estimates() -> FeeEstimates {
 
 /// Construct the default [`DaemonHealth`] that every `TestDaemon`
 /// returns from `get_health`: a healthy, fully-synced daemon (peers
-/// present, `target_height == 0`). `TestDaemon` health is fixed to this
+/// present, `synchronized`). `TestDaemon` health is fixed to this
 /// value — the watchdog health-gate and health-failure paths are driven
 /// by the hermetic `StubDaemon` in the `submit_lifecycle` test module,
 /// which controls both health facts and submit outcomes.
@@ -427,26 +427,19 @@ pub fn test_block_hash_at(height: u64) -> [u8; 32] {
 const TEST_DAEMON_OUTGOING_CONNECTIONS: u64 = 8;
 
 /// How far above its chain count a syncing test daemon places
-/// `target_height`. The lead only has to be strictly positive: the sync
-/// predicate refuses any target the count has not reached. It is not a
-/// protocol constant.
+/// `target_height`, so the reply looks like a real syncing daemon's. No
+/// reader decides on it; the flag is what makes the double "syncing". It is
+/// not a protocol constant.
 const SYNCING_TARGET_LEAD: u64 = 10_000;
 
 /// `get_info` for [`TestDaemon`] and any other double that should answer
 /// as this daemon does.
 ///
-/// `syncing` moves both halves of the predicate together: the flag clears
-/// and the target sits [`SYNCING_TARGET_LEAD`] above the count. A reply
-/// that changes only one of those is not a state this double emits. The
-/// sentinel-only case (target `0` with the flag clear) is built in
-/// `synced_chain_facts_tests` against the constructor.
+/// `syncing` clears the flag, which is the whole predicate, and places the
+/// target [`SYNCING_TARGET_LEAD`] above the count. A synchronized double
+/// reports no target.
 pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Value {
-    let target_height = if syncing {
-        chain_count.saturating_add(SYNCING_TARGET_LEAD)
-    } else {
-        // get_info writes 0 when synchronized.
-        0
-    };
+    let target_height = syncing.then(|| chain_count.saturating_add(SYNCING_TARGET_LEAD));
     super::daemon::synced_chain_facts::GetInfoDocument {
         chain_count: ChainCount::from_raw(chain_count),
         target_height,
@@ -462,7 +455,6 @@ fn default_health() -> DaemonHealth {
     DaemonHealth {
         connections: TEST_DAEMON_OUTGOING_CONNECTIONS,
         height: 0,
-        target_height: 0,
         synchronized: true,
     }
 }

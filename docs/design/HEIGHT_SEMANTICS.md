@@ -18,7 +18,8 @@ the slice itself not yet opened; §3.5, `DRS_E4_ARCHIVAL_WRITER.md`
 `ARW-Q16`).
 Stamp-clock COUNT→ORDINAL conversion is optional-not-owed. The
 `get_version` `target_height` wire `0` was retired at `CORE_RPC_VERSION`
-3.40 (2026-10-01); `get_info` still uses the C++ convention. Numerics are frozen
+3.40 (2026-10-01), and `get_info`'s at 3.46 (2026-10-10), where "no target"
+became `null` on all three methods. Numerics are frozen
 as pinned (Rick, 2026-09-19).
 
 <!-- claim-audit: citations -->
@@ -186,8 +187,10 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
 - **C5 Sentinels are not counts.** A reported `target_height` of `0` is
   not a chain count and decodes to `Option<ChainCount>` (`None`). On
   `get_version` and `sync_info` (`CORE_RPC_VERSION` 3.40) that `0` is the
-  core reporting no target; synchronization is a separate fact. `get_info`
-  still writes `0` when the node is synchronized
+  core reporting no target; synchronization is a separate fact. Since
+  `CORE_RPC_VERSION` 3.46 the wire does not carry that `0` at all:
+  `get_info`, `get_version` and `sync_info` write the core's target, or
+  `null` when it has none (`DAEMON_RPC_KV_GET_INFO.md` RK-D15, RK-Q7)
   (`core_rpc_server::on_get_info`, `src/rpc/core_rpc_server.cpp:209`).
   Inland code does not encode `0` as `ChainCount`.
 - **C6 Template height is `ChainCount::next_height()`.**
@@ -239,8 +242,8 @@ producers cited at source.
 | `GET /get_height` | `GetHeightResponse.height` (`rust/shekyl-rpc-types/src/chain.rs:179`) | COUNT | Facts POD already `+1` (`src/rpc/rpc_facts_ffi.cpp:73-75`); handler copies (`rust/shekyl-daemon-rpc/src/methods.rs:102-108`). Wallet client documents "amount of blocks", genesis-only = 1 (`rust/shekyl-rpc-client/src/lib.rs:380-384`). |
 | `get_block_count` | `GetBlockCountResponse.count` (`rust/shekyl-rpc-types/src/chain.rs:191`) | COUNT | Same chain-height as `/get_height`, honest field name. |
 | `GET /get_info` | `height` | COUNT | C++ still serves: `get_blockchain_top` then `++res.height` (`src/rpc/core_rpc_server.cpp:206-207`). |
-| `GET /get_info` | `target_height` | COUNT or 0-when-synced | `is_synchronized() ? 0 : get_target_blockchain_height()` (`src/rpc/core_rpc_server.cpp:209`). The core stores the peer-advertised count (`core::set_target_blockchain_height`, `src/cryptonote_core/cryptonote_core.cpp`). |
-| `get_version`, `sync_info` | `target_height` | COUNT or 0-absent | The core count, forwarded. `0` only when the core reported none (`rust/shekyl-daemon-rpc/src/methods.rs:115-116`, `rust/shekyl-daemon-rpc/src/methods.rs:138`, `rust/shekyl-daemon-rpc/src/methods.rs:1375-1377`). Inland: `Option<ChainCount>` (C5). The synchronized `0` was retired at `CORE_RPC_VERSION` 3.40. |
+| `GET /get_info` | `target_height` | COUNT or `null` | The core count, forwarded, synchronized or not; `null` when the core reports none (`rust/shekyl-daemon-rpc/src/info.rs:215-218`). The `0`-when-synchronized sentinel was retired at `CORE_RPC_VERSION` 3.46 (RK-D15). The core stores the peer-advertised count (`core::set_target_blockchain_height`, `src/cryptonote_core/cryptonote_core.cpp`), so it is information and no reader decides on it. |
+| `get_version`, `sync_info` | `target_height` | COUNT or `null` | The core count, forwarded; `null` when the core reported none (`rust/shekyl-daemon-rpc/src/methods.rs:115-116`, `rust/shekyl-daemon-rpc/src/methods.rs:130`, `rust/shekyl-daemon-rpc/src/methods.rs:1333-1335`). Inland: `Option<ChainCount>` (C5). The synchronized `0` was retired at `CORE_RPC_VERSION` 3.40, and the `0` (or omitted member) for "no target" at 3.46. |
 | `get_version` | `current_height` (`rust/shekyl-rpc-types/src/chain.rs:394`) | COUNT | `tip.chain_height.to_raw()` (`rust/shekyl-daemon-rpc/src/methods.rs:137`). |
 | `get_block_hash` number / `GetBlockRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:275`) / `GetBlockHeaderByHeightRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:319`) / `GetBlocksByHeightRequest.heights` (`rust/shekyl-rpc-types/src/bin_commands.rs:165`) | those fields | ORDINAL | Zero-indexed position (`rust/shekyl-rpc-client/src/lib.rs:410-413`). Bound vs COUNT is `height >= chain_height` (`src/rpc/rpc_facts_ffi.h:82`). |
 | `BlockHeader.height` (`rust/shekyl-rpc-types/src/chain.rs:225`) | `height` | ORDINAL | Header of that block. |
@@ -259,7 +262,7 @@ producers cited at source.
 | POD | Field | Quantity |
 | --- | --- | --- |
 | `shekyl_rpc_chain_tip_facts` (`src/rpc/rpc_facts_ffi.h:35-37`) | `chain_height` | COUNT (`top_height + 1`, `src/rpc/rpc_facts_ffi.cpp:73-75`) |
-| same | `target_height` | raw core target (`src/rpc/rpc_facts_ffi.cpp:1160`); `0` is the core reporting none (C5). `0`-when-synced is `get_info` only |
+| same | `target_height` | raw core target (`src/rpc/rpc_facts_ffi.cpp:1293`); `0` is the core reporting none (C5), at this FFI boundary only: no wire method writes it since 3.46 |
 | `shekyl_rpc_block_hash_facts` (`src/rpc/rpc_facts_ffi.h:81`) | `chain_height` | COUNT |
 | `shekyl_rpc_block_header_facts` (`src/rpc/rpc_facts_ffi.h:104-106`) | `height` ORDINAL; `depth` DIFFERENCE; `chain_height` COUNT | as named in the header |
 | `ChainTipFactsFfi` (`rust/shekyl-daemon-rpc/src/ffi.rs:337-342`) | twins of the C POD | stay raw |
@@ -395,8 +398,9 @@ quantity.
   JSON block number is `usize` inside the fetch helpers. FFI pods, the
   snapshot-id preimage, and the gf7 measurement hook stay raw.
   `get_version` `target_height` stays a wire `u64`; its synchronized `0`
-  was retired at `CORE_RPC_VERSION` 3.40. `get_info` still writes `0`
-  when synchronized. No numeric change.
+  was retired at `CORE_RPC_VERSION` 3.40. `get_info` still wrote `0`
+  when synchronized at the time of this ruling; that ended at 3.46. No
+  numeric change.
 - **Height-semantics Phase 2g — the daemon-store and archival surface —
   RULED 2026-10-01 as a separate slice, gate landed, burn-down begun**
   (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-Q16` (b), (c)). *UPDATE 2026-10-02:*
@@ -458,8 +462,8 @@ quantity.
 Phase 1); the curve-tree FFI replica's internals beyond the
 type-name check; C++ retyping (C8). The daemon-RPC `target_height`
 wire sentinel was outside this audit. `get_version` and `sync_info`
-stopped writing `0` for synchronization at `CORE_RPC_VERSION` 3.40;
-`get_info` still does (`src/rpc/core_rpc_server.cpp:209`).
+stopped writing `0` for synchronization at `CORE_RPC_VERSION` 3.40, and
+`get_info` at 3.46, when its handler moved to Rust (RK-5c).
 
 ## 4. How a reader uses this page
 

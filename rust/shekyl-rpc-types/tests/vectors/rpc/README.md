@@ -30,8 +30,17 @@ caught in review and reverted; on inspection the property it violated had no
 consumer, so it was retired deliberately rather than defended by habit.
 
 The emitter is deleted with the structs it captures, so each slice writes its
-own and takes it away again; these files are the oracle's memory. **RK-5b was
-the most recent slice to run one** (`get_last_block_header`,
+own and takes it away again; these files are the oracle's memory. **RK-5c
+was the most recent slice to run one**, for `get_info`, and it was the first
+of a second kind: the five `get_info_*_v1.json` files are not a hand-built
+response serialized. The C++ handler was first split into a gather step and
+a pure `build_get_info(facts, restricted)`, and the emitter ran that
+function over fixed facts — because the handler decided things (a
+synchronized sentinel, the restricted stand-ins, a subtraction across two
+counts, a burn computation that can refuse) and a serializer-only capture
+would pin none of them (`docs/design/DAEMON_RPC_KV_GET_INFO.md` §4.4). The
+split, the builder and the emitter went with the handler. **RK-5b was the
+slice before it** (`get_last_block_header`,
 `get_block_header_by_hash`, `get_block_headers_range`, `hard_fork_info`,
 `get_fee_estimate`), and it is gone with those structs too. To read one, or
 to see how a capture was set up, check out the commit that added
@@ -100,3 +109,18 @@ above, and takes a new case name
 because `synced_v7` onward carry a target. It replaced a per-pair test
 that was renamed at each bump, which is how a chain with a missing vector
 passed.
+
+**3.46 restated the target, and every vector it moved is derived.** "No
+target" became `null` on `get_info`, `get_version` and `sync_info`, and
+`get_info` stopped writing `0` for a synchronized node (RK-D15, RK-Q7). No
+C++ stood to capture from, so each successor is its predecessor with only
+the named members restated, and
+`the_3_46_vectors_are_their_predecessors_with_exactly_the_target_restated`
+holds each pair to that: `get_version_absent_target_v2`,
+`get_version_all_defaults_v3` (which also gains `current_height: 0`),
+`sync_info_empty_v3`, and the `_v2` of four `get_info` fixtures. The
+synchronized `get_info` fixtures take the core's target, 1234567, which is
+what `shekyl-daemon-rpc`'s method tests produce from the capture's own
+facts. `get_version_syncing_v3`, `sync_info_v3` and `get_info_syncing_v1`
+carried a target already; their replies did not move and they have no
+successor. The side cases keep their predecessor's `version`, as before.

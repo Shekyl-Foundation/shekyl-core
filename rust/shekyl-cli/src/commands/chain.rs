@@ -16,31 +16,71 @@ use crate::rpc_client::RpcSession;
 pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
     let dc = require_daemon(daemon)?;
     match dc.get_info() {
-        Ok(info) => Ok(json!({
-            "status": info.status,
-            "height": info.height,
-            "target_height": info.target_height,
-            "difficulty": info.difficulty,
-            "tx_count": info.tx_count,
-            "outgoing_connections_count": info.outgoing_connections_count,
-            "incoming_connections_count": info.incoming_connections_count,
-        })),
+        Ok(info) => {
+            // The connection counts are a Status field, which a daemon may
+            // withhold. Today a restricted daemon writes zeros there, and a
+            // withheld part reads the same until this output learns to say
+            // "not disclosed" (RK-Q8).
+            let (outgoing, incoming) = info.node.shown().map_or((0, 0), |status| {
+                (
+                    status.outgoing_connections_count,
+                    status.incoming_connections_count,
+                )
+            });
+            Ok(json!({
+                "status": info.status.0,
+                "height": info.health.height,
+                // Whether the daemon has caught up is its own flag. The
+                // target is the core's, `null` when it has none, and is
+                // shown beside the flag, never read as the flag.
+                "synchronized": info.health.synchronized,
+                "target_height": info.health.target_height,
+                // The low 64 bits, which is what the wire's `difficulty`
+                // member carries and what this output has always shown.
+                "difficulty": u64::try_from(info.chain.difficulty & u128::from(u64::MAX))
+                    .unwrap_or(u64::MAX),
+                "tx_count": info.chain.tx_count,
+                "outgoing_connections_count": outgoing,
+                "incoming_connections_count": incoming,
+            }))
+        }
         Err(e) => failed(e.to_string()),
     }
+}
+
+/// The line that says the daemon is still syncing, or `None` when it has
+/// caught up.
+///
+/// Read from `synchronized`, the daemon's own flag. Until `get_info`
+/// stopped writing its target as `0` for a synchronized node, this was
+/// inferred from the target being non-zero and different from the height.
+/// A synchronized daemon now reports a real target, so that inference
+/// would call it syncing whenever a peer had claimed a taller chain.
+///
+/// A value without the flag is not this command's output; it is shown as
+/// syncing, the reading that promises less.
+fn sync_line(val: &Value) -> Option<String> {
+    let synchronized = val
+        .get("synchronized")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if synchronized {
+        return None;
+    }
+    Some(match val.get("target_height").and_then(Value::as_u64) {
+        Some(target) => format!("  Target:       {target} (syncing)"),
+        None => "  Target:       none yet (syncing)".to_owned(),
+    })
 }
 
 pub(crate) fn show_chain(val: &Value) {
     let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("?");
     let height = val.get("height").and_then(Value::as_u64).unwrap_or(0);
-    let target = val
-        .get("target_height")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
     println!("Chain health:");
     println!("  Status:       {status}");
     println!("  Height:       {height}");
-    if target > 0 && target != height {
-        println!("  Target:       {target} (syncing)");
+    if let Some(line) = sync_line(val) {
+        println!("{line}");
     }
     println!(
         "  Difficulty:   {}",
@@ -251,4 +291,47 @@ fn print_coverage_row(row: &Value, profit_available: bool) {
         "unavailable".to_owned()
     };
     println!("{shard_id:<8} {pay:>16} {bonded:>8} {served:>8}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sync_line;
+    use serde_json::json;
+
+    /// Synchronized is the flag's word. A target above the height, which a
+    /// synchronized daemon can now report, does not make it "syncing".
+    #[test]
+    fn a_synchronized_daemon_has_no_syncing_line_whatever_its_target() {
+        for target in [json!(null), json!(0), json!(10), json!(9_999_999)] {
+            assert_eq!(
+                sync_line(&json!({
+                    "height": 10, "synchronized": true, "target_height": target,
+                })),
+                None,
+                "target {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_syncing_daemon_shows_its_target_or_says_it_has_none() {
+        assert_eq!(
+            sync_line(&json!({ "height": 10, "synchronized": false, "target_height": 500 })),
+            Some("  Target:       500 (syncing)".to_owned())
+        );
+        // A target equal to the height was hidden by the old inference.
+        assert_eq!(
+            sync_line(&json!({ "height": 10, "synchronized": false, "target_height": 10 })),
+            Some("  Target:       10 (syncing)".to_owned())
+        );
+        assert_eq!(
+            sync_line(&json!({ "height": 10, "synchronized": false, "target_height": null })),
+            Some("  Target:       none yet (syncing)".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_value_without_the_flag_reads_as_syncing() {
+        assert!(sync_line(&json!({ "height": 10, "target_height": null })).is_some());
+    }
 }

@@ -64,14 +64,16 @@ namespace {
 // whether a transaction that has not been broadcast is disclosed at all.
 // Single-sourced here so there is one place to be wrong: every dispatcher
 // names this and nothing else. The guard that it keeps answering non-null is
-// `restricted_listener_applies_request_caps_through_the_ffi_bridge`
-// (rust/shekyl-engine-core/src/engine/regtest_e2e.rs) — a live daemon, a
-// restricted listener, and real requests over the caps: REST ones through
-// `dispatch_json`, JSON-RPC ones through `dispatch_jsonrpc_we`, so both
-// templates are held separately rather than one standing in for the other.
-// It has to be there rather than beside this file: a C++ test of this helper
-// cannot see whether the dispatchers call it, so reverting one of them would
-// leave such a test green. Those go red.
+// `restricted_listener_hides_a_transaction_this_node_has_not_broadcast`
+// (rust/shekyl-engine-core/src/engine/regtest_e2e.rs) — two live daemons, a
+// transaction one of them has not broadcast, and the three pool routes asked
+// on both listeners. Those routes are what `dispatch_json` still carries
+// with a restricted difference, so they are what witness it; the guard is
+// anchored on the property (`include_sensitive`) and not on a route, because
+// each route it was anchored on before has since moved to Rust. It has to be
+// there rather than beside this file: a C++ test of this helper cannot see
+// whether the dispatchers call it, so reverting one of them would leave such
+// a test green. That one goes red.
 //
 // "Every" includes the two hand-written ones, `dispatch_submitblock` and
 // `dispatch_calcpow`. Neither handler reads `ctx` today, so those two calls
@@ -171,8 +173,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/get_transaction_pool",              on_get_transaction_pool,         COMMAND_RPC_GET_TRANSACTION_POOL),
         DJSON("/get_transaction_pool_hashes",       on_get_transaction_pool_hashes,  COMMAND_RPC_GET_TRANSACTION_POOL_HASHES),
         DJSON("/get_transaction_pool_stats",        on_get_transaction_pool_stats,   COMMAND_RPC_GET_TRANSACTION_POOL_STATS),
-        DJSON("/get_info",                          on_get_info,                     COMMAND_RPC_GET_INFO),
-        DJSON("/getinfo",                           on_get_info,                     COMMAND_RPC_GET_INFO),
         DJSON("/get_limit",                         on_get_limit,                    COMMAND_RPC_GET_LIMIT),
         // Restricted-only endpoints (Rust checks restriction before calling)
         DJSON("/start_mining",                      on_start_mining,                 COMMAND_RPC_START_MINING),
@@ -265,7 +265,6 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("get_miner_data",          on_getminerdata,              COMMAND_RPC_GETMINERDATA),
         DJRPC_WE("generateblocks",          on_generateblocks,             COMMAND_RPC_GENERATEBLOCKS),
         DJRPC_WE("inject_archival_serve_credit", on_inject_archival_serve_credit, COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT),
-        DJRPC_WE("get_info",               on_get_info_json,              COMMAND_RPC_GET_INFO),
         DJRPC_WE("set_bans",              on_set_bans,                    COMMAND_RPC_SETBANS),
         DJRPC_WE("get_bans",              on_get_bans,                    COMMAND_RPC_GETBANS),
         DJRPC_WE("banned",                on_banned,                      COMMAND_RPC_BANNED),
