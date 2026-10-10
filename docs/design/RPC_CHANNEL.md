@@ -11,9 +11,10 @@ run, not open design.
 clatter name their own commit (§4.1).
 **Token family:** continues `RT-` from
 [`RPC_TRANSPORT_POSTURE.md`](RPC_TRANSPORT_POSTURE.md) (R0): rulings
-`RT-10…RT-16`; open items `RT-O5…RT-O10`, every one now ruled (RT-O5 and
+`RT-10…RT-16`; open items `RT-O5…RT-O15`, every one now ruled (RT-O5 and
 RT-O5′ into RT-15; RT-O9 in four parts, `RT-O9.1`…`RT-O9.4`); probes
-`RT-P4…RT-P8`; slices `RT-W8…RT-W14`. No new family (rule 94).
+`RT-P4…RT-P8`; slices `RT-W8…RT-W14`. RT-O11…RT-O15 are the RT-W8
+pre-flight's. No new family (rule 94).
 **Decision authority:** Rick.
 **Relationship to R0:** R0's §1 premise (every RPC leg is
 operator-to-operator; the adversary is the path, never the peer) and §3
@@ -320,12 +321,20 @@ The client pins the daemon's static bundle in advance; the daemon learns
 the client's identity in the handshake and checks it against its enrolled
 set. That is the **XK** shape. Its hybrid form is not ours: the `clatter`
 library ships it as a named pattern, `noise_hybrid_xk`
-(clatter's `handshakepattern.rs:1238-1255`, at commit
-`9a8d15c4f80d5911ca0403aa22e0de99ea59df08`, v3.0.0), built by combining
+(clatter's `handshakepattern.rs:1238-1254`, version **2.3.0** as published
+on crates.io), built by combining
 classical XK with PQNoise's pqXK (Angel et al., *Post-Quantum Noise*,
 ePrint 2022/539) under PQNoise's ordering rule: *within a message `ekem`
 always precedes `skem`, which always precedes all public keys and the
-payload.* The channel adopts that token order unchanged:
+payload.* The channel adopts that token order unchanged.
+
+*The pin is the published 2.3.0, not the unpublished 3.0.0 this section
+first cited by commit* (RT-O12, ruled 2026-10-09). The pattern and the
+handshake logic are the same in both. 2.3.0 comes from the registry, where
+3.0.0 would have been the workspace's first git dependency, and it uses
+the versions of `rand_core`, `x25519-dalek` and `chacha20poly1305` the
+production graph already carries, where 3.0.0 would have added a second
+major version of each to the lock file.
 
 ```
 <- s                          pre-message: the daemon's static bundle; never sent
@@ -367,7 +376,7 @@ key**, hashed and mixed in that order (clatter's README, "Tokens `e` and
 side's `e` is an ephemeral X25519 key and an ephemeral ML-KEM
 encapsulation key. One consequence is read from the source, not the
 README: the daemon's `e` carries an ephemeral ML-KEM key that nothing in
-this pattern encapsulates to (clatter's `handshakestate/hybrid.rs:460-490`
+this pattern encapsulates to (clatter 2.3.0's `handshakestate/hybrid.rs:460-490`
 generates and sends both keys for either side). That one key is pure
 overhead: 1,184 bytes in message 2 and one ML-KEM key generation on the
 daemon that the pattern never uses. Both are already counted in the cost
@@ -378,7 +387,7 @@ cross-checked below.
 
 **Protocol name:** `Noise_hybridXK_25519+MLKEM768_ChaChaPoly_BLAKE2s`,
 following clatter's naming scheme. (Its README example writes `X25519`;
-its code emits `25519`, the Noise name — clatter's `crypto_impl/x25519.rs:12-14`
+its code emits `25519`, the Noise name — clatter 2.3.0's `crypto_impl/x25519.rs:11-13`
 — and the name is hashed into the transcript, so the code is what counts.)
 The prologue (§4.4) is unchanged.
 
@@ -413,26 +422,31 @@ failing under a named edit** before its pass is trusted:
    which already anchors the P2P handshake's symmetric state).
 2. **The hybrid pattern as a whole:** byte-for-byte against clatter's
    `noise_hybrid_xk`, both sides driven from the same seeded randomness.
-   Read at source for this round, **not yet run**: clatter's ML-KEM backend
-   (RustCrypto `ml-kem` 0.3.2) and ours (`fips203` 0.4.3) draw the same
-   randomness in the same order — key generation `d` then `z`, 32 bytes
-   each (`ml-kem` `decapsulation_key.rs:107-114`; `fips203`
-   `ml_kem.rs:156-162`), encapsulation one 32-byte `m`
-   (`encapsulation_key.rs:78-84`; `ml_kem.rs:226`) — and both X25519 sides
-   draw one 32-byte scalar. Within a message clatter draws in token order:
-   for message 1, the `skem` encapsulation, then the X25519 ephemeral, then
-   the ML-KEM ephemeral. Two things RT-W8 must still show before byte
-   equality is claimed: that an implementation of ours drawing in that
-   order reproduces clatter's bytes, and that one seeded stream can feed
-   both libraries, which take different versions of the `rand_core`
-   traits. If either fails, the difference is reported — a weaker
+   **RT-W8 pins and RT-W9 compares** (RT-O11, ruled 2026-10-09): RT-W8 has
+   no handshake of ours, so it drives clatter from seeded randomness with
+   the real prologue and commits the messages and transport keys as
+   vectors; RT-W9 implements against them, red first. This anchor is
+   complete only when RT-W9 lands, and RT-W8's record says so. Read at
+   source, **not yet run**: clatter's ML-KEM backend (RustCrypto `ml-kem`
+   0.2.1) and ours (`fips203` 0.4.3) draw the same randomness in the same
+   order — key generation `d` then `z`, 32 bytes each (`ml-kem`
+   `kem.rs:128-132`; `fips203` `ml_kem.rs:156-162`), encapsulation one
+   32-byte `m` (`kem.rs:194-200`; `ml_kem.rs:226`) — and both X25519 sides
+   draw one 32-byte scalar. Both take the same `rand_core` 0.6 traits, so
+   one seeded generator serves both libraries with no adapter between
+   them. Within a message clatter draws in token order: for message 1, the
+   `skem` encapsulation, then the X25519 ephemeral, then the ML-KEM
+   ephemeral. If our implementation, drawing in that order, does not
+   reproduce the pinned bytes, the difference is reported — a weaker
    comparison is not substituted and called this anchor.
 3. **The design:** the ProVerif model (RT-P7), which gates RT-W9.
 
 **clatter is a test-only cross-check, never a production dependency** —
 the P2P round's read-not-depend posture for `snow` (PW-7a). That is encoded
 as a check that can fail: a gate asserting clatter is absent from every
-non-dev dependency graph in the workspace (RT-W8).
+non-dev dependency graph in the workspace (RT-W8). It is declared with its
+default features off: they include a binding to the PQClean C
+implementation of ML-KEM, and the cross-check needs only the Rust one.
 
 ### 4.2 Why XK, and not KN, KK, or IK
 
@@ -503,7 +517,10 @@ is needed is decided from RT-P6's measurement, not before it.
 
 - **Prologue:** a registered customization (`shekyl/rpc-channel-v1`,
   registered in `CRYPTO_DOMAIN_REGISTRY.tsv` by RT-W8) followed by the network id
-  (`shekyl/p2p-network-id-v1`, already derived from genesis). A testnet
+  (`shekyl/p2p-network-id-v1`, already derived from genesis). The bytes
+  (RT-O14, ruled 2026-10-09): the customization string, then the 16-byte
+  network id, with no separator and no length prefix — the first part is a
+  constant and the second has a fixed length. A testnet
   client cannot complete a handshake with a mainnet daemon. Nettype selects
   data only (rule 71).
 - **Record layer:** `shekyl-p2p-transport`'s `aead.rs` and `channel.rs`
@@ -596,7 +613,11 @@ R0 RT-7 stands: generated material only, never typed from memory.
   that will be enrolled; do not publish it.
 - **Client → daemon: a fingerprint** — cSHAKE256 under a registered
   customization (`shekyl/rpc-static-fingerprint-v1`, registered by RT-W8) over the
-  client's bundle — plus a **ceiling**. The daemon needs only the
+  client's bundle — plus a **ceiling**. The bytes (RT-O14, ruled
+  2026-10-09): the input is the X25519 public key (32 bytes) then the
+  ML-KEM-768 encapsulation key (1,184 bytes), the order the handshake's
+  `s` sends them; the output is **32 bytes**. How a fingerprint is shown
+  to an operator is presentation, not part of the wire. The daemon needs only the
   fingerprint, because the client's statics arrive in message 3.
 - **Enrolment and revocation are operator actions over the channel**:
   `shekyld rpc-enrol FINGERPRINT --ceiling GRANTS` and
@@ -952,8 +973,10 @@ client never reaches the wrong network's node.
   under the registered customization `shekyl/rpc-rendezvous-name-v1`
   (`CRYPTO_DOMAIN_REGISTRY.tsv`). **An instance name therefore reaches no
   path anywhere.** `<name>` is the first 12 bytes of
-  cSHAKE256 under that customization over the network id and the instance
-  name, written as 24 hex characters. A daemon and a client compute the
+  cSHAKE256 under that customization over the 16-byte network id followed
+  by the instance name's ASCII bytes (RT-O14, ruled 2026-10-09: the
+  fixed-length part first, so no length prefix is needed), written as 24
+  lower-case hex characters. A daemon and a client compute the
   same name from the same two inputs; nothing is looked up.
 
   *The arithmetic.* A Unix socket path is limited to 108 bytes on Linux
@@ -1280,6 +1303,19 @@ construction) instead of loopback TCP.
     seed-node count, or drops the count. That is its operator's choice at
     enrolment, which is what the grant model is for.
 
+- **RT-O11…RT-O15 — the RT-W8 pre-flight's questions. RULED 2026-10-09**
+  ([`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) §4).
+  **RT-O11:** RT-W8 pins vectors from clatter and RT-W9 compares our
+  handshake against them (§4.1). **RT-O12:** clatter 2.3.0 from crates.io,
+  test-only, in one `publish = false` cross-check crate behind a
+  production-graph gate (§4.1). **RT-O13:** the channel crate,
+  `shekyl-rpc-channel`, is created in RT-W8 holding the three constants and
+  the two naming functions; RT-W9 adds the handshake. **RT-O14:** the byte
+  encodings of the prologue, the rendezvous name and the static fingerprint
+  (§4.4, §5, §7.1). **RT-O15:** the ProVerif model lives in the channel
+  crate with a runner and a CI job that fails if a property fails or a
+  deliberately broken variant passes.
+
 ---
 
 ## 11. What this round supersedes
@@ -1418,7 +1454,7 @@ rule-26 pre-flight before its first production commit.
 
 | Slice | Contents | Depends on | Authorization |
 |---|---|---|---|
-| RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, byte equality with clatter under seeded randomness (reporting any difference in how the two ML-KEM libraries are fed), each observed failing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
+| RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, vectors pinned from clatter 2.3.0 under seeded randomness, which RT-W9 compares our handshake against (RT-O11), each observed changing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; creates `shekyl-rpc-channel` with the constants and naming functions (RT-O13); deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
 | RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); padded records in size classes derived from RT-P5 and RT-P6, one framing shared with P2P (RT-O6); deadline from RT-P6 | RT-W8 | not authorized |
 | RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 | not authorized |
