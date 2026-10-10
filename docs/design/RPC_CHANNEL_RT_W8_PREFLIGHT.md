@@ -87,9 +87,13 @@ section says exactly what was and was not done.
   registered lines (worst `|t|` 2.66 of four comparisons; the planted 0.5 %
   leak detected at 102). The floor-device run of the same day **fails**
   them: all four comparisons are above the fail line, two of them by a wide
-  margin (502, 464). Whether that is the crate or the harness is not yet
-  established. The record is
-  `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261010.md`.
+  margin (502, 464). Diagnosis attributes that to the harness, which built
+  its inputs inside the timed loop: with inputs prepared before the loop
+  every comparison and both null comparisons are under 4.5 on the floor
+  device, and the aarch64 code has no branch or division that depends on
+  the ciphertext. A diagnosis is not a registered result; RT-P4 is judged
+  by a fresh registration of the corrected method on both machines. The
+  record is `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261010.md`.
 
 ---
 
@@ -309,6 +313,6 @@ Each is one unit of work, pushed as it is made.
 | 3 | `shekyl-rpc-channel`: the three constants, the rendezvous-name and fingerprint functions, their vectors written first and observed red, the registry rows | RT-O13, RT-O14 |
 | 4–6 | **Landed as one commit** (accepted 2026-10-09), because the crate's shared test support does not compile warning-free in pieces: the cross-check crate (clatter 2.3.0, default features off) and the clatter gate with its self-test; the classical anchor against the community vector; the hybrid vectors under seeded randomness with their named edits | RT-O11, RT-O12; F-4, F-5, F-7, F-18 |
 | 7 | The ProVerif model, its runner, its install recipe and its CI job — **landed 2026-10-10**, 27 verdicts as predicted; 31 after review, with injective agreement and a second enrolled client in the attacker's hands (§4.2) | RT-O15; RT-P7 |
-| 8 | RT-P4 on the floor device and on x86, recorded under `docs/benchmarks/` — **x86 run 2026-10-10 passes; the floor-device run of the same day fails its registered lines**, so this row is open and RT-P4 is not met | Host claimed first |
+| 8 | RT-P4 on the floor device and on x86, recorded under `docs/benchmarks/` — **x86 run 2026-10-10 passes; the floor-device run of the same day fails its registered lines**; diagnosed as the harness, re-registration pending, so this row is open and RT-P4 is not met | Host claimed first |
 
 RT-W9 is not started from this branch.
