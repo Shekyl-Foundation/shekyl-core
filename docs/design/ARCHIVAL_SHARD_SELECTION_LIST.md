@@ -359,7 +359,19 @@ challenge/organic (`SF-D7`).
 2. **`request_archival_shard { shard_id }`** — fourth scheduler of
    `shekyl-p-fetch` (`SF-D1`). Shard bodies sit below the prune window
    (staker hold, or a temporary view-cache after this fetch). Freeze-row
-   `R_k` is not a body. GUI names `shard_id` only.
+   `R_k` is not a body. GUI names `shard_id` only. **UPDATE 2026-10-08:**
+   the response's `shard_hash` is `SV-D1`'s fold over the fetched archival
+   bytes, never `R_k` (which the C++ shim copied until then); the method is
+   served natively in `shekyl-daemon-rpc` (`SV-D3`), stays restricted
+   (`SV-D6`), refuses the open tip shard and carries `close_height`
+   (`SV-D5`). Round and landing order:
+   [`SHARD_VIEW_FETCH.md`](SHARD_VIEW_FETCH.md) §4. **UPDATE 2026-10-09:**
+   the GUI no longer calls this method itself; its Shards page draws from
+   the wallet contract's `get_shard_view` (`wallet_rpc.yaml` 0.11.0),
+   which forwards `shard_id` to the wallet's daemon and maps the daemon's
+   refusals to `SHARD_STILL_OPEN` / `SHARD_UNAVAILABLE` /
+   `SHARD_VIEW_NOT_OFFERED`. `list_shards` (item 1's projection) is
+   unchanged: still the GUI's own daemon read, still no bodies.
 3. **Client-side shuffle** of equal join-profit bands (per-process RNG; not
    consensus).
 4. **`SL-D6` payout-floor arithmetic** stays FOLLOWUPS — profit is shown, not
