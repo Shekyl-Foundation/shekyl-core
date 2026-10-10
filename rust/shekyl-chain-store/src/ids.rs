@@ -530,6 +530,52 @@ impl SettlementKey {
             self.epoch.to_raw(),
         )
     }
+
+    /// The key a stored tuple names.
+    #[must_use]
+    pub const fn from_key((persona, shard, epoch): SettlementTuple) -> Self {
+        Self {
+            persona: PCanonicalId::from_bytes(persona),
+            shard: ShardId::from_raw(shard),
+            epoch: SettlementEpoch::from_raw(epoch),
+        }
+    }
+
+    /// The shard this row settles.
+    #[must_use]
+    pub const fn shard(self) -> ShardId {
+        self.shard
+    }
+
+    /// Every row of one persona: `(P, 0, 0) ..= (P, MAX, MAX)`. The hop A17
+    /// walks (`served_at`): one seek to each shard the persona has a row
+    /// for, then a point read of the epochs the caller named.
+    #[must_use]
+    pub const fn persona_range(
+        persona: PCanonicalId,
+    ) -> core::ops::RangeInclusive<SettlementTuple> {
+        let lo = Self::new(persona, ShardId::ZERO, SettlementEpoch::ZERO).key();
+        let hi = Self::new(
+            persona,
+            ShardId::from_raw(u64::MAX),
+            SettlementEpoch::from_raw(u64::MAX),
+        )
+        .key();
+        lo..=hi
+    }
+
+    /// Every epoch of one `(persona, shard)`, in epoch order. `SO-D2` puts
+    /// the epoch last so a window walk is this range. A cited epoch is
+    /// [`Self::key`]: one row inside it.
+    #[must_use]
+    pub const fn shard_range(
+        persona: PCanonicalId,
+        shard: ShardId,
+    ) -> core::ops::RangeInclusive<SettlementTuple> {
+        let lo = Self::new(persona, shard, SettlementEpoch::ZERO).key();
+        let hi = Self::new(persona, shard, SettlementEpoch::from_raw(u64::MAX)).key();
+        lo..=hi
+    }
 }
 
 /// The key of one issued draw:

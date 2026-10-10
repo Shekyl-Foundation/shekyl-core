@@ -37,6 +37,8 @@
 //!   writer exists from the seal (amendment A2), so `TableDoesNotExist` on
 //!   a chain table is a file this store did not write, not an empty chain.
 
+use std::collections::BTreeMap;
+
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, RecordedWeights, SlashLogFloor, Tip};
@@ -1038,6 +1040,18 @@ impl ReadSnapshot<'_> {
     /// [`IssuedDigest::ZERO`] when none was.
     pub fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
         archival_reads::issued_digest(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A17.** The shards `persona` was Served on at each of `epochs`,
+    /// ascending per epoch. An epoch with none is absent. One hop of the
+    /// persona's shards, then a point read of each epoch (`SO-D2`).
+    pub fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epochs: &[SettlementEpoch],
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
+        archival_reads::served_at(&self.txn, persona, epochs)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// The archival state as of this snapshot, as the E2 trace carries it

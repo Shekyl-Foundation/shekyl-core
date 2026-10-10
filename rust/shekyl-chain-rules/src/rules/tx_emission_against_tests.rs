@@ -14,7 +14,7 @@ use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
     anchored_on, balanced_emission, chain_of, emission_vin, listed_on, point, spendable_chain,
 };
-use crate::harness::{assert_refused, defined};
+use crate::harness::{assert_refused, defined, MockChain};
 use crate::rule_set::{FakechainSchedule, RuleSet, SettlementEpochBlocks};
 use crate::rules::tx_against::{ReferenceContext, I15};
 use crate::rules::tx_emission_against::judge_emission_claim;
@@ -116,13 +116,27 @@ fn i15_over_the_fee_subset_refuses_filler_and_requires_absence_over_nothing() {
     );
 }
 
-/// J23: a claimed epoch with no frozen close — the mock closes none — is
-/// refused at the transaction before anything is verified, whether or not
-/// the reference context was yielded; neither row is recorded.
+/// J23: a claimed epoch that is not closed and settled is refused at the
+/// transaction before anything is verified, whether or not the reference
+/// context was yielded; neither row is recorded. Two states refuse. The
+/// epoch never closed: no budget, no `Σwork`. And the epoch closed and its
+/// slash pass has not run: a budget and no `Σwork`, the ordinary state for
+/// one epoch after every close (`SO-D11d`: `Σwork`'s row is the citing
+/// gate).
 #[test]
-fn j23_refuses_a_claimed_epoch_with_no_frozen_close() {
-    let chain = spendable_chain();
-    let tx = anchored_on(&chain, emission());
+fn j23_refuses_a_claimed_epoch_that_is_not_closed_and_settled() {
+    let never_closed = spendable_chain();
+    let closed_not_settled = spendable_chain().with_close(
+        SettlementEpoch::from_raw(CLAIMED),
+        AtomicUnits::from_raw(1_000_000),
+    );
+    for chain in [never_closed, closed_not_settled] {
+        refuses_at_j23(&chain);
+    }
+}
+
+fn refuses_at_j23(chain: &MockChain) {
+    let tx = anchored_on(chain, emission());
     chain.with_view(|view| {
         for reference in [Some(&REFERENCE), None] {
             let mut coverage = RuleCoverage::EMPTY;
@@ -183,12 +197,16 @@ fn j25_refuses_a_claim_the_verify_rejects_and_one_with_no_reference() {
         .settlement_schedule()
         .close_height(CLAIMED)
         .expect("epoch 0 closes");
-    // Past the close, so the universe the gather reads is recorded.
-    let chain = chain_of(close_height + 6).with_close(
-        epoch,
-        SigmaWorkMilli::from_raw(1_000),
-        AtomicUnits::from_raw(1_000_000),
+    // Past the epoch's slash pass, so the universe the gather reads is
+    // recorded.
+    let settled_at = rules.settlement_schedule().slash_deadline_height(CLAIMED);
+    assert!(
+        close_height <= settled_at,
+        "an epoch settles after it closes"
     );
+    let chain = chain_of(settled_at + 6)
+        .with_close(epoch, AtomicUnits::from_raw(1_000_000))
+        .with_gather(epoch, SigmaWorkMilli::from_raw(1_000));
     let tx = anchored_on(&chain, emission());
     chain.with_view(|view| {
         for reference in [Some(&REFERENCE), None] {

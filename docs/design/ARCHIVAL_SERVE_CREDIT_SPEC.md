@@ -92,7 +92,7 @@ This section is the only place the document describes current behaviour.
 | Settlement fold | `settle_pair`: three of a pair's counted draws selected by the beacon, NonObservation below 3, Served at 2 passes among the three, else Missed (§9.3). The Rust slash pass calls it for every pair with a draw in the epoch | `rust/shekyl-archival-retention/src/settlement_select.rs`; `rust/shekyl-chain-rules/src/archival/slash.rs` |
 | Settlement rows | The Rust slash pass writes one per pair with a counted draw, ahead of the slash it decides. The issued-draw index and its digest (§10) have no block writer yet; a Fakechain-only door stands in for admission. The C++ store keeps the table's handle with no writer | `rust/shekyl-types/src/archival/settlement.rs`; `rust/shekyl-chain-store/src/store/archival_write.rs` (`write_settlements`, `regtest_issue_draws`); `rust/shekyl-chain-store/src/archival_snapshot.rs` (`disposition`) |
 | Slash fold | Rust: reads the settlement row; Missed is the only candidate. C++, consensus until `DEL-008`: reads "any pass" on the one-challenge beacon | `rust/shekyl-chain-rules/src/archival/slash.rs`; `src/blockchain_db/lmdb/db_lmdb.cpp` (`archival_challenge_failed_at_height`) |
-| Accrual | A pair earns for an epoch on "any pass" | `rust/shekyl-chain-rules/src/archival/close.rs:344-352` |
+| Accrual | Rust: a pair earns for an epoch iff its settlement row is Served; the slash pass gathers, an epoch after the close (`ARCHIVAL_SETTLEMENT_WRITER.md` §15). C++, consensus until `DEL-008`: on "any pass", at the close | `rust/shekyl-chain-rules/src/archival/close.rs` (`Transition::gather`); `src/blockchain_db/lmdb/db_lmdb.cpp` (`process_archival_epoch_close_at_height`) |
 | Failure window | `m = 11`, `n = 13`; a two-valued observation with no NonObservation arm | `config/consensus_constants.json:46-47`; `rust/shekyl-archival-retention/src/failure_window.rs:258-265` |
 | Signature schemes | Ed25519 + ML-DSA-65 hybrid. The canonical encoding already carries a scheme byte: values 1 (single) and 2 (multisig) | `rust/shekyl-crypto-pq/src/signature.rs:66-67`, `:152-154`; `multisig.rs:18` |
 | Bond record | One identity key (`hybrid_pubkey`), from which `p_canonical_id` is derived. No second key field | `rust/shekyl-types/src/archival/bond.rs:262-265`; `rust/shekyl-archival-retention/src/id.rs:20-21` |
@@ -852,7 +852,9 @@ is final.
 1. **This specification lands before code.**
 2. **The settlement writer is wired before the secret draw goes live.**
    The slash fold and accrual read the settlement row with its
-   NonObservation floor (§9.4). Today both use "any pass" (§2).
+   NonObservation floor (§9.4). **Done in the Rust validator**
+   (`ARCHIVAL_SETTLEMENT_WRITER.md` §14 and §15). The C++ daemon uses
+   "any pass" for both until `DEL-008` (§2).
 3. **Production `ContentVerify`** is written against the
    transaction-range unit.
 4. **The FN-DSA integration follows**, then the mechanism, in increments,

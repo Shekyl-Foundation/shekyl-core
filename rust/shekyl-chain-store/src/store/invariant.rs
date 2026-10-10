@@ -234,13 +234,14 @@ pub enum StoreInvariant {
     /// just performed is those writes. Bound at the replace handle's open
     /// in phase 2 (DRS-E4 `ARW-7`).
     BondRecordAbsent,
-    /// **SI-21** — an epoch closes whole. `archival_sigma_work[E]` and
-    /// `archival_budget[E]` exist together with every `(shard, E)` row of
-    /// `archival_r_market` the close's snapshot named — zero rows written,
-    /// not skipped (`ARW-Q4`) — or none does; each is insert-once on `E`,
-    /// so a second close of `E` refuses rather than overwriting (CEN-L14's
-    /// O-2 adversary). Bound at the three insert handles' open in phase 9
-    /// (DRS-E4 `ARW-8`).
+    /// **SI-21** — an epoch's frozen rows are two write sets, each whole
+    /// and each written once (`SO-D11e`). The close freezes the budget:
+    /// `archival_budget[E]`. The slash pass, an epoch later, settles
+    /// whole: `archival_sigma_work[E]` with every `(shard, E)` row of
+    /// `archival_r_market` its snapshot named — zero rows written, not
+    /// skipped (`ARW-Q4`). Each is insert-once on `E`, so a second write
+    /// refuses rather than overwriting (CEN-L14's O-2 adversary). Bound at
+    /// the three insert handles' open in phase 9 (DRS-E4 `ARW-8`).
     EpochCloseRewritten {
         /// The epoch a close was already recorded for.
         epoch: shekyl_types::SettlementEpoch,
@@ -584,8 +585,9 @@ impl core::fmt::Display for StoreInvariant {
             ),
             Self::EpochCloseRewritten { epoch } => write!(
                 f,
-                "settlement epoch {epoch} already has a close row (archival_r_market / \
-                 archival_sigma_work / archival_budget); an epoch closes once"
+                "settlement epoch {epoch} already has one of its frozen rows (archival_budget \
+                 from the close, archival_sigma_work / archival_r_market from the slash \
+                 pass); each is written once"
             ),
             Self::SlashLogNotDense { height, observed } => match observed {
                 SlashFault::NotDense => write!(

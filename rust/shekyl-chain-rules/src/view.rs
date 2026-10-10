@@ -37,6 +37,8 @@
 //! refusal the rule writes, never a pass it arrives at by `?` or
 //! `unwrap_or_default`.
 
+use std::collections::BTreeMap;
+
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
@@ -383,7 +385,7 @@ pub trait ChainView<'id> {
 
     // -----------------------------------------------------------------------
     // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9, A11–A13;
-    // `SO-D10` A14–A16)
+    // `SO-D10` A14–A16, `SO-D11` A17)
     //
     // Recorded archival *state*, for the 4.J rows E6 slice 8 lands and the
     // E4 fold that derives a bond post's transition: a record is state, the
@@ -445,8 +447,10 @@ pub trait ChainView<'id> {
     fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Self::Fault>;
 
     /// **A5.** Pass bits recorded for `(persona, shard, epoch)`;
-    /// [`PassCount::ZERO`] when none. CEN-J3's pair-epoch dedup reads
-    /// [`PassCount::any`]; the settlement writer reads the count.
+    /// [`PassCount::ZERO`] when none. No rule reads it since `SO-D11`:
+    /// slashing and accrual read the settlement row, whose pass fact is
+    /// the issued-draw index's. The read goes with the serve-credit table
+    /// when admission re-keys or deletes it (`SO-D10c`).
     fn pass_count(
         &self,
         persona: &PCanonicalId,
@@ -454,9 +458,11 @@ pub trait ChainView<'id> {
         epoch: SettlementEpoch,
     ) -> Result<PassCount, Self::Fault>;
 
-    /// **A6.** The market's co-holder count for `shard` at `epoch`'s close,
-    /// or `None` for an epoch that never closed for it. A written
-    /// `RMarket(0)` is a closed epoch with no co-holders (SAR-8): the view
+    /// **A6.** The market's co-holder count for `shard` at `epoch`, as the
+    /// epoch's slash pass gathered it (`SO-D11`), or `None` for an epoch
+    /// not gathered with the shard in it: not settled yet, or the shard was
+    /// not closed and final at that pass. A written `RMarket(0)` is a
+    /// gathered shard with no co-holders (SAR-8): the view
     /// keeps the two apart; what a rule does with `None` is that rule's to
     /// say (`SAR-Q6`). CEN-J15's admission operand, CEN-J25's work
     /// arithmetic.
@@ -467,8 +473,9 @@ pub trait ChainView<'id> {
     ) -> Result<Option<RMarket>, Self::Fault>;
 
     /// **A7.** The frozen `Σwork(E)` for `epoch`, in milli-units, or `None`
-    /// for an epoch that never closed (SAR-8). The stored denominator a
-    /// verifier never recomputes — CEN-J25's.
+    /// for an epoch its slash pass has not gathered (SAR-8; `SO-D11`). Its
+    /// existence is what lets a claim cite the epoch (CEN-J23), and it is
+    /// the stored denominator CEN-J25 compares its recompute with.
     fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Self::Fault>;
 
     /// **A8.** The frozen `budget(E)` for `epoch`, or `None` for an epoch
@@ -543,9 +550,23 @@ pub trait ChainView<'id> {
     /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch
     /// with none: the digest of no draws.
     fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, Self::Fault>;
+
+    /// **A17.** The shards `persona`'s settlement rows say were Served at
+    /// each of `epochs`, ascending per epoch. An epoch with no Served shard
+    /// is absent. What the emission gather credits (`SO-D11a`), read back
+    /// by the claim verify.
+    ///
+    /// The table is keyed `(P, shard, E)` (`SO-D2`). A store hops the
+    /// persona's shards once and point-reads each requested epoch. CEN-J23
+    /// asks once per bonded persona, for every epoch the claim cites.
+    fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epochs: &[SettlementEpoch],
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Self::Fault>;
 }
 
-/// Implement every archival [`ChainView`] read (A1–A9, A11–A16) as one policy.
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A17) as one policy.
 ///
 /// Three policies, one method list. A new archival read is added here, once;
 /// every view that expands the macro then implements it. A view that answers
@@ -554,17 +575,20 @@ pub trait ChainView<'id> {
 ///
 /// * `archival_reads!(empty)` — no bonds: `None`, empty, `PassCount::ZERO`,
 ///   `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
-/// * `archival_reads!(empty, r_market from <path>, close from <path>)` —
-///   `empty`, except that `r_market` answers from the first `self.<path>`,
-///   a `BTreeMap<(ShardId, SettlementEpoch), RMarket>` of planted prices,
-///   and `sigma_work` / `budget` answer from the second, a
-///   `BTreeMap<SettlementEpoch, (SigmaWorkMilli, AtomicUnits)>` of planted
-///   closes. The archival reads a no-bonds view may plant: CEN-J15's
-///   accept needs a priced shard, CEN-J25's refusal a closed epoch, and no
-///   driven chain in the tree closes either (`rules/tx_bond.rs`, J15's
-///   witness note; `rules/tx_emission_against.rs`). A price and a frozen
-///   close are settled values the close wrote, not records, so planting
-///   them tests no construction.
+/// * `archival_reads!(empty, r_market from <path>, sigma_work from <path>,
+///   budget from <path>, slash_watermark from <path>)` — `empty`, except
+///   that four reads answer from `self.<path>`: `r_market` from a
+///   `BTreeMap<(ShardId, SettlementEpoch), RMarket>` of planted prices,
+///   `sigma_work` and `budget` each from a map keyed by epoch, and
+///   `last_settled_slash_epoch` from an `Option<SettlementEpoch>`. The
+///   archival reads a no-bonds view may plant: CEN-J15's accept needs a
+///   shard priced at the slash watermark, CEN-J25's refusal an epoch that
+///   is closed and settled, CEN-J23's a closed epoch that is not yet
+///   settled, and no driven chain in the tree reaches any of them
+///   (`rules/tx_bond.rs`, J15's witness note;
+///   `rules/tx_emission_against.rs`). These are settled values the close
+///   and the slash pass wrote, not records, so planting them tests no
+///   construction.
 /// * `archival_reads!(fault <expr>)` — every read returns `Err(<expr>)`.
 ///   The expression is pasted into each method, so it is a unit constructor
 ///   or another value that is cheap to repeat.
@@ -579,8 +603,16 @@ macro_rules! archival_reads {
     (empty) => {
         $crate::archival_reads!(@methods {empty});
     };
-    (empty, r_market from $($price:ident).+, close from $($close:ident).+) => {
-        $crate::archival_reads!(@methods {planted $($price).+ ; $($close).+});
+    (
+        empty,
+        r_market from $($price:ident).+,
+        sigma_work from $($sigma:ident).+,
+        budget from $($budget:ident).+,
+        slash_watermark from $($mark:ident).+
+    ) => {
+        $crate::archival_reads!(
+            @methods {planted $($price).+ ; $($sigma).+ ; $($budget).+ ; $($mark).+}
+        );
     };
     (fault $err:expr) => {
         $crate::archival_reads!(@methods {fault $err});
@@ -682,6 +714,16 @@ macro_rules! archival_reads {
             (shekyl_types::archival::IssuedDigest);
             (epoch);
             (shekyl_types::archival::IssuedDigest::ZERO));
+        $crate::archival_reads!(@emit $policy; served_at;
+            (persona: &shekyl_types::PCanonicalId, epochs: &[shekyl_types::SettlementEpoch]);
+            (
+                ::std::collections::BTreeMap<
+                    shekyl_types::SettlementEpoch,
+                    ::std::vec::Vec<shekyl_types::ShardId>,
+                >
+            );
+            (persona, epochs);
+            (::std::collections::BTreeMap::new()));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
@@ -690,24 +732,30 @@ macro_rules! archival_reads {
         }
     };
     // The planted reads: matched before the generic `planted` arm below,
-    // so only `r_market`, `sigma_work` and `budget` read their maps and
-    // every other read is `empty`'s.
-    (@emit {planted $($price:ident).+ ; $($close:ident).+}; r_market; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    // so only `r_market`, `sigma_work`, `budget` and
+    // `last_settled_slash_epoch` read their fields and every other read is
+    // `empty`'s.
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; r_market; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn r_market(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             ::core::result::Result::Ok(self.$($price).+.get(&($($arg),*)).copied())
         }
     };
-    (@emit {planted $($price:ident).+ ; $($close:ident).+}; sigma_work; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; sigma_work; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn sigma_work(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
-            ::core::result::Result::Ok(self.$($close).+.get(&($($arg),*)).map(|close| close.0))
+            ::core::result::Result::Ok(self.$($sigma).+.get(&($($arg),*)).copied())
         }
     };
-    (@emit {planted $($price:ident).+ ; $($close:ident).+}; budget; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; budget; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn budget(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
-            ::core::result::Result::Ok(self.$($close).+.get(&($($arg),*)).map(|close| close.1))
+            ::core::result::Result::Ok(self.$($budget).+.get(&($($arg),*)).copied())
         }
     };
-    (@emit {planted $($price:ident).+ ; $($close:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; last_settled_slash_epoch; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn last_settled_slash_epoch(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(self.$($mark).+)
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $($arg),*);
             ::core::result::Result::Ok($empty)
