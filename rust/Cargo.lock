@@ -4225,6 +4225,7 @@ dependencies = [
  "shekyl-operator-alarm",
  "shekyl-p-host",
  "shekyl-p-loopback",
+ "shekyl-p-store",
  "shekyl-p-transport",
  "shekyl-proofs",
  "shekyl-rpc-client",
@@ -4575,6 +4576,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-p-host",
  "shekyl-p-serve",
+ "shekyl-p-store",
  "shekyl-tor-control-wallet",
  "shekyl-types",
  "tempfile",
@@ -4607,6 +4609,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-tree",
  "shekyl-p-serve",
+ "shekyl-p-store",
  "shekyl-types",
  "tokio",
 ]

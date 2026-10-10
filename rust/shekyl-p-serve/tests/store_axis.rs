@@ -3,19 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! End-to-end on the axis the interim leaf provider lives on: store → pin
-//! → endpoint → loopback fetch → **recompute `R_k` from the fetched bytes
-//! and match the store's frozen record**. A corrupted store, a stride bug
-//! in the serving read, or a truncated write all fail *this* check.
+//! End-to-end on the axis the production provider lives on: body store →
+//! endpoint → loopback fetch → the streamed bytes are the frame that was
+//! put, and the countersignature binds them.
 //!
-//! **Interim.** [`StoreShardProvider`] serves the retired leaf-segment unit
-//! (`PDM-Q-F25`); the shard a requester names is a `W`-byte `tx_id` range
-//! whose body is `shekyl_wire::shard_frame` over archival good (`SF-D8`
-//! amendment 2026-10-08), and a fetch client judging this body against its
-//! skeleton rows refuses it. What this file holds until the `WSS` provider
-//! replaces it is narrower: that the loop streams exactly the bytes the
-//! provider opened, no frame of its own ahead of them, and signs for those.
-//! It is deleted with the provider, not adapted.
+//! A missing shard is an ordinary 404. Erase is how a released pin
+//! becomes a miss — not a 503.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -24,14 +17,13 @@ use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANC
 use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
-use shekyl_curve_tree::{
-    leaves_per_segment, recompute_segment_r_k, BlockHeight, Gindex, LeafEntry, LeafStore,
-    OutputIdentity, SegmentId, SegmentPin, ServingReader, TargetKind, LEAF_BYTES,
-};
+use shekyl_curve_tree::BlockHeight;
 use shekyl_p_serve::{
     PServeEndpoint, PassSigner, ShardProvider, StoreShardProvider, TestKeySigner,
     REQUEST_HEADER_NAME, SIGNATURE_ENVELOPE_LEN,
 };
+use shekyl_p_store::{BodyStore, StoreKey};
+use shekyl_types::ShardId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -42,36 +34,23 @@ const ANCHOR_HEIGHT: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 const NONCE: [u8; 32] = [0x3c; 32];
 const ANCHOR_HASH: [u8; 32] = [0xc3; 32];
 
+/// Opaque `shard_frame` stand-in: the loop must stream it exactly.
+const FRAME: &[u8] = b"\x01\x01not-a-real-frame-but-the-bytes-the-loop-must-reproduce";
+
+fn key() -> StoreKey {
+    StoreKey::from_bytes([0x5a; 32])
+}
+
+fn shard(n: u64) -> ShardId {
+    ShardId::from_raw(n)
+}
+
 async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeySigner>) {
     let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
     let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
         .await
         .expect("bind endpoint");
     (ep, signer)
-}
-
-/// A full segment of distinct canonical leaves — distinct so a
-/// stride/offset bug in the read cannot still hash to the right `R_k`.
-fn segment_entries() -> Vec<LeafEntry> {
-    (0..leaves_per_segment())
-        .map(|i| {
-            let gindex = u64::try_from(i).expect("index fits u64");
-            let mut leaf = [1u8; 128];
-            leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
-            LeafEntry {
-                gindex: Gindex::from_raw(gindex),
-                maturity: BlockHeight::from_raw(0),
-                creation_height: BlockHeight::from_raw(0),
-                leaf,
-                identity: OutputIdentity {
-                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([1u8; 32]),
-                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes([2u8; 32])),
-                    cm: [3u8; 32],
-                    target: TargetKind::TaggedKey,
-                },
-            }
-        })
-        .collect()
 }
 
 async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
@@ -93,7 +72,6 @@ async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
 }
 
 /// Split a 200 response after its head into (countersignature, body).
-/// The countersignature is the response's last bytes.
 fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
     let end = response
         .windows(4)
@@ -108,37 +86,15 @@ fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
 }
 
 #[tokio::test]
-async fn served_shard_recomputes_to_the_committed_r_k() {
-    // Freeze segment 0 (append a full segment past the eligibility
-    // height), pin the serve-set, prune — the serving-daemon startup
-    // sequence — then serve and run the witness's own verification.
-    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
-        .expect("append and freeze segment 0");
-
-    let pins = store.pin_serve_set(&[0, 1]).expect("pin serve set");
-    assert_eq!(
-        pins,
-        vec![
-            (0, SegmentPin::PinnedServable),
-            // Bonded-before-freeze is legal; nothing to pin yet.
-            (1, SegmentPin::PinnedNotYetFrozen),
-        ]
-    );
-    let provider = StoreShardProvider::new(ServingReader::new(Arc::clone(&store)));
-    // The prune a wallet lifecycle would run: the pin keeps shard 0
-    // servable through it.
-    store.prune_frozen(&[]).expect("prune");
-
+async fn served_shard_is_the_put_frame() {
+    let store = BodyStore::open_ephemeral(key()).expect("open");
+    store.put_shard(shard(0), FRAME).expect("put");
+    let provider = StoreShardProvider::new(store.reader());
     let (ep, signer) = bind(Arc::new(provider)).await;
 
     let response = fetch(ep.addr(), "/shard/0").await;
     let (signature, body) = envelope_of(&response);
 
-    // The witness's *first* act (`SF-D8`): the response is bound to the
-    // request it made. Verified through the same consensus function the
-    // daemon runs at admission, against the P pubkey the bond record holds.
     verify_pass_transcript(
         signer.public_key(),
         &NONCE,
@@ -150,54 +106,21 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
     )
     .expect("the countersignature covers this request's header, shard id and delivered bytes");
 
-    // The body is the provider's bytes from the first one: the segment's
-    // leaves in tree order, and nothing the loop added ahead of them.
-    assert_eq!(
-        body.len(),
-        leaves_per_segment() * LEAF_BYTES,
-        "the loop streams the opened body exactly"
-    );
-
-    // Chunk the leaves back, recompute the sub-root, compare against the
-    // store's frozen record.
-    let leaves: Vec<[u8; LEAF_BYTES]> = body
-        .chunks_exact(LEAF_BYTES)
-        .map(|c| c.try_into().expect("whole leaf"))
-        .collect();
-    let recomputed = recompute_segment_r_k(&leaves).expect("recompute R_k");
-    let record = store
-        .frozen_segment(SegmentId(0))
-        .expect("read record")
-        .expect("segment 0 frozen");
-    assert_eq!(
-        recomputed, record.r_k,
-        "served bytes must recompute to the store's frozen R_k"
-    );
+    assert_eq!(body, FRAME, "the loop streams the opened body exactly");
     assert_eq!(ep.served_count(), 1);
     assert_eq!(ep.lookup_failure_count(), 0);
 }
 
 #[tokio::test]
-async fn unfrozen_and_unknown_shards_are_indistinguishable_404s() {
-    // Segment 1 exists in the serve-set but has not frozen; segment 77
-    // does not exist at all. Both must render the same 404 —
-    // holdings and freeze progress are chain-public, but this endpoint
-    // must not become a second, unauthenticated oracle for them.
-    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
-        .expect("append and freeze segment 0");
-    let (ep, _) = bind(Arc::new(StoreShardProvider::new(ServingReader::new(
-        Arc::clone(&store),
-    ))))
-    .await;
+async fn missing_shards_are_indistinguishable_404s() {
+    let store = BodyStore::open_ephemeral(key()).expect("open");
+    store.put_shard(shard(0), FRAME).expect("put");
+    let (ep, _) = bind(Arc::new(StoreShardProvider::new(store.reader()))).await;
 
-    let unfrozen = fetch(ep.addr(), "/shard/1").await;
+    let never_held = fetch(ep.addr(), "/shard/1").await;
     let unknown = fetch(ep.addr(), "/shard/77").await;
-    assert_eq!(unfrozen, unknown);
+    assert_eq!(never_held, unknown);
     assert!(unknown.starts_with(b"HTTP/1.1 404 "), "not held is the 404");
-    // A request that is not valid is a different answer, and not one that
-    // depends on the store.
     let bad_route = fetch(ep.addr(), "/nope").await;
     assert!(bad_route.starts_with(b"HTTP/1.1 400 "));
     assert_eq!(ep.served_count(), 0);
@@ -205,86 +128,36 @@ async fn unfrozen_and_unknown_shards_are_indistinguishable_404s() {
 }
 
 #[tokio::test]
-async fn unpinned_prune_surfaces_as_a_counted_failure_and_the_503() {
-    // The silent-slash precursor, end to end: freeze, prune WITHOUT
-    // pinning, serve. The wire shows the bare 503 — this persona's fault,
-    // and not the 404 a shard it does not hold gets; the local counter
-    // shows exactly what went wrong.
-    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
-        .expect("append and freeze segment 0");
-    store.prune_frozen(&[]).expect("prune without pinning");
+async fn erase_makes_a_held_shard_an_ordinary_404() {
+    let store = BodyStore::open_ephemeral(key()).expect("open");
+    store.put_shard(shard(0), FRAME).expect("put");
+    store.erase_shard(shard(0)).expect("erase");
 
-    let (ep, _) = bind(Arc::new(StoreShardProvider::new(ServingReader::new(
-        Arc::clone(&store),
-    ))))
-    .await;
-    let pruned = fetch(ep.addr(), "/shard/0").await;
+    let (ep, _) = bind(Arc::new(StoreShardProvider::new(store.reader()))).await;
+    let gone = fetch(ep.addr(), "/shard/0").await;
     assert!(
-        pruned.starts_with(b"HTTP/1.1 503 "),
-        "a store failure on a held shard is the 503"
+        gone.starts_with(b"HTTP/1.1 404 "),
+        "erase is a miss, not a store fault"
     );
-    let not_held = fetch(ep.addr(), "/shard/77").await;
-    assert!(not_held.starts_with(b"HTTP/1.1 404 "));
-    assert_eq!(ep.lookup_failure_count(), 1, "but the counter names it");
+    assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
 }
 
 #[test]
-fn provider_body_is_exactly_the_store_leaves_in_order() {
-    // The production body is the store's leaves in tree order — no
-    // padding, no reordering — and it streams: the length is exact before
-    // the first chunk is read, which is what lets the response head be
-    // committed before the store is touched.
-    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let entries = segment_entries();
-    store
-        .append_block_deltas(&entries, &[], &[], BlockHeight::from_raw(10_000))
-        .expect("append and freeze");
-    let provider = StoreShardProvider::new(ServingReader::new(store));
+fn provider_body_is_exactly_the_put_bytes() {
+    let store = BodyStore::open_ephemeral(key()).expect("open");
+    store.put_shard(shard(0), FRAME).expect("put");
+    let provider = StoreShardProvider::new(store.reader());
     let mut body = provider
         .shard_bytes(0)
         .expect("lookup")
-        .expect("frozen shard");
+        .expect("held shard");
     let declared = body.remaining_bytes();
-    assert_eq!(declared, entries.len() * 128);
+    assert_eq!(declared, FRAME.len());
 
     let mut bytes = Vec::new();
-    // A chunk size that is not a multiple of the leaf width, so a reader
-    // that quietly assumes leaf-aligned chunks fails here.
-    while let Some(chunk) = body.next_chunk(3_000).expect("chunk") {
+    while let Some(chunk) = body.next_chunk(7).expect("chunk") {
         bytes.extend_from_slice(&chunk);
     }
-    assert_eq!(bytes.len(), declared, "the body matches its content-length");
-    for (i, entry) in entries.iter().enumerate() {
-        assert_eq!(&bytes[i * 128..(i + 1) * 128], &entry.leaf[..]);
-    }
-}
-
-#[test]
-fn an_unfrozen_serve_set_member_is_pinned_before_it_freezes() {
-    // The window this closes: shard bonded, not yet frozen. If the pin
-    // waited for the freeze, a prune landing between the freeze and the
-    // next re-pin would discard the bytes permanently. Pinning ahead makes
-    // the survival of a bonded shard independent of which timer fires
-    // first.
-    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
-    let provider = StoreShardProvider::new(ServingReader::new(Arc::clone(&store)));
-    assert_eq!(
-        store.pin_serve_set(&[0]).expect("pin ahead of freeze"),
-        vec![(0, SegmentPin::PinnedNotYetFrozen)]
-    );
-
-    // Freeze, then prune with no further pinning call at all.
-    store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
-        .expect("append and freeze segment 0");
-    store.prune_frozen(&[]).expect("prune");
-
-    let body = provider
-        .shard_bytes(0)
-        .expect("lookup")
-        .expect("the advance pin kept the shard servable");
-    assert_eq!(body.remaining_bytes(), leaves_per_segment() * 128);
+    assert_eq!(bytes, FRAME, "the body matches its content-length");
 }

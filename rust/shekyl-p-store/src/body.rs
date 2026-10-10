@@ -5,6 +5,7 @@
 
 //! Chunked reader over one held shard's `shard_frame` bytes.
 
+use std::fmt;
 use std::sync::Arc;
 
 use shekyl_types::ShardId;
@@ -30,6 +31,15 @@ pub struct ShardFrameBody {
     leftover_off: usize,
     /// Bytes already handed to the caller.
     yielded: u64,
+}
+
+impl fmt::Debug for ShardFrameBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShardFrameBody")
+            .field("shard_id", &self.shard_id)
+            .field("len", &self.body_len)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ShardFrameBody {

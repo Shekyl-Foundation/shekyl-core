@@ -146,7 +146,7 @@ where
         // outside this lock — `tor_service_config` creates and chmods a
         // directory, and holding the engine `RwLock` across that would stall
         // every other reader on disk.
-        let (stake, curve_tree, base_path, device) = {
+        let (stake, curve_tree, bodies, base_path, device) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -158,6 +158,7 @@ where
             (
                 stake,
                 g.curve_tree.clone(),
+                g.p_store.reader(),
                 g.persistence().base_path().to_path_buf(),
                 g.prefs().device.clone(),
             )
@@ -248,6 +249,7 @@ where
                 // scan (`WSS-24`). The refresher spawned above keeps it
                 // stamped and exits with the last reader.
                 tip,
+                bodies,
             },
             pinner,
             std::sync::Arc::new(shekyl_operator_alarm::OperatorAlarms::new()),

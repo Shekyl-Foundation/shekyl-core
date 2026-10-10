@@ -171,6 +171,10 @@ impl Engine<SoloSigner> {
             &file.opened_keys().file_kek,
             file.expected_classical_address(),
         );
+        // `WSS-Q1`(a): the body-store key is from `file_kek`. Derive it
+        // before the transient is wiped; the store itself is opened with
+        // the curve-tree companion below.
+        let p_store_key = shekyl_p_store::derive_store_key(&file.opened_keys().file_kek);
         file.zeroize_transient_file_kek();
         // Construct the producer's view-and-spend material once, from
         // the freshly-derived `AllKeysBlob`, and move it into the
@@ -255,6 +259,15 @@ impl Engine<SoloSigner> {
             )?
         };
 
+        let p_store = {
+            let store_path = shekyl_engine_file::paths::p_store_path_from(file.base_path());
+            shekyl_p_store::BodyStore::open(&store_path, p_store_key).map_err(|e| {
+                OpenError::Io(IoError::PStore {
+                    detail: format!("{e:?}"),
+                })
+            })?
+        };
+
         // ARCHIVAL_BOND_CONSTRUCTION.md §10.2 (Model D): for a staker, derive the
         // derive-forward set from the still-borrowed `master_seed` and spawn the
         // StakeEngine over it. Read `&ledger.staking` *before* `ledger` is moved
@@ -322,6 +335,7 @@ impl Engine<SoloSigner> {
             prefs_hmac_key,
             key,
             curve_tree,
+            p_store,
             merge_view_secret,
             ledger,
             pending,

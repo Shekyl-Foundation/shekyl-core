@@ -27,7 +27,7 @@ use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_NAME};
 use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
-    PostureDeclaration, SegmentPin, ServingReader, TargetKind, TreePosition, LEAF_BYTES,
+    PostureDeclaration, SegmentPin, ServingReader, TargetKind, TreePosition,
 };
 use shekyl_p_host::{
     DaemonTipCache, HostError, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
@@ -35,10 +35,12 @@ use shekyl_p_host::{
     Staleness, StalenessBound,
 };
 use shekyl_p_serve::{TestKeySigner, SIGNATURE_ENVELOPE_LEN};
+use shekyl_p_store::{BodyStore, BodyStoreReader, StoreKey};
 use shekyl_tor_control_wallet::service::{
     EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
     WalletTorControlConfig,
 };
+use shekyl_types::ShardId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -254,6 +256,29 @@ fn churning_tor(dir: &tempfile::TempDir) -> WalletTorControlConfig {
 
 fn identity() -> OnionIdentity {
     OnionIdentity::from_hs_id_seed(&[9u8; 32])
+}
+
+/// Opaque frame the composition tests put and expect back.
+const HELD_FRAME: &[u8] = b"\x01held-shard-frame-for-composition";
+
+fn empty_bodies() -> BodyStoreReader {
+    BodyStore::open_ephemeral(StoreKey::from_bytes([0x11; 32]))
+        .expect("ephemeral body store")
+        .reader()
+}
+
+fn bodies_holding(ids: &[u64]) -> BodyStoreReader {
+    bodies_writer_holding(ids).reader()
+}
+
+fn bodies_writer_holding(ids: &[u64]) -> BodyStore {
+    let store = BodyStore::open_ephemeral(StoreKey::from_bytes([0x22; 32])).expect("ephemeral");
+    for id in ids {
+        store
+            .put_shard(ShardId::from_raw(*id), HELD_FRAME)
+            .expect("put");
+    }
+    store
 }
 
 /// An ephemeral attestation key for a host under test; the test keeps the
@@ -515,6 +540,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
             max_streams: 8,
             key: Arc::clone(&key) as Arc<dyn PassKey>,
             tip: tip_at(10_000),
+            bodies: bodies_holding(&[0]),
         },
         &pinner,
     )
@@ -530,7 +556,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     let first = fetch(addr, "/shard/0", 10_000).await;
     assert_eq!(
         served_segment_len(&first),
-        (leaves_per_segment() * LEAF_BYTES) as u64,
+        HELD_FRAME.len() as u64,
         "a whole shard, not a 404 that happens to be non-empty"
     );
     // The envelope verifies against the key the host was started with,
@@ -643,6 +669,7 @@ async fn shutdown_stops_the_listener() {
             max_streams: 8,
             key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         &pinner,
     )
@@ -717,6 +744,7 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
             max_streams: 8,
             key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         &pinner,
     )
@@ -762,6 +790,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     // Hoisted: this test advances the chain, so it must advance the gate's
     // view of the chain too (see `tip_at`).
     let tip = tip_at(10_000);
+    let bodies = bodies_writer_holding(&[0]);
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -772,6 +801,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
             max_streams: 8,
             key: test_key(),
             tip: Arc::clone(&tip),
+            bodies: bodies.reader(),
         },
         &pinner,
     )
@@ -781,6 +811,9 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     // Holdings grow to cover segment 1, which then freezes.
     pinner.holdings_became(&[0, 1], BlockHeight::from_raw(20_000));
     host.refresh().await.expect("refresh");
+    bodies
+        .put_shard(ShardId::from_raw(1), HELD_FRAME)
+        .expect("fill gained shard");
     let mut second = segment_entries();
     for (i, e) in second.iter_mut().enumerate() {
         e.gindex = Gindex::from_raw(leaves_per_segment() as u64 + i as u64);
@@ -798,7 +831,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     let body = fetch(host.serve_addr(), "/shard/1", 20_000).await;
     assert_eq!(
         served_segment_len(&body),
-        (leaves_per_segment() * LEAF_BYTES) as u64,
+        HELD_FRAME.len() as u64,
         "the gained shard must be servable — an unrefreshed host loses it here"
     );
 
@@ -1111,6 +1144,7 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
             max_streams: 8,
             key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         &pinner,
     )
@@ -1177,6 +1211,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
             max_streams: 8,
             key: test_key(),
             tip: tip_at(10_000),
+            bodies: bodies_holding(&[0]),
         },
         &pinner,
     )
@@ -1202,7 +1237,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     store.prune_frozen(&[]).expect("prune");
     assert_eq!(
         served_segment_len(&fetch(host.serve_addr(), "/shard/0", 10_000).await),
-        (leaves_per_segment() * LEAF_BYTES) as u64
+        HELD_FRAME.len() as u64
     );
 
     host.shutdown().await;
@@ -1221,6 +1256,7 @@ async fn start_refuses_a_pinner_that_cannot_pin() {
             max_streams: 8,
             key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         DeadPinner,
     )
@@ -1288,6 +1324,7 @@ async fn host_staleness_uses_the_live_witness() {
             max_streams: 8,
             key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         &pinner,
     )
@@ -1720,6 +1757,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
             max_streams: 8,
             key: Arc::clone(&key) as Arc<dyn PassKey>,
             tip: Arc::clone(&tip),
+            bodies: bodies_holding(&[0]),
         },
         &pinner,
     )
@@ -1737,7 +1775,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
     );
     assert_eq!(
         served_segment_len(&served),
-        (leaves_per_segment() * LEAF_BYTES) as u64,
+        HELD_FRAME.len() as u64,
         "a whole shard, not a 404 that happens to be non-empty"
     );
     // And the countersignature binds the anchor the requester actually sent,

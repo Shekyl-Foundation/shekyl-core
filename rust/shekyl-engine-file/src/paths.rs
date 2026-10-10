@@ -97,6 +97,29 @@ pub fn state_path_from(base: &Path) -> PathBuf {
 /// `.wallet` / `.wallet.keys` pair rather than a hidden cache elsewhere.
 pub const CURVE_TREE_STORE_SUFFIX: &str = ".curvetree";
 
+/// Extension suffix for `P`'s serving body store (`WSS-Q1`(a)). Appended
+/// as raw bytes so `primary.wallet` becomes `primary.wallet.pstore`.
+pub const P_STORE_SUFFIX: &str = ".pstore";
+
+/// Derive `P`'s body-store path from the `.wallet` base, sibling of
+/// [`.curvetree`](CURVE_TREE_STORE_SUFFIX).
+///
+/// # Examples
+///
+/// ```
+/// use shekyl_engine_file::paths::p_store_path_from;
+/// use std::path::Path;
+/// assert_eq!(
+///     p_store_path_from(Path::new("/tmp/primary.wallet")),
+///     Path::new("/tmp/primary.wallet.pstore"),
+/// );
+/// ```
+pub fn p_store_path_from(base: &Path) -> PathBuf {
+    let mut os: OsString = base.as_os_str().to_owned();
+    os.push(P_STORE_SUFFIX);
+    PathBuf::from(os)
+}
+
 /// Derive the curve-tree store path from a user-provided base, per the
 /// CT-5 engine-wiring design (`docs/design/CT5_ENGINE_WIRING.md` §3.1):
 /// the `redb`-backed `shekyl_curve_tree::LeafStore` lives **beside the
@@ -312,5 +335,22 @@ mod tests {
         let c = curve_tree_store_path_from(base);
         assert_eq!(c.parent(), s.parent());
         assert_eq!(c.parent(), k.parent());
+    }
+
+    #[test]
+    fn p_store_path_appends_suffix() {
+        assert_eq!(
+            p_store_path_from(Path::new("/tmp/a.wallet")),
+            Path::new("/tmp/a.wallet.pstore"),
+        );
+    }
+
+    #[test]
+    fn p_store_is_sibling_of_wallet_files() {
+        let base = Path::new("/home/alice/wallets/x.wallet");
+        assert_eq!(
+            p_store_path_from(base).parent(),
+            state_path_from(base).parent()
+        );
     }
 }

@@ -4,34 +4,31 @@
 // BSD-3-Clause
 
 //! Shard lookup behind the serving loop: the [`ShardProvider`] seam and its
-//! production [`ServingReader`] implementation.
+//! production [`BodyStoreReader`] implementation.
 //!
 //! The seam exists so the loop's wire behaviour is testable without a
 //! store, and so the store read (synchronous redb) is confined behind one
 //! trait the endpoint calls via `spawn_blocking`. It is **not** an
-//! abstraction over storage backends — the store is `shekyl_curve_tree`'s
-//! `LeafStore`, and the trait's second implementor is the test fixture.
+//! abstraction over storage backends — the store is `shekyl-p-store`,
+//! and the trait's second implementor is the test fixture.
 //!
 //! # Read-only, structurally
 //!
-//! [`StoreShardProvider`] is built from a [`ServingReader`], not from the
-//! store: the store is a single-writer redb database whose single writer is
-//! the wallet's curve-tree actor, and the serving loop runs beside it.
-//! Pinning a serve-set *is* a write, so it lives on the actor's own object
-//! (`CurveTreeClient::pin_serve_set`) and reaches the serving host through
-//! `shekyl-p-host`'s pinner seam — it is deliberately not a method here.
-//! What is left in this module cannot write to the store at all, which is
-//! the property that keeps "the serving side is a reader" from being a
-//! convention.
+//! [`StoreShardProvider`] is built from a [`BodyStoreReader`], not from
+//! the writer: fill and erase live on `BodyStore` under `StakeEngine`,
+//! and the serving loop runs beside it. What is left in this module
+//! cannot write to the store at all, which is the property that keeps
+//! "the serving side is a reader" from being a convention.
 //!
 //! This module stays free of Tor and key material.
 
 use std::sync::Arc;
 
-use shekyl_curve_tree::{FrozenSegmentBody, SegmentId, ServingReader, StoreError};
+use shekyl_p_store::{BodyStoreReader, ShardFrameBody, StoreError};
+use shekyl_types::ShardId;
 
-/// A shard lookup failed for an infrastructure reason (store I/O, pruned
-/// bytes) or a serve-set construction bug. Counted locally by the endpoint
+/// A shard lookup failed for an infrastructure reason (store I/O)
+/// or a serve-set construction bug. Counted locally by the endpoint
 /// when it is a lookup failure. On the wire it is the bare 503 the endpoint
 /// gives for every fault of its own — never the 404, which means "not
 /// held", and never a response that says which fault.
@@ -44,21 +41,6 @@ pub enum ProviderError {
     Store {
         /// Local diagnostic (`Debug` of the store error); never on the wire.
         detail: String,
-    },
-    /// Frozen segment leaf bytes were pruned without a pin — the
-    /// silent-slash precursor. Named so a non-zero
-    /// [`crate::PServeEndpoint::lookup_failure_count`] can be correlated
-    /// with the cause without scraping free-text. Raised only for an
-    /// *unpinned* segment: missing bytes under a pin are corruption, which
-    /// pinning cannot fix (the store crate draws that line).
-    ///
-    /// Seeing this on the read path means the persona is already serving a
-    /// shard whose bytes are gone — the pin that should have prevented it
-    /// belongs to `shekyl-p-host`, which refuses to start a host over a
-    /// serve-set in this state.
-    FrozenSegmentPruned {
-        /// Segment id that was frozen then pruned.
-        segment_id: u32,
     },
     /// Non-store failure (tests, future callers).
     Other {
@@ -75,15 +57,11 @@ impl ProviderError {
         }
     }
 
-    /// Map a store error, preserving the pruned-segment case as its own arm.
-    fn from_store(err: StoreError) -> Self {
-        match err {
-            StoreError::FrozenSegmentPruned { id } => {
-                Self::FrozenSegmentPruned { segment_id: id.0 }
-            }
-            other => Self::Store {
-                detail: format!("{other:?}"),
-            },
+    /// Map a body-store error. Every arm is infrastructure: a missing
+    /// shard is `Ok(None)` at open, not an error.
+    fn from_store(err: &StoreError) -> Self {
+        Self::Store {
+            detail: format!("{err:?}"),
         }
     }
 }
@@ -94,10 +72,6 @@ impl std::fmt::Display for ProviderError {
             Self::Store { detail } | Self::Other { detail } => {
                 write!(f, "shard lookup failed: {detail}")
             }
-            Self::FrozenSegmentPruned { segment_id } => write!(
-                f,
-                "shard lookup failed: frozen segment {segment_id} pruned (pin serve-set before prune)"
-            ),
         }
     }
 }
@@ -136,8 +110,8 @@ pub struct ShardBody {
 /// able to tell them apart.
 #[derive(Debug)]
 enum Source {
-    /// Frozen segment streamed from the store (production).
-    Segment(FrozenSegmentBody),
+    /// `shard_frame` streamed from `P`'s body store (production).
+    Held(Box<ShardFrameBody>),
     /// Opaque in-memory payload (tests, measurement harnesses).
     Flat { bytes: Arc<[u8]>, read: usize },
     /// An in-memory payload that counts the chunks it yields into a counter
@@ -196,12 +170,12 @@ impl ShardBody {
         }
     }
 
-    /// A store-backed frozen-segment body.
+    /// A store-backed `shard_frame` body.
     #[must_use]
-    pub fn segment(body: FrozenSegmentBody) -> Self {
-        let len = wire_len(body.remaining_bytes());
+    pub fn held(body: ShardFrameBody) -> Self {
+        let len = body.len();
         Self {
-            source: Source::Segment(body),
+            source: Source::Held(Box::new(body)),
             len,
         }
     }
@@ -234,7 +208,7 @@ impl ShardBody {
     #[must_use]
     pub fn remaining_bytes(&self) -> usize {
         match &self.source {
-            Source::Segment(body) => body.remaining_bytes(),
+            Source::Held(body) => body.remaining_bytes(),
             Source::Flat { bytes, read } => bytes.len() - read,
             #[cfg(test)]
             Source::Counted { bytes, read, .. } => bytes.len() - read,
@@ -250,9 +224,9 @@ impl ShardBody {
     /// close; the counter is the signal.
     pub fn next_chunk(&mut self, max_bytes: usize) -> Result<Option<Vec<u8>>, ProviderError> {
         match &mut self.source {
-            Source::Segment(body) => body
+            Source::Held(body) => body
                 .next_chunk(max_bytes)
-                .map_err(ProviderError::from_store),
+                .map_err(|e| ProviderError::from_store(&e)),
             Source::Flat { bytes, read } => Ok(slice_chunk(bytes, read, max_bytes)),
             #[cfg(test)]
             Source::Counted { bytes, read, reads } => {
@@ -285,58 +259,34 @@ pub trait ShardProvider: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// [`ProviderError`] on store failure — including
-    /// [`ProviderError::FrozenSegmentPruned`] when the serve-set was not
-    /// pinned before a prune ran.
+    /// [`ProviderError`] on store failure. A shard that is not held is
+    /// `Ok(None)`, not an error.
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError>;
 }
 
-/// The leaf-segment provider: shard reads out of the persona's curve-tree
-/// store, through a read-only [`ServingReader`], serving a frozen
-/// segment's raw leaf bytes.
+/// The production provider: shard reads out of `P`'s body store, through
+/// a read-only [`BodyStoreReader`], serving a held `shard_frame`.
 ///
-/// **Retired unit, still wired.** It reads the leaf-segment partition
-/// (`PDM-Q12`, retired by `PDM-Q6` / `PDM-Q-F25`); the shard a requester
-/// names is a `W`-byte `tx_id` range (`SHT-Q2`) whose body is the
-/// `shard_frame` over archival good, and nothing this provider serves
-/// satisfies that expectation — a fetch against it is a grammar refusal
-/// (`Malformed::Frame`, where the leaf bytes are not the frame's version
-/// byte) or `ContentRefused` (where they happen to be), never a verified
-/// shard and never `Miss`. It stays until the wallet lane's store rebuild
-/// (`WSS-`, behind `WSS-Q1`) lands the provider over `P`'s body store, so
-/// that `shekyl-p-host`'s serve-set pinning keeps a provider to pin for;
-/// it is deleted with that landing, not adapted
-/// (`ARCHIVAL_SHARD_FETCH.md` `SF-D8` amendment 2026-10-08,
-/// `SHARD_VIEW_FETCH.md` §4).
+/// Fill and erase live on [`shekyl_p_store::BodyStore`] under
+/// `StakeEngine`. This type cannot write.
 pub struct StoreShardProvider {
-    reader: ServingReader,
+    reader: BodyStoreReader,
 }
 
 impl StoreShardProvider {
-    /// Wrap a read-only store handle.
+    /// Wrap a read-only body-store handle.
     #[must_use]
-    pub fn new(reader: ServingReader) -> Self {
+    pub fn new(reader: BodyStoreReader) -> Self {
         Self { reader }
     }
 }
 
-/// A shard id names a `SegmentId` iff it fits the store's `u32` id space;
-/// anything larger cannot exist in this store and is an ordinary miss on
-/// the serve path. (On the *pin* path it is a construction bug instead —
-/// `CurveTreeClient::pin_serve_set` refuses it rather than skipping it.)
-fn segment_id(shard_id: u64) -> Option<SegmentId> {
-    u32::try_from(shard_id).ok().map(SegmentId)
-}
-
 impl ShardProvider for StoreShardProvider {
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-        let Some(id) = segment_id(shard_id) else {
-            return Ok(None);
-        };
-        match self.reader.open_frozen_segment_body(id) {
-            Ok(Some(body)) => Ok(Some(ShardBody::segment(body))),
+        match self.reader.open_shard(ShardId::from_raw(shard_id)) {
+            Ok(Some(body)) => Ok(Some(ShardBody::held(body))),
             Ok(None) => Ok(None),
-            Err(e) => Err(ProviderError::from_store(e)),
+            Err(e) => Err(ProviderError::from_store(&e)),
         }
     }
 }

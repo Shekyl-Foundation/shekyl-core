@@ -63,7 +63,7 @@
 //! `ADD_ONION` mapping `shekyl-p-host` wires in. This crate holds no key
 //! material — the signer is the host's object, and the serve loop sees
 //! only the signature it returns — and, since [`StoreShardProvider`] is
-//! built from a read-only `ServingReader`, it cannot write to the store
+//! built from a read-only `BodyStoreReader`, it cannot write to the store
 //! either.
 //!
 //! **Is not:** a pass-record builder, a key holder, the *definition* of a

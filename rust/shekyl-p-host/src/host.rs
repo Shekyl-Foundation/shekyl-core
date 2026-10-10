@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_p_serve::{PServeEndpoint, ServeCounterReader, StoreShardProvider};
+use shekyl_p_store::BodyStoreReader;
 use shekyl_tor_control_wallet::service::{
     OnionIdentity, OnionServiceSpec, ServiceId, ServingPosture, TorPosture, WalletTorControl,
     WalletTorControlConfig,
@@ -57,6 +58,10 @@ pub struct PersonaServing {
     /// correct direction for a persona that cannot see the chain — but it
     /// is a wiring bug, not a posture.
     pub tip: Arc<DaemonTipCache>,
+    /// Read-only handle on `P`'s body store. The endpoint streams
+    /// `shard_frame` bodies from here; pin evidence still lives on the
+    /// curve-tree witness the pinner acquires (`WSS-Q1`(a)).
+    pub bodies: BodyStoreReader,
 }
 
 impl fmt::Debug for PersonaServing {
@@ -67,6 +72,7 @@ impl fmt::Debug for PersonaServing {
             .field("max_streams", &self.max_streams)
             .field("key", &"<dyn PassKey>")
             .field("tip", &self.tip)
+            .field("bodies", &"<BodyStoreReader>")
             .finish()
     }
 }
@@ -362,15 +368,11 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         let pinned = PinnedServeSet::acquire(&pinner)
             .await
             .map_err(HostError::Pin)?;
-        // The reader comes from the witness, not from an argument: the store
-        // served must be the store pinned, and the only way to make that
-        // unconditional is to leave the caller no way to name a second one.
-        //
-        // The signer's gate height does NOT come from that reader. It is the
-        // daemon's tip, carried in on `serving.tip` — the scan tip and the
-        // chain tip answer different questions, and the gate asks the second
-        // one (`WSS-24`; the reasoning is in `signer`'s module doc).
-        let provider = StoreShardProvider::new(pinned.reader().clone());
+        // Bytes come from `P`'s body store, not from the pin witness.
+        // The witness still proves the serve-set was pinned; the frames
+        // it names live in `serving.bodies` (`WSS-Q1`(a)). The signer's
+        // gate height is the daemon's tip on `serving.tip` (`WSS-24`).
+        let provider = StoreShardProvider::new(serving.bodies);
         let signer = HostSigner::new(serving.tip, serving.key);
         let endpoint = PServeEndpoint::bind(Arc::new(provider), Arc::new(signer))
             .await

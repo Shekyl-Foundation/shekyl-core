@@ -648,6 +648,11 @@ pub struct Engine<
     // `21-reversion-clause-discipline.mdc`.
     curve_tree: CurveTreeHandle,
 
+    /// `P`'s serving body store (`WSS-Q1`(a)): chunk-sealed `shard_frame`
+    /// bodies beside the wallet files. Opened in assemble from `file_kek`
+    /// before that key is wiped; the serving host takes [`BodyStore::reader`].
+    p_store: shekyl_p_store::BodyStore,
+
     /// Construction-time view-secret projection for the merge post-pass
     /// ([`Engine::apply_scan_result`]), per `STAGE_2_KEY_ENGINE_ACTOR.md` §6
     /// option 6-i. That path is synchronous and runs under the ledger
@@ -946,6 +951,7 @@ impl<
             .field("prefs_hmac_key", &self.prefs_hmac_key)
             .field("key", &"<redacted: KeyEngineHandle>")
             .field("curve_tree", &"<opaque: CurveTreeHandle>")
+            .field("p_store", &"<opaque: BodyStore>")
             .field("merge_view_secret", &"<redacted: view secret>")
             .field("ledger", &"<…>")
             .field("outstanding_pending_txs", &self.pending.outstanding())
@@ -1151,6 +1157,7 @@ impl<
             prefs_hmac_key,
             key,
             curve_tree,
+            p_store,
             merge_view_secret,
             ledger,
             pending,
@@ -1173,6 +1180,7 @@ impl<
             prefs_hmac_key,
             key,
             curve_tree,
+            p_store,
             merge_view_secret,
             ledger,
             pending,
@@ -1210,6 +1218,7 @@ impl<
             prefs_hmac_key,
             key,
             curve_tree,
+            p_store,
             merge_view_secret,
             ledger,
             pending: _old,
@@ -1232,6 +1241,7 @@ impl<
             prefs_hmac_key,
             key,
             curve_tree,
+            p_store,
             merge_view_secret,
             ledger,
             pending,
