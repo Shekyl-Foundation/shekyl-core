@@ -1,9 +1,12 @@
 # DRS-E5 — pool, alt chain, prune: the store's consuming increment (`E5-`)
 
-**Status:** OPEN — **Round 0 posed 2026-10-10 at `dev@14d68c00fc`**
-(pre-flight in §1.1, findings `E5-1…E5-12`; questions `E5-Q1…E5-Q11` in
-§8 with defaults; no implementation commit until the round is ruled — rule
-26's halt). Identifier families **`E5-`** (findings) and **`E5-Q`**
+**Status:** OPEN — **Round 1 ruled 2026-10-10 apart from `E5-Q4` (HELD,
+priced in §8)**; Round 0 posed 2026-10-10 at `dev@14d68c00fc`, merged to
+`dev@ac95d6d04` before the draft PR (#1026) opened. Pre-flight in §1.1,
+findings `E5-1…E5-15` (`E5-13…E5-15` are PR-a commit 1's measurement, §1.7);
+questions `E5-Q1…E5-Q11` in §8, each with its ruling under its default. No
+cheap-tier code until `E5-Q4` is ruled — rule 26's halt applies to the
+commit that builds the question. Identifier families **`E5-`** (findings) and **`E5-Q`**
 (questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file (rule
 94 §1; `check_index_prefix_uniqueness.py` branch (a): `E5` and `E5-Q`
@@ -96,7 +99,8 @@ the expectation, and a second is owed only if a ruling refutes a finding in
   production caller is `connector.rs:572`. `TxSlot::Lone` (`verdict.rs:145`)
   is the pool's slot and `validate` never passes it.
 - `ChainView<'id>` (`view.rs:246`) has twenty-eight methods. Four are facts
-  of the chain's *shape* (`tip`, `block_at`, `height_of`, `depth_at`); the
+  of the chain's *shape* (`tip`, `block_at`, `height_of`, `depth_at`) — by
+  method; `block_at`'s *record* mixes the two, `E5-13` — the
   rest are facts of an *executed* chain — tree roots, outputs, leaf counts,
   key images, transaction membership, burned total, and the archival
   family (`bond_record` … `issued_digest`). `BatchView` (`store/view.rs:147`)
@@ -110,7 +114,14 @@ the expectation, and a second is owed only if a ruling refutes a finding in
   `attestation.rs` — `bond_record`; `tx_against.rs` — `depth_at`,
   `has_key_image`, `height_of`, `root_at`, `tip`; `tx_bond.rs` and
   `tx_emission_against.rs` — the archival family. The PoW and difficulty
-  rules read through `rules/mod.rs`'s `block_at`/`tip`.
+  rules read through `rules/mod.rs`'s `block_at`/`tip`. **UPDATE
+  2026-10-10 (Round 1, `E5-13`):** this grep is a *method*-level
+  partition and the method-level answer is incomplete — `block_at` returns
+  `RecordedBlock` (`view.rs:166`), which carries three executed facts
+  (`coins_generated`, `cumulative_tx_count`, `cumulative_archival_len`)
+  beside the header facts (`hash`, `header`, `cumulative_difficulty`), and
+  `miner.rs:469/:523/:668` and `archival/close.rs:75` read the executed
+  three through it. The field-level partition is `E5-13`.
 - `AdmissionPolicyId(u8)` with `GENESIS = 1` and `AdmissionPolicy { id }`
   (`rule_set.rs:555–597`): "Consumer: DRS-E5 (`PoolView`, `PolicyCoverage`).
   Its parameters populate there." `PolicyCoverage = Coverage<PolicyRow>`;
@@ -255,7 +266,8 @@ carries the second spelling's deletion with owner `CHAIN_RULES_CRATE.md`.
   root, no output set, no key-image set, no archival row to answer with.
   "Re-validation over an alt `ChainView`" (REDB table 3; `census.rs:353`,
   `:369`) is therefore two different things that one phrase hid: the
-  *cheap tier* (C2-R1 §5.5 Q1a; K4) reads only the four shape facts plus the
+  *cheap tier* (C2-R1 §5.5 Q1a; K4) reads only shape facts (measured at
+  `E5-14`: `tip` and the header record — two, not four) plus the
   attestation's `bond_record`, and the *promotion tier* (K5) is `validate`
   over the batch's own `BatchView` after the pops. The alt view is a
   **header view** (§2.1, `E5-Q3`). SAL-7 is not contradicted — it forbids
@@ -322,46 +334,152 @@ carries the second spelling's deletion with owner `CHAIN_RULES_CRATE.md`.
   fixes the shape and prices the FFI consumer that reads the `repr(i32)`
   until DEL-009.
 
+The three findings below are PR-a commit 1's measurement (Round 1 ruled
+`E5-Q3` with "the partition of `header.rs`'s rules between the tiers is
+unknown; commit 1 owes it rule by rule"), read at `dev@ac95d6d04`.
+
+- **E5-13 — `block_at` is a header fact by method and a mixed fact by
+  field; the honest header view returns a header record.** `RecordedBlock`
+  (`view.rs:166–190`) is `{hash, header, cumulative_difficulty,
+  coins_generated, cumulative_tx_count, cumulative_archival_len}`. The
+  first three are shape facts an alt entry has (`AltBlockFacts`,
+  `codec/alt.rs:114`: `height`, `block_weight`, `cumulative_difficulty`,
+  `coins_generated`); the last two an alt entry **cannot** have — nothing
+  has executed its body — and `coins_generated` is K8's bookkeeping, which
+  SAL-7 says no rule reads. A stitched `block_at` returning `RecordedBlock`
+  would therefore have to invent `cumulative_tx_count` for alt rows or
+  fault *inside a field*, and the fallback `E5-Q3` priced ("twenty-four
+  faulting methods") is weaker than Round 0 wrote: the fault would sit
+  inside the one method the cheap tier does call. The split is at the
+  type: `HeaderRecord { hash, header, cumulative_difficulty }` and
+  `HeaderView::header_at(h) -> AtHeight<HeaderRecord>`; `RecordedBlock`
+  embeds a `HeaderRecord` and `ChainView::block_at` keeps returning it.
+  Readers move by what they read: `difficulty.rs:240–266`
+  (`cumulative_difficulty`, `header.timestamp`), `pow.rs:152` (`hash`),
+  `timestamps.rs:144/:149` (`header.timestamp`), `anchors.rs:144`
+  (`hash`), `attestation.rs:203` (`hash`, the anchor window) read
+  `header_at`; `miner.rs:469/:523/:668` and `close.rs:75` stay on
+  `block_at`. K8 gains its type-level witness (§3's row corrected): the
+  view an alt rule can be bound on has no `coins_generated` to read.
+- **E5-14 — `header.rs` is three form rows and one promotion row; the
+  cheap tier re-bounds five rule files and `header.rs` is not one of
+  them.** Rule by rule: **B1** (`:57`) and **B2** (`:76`) are `FormRule`s
+  — no view, already run by `form` before any tier, so the cheap tier gets
+  them by calling `form`; **B6** (`:149`) is the identity `form` derives,
+  no view; **B5** (`:108`) reads `root_at(cx.connecting)` — the curve-tree
+  state after the parent connected — an executed fact no alt chain has:
+  **promotion tier**, with the consequence written in §2.1. So the
+  re-bounding touches `anchors.rs` (E1 `:143–144`, E2), `timestamps.rs`
+  (C1, C2, C3's window `:131–149`), `pow.rs` (D1, D3's seed `:142–152`),
+  `difficulty.rs` (D4's window and `cumulative_after` `:227–266`) and
+  `attestation.rs` (B4's `anchor_window` `:188–203`, under any `E5-Q4`
+  option — see `E5-15`): five, and a different five from §1.0's (version
+  out, attestation in). Beside them: `rules/mod.rs` (the trait and the
+  `recorded` helper), `view.rs` (the split), the nine `ChainView`
+  implementors (`BatchView`, the chain-rules harness views, the ingest
+  test tree) each gaining `HeaderView`, and
+  `scripts/ci/check_block_rule_corrupt_sites.py`, whose `IMPL_RE` reads
+  `impl BlockRule for X` (`:101`) and must read the header-rule impl too
+  or its enumerated set shrinks under its floor. The measured
+  `HeaderView` is **two methods, not four**: `tip` and `header_at`.
+  `height_of` and `depth_at` are header facts by classification and have
+  no cheap-tier caller (`tx_against.rs:259/:424` only — I-rows, promotion);
+  a method with no caller is pre-provisioning (rule 21), so they stay on
+  `ChainView`. The `E5-Q3` falsifier did not fire on count and did fire on
+  membership; the split stands, re-measured.
+- **E5-15 — CEN-K4 names CEN-B4 in the admission tier; a K-row does
+  require the attestation check before storage.** The ratified row
+  (`CONSENSUS_RULE_CENSUS_3.md:395`): "alt blocks are accepted into storage
+  after: version (CEN-B1 …), **attestation (CEN-B4)**, timestamp vs
+  alt-window median (CEN-C2), checkpoint, PoW at alt difficulty
+  (CEN-D1/D5), and prevalidate-only miner-tx checks";
+  `CONSENSUS_STORE_RECONCILIATION.md:787` holds it CHECKED-CONFORMANT with
+  the attestation step at `:2264`. B4 (`attestation.rs:85–148`) makes two
+  view reads: the **anchor window** (`anchor_window`, `recorded(view,
+  height).hash` over the connecting chain — a header fact the stitched
+  view answers honestly, and the C++ passes `alt_chain` to
+  `fill_pass_anchor_window` for the same reason, `blockchain.cpp:5034`) and
+  the **bond's committed hybrid key** (`committed_hybrid_key`,
+  `view.bond_record(persona)` — the archival read `E5-6` is about). Under
+  every `E5-Q4` option B4's body is factored so the cheap tier can hand the
+  window read one view and the bond read another (or none); the `BlockRule`
+  impl passes its one view to both. This is the fact `E5-Q4`'s pricing
+  turns on (§8).
+
 ---
 
 ## 2. The shapes
 
 ### 2.1 The alt view is a header view (`E5-Q3`)
 
-Default: a supertrait split in `shekyl-chain-rules`,
+Ruled 2026-10-10 (the split), re-measured by `E5-13`/`E5-14`. Round 0's
+shape is kept below as records-was; the ruled shape is:
 
 ```text
-pub trait HeaderView<'id> { type Fault; fn tip(); fn block_at(h); fn height_of(hash); fn depth_at(h); }
-pub trait ChainView<'id>: HeaderView<'id> { …the other twenty-four… }
+pub struct HeaderRecord { hash, header, cumulative_difficulty }       // what an alt entry has
+pub struct RecordedBlock { header: HeaderRecord, coins_generated, cumulative_tx_count, cumulative_archival_len }
+pub trait HeaderView<'id> { type Fault; fn tip(); fn header_at(h) -> AtHeight<HeaderRecord>; }
+pub trait ChainView<'id>: HeaderView<'id> { fn block_at(h) -> AtHeight<RecordedBlock>; fn height_of(hash); fn depth_at(h); …the twenty-four executed-chain methods… }   // 27 own + 2 inherited
+pub trait HeaderRule: Rule { fn check<H: HeaderView>(cx, &H) -> …; }   // blanket `impl<R: HeaderRule> BlockRule for R`
 ```
 
-with the PoW, difficulty, timestamp, version and anchor rules re-bounded on
-`HeaderView` (their reads are already only `block_at`/`tip`; the grep in §1.0
-is the evidence the narrowing compiles), `BatchView` implementing both, and a
-new `AltView<'s>` in the store — a `ReadSnapshot` plus an `AltChain` (the
-alt entries from the fork point to the candidate's parent, AL4 walked to a
-main-chain row; K2) — implementing **`HeaderView` only**, stitched:
-`block_at(h)` is the main chain's row below the fork point and the alt
-entry's block above it; `tip` is the alt chain's last entry; `height_of` is
-the stitched chain's. It carries no brand (its type is not `BatchView`) and
-no archival method, so a rule that needed an executed fact cannot be bound
-on it — the compiler, not a fault, is the belt (`05-system-thinking.mdc`, "a
-type defends the call").
+*Round 0 wrote (SUPERSEDED by `E5-13`/`E5-14`):* `HeaderView { tip,
+block_at, height_of, depth_at }` with "the PoW, difficulty, timestamp,
+version and anchor rules re-bounded … their reads are already only
+`block_at`/`tip`". Two corrections: `block_at` returns executed fields an
+alt row cannot carry, so the header view returns a `HeaderRecord`; and the
+re-bounded files are `anchors.rs`, `timestamps.rs`, `pow.rs`,
+`difficulty.rs`, `attestation.rs` — not `header.rs`, whose only view-bound
+rule (B5) is promotion's. `height_of`/`depth_at` have no cheap-tier caller
+and stay on `ChainView`.
+
+`BatchView` implements both from the one row read it already does; the new
+`AltView<'s>` in the store — a `ReadSnapshot` plus an `AltChain` (the alt
+entries from the fork point to the candidate's parent, AL4 walked to a
+main-chain row; K2) — implements **`HeaderView` only**, stitched:
+`header_at(h)` is the main chain's row below the fork point and the alt
+entry's header, hash and cumulative difficulty above it; `tip` is the alt
+chain's last entry. It carries no brand (its type is not `BatchView`), no
+`block_at` and no archival method, so a rule that needs an executed fact
+cannot be bound on it — the compiler, not a fault, is the belt
+(`05-system-thinking.mdc`, "a type defends the call"). K8 is the first
+beneficiary: `coins_generated` is not a field the alt-bound view has.
 
 The alternative — `AltView` implementing the full `ChainView` with the
-twenty-four executed-chain methods returning a fault — moves the same error
-to run time, costs no trait surgery, and is what the C++ does implicitly.
-It is the fallback if the re-bounding turns out to touch more than the five
-rule files §1.0 names.
+executed-chain methods returning a fault — was Round 0's fallback. `E5-13`
+prices it lower than Round 0 did: `block_at` is the one method the cheap
+tier calls, and its `RecordedBlock` has two fields an alt row cannot fill,
+so the fault would live inside a returned value, not behind an uncalled
+method. It stays on the table only if the `HeaderRule` blanket impl turns
+out not to compose with `run`'s coverage recording; a2 reports either way.
+
+**CEN-B5 at the cheap tier — written down because the reason it is safe
+is structural.** B5 is promotion-tier (`E5-14`), so **an alt block is
+stored without its `curve_tree_root` commitment checked.** This is the
+C++'s own disposition (K4's row: "the curve-root check [is] deferred to
+promotion", `CONSENSUS_RULE_CENSUS_3.md:395`) and it is fine for exactly
+two reasons, both of which E5 builds rather than inherits: (1) nothing
+reads an alt block's root until promotion, and promotion is `validate`
+over `BatchView` — `AltValid` is not `ChainValid`, nothing converts it,
+and `connect` takes only `ChainValid` (§2.1's brand argument, `E5-5`), so
+a wrong root in the alt table cannot reach the tree; (2) what an
+unchecked root costs is a stored row, and K4's PoW floor bounds how many an
+adversary can buy (`E5-Q7`, rule-21 reopen in §4). Without (1) the
+deferral would be a hole; with it the deferral is the `AltValid`/`ChainValid`
+separation doing its one job. The same sentence covers every promotion-tier
+row — G1's `has_transaction`, the F-rows' emission reads, the I-rows — B5
+is named because a committed root reads as the alarming case.
 
 The cheap tier is then `alt_against<H: HeaderView>(block, &alt_view,
 &snapshot_view, rule_set) -> Result<AltValid, Verdict>`: B1/B2, the
 timestamp rule over `alt_window_plan`, E1/E2 (an alt block at or below the
 last anchor refused — E2's home), D1–D3 PoW against D4's difficulty read
-through the stitched `block_at` (= D5, as `census.rs:353` anticipated),
-K1a/K1b, `prevalidate_miner_transaction`'s form rows, and the attestation's
-witness check (K5b) reading `bond_record` from the **snapshot view** passed
-alongside — the C++'s approximation, named (`E5-6`, `E5-Q4`). `AltValid`
+through the stitched `header_at` (= D5, as `census.rs:353` anticipated),
+K1a/K1b, `prevalidate_miner_transaction`'s form rows, and K4's attestation
+step (B4, `E5-15`): the window from the alt view, the bond read from the
+**snapshot view** passed alongside — the C++'s approximation, named
+(`E5-6`); **which of B4's two reads the cheap tier makes is `E5-Q4`, HELD;
+the row set above is fixed except for that one step.** `AltValid`
 carries `AltBlockFacts` and is what AL1 stores; it is not `ChainValid` and
 nothing converts it.
 
@@ -442,10 +560,10 @@ and site it lands in, and the witness. "slice 9" is the alt increment
 | CEN-K5b | each promoted block's attestation witness travels and is checked | sequencing — the witness is in `AltBlock`; `validate`'s attestation rule reads it | ingest switch + `AltBlock` (slice 9) | a tampered witness on an alt entry fails promotion |
 | CEN-K6 | switch iff alt cumulative difficulty strictly greater (checkpoint forces) | rule — `fork_choice`'s verdict matched; the crossing is Q1b's | `shekyl-difficulty` (landed) + ingest match (slice 9) | equal keeps; greater switches; checkpoint-forced promotes a lighter chain |
 | CEN-K7 | demoted blocks re-enter as alt blocks; discard on checkpoint-forced | sequencing — step 3 under the verdict's arm (`E5-12`) | ingest switch (slice 9) | after a switch AL7 lists the demoted blocks; after a forced switch it does not |
-| CEN-K8 | alt `already_generated_coins` is bookkeeping, not a consensus read | by construction — `AltBlockFacts.coins_generated` has no `ChainView` reader (SAL-7); the row is an enumeration | store `codec/alt.rs` (landed) | `rg coins_generated rust/shekyl-chain-rules/` → 0 |
+| CEN-K8 | alt `already_generated_coins` is bookkeeping, not a consensus read | by construction — `AltBlockFacts.coins_generated` has no reader through the view an alt rule can be bound on: `HeaderRecord` has no such field (`E5-13`); the row is an enumeration | store `codec/alt.rs` (landed) + `view.rs` `HeaderRecord` (a2) | UPDATE 2026-10-10: Round 0's witness (`rg coins_generated rust/shekyl-chain-rules/` → 0) was wrong at the pin — `RecordedBlock.coins_generated` is F13's operand (`view.rs:177`, `miner.rs:469`). The witness is the type: `rg 'coins_generated' rust/shekyl-chain-rules/src/view.rs` names only `RecordedBlock`'s field, never `HeaderRecord`'s, and `AltView` implements `HeaderView` only |
 | CEN-K9 | supplement txs must pass NIC or the block is rejected | sequencing — the supplement goes through the pool door (§2.2) under `kept_by_block`; a refusal refuses the block | `shekyl-mempool` + ingest (slice 10) | a supplement tx failing `tx_form` refuses the alt block |
 | CEN-K10 | `kept_by_block` admission skips policy, keeps consensus | writer behaviour — `policy_form` skipped, `tx_form`/`tx_against` not; `fcmp_cache` consulted (`E5-11`) | `shekyl-mempool` (slice 10) | a zero-fee demoted tx is admitted and not relayed (M11) |
-| CEN-D5 | alt-chain difficulty: the same LWMA-1 over the stitched window | rule — D4 over `AltView::block_at` (the subsumption `census.rs:353` wrote) | rules `difficulty.rs` bound on `HeaderView` (slice 9) | a fixture drives D4 over a stitched view and over the main chain to the same target when the branches agree, different when they do not |
+| CEN-D5 | alt-chain difficulty: the same LWMA-1 over the stitched window | rule — D4 over `AltView::header_at` (the subsumption `census.rs:353` wrote; `block_at` → `header_at` per `E5-13`) | rules `difficulty.rs` bound on `HeaderView` (slice 9) | a fixture drives D4 over a stitched view and over the main chain to the same target when the branches agree, different when they do not |
 | CEN-E2 | an alt block at or below the last anchor is refused | rule in `alt_against` — `anchors.rs`'s E2 arm given its alt home | rules `anchors.rs` (slice 9) | a candidate forking below the anchor floor refused; above it admitted |
 | CEN-M1 | a tx already in the pool or on chain is refused | rule — `has_transaction` through `PoolView` (chain) and the pool's own set | `shekyl-mempool` (slice 10) | duplicate refused; `double_spend_seen` not set for a duplicate |
 | CEN-M2 | pool admission runs the full NIC set | rule — `tx_form(TxSlot::Lone)` is the set | rules (landed) + mempool call (slice 10) | one NIC mutation refused at the door |
@@ -523,10 +641,19 @@ Adversarial items, each with the fixture that would notice:
   switch and not in any template.
 - **The cheap tier's wrong-chain archival read (`E5-6`).** Fixture: a bond
   slashed at `tip − 1`, an alt chain forking at `tip − 3` whose block
-  attests under that bond; the alt block is refused at the cheap tier; the
-  same chain presented one block longer (past the switch threshold) is
-  refused again — the liveness cost is real and bounded; the fixture is the
-  measurement `E5-Q4`'s ruling reads.
+  attests under that bond; the same chain presented one block longer (past
+  the switch threshold). *Round 0 wrote (SUPERSEDED by Round 1's `E5-Q4`
+  instruction):* "the fixture is the measurement `E5-Q4`'s ruling reads".
+  The fixture does not measure; it **asserts** whichever `E5-Q4` ruling
+  lands and **names** the refusal: under option α (the default) it asserts
+  the cheap tier refuses both presentations with `B4` at `Locus::Block`
+  and names the shape — *a bond change on the main chain within `D_max` of
+  the fork refuses an honest alt block until the main chain's record
+  agrees* — as the contract, so a later reader finds the liveness cost as a
+  stated property, not a surprise; under β or γ it asserts both
+  presentations are **stored** and the switch's promotion `validate`
+  refuses or admits them by the alt chain's own record. Either way the
+  fixture's name carries `E5-6`.
 - **A `PoolView` that reaches `connect`.** Negative control: a test that
   tries `connect(validate(.., &pool_view, ..))` and does not compile
   (`compile_fail`), beside `AdmissionPolicyId`'s existing one.
@@ -545,10 +672,10 @@ drops, with PR-b the caller.
 
 | # | commit | cost | falsifier applies |
 | --- | --- | --- | --- |
-| a1 | this file on review; index rows; the §12 register rows (DEL-009, DEL-010) | 1 | — |
-| a2 | `HeaderView` supertrait; five rule files re-bounded; `BatchView` implements both; the store's conformance suite split | 2 | yes |
+| a1 | this file on review; index rows; the §12 register rows (DEL-009, DEL-010). UPDATE 2026-10-10: Round 1's rulings recorded; the `header.rs` partition measured (`E5-13…E5-15`); `E5-Q4` priced | 1 | — |
+| a2 | `HeaderView { tip, header_at }` + `HeaderRecord` (`E5-13`); `HeaderRule` with the blanket `BlockRule` impl; `anchors.rs`, `timestamps.rs`, `pow.rs`, `difficulty.rs`, `attestation.rs` re-bounded (`E5-14` — not `header.rs`); `BatchView` and the eight test implementors gain `HeaderView`; `check_block_rule_corrupt_sites.py` reads both impl forms; the store's conformance suite split | 2 | yes — more than these five rule files, or the blanket impl not composing with `run`, is the fallback |
 | a3 | `AltChain::build` (K2), `AltView` over `ReadSnapshot` + chain (`HeaderView` only), K1a by construction, the stitched-view conformance test | 2 | yes |
-| a4 | `alt_against` (K1b, K4's tier, D5 via D4, E2's arm, K5b's witness, the attestation's snapshot read); `AltValid` → AL1; census arms | 3 | yes |
+| a4 | `alt_against` (K1b, K4's tier, D5 via D4, E2's arm, K4's attestation step shaped by `E5-Q4`'s ruling — **blocked on that ruling**, `E5-15`); `AltValid` → AL1; census arms | 3 | yes |
 | a5 | the switch closure in `shekyl-chain-ingest` (§2.3): cap check, SAL-13 reads, pops, K7 under the verdict arm, K5 promotion, removes; K6 on `ForkChoiceVerdict`; `Switched` | 3 | yes |
 | a6 | the three refusals distinguished (cap, floor, verdict) and the §4 fixtures for the boundary and the floor | 2 | yes |
 | a7 | a reorg capture for the corpus (`E5-Q9`): the C++ produces one switch, the trace gains the event, the grader compares | 2 | yes |
@@ -653,6 +780,10 @@ projects outputs (wrong under FCMP++). **Falsifier.** A `tx_against` rule
 that reads a view method other than `has_key_image` and whose answer should
 differ between chain and chain+pool — none exists at the pin (§1.0's grep).
 
+**Ruled 2026-10-10 — yes, as defaulted.** The FCMP++ premise is
+load-bearing: pool contents cannot move I10's reference lookup, so the
+decorator has exactly one override.
+
 ### E5-Q2 — Does the pool live in a new `shekyl-mempool` crate?
 
 **Default.** Yes; the switch stays in `shekyl-chain-ingest`. **Why.** The
@@ -663,6 +794,14 @@ Rule 25's single-FFI-crate rule is unaffected. **Otherwise.** The pool in
 replay harness to relay state. **Falsifier.** A circular dependency between
 the two (the switch needs the pool for returns, the pool needs the switch
 for nothing) — PR-a's `Vec<Transaction>` return is the cut.
+
+**Ruled 2026-10-10 — yes, with a condition.** `shekyl-mempool` holds the
+FSM and the store wiring, **never a rule**: G10 forbids a second admission
+function, and the crate's own `//!` doc says so at its top (b1), so the
+reader who opens the crate meets the constraint before any code — the
+place a constraint has to be written to survive the next author
+(`16-architectural-inheritance.mdc`, "write the constraint where the
+replacement's author will read it").
 
 ### E5-Q3 — Is the alt view a `HeaderView` supertrait split, or a faulting full `ChainView`?
 
@@ -677,6 +816,21 @@ blocks. **Falsifier.** The re-bounding touches rule files beyond the five
 (`header.rs` does — and that rule is promotion-tier, which the split makes
 explicit: the question is which of `header.rs`'s rules are B-rows).
 
+**Ruled 2026-10-10 — the split, with commit 1 owing the measured
+partition.** The ruling's own words: the falsifier says `header.rs` reads
+`root_at`, which is not a header fact, so "the partition of `header.rs`'s
+rules between the cheap and promotion tiers is unknown"; commit 1 owes it
+rule by rule, and if the re-bounding exceeds five files the fallback is on
+the table. **Measured (`E5-13`, `E5-14`):** `header.rs` is B1/B2/B6 form
+and B5 promotion — zero re-bounding there; the five re-bounded files are
+`anchors.rs`, `timestamps.rs`, `pow.rs`, `difficulty.rs`,
+`attestation.rs`; `HeaderView` is two methods; `block_at` splits into
+`header_at`/`HeaderRecord` because its record carries executed fields. The
+count held and the membership moved — the falsifier fired on the half it
+was written for. The B5 consequence (an alt block stored without its root
+checked, safe because of the `AltValid`/`ChainValid` separation and the PoW
+bound) is written in §2.1.
+
 ### E5-Q4 — Does the cheap tier inherit the C++'s wrong-chain archival read (`E5-6`)?
 
 **Default.** Yes, named, with the fixture in §4 measuring the liveness
@@ -687,6 +841,62 @@ bounded by `D_max`. **Otherwise.** A new as-of read on the archival tables,
 which is a settlement-writer change, not E5's. **Falsifier.** The fixture
 refuses an honest chain in a shape stressnet produces (a slash within
 `D_max` of a fork).
+
+**HELD 2026-10-10 — a third option to price, and the pricing.** The
+ruling's reasoning: the default refuses honest alt blocks, which is a
+consensus-liveness cost, and `16-architectural-inheritance.mdc` says
+migrate the inherited approximation rather than rationalize it. The third
+option: drop the witness check from the cheap tier entirely and let
+promotion do the real one. Two things to price — what the cheap tier loses
+by not checking, and whether any K-row requires the check before storage;
+if one does, the default stands and the §4 fixture asserts and names the
+refusal. The pricing, against `E5-15`:
+
+- **α — the default.** Both B4 reads in the cheap tier; the bond read
+  from the tip snapshot. *Keeps:* CEN-K4 whole (its ratified admission list
+  names CEN-B4, `CONSENSUS_RULE_CENSUS_3.md:395`; CHECKED-CONFORMANT at
+  `CONSENSUS_STORE_RECONCILIATION.md:787`). *Costs:* the one-sided
+  refusal — an alt block attesting under a bond the **main** chain slashed,
+  released or never had within `D_max` of the fork is refused at the cheap
+  tier though honest on its own chain; bounded by `D_max`, and gone once
+  the alt chain is longer than the divergence (the main chain's record is
+  then the alt chain's). The reverse error (a bond the main chain has and
+  the alt chain lacks) admits a row promotion refuses — the same class as
+  B5's deferral, PoW-bounded.
+- **β — drop B4 from the cheap tier.** *Keeps:* liveness clean — no
+  honest alt block is refused for an archival fact. *Costs:* a block whose
+  attestation is malformed, whose root does not recompute, or whose
+  countersignatures are forged is **stored** and refused at promotion —
+  PoW-bounded like B5, and no worse in kind. *But:* **CEN-K4 names CEN-B4
+  in the admission tier (`E5-15`), so a K-row does require the check
+  before storage.** β is not a tier choice E5 can default; it is an
+  amendment to a ratified census row, and the row's own note calls the
+  deferral set "the reorg path's central unexamined design decision" —
+  which is to say the row is exactly where that decision was recorded.
+- **γ — split B4 across the tiers.** The stateless half (extra parse,
+  49-byte records and cap, witness decode and pairing, root recompute, the
+  A3 empty-witness arm) and the anchor window (a header fact the stitched
+  view answers honestly, as the C++'s `fill_pass_anchor_window(…,
+  alt_chain, …)` does) in the cheap tier; the bond-key countersignature
+  verification — the one archival read — promotion's. *Keeps:* liveness
+  clean, the `attestation_root` commitment checked before storage, the
+  window checked before storage. *Costs:* a forged-signature block under a
+  key nobody bonded is stored, PoW-bounded. *But:* it still amends K4 (B4
+  is no longer whole at admission), and it contradicts B4's own contract —
+  "every one is this row at `Locus::Block` — the census splits none of
+  them" (`attestation.rs:77–78`): a cheap tier that records B4 after half
+  of B4 has run makes coverage say a row ran when it did not, so γ needs a
+  B4a/B4b census split as well. Smaller than β in what it defers, larger
+  in what it touches.
+
+**By the ruling's own criterion the default stands** (a K-row requires the
+check; `E5-15`), and the §4 fixture is rewritten to assert and name the
+refusal rather than measure it. The question stays HELD until the ruling
+confirms or chooses β/γ with the census amendment named: a4 does not land
+before then. **Reopen (rule 21):** an as-of-height archival read landing
+in the settlement writer (`PDM-Q3`'s re-key reversed) removes the
+approximation and with it the liveness cost — then α becomes the real read
+and this question closes without a tier change.
 
 ### E5-Q5 — Does `ForkChoiceVerdict` gain a `ForcedSwitch` arm, and is K7's discard a match on it?
 
@@ -703,6 +913,9 @@ switch carries a boolean beside it — the C++'s shape, inherited. **Falsifier.*
 A caller that needs *forced* and *switch* to be the same arm — the C++ is
 the only one, and its reading is the line the default changes.
 
+**Ruled 2026-10-10 — yes, as defaulted:** `ForcedSwitch`, with the
+one-line C++ shim at `:2291` in the same commit (a5).
+
 ### E5-Q6 — Is the reorg cap checked before the first pop, as a local refusal?
 
 **Default.** Yes: `depth > rule_set.reorg_cap()` refuses before step 1 of
@@ -713,12 +926,21 @@ nothing and conflates "too deep" with "below the floor". **Otherwise.** The
 floor belt alone, which cannot tell the two apart. **Falsifier.** §4's
 floor fixture cannot distinguish the refusals.
 
+**Ruled 2026-10-10 — yes, as defaulted, with the reason in one line:**
+the cap is a **policy** limit and `PopBelowFloor` is a **capability**
+limit, and two independent operands earn two refusals — the same
+discriminator as SLK-2 and the `PopBeyondReorgCap` refusal, its third
+application. The line goes in the refusal type's doc (a6).
+
 ### E5-Q7 — Does E5 add a bound on alt-block storage beyond K4's PoW?
 
 **Default.** No (rule 21: rejected with the reopen in §4). **Why.** The C++
 has none, SAL-8 drops the table at open, AL6 is the metric. **Otherwise.** A
 count or age cap, with its own eviction order to rule. **Falsifier.** A
 stressnet AL6 series under adversarial mining that PoW cost does not bound.
+
+**Ruled 2026-10-10 — no, as defaulted** (rule-21 rejection; the §4 reopen
+is the AL6 series).
 
 ### E5-Q8 — Is `fcmp_cache` seeded for a demoted block's transactions?
 
@@ -728,6 +950,9 @@ of a block the switch is in the act of refusing. The cost is bounded by
 `D_max` blocks of proofs. **Otherwise.** The switch computes and seeds the
 hash from the demoted bytes. **Falsifier.** A measured switch at `D_max` on
 the floor device exceeding the block interval.
+
+**Ruled 2026-10-10 — no, as defaulted:** seeding is a provenance
+violation — the cache would record a verification nobody performed.
 
 ### E5-Q9 — Does the lane extend the E2 corpus with a reorg capture?
 
@@ -740,12 +965,16 @@ switch is never compared to the Rust's. **Falsifier.** The capture's
 digest after the switch differs from the never-switched chain's — which is
 a finding either way.
 
+**Ruled 2026-10-10 — yes, one capture (a7).**
+
 ### E5-Q10 — PR-a before PR-b?
 
 **Default.** Yes (§5). **Otherwise.** b-then-a, with K9/K10 landing in
 their own PR and the pool's returns path untestable until the switch exists.
 **Falsifier.** PR-a's `Vec<Transaction>` return has a second caller before
 PR-b — then it is a silent interface, and b goes first.
+
+**Ruled 2026-10-10 — yes, PR-a first.**
 
 ### E5-Q11 — Does `--keep-alt-blocks` die with DEL-009?
 
@@ -754,6 +983,8 @@ unconditionally. **Why.** SAL-8: the C++'s own default is empty-at-open; a
 flag that preserves alt blocks preserves nothing a rule reads. **Otherwise.**
 A Rust flag with the same semantics. **Falsifier.** A production consumer of
 alt blocks across a restart — none exists (`CEN-K8`'s enumeration).
+
+**Ruled 2026-10-10 — yes, as defaulted.**
 
 ---
 
@@ -776,3 +1007,4 @@ Not E5's; found while reading the census at the pin.
 | Date | Entry |
 | --- | --- |
 | 2026-10-10 | Round 0 posed at `dev@14d68c00fc`. Pre-flight `E5-1…E5-12` (§1.7); questions `E5-Q1…E5-Q11` (§8) with defaults. Families `E5-`/`E5-Q` registered (index §2). `DEL-009` and `DEL-010` minted in `DAEMON_REDB_STORE.md` §12, `Planned`. Denominator corrected to 25 / 42 (`E5-3`; §7). No code. Halt for Round 1. |
+| 2026-10-10 | **Round 1 ruled apart from `E5-Q4`.** Q1, Q5, Q7–Q11 as defaulted; Q2 with the never-a-rule condition on the crate doc; Q3 the split, commit 1 owing the `header.rs` partition; Q6 with the policy-vs-capability line. 25 / 42 accepted; `DEL-009`/`DEL-010` `Planned` approved. Branch merged to `dev@ac95d6d04` (one conflict, `DAEMON_REDB_STORE.md` §12, both sides kept; coverage 118/151 and inland-height 151/151 unchanged on the merged tree); draft PR #1026 opened. **PR-a commit 1** measured the partition: `E5-13` (`block_at`'s record carries executed fields → `HeaderRecord`/`header_at`), `E5-14` (`header.rs` is B1/B2/B6 form + B5 promotion; the five re-bounded files are anchors, timestamps, pow, difficulty, attestation; `HeaderView` is `tip` + `header_at`), `E5-15` (CEN-K4 names CEN-B4 at admission). `E5-Q4` HELD, priced α/β/γ in §8: by the ruling's criterion the default stands; the §4 fixture asserts and names the refusal. §2.1 carries the CEN-B5 statement. a4 blocked on `E5-Q4`. |
