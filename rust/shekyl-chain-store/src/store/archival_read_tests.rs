@@ -4,11 +4,13 @@
 // BSD-3-Clause
 
 //! Tests for the archival reads (`store/archival_reads.rs`, DRS-E1 S-ARCH
-//! A1–A10; DRS-E4 A11–A13; `SO-D10` A14–A16). Every planted state is
+//! A1–A10; DRS-E4 A11–A13; `SO-D10` A14–A16; `SO-D11` A17). Every planted state is
 //! written raw through the schema's own table handles and asserted on a
 //! fresh snapshot: the reads' contract is with the bytes a writer leaves,
 //! not with any writer, so the reads are tested apart from the writers
 //! (`archival_write_tests`, `slash_scan_bench_tests`).
+
+use std::collections::BTreeMap;
 
 use redb::Value;
 use shekyl_chain_rules::AtHeight;
@@ -670,7 +672,7 @@ fn a13_budget_accruing_is_the_open_epochs_row_and_none_otherwise() {
 }
 
 // ---------------------------------------------------------------------------
-// A14–A16 — settlement's reads (`SO-D10`). Every row is planted: the reads
+// A14–A17 — settlement's reads (`SO-D10`, A17 from `SO-D11`). Every row is planted: the reads
 // are tested apart from the slash pass that writes the rows
 // (`slash_scan_bench_tests`).
 // ---------------------------------------------------------------------------
@@ -831,6 +833,134 @@ fn a16_issued_digest_is_the_epochs_cell_and_zero_when_nothing_was_folded() {
     assert_eq!(snap.issued_digest(epoch(5)).unwrap(), digest);
     assert_eq!(snap.issued_digest(epoch(4)).unwrap(), IssuedDigest::ZERO);
     assert_eq!(snap.issued_digest(epoch(6)).unwrap(), IssuedDigest::ZERO);
+    cleanup(&path);
+}
+
+/// `(P, 0, 0)..=(P, MAX, MAX)` and `(P, shard, 0)..=(P, shard, MAX)`. The
+/// hop and the window walk are these two ranges; a hand-built tuple would
+/// be a second definition of `SO-D2`.
+#[test]
+fn settlement_key_ranges_are_the_persona_and_the_pair() {
+    let p = persona(0xa7);
+    let persona_span = SettlementKey::persona_range(p);
+    assert_eq!(
+        *persona_span.start(),
+        SettlementKey::new(p, ShardId::ZERO, SettlementEpoch::ZERO).key()
+    );
+    assert_eq!(
+        *persona_span.end(),
+        SettlementKey::new(
+            p,
+            ShardId::from_raw(u64::MAX),
+            SettlementEpoch::from_raw(u64::MAX)
+        )
+        .key()
+    );
+    let pair_span = SettlementKey::shard_range(p, shard(100));
+    assert_eq!(
+        *pair_span.start(),
+        SettlementKey::new(p, shard(100), SettlementEpoch::ZERO).key()
+    );
+    assert_eq!(
+        *pair_span.end(),
+        SettlementKey::new(p, shard(100), SettlementEpoch::from_raw(u64::MAX)).key()
+    );
+}
+
+/// A17 hops shards and point-reads the cited epochs. A gap between shard
+/// ids, a Missed row, a NonObservation, an uncited Served row, another
+/// persona, and a repeated citation each have one answer: the cited
+/// epochs' Served shards, ascending, each shard once. A corrupt row on an
+/// epoch the caller did not cite is not decoded; the same bytes on a cited
+/// epoch are SI-7.
+#[test]
+fn a17_served_at_hops_shards_and_point_reads_the_cited_epochs() {
+    let path = tmp("arch-a17");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let p = persona(0xa7);
+    let other = persona(0xa8);
+    assert!(store
+        .begin_read()
+        .unwrap()
+        .served_at(&p, &[epoch(2), epoch(9)])
+        .unwrap()
+        .is_empty());
+    drop(store);
+
+    let served = SettlementRow::settle(2, 3).expect("two of three");
+    let missed = SettlementRow::settle(1, 3).expect("one of three");
+    let unobserved = SettlementRow::settle(0, 1).expect("fewer than three");
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_SETTLEMENT).expect("t");
+        t.insert(
+            SettlementKey::new(p, shard(1), epoch(2)).key(),
+            missed.encoded().as_encoded(),
+        )
+        .expect("insert");
+        t.insert(
+            SettlementKey::new(p, shard(1), epoch(9)).key(),
+            served.encoded().as_encoded(),
+        )
+        .expect("insert");
+        t.insert(
+            SettlementKey::new(p, shard(5), epoch(7)).key(),
+            served.encoded().as_encoded(),
+        )
+        .expect("insert");
+        t.insert(
+            SettlementKey::new(p, shard(100), epoch(2)).key(),
+            served.encoded().as_encoded(),
+        )
+        .expect("insert");
+        t.insert(
+            SettlementKey::new(p, shard(100), epoch(9)).key(),
+            unobserved.encoded().as_encoded(),
+        )
+        .expect("insert");
+        t.insert(
+            SettlementKey::new(other, shard(1), epoch(2)).key(),
+            served.encoded().as_encoded(),
+        )
+        .expect("insert");
+        // Uncited, and not a settlement its counts give: decoding it is
+        // SI-7. The hop leaves an epoch the caller did not name unread.
+        t.insert(
+            SettlementKey::new(p, shard(1), epoch(4)).key(),
+            <Coded<SettlementRow> as Value>::from_bytes(&[0x01, 1, 3]),
+        )
+        .expect("insert");
+    });
+
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    assert!(snap.served_at(&p, &[]).unwrap().is_empty());
+    let cited = snap.served_at(&p, &[epoch(9), epoch(2), epoch(9)]).unwrap();
+    let mut expect = BTreeMap::new();
+    expect.insert(epoch(2), vec![shard(100)]);
+    expect.insert(epoch(9), vec![shard(1)]);
+    assert_eq!(cited, expect);
+    assert_eq!(
+        snap.served_at(&other, &[epoch(2)]).unwrap(),
+        BTreeMap::from([(epoch(2), vec![shard(1)])])
+    );
+    drop(snap);
+    drop(store);
+
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_SETTLEMENT).expect("t");
+        t.insert(
+            SettlementKey::new(p, shard(1), epoch(9)).key(),
+            <Coded<SettlementRow> as Value>::from_bytes(&[0x01, 1, 3]),
+        )
+        .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let err = store
+        .begin_read()
+        .unwrap()
+        .served_at(&p, &[epoch(9)])
+        .unwrap_err();
+    assert!(is_si7_undecodable(&err, "archival_settlement"), "{err}");
     cleanup(&path);
 }
 

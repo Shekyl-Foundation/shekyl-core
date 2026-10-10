@@ -54,9 +54,10 @@ The three Shekyl mechanisms absent from the ArticMine calibration:
    `b = min(0.9, 0.5·sqrt(v/50)·circulating/total)`
    (`rust/shekyl-economics/src/burn.rs`).
 3. **Emission split** — the miner receives `(1 − σ(t))` of the (penalized,
-   modulated) block emission, `σ(0) = 0.15` decaying `×0.9` per year
-   (`rust/shekyl-economics/src/emission_share.rs`,
-   `src/shekyl/economics.h:95-116`).
+   modulated) block emission. `σ` is 0 at height 0 and 0.15 at block 1
+   (`EMISSION_SPLIT_EPOCH`), then decays `×0.9` per year measured from
+   block 1 (`rust/shekyl-economics/src/emission_share.rs`,
+   `compute_emission_split` in `src/shekyl/economics.h`).
 
 ### §0.1 Census collision and sequencing hold (coordination, 2026-09-03)
 
@@ -324,7 +325,7 @@ hysteresis/smoothing on `C`, then re-test; if still divergent, surface in
 
 A module in `rust/shekyl-economics-sim` (extending the existing sim per the
 drift-pair ban) that calls the **canonical** `shekyl-economics` functions —
-`calc_burn_pct`, `calc_release_multiplier`, `calc_effective_emission_share`,
+`calc_burn_pct`, `calc_release_multiplier`, `emission_share`,
 and the KAT-pinned penalty via the crate's block-reward entry point — and
 reimplements none of them. Hand arithmetic in this document is illustration;
 the tables in §4 come from the instrument.
@@ -392,7 +393,7 @@ by FL-R17.
   `blockchain.cpp:4541` (`get_dynamic_base_fee_estimate_2021_scaling`).
 - Additionally — a factor the brief did not list — the miner does not
   receive the whole modulated reward: `compute_emission_split`
-  (`blockchain.cpp:1795-1798`, `src/shekyl/economics.h:95-116`) diverts
+  (`validate_miner_transaction` in `blockchain.cpp`; the wrapper is in `src/shekyl/economics.h`) diverts
   `σ(t)` (15% at genesis, ×0.9/year) to the staker pool, and the split
   operand is the modulated reward (per the F-B1c block comment at
   `blockchain.cpp:6349-6365`), so the miner bears exactly `(1−σ)` of any

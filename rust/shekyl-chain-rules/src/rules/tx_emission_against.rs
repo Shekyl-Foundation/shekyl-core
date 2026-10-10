@@ -16,20 +16,25 @@
 //! fee-input proof at `:4046–4105`).
 //!
 //! **One gather for two readers.** The snapshot a claim is verified over is
-//! assembled by [`gather_epoch_snapshot`] — the same function the epoch
-//! close folded `Σwork(E)` from (`archival/close.rs`, `Transition::close`)
-//! — over the same universe: the closed shards *before* the close height,
-//! and every record with a recorded credit at `E`. The verify's recompute
-//! of `Σwork(E)` is then over the rows the close saw, and the compare with
-//! the frozen row (`EmissionVerifyError::SigmaWorkMismatch`) can fail only
-//! on a claim that lies, never on a snapshot that drifted. The C++ reaches
-//! the frozen operands through one LMDB gather too (`db_lmdb.cpp:7708`,
-//! `gather_archival_emission_epoch_snapshot`), **but reads the shard
-//! segments and bond values as they are now** rather than as of `E`'s
-//! close; the Rust reads them through [`ClosedUniverse::before`] and
-//! [`shard_close`](crate::archival::shard_close) at the close height, the
-//! same correction row 8's J15 made for the join's gather (slice 8 §5 row
-//! 9, "corpus parity — the same correction as row 8's").
+//! assembled by [`gather_epoch_snapshot`] — the same function the slash
+//! pass folded `Σwork(E)` from (`archival/close.rs`, `Transition::gather`;
+//! `ARCHIVAL_SETTLEMENT_WRITER.md` §15, `SO-D11`) — over the same
+//! universe ([`gather_universe`]: the shards closed and final as of the
+//! block that settled `E`) and the same credits: every pair whose
+//! settlement row for `E` is Served ([`ServedAt`], one read per persona
+//! for the epochs the claim cites). The verify's
+//! recompute of `Σwork(E)` is then over the rows the pass saw, and the
+//! compare with the frozen row (`EmissionVerifyError::SigmaWorkMismatch`)
+//! can fail only on a claim that lies, never on a snapshot that drifted.
+//! The bond records are read as they are now. The pass gathered after
+//! `E`'s own slashes, so a record slashed for `E` is out of `E`'s market
+//! in both readings, and a later interval opens at a later epoch. One
+//! field of a record can still move under a settled epoch: a complete
+//! tree that is slashed or released becomes a compact record, and
+//! `market_member_at_epoch` reads that flag. The epoch close had the same
+//! exposure and it is not closed here. The C++, consensus until `DEL-008`, gathers at the
+//! epoch close on any pass and reads the shard segments and bond values
+//! as they are now.
 //!
 //! **What the verify consumes and what it yields.** The crossing's inputs
 //! are the vin ([`J19::parse`]), the connecting height, the claimant's
@@ -68,9 +73,9 @@ use shekyl_archival_retention::{
     emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
     ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
 };
-use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
-use crate::archival::{gather_epoch_snapshot, recorded_credits, ClosedUniverse, EpochSnapshot};
+use crate::archival::{gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::ViewRead;
@@ -81,29 +86,43 @@ use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Verdict};
 use crate::view::{ChainView, Tip};
 
-/// CEN-J23: every claimed epoch has a **frozen budget row** — it closed
-/// and was not pruned (`has_budget_row`, `blockchain.cpp:3935`) — and its
-/// as-of-`E` snapshot is gathered for the verify. The row reads `budget(E)`
-/// (A8) and `Σwork(E)` (A7): the close writes both in one event
-/// (`EpochClose`), so a budget without a denominator is not a state the
-/// fold produces, and this row refuses it as it refuses the absent budget
-/// rather than naming a `Corrupt` for a shape nothing writes. A claimed
+/// CEN-J23: every claimed epoch is **closed and settled** — it has its
+/// frozen budget row (A8) and its `Σwork` row (A7) — and its snapshot is
+/// gathered for the verify. The two rows are written an epoch apart: the
+/// close freezes the budget at `(E+1)·SEB − 1`, and the slash pass writes
+/// `Σwork(E)` at `(E+2)·SEB − 1` (`SO-D11`). Between them the epoch has a
+/// budget and no denominator, which is an ordinary state and this row's
+/// refusal: **`Σwork`'s existence is the citing gate**, so an epoch is
+/// claimable from the block after its slash pass (`SO-D11d`). A claimed
 /// epoch so far ahead that its close height does not fit a `u64` has no
 /// close and is refused the same way.
 ///
-/// The gather is [`gather_epoch_snapshot`] over the universe the close
-/// read ([`ClosedUniverse::before`] the close height) and A11's records,
-/// with the claimant named so its index among the bonds is the source's
-/// `claimant_bond_idx`; the credits are the recorded ones
-/// ([`recorded_credits`]) — a closed epoch's credits are all recorded.
+/// The gather is [`gather_epoch_snapshot`] over the universe the pass
+/// read ([`gather_universe`]) and A11's records, with the claimant named
+/// so its index among the bonds is the source's `claimant_bond_idx`; the
+/// credits are the Served rows ([`ServedAt`]) — a settled epoch's rows are
+/// all recorded, and one read per persona covers every epoch the claim cites.
 pub(crate) struct J23;
 
 impl Rule for J23 {
     const ROW: CenRow = CenRow::J23;
 }
 
-/// One claimed epoch's gathered source: the snapshot the close read and
-/// the two values it froze. Kept whole because `EmissionEpochSource`
+/// One claimed epoch the citing gate admitted: a frozen budget, a frozen
+/// `Σwork`, and a close height. The snapshot is gathered after every cited
+/// epoch has passed the gate, so a missing row refuses before any
+/// settlement hop.
+struct CitedEpoch {
+    /// The epoch as the vin spells it.
+    raw: u64,
+    epoch: SettlementEpoch,
+    close_height: BlockHeight,
+    sigma_work_milli: u64,
+    budget: u64,
+}
+
+/// One claimed epoch's gathered source: the snapshot the slash pass read
+/// and the two values it froze. Kept whole because `EmissionEpochSource`
 /// borrows the snapshot's rows.
 struct GatheredEpoch<'r> {
     epoch: u64,
@@ -125,33 +144,46 @@ impl J23 {
         records: &'r [(PCanonicalId, shekyl_types::archival::BondRecord)],
     ) -> Result<Verdict<Vec<GatheredEpoch<'r>>>, ViewRead<V::Fault>> {
         let schedule = rule_set.settlement_schedule();
-        let mut gathered = Vec::with_capacity(vin.settlement_epochs.len());
+        // The citing gate first. A missing budget or Σwork refuses the
+        // claim before any persona's settlement rows are read.
+        let mut cited = Vec::with_capacity(vin.settlement_epochs.len());
         for &epoch in &vin.settlement_epochs {
-            let e = SettlementEpoch::from_raw(epoch);
+            let settled = SettlementEpoch::from_raw(epoch);
             let (Some(budget), Some(sigma_work), Some(close_height)) = (
-                view.budget(e).map_err(ViewRead::View)?,
-                view.sigma_work(e).map_err(ViewRead::View)?,
+                view.budget(settled).map_err(ViewRead::View)?,
+                view.sigma_work(settled).map_err(ViewRead::View)?,
                 schedule.close_height(epoch).map(BlockHeight::from_raw),
             ) else {
                 return Ok(Err(InvalidBlock::new(Self::ROW, cx.locus())));
             };
-            // The close ran at the block whose connecting height is one
-            // below the close height (`Transition::close`: `count =
-            // connecting + 1 = (E + 1) · SEB`), and read the universe
-            // before that connecting height.
-            let Some(closing_connected) = close_height.checked_sub_count(BlockCount::ONE) else {
-                return Ok(Err(InvalidBlock::new(Self::ROW, cx.locus())));
-            };
-            let universe = ClosedUniverse::before(view, closing_connected)?;
-            let snapshot = gather_epoch_snapshot(view, &universe, records, Some(persona), |p| {
-                recorded_credits(view, *p, e)
-            })?;
-            gathered.push(GatheredEpoch {
-                epoch,
+            cited.push(CitedEpoch {
+                raw: epoch,
+                epoch: settled,
                 close_height,
-                snapshot,
                 sigma_work_milli: sigma_work.to_raw(),
                 budget: budget.to_raw(),
+            });
+        }
+        let epochs: Vec<SettlementEpoch> = cited.iter().map(|cited| cited.epoch).collect();
+        let credits = ServedAt::read(view, records.iter().map(|(persona, _)| *persona), &epochs)?;
+        let mut gathered = Vec::with_capacity(cited.len());
+        for cited in cited {
+            let universe = gather_universe(view, schedule, rule_set.reorg_cap(), cited.epoch)?;
+            let rows = records.iter().map(|(persona, record)| (persona, record));
+            let snapshot = gather_epoch_snapshot(view, &universe, rows, Some(persona), |holder| {
+                Ok(credits
+                    .shards(holder, cited.epoch)
+                    .iter()
+                    .copied()
+                    .map(ShardId::to_raw)
+                    .collect())
+            })?;
+            gathered.push(GatheredEpoch {
+                epoch: cited.raw,
+                close_height: cited.close_height,
+                snapshot,
+                sigma_work_milli: cited.sigma_work_milli,
+                budget: cited.budget,
             });
         }
         Ok(Ok(gathered))

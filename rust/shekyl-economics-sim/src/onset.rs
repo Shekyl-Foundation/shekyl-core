@@ -67,7 +67,7 @@
 use std::fmt;
 
 use serde::Serialize;
-use shekyl_economics::{calc_effective_emission_share, params::SCALE};
+use shekyl_economics::{emission_share, params::SCALE};
 
 use crate::burden::{KryderRate, OPP_COST_RATE_BAND, REPLICAS_PER_SHARD, SKL_FIAT_PRICE_BAND};
 use crate::engine::{ScenarioConfig, SimParams};
@@ -208,9 +208,8 @@ impl Lever {
 #[must_use]
 pub fn emission_leg_at_decay(a: &A1YearAgg, params: &SimParams, annual_decay: u64) -> u128 {
     let mid_height = a.start_height + params.blocks_per_year / 2;
-    let share = calc_effective_emission_share(
+    let share = emission_share(
         mid_height,
-        crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT,
         params.staker_emission_share,
         annual_decay,
         params.blocks_per_year,

@@ -72,5 +72,5 @@ pub(crate) mod task;
 pub(crate) mod tor_config;
 
 pub use start::ServingStartError;
-pub use task::{ServingHandle, ServingPosture};
+pub use task::{ServingHandle, ServingPosture, ServingStatus};
 pub use tor_config::TorConfigError;

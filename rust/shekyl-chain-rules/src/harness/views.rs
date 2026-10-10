@@ -11,6 +11,8 @@
 //! key is not canonical. When a mock is the right instrument at all is
 //! [`MockChain`](super::MockChain)'s charter.
 
+use std::collections::BTreeMap;
+
 use core::convert::Infallible;
 
 use shekyl_crypto_pq::signature::HybridPublicKey;
@@ -419,5 +421,13 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
 
     fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, Infallible> {
         self.inner.issued_digest(epoch)
+    }
+
+    fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epochs: &[SettlementEpoch],
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Infallible> {
+        self.inner.served_at(persona, epochs)
     }
 }

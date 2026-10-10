@@ -43,14 +43,17 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.43: `request_archival_shard` is served
-/// natively over the W-shard view (`archival.rs`; `SHARD_VIEW_FETCH.md`
-/// `SV-D3`): the response gains `archival_len` and `close_height`, and an
-/// open shard and an absent skeleton answer with their own codes (-24, -25)
-/// rather than sharing the miss's -22. `get_version` gains nothing. 3.42:
-/// `get_info` reports `already_generated_coins`, the gross coins emitted
-/// through the tip. `get_version` gains nothing. 3.41:
-/// `inject_archival_serve_credit` (regtest
+/// `CORE_RPC_VERSION_MINOR`. 3.44: `get_version` drops `hard_forks` and the
+/// `hard_fork_info` method is deleted — the block version is the constant 1,
+/// so there is no schedule to report and no activation to query.
+/// `get_version` loses that member and gains nothing else. 3.43:
+/// `request_archival_shard` is served natively over the W-shard view
+/// (`archival.rs`; `SHARD_VIEW_FETCH.md` `SV-D3`): the response gains
+/// `archival_len` and `close_height`, and an open shard and an absent
+/// skeleton answer with their own codes (-24, -25) rather than sharing the
+/// miss's -22. `get_version` gains nothing. 3.42: `get_info` reports
+/// `already_generated_coins`, the gross coins emitted through the tip.
+/// `get_version` gains nothing. 3.41: `inject_archival_serve_credit` (regtest
 /// only) returns its receipt — `height`, the tip's block **index** the row
 /// was keyed at, read under the lock with the write; the chain-vector
 /// capture replays the injection as a corpus event at exactly that height
@@ -116,8 +119,11 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// served natively over the W-shard view (`archival.rs`): the response
 /// gains `archival_len` and `close_height`, and the open-shard and
 /// skeleton-absent refusals get their own codes (`SHARD_VIEW_FETCH.md`
-/// `SV-D3`, `SV-D5`, `SV-D9`).
-pub const CORE_RPC_VERSION_MINOR: u32 = 43;
+/// `SV-D3`, `SV-D5`, `SV-D9`); 3.44 `get_version` loses `hard_forks` and
+/// `hard_fork_info` is deleted. Both branches had written 3.43; the
+/// deletion is chained after the shard view, the same way 3.34 was
+/// chained after 3.33.
+pub const CORE_RPC_VERSION_MINOR: u32 = 44;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -186,10 +192,8 @@ pub const CORE_RPC_ERROR_CODE_INTERNAL_ERROR: i64 = -5;
 /// `CHECK_CORE_READY()` set `status = BUSY` and returned success, leaving the
 /// reply's `block_header` default-constructed — so a client that read the
 /// header without checking the status got a block at height 0 with a zero
-/// hash. That is not hypothetical: `shekyl-rpc-client`'s
-/// `get_hardfork_version` reads `block_header.major_version` straight
-/// through, and against an unsynchronised C++ daemon it silently returned
-/// version 0. Refusing is the ruling this slice already applied twice
+/// hash, and one that read `block_header.major_version` straight through
+/// got version 0. Refusing is the ruling this slice already applied twice
 /// (`pow_hash_or_refuse`, and `5b0c32f51`'s "loud, never the degrade arm"):
 /// a method that declines to answer must not report success.
 pub const CORE_RPC_ERROR_CODE_CORE_BUSY: i64 = -9;
@@ -375,15 +379,6 @@ pub struct GetBlockHeaderByHeightResponse {
     pub block_header: BlockHeader,
 }
 
-/// One row of [`GetVersionResponse::hard_forks`]: the version that activates
-/// at `height`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HardForkEntry {
-    pub hf_version: u8,
-    pub height: u64,
-}
-
 /// Result of the `get_version` JSON-RPC method (no params).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -401,10 +396,6 @@ pub struct GetVersionResponse {
     /// reported none. A synchronized node with a target reports that target.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub target_height: u64,
-    /// The hard-fork schedule. Omitted on the wire when empty
-    /// (`KV_SERIALIZE_OPT(hard_forks, {})`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hard_forks: Vec<HardForkEntry>,
 
     // The three identity-tuple fields (VC-2). Each is MANDATORY and strict:
     // no `default`, no `Option`, no catch-all variant (VC-D14). `get_version`
@@ -523,10 +514,12 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_651);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 43);
+        // 3.44 drops `hard_forks`. 3.43 was already the native shard view;
+        // both branches had written 43, so the deletion took the next minor.
+        assert_eq!(CORE_RPC_VERSION, 196_652);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 44);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 43);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 44);
     }
 
     #[test]

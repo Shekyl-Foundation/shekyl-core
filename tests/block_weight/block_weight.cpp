@@ -99,37 +99,27 @@ public:
     return top;
   }
   virtual void pop_block(cryptonote::block &blk, std::vector<cryptonote::transaction> &txs) override { blocks.pop_back(); }
-  virtual void set_hard_fork_version(uint64_t height, uint8_t version) override { if (height >= hf.size()) hf.resize(height + 1); hf[height] = version; }
-  virtual uint8_t get_hard_fork_version(uint64_t height) const override { if (height >= hf.size()) return 255; return hf[height]; }
 
 private:
   std::vector<block_t> blocks;
-  std::vector<uint8_t> hf;
 };
 
 }
 
-#define PREFIX_WINDOW(hf_version,window) \
+#define PREFIX_WINDOW(window) \
   std::unique_ptr<cryptonote::Blockchain> bc; \
   cryptonote::tx_memory_pool txpool(*bc); \
   bc.reset(new cryptonote::Blockchain(txpool)); \
-  struct get_test_options { \
-    const std::pair<uint8_t, uint64_t> hard_forks[3]; \
-    const cryptonote::test_options test_options = { \
-      hard_forks, \
-      window, \
-    }; \
-    get_test_options(): hard_forks{std::make_pair(1, (uint64_t)0), std::make_pair((uint8_t)hf_version, (uint64_t)LONG_TERM_BLOCK_WEIGHT_WINDOW), std::make_pair((uint8_t)0, (uint64_t)0)} {} \
-  } opts; \
+  const cryptonote::test_options test_options = {window}; \
   cryptonote::Blockchain *blockchain = bc.get(); \
-  bool r = blockchain->init(new TestDB(), cryptonote::FAKECHAIN, true, &opts.test_options, 0); \
+  bool r = blockchain->init(new TestDB(), cryptonote::FAKECHAIN, true, &test_options, 0); \
   if (!r) \
   { \
     fprintf(stderr, "Failed to init blockchain\n"); \
     exit(1); \
   }
 
-#define PREFIX(hf_version) PREFIX_WINDOW(hf_version, LONG_TERM_BLOCK_WEIGHT_WINDOW)
+#define PREFIX() PREFIX_WINDOW(LONG_TERM_BLOCK_WEIGHT_WINDOW)
 
 static uint32_t lcg_seed = 0;
 
@@ -141,7 +131,7 @@ static uint32_t lcg()
 
 static void test(test_t t, uint64_t blocks)
 {
-  PREFIX(10);
+  PREFIX();
 
   for (uint64_t h = 0; h < LONG_TERM_BLOCK_WEIGHT_WINDOW; ++h)
   {

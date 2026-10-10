@@ -429,11 +429,7 @@ TEST(archival_serve_credit, gate2_integration_check_archival_serve_credit_input)
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
   // init() takes ownership; ~Blockchain deletes the DB in deinit().
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
@@ -483,11 +479,7 @@ TEST(archival_serve_credit, gate2_check_tx_inputs_derives_the_block_hash_from_th
 
     BlockchainAndPool bap;
     cryptonote::Blockchain* bc = &bap.bc;
-    const std::pair<uint8_t, uint64_t> hard_forks[] = {
-      std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-      std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-    };
-    const cryptonote::test_options test_options = {hard_forks, 5000};
+    const cryptonote::test_options test_options = {5000};
     if (!bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0))
       throw std::runtime_error("Blockchain::init failed");
 
@@ -522,11 +514,7 @@ TEST(archival_serve_credit, gate2_integration_rejects_serve_at_join_epoch)
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
@@ -545,11 +533,7 @@ TEST(archival_serve_credit, gate2_seal_committed_guard_precedes_the_block_hash_r
   const IntegrationKat kat = load_integration_kat();
   const txin_archival_serve_credit_response resp = load_serve_credit_vin(kat.wire_hex);
 
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
 
   // current_height == h_seal: the seal block's index is one past the tip, so the
   // guard rejects and the block-hash read is never reached.
@@ -640,11 +624,7 @@ TEST(archival_serve_credit, gate2_accepts_credit_when_held_at_fire_but_dropped_b
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
   EXPECT_TRUE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
@@ -675,11 +655,7 @@ TEST(archival_serve_credit, gate2_rejects_credit_when_not_held_at_fire)
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,
@@ -704,11 +680,7 @@ TEST(archival_serve_credit, gate2_integration_rejects_duplicate_credit_bit)
 
   BlockchainAndPool bap;
   cryptonote::Blockchain* bc = &bap.bc;
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
   ASSERT_TRUE(bc->init(db.release(), cryptonote::FAKECHAIN, true, &test_options, 0));
 
   EXPECT_FALSE(bc->check_archival_serve_credit_input(resp, bytes_from_hex(kat.pruned_hex), kat.current_height,

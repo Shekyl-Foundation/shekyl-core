@@ -529,37 +529,6 @@ impl BlockHeaderFactsFfi {
     }
 }
 
-/// Twin of `shekyl_rpc_hardfork_entry`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HardforkEntryFfi {
-    pub version: u8,
-    pub reserved: [u8; 7],
-    pub height: u64,
-}
-
-/// Twin of `shekyl_rpc_hard_fork_facts` (RK-5b).
-///
-/// **Two versions, named apart.** `queried_version` is what the voting fields
-/// describe — the caller's, or the resolved next-fork version when the caller
-/// asked with none. `active_version` is the chain's current fork. The C++ this
-/// replaces reported the second under the name `version` while the voting
-/// fields described the first, and echoed nothing of the query.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HardForkFactsFfi {
-    pub earliest_height: u64,
-    pub window: u32,
-    pub votes: u32,
-    pub threshold: u32,
-    pub state: u32,
-    pub queried_version: u8,
-    pub active_version: u8,
-    pub voting: u8,
-    pub enabled: u8,
-    pub reserved: [u8; 4],
-}
-
 /// Twin of `shekyl_rpc_fee_estimate_facts` (RK-5b).
 ///
 /// `fees` is one slot per priced tier: `[economy, standard, priority]`.
@@ -574,18 +543,6 @@ pub struct FeeEstimateFactsFfi {
     pub fee_count: u8,
     pub reserved: [u8; 7],
 }
-
-const _: () = assert!(std::mem::size_of::<HardForkFactsFfi>() == 32);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, earliest_height) == 0);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, window) == 8);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, votes) == 12);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, threshold) == 16);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, state) == 20);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, queried_version) == 24);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, active_version) == 25);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, voting) == 26);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, enabled) == 27);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, reserved) == 28);
 
 const _: () = assert!(std::mem::size_of::<FeeEstimateFactsFfi>() == 40);
 const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fees) == 0);
@@ -747,11 +704,6 @@ const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 30);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 31);
 
 extern "C" {
-    pub fn shekyl_rpc_hard_fork_info(
-        h: *mut CoreRpcHandle,
-        requested_version: u8,
-        out: *mut HardForkFactsFfi,
-    ) -> i32;
     pub fn shekyl_rpc_fee_estimate(
         h: *mut CoreRpcHandle,
         grace_blocks: u64,
@@ -795,15 +747,6 @@ extern "C" {
     /// cannot fail.
     pub fn shekyl_rpc_peerlist_limits(out_white: *mut u32, out_gray: *mut u32);
     pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
-    /// Fills a C++-owned view of the hard-fork schedule; release the owner
-    /// with `shekyl_rpc_hardforks_free`.
-    pub fn shekyl_rpc_hardforks(
-        h: *mut CoreRpcHandle,
-        out: *mut *const HardforkEntryFfi,
-        out_len: *mut usize,
-        out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    pub fn shekyl_rpc_hardforks_free(owner: *mut std::ffi::c_void);
     pub fn shekyl_rpc_block_hash_at(
         h: *mut CoreRpcHandle,
         height: u64,
@@ -1013,14 +956,6 @@ mod unit_test_link_stubs {
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_free_string(_s: *mut std::os::raw::c_char) {}
     #[no_mangle]
-    pub extern "C" fn shekyl_rpc_hard_fork_info(
-        _h: *mut CoreRpcHandle,
-        _requested_version: u8,
-        _out: *mut HardForkFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
     pub extern "C" fn shekyl_rpc_fee_estimate(
         _h: *mut CoreRpcHandle,
         _grace_blocks: u64,
@@ -1114,17 +1049,6 @@ mod unit_test_link_stubs {
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
     }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_hardforks(
-        _h: *mut CoreRpcHandle,
-        _out: *mut *const HardforkEntryFfi,
-        _out_len: *mut usize,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_hardforks_free(_owner: *mut std::ffi::c_void) {}
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_block_at(
         _h: *mut CoreRpcHandle,

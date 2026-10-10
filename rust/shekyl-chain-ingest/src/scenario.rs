@@ -53,7 +53,7 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{
     form, seed_height, ArchivalDelta, Candidate, CenRow, FormAttempt, InvalidBlock, PaidEmission,
-    RuleSet, Substrate, Weights, EMISSION_SPLIT_EPOCH,
+    RuleSet, Substrate, Weights,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -489,7 +489,6 @@ where
                 // validator's own definition. (Zero until a scenario chain
                 // issues `T` ids; it was a literal zero until wave B.)
                 closed_shards: facts.closed_shards,
-                emission_split_epoch: EMISSION_SPLIT_EPOCH,
             },
             params: &self.params,
             miner: &self.miner,

@@ -79,9 +79,12 @@
 //! miner's (the nonce search over the returned block), and difficulty is
 //! CEN-D4's — a template does not know the target and does not need to.
 //! It holds no **pool**: which bodies are offered, and in what order, is
-//! the mempool's. The one selection decision it owns is the rule a
-//! producer applies to each offered body — [`Fill`], lifted from
-//! `fill_block_template` — and that rule is policy, not consensus.
+//! the mempool's. The selection decision it owns is [`Fill`], the ruled
+//! reward-aware policy: admit a body only when listing it does not lower
+//! the gross coinbase. That rule is policy, not consensus. The daemon's
+//! live scan, `tx_memory_pool::fill_block_template`, is the other policy
+//! (one body may cross the median, then the scan ends). [`Fill`] replaces
+//! that scan once the coinbase reserve is derived; it does not describe it.
 //!
 //! # How it is tested, by design
 //!
@@ -147,8 +150,6 @@ pub struct EmissionOperands {
     /// Closed transaction-shard count for the burn escalation (CEN-F17),
     /// read at parent state by `shekyl_chain_rules::closed_shards_before`.
     pub closed_shards: ClosedShardCount,
-    /// The height the staker share's decay is measured from (CEN-F21).
-    pub emission_split_epoch: BlockHeight,
 }
 
 /// Everything a template is a function of. Pure: two contexts with the same
@@ -523,7 +524,6 @@ fn price_and_pay(
         total_fees: total_fees.to_raw(),
         supply,
         closed_shards: e.closed_shards,
-        split_epoch: e.emission_split_epoch.to_raw(),
         params: cx.params,
     })
     .map_err(reward_error)?;

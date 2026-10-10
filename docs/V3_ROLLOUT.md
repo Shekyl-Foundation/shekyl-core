@@ -1,6 +1,6 @@
-# Shekyl v3 Rollout (HF1)
+# Shekyl v3 Rollout
 
-> **Last updated:** 2026-07-15
+> **Last updated:** 2026-10-09
 
 ## Scope
 
@@ -9,11 +9,11 @@ on Shekyl NG.
 
 ## Activation
 
-- Consensus gate: `HF_VERSION_SHEKYL_NG = 1`
-- At/after HF1:
-  - user tx max version: `3`
-  - `pqc_auth` verification is required for non-coinbase v3 txs
-- Coinbase txs remain outside `pqc_auth` requirements
+From genesis. There is no fork gate (`design/CXX_VERSION_GATES.md` §5).
+
+- The admitted transaction version is `CURRENT_TRANSACTION_VERSION` (3).
+- `pqc_auth` verification is required for non-coinbase v3 txs.
+- Coinbase txs remain outside `pqc_auth` requirements.
 
 ## Transaction Size Impact
 

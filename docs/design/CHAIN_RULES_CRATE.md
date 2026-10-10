@@ -333,10 +333,9 @@ impl RuleSet {
 
 /// Height → rule set, per network. Nettype selects **data** (rule 71): three
 /// schedule values, one `rules_at`, no `match network` anywhere a rule runs.
-/// Seeded as the identity schedule today (every network, every height →
-/// `GENESIS`), which is what the shipped one-entry hardfork table means; the
-/// function exists so R4's state-dependent activation has a place to land
-/// without touching a caller.
+/// The schedule is the identity: every network, every height → `GENESIS`.
+/// There is no fork table. A later activation is a design document before a
+/// step is added ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuleSchedule {
     genesis: RuleSetId,                                // in force from ZERO — not optional
@@ -1662,7 +1661,7 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 | Q2 | Root type on `root_at` — bare array, mint in `shekyl-types`, or here? | **RULED 2026-09-15 — override:** mint `CurveTreeRoot` in `shekyl-types` now. "Rule 18's home is the redb-bearing curve-tree crate" is the reason to reject the default — the rules crate would depend on a store-bearing crate to *name a value*, the inversion R8 banned arriving through a type. Computation stays in the tree crate. |
 | Q3 | Payloads of `block_at` / `output_at` | **RULED 2026-09-15 — default, with a binding condition:** every field is justified by a named CEN row when introduced; `ChainView`'s narrowness is what keeps rules mockable and the mock smaller than the store. **Applied (round 2):** `output_at` has no justifiable field and is dropped (§3.3); `has_output_key` is the shape the output-key row will need. |
 | Q4 | Policy rows — same enum + `Flag`, or sibling enum? | **RULED 2026-09-15 — override:** sibling enums. A `Flag` field is a check someone can forget; two enums make proximity promotion unrepresentable; two coverage bitsets and two denominators are exactly the two-line record. §7.5.1's gate bullet names the hazard ("a policy row counted toward consensus coverage is proximity promotion arriving through the instrument"). |
-| Q5 | `RuleSetId` representation | **RULED 2026-09-15 — accept `RuleSetId(u8)`, `GENESIS = 1`, but not defined as the header major version:** its own space with an explicit `rules_at(nettype, height) -> RuleSetId` seeded as identity. The 1:1 is true only because the hardfork table has one entry — the same inertness that hid the `on_block_popped` defect; a function preserves the R4 coupling, equality erases it. (§7.5.1 already states the fork version enters through `RuleSet`.) |
+| Q5 | `RuleSetId` representation | **RULED 2026-09-15 — accept `RuleSetId(u8)`, `GENESIS = 1`, but not defined as the header major version:** its own space with an explicit `rules_at(nettype, height) -> RuleSetId` seeded as identity. The 1:1 was then true only because the hardfork table had one entry — the same inertness that hid the `on_block_popped` defect; a function preserves the distinction, equality erases it. **UPDATE 2026-10-09:** that table is deleted ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5). The 1:1 remains because there is one rule set and one block version, not because a table has one row. |
 | Q6 | `InvalidBlock` locus shape | **RULED 2026-09-15 — default.** No `detail` field: an unbounded string is not evidence (the `ReviewedDivergence` reason). |
 | Q7 | Census-parser reuse by import | **RULED 2026-09-15 — default, follow-up named not filed:** import now; extract to `_census.py` after #751 merges (blocker #751; falsifier `gh pr view 751 --json state`). **DISCHARGED 2026-09-15:** #751 merged; `scripts/ci/_census.py` extracted in this PR, both gates import it (§6.1). |
 | Q8 | Harness visibility for doctests | **RULED 2026-09-15 — default** (`cfg(any(test, doctest))`). **AMENDED BY FINDING 2026-09-15 (commit 6):** the default's premise fails — `cfg(doctest)` items are not visible to doctest snippets (§8.3); `harness` is `#[cfg(test)]`, the cross-view pin uses an inline view. Disclosed in the commit-6 message. |

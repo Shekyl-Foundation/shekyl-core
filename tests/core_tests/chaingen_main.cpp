@@ -100,7 +100,7 @@ int main(int argc, char* argv[])
     // "user-transaction chain cases", owner E2's corpus.
     GENERATE_AND_PLAY(one_block);
     GENERATE_AND_PLAY(economics_c2a_prime_layer3_pop_replay);
-    GENERATE_AND_PLAY(archival_budget_conservation_boundary);
+    GENERATE_AND_PLAY(archival_budget_conservation);
     // Block verification tests
     GENERATE_AND_PLAY(gen_block_big_major_version);
     GENERATE_AND_PLAY(gen_block_big_minor_version);
@@ -134,14 +134,10 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_miner_tx_out_is_big);
     GENERATE_AND_PLAY(gen_block_miner_tx_has_no_out);
     GENERATE_AND_PLAY(gen_block_miner_tx_has_out_to_alice);
-    GENERATE_AND_PLAY(gen_block_miner_tx_out_has_no_view_tag_before_hf_view_tags);
-    GENERATE_AND_PLAY(gen_block_miner_tx_out_has_no_view_tag_from_hf_view_tags);
-    GENERATE_AND_PLAY(gen_block_miner_tx_out_has_view_tag_before_hf_view_tags);
-    GENERATE_AND_PLAY(gen_block_miner_tx_out_has_view_tag_from_hf_view_tags);
+    GENERATE_AND_PLAY(gen_block_miner_tx_out_has_no_view_tag);
+    GENERATE_AND_PLAY(gen_block_miner_tx_out_has_view_tag);
     GENERATE_AND_PLAY(gen_block_missing_tx);
     GENERATE_AND_PLAY(gen_block_is_too_big);
-    // Disabled: no "late v1 coinbase" era in Shekyl (1 = 1 = genesis)
-    // GENERATE_AND_PLAY(gen_block_late_v1_coinbase_tx);
 
     // Transaction verification, FCMP++ transaction and staking tests were
     // removed 2026-05-05 (gen_tx_*, gen_fcmp_*, gen_staking_*/gen_claim_*/

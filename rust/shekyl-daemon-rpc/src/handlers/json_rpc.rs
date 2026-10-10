@@ -216,7 +216,6 @@ enum NativeMethod {
     LastBlockHeader,
     BlockHeaderByHash,
     BlockHeadersRange,
-    HardForkInfo,
     FeeEstimate,
     RequestArchivalShard,
 }
@@ -240,12 +239,11 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         "sync_info" => NativeMethod::SyncInfo,
         "get_connections" => NativeMethod::Connections,
         // RK-5b. Both spellings of each, as the C++ table carried them
-        // (`core_rpc_ffi.cpp:269-283`); `hard_fork_info` and
-        // `get_fee_estimate` had only one apiece there and gain none here.
+        // (`core_rpc_ffi.cpp:269-283`); `get_fee_estimate` had only one
+        // there and gains none here.
         "get_last_block_header" | "getlastblockheader" => NativeMethod::LastBlockHeader,
         "get_block_header_by_hash" | "getblockheaderbyhash" => NativeMethod::BlockHeaderByHash,
         "get_block_headers_range" | "getblockheadersrange" => NativeMethod::BlockHeadersRange,
-        "hard_fork_info" => NativeMethod::HardForkInfo,
         "get_fee_estimate" => NativeMethod::FeeEstimate,
         // One spelling: the method was born in the Rust registry (3.31)
         // and never had a C++ alias.
@@ -366,18 +364,6 @@ async fn native_method(
                         &request,
                         restricted,
                     )
-                })
-                .await,
-            ))
-        }
-        NativeMethod::HardForkInfo => {
-            let request = match crate::methods::hard_fork_info_request(params) {
-                Ok(request) => request,
-                Err(fault) => return Some(Err(fault)),
-            };
-            Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::hard_fork_info(&FfiChainFacts::new(core), &request)
                 })
                 .await,
             ))
@@ -569,7 +555,6 @@ mod tests {
             NativeMethod::BlockHeadersRange,
             false,
         ),
-        ("hard_fork_info", NativeMethod::HardForkInfo, false),
         ("get_fee_estimate", NativeMethod::FeeEstimate, false),
         (
             "request_archival_shard",
@@ -607,6 +592,10 @@ mod tests {
                 "{name} must fall through to the C++ dispatch table"
             );
         }
+        // Not dispatched natively. Nothing on this side serves the name, so
+        // whether it is answered at all is the C++ table's to say — and that
+        // table carries no row for it.
+        assert!(native_method_for("hard_fork_info").is_none());
     }
 
     /// The restricted listener never computes a pow hash, however the request

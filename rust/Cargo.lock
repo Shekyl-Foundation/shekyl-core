@@ -4632,6 +4632,8 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-p-host",
  "shekyl-p-serve",
+ "shekyl-runtime",
+ "shekyl-thread-priority",
  "shekyl-tor-control-wallet",
  "shekyl-types",
  "tempfile",
@@ -4986,6 +4988,14 @@ dependencies = [
 [[package]]
 name = "shekyl-thread-ledger"
 version = "3.1.0"
+
+[[package]]
+name = "shekyl-thread-priority"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "shekyl-timing-engine"

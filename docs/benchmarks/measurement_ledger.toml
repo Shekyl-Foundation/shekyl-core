@@ -381,6 +381,43 @@ rev_source = "not recorded in the capture; the last commit before the run's firs
 path_set = "archival-serve-fetch"
 
 [[path_set]]
+id = "serving-runtime"
+spec = [
+  "rust/shekyl-thread-priority/src",
+  "rust/shekyl-p-host/src/runtime.rs",
+]
+
+[[constant]]
+name = "serving_priority_nice"
+defined_in = "rust/shekyl-thread-priority/src/lib.rs"
+needle = "pub const SERVING_NICE: i32 = 19;"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = { low = 0.9, high = 1.0, unit = "share of the no-serve sync rate the daemon keeps" }
+basis = "BA-T5 session 2's nice arm: the serving process started under an external nice 19 beside a daemon syncing the chain on the floor device. The daemon kept 96, 97, 94 and 90 % of its no-serve sync rate at N = 8, 16, 32, 64 (cell medians over three passes, read from each window's own points), and serving delivered 5 to 8 responses per second. The shipped mechanism lowers the serving runtime's threads from inside the process to the same nice value, and nothing else; the share is expected to reproduce."
+basis_captures = ["docs/benchmarks/ba_t5_serve_floor_device_20261009_obs.tsv"]
+carrier = "The confirming floor block after SH-3 merges (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8): the syncing daemon, N = 8 and N = 64, with the thread-level mechanism in place of the external nice. Its capture makes this row current, and only a current row listens to its path set; until then a change to the priority setup does not trip the ledger."
+path_set = "serving-runtime"
+
+[[constant]]
+name = "serving_workers"
+defined_in = "rust/shekyl-p-host/src/runtime.rs"
+needle = "pub const SERVING_WORKERS: usize = 2;"
+measured_by = ["BA-T5"]
+status = "unmeasured"
+carrier = "BA-T5 (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8). A structural floor: two workers because the executor work per response is small and the path is CPU-bound on the blocking side. Unmeasured until the confirming floor block, which is the first measurement of this budget."
+path_set = "serving-runtime"
+
+[[constant]]
+name = "serving_blocking"
+defined_in = "rust/shekyl-p-host/src/runtime.rs"
+needle = "pub const SERVING_BLOCKING: usize = MAX_INFLIGHT;"
+measured_by = ["BA-T5"]
+status = "unmeasured"
+carrier = "BA-T5 (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8). One blocking thread per permitted connection, because each connection has at most one hop in flight. The cap is MAX_INFLIGHT, recorded separately as p_serve_max_inflight. Unmeasured until the confirming floor block."
+path_set = "serving-runtime"
+
+[[path_set]]
 id = "p-serve"
 spec = [
   "rust/shekyl-p-serve/src",
@@ -436,6 +473,8 @@ stale_through = [
   { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
   { through = "b3bc220aab", note = "The transit cell's type is DerivationMs built by a named constructor, with AdmissibleBasis in place of the marker types; the declaration table's values are unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime gained a thread-start hook parameter at this commit (a ThreadStart, since reshaped into ThreadHooks on runtime_with_thread_hooks; the two-argument runtime came back at da7b70c8cf, heard below). The clearnet tests passed the empty hook, so their runtime threads started exactly as before; no production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "da7b70c8cf", note = "SH-3: the ordinary runtime constructor is a budget and a name again. The clearnet tests call it with the same two arguments they had before the hook parameter (the serving runtime alone uses ThreadHooks through runtime_with_thread_hooks), so their runtime threads start as before. No production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -496,6 +535,8 @@ stale_through = [
   { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. The dial and the gap wait are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
   { through = "b3bc220aab", note = "The transit cell's type is DerivationMs built by a named constructor, with AdmissibleBasis in place of the marker types; the declaration table's values are unchanged. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime gained a thread-start hook parameter at this commit (a ThreadStart, since reshaped into ThreadHooks on runtime_with_thread_hooks; the two-argument runtime came back at da7b70c8cf, heard below). shekyl-tor's tests passed the empty hook, so their runtime threads started exactly as before; no production path in this set changed. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "da7b70c8cf", note = "SH-3: the ordinary runtime constructor is a budget and a name again. shekyl-tor's tests call it with the same two arguments they had before the hook parameter (the serving runtime alone uses ThreadHooks through runtime_with_thread_hooks), so their runtime threads start as before. No production path in this set changed. The dial and the gap wait are unchanged. Not re-measured." },
 ]
 
 [[constant]]
