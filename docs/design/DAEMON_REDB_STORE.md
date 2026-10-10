@@ -1301,6 +1301,7 @@ flowchart TD
   B[DRS-B Path B Rust consumers]
   MAT[DRS-MAT wallet e2e matrix LMDB x redb]
   X[DRS-X deletion register + unlink LMDB if D2 closed]
+  SB[DRS-SB set-B discard in the Rust daemon — first post-cutover increment, PDM-Q-S0]
   G{D2 closed?}
   G1[Genesis redb-only]
   G2[Genesis LMDB + surfaces]
@@ -1325,6 +1326,8 @@ flowchart TD
   B --> X
   MAT --> X
   X --> G
+  X --> SB
+  SB -->|genesis does not precede it| G1
   G -->|yes| G1
   G -->|reopened| G2
 ```
@@ -1343,6 +1346,7 @@ flowchart TD
 | **DRS-MAT** | Wallet Phase 6a / Track-2 as **LMDB×redb CI matrix** from first redb read path | During shadow | Continuous discharge (E-8), not a late phase |
 | **DRS-B** | Path B consumers | After C + E* | |
 | **DRS-X** | Empty deletion register; D2-closed or reopen path | End | |
+| **DRS-SB** | **Set-B discard in the Rust daemon** — the design is [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) (`PDM-Q1`/`Q2` the retained set and the discard predicate; `PDM-Q3` the residual consensus reads); this row is only its place in the order. Node added 2026-10-10. | **After X** — `PDM-Q-S0` (RULED 2026-09-12): not implemented in the C++ daemon, lands in the Rust daemon after the cutover, and **genesis does not precede it**. | Replaces nothing in C++: the inherited `prune_worker` engine was deleted 2026-09-21 (§3.5's UPDATE), and the C++ serve-credit leaf read it would have had to coexist with deletes at X (`DEL-008`), so the discard and that read are never live together (`PDM-Q3`). The store carries **no node-variable content** until this lands (§11.2's note). |
 
 ### 7.1 DRS-P0 — multi-PR envelope (honest “one audit pass”)
 
