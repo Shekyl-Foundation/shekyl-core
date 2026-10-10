@@ -59,7 +59,7 @@ source.
 | F-10 | clatter's toolchain needs fit | clatter 2.3.0 `Cargo.toml` (`edition = "2021"`, `rust-version = "1.81.0"`); `rust/Cargo.toml:447` (`rust-version = "1.94"`) | **Fits.** |
 | F-11 | What clatter brings into the lock file | `rust/Cargo.lock` at the commit that adds the cross-check crate | `rand_core` 0.6, `x25519-dalek` 2.0.1, `chacha20poly1305` 0.10.1 and `blake2` 0.10.6 are the versions the production graph already carries, so they add nothing. **Seven new packages, all test-only:** `clatter` 2.3.0; `ml-kem` 0.2.3; `hybrid-array` 0.2.3; `kem` 0.3.0-pre.0, the one **pre-release** among them (`ml-kem` pins it exactly); `thiserror-no-std` and `thiserror-impl-no-std` 2.0.2; and `syn` 1.0.109, a second major version of a build-time crate, pulled by the last |
 | F-12 | Shekyl's Noise primitives can be called from the new work | `rust/shekyl-p2p-transport/src/aead.rs:17-93` (every item `pub(crate)`), `noise.rs:58` (`struct Sym`, private) | **They cannot.** Nothing outside that crate can reach them until RT-W9 extracts the shared core. So RT-W8 has no Shekyl handshake to compare with anything (RT-O11) |
-| F-13 | Registering a domain string is a row in a file | `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` header; `scripts/ci/domain_registry_gate.sh` | **It is a row and a Rust constant.** The gate requires the literal at its defining file with a `const` definition, and pins the count of cSHAKE call sites. RT-W8 therefore lands Rust code, and needs a crate to land it in (RT-O13). *Found at commit 3:* the registry groups rows by the mechanism that hashes them, and the prologue label fits none of the six — its own bytes go into the Noise handshake hash, not through cSHAKE. It is registered under a new one-entry mechanism 7, "Noise prologue label", with the gate and the registry test taught the id |
+| F-13 | Registering a domain string is a row in a file | `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` header; `scripts/ci/domain_registry_gate.sh` | **It is a row and a Rust constant.** The gate requires the literal at its defining file with a `const` definition, and pins the count of cSHAKE call sites. RT-W8 therefore lands Rust code, and needs a crate to land it in (RT-O13). *Found at commit 3:* the registry groups rows by the mechanism that hashes them, and the prologue label fits none of the six — its own bytes go into the Noise handshake hash, not through cSHAKE. It is registered under a new one-entry mechanism 7, "Noise prologue label", with the gate and the registry test taught the id. **Accepted 2026-10-09** (Rick): a label's raw bytes mixed into a handshake hash is not cSHAKE, and forcing it through cSHAKE would contradict RT-O14. One consistency point goes to RT-W9: Noise protocol names (`Noise_hybridXK_…`, and the P2P handshake's `Noise_NNhfs_…`) are also literals mixed into a handshake hash and are registered nowhere. That is defensible — they are standard pattern names, not Shekyl domain strings — but it is to be written down once, as an exclusion row with its reason, in the slice that adds the RPC protocol name |
 | F-14 | The byte encodings the names depend on are fixed | `RPC_CHANNEL.md` §4.4, §5, §7.1 | **They are not.** The design names the inputs and not their encoding: how the prologue joins its customization to the network id; the input to the rendezvous name; the input to and the length of the static fingerprint (RT-O14) |
 | F-15 | The model checker is available | the dev box (`proverif`, `opam`: absent); `.github/`, `scripts/` (no mention) | **Absent**, and the repository has no model-checked artifact yet, so there is no precedent for where one lives or how it is gated (RT-O15) |
 | F-16 | The pinned ML-KEM crate is constant-time | `fips203` 0.4.3 `README.md:13-17`, `:64-65` | **Claimed by its authors**, at source level, with their own `dudect` measurements. RT-P4 is still ours to run: the claim is about their build and machines, and the daemon's static key meets attacker-chosen ciphertexts before anything authenticates (§4.3 there) |
@@ -163,6 +163,13 @@ property queries and the named-edit variants that must fail. A CI job
 installs ProVerif, pinned by version, and runs the script; the script
 fails if a property query fails **or if a named-edit variant passes**.
 
+*Condition added with the go-ahead to install ProVerif (Rick, 2026-10-09):*
+the model is run locally, not only in CI — a model that cannot be run where
+it is written is not checked — and **CI runs the same ProVerif version**.
+One version is pinned and installed the same way in both places (through
+opam), and the runner checks the version it finds and fails on any other,
+so the two cannot disagree on a verdict without saying why.
+
 ---
 
 ## 4.1 What the cross-check found by running (commits 4 to 6)
@@ -191,7 +198,7 @@ Each is one unit of work, pushed as it is made.
 | 1 | This document, with the round's ratification close-out | Docs only |
 | 2 | Delete `shekyl-rt-p2-spike` | F-17; the lock diff is read and stated |
 | 3 | `shekyl-rpc-channel`: the three constants, the rendezvous-name and fingerprint functions, their vectors written first and observed red, the registry rows | RT-O13, RT-O14 |
-| 4–6 | **Landed as one commit**, because the crate's shared test support does not compile warning-free in pieces: the cross-check crate (clatter 2.3.0, default features off) and the clatter gate with its self-test; the classical anchor against the community vector; the hybrid vectors under seeded randomness with their named edits | RT-O11, RT-O12; F-4, F-5, F-7, F-18 |
+| 4–6 | **Landed as one commit** (accepted 2026-10-09), because the crate's shared test support does not compile warning-free in pieces: the cross-check crate (clatter 2.3.0, default features off) and the clatter gate with its self-test; the classical anchor against the community vector; the hybrid vectors under seeded randomness with their named edits | RT-O11, RT-O12; F-4, F-5, F-7, F-18 |
 | 7 | The ProVerif model, its runner and its CI job | RT-O15; RT-P7 |
 | 8 | RT-P4 on the floor device and on x86, recorded under `docs/benchmarks/` | Host claimed first |
 
