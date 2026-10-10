@@ -7,6 +7,8 @@ it re-derived a constraint the tree already enforced**; **`SO-D8` OPENED** and
 assigned out of this round. **`SO-D10` RULED 2026-10-08** — the writer's
 wiring ahead of the secret draw, §14. **`SO-D11` RULED 2026-10-09** —
 accrual reads the row and the gather moves to the slash pass, §15.
+**`SO-D12` POSED 2026-10-10** — admission and the draw, §16: eight
+questions, each with a recommendation, none ruled. Nothing in §16 is built.
 
 **Implementation began 2026-08-24 and the first hour changed two dispositions.**
 That is the intended use of the round, not a failure of it: the ruling that the
@@ -707,6 +709,7 @@ added (Q15).
 | `SO-D9` | `ERR_EPOCH_MISMATCH` (`serve_credit.rs:168`) was a tautology — `ctx.settlement_epoch` (`blockchain.cpp:5304`) was the record's own epoch (`:5124`). Ruled **(i)**: populate it at that single site from `shekyl_archival_settlement_epoch_at_height(·)` of the block whose epoch the record claims — `current_height` on the **pre-cutover R-A path** (the connecting block), the **validated issuing block `h`** under **R-B** (proposal §1 "what is ruled is the site", §2.1 item 3) — making "the record's epoch is the block's epoch" an explicit enforced rule rather than a bound on *when* implicit in `h_close`. The *site* is independent of `SO-D8`'s shape; the *operand* is not, and the two pre-FFI C++ bounds (`h_close`, `challenge_seal_on_chain`) mean (i) on the R-A operand flips exactly one block per epoch (proposal §1 "Ordering", Q14). **Implementation not yet built** and **not to be built on the C++ path** (Q15, 2026-09-16): the row lands in `shekyl-chain-rules` with the R-B cutover, operand `h`. **Prohibition:** do not repair the tautology in `blockchain.cpp` — that would be a consensus tightening on the live LMDB daemon for a path being replaced. FOLLOWUPS row. Proposal: [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §1 / Q15 | **RULED 2026-09-13 — (i)**; site **re-homed 2026-09-16 (Q15)** |
 | `SO-D10` | Wiring the writer ahead of the secret draw: it reads the issued-draw index, empty until the draw lands; the walk-back skips an unobserved epoch inside a standing run; the pass fact lives on the draw's index entry; accrual follows as its own change and gates the draw (§14) | **RULED 2026-10-08** |
 | `SO-D11` | Accrual reads the settlement row (`SO-D10d`), so the emission gather moves to the slash pass (`SO-D8c`): what is credited, CEN-J15's price row, when an epoch is claimable, `SI-21`, and the cutover gate. §15 | **RULED 2026-10-09** |
+| `SO-D12` | Admission and the draw (§14.4 step 5): the increments and their order, the drawable set as of the epoch's open, the receipt key the bond record does not carry, the wire, the per-block draw state, the `D` digest, the one home of the pass fact, the deletions, and the census rows. §16 | **POSED 2026-10-10** |
 
 **Not blocked on the stressnet.** Everything above is desk-derivable, and
 `SO-D2`'s `issued` byte is deliberately the artifact that makes the eventual
@@ -869,7 +872,7 @@ live validator; the C++ daemon stays consensus, on the beacon, until
    capture stays as a record and goes with the capture tooling
    (`DEL-008`).
 4. **`SO-D10d`**: accrual reads the row. **LANDED** as `SO-D11`, §15.
-5. **Admission and the draw.**
+5. **Admission and the draw.** **POSED** as `SO-D12`, §16.
 
 ### 14.5 Rulings (maintainer, 2026-10-08)
 
@@ -1101,3 +1104,123 @@ holds the two write sets and the state between them.
 `the_final_universe_counts_the_shards_the_predicate_accepts` holds the
 universe to `closed_and_final`. The CEN-J15 and CEN-J23 rule tests gain
 the watermark and the closed-not-settled cases.
+
+---
+
+## 16. `SO-D12` — admission and the draw — POSED 2026-10-10
+
+**Status:** POSED. Eight questions (§16.4), each with a recommendation.
+Nothing here is built. Grounded at `dev@e28979ff2`.
+
+**The charge.** §14.4 step 5. The mechanism is ruled in
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4 to §10
+and this section reopens none of it. It asks how the build is cut, and
+reports three places where the code the build stands on does not yet give
+what the specification assumes.
+
+### 16.1 What exists
+
+| Subject | State | Where |
+| --- | --- | --- |
+| The draw's hashes | Selection with its cap, the `0x0C` commitment, the challenge nonce, the set commitment, the count rule and its horizon, each with the specification's vectors. No caller on a block path | `rust/shekyl-archival-retention/src/secret_draw.rs` (`select_draw`, `draw_commit`, `challenge_nonce`, `serve_credit_batch_commitment`, `draw_count`, `draw_horizon`) |
+| The drawable set | `DrawableSet::at_epoch_open` enumerates the bond records **at the view's tip**, drops a bond that joined in `E` or later, expands a complete tree over the shards closed and final at `h_open(E)`, and sorts. Its module doc says the walk that recovers holdings a Release or a slash has cleared is left to this step | `rust/shekyl-chain-rules/src/archival/drawable.rs` |
+| The challenger's read | `challenge_read` derives the nonce and reads through the one fetch entry point. No producer calls it | `rust/shekyl-archival-fetch-sched/src/read.rs` |
+| Scheme 3 | Ed25519 + FN-DSA-1024 with its two signature domains, landed with no consumer. The receipt key's derivation, the JoinMarket post that carries it and receipts signed under it (increments 2 to 4 of [`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §6) are not built | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs` |
+| The bond record | One identity key. No receipt key | `rust/shekyl-types/src/archival/bond.rs` (`BondRecord`) |
+| The coinbase grammar | Admits four tags. `0x0C` is not defined | `rust/shekyl-wire/src/tx_extra/coinbase.rs` (`COINBASE_TAGS`); `tx_extra/mod.rs` |
+| The serve-credit input | The leaf-path record of the retired mechanism: persona, shard and epoch named by the prover | `rust/shekyl-archival-retention/src/wire.rs`; `rust/shekyl-chain-rules/src/rules/body.rs` (`ArchivalKey::ServeCredit`) |
+| The index and its digest | Shaped, journaled and read by the settlement pass. Their one producer is the Fakechain door | §14.1 |
+| Per-block draw state | Not in the store: no `count(h)`, `carry(h)`, visible shortfall or revealed flag | `rust/shekyl-chain-store/src/schema.rs` |
+| The `D` digest cell | Not in the store | same |
+| Admission rows | CEN-J1, J3, J7, J8, J9 and J10 are `pending`. CEN-B4 is `implemented` and judges the attestation witness this step deletes | `rust/shekyl-chain-rules/src/census.rs` |
+
+### 16.2 Three findings
+
+**1. The drawable set moves during the epoch, and admission indexes into
+it.** The specification fixes `D` at `h_open(E)`: a pair slashed or
+released during `E` stays in it (its §4.1). `at_epoch_open` reads the
+records at tip. A Release empties the record's holdings
+(`archival/inputs.rs`, the Release arm) and a slash removes the shard, so
+either one, connected after `h_open(E)`, shortens the set the function
+returns and shifts every later index. Admission derives a record's pair
+as `index(P, s)` into `D`. After the shift the derived pair is the wrong
+one, its receipt does not verify, and an honest carrier is refused. Two
+nodes cannot disagree, since both read the same tip. The defect is that
+the same draw names different pairs at different heights.
+
+What can be recovered today:
+
+- **A slash.** The slash log carries the removed holding, and
+  `holds_shard_at` already folds it. The log has a retention horizon
+  (`DRS_E4_SLASH_LOG_ROUND.md`), and the set is needed from `h_open(E)`
+  until the slash pass of `E`, two epochs later.
+- **A Release.** Not recoverable. The Rust store keeps no pre-image of a
+  released record's holdings beyond the undo journal, whose retention is
+  under one epoch. The proposal's construction (§7.4) names the C++
+  `archival_bond_unbond_log` as its source; the Rust store has no such
+  table.
+
+**2. Admission's receipt check has no key to verify under.** The
+specification's §9.1 check 6 verifies `P`'s receipt under the bond
+record's receipt key. The record has none, and the three FN-DSA
+increments that put it there are unbuilt. The witness-signature check
+(check 3) does not have this problem: the witness key is carried by the
+carrier and scheme 3 has landed.
+
+**3. Two of the six deletions change what the live daemon enforces.**
+The specification's §11.1 deletes CEN-B4's verify path and the beacon's
+fire-height gate, and both have their C++ half in `blockchain.cpp`, which
+is consensus until `DEL-008`. `SO-D10e` met the same split and kept the
+C++ side for the cutover.
+
+### 16.3 The cut proposed
+
+Four increments, each its own PR, in this order. Each leaves the tree
+with the Rust validator still slashing and paying nothing off Fakechain
+until the last one lands.
+
+1. **State and wire types.** The `0x0C` field and the coinbase grammar
+   that admits it; the carrier and record layouts of the specification's
+   §7 with the rule-42 bump; the per-block draw table and the `D` digest
+   cell with their view reads; `SCHEMA_VERSION` 22 to 23. Types, codecs,
+   vectors and the store's write and undo. No rule reads any of it.
+2. **The drawable set as of `h_open(E)`.** Whatever `SO-D12b` rules,
+   with the `D` digest written at `h_open(E)` and checked by the
+   settlement pass (`SO-D10g`).
+3. **Issuance.** The commitment check, the witness signature, the
+   per-block count, the derivation of each record's pair, the index and
+   digest writes at the first reveal, and dedup. These are checks 1 to 5
+   and 7 of the specification's §9.1. The Fakechain door's issuing half
+   is deleted here: a test issues draws by connecting a carrier.
+4. **The receipt.** Check 6, after the FN-DSA increments. The `passed`
+   bit is set by an admitted record and by nothing else; the door's
+   pass-marking half and the serve-credit table go (`SO-D10c`).
+
+The producer side is not in this list: generating the seed and the
+witness key, the memory-only ring, writing `0x0C` into the template,
+scheduling the reads and filing carriers. It is its own lane's work and
+needs only increment 1's types.
+
+**Between increments 3 and 4 a carrier would be admitted without its
+receipts being checked.** That state must not be reachable off Fakechain.
+Recommended in `SO-D12c`.
+
+### 16.4 Posed
+
+| # | Question | Recommendation |
+| --- | --- | --- |
+| `SO-D12a` | Is the cut of §16.3 the right one, and is the producer side a separate lane? | **Yes to both.** Increment 1 is the only one that fixes bytes, and it depends on nothing unbuilt |
+| `SO-D12b` | How the drawable set is made stable through the epoch, given a Release leaves no pre-image (§16.2 finding 1) | **Journal the pre-image.** A Rust table of released holdings keyed by the releasing height, written with the Release and undone with it, retained until the settlement of the last epoch the bond was drawable in is final. The enumerator then walks it and the slash log back to `h_open(E)`, as the proposal's §7.4 rules. Rename `at_epoch_open` to say it reads tip until that lands, or keep it unexported. The alternative, storing the set itself at `h_open(E)`, was refused in the proposal's §7.4 ("no snapshot table"); I do not recommend reopening it, though it is the simpler read |
+| `SO-D12c` | Admission before the receipt key exists (§16.2 finding 2) | **Build increments 1 to 3; hold increment 3's rule rows `pending` in the census until increment 4.** No carrier is admissible off Fakechain while the receipt check is absent: the rule that admits a carrier refuses unless the rule set is Fakechain's, as a named, loud divergence under rule 71, deleted by increment 4. If that divergence is not acceptable, increment 3 waits for the FN-DSA increments and only 1 and 2 are built now |
+| `SO-D12d` | Who builds FN-DSA increments 2 to 4 | **A ruling, not a recommendation.** The scheme landed in #1016. This lane can take the three increments after increment 2 above, or they stay with the lane that built the scheme |
+| `SO-D12e` | The deletions of the specification's §11.1 | **Rust side with the increment that replaces each; C++ side at `DEL-008`**, as `SO-D10e` ruled. Rust now: the attestation path's pass records, the anchor window, the public urn, the leaf-path preimage, the fire height. C++ at the cutover: CEN-B4's verify and the beacon gate. The urn's assert against the settlement count (§14.4 step 2) goes with the urn; the selection vectors are what pin the draw after it |
+| `SO-D12f` | Where the visible shortfall comes from. The specification's §10 stores it per block; it is also derivable from the index (`h_reveal < h`) | **Store it**, as the specification says. Deriving it is a walk of the epoch's index per block |
+| `SO-D12g` | The census: the rows for the seven checks of §9.1, and the retired-by-ruling status for CEN-J8, J9 and J10 | **Mint the rows with increment 1's design text, add the `RowStatus` arm with increment 3**, when the first successor row is implemented |
+| `SO-D12h` | The complete-tree exposure of §15.9: a complete tree that is slashed or released reads as compact afterwards, and market membership reads that flag | **Fix it in increment 2.** The same pre-image that fixes the drawable set says what the record was at `E`. It is the same defect on a second reader |
+
+### 16.5 Not in this step
+
+The producer and challenger (§16.3). The weight rule for the prunable
+part of a carrier (the fee-and-weight round's). `BA-T31` and `BA-T32`.
+The settlement-timing question `ESR-12`.
+
