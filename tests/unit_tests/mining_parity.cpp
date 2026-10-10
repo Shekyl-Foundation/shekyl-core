@@ -68,16 +68,15 @@ TEST(mining_parity, release_multiplier_scales_reward)
   const size_t median_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const size_t current_block_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const uint64_t already_generated_coins = 1234567890;
-  const uint8_t version = HF_VERSION_SHEKYL_NG;
 
   uint64_t base_reward = 0;
   uint64_t high_volume_reward = 0;
   uint64_t low_volume_reward = 0;
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward, version));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward));
   ASSERT_GT(base_reward, 0u);
 
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, high_volume_reward, version, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, low_volume_reward, version, {1, 1}));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, high_volume_reward, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, low_volume_reward, {1, 1}));
 
   ASSERT_GT(high_volume_reward, base_reward);
   ASSERT_LT(low_volume_reward, base_reward);
@@ -88,12 +87,11 @@ TEST(mining_parity, reward_multiplier_is_neutral_at_baseline)
   const size_t median_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const size_t current_block_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const uint64_t already_generated_coins = 987654321;
-  const uint8_t version = HF_VERSION_SHEKYL_NG;
 
   uint64_t base_reward = 0;
   uint64_t release_reward = 0;
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward, version));
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, release_reward, version, {SHEKYL_TX_VOLUME_BASELINE, 1}));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, release_reward, {SHEKYL_TX_VOLUME_BASELINE, 1}));
   ASSERT_EQ(base_reward, release_reward);
 }
 
@@ -108,7 +106,6 @@ TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
   // the status -> bool mapping — are inside the tested surface. Written
   // under the no-test-exists-means-write-the-test rule: this overload
   // crossed with the FL-R12' bundle carrying only directional coverage.
-  const uint8_t version = HF_VERSION_SHEKYL_NG;
   const uint64_t tail = FINAL_SUBSIDY_PER_MINUTE * (SHEKYL_DAA_TARGET_SECONDS / 60);
   const size_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   uint64_t reward = 0;
@@ -116,18 +113,18 @@ TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
   // Tail boundary under dormancy (v = 0 pins M_r at its 0.8 rail), no
   // penalty: the floor pays TAIL whole. The shipped pre-FL-R12' order
   // paid 480000000 here (the multiplier applied to the floored base).
-  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE - tail + 1, reward, version, {}));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE - tail + 1, reward, {}));
   ASSERT_EQ(reward, tail);
 
   // Past the asymptote with x = 1/2: penalty AFTER the floor => TAIL*3/4.
   // Pre-FL-R12' this state was an error arm (FL-R16a).
-  ASSERT_TRUE(cryptonote::get_block_reward(zone, zone + zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE + tail, reward, version, {}));
+  ASSERT_TRUE(cryptonote::get_block_reward(zone, zone + zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE + tail, reward, {}));
   ASSERT_EQ(reward, tail / 4 * 3);
 
   // Surge rail (M_r at 1.3) at the asymptote: rail-independent TAIL — the
   // axis that separates max(M_r*curve, TAIL) from a floor-inside-the-
   // operand rebuild (FL round 10, T-3).
-  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE, reward, version, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE, reward, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
   ASSERT_EQ(reward, tail);
 
   // Mid-curve dormancy, cross-checked against the DIRECT FFI call: the
@@ -139,7 +136,7 @@ TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
             shekyl_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, 0, 0, &expected, &limit));
-  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, reward, version, {}));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, reward, {}));
   ASSERT_EQ(reward, expected);
 }
 
@@ -157,8 +154,8 @@ TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
   // SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf` = 1 024 000 000 000 at the design's
   // ESF 22 per block; an empty volume window pins `M_r` at its 0.8 rail and
   // the tail floor does not bind, so the paid pre-penalty quantity is
-  // 819 200 000 000; the genesis emission share is 15%, leaving the miner
-  // 696 320 000 000. A reward-math change fails this even though the marshal
+  // 819 200 000 000; the emission share at block 1 is 15%, leaving the miner
+  // 696 320 000 000, and at genesis (height 0) there is no staker share. A reward-math change fails this even though the marshal
   // still agrees with itself. (Re-derived 2026-10-04; at the per-minute
   // convention's 21 these were 1 638 400 000 000 and 1 392 640 000 000.)
   uint64_t paid = 0;
@@ -167,9 +164,13 @@ TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
             shekyl_block_reward(0, 1, 0, /*tx_count_sum=*/0, /*window_blocks=*/0, &paid, &limit));
   ASSERT_EQ(paid, UINT64_C(819200000000));
 
-  const shekyl::EmissionSplit em = shekyl::compute_emission_split(paid, 0, 0);
+  const shekyl::EmissionSplit em = shekyl::compute_emission_split(paid, 1);
   ASSERT_EQ(em.miner_emission, UINT64_C(696320000000));
   ASSERT_EQ(em.miner_emission + em.staker_emission, paid);
+
+  const shekyl::EmissionSplit genesis = shekyl::compute_emission_split(paid, 0);
+  ASSERT_EQ(genesis.miner_emission, paid);
+  ASSERT_EQ(genesis.staker_emission, UINT64_C(0));
 }
 
 TEST(mining_parity, randomx_hash_routes_through_v2_ffi)

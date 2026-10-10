@@ -72,11 +72,7 @@ struct BlockchainAndPool
 
 bool init_blockchain(Blockchain& bc, BlockchainDB* db)
 {
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
   return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 0);
 }
 
@@ -106,7 +102,6 @@ block make_block_with_coinbase(uint64_t height, uint64_t coinbase_amount)
 constexpr uint64_t kAlreadyGenerated = UINT64_C(42949672960000000);
 constexpr uint64_t kBlockHeight = 1;
 constexpr uint64_t kFee = UINT64_C(1000000000);
-constexpr uint8_t kHfVersion = 1;
 
 struct B5Operands
 {
@@ -129,9 +124,8 @@ B5Operands expected_operands(const Blockchain& bc)
   EXPECT_GT(tx_volume.tx_count_sum, 0u);
   EXPECT_GT(tx_volume.blocks, 0u);
   EXPECT_TRUE(get_block_reward(median, 0, kAlreadyGenerated, ops.base_reward,
-    kHfVersion, tx_volume));
-  ops.split = shekyl::compute_emission_split(ops.base_reward, kBlockHeight,
-    /*genesis_ng_height=*/0);
+    tx_volume));
+  ops.split = shekyl::compute_emission_split(ops.base_reward, kBlockHeight);
   // n = 0 is the same parent-state operand the production check reads:
   // B5TestDB's curve tree is empty, so parent_frozen_segment_count yields 0.
   // Nothing has been burned on B5TestDB's chain, so the derived supply is
@@ -165,7 +159,7 @@ TEST(economics_b5_fee_coinbase, fee_bearing_exact_coinbase_accepts)
   // total_burned = 0: nothing has been destroyed on B5TestDB's chain, the
   // same parent-state fact the production check reads (FL-R16c).
   EXPECT_TRUE(bap.bc.validate_miner_transaction(b, /*cumulative_block_weight=*/0,
-    kFee, base_reward_out, kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0, /*total_burned=*/0));
+    kFee, base_reward_out, kAlreadyGenerated, /*frozen_segment_count=*/0, /*total_burned=*/0));
   // Fix α regression guard: the out-param stays the FULL subsidy (miner +
   // staker emission) so the connect path accumulates the full amount into
   // already_generated_coins.
@@ -185,7 +179,7 @@ TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_pool_rejects)
     ops.split.miner_emission + ops.burn.miner_fee_income + ops.burn.staker_pool_amount);
   uint64_t base_reward_out = 0;
   EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0, /*total_burned=*/0));
+    kAlreadyGenerated, /*frozen_segment_count=*/0, /*total_burned=*/0));
 }
 
 TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_emission_rejects)
@@ -201,7 +195,7 @@ TEST(economics_b5_fee_coinbase, coinbase_claiming_staker_emission_rejects)
     ops.split.miner_emission + ops.split.staker_emission + ops.burn.miner_fee_income);
   uint64_t base_reward_out = 0;
   EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0, /*total_burned=*/0));
+    kAlreadyGenerated, /*frozen_segment_count=*/0, /*total_burned=*/0));
 }
 
 TEST(economics_b5_fee_coinbase, fee_underclaim_rejects_exactness)
@@ -217,5 +211,5 @@ TEST(economics_b5_fee_coinbase, fee_underclaim_rejects_exactness)
   const block b = make_block_with_coinbase(kBlockHeight, ops.split.miner_emission);
   uint64_t base_reward_out = 0;
   EXPECT_FALSE(bap.bc.validate_miner_transaction(b, 0, kFee, base_reward_out,
-    kAlreadyGenerated, kHfVersion, /*frozen_segment_count=*/0, /*total_burned=*/0));
+    kAlreadyGenerated, /*frozen_segment_count=*/0, /*total_burned=*/0));
 }

@@ -161,11 +161,7 @@ struct BlockchainAndPool
 
 bool init_blockchain(Blockchain& bc, BlockchainDB* db)
 {
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
   return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1);
 }
 
@@ -577,4 +573,107 @@ TEST(relay_deadline, is_monotonic_in_the_draw)
       previous = d;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// The template scan's two pure functions (`fill_block_template`). Expected
+// values are written from the rule: the cap is 13/10 of the median less the
+// coinbase reserve, one body may cross the median, and the cap is consulted
+// before the median.
+
+namespace
+{
+  using cryptonote::detail::decide_listed_body;
+  using cryptonote::detail::listed_body_decision;
+  using cryptonote::detail::listed_weight_cap;
+
+  constexpr size_t RESERVE = CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
+}
+
+TEST(listed_weight_cap, is_thirteen_tenths_of_the_median_less_the_reserve)
+{
+  ASSERT_EQ(RESERVE, 600u) << "the literals below are written against a 600-byte reserve";
+  // 13/10 of 300 000 is 390 000.
+  EXPECT_EQ(listed_weight_cap(300000), 390000u - 600u);
+  EXPECT_EQ(listed_weight_cap(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5),
+      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 / 10 * 13 - 600u);
+  // A median that is not a multiple of 10 floors: 13 * 300 007 = 3 900 091.
+  EXPECT_EQ(listed_weight_cap(300007), 390009u - 600u);
+}
+
+TEST(listed_weight_cap, equals_the_inherited_expression_off_the_zone)
+{
+  // 13/10 and 130/100 are one rational, so the floors agree at every
+  // median, including those not divisible by 10 or by 100.
+  for (const size_t median : {size_t(463), size_t(1001), size_t(299999), size_t(300001), size_t(300007), size_t(1234567)})
+    EXPECT_EQ(listed_weight_cap(median), (130 * median) / 100 - RESERVE) << "median " << median;
+}
+
+TEST(listed_weight_cap, is_zero_where_the_inherited_subtraction_wrapped)
+{
+  // 13 * 461 / 10 = 599, one byte short of the reserve.
+  EXPECT_EQ(listed_weight_cap(461), 0u);
+  // 13 * 462 / 10 = 600: the reserve exactly, so nothing is left for bodies.
+  EXPECT_EQ(listed_weight_cap(462), 0u);
+  // 13 * 463 / 10 = 601: the first median with room.
+  EXPECT_EQ(listed_weight_cap(463), 1u);
+  EXPECT_EQ(listed_weight_cap(0), 0u);
+  // The product does not fit.
+  EXPECT_EQ(listed_weight_cap(std::numeric_limits<size_t>::max()), 0u);
+  EXPECT_EQ(listed_weight_cap(std::numeric_limits<size_t>::max() / 13 + 1), 0u);
+}
+
+TEST(decide_listed_body, takes_bodies_up_to_and_across_the_median)
+{
+  const size_t median = 1000, cap = 1300;
+  EXPECT_EQ(decide_listed_body(0, 400, median, cap), listed_body_decision::take);
+  // Listed weight exactly at the median has not passed it.
+  EXPECT_EQ(decide_listed_body(1000, 100, median, cap), listed_body_decision::take);
+  // The body that crosses: 900 listed, 300 more, 1 200 is over the median
+  // and under the cap.
+  EXPECT_EQ(decide_listed_body(900, 300, median, cap), listed_body_decision::take);
+  // A body that lands exactly on the cap fits.
+  EXPECT_EQ(decide_listed_body(900, 400, median, cap), listed_body_decision::take);
+}
+
+TEST(decide_listed_body, ends_the_scan_once_the_listed_weight_is_past_the_median)
+{
+  const size_t median = 1000, cap = 1300;
+  EXPECT_EQ(decide_listed_body(1001, 1, median, cap), listed_body_decision::end_scan);
+  EXPECT_EQ(decide_listed_body(1200, 100, median, cap), listed_body_decision::end_scan);
+  // A weightless body still ends it: the candidate is not part of the
+  // median compare.
+  EXPECT_EQ(decide_listed_body(1200, 0, median, cap), listed_body_decision::end_scan);
+}
+
+TEST(decide_listed_body, passes_over_a_body_that_would_pass_the_cap)
+{
+  const size_t median = 1000, cap = 1300;
+  // Under the median, one byte too heavy for the cap.
+  EXPECT_EQ(decide_listed_body(900, 401, median, cap), listed_body_decision::pass);
+  EXPECT_EQ(decide_listed_body(0, 1301, median, cap), listed_body_decision::pass);
+  // A candidate so heavy the sum would wrap is still passed over.
+  EXPECT_EQ(decide_listed_body(900, std::numeric_limits<size_t>::max(), median, cap), listed_body_decision::pass);
+}
+
+TEST(decide_listed_body, consults_the_cap_before_the_median)
+{
+  // The inherited order: "would exceed maximum block weight" was tested
+  // before "would exceed median block weight". With the listed weight
+  // already past the median, a body that would also pass the cap is passed
+  // over, and the scan goes on to the next body; it does not end.
+  const size_t median = 1000, cap = 1300;
+  EXPECT_EQ(decide_listed_body(1200, 101, median, cap), listed_body_decision::pass);
+  // The same listed weight with a body that fits ends the scan, so the
+  // decision above was the cap's and not the median's.
+  EXPECT_EQ(decide_listed_body(1200, 100, median, cap), listed_body_decision::end_scan);
+  // Listed weight already past the cap passes every body, a weightless
+  // one included.
+  EXPECT_EQ(decide_listed_body(1301, 0, median, cap), listed_body_decision::pass);
+}
+
+TEST(decide_listed_body, a_zero_cap_lists_nothing_that_weighs_anything)
+{
+  EXPECT_EQ(decide_listed_body(0, 1, 100, 0), listed_body_decision::pass);
+  EXPECT_EQ(decide_listed_body(0, 13200, 461, listed_weight_cap(461)), listed_body_decision::pass);
 }

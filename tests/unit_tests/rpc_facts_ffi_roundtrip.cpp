@@ -19,14 +19,10 @@ void shekyl_rpc_identity_facts_rust_fill(shekyl_rpc_identity_facts* out, uint64_
 int shekyl_rpc_identity_facts_rust_check(const shekyl_rpc_identity_facts* facts, uint64_t seed);
 void shekyl_rpc_chain_tip_facts_rust_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_rust_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
-void shekyl_rpc_hardfork_entry_rust_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed);
-int shekyl_rpc_hardfork_entry_rust_check(const shekyl_rpc_hardfork_entry* entry, uint64_t seed);
 void shekyl_rpc_block_hash_facts_rust_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed);
 int shekyl_rpc_block_hash_facts_rust_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed);
 void shekyl_rpc_block_header_facts_rust_fill(shekyl_rpc_block_header_facts* out, uint64_t seed);
 int shekyl_rpc_block_header_facts_rust_check(const shekyl_rpc_block_header_facts* facts, uint64_t seed);
-void shekyl_rpc_hard_fork_facts_rust_fill(shekyl_rpc_hard_fork_facts* out, uint64_t seed);
-int shekyl_rpc_hard_fork_facts_rust_check(const shekyl_rpc_hard_fork_facts* facts, uint64_t seed);
 void shekyl_rpc_fee_estimate_facts_rust_fill(shekyl_rpc_fee_estimate_facts* out, uint64_t seed);
 int shekyl_rpc_fee_estimate_facts_rust_check(const shekyl_rpc_fee_estimate_facts* facts, uint64_t seed);
 void shekyl_rpc_net_stats_facts_rust_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed);
@@ -80,26 +76,6 @@ TEST(rpc_facts_ffi_roundtrip, identity_rust_writes_cpp_reads)
     shekyl_rpc_identity_facts facts;
     shekyl_rpc_identity_facts_rust_fill(&facts, seed);
     EXPECT_EQ(0, shekyl_rpc_identity_facts_test_check(&facts, seed)) << "seed " << seed;
-  }
-}
-
-TEST(rpc_facts_ffi_roundtrip, hardfork_entry_cpp_writes_rust_reads)
-{
-  for (const uint64_t seed : seeds)
-  {
-    shekyl_rpc_hardfork_entry entry;
-    shekyl_rpc_hardfork_entry_test_fill(&entry, seed);
-    EXPECT_EQ(0, shekyl_rpc_hardfork_entry_rust_check(&entry, seed)) << "seed " << seed;
-  }
-}
-
-TEST(rpc_facts_ffi_roundtrip, hardfork_entry_rust_writes_cpp_reads)
-{
-  for (const uint64_t seed : seeds)
-  {
-    shekyl_rpc_hardfork_entry entry;
-    shekyl_rpc_hardfork_entry_rust_fill(&entry, seed);
-    EXPECT_EQ(0, shekyl_rpc_hardfork_entry_test_check(&entry, seed)) << "seed " << seed;
   }
 }
 
@@ -163,26 +139,6 @@ TEST(rpc_facts_ffi_roundtrip, net_stats_facts_rust_writes_cpp_reads)
   }
 }
 
-TEST(rpc_facts_ffi_roundtrip, hard_fork_facts_cpp_writes_rust_reads)
-{
-  for (const uint64_t seed : seeds)
-  {
-    shekyl_rpc_hard_fork_facts f;
-    shekyl_rpc_hard_fork_facts_test_fill(&f, seed);
-    EXPECT_EQ(0, shekyl_rpc_hard_fork_facts_rust_check(&f, seed)) << "seed " << seed;
-  }
-}
-
-TEST(rpc_facts_ffi_roundtrip, hard_fork_facts_rust_writes_cpp_reads)
-{
-  for (const uint64_t seed : seeds)
-  {
-    shekyl_rpc_hard_fork_facts f;
-    shekyl_rpc_hard_fork_facts_rust_fill(&f, seed);
-    EXPECT_EQ(0, shekyl_rpc_hard_fork_facts_test_check(&f, seed)) << "seed " << seed;
-  }
-}
-
 TEST(rpc_facts_ffi_roundtrip, fee_estimate_facts_cpp_writes_rust_reads)
 {
   for (const uint64_t seed : seeds)
@@ -213,7 +169,6 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(sizeof(shekyl_rpc_identity_facts) == 40, "identity facts POD changed size");
   static_assert(offsetof(shekyl_rpc_identity_facts, nettype) == 0, "nettype offset");
   static_assert(offsetof(shekyl_rpc_identity_facts, genesis_hash) == 8, "genesis_hash offset");
-  static_assert(sizeof(shekyl_rpc_hardfork_entry) == 16, "hardfork entry POD changed size");
   static_assert(sizeof(shekyl_rpc_block_hash_facts) == 48, "block-hash facts POD changed size");
   static_assert(sizeof(shekyl_rpc_block_header_facts) == 304, "block-header facts POD changed size");
 
@@ -260,7 +215,6 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_tx_entry, reserved) == 108, "reserved offset");
 
   static_assert(sizeof(shekyl_rpc_net_stats_facts) == 40, "net-stats facts POD changed size");
-  static_assert(sizeof(shekyl_rpc_hard_fork_facts) == 32, "hard-fork facts POD changed size");
   static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 40, "fee-estimate facts POD changed size");
 
   // RK-5a's three list PODs. Same reason as `shekyl_rpc_tx_entry` above: they

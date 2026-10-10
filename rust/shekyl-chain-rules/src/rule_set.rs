@@ -8,19 +8,16 @@
 //!
 //! [`RuleSetId`] is **its own space** (`CHAIN_RULES_CRATE.md` §4.2, round-1
 //! ruling Q5). It coincides with `BlockHeader.major_version` today because
-//! the shipped hardfork table has one entry — the same inertness that hid
-//! the `on_block_popped` defect — and the coincidence is a fact about the
-//! table, not a definition. So there is no `From<u8>`, no `PartialEq<u8>`,
+//! there is one rule set and one block version, and the coincidence is a
+//! fact about that, not a definition. So there is no `From<u8>`, no `PartialEq<u8>`,
 //! and no reading of the header version anywhere here: the header version
 //! a rule set *admits* is one of its parameters ([`RuleSet::header_major_version`],
 //! landed with CEN-B1 in slice 1), never its identity.
 //!
-//! [`RuleSchedule`] is where R4's state-dependent activation has its seat.
-//! `rules_at(height)` is a function, seeded as the identity (every network,
-//! every height → [`RuleSet::GENESIS`]), so a second rule set arrives as a
-//! schedule step and no caller changes. Nettype selects **data** (rule 71):
-//! three schedule values, one `rules_at`, no `match network` anywhere a rule
-//! runs.
+//! [`RuleSchedule`] is the identity: every network, every height names
+//! [`RuleSet::GENESIS`]. A later activation is a design document before a
+//! step is added. Nettype selects **data** (rule 71): three schedule values,
+//! one `rules_at`, no `match network` anywhere a rule runs.
 //!
 //! [`AdmissionPolicy`] is relay/pool policy — a separate input with a
 //! separate id, never merged into [`RuleSet`] (ruling §8). Its consumer is
@@ -44,8 +41,9 @@ use crate::rules::difficulty::Target;
 /// `StoreCannot` — the block was judged under rules not in force at its
 /// height, which is not a verdict about the block.
 ///
-/// Not the header's `major_version`, and not comparable to one — the 1:1 is
-/// a fact about today's table, and equality would erase the distinction
+/// Not the header's `major_version`, and not comparable to one. One rule set
+/// and one block version both happen to be 1; that coincidence is not a
+/// definition, and equality would erase the distinction
 /// [`RuleSchedule::rules_at`] exists to preserve:
 ///
 /// ```compile_fail
@@ -117,8 +115,7 @@ impl RuleSetId {
 /// validator read the latch; a replay of a capture made under the lever,
 /// in a process that had not armed it, refused the first claim under L7
 /// (`DRS_E4_ARCHIVAL_WRITER.md` §5 ARW-15). CEN-F21's split epoch is
-/// `rules::miner::EMISSION_SPLIT_EPOCH`, not a field: it joins this set
-/// when a schedule step names a different epoch.
+/// `shekyl_economics::EMISSION_SPLIT_EPOCH`, not a field.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
@@ -478,8 +475,7 @@ pub struct RuleSchedule {
 }
 
 impl RuleSchedule {
-    /// The identity schedule: the genesis rules at every height. What the
-    /// shipped one-entry hardfork table means.
+    /// The identity schedule: the genesis rules at every height.
     const IDENTITY: Self = Self {
         genesis: RuleSetId::GENESIS,
         steps: &[],
