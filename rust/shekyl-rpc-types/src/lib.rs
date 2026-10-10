@@ -100,7 +100,10 @@ pub use headers::{
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
 };
-pub use identity::{genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch};
+pub use identity::{
+    daemon_rpc_version, genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch,
+    IdentityRefusal, VersionUnreadable,
+};
 pub use info::{
     GetInfoResponse, GetInfoShapeError, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
     InfoPeers, InfoPool, InfoStatus,

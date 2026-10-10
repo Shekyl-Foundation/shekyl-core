@@ -42,9 +42,21 @@ pub(super) fn fetch_get_info(src: &Source) -> Result<GetInfoResponse, String> {
         }
         Source::Remote { .. } => {
             let raw = src.post_remote("/get_info", b"{}".to_vec())?;
-            decode_get_info(&raw)?
+            return decode_get_info_ok(&raw);
         }
     };
+    ok_or_status(reply)
+}
+
+/// A `/get_info` body decoded strictly, refused unless its status is OK.
+///
+/// For the one caller that fetches the body itself: `version`, which asks
+/// without the identity handshake.
+pub(super) fn decode_get_info_ok(raw: &[u8]) -> Result<GetInfoResponse, String> {
+    ok_or_status(decode_get_info(raw)?)
+}
+
+fn ok_or_status(reply: GetInfoResponse) -> Result<GetInfoResponse, String> {
     if reply.status.is_ok() {
         Ok(reply)
     } else {

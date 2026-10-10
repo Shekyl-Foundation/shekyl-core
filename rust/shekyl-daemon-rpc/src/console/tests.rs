@@ -2214,28 +2214,64 @@ fn a_foreign_genesis_daemon_is_refused() {
     assert!(out.contains("different chain"), "{out}");
 }
 
+/// A reply with no readable version, and one that claims this build's
+/// version and then answers in another shape, are both unreadable: the
+/// wire axis disagreeing, said as that and not as a serde error naming a
+/// field (VC-D16).
 #[test]
 fn a_get_version_that_does_not_parse_is_reported_as_a_wire_mismatch() {
-    // VC-D16: every tuple field is strict, so a daemon whose get_version
-    // shape moved fails deserialization before any axis is read. That IS the
-    // wire axis disagreeing, and the operator must be told so — not handed a
-    // serde error naming a field.
-    let addr = route_server(vec![(
-        "json_rpc:get_version",
-        serde_json::json!({"jsonrpc": "2.0", "id": "0",
-                           "result": {"status": "OK", "version": 1}})
-        .to_string(),
-    )]);
-    let (code, out) = run(&["print_height"], Some(&addr));
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-    assert!(
-        out.contains("does not match the RPC contract"),
-        "a shape failure must read as a version disagreement: {out}"
-    );
-    assert!(
-        out.contains("cannot be named here"),
-        "it must say the daemon's version is unavailable rather than guess: {out}"
-    );
+    for result in [
+        serde_json::json!({"status": "OK"}),
+        serde_json::json!({"status": "OK", "version": shekyl_rpc_types::CORE_RPC_VERSION}),
+    ] {
+        let addr = route_server(vec![(
+            "json_rpc:get_version",
+            serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": result}).to_string(),
+        )]);
+        let (code, out) = run(&["print_height"], Some(&addr));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert!(
+            out.contains("does not match the RPC contract"),
+            "a shape failure must read as a version disagreement: {out}"
+        );
+        assert!(
+            out.contains("cannot be named here"),
+            "it must say the daemon's version is unavailable rather than guess: {out}"
+        );
+    }
+}
+
+/// **The version is read before the rest (RK-Q11).** A daemon of another
+/// RPC version answers in that version's shape, which this build cannot
+/// decode. It is still named: both versions, and which side is older. Before
+/// the version was read first this was the unreadable case above, and the
+/// operator was told only that the versions differ.
+#[test]
+fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode() {
+    let ours = shekyl_rpc_types::CORE_RPC_VERSION;
+    for (theirs, older) in [
+        (ours - 1, "the daemon is the older"),
+        (4 << 16, "this build is the older"),
+    ] {
+        let addr = route_server(vec![(
+            "json_rpc:get_version",
+            serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": {
+                "version": theirs,
+                "a_member_this_build_has_never_heard_of": true,
+            }})
+            .to_string(),
+        )]);
+        let (code, out) = run(&["print_height"], Some(&addr));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert!(out.contains("RPC contract mismatch"), "{out}");
+        assert!(
+            out.contains(&shekyl_rpc_types::core_rpc_version_string(theirs))
+                && out.contains(&shekyl_rpc_types::core_rpc_version_string(ours)),
+            "both versions are named: {out}"
+        );
+        assert!(out.contains(older), "{out}");
+        assert!(!out.contains("cannot be named here"), "{out}");
+    }
 }
 
 #[test]
@@ -2317,7 +2353,10 @@ fn diff_prints_the_tip_the_difficulties_and_the_hash_rate() {
 /// `version` prints the daemon's software version.
 #[test]
 fn version_prints_the_daemons_software_version() {
-    let address = route_server(vec![("/get_info", info_reply(100))]);
+    let address = route_server(vec![
+        ("json_rpc:get_version", agreeing_get_version()),
+        ("/get_info", info_reply(100)),
+    ]);
     let (code, out) = run(&["version"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert_eq!(out, "3.1.0-test");
@@ -2328,50 +2367,117 @@ fn version_prints_the_daemons_software_version() {
 /// that is not this build's; `version` exists to tell the operator what
 /// that daemon is, so it asks without the check (VC §3.6.2).
 ///
-/// The control is `diff` against the same daemon: it is refused, so the
-/// daemon really is one the handshake rejects, and `version` answering is
-/// the exemption and not a handshake that happened to pass.
+/// The daemon here speaks this build's RPC version and is on another
+/// chain. The control is `diff` against the same daemon: it is refused, so
+/// the daemon really is one the handshake rejects, and `version` answering
+/// is the exemption and not a handshake that happened to pass.
 #[test]
 fn version_answers_from_a_daemon_the_handshake_refuses() {
-    let mut other = serde_json::from_str::<serde_json::Value>(&agreeing_get_version()).unwrap();
-    other["result"]["version"] = serde_json::json!(shekyl_rpc_types::CORE_RPC_VERSION + 1);
     let routes = || {
         vec![
             ("/get_info", info_reply(100)),
-            ("json_rpc:get_version", other.to_string()),
+            (
+                "json_rpc:get_version",
+                get_version_but(|r| {
+                    r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
+                }),
+            ),
         ]
     };
 
     let (code, out) = run(&["diff"], Some(&route_server(routes())));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-    assert!(out.contains("mismatch"), "{out}");
+    assert!(out.contains("genesis mismatch"), "{out}");
 
     let (code, out) = run(&["version"], Some(&route_server(routes())));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert_eq!(out, "3.1.0-test");
 }
 
-/// `version` reads its one member on its own, so a daemon whose reply has
-/// another shape — another version's — still answers. A strict decode of
-/// the whole reply would refuse exactly the daemon this command is for.
+/// **Against a daemon of another RPC version, `version` names both RPC
+/// versions and reads nothing else** (RK-Q11, RK-D25). The reader it uses
+/// is the one every client uses, so it needs only the frozen `version`
+/// member: the fake daemon's `get_version` has nothing else in it, and
+/// serves no `/get_info` at all, so a read of that route would fail the
+/// test with a transport error and not this message.
 #[test]
-fn version_reads_a_reply_of_another_shape() {
-    let address = route_server(vec![(
-        "/get_info",
-        r#"{"status":"OK","version":"9.9.9-other","a_member_from_the_future":1}"#.to_owned(),
-    )]);
-    let (code, out) = run(&["version"], Some(&address));
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
-    assert_eq!(out, "9.9.9-other");
+fn version_names_both_rpc_versions_when_they_differ() {
+    let ours = shekyl_rpc_types::CORE_RPC_VERSION;
+    for (theirs, older) in [
+        (ours - 1, "the daemon is the older one"),
+        (4 << 16, "this console is the older one"),
+    ] {
+        let address = route_server(vec![(
+            "json_rpc:get_version",
+            serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": {"version": theirs}})
+                .to_string(),
+        )]);
+        let (code, out) = run(&["version"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert_eq!(
+            out,
+            format!(
+                "The daemon speaks RPC {}; this console speaks RPC {}. {older}. The daemon's \
+                 software version cannot be read across that difference.",
+                shekyl_rpc_types::core_rpc_version_string(theirs),
+                shekyl_rpc_types::core_rpc_version_string(ours),
+            )
+        );
+    }
 }
 
+/// **No second lenient reader** (RK-D25). A daemon that reports this
+/// build's RPC version and then answers `get_info` in another shape is
+/// refused, as every other reader refuses it. Before, `version` decoded one
+/// member of that reply and ignored the rest.
+#[test]
+fn version_decodes_get_info_strictly() {
+    let mut other: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+    other["a_member_from_the_future"] = serde_json::json!(1);
+    let address = route_server(vec![
+        ("json_rpc:get_version", agreeing_get_version()),
+        ("/get_info", other.to_string()),
+    ]);
+    let (code, out) = run(&["version"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("a_member_from_the_future"), "{out}");
+}
+
+/// The wire names of `get_info`'s Status part.
+const STATUS_PART_KEYS: &[&str] = &[
+    "start_time",
+    "free_space",
+    "database_size",
+    "version",
+    "outgoing_connections_count",
+    "incoming_connections_count",
+    "alt_blocks_count",
+    "rpc_connections_count",
+];
+
 /// A daemon that does not disclose its version — an empty string from a
-/// restricted listener today, an absent member later — is a failure that
-/// says so, not an empty line.
+/// restricted listener today, the whole Status part absent later — is a
+/// failure that says so, not an empty line.
 #[test]
 fn version_says_when_the_daemon_does_not_disclose_it() {
-    for reply in [r#"{"status":"OK","version":""}"#, r#"{"status":"OK"}"#] {
-        let address = route_server(vec![("/get_info", reply.to_owned())]);
+    let full: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+
+    let mut empty = full.clone();
+    empty["version"] = serde_json::json!("");
+
+    let mut withheld = full;
+    let members = withheld.as_object_mut().unwrap();
+    for key in STATUS_PART_KEYS {
+        members
+            .remove(*key)
+            .unwrap_or_else(|| panic!("`{key}` is a Status member of the fixture"));
+    }
+
+    for reply in [empty, withheld] {
+        let address = route_server(vec![
+            ("json_rpc:get_version", agreeing_get_version()),
+            ("/get_info", reply.to_string()),
+        ]);
         let (code, out) = run(&["version"], Some(&address));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
         assert_eq!(out, "The daemon software version is not available.");

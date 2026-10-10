@@ -11,10 +11,11 @@
 //! the console's own retirement slice, because the C++ forms called the
 //! `get_info` handler directly and that handler is deleted next.
 
-use shekyl_rpc_types::RpcStatus;
+use shekyl_rpc_types::{core_rpc_version_string, daemon_rpc_version, RpcStatus, CORE_RPC_VERSION};
 use shekyl_units::AtomicUnits;
 
-use super::info::fetch_get_info;
+use super::identity::get_version_result;
+use super::info::{decode_get_info_ok, fetch_get_info};
 use super::Source;
 use crate::ctl_client;
 
@@ -41,20 +42,6 @@ pub(super) fn show_difficulty(src: &Source) -> Result<String, String> {
     ))
 }
 
-/// The one member `version` reads, decoded on its own.
-///
-/// Every other reader of `get_info` decodes the whole reply strictly. This
-/// command is the exception because of what it is for: telling an operator
-/// what they are talking to, which matters most when that is a daemon of
-/// another version — exactly when a strict decode of the whole reply would
-/// fail. `version` is absent when the daemon does not disclose it.
-#[derive(serde::Deserialize)]
-struct VersionOnly {
-    status: RpcStatus,
-    #[serde(default)]
-    version: Option<String>,
-}
-
 const VERSION_UNAVAILABLE: &str = "The daemon software version is not available.";
 
 /// `version`: the daemon's software version.
@@ -63,36 +50,58 @@ const VERSION_UNAVAILABLE: &str = "The daemon software version is not available.
 /// command refuses to render from a daemon whose identity does not match
 /// this build; this one exists to show the operator what they reached, so
 /// it asks without that check (`CLIENT_VERSION_CONSTANTS_VALIDATION.md`
-/// §3.6.2). That section also asks `version` to show both sides and the
-/// handshake's verdict; that fuller form belongs to the console's
-/// retirement slice (RK-C). This is the C++ command's output, kept.
+/// §3.6.2).
+///
+/// It still reads the daemon's RPC version first, through the one reader
+/// every client uses (`RK-D25`), and what it does next depends on the
+/// answer:
+///
+/// - **The versions differ.** The reply names both and says which side is
+///   older, and that is all: `get_info` is not read, because its shape is
+///   another version's and this build decodes it strictly or not at all.
+/// - **The versions agree.** `get_info` is decoded as every other reader
+///   decodes it, and the software version is printed.
 ///
 /// A daemon that does not disclose its version — a restricted listener
 /// writes an empty string today — is reported as such, and as a failure,
 /// as the C++ did.
 pub(super) fn version(src: &Source) -> Result<String, String> {
-    let version = match src {
-        Source::Live(_) => fetch_get_info(src)?
-            .node
-            .shown()
-            .map(|status| status.version.clone()),
+    let info = match src {
+        Source::Live(_) => fetch_get_info(src)?,
         Source::Remote {
             address, timeout, ..
         } => {
+            let result = get_version_result(address, *timeout)?;
+            let theirs = daemon_rpc_version(&result).map_err(|unreadable| {
+                format!("the daemon's RPC version cannot be read: {unreadable}")
+            })?;
+            if theirs != CORE_RPC_VERSION {
+                return Err(rpc_version_difference(CORE_RPC_VERSION, theirs));
+            }
             let raw = ctl_client::post_blocking(address, "/get_info", b"{}".to_vec(), *timeout)
                 .map_err(|(_, reason)| reason)?;
-            let reply: VersionOnly = serde_json::from_slice(&raw)
-                .map_err(|e| format!("malformed get_info reply: {e}"))?;
-            if !reply.status.is_ok() {
-                return Err(reply.status.0);
-            }
-            reply.version
+            decode_get_info_ok(&raw)?
         }
     };
-    match version {
-        Some(version) if !version.is_empty() => Ok(version),
+    match info.node.shown() {
+        Some(status) if !status.version.is_empty() => Ok(status.version.clone()),
         _ => Err(VERSION_UNAVAILABLE.to_owned()),
     }
+}
+
+/// What `version` says of a daemon on another RPC version.
+fn rpc_version_difference(ours: u32, theirs: u32) -> String {
+    let older = if theirs < ours {
+        "the daemon"
+    } else {
+        "this console"
+    };
+    format!(
+        "The daemon speaks RPC {}; this console speaks RPC {}. {older} is the older one. \
+         The daemon's software version cannot be read across that difference.",
+        core_rpc_version_string(theirs),
+        core_rpc_version_string(ours),
+    )
 }
 
 /// One bucket of the pool's age histogram.
