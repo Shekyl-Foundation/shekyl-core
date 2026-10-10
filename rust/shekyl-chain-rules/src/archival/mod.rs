@@ -102,6 +102,7 @@
 mod arm;
 mod close;
 mod delta;
+mod drawable;
 mod inputs;
 mod slash;
 
@@ -112,6 +113,7 @@ pub use delta::{
     Accrual, ArchivalDelta, EpochClose, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement,
     Slash,
 };
+pub use drawable::DrawableSet;
 pub(crate) use slash::apply_slash;
 
 use std::collections::btree_map::Entry;
