@@ -438,8 +438,10 @@ pub trait ChainView<'id> {
     fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Self::Fault>;
 
     /// **A5.** Pass bits recorded for `(persona, shard, epoch)`;
-    /// [`PassCount::ZERO`] when none. CEN-J3's pair-epoch dedup reads
-    /// [`PassCount::any`]; the settlement writer reads the count.
+    /// [`PassCount::ZERO`] when none. No rule reads it since `SO-D11`:
+    /// slashing and accrual read the settlement row, whose pass fact is
+    /// the issued-draw index's. The read goes with the serve-credit table
+    /// when admission re-keys or deletes it (`SO-D10c`).
     fn pass_count(
         &self,
         persona: &PCanonicalId,
@@ -447,9 +449,11 @@ pub trait ChainView<'id> {
         epoch: SettlementEpoch,
     ) -> Result<PassCount, Self::Fault>;
 
-    /// **A6.** The market's co-holder count for `shard` at `epoch`'s close,
-    /// or `None` for an epoch that never closed for it. A written
-    /// `RMarket(0)` is a closed epoch with no co-holders (SAR-8): the view
+    /// **A6.** The market's co-holder count for `shard` at `epoch`, as the
+    /// epoch's slash pass gathered it (`SO-D11`), or `None` for an epoch
+    /// not gathered with the shard in it: not settled yet, or the shard was
+    /// not closed and final at that pass. A written `RMarket(0)` is a
+    /// gathered shard with no co-holders (SAR-8): the view
     /// keeps the two apart; what a rule does with `None` is that rule's to
     /// say (`SAR-Q6`). CEN-J15's admission operand, CEN-J25's work
     /// arithmetic.
@@ -460,8 +464,9 @@ pub trait ChainView<'id> {
     ) -> Result<Option<RMarket>, Self::Fault>;
 
     /// **A7.** The frozen `Σwork(E)` for `epoch`, in milli-units, or `None`
-    /// for an epoch that never closed (SAR-8). The stored denominator a
-    /// verifier never recomputes — CEN-J25's.
+    /// for an epoch its slash pass has not gathered (SAR-8; `SO-D11`). Its
+    /// existence is what lets a claim cite the epoch (CEN-J23), and it is
+    /// the stored denominator CEN-J25 compares its recompute with.
     fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Self::Fault>;
 
     /// **A8.** The frozen `budget(E)` for `epoch`, or `None` for an epoch
@@ -541,6 +546,11 @@ pub trait ChainView<'id> {
     /// Served, ascending; empty when none was, or when the epoch is not
     /// settled. What the emission gather credits (`SO-D11a`), read back by
     /// the claim verify.
+    ///
+    /// Cost: the table is keyed `(P, shard, E)`, so a store answers by
+    /// walking the persona's rows across every retained epoch and keeping
+    /// one. CEN-J23 asks once per bonded persona per claimed epoch. It is
+    /// part of the walk `BA-T32` is to measure.
     fn served_at(
         &self,
         persona: &PCanonicalId,

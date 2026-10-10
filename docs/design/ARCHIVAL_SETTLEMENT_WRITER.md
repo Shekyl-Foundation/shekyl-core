@@ -1083,9 +1083,15 @@ change.
   refused by the finalisation bound; CEN-J23 now refuses every height
   from there to the pass first. The bound's KAT in the retention crate
   still pins it.
-- **The comparison with the C++ capture** is unchanged: the captured
-  chains' tips hold no row the two validators now write differently
-  (`vectors_tests`, `archival_sufficiency_tests` pass as they stood).
+- **The comparison with the C++ capture is unexercised, not passed.**
+  One captured chain carries close rows, `emission-claim`, and its
+  replay has been suspended since CEN-J15 (the capture predates that
+  rule; `archival_sufficiency_tests`, `vectors_tests::PREDATES`). So
+  nothing compared the Rust `RMarket` and `SigmaWork` rows with the
+  daemon's before this step and nothing does after it. The two now
+  differ by ruling, in timing and in content. Which families stay
+  compared is decided when that chain is re-captured from Rust, which is
+  `DEL-008`'s re-baseline.
 
 Tests: the end-to-end claim (`scenario_emission_tests`, live lane) issues
 three passed draws, asserts the pass's gather against the arithmetic,
