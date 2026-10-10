@@ -77,7 +77,8 @@ This section is the only place the document describes current behaviour.
 | --- | --- | --- |
 | Live challenge mechanism | One beacon challenge per pair-epoch. The derived-assignment issuer is not wired | `src/cryptonote_core/blockchain.cpp:4746-4749` |
 | The public urn | Deleted 2026-10-10. It had no production caller. The secret draw's hash side is what replaced the selection; the draw producer is not live | was `rust/shekyl-archival-retention/src/challenge_assignment.rs`; `src/blockchain_db/blockchain_db.h:2047-2048` |
-| Drawable-set construction, assignment cache, membership check | Not in code under any name | grep for `DrawableSet`, `EpochAssignmentCache`, `is_assigned`, `at_epoch_open`: no hits |
+| Drawable set | `DrawableSet::at_epoch_open` is built. It enumerates tip bonds. The journal walk that recovers a Release or a slash is not | `rust/shekyl-chain-rules/src/archival/drawable.rs` |
+| Assignment cache, membership check | Not in code | grep for `EpochAssignmentCache`, `is_assigned`: no hits |
 | Serve-credit acceptance | One C++ gate. The Rust validator has no rule for CEN-J8–J10 | `src/cryptonote_core/blockchain.cpp:4702`, `:4714`; `rust/shekyl-chain-rules/src/census.rs:492-494` |
 | Serve-credit dedup | Pair-epoch-wide: any earlier pass for `(P, s, E)` refuses the next | `src/cryptonote_core/blockchain.cpp:4760` |
 | Serve-credit vin record | Kept: `p_canonical_id`, `shard_id`, `settlement_epoch`, a 64-byte Ed25519 leg. Pruned: a segment path and a 3,309-byte ML-DSA leg. The signed preimage is over a leaf path | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379-402` |

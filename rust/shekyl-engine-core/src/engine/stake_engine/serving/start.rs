@@ -177,14 +177,10 @@ where
         // Outside the engine lock: both handles are actor asks, and the
         // store lives on the stake actor, not on `Engine`. An empty store
         // answers 404 until fill (`WSS-Q4`) lands. The reader still
-        // decrypts (`WSS-Q13` is not met). The writer clone is the
-        // pin-release erase (`WSS-Q8`), not a serve-loop handle.
+        // decrypts (`WSS-Q13` is not met). Pin-release erase asks this
+        // actor (`WSS-Q8`); the host does not receive the writer.
         let bodies = stake
             .serving_bodies()
-            .await
-            .map_err(|e| ServingStartError::Identity(Box::new(e)))?;
-        let body_writer = stake
-            .share_body_writer()
             .await
             .map_err(|e| ServingStartError::Identity(Box::new(e)))?;
 
@@ -242,7 +238,7 @@ where
             curve_tree,
             claim_rpc,
             p_id.to_bytes(),
-            body_writer,
+            crate::engine::stake_engine::serve_set_source::ReleasedRows::Actor(stake.actor.clone()),
         );
 
         Ok(Some(spawn_serving_task(

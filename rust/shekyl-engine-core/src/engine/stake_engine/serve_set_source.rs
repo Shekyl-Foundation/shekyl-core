@@ -48,11 +48,17 @@
 //! This type still does not create transports; it takes one. The bound decides
 //! *which kind*, the construction site decides *whose*.
 
+use kameo::actor::ActorRef;
 use shekyl_archival_retention::HoldingsKind;
 use shekyl_curve_tree::{BlockHeight, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
+#[cfg(test)]
 use shekyl_p_store::BodyStore;
+#[cfg(test)]
 use shekyl_types::ShardId;
+
+use super::actor::StakeEngine;
+use super::persona::EraseReleasedShards;
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 
@@ -95,9 +101,41 @@ pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     /// The store's pin set as of the last reconcile — the other half of the
     /// release input, kept here so a refresh costs one actor round trip.
     last_pinned: std::sync::Mutex<Vec<u64>>,
-    /// `P`'s body store. A released pin erases that shard's row here
-    /// (`WSS-Q8`). The curve-tree pin does not retain `.pstore` bytes.
-    bodies: BodyStore,
+    /// Where a released shard's body row is erased (`WSS-Q8`). Production
+    /// asks the stake actor, which keeps the writer. Tests hold a store
+    /// because they have no actor.
+    rows: ReleasedRows,
+}
+
+/// The body rows a pin release erases.
+pub(crate) enum ReleasedRows {
+    /// A store in this process. Tests have no stake actor.
+    #[cfg(test)]
+    Store(BodyStore),
+    /// The stake actor's writer. The serving host never holds the key.
+    Actor(ActorRef<StakeEngine>),
+}
+
+impl ReleasedRows {
+    async fn erase(&self, ids: &[u64]) -> Result<(), String> {
+        match self {
+            #[cfg(test)]
+            Self::Store(store) => {
+                for id in ids {
+                    store
+                        .erase_shard(ShardId::from_raw(*id))
+                        .map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            }
+            Self::Actor(actor) => actor
+                .ask(EraseReleasedShards {
+                    shard_ids: ids.to_vec(),
+                })
+                .await
+                .map_err(|e| e.to_string()),
+        }
+    }
 }
 
 impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
@@ -106,7 +144,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         curve_tree: CurveTreeHandle,
         rpc: R,
         p_id: [u8; 32],
-        bodies: BodyStore,
+        rows: ReleasedRows,
     ) -> Self {
         Self {
             curve_tree,
@@ -114,7 +152,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             p_id,
             absent_since: std::sync::Mutex::new(DepartureLedger::default()),
             last_pinned: std::sync::Mutex::new(Vec::new()),
-            bodies,
+            rows,
         }
     }
 
@@ -224,19 +262,22 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     ) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
         let shard_ids = shard_ids.to_vec();
 
+        // Erase before the pin is released. A failed erase leaves the pins
+        // and the two-epoch clock where they were, so the next refresh
+        // tries again. Releasing the pin first would persist that release
+        // while the body row remained, and the clock — spent or restarted
+        // after a process restart — would not see an unpinned row again.
+        // A missing row is success.
+        self.rows.erase(&releasable).await?;
         let reply = self
             .curve_tree
             .pin_serve_set(shard_ids.clone(), releasable.clone())
             .await
             .map_err(|e| format!("serve-set pin failed: {e:?}"))?;
-        // The gate released these shards. The body row is what a fetch
-        // reads; the curve-tree pin does not retain it. A missing row is
-        // success.
-        for id in &releasable {
-            self.bodies
-                .erase_shard(ShardId::from_raw(*id))
-                .map_err(|e| format!("body-store erase failed: {e}"))?;
-        }
+        self.absent_since
+            .lock()
+            .expect("departure ledger")
+            .commit_releases(&releasable);
         *self.last_pinned.lock().expect("pin view") = reply.pinned_now.clone();
         if reply.released > 0 {
             // Counts, never ids (`WSS-20`). A released shard id matched

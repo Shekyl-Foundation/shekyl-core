@@ -44,7 +44,7 @@ use super::*;
 // feature.
 use super::helpers::draw_entry_gap_guarded;
 use super::persona::{
-    ActivatePersona, ActivePersona, MintPersonaHandle, ServingBodies, ShareBodyWriter,
+    ActivatePersona, ActivePersona, EraseReleasedShards, MintPersonaHandle, ServingBodies,
 };
 use super::types::PersonaIdentity;
 use crate::engine::bond_assembly::FundingInputContext;
@@ -554,7 +554,7 @@ fn message_and_reply_types_are_send() {
     assert_send::<ActivatePersona>();
     assert_send::<ActivePersona>();
     assert_send::<ServingBodies>();
-    assert_send::<ShareBodyWriter>();
+    assert_send::<EraseReleasedShards>();
     assert_send::<shekyl_p_store::BodyStoreReader>();
     assert_send::<PersonaHandle>();
     assert_send::<PersonaIdentity>();

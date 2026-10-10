@@ -248,22 +248,28 @@ impl Message<ServingBodies> for StakeEngine {
     }
 }
 
-/// A second handle on the actor's body-store writer.
+/// Erase body-store rows the pin-release gate has cleared (`WSS-Q8`).
 ///
-/// The pin-release gate erases a shard when it releases the pin
-/// (`WSS-Q8`). The serve task still receives only [`ServingBodies`]'s
-/// reader. The clone shares the file; it does not copy the key.
-pub(crate) struct ShareBodyWriter;
+/// The writer stays on this actor. The serving host asks; it does not
+/// hold the store key.
+pub(crate) struct EraseReleasedShards {
+    pub shard_ids: Vec<u64>,
+}
 
-impl Message<ShareBodyWriter> for StakeEngine {
-    type Reply = Result<shekyl_p_store::BodyStore, StakeEngineError>;
+impl Message<EraseReleasedShards> for StakeEngine {
+    type Reply = Result<(), String>;
 
     async fn handle(
         &mut self,
-        _msg: ShareBodyWriter,
+        msg: EraseReleasedShards,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self.body_store.clone())
+        for id in msg.shard_ids {
+            self.body_store
+                .erase_shard(shekyl_types::ShardId::from_raw(id))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 }
 

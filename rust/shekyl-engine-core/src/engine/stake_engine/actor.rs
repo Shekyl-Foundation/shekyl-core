@@ -67,8 +67,8 @@ pub(crate) struct StakeEngine {
     /// task's held list drops the record.
     pub(crate) watch_quarantine: BTreeSet<shekyl_types::GlobalOutputIndex>,
     /// `P`'s serving body store (`WSS-Q1`(a)). Fill (`WSS-Q4`) is not
-    /// written. Erase at the second absent epoch (`WSS-Q8`) runs on the
-    /// shared handle the pin-release gate takes from this actor.
+    /// written. Erase at the second absent epoch (`WSS-Q8`) is an ask
+    /// this actor handles; the serving host does not hold the writer.
     /// `ServingBodies` hands the serve task a reader, which still decrypts,
     /// so `WSS-Q13` is not met. A per-chunk ask on this actor would stall
     /// bond signing on bulk redb I/O; the decrypt task is a later increment.
