@@ -17727,14 +17727,21 @@ changes its answer: **identity** — the node's own onion was the last
 entry of its timed-sync replies, recovered at 100 % precision and
 100 % recall.
 
-Shekyl's design closes TC-I and TC-II structurally (§95.3: own
-transactions ride a stem slot; stem candidacy is not a peer-asserted
-height; a hidden stem slot is drawn from the hidden outbound sessions;
-slice 1: `DISCLOSE_COUNT` 12 against the paper's 250 per reply, random
-rather than first-in-first-out gray eviction, the per-session intake
-cap; the handshake-address ruling: no self-entry) and treats TC-III as
-a Tor-layer threat (TRC-1). This section is how those claims are
-measured rather than asserted (rule 47). **This section mints
+Each stage has its own answer, and this section measures that answer
+rather than asserting it (rule 47). **TC-II** has no height input:
+stem candidacy is an outbound session with an assessed transit, and a
+peer-asserted height never reaches the map (§95.3, `stem_candidate`).
+PM-2b records the share that follows. **TC-I** stays open with §96
+item 3. Occupying the hidden outbound sessions is the attack PM-2a
+runs, against the §97 assumptions in effect: `DISCLOSE_COUNT` 12
+against the paper's 250 per reply, random rather than
+first-in-first-out gray eviction, and the per-session intake cap. Rick
+decides closure from those results. The hidden stem slot (§95.3) names
+which hidden outbound session an origin uses; how many of those
+sessions an attacker holds is PM-2a's number. The handshake-address
+ruling removes the self-entry the paper's identity step used, and PM-1
+measures the sample that remains. **TC-III** is a Tor-layer threat
+(TRC-1), open with §96 item 4 until PM-3 has run. **This section mints
 `PM-1…PM-3`** (rule 94; registered in `IMPLEMENTATION_INDEX.md` §2);
 PM-2 splits into 2a and 2b, the paper's TC-I and TC-II.
 
