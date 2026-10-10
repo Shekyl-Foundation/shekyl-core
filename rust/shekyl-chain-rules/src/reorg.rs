@@ -156,17 +156,11 @@ impl SlashLogFloor {
     }
 
     /// The lowest retained height, or `None` while nothing is retired.
+    /// The store builds the retired key range from this height and refuses
+    /// a scan whose start lies in it (SI-26).
     #[must_use]
     pub const fn height(self) -> Option<BlockHeight> {
         self.0
-    }
-
-    /// The floor, when a row at `height` is below it — retired, or
-    /// retirable by the next boundary. `None` while there is no floor, and
-    /// for a height at or above it.
-    #[must_use]
-    pub fn retiring(self, height: BlockHeight) -> Option<BlockHeight> {
-        self.0.filter(|floor| height < *floor)
     }
 }
 
@@ -258,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn the_floor_is_the_horizon_typed_and_retires_strictly_below_itself() {
+    fn the_floor_is_the_horizon_typed() {
         let epoch = SettlementEpochBlocks::new(100).expect("non-zero");
         let cap = BlockCount::from_raw(50);
         let short = (SLASH_GRACE_EPOCHS + u64::from(FAILURE_WINDOW_N)) * 100 + 50;
@@ -267,22 +261,16 @@ mod tests {
             Some(BlockCount::from_raw(short)),
             "the window a test derives its length from is the floor's own"
         );
-        // Under the window: no floor, nothing retires — the same answer as
-        // the constant for a table no prune has touched.
+        // Under the window: no floor — the same answer as the constant for
+        // a table no prune has touched.
         let none = SlashLogFloor::under(BlockHeight::from_raw(short - 1), epoch, cap);
         assert_eq!(none, SlashLogFloor::NONE);
         assert_eq!(none.height(), None);
-        assert_eq!(none.retiring(BlockHeight::ZERO), None);
-        // At the window + 3 the floor is 3: rows at 3 are retained, rows at
-        // 2 are retired — the retirement's range is `..(floor, 0)` and the
-        // read's soundness is `start ≥ floor`, both read off this one edge.
+        // At the window + 3 the floor is 3. Which rows that keeps is the
+        // store key's range (`SlashLogKey::below`), not a second comparison
+        // on this height.
         let floor = SlashLogFloor::under(BlockHeight::from_raw(short + 3), epoch, cap);
         assert_eq!(floor.height(), Some(BlockHeight::from_raw(3)));
-        assert_eq!(
-            floor.retiring(BlockHeight::from_raw(2)),
-            Some(BlockHeight::from_raw(3))
-        );
-        assert_eq!(floor.retiring(BlockHeight::from_raw(3)), None);
         assert_eq!(
             floor.height(),
             journal_horizon_under(BlockHeight::from_raw(short + 3), 100, cap),

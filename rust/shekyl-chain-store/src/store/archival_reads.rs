@@ -76,7 +76,7 @@
 //! The slash log is read only where it is kept. A2 takes the log's
 //! retirement floor from its caller — computed on the consensus side from
 //! the rule set the slash pass runs (`SlashLogFloor`, `SLK-Q1` / `SLK-2`)
-//! — and refuses a read whose range starts below it
+//! — and refuses a scan whose start lies in [`SlashLogKey::below`]
 //! ([`StoreInvariant::SlashLogReadBelowFloor`]) rather than fold a retired
 //! range as "never slashed". The store compares; it does not source the
 //! floor, because the horizon is a consensus expression and a store setting
@@ -171,11 +171,10 @@ pub(super) fn bond_record<T: ReadTables>(
 /// so the C++'s `u64::MAX` early-return is the key type's `None` and not a
 /// case here. A row that does not decode is SI-7.
 ///
-/// `floor` is the log's retirement floor under the caller's rule set. The
-/// range starts at `height + 1`; a start below the floor would read a
-/// range the boundary batch may have retired, so it is refused as SI-26
-/// before the table is opened. The last-height case needs no check: it has
-/// no range to start.
+/// `floor` is the log's retirement floor under the caller's rule set.
+/// The scan is [`SlashLogKey::above`]; a start that lies in
+/// [`SlashLogKey::below`] is SI-26, refused before the table is opened.
+/// The last height has no range, so it needs no check.
 pub(super) fn slash_log_after<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
@@ -185,13 +184,15 @@ pub(super) fn slash_log_after<T: ReadTables>(
     let Some(above) = SlashLogKey::above(height) else {
         return Ok(Vec::new());
     };
-    if let Some(floor) = floor.retiring(SlashLogKey::from_key(above.start).height()) {
-        return Err(ReadFault::Invariant(
-            StoreInvariant::SlashLogReadBelowFloor {
-                asked: height,
-                floor,
-            },
-        ));
+    if let Some(kept_from) = floor.height() {
+        if SlashLogKey::below(kept_from).contains(&above.start) {
+            return Err(ReadFault::Invariant(
+                StoreInvariant::SlashLogReadBelowFloor {
+                    asked: height,
+                    floor: kept_from,
+                },
+            ));
+        }
     }
     let table = txn.table(ARCHIVAL_SLASH_LOG)?;
     let mut out = Vec::new();
