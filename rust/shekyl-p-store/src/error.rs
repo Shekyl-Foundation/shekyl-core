@@ -26,6 +26,10 @@ pub enum StoreError {
         /// Local diagnostic; never on the wire.
         detail: String,
     },
+    /// An existing file's verifier cell is missing or does not open
+    /// under this store key. Pre-genesis the remedy is to delete the
+    /// file and reopen; there is no migration.
+    KeyRejected,
 }
 
 impl StoreError {
@@ -47,6 +51,9 @@ impl std::fmt::Display for StoreError {
                     f,
                     "persona body store schema {found} is not {SCHEMA_VERSION}"
                 )
+            }
+            Self::KeyRejected => {
+                write!(f, "persona body store key does not open this file")
             }
         }
     }

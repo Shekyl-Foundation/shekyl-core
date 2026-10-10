@@ -95,9 +95,11 @@ impl std::error::Error for ProviderError {}
 /// refuse against its skeleton rows; nothing a serving loop could prepend
 /// would make it right.
 ///
-/// [`Self::len`] is fixed when the body is opened and exact before the
-/// first chunk is read, which is what lets the response head — including
-/// `content-length` — go out before the store is touched at all.
+/// [`Self::len`] is fixed when the body is opened, from the store's meta
+/// row, and exact before the first chunk is read. That is what lets the
+/// response head — including `content-length` — go out before any chunk
+/// byte is read. A chunk that later fails authentication can only close
+/// the stream (`WSS` §6.6.5).
 #[derive(Debug)]
 pub struct ShardBody {
     source: Source,

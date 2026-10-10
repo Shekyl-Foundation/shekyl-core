@@ -154,7 +154,9 @@ mechanism-1 customizations for Slice C's secret draw:
 `shekyl/archival-challenge-nonce-v1`, and
 `shekyl/archival-serve-credit-batch-v1` (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
 §4, §5.2, §7.3), and two for P's W-shard body store:
-`shekyl/p-store-aead-v1` and `shekyl/p-store-slot-v1`.
+`shekyl/p-store-aead-v1` and `shekyl/p-store-slot-v1`. The open-time
+key check is an AEAD cell under the derived key, not a third
+customization.
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|

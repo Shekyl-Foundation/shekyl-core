@@ -15,7 +15,9 @@
 //! `nonce = salt ‖ chunk_index`. A refill mints a fresh salt, so a
 //! reused slot cannot reproduce a nonce (`WSS` §6.6.5). Table keys are
 //! cSHAKE256 of the store key and the shard id, so a stolen file does
-//! not name the shards it holds (`WSS-18`).
+//! not name the shards it holds (`WSS-18`). Open also checks a cell
+//! sealed under that key, so a file written by another key is refused
+//! before any shard row is trusted.
 //!
 //! This crate holds no Tor, no key-derivation from a wallet password,
 //! and no serve-set: the caller supplies the key and decides when to
@@ -102,6 +104,29 @@ mod tests {
         let other = BodyStore::open_ephemeral(StoreKey::from_bytes([0x11; 32])).expect("other");
         // Different key ⇒ different slot hash, so the row is not found.
         assert!(other.reader().open_shard(shard(2)).expect("open").is_none());
+    }
+
+    #[test]
+    fn a_swapped_key_is_refused_before_any_shard_row_is_trusted() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("p.store");
+        let frame = b"sealed-under-a";
+        {
+            let store = BodyStore::open(&path, key()).expect("create");
+            store.put_shard(shard(4), frame).expect("put");
+        }
+        let wrong = BodyStore::open(&path, StoreKey::from_bytes([0x11; 32]));
+        assert!(matches!(wrong, Err(StoreError::KeyRejected)));
+        let store = BodyStore::open(&path, key()).expect("reopen");
+        let mut body = store
+            .reader()
+            .open_shard(shard(4))
+            .expect("open")
+            .expect("held");
+        assert_eq!(
+            body.next_chunk(32).expect("chunk").as_deref(),
+            Some(frame.as_slice())
+        );
     }
 
     #[test]

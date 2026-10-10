@@ -23,6 +23,9 @@ use crate::error::{StoreError, SCHEMA_VERSION};
 const SHARDS: TableDefinition<&[u8; 32], [u8; META_LEN]> = TableDefinition::new("p_shards");
 const CHUNKS: TableDefinition<&[u8; CHUNK_KEY_LEN], &[u8]> = TableDefinition::new("p_chunks");
 const META: TableDefinition<&str, u8> = TableDefinition::new("p_meta");
+/// The verifier cell. Not the schema table: that cell is a `u8`, and the
+/// ciphertext does not belong there.
+const KEY_CHECK: TableDefinition<&str, &[u8]> = TableDefinition::new("p_key_check");
 
 const META_LEN: usize = 16 + 8 + 4;
 const CHUNK_KEY_LEN: usize = 32 + 8;
@@ -32,6 +35,19 @@ pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
 const SALT_LEN: usize = 16;
 
 const SCHEMA_CELL: &str = "schema";
+const KEY_CHECK_CELL: &str = "verifier";
+
+/// One cell, written once at init. Chunk nonces are a random salt
+/// concatenated with a chunk index, so this domain-constant nonce cannot
+/// collide with one. Password change re-wraps `file_kek` and does not
+/// rotate the store key, so the cell stays valid. Do not re-seal it
+/// under this nonce with different plaintext.
+const KEY_CHECK_NONCE: [u8; NONCE_SIZE] = *b"p-store-key-check-nonce!";
+/// Plaintext of the verifier. A domain constant, never a shard id.
+const KEY_CHECK_PLAINTEXT: &[u8] = b"shekyl/p-store-key-ok-v1";
+/// Associated data of the verifier. A label used only as AEAD AAD, not a
+/// cSHAKE customization, so it is not a mechanism-1 domain.
+const KEY_CHECK_AAD: &[u8] = b"shekyl/p-store-key-check-v1";
 
 /// cSHAKE256 customization for [`derive_store_key`] (rule 30: one label,
 /// one function, versioned).
@@ -59,9 +75,9 @@ impl StoreKey {
     }
 }
 
-/// HKDF-shaped derivation: cSHAKE256 over the wallet `file_kek` under
-/// a store-specific customization, so a swapped companion file is a
-/// loud AEAD miss rather than a decode at a random offset.
+/// Domain-separated cSHAKE256 of the wallet `file_kek`. Open verifies a
+/// cell sealed under that key, so a swapped companion file fails AEAD
+/// before any shard row is trusted.
 #[must_use]
 pub fn derive_store_key(file_kek: &[u8; KEY_SIZE]) -> StoreKey {
     StoreKey(cshake256_32(STORE_AEAD_CUSTOMIZATION, file_kek))
@@ -87,10 +103,16 @@ pub struct BodyStoreReader {
 impl BodyStore {
     /// Open or create the store at `path` under `key`.
     ///
+    /// An existing file is checked before any write: the schema byte,
+    /// then a cell sealed under `key`. A missing cell or a failed open
+    /// is [`StoreError::KeyRejected`]. Pre-genesis, delete the file and
+    /// reopen; there is no migration.
+    ///
     /// # Errors
     ///
     /// [`StoreError::Schema`] if an existing file's version cell is not
-    /// [`SCHEMA_VERSION`]; [`StoreError::Backend`] on I/O.
+    /// [`SCHEMA_VERSION`]; [`StoreError::KeyRejected`] if that file was
+    /// not sealed under `key`; [`StoreError::Backend`] on I/O.
     pub fn open(path: impl AsRef<Path>, key: StoreKey) -> Result<Self, StoreError> {
         let existed = path.as_ref().exists();
         let db = Database::create(path)?;
@@ -99,8 +121,10 @@ impl BodyStore {
         };
         if existed {
             store.check_schema()?;
+            store.check_key()?;
+        } else {
+            store.init_tables()?;
         }
-        store.init_tables()?;
         Ok(store)
     }
 
@@ -193,6 +217,31 @@ impl BodyStore {
         }
     }
 
+    /// The verifier is sealed under the store key. A plaintext tag would
+    /// be forgeable by rewriting the cell; AEAD is not.
+    fn check_key(&self) -> Result<(), StoreError> {
+        let txn = self.inner.db.begin_read()?;
+        let sealed = match txn.open_table(KEY_CHECK) {
+            Ok(table) => table.get(KEY_CHECK_CELL)?.map(|row| row.value().to_vec()),
+            Err(redb::TableError::TableDoesNotExist(_)) => None,
+            Err(e) => return Err(e.into()),
+        };
+        let Some(sealed) = sealed else {
+            return Err(StoreError::KeyRejected);
+        };
+        match shekyl_chacha::open(
+            self.inner.key.as_bytes(),
+            &KEY_CHECK_NONCE,
+            KEY_CHECK_AAD,
+            &sealed,
+        ) {
+            Ok(plain) if plain.as_slice() == KEY_CHECK_PLAINTEXT => Ok(()),
+            _ => Err(StoreError::KeyRejected),
+        }
+    }
+
+    /// Create the tables and the verifier. Called only for a new file:
+    /// a reopen must not rewrite the cell under the same nonce.
     fn init_tables(&self) -> Result<(), StoreError> {
         let txn = self.inner.db.begin_write()?;
         let _ = txn.open_table(SHARDS)?;
@@ -201,8 +250,40 @@ impl BodyStore {
             let mut meta = txn.open_table(META)?;
             meta.insert(SCHEMA_CELL, SCHEMA_VERSION)?;
         }
+        {
+            let mut check = txn.open_table(KEY_CHECK)?;
+            let sealed = seal(
+                self.inner.key.as_bytes(),
+                &KEY_CHECK_NONCE,
+                KEY_CHECK_AAD,
+                KEY_CHECK_PLAINTEXT,
+            );
+            check.insert(KEY_CHECK_CELL, sealed.as_slice())?;
+        }
         txn.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod key_check_tests {
+    use super::*;
+
+    #[test]
+    fn a_schema_file_without_the_verifier_cell_is_refused() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("bare.store");
+        {
+            let db = Database::create(&path).expect("create");
+            let txn = db.begin_write().expect("write");
+            {
+                let mut meta = txn.open_table(META).expect("meta");
+                meta.insert(SCHEMA_CELL, SCHEMA_VERSION).expect("schema");
+            }
+            txn.commit().expect("commit");
+        }
+        let opened = BodyStore::open(&path, StoreKey::from_bytes([0x5a; 32]));
+        assert!(matches!(opened, Err(StoreError::KeyRejected)));
     }
 }
 
