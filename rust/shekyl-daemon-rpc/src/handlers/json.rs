@@ -79,27 +79,6 @@ async fn dispatch_json(state: Arc<AppState>, uri: &'static str, body: String) ->
     }
 }
 
-/// Overwrite `rpc_connections_count` in a `get_info` body with the live count
-/// from the connection tracker — Rust owns the count; the C++ handler writes a
-/// literal 0 (`on_get_info`, since RK-5a deleted the accessor that had been
-/// returning one). Restricted RPC discloses 0,
-/// matching the C++ policy for the peer/connection fields, so the tracker value
-/// is only injected on the unrestricted listener. Any parse failure returns the
-/// body unchanged rather than dropping the response.
-fn fill_rpc_connections_count(json: String, restricted: bool, count: u64) -> String {
-    if restricted {
-        return json;
-    }
-    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&json) else {
-        return json;
-    };
-    let Some(obj) = value.as_object_mut() else {
-        return json;
-    };
-    obj.insert("rpc_connections_count".to_owned(), count.into());
-    serde_json::to_string(&value).unwrap_or(json)
-}
-
 macro_rules! json_handler {
     ($fn_name:ident, $uri:expr) => {
         pub async fn $fn_name(
@@ -313,18 +292,23 @@ json_handler!(get_transaction_pool_hashes, "/get_transaction_pool_hashes");
 json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");
 json_handler!(get_limit, "/get_limit");
 
-/// `get_info` is not a thin passthrough: it injects the live
-/// `rpc_connections_count` from the Rust connection tracker (both the
-/// `/get_info` and `/getinfo` routes dispatch here).
-pub async fn get_info(State(state): State<Arc<AppState>>, body: String) -> impl IntoResponse {
-    match dispatch_json_raw(&state, "/get_info", body).await {
-        Some(json) => json_ok(fill_rpc_connections_count(
-            json,
-            state.restricted,
-            state.conn_tracker.active_total(),
-        )),
-        None => json_dispatch_error(),
-    }
+/// `/get_info` (alias `/getinfo`) — served natively (RK-5c,
+/// `docs/design/DAEMON_RPC_KV_GET_INFO.md`). The body is ignored, as the C++
+/// handler ignored its empty request struct.
+///
+/// The listener's posture becomes a [`crate::info::Disclosure`], and the
+/// method reads only the parts that disclosure shows (RK-D24). This server's
+/// own connection count is the transport's to supply; it is a Status field.
+pub async fn get_info(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
+    let core = state.core.clone();
+    let disclosure = crate::info::Disclosure::from_listener(state.restricted);
+    let rpc_connections = state.conn_tracker.active_total();
+    let result = tokio::task::spawn_blocking(move || {
+        let facts = crate::info_facts::FfiInfoFacts::new(core);
+        crate::info::get_info(&facts, disclosure, rpc_connections)
+    })
+    .await;
+    render("get_info", "node facts unavailable", result)
 }
 
 #[cfg(test)]
@@ -348,7 +332,7 @@ mod tests {
         );
         assert!(!bodyless.include_blocked);
     }
-    use super::{fill_rpc_connections_count, json_error};
+    use super::json_error;
 
     /// A native method's failure names its own cause in the envelope —
     /// never "FFI dispatch failed", which it cannot be.
@@ -359,43 +343,6 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["status"], "ERROR");
         assert_eq!(v["error"], "chain facts unavailable");
-    }
-
-    #[test]
-    fn fills_live_count_when_unrestricted() {
-        let out = fill_rpc_connections_count(
-            r#"{"status":"OK","rpc_connections_count":0}"#.to_string(),
-            false,
-            7,
-        );
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["rpc_connections_count"], 7);
-        assert_eq!(v["status"], "OK");
-    }
-
-    #[test]
-    fn adds_the_field_when_absent() {
-        let out = fill_rpc_connections_count(r#"{"status":"OK"}"#.to_string(), false, 3);
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["rpc_connections_count"], 3);
-    }
-
-    #[test]
-    fn restricted_leaves_the_body_verbatim() {
-        let body = r#"{"rpc_connections_count":0}"#.to_string();
-        assert_eq!(fill_rpc_connections_count(body.clone(), true, 9), body);
-    }
-
-    #[test]
-    fn non_object_or_unparseable_bodies_pass_through() {
-        assert_eq!(
-            fill_rpc_connections_count("not json".to_string(), false, 5),
-            "not json"
-        );
-        assert_eq!(
-            fill_rpc_connections_count("[1,2,3]".to_string(), false, 5),
-            "[1,2,3]"
-        );
     }
 }
 
@@ -422,7 +369,7 @@ pub async fn get_net_stats(State(state): State<Arc<AppState>>, _body: String) ->
         crate::methods::get_net_stats(&facts)
     })
     .await;
-    render("get_net_stats", result)
+    render("get_net_stats", "p2p facts unavailable", result)
 }
 
 /// `/get_peer_list` — the white and gray peerlists (RK-5a). Admin-only.
@@ -459,12 +406,13 @@ pub async fn get_peer_list(State(state): State<Arc<AppState>>, body: String) -> 
         crate::methods::get_peer_list(&request, &facts)
     })
     .await;
-    render("get_peer_list", result)
+    render("get_peer_list", "p2p facts unavailable", result)
 }
 
 /// The three-way match every native REST handler above ends in, written once.
 fn render<T: serde::Serialize>(
     method: &'static str,
+    unavailable: &'static str,
     result: Result<Result<T, crate::methods::RpcFault>, tokio::task::JoinError>,
 ) -> (StatusCode, [(&'static str, &'static str); 1], String) {
     match result {
@@ -477,7 +425,7 @@ fn render<T: serde::Serialize>(
         },
         Ok(Err(fault)) => {
             tracing::warn!(?fault, method, "facts unavailable");
-            json_error("p2p facts unavailable")
+            json_error(unavailable)
         }
         Err(e) => {
             tracing::warn!(?e, method, "handler task did not complete");
