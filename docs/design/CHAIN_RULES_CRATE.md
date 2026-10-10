@@ -65,7 +65,7 @@ is a hope; none of these is.
 | G1 | **No store handle.** The crate reaches neither `shekyl-chain-store` nor `redb`, directly or transitively, in normal or dev dependencies. | Two `compile_fail` doctests in `lib.rs` (intent; a direct `use` fails to resolve); the coverage gate refuses either package in any dependency table of the crate's `Cargo.toml`; **the belt** `scripts/ci/check_chain_rules_no_store.sh` (in `rust-audit-test.yml`) captures the crate's `cargo tree -e normal,dev --target all` closure and refuses either package in it (§6.5) — the belt is what sees *transitive* arrival, which the doctest cannot (round-1 ruling). |
 | G2 | **The conversion ban.** No `From`/`Into`/`TryFrom`/`TryInto` between any `StoreError`/`StoreInvariant`/`StoreCannot` and `InvalidBlock`; no `match` arm maps a store token onto `InvalidBlock`. This crate never *names* a store error type; the store's fault reaches `validate` only as the opaque `V::Fault` (§4.3), which has no bound a rule could inspect. | `check_store_error_conversion_ban.py` clauses 1 and 3, **raised in this PR** so `verdict_defs == 0` is a failure now that the subject exists (§7); genericity of `Fault`. |
 | G3 | **The verdict names the row.** `InvalidBlock { rule: CenRow, locus: Locus }` — a typed census row id, never a string, never "some rejection". | `CenRow` is a closed `enum`; `InvalidBlock` has no string field. |
-| G4 | **One transaction, one brand.** `ChainValid<'id, V>` carries an *invariant* `'id` and is parameterized by the view type `V` that minted it. An unbranded `impl<'id> ChainView<'id> for Evil` can pick up a batch's `'id`, but produces `ChainValid<'id, Evil>`, which does not unify with the `ChainValid<'id, StoreView<'_, 'id>>` `connect` will demand. | `PhantomData<fn(V) -> V>` plus `'id`; `validate` returns `ChainValid<'id, V>`; two `compile_fail` doctests (cross-`'id` and unbranded-`V`) (§8.3). |
+| G4 | **One transaction, one brand.** `ChainValid<'id, V>` carries an *invariant* `'id` and is parameterized by the view type `V` that minted it. An unbranded `impl<'id> ChainView<'id> for Evil` can pick up a batch's `'id`, but produces `ChainValid<'id, Evil>`, which does not unify with the `ChainValid<'id, StoreView<'_, 'id>>` `connect` will demand. | `PhantomData<fn(V) -> V>` plus `'id`; `validate` returns `ChainValid<'id, V>`; two `trybuild` `compile_fail` programs with whole-stderr snapshots and a positive control (`tests/trybuild/`, §8.3; `compile_fail` doctests until 2026-10-10, when they were found green for the wrong reason). |
 | G5 | **Private constructor.** Nothing outside the crate can build a `ChainValid` or a `ValidatedBlock`. | Fields private; no `pub` constructor; `compile_fail` doctest. The FFI-shim construction path is rejected by the ruling (§9.2) and does not exist. |
 | G6 | **Coverage is carried, not declared.** Every `ChainValid` carries `RuleCoverage` (rows actually evaluated) and the `RuleSetId` it was checked under. With zero rules, coverage is empty and `is_complete_for` is `false`. Mint additionally requires `covers_landed` — every *implemented* row the rule set enforces is in coverage — so a forgotten `validate` call cannot produce the token during porting. | Struct fields, set only by `validate`; `ChainValid::mint` panics if `covers_landed` is false; unit tests pin empty/`is_complete_for`/`covers_landed`. |
 | G7 | **The flag partitions first — by type.** Consensus rows and policy rows are **sibling enums** (`CenRow`, `PolicyRow`); a policy row cannot be inserted into a `RuleCoverage`, and `RuleSet` cannot name a `PolicyRow`. `implemented / enforced` and `ratified / enforced` are computed per flag; `E = rows of that flag − bucket 3`; both numbers always printed together with the definition of `E`. | Two enums, two `Coverage<R>` instantiations, two denominators (round-1 ruling Q4); `scripts/ci/check_chain_rules_coverage.py` (§6). |
@@ -1145,6 +1145,7 @@ figures are still printed, as derived), **0** when they agree.
 | exactly one `census_rows!` per flag; header parses; flag ∈ {`Consensus`, `Policy`} | `no registry for flag F` / `N registries for flag F` / `unparseable header at line N` / `unknown flag` (2) |
 | ≥ 1 entry per registry | `registry <Name> empty` (2) |
 | entry grammar — `Var pending,`, `Var implemented(rust::path),`, `Var enforced_at(rust::path, "test_fn"),` or `Var held_by_cxx("file", "test"),`; `implemented` / `enforced_at` **must** carry a non-empty path; `enforced_at` **must** carry a quoted identifier that is a `#[test] fn` defined in the crate (a mention in a comment or a call is not a definition); `held_by_cxx` **must** carry a quoted repo-relative file and a quoted identifier | `unparseable entry at line N` (2) |
+| `Var by_construction(rust::path, "falsifier"),` — the falsifier **must** exist (rule 47) in one of three shapes: a `#[test] fn <name>` defined in the crate; `doctest:<item>`, a ```` ```compile_fail ```` doctest in the `///` block above `fn <item>`; or `trybuild:<test>` (added 2026-10-10, DRS-E5 a2), a `#[test] fn <test>` defined in `src/` or `tests/` whose body calls `.compile_fail(…)` — the test that compares a must-not-compile program's stderr to its snapshot. A shared `#[test]` falsifier names every row it serves as `CenRow::<id>` (slice 5 Q6) | `falsifier … is not a #[test] fn defined in the crate` / `names no fn <item> … carrying a compile_fail doctest` / `is not a #[test] fn <test> defined in the crate (src/ or tests/)` / `runs no compile_fail(…) program` / `serves N rows but its body does not name CenRow::<id>` (1) |
 | no attribute on an entry (a `#[cfg]` the gate cannot evaluate would let the compiled enum and the counted enum differ; the enum's own attributes are fine) | `attribute on entry at line N` (2) |
 | nothing after the enum's closing brace inside the invocation | `text after the enum body at line N` (2) |
 | no duplicate variant across both registries | `duplicate entry X` (1) |
@@ -1433,7 +1434,13 @@ lint scans them as production — no debug macros anywhere).
 - `compile_fail`: `use redb::Database;`
 - `compile_fail`: `use shekyl_chain_store::store::ChainStore;`
 - `compile_fail`: `ChainValid { … }` / `ValidatedBlock { … }` from outside.
-- `compile_fail`: cross-view handoff (on `validate`) —
+- cross-view handoff and unbranded view (on `validate`) — **`trybuild` since
+  2026-10-10 (DRS-E5 a2), `tests/trybuild.rs`**: `verdict_does_not_escape_its_view.rs`
+  (the program below, `E0521` at `connect`), `unbranded_view_does_not_connect.rs`
+  (`ChainValid<'_, Evil>` at `connect`, `E0308`), and the positive control
+  `verdict_connects_under_its_own_view.rs` (`t.pass`), all over one complete
+  stub view in `tests/trybuild/stub_view.rs`. *Records-was:* two `compile_fail`
+  doctests here until that day; see the amendment below for why.
   ```rust
   with_view(|outer| {
       with_view(|inner| {
@@ -1455,8 +1462,10 @@ links the ordinary library build, where no `cfg(doctest)` item exists to
 resolve (the Rust reference says so of the cfg; verified empirically at
 commit 6 — a snippet naming `shekyl_chain_rules::harness::MockChain` fails
 to resolve under `cargo test --doc`). So `harness` is `#[cfg(test)]` only, and the one
-doctest that needs a branded view — the cross-view pin above — declares an
-inline three-method `View<'id>` with its own `with_view`/`connect`. The
+doctest that needed a branded view — the cross-view pin above — declared an
+inline three-method `View<'id>` with its own `with_view`/`connect` (until
+2026-10-10; the stub now lives in `tests/trybuild/stub_view.rs`, where a
+`trybuild` program can `#[path]`-include it). The
 alternative, a `pub` harness behind a `test-support` feature, was not taken:
 it would put a mock `ChainView` on the crate's public surface for one pin.
 
@@ -1467,7 +1476,9 @@ silently ignored, so writing one claims a precision the gate does not have
 (verified at commit 4: `E0999` passed). None is written. Instead every pin
 was compiled once outside rustdoc to read the error it actually produces, so
 a snippet that fails for a typo rather than for its reason is a review item,
-not a hidden state. All eleven, at commit 8:
+not a hidden state. All eleven, at commit 8 (the unbranded-view row was
+added 2026-10-10: that pin sat beside the cross-view one in `validate.rs`
+and was not tabled here):
 
 | pin | where | error |
 | --- | --- | --- |
@@ -1481,12 +1492,44 @@ not a hidden state. All eleven, at commit 8:
 | `ChainValid<'long>` → `ChainValid<'short>` | `verdict.rs` | *lifetime may not live long enough* (no code; the invariance error) |
 | `ChainValid { .. }` from outside | `verdict.rs` | `E0451` field is private |
 | `ValidatedBlock { .. }` from outside | `block.rs` | `E0451` field is private |
-| cross-view `connect(&outer, valid)` | `validate.rs` | `E0521` borrowed data escapes the closure (the inner brand cannot become the outer) |
+| cross-view `connect(&outer, valid)` | `validate.rs` → `tests/trybuild/` (2026-10-10) | `E0521` borrowed data escapes the closure (the inner brand cannot become the outer) — now a stderr snapshot |
+| unbranded `connect(&view, valid)` | `validate.rs` → `tests/trybuild/` (2026-10-10) | `E0308` `ChainValid<'_, Stub<()>>` is not `ChainValid<'_, Stub<Brand<'_>>>` — now a stderr snapshot |
 
 The G1 pair is *not* `E0432` ×2 as an earlier draft of this section said —
 an unknown crate root is `E0433`, an unknown item in a known crate `E0432`.
-Exact-diagnostic pinning (`trybuild`) is not adopted: the pins here are
-second lines behind the belt and the type shapes, not gates.
+Exact-diagnostic pinning (`trybuild`) is not adopted for the pins whose
+stub cannot drift: they are second lines behind the belt and the type
+shapes, not gates.
+
+**Amended by finding (DRS-E5 a2, 2026-10-10): compiled-once is not
+compiled-every-time.** The paragraph above relied on each pin having been
+compiled outside rustdoc *once*, so that a snippet failing for a reason
+other than its own would be a review item. That holds only while the
+snippet's stub stays complete. The two `validate` brand pins carried an
+inline `ChainView` stub, and when `ChainView` grew the archival reads
+(`5fb2132fa`, 2026-09-29, E4 commit 2) the stubs did not: from that day
+both doctests passed on `E0046` (sixteen methods missing) — the stub no
+longer implemented the trait, so `connect` was never reached. A
+`compile_fail` that goes red for any reason is a gate whose subject can
+vanish while it stays green (rule 47). Pinning an error code did not close
+it: rustdoc requires the code to be *among* the errors, and borrowck still
+ran beside the E0046, so a drift probe stayed green. The two pins are
+`trybuild` programs now, whose whole stderr is compared against a snapshot
+and whose stub is a complete `HeaderView` + `ChainView` impl: a method
+added to either trait turns all three programs red (the positive control
+fails to compile; both negatives mismatch on the E0046 line), which is the
+behaviour the doctests were assumed to have. Reading a mismatch: an E0046
+means fix the stub, never regenerate; a reworded diagnostic under a
+toolchain bump is `TRYBUILD=overwrite` after reading the new text; a
+different error at `connect` is a finding against `validate`. `trybuild`
+was already in `Cargo.lock` (crypto-pq's and logging's dev-dependency,
+rule 17); the toolchain pin makes the snapshots deterministic. The other
+pins in this table have no stub to drift and stay as doctests. CEN-F19's
+registry falsifier moved with the pins — `doctest:validate` →
+`trybuild:a_verdict_connects_under_the_view_it_was_judged_against_and_no_other`
+— and the completeness gate learned the shape (§6.2): the named `#[test]`
+must exist under `src/` or `tests/` and call `.compile_fail(…)`, so the
+row cannot be re-keyed to a test that only passes programs.
 
 ### 8.4 Rule sets and schedule (`rule_set_tests.rs`)
 

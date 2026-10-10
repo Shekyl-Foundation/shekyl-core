@@ -186,179 +186,22 @@ pub fn form<S: Substrate>(
 /// view, it cannot be connected under another — the store's `connect` takes
 /// a `ChainValid<'id, StoreView<'_, 'id>>`, and a verdict from a different
 /// transaction, or from an unbranded view that merely borrowed the `'id`,
-/// does not unify with it:
+/// does not unify with it.
 ///
-/// ```compile_fail
-/// use core::convert::Infallible;
-/// use core::marker::PhantomData;
-/// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
-///
-/// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
-/// impl<'id> ChainView<'id> for View<'id> {
-///     type Fault = Infallible;
-///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
-///         Ok(false)
-///     }
-///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
-///         Ok(None)
-///     }
-///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
-///         Ok(None)
-///     }
-///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-///         Ok(TreeFrontier::EMPTY)
-///     }
-///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn weights_window(
-///         &self,
-///         _: BlockHeight,
-///         _: BlockCount,
-///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
-///         Ok(false)
-///     }
-///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
-///         Ok(shekyl_units::AtomicUnits::ZERO)
-///     }
-/// }
-/// // Each call brands a fresh view, as the store's `write` does.
-/// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
-///     f(View(PhantomData))
-/// }
-/// // The store's `connect`: the verdict must carry *this* view's brand.
-/// fn connect<'id>(_view: &View<'id>, _valid: ChainValid<'id, View<'id>>) {}
-/// fn formed() -> StructurallyValid {
-///     unimplemented!()
-/// }
-///
-/// with_view(|outer| {
-///     with_view(|inner| {
-///         let valid = validate(
-///             formed(),
-///             &inner,
-///             &RuleSet::GENESIS,
-///             &Trust::UNANCHORED,
-///         )
-///         .unwrap()
-///         .unwrap();
-///         connect(&outer, valid); // judged against `inner`: does not compile
-///     })
-/// });
-/// ```
-///
-/// An unbranded view that implements `ChainView` for every `'id` still
-/// cannot satisfy `connect`: it mints `ChainValid<'id, Evil>`, not
-/// `ChainValid<'id, View<'id>>`.
-///
-/// ```compile_fail
-/// use core::convert::Infallible;
-/// use core::marker::PhantomData;
-/// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
-///
-/// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
-/// impl<'id> ChainView<'id> for View<'id> {
-///     type Fault = Infallible;
-///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
-///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
-///         Ok(None)
-///     }
-///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
-///         Ok(None)
-///     }
-///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-///         Ok(TreeFrontier::EMPTY)
-///     }
-///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn weights_window(
-///         &self,
-///         _: BlockHeight,
-///         _: BlockCount,
-///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
-///         Ok(false)
-///     }
-///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
-///         Ok(shekyl_units::AtomicUnits::ZERO)
-///     }
-/// }
-/// struct Evil;
-/// impl<'id> ChainView<'id> for Evil {
-///     type Fault = Infallible;
-///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
-///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
-///         Ok(None)
-///     }
-///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
-///         Ok(None)
-///     }
-///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-///         Ok(TreeFrontier::EMPTY)
-///     }
-///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn weights_window(
-///         &self,
-///         _: BlockHeight,
-///         _: BlockCount,
-///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
-///         Ok(false)
-///     }
-///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
-///         Ok(shekyl_units::AtomicUnits::ZERO)
-///     }
-/// }
-/// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}
-/// fn formed() -> StructurallyValid { unimplemented!() }
-///
-/// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
-///     f(View(PhantomData))
-/// }
-/// with_view(|view| {
-///     let valid = validate(formed(), &Evil, &RuleSet::GENESIS, &Trust::UNANCHORED).unwrap().unwrap();
-///     connect(&view, valid); // ChainValid<Evil> ≠ ChainValid<View>
-/// });
-/// ```
+/// That is a property of the types, with no runtime behaviour to test; the
+/// test is the program that must not compile, and it lives in
+/// `tests/trybuild/` (`verdict_does_not_escape_its_view.rs`: a verdict
+/// judged against an inner brand cannot be connected under an outer one,
+/// `E0521`; `unbranded_view_does_not_connect.rs`: a view implementing
+/// `ChainView` for every `'id` mints `ChainValid<'id, Evil>`, which is not
+/// `ChainValid<'id, View<'id>>`, `E0308`; and
+/// `verdict_connects_under_its_own_view.rs`, the positive control). They
+/// were two `compile_fail` doctests here until 2026-10-10. A doctest's
+/// `compile_fail` cannot say *why* the program failed, and from 2026-09-29
+/// — when `ChainView` grew the archival reads and the doctests' stub views
+/// did not — both passed because the stubs no longer implemented the trait,
+/// not because `connect` refused the verdict. `trybuild` snapshots the
+/// stderr, so the cause is the thing asserted.
 pub fn validate<'id, V: ChainView<'id>>(
     formed: StructurallyValid,
     view: &V,

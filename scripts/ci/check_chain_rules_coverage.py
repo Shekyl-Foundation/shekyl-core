@@ -127,7 +127,7 @@ ENTRY_RE = re.compile(
     r"(?:(?P<pending>pending)"
     rf"|(?P<implemented>implemented)\(\s*(?P<impl_path>{_RUST_PATH})\s*\)"
     rf'|(?P<enforced_at>enforced_at)\(\s*(?P<site>{_RUST_PATH})\s*,\s*"(?P<proof>[A-Za-z_]\w*)"\s*\)'
-    rf'|(?P<by_construction>by_construction)\(\s*(?P<property>{_RUST_PATH})\s*,\s*"(?P<falsifier>(?:doctest:)?[A-Za-z_]\w*)"\s*\)'
+    rf'|(?P<by_construction>by_construction)\(\s*(?P<property>{_RUST_PATH})\s*,\s*"(?P<falsifier>(?:doctest:|trybuild:)?[A-Za-z_]\w*)"\s*\)'
     r'|(?P<held>held_by_cxx)\(\s*"(?P<file>[^"\s]+)"\s*,\s*"(?P<test>[A-Za-z_]\w*)"\s*\))'
     r"\s*,$"
 )
@@ -487,12 +487,17 @@ def check_by_construction(entries: list[Entry], crate_src: str | None, errors: l
     """Every `by_construction` entry names a falsifier defined in this crate.
 
     The compiler pins the property's home (`use path as _`); the falsifier is
-    the gate's to assert (rule 47): either a `#[test] fn <name>` that would
-    fail if the property lapsed, or `doctest:<item>` — a `compile_fail`
-    doctest on `fn <item>`, the shape a type-system property is falsified
-    by (CEN-F19: a verdict judged against one view cannot connect under
-    another). A row true by construction with no way to fail is a claim,
-    not a row (CHAIN_RULES_SLICE_4.md Q4).
+    the gate's to assert (rule 47): a `#[test] fn <name>` that would fail if
+    the property lapsed; or `doctest:<item>` — a `compile_fail` doctest on
+    `fn <item>`; or `trybuild:<test>` — a `#[test] fn <test>` (under the
+    crate's `tests/`, read with `src/`) whose body runs `compile_fail`
+    programs against stderr snapshots. The last is the shape a type-system
+    property is falsified by when its program carries a stub that can drift
+    (CEN-F19: a verdict judged against one view cannot connect under
+    another; its doctests were found green on E0046 from 2026-09-29 to
+    2026-10-10, the stub view having fallen behind `ChainView` —
+    CHAIN_RULES_CRATE.md §8.3). A row true by construction with no way to
+    fail is a claim, not a row (CHAIN_RULES_SLICE_4.md Q4).
     """
     rows = [e for e in entries if e.by_construction and e.proof]
     if not rows:
@@ -514,6 +519,21 @@ def check_by_construction(entries: list[Entry], crate_src: str | None, errors: l
                     f"`fn {item}` in the crate carrying a ```compile_fail doctest — a type-system "
                     "property is falsified by the program that must not compile"
                 )
+        elif falsifier.startswith("trybuild:"):
+            test = falsifier[len("trybuild:"):]
+            body = _test_body(stripped_src, test)
+            if body is None:
+                errors.append(
+                    f"by_construction entry {e.id} (line {e.line}): falsifier {falsifier!r} is not a "
+                    f"`#[test] fn {test}` defined in the crate (`src/` or `tests/`) — a trybuild "
+                    "falsifier is the test that compares the program's stderr to its snapshot"
+                )
+            elif not re.search(r"\.compile_fail\s*\(", body):
+                errors.append(
+                    f"by_construction entry {e.id} (line {e.line}): falsifier {falsifier!r} is a "
+                    f"`#[test] fn {test}` that runs no `compile_fail(…)` program — the property is "
+                    "falsified by the program that must not compile, snapshot and all"
+                )
         elif not _test_def_re(falsifier).search(stripped_src):
             errors.append(
                 f"by_construction entry {e.id} (line {e.line}): falsifier {falsifier!r} is not a "
@@ -528,7 +548,7 @@ def check_by_construction(entries: list[Entry], crate_src: str | None, errors: l
     # reads as compliant and is not; this refuses it.
     shared: dict[str, list[Entry]] = {}
     for e in rows:
-        if not (e.proof or "").startswith("doctest:"):
+        if not (e.proof or "").startswith(("doctest:", "trybuild:")):
             shared.setdefault(e.proof or "", []).append(e)
     for falsifier, served in shared.items():
         if len(served) < 2:
@@ -989,6 +1009,13 @@ def selftest() -> None:
     _expect_ok(_inputs(registry=bc_doc_reg, crate_src=doc_src), "a by-construction row with a compile_fail doctest falsifier")
     _expect_refusal(_inputs(registry=bc_doc_reg, crate_src="/// ```\n/// let x = 1;\n/// ```\npub fn validate() {}\n"), "names no `fn validate` in the crate carrying a ```compile_fail doctest", "doctest falsifier whose doctest is not compile_fail")
     _expect_refusal(_inputs(registry=bc_doc_reg, crate_src="/// ```compile_fail\n/// x\n/// ```\npub fn other() {}\n\npub fn validate() {}\n"), "names no `fn validate` in the crate carrying a ```compile_fail doctest", "doctest falsifier on a different item")
+    # trybuild: — the `#[test]` that runs the compile_fail programs (CEN-F19 since 2026-10-10)
+    bc_try_reg = _REGISTRY_OK.replace("        L1 pending,\n", '        L1 by_construction(crate::view::ChainView, "trybuild:brand_holds"),\n')
+    try_src = "#[test]\nfn brand_holds() {\n    let t = trybuild::TestCases::new();\n    t.pass(\"tests/trybuild/ok.rs\");\n    t.compile_fail(\"tests/trybuild/escape.rs\");\n}\n"
+    _expect_ok(_inputs(registry=bc_try_reg, crate_src=try_src), "a by-construction row with a trybuild falsifier")
+    _expect_refusal(_inputs(registry=bc_try_reg, crate_src="fn brand_holds() {\n    t.compile_fail(\"x.rs\");\n}\n"), "is not a `#[test] fn brand_holds` defined in the crate", "trybuild falsifier without #[test]")
+    _expect_refusal(_inputs(registry=bc_try_reg, crate_src="#[test]\nfn brand_holds() {\n    let t = trybuild::TestCases::new();\n    t.pass(\"tests/trybuild/ok.rs\");\n}\n"), "runs no `compile_fail(…)` program", "trybuild falsifier that only passes")
+    _expect_refusal(_inputs(registry=bc_try_reg, crate_src="#[test]\nfn brand_holds() {\n    // t.compile_fail(\"x.rs\");\n}\n"), "runs no `compile_fail(…)` program", "trybuild compile_fail only in a comment")
     _expect_refusal(_reg("        L1 pending,\n", "        L1 by_construction(crate::view::ChainView),\n"), "unparseable entry at line 12", "by_construction without a falsifier")
     _expect_refusal(_reg("        L1 pending,\n", '        L1 enforced_at("crate::anchors::E5", "e5_refuses"),\n'), "unparseable entry at line 12", "enforced_at site quoted")
 
@@ -1060,8 +1087,20 @@ def load(census: Path, registry: Path, lib: Path, manifest: Path) -> Inputs:
         if not p.is_file():
             raise Refused(f"{label}: {p}")
     read = lambda p: p.read_text(encoding="utf-8")  # noqa: E731
+    # `src/` and the crate's integration tests: a `trybuild:` falsifier lives
+    # under `tests/`, where cargo compiles it as its own target.
     src_dir = lib.parent
-    crate_src = "\n".join(read(f) for f in sorted(src_dir.rglob("*.rs"))) if src_dir.is_dir() else None
+    tests_dir = lib.parent.parent / "tests"
+    crate_src = (
+        "\n".join(
+            read(f)
+            for d in (src_dir, tests_dir)
+            if d.is_dir()
+            for f in sorted(d.rglob("*.rs"))
+        )
+        if src_dir.is_dir()
+        else None
+    )
     return Inputs(
         census=read(census),
         registry=read(registry),

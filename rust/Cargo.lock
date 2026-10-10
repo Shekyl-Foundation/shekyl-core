@@ -3946,6 +3946,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "trybuild",
 ]
 
 [[package]]
