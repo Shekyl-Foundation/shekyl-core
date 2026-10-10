@@ -11,7 +11,7 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
-- **The GUI wallet cannot decode a 3.42 `get_info` reply.** `already_generated_coins` has been a JSON number since #1005 and the GUI decodes it as a string, so the wallet reports its daemon disconnected and chain health fails. No interim fix (2026-10-08): testnet is not exercising the GUI, so the break is accepted until RK-5c's amount-encoding commit (RK-Q2) and its GUI pair land. RK-Q2 was ruled 2026-10-09 (decimal strings); blocked on RK-5c reaching that commit.
+- **The GUI wallet cannot decode a 3.42 `get_info` reply.** `already_generated_coins` has been a JSON number since #1005 and the GUI decodes it as a string, so the wallet reports its daemon disconnected and chain health fails. No interim fix (2026-10-08): testnet is not exercising the GUI, so the break is accepted until RK-5c's amount-encoding commit (RK-Q2) lands and the GUI lane, parked until the daemon is stable, makes its side of the change (`DAEMON_RPC_KV_GET_INFO.md` §5.1). RK-Q2 was ruled 2026-10-09 (decimal strings); blocked on RK-5c reaching that commit and on the GUI lane resuming.
   - Owner: [`DAEMON_RPC_KV_GET_INFO.md`](design/DAEMON_RPC_KV_GET_INFO.md) §3.3
   - Target: pre-genesis
 
