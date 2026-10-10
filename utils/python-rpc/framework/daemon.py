@@ -191,18 +191,6 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(get_info)
     getinfo = get_info
 
-    def hard_fork_info(self, version = None):
-        params = {}
-        if version is not None:
-            params['version'] = version
-        hard_fork_info = {
-            'method': 'hard_fork_info',
-            'params': params,
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(hard_fork_info)
-
     def generateblocks(self, address, blocks=1, prev_block = "", starting_nonce = 0):
         generateblocks = {
             'method': 'generateblocks',

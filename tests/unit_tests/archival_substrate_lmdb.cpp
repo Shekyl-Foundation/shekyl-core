@@ -24,7 +24,6 @@
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "blockchain_db/shekyl_types.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_basic/hardfork.h"
 #include "shekyl/shekyl_ffi.h"
 #include "string_tools.h"
 #include "archival_lmdb_test_helpers.h"
@@ -1869,11 +1868,6 @@ TEST(archival_substrate_lmdb, attestation_witness_threaded_through_add_block)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  // add_block calls m_hardfork->add(...); a connect needs a hardfork set or it
-  // null-derefs (the connect KATs below do the same).
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   const uint64_t h0 = db.height();
   const blobdata witness(96, 'w');
@@ -1928,9 +1922,6 @@ TEST(archival_substrate_lmdb, pop_deletes_the_serve_credit_row_the_connect_wrote
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   // The gate-2 integration vin: the only serve-credit blob whose kept half is
   // authored by shekyl-wire, so this test cannot drift from the real encoding
@@ -1998,9 +1989,6 @@ TEST(archival_substrate_lmdb, plain_pop_drops_the_witness_and_parks_no_detached_
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   constexpr size_t kBlocks = 5;
   const blobdata witness(96, 'w');
@@ -2052,9 +2040,6 @@ TEST(archival_substrate_lmdb, add_block_does_not_touch_the_alt_witness_table)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   const blobdata witness(96, 'w');
   const uint64_t h0 = db.height();
@@ -2124,9 +2109,6 @@ TEST(archival_substrate_lmdb, slash_scheduler_absorbs_a_single_missed_challenge)
   const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t settlement_epoch = 1;
 
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   // Two bonds, both joined at epoch 0 and holding shard 7 through epoch 1's
   // challenge. P_miss never responds; P_served earned the (P, 7, E=1) credit.
@@ -2462,9 +2444,6 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_sustained_absence_at_m_of_
   const FailureWindowParams window = failure_window_params();
   ASSERT_GE(window.m, 2u); // else there is no "absorbed" epoch to check
 
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   const crypto::hash p_miss = make_hash(0x7D);
   const crypto::hash p_served = make_hash(0x7E);
@@ -2564,9 +2543,6 @@ TEST(archival_substrate_lmdb, failure_window_floor_is_the_shard_add_epoch)
   const FailureWindowParams window = failure_window_params();
   const uint64_t add_epoch = 5;
 
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   const crypto::hash p_id = make_hash(0x81);
   shekyl::db::ArchivalBondValue seed = window_kat_bond();
@@ -2625,9 +2601,6 @@ TEST(archival_substrate_lmdb, slash_scheduler_spans_a_full_window_past_the_serve
   const FailureWindowParams window = failure_window_params();
   ASSERT_GE(window.serve_budget, 1u); // else the early-break is unreachable
 
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   const crypto::hash p_id = make_hash(0x80);
   db.put_archival_bond_value(p_id, window_kat_bond());
@@ -2686,9 +2659,6 @@ TEST(archival_substrate_lmdb, failure_window_recomputes_from_reverted_state_on_p
   const FailureWindowParams window = failure_window_params();
   ASSERT_GE(window.m, 2u);
 
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   const crypto::hash p_id = make_hash(0x7F);
   db.put_archival_bond_value(p_id, window_kat_bond());
@@ -3158,9 +3128,6 @@ void expect_connect_refused(const transaction& tx, const char* what,
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
   append_minimal_blocks(db, 3);
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -3277,9 +3244,6 @@ TEST(archival_substrate_lmdb, cen_l11_accepts_a_well_formed_output)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
   append_minimal_blocks(db, 3);
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -3306,9 +3270,6 @@ TEST(archival_substrate_lmdb, cen_b5_header_root_is_the_tip_root_before_add_bloc
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
   append_minimal_blocks(db, 3);
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -3365,9 +3326,6 @@ TEST(archival_substrate_lmdb, emission_connect_pop_roundtrip_through_real_block_
 
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   // Reach a height where every fixture epoch is settled and inside the claim
   // window: the connect block's index N needs floor(N / SEB) > max_epoch.
@@ -3416,9 +3374,6 @@ TEST(archival_substrate_lmdb, bond_post_connect_pop_roundtrip_through_real_block
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   // One settlement epoch of blocks, so the expected join epoch is nonzero —
   // a zero-height operand bug cannot hide behind a zero expectation.
@@ -3562,9 +3517,6 @@ TEST(archival_substrate_lmdb, release_connect_pop_roundtrip_through_real_block_p
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   append_minimal_blocks(db, kSeb + 3);
 
@@ -3647,9 +3599,6 @@ TEST(archival_substrate_lmdb, release_two_p_one_block_threads_the_counter)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   append_minimal_blocks(db, 5);
 
@@ -3861,9 +3810,6 @@ TEST(archival_substrate_lmdb, reinstate_growth_is_unrepresentable_at_connect)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   append_minimal_blocks(db, kSeb + 3);
 
@@ -3883,9 +3829,6 @@ TEST(archival_substrate_lmdb, reinstate_standing_only_zero_credit_roundtrip)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   append_minimal_blocks(db, kSeb + 3);
 
@@ -3941,9 +3884,6 @@ TEST(archival_substrate_lmdb, budget_epoch_boundary_includes_final_block_through
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
   BlockchainLMDB& lmdb = fixture.db;
-  HardFork hf(db);
-  hf.init();
-  db.set_hard_fork(&hf);
 
   // Per-block inflow. Any nonzero value makes an off-by-one sum distinct
   // from the correct one; SEB·kAccrual vs (SEB-1)·kAccrual differ by kAccrual.

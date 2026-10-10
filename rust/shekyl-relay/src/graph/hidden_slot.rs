@@ -5,46 +5,33 @@
 
 //! The hidden stem slot (`DAEMON_RELAY_PRIVACY.md` §95.3, §98).
 //!
-//! When a configured connector hides this node's address from the peer,
-//! slot 0 of the stem map is **reserved** for the outbound sessions whose
-//! declaration says so, and a local origin's first hop is a pin over those
-//! sessions: slot 0's peer, then `stems − 1` alternates drawn uniformly from
-//! the rest of them at the first origination of the epoch (D-PR1-1 (c′)).
-//! The pin is walked as every other source's pin is (W3c); when the slot's
-//! peer drops, the merge moves the live alternate into slot 0; once the pin
-//! is exhausted the plan is [`RelayPlan::NoOwnEdge`] until the epoch ends.
+//! When a configured connector hides this node's address from the peer, the
+//! epoch's map is [`super::epoch_map::EpochMap::Reserved`]. Slot 0 is
+//! reserved for the outbound sessions whose declaration says so, and a local
+//! origin's first hop is that map's route over the class. This module names
+//! the class. It does not sequence the fill and the walk.
 //!
-//! The primary is slot 0's peer when slot 0 holds one. It may sit in another
-//! slot: the class-blind draw for the other slots can place an address-hiding
-//! session there, and when slot 0's peer then dies before the origin has
-//! pinned, the hidden-slot fill finds no *unslotted* address-hiding session
-//! and slot 0 stays empty while the survivor holds slot 1. Peers are never
-//! moved between slots — a move would re-point every relayed source pinned
-//! on the moved peer's slot index in the covert-channel binding (§20.3) and
-//! change the live set for no routing reason — so the origin's primary is
-//! then an address-hiding peer occupying another slot, drawn uniformly when
-//! several do.
+//! Peers are never moved between slots (§20.3). When slot 0 is empty and
+//! every address-hiding session already occupies another slot, the route's
+//! merge does not run, and the origin pins on one of them where it sits.
 //!
-//! No connector is named here. The class is `address_hidden_from_peer`,
-//! read off each session's declaration; the stem map never learns what the
-//! class is (`StemMap::new_with_reserved_slot`, `update_with_reserved`).
-//! The class's target size is
-//! [`shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS`]. A class of
-//! one still reports `hop-0 edge cannot rotate` at each rebuild. No cover on
-//! Tor by ruling: the plan kind stays [`RelayPlan::OwnEdge`], one ordinary
-//! send, terminal on write failure, so a failed hidden write is never
-//! fluffed on a clear link.
+//! No connector is named here. The class is `address_hidden_from_peer` on
+//! each session's declaration. A class of one still reports `hop-0 edge
+//! cannot rotate` at each rebuild. No cover on Tor by ruling: the plan kind
+//! stays [`RelayPlan::OwnEdge`], one ordinary send, terminal on write
+//! failure, so a failed hidden write is never fluffed on a clear link.
 
-use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
-use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap};
+use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_relay_privacy::stem_map::ConnectionId;
 
+use super::epoch_map::EpochMap;
 use super::{hides_address, Relay, RelayPlan};
 
 impl Relay {
     /// Outbound stem candidates split by the declaration cell: sessions
     /// whose peer does not learn this node's address, then the rest. Both in
-    /// connection-id order.
-    fn partitioned_outbound_ids(&self) -> (Vec<ConnectionId>, Vec<ConnectionId>) {
+    /// connection-id order. Their union is the outbound stem-candidate set.
+    pub(super) fn partitioned_outbound_ids(&self) -> (Vec<ConnectionId>, Vec<ConnectionId>) {
         let mut hidden = Vec::new();
         let mut rest = Vec::new();
         for (id, peer) in &self.contexts {
@@ -63,123 +50,28 @@ impl Relay {
     /// The epoch's stem map under a hidden connector: slot 0 reserved for
     /// the address-hiding sessions. The body of [`Relay::rebuild_stems`] on
     /// that path.
-    pub(super) fn reserved_stem_map<R: RelayRng + ?Sized>(&self, rng: &mut R) -> StemMap {
+    pub(super) fn reserved_stem_map<R: RelayRng + ?Sized>(&self, rng: &mut R) -> EpochMap {
         let (hidden, rest) = self.partitioned_outbound_ids();
         if hidden.len() == 1 {
             tracing::error!(
                 "hop-0 edge cannot rotate: one outbound connection hides this node's address, so every transaction this node originates uses that connection until another such peer connects"
             );
         }
-        StemMap::new_with_reserved_slot(hidden, rest, self.stems, rng)
-    }
-
-    /// The mid-epoch merge under a hidden connector. The body of
-    /// [`Relay::update_stems`] on that path.
-    pub(super) fn merge_reserved<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
-        let (hidden, rest) = self.partitioned_outbound_ids();
-        // Named bind: `StemSetChange` is `Copy + must_use`; nothing re-points
-        // on push (§20.3), as in `update_stems`.
-        let _change = self.map.update_with_reserved(hidden, rest, rng);
+        EpochMap::reserved(hidden, rest, self.stems, rng)
     }
 
     /// Plan a local origin's first hop over the hidden stem slot.
     ///
-    /// A close does not merge ([`Relay::on_connection_close`]), so a slot 0
-    /// whose peer is gone is merged here first: the hidden-slot fill is what
-    /// moves the pin's live alternate into the slot before the pin is walked.
-    /// An empty slot 0 is merged only when an **unslotted** address-hiding
-    /// session exists to fill it (rule 3: it fills at the next merge, not the
-    /// next epoch). When every address-hiding session is already in another
-    /// slot the merge would change nothing, and the origin pins on one of
-    /// them where it sits (see the module doc) rather than merging on every
-    /// origination.
-    ///
-    /// Then the pin. Unpinned this epoch: slot 0's peer and `stems − 1`
-    /// alternates drawn uniformly from the other address-hiding sessions,
-    /// frozen as supplied; an origination that finds slot 0 empty makes no
-    /// pin and the next one may. Pinned: the walk, with the address-hiding
-    /// sessions as the allowed set. `None` either way is
-    /// [`RelayPlan::NoOwnEdge`]: the caller sends nothing, records nothing,
-    /// and does not refresh the stem map — a refresh cannot manufacture a
-    /// session that hides this node's address, and falling through to fluff
-    /// would publish the origin on a clear link.
+    /// The map fills slot 0 before it walks the pin, and only when that fill
+    /// would change the slot. `None` is [`RelayPlan::NoOwnEdge`]: the caller
+    /// sends nothing, records nothing, and does not refresh the stem map. A
+    /// refresh cannot manufacture a session that hides this node's address,
+    /// and falling through to fluff would publish the origin on a clear link.
     pub(super) fn hidden_slot_plan<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> RelayPlan {
-        let (hidden_live, _) = self.partitioned_outbound_ids();
-        let slot0 = self.map.slots().first().copied().flatten();
-        let needs_merge = match slot0 {
-            Some(peer) => !self.contexts.contains_key(&peer),
-            None => hidden_live
-                .iter()
-                .any(|peer| self.map.slot_of(*peer).is_none()),
-        };
-        if needs_merge {
-            self.merge_reserved(rng);
-        }
-        let chosen = if self.map.is_pinned(None) {
-            self.map.stem_for_among(None, &hidden_live, rng)
-        } else {
-            let candidates = self.local_pin_candidates(&hidden_live, rng);
-            self.map.pin_over(None, candidates)
-        };
-        match chosen {
+        let (hidden, rest) = self.partitioned_outbound_ids();
+        match self.map.route_local_origin(&hidden, &rest, rng) {
             Some(destination) => RelayPlan::OwnEdge(destination),
             None => RelayPlan::NoOwnEdge,
         }
-    }
-
-    /// The local source's pin (D-PR1-1 (c′)): the primary first, then
-    /// `stems − 1` alternates drawn uniformly — a partial Fisher-Yates, as
-    /// `StemMap::new` draws — from the other address-hiding sessions live
-    /// now.
-    ///
-    /// The primary is slot 0's peer when slot 0 holds one. Otherwise it is an
-    /// address-hiding peer occupying another slot, drawn uniformly when
-    /// several do (the stranded state the module doc describes; peers are not
-    /// moved between slots). Empty when no slot holds an address-hiding
-    /// session, so [`StemMap::pin_over`] pins nothing.
-    fn local_pin_candidates<R: RelayRng + ?Sized>(
-        &self,
-        hidden_live: &[ConnectionId],
-        rng: &mut R,
-    ) -> Vec<ConnectionId> {
-        let slots = self.map.slots();
-        let primary = match slots.first().copied().flatten() {
-            Some(peer) => peer,
-            None => {
-                let slotted: Vec<ConnectionId> = slots
-                    .iter()
-                    .skip(1)
-                    .flatten()
-                    .copied()
-                    .filter(|peer| hidden_live.contains(peer))
-                    .collect();
-                match slotted.len() {
-                    0 => return Vec::new(),
-                    1 => slotted[0],
-                    n => {
-                        let pick = usize::try_from(bounded_uniform(rng, (n - 1) as u64))
-                            .expect("the draw is bounded by the slot count");
-                        slotted[pick]
-                    }
-                }
-            }
-        };
-        let mut alternates: Vec<ConnectionId> = hidden_live
-            .iter()
-            .copied()
-            .filter(|peer| *peer != primary)
-            .collect();
-        let take = self.stems.saturating_sub(1).min(alternates.len());
-        for i in 0..take {
-            let remaining = alternates.len() - i;
-            let pick = i + usize::try_from(bounded_uniform(rng, (remaining - 1) as u64))
-                .expect("the draw is bounded by the candidate count");
-            alternates.swap(i, pick);
-        }
-        alternates.truncate(take);
-        let mut candidates = Vec::with_capacity(1 + take);
-        candidates.push(primary);
-        candidates.extend(alternates);
-        candidates
     }
 }

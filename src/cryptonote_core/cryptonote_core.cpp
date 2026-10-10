@@ -51,7 +51,6 @@ using namespace epee;
 #include "blockchain_db/blockchain_db.h"
 #include "fcmp/ct_semantics.h"
 #include "common/notify.h"
-#include "hardforks/hardforks.h"
 #include "tx_verification_utils.h"
 #include "version.h"
 #include "shekyl/shekyl_ffi.h"
@@ -615,15 +614,7 @@ namespace cryptonote
       MERROR("Failed to parse block rate notify spec: " << e.what());
     }
 
-    // Regtest installs `regtest_hard_fork_row()`: the schedule's newest
-    // version at its first height. That height is CEN-F21's epoch. The
-    // inherited shape `{(1, 0), (latest, 1)}` collapsed to `[(1, 0)]`
-    // (`add_fork` rejects a version that does not advance), so regtest
-    // decayed the staker split from height 0 while every issued network
-    // decayed it from height 1. The export tool installs the same row.
-    const std::pair<uint8_t, uint64_t> regtest_hard_forks[2] = {regtest_hard_fork_row(), std::make_pair(0, 0)};
     const cryptonote::test_options regtest_test_options = {
-      regtest_hard_forks,
       0
     };
     const difficulty_type fixed_difficulty = command_line::get_arg(vm, arg_fixed_difficulty);
@@ -633,9 +624,9 @@ namespace cryptonote
     r = m_mempool.init(max_txpool_weight, m_nettype == FAKECHAIN);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize memory pool");
 
-    // now that we have a valid m_blockchain_storage, we can clean out any
-    // transactions in the pool that do not conform to the current fork
-    m_mempool.validate(m_blockchain_storage.get_current_hard_fork_version());
+    // now that we have a valid m_blockchain_storage, re-run admission on
+    // the persisted pool and drop what this binary refuses
+    m_mempool.validate();
 
     bool show_time_stats = command_line::get_arg(vm, arg_show_time_stats) != 0;
     m_blockchain_storage.set_show_time_stats(show_time_stats);
@@ -757,8 +748,7 @@ namespace cryptonote
     CATCH_ENTRY_L0("core::handle_incoming_tx()", false);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::check_tx_semantic(const transaction& tx, tx_verification_context& tvc,
-      uint8_t hf_version)
+  bool core::check_tx_semantic(const transaction& tx, tx_verification_context& tvc)
   {
     if(!tx.vin.size())
     {
@@ -830,7 +820,7 @@ namespace cryptonote
       return false;
     }
 
-    if (!check_tx_inputs_ring_members_diff(tx, hf_version))
+    if (!check_tx_inputs_ring_members_diff(tx))
     {
       MERROR_VER("tx uses duplicate ring members");
       tvc.m_verifivation_failed = true;
@@ -948,7 +938,7 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::check_tx_inputs_ring_members_diff(const transaction& tx, const uint8_t /* hf_version */)
+  bool core::check_tx_inputs_ring_members_diff(const transaction& tx)
   {
     for(const auto& in: tx.vin)
     {
@@ -1014,8 +1004,7 @@ namespace cryptonote
       return true;
     }
 
-    uint8_t version = m_blockchain_storage.get_current_hard_fork_version();
-    const bool res = m_mempool.add_tx(tx, tx_hash, blob, tx_weight, tvc, tx_relay, relayed, version);
+    const bool res = m_mempool.add_tx(tx, tx_hash, blob, tx_weight, tvc, tx_relay, relayed);
 
     // If new incoming tx passed verification and entered the pool, notify subscribers
     if (!tvc.m_verifivation_failed && tvc.m_added_to_pool && matches_category(tx_relay, relay_category::broadcasted))
@@ -1582,26 +1571,6 @@ namespace cryptonote
     m_miner.on_idle();
     m_mempool.on_idle();
     return true;
-  }
-  //-----------------------------------------------------------------------------------------------
-  uint8_t core::get_ideal_hard_fork_version() const
-  {
-    return get_blockchain_storage().get_ideal_hard_fork_version();
-  }
-  //-----------------------------------------------------------------------------------------------
-  uint8_t core::get_ideal_hard_fork_version(uint64_t height) const
-  {
-    return get_blockchain_storage().get_ideal_hard_fork_version(height);
-  }
-  //-----------------------------------------------------------------------------------------------
-  uint8_t core::get_hard_fork_version(uint64_t height) const
-  {
-    return get_blockchain_storage().get_hard_fork_version(height);
-  }
-  //-----------------------------------------------------------------------------------------------
-  uint64_t core::get_earliest_ideal_height_for_version(uint8_t version) const
-  {
-    return get_blockchain_storage().get_earliest_ideal_height_for_version(version);
   }
   //-----------------------------------------------------------------------------------------------
   bool core::check_disk_space()

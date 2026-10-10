@@ -101,9 +101,9 @@ const _: () = {
 /// Base staker emission share in fixed-point [`SCALE`] units
 /// (`shekyl_staker_emission_share`; `150_000` = 15%). This is the
 /// **base** share before the height-dependent decay in
-/// [`crate::emission_share::calc_effective_emission_share`]; consumers
-/// that need the effective share apply the decay themselves. Surfaced
-/// for the `EconomicsParametersSnapshot` rulebook (PR 7 §5.3 R2).
+/// [`crate::emission_share()`]. [`crate::emission_share_at`] applies this
+/// share with the shipped decay, from [`crate::EMISSION_SPLIT_EPOCH`].
+/// Surfaced for the `EconomicsParametersSnapshot` rulebook (PR 7 §5.3 R2).
 pub const STAKER_EMISSION_SHARE: u64 = GENERATED_STAKER_EMISSION_SHARE;
 
 /// Per-year staker emission decay factor in fixed-point [`SCALE`] units

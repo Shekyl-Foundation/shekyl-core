@@ -554,34 +554,6 @@ impl CoreRpc {
         (white, gray)
     }
 
-    /// Hard-fork voting info (`shekyl_rpc_hard_fork_info`). `requested_version`
-    /// of 0 means "the next fork"; the export resolves it and reports which.
-    pub fn hard_fork_info(&self, requested_version: u8) -> Result<ffi::HardForkFactsFfi, i32> {
-        if self.handle.is_null() {
-            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
-        }
-        let mut pod = ffi::HardForkFactsFfi {
-            earliest_height: 0,
-            window: 0,
-            votes: 0,
-            threshold: 0,
-            state: 0,
-            queried_version: 0,
-            active_version: 0,
-            voting: 0,
-            enabled: 0,
-            reserved: [0; 4],
-        };
-        // SAFETY: live handle; `pod` is a valid out pointer for the call.
-        let rc =
-            unsafe { ffi::shekyl_rpc_hard_fork_info(self.handle, requested_version, &raw mut pod) };
-        if rc == ffi::SHEKYL_RPC_FACTS_OK {
-            Ok(pod)
-        } else {
-            Err(rc)
-        }
-    }
-
     /// The dynamic base-fee estimate (`shekyl_rpc_fee_estimate`).
     pub fn fee_estimate(&self, grace_blocks: u64) -> Result<ffi::FeeEstimateFactsFfi, i32> {
         if self.handle.is_null() {
@@ -599,33 +571,6 @@ impl CoreRpc {
             Ok(pod)
         } else {
             Err(rc)
-        }
-    }
-
-    /// The hard-fork schedule (`shekyl_rpc_hardforks`), copied out of the
-    /// C++-owned view before it is released.
-    pub fn hardforks(&self) -> Result<Vec<ffi::HardforkEntryFfi>, i32> {
-        if self.handle.is_null() {
-            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
-        }
-        let mut rows: *const ffi::HardforkEntryFfi = std::ptr::null();
-        let mut len: usize = 0;
-        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
-        // SAFETY: live handle; the three out pointers are valid; on OK the
-        // view is valid until `shekyl_rpc_hardforks_free(owner)`.
-        unsafe {
-            let rc =
-                ffi::shekyl_rpc_hardforks(self.handle, &raw mut rows, &raw mut len, &raw mut owner);
-            if rc != ffi::SHEKYL_RPC_FACTS_OK {
-                return Err(rc);
-            }
-            let copied = if rows.is_null() || len == 0 {
-                Vec::new()
-            } else {
-                std::slice::from_raw_parts(rows, len).to_vec()
-            };
-            ffi::shekyl_rpc_hardforks_free(owner);
-            Ok(copied)
         }
     }
 

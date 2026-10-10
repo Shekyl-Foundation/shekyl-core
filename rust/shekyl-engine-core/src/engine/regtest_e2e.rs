@@ -1791,14 +1791,11 @@ async fn overfill_pool(
 /// expected at most 600000`) and the block at the bound was refused for
 /// its coinbase: the miner leg differed by `33 595` atomic units — one
 /// unit of the staker share in `10⁶` — because the C++ *regtest* measured
-/// CEN-F21's decay from height 0 while every issued network, and
-/// `EMISSION_SPLIT_EPOCH`, measure it from height 1. The regtest hardfork
-/// table was `{(1, 0), (1, 1)}` with the second row rejected by
-/// `HardFork::add_fork` (version ≤ back), a nettype-conditional
-/// consensus datum no `m_nettype` sweep could see (rule 71). Fixed in the
-/// table (`cryptonote_core.cpp`, `shekyl_e2_trace_export.cpp`) in the same
-/// PR; this test is the falsifier. Fee income agreed to the unit both
-/// times.
+/// CEN-F21's decay from height 0 while every issued network measures it
+/// from block 1. The share now starts at `shekyl_economics::EMISSION_SPLIT_EPOCH`
+/// on every network, read by the split itself. This test is the falsifier
+/// that the two producers agree on that share. Fee income agreed to the
+/// unit both times.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; ~50 spends into the pool, several min"]
 async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
@@ -1806,7 +1803,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use shekyl_block_template::{
         build, EmissionOperands, MinerKeys, TemplateContext, TemplateError,
     };
-    use shekyl_chain_rules::{RuleSet, EMISSION_SPLIT_EPOCH};
+    use shekyl_chain_rules::RuleSet;
     use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
     use shekyl_economics::params::TX_VOLUME_WINDOW;
     use shekyl_economics::{ClosedShardCount, EconomicParams, EmissionError, TxVolume};
@@ -1936,7 +1933,6 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
                 median_weight: median,
                 tx_volume,
                 closed_shards: ClosedShardCount::ZERO,
-                emission_split_epoch: EMISSION_SPLIT_EPOCH,
             },
             params: &params,
             miner: &miner,
@@ -2066,11 +2062,12 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 ///
 /// **What the first run found (2026-09-28), and what this therefore
 /// captures.** The premise was a block *at the limit*. The C++ producer
-/// does not build one: `tx_pool::fill_block_template` stops listing once
-/// the bodies pass the median (*"would exceed median block weight"*, the
-/// arm a block version below 5 takes, and Shekyl's is 1; the reward-aware
-/// comparison beside it, *"would decrease coinbase"*, never runs), so
-/// the template stops one transaction past the **median**
+/// does not build one: `tx_pool::fill_block_template` lists bodies in fee
+/// order, lets one body cross the median, refuses a body that would pass
+/// 13/10 of the median less the coinbase reserve, and then stops. The
+/// reward-aware rule, `shekyl_block_template::Fill`, is not this scan and
+/// does not run here, so the template stops one transaction past the
+/// **median**
 /// — 305 738 bytes, 23 spends, 27 left in the pool, against a limit of
 /// 600 000. The 2 × median bound is the *validator's* refusal (CEN-F14); no
 /// C++ producer reaches it, and a block at it is a Rust-producer-built
@@ -2103,6 +2100,12 @@ async fn e2e_cxx_template_fills_to_its_median() {
         weights,
     } = overfill_pool(&daemon, &arc, &address).await;
 
+    // `get_block_template` reports what the template pays its miner. With
+    // the pool full the template lists transactions, and the figure is the
+    // coinbase the template carries: not zero, and not the pre-split
+    // emission.
+    assert_template_reports_its_coinbase(&daemon, &address, true).await;
+
     // The fullest block the C++ producer builds from that pool.
     let mined = daemon.generate_blocks(1, &address).await;
     assert_eq!(mined.blocks.len(), 1);
@@ -2121,11 +2124,10 @@ async fn e2e_cxx_template_fills_to_its_median() {
         pool_after >= 1,
         "the template must have been bounded by its own policy: the pool ran dry instead"
     );
-    // The producer's stop is the fee/penalty equilibrium just past the
-    // median (the doc above): one more spend would have been refused for
-    // decreasing the coinbase, and the block is within two spends of `M`
-    // on the heavy side — not at the limit, and not under the median with
-    // room to spare.
+    // The producer stops once the listed weight passes the median (the
+    // doc above), so the block is within two spends of `M` on the heavy
+    // side — not at the limit, and not under the median with room to
+    // spare.
     assert!(
         block_weight + lightest_left > median,
         "one more spend ({lightest_left}) would have kept the block under the median: \
@@ -2134,7 +2136,7 @@ async fn e2e_cxx_template_fills_to_its_median() {
     assert!(
         block_weight < median + 2 * lightest_left,
         "the C++ producer took the block {block_weight} more than two spends past its median \
-         {median}: the fee/penalty stop is not where tx_pool.cpp:2135–2146 says it is"
+         {median}: the fill does not stop where `fill_block_template` says it does"
     );
     assert!(
         carried >= 20,
@@ -2151,6 +2153,8 @@ async fn e2e_cxx_template_fills_to_its_median() {
         daemon.generate_blocks(1, &address).await;
     }
     assert_eq!(daemon.tx_pool_size().await, 0, "the pool drains");
+    // The same holds for a template that lists nothing.
+    assert_template_reports_its_coinbase(&daemon, &address, false).await;
     daemon.generate_blocks(1, &address).await;
     maybe_capture_chain_vector(
         &daemon,
@@ -2160,6 +2164,53 @@ async fn e2e_cxx_template_fills_to_its_median() {
         &[],
     )
     .await;
+}
+
+/// `get_block_template.expected_reward` is the sum of the coinbase outputs of
+/// the template it returns. `lists_transactions` states which template the
+/// caller set up, so a pool that did not fill (or did not drain) fails here
+/// and not as a vacuous pass.
+#[cfg(test)]
+async fn assert_template_reports_its_coinbase(
+    daemon: &RegtestDaemon,
+    address: &str,
+    lists_transactions: bool,
+) {
+    use shekyl_wire::Block;
+
+    let template: serde_json::Value = daemon
+        .rpc
+        .json_rpc_call(
+            "get_block_template",
+            Some(json!({ "wallet_address": address, "reserve_size": 0 })),
+        )
+        .await
+        .expect("get_block_template");
+    let block = Block::from_bytes(&hex_decode(
+        template["blocktemplate_blob"]
+            .as_str()
+            .expect("blocktemplate_blob"),
+    ))
+    .expect("the C++ template parses");
+    assert_eq!(
+        !block.transaction_hashes.is_empty(),
+        lists_transactions,
+        "the template lists {} transaction(s)",
+        block.transaction_hashes.len()
+    );
+    let coinbase: u64 = block
+        .miner_transaction
+        .prefix
+        .outputs
+        .iter()
+        .map(|output| output.amount)
+        .sum();
+    assert!(coinbase > 0, "a template pays its miner");
+    assert_eq!(
+        template["expected_reward"].as_u64(),
+        Some(coinbase),
+        "expected_reward is the coinbase the template carries"
+    );
 }
 
 /// Trim (reorg) self-consistency: popping the chain back to an earlier height must

@@ -14,8 +14,8 @@ use shekyl_operator_alarm::serve_health::{apply as report_health, ServeHealthObs
 use shekyl_operator_alarm::serve_set::{apply as report, ServeSetObservation};
 use shekyl_operator_alarm::OperatorAlarms;
 use shekyl_p_host::{
-    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeCounters,
-    ServeObligation, ServeSetPinner, StalenessBound,
+    HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, PriorityFailures,
+    ServeCounters, ServeObligation, ServeSetPinner, StalenessBound,
 };
 use shekyl_tor_control_wallet::service::WalletTorControlConfig;
 use tokio::sync::watch;
@@ -142,6 +142,31 @@ pub enum ServingPosture {
     FoundationCompleteTree,
 }
 
+/// One read of a parked serving lifecycle (`SH-3`).
+///
+/// Posture and the unlowered-thread count belong to one lifecycle. A
+/// restart swaps the handle under the cadence slot lock, and reading the
+/// two through two locks can pair one lifecycle's posture with another's
+/// count. [`ServingHandle::status`] is that pair. The caller that parks
+/// the handle holds the slot lock across the read, so the swap cannot
+/// land between the fields.
+///
+/// `posture` is `None` while the lifecycle is parked but has not published
+/// an obligation: the launch standoff, a failed start, teardown. The count
+/// is a reading whenever the lifecycle exists, and zero means every live
+/// serving thread was lowered. Absence of this value is the only "no
+/// lifecycle" answer, and it is the same absence the wire uses for both
+/// fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServingStatus {
+    /// What this persona is obligated to serve, or `None` while nothing
+    /// has been published yet.
+    pub posture: Option<ServingPosture>,
+    /// Serving threads of this lifecycle at normal priority because
+    /// lowering failed. Zero is a reading.
+    pub priority_not_lowered: u32,
+}
+
 /// A running serving lifecycle: the cancel token plus the task's join handle.
 ///
 /// Deliberately the same shape as `PScanHandle`. The handle parks with the
@@ -157,9 +182,25 @@ pub struct ServingHandle {
     join: Option<JoinHandle<()>>,
     alarms: Arc<OperatorAlarms>,
     posture: watch::Receiver<Option<ServingPosture>>,
+    priority_failures: PriorityFailures,
 }
 
 impl ServingHandle {
+    /// Serving-runtime threads currently at normal priority because the
+    /// OS refused to lower them (`SH-3`, `ARCHIVAL_CHALLENGE_MECHANISM.md`
+    /// §9.8): the call's result for the threads that are still running,
+    /// and nothing more. A thread that has exited leaves the count. Zero
+    /// on every supported platform; a non-zero count is the one thing the
+    /// operator is shown when the platform refused, beside the one warning
+    /// this task logs per host (the host itself, on `P`'s serving path,
+    /// logs nothing — `WSS-20`). It does not say whether the lowering
+    /// yields CPU to the daemon. Born with this handle, so it reads after a
+    /// failed start too.
+    #[must_use]
+    pub fn priority_not_lowered(&self) -> u32 {
+        self.priority_failures.count()
+    }
+
     /// The operator alarm board this lifecycle reports through.
     ///
     /// **Held here because this is what the embedder holds.** The board's
@@ -195,6 +236,20 @@ impl ServingHandle {
     #[must_use]
     pub fn posture(&self) -> Option<ServingPosture> {
         *self.posture.borrow()
+    }
+
+    /// Posture and unlowered count together.
+    ///
+    /// The two reads are this handle's watch and its counter. They are one
+    /// lifecycle by construction: this value is the lifecycle. The slot
+    /// that parks the handle is what a caller holds when a restart must
+    /// not swap the lifecycle between the two reads.
+    #[must_use]
+    pub fn status(&self) -> ServingStatus {
+        ServingStatus {
+            posture: self.posture(),
+            priority_not_lowered: self.priority_not_lowered(),
+        }
     }
 
     /// Whether the serving task is still running.
@@ -259,6 +314,10 @@ where
     // established what it serves, so the standoff window reads "not
     // serving" — which it is.
     let (posture_tx, posture_rx) = watch::channel(None);
+    // Born here, beside the handle the embedder reads, and handed to the
+    // host: the count of serving threads the platform would not lower is
+    // readable whether or not the host ever started (SH-3).
+    let priority_failures = PriorityFailures::new();
     let join = tokio::spawn(run_serving_task(
         tor,
         serving,
@@ -270,6 +329,7 @@ where
         ServingSetup {
             config,
             store_fs_path,
+            priority_failures: priority_failures.clone(),
         },
         cancel_token.clone(),
         slot_guard,
@@ -279,6 +339,7 @@ where
         cancel_token,
         join: Some(join),
         alarms,
+        priority_failures,
     }
 }
 
@@ -311,6 +372,9 @@ struct ServingSetup {
     /// different mount, and the disk that matters is the one the
     /// corpus lands on.
     store_fs_path: PathBuf,
+    /// The handle's counter of serving threads the platform would not
+    /// lower, handed to the host at start (SH-3).
+    priority_failures: PriorityFailures,
 }
 
 async fn run_serving_task<P>(
@@ -331,6 +395,7 @@ async fn run_serving_task<P>(
     let ServingSetup {
         config,
         store_fs_path,
+        priority_failures,
     } = setup;
     // All three conditions are watched from the moment the task exists, so
     // a wallet sitting in the launch standoff reads "not serving yet"
@@ -349,9 +414,20 @@ async fn run_serving_task<P>(
 
     // `start_host` has already reported why it failed, and every reason it
     // gives up on is one this task cannot retry (its inputs are consumed).
-    let Some(host) = start_host(tor, serving, pinner, &alarms).await else {
+    let Some(host) = start_host(tor, serving, pinner, &alarms, &priority_failures).await else {
         return;
     };
+    // The one warning per host when the OS refused to lower a serving
+    // thread (SH-3, rule 82). Own task, for the reason the health probe is
+    // one: the refresh below awaits the store actor with no timeout, and a
+    // refusal during that wait is the case the line exists for. The counter
+    // wakes this task; the loop does not poll. Spawned here, before the
+    // rest of setup, so a refusal recorded while the pool was built — the
+    // build is synchronous, before `start`'s first await — is already
+    // waiting and is said on the first poll. A start that failed returned
+    // above and does not warn. The host itself logs nothing (WSS-20). This
+    // task carries no span, so the warning task does not enter one.
+    let priority_warning = spawn_priority_warning(priority_failures, cancel.clone());
 
     // OA-1's tor producer attaches to *this* host's supervisor, so the transport
     // conditions are on the board for as long as the host is.
@@ -440,10 +516,15 @@ async fn run_serving_task<P>(
     // Ordered teardown: tor first, then the listener (§9.7 item 4).
     host.shutdown().await;
     posture.abort();
-    // Drain both probes before disarming: a late measured reading must
-    // not overwrite `NotServing` after the host is gone.
+    // Drain the probes and the priority warning before disarming. A late
+    // measured reading must not overwrite `NotServing` after the host is
+    // gone, and a warning already woken must be said before this task
+    // returns — dropping the join handle would detach it. Cancel has
+    // already fired; the warning task prefers a ready refusal over that
+    // cancel, so the line is not lost on the way out.
     let _disk = disk.await;
     let _health = health.await;
+    let _priority_warning = priority_warning.await;
     // Nothing is watched once the host is gone. Disarm rather than clear: a
     // closed wallet is not a healthy serve-set, and a live pruned-bytes report
     // stays live because nothing observed it fixed.
@@ -542,6 +623,40 @@ fn count(members: usize) -> u32 {
     u32::try_from(members).unwrap_or(u32::MAX)
 }
 
+/// Say the one priority warning, then return.
+///
+/// The refusal arm is first and the select is biased. Teardown fires
+/// `cancel` and then awaits this task; when both are ready, the refusal
+/// is the line the operator gets. A cancel that won that race would drop
+/// it. No cause, and a fired cancel, returns without a line.
+fn spawn_priority_warning(failures: PriorityFailures, cancel: CancellationToken) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            cause = failures.until_first_refusal() => {
+                let line = priority_refusal_line(&cause);
+                tracing::warn!("{line}");
+            }
+            () = cancel.cancelled() => {}
+        }
+    })
+}
+
+/// The one warning a host gets when the OS refused to lower a serving
+/// thread's CPU priority.
+///
+/// Names the first cause the platform gave and where the count is, and
+/// says serving continues — the operator's next action is to read the
+/// count, not to restart anything (rule 82). Said once: the counter keeps
+/// that cause and wakes this one task.
+fn priority_refusal_line(cause: &str) -> String {
+    format!(
+        "the OS refused to lower a serving thread's CPU priority ({cause}); it serves at normal \
+         priority, and the count of such threads is on the serving status as \
+         serving_priority_not_lowered"
+    )
+}
+
 /// Start the host, reporting whichever condition prevented it.
 ///
 /// **One attempt per start call, deliberately.** `PersonaServingHost::start`
@@ -561,11 +676,12 @@ async fn start_host<P>(
     serving: PersonaServing,
     pinner: P,
     alarms: &OperatorAlarms,
+    priority_failures: &PriorityFailures,
 ) -> Option<PersonaServingHost<P>>
 where
     P: ServeSetPinner + Send + Sync + 'static,
 {
-    match PersonaServingHost::start(tor, serving, pinner).await {
+    match PersonaServingHost::start(tor, serving, pinner, priority_failures).await {
         Ok(host) => Some(host),
         Err(HostError::Pin(PinError::MembersAlreadyPruned { shard_ids })) => {
             // Terminal by the store's own contract: chain replay, not retry.
@@ -607,6 +723,17 @@ fn caught_up(pinned: &PinnedServeSet) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_priority_refusal_line_names_the_cause_and_where_the_count_is() {
+        let cause = "this platform has no per-thread priority under normal scheduling";
+        let line = priority_refusal_line(cause);
+        assert!(
+            line.contains("no per-thread priority under normal scheduling"),
+            "{line}"
+        );
+        assert!(line.contains("serving_priority_not_lowered"), "{line}");
+    }
 
     /// The bound is derived from the cadence and the chain's block target, not
     /// picked — so a change to either moves it, and a mis-wired zero target is

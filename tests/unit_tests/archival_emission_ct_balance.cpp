@@ -336,12 +336,10 @@ TEST(archival_emission_ct_balance, dispatch_verdict_invariant_under_blob_variati
     std::get<txin_archival_reward_emission>(tx_O_prime.vin[0]).canonical_bytes);
   ASSERT_EQ(tx_O.ct_signatures.outPk[0].mask, tx_O_prime.ct_signatures.outPk[0].mask);
 
-  // HF_VERSION_SHEKYL_NG is the genesis (and only) consensus surface; the
-  // dispatch derives min/max tx version and the weight limit from it.
   tx_verification_context tvc_O{};
   tx_verification_context tvc_O_prime{};
-  EXPECT_TRUE(ver_non_input_consensus(tx_O, tvc_O, HF_VERSION_SHEKYL_NG));
-  EXPECT_TRUE(ver_non_input_consensus(tx_O_prime, tvc_O_prime, HF_VERSION_SHEKYL_NG));
+  EXPECT_TRUE(ver_non_input_consensus(tx_O, tvc_O));
+  EXPECT_TRUE(ver_non_input_consensus(tx_O_prime, tvc_O_prime));
   EXPECT_FALSE(tvc_O.m_verifivation_failed);
   EXPECT_FALSE(tvc_O_prime.m_verifivation_failed);
 
@@ -362,7 +360,7 @@ TEST(archival_emission_ct_balance, dispatch_verdict_invariant_under_blob_variati
   EXPECT_EQ(get_transaction_weight(tx_included), get_transaction_weight(tx_included, fragment.size()));
   EXPECT_FALSE(tx_included.is_blob_size_valid());
   tx_verification_context tvc_included{};
-  EXPECT_FALSE(ver_non_input_consensus(tx_included, tvc_included, HF_VERSION_SHEKYL_NG));
+  EXPECT_FALSE(ver_non_input_consensus(tx_included, tvc_included));
   EXPECT_TRUE(tvc_included.m_verifivation_failed);
   EXPECT_TRUE(tvc_included.m_invalid_input);
   EXPECT_FALSE(tx_included.is_blob_size_valid());

@@ -4,23 +4,24 @@
 // BSD-3-Clause
 
 //! The driver's emission claim through the production stack (E6 slice 8
-//! PR-b, `CHAIN_RULES_SLICE_8.md` §5 row 7, Q3): a persona funded by a
-//! coinbase spend joins a closed shard, serves it for one epoch, and —
-//! once that epoch has closed and its `Σwork` and budget are the store's
-//! rows — claims its reward with a transaction `emission_assembly` built
-//! the way the engine handler builds one. `validate` admits it at
-//! `h_close + 1`; the fold writes the claim onto the record; the store
-//! holds what the verdict derived. That is the one admitted claim the row
-//! pins. Beside it, three refusals with a pipeline witness nowhere else:
-//! the same claim at `h_close` is CEN-J25's (the verify's strict
-//! finalization, slice 8 row 9), listed with a twin it is CEN-G9's
-//! (slice 8 row 9 retired the mutation family's `DuplicateClaim` here —
-//! `Mutation` docs), and with its fee proof corrupted it is CEN-J26's
-//! (the one emission row the backing proof does not cover). The row's
-//! other half — the driver's bytes and the
-//! engine's held identical for one shape — lives in `shekyl-engine-core`'s
-//! `stake_engine_tests`, which reaches this crate's assembly through the
-//! `harness` feature.
+//! PR-b, `CHAIN_RULES_SLICE_8.md` §5 row 7, Q3; re-timed by `SO-D11`): a
+//! persona funded by a coinbase spend joins a closed shard, is Served on
+//! it for one epoch, and — once that epoch has closed **and its slash pass
+//! has run**, so its budget and its `Σwork` are both the store's rows —
+//! claims its reward with a transaction `emission_assembly` built the way
+//! the engine handler builds one. `validate` admits it on the block after
+//! the pass; the fold writes the claim onto the record; the store holds
+//! what the verdict derived. That is the one admitted claim the row pins,
+//! and the one place the pass's gather and the claim verify's re-gather
+//! are held to each other on a driven chain. Beside it, three refusals
+//! with a pipeline witness nowhere else: the same claim in the pass block
+//! itself is CEN-J23's (closed, not yet settled), listed with a twin it is
+//! CEN-G9's (slice 8 row 9 retired the mutation family's `DuplicateClaim`
+//! here — `Mutation` docs), and with its fee proof corrupted it is
+//! CEN-J26's (the one emission row the backing proof does not cover). The
+//! row's other half — the driver's bytes and the engine's held identical
+//! for one shape — lives in `shekyl-engine-core`'s `stake_engine_tests`,
+//! which reaches this crate's assembly through the `harness` feature.
 //!
 //! # What the chain has to do first
 //!
@@ -51,6 +52,7 @@
 //! legs — the membership-only backing proof and the dual auth — run here
 //! against the wallet-side root as a self-check, as the spend's FCMP does.
 
+use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{
     claimant_reward_share, emission_vin_verify_auth, emission_vin_verify_backing,
     epoch_close_compute, shard_contribution_micro, CreditPair, EmissionEpochSource, EpochCloseBond,
@@ -59,12 +61,15 @@ use shekyl_archival_retention::{
 use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, TxSlot};
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
-use shekyl_types::archival::FirstPayingHeight;
-use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch};
+use shekyl_types::archival::{
+    FirstPayingHeight, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
+};
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::{Ct, Transaction};
 use zeroize::Zeroizing;
 
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
+use crate::connector::IssueDraws;
 use crate::emission_assembly::{assemble_emission_claim, ClaimTerms};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
@@ -168,26 +173,74 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     assert_eq!(block.height, twin_height);
     mined.push(block);
 
-    // Through the close of `served`: the fold closes it when the count
-    // reaches `(served + 1) · SEB`, at the block before that height.
-    let count_at_close = (served.to_raw() + 1) * EPOCH_BLOCKS;
-    mine_to(
-        &mut scenario,
-        &mut mined,
-        BlockHeight::from_raw(count_at_close),
-    )
-    .await;
-    catch_up(&mut spender, &mined, &mut seen);
-    let close = mined[usize::try_from(count_at_close - 1).expect("small")]
-        .archival
-        .close()
-        .expect("the block that completes the epoch carries its close")
-        .clone();
-    assert_eq!(close.epoch(), served);
+    // The persona's three draws of `served` on the shard, each passed: the
+    // epoch settles Served for the pair, which is what the gather credits
+    // (`SO-D11a`). Nothing admits a draw yet, so they go in through the
+    // regtest door, with the digest they fold to.
+    let shard = ShardId::from_raw(0);
+    let open = levered_schedule().open_height(served.to_raw());
+    let mut digest = IssuedDigest::ZERO;
+    let draws: Vec<IndexedDraw> = (0..3u64)
+        .map(|k| {
+            let issuing_height = BlockHeight::from_raw(open + k);
+            digest.fold(&issued_draw_term(
+                &persona.id(),
+                shard,
+                served,
+                issuing_height,
+                0,
+            ));
+            IndexedDraw {
+                persona: persona.id(),
+                shard,
+                issuing_height,
+                draw: 0,
+                state: IssuedDraw {
+                    revealed_at: BlockHeight::from_raw(open + k + 1),
+                    passed: true,
+                },
+            }
+        })
+        .collect();
+    scenario
+        .connector()
+        .ask(IssueDraws {
+            epoch: served,
+            draws,
+            digest,
+        })
+        .await
+        .expect("the door issues the draws");
 
-    // The close, re-run over the rows this test fed it: one bond that
-    // joined in `join_epoch`, one shard closed where the fill closed it,
-    // one credit pair. The fold's rows are this arithmetic.
+    // Up to the slash pass of `served`, not through it. The epoch closed
+    // when the count reached `(served + 1) · SEB`, at the block before
+    // that height, and that block froze its budget and nothing else. Its
+    // `Σwork` is the pass's, at the block where the count reaches
+    // `(served + 2) · SEB`.
+    let count_at_close = (served.to_raw() + 1) * EPOCH_BLOCKS;
+    let at_pass = BlockHeight::from_raw(levered_schedule().slash_deadline_height(served.to_raw()));
+    assert_eq!(
+        at_pass.to_raw() + 1,
+        (served.to_raw() + 2) * EPOCH_BLOCKS,
+        "the pass is the last block of the epoch after"
+    );
+    mine_to(&mut scenario, &mut mined, at_pass).await;
+    catch_up(&mut spender, &mined, &mut seen);
+    let closing = &mined[usize::try_from(count_at_close - 1).expect("small")].archival;
+    let close = *closing
+        .close()
+        .expect("the block that completes the epoch carries its close");
+    assert_eq!(close.epoch(), served);
+    assert!(
+        closing.gathers().iter().all(|g| g.epoch() != served),
+        "the close does not gather the epoch it closes"
+    );
+
+    // The gather, computed here over the rows this test fed it before the
+    // pass has run: one bond that joined in `join_epoch`, one shard closed
+    // where the fill closed it and long final, one Served pair. Ages are
+    // read at the epoch's own close height. The pass's rows must be this
+    // arithmetic, and the claim below is built from it.
     let bonds = [EpochCloseBond {
         join_settlement_epoch: join_epoch.to_raw(),
         is_foundation_complete_tree: false,
@@ -210,16 +263,9 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         &pairs,
     );
     let result = epoch_close_compute(&inputs).expect("the pair indexes its bond and shard");
-    let r_market: Vec<(u64, u64)> = close
-        .r_market()
-        .iter()
-        .map(|(shard, r)| (shard.to_raw(), r.to_raw()))
-        .collect();
-    assert_eq!(r_market, vec![(0, result.r_market_by_shard[0])]);
-    assert_eq!(close.sigma_work().to_raw(), result.sigma_work_milli);
     let share = claimant_reward_share(&EmissionEpochSource {
         inputs: inputs.clone(),
-        persisted_sigma_work_milli: close.sigma_work().to_raw(),
+        persisted_sigma_work_milli: result.sigma_work_milli,
         claimant_bond_idx: Some(0),
         budget: close.budget().to_raw(),
     })
@@ -230,7 +276,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         "the one server of the one shard is owed the epoch's budget share \
          (budget {}, Σwork {})",
         close.budget().to_raw(),
-        close.sigma_work().to_raw()
+        result.sigma_work_milli
     );
     let scarcity = shard_contribution_micro(&inputs, &result.r_market_by_shard, 0);
     let terms = ClaimTerms {
@@ -247,24 +293,15 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         reward_amount_plain: vec![share.reward],
     };
 
-    // The claim is assembled for the epoch after `served`, at its first
-    // block — `h_close(served)`, which is past the persona outputs'
-    // maturity and the reference window (`DEFAULT_LOCK_WINDOW` and the
-    // reorg cap both fit inside an epoch of twenty from a join that was
-    // not its last block). It **connects one block later**: the verify's
-    // finalization is strict (`current_block_height > h_close(E)`; the
-    // F-E1 KAT pins reject-at-`h_close`, accept-at-`h_close + 1`), while
-    // the fold's L7 window admits at `h_close`. Slice 8 row 9 measured
-    // the gap here — this claim listed at `h_close` was CEN-J25's
-    // `EpochNotFinalized` — and the rule is the criterion: the claim at
-    // `h_close` is J25's driven refusal below, and the same bytes connect
-    // at `h_close + 1` (the reference, `h_close − MIN_AGE`, is admissible
-    // at both).
-    let at_close = BlockHeight::from_raw(count_at_close);
-    let connecting = at_close + BlockCount::ONE;
+    // The claim is assembled against the pass block's height and connects
+    // one block later, the first block at which `Σwork(served)` is a row
+    // (`SO-D11d`: the row's existence is the citing gate). Both heights
+    // are past the persona outputs' maturity and inside the reference
+    // window.
+    let connecting = at_pass + BlockCount::ONE;
     let owner = Owner::persona(persona.keys());
-    let backing = spender.owned_input(&owner, backing_key, at_close);
-    let fee_input = spender.owned_input(&owner, fee_key, at_close);
+    let backing = spender.owned_input(&owner, backing_key, at_pass);
+    let fee_input = spender.owned_input(&owner, fee_key, at_pass);
     let claim = assemble_emission_claim(
         persona.keys(),
         &Zeroizing::new(CLAIM_TX_KEY),
@@ -278,19 +315,50 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let claim_tx =
         Transaction::from_bytes(&claim.bytes).expect("the encoder's bytes parse as a transaction");
 
-    // CEN-J25 on the pipeline: the claim at `h_close(served)` itself,
-    // where the fold's window would admit it, is the verify's refusal at
-    // the transaction (`EpochNotFinalized`) — the one row that reads the
-    // verify, and its one driven negative. The block does not connect.
+    // CEN-J23 on the pipeline: the claim listed in the pass block itself.
+    // The epoch closed a whole epoch ago and has its budget; its `Σwork`
+    // is written by this very block's pass, after its transactions are
+    // judged against the parent. Closed and not yet settled is J23's
+    // refusal at the transaction. The block does not connect.
+    //
+    // *Records-was:* until `SO-D11` the driven negative here was CEN-J25's
+    // `EpochNotFinalized`, the claim at `h_close(served)`. J23 now refuses
+    // every height from there to the pass first, so that bound no longer
+    // binds on a chain; the retention crate's KAT still pins it.
     refused_at(
         scenario.mine_listing(vec![claim_tx.clone()]).await,
-        CenRow::J25,
+        CenRow::J23,
         Locus::Tx {
             slot: TxSlot::Listed(0),
         },
     );
     mine_to(&mut scenario, &mut mined, connecting).await;
     catch_up(&mut spender, &mined, &mut seen);
+
+    // The pass block: it settled the pair Served and gathered the epoch,
+    // and the rows are the arithmetic above.
+    let pass = &mined[usize::try_from(at_pass.to_raw()).expect("small")].archival;
+    let settled: Vec<_> = pass
+        .settlements()
+        .iter()
+        .map(|s| (s.persona, s.shard, s.epoch, s.row.outcome()))
+        .collect();
+    assert_eq!(
+        settled,
+        [(persona.id(), shard, served, SettlementOutcome::Served)]
+    );
+    let gather = pass
+        .gathers()
+        .iter()
+        .find(|g| g.epoch() == served)
+        .expect("the pass gathers the epoch it settles");
+    let r_market: Vec<(u64, u64)> = gather
+        .r_market()
+        .iter()
+        .map(|(shard, r)| (shard.to_raw(), r.to_raw()))
+        .collect();
+    assert_eq!(r_market, vec![(0, result.r_market_by_shard[0])]);
+    assert_eq!(gather.sigma_work().to_raw(), result.sigma_work_milli);
 
     // CEN-G9 on the pipeline: a block listing this claim beside a twin —
     // the same persona and terms, its own fee input and transaction key,

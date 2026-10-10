@@ -25,7 +25,7 @@
 //! Multi-tenant `--wallet-dir` exchanges extend this seam later
 //! (`WALLET_REWRITE_PLAN.md`).
 
-use shekyl_engine_core::{CadenceHandle, Engine, PScanHandle, ServingPosture, SoloSigner};
+use shekyl_engine_core::{CadenceHandle, Engine, PScanHandle, ServingStatus, SoloSigner};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -283,21 +283,21 @@ impl Tenant {
         self.tasks.pscan.is_some()
     }
 
-    /// What the parked serving host is currently obligated to serve, or
-    /// `None` when no host is running (`COMPLETETREE_ACTIVATION.md` Q-3).
+    /// The parked serving lifecycle's posture and unlowered-thread count,
+    /// or `None` when no lifecycle is parked (`SH-3`,
+    /// `COMPLETETREE_ACTIVATION.md` Q-3).
     ///
     /// Delegates to the cadence driver, which parks the serving handle
     /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 2) — so `staking_info` /
-    /// `get_wallet_info` take it from the tenant and project it onto the
-    /// wire. It is not a field of the engine's sealed-state view.
-    ///
-    /// A cheap snapshot read: it never waits on the serving task, so a
-    /// status query cannot stall the thing that serves.
-    pub(crate) fn serving_posture(&self) -> Option<ServingPosture> {
+    /// `get_wallet_info` take this one snapshot and project it onto the
+    /// wire. It is not a field of the engine's sealed-state view. The
+    /// read never waits on the serving task, so a status query cannot
+    /// stall the thing that serves.
+    pub(crate) fn serving_status(&self) -> Option<ServingStatus> {
         self.tasks
             .cadence
             .as_ref()
-            .and_then(CadenceHandle::serving_posture)
+            .and_then(CadenceHandle::serving_status)
     }
 }
 

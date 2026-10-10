@@ -2,8 +2,8 @@
 # tree 301ed05b737885d584ad3fc99cdf4fba206378e9
 # probe sha256 74d70aaad8f7857cc18c2f251bf7feacbb1df5b19d73e93e9d24b3a3d3241bf0
 # rustc rustc 1.94.0 (4a4ef493e 2026-03-02); RUSTFLAGS unset; release profile
-# resident daemon: /usr/local/bin/shekyld --config-file /etc/shekyl/shekyld-testnet.conf --non-interactive  pid 572707
-# syncing daemon: /usr/local/bin/shekyld, own data dir, exclusive peer: a testnet staker on the LAN, port 12021 (its address is in the estate ledger, not here), in-peers 0
+# resident daemon: the floor device's resident testnet daemon, pid 572707
+# syncing daemon: a second testnet daemon, own data dir, exclusive peer: a testnet staker on the LAN, port 12021 (its address is in the estate ledger, not here), in-peers 0
 # resident daemon mining_status: {'active': False, 'threads_count': 0}
 # states idle, sync, nice (sync with the probe under nice -n 19); in-flight counts 8 16 32 64; 2048 fetches per serving block (512 at nice 19); no-serve windows 45 s; 3 passes per state
 # sync rate from the syncing daemon's own stdout log (Synced H/T lines), not its RPC, which answers in 6 to 9 s under sync load

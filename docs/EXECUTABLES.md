@@ -108,7 +108,6 @@ launchd, Task Scheduler, or the GUI wallet's Tauri sidecar), run with
 | `mining_status` | Current mining status |
 | `diff` | Current network difficulty |
 | `sync_info` | Blockchain sync progress and peer states |
-| `hard_fork_info` | Hard fork voting status |
 | `bans` | List banned peers |
 | `ban <ip> [seconds]` | Ban an IP address |
 | `unban <ip>` | Remove a ban |
@@ -460,7 +459,7 @@ shekyl-blockchain-import --pop-blocks 100
 
 Key options: `--input-file`, `--data-dir`, `--batch-size`, `--resume` /
 `--no-resume`, `--block-stop`, `--count-blocks`, `--pop-blocks`,
-`--drop-hard-fork`, `--dangerous-unverified-import`.
+`--dangerous-unverified-import`.
 
 ### `shekyl-blockchain-export`
 

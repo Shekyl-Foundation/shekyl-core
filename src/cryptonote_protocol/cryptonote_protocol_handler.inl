@@ -120,7 +120,7 @@ namespace cryptonote
     const cryptonote::blobdata& attestation_witness,
     cryptonote::block_connect_supplement& connect)
   {
-    connect.pool.nic_verified_hf_version = 0;
+    connect.pool.nic_verified = false;
     // Single assignment site for the credit-wire attestation witness (opaque
     // bytes). Block-level data lives on block_connect_supplement, not on the
     // tx-shaped pool_supplement. Compact-announce and get-objects both funnel through here.
@@ -469,7 +469,6 @@ namespace cryptonote
   bool t_cryptonote_protocol_handler<t_core>::get_payload_sync_data(CORE_SYNC_DATA& hshd)
   {
     m_core.get_blockchain_top(hshd.current_height, hshd.top_id);
-    hshd.top_version = m_core.get_ideal_hard_fork_version(hshd.current_height);
     difficulty_type wide_cumulative_difficulty = m_core.get_block_cumulative_difficulty(hshd.current_height);
     hshd.cumulative_difficulty = (wide_cumulative_difficulty & 0xffffffffffffffff).convert_to<uint64_t>();
     hshd.cumulative_difficulty_top64 = ((wide_cumulative_difficulty >> 64) & 0xffffffffffffffff).convert_to<uint64_t>();
