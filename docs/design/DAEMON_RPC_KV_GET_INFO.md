@@ -1,7 +1,7 @@
 # RK-5c — `get_info`, the hub: rule-26 pre-flight
 
 **Status:** OPEN — R0, **RATIFIED 2026-10-09** (Rick); implementation open.
-**Commits 1–5 of §5 have landed** (1 and 2 on 2026-10-09, 3 to 5 on 2026-10-10); commit 6 is next. Drafted 2026-10-08. §1's rulings
+**Commits 1–6 of §5 have landed** (1 and 2 on 2026-10-09, 3 to 6 on 2026-10-10); commit 7 is next. Drafted 2026-10-08. §1's rulings
 are recorded as ruled; **RK-Q1…RK-Q9 were ruled 2026-10-09** and RK-Q10
 2026-10-08, confirmed 2026-10-09 (§8). **RK-Q11 was ruled 2026-10-10**, with
 two additions; the first is minted as RK-D25 (§1).
@@ -349,8 +349,9 @@ places this reply needs them distinct.
 - **`Nullable<T>` — required, and may be `null`.** `Option<T>` decodes a
   `null` field and a **missing** field to the same `None`, so a field
   dropped by contract drift would read as "no answer". That is the
-  fail-open the wallet decoder guards against by hand
-  (`rust/shekyl-engine-core/src/engine/daemon/synced_chain_facts.rs:677-690`).
+  fail-open the wallet's decoder in `engine/daemon/synced_chain_facts.rs`
+  guarded against by hand, field by field, until commit 4 moved it onto
+  the shared type.
   `Nullable<T>` lives in `shekyl-rpc-types`; its deserializer **errors on
   a missing key** and maps `null` to `None`, and it always serializes the
   key. Every field RK-D23 makes nullable uses it. A bare `Option<T>` with
@@ -366,9 +367,13 @@ places this reply needs them distinct.
 
 `Hidden` is tested in commit 4: a full reply with one Status key removed,
 and one with one Peers key removed, is an error and not an absent part.
-`Nullable` has no field to carry until commit 6 makes the target
+`Nullable` had no field to carry until commit 6 made the target
 nullable, so the type and its test — `{}` fails and `{"f": null}` decodes,
-per field — land there, not as an unused type in commit 4.
+per field — landed there (`rust/shekyl-rpc-types/src/nullable.rs`), not as
+an unused type in commit 4. It decodes through `deserialize_any` and not
+`deserialize_option`: serde's derive answers a missing member with a
+stand-in that says "none" to an option and "missing field" to anything
+else, which is the whole difference between this type and `Option`.
 
 #### The three wire states — RK-D23
 
@@ -385,9 +390,10 @@ A refusal is none of the three. A computation that refuses because the
 store contradicts itself is an error and the method does not reply
 (RK-Q9); it is not a value state of a field.
 
-Parity (commit 4) does not have these yet: it writes today's sentinel and
+Parity (commit 4) did not have these: it wrote the sentinel and the
 stand-ins. Each later commit that changes the wire moves fields onto this
-table, and none moves a field off it.
+table, and none moves a field off it. Commit 6 moved `target_height`, on
+all three methods that carry it, and `get_version.current_height`.
 
 ### 4.2 Facts — RK-D3 / RK-D7, one snapshot per family
 
@@ -556,6 +562,11 @@ no vector carries `emission_era`. Fixtures:
 | synced, restricted | each of the four restricted stand-ins in §0, `alt_blocks_count` included |
 | burn refusal (`total_burned > already_generated`) | the logged-zero path — kept so parity matches; RK-Q9's commit replaces the behaviour |
 
+That is the table as captured, at parity. Since commit 6 the two
+synchronized fixtures and the burn-refusal one carry the core's target
+(1234567) and the peerless one carries `null`, in `_v2` files derived from
+these; the syncing fixture did not move.
+
 One case is not an oracle vector, because the C++ handler cannot express
 it — it reads the same zero-on-missing exports. It is a pair of Rust
 handler tests, one on each side of the behaviour change (§4.2):
@@ -577,7 +588,7 @@ handler tests, one on each side of the behaviour change (§4.2):
 | 3 | **Capture.** **LANDED 2026-10-10.** `on_get_info` gathers `get_info_facts` and calls `build_get_info(facts, restricted, res)` (`src/rpc/get_info_build.h`; defined beside the handler). The builder is the handler's computation with each read replaced by a fact; rewriting the old handler's reads into facts mechanically and diffing against the builder leaves only the lines that moved to the gather. **One thing differs, and it is not in any reply:** the gather reads everything whoever is asking, where the handler skipped a restricted caller's hidden reads and counted the pool one way; the builder decides what a restricted caller is shown from the same facts, which is the shape §4.1 gives the native handler. `tests/unit_tests/rpc_oracle_vectors.cpp` runs the builder over fixed facts for §4.4's five fixtures and pins `get_info_{synced,syncing,peerless_startup,synced_restricted,burn_refusal}_v1.json`, stored LF | the emitter is in `unit_tests` and green; observed red by breaking the connection-count subtraction in the builder — the three vectors with peers and full disclosure drifted, the restricted and peerless ones did not |
 | 4 | **Native port at parity**, landed as bisectable pieces (types, facts and handler with their parity tests; then the Rust readers; then the console): types (§4.1), facts export + layout twin (§4.2), economics projection (§4.3), handler, both routes and the JSON-RPC name native; Rust parity test green against commit 3's vectors; all in-tree readers in §2.2 onto the shared type (RK-D1); console readers ported (RK-D5), four bridged legs closed; RK-D9 re-pin of `target` and a value-shaped `already_generated_coins` test against the snapshot; `following_degraded` value-shaped test (C2-R1 obligation) **LANDED 2026-10-10** in six pieces: the wire type; the economics projection; the facts by part and the method over them; the native routes; the Rust readers; the console. **Notes on what was built.** (a) The store's size is read in Rust: only the data file's path crosses, and `store_file_size` returns `StoreUnreadable` for a file it cannot stat — the same code whichever store names the file, which is the form that survives the store cutover. (b) The build's version string and `SHEKYL_PROTOCOL_VERSION` exist only in C++ and cross as facts. (c) `diff`, `version` and `print_pool_stats` are rendered in Rust. `version` asks without the identity handshake and reads its one member leniently, because it is for telling an operator what they reached, a daemon of another version included; the fuller form `CLIENT_VERSION_CONSTANTS_VALIDATION.md` §3.6.2 describes (both sides and the verdict) is left to the console's retirement slice. (d) **One behaviour changes at a version skew:** a reply that omitted `offline`, `following_degraded` or `restricted` used to read as false in the persona's tip poller; it is now not a reply and reads as unusable, which holds the tip and lets it age out. (e) `restricted_listener_applies_request_caps_through_the_ffi_bridge` is renamed `restricted_listener_gets_stand_ins_and_caps_from_native_handlers`: both its legs are native, and the bridge's guard is commit 1's test | parent §4 gate; the `Hidden` partial-part tests of §4.1; the hub-absent parity test of §4.4; RK-D24's gather-by-part test, both cases; the FFI-level case that an unreadable data file is a fault and not a size of `0`; all five oracle vectors reproduced by the type and by the method; two live gates observed red by daemon sabotage (the listener's posture mapped to full disclosure; `diff` cut off from the method) |
 | 5 | **Delete C++.** **LANDED 2026-10-10.** Gone: `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, the three dispatch rows, `build_get_info` and `get_info_facts` with their header, the handler-only `round_up`, the oracle emitter, and the two `get_info` cases in `rpc_target_wire_contract.cpp`. `check_core_ready` stays: two other handlers call it. Comments that cited lines of the handler are rewritten to say what the daemon does, and the bridge's header comment names its current guard | `git grep` for `COMMAND_RPC_GET_INFO`, `on_get_info` and `build_get_info` outside `docs/` → only the vectors' README, which records how the capture was made |
-| 6 | **RK-D15:** sentinel retired on `get_info`; under RK-Q7, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6); under RK-Q11 as ruled, the version is read before the full decode through one function, which lands first in this commit; both handshakes and the console's `version` command call it (RK-D25) | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); `Nullable` and its missing-key test (§4.1); RK-D25's test that `{"version": N}` alone reads through the function |
+| 6 | **RK-D15.** **LANDED 2026-10-10** at `CORE_RPC_VERSION` 3.46, in two pieces: the version-first read, then the wire change. Sentinel retired on `get_info`; under RK-Q7, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6); under RK-Q11 as ruled, the version is read before the full decode through one function, which lands first in this commit; both handshakes and the console's `version` command call it (RK-D25). **Notes on what was built.** (a) The reader is `daemon_rpc_version` and the single decode-and-compare entry is `IdentityExpectation::read` (`rust/shekyl-rpc-types/src/identity.rs`); `check` is gone, so the version cannot be compared in two places. The reader is written by hand: a derived struct would also accept a JSON array positionally, and the key is part of what is frozen. (b) `version`, against a daemon of another RPC version, prints the two RPC versions and fails; it printed the daemon's software version from a lenient decode of `get_info`, which is deleted. (c) **The wallet's predicate is the `synchronized` flag alone.** The height comparison is deleted, with the persona poller's `BehindItsTarget` arm and the `target_height` member of the wallet's two health types. A synchronized daemon now reports its real target, which is the tallest chain a peer has claimed, so comparing against it would let one peer stop the submit watchdog and the persona's serving. No behaviour changes: under the sentinel the comparison never decided anything (Rick, 2026-10-10). (d) The wire type keeps `u64` for the target, as for every height in `shekyl-rpc-types`, which does not depend on the unit types; it is `Option<ChainCount>` inland. (e) The console's `status` and `sync_info` lines show the core's target on a synchronized node too, where `status` showed the node's own height. (f) Vectors: `get_version_synced_v23` (the chain's link, members unchanged), `get_version_absent_target_v2`, `get_version_all_defaults_v3`, `sync_info_empty_v3`, and a `_v2` of four `get_info` fixtures; `get_version_syncing_v3`, `sync_info_v3` and `get_info_syncing_v1` carried a target already and have no successor | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); `Nullable` and its missing-key test (§4.1); RK-D25's test that `{"version": N}` alone reads through the function; the derivation test that each new vector is its predecessor with only the target (and `current_height`) restated; a test that a target above the height neither withholds nor grants the wallet's facts, and one that it does not stop the persona's poller |
 | 7 | **RK-D14:** `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1; the handler's missing-hub parity arm is deleted, so a missing hub refuses (§4.2) | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers`; the hub-absent refusal test of §4.4 |
 | 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8, Q9, Q10 as ruled, one commit each. **Two carry-forwards, ruled 2026-10-10.** *RK-Q1's commit:* the weight names it keeps (`block_weight_limit`, `block_weight_median`) lose their inherited omit-at-zero — the `default` and `skip_serializing_if = "is_zero"` that mirror `KV_SERIALIZE_OPT` — so they are always present; `0` is a value (RK-D23). *RK-Q3's commit:* the parity `wrapping_sub` on `incoming_connections_count` is deleted and replaced by per-direction counts from the board, not by a checked subtraction: there is no subtraction left to check | bump each |
 
@@ -602,7 +613,7 @@ The GUI's fields are read at `447908f` (`src-tauri/src/daemon_rpc.rs:97-123`).
 | Core commit | Wire change | GUI today | GUI change when its lane resumes |
 | --- | --- | --- | --- |
 | 2 (RK-D21) | `emission_era` gone | `#[serde(default)] String`; the panel renders it only when non-empty | none to keep decoding; the dead field, its type and the two panel blocks are deleted |
-| 6 (RK-D15) | `target_height` is the core's target, `null` when there is none (RK-Q7) | required `u64`, shown as "daemon height" | `Option<u64>`; `null` rendered as no target, not `0` |
+| 6 (RK-D15) | `target_height` is the core's target, `null` when there is none (RK-Q7), on `get_info` and on `get_version`; `get_version.current_height` is always present | required `u64`, shown as "daemon height" | `Option<u64>`; `null` rendered as no target, not `0`; its `get_version` handshake reads the version first through `daemon_rpc_version` (RK-D25) |
 | 8+ (RK-Q1) | `difficulty` and `difficulty_top64` retired, `wide_difficulty` kept | required `difficulty: u64` | reads `wide_difficulty` (decimal string) |
 | 8+ (RK-Q2) | `already_generated_coins`, `total_burned` become decimal strings | `Option<String>` and `u64` | `total_burned` becomes a string; the first already is |
 | 8+ (RK-Q6) | `nettype` and the three booleans retired | not read | none |
@@ -623,9 +634,9 @@ round's (`RPC_CHANNEL.md` §6.1).
 | Origin guard re-anchor before the route leaves | parent §5 | 1 |
 | Four bridged `get_info` console legs | parent §5 | 4 |
 | `target` re-pinned as a value (RK-D9) | parent §1 | 4 |
-| Wallet sync predicate simplification | #792 / WSS-Q14 | 6 |
-| `get_version` and `sync_info` still encode "no target" as an omitted or zero `target_height` (`rust/shekyl-rpc-types/src/chain.rs:386-393`, `p2p.rs:280-283`) | RK-D23 | 6 |
-| "`get_info` still writes `0` when synchronized" — the `HEIGHT_SEMANTICS.md` index row and the comment at `rust/shekyl-daemon-rpc/src/chain_facts.rs:112-116` | height-semantics Phase 2f | 6 |
+| Wallet sync predicate simplification | #792 / WSS-Q14 | 6 — **done** |
+| `get_version` and `sync_info` still encode "no target" as an omitted or zero `target_height` (`rust/shekyl-rpc-types/src/chain.rs:386-393`, `p2p.rs:280-283`, as cited when this row was written) | RK-D23 | 6 — **done** |
+| "`get_info` still writes `0` when synchronized" — the `HEIGHT_SEMANTICS.md` index row and the comment at `rust/shekyl-daemon-rpc/src/chain_facts.rs:112-116` | height-semantics Phase 2f | 6 — **done** |
 | CLI `DaemonInfo` and engine `GetInfoResp` duplicates retired | RK-D1 | 4 |
 
 ---
