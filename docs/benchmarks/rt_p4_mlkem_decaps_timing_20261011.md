@@ -2,7 +2,7 @@
 
 **State of this record: REGISTERED, NOT YET RUN.** Everything under
 "Registered before the run" is committed and pushed before the first run
-that counts on either machine. Results are added below it and that section
+that counts on any machine. Results are added below it and that section
 is not edited afterwards.
 
 This replaces the method of
@@ -23,10 +23,14 @@ device and on x86, including the implicit-rejection path.
 
 ## Registered before the run
 
-*Amended once before any run, 2026-10-11, on the maintainer's review of the
-registration as first pushed (`b1b9193c5`): the limit on attempts after a
-void, the floor device's recorded conditions, and which machine is the x86
-one. Nothing else changed.*
+*Amended twice on the maintainer's review, both times before any timed
+run. First (`1ce9f13d0`): a limit on attempts after a void, and the floor
+device's recorded conditions. Second (2026-10-11): the x86 machine is a
+Windows laptop with two registered runs, one per core design; the shared
+Linux dev box is dropped; the re-run limit is per registered run and needs
+the cause fixed; and the closing rule names which runs close RT-P4. The
+method, the comparisons, the thresholds, the control and the inputs are as
+first pushed (`b1b9193c5`).*
 
 **Subject.** `fips203` 0.4.3, `ml_kem_768`, `try_decaps`, built in release
 profile from this workspace's lock file. The harness is
@@ -86,35 +90,36 @@ Each comparison is read on its own figure. In particular
 ciphertext corresponds to, are not cleared by any other comparison's
 result.
 
-**Runs.** One run per machine. A fail or an inconclusive is not re-run to
-get a different answer. A **void** run may be made again, within these
-limits, fixed before anything runs:
+**Runs.** Three registered runs: one on the floor device, and two on the
+laptop, one pinned to a performance core and one to an efficiency core
+(below). Each is one run and each has its own verdict. A fail or an
+inconclusive is not re-run to get a different answer. A **void** run may
+be made again, within these limits, fixed before anything runs:
 
-- **At most two attempts per machine.** If both are void, that machine has
-  no result and RT-P4 is not met there; the next step goes to the
-  maintainer.
-- **The second attempt runs under a quiet claim** on that machine, filed in
-  the estate's usage ledger before it starts. On a shared machine "it was
-  noisy" can always be said, so a second attempt has to remove the noise,
-  not hope for less of it. (Both machines are claimed quiet from the first
-  attempt here.)
+- **At most two attempts per registered run.** If both are void, that run
+  has no result; the next step goes to the maintainer.
+- **The second attempt is made only after the cause of the first void is
+  named and fixed.** On any machine "it was noisy" can always be said, so
+  a second attempt has to remove the cause, not hope for less of it.
 - **Every attempt is recorded, in order, whatever it shows**, with its full
   output.
 
-**Inputs.** The registered run draws its inputs from a seed that no run
-has used: not the first registration's, and not any diagnostic's. The
-harness prints `inputs=registered` when it uses it.
+**Inputs.** The registered runs draw their inputs from a seed that no run
+had used when this was registered: not the first registration's, and not
+any diagnostic's. All three draw the same inputs, so they are the same
+question put to three cores. The harness prints `inputs=registered` when
+it uses that seed.
 
-**Machines.**
+**Machines**, by role and processor.
 
-- **The floor device** (rule 76): the Pi 4, under a quiet claim in the
-  estate's usage ledger, from a fresh clone of the pushed commit in a new
-  directory. Its conditions are recorded at the start and the end of the
-  run, for the record and not as a line: the CPU governor (it was
+- **The floor device** (rule 76): a Raspberry Pi 4 (Cortex-A72), under a
+  quiet claim in the estate's usage ledger, from a fresh clone of the
+  pushed commit in a new directory. Recorded at the start and the end of
+  the run, for the record and not as a line: the CPU governor (it was
   `ondemand` for the first record, which changes clock speed during a run;
   the classes are interleaved, so that cannot favour one, and the null
-  comparisons would show it if it did); the SoC temperature; and the
-  firmware's throttle flags.
+  comparisons would show it if it did), `vcgencmd get_throttled`, and the
+  SoC temperature.
 
   *The throttle flags, as far as this lane can read them.*
   `vcgencmd get_throttled` needs root on this device (`/dev/vcio` is
@@ -126,20 +131,44 @@ harness prints `inputs=registered` when it uses it.
   (`cpufreq/stats/time_in_state`), and the count of clock-speed changes
   (`total_trans`). The last two say directly whether and how much the
   clock moved during the run, which is what the flags would be read for.
-- **x86:** the Windows dev box, a native Windows build, run there by the
-  remote agent on that machine. *Changed before any run, on the
-  maintainer's direction (2026-10-11):* the Linux dev box, named here when
-  this registration was first pushed, is too busy and too noisy to be the
-  x86 machine. The run is from a fresh clone of the pushed commit, built
-  with `--locked` in release profile. Recorded at the start and the end:
-  the processor, the power plan, the CPU load, and what else of weight is
-  running. Two things differ from the floor device and are stated so the
-  result is read with them: the operating system, and the clock, which on
-  Windows ticks every 100 ns, about 0.15 % of a decapsulation there. The
-  statistic averages over a million samples and resolves below a tick; the
-  control says whether it resolved enough. With null comparisons in the
-  lines, a machine too disturbed to compare a class with itself voids its
-  own run instead of passing by default.
+
+- **x86: a Windows laptop with a 14th-generation Intel Core i9 (Raptor
+  Lake)**, a hybrid processor with two core designs. The exact processor
+  and its core layout are enumerated from the machine before the run and
+  recorded with the results. Two registered runs, each on **one logical
+  processor**, with that core's hyperthread sibling, where it has one,
+  left idle:
+
+  - **the P-core run**, pinned to a logical processor of a performance
+    core;
+  - **the E-core run**, pinned to a logical processor of an efficiency
+    core.
+
+  Each is its own verdict, for that core design. The P-core run is made
+  first.
+
+  *Conditions.* A release build for the MSVC target, with `--locked`, from
+  a fresh clone of the pushed commit. Mains power; best-performance mode;
+  Defender real-time scanning paused; Windows Update and search indexing
+  deferred; nothing else running. Recorded with each run: the value of
+  `QueryPerformanceFrequency`; which logical processor was used and its
+  core type; the CPU temperature and clock speed at the start and the end;
+  and, since "idle" should be a recorded fact, how busy the sibling
+  logical processor was over the run. Any of these conditions that cannot
+  be set or read from the session that makes the run is recorded as not
+  set or not read, with the reason, and is not passed over.
+
+  Two things differ from the floor device and are stated so the results
+  are read with them: the operating system, and the clock, which on
+  Windows is read through `QueryPerformanceCounter`; at its usual 10 MHz
+  one tick is 100 ns, a larger share of a decapsulation than the floor
+  device's 18.5 ns tick is of its own. The statistic averages over a
+  million samples and resolves below a tick; the control says whether it
+  resolved enough.
+
+*The shared Linux dev box is dropped.* It was the x86 machine of the first
+record and of this registration as first pushed. It is too busy and too
+noisy, and no registered run is made on it.
 
 **What has already been seen, disclosed.**
 
@@ -148,21 +177,32 @@ harness prints `inputs=registered` when it uses it.
   registration's seed, and came out under 4.5 throughout. This
   registration was written knowing that. What it has not seen is these
   inputs, or this method on x86 at full size.
-- To check that the committed harness runs, it was run once on the Linux dev box
-  at 20,000 samples with a seed given on the command line, which the
-  harness labels `inputs=NOT-REGISTERED`. At that size the control was not
-  detected, which means nothing at that size. There is no shake-down with
-  the registered inputs on either machine.
+- To check that the committed harness runs, it was run once on the shared
+  Linux dev box at 20,000 samples with a seed given on the command line,
+  which the harness labels `inputs=NOT-REGISTERED`. At that size the
+  control was not detected, which means nothing at that size. There is no
+  shake-down with the registered inputs on any machine.
+- **A floor-device start that was stopped before it timed anything.** After
+  the first amendment was pushed (`1ce9f13d0`) the floor device was cloned
+  and its build started, at 2026-10-11 00:15Z. The second amendment
+  arrived two minutes later. The session was stopped while still compiling
+  dependencies: the harness binary did not yet exist, no decapsulation was
+  timed, and no output file was created. That directory was removed, and
+  the floor-device run is made from a fresh clone of the commit that
+  carries this amendment. It is not counted as an attempt, because nothing
+  ran.
 
 **What is not measured, and is read instead.** Timing statistics cannot
 show the absence of a branch. The aarch64 code was read for the first
 record (comparison loop, rejection select, every conditional branch, the
-NTT's division). The x86 code is read the same way and recorded with the
-results.
+NTT's division). The x86 code is read the same way, from the laptop's own
+binary, and recorded with the results.
 
-**What closes RT-P4.** A **pass on both machines** under these lines:
-RT-P4 is met, and `RPC_CHANNEL.md` §4.3's "demonstrated by RT-P4" stands,
-with the reach above. **Anything else** is reported as it is. If a
-dependence survives, `libcrux-ml-kem` and RustCrypto `ml-kem` are measured
-on this same harness and the choice of implementation goes to the
-maintainer with those numbers.
+**What closes RT-P4.** A **pass on the floor device and on the laptop's
+P-core run**, under these lines: RT-P4 is met, and `RPC_CHANNEL.md` §4.3's
+"demonstrated by RT-P4" stands, with the reach above. The **E-core run is
+recorded as coverage** of a second x86 core design and does not gate the
+close. A **fail on any of the three runs is a finding for that core
+design**, reported with its evidence, and sends `libcrux-ml-kem` and
+RustCrypto `ml-kem` through this same harness, so that the choice of
+implementation goes to the maintainer with those numbers.
