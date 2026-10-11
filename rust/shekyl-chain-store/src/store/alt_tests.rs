@@ -26,13 +26,19 @@ use crate::codec::{forged, AltBlock, AltBlockFacts, Canonical, CodecError};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::ALT_BLOCKS;
 
-fn alt(height: u64, block: &[u8], witness: Option<Vec<u8>>) -> AltBlock {
+/// `BlockHeight::from_raw`, short enough for a fixture call.
+pub(super) const fn h(n: u64) -> BlockHeight {
+    BlockHeight::from_raw(n)
+}
+
+pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -> AltBlock {
+    let raw = height.to_raw();
     AltBlock::checked(
         AltBlockFacts {
-            height: BlockHeight::from_raw(height),
-            block_weight: Some(BlockWeight::from_raw(300 + height)),
-            cumulative_difficulty: CumulativeDifficulty::from_raw(1_000 + u128::from(height)),
-            coins_generated: AtomicUnits::from_raw(50 * height),
+            height,
+            block_weight: Some(BlockWeight::from_raw(300 + raw)),
+            cumulative_difficulty: CumulativeDifficulty::from_raw(1_000 + u128::from(raw)),
+            coins_generated: AtomicUnits::from_raw(50 * raw),
         },
         block,
         witness,
@@ -45,9 +51,13 @@ fn alt(height: u64, block: &[u8], witness: Option<Vec<u8>>) -> AltBlock {
 /// judges (§11.2: the alt surface is not chain state), so the listed body
 /// is the harness's spend-shaped filler — a named key image, no proof —
 /// not a spend built against a tree; nothing here reads it as one.
-fn side_block(height: u64, previous: BlockHash, key_image: usize) -> (BlockHash, Vec<u8>) {
+pub(super) fn side_block(
+    height: BlockHeight,
+    previous: BlockHash,
+    key_image: usize,
+) -> (BlockHash, Vec<u8>) {
     let filler = fixture::spend(fixture::point(key_image), 2);
-    let cand = candidate(height, previous, vec![filler]);
+    let cand = candidate(height.to_raw(), previous, vec![filler]);
     (cand.block.hash(), cand.block.serialize())
 }
 
@@ -73,13 +83,13 @@ fn insert_read_enumerate_remove_and_drop() {
     let path = tmp("alt-ops");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &[vec![], vec![]]).hashes;
-    let (a, a_bytes) = side_block(1, main[0], 3);
-    let (b, b_bytes) = side_block(2, a, 4);
+    let (a, a_bytes) = side_block(h(1), main[0], 3);
+    let (b, b_bytes) = side_block(h(2), a, 4);
     let witness = vec![0xA5; 40];
 
     let out: Result<(), TestErr> = store.write(|batch| {
-        batch.insert_alt_block(&a, &alt(1, &a_bytes, None))?;
-        batch.insert_alt_block(&b, &alt(2, &b_bytes, Some(witness.clone())))?;
+        batch.insert_alt_block(&a, &alt(h(1), &a_bytes, None))?;
+        batch.insert_alt_block(&b, &alt(h(2), &b_bytes, Some(witness.clone())))?;
         // The batch sees its own writes.
         assert!(batch.has_alt_block(&a)?);
         assert_eq!(batch.alt_block_count()?, 2);
@@ -137,7 +147,7 @@ fn insert_read_enumerate_remove_and_drop() {
     }
 
     let out: Result<u64, TestErr> = store.write(|batch| {
-        batch.insert_alt_block(&a, &alt(1, &a_bytes, None))?;
+        batch.insert_alt_block(&a, &alt(h(1), &a_bytes, None))?;
         Ok(batch.drop_alt_blocks()?)
     });
     assert_eq!(out, Ok(2), "drop reports how many it removed");
@@ -156,14 +166,14 @@ fn insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals() {
     let path = tmp("alt-refusals");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &[vec![]]).hashes;
-    let (a, a_bytes) = side_block(1, main[0], 5);
+    let (a, a_bytes) = side_block(h(1), main[0], 5);
 
     let out: Result<(), TestErr> =
-        store.write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, &a_bytes, None))?));
+        store.write(|batch| Ok(batch.insert_alt_block(&a, &alt(h(1), &a_bytes, None))?));
     out.expect("first insert");
 
     let out: Result<(), TestErr> =
-        store.write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, &a_bytes, None))?));
+        store.write(|batch| Ok(batch.insert_alt_block(&a, &alt(h(1), &a_bytes, None))?));
     assert_eq!(
         out,
         Err(TestErr::Store(
@@ -188,7 +198,7 @@ fn insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals() {
 
     // The key must be the block's hash: `a`'s bytes under `main[0]`'s key.
     let out: Result<(), TestErr> =
-        store.write(|batch| Ok(batch.insert_alt_block(&main[0], &alt(1, &a_bytes, None))?));
+        store.write(|batch| Ok(batch.insert_alt_block(&main[0], &alt(h(1), &a_bytes, None))?));
     assert_eq!(
         out,
         Err(TestErr::Store(
@@ -273,10 +283,10 @@ fn a_row_whose_block_does_not_hash_to_its_key_is_si7() {
     let path = tmp("alt-key-mismatch");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &[vec![]]).hashes;
-    let (a, a_bytes) = side_block(1, main[0], 7);
+    let (a, a_bytes) = side_block(h(1), main[0], 7);
     let wrong = BlockHash::from_bytes([0xBD; 32]);
     assert_ne!(wrong, a);
-    let record = alt(1, &a_bytes, None);
+    let record = alt(h(1), &a_bytes, None);
 
     let out: Result<(), TestErr> = store.write(|batch| {
         batch
@@ -398,7 +408,11 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     let out: Result<(), TestErr> = store.write(|batch| {
         Ok(batch.insert_alt_block(
             &alt_top,
-            &alt(top, &alt_cand.block.serialize(), Some(alt_witness.clone())),
+            &alt(
+                h(top),
+                &alt_cand.block.serialize(),
+                Some(alt_witness.clone()),
+            ),
         )?)
     });
     out.expect("hold top'");
@@ -410,7 +424,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         let promoted = batch.alt_block(&alt_top)?.expect("top' is held");
         let popped = batch.pop()?;
         assert_eq!(popped.height, BlockHeight::from_raw(top));
-        batch.insert_alt_block(&main_top_hash, &alt(top, &main_top_bytes, None))?;
+        batch.insert_alt_block(&main_top_hash, &alt(h(top), &main_top_bytes, None))?;
         batch.connect(judge(&view, alt_cand.clone())?, RuleSet::GENESIS)?;
         batch.remove_alt_block(&alt_top)?;
         Ok(promoted.attestation_witness().expect("witness").to_vec())
@@ -439,7 +453,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         batch.pop()?;
-        batch.insert_alt_block(&alt_top, &alt(top, &alt_cand.block.serialize(), None))?;
+        batch.insert_alt_block(&alt_top, &alt(h(top), &alt_cand.block.serialize(), None))?;
         // The main top, re-promoted: the block as recorded and the body it
         // listed (pricing the priced coinbase again writes the same amount).
         batch.connect(
@@ -490,9 +504,9 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
         .logical_state_digest_v0()
         .expect("digest");
 
-    let (a, a_bytes) = side_block(1, main[0], 6);
+    let (a, a_bytes) = side_block(h(1), main[0], 6);
     let out: Result<(), TestErr> = store
-        .write(|batch| Ok(batch.insert_alt_block(&a, &alt(1, &a_bytes, Some(vec![0xC3; 40])))?));
+        .write(|batch| Ok(batch.insert_alt_block(&a, &alt(h(1), &a_bytes, Some(vec![0xC3; 40])))?));
     out.expect("insert");
     let snap = store.begin_read().expect("read");
     assert!(snap.has_alt_block(&a).expect("has"), "the write landed");

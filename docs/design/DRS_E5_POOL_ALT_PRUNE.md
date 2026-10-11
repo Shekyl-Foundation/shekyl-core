@@ -7,10 +7,11 @@ header root, the verify path — is deleted by
 `SCS-P11`; the alt tier has no archival read to make and CEN-B4 is not
 ported to it, §8); PR-a building (#1026, draft). Round 0 posed
 2026-10-10 at `dev@14d68c00fc`, merged to `dev@ac95d6d04` before the PR
-opened. Pre-flight in §1.1, findings `E5-1…E5-17` (`E5-13…E5-15` are PR-a
+opened. Pre-flight in §1.1, findings `E5-1…E5-18` (`E5-13…E5-15` are PR-a
 commit 1's measurement, §1.7; `E5-16` and `E5-17` are the review's;
 `E5-6` and `E5-17` are dissolved with `E5-Q4`, `E5-16` stands with no
-consumer); questions `E5-Q1…E5-Q11` in §8, each with its ruling under its
+consumer; `E5-18` is a3's — the census registry cannot name a store-homed
+property, resolved in a4); questions `E5-Q1…E5-Q11` in §8, each with its ruling under its
 default. a4's census amendment (CEN-K4's row describes the C++ ladder in
 its landed order and names no attestation step for the Rust tier; CEN-B4's
 site pin re-pinned) is drafted for ruling before it lands. **The
@@ -491,6 +492,27 @@ unknown; commit 1 owes it rule by rule"), read at `dev@ac95d6d04`.
   from the C++. The FOLLOWUPS row closes by dissolution — C++ frozen,
   operand deleted by `ARCHIVAL_SERVE_CREDIT_SPEC.md` §11.1 — not as
   handled.
+- **E5-18 — the census registry cannot name a store-homed by-construction
+  property.** (a3, 2026-10-11, found while landing `AltChain`.) §3
+  projects K3, K8, K1a and K2 leaving `pending` as `by_construction`
+  (`by-construction 16 → 20`). The registry form is
+  `by_construction(path, "falsifier")`: the macro pins the path with
+  `use $path as _` (`census.rs:202–205`), and
+  `check_chain_rules_coverage.py`'s `check_by_construction` requires the
+  falsifier to be a `#[test]` (or `doctest:`/`trybuild:`) **in the rules
+  crate's own `src/` and `tests/`**. `AltChain`, `AltView` (K8's absent
+  `block_at`) and AL1's `AlreadyHeld` (K3) all live in
+  `shekyl-chain-store`, which `shekyl-chain-rules` must not import
+  (DRS-D12 (i): no store handle, neither `shekyl-chain-store` nor
+  `redb`); the dependency runs the other way. So neither the path nor the
+  falsifier can be named from the registry as it stands. a3 lands the
+  construction and its tests in the store (§3 K1a/K2 witness cells) and
+  leaves the four arms `pending`; a4's "census arms" commit resolves the
+  form — a registry variant that credits a falsifier by crate and test
+  name with the gate reading that crate's sources, or §3's projection
+  revised to count these rows as held-by-store rather than
+  by-construction. Not a deferral past the increment: a4 is the next
+  commit and already owns the arm flips.
 
 ---
 
@@ -654,9 +676,9 @@ and site it lands in, and the witness. "slice 9" is the alt increment
 
 | Row | Rule (short) | Disposition | Crate / site | Witness |
 | --- | --- | --- | --- | --- |
-| CEN-K1a | alt-chain derived height ≥ 1 | by construction — `AltChain`'s root is a main-chain row, so the candidate's derived height is `root + 1 + len` ≥ 1 | `shekyl-chain-store` `AltChain` (slice 9) | a candidate whose `prev_id` is unknown is K2, not K1a; the K1a arm is `by_construction` with the constructor test |
+| CEN-K1a | alt-chain derived height ≥ 1 | by construction — `AltChain`'s root is a main-chain row, so the candidate's derived height is `root + 1 + len` ≥ 1 | `shekyl-chain-store` `AltChain::candidate_height` (slice 9 a3, landed 2026-10-11) | a candidate whose `prev_id` is unknown is K2, not K1a; the constructor test is `a_chain_through_two_alt_entries_reaches_a_recorded_row` (`store/alt_view_tests.rs`: every chain built, including the one over genesis, sits at ≥ 1 — the one over genesis at exactly 1). The census arm is a4's (§5) |
 | CEN-K1b | a miner-tx claiming height 0 is refused | rule in `alt_against` — the claim read against the derived height, `Locus::Block` | `shekyl-chain-rules` `rules/alt` (slice 9) | mutation: a height-0 claim at derived height ≥ 1 refused |
-| CEN-K2 | alt linkage: the chain must connect to the main chain | by construction — `AltChain::build(snapshot, prev_id)` returns `Err(Unlinked)` and no view exists | store `AltChain` (slice 9) | the orphan case; a chain through two alt entries to a main row |
+| CEN-K2 | alt linkage: the chain must connect to the main chain | by construction — `AltChain::build(snapshot, prev_id)` returns `Err(AltCannot::Unlinked { at })` and no view exists; each row's recorded height is held to the height its position derives (the C++ rebuild's assertion), a disagreement SI-7 | store `AltChain::build` (slice 9 a3, landed 2026-10-11) | `the_orphan_is_unlinked_at_the_first_unheld_hash` (the orphan, named at the first unheld hash — also on an empty store); `a_chain_through_two_alt_entries_reaches_a_recorded_row`; `a_row_whose_height_disagrees_with_its_chain_is_si7` (`store/alt_view_tests.rs`). The census arm is a4's (§5) |
 | CEN-K3 | an alt block already stored is refused | by construction — AL1 `AlreadyHeld` (the belt E1 landed) | store `alt.rs` (landed) | the existing AL1 test; the census arm flips to `by_construction` |
 | CEN-K4 | alt blocks stored after version, timestamp, checkpoint, PoW | rule — `alt_against` is the tier; what it holds is the row; no attestation step (`E5-Q4` dissolved — the C++ ladder's step is frozen and deleted with Slice C) | rules `alt_against` (slice 9) | each sub-check mutated once; the order pinned |
 | CEN-K5 | promotion re-validates every block through the full validator | sequencing — step 4 of §2.3 is `validate` + `connect`, nothing else connects | `shekyl-chain-ingest` switch (slice 9) | an alt chain carrying a body `validate` refuses leaves the store at the pre-switch digest |
@@ -770,7 +792,7 @@ drops, with PR-b the caller.
 | --- | --- | --- | --- |
 | a1 | this file on review; index rows; the §12 register rows (DEL-009, DEL-010). UPDATE 2026-10-10: Round 1's rulings recorded; the `header.rs` partition measured (`E5-13…E5-15`); `E5-Q4` priced | 1 | — |
 | a2 | `HeaderView { tip, header_at }` + `HeaderRecord` (`E5-13`); `HeaderRule` with the blanket `BlockRule` impl; `anchors.rs`, `timestamps.rs`, `pow.rs`, `difficulty.rs`, `attestation.rs` re-bounded (`E5-14` — not `header.rs`); `BatchView` and the eight test implementors gain `HeaderView`; `check_block_rule_corrupt_sites.py` reads both impl forms; the store's conformance suite split. UPDATE 2026-10-10: landed as measured — `HeaderRecord { hash, header, cumulative_difficulty }` embedded in `RecordedBlock` (`E5-13`, no `Deref`); `HeaderView { tip, header_at }` with `ChainView: HeaderView` (`E5-14`); D1, C1, C2, E1 are `HeaderRule`s under `impl<R: HeaderRule> BlockRule for R`, the window and seed helpers (`C3::window`, `mtp_median_at`, `D4::target`, `D3::expected_seed`, `E5::conflict_with`, `anchor_window`) bound on `HeaderView`; `recorded_header` lifts a hole to `Corrupt::HoleBelowTip { record: PerHeightRecord::Header }`; the gate **derives** the rule-trait set from the blanket impl and refuses a rule-shaped `check` under a trait it cannot reach (15 rules read: 11 + 4; the user's three probes red on D1). The falsifier did not fire: five rule files, the blanket impl composes with `run`. Beside it, a wrong-subject finding: `validate.rs`'s two brand `compile_fail` doctests had passed since `5fb2132fa` (2026-09-29) on E0046 — the stubs no longer implemented `ChainView` — not at `connect`; replaced by a `trybuild` suite with stderr snapshots and a positive control (`CHAIN_RULES_CRATE.md` §8.3) | 2 | yes — more than these five rule files, or the blanket impl not composing with `run`, is the fallback |
-| a3 | `AltChain::build` (K2), `AltView` over `ReadSnapshot` + chain (`HeaderView` only), K1a by construction, the stitched-view conformance test | 2 | yes |
+| a3 | `AltChain::build` (K2), `AltView` over `ReadSnapshot` + chain (`HeaderView` only), K1a by construction, the stitched-view conformance test. UPDATE 2026-10-11: landed as specified — `store/alt_view.rs`: `AltChain::build(&ReadSnapshot, &prev_id)` walks `previous` from the parent (recorded hash → root, alt row → entry, neither → `AltCannot::Unlinked { at }`, the new refusal variant), then holds each entry's recorded height to `root + 1 + i` (the C++ rebuild's assertion; a disagreement is SI-7 under `alt_blocks`, reason `alt block's recorded height disagrees with its chain`); `AltView<'s>` implements `HeaderView` and nothing else — `header_at` is `chain_reads::block_body` at or below the root (one body with `BatchView`) and the entry's `{ hash, header, cumulative_difficulty }` above, `tip` the parent; `candidate_height() = parent + 1 ≥ 1` (K1a). Four tests in `store/alt_view_tests.rs`, including the stitched-view conformance test against `BatchView::header_at` below the fork with the negative control that the recorded reader still answers `main[2]` where the view answers `a`; the height check was mutation-tested (disabled → the SI-7 test fails). Finding `E5-18`: the census registry's `by_construction` form cannot name a store-homed property or credit a store-crate falsifier, so K1a/K2 stay `pending` in `census.rs` until a4's census-arms commit chooses the form | 2 | yes |
 | a4 | **first commit, ruled before it lands:** the census amendment (`CONSENSUS_RULE_CENSUS.md`; the registry entry is unchanged) — CEN-K4's row stops describing a ladder the Rust tier will not run: the C++ ladder is recorded in its landed order (version, timestamp, checkpoint, PoW, then attestation since `4932b769b`, 2026-09-13, then prevalidate) as the frozen path Slice C deletes, and the Rust tier's steps name no attestation step (`E5-Q4` dissolved); CEN-B4's site pin re-pinned to `verify_block_attestation` 4979–5066 (signature to closing brace; `:4978` is the separator comment). **Then** `alt_against` (K1b, K4's tier, D5 via D4, E2's arm); `AltValid` → AL1; census arms. The `docs/FOLLOWUPS.md` rows *"Alt-chain attestation verify resolves bond pubkeys from main-chain state"* and *"Validate `prev_id` before attestation verify on the alt-chain path"* were closed by dissolution with the ruling (2026-10-11), not by this commit | 3 | yes |
 | a5 | the switch closure in `shekyl-chain-ingest` (§2.3): cap check, SAL-13 reads, pops, K7 under the verdict arm, K5 promotion, removes; K6 on `ForkChoiceVerdict`; `Switched` | 3 | yes |
 | a6 | the three refusals distinguished (cap, floor, verdict) and the §4 fixtures for the boundary and the floor | 2 | yes |

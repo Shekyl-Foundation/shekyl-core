@@ -550,6 +550,21 @@ tests) imports `HeaderView`. A hole below the tip on a header read is
 `Corrupt::HoleBelowTip { record: PerHeightRecord::Header }`, through
 `recorded_header` (`rules/mod.rs`) as `recorded` does for the block.
 
+**The second implementor (DRS-E5 a3, 2026-10-11).** The store's
+`AltView<'s>` (`shekyl-chain-store` `store/alt_view.rs`) is a
+`HeaderView` and **not** a `ChainView`: a `ReadSnapshot` stitched with an
+`AltChain` (the alt rows from the fork point to a candidate's parent,
+walked back to a recorded row — `AltChain::build`, CEN-K2; the orphan is
+`AltCannot::Unlinked`). `header_at(h)` is the recorded row at or below
+the root through the same `block_body` read `BatchView` makes, and the
+alt entry's hash, header and cumulative difficulty above it; `tip` is the
+candidate's parent. It carries no batch brand, so nothing judged over it
+can reach `connect`; and it has no `block_at`, so a `BlockRule` cannot be
+bound on it — the belt for an executed-chain fact leaking into the alt
+tier is the compiler (CEN-K8 is the first beneficiary). A candidate over
+it sits at `root + 1 + len ≥ 1` (CEN-K1a, by construction). The alt
+tier's rule runner over this view is slice 9 a4's.
+
 **Why a fault channel (Q12-1).** The store's projection reads a redb
 transaction; reads can fail. An infallible trait would leave the projection
 two bad options — panic through the validator, or answer wrongly and hope the

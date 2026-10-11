@@ -15,6 +15,9 @@
 //! (SAL-7): alt-store membership is not a recorded-chain fact (CEN-A4), and
 //! a rule that asked would be a rule about the store's contents (C2-R8).
 //! These reads belong to the reorg's orchestration (E5) and to the RPCs.
+//! The alt tier's own view, [`super::AltView`], is a `HeaderView` stitched
+//! from these rows and the recorded chain below the fork point — and
+//! deliberately not a `ChainView` (DRS-E5 `E5-13`; `alt_view.rs`).
 //!
 //! The block is already parsed. [`AltBlock::block`] is that
 //! [`shekyl_wire::Block`]; a row that does not decode, or whose block does
