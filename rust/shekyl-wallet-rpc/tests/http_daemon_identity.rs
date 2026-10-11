@@ -47,7 +47,7 @@ fn version_reply(edit: impl FnOnce(&mut GetVersionResponse)) -> String {
         version: CORE_RPC_VERSION,
         release: false,
         current_height: 1,
-        target_height: 0,
+        target_height: shekyl_rpc_types::Nullable::NULL,
         consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
         nettype: SERVED,
         genesis_hash: HashHex::from_bytes(genesis_hash_for(SERVED)),
@@ -183,10 +183,27 @@ async fn a_daemon_on_another_chain_is_not_an_outage() {
     assert_eq!(error["data"]["network"], "stagenet", "{error}");
 }
 
+/// The version is read before the rest (RK-Q11): a daemon of another RPC
+/// version answers in a shape this build cannot decode, and is still named.
+/// Before, this was the unreadable case below.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode() {
+    let error = refresh_error(fake_daemon(
+        json!({"jsonrpc": "2.0", "id": "0", "result": {
+            "version": 1, "a_member_this_build_has_never_heard_of": true,
+        }})
+        .to_string(),
+    ))
+    .await;
+    assert_eq!(error["code"], -29205, "{error}");
+    assert_eq!(error["data"]["daemon_version"], "0.1", "{error}");
+    assert_eq!(error["data"]["update"], "daemon", "{error}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreadable_version_reply_says_the_version_cannot_be_named() {
     let error = refresh_error(fake_daemon(
-        json!({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK", "version": 1}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK"}}).to_string(),
     ))
     .await;
     assert_eq!(error["code"], -29205, "{error}");

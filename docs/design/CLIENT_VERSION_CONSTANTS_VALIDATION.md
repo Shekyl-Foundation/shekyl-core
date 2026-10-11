@@ -556,6 +556,17 @@ itself**: its job is to show the operator what they are talking to, so it
 renders both sides and the verdict rather than refusing — it *is* the
 handshake, made visible.
 
+**As built (RK-5c commit 6, `DAEMON_RPC_KV_GET_INFO.md` RK-Q11 / RK-D25).**
+Both arms read the daemon's RPC version before they decode the rest of
+`get_version`, through one function, so a daemon of another version is named
+with both versions even though its reply does not decode. `version` uses the
+same function and skips the rest of the handshake. When the RPC versions
+differ it prints both and which side is older, and fails, because the
+daemon's software version lives in a `get_info` reply of another shape.
+When they agree it prints the daemon's software version. Showing the other
+three axes and the verdict from `version` is still owed to the console's
+retirement slice.
+
 Rejected: an override flag to render anyway. A console that renders
 statistics from a chain it has just proved is not this build's chain prints
 confidently wrong numbers, which is the failure §0.3 was written to avoid.
@@ -1115,7 +1126,10 @@ carries `#[serde(default)]` on `current_height`, `target_height` and
 `hard_forks` (`chain.rs:351`, `:355`, `:359`), because the C++ side omits
 them via `KV_SERIALIZE_OPT` and the oracle vectors depend on that. Those are
 not tuple fields. The requirement is per-field on the identity tuple, not a
-sweep of the struct — the wider `#[serde(default)]` audit remains its own
+sweep of the struct. (Since `CORE_RPC_VERSION` 3.46 no member of the struct
+defaults: `hard_forks` is gone, `current_height` is always present, and
+`target_height` is required and may be `null`,
+`DAEMON_RPC_KV_GET_INFO.md` RK-Q7.) The wider `#[serde(default)]` audit remains its own
 FOLLOWUPS pass.
 
 ### 3.15 `VC-D15` — a refusal names the stale side only where a side *is* older
@@ -1191,7 +1205,7 @@ and `mining_parity.genesis_identity_is_pow_independent` (mainnet/fakechain
 `e623214c…`, testnet `7cbb8529…`, stagenet `82ccf335…`). Handshake compares
 those ids — `get_block_id_by_height(0)` / `geblock block-id` — not
 `GENESIS_TX`. `GENESIS_PINS_ARE_PLACEHOLDERS` is deleted; [`genesis_hash_for`](../../rust/shekyl-rpc-types/src/identity.rs)
-and [`IdentityExpectation::check`](../../rust/shekyl-rpc-types/src/identity.rs)
+and [`IdentityExpectation::read`](../../rust/shekyl-rpc-types/src/identity.rs) (named `check` until RK-5c commit 6, when it took over the decode so the version is read first)
 refuse a foreign block 0. Wallet and console do not each hold a copy.
 Reminting genesis updates `GENESIS_TX` / nonce, the frozen-id surfaces, and
 these pins in the same change.
