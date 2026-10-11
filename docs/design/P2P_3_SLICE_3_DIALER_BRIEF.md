@@ -142,14 +142,31 @@ Each wake, for one connector, takes the first arm that applies.
    "sound good but essentially bypass all the identity protections we
    have built in and provide no actual value." `--add-peer` already
    jumpstarts a node; it enters gray and takes its chances in the draw.
-2. **Harvest.** The aim is `Harvest`. Both lists are empty (`has_no_known_peers`,
-   `net_peerlist.h:147`), or the previous fill pass added no session
-   while the connector is still under its outbound target. One seed
-   address per wake. The cursor stops at the first `HarvestDone`.
-   The seed list is `get_seed_nodes`, filled at `net_node.inl:2042`.
-   Clearnet, once, after every seed has failed, adds
-   `get_ip_seed_nodes` (`:2084`) and walks those the same way. The
-   C++ `break` after `connect_to_seed`'s dial is `:2073`.
+2. **Harvest — keyed on list state (Rick, 2026-10-11).** The aim is
+   `Harvest`. While gray on this connector holds fewer addresses than
+   the white diversity floor (the composition's `white_diversity_floor`,
+   48; the exact floor is this brief's review to settle), a fill draw
+   is a harvest: one address drawn uniformly from gray, the list taken,
+   the session closed, no `adopt`, no white. Whatever the address is —
+   a compiled seed, an `--add-peer`, an address a peer sent. At or
+   above the floor the arm does not apply and a free slot is arm 4's
+   kept `SessionAccepted`, as now. One harvest per wake; the cursor
+   stops at the first `HarvestDone`. *Records-was: keyed on identity —
+   both lists empty (`has_no_known_peers`, `net_peerlist.h:147`) or a
+   fill pass that added nothing, then one address per wake from the
+   seed list (`get_seed_nodes`, filled at `net_node.inl:2042`; clearnet
+   once adds `get_ip_seed_nodes`, `:2084`, after every seed has failed;
+   the `break` after `connect_to_seed`'s dial is `:2073`). That seed
+   walk leaves with the dial path; the compiled seeds are gray entries
+   from the start (slice 1 §3).*
+
+   *The wargame for deleting the arm instead.* A fresh node's gray is
+   only the compiled seeds. Kept draws would make the seeds every new
+   node's first outbound peers and its first stem hop: a first-spy
+   position on every new node's first transactions, and a new-node
+   eclipse for whoever can sit where the seeds sit. Harvesting first
+   grows gray from the seeds' lists before any session is kept, so the
+   first kept draw is from a population the seeds do not dominate.
 3. **`draw_white`.** The connector is under its outbound target, and
    white has an address that is not already an outbound session on
    that connector and that passes the candidate filter. The draw is
@@ -489,17 +506,17 @@ no `adopt` and no `SessionAccepted`, and white does not change:
 Foundation fleet).
 
 **Seeds are ordinary peers (Rick, 2026-10-11).** The compiled seed
-addresses enter gray at each start as operator-named addresses do, are
-not saved, and reach white only through a drawn dial's `SessionAccepted`
-or `Confirmed`. The peerlist a seed returns is network-learned, under
-slice 1's address-validity check and D-S1's cap. **Open for this
-brief's review:** with the seeds in gray from the start, the fill's
-uniform gray draw reaches them as it reaches any address, so the
-separate harvest arm (arm 2 of the fill) and the `Harvest` aim do no
-work the standard rule does not; the review decides whether they
-survive, and `HarvestDone` with them. The exception audit
-([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §8)
-records the arm as absorbed pending that decision.
+addresses enter gray at each start as operator-named addresses do, and
+reach white only through a drawn dial's `SessionAccepted` or
+`Confirmed`. The peerlist a seed returns is network-learned, under
+slice 1's address-validity check and D-S1's cap. The harvest survives,
+re-keyed from identity to list state (the fill, arm 2): while gray is
+below the floor, every fill draw is a harvest, whatever the address;
+the seed list is not an input to the dialer. The exception audit
+([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §8,
+row 7) records the arm as absorbed on that ground. *Records-was (same
+day): the arm was an open point for this brief's review, pending a
+decision whether it survived at all.*
 
 The C++ gray probe is not that harvest. `gray_peerlist_housekeeping`
 (`net_node.inl:3336`, declared `net_node.h:713`) dials one random gray

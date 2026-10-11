@@ -309,10 +309,12 @@ found. Same mechanism, same gray to white process."
 - The compiled seed addresses (`get_ip_seed_nodes`,
   `src/p2p/net_node.inl:771`, the array at `:781`; the onion seeds
   `get_seed_nodes` returns) enter gray at each start, as operator-named
-  addresses do (`Source::Operator`). They are not saved to the address
-  file (§7). They reach white only through a drawn dial's
-  `SessionAccepted` or `Confirmed`. **`HarvestDone` writes no white for
-  any address.**
+  addresses do (`Source::Operator`). They reach white only through a
+  drawn dial's `SessionAccepted` or `Confirmed`. **`HarvestDone` writes
+  no white for any address.** The file treats them as it treats any
+  address (§7): they are public, and excluding them would need a seed
+  list or a provenance tag in the crate, which is the special case just
+  deleted.
 - The peerlist a seed returns is network-learned (`Source::Session`): the
   address-validity check of §2 applies to it, and D-S1's per-session cap
   counts it.
@@ -616,12 +618,16 @@ the start (§3), so the first draws reach them as they reach any other gray
 address. How many dials run at once is the outbound cap, owned outside
 this slice (`P2P_DEFAULT_OUT_PEERS`).
 
-**What the file holds (Rick, 2026-10-11).** The compiled seed addresses
-are not written: they are re-supplied at every start. A non-global
-address (§2's ranges) is never written unless `--allow-local-ip` is set,
-and `restore` applies the same refusal as a backstop, so a file written
-under the flag does not seed a node started without it. Lands with
-increment 3, with the range table.
+**What the file holds (Rick, 2026-10-11).** The rule is by range only.
+A non-global address (§2's ranges) is never written unless
+`--allow-local-ip` is set, and `restore` applies the same refusal as a
+backstop, so a file written under the flag does not seed a node started
+without it. No address is excluded by who supplied it — not the
+compiled seeds, not an operator-named address: that would need a seed
+list or a provenance tag in the crate, the special case §3 deleted, and
+the seeds are public addresses. *Records-was (same day, struck): "the
+compiled seed addresses are not written".* Lands with increment 3, with
+the range table.
 
 ---
 
