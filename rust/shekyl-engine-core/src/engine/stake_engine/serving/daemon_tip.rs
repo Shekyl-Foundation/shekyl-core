@@ -206,9 +206,8 @@ pub(crate) enum TipReading {
 ///
 /// The sync **verdict** is the daemon's flag, read from the one
 /// [`DaemonHealth`](crate::engine::traits::daemon::DaemonHealth) projection
-/// the submit watchdog's `DaemonHealthContext::is_synced` and
-/// `SyncedChainFacts` also read (`WSS-Q14`). This reading adds, on top of
-/// it, the facts that can go false again.
+/// the submit ladder and `SyncedChainFacts` also read (`WSS-Q14`). This
+/// reading adds, on top of it, the facts that can go false again.
 ///
 /// **`height` against `target_height` is not one of them.** It would
 /// revert, which is what this table wants, but the target is the tallest

@@ -212,23 +212,24 @@ pub(crate) enum TxSubmitOutcome {
     },
 }
 
-/// Daemon health facts consumed by the §5.3 watchdog escape ladder.
+/// Daemon health facts the wallet reads from `get_info`.
 ///
-/// A contract-accurate projection of the daemon's existing `get_info`
-/// surface — whether it has peers, its current height, and whether it is
-/// synchronized — carrying **no new RPC
-/// method** (`DAEMON_SUBMIT_VERDICT.md` §5.2 item 3). The wallet-side
-/// liveness kernel maps this into its
-/// [`DaemonHealthContext`](super::super::submit_watchdog::DaemonHealthContext);
-/// the split keeps this RPC-transport trait free of any liveness-policy
-/// type (the kernel depends on the trait, never the reverse).
+/// Whether the daemon has a peer it can relay through, its chain height,
+/// and whether it is synchronized. No new RPC
+/// (`DAEMON_SUBMIT_VERDICT.md` §5.2 item 3). The submit ladder takes this
+/// struct. A second copy would be free to grow a different reading of the
+/// same reply, which is the split [`SyncedChainFacts`] exists to forbid
+/// (`WSS-Q14`).
 ///
 /// # Trust classification (§7.2)
 ///
 /// Trusted under the own-daemon V3.0 deployment model; **untrusted**
-/// under the multi-daemon reopen. The damage cap is the ladder's rung 2:
-/// health context can only *delay* escalation, never authorize a
-/// rebuild.
+/// under the multi-daemon reopen — a lying "I'm healthy" makes the wallet
+/// wait on a non-propagating transaction, and a lying sync height flips
+/// backoff at will. The damage cap is the ladder's rung 2: these facts
+/// can only delay escalation, never authorize a rebuild.
+///
+/// [`SyncedChainFacts`]: super::super::daemon::synced_chain_facts::SyncedChainFacts
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DaemonHealth {
     /// Whether the daemon has a peer it can relay through: `get_info`'s

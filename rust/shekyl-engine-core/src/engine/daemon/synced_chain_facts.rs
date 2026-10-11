@@ -31,8 +31,8 @@
 //! Whether the node has caught up is the daemon's call, and it makes that
 //! call with more context than the wallet has. So the wallet reads one
 //! source, `get_info.synchronized`, and [`SyncedChainFacts::new`] is where
-//! it is read; the submit watchdog's `DaemonHealthContext::is_synced` reads
-//! the same member of the same [`DaemonHealth`].
+//! it is read. The submit ladder reads that same member of the same
+//! [`DaemonHealth`]: there is no second health type to disagree with it.
 //!
 //! **The wallet does not compare its daemon's height with its target.** The
 //! core's target is the tallest chain any peer has *claimed* in a handshake.
