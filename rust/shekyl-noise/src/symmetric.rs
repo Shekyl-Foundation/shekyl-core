@@ -80,6 +80,23 @@ impl SymmetricState {
         self.n = 0;
     }
 
+    /// Noise's `MixKeyAndHash`: one input moves the chaining key, the
+    /// handshake hash and the cipher key together. The hybrid patterns use
+    /// it for a static KEM's shared secret.
+    pub fn mix_key_and_hash(&mut self, ikm: &[u8]) {
+        let (ck, temp_h, temp_k) = aead::hkdf3(&self.ck, ikm);
+        self.ck = ck;
+        self.mix_hash(&temp_h[..]);
+        self.k = Some(temp_k);
+        self.n = 0;
+    }
+
+    /// Whether a cipher key has been mixed in yet. Before one has,
+    /// [`Self::encrypt_and_hash`] passes its input through in the clear.
+    pub fn has_key(&self) -> bool {
+        self.k.is_some()
+    }
+
     pub fn encrypt_and_hash(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, SymmetricError> {
         if self.k.is_none() {
             self.mix_hash(plaintext);

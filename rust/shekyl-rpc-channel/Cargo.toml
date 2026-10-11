@@ -1,6 +1,6 @@
 [package]
 name = "shekyl-rpc-channel"
-description = "The RPC channel's domain strings and names: prologue, rendezvous name, static fingerprint"
+description = "The RPC channel: its hybridXK handshake, and the domain strings and names it is bound to"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,8 +8,28 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# Pinned exactly, to the version `shekyl-crypto-pq` and the P2P handshake
+# pin. RT-P4's constant-time result is a statement about this build of this
+# crate, and the handshake is what puts its decapsulation in front of a
+# stranger. The RT-P4 harness (examples/rt_p4_decaps_timing.rs) times it
+# through this same edge.
+fips203 = "=0.4.3"
+rand_core = { version = "0.6", features = ["getrandom"] }
 # cSHAKE256: the one audited home (`shekyl-crypto-hash`), not a second copy.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The symmetric primitives, the symmetric state and the record layer, shared
+# with the P2P handshake (RPC_CHANNEL.md section 4.4).
+shekyl-noise = { path = "../shekyl-noise" }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+zeroize = { workspace = true }
+
+[features]
+# The handshake's entry points that take a random-number generator, so the
+# cross-check can drive it from the seeded streams the pinned vectors were
+# made with (RT-O18). Production draws from the operating system and takes no
+# generator. Dev-dependencies only: a TEST_ONLY row of
+# scripts/ci/check_test_only_features.py.
+test-support = []
 
 [dev-dependencies]
 # The known-answer vectors are JSON with hex fields.
@@ -20,10 +40,6 @@ hex = "0.4"
 # (`shekyl-crypto-pq`). Neither is a production edge.
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# RT-P4 (examples/rt_p4_decaps_timing.rs) times this crate's decapsulation
-# directly. Pinned exactly, to the version `shekyl-crypto-pq` pins: the probe
-# is a statement about one build of one crate.
-fips203 = "=0.4.3"
 
 [lints]
 workspace = true

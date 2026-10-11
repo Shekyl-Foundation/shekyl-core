@@ -431,8 +431,21 @@ failing under a named edit** before its pass is trusted:
    **RT-W8 pins and RT-W9 compares** (RT-O11, ruled 2026-10-09): RT-W8 has
    no handshake of ours, so it drives clatter from seeded randomness with
    the real prologue and commits the messages and transport keys as
-   vectors; RT-W9 implements against them, red first. This anchor is
-   complete only when RT-W9 lands, and RT-W8's record says so. Read at
+   vectors; RT-W9 implements against them, red first. **This anchor is
+   complete (RT-W9, step 2).** Shekyl's handshake
+   (`rust/shekyl-rpc-channel/src/handshake.rs`), drawing both statics and
+   every ephemeral from the same seeded streams through the calls
+   production makes on the operating system's generator, reproduces the
+   four pinned messages, the handshake hash, and a plain Noise transport
+   message under each transport key
+   (`rust/shekyl-rpc-channel-xcheck/tests/our_handshake.rs`). The
+   comparison was written first and seen failing with no handshake behind
+   it, and seen failing again under two named edits: the X25519 ephemeral
+   drawn before the `skem` encapsulation (message 1's bytes differ), and
+   message 1's tokens in the first draft's order on both sides (message 1
+   is 2,336 bytes, not 2,320). What it does not cover is record framing:
+   the pinned transport bytes are plain Noise messages, and test the keys
+   `Split` yields, not Shekyl's records. Read at
    source: clatter's ML-KEM backend (RustCrypto `ml-kem`, which clatter
    2.3.0 asks for as `0.2.1` and the lock file resolves to **0.2.3**; read
    at both) and ours (`fips203` 0.4.3) draw the same randomness in the same

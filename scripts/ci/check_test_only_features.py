@@ -218,6 +218,17 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "pinned-vector test asserts the key schedule and the rekey through them, "
     "unchanged, from its [dev-dependencies] edge. On a normal edge every "
     "session's transport keys would be readable through a public method",
+    (
+        "shekyl-rpc-channel",
+        "test-support",
+    ): "exposes the hybridXK handshake's entry points that take a caller's "
+    "random-number generator (StaticKeypair::generate_with_rng, "
+    "Client::start_with_rng, write_message2_with_rng, "
+    "write_message4_with_rng), so shekyl-rpc-channel-xcheck can drive it from "
+    "the seeded streams its pinned vectors were made with (RPC_CHANNEL.md "
+    "section 4.1 anchor 2, RT-O18). Production draws from the operating "
+    "system and takes no generator; on a normal edge a caller could supply "
+    "the handshake's ephemeral secrets",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -284,6 +295,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-p-host",
         "shekyl-chain-ingest",
         "shekyl-noise",
+        "shekyl-rpc-channel",
     }
 )
 

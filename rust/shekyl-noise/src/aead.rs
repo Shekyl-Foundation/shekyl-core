@@ -22,6 +22,9 @@ use zeroize::Zeroizing;
 pub const HASH_LEN: usize = 32;
 pub const TAG_LEN: usize = 16;
 
+/// One hash-length output of the key derivation, wiped when dropped.
+pub type HashOutput = Zeroizing<[u8; HASH_LEN]>;
+
 pub fn hash(data: &[u8]) -> [u8; HASH_LEN] {
     let digest = Blake2s256::digest(data);
     let mut out = [0u8; HASH_LEN];
@@ -76,6 +79,22 @@ pub fn hkdf(
     (out1, out2)
 }
 
+/// Noise `HKDF(ck, ikm) -> (output1, output2, output3)`, the three-output
+/// form `MixKeyAndHash` uses. Its first two outputs are [`hkdf`]'s.
+pub fn hkdf3(ck: &[u8; HASH_LEN], ikm: &[u8]) -> (HashOutput, HashOutput, HashOutput) {
+    let temp = hmac_blake2s(ck, ikm);
+    let out1 = hmac_blake2s(&temp[..], &[0x01]);
+    let mut second = Zeroizing::new([0u8; HASH_LEN + 1]);
+    second[..HASH_LEN].copy_from_slice(&out1[..]);
+    second[HASH_LEN] = 0x02;
+    let out2 = hmac_blake2s(&temp[..], &second[..]);
+    let mut third = Zeroizing::new([0u8; HASH_LEN + 1]);
+    third[..HASH_LEN].copy_from_slice(&out2[..]);
+    third[HASH_LEN] = 0x03;
+    let out3 = hmac_blake2s(&temp[..], &third[..]);
+    (out1, out2, out3)
+}
+
 pub(crate) fn nonce(n: u64) -> Nonce {
     let mut raw = [0u8; 12];
     raw[4..].copy_from_slice(&n.to_le_bytes());
@@ -106,4 +125,23 @@ pub fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -> Optio
             },
         )
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `hkdf3` is `hkdf` with one more block: the same chain, so the same
+    /// first two outputs, and a third that is neither.
+    #[test]
+    fn the_three_output_form_extends_the_two_output_form() {
+        let ck = [0x5au8; HASH_LEN];
+        let ikm = b"input key material";
+        let (a1, a2) = hkdf(&ck, ikm);
+        let (b1, b2, b3) = hkdf3(&ck, ikm);
+        assert_eq!(*a1, *b1);
+        assert_eq!(*a2, *b2);
+        assert_ne!(*b3, *b1);
+        assert_ne!(*b3, *b2);
+    }
 }

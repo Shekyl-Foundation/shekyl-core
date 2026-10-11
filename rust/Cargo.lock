@@ -4883,10 +4883,14 @@ version = "3.1.0"
 dependencies = [
  "fips203",
  "hex",
+ "rand_core 0.6.4",
  "serde_json",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-noise",
  "shekyl-p2p-transport",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -4898,6 +4902,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde_json",
  "sha3",
+ "shekyl-noise",
  "shekyl-rpc-channel",
 ]
 
