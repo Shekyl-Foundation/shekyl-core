@@ -23,6 +23,11 @@ device and on x86, including the implicit-rejection path.
 
 ## Registered before the run
 
+*Amended once before any run, 2026-10-11, on the maintainer's review of the
+registration as first pushed (`b1b9193c5`): the limit on attempts after a
+void, the floor device's recorded conditions, and which machine is the x86
+one. Nothing else changed.*
+
 **Subject.** `fips203` 0.4.3, `ml_kem_768`, `try_decaps`, built in release
 profile from this workspace's lock file. The harness is
 `rust/shekyl-rpc-channel/examples/rt_p4_decaps_timing.rs` at the commit
@@ -81,9 +86,20 @@ Each comparison is read on its own figure. In particular
 ciphertext corresponds to, are not cleared by any other comparison's
 result.
 
-**Runs.** One run per machine. A void run is recorded with its output and
-its cause, and may be made again once the cause is named; a fail or an
-inconclusive is not re-run to get a different answer.
+**Runs.** One run per machine. A fail or an inconclusive is not re-run to
+get a different answer. A **void** run may be made again, within these
+limits, fixed before anything runs:
+
+- **At most two attempts per machine.** If both are void, that machine has
+  no result and RT-P4 is not met there; the next step goes to the
+  maintainer.
+- **The second attempt runs under a quiet claim** on that machine, filed in
+  the estate's usage ledger before it starts. On a shared machine "it was
+  noisy" can always be said, so a second attempt has to remove the noise,
+  not hope for less of it. (Both machines are claimed quiet from the first
+  attempt here.)
+- **Every attempt is recorded, in order, whatever it shows**, with its full
+  output.
 
 **Inputs.** The registered run draws its inputs from a seed that no run
 has used: not the first registration's, and not any diagnostic's. The
@@ -93,11 +109,37 @@ harness prints `inputs=registered` when it uses it.
 
 - **The floor device** (rule 76): the Pi 4, under a quiet claim in the
   estate's usage ledger, from a fresh clone of the pushed commit in a new
-  directory.
-- **x86:** the dev box. It is a shared machine and is not quiet. With null
-  comparisons in the lines, a box too disturbed to compare a class with
-  itself now voids its own run instead of passing by default. Its load is
-  recorded at the start and the end.
+  directory. Its conditions are recorded at the start and the end of the
+  run, for the record and not as a line: the CPU governor (it was
+  `ondemand` for the first record, which changes clock speed during a run;
+  the classes are interleaved, so that cannot favour one, and the null
+  comparisons would show it if it did); the SoC temperature; and the
+  firmware's throttle flags.
+
+  *The throttle flags, as far as this lane can read them.*
+  `vcgencmd get_throttled` needs root on this device (`/dev/vcio` is
+  root-only and the lane's account has no passwordless `sudo`). The command
+  is attempted at the start and the end and its output recorded as it
+  comes. Beside it, three things the account can read are recorded at both
+  ends: the kernel's under-voltage alarm (`rpi_volt`,
+  `in0_lcrit_alarm`), the time the core has spent at each clock speed
+  (`cpufreq/stats/time_in_state`), and the count of clock-speed changes
+  (`total_trans`). The last two say directly whether and how much the
+  clock moved during the run, which is what the flags would be read for.
+- **x86:** the Windows dev box, a native Windows build, run there by the
+  remote agent on that machine. *Changed before any run, on the
+  maintainer's direction (2026-10-11):* the Linux dev box, named here when
+  this registration was first pushed, is too busy and too noisy to be the
+  x86 machine. The run is from a fresh clone of the pushed commit, built
+  with `--locked` in release profile. Recorded at the start and the end:
+  the processor, the power plan, the CPU load, and what else of weight is
+  running. Two things differ from the floor device and are stated so the
+  result is read with them: the operating system, and the clock, which on
+  Windows ticks every 100 ns, about 0.15 % of a decapsulation there. The
+  statistic averages over a million samples and resolves below a tick; the
+  control says whether it resolved enough. With null comparisons in the
+  lines, a machine too disturbed to compare a class with itself voids its
+  own run instead of passing by default.
 
 **What has already been seen, disclosed.**
 
@@ -106,7 +148,7 @@ harness prints `inputs=registered` when it uses it.
   registration's seed, and came out under 4.5 throughout. This
   registration was written knowing that. What it has not seen is these
   inputs, or this method on x86 at full size.
-- To check that the committed harness runs, it was run once on the dev box
+- To check that the committed harness runs, it was run once on the Linux dev box
   at 20,000 samples with a seed given on the command line, which the
   harness labels `inputs=NOT-REGISTERED`. At that size the control was not
   detected, which means nothing at that size. There is no shake-down with
