@@ -1355,8 +1355,8 @@ that function and the writer together, with:
 ### 16.8 Increment 1 as designed — a regenesis, not a type half
 
 **Status:** design text for the first increment, written before its
-code. Decisions 3, 7 and 8 below fix bytes or retire a live path and are
-flagged for the maintainer's eye on the draft.
+code. Decisions 3, 7 and 8 fix bytes or retire a live path; they were
+flagged and are ruled, with conditions, in §16.9.
 
 **What the increment is.** Genesis is judged by the coinbase grammar at
 connect (`prevalidate_miner_transaction`) and at DB add. Requiring `0x0C`
@@ -1436,4 +1436,28 @@ reads; the `0x0C` field, grammar, writer, FFI and C++ call sites; the
 smallest writer and the template threading; the Rust template field and
 its two callers; genesis regeneration and every pin; vector recapture;
 the record and carrier wire; test fix-ups.
+
+### 16.9 Rulings on increment 1 (maintainer, relayed 2026-10-10)
+
+| Decision | Ruling |
+| --- | --- |
+| 3, genesis commits to 32 zero bytes | **Agreed, on two conditions.** **No code treats an all-zero commitment as absent or unset.** Zero is a valid value nobody can open; a reader that uses it as a sentinel makes genesis a special case. A test holds that the genesis block's `0x0C` parses and is carried like any other. **Height 0 issues nothing, pinned by a test:** `D` is empty at genesis, so `count(0) = 0`, and no reveal can name `h = 0`. A nothing-up-my-sleeve hash was considered and buys nothing: neither value can be opened, and zeros are obvious to a reader of the genesis block |
+| 7, seed and `h` in `0x0D` | **Agreed.** The transaction extra is the carrier-level slot and is in the kept prefix, which is what settlement needs. Three conditions. **Exactly once** in a `serve_credit_only` transaction and refused everywhere else, as part of that transaction's exact ordered tag grammar. **Canonical varint for `h`:** a non-minimal encoding is refused, so one carrier has one byte form. **The set commitment covers the field's content**, seed and `h` both, so the witness signature binds it; that input is in the commitment's vectors |
+| 8, the record is replaced in increment 1 | **Agreed: increment 1, not 4. It is the more correct state.** The old record is the one the Rust validator admits today without checking anything, the hole the round started from; once replaced, the Rust validator admits no serve credit until increment 4 wires admission whole, which is fail-closed by construction. Nothing on the testnet gets worse: no production code signs the old record, so the C++ gate already accepts nothing real and its beacon-era fold behaves the same with or without credits. The C++ tests that drive the old record are deleted with the reason recorded (rule 15). **One condition: the C++ refusal is loud.** A typed refusal that names the retired serve-credit record and `DEL-008`, not a codec parse error that happens to fail. One line at the existing refusal site and nothing more (rule 20) |
+
+**Added to the increment: a gate on the hand-maintained C header**
+(rule 40). The coinbase writer's C ABI gains a parameter on a header no
+check reads, with five C++ call sites changed by hand. The increment
+either generates the declaration or asserts the signature from both
+sides.
+
+**Order confirmed:** store tables, schema 23 and view reads first; then
+the grammar change and the genesis regeneration, with the six chains
+recaptured from a C++ daemon built with the new grammar.
+
+On the set commitment: the specification's §7.3 already leads the
+commitment with `seed[32] ‖ h_le[8]`, and every vector there carries
+both. The condition is met by construction; increment 1 adds the test
+that the bytes fed to the commitment are the `0x0D` field's own seed and
+`h`, so the field and the commitment cannot name different values.
 
