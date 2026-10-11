@@ -143,15 +143,32 @@ Each wake, for one connector, takes the first arm that applies.
    have built in and provide no actual value." `--add-peer` already
    jumpstarts a node; it enters gray and takes its chances in the draw.
 2. **Harvest — keyed on list state (Rick, 2026-10-11).** The aim is
-   `Harvest`. While gray on this connector holds fewer addresses than
-   the white diversity floor (the composition's `white_diversity_floor`,
-   48; the exact floor is this brief's review to settle), a fill draw
-   is a harvest: one address drawn uniformly from gray, the list taken,
-   the session closed, no `adopt`, no white. Whatever the address is —
-   a compiled seed, an `--add-peer`, an address a peer sent. At or
-   above the floor the arm does not apply and a free slot is arm 4's
-   kept `SessionAccepted`, as now. One harvest per wake; the cursor
-   stops at the first `HarvestDone`. *Records-was: keyed on identity —
+   `Harvest`. A fill draw is a harvest while **both** hold on this
+   connector: gray holds fewer addresses than the white diversity floor
+   (the composition's `white_diversity_floor`, 48; the exact floor is
+   this brief's review to settle), **and** the previous harvest on this
+   connector added at least one new gray address. The harvest is one
+   address drawn uniformly from gray, the list taken, the session
+   closed, no `adopt`, no white. Whatever the address is — a compiled
+   seed, an `--add-peer`, an address a peer sent. When either condition
+   fails, the arm does not apply and a free slot is arm 4's kept
+   `SessionAccepted`, as now. The first harvest after start has no
+   previous one and runs on the floor alone. One harvest per wake; the
+   cursor stops at the first `HarvestDone`.
+
+   *The wargame for the second condition.* The floor alone never
+   terminates when the reachable network is smaller than the floor —
+   at genesis, or on a private testnet — and an attacker who can keep
+   a victim's gray small (by feeding it few addresses, or addresses
+   that fail validity or the cap) would hold the victim in
+   harvest-only, never keeping a session. With the yield condition,
+   harvesting ends when it stops yielding: a harvest that adds nothing
+   new is the last one, and the next free slot is kept. A feeder of
+   unreachable addresses can only prolong harvesting, one wake per
+   address that turns out to be new, not prevent its end.
+
+   *Records-was (same day): gray below the floor was the whole
+   condition.* *Records-was, before that: keyed on identity —
    both lists empty (`has_no_known_peers`, `net_peerlist.h:147`) or a
    fill pass that added nothing, then one address per wake from the
    seed list (`get_seed_nodes`, filled at `net_node.inl:2042`; clearnet
@@ -511,8 +528,9 @@ reach white only through a drawn dial's `SessionAccepted` or
 `Confirmed`. The peerlist a seed returns is network-learned, under
 slice 1's address-validity check and D-S1's cap. The harvest survives,
 re-keyed from identity to list state (the fill, arm 2): while gray is
-below the floor, every fill draw is a harvest, whatever the address;
-the seed list is not an input to the dialer. The exception audit
+below the floor and the previous harvest added a new gray address,
+every fill draw is a harvest, whatever the address; when either fails,
+the draw is kept. The seed list is not an input to the dialer. The exception audit
 ([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §8,
 row 7) records the arm as absorbed on that ground. *Records-was (same
 day): the arm was an open point for this brief's review, pending a
