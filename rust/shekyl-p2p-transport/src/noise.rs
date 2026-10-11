@@ -13,8 +13,6 @@
 //! The type at each step is the only thing that step can do. Transport keys
 //! exist only after message 2.
 
-use blake2::digest::Digest;
-use blake2::Blake2s256;
 use fips203::ml_kem_768;
 use fips203::traits::{Decaps, Encaps, KeyGen, SerDes};
 use rand_core::OsRng;
@@ -26,7 +24,11 @@ use std::cell::Cell;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-use crate::aead::{self, HASH_LEN, TAG_LEN};
+use shekyl_noise::symmetric::{SymmetricError, SymmetricState as Sym};
+
+#[cfg(test)]
+use crate::aead::HASH_LEN;
+use crate::aead::TAG_LEN;
 use crate::channel::{halves, RecvHalf, SendHalf};
 use crate::prefix::NetworkId;
 
@@ -55,78 +57,12 @@ pub enum HandshakeError {
     State,
 }
 
-struct Sym {
-    ck: Zeroizing<[u8; HASH_LEN]>,
-    h: [u8; HASH_LEN],
-    k: Option<Zeroizing<[u8; HASH_LEN]>>,
-    n: u64,
-}
-
-impl Sym {
-    fn new(name: &[u8], prologue: &[u8]) -> Self {
-        let hashed = if name.len() <= HASH_LEN {
-            let mut padded = [0u8; HASH_LEN];
-            padded[..name.len()].copy_from_slice(name);
-            padded
-        } else {
-            aead::hash(name)
-        };
-        let mut sym = Self {
-            ck: Zeroizing::new(hashed),
-            h: hashed,
-            k: None,
-            n: 0,
-        };
-        sym.mix_hash(prologue);
-        sym
-    }
-
-    fn mix_hash(&mut self, data: &[u8]) {
-        let mut hasher = Blake2s256::new();
-        hasher.update(self.h);
-        hasher.update(data);
-        self.h = hasher.finalize().into();
-    }
-
-    fn mix_key(&mut self, ikm: &[u8]) {
-        let (ck, k) = aead::hkdf(&self.ck, ikm);
-        self.ck = ck;
-        self.k = Some(k);
-        self.n = 0;
-    }
-
-    fn encrypt_and_hash(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, HandshakeError> {
-        if self.k.is_none() {
-            self.mix_hash(plaintext);
-            return Ok(plaintext.to_vec());
+impl From<SymmetricError> for HandshakeError {
+    fn from(error: SymmetricError) -> Self {
+        match error {
+            SymmetricError::Decrypt => Self::Decrypt,
+            SymmetricError::State => Self::State,
         }
-        let ct = self.encrypt(plaintext)?;
-        self.mix_hash(&ct);
-        Ok(ct)
-    }
-
-    fn decrypt_and_hash(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, HandshakeError> {
-        if self.k.is_none() {
-            self.mix_hash(ciphertext);
-            return Ok(ciphertext.to_vec());
-        }
-        let pt = self.decrypt(ciphertext)?;
-        self.mix_hash(ciphertext);
-        Ok(pt)
-    }
-
-    fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, HandshakeError> {
-        let key = self.k.as_ref().ok_or(HandshakeError::State)?;
-        let ct = aead::seal(key, self.n, &self.h, plaintext).ok_or(HandshakeError::Decrypt)?;
-        self.n = self.n.checked_add(1).ok_or(HandshakeError::State)?;
-        Ok(ct)
-    }
-
-    fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, HandshakeError> {
-        let key = self.k.as_ref().ok_or(HandshakeError::State)?;
-        let pt = aead::open(key, self.n, &self.h, ciphertext).ok_or(HandshakeError::Decrypt)?;
-        self.n = self.n.checked_add(1).ok_or(HandshakeError::State)?;
-        Ok(pt)
     }
 }
 
@@ -200,7 +136,7 @@ impl Initiator {
         }
         self.sym.mix_key(shared.as_bytes());
         #[cfg(test)]
-        let ck_after_ee = Zeroizing::new(*self.sym.ck);
+        let ck_after_ee = Zeroizing::new(self.sym.chaining_key());
         let ct_end = 32 + ML_KEM_768_CT_LEN + TAG_LEN;
         let ct_plain = self.sym.decrypt_and_hash(&message2[32..ct_end])?;
         if ct_plain.len() != ML_KEM_768_CT_LEN {
@@ -280,7 +216,7 @@ impl Responder {
 
     #[cfg(test)]
     pub(crate) fn chaining_key(&self) -> [u8; HASH_LEN] {
-        *self.sym.ck
+        self.sym.chaining_key()
     }
 }
 
@@ -319,7 +255,7 @@ impl ResponderReady {
         }
         self.sym.mix_key(shared.as_bytes());
         #[cfg(test)]
-        let ck_after_ee = Zeroizing::new(*self.sym.ck);
+        let ck_after_ee = Zeroizing::new(self.sym.chaining_key());
         let (ss, ct) = self
             .remote_ek
             .try_encaps_with_rng(rng)
@@ -351,19 +287,18 @@ impl ResponderReady {
 }
 
 impl<const INITIATOR: bool> Established<INITIATOR> {
-    pub fn split(mut self) -> (SendHalf, RecvHalf) {
-        let ck = std::mem::replace(&mut self.sym.ck, Zeroizing::new([0u8; HASH_LEN]));
-        let (first, second) = aead::hkdf(&ck, &[]);
+    pub fn split(self) -> (SendHalf, RecvHalf) {
+        let keys = self.sym.split();
         if INITIATOR {
-            halves(ck, first, second)
+            halves(keys.chaining_key, keys.first, keys.second)
         } else {
-            halves(ck, second, first)
+            halves(keys.chaining_key, keys.second, keys.first)
         }
     }
 
     #[cfg(test)]
     pub(crate) fn chaining_key(&self) -> [u8; HASH_LEN] {
-        *self.sym.ck
+        self.sym.chaining_key()
     }
 }
 
@@ -662,12 +597,12 @@ mod tests {
         ini.mix_key(shared.as_bytes());
         assert_eq!(ini.decrypt_and_hash(&msg2[32..]).unwrap(), p1);
         assert_eq!(
-            hex_of(&ini.h),
+            hex_of(&ini.handshake_hash()),
             "a621e3943a29c1d984b43727697fbec096107d0b569031ac7e0f1131de19f4f4"
         );
 
-        let ini_ck = *ini.ck;
-        let resp_ck = *resp.ck;
+        let ini_ck = ini.chaining_key();
+        let resp_ck = resp.chaining_key();
         let (ini_send, _) = Established::<true> {
             sym: ini,
             ck_after_ee: Zeroizing::new(ini_ck),

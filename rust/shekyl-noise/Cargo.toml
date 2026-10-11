@@ -1,0 +1,19 @@
+[package]
+name = "shekyl-noise"
+description = "Noise symmetric primitives, symmetric state and record layer shared by the P2P and RPC transports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+blake2 = { version = "0.10", default-features = false }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+zeroize = { workspace = true }
+
+[features]
+# Raw keys and a settable nonce, for a handshake's tests to pin the key
+# schedule from another crate. Dev-dependencies only: the gate is
+# scripts/ci/check_noise_test_support.py.
+test-support = []

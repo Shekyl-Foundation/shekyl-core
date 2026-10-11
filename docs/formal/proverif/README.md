@@ -137,8 +137,10 @@ name a row which flips it, and refuses a `variants/` directory that is not
 exactly the files it would generate. Each variant runs under `prlimit`, so
 the address-space cap is on the child and the runner can run variants in
 parallel. CI (`.github/workflows/p2p-nnhfs-model.yml`) runs the same script
-on changes to this directory, to `noise.rs`, to `channel.rs`, or to the
-workflow, and fails if any verdict changes.
+on changes to this directory, to the handshake's Rust (`noise.rs` and
+`prefix.rs` in `shekyl-p2p-transport`; `channel.rs`, `aead.rs` and
+`symmetric.rs` in `shekyl-noise`), or to the workflow, and fails if any
+verdict changes.
 
 `install_proverif.sh` is the one recipe: ProVerif 2.05 from source, a
 pinned OCaml, a pinned opam-repository revision, every download checked

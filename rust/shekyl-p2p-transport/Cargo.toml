@@ -7,12 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-blake2 = { version = "0.10", default-features = false }
-chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 fips203 = "=0.4.3"
 rand_core = { version = "0.6", features = ["getrandom"] }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-noise = { path = "../shekyl-noise" }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 zeroize = { workspace = true }
 
@@ -25,6 +24,9 @@ c5-bench = []
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
 shekyl-levin = { path = "../shekyl-levin" }
+# The pinned-vector test asserts the key schedule and the rekey through the
+# record layer's test accessors.
+shekyl-noise = { path = "../shekyl-noise", features = ["test-support"] }
 
 [[bench]]
 name = "c5"

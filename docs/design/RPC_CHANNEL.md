@@ -544,12 +544,21 @@ is needed is decided from RT-P6's measurement, not before it.
   constant and the second has a fixed length. A testnet
   client cannot complete a handshake with a mainnet daemon. Nettype selects
   data only (rule 71).
-- **Record layer:** `shekyl-p2p-transport`'s `aead.rs` and `channel.rs`
+- **Record layer:** the P2P transport's `aead.rs` and `channel.rs`
   (64 KiB maximum record body, `MAX_BODY = u16::MAX`; rekey every 1,000
   nonces, `channel.rs:18-19`), **extracted into a crate both transports
   depend on**, not copied. The extraction must not move or regenerate the
-  pinned handshake vectors (`kat_m1.hex`, `kat_m2.hex`, asserted at
-  `noise.rs:549-554`): they stay byte-identical and keep passing in place.
+  pinned handshake vectors (`kat_m1.hex`, `kat_m2.hex`): they stay
+  byte-identical and keep passing in place.
+  **Done in RT-W9, step 1:** the crate is `shekyl-noise`
+  (`rust/shekyl-noise/`). It holds those two files and the handshake's
+  symmetric state, which both handshakes share and which takes the
+  protocol name as a parameter (RT-O17). `shekyl-p2p-transport` keeps its
+  handshake, its prefix and its two vector files; the test that asserts
+  them is unchanged and passes where it was. Its tests reach the record
+  layer's key schedule through a `test-support` feature that a gate keeps
+  out of every production build (RT-O16,
+  `scripts/ci/check_noise_test_support.py`).
 - **HTTP over records.** hyper and axum expect a byte stream; the channel
   delivers records of at most 64 KiB. A stream adapter — `AsyncRead` /
   `AsyncWrite` over seal/open, with backpressure, record splitting for
@@ -567,7 +576,7 @@ is needed is decided from RT-P6's measurement, not before it.
     ruled fixed-window (`P2P_TRANSPORT_LAYER.md`, D14 item 4): one window is
     one record, its plaintext starts with an authenticated 2-byte occupancy,
     and the rest is padding. That is this mechanism with a single class. It
-    is **not built yet** — `channel.rs` still carries the interim
+    is **not built yet** — `shekyl-noise`'s `channel.rs` still carries the interim
     length-prefixed framing, pending that round's size measurement — so
     there is no module to reuse today. The extracted record-layer crate
     (above) carries one implementation, parameterised by its class table:

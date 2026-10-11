@@ -3,7 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Noise symmetric primitives shared by the handshake and the record layer.
+//! Noise symmetric primitives shared by the handshakes and the record layer.
+//!
+//! These are raw: a key and a nonce come from the caller. They are public
+//! because two crates build handshakes on them, not because they are a
+//! general-purpose API. Nothing outside a Noise handshake or this crate's
+//! record layer should call them.
 //!
 //! HMAC-BLAKE2s is RFC 2104 over BLAKE2s-256. `hkdf` is Noise's two-output
 //! HKDF: `HMAC(ck, ikm)` then `HMAC(temp, 0x01)` and `HMAC(temp, out1 || 0x02)`.
@@ -14,10 +19,10 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use zeroize::Zeroizing;
 
-pub(crate) const HASH_LEN: usize = 32;
-pub(crate) const TAG_LEN: usize = 16;
+pub const HASH_LEN: usize = 32;
+pub const TAG_LEN: usize = 16;
 
-pub(crate) fn hash(data: &[u8]) -> [u8; HASH_LEN] {
+pub fn hash(data: &[u8]) -> [u8; HASH_LEN] {
     let digest = Blake2s256::digest(data);
     let mut out = [0u8; HASH_LEN];
     out.copy_from_slice(&digest);
@@ -58,7 +63,7 @@ fn hmac_blake2s(key: &[u8], data: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
 }
 
 /// Noise `HKDF(ck, ikm) -> (output1, output2)`.
-pub(crate) fn hkdf(
+pub fn hkdf(
     ck: &[u8; HASH_LEN],
     ikm: &[u8],
 ) -> (Zeroizing<[u8; HASH_LEN]>, Zeroizing<[u8; HASH_LEN]>) {
@@ -77,7 +82,7 @@ pub(crate) fn nonce(n: u64) -> Nonce {
     Nonce::from(raw)
 }
 
-pub(crate) fn seal(key: &[u8; HASH_LEN], n: u64, ad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
+pub fn seal(key: &[u8; HASH_LEN], n: u64, ad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new_from_slice(key).ok()?;
     cipher
         .encrypt(
@@ -90,7 +95,7 @@ pub(crate) fn seal(key: &[u8; HASH_LEN], n: u64, ad: &[u8], plaintext: &[u8]) ->
         .ok()
 }
 
-pub(crate) fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+pub fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new_from_slice(key).ok()?;
     cipher
         .decrypt(

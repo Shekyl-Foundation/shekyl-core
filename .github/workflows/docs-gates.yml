@@ -730,3 +730,19 @@ jobs:
         # control that must stay green.
         if: '!cancelled()'
         run: python3 scripts/ci/check_clatter_not_in_production.py --selftest
+
+      - name: Run noise test-support gate
+        # shekyl-noise's `test-support` feature exposes raw session keys and
+        # a settable record nonce, so a handshake's tests can pin the key
+        # schedule from another crate (RPC_CHANNEL.md section 10, RT-O16).
+        # This asserts it is asked for under [dev-dependencies] only, by no
+        # workspace-wide entry, and forwarded by no crate's own feature. It
+        # reads the manifests; no build is needed.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_noise_test_support.py
+
+      - name: Run noise test-support gate selftest
+        # Builds throwaway trees and bites each failure class red, beside
+        # controls that must stay green.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_noise_test_support.py --selftest

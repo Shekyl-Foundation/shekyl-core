@@ -15,7 +15,7 @@ use zeroize::Zeroizing;
 
 use crate::aead::{self, TAG_LEN};
 
-pub(crate) const REKEY_NONCES: u64 = 1_000;
+pub const REKEY_NONCES: u64 = 1_000;
 const MAX_BODY: usize = u16::MAX as usize;
 const LENGTH_WIRE: usize = 2 + TAG_LEN;
 const LENGTH_AAD: &[u8] = b"len";
@@ -41,13 +41,13 @@ impl Direction {
         Self { ck, k, n: 0 }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn force_nonce(&mut self, n: u64) {
         self.n = n;
     }
 
-    #[cfg(test)]
-    pub(crate) fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
+    #[cfg(any(test, feature = "test-support"))]
+    fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
         (*self.ck, *self.k)
     }
 
@@ -87,7 +87,9 @@ pub struct RecvHalf {
     dead: bool,
 }
 
-pub(crate) fn halves(
+/// Build the two halves from `Split`'s output. `send_k` seals what this
+/// side sends; `recv_k` opens what it receives.
+pub fn halves(
     ck: Zeroizing<[u8; 32]>,
     send_k: Zeroizing<[u8; 32]>,
     recv_k: Zeroizing<[u8; 32]>,
@@ -128,13 +130,19 @@ impl SendHalf {
         Ok(out)
     }
 
-    #[cfg(test)]
-    pub(crate) fn force_nonce(&mut self, n: u64) {
+    /// Test support: set the nonce, to reach the rekey boundary.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn force_nonce(&mut self, n: u64) {
         self.dir.force_nonce(n);
     }
 
-    #[cfg(test)]
-    pub(crate) fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
+    /// Test support: the chaining key and the record key, for a test that
+    /// pins the key schedule. Raw keys: never reachable in a production
+    /// build (`scripts/ci/check_noise_test_support.py`).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
         self.dir.ck_and_k()
     }
 }
@@ -158,13 +166,19 @@ impl RecvHalf {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn force_nonce(&mut self, n: u64) {
+    /// Test support: set the nonce, to reach the rekey boundary.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn force_nonce(&mut self, n: u64) {
         self.dir.force_nonce(n);
     }
 
-    #[cfg(test)]
-    pub(crate) fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
+    /// Test support: the chaining key and the record key, for a test that
+    /// pins the key schedule. Raw keys: never reachable in a production
+    /// build (`scripts/ci/check_noise_test_support.py`).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
         self.dir.ck_and_k()
     }
 }
@@ -218,16 +232,17 @@ fn open_record(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::noise::{Initiator, Responder};
 
+    /// Two ends of one session, keyed as `Split` keys them: one chaining
+    /// key, and two record keys that the two ends hold in opposite order.
+    /// Before this layer had a crate of its own these came from running the
+    /// P2P handshake; the record layer needs only the keys.
     fn pair() -> (SendHalf, RecvHalf, SendHalf, RecvHalf) {
-        let nid = [9u8; 16];
-        let (ini, m1) = Initiator::new(&nid).unwrap();
-        let ready = Responder::new(&nid).read_message1(&m1).unwrap();
-        let (resp, m2) = ready.write_message2().unwrap();
-        let est = ini.read_message2(&m2).unwrap();
-        let (a_send, a_recv) = est.split();
-        let (b_send, b_recv) = resp.split();
+        let ck = || Zeroizing::new([0x51u8; 32]);
+        let first = || Zeroizing::new([0xa7u8; 32]);
+        let second = || Zeroizing::new([0x3cu8; 32]);
+        let (a_send, a_recv) = halves(ck(), first(), second());
+        let (b_send, b_recv) = halves(ck(), second(), first());
         (a_send, a_recv, b_send, b_recv)
     }
 

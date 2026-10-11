@@ -1386,7 +1386,8 @@ declaration, not a new set of branches.
 - **Clearnet is plain clearnet, plus the Noise layer.** The declaration is what
   clearnet provides natively. The stack includes Noise because clearnet
   declares no native encryption. `noise.rs`, `channel.rs`, `prefix.rs` and
-  `aead.rs` are that layer. The option-off path is the exception in ruling 4;
+  `aead.rs` are that layer (`channel.rs` and `aead.rs` live in
+  `shekyl-noise` since the RPC channel began sharing them). The option-off path is the exception in ruling 4;
   the flip is "enforce the contract". `--proxy` is a D3 dial duty and changes
   no declared capability.
 - **Tor is a complete overlay, not a VPN.** The Tor connector speaks onion to
