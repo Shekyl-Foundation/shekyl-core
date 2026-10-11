@@ -1,9 +1,11 @@
-# `RT-P4`: is ML-KEM-768 decapsulation constant-time? Re-registration of 2026-10-11
+# `RT-P4`: is ML-KEM-768 decapsulation constant-time? Re-registration, runs of 2026-10-11
 
-**State of this record: REGISTERED, NOT YET RUN.** Everything under
-"Registered before the run" is committed and pushed before the first run
-that counts on any machine. Results are added below it and that section
-is not edited afterwards.
+**State of this record: the floor-device run is in and PASSES; the laptop
+run has not been made.** RT-P4 closes on both, so it is not yet closed.
+The registration was first pushed on 2026-10-10 at 23:46Z and amended
+three times before any result was read, as its own note says. Results are
+added below "Registered before the run" and that section is not edited
+afterwards.
 
 This replaces the method of
 [`rt_p4_mlkem_decaps_timing_20261010.md`](rt_p4_mlkem_decaps_timing_20261010.md),
@@ -228,3 +230,80 @@ been measured, and the record says so wherever the result is quoted. A
 its evidence, and sends `libcrux-ml-kem` and
 RustCrypto `ml-kem` through this same harness, so that the choice of
 implementation goes to the maintainer with those numbers.
+
+## Results
+
+### The floor device — PASS
+
+One attempt, 2026-10-11 00:22:41Z to 01:01:40Z, on the Raspberry Pi 4
+(Cortex-A72, kernel 7.0.0-1020-raspi), under a quiet claim, from a fresh
+clone in a new directory. `rustc` 1.94.0, release profile, `--locked`;
+binary sha256 `735105f4…`. The full output is
+`rt_p4_mlkem_decaps_timing_20261011_captures/floor_registered_attempt1.txt`,
+its checksum taken on the device and matched after copying.
+
+```text
+RT-P4 ML-KEM-768 decapsulation timing (fips203), inputs prepared before the loop
+arch=aarch64 os=linux samples_per_comparison=1000000 calibration=10000 crops=100 inputs=registered
+pass: |t| < 4.5 on every real comparison; null comparisons: |t| < 4.5; control: |t| > 10
+comparison=fixed-vs-valid max_abs_t=1.33 median_ns=263221 n0=499545 n1=500455 verdict=no-evidence
+comparison=fixed-vs-invalid max_abs_t=1.89 median_ns=263536 n0=499434 n1=500566 verdict=no-evidence
+comparison=fixed-vs-bitflip max_abs_t=3.00 median_ns=262574 n0=498225 n1=501775 verdict=no-evidence
+comparison=valid-vs-invalid max_abs_t=1.65 median_ns=262518 n0=500011 n1=499989 verdict=no-evidence
+null=invalid-vs-invalid max_abs_t=2.27 median_ns=262499 n0=500041 n1=499959 verdict=no-evidence
+null=valid-vs-valid max_abs_t=3.63 median_ns=262388 n0=499595 n1=500405 verdict=no-evidence
+control=planted-leak fraction=0.005 planted_ns=1312 max_abs_t=1520.00 verdict=detected
+result=PASS worst_real_abs_t=3.00 worst_null_abs_t=3.63 control_abs_t=1520.00
+```
+
+Read in the registered order:
+
+| Line | Registered | Observed | |
+|---|---|---|---|
+| 1. the control | `|t|` > 10 | 1,520.00 | detected; not void |
+| 2. the null comparisons | `|t|` < 4.5 | 2.27, 3.63 | not void |
+| 3–5. the four comparisons | all `|t|` < 4.5 | 1.33, 1.89, 3.00, 1.65 | **pass** |
+
+**The two comparisons an attacker's choice corresponds to, each on its
+own figure.** `valid-vs-invalid`: 1.65, at a cut-off where the class means
+differ by 0.8 ns. `fixed-vs-bitflip`: 3.00, at a cut-off where they differ
+by 1.1 ns. The larger of the two is smaller than what one of the null
+comparisons reported with nothing to find (3.63).
+
+**What this says, with its reach.** On the floor device, the time
+`fips203` 0.4.3 takes to decapsulate does not depend on the ciphertext by
+0.5 % of a decapsulation (1,312 ns here) or more. That is the registered
+claim and it is all the verdict says.
+
+*An estimate beside it, not part of the verdict.* The control landed 338
+times over the 4.5 line. If the statistic grows in proportion to a shift
+of the whole distribution, the line corresponds to about 4 ns, 0.0015 % of
+a decapsulation. The null comparison at 3.63 is a reminder of how close to
+the line nothing at all can come at this sensitivity.
+
+**Conditions, recorded as registered.**
+
+| | Start | End |
+|---|---|---|
+| Governor | `ondemand` | `ondemand` |
+| SoC temperature | 59.9 °C | 58.4 °C |
+| Load, 1 min | 3.93 (the build had just finished) | 1.00 |
+| `vcgencmd get_throttled` | refused: needs root | refused: needs root |
+| Under-voltage alarm | 0 | 0 |
+| Clock-speed changes, total | 5,029,725 | 5,029,846 |
+
+Of the 39 minutes of the run, the core's time-at-speed counters put all
+but about 0.3 seconds at the top speed, 1.8 GHz, and count 121 changes of
+speed. The clock did not wander. The firmware's throttle flags were not
+read; the under-voltage alarm, which is one of the things those flags
+report, stayed clear.
+
+**Disclosed.** The run was made from `ba4677446`, the commit that carried
+the registration when it started. The registration was amended once more
+after that (`7b7046579`), for the laptop alone; the two commits differ in
+this file and nowhere else, so the harness the laptop builds is the one
+this run used. That amendment was pushed before this run's output was
+read: the file was copied off the device with its checksum and not opened
+until then.
+
+### The laptop — NOT YET RUN
