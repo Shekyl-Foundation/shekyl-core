@@ -38,8 +38,12 @@
 //! against the bytes that were frozen. A change here that moves a vector is
 //! a wrong change.
 //!
-//! The cipher counts blocks in 32 bits and stops at 256 GiB; `rand_chacha`
-//! counts in 64. A key generator draws a few hundred bytes.
+//! RustCrypto's `ChaCha20Legacy` (the type this holds) counts blocks in
+//! 32 bits and stops at 256 GiB. The name says "legacy" and the layout is
+//! Bernstein's — 64-bit nonce, counter in the low word — but the crate's
+//! counter is `u32`, which its own docs warn about. `rand_chacha` counts
+//! that counter in 64 bits. The two streams agree while the high half stays
+//! zero, which is every key this crate generates: a few hundred bytes.
 
 use chacha20::cipher::{KeyIvInit as _, StreamCipher as _};
 use chacha20::{ChaCha20Legacy, Key, LegacyNonce};
