@@ -39,6 +39,10 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md)
   - Target: pre-genesis
 
+- **`SeededRng::from_seed` still materializes one ChaCha20 cipher on the stack.** `ChaCha20Legacy::new` returns the cipher by value and the crate exposes no constructor that writes into caller memory (`FN_DSA_HYBRID.md` `FND-14`). The generator we own is a pointer (`Box<ChaCha20Legacy>`): a move of `SeededRng` copies that pointer, and drop wipes the heap cipher. The constructor return is moved into the box and its stack slot is not wiped. Closing it needs that upstream constructor. Unsafe placement is refused (`#[deny(unsafe_code)]` in `shekyl-crypto-pq`). Falsify by `from_seed` constructing the cipher without a by-value `ChaCha20Legacy` return, with `size_of::<SeededRng>()` still equal to `size_of::<usize>()`.
+  - Owner: [`FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md)
+  - Target: pre-genesis
+
 - **Move `fn-dsa` to its FIPS 206 release and regenerate every scheme-3 vector.** The pinned crate (`=0.4.0`, with its four sub-crates) is pre-standard, and its keys and signatures will change when FIPS 206 is final. Blocked on NIST publishing FIPS 206 and the crate reaching 1.0. Until then a genesis-tagged build is refused by `scripts/ci/check_fn_dsa_genesis_gate.py` (`FN_DSA_HYBRID.md` §4). If the final standard defines key generation from a seed, use it, and delete the ChaCha20 step in `HybridEd25519FnDsa::keypair_from_seeds` that today turns the 32-byte seed into the stream the crate's key generator draws from: that expansion is ours, not the standard's, and a receipt key derived through it is reproducible only by this code. Falsify by the five packages locked at 1.0 or later, `FN_DSA_HYBRID_V1_KAT.json` regenerated and re-pinned on x86_64 and aarch64, `keypair_from_seeds` either calling the standard's seeded key generation or recording that the standard defines none, and that gate passing on a genesis tag.
   - Owner: [`FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md)
   - Target: pre-genesis

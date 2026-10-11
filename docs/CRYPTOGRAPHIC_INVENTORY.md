@@ -69,16 +69,19 @@ and the message into every draw. A fresh scheme-3 key takes its seeds from
 `key_material32`, which is fail-loud. The seeded entries that pin vectors
 and benches are behind `test-utils`.
 
-**Seeded key generation has one stream (2026-10-10).** A key that must come
-back from the wallet seed is generated from `seeded_rng::SeededRng`, a
-ChaCha20 stream over 32 seed bytes: ML-DSA-65 per-output and persona keys,
-the ML-KEM-768 address key, the FN-DSA-1024 receipt key. It is the stream
+**Seeded key generation has one stream (2026-10-10; the cipher has lived on
+the heap since 2026-10-11).** A key that must come back from the wallet seed
+is generated from `seeded_rng::SeededRng`, a ChaCha20 stream over 32 seed
+bytes: ML-DSA-65 per-output and persona keys, the ML-KEM-768 address key,
+the FN-DSA-1024 receipt key. It is the stream
 `rand_chacha::ChaCha20Rng::from_seed` gives, which those keys were frozen
-on, from a generator that wipes its key and its buffered output on drop. It
-is deterministic by construction and is not an entropy source; the verdict
-above, that no deterministic seed is reachable from a path that should draw
-fresh randomness, is unchanged, because its only production callers are the
-three re-derivations.
+on. The cipher lives on the heap: a move of the generator copies a pointer,
+and drop wipes the cipher there. `ChaCha20Legacy::new` still returns the
+cipher by value, so that one constructor temporary is not wiped
+(`FN_DSA_HYBRID.md` `FND-14`). It is deterministic by construction and is
+not an entropy source; the verdict above, that no deterministic seed is
+reachable from a path that should draw fresh randomness, is unchanged,
+because its only production callers are the three re-derivations.
 
 F-1..F-8 dispositions all landed in PR-SA-1 (F-7's test-keygen gating rode
 PR-SA-2 with the trait rewrite, as recorded); the per-finding table stays in
