@@ -288,6 +288,9 @@ pub(crate) mod tests {
         pub(crate) store_size: u64,
         pub(crate) status: InfoStatusFacts,
         pub(crate) peers: InfoPeersFacts,
+        pub(crate) handshaken_sessions: u64,
+        pub(crate) handshaken_fault: Option<FactsFault>,
+        pub(crate) handshaken_reads: AtomicUsize,
         pub(crate) chain_fault: Option<FactsFault>,
         pub(crate) pool_fault: Option<FactsFault>,
         pub(crate) store_size_fault: Option<FactsFault>,
@@ -351,6 +354,10 @@ pub(crate) mod tests {
             store_size_fault: None,
             status_fault: None,
             peers_fault: None,
+            // Eight outbound and twelve inbound, all handshaken.
+            handshaken_sessions: 20,
+            handshaken_fault: None,
+            handshaken_reads: AtomicUsize::new(0),
             status_reads: AtomicUsize::new(0),
             peers_reads: AtomicUsize::new(0),
             store_size_reads: AtomicUsize::new(0),
@@ -388,6 +395,12 @@ pub(crate) mod tests {
         fn peers(&self) -> Result<InfoPeersFacts, FactsFault> {
             self.peers_reads.fetch_add(1, Ordering::Relaxed);
             self.peers_fault.map_or(Ok(self.peers), Err)
+        }
+
+        fn handshaken_sessions(&self) -> Result<u64, FactsFault> {
+            self.handshaken_reads.fetch_add(1, Ordering::Relaxed);
+            self.handshaken_fault
+                .map_or(Ok(self.handshaken_sessions), Err)
         }
     }
 

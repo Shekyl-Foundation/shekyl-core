@@ -942,6 +942,23 @@ extern "C" {
     ) -> i32;
 }
 
+/// [`shekyl_seam_established_count`] wrote a count.
+pub const SHEKYL_SEAM_COUNT_OK: i32 = 0;
+/// No hub is bound in this process: there is no count, which is not zero.
+pub const SHEKYL_SEAM_COUNT_ERR_NO_HUB: i32 = -2;
+
+extern "C" {
+    /// Handshaken sessions on the seam board, every connector and both
+    /// directions, written through `out`.
+    ///
+    /// **Rust on both sides.** The board is `shekyl-ffi`'s (it owns the
+    /// process hub), this crate does not depend on that one, and the two
+    /// share the daemon's link image, so the read crosses as a C symbol
+    /// without visiting C++. The codes are restated above because the
+    /// definition cannot be imported; `shekyl-ffi`'s own test pins them.
+    pub fn shekyl_seam_established_count(out: *mut u64) -> i32;
+}
+
 extern "C" {
     pub fn core_rpc_ffi_create(rpc_server_ptr: *mut std::ffi::c_void) -> *mut CoreRpcHandle;
     pub fn core_rpc_ffi_destroy(h: *mut CoreRpcHandle);
@@ -1157,6 +1174,13 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_peer_list_free(_owner: *mut std::ffi::c_void) {}
+    /// "No hub here", never a count: a stub that wrote `0` would let a
+    /// handler's test read a process with no p2p layer as a node with no
+    /// peers, which is the answer the real export exists to refuse.
+    #[no_mangle]
+    pub extern "C" fn shekyl_seam_established_count(_out: *mut u64) -> i32 {
+        SHEKYL_SEAM_COUNT_ERR_NO_HUB
+    }
     // The two constant exports have no "no core here" answer to give, and no
     // unit test may take an answer from them: they exist to carry C++
     // configuration, so a stub returning zero would let a renderer's test

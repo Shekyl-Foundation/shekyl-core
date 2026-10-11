@@ -213,6 +213,12 @@ pub enum FactsFault {
     /// reported as a size of `0` — an empty store is `0`, and a store that
     /// cannot be read is not that (RK-D23).
     StoreUnreadable,
+    /// The p2p hub is not up in this process, so there is no board to count
+    /// sessions on. Raised by [`crate::info_facts::handshaken_sessions`],
+    /// and never reported as zero sessions: a node whose p2p layer has not
+    /// started is not a node with no peers, and a reader told "no peers"
+    /// raises an alarm an operator would act on (RK-D23).
+    HubAbsent,
     /// A code outside the documented set — a contract violation, never a
     /// guessed fact.
     Unknown(i32),

@@ -8,7 +8,7 @@
 //!
 //! `get_info` is gathered **by part** (RK-D24): a part the caller will not
 //! be shown is not read. So [`InfoFacts`] is not one snapshot of everything
-//! but five reads, and the handler makes only those its caller is entitled
+//! but six reads, and the handler makes only those its caller is entitled
 //! to. A read that is never made cannot fail the caller it was never for,
 //! and a public caller costs the node no filesystem or peer-registry read.
 //!
@@ -25,6 +25,9 @@
 //! - [`InfoFacts::store_size`] reports a size it could not read as
 //!   [`FactsFault::StoreUnreadable`], never as `0` (RK-D23). The size is
 //!   read on this side, by [`store_file_size`], for that reason.
+//! - [`InfoFacts::handshaken_sessions`] reports a p2p layer that is not up
+//!   as [`FactsFault::HubAbsent`], never as `0` sessions. It is read from
+//!   the seam board, which is Rust's, without visiting C++.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -129,6 +132,43 @@ pub trait InfoFacts: Send + Sync {
     fn status(&self) -> Result<InfoStatusFacts, FactsFault>;
     /// Peers facts. Called only on behalf of a caller who is shown Peers.
     fn peers(&self) -> Result<InfoPeersFacts, FactsFault>;
+    /// Sessions that have finished the handshake, on every connector and in
+    /// both directions. Read for every caller: it is behind Health's
+    /// `has_peers`, and Health is never withheld.
+    ///
+    /// A session before its handshake is not counted: it cannot relay,
+    /// which is what every reader of `has_peers` is asking (RK-Q4).
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::HubAbsent`] when the p2p hub is not up. Zero sessions
+    /// is an answer — a node with nobody to talk to — and is never returned
+    /// for a hub that is not there.
+    fn handshaken_sessions(&self) -> Result<u64, FactsFault>;
+}
+
+/// The seam board's handshaken-session count.
+///
+/// # Errors
+///
+/// [`FactsFault::HubAbsent`] when no hub is bound; [`FactsFault::Unknown`]
+/// for a code the export does not document.
+pub fn handshaken_sessions() -> Result<u64, FactsFault> {
+    // A value no board can hold: if the export claimed success without
+    // writing, the answer would not pass for a small count.
+    let mut count = u64::MAX;
+    // SAFETY: `count` is a valid, writable `u64` for the call.
+    let code = unsafe { crate::ffi::shekyl_seam_established_count(&raw mut count) };
+    handshaken_from(code, count)
+}
+
+/// What a return code of the board's count export means.
+fn handshaken_from(code: i32, count: u64) -> Result<u64, FactsFault> {
+    match code {
+        crate::ffi::SHEKYL_SEAM_COUNT_OK => Ok(count),
+        crate::ffi::SHEKYL_SEAM_COUNT_ERR_NO_HUB => Err(FactsFault::HubAbsent),
+        other => Err(FactsFault::Unknown(other)),
+    }
 }
 
 /// The size of the chain store's data file.
@@ -233,11 +273,41 @@ impl InfoFacts for FfiInfoFacts {
             grey_peerlist_size: pod.grey_peerlist_size,
         })
     }
+
+    fn handshaken_sessions(&self) -> Result<u64, FactsFault> {
+        handshaken_sessions()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A missing hub is a fault, and zero sessions is an answer.** The
+    /// two are different return codes of the board's export and stay
+    /// different here; a code the export does not document is not guessed
+    /// at.
+    #[test]
+    fn a_missing_hub_is_a_fault_and_zero_sessions_is_an_answer() {
+        use crate::ffi::{SHEKYL_SEAM_COUNT_ERR_NO_HUB, SHEKYL_SEAM_COUNT_OK};
+
+        assert_eq!(handshaken_from(SHEKYL_SEAM_COUNT_OK, 0), Ok(0));
+        assert_eq!(handshaken_from(SHEKYL_SEAM_COUNT_OK, 7), Ok(7));
+        assert_eq!(
+            handshaken_from(SHEKYL_SEAM_COUNT_ERR_NO_HUB, 0),
+            Err(FactsFault::HubAbsent),
+            "no hub is not zero sessions, whatever the count slot holds"
+        );
+        assert_eq!(handshaken_from(-1, 0), Err(FactsFault::Unknown(-1)));
+        assert_eq!(handshaken_from(1, 3), Err(FactsFault::Unknown(1)));
+    }
+
+    /// The unit-test binary links no hub, and the stub that stands in for
+    /// the export says so. The read through it is the fault, not `0`.
+    #[test]
+    fn the_read_with_no_hub_linked_is_the_fault() {
+        assert_eq!(handshaken_sessions(), Err(FactsFault::HubAbsent));
+    }
 
     /// A scratch directory under the system temp dir, removed on drop.
     struct Scratch(std::path::PathBuf);
