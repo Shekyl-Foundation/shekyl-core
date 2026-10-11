@@ -244,9 +244,9 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
     const char* frozen_id;
   };
   const NetCase nets[] = {
-    { cryptonote::MAINNET,  "mainnet",  "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3" },
-    { cryptonote::TESTNET,  "testnet",  "b0ef992f179554ad2e9bb150296d49bc0da6e07f12b853b1901108c4c805bc76" },
-    { cryptonote::STAGENET, "stagenet", "65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0" },
+    { cryptonote::MAINNET,  "mainnet",  "d7af382339b2cd0c4ee4b2ea0afe7426f34bc2971495d9873fd4cec2107ad8ed" },
+    { cryptonote::TESTNET,  "testnet",  "e895bf2baa4ea4ccb07620d354e544a4be243bf329925f6a8a51631da18033da" },
+    { cryptonote::STAGENET, "stagenet", "371e8fa310afb0c6089e47398ebe02c4e2aa1820e8ccfd32e328558b99677c60" },
   };
 
   for (const NetCase& nc : nets)

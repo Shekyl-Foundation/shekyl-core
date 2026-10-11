@@ -485,7 +485,8 @@ pub fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
 
 /// The `tx_extra` a coinbase with `n` outputs must carry (CEN-I20,
 /// `GENESIS_TX_WIRE_FORMAT.md` §9.6b): exactly `[0x01 pubkey, 0x02 nonce(8),
-/// 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order, the PQC pair absent when
+/// 0x0C commitment(32), 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order, the
+/// PQC pair absent when
 /// `n == 0`. A coinbase fixture that carries only the I19 pair fails the wire
 /// validator on the grammar before it reaches the refusal under test.
 pub fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {

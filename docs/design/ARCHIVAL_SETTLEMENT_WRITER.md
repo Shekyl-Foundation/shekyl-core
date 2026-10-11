@@ -1315,10 +1315,10 @@ every network that already has a chain, and it changes genesis.**
   grammar. The Rust validator runs the same function
   (`rules/tx_extra.rs`).
 - **So there is one grammar and one writer, in Rust, and both
-  validators link it.** The C++ refuses `0x0C` today because the shared
-  grammar does. A change to `COINBASE_TAGS` changes the writer and both
-  validators in the same binary; the "both validators in one change"
-  condition is met by construction.
+  validators link it.** Before increment 1 the C++ refused `0x0C`
+  because the shared grammar did. A change to `COINBASE_TAGS` changes the
+  writer and both validators in the same binary; the "both validators in
+  one change" condition is met by construction.
 - **What is not met.** The grammar is an exact ordered list. Requiring
   `0x0C`:
   - refuses every block already on a chain, on a node that resyncs
@@ -1356,9 +1356,10 @@ The design of increment 1 is §16.8 and the rulings on it §16.9.
 
 ### 16.8 Increment 1 as designed — a regenesis, not a type half
 
-**Status:** design text for the first increment, written before its
-code. Decisions 3, 7 and 8 fix bytes or retire a live path; they were
-flagged and are ruled, with conditions, in §16.9.
+**Status:** the first increment's design, written before its code.
+Decisions 1 to 6 are **LANDED**; 7 and 8 (the carrier field and the
+record) are not built yet. Decisions 3, 7 and 8 fix bytes or retire a
+live path; they were flagged and are ruled, with conditions, in §16.9.
 
 **What the increment is.** Genesis is judged by the coinbase grammar at
 connect (`prevalidate_miner_transaction`) and at DB add. Requiring `0x0C`
@@ -1384,9 +1385,14 @@ was going to be, landed as one rule-07 change.
    from 18,994 to 19,027 bytes.
 3. **Genesis commits to 32 zero bytes.** The genesis tool is
    deterministic and holds no seed or key, and the value is permanent.
-   Zero is not a commitment to anything: no `witness_pk ‖ seed` is known
+   Zero is a commitment nobody can open: no `witness_pk ‖ seed` is known
    to hash to it, so no carrier can reveal height 0, which has no
-   producer. *Flagged: a byte the maintainer is accepting.*
+   producer. The value lives in one place, `GENESIS_DRAW_COMMITMENT` in
+   the genesis tool; `DrawCommitment` has no zero constant, no `Default`
+   and no emptiness test, so no reader can take a value for "absent".
+   Epoch 0 issues no draw because its drawable set is empty, which
+   `height_zero_and_all_of_epoch_zero_issue_no_draw` pins
+   (`rust/shekyl-chain-rules/src/archival/drawable.rs`).
 4. **The smallest writer.** One Rust function behind the FFI: generate a
    witness key and a seed, compute the commitment, wipe both, return 32
    bytes. The C++ never holds either secret (rule 36). The daemon calls
@@ -1395,7 +1401,10 @@ was going to be, landed as one rule-07 change.
    producer lane keeps the secrets, every block commits to a seed nobody
    can reveal, which issues nothing (the specification's §9.2). The
    FN-DSA-1024 key generation is new cost on the template path; it gets
-   a `BA-T` row and is measured, not gated.
+   a `BA-T` row and is measured, not gated. Built as
+   `shekyl_archival_draw_commitment`
+   (`rust/shekyl-ffi/src/archival_ffi/draw.rs`), called from
+   `Blockchain::create_block_template`.
 5. **The Rust template.** `TemplateContext` gains the commitment as a
    field; the crate stays a pure function of its context. The scenario
    driver derives it from the counter it already derives the transaction

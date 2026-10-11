@@ -400,9 +400,9 @@ mod tests {
     use super::*;
     use crate::legacy_util::shekyl_buffer_free;
     use shekyl_wire::tx_extra::{
-        conforming_pqc_leaf_blob, serialize, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, TX_EXTRA_TAG_NONCE,
-        TX_EXTRA_TAG_PADDING, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
-        TX_EXTRA_TAG_PUBKEY,
+        conforming_pqc_leaf_blob, serialize, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
+        TX_EXTRA_TAG_DRAW_COMMITMENT, TX_EXTRA_TAG_NONCE, TX_EXTRA_TAG_PADDING,
+        TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, TX_EXTRA_TAG_PQC_LEAF_ENTRIES, TX_EXTRA_TAG_PUBKEY,
     };
 
     fn take(buf: &ShekylBuffer) -> Vec<u8> {
@@ -468,14 +468,15 @@ mod tests {
     }
 
     #[test]
-    fn the_coinbase_writer_lays_out_pubkey_nonce_kem_leaf_and_the_reads_find_each() {
+    fn the_coinbase_writer_lays_out_pubkey_nonce_commitment_kem_leaf_and_the_reads_find_each() {
         let (extra, kem, leaf) = valid_extra(2);
-        // The grammar's one layout: 0x01, 0x02(8), 0x06, 0x07 — byte-identical
-        // to serializing the same four fields by hand, and admitted by the
-        // rule a validator applies to a coinbase.
+        // The grammar's one layout: 0x01, 0x02(8), 0x0C(32), 0x06, 0x07 —
+        // byte-identical to serializing the same five fields by hand, and
+        // admitted by the rule a validator applies to a coinbase.
         let by_hand = serialize(&[
             TxExtraField::PubKey([0x11; 32]),
             TxExtraField::Nonce(NONCE.to_vec()),
+            TxExtraField::DrawCommitment(DrawCommitment::from_bytes(COMMITMENT)),
             TxExtraField::PqcKemCiphertext(kem.clone()),
             TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
@@ -492,6 +493,11 @@ mod tests {
         assert_eq!(
             field(&extra, TX_EXTRA_TAG_NONCE, 0),
             (SHEKYL_TX_EXTRA_OK, NONCE.to_vec())
+        );
+        // The commitment is read back as the 32 bytes the writer was given.
+        assert_eq!(
+            field(&extra, TX_EXTRA_TAG_DRAW_COMMITMENT, 0),
+            (SHEKYL_TX_EXTRA_OK, COMMITMENT.to_vec())
         );
         assert_eq!(
             field(&extra, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0),
@@ -646,15 +652,16 @@ mod tests {
             rc,
             crate::tx_extra_ffi::SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT
         );
-        // Leafless coinbase: pubkey and nonce only, and bytes handed in
-        // anyway are refused.
+        // Leafless coinbase: pubkey, nonce and commitment only, and bytes
+        // handed in anyway are refused.
         let (rc, blob, _) = coinbase([0x22; 32], 0, &[], &[]);
         assert_eq!(rc, SHEKYL_TX_EXTRA_OK);
         assert_eq!(
             parse(&blob).expect("parses"),
             vec![
                 TxExtraField::PubKey([0x22; 32]),
-                TxExtraField::Nonce(NONCE.to_vec())
+                TxExtraField::Nonce(NONCE.to_vec()),
+                TxExtraField::DrawCommitment(DrawCommitment::from_bytes(COMMITMENT)),
             ]
         );
         let (rc, _, _) = coinbase([0x22; 32], 0, &kem, &conforming_pqc_leaf_blob(1));
@@ -767,13 +774,41 @@ mod tests {
         let swapped = serialize(&[
             TxExtraField::Nonce(NONCE.to_vec()),
             TxExtraField::PubKey([0x11; 32]),
-            TxExtraField::PqcKemCiphertext(kem),
-            TxExtraField::PqcLeafEntries(leaf),
+            TxExtraField::DrawCommitment(DrawCommitment::from_bytes(COMMITMENT)),
+            TxExtraField::PqcKemCiphertext(kem.clone()),
+            TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
         .unwrap();
         assert_eq!(
             shape(&swapped, 1, true).0,
             SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT
+        );
+        // No commitment, and two: each has its own code.
+        let without = serialize(&[
+            TxExtraField::PubKey([0x11; 32]),
+            TxExtraField::Nonce(NONCE.to_vec()),
+            TxExtraField::PqcKemCiphertext(kem.clone()),
+            TxExtraField::PqcLeafEntries(leaf.clone()),
+        ])
+        .unwrap();
+        let (rc, msg) = shape(&without, 1, true);
+        assert_eq!(
+            rc,
+            crate::tx_extra_ffi::SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_MISSING
+        );
+        assert!(msg.contains("0x0c"), "{msg}");
+        let twice = serialize(&[
+            TxExtraField::PubKey([0x11; 32]),
+            TxExtraField::Nonce(NONCE.to_vec()),
+            TxExtraField::DrawCommitment(DrawCommitment::from_bytes(COMMITMENT)),
+            TxExtraField::DrawCommitment(DrawCommitment::from_bytes(COMMITMENT)),
+            TxExtraField::PqcKemCiphertext(kem),
+            TxExtraField::PqcLeafEntries(leaf),
+        ])
+        .unwrap();
+        assert_eq!(
+            shape(&twice, 1, true).0,
+            crate::tx_extra_ffi::SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_DUPLICATE
         );
         // The leaf read applies the same grammar.
         let mut out = ShekylBuffer::null();
