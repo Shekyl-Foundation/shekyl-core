@@ -914,7 +914,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 23] = [
+    let links: [(&str, &str); 24] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1007,6 +1007,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v23.json"),
             include_str!("vectors/rpc/get_version_synced_v24.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v24.json"),
+            include_str!("vectors/rpc/get_version_synced_v25.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1025,7 +1029,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 23] = [
+    const ADDED_AT_LINK: [&[&str]; 24] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1049,6 +1053,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.45 (get_info stops carrying emission_era, RK-D21; get_version gains nothing)
         &[], // 3.46 (no target is `null`, RK-Q7; this case has a target, so its members do not move)
         &[], // 3.47 (get_info gains has_peers, RK-D14; get_version gains nothing)
+        &[], // 3.48 (a restricted get_info omits Status and Peers, RK-Q8; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1060,7 +1065,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 23] = [
+    const REMOVED_AT_LINK: [&[&str]; 24] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1084,6 +1089,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.45 (the emission_era deletion is get_info's; get_version retires nothing)
         &[], // 3.46 (nothing leaves; the side cases gain members, pinned by their own test)
         &[], // 3.47 (has_peers is get_info's; get_version retires nothing)
+        &[], // 3.48 (the withheld parts are get_info's; get_version retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1342,6 +1348,55 @@ fn the_3_47_get_info_vectors_are_their_predecessors_plus_exactly_has_peers() {
     assert_eq!(restricted["has_peers"], json!(true));
     assert_eq!(restricted["outgoing_connections_count"], json!(0));
     assert_eq!(restricted["incoming_connections_count"], json!(0));
+}
+
+/// **3.48, by derivation.** A `get_info` reply to a caller who is not shown
+/// Status or Peers omits both parts (RK-Q8). One fixture is such a reply,
+/// and its successor is its predecessor minus exactly the fourteen keys of
+/// those two parts. The other four fixtures are full replies and do not
+/// move.
+///
+/// What the predecessor held in those keys is asserted too, because it is
+/// the reason they went: every one a value that meant "not this value".
+#[test]
+fn the_3_48_restricted_vector_is_its_predecessor_minus_exactly_status_and_peers() {
+    use serde_json::json;
+
+    let stand_ins = [
+        ("start_time", json!(0)),
+        ("free_space", json!(u64::MAX)),
+        ("database_size", json!(10u64 * 1024 * 1024 * 1024)),
+        ("version", json!("")),
+        ("outgoing_connections_count", json!(0)),
+        ("incoming_connections_count", json!(0)),
+        ("alt_blocks_count", json!(0)),
+        ("rpc_connections_count", json!(0)),
+        ("public_incoming_socket_count", json!(0)),
+        ("public_outgoing_socket_count", json!(0)),
+        ("tor_incoming_socket_count", json!(0)),
+        ("tor_outgoing_socket_count", json!(0)),
+        ("white_peerlist_size", json!(0)),
+        ("grey_peerlist_size", json!(0)),
+    ];
+
+    let mut derived = parsed(include_str!(
+        "vectors/rpc/get_info_synced_restricted_v3.json"
+    ));
+    let members = derived.as_object_mut().expect("vector is an object");
+    for (key, stand_in) in &stand_ins {
+        assert_eq!(
+            members.remove(*key).as_ref(),
+            Some(stand_in),
+            "`{key}` was the stand-in this derivation says it was"
+        );
+    }
+    assert_eq!(
+        derived,
+        parsed(include_str!(
+            "vectors/rpc/get_info_synced_restricted_v4.json"
+        )),
+        "the successor is its predecessor minus the two withheld parts and nothing else"
+    );
 }
 
 #[test]
@@ -1876,8 +1931,9 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
 // before that handler was deleted, and went with it (the README beside the
 // vectors says how to read one). Four of them have a `_v2` successor,
 // derived at 3.46 when the target stopped being a sentinel, and all five
-// have one derived at 3.47 when `has_peers` arrived; the tests below read
-// the newest of each.
+// have one derived at 3.47 when `has_peers` arrived, and the restricted one
+// another at 3.48 when it stopped carrying Status and Peers; the tests
+// below read the newest of each.
 // These tests pin the TYPE: that each vector is a `GetInfoResponse` and that
 // the response writes the vector back. The handler's parity is
 // `shekyl-daemon-rpc`'s.
@@ -1994,35 +2050,18 @@ mod get_info {
         );
     }
 
-    /// At parity a restricted reply carries every key, holding the
-    /// stand-ins. So the vector decodes as parts that are *shown*, with
-    /// stand-in values — not as withheld parts. RK-Q8 is where a restricted
-    /// reply stops carrying them.
+    /// A restricted reply withholds Status and Peers, so the vector decodes
+    /// as a reply with both parts withheld and writes back without their
+    /// keys (RK-Q8). Until 3.48 it carried every key, holding stand-ins.
     #[test]
     fn synced_restricted_matches_the_oracle() {
         let mut built = synced();
         built.restricted = true;
         built.pool.tx_pool_size = 9;
-        built.node = Hidden::Shown(InfoStatus {
-            start_time: 0,
-            free_space: u64::MAX,
-            database_size: 10 * 1024 * 1024 * 1024,
-            version: String::new(),
-            outgoing_connections_count: 0,
-            incoming_connections_count: 0,
-            alt_blocks_count: 0,
-            rpc_connections_count: 0,
-        });
-        built.peers = Hidden::Shown(InfoPeers {
-            public_incoming_socket_count: 0,
-            public_outgoing_socket_count: 0,
-            tor_incoming_socket_count: 0,
-            tor_outgoing_socket_count: 0,
-            white_peerlist_size: 0,
-            grey_peerlist_size: 0,
-        });
+        built.node = Hidden::Withheld;
+        built.peers = Hidden::Withheld;
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_restricted_v3.json"),
+            include_str!("vectors/rpc/get_info_synced_restricted_v4.json"),
             &built,
         );
     }

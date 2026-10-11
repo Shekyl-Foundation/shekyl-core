@@ -38,16 +38,19 @@
 //! names every key, refuses any other, and is converted to and from the
 //! parts. The whole-part rule of [`Hidden`] lives in that conversion.
 //!
-//! # At parity nothing is absent yet
+//! # A part the caller is not shown is absent
 //!
-//! A restricted reply today carries every key, with stand-ins for what it
-//! does not disclose: zeroed counts, `free_space` as `u64::MAX`, an empty
-//! `version`, and `database_size` rounded up to 5 GiB. That last one is
-//! derived from a real read, so no constant written for an absent part could
-//! reproduce it. Until the commit that makes a restricted reply omit them
-//! (RK-Q8), the handler builds a restricted caller's Status and Peers as
-//! present parts holding those stand-ins, and [`Hidden::Withheld`] is reached
-//! only by decoding.
+//! A reply to a caller who is not shown Status or Peers does not carry
+//! those parts: none of their keys is on the wire, and the reply decodes
+//! with the part [`Hidden::Withheld`] (RK-Q8, `CORE_RPC_VERSION` 3.48).
+//!
+//! Until then such a reply carried every key, with stand-ins for what it
+//! did not disclose: zeroed counts, `free_space` as `u64::MAX`, an empty
+//! `version`, and `database_size` rounded up to 5 GiB. Each was a value
+//! that meant "not this value", and a reader could not tell it from an
+//! answer: a wallet read the zeroed connection counts as a node with no
+//! peers. A reader of a hidden part now asks [`Hidden::shown`] and is told
+//! when there is nothing to read.
 
 use serde::{Deserialize, Serialize};
 

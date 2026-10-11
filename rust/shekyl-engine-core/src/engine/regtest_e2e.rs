@@ -5328,7 +5328,7 @@ fn jsonrpc_body(method: &str, params: &serde_json::Value) -> serde_json::Value {
 /// (`get_output_histogram` was the last). The remaining witness is a
 /// universal cap on the admin listener. This is not an origin check: if a
 /// WE handler grows a restricted `res.status` refusal, that leg belongs on
-/// `restricted_listener_gets_stand_ins_and_caps_from_native_handlers`.
+/// `restricted_listener_is_withheld_status_and_capped_by_native_handlers`.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn jsonrpc_we_carries_handler_status_through_the_result_envelope() {

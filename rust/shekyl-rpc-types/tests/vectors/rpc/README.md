@@ -132,3 +132,11 @@ successor.** Each is its predecessor plus that member
 one to read: `has_peers: true` beside two connection counts of `0`, which
 is the case the member exists for. `get_version_synced_v24` is the
 chain's 3.47 link; its members do not move.
+
+**3.48 withheld Status and Peers from a restricted reply, and one fixture
+moves.** `get_info_synced_restricted_v4` is `_v3` minus exactly the
+fourteen keys of those two parts
+(`the_3_48_restricted_vector_is_its_predecessor_minus_exactly_status_and_peers`,
+which also asserts that each removed key held its stand-in). The other
+four fixtures are full replies and have no successor.
+`get_version_synced_v25` is the chain's 3.48 link.

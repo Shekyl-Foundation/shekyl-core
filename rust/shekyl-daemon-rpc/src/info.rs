@@ -24,17 +24,20 @@
 //! computation held it to that. Each later commit moves one thing off
 //! parity, with a vector derived from its predecessor: the `target_height`
 //! sentinel went first (RK-D15, 3.46), then `has_peers` arrived (RK-D14,
-//! 3.47). It still writes what the design
-//! retires after that, each marked where it is written: the restricted
-//! stand-ins, the clearnet-only connection counts and their subtraction, a
-//! refused burn computation reported as zero, and a pool count whose
-//! meaning depends on the caller.
+//! 3.47), then the restricted stand-ins went (RK-Q8, 3.48): a caller who is
+//! not shown Status or Peers gets a reply without those parts, where it got
+//! zeros, an empty version, `u64::MAX` of free space and the store's size
+//! rounded up. It still writes what the design retires after that, each
+//! marked where it is written: the clearnet-only connection counts and
+//! their subtraction, a refused burn computation reported as zero, and a
+//! pool count whose meaning depends on the caller.
 //!
-//! **One read is made for every caller that the rule above would withhold.**
-//! A restricted reply carries `database_size` rounded up to 5 GiB — a
-//! stand-in, but one derived from the real size. The caller receives it, so
-//! it is read for that caller. It joins the not-read set when a restricted
-//! reply stops carrying Status (RK-Q8).
+//! **The store's size is a Status member and is read with Status.** While
+//! a restricted reply carried it rounded, it was read for every caller, so
+//! a store that could not be read for its size refused a caller who was
+//! only ever going to be told a rounded figure. That exception ended with
+//! the stand-ins: no read is now made for a caller who will not receive
+//! what it returns.
 
 use shekyl_economics::{project_at_tip, EconomicParams, TipOperands};
 use shekyl_rpc_types::{
@@ -101,14 +104,11 @@ impl Disclosure {
     }
 }
 
-/// The quantum a restricted reply rounds the store's size up to.
-const RESTRICTED_DATABASE_SIZE_QUANTUM: u64 = 5 * 1024 * 1024 * 1024;
-
 /// `get_info` (REST `/get_info`, `/getinfo`; JSON-RPC `get_info`).
 ///
 /// `rpc_connections` is this server's live connection count, which the
-/// transport owns; it is a Status field and is ignored for a caller who is
-/// not shown Status.
+/// transport owns; it is a Status field, so a caller who is not shown
+/// Status is not told it.
 ///
 /// # Errors
 ///
@@ -140,16 +140,15 @@ pub fn get_info(
     } else {
         PoolScope::Broadcast
     })?;
-    // Read for every caller while a restricted reply carries it rounded:
-    // see the module docs.
-    let store_size = facts.store_size()?;
-
+    // A part the caller is not shown is withheld: absent from the reply,
+    // and none of its reads made (RK-D24, RK-Q8). No member is written with
+    // a value that means "not this value".
     let node = if disclosure.status {
         let status = facts.status()?;
-        InfoStatus {
+        Hidden::Shown(InfoStatus {
             start_time: status.start_time,
             free_space: status.free_space,
-            database_size: store_size,
+            database_size: facts.store_size()?,
             version: status.version,
             outgoing_connections_count: status.public_outgoing_connections,
             // Parity: the clearnet total and its outbound count are two
@@ -161,44 +160,23 @@ pub fn get_info(
                 .wrapping_sub(status.public_outgoing_connections),
             alt_blocks_count: status.alt_blocks_count,
             rpc_connections_count: rpc_connections,
-        }
+        })
     } else {
-        // Parity: the restricted stand-ins. A value that means "not this
-        // value" in every member; RK-Q8 makes the part absent instead.
-        InfoStatus {
-            start_time: 0,
-            free_space: u64::MAX,
-            database_size: store_size
-                .div_ceil(RESTRICTED_DATABASE_SIZE_QUANTUM)
-                .saturating_mul(RESTRICTED_DATABASE_SIZE_QUANTUM),
-            version: String::new(),
-            outgoing_connections_count: 0,
-            incoming_connections_count: 0,
-            alt_blocks_count: 0,
-            rpc_connections_count: 0,
-        }
+        Hidden::Withheld
     };
 
     let peers = if disclosure.peers {
         let peers = facts.peers()?;
-        InfoPeers {
+        Hidden::Shown(InfoPeers {
             public_incoming_socket_count: peers.public_incoming_sockets,
             public_outgoing_socket_count: peers.public_outgoing_sockets,
             tor_incoming_socket_count: peers.tor_incoming_sockets,
             tor_outgoing_socket_count: peers.tor_outgoing_sockets,
             white_peerlist_size: peers.white_peerlist_size,
             grey_peerlist_size: peers.grey_peerlist_size,
-        }
+        })
     } else {
-        // Parity: stand-ins, as for Status.
-        InfoPeers {
-            public_incoming_socket_count: 0,
-            public_outgoing_socket_count: 0,
-            tor_incoming_socket_count: 0,
-            tor_outgoing_socket_count: 0,
-            white_peerlist_size: 0,
-            grey_peerlist_size: 0,
-        }
+        Hidden::Withheld
     };
 
     let height = chain.chain_height.to_raw();
@@ -265,8 +243,8 @@ pub fn get_info(
         pool: InfoPool {
             tx_pool_size: pool_count,
         },
-        node: Hidden::Shown(node),
-        peers: Hidden::Shown(peers),
+        node,
+        peers,
         restricted: disclosure.listener_restricted,
     })
 }
@@ -506,14 +484,13 @@ pub(crate) mod tests {
     }
 
     /// The same facts as the synced case, asked by a restricted caller:
-    /// every stand-in, the pool counted over the broadcast set, and the
-    /// store's size rounded up.
+    /// no Status and no Peers, and the pool counted over the broadcast set.
     #[test]
     fn synced_restricted_reproduces_the_oracle_vector() {
         assert_eq!(
             ours(&synced_facts(), Disclosure::VIEW),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v3.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v4.json"
             ))
         );
     }
@@ -562,17 +539,18 @@ pub(crate) mod tests {
         assert_eq!(ours(&facts, Disclosure::FULL)["has_peers"], true);
     }
 
-    /// **§3.1's defect, at its source.** A restricted caller's reply still
-    /// carries zero for both connection counts, and beside them
-    /// `has_peers: true`, because Health is told to every caller. A reader
-    /// that asks "does this node have peers" now has a member that answers
-    /// it, instead of two that a restricted listener zeroes.
+    /// **§3.1's defect, at its source.** A restricted caller's reply does
+    /// not carry the connection counts at all, and says `has_peers: true`,
+    /// because Health is told to every caller. A reader that asks "does
+    /// this node have peers" has a member that answers it. Until 3.47 it
+    /// had only two counts, which a restricted listener wrote as zero.
     #[test]
     fn a_restricted_reply_from_a_node_with_peers_says_it_has_peers() {
         let reply = ours(&synced_facts(), Disclosure::VIEW);
         assert_eq!(reply["has_peers"], true);
-        assert_eq!(reply["outgoing_connections_count"], 0);
-        assert_eq!(reply["incoming_connections_count"], 0);
+        let members = reply.as_object().expect("a reply is an object");
+        assert!(!members.contains_key("outgoing_connections_count"));
+        assert!(!members.contains_key("incoming_connections_count"));
         assert_eq!(reply["restricted"], true);
 
         // And the same member for the host's administrator.
@@ -637,15 +615,15 @@ pub(crate) mod tests {
 
     /// A restricted caller is not shown Status or Peers, so neither is read
     /// on its behalf, and its pool count is asked for over the broadcast
-    /// set only. The store's size is the one read it shares, because its
-    /// reply still carries that, rounded.
+    /// set only. The store's size is a Status member and is not read
+    /// either.
     #[test]
     fn a_view_caller_costs_no_status_or_peers_read() {
         let facts = synced_facts();
         get_info(&facts, Disclosure::VIEW, 5).expect("a view caller is answered");
         assert_eq!(facts.status_reads.load(Ordering::Relaxed), 0);
         assert_eq!(facts.peers_reads.load(Ordering::Relaxed), 0);
-        assert_eq!(facts.store_size_reads.load(Ordering::Relaxed), 1);
+        assert_eq!(facts.store_size_reads.load(Ordering::Relaxed), 0);
         assert_eq!(
             facts.handshaken_reads.load(Ordering::Relaxed),
             1,
@@ -709,21 +687,34 @@ pub(crate) mod tests {
         );
     }
 
-    /// The exception, pinned. While a restricted reply carries the store's
-    /// size rounded, the size is read for every caller, so a store that
-    /// cannot be read for its size refuses both. RK-Q8's commit flips the
-    /// view half of this: a view reply with a failing size read is whole.
+    /// The store's size is a Status member, so its read follows Status:
+    /// with the size read failing, a view caller gets the same full reply it
+    /// gets when the read succeeds, and a full caller gets the refusal.
+    ///
+    /// Until 3.48 this was the one exception to gathering by part. A
+    /// restricted reply carried the size rounded up, so it was read for
+    /// every caller and an unreadable store refused both. The stand-in is
+    /// gone, and the exception with it (RK-Q8).
     #[test]
-    fn an_unreadable_store_size_refuses_both_callers_while_parity_lasts() {
+    fn an_unreadable_store_size_refuses_a_full_caller_and_not_a_view_caller() {
+        let healthy = ours(&synced_facts(), Disclosure::VIEW);
+
         let mut facts = synced_facts();
         facts.store_size_fault = Some(FactsFault::StoreUnreadable);
-        for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
-            assert_eq!(
-                get_info(&facts, disclosure, 0),
-                Err(RpcFault::Facts(FactsFault::StoreUnreadable)),
-                "{disclosure:?}"
-            );
-        }
+        assert_eq!(
+            ours(&facts, Disclosure::VIEW),
+            healthy,
+            "a view caller's reply must not depend on the store's size at all"
+        );
+        assert_eq!(
+            facts.store_size_reads.load(Ordering::Relaxed),
+            0,
+            "the size is not read for a caller who is not told it"
+        );
+        assert_eq!(
+            get_info(&facts, Disclosure::FULL, 0),
+            Err(RpcFault::Facts(FactsFault::StoreUnreadable))
+        );
     }
 
     /// A fault in a read every caller needs refuses every caller.
@@ -756,7 +747,7 @@ pub(crate) mod tests {
         let full = get_info(&facts, Disclosure::FULL, 17).unwrap();
         assert_eq!(full.node.shown().map(|n| n.rpc_connections_count), Some(17));
         let view = get_info(&facts, Disclosure::VIEW, 17).unwrap();
-        assert_eq!(view.node.shown().map(|n| n.rpc_connections_count), Some(0));
+        assert_eq!(view.node, Hidden::Withheld, "no Status, so no count");
     }
 
     /// `following_degraded` is the store's flag, carried as it is in both
@@ -823,21 +814,74 @@ pub(crate) mod tests {
         assert_eq!(Disclosure::from_listener(false), Disclosure::FULL);
     }
 
-    /// The restricted size is rounded **up** to the quantum: a store exactly
-    /// on a boundary stays there, one byte over goes to the next, and an
-    /// empty store is zero.
+    /// **A restricted reply withholds Status and Peers: the parts are
+    /// absent, and nothing stands in for them** (RK-Q8, RK-D23). Every key
+    /// of both parts is missing from the wire, the reply still decodes as
+    /// this build's type with both parts withheld, and everything else in
+    /// it is what the host's administrator is told.
+    ///
+    /// Until 3.48 those keys were present and held values that meant "not
+    /// this value": zero counts, an empty version, `u64::MAX` of free
+    /// space, and the store's size rounded up to five gibibytes.
     #[test]
-    fn the_restricted_size_rounds_up_to_five_gibibytes() {
-        const Q: u64 = RESTRICTED_DATABASE_SIZE_QUANTUM;
-        for (size, shown) in [(0, 0), (1, Q), (Q, Q), (Q + 1, 2 * Q), (3 * Q - 1, 3 * Q)] {
-            let mut facts = synced_facts();
-            facts.store_size = size;
-            let reply = get_info(&facts, Disclosure::VIEW, 0).unwrap();
-            assert_eq!(
-                reply.node.shown().map(|n| n.database_size),
-                Some(shown),
-                "a store of {size} bytes"
+    fn a_restricted_reply_withholds_status_and_peers() {
+        const STATUS_KEYS: [&str; 8] = [
+            "start_time",
+            "free_space",
+            "database_size",
+            "version",
+            "outgoing_connections_count",
+            "incoming_connections_count",
+            "alt_blocks_count",
+            "rpc_connections_count",
+        ];
+        const PEERS_KEYS: [&str; 6] = [
+            "public_incoming_socket_count",
+            "public_outgoing_socket_count",
+            "tor_incoming_socket_count",
+            "tor_outgoing_socket_count",
+            "white_peerlist_size",
+            "grey_peerlist_size",
+        ];
+
+        let facts = synced_facts();
+        let view = get_info(&facts, Disclosure::VIEW, 17).expect("a view caller is answered");
+        assert_eq!(view.node, Hidden::Withheld);
+        assert_eq!(view.peers, Hidden::Withheld);
+
+        let wire = serde_json::to_value(&view).expect("the reply serializes");
+        let members = wire.as_object().expect("a reply is an object");
+        for key in STATUS_KEYS.iter().chain(PEERS_KEYS.iter()) {
+            assert!(
+                !members.contains_key(*key),
+                "`{key}` is not disclosed, so it is not on the wire"
             );
         }
+        assert_eq!(
+            serde_json::from_value::<GetInfoResponse>(wire.clone()).expect("it decodes"),
+            view,
+            "a reply without the two parts is this build's reply"
+        );
+
+        // Everything else is what a full caller is told, apart from the
+        // posture flag and the pool count (host-only entries are RK-Q10's).
+        let mut full = serde_json::to_value(
+            get_info(&facts, Disclosure::FULL, 17).expect("a full caller is answered"),
+        )
+        .expect("the reply serializes");
+        let full_members = full.as_object_mut().expect("a reply is an object");
+        for key in STATUS_KEYS.iter().chain(PEERS_KEYS.iter()) {
+            assert!(
+                full_members.remove(*key).is_some(),
+                "a full reply carries `{key}`"
+            );
+        }
+        let mut view_rest = wire;
+        for reply in [&mut full, &mut view_rest] {
+            let members = reply.as_object_mut().expect("a reply is an object");
+            members.remove("restricted");
+            members.remove("tx_pool_size");
+        }
+        assert_eq!(view_rest, full);
     }
 }

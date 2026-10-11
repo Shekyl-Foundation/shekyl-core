@@ -1981,12 +1981,19 @@ fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
     );
 }
 
-/// A restricted daemon discloses no start time, and the uptime clause is
-/// omitted rather than reported as zero.
+/// **A daemon that withholds Status is not a daemon with no connections
+/// and no uptime.** A restricted listener's reply carries no Status part.
+/// The line says the connection counts were not disclosed, where it would
+/// have printed `0(out)+0(in)`, and omits the uptime clause.
 #[test]
-fn a_daemon_that_hides_its_start_time_gets_no_uptime_clause() {
+fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
     let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-    info["start_time"] = serde_json::json!(0);
+    let members = info.as_object_mut().unwrap();
+    for key in STATUS_PART_KEYS {
+        members
+            .remove(*key)
+            .unwrap_or_else(|| panic!("`{key}` is a Status member of the fixture"));
+    }
     let address = route_server(vec![
         ("/get_info", info.to_string()),
         ("/mining_status", mining_reply(false, 0, false)),
@@ -1994,7 +2001,27 @@ fn a_daemon_that_hides_its_start_time_gets_no_uptime_clause() {
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("not mining"), "{out}");
-    assert!(!out.contains("uptime"), "{out}");
+    assert!(
+        out.ends_with("connections not disclosed"),
+        "no counts and no uptime clause: {out}"
+    );
+    assert!(!out.contains("(out)") && !out.contains("uptime"), "{out}");
+}
+
+/// A daemon that does show Status and reports no connections prints the
+/// zeros: that is a count, and it gets its uptime.
+#[test]
+fn a_shown_zero_connection_count_prints_as_zero() {
+    let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+    info["outgoing_connections_count"] = serde_json::json!(0);
+    info["incoming_connections_count"] = serde_json::json!(0);
+    let address = route_server(vec![
+        ("/get_info", info.to_string()),
+        ("/mining_status", mining_reply(false, 0, false)),
+    ]);
+    let (code, out) = run(&["status"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("0(out)+0(in) connections, uptime "), "{out}");
 }
 
 /// A remote daemon that will not serve `/mining_status` still gets a
