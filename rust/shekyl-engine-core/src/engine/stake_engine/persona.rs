@@ -143,7 +143,7 @@ impl Message<PersonaIdentityOf> for StakeEngine {
 /// **The guarantee is the boundary, not the seed's lifetime**, and the two are
 /// easy to conflate. This call does not shorten the seed's life or wipe it:
 /// `hs_id_seed` stays in the actor's [`ArchivalPKeys`] for the persona's life,
-/// under that field's `Zeroizing` and the `on_stop` wipe, and
+/// on the heap and wiped when the bundle drops, and under the `on_stop` wipe.
 /// [`OnionIdentity::from_hs_id_seed`] borrows it and retains nothing. What
 /// makes the custody property hold is narrower and stronger: no caller of this
 /// message can obtain the seed, only the expanded credential.
@@ -175,7 +175,7 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
             .ok_or(StakeEngineError::LookaheadExhausted {
                 requested: msg.p_slot,
             })?;
-        Ok(OnionIdentity::from_hs_id_seed(&held.keys().hs_id_seed))
+        Ok(OnionIdentity::from_hs_id_seed(held.keys().hs_id_seed()))
     }
 }
 
@@ -429,7 +429,7 @@ impl Message<PlanBondPost> for StakeEngine {
         //    never returned to the caller (rule 36-secret-locality): only the
         //    constructed `JoinMarketVin` (paired with its placement offset)
         //    crosses the actor boundary.
-        let endpoint = OnionIdentity::from_hs_id_seed(&keys.hs_id_seed).public_key();
+        let endpoint = OnionIdentity::from_hs_id_seed(keys.hs_id_seed()).public_key();
         let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings, endpoint)
             .map_err(StakeEngineError::BondBuild)?;
         Ok(BondPostPlacement {

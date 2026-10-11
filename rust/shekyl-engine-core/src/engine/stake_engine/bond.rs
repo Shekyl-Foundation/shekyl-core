@@ -114,7 +114,7 @@ impl Message<AssembleBond> for StakeEngine {
         // pre-SA-2b signing circularity forced a second, public-parts
         // construction plus a runtime A-1 equality check; deleting the on-vin
         // signature deleted the circularity, and the duplicate with it.)
-        let endpoint = OnionIdentity::from_hs_id_seed(&keys.hs_id_seed).public_key();
+        let endpoint = OnionIdentity::from_hs_id_seed(keys.hs_id_seed()).public_key();
         let built = build_join_market_vin(keys.bond_post_keys(), msg.holdings.clone(), endpoint)
             .map_err(StakeEngineError::BondBuild)?;
         let hybrid_pk_bytes = built.vin().hybrid_public_key.clone();

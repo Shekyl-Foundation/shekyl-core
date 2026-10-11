@@ -521,7 +521,7 @@ pub unsafe extern "C" fn shekyl_ml_kem_chacha_seed_trace(
     std::ptr::copy_nonoverlapping(d_z_in, d_z.as_mut_ptr(), 64);
     let seed = account::ml_kem_chacha_seed_from_d_z(&d_z);
     d_z.zeroize();
-    write_out(chacha_seed_out, &seed, 32);
+    write_out(chacha_seed_out, seed.as_slice(), 32);
     true
 }
 
