@@ -130,8 +130,10 @@ opened to that address. It moves the clock forward. Contact that arrived
 inbound does not. One failed redial does not demote; the clock does.
 
 **Address validity — RULED 2026-10-11 (Rick; formerly the dialer
-brief's D2a).** `admit_gray` and both draws refuse an address that is
-not dialable on the public internet. Refused:
+brief's D2a; scope settled the same day).** An address learned from
+the network — a received peerlist or an inbound advertisement, which
+is `Source::Session` — is refused at `admit_gray` unless it is
+dialable on the public internet. Refused:
 
 - IPv4: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`,
   `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, the
@@ -143,29 +145,55 @@ not dialable on the public internet. Refused:
   (`ff00::/8`), and the IPv4-embedding prefixes 6to4 (`2002::/16`),
   Teredo (`2001::/32`) and NAT64 (`64:ff9b::/96`).
 - Port 0, on every address type. `tor_address::unknown()` is port 0
-  and never enters a list (this closes PWD-B11's question; the row in
-  `FOLLOWUPS.md` retires when the check lands).
+  and never enters a list from the network (this closes PWD-B11's
+  question; the row in `FOLLOWUPS.md` retires when the check lands).
 
-The check is at admit and at both draws, not at admit alone: a
-persisted file predates the rule's current list, and the draw is what
-the dialer acts on. `--allow-local-ip` is the one operator override,
-for test networks; it admits the private ranges today's flag admits
-(`is_ip_local`, `contrib/epee/include/net/local_ip.h:41`: `10/8`,
-`172.16/12`, `192.168/16`) and nothing else — loopback stays refused,
-as `is_host_allowed` refuses it today. *The override's exact set is
-this brief's reading of the ruling, for Rick's review.* The check
-lands with increment 3 (D5: in PR-3), because until the cutover the
-C++ filters are still in front of every admit.
+Four scope lines, each ruled:
 
-*Records-was, the C++ at `8848e773`:* two filters, not one.
-`sanitize_peerlist` (`net_node.inl:2417`) drops loopback, `is_local`,
-`0.0.0.0` and IPv4 port 0 from a received list, with no regard for the
-flag; `peerlist_manager::is_host_allowed` (`net_peerlist.h:273`) drops
-loopback always and `is_local` unless `--allow-local-ip`, at every
-list insert. For IPv6 both know only loopback and link-local
-(`net_utils_base.cpp:45-46`). `Peerlist::admit_gray` on `dev` has no
-validity check. Without this ruling the cutover would delete both C++
-filters and leave none.
+- **Operator-named addresses are admitted whatever the range.**
+  `--add-peer` (`Source::Operator`) enters gray as named; exclusive
+  and priority nodes are dialed as named. The operator is trusted
+  about the operator's own network; the rule is against what peers
+  say.
+- **`disclose` never includes a non-global address.** Whatever
+  reached white — an operator-named private address that was then
+  confirmed, say — is not what this node tells a peer. The filter is
+  on the sample, not on white.
+- **Inbound acceptance is untouched.** Who may connect to this node is
+  the transport layer's ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md)),
+  not this list's; a private-range inbound session is accepted or not
+  on that layer's rules and the address it advertises is what this
+  rule judges.
+- **`--allow-local-ip` is the one override**, for private test
+  networks, where every address is non-global: it lifts the refusal
+  at `admit_gray` and the exclusion at `disclose` together, since a
+  test network that admitted private addresses but never disclosed
+  them could not discover beyond `--add-peer`. *That the override
+  lifts both sites is this brief's reading, for Rick's review.*
+
+The draws are not a check site. *Records-was, the brief's first
+reading of the ruling (2026-10-11, same day): the check was at admit
+and at both draws; the draw check would have struck operator-named
+addresses, which are admitted whatever the range.* The check lands
+with increment 3 (D5: in PR-3).
+
+*Records-was, the C++ at `8848e773`:* two filters, with different
+fates. `peerlist_manager::is_host_allowed` (`net_peerlist.h:273`)
+drops loopback always and `is_local` unless `--allow-local-ip`, at
+every list insert; it is the only reader of the flag today, and it
+leaves at the cutover with the C++ peerlist (§11.4).
+`sanitize_peerlist` (`net_node.inl:2417`, called at `:2456`) drops
+loopback, `is_local`, `0.0.0.0` and IPv4 port 0 from a received list,
+with no regard for the flag; it **stays** with `handle_remote_peerlist`
+until slice 4, in front of the call into `admit_gray`. Between the
+cutover and slice 4 a received list therefore passes two filters, and
+the Rust rule is the one that governs: an address the C++ copy lets
+through and Rust refuses is refused, and the C++ copy's narrower
+IPv6 reading (loopback and link-local only, `net_utils_base.cpp:45-46`)
+adds nothing. Slice 4 deletes the C++ copy with the handler. *Records-was,
+same day: "without this ruling the cutover would delete the only
+filter"; the cutover deletes `is_host_allowed`, not `sanitize_peerlist`,
+and `Peerlist::admit_gray` on `dev` has no validity check of its own.*
 
 **White's target is draw diversity (ruled 2026-09-25).** Outbound
 connections are drawn uniformly from white, so a small white list is a
@@ -677,11 +705,12 @@ They check different things. Neither stands for the other.
      recorded in §5a.
 6. **Address validity (Rick, 2026-10-11; lands with increment 3).** One
    address from each range §2 lists, and a port-0 address of each type,
-   is refused by `admit_gray` and is never returned by `draw_gray` or
-   `draw_white` after a `restore` that carried it. With
-   `--allow-local-ip`, an address in each of the three private IPv4
-   ranges is admitted and a loopback address is still refused. The
-   test enumerates the ranges from the same table the check reads, and
+   offered as `Source::Session` is refused by `admit_gray`; the same
+   address as `Source::Operator` is admitted; once in white it is
+   absent from every `disclose` sample while a global address beside
+   it is present. With `--allow-local-ip`, the `Source::Session` offer
+   is admitted and the address appears in the sample. The test
+   enumerates the ranges from the same table the check reads, and
    fails if that table is empty (rule 47).
 
 A harness that requires Rust membership to match the C++ is the wrong oracle.
@@ -728,7 +757,7 @@ cannot express. Fix the signature. That does not widen white.
 | --- | --- | --- |
 | 1 | The crate `shekyl-peerlist`: gray, white, `EXPIRATION_PERIOD`, the draws, the door, the cached sample (D3), ban demotion (D4), the per-session intake cap (D-S1), the snapshot, the address file. No FFI, no C++ | The crate's tests cover §11.2, §11.3 and §11.5, and `git diff dev..HEAD --stat -- src/ contrib/` is empty |
 | 2 | The divergence ledger of §8, checked against the tree at the increment's pin; the D3 exception instrument and its results in §5a | Each §8 row names the Rust operation that replaces it, and §11.1 passes. **Checked 2026-10-09 at the PR-2 pin (§16.1):** every C++ site in §8 is where the row says (the `net_peerlist.h` lines moved by four, §16.1), and each row's Rust column is an operation the crate has — `Peerlist::apply` (rows 1, 2, 3, 7), `Source::Session` admits with no clock (row 4), `draw_gray` / `draw_white` / `restore` uniform (row 5), `Partition::expire` through every white read (row 6), `insert_gray`'s keep-the-named eviction (row 8) |
-| 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions. Delete every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. The address-validity check of §2 (ruled 2026-10-11) lands here, with `--allow-local-ip` as the constructor's one input from the C++. **D5 (Rick, 2026-10-11):** this increment lands with slice 3 as one cutover PR, PR-3 | §11.3, §11.4, §11.6 |
+| 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions. Delete every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. The address-validity check of §2 (ruled 2026-10-11: network-learned addresses refused at `admit_gray` unless global; `disclose` excludes non-global; operator-named exempt) lands here, with `--allow-local-ip` as the constructor's one input from the C++. **D5 (Rick, 2026-10-11):** this increment lands with slice 3 as one cutover PR, PR-3 | §11.3, §11.4, §11.6 |
 
 Increment 1 changes no production behavior. Increment 3 is the cutover. The
 crate boundary is what makes `White`'s constructor crate-private; `shekyl-ffi`

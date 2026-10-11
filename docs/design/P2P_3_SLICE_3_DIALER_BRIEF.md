@@ -429,7 +429,7 @@ under it, is dropped with the C++ dial path.
 | Recently failed (`is_addr_recently_failed`) | Kept | This slice's failed-address memory |
 | One candidate per host while the list is built | Kept | A host that advertises many ports is not drawn more often. The port kept for a host is chosen uniformly, not first in list order. The address that is dialed is still host and port |
 | White-list index weighted by `last_seen`, and the cap of the 20 most recent (`net_node.inl:1948`, weighted pick `:1970-1974`) | Dropped | The uniform draw already ruled. A last-seen weight is the eclipse lever in the wargame below |
-| Address validity: `sanitize_peerlist` (`net_node.inl:2417`) and `peerlist_manager::is_host_allowed` (`net_peerlist.h:273`) | Kept, in slice 1 (Rick, 2026-10-11) | Slice 1's `admit_gray` and both draws refuse an address that is not dialable on the public internet (slice 1 brief §2, "Address validity"). `--allow-local-ip` is the one operator override. Neither C++ filter survives the cutover; the Rust check is the one filter, so a dial candidate is never one of those addresses |
+| Address validity (`sanitize_peerlist`, `net_node.inl:2417`; `peerlist_manager::is_host_allowed`, `net_peerlist.h:273`) | Kept, in slice 1, at admit (Rick, 2026-10-11) | A network-learned address — a received peerlist, an inbound advertisement — is refused at slice 1's `admit_gray` unless dialable on the public internet; `disclose` never includes a non-global address (slice 1 brief §2, "Address validity"). Not a dial-time filter: a gray or white address is global or operator-named, and operator-named addresses (`--add-peer`, exclusive, priority) are dialed whatever the range. `--allow-local-ip` is the one override, for private test networks |
 | The `/24` subnet pass, both passes (`net_node.inl:1842-1933`, public zone only) | Dropped (Rick, 2026-10-11) | No subnet grouping. The draw is slice 1's: uniform over eligible addresses, and an address is a host and a port, not a `/24`. See the ruling below |
 
 **No subnet grouping — RULED 2026-10-11 (Rick).** The C++ `/24` pass
@@ -664,7 +664,7 @@ keep the callers named below.
 | `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |
 | The timed-sync self-insertion (handshake-address ruling, 2026-10-09) | `net_node.inl:2717` to `:2735`: `outgoing_to_same_zone`, the `max_peerlist_size` subtraction, and the `local_peerlist_new.insert` of `zone.m_our_address` | `rg -n -e outgoing_to_same_zone src/p2p` returns nothing. Before deletion it hits `:2717`, `:2718` and `:2730` |
-| The C++ address filters (address-validity ruling, 2026-10-11) | `sanitize_peerlist`: definition `net_node.inl:2417`, declaration `net_node.h:510`, call `:2456` in `handle_remote_peerlist`. `peerlist_manager::is_host_allowed` (`net_peerlist.h:273`) and `m_allow_local_ip` (`:201`) go with the C++ peerlist (slice 1 §11.4). The flag itself stays: `arg_p2p_allow_local_ip` (`net_node.cpp:123`), read at `net_node.inl:486`, becomes an input to the Rust peerlist's construction instead of `peerlist_manager::init` (`:1078`) | `rg -n -e sanitize_peerlist src/p2p` returns nothing. Before deletion it hits the declaration, the definition and the call. `rg -n -e allow_local_ip src/p2p` still hits the argument and its read; zero hits fails, because the override was kept |
+| `peerlist_manager::is_host_allowed` and `m_allow_local_ip` (address-validity ruling, 2026-10-11) | `net_peerlist.h:273` and `:201`; they go with the C++ peerlist (slice 1 §11.4). **Not in this table:** `sanitize_peerlist` (`net_node.inl:2417`, declaration `net_node.h:510`, call `:2456`) stays with `handle_remote_peerlist` until slice 4 — the Rust rule at `admit_gray` supersedes it, and the C++ copy is deleted with the handler (Rick, 2026-10-11). The flag stays: `arg_p2p_allow_local_ip` (`net_node.cpp:123`), read at `net_node.inl:486`, becomes an input to the Rust peerlist's construction instead of `peerlist_manager::init` (`:1078`) | `rg -n -e is_host_allowed -e m_allow_local_ip src/p2p` returns nothing. `rg -n -e sanitize_peerlist src/p2p` still hits the declaration, the definition and the call; zero hits fails, because the deletion is slice 4's. `rg -n -e allow_local_ip src/p2p` still hits the argument and its read; zero hits fails, because the override was kept |
 | The C++ in-flight nonce mint and erase | call `:1347`, guard `:1348`, `mint_recorded_handshake_nonce` `:1497`, `erase_outbound_handshake_nonce` `:1516` | `rg -n -e mint_recorded_handshake_nonce -e erase_outbound_handshake_nonce src/p2p` returns nothing. `rg -n -e detect_self_handshake src/p2p` still hits the declaration and the call in `handle_handshake` (`:2789`). Zero hits on `detect_self_handshake` fails. The dialer's `HandshakeNonceSet` is what `shekyl_dial_take_handshake_nonce` reads |
 
 ---
@@ -748,9 +748,10 @@ nodes dialed before the draw, white promotion only on
 `SessionAccepted` or `Confirmed` of an outstanding gray draw or
 `HarvestDone` of a Foundation host, and each kept row of the candidate
 filter. There is no subnet pass to assert (ruled 2026-10-11). Address
-validity is slice 1's falsifier §11.6: each listed range, and port 0,
-is refused at `admit_gray` and at both draws, so no dial candidate is
-one of them. A hidden-connector handshake does not carry the clearnet
+validity is slice 1's falsifier §11.6: a network-learned address in
+each listed range, and port 0, is refused at `admit_gray`, an
+operator-named one is admitted, and `disclose` carries no non-global
+address. A hidden-connector handshake does not carry the clearnet
 port. A dial to our own listener is detected.
 
 Property tests on draw uniformity, within one connector, including a
