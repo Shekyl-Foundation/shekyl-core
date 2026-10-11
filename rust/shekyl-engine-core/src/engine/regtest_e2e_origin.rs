@@ -10,6 +10,11 @@
 //! longer than one assertion, which one daemon cannot do. The restricted-listener
 //! and in-process console gates that read `get_info` live here with it.
 
+// The production debug-macro lint treats a file as test code only when the
+// file itself carries this attribute. The parent harness is already
+// test-only; this sibling has to say so on its own.
+#![cfg(test)]
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
