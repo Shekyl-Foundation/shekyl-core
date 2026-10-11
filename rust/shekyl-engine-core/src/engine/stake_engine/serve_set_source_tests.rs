@@ -60,19 +60,25 @@ impl Rpc for ClaimSourceDaemon {
             .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
             .is_some_and(|m| m == "get_info");
         let result = if is_get_info {
-            serde_json::json!({
-                "height": self.0.get("chain_height").and_then(serde_json::Value::as_u64)
-                    .expect("the fixture source carries a chain height"),
-                "target_height": 0,
-                "synchronized": true,
-                "top_block_hash": hex::encode(test_block_hash_at(
-                    self.0.get("chain_height").and_then(serde_json::Value::as_u64)
+            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                chain_count: shekyl_types::ChainCount::from_raw(
+                    self.0
+                        .get("chain_height")
+                        .and_then(serde_json::Value::as_u64)
+                        .expect("the fixture source carries a chain height"),
+                ),
+                target_height: None,
+                synchronized: true,
+                top_hash: shekyl_types::BlockHash::from_bytes(test_block_hash_at(
+                    self.0
+                        .get("chain_height")
+                        .and_then(serde_json::Value::as_u64)
                         .expect("the fixture source carries a chain height")
                         .saturating_sub(1),
                 )),
-                "outgoing_connections_count": 8,
-                "incoming_connections_count": 0,
-            })
+                has_peers: true,
+            }
+            .to_value()
         } else {
             (*self.0).clone()
         };
@@ -472,9 +478,9 @@ async fn pins_in_store(curve_tree: &CurveTreeHandle) -> Vec<u64> {
 /// advances the cursor and the claim source reads it, matching production
 /// order (health first, then the record).
 ///
-/// `target_height` is the sync dial: a non-zero value above the answering
-/// height is a daemon that says it is still catching up; `0` is the info
-/// surface's "synchronized" convention.
+/// `synchronized` is the sync dial: the daemon's own flag. A daemon that is
+/// still catching up also reports a target far above its height, as a real
+/// one would; nothing decides on that number.
 /// One refresh's worth of daemon: the tip it answers at and what the bond
 /// record says at that tip.
 #[derive(Clone)]
@@ -529,17 +535,17 @@ struct ScheduledDaemon {
     cursor: Arc<std::sync::atomic::AtomicUsize>,
     /// The step the current refresh answers from, written by `get_info`.
     current: Arc<std::sync::Mutex<usize>>,
-    /// `0` means synchronized; anything else is the climbing target.
-    target_height: u64,
+    /// The daemon's flag.
+    synchronized: bool,
 }
 
 impl ScheduledDaemon {
-    fn new(schedule: Vec<Step>, target_height: u64) -> Self {
+    fn new(schedule: Vec<Step>, synchronized: bool) -> Self {
         Self {
             schedule: Arc::new(schedule),
             cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             current: Arc::new(std::sync::Mutex::new(0)),
-            target_height,
+            synchronized,
         }
     }
 
@@ -582,16 +588,14 @@ impl Rpc for ScheduledDaemon {
             // claim source below reports, because both come off one
             // `db.height()` read on the daemon.
             let tip = self.step().tip;
-            serde_json::json!({
-                "height": tip + 1,
-                "target_height": self.target_height,
-                // A resyncing daemon says so outright; the heights are
-                // the second half of the same statement.
-                "synchronized": self.target_height == 0,
-                "top_block_hash": hex::encode(test_block_hash_at(tip)),
-                "outgoing_connections_count": 8,
-                "incoming_connections_count": 0,
-            })
+            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                chain_count: shekyl_types::ChainCount::from_raw(tip + 1),
+                target_height: (!self.synchronized).then_some(1_000_000),
+                synchronized: self.synchronized,
+                top_hash: shekyl_types::BlockHash::from_bytes(test_block_hash_at(tip)),
+                has_peers: true,
+            }
+            .to_value()
         } else {
             // `chain_height` is a COUNT; the schedule is expressed in
             // tips, so the record answers one more than the tip — the
@@ -659,7 +663,7 @@ fn compact_climb(owed: &[u64]) -> Vec<Step> {
 async fn a_resyncing_daemon_releases_nothing_and_observes_no_absence() {
     let (_dir, curve_tree) = handle();
     // Owes shard 1 only; shard 9 is held from an older record.
-    let rpc = ScheduledDaemon::new(compact_climb(&[1]), 1_000_000);
+    let rpc = ScheduledDaemon::new(compact_climb(&[1]), false);
     let pinner =
         EngineServeSetPinner::new(curve_tree, rpc, [7; 32], ReleasedRows::Store(test_bodies()));
 
@@ -706,7 +710,7 @@ async fn a_resyncing_daemon_releases_nothing_and_observes_no_absence() {
 #[tokio::test]
 async fn the_same_climb_synchronized_still_releases_at_the_second_epoch_open() {
     let (_dir, curve_tree) = handle();
-    let rpc = ScheduledDaemon::new(compact_climb(&[1]), 0);
+    let rpc = ScheduledDaemon::new(compact_climb(&[1]), true);
     let bodies = test_bodies();
     bodies
         .put_shard(ShardId::from_raw(9), b"departed")
@@ -764,7 +768,7 @@ async fn a_complete_tree_epoch_forgets_the_absence_clock_before_it() {
         Step::compact(40_000, &[1]),
     ];
     let expected_pins: [&[u64]; 5] = [&[1, 9], &[1, 9], &[1, 9], &[1, 9], &[1]];
-    let rpc = ScheduledDaemon::new(schedule, 0);
+    let rpc = ScheduledDaemon::new(schedule, true);
     let pinner =
         EngineServeSetPinner::new(curve_tree, rpc, [7; 32], ReleasedRows::Store(test_bodies()));
     pinner
@@ -811,7 +815,7 @@ async fn a_rollback_refresh_leaves_the_ledger_empty_and_the_next_observation_sta
     let expected_pins: [&[u64]; 5] = [&[1, 9], &[1, 9], &[1, 9], &[1, 9], &[1]];
     let pinner = EngineServeSetPinner::new(
         curve_tree,
-        ScheduledDaemon::new(schedule, 0),
+        ScheduledDaemon::new(schedule, true),
         [7; 32],
         ReleasedRows::Store(test_bodies()),
     );

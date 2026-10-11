@@ -1744,9 +1744,9 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
 #[tokio::test]
 async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reachable() {
     use crate::engine::submit_watchdog::{
-        escape_ladder_step, held_submits, DaemonHealthContext, HeldSubmit, WaitReason,
-        WatchdogConfig, WatchdogStep,
+        escape_ladder_step, held_submits, HeldSubmit, WaitReason, WatchdogConfig, WatchdogStep,
     };
+    use crate::engine::traits::DaemonHealth;
 
     let (pending, _ledger, _tree_dir) = funded_pending_tx().await;
     let built = pending
@@ -1788,10 +1788,9 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
 
     // Horizon reachability, the property the §7.2 cap names.
     let config = WatchdogConfig::from_block_target(120);
-    let healthy = DaemonHealthContext {
-        connections: 8,
+    let healthy = DaemonHealth {
+        has_peers: true,
         height: 20,
-        target_height: 0,
         synchronized: true,
     };
     let horizon_reached = 20 + config.escape_horizon_blocks;

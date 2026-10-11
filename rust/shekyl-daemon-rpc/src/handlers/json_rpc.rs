@@ -132,18 +132,7 @@ pub async fn handle(
     match result {
         Ok(Some(raw)) => match serde_json::from_str::<FfiJsonRpcResult>(&raw) {
             Ok(ffi_result) if ffi_result.ok => {
-                let mut value = ffi_result.result.unwrap_or(serde_json::Value::Null);
-                // Rust owns `rpc_connections_count`; fill it on the json_rpc
-                // get_info surface too (unrestricted only, matching the REST
-                // handler and the C++ restricted-mode policy).
-                if method == "get_info" && !state.restricted {
-                    if let Some(obj) = value.as_object_mut() {
-                        obj.insert(
-                            "rpc_connections_count".to_owned(),
-                            state.conn_tracker.active_total().into(),
-                        );
-                    }
-                }
+                let value = ffi_result.result.unwrap_or(serde_json::Value::Null);
                 (StatusCode::OK, Json(JsonRpcResponse::success(id, value)))
             }
             Ok(ffi_result) => (
@@ -218,6 +207,7 @@ enum NativeMethod {
     BlockHeadersRange,
     FeeEstimate,
     RequestArchivalShard,
+    Info,
 }
 
 /// The names each native method answers to — every alias the C++ dispatch
@@ -248,6 +238,9 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         // One spelling: the method was born in the Rust registry (3.31)
         // and never had a C++ alias.
         "request_archival_shard" => NativeMethod::RequestArchivalShard,
+        // RK-5c. One spelling on JSON-RPC, as the C++ table carried it; the
+        // `/getinfo` alias is a REST path.
+        "get_info" => NativeMethod::Info,
         _ => return None,
     })
 }
@@ -295,6 +288,21 @@ async fn native_method(
             Some(frame_native(
                 run_blocking(state, move |core| {
                     crate::methods::get_block(&FfiChainFacts::new(core), &request, fill_pow_hash)
+                })
+                .await,
+            ))
+        }
+        NativeMethod::Info => {
+            // The listener's posture and this server's own connection count
+            // are the transport's facts; they are taken here, before the
+            // worker, and the method reads only the parts the disclosure
+            // shows (RK-D24).
+            let disclosure = crate::info::Disclosure::from_listener(state.restricted);
+            let rpc_connections = state.conn_tracker.active_total();
+            Some(frame_native(
+                run_blocking(state, move |core| {
+                    let facts = crate::info_facts::FfiInfoFacts::new(core);
+                    crate::info::get_info(&facts, disclosure, rpc_connections)
                 })
                 .await,
             ))
@@ -556,6 +564,7 @@ mod tests {
             false,
         ),
         ("get_fee_estimate", NativeMethod::FeeEstimate, false),
+        ("get_info", NativeMethod::Info, false),
         (
             "request_archival_shard",
             NativeMethod::RequestArchivalShard,
@@ -580,7 +589,6 @@ mod tests {
         // Still the C++ table's: recognizing one here would serve it from a
         // handler that does not exist yet.
         for name in [
-            "get_info",
             "get_alternate_chains",
             "mining_status",
             "get_block_by_hash",

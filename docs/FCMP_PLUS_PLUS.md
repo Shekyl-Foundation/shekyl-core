@@ -914,8 +914,9 @@ d_z                 = HKDF-SHA-512(salt, ikm=master_seed_64,
                                    info="shekyl-ml-kem-768",    L=64)
 
 spend_sk, view_sk   = Scalar::from_bytes_mod_order_wide(...)   (unclamped)
-ml_kem_768 (ek,dk)  = keygen(ChaCha20Rng::from_seed(
+ml_kem_768 (ek,dk)  = keygen(SeededRng::from_seed(
                         SHA3-256("shekyl-mlkem-chacha-seed" || d_z)))
+                      (those bytes are what ChaCha20Rng::from_seed produces)
 ```
 
 All key material — classical and PQC — is therefore a pure function of

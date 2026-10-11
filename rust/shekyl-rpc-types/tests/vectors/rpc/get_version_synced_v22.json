@@ -1,0 +1,10 @@
+{
+  "consensus_constants_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "current_height": 1234567,
+  "genesis_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "nettype": "mainnet",
+  "release": false,
+  "status": "OK",
+  "target_height": 999999,
+  "version": 196653
+}

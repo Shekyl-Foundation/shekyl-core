@@ -212,9 +212,8 @@ impl StubDaemon {
         Self {
             state: Arc::new(Mutex::new(DaemonState {
                 health: DaemonHealth {
-                    connections: 8,
+                    has_peers: true,
                     height: 10_000,
-                    target_height: 0,
                     synchronized: true,
                 },
                 health_fail: false,
@@ -536,9 +535,8 @@ async fn peerless_daemon_alarms_without_probing() {
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.set_health(DaemonHealth {
-        connections: 0,
+        has_peers: false,
         height: 10_000,
-        target_height: 0,
         synchronized: true,
     });
     let mut d = driver();
@@ -556,7 +554,7 @@ async fn peerless_daemon_alarms_without_probing() {
     );
 }
 
-/// Health gating: a daemon behind the network sync-gates the ladder —
+/// Health gating: a daemon that says it has not caught up sync-gates the ladder —
 /// "unconfirmed at this daemon" is uninformative until it syncs — so
 /// the driver waits, never probing or alarming.
 #[tokio::test]
@@ -566,10 +564,9 @@ async fn syncing_daemon_waits() {
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.set_health(DaemonHealth {
-        connections: 8,
+        has_peers: true,
         height: 5_000,
-        target_height: 6_000,
-        synchronized: true,
+        synchronized: false,
     });
     let mut d = driver();
 

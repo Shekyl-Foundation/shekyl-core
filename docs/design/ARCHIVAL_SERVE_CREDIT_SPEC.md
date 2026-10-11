@@ -455,8 +455,12 @@ The reason is algorithm isolation: persona identity stays on a finalized
 standard, and the pre-standard scheme touches only signatures whose value
 expires within an epoch. Ruled; it reopens `SF-D13` under rule 21
 (§13.1). The receipt key is derived from the wallet master seed when the
-engine is assembled, by persona slot and under its own label, exactly as
-the identity key is. The stake-engine actor is handed the derived keys
+engine is assembled, by persona slot and under its own two labels, one for
+each half of the hybrid, exactly as the identity key is
+(`shekyl-archival-p-receipt-ed25519-v1`,
+`shekyl-archival-p-receipt-fn-dsa-1024-v1`; `ARCHIVAL_P_RECEIPT_ED_INFO` and
+`ARCHIVAL_P_RECEIPT_FN_DSA_INFO` in `rust/shekyl-crypto-pq/src/archival_p.rs`).
+It shares no seed with the identity key. The stake-engine actor is handed the derived keys
 and holds no seed; the serving task receives a signing capability and
 never a key.
 
@@ -1109,11 +1113,13 @@ stays until that code is deleted (§11.1), and is marked.
 
 ## 16. Labels this specification mints
 
-Each row lands with its constant. Four have: the settlement selection and
+Each row lands with its constant. Six have: the settlement selection and
 the issued-index term (`rust/shekyl-archival-retention/src/settlement_select.rs`,
-2026-10-08), and the two scheme domains (`SCHEME_DOMAIN_RECEIPT`,
+2026-10-08), the two scheme domains (`SCHEME_DOMAIN_RECEIPT`,
 `SCHEME_DOMAIN_WITNESS_CARRIER` in `rust/shekyl-crypto-pq/src/signature.rs`,
-2026-10-09). The rest have no constant or registry row yet.
+2026-10-09), and the two receipt-key labels
+(`rust/shekyl-crypto-pq/src/archival_p.rs`, 2026-10-10). The rest have no
+constant or registry row yet.
 
 | Label | Mechanism | Use |
 | --- | --- | --- |
@@ -1123,11 +1129,11 @@ the issued-index term (`rust/shekyl-archival-retention/src/settlement_select.rs`
 | `shekyl/archival-issued-index-v1` | cSHAKE256 | One issued draw's term in the epoch's running digest, §10 |
 | `shekyl/archival-settlement-select-v1` | cSHAKE256 | Counted-draw selection, §9.3 |
 | `shekyl/archival-serve-credit-batch-v1` | cSHAKE256 | Set commitment, §7.3 |
-| a receipt-key label | HKDF info | The persona's receipt key, from the master seed, §6.3 |
+| `shekyl-archival-p-receipt-ed25519-v1` | HKDF info | The Ed25519 half of the persona's receipt key, from the master seed, §6.3 |
+| `shekyl-archival-p-receipt-fn-dsa-1024-v1` | HKDF info | The FN-DSA-1024 half of the same key, §6.3 |
 | `shekyl/archival-receipt-scheme-v1` | signature domain | Receipts under scheme 3, §6.2 |
 | `shekyl/archival-witness-carrier-scheme-v1` | signature domain | The witness signature under scheme 3, §7.3 |
 
-The HKDF string is named when its constant lands.
 The seed and the witness key have no label: they are fresh randomness.
 
 ---
