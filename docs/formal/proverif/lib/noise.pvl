@@ -3,14 +3,17 @@
  * All rights reserved.
  * BSD-3-Clause
  *
- * The shared ProVerif library for Shekyl's Noise handshakes (RT-W8 part 1).
+ * The shared ProVerif library for Shekyl's Noise handshakes.
  *
- * One library, two models: the P2P transport's NNhfs (nnhfs/run.py beside
- * this file) and the RPC channel's hybridXK (RT-P7, rust/shekyl-rpc-channel/
- * model/run.py, which declared the same primitives inline and adopts this
- * file when it merges). A primitive is declared here once; a model declares
- * only its protocol: processes, events, queries, and the constants that name
- * its messages.
+ * One library, two models. The P2P transport's NNhfs (PWD-T1,
+ * nnhfs/model.py beside this file; nnhfs/run.py executes it) is the first
+ * user. The RPC channel's
+ * hybridXK (RT-P7, rust/shekyl-rpc-channel/model/run.py) declared the
+ * same primitives inline and adopts this file when it merges. A primitive
+ * is declared here once; a model declares only its protocol: processes,
+ * events, queries, and the constants that name its messages.
+ * `kdfh` and `n2` have no NNhfs caller. They stay: hybridXK's
+ * MixKeyAndHash and a third seal under one key are the next user.
  *
  * Load with `proverif -lib docs/formal/proverif/lib/noise.pvl model.pv`.
  *

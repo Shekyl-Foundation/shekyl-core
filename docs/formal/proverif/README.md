@@ -1,16 +1,18 @@
 # Formal models — ProVerif
 
-**Status: LIVING CONTRACT — last verified 2026-10-10 (RT-W8 part 1).**
+**Status: LIVING CONTRACT — last verified 2026-10-10.**
 Symbolic models of Shekyl's Noise handshakes, checked in CI against pinned
 verdicts. This directory is the shared library and the P2P transport's
-NNhfs model; the RPC channel's hybridXK model (RT-P7) lives with its crate
-and adopts the library when it merges.
+NNhfs model, which is PWD-T1's handshake. It is not the RPC slice RT-W8.
+The RPC channel's hybridXK model (RT-P7) lives with its crate and adopts
+the library when it merges.
 
 ```text
 docs/formal/proverif/
 ├── lib/noise.pvl             the shared library: symmetric state, X25519, ML-KEM, AEAD
-├── nnhfs/run.py              the NNhfs model, its named edits, its pinned verdicts
-├── nnhfs/nnhfs.baseline.pv   the unedited passive variant, written out for reading
+├── nnhfs/model.py            the pattern, the walk, the claims
+├── nnhfs/run.py              executes variants/ and checks the pins
+├── nnhfs/variants/*.pv       every variant the runner executes, generated and checked
 ├── install_proverif.sh       the one ProVerif (2.05) recipe, no root needed
 └── README.md
 ```
@@ -27,88 +29,101 @@ key — not about bytes, constant time, or Shekyl's Rust.
 pinned vectors (`noise.rs` tests, the Cacophony NN vector) and the
 differential tests. Downgrade is decided outside Noise, by the clearnet
 encryption flag (`--clearnet-transport-encrypt`); a session that never
-starts this handshake is not this model's subject.
+starts this handshake is not this model's subject. The rekey chain that
+`split` hands to both `Direction`s (`channel.rs` `halves`) is a FOLLOWUPS
+row, not a query in this model.
 
 ## The library — `lib/noise.pvl`
 
-One declaration of each primitive, loaded with `proverif -lib`:
+One declaration of each primitive, loaded with `proverif -lib`. The names
+and signatures are the ones the RT-P7 model declared inline, so that model
+adopts the library by replacing its prelude with `-lib`.
 
 | Noise | Library | Notes |
 | --- | --- | --- |
 | `InitializeSymmetric(name)` | `hinit(name)` | `h = ck = HASH(name)` |
 | `MixHash(data)` | `mixh(h, data)` | |
-| `MixKey(ikm)` | `kdfck(ck, ikm)`, `kdfk(ck, ikm)` | HKDF's two outputs; the nonce resets per key, so a model names nonces per key |
-| `MixKeyAndHash(ikm)` | `… + kdfh(ck, ikm)` | the third output, which a model mixes into `h` |
-| `EncryptAndHash(m)` | `eah(k, n, h, m)` → `(ct, h')` | `aead` then `mixh` of the ciphertext |
+| `MixKey(ikm)` | `kdfck(ck, ikm)`, `kdfk(ck, ikm)` | HKDF's two outputs; the nonce restarts at `n0` per key |
+| `MixKeyAndHash(ikm)` | `… + kdfh(ck, ikm)` | the third output, mixed into `h` by the model that needs it |
+| `EncryptAndHash(m)` | `eah(k, n, h, m)` → `(ct, h')` | `aead` then `mixh` of the ciphertext; `dah` opens |
 | `Split()` | `split1(ck)`, `split2(ck)` | initiator→responder, responder→initiator |
 | X25519 | `g`, `exp`, the commutation equation | low-order points do not exist here |
-| ML-KEM-768 | `kpk`, `kct`, `kss`, `kdecaps` | IND-CCA: a ciphertext opens only under its secret key |
-| a broken primitive | `broken_dh`, `broken_kem` | every shared secret is one public constant; see the file |
+| ML-KEM-768 | `kpk`, `kct`, `kss`, `kdecaps` | a ciphertext opens only under its secret key |
+| a broken primitive | `broken_dh`, `broken_kem` | the model uses the constant in place of that primitive's output |
 
-The names and signatures are the ones the RT-P7 model declared inline
-(`rust/shekyl-rpc-channel/model/run.py`, #1020), so that model adopts the
-library by replacing its prelude with `-lib` and nothing else (FOLLOWUPS).
+`kdfh` and `n2` have no NNhfs caller. They stay for hybridXK. A break is
+the constant substituted for the output, not an equation: a discrete-log
+rule beside the Diffie-Hellman equation made the search grow without bound.
 
-## The NNhfs model — `nnhfs/run.py`
+## The NNhfs model — `nnhfs/model.py`
 
-Follows `rust/shekyl-p2p-transport/src/noise.rs` exactly: both sides start
-`h = ck = HASH(protocol_name)` and `MixHash(network_id)` — the prologue, the
-network id being the first 16 bytes of a domain-separated cSHAKE256 of the
-genesis block hash (`prefix.rs`);
-message 1 is `e, ekem` hashed only (no key yet) and the empty payload
-mixed; message 2 is `e`, `MixKey(ee)`, `EncryptAndHash(ekem ct)`,
-`MixKey(ss)`, `EncryptAndHash(empty)`; `Split` is `HKDF(ck, empty)`.
+The pattern is the data. `model.py` walks it once for each role. `run.py` only executes the result.
 
-**The attacker is passive**, by the pattern's nature: NN authenticates no
-one, so an active attacker who answers message 1 is a legitimate
-responder. The honest pair talk over a private link and the attacker is
-handed a copy of every byte. The active attacker is run once, to record
-the non-property as a verdict rather than a sentence.
+```text
+-> e, ek                 hashed, then the empty payload hashed and not sent
+<- e, ee, ekem, empty    MixKey(ee); EncryptAndHash(ct); MixKey(ss); EncryptAndHash(empty)
+Split                    k_i2r, k_r2i
+records                  length under len_ad at n0, body under body_ad at n1
+```
+
+That is `noise.rs` up to `Split`, then `channel.rs`: a 2-byte length sealed
+under associated data `b"len"`, then the body under `b"body"`. The length
+plaintext is the public constant `body_len`. The body plaintexts are `req`
+and `rep`, and those are the secrecy queries.
+
+An **edit** drops a token from the walk (`no_ee`, `no_ekem`), leaves the
+network id out of `h` (`no_prologue`), or reuses one initiator ephemeral
+pair (`reuse_eph`). A **break** uses `broken_dh` or `broken_kem` as that
+step's output. The nonce is the next one under the current key, so deleting
+`ekem` does not leave a hole where its seal used to be.
+
+**The attacker is passive**, because NN authenticates no one: an active
+attacker who answers message 1 is a legitimate responder. The honest pair
+talk over a private link and the attacker is handed a copy of every byte.
+The active attacker is one stated non-property.
+
+Each property names the row that must flip every query it holds. A property
+with no such row, a row that does not flip, or a `variants/` file that is
+missing or stale, fails the run.
 
 | Variant | Asks | Pinned verdict |
 | --- | --- | --- |
-| `passive` | secrecy of both transport records and of both Split keys (`k_i2r`, `k_r2i`); honest completion reachable | secret; reachable |
-| `hybrid_dh_broken` | the same with every X25519 result public | secret — ML-KEM carries it |
-| `hybrid_kem_broken` | the same with every ML-KEM secret public | secret — X25519 carries it |
-| `independent_of_later_ephemerals` | a completed session's records after the ephemerals of sessions started afterwards are published (phase 1) — session independence, not forward secrecy (NN has no long-term key for that term to be about) | secret |
-| `network_binding` | an initiator on network A and a responder on network B completing with the same keys | unreachable |
-| `active_mitm` | secrecy against an active attacker | **not secret — stated non-property: NN has no authentication, by design** |
+| `passive` | secrecy of both record bodies and of both Split keys; honest completion reachable | secret; reachable |
+| `hybrid_dh_broken` | the same, with every X25519 output the public constant | secret — ML-KEM carries it |
+| `hybrid_kem_broken` | the same, with every ML-KEM secret the public constant | secret — X25519 carries it |
+| `independent_of_later_ephemerals` | a finished session's bodies after ephemerals of sessions started afterwards are published. Session independence, not forward secrecy: NN has no long-term key for that term | secret |
+| `network_binding` | an initiator on network A and a responder on network B finishing with the same keys | unreachable |
+| `active_mitm` | secrecy against an active attacker | **not secret — NN has no authentication, by design** |
 | `both_broken` | both primitives public | not secret, as expected |
-| `own_ephemerals_exposed` | a completed session's records after **its own** ephemerals are published | **not secret** — pinned so: what protects a completed session is erasure, not the pattern. `noise.rs` drops the ephemerals (`ZeroizeOnDrop`) at the end of `read_message2` / `finish`; `split` zeroes the symmetric state's `ck` but hands that value to both `Direction`s, where it persists as the rekey chain (`channel.rs` `halves`) — the chain is RT-W8 part 2's subject |
+| `own_ephemerals_exposed` | a finished session's bodies after **its own** ephemerals are published | **not secret** — what protects a finished session is erasure. `noise.rs` drops the ephemerals (`ZeroizeOnDrop`) at the end of `read_message2` / `finish` |
 
-**Each property is shown failing under a named edit before its success
-counts** (rule 47). The edits remove one thing the pattern carries:
-
-| Edit | Removes | Falsifies |
+| Falsifier | Drops | Flips |
 | --- | --- | --- |
-| `no_ekem` + X25519 broken | the KEM ciphertext | the hybrid claim's ML-KEM leg |
-| `no_ee` + ML-KEM broken | the X25519 exchange | the hybrid claim's X25519 leg |
-| `no_ee` + `no_ekem` | both | plain secrecy and the secrecy of both Split keys |
-| `no_prologue` | the network id from `h` | network binding: cross-network completion becomes reachable |
-| `reuse_eph` | fresh initiator ephemerals (one pair across sessions) | session independence under later-session compromise |
-
-An edit whose property still holds fails the run: either the edit is not
-what it says, or the property does not depend on what the design says it
-does.
+| `edit_no_ee_no_ekem` | `ee` and `ekem` | plain secrecy and both Split keys |
+| `edit_no_ekem_dh_broken` | `ekem`, X25519 already public | the hybrid claim's ML-KEM leg |
+| `edit_no_ee_kem_broken` | `ee`, ML-KEM already public | the hybrid claim's X25519 leg |
+| `edit_no_prologue` | the network id from `h` | network binding: cross-network completion becomes reachable |
+| `edit_reuse_ephemeral` | fresh initiator ephemerals | session independence under later-session compromise |
 
 ## Running it
 
 ```bash
-docs/formal/proverif/install_proverif.sh "$HOME/.cache/shekyl-proverif"   # once; no root
+docs/formal/proverif/install_proverif.sh "$HOME/.cache/shekyl-proverif"   # once; no root; x86_64 Linux
 export PATH="$HOME/.cache/shekyl-proverif/proverif2.05:$PATH"
-python3 docs/formal/proverif/nnhfs/run.py            # every variant, ~2 s total
-python3 docs/formal/proverif/nnhfs/run.py --list     # the table
-python3 docs/formal/proverif/nnhfs/run.py --keep DIR # leave the generated .pv files
+python3 docs/formal/proverif/nnhfs/run.py            # every variant
+python3 docs/formal/proverif/nnhfs/run.py --list     # each property and the row that flips it
+python3 docs/formal/proverif/nnhfs/run.py --write-variants   # regenerate variants/*.pv
 ```
 
-`run.py` refuses any ProVerif but 2.05 (the verdicts are pinned to it), and
-refuses to run if `nnhfs.baseline.pv` is not what it would generate
-(`--write-baseline` regenerates it). CI
-(`.github/workflows/p2p-nnhfs-model.yml`) runs the same script on changes
-to this directory, to `noise.rs`, or to the workflow, and fails if any
-verdict changes.
+`run.py` refuses any ProVerif but 2.05, refuses a property that does not
+name a row which flips it, and refuses a `variants/` directory that is not
+exactly the files it would generate. Each variant runs under `prlimit`, so
+the address-space cap is on the child and the runner can run variants in
+parallel. CI (`.github/workflows/p2p-nnhfs-model.yml`) runs the same script
+on changes to this directory, to `noise.rs`, to `channel.rs`, or to the
+workflow, and fails if any verdict changes.
 
-`install_proverif.sh` is the one recipe: it builds ProVerif 2.05 from
-source under a pinned OCaml from a pinned opam-repository revision, every
-download checked against a recorded SHA-256. The RT-P7 model (#1020)
-adopts it and the library, deleting its own copy (FOLLOWUPS).
+`install_proverif.sh` is the one recipe: ProVerif 2.05 from source, a
+pinned OCaml, a pinned opam-repository revision, every download checked
+against a recorded SHA-256. The RT-P7 model adopts it and the library,
+deleting its own copy (FOLLOWUPS).

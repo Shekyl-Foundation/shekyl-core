@@ -4,349 +4,55 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# RT-W8 part 1: the ProVerif model of the P2P transport's handshake,
-# Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s, and the runner that checks it.
+# Execute the NNhfs variants and fail if a pinned verdict moves.
+# The pattern, the claims, and the generated files live in model.py.
+# This is PWD-T1's handshake, not the RPC slice RT-W8.
 #
-# THE PROTOCOL MODELLED is rust/shekyl-p2p-transport/src/noise.rs, in its
-# exact message order, in the symbolic (Dolev-Yao) model:
-#
-#     both:  h = ck = HASH(protocol_name); MixHash(network_id)     the prologue
-#     -> e, ekem                 hashed only: message 1 has no key
-#     <- e, ee, ekem, <empty>    MixKey(ee); EncryptAndHash(ct); MixKey(ss);
-#                                EncryptAndHash(empty payload)
-#     Split                      k_i2r = HKDF(ck)[1], k_r2i = HKDF(ck)[2]
-#
-# WHAT THE PHASE-1 VARIANTS SAY. `independent_of_later_ephemerals` is
-# session independence: a completed session's records stay secret when the
-# ephemerals of sessions started afterwards are published. It is not forward
-# secrecy — NN has no long-term key for that term to be about.
-# `own_ephemerals_exposed` publishes the completed session's own ephemerals
-# and is pinned FALSE: what protects a completed session is erasure, and the
-# code performs it (the ephemerals are dropped, ZeroizeOnDrop, at the end of
-# read_message2 / finish; see the README for what Split keeps).
-#
-# The primitives come from ../lib/noise.pvl, the library shared with the RPC
-# channel's hybridXK model (RT-P7). This file declares only the protocol.
-#
-# THE ATTACKER. NN has no authentication, by design: an active attacker who
-# answers message 1 itself is a legitimate responder, so every property below
-# is stated against a PASSIVE attacker — the honest pair talk over a private
-# link and the attacker is handed a copy of every byte. One variant runs the
-# active attacker to record that non-property as what it is, a verdict of
-# "false" that this script expects.
-#
-# WHAT "HYBRID" MEANS HERE, and why one run is not enough. The transport keys
-# are hybrid if they stay secret when either primitive is broken. So the
-# model runs with X25519 broken and with ML-KEM broken (a broken primitive's
-# every shared secret is one public constant; see the library). With both
-# broken nothing is left, and that run is recorded as "false" too.
-#
-# NAMED EDITS. A model that only ever says "true" has not been shown able to
-# say anything else. Each edit below removes one thing the pattern carries,
-# and a property that thing carries must then FAIL. An edit whose property
-# still holds fails this script: either the edit is not what it says, or the
-# property does not depend on what the design says it does.
-#
-#   no_ekem       the KEM ciphertext is not sent: no ML-KEM secret is mixed
-#   no_ee         the X25519 exchange is not mixed: ekem travels in the clear
-#   no_prologue   the network id is not mixed into h
-#   reuse_eph     one initiator ephemeral pair is reused across sessions
-#
-# OUT OF SCOPE, recorded as such: implementation correctness (the pinned
-# vectors in noise.rs and the differential tests), and downgrade (decided
-# outside Noise, by the clearnet encryption flag; a session that never
-# starts this handshake is not this model's subject).
-#
-# Run:  python3 run.py              # every variant; exit 1 on any unexpected verdict
-#       python3 run.py --list       # the table, without running
-#       python3 run.py --keep DIR   # also leave the generated .pv files in DIR
-#       python3 run.py --jobs N     # variants in parallel (default: up to 4)
-#       python3 run.py --only NAME  # one variant
-#       python3 run.py --write-baseline   # regenerate nnhfs.baseline.pv
-#
-# ONE ProVerif version, here and in CI (install_proverif.sh). The verdicts are
-# pinned to it; this script reads the version of the proverif it finds and
-# refuses any other.
+# Run:  python3 run.py                 # every variant; exit 1 on a drift
+#       python3 run.py --list          # the claims and the rows that flip them
+#       python3 run.py --jobs N        # variants in parallel (default: up to 4)
+#       python3 run.py --only NAME
+#       python3 run.py --write-variants
+
+from __future__ import annotations
 
 import argparse
 import concurrent.futures
 import os
-import pathlib
 import re
-import resource
+import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
+from model import (
+    CLAIMS,
+    LIB,
+    VARIANTS,
+    Claim,
+    Row,
+    Verdict,
+    check_claims,
+    check_variants,
+    rows_of,
+    write_variants,
+    _labels,
+)
+
 PROVERIF_VERSION = "2.05"
-HERE = pathlib.Path(__file__).resolve().parent
-LIB = HERE.parent / "lib" / "noise.pvl"
-BASELINE = HERE / "nnhfs.baseline.pv"
-
 VARIANT_TIMEOUT_SECONDS = 20 * 60
-VARIANT_MEMORY_BYTES = 4 * 1024 ** 3
-
-HEADER = """(* ---- generated by docs/formal/proverif/nnhfs/run.py; do not edit ----
-   Variant: {name}
-   Edits:   {edits}
-   Breaks:  {breaks}
-   Load with: proverif -lib docs/formal/proverif/lib/noise.pvl <this file> *)
-
-free c: channel.
-(* The honest pair's link under the passive attacker. Every message that
-   crosses it is also written to c, so the attacker reads all and injects
-   nothing. The active variant uses c for the link too. *)
-free hs: channel [private].
-
-const protocol_name: bitstring.
-(* Network ids are public: the first 16 bytes of cSHAKE256(S = NETWORK_ID_DST,
-   X = genesis block hash) (prefix.rs, `network_id_from_genesis`). Two of
-   them, so a handshake across networks can be asked about. *)
-free nidA: bitstring.
-free nidB: bitstring.
-
-(* The first transport records. Secret unless the handshake leaks them. *)
-free req0: bitstring [private].
-free rep0: bitstring [private].
-free req1: bitstring [private].
-free rep1: bitstring [private].
-
-(* (network id, k_i2r, k_r2i): the Split keys a role ends with. *)
-event InitiatorDone(bitstring, key, key).
-event ResponderDone(bitstring, key, key).
-"""
-
-
-def protocol(edits, breaks, leak_prefix):
-    """Both roles, parameterised by the link they talk over, their network
-    id, the record each will send, and (for the forward-secrecy variants)
-    whether they publish their ephemerals once done. `leak_prefix` is
-    "phase 1; " for a session that runs in phase 0 and leaks afterwards, and
-    "" for one that already runs in phase 1 (ProVerif refuses a phase that
-    does not increase)."""
-    no_ekem = "no_ekem" in edits
-    no_ee = "no_ee" in edits
-    no_prologue = "no_prologue" in edits
-    reuse_eph = "reuse_eph" in edits
-    dh_broken = "dh" in breaks
-    kem_broken = "kem" in breaks
-
-    h0 = "hinit(protocol_name)" if no_prologue else "mixh(hinit(protocol_name), nid)"
-
-    # The initiator's ephemerals: fresh per session, or one shared pair.
-    if reuse_eph:
-        eph_decl = "free ei_shared: scalar [private].\nfree eki_shared: kemsk [private].\n"
-        i_new = "  let ei = ei_shared in\n  let eki = eki_shared in"
-    else:
-        eph_decl = ""
-        i_new = "  new ei: scalar;\n  new eki: kemsk;"
-
-    # ee: the X25519 result mixed in, or broken, or (edit) not mixed at all.
-    dh_i = "broken_dh" if dh_broken else "exp(re, ei)"
-    dh_r = "broken_dh" if dh_broken else "exp(ie, er)"
-    if no_ee:
-        # No key after message 2's e: EncryptAndHash is MixHash of the
-        # plaintext, so the ciphertext travels in the clear.
-        i_ee = "  let ck1 = ck0 in"
-        r_ee = "  let ck1 = ck0 in"
-        i_ct = "  let ct2b(ct) = cct in\n  let h3 = mixh(h2, cct) in"
-        r_ct = "  let cct = ct2b(ct) in\n  let h3 = mixh(h2, cct) in"
-    else:
-        i_ee = f"  let dh = {dh_i} in\n  let ck1 = kdfck(ck0, p2b(dh)) in\n  let k1 = kdfk(ck0, p2b(dh)) in"
-        r_ee = f"  let dh = {dh_r} in\n  let ck1 = kdfck(ck0, p2b(dh)) in\n  let k1 = kdfk(ck0, p2b(dh)) in"
-        i_ct = "  let (ctb: bitstring, h3: bitstring) = dah(k1, n0, h2, cct) in\n  let ct2b(ct) = ctb in"
-        r_ct = "  let (cct: bitstring, h3: bitstring) = eah(k1, n0, h2, ct2b(ct)) in"
-
-    # ekem: the ML-KEM secret mixed in, or broken, or (edit) no ciphertext.
-    ss_i = "broken_kem" if kem_broken else "kdecaps(ct, eki)"
-    ss_r = "broken_kem" if kem_broken else "kss(iek, r)"
-    if no_ekem:
-        # Nothing encapsulated; the payload is the next encryption under k1.
-        tag_key, tag_nonce = ("k1", "n1") if not no_ee else (None, None)
-        i_kem = "  let ck2 = ck1 in\n  let h3 = h2 in"
-        r_kem = "  let ck2 = ck1 in\n  let h3 = h2 in"
-        r_send = "(repub, tag)"
-        i_recv = "(re: point, tag: bitstring)"
-        i_ct = ""
-        r_ct = ""
-    else:
-        tag_key, tag_nonce = "k2", "n0"
-        i_kem = f"  let ss = {ss_i} in\n  let ck2 = kdfck(ck1, ss) in\n  let k2 = kdfk(ck1, ss) in"
-        r_kem = f"  new r: seed;\n  let ct = kct(iek, r) in\n  let ss = {ss_r} in"
-        r_send = "(repub, cct, tag)"
-        i_recv = "(re: point, cct: bitstring, tag: bitstring)"
-
-    if tag_key is None:
-        # Both ee and ekem removed: no key at all. The payload is hashed.
-        i_tag = "  let (=empty) = tag in\n  let h4 = mixh(h3, tag) in"
-        r_tag = "  let tag = empty in\n  let h4 = mixh(h3, tag) in"
-        r_kem_post = "  let ck2 = ck1 in" if not no_ekem else ""
-    else:
-        i_tag = f"  let (=empty, h4: bitstring) = dah({tag_key}, {tag_nonce}, h3, tag) in"
-        r_tag = f"  let (tag: bitstring, h4: bitstring) = eah({tag_key}, {tag_nonce}, h3, empty) in"
-        r_kem_post = "" if no_ekem else "  let ck2 = kdfck(ck1, ss) in\n  let k2 = kdfk(ck1, ss) in"
-
-    # The responder orders: e, ee, ekem (encapsulate, then encrypt ct), mix ss,
-    # then the payload. Assemble its message-2 body in that order.
-    r_body = "\n".join(x for x in [r_ee, r_kem, r_ct, r_kem_post, r_tag] if x)
-    i_body = "\n".join(x for x in [i_ee, i_ct, i_kem, i_tag] if x)
-
-    return eph_decl + f"""
-let Initiator(nid: bitstring, link: channel, req: bitstring, leak: bool) =
-  let ck0 = hinit(protocol_name) in
-  let h0 = {h0} in
-{i_new}
-  let epub = exp(g, ei) in
-  let ekpub = kpk(eki) in
-  (* message 1: e, ekem, then the empty payload, all hashed *)
-  let h1 = mixh(mixh(mixh(h0, p2b(epub)), kpk2b(ekpub)), empty) in
-  out(link, (epub, ekpub));
-  out(c, (epub, ekpub));
-  (* message 2 *)
-  in(link, {i_recv});
-  let h2 = mixh(h1, p2b(re)) in
-{i_body}
-  let k_i2r = split1(ck2) in
-  let k_r2i = split2(ck2) in
-  event InitiatorDone(nid, k_i2r, k_r2i);
-  (* the first transport records, each way *)
-  let request = aead(k_i2r, n0, empty, req) in
-  out(link, request);
-  out(c, request);
-  in(link, reply: bitstring);
-  let answer = adec(k_r2i, n0, empty, reply) in
-  (if leak then {leak_prefix}out(c, (ei, eki))).
-
-let Responder(nid: bitstring, link: channel, rep: bitstring, leak: bool) =
-  let ck0 = hinit(protocol_name) in
-  let h0 = {h0} in
-  (* message 1 *)
-  in(link, (ie: point, iek: kempk));
-  let h1 = mixh(mixh(mixh(h0, p2b(ie)), kpk2b(iek)), empty) in
-  (* message 2: e, ee, ekem, payload *)
-  new er: scalar;
-  let repub = exp(g, er) in
-  let h2 = mixh(h1, p2b(repub)) in
-{r_body}
-  out(link, {r_send});
-  out(c, {r_send});
-  let k_i2r = split1(ck2) in
-  let k_r2i = split2(ck2) in
-  event ResponderDone(nid, k_i2r, k_r2i);
-  in(link, request: bitstring);
-  let got = adec(k_i2r, n0, empty, request) in
-  let reply = aead(k_r2i, n0, empty, rep) in
-  out(link, reply);
-  out(c, reply);
-  (if leak then {leak_prefix}out(c, er)).
-"""
-
-
-# The main processes. `passive` pairs the honest roles over hs; `active`
-# puts them on c. `cross` adds a responder on the other network. `fs_later`
-# adds phase-1 sessions that publish their ephemerals (session
-# independence); `fs_own` has the session publish its own (erasure).
-#
-# Where a leaking session runs decides its leak prefix (see `protocol`).
-LEAK_PREFIX = {"passive": "phase 1; ", "active": "phase 1; ", "cross": "phase 1; ",
-               "fs_later": "", "fs_own": "phase 1; "}
-
-MAINS = {
-    "passive": """
-process
-  ( !Initiator(nidA, hs, req0, false) | !Responder(nidA, hs, rep0, false) )
-""",
-    "active": """
-process
-  ( !Initiator(nidA, c, req0, false) | !Responder(nidA, c, rep0, false) )
-""",
-    "cross": """
-process
-  ( !Initiator(nidA, hs, req0, false) | !Responder(nidA, hs, rep0, false)
-  | !Initiator(nidB, hs, req1, false) | !Responder(nidB, hs, rep1, false) )
-""",
-    # The phase-0 session carries req0/rep0 and keeps its ephemerals. The
-    # phase-1 sessions carry req1/rep1 and publish theirs once done.
-    "fs_later": """
-process
-  ( Initiator(nidA, hs, req0, false) | Responder(nidA, hs, rep0, false)
-  | ( phase 1; ( !Initiator(nidA, hs, req1, true) | !Responder(nidA, hs, rep1, true) ) ) )
-""",
-    # The session itself publishes its ephemerals afterwards.
-    "fs_own": """
-process
-  ( Initiator(nidA, hs, req0, true) | Responder(nidA, hs, rep0, true) )
-""",
-}
-
-QUERIES = {
-    "req_secret": "query attacker(req0).",
-    "rep_secret": "query attacker(rep0).",
-    "req_secret_p1": "query attacker(req0) phase 1.",
-    "rep_secret_p1": "query attacker(rep0) phase 1.",
-    "key_secret_i2r": (
-        "query n: bitstring, k1: key, k2: key;\n"
-        "  event(InitiatorDone(n, k1, k2)) && attacker(k1)."),
-    "cross_network": (
-        "query k1: key, k2: key;\n"
-        "  event(InitiatorDone(nidA, k1, k2)) && event(ResponderDone(nidB, k1, k2))."),
-    "key_secret_r2i": (
-        "query n: bitstring, k1: key, k2: key;\n"
-        "  event(InitiatorDone(n, k1, k2)) && attacker(k2)."),
-    # Not properties: these must be REACHABLE, or every claim is true of a
-    # protocol that cannot run.
-    "reach_pair": (
-        "query k1: key, k2: key;\n"
-        "  event(InitiatorDone(nidA, k1, k2)) && event(ResponderDone(nidA, k1, k2))."),
-}
-
-# One row per variant: main process, edits, breaks, and the verdict each
-# query must come back with. "true" is ProVerif's "RESULT ... is true"; for a
-# `query attacker(x)` that means x stays secret, for an event conjunction it
-# means the conjunction is unreachable. "false" is the opposite; for the
-# reach_* rows that is the wanted verdict.
-VARIANTS = [
-    # --- the properties --------------------------------------------------
-    ("passive",            "passive",  set(),           set(),          {"req_secret": "true", "rep_secret": "true", "key_secret_i2r": "true", "key_secret_r2i": "true", "reach_pair": "false"}),
-    ("hybrid_dh_broken",   "passive",  set(),           {"dh"},         {"req_secret": "true", "rep_secret": "true", "key_secret_i2r": "true", "key_secret_r2i": "true", "reach_pair": "false"}),
-    ("hybrid_kem_broken",  "passive",  set(),           {"kem"},        {"req_secret": "true", "rep_secret": "true", "key_secret_i2r": "true", "key_secret_r2i": "true", "reach_pair": "false"}),
-    ("independent_of_later_ephemerals","fs_later", set(),           set(),          {"req_secret_p1": "true", "rep_secret_p1": "true"}),
-    ("network_binding",    "cross",    set(),           set(),          {"cross_network": "true", "reach_pair": "false"}),
-    # --- stated non-properties ------------------------------------------
-    ("active_mitm",        "active",   set(),           set(),          {"req_secret": "false", "rep_secret": "false", "reach_pair": "false"}),
-    ("both_broken",        "passive",  set(),           {"dh", "kem"},  {"req_secret": "false", "rep_secret": "false"}),
-    ("own_ephemerals_exposed",  "fs_own",   set(),           set(),          {"req_secret_p1": "false", "rep_secret_p1": "false"}),
-    # --- the named edits: each property observed failing -----------------
-    ("edit_no_ekem_dh_broken",  "passive",  {"no_ekem"},          {"dh"},   {"req_secret": "false", "rep_secret": "false"}),
-    ("edit_no_ee_kem_broken",   "passive",  {"no_ee"},            {"kem"},  {"req_secret": "false", "rep_secret": "false"}),
-    ("edit_no_ee_no_ekem",      "passive",  {"no_ee", "no_ekem"}, set(),    {"req_secret": "false", "rep_secret": "false", "key_secret_i2r": "false", "key_secret_r2i": "false"}),
-    ("edit_no_prologue",        "cross",    {"no_prologue"},      set(),    {"cross_network": "false"}),
-    ("edit_reuse_ephemeral",    "fs_later", {"reuse_eph"},        set(),    {"req_secret_p1": "false", "rep_secret_p1": "false"}),
-]
-
-
-def render(name, main, edits, breaks, queries):
-    text = HEADER.format(
-        name=name,
-        edits=", ".join(sorted(edits)) or "none",
-        breaks=", ".join(sorted(breaks)) or "none",
-    )
-    text += protocol(edits, breaks, LEAK_PREFIX[main])
-    text += "\n" + "\n".join(QUERIES[q] for q in queries) + "\n"
-    text += MAINS[main]
-    return text
-
+VARIANT_MEMORY_BYTES = 4 * 1024**3
 
 RESULT = re.compile(r"^RESULT (.*) (is true|is false|cannot be proved)\.?\s*$")
+RESULT_WORD = {"is true": Verdict.HOLDS, "is false": Verdict.FAILS}
 
 
-def proverif_binary():
+def proverif_binary() -> str:
     exe = os.environ.get("PROVERIF", "proverif")
     try:
         out = subprocess.run([exe, "-help"], capture_output=True, text=True, timeout=30)
     except FileNotFoundError:
-        sys.exit(f"run.py: no proverif on PATH (set PROVERIF=...); install with ../install_proverif.sh")
+        sys.exit("run.py: no proverif on PATH (set PROVERIF=...); install with ../install_proverif.sh")
     banner = (out.stdout + out.stderr).splitlines()[0] if (out.stdout + out.stderr) else ""
     # The banner is "Proverif <version>. Cryptographic protocol verifier, ...".
     # The whole version token is compared, so 2.05pl1 is not 2.05.
@@ -356,93 +62,129 @@ def proverif_binary():
     return exe
 
 
-def limits():
-    resource.setrlimit(resource.RLIMIT_AS, (VARIANT_MEMORY_BYTES, VARIANT_MEMORY_BYTES))
+def proverif_command(exe: str, model_path: str) -> list[str]:
+    """Cap the child with prlimit. A preexec_fn would fork from a worker
+    thread, which can deadlock before exec."""
+    prlimit = shutil.which("prlimit")
+    if prlimit is None:
+        sys.exit("run.py: prlimit is required (util-linux) to cap each variant")
+    return [prlimit, f"--as={VARIANT_MEMORY_BYTES}", "--", exe, "-lib", str(LIB), model_path]
 
 
-def run_variant(exe, workdir, row):
-    name, main, edits, breaks, expected = row
-    path = workdir / f"{name}.pv"
-    path.write_text(render(name, main, edits, breaks, expected.keys()), encoding="utf-8")
+def run_variant(exe: str, row: Row) -> tuple[str, dict[str, Verdict], str | None, float]:
     started = time.monotonic()
     try:
         proc = subprocess.run(
-            [exe, "-lib", str(LIB), str(path)],
-            capture_output=True, text=True, timeout=VARIANT_TIMEOUT_SECONDS, preexec_fn=limits,
+            proverif_command(exe, str(VARIANTS / f"{row.name}.pv")),
+            capture_output=True,
+            text=True,
+            timeout=VARIANT_TIMEOUT_SECONDS,
         )
         out = proc.stdout + proc.stderr
         rc = proc.returncode
     except subprocess.TimeoutExpired:
-        return name, {}, expected, f"timed out after {VARIANT_TIMEOUT_SECONDS}s", time.monotonic() - started
-    results = []
+        return row.name, {}, f"timed out after {VARIANT_TIMEOUT_SECONDS}s", time.monotonic() - started
+    results: list[Verdict] = []
+    unproved = False
     for line in out.splitlines():
-        m = RESULT.match(line.strip())
-        if m:
-            results.append({"is true": "true", "is false": "false", "cannot be proved": "unproved"}[m.group(2)])
-    # Every nonzero exit is a failure, verdicts or not: a verifier that
-    # printed its results and then died has not finished its check.
+        matched = RESULT.match(line.strip())
+        if not matched:
+            continue
+        verdict = RESULT_WORD.get(matched.group(2))
+        if verdict is None:
+            unproved = True
+            break
+        results.append(verdict)
+    # A verifier that printed its results and then died has not finished.
     if rc != 0:
-        return name, {}, expected, f"proverif exited {rc}:\n{out[-3000:]}", time.monotonic() - started
-    # ProVerif reports results in query order.
-    got = dict(zip(expected.keys(), results))
-    if len(results) != len(expected):
-        return name, got, expected, f"{len(results)} RESULT lines for {len(expected)} queries:\n{out[-3000:]}", time.monotonic() - started
-    return name, got, expected, None, time.monotonic() - started
+        return row.name, {}, f"proverif exited {rc}:\n{out[-3000:]}", time.monotonic() - started
+    if unproved:
+        return row.name, {}, f"a query cannot be proved:\n{out[-3000:]}", time.monotonic() - started
+    if len(results) != len(row.expects):
+        return (
+            row.name,
+            {},
+            f"{len(results)} RESULT lines for {len(row.expects)} queries:\n{out[-3000:]}",
+            time.monotonic() - started,
+        )
+    got = dict(zip((name for name, _ in row.expects), results))
+    return row.name, got, None, time.monotonic() - started
 
 
-def main():
+def _print_list(claims: tuple[Claim, ...]) -> None:
+    for claim in claims:
+        row = claim.row
+        print(
+            f"{row.name:32} {_labels(row.edits):22} {_labels(row.breaks):8} "
+            + " ".join(f"{name}={verdict.value}" for name, verdict in row.expects)
+        )
+        falsifier = claim.falsifier
+        if falsifier is None:
+            print(f"{'':32} stated non-property")
+            continue
+        print(
+            f"  {falsifier.name:30} flips it  {_labels(falsifier.edits):22} {_labels(falsifier.breaks):8} "
+            + " ".join(f"{name}={verdict.value}" for name, verdict in falsifier.expects)
+        )
+
+
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true")
-    ap.add_argument("--keep", metavar="DIR")
     ap.add_argument("--jobs", type=int, default=min(4, os.cpu_count() or 1))
     ap.add_argument("--only")
-    ap.add_argument("--write-baseline", action="store_true")
+    ap.add_argument("--write-variants", action="store_true")
     args = ap.parse_args()
 
-    rows = [r for r in VARIANTS if not args.only or r[0] == args.only]
-    if args.only and not rows:
-        sys.exit(f"run.py: no variant named {args.only}")
-
-    if args.write_baseline:
-        BASELINE.write_text(render(*VARIANTS[0]), encoding="utf-8")
-        print(f"wrote {BASELINE}")
+    check_claims(CLAIMS)
+    rows = rows_of(CLAIMS)
+    if args.write_variants:
+        write_variants(rows)
+        print(f"wrote {len(rows)} variants in {VARIANTS}")
         return 0
-
+    if args.only:
+        rows = [row for row in rows if row.name == args.only]
+        if not rows:
+            sys.exit(f"run.py: no variant named {args.only}")
     if args.list:
-        for name, mainp, edits, breaks, expected in rows:
-            print(f"{name:26} main={mainp:9} edits={','.join(sorted(edits)) or '-':22} breaks={','.join(sorted(breaks)) or '-':8} expects {expected}")
+        _print_list(CLAIMS)
         return 0
 
-    # The committed baseline must exist and be what the generator produces
-    # (rule 47: a missing subject fails, it does not pass).
-    if not BASELINE.exists():
-        print(f"run.py: {BASELINE.name} is missing; run --write-baseline and commit it", file=sys.stderr)
-        return 1
-    if BASELINE.read_text(encoding="utf-8") != render(*VARIANTS[0]):
-        print(f"run.py: {BASELINE.name} is stale; run --write-baseline and commit it", file=sys.stderr)
+    # The whole committed set is the subject, including when --only runs one.
+    stale = check_variants(rows_of(CLAIMS))
+    if stale:
+        print(f"run.py: {stale}", file=sys.stderr)
         return 1
 
     exe = proverif_binary()
-    keep = pathlib.Path(args.keep) if args.keep else None
-    tmp = tempfile.TemporaryDirectory()
-    workdir = keep or pathlib.Path(tmp.name)
-    workdir.mkdir(parents=True, exist_ok=True)
-
     failed = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
-        for name, got, expected, err, secs in pool.map(lambda r: run_variant(exe, workdir, r), rows):
+        for name, got, err, secs in pool.map(lambda row: run_variant(exe, row), rows):
             if err:
                 failed = True
-                print(f"FAIL  {name:26} {secs:6.1f}s  {err}")
+                print(f"FAIL  {name:32} {secs:6.1f}s  {err}")
                 continue
-            bad = {q: (got[q], expected[q]) for q in expected if got.get(q) != expected[q]}
+            expected = dict(next(row.expects for row in rows_of(CLAIMS) if row.name == name))
+            bad = {
+                query: (got[query].value, verdict.value)
+                for query, verdict in expected.items()
+                if got.get(query) is not verdict
+            }
             if bad:
                 failed = True
-                print(f"FAIL  {name:26} {secs:6.1f}s  " + "; ".join(f"{q}: got {g}, expected {e}" for q, (g, e) in bad.items()))
+                detail = "; ".join(
+                    f"{query}: got {have}, expected {want}" for query, (have, want) in bad.items()
+                )
+                print(f"FAIL  {name:32} {secs:6.1f}s  {detail}")
             else:
-                print(f"ok    {name:26} {secs:6.1f}s  " + ", ".join(f"{q}={v}" for q, v in got.items()))
+                summary = ", ".join(f"{query}={verdict.value}" for query, verdict in got.items())
+                print(f"ok    {name:32} {secs:6.1f}s  {summary}")
     if failed:
-        print("run.py: a verdict changed. A property that moved is a design change; an edit that no longer falsifies is a model error.", file=sys.stderr)
+        print(
+            "run.py: a verdict changed. A property that moved is a design change; "
+            "a falsifier that no longer flips is a model error.",
+            file=sys.stderr,
+        )
         return 1
     print(f"run.py: {len(rows)} variants, every verdict as pinned")
     return 0
