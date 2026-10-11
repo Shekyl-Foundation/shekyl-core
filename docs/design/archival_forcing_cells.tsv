@@ -61,12 +61,16 @@
 # Re-resolved 2026-10-06 after the header-version rule (CEN-B2) put a
 # comment line above each of blockchain.cpp's two version checks: the later
 # blockchain.cpp sites moved with them. Each re-found by its exact line text.
+# Re-resolved 2026-10-10 after the pair-epoch comment grew one line (the
+# public urn was deleted; the reopen is the secret-draw producer): the later
+# blockchain.cpp site (`connect.attestation_witness`, :5775 -> :5776) was
+# re-found by its symbol. The site at :2263 is above the insertion.
 table	half	disposition	site	symbol	note
 archival_serve_credit	apply	FORCED-BY:tx-with-serve-credit-response-vin	blockchain_db.cpp:252	set_archival_serve_credit_bit	set_archival_serve_credit_bit from txin_archival_serve_credit_response
 archival_serve_credit	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:882	remove_archival_serve_credit_bit	remove_archival_serve_credit_bit
 archival_settlement	apply	EXCLUDED:no-writer-in-this-store	db_lmdb.cpp:1693	LMDB_ARCHIVAL_SETTLEMENT	the C++ writer was deleted (SO-D10e): settlement is the Rust validator's (SO-D10); the anchor is the table handle, which stays with the revert and the prune until DEL-008
 archival_settlement	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:6622	delete_archival_settlement_for_epoch	delete runs but cannot discriminate; only write is mdb_cursor_del, no counter
-archival_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:5775	connect.attestation_witness	no emitter exists: tree says "Empty on local mine and until the Phase 2/3 template writer populates it"; FFI exposes verify + pass_p_ids only
+archival_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:5776	connect.attestation_witness	no emitter exists: tree says "Empty on local mine and until the Phase 2/3 template writer populates it"; FFI exposes verify + pass_p_ids only
 archival_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:8860	remove_archival_attestation_witness_at_height	remove_archival_attestation_witness_at_height is a lone mdb_del, no counter, no side effect
 archival_alt_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:2263	store_archival_alt_attestation_witness	stores connect.attestation_witness, which no in-tree emitter ever populates; same blocker as the main-chain row
 archival_alt_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:8905	remove_archival_alt_attestation_witness	remove_archival_alt_attestation_witness is a lone mdb_del, no counter, no side effect

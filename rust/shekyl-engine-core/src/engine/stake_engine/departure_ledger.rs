@@ -245,11 +245,19 @@ impl DepartureLedger {
                 releasable.push(shard_id);
             }
         }
-        // Released pins stop being pinned, so their entries are spent.
-        for shard_id in &releasable {
+        // The caller spends these entries after the body erase and the pin
+        // release both succeed ([`Self::commit_releases`]). Spending them
+        // here would restart the two-epoch clock when the erase fails, and
+        // the pins would already be gone.
+        releasable
+    }
+
+    /// The release was carried out: the body row is gone and the pin is
+    /// released. Until this runs, the next observation still sees the clock.
+    pub(crate) fn commit_releases(&mut self, released: &[u64]) {
+        for shard_id in released {
             self.absent_since.remove(shard_id);
         }
-        releasable
     }
 
     /// Record that the wallet could not observe, and forget what it knew.

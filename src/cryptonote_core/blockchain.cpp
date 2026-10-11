@@ -4632,20 +4632,21 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   // VACUOUS here: `h` is the block under validation, which is not in the DB
   // yet, so no row can match and every duplicate would be admitted. That is
   // the correct END state -- up to CHALLENGES_PER_PAIR_PER_EPOCH rows across
-  // distinct blocks -- but only once the derived-assignment issuer bounds how
-  // many blocks may challenge a pair. That issuer is NOT wired:
-  // `assign_epoch` exists in Rust with no FFI export and no consensus caller,
-  // and the live mechanism is still the one-challenge-per-pair-epoch beacon.
-  // Relaxing to the exact-get now would leave the pass count bounded by
-  // nothing at all.
+  // distinct blocks -- but only once a producer bounds how many blocks may
+  // challenge a pair. The public urn (`assign_epoch`) was deleted: it had
+  // no FFI export and no consensus caller. The live mechanism is still the
+  // one-challenge-per-pair-epoch beacon. The remaining blocker is the
+  // secret-draw producer and the admission cutover, not a Rust urn waiting
+  // to be exported. Relaxing to the exact-get now would leave the pass
+  // count bounded by nothing at all.
   //
   // So this stays the pair-epoch bound the beacon mechanism already implies,
   // and consensus behaviour is byte-identical to before the key widened.
   //
-  // REOPEN (rule 21): when the assignment cutover lands, this relaxes to
-  // "reject unless this block's assignment names this pair" -- which is the
-  // count bound and the anti-adaptive-selection check in one, and is what
-  // PC-D7's surviving half asks for.
+  // REOPEN (rule 21): when the secret-draw admission cutover lands, this
+  // relaxes to "reject unless this block's assignment names this pair" --
+  // which is the count bound and the anti-adaptive-selection check in one,
+  // and is what PC-D7's surviving half asks for.
   if (m_db->archival_serve_credit_pass_count(sc_p_id, sc_shard_id, sc_settlement_epoch) > 0)
   {
     MERROR_VER("Duplicate archival serve-credit for (P, shard, E)");
