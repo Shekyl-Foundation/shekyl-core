@@ -869,8 +869,8 @@ fn settlement_key_range_is_the_persona() {
 /// A17 hops shards and point-reads the cited epochs. A gap between shard
 /// ids, a Missed row, a NonObservation, an uncited Served row, another
 /// persona, and epochs given out of order each have one answer: the cited
-/// epochs' Served shards, ascending, each shard once. The epochs are a
-/// set, so a repeated citation cannot be asked. A corrupt row on an
+/// epochs' Served shards, ascending, each shard once. The epochs are the
+/// read's key set. A corrupt row on an
 /// epoch the caller did not cite is not decoded; the same bytes on a cited
 /// epoch are SI-7.
 #[test]

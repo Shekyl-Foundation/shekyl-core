@@ -1171,11 +1171,16 @@ What can be recovered today:
   a locator on the record and a transaction read in the view, which is
   more new surface than a journal row and reads a transaction body that
   nothing else in the validator reads after connect.
-- **The slash log's horizon.** The Rust store prunes no slash-log row on
-  `dev`. The open slash-log round (`DRS_E4_SLASH_LOG_ROUND.md`) gives it
-  a floor sized on the failure window. The set of `E` is read from
-  `h_open(E)` to the slash pass of `E`, two epochs. Increment 2 asserts
-  that the floor in force is below that span, in code.
+- **The slash log's horizon.** The store retires slash-log rows at each
+  pruning boundary, below a floor the rule set gives
+  (`SlashLogFloor::under`, `rust/shekyl-chain-rules/src/reorg.rs`;
+  `WriteBatch::prune_at_boundary`): the tip less the slash grace plus
+  the failure window's `n` epochs, less the reorg cap. A read that
+  starts below the floor is refused (`SI-26`). The set of `E` is read
+  from `h_open(E)` to the slash pass of `E`, two epochs, which is well
+  inside that window. Increment 2 holds the relation in code, as a
+  const-assert of the window against the span the walk-back reads, so
+  re-pinning either fails the build.
 
 **Why this orders the build.** `SO-D10g`'s check compares a digest of `D`
 written at `h_open(E)` with a re-walk at the slash pass. With the set
@@ -1344,7 +1349,7 @@ condition by changing that function and the writer together, with:
 - the serve-credit record replaced. The C++ gate does not parse the new
   record. It refuses a serve-credit input loudly, naming the retired
   record and `DEL-008`, until the cutover; no production code produces
-  the old record, so the daemon accepts nothing it accepts today.
+  the old record, so no credit the daemon accepts today is lost.
 
 The design of increment 1 and the rulings on it travel with that
 increment's change.
