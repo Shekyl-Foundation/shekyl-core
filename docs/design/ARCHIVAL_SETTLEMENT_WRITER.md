@@ -1153,9 +1153,9 @@ the same draw names different pairs at different heights.
 What can be recovered today:
 
 - **A slash.** The slash log carries the removed holding, and
-  `holds_shard_at` already folds it. The log has a retention horizon
-  (`DRS_E4_SLASH_LOG_ROUND.md`), and the set is needed from `h_open(E)`
-  until the slash pass of `E`, two epochs later.
+  `holds_shard_at` already folds it. Its retention horizon is the landed
+  floor below. The set is needed from `h_open(E)` until the slash pass
+  of `E`, two epochs later.
 - **A Release.** Not recoverable from anything the validator can read
   today. Checked:
   - the store keeps no pre-image of a released record's holdings beyond
@@ -1171,16 +1171,17 @@ What can be recovered today:
   a locator on the record and a transaction read in the view, which is
   more new surface than a journal row and reads a transaction body that
   nothing else in the validator reads after connect.
-- **The slash log's horizon.** The store retires slash-log rows at each
-  pruning boundary, below a floor the rule set gives
-  (`SlashLogFloor::under`, `rust/shekyl-chain-rules/src/reorg.rs`;
-  `WriteBatch::prune_at_boundary`): the tip less the slash grace plus
-  the failure window's `n` epochs, less the reorg cap. A read that
-  starts below the floor is refused (`SI-26`). The set of `E` is read
-  from `h_open(E)` to the slash pass of `E`, two epochs, which is well
-  inside that window. Increment 2 holds the relation in code, as a
-  const-assert of the window against the span the walk-back reads, so
-  re-pinning either fails the build.
+- **The slash log's horizon.** Landed
+  ([`DRS_E4_SLASH_LOG_ROUND.md`](../completed/DRS_E4_SLASH_LOG_ROUND.md)).
+  The store retires slash-log rows at each pruning boundary, below the
+  floor the rule set gives (`SlashLogFloor::under`,
+  `rust/shekyl-chain-rules/src/reorg.rs`; `WriteBatch::prune_at_boundary`):
+  `tip − ((k + n)·SEB + reorg_cap)`, with `k` the slash-grace epochs and
+  `n` the failure window. A read that starts below the floor is refused
+  (`SI-26`). The set of `E` is read from `h_open(E)` to the slash pass of
+  `E`, two epochs, which is inside that window. Increment 2 holds the
+  relation in code, as a const-assert of the window against the span the
+  walk-back reads, so re-pinning either fails the build.
 
 **Why this orders the build.** `SO-D10g`'s check compares a digest of `D`
 written at `h_open(E)` with a re-walk at the slash pass. With the set
