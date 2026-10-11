@@ -49,6 +49,11 @@
 //!   the epochs a caller names: one hop of that persona's shards, then a
 //!   point read of each epoch (`SO-D2`). What the claim's gather credits
 //!   (`SO-D11`).
+//! - **A18** [`block_draws`] — what the draw's count rule recorded for one
+//!   block (`SO-D12`). `None` until a block writes it.
+//! - **A19** [`drawable_digest`] — the digest of an epoch's drawable set as
+//!   written at its open (`SO-D10g`). `None` is no recorded set; an
+//!   all-zero digest is a digest.
 //!
 //! # Absence, stated once (`DRS_E1_SARCH.md` §3.3)
 //!
@@ -108,7 +113,7 @@ use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
-    IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -117,9 +122,10 @@ use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily, SnapshotFault};
 use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
 use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
-    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
+    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -144,6 +150,10 @@ const SETTLEMENT: &str = "archival_settlement";
 const ISSUED_DRAW: &str = "archival_issued_draw";
 /// The `archival_issued_digest` cell as faults name it.
 const ISSUED_DIGEST: &str = "archival_issued_digest";
+/// The `archival_block_draws` cell as faults name it.
+const BLOCK_DRAWS: &str = "archival_block_draws";
+/// The `archival_drawable_digest` cell as faults name it.
+const DRAWABLE_DIGEST: &str = "archival_drawable_digest";
 /// The `archival_attestation_witness` cell as faults name it.
 const WITNESS: &str = "archival_attestation_witness";
 
@@ -554,6 +564,31 @@ pub(super) fn served_at<T: ReadTables>(
         .key();
     }
     Ok(out)
+}
+
+/// **A18.** `archival_block_draws[height]` — what the count rule recorded
+/// for the block. `None` is a block no row was written for. A row that
+/// does not decode is SI-7.
+pub(super) fn block_draws<T: ReadTables>(
+    txn: &T,
+    height: BlockHeight,
+) -> Result<Option<BlockDraws>, ReadFault> {
+    chain_reads::cell(txn, ARCHIVAL_BLOCK_DRAWS, height.to_raw(), BLOCK_DRAWS)
+}
+
+/// **A19.** `archival_drawable_digest[epoch]` — the digest of the epoch's
+/// drawable set. `None` is an epoch with no recorded set. The row is
+/// returned as stored whatever its bytes: no value is read as absent.
+pub(super) fn drawable_digest<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+) -> Result<Option<DrawableDigest>, ReadFault> {
+    chain_reads::cell(
+        txn,
+        ARCHIVAL_DRAWABLE_DIGEST,
+        epoch.to_raw(),
+        DRAWABLE_DIGEST,
+    )
 }
 
 /// The nine table-backed families of the archival snapshot

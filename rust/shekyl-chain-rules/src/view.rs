@@ -42,8 +42,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
-    BondRecord, IndexedDraw, IssuedDigest, PassCount, RMarket, ServedShard, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry,
+    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, RMarket,
+    ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -569,9 +569,26 @@ pub trait ChainView<'id> {
         persona: &PCanonicalId,
         epochs: &BTreeSet<SettlementEpoch>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Self::Fault>;
+
+    /// **A18.** What the secret draw's count rule recorded for the block at
+    /// `height`: its draw count, the fraction it carried forward, the
+    /// visible shortfall it saw, and whether its seed has been revealed
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10). `None` for a block the
+    /// rule has not run for. No block writes the row until admission lands
+    /// (`SO-D12`), so every height reads `None` until then.
+    fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, Self::Fault>;
+
+    /// **A19.** The digest of `epoch`'s drawable set, as written when the
+    /// epoch opened (`SO-D10g`). `None` for an epoch whose set was never
+    /// recorded. Every 32-byte value is a digest: an all-zero one is not
+    /// an absent one.
+    fn drawable_digest(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<DrawableDigest>, Self::Fault>;
 }
 
-/// Implement every archival [`ChainView`] read (A1–A9, A11–A17) as one policy.
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A19) as one policy.
 ///
 /// Three policies, one method list. A new archival read is added here, once;
 /// every view that expands the macro then implements it. A view that answers
@@ -732,6 +749,16 @@ macro_rules! archival_reads {
             );
             (persona, epochs);
             (::std::collections::BTreeMap::new()));
+        $crate::archival_reads!(@emit $policy; block_draws;
+            (height: shekyl_types::BlockHeight);
+            (::core::option::Option<shekyl_types::archival::BlockDraws>);
+            (height);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; drawable_digest;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_types::archival::DrawableDigest>);
+            (epoch);
+            (::core::option::Option::None));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {

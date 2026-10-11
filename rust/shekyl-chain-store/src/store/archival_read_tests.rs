@@ -16,8 +16,8 @@ use redb::Value;
 use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::Coded;
 use shekyl_types::archival::{
-    IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow,
-    MAX_ATTESTATION_WITNESS_BYTES,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
+    SettlementRow, MAX_ATTESTATION_WITNESS_BYTES,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -32,9 +32,10 @@ use crate::codec::{
 };
 use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
-    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
+    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
 };
 
 pub(super) fn persona(fill: u8) -> PCanonicalId {
@@ -1088,5 +1089,89 @@ fn archival_snapshot_refuses_a_second_accruing_row_as_si23() {
         ),
         "{err}"
     );
+    cleanup(&path);
+}
+
+// A18, A19 — the draw's per-block state and the drawable set's digest
+// (`SO-D12`). No block writes either yet, so every row here is planted.
+
+/// A18 reads a planted row back whole and reads `None` where there is
+/// none. A row with a third value of the revealed flag is SI-7.
+#[test]
+fn a18_block_draws_reads_the_row_or_none() {
+    let path = tmp("arch-a18");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let at = BlockHeight::from_raw(41);
+    assert_eq!(store.begin_read().unwrap().block_draws(at).unwrap(), None);
+    drop(store);
+
+    let row = BlockDraws {
+        count: 7,
+        carry: 0x8000_0001,
+        shortfall: 19,
+        revealed: true,
+    };
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_BLOCK_DRAWS).expect("t");
+        t.insert(at.to_raw(), row.encoded().as_encoded())
+            .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    assert_eq!(snap.block_draws(at).unwrap(), Some(row));
+    assert_eq!(snap.block_draws(BlockHeight::from_raw(42)).unwrap(), None);
+    drop(snap);
+    drop(store);
+
+    // Twenty bytes of fields, then a flag that is neither 0 nor 1.
+    let mut bytes = [0u8; 21];
+    bytes[20] = 2;
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_BLOCK_DRAWS).expect("t");
+        t.insert(
+            at.to_raw(),
+            <Coded<BlockDraws> as Value>::from_bytes(&bytes),
+        )
+        .expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let err = store.begin_read().unwrap().block_draws(at).unwrap_err();
+    assert!(is_si7_undecodable(&err, "archival_block_draws"), "{err}");
+    cleanup(&path);
+}
+
+/// A19 tells an absent digest from an all-zero one. Zero is a digest like
+/// any other: a reader that took it for "unset" would make the one epoch
+/// whose set hashes to it a special case.
+#[test]
+fn a19_an_all_zero_drawable_digest_is_a_digest_not_an_absence() {
+    let path = tmp("arch-a19");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    assert_eq!(
+        store
+            .begin_read()
+            .unwrap()
+            .drawable_digest(epoch(3))
+            .unwrap(),
+        None
+    );
+    drop(store);
+
+    let zero = DrawableDigest::from_bytes([0; 32]);
+    let other = DrawableDigest::from_bytes([0xd1; 32]);
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_DRAWABLE_DIGEST).expect("t");
+        t.insert(3, zero.encoded().as_encoded()).expect("insert");
+        t.insert(4, other.encoded().as_encoded()).expect("insert");
+    });
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    assert_eq!(snap.drawable_digest(epoch(3)).unwrap(), Some(zero));
+    assert_eq!(snap.drawable_digest(epoch(4)).unwrap(), Some(other));
+    assert_eq!(snap.drawable_digest(epoch(5)).unwrap(), None);
+    // No undecodable case: the cell is fixed at 32 bytes and every 32
+    // bytes are a digest, so the table cannot hold a row the codec refuses.
+    drop(snap);
+    drop(store);
     cleanup(&path);
 }

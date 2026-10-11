@@ -39,6 +39,12 @@ pub const SETTLEMENT_ROW_LEN: usize = 3;
 /// Width of an [`IssuedDigest`].
 pub const ISSUED_DIGEST_LEN: usize = 32;
 
+/// Width of a [`DrawableDigest`].
+pub const DRAWABLE_DIGEST_LEN: usize = 32;
+
+/// Width of a stored [`BlockDraws`].
+pub const BLOCK_DRAWS_LEN: usize = 21;
+
 /// What one epoch settled for one pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettlementOutcome {
@@ -281,6 +287,55 @@ impl IssuedDigest {
             carry = sum >> 8;
         }
         // The carry out of the top byte is the reduction modulo 2^256.
+    }
+}
+
+/// What the count rule recorded for one block
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10).
+///
+/// `count` and `carry` are the rule's output at this block, and the next
+/// block's rule reads `carry`. `shortfall` is the visible shortfall the
+/// rule saw. `revealed` is whether a carrier has revealed this block's
+/// seed: until one has, the block's draws are in flight and none of them
+/// is issued.
+///
+/// A row is written when its block connects and `revealed` is set by the
+/// block that first admits the seed. Both are consensus state, undone with
+/// the block that wrote them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BlockDraws {
+    /// How many draws this block's producer made. Draw indices are below
+    /// it.
+    pub count: u64,
+    /// The 32-bit fraction carried to the next block's count.
+    pub carry: u32,
+    /// The visible shortfall the count was computed from.
+    pub shortfall: u64,
+    /// Whether this block's seed has been revealed.
+    pub revealed: bool,
+}
+
+/// The digest of one epoch's drawable set, written when the epoch opens
+/// and compared with a re-walk when the epoch settles (`SO-D8d` layer 2,
+/// `SO-D10g`).
+///
+/// It is 32 opaque bytes to everything but the function that computes it.
+/// There is no zero value that means "none": an epoch whose set was never
+/// recorded has no digest, and a read says so with `None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DrawableDigest([u8; DRAWABLE_DIGEST_LEN]);
+
+impl DrawableDigest {
+    /// The digest a store holds.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; DRAWABLE_DIGEST_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes a store holds.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; DRAWABLE_DIGEST_LEN] {
+        &self.0
     }
 }
 

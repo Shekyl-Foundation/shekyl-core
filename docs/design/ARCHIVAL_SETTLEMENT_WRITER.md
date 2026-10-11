@@ -1400,7 +1400,12 @@ was going to be, landed as one rule-07 change.
    digest cell get their types, codecs, snapshots, undo and view reads,
    with `SCHEMA_VERSION` 22 to 23, and no block writer: `count` needs
    `D`, which is increment 2's. The same shape as `SO-D10a`'s empty
-   index.
+   index. **LANDED:** `archival_block_draws` (`u64 → BlockDraws`,
+   ordinal 40) and `archival_drawable_digest` (`u64 → DrawableDigest`,
+   ordinal 41), layout 23, read as `ChainView::block_draws` (A18) and
+   `ChainView::drawable_digest` (A19). Both reads answer `None` for a row
+   that is not there; an all-zero digest is returned as a digest
+   (`rust/shekyl-chain-store/src/schema.rs`; `store/archival_reads.rs`).
 7. **Where a carrier's seed and `h` ride.** The specification says kept,
    once per carrier, and names no field. Proposed: a transaction-extra
    field `0x0D`, `seed[32] ‖ varint(h)`, with no length prefix. It is
