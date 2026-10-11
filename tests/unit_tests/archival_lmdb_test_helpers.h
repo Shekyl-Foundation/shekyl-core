@@ -19,6 +19,7 @@
 
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "blockchain_db/shekyl_types.h"
+#include "shekyl/draw_commitment.h"
 #include "shekyl/shekyl_ffi.h"
 
 #include <stdexcept>
@@ -105,7 +106,7 @@ inline cryptonote::transaction minimal_coinbase(uint64_t height)
   const uint8_t nonce[SHEKYL_COINBASE_NONCE_BYTES] = {0};
   char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
   ShekylOwnedBuffer extra;
-  const int32_t rc = shekyl_coinbase_extra(pubkey, nonce, nullptr, 0, nullptr, 0, 0,
+  const int32_t rc = shekyl_coinbase_extra(pubkey, nonce, shekyl::draw_commitment{{0xDC}}.bytes, nullptr, 0, nullptr, 0, 0,
     &extra.buf, msg, sizeof(msg));
   if (rc != SHEKYL_TX_EXTRA_OK)
     throw std::runtime_error(std::string("minimal_coinbase: writer refused: ") + msg);

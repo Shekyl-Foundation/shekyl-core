@@ -172,7 +172,7 @@ TEST(tx_prunable_region, miner_tx_has_no_prunable_tail)
   const blobdata extra_nonce;
   ASSERT_TRUE(construct_miner_tx(0, 0, 10000000000000, 1000, /*fee=*/0,
                                  /*frozen_segment_count=*/0,
-                                 acc.get_keys().m_account_address, tx, extra_nonce,
+                                 acc.get_keys().m_account_address, tx, shekyl::draw_commitment{{0xDC}}, extra_nonce,
                                  /*max_outs=*/1));
 
   // Round-trip through the binary archive so `unprunable_size` is stamped: it is

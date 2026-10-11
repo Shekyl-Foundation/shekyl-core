@@ -1283,16 +1283,18 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
  * inside an `extra` again.
  *
  * Codes: shape verdicts keep their SHEKYL_TX_EXTRA_PQC_SHAPE_* /
- * SHEKYL_TX_EXTRA_SHAPE_* values (0 OK, 1..=17) and are returned unchanged
+ * SHEKYL_TX_EXTRA_SHAPE_* values (0 OK, 1..=20) and are returned unchanged
  * by the leaf read and the coinbase writer when the rule refuses; this
  * family's own outcomes start at 100 so the two cannot collide. A null
  * pointer is SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR everywhere.
  *
  * The shape rule (shekyl_wire::tx_extra::check_tx_extra_shape) is CEN-I19 on
  * every transaction plus, on a coinbase, the closed coinbase grammar
- * (TXE-Q6', consensus): the extra is exactly [0x01 pubkey, 0x02 nonce of
- * SHEKYL_COINBASE_NONCE_BYTES, 0x06 KEM(1120*n), 0x07 leaf(64*n)] in that
- * order and nothing else; off the coinbase, no 0x02 at all. */
+ * (TXE-Q6', consensus; amended 2026-10-10, SO-D12i): the extra is exactly
+ * [0x01 pubkey, 0x02 nonce of SHEKYL_COINBASE_NONCE_BYTES, 0x0C draw
+ * commitment of SHEKYL_DRAW_COMMITMENT_BYTES, 0x06 KEM(1120*n), 0x07
+ * leaf(64*n)] in that order and nothing else; off the coinbase, no 0x02 and
+ * no 0x0C at all. */
 /// Per-output widths of the two PQC fields (shekyl_wire::tx_extra::
 /// HYBRID_KEM_CT_BYTES = X25519 ct(32) + ML-KEM-768 ct(1088), and
 /// PQC_LEAF_ENTRY_LEN = CM(32) ‖ record(32)); a 0x06 field is 1120·n bytes
@@ -1303,18 +1305,26 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
 /// the header nonce in one interval; each byte here multiplies that by 256,
 /// so 8 never binds and matches the pool convention (reserve_size: 8).
 #define SHEKYL_COINBASE_NONCE_BYTES           8
+/// Width of the coinbase 0x0C draw commitment: the block producer's
+/// commitment to its witness key and draw seed. Opaque to C++: every 32-byte
+/// value is a commitment, the genesis block's all-zero one included, and
+/// none means "absent". No C++ code may compare one against zero.
+#define SHEKYL_DRAW_COMMITMENT_BYTES          32
 /// Bytes from the first byte of the coinbase tx pubkey to the nonce payload.
 /// The grammar fixes the distance (shekyl_wire::tx_extra::COINBASE_NONCE_OFFSET_FROM_PUBKEY);
 /// the template adds it to the pubkey's offset in the block blob rather than
 /// re-encoding the 0x02 tag and the length byte.
 size_t shekyl_coinbase_nonce_offset_from_pubkey(void);
-/// Coinbase grammar refusals (12..=17), beside the CEN-I19 codes (1..=11).
+/// Coinbase grammar refusals (12..=20), beside the CEN-I19 codes (1..=11).
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING   12
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH    13
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE 14
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_FOREIGN_TAG     15
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT          16
 #define SHEKYL_TX_EXTRA_SHAPE_NONCE_OUTSIDE_COINBASE   17
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_MISSING   18
+#define SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_DUPLICATE 19
+#define SHEKYL_TX_EXTRA_SHAPE_DRAW_COMMITMENT_OUTSIDE_COINBASE   20
 #define SHEKYL_TX_EXTRA_OK                    0
 /// The extra parsed and holds no such field — the committed empty set.
 #define SHEKYL_TX_EXTRA_ABSENT                100
@@ -1334,6 +1344,7 @@ size_t shekyl_coinbase_nonce_offset_from_pubkey(void);
 #define SHEKYL_TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT   0x06
 #define SHEKYL_TX_EXTRA_TAG_PQC_LEAF_ENTRIES     0x07
 #define SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION 0x0B
+#define SHEKYL_TX_EXTRA_TAG_DRAW_COMMITMENT      0x0C
 
 /// The `index`th field of `tag` in `extra`, as its payload bytes, in `out`
 /// (free with shekyl_buffer_free). OK / ABSENT / MALFORMED / UNKNOWN_TAG;
@@ -1429,10 +1440,21 @@ bool shekyl_tx_prunable_hash(
     size_t prunable_len,
     uint8_t* out_hash);
 
+/// A block template's draw commitment, SHEKYL_DRAW_COMMITMENT_BYTES into
+/// `out`: Rust draws a witness key and a seed, commits to them and keeps
+/// neither, so C++ holds 32 opaque bytes and no secret (rule 36). One call
+/// per template; every pricing pass of that template's coinbase carries the
+/// same bytes. 0 on success, 1 for a null `out`, 2 if the OS random source
+/// or key generation failed (nothing written; there is no fallback value).
+uint8_t shekyl_archival_draw_commitment(uint8_t* out);
+
 /// Build the coinbase extra in the grammar's one layout: [PubKey(tx_pubkey
-/// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), PqcKemCiphertext(kem),
-/// PqcLeafEntries(leaf)] — [PubKey, Nonce] when n_outputs == 0 — judged by
-/// the coinbase grammar before it is handed back in `out`. kem is
+/// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), DrawCommitment(
+/// draw_commitment[SHEKYL_DRAW_COMMITMENT_BYTES]), PqcKemCiphertext(kem),
+/// PqcLeafEntries(leaf)] — [PubKey, Nonce, DrawCommitment] when
+/// n_outputs == 0 — judged by
+/// the coinbase grammar before it is handed back in `out`. The commitment's
+/// bytes are carried and not read. kem is
 /// 1120·n_outputs bytes and leaf 64·n_outputs, as shekyl_construct_output
 /// produced them; anything else is refused with the shape code naming the
 /// field, so a template that could not pass admission is refused at
@@ -1440,6 +1462,7 @@ bool shekyl_tx_prunable_hash(
 int32_t shekyl_coinbase_extra(
     const uint8_t* tx_pubkey,
     const uint8_t* nonce,
+    const uint8_t* draw_commitment,
     const uint8_t* kem,
     size_t kem_len,
     const uint8_t* leaf,
@@ -3404,7 +3427,7 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //!
 //! A bitmask rather than a bare `bool`, so a second flag cannot be transposed
 //! onto this one by argument order. Function signatures on this surface are
-//! gated by `scripts/ci/check_relay_ffi_signatures.sh`. Flag values are not:
+//! gated by `scripts/ci/check_ffi_signatures.sh`. Flag values are not:
 //! `zone_flag_bits_do_not_transpose` pins the number. Bit 0 is not a flag.
 //! Keep the noise value in sync with `SHEKYL_RELAY_ZONE_NOISE_ENABLED` in
 //! `relay_zone_ffi`.

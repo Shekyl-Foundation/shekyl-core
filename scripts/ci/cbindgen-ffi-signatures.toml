@@ -3,14 +3,15 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# cbindgen config for the relay-FFI signature gate
-# (scripts/ci/check_relay_ffi_signatures.sh). Generates a declarations-only
-# header from rust/shekyl-ffi/src/relay_zone_ffi/mod.rs; the gate TU includes
-# it AFTER the hand-written src/shekyl/shekyl_ffi.h, so any signature
-# disagreement is a conflicting-declaration compile error.
+# cbindgen config for the FFI signature gate
+# (scripts/ci/check_ffi_signatures.sh). Generates a declarations-only
+# header from each gated Rust source file; the gate TU includes them AFTER
+# the hand-written src/shekyl/shekyl_ffi.h, so any signature disagreement
+# is a conflicting-declaration compile error.
 #
 # item_types deliberately excludes structs and constants:
-# - ShekylRelayBlob's DEFINITION lives in the hand-written header (a second
+# - a crossing struct's DEFINITION (ShekylRelayBlob, ShekylBuffer) lives in
+#   the hand-written header (a second
 #   definition would be an unconditional redefinition error; its byte layout
 #   is pinned by the header's own static_assert, and referenced-only types
 #   still surface here as opaque forward declarations, which redeclare
@@ -21,7 +22,6 @@
 # Signatures are this gate's job; values have their own regime.
 
 language = "C++"
-include_guard = "SHEKYL_FFI_GENERATED_RELAY_SIGNATURES_H"
 cpp_compat = true
 usize_is_size_t = true
 

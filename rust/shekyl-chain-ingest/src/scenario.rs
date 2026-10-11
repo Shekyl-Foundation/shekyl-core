@@ -460,6 +460,13 @@ where
         // scalar's bytes exists on this stack after the context drops.
         let mut tx_key_secret = Zeroizing::new([0u8; 32]);
         tx_key_secret[..8].copy_from_slice(&self.next_tx_secret.to_le_bytes());
+        // A commitment per template, from the same counter, so two
+        // templates never share one. Nothing opens it: the driver holds no
+        // witness key or seed yet, so its blocks issue no draw. The driver
+        // that reveals a seed commits to one it can open (`SO-D12`
+        // increment 3).
+        let mut commitment = [0xDC; 32];
+        commitment[..8].copy_from_slice(&self.next_tx_secret.to_le_bytes());
         self.next_tx_secret += 1;
         let rule_set: RuleSet = self.rules.in_force(facts.connecting);
         build(&TemplateContext {
@@ -494,6 +501,7 @@ where
             miner: &self.miner,
             tx_key_secret,
             extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
+            draw_commitment: shekyl_wire::tx_extra::DrawCommitment::from_bytes(commitment),
             listed,
         })
     }

@@ -60,14 +60,14 @@ using namespace crypto;
 namespace cryptonote
 {
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply) {
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const shekyl::draw_commitment& draw_commitment, const blobdata& extra_nonce, size_t max_outs, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply) {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
 
     // The extra is built once, at the end, by shekyl_coinbase_extra: the
-    // codec lays out [0x01 pubkey, 0x02 nonce(8), 0x06 KEM, 0x07 leaf
-    // entries] and judges it by the coinbase grammar before handing the bytes
+    // codec lays out [0x01 pubkey, 0x02 nonce(8), 0x0C draw commitment,
+    // 0x06 KEM, 0x07 leaf entries] and judges it by the coinbase grammar before handing the bytes
     // back (TX_EXTRA_RUST_CUTOVER.md §3, TXE-Q2, TXE-Q6'). The nonce is a
     // fixed SHEKYL_COINBASE_NONCE_BYTES: a miner's shorter request is
     // zero-padded and a longer one refused here, not at connect.
@@ -182,7 +182,7 @@ namespace cryptonote
       char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
       ShekylOwnedBuffer extra;
       const int32_t rc = shekyl_coinbase_extra(
-        reinterpret_cast<const uint8_t*>(&txkey.pub), nonce,
+        reinterpret_cast<const uint8_t*>(&txkey.pub), nonce, draw_commitment.bytes,
         kem_blob.empty() ? nullptr : kem_blob.data(), kem_blob.size(),
         leaf_blob.empty() ? nullptr : leaf_blob.data(), leaf_blob.size(),
         out_amounts.size(), &extra.buf, msg, sizeof(msg));

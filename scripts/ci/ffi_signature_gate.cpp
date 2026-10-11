@@ -3,15 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 //
-// The relay-FFI signature gate TU (scripts/ci/check_relay_ffi_signatures.sh).
+// The FFI signature gate TU (scripts/ci/check_ffi_signatures.sh).
 //
 // C linkage erases types: a hand-written declaration that drifts from its
 // Rust definition compiles, links by name alone, and is UB at runtime — the
 // hazard docs/FOLLOWUPS.md registers for src/shekyl/shekyl_ffi.h. A
 // link-only probe cannot catch this (the Rust side never enters that
 // compilation; refuted on the record in the FOLLOWUPS entry). This TU can:
-// it includes the hand-written header and then a cbindgen-generated
-// declarations-only header derived from the Rust definitions. extern "C"
+// it includes the hand-written header and then one cbindgen-generated
+// declarations-only header per gated Rust source file. extern "C"
 // functions cannot overload, so any disagreement in arity, parameter types,
 // or return type is a conflicting-declaration COMPILE error — the C++
 // compiler performs the comparison, and both inputs to it derive from the
@@ -20,7 +20,11 @@
 // Negative-controlled at introduction (both injected into a copy of the
 // hand-written header and observed to fail): dropping a parameter from
 // shekyl_relay_zone_poll -> "conflicting declaration of C function";
-// changing now_ms from uint64_t to uint32_t -> same error class.
+// changing now_ms from uint64_t to uint32_t -> same error class. And, when
+// the coinbase writer joined the gate (SO-D12 increment 1): the Rust
+// shekyl_coinbase_extra had gained its draw_commitment parameter and the
+// hand-written declaration had not -> the same error, before any C++ call
+// site was touched.
 //
 // Order matters: the hand-written header comes first so its type
 // definitions (ShekylRelayBlob, the callback typedefs, the #define flag
@@ -29,6 +33,8 @@
 #include "shekyl/shekyl_ffi.h"
 
 #include "shekyl_ffi_generated_relay.h"
+#include "shekyl_ffi_generated_tx_extra_codec.h"
+#include "shekyl_ffi_generated_archival_draw.h"
 
 int main()
 {

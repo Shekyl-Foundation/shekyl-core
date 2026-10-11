@@ -22,6 +22,7 @@
 //! | [`epoch_close`] | Failure window, prune, epoch-close compute |
 //! | [`emission`] | Emission vin + claimed-epochs writer |
 //! | [`ct_balance`] | Bond-post CT balance |
+//! | [`draw`] | The block template's `0x0C` draw commitment |
 //!
 //! Split from the former monofile so the archival C edge stays reviewable.
 //! Pattern matches [`crate::relay_zone_ffi`].
@@ -30,6 +31,7 @@ mod attestation;
 mod bond;
 mod codes;
 mod ct_balance;
+mod draw;
 mod emission;
 mod epoch_close;
 mod schedule;
@@ -51,6 +53,8 @@ pub use attestation::*;
 pub use bond::*;
 #[allow(unused_imports)]
 pub use ct_balance::*;
+#[allow(unused_imports)]
+pub use draw::*;
 #[allow(unused_imports)]
 pub use emission::*;
 #[allow(unused_imports)]

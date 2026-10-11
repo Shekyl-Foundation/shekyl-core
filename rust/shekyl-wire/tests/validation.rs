@@ -728,7 +728,9 @@ fn validator_rejects_a_kem_field_of_the_wrong_length() {
 /// real genesis coinbase so everything but the outputs and the extra is a
 /// shape the validator already accepts.
 fn coinbase_with_outputs(n: usize) -> Transaction {
-    use shekyl_wire::tx_extra::{self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES};
+    use shekyl_wire::tx_extra::{
+        self, DrawCommitment, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES,
+    };
     let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
     let mut tx = blk.miner_transaction;
     let out = tx.prefix.outputs[0].clone();
@@ -745,6 +747,7 @@ fn coinbase_with_outputs(n: usize) -> Transaction {
     tx.prefix.extra = tx_extra::build_coinbase_extra(
         pk,
         &[0u8; COINBASE_NONCE_BYTES],
+        DrawCommitment::from_bytes([0xDC; 32]),
         n,
         &vec![0x6a; HYBRID_KEM_CT_BYTES * n],
         &tx_extra::conforming_pqc_leaf_blob(n),
@@ -759,8 +762,8 @@ fn coinbase_with_outputs(n: usize) -> Transaction {
 /// not size-capped here or in C++. What the cutover changed is that the
 /// coinbase extra now has a consensus bound of its own — the grammar — and
 /// that bound is tighter than the relay cap ever was: the largest grammar-
-/// valid coinbase extra is the `MAX_OUTPUTS`-output one — four tags, four
-/// varint lengths, `32 + 8 + 1184·16` bytes of payload, 18 994 in all —
+/// valid coinbase extra is the `MAX_OUTPUTS`-output one — five tags, three
+/// varint lengths, `32 + 8 + 32 + 1184·16` bytes of payload, 19 027 in all —
 /// below 24 576. The "unbounded coinbase extra" M4 named is closed, not
 /// moved; one byte of padding on that largest coinbase is refused.
 #[test]
@@ -780,9 +783,13 @@ fn cen_m4_coinbase_extra_is_bounded_by_the_grammar_below_the_relay_cap() {
     let leaf = 64 * MAX_OUTPUTS;
     assert_eq!(
         largest.prefix.extra.len(),
-        (1 + 32) + (1 + 1 + 8) + (1 + varint_len(kem) + kem) + (1 + varint_len(leaf) + leaf)
+        (1 + 32)
+            + (1 + 1 + 8)
+            + (1 + 32)
+            + (1 + varint_len(kem) + kem)
+            + (1 + varint_len(leaf) + leaf)
     );
-    assert_eq!(largest.prefix.extra.len(), 18_994);
+    assert_eq!(largest.prefix.extra.len(), 19_027);
     assert!(largest.prefix.extra.len() < MAX_TX_EXTRA);
     largest
         .validate()

@@ -19,11 +19,17 @@
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use shekyl_crypto_pq::output::{construct_output, OutputData};
-use shekyl_wire::tx_extra::{self, COINBASE_NONCE_BYTES};
+use shekyl_wire::tx_extra::{self, DrawCommitment, COINBASE_NONCE_BYTES};
 use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 use zeroize::Zeroizing;
 
 use crate::Recipient;
+
+/// The `0x0C` commitment every harness coinbase carries. A fixed value
+/// with no opening: the harness has no producer, so its blocks commit to
+/// a seed nobody reveals and issue no draw. Not zero, so a fixture cannot
+/// pass for the genesis block's commitment by accident.
+pub const DRAW_COMMITMENT: DrawCommitment = DrawCommitment::from_bytes([0xDC; 32]);
 
 /// The coinbase tx secret `r` for a block at `height`: the height in the
 /// low eight bytes under a fixed `0x0A` fill. The fill keeps the value
@@ -93,6 +99,7 @@ pub fn paying(recipient: &Recipient, height: u64, unlock_time: u64, amount: u64)
     let extra = tx_extra::build_coinbase_extra(
         tx_pubkey(height),
         &[0; COINBASE_NONCE_BYTES],
+        DRAW_COMMITMENT,
         1,
         &kem_blob,
         &leaf_blob,

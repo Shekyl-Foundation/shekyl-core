@@ -25,7 +25,7 @@ use crate::verdict::TxSlot;
 
 pub use crate::rules::tx_against::newest_admissible_reference;
 pub use price::{priced, priced_at, repriced};
-pub use shekyl_harness_wallet::coinbase::{paid, Paid};
+pub use shekyl_harness_wallet::coinbase::{paid, Paid, DRAW_COMMITMENT};
 pub use shekyl_harness_wallet::MinerWallet;
 
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
@@ -313,14 +313,22 @@ pub fn pqc_extra(n_outputs: usize) -> Vec<u8> {
 }
 
 /// The coinbase `extra` in CEN-I20's one layout for `n_outputs` outputs:
-/// `[0x01 pubkey, 0x02 nonce(8), 0x06, 0x07]`, built by the grammar's
-/// own constructor so the fixture cannot drift from the rule. The
-/// pubkey is `G` and the nonce zero: no rule reads either's value.
+/// `[0x01 pubkey, 0x02 nonce(8), 0x0C commitment, 0x06, 0x07]`, built by
+/// the grammar's own constructor so the fixture cannot drift from the
+/// rule. The pubkey is `G`, the nonce zero and the commitment
+/// [`DRAW_COMMITMENT`]: no rule reads any of the three values.
 pub fn coinbase_extra(n_outputs: usize) -> Vec<u8> {
     let kem = vec![0x5A; HYBRID_KEM_CT_BYTES * n_outputs];
     let leaf = conforming_pqc_leaf_blob(n_outputs);
-    tx_extra::build_coinbase_extra(G, &[0; COINBASE_NONCE_BYTES], n_outputs, &kem, &leaf)
-        .expect("the grammar's one layout builds")
+    tx_extra::build_coinbase_extra(
+        G,
+        &[0; COINBASE_NONCE_BYTES],
+        DRAW_COMMITMENT,
+        n_outputs,
+        &kem,
+        &leaf,
+    )
+    .expect("the grammar's one layout builds")
 }
 
 /// A coinbase that satisfies every structural 4.F row for a block at

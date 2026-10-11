@@ -61,9 +61,11 @@ use std::os::raw::c_char;
 
 use shekyl_wire::tx_extra::{
     admitted_leaf_blob, build_coinbase_extra, check_tx_extra_shape, parse, tag_carries_payload,
-    CoinbaseBuildError, ExtraShapeError, ExtraSubject, TxExtraField, COINBASE_NONCE_BYTES,
-    COINBASE_NONCE_OFFSET_FROM_PUBKEY, TX_EXTRA_PUBKEY_LEN,
+    CoinbaseBuildError, DrawCommitment, ExtraShapeError, ExtraSubject, TxExtraField,
+    COINBASE_NONCE_BYTES, COINBASE_NONCE_OFFSET_FROM_PUBKEY, TX_EXTRA_PUBKEY_LEN,
 };
+
+use shekyl_types::archival::DRAW_COMMITMENT_LEN;
 
 use crate::legacy_types::ShekylBuffer;
 use crate::tx_extra_ffi::{
@@ -313,7 +315,10 @@ pub extern "C" fn shekyl_coinbase_nonce_offset_from_pubkey() -> usize {
 ///
 /// `nonce` is exactly [`COINBASE_NONCE_BYTES`] bytes, the miner's template
 /// search space beyond the 32-bit header nonce (`TXE-Q6′`); the daemon
-/// zero-fills it when no miner asked. The KEM blob is `1120 · n_outputs`
+/// zero-fills it when no miner asked. `draw_commitment` is the block's
+/// `0x0C` field, exactly [`DRAW_COMMITMENT_LEN`] bytes, as
+/// `shekyl_archival_draw_commitment` produced it; the writer carries the
+/// bytes and reads none of them. The KEM blob is `1120 · n_outputs`
 /// bytes and the leaf blob `64 · n_outputs`, exactly as
 /// `shekyl_construct_output` produced them; anything else is refused with
 /// the shape code that names the field (a template that cannot pass
@@ -322,14 +327,16 @@ pub extern "C" fn shekyl_coinbase_nonce_offset_from_pubkey() -> usize {
 /// on `OK` and the null buffer otherwise.
 ///
 /// # Safety
-/// `tx_pubkey` is readable for [`TX_EXTRA_PUBKEY_LEN`] bytes and `nonce` for
-/// `COINBASE_NONCE_BYTES`; `kem` / `leaf` are readable for their lengths
+/// `tx_pubkey` is readable for [`TX_EXTRA_PUBKEY_LEN`] bytes, `nonce` for
+/// `COINBASE_NONCE_BYTES` and `draw_commitment` for
+/// [`DRAW_COMMITMENT_LEN`]; `kem` / `leaf` are readable for their lengths
 /// (null only with 0); `out` is a writable `ShekylBuffer`; `out_msg` is
 /// writable for `out_msg_cap` bytes (null with 0).
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_coinbase_extra(
     tx_pubkey: *const u8,
     nonce: *const u8,
+    draw_commitment: *const u8,
     kem: *const u8,
     kem_len: usize,
     leaf: *const u8,
@@ -341,29 +348,39 @@ pub unsafe extern "C" fn shekyl_coinbase_extra(
 ) -> i32 {
     // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
     unsafe { write_msg(out_msg, out_msg_cap, "") };
-    if out.is_null() || tx_pubkey.is_null() || nonce.is_null() {
+    if out.is_null() || tx_pubkey.is_null() || nonce.is_null() || draw_commitment.is_null() {
         return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
     }
     // SAFETY: caller contract on `out`.
     unsafe { out.write(ShekylBuffer::null()) };
-    // SAFETY: caller contracts on the four inputs.
-    let (key, nonce, kem, leaf) = unsafe {
-        let (Some(key), Some(nonce)) = (
+    // SAFETY: caller contracts on the five inputs.
+    let (key, nonce, commitment, kem, leaf) = unsafe {
+        let (Some(key), Some(nonce), Some(commitment)) = (
             bytes(tx_pubkey, TX_EXTRA_PUBKEY_LEN),
             bytes(nonce, COINBASE_NONCE_BYTES),
+            bytes(draw_commitment, DRAW_COMMITMENT_LEN),
         ) else {
             return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
         };
         let (Some(kem), Some(leaf)) = (bytes(kem, kem_len), bytes(leaf, leaf_len)) else {
             return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
         };
-        (key, nonce, kem, leaf)
+        (key, nonce, commitment, kem, leaf)
     };
     let mut pubkey = [0u8; TX_EXTRA_PUBKEY_LEN];
     pubkey.copy_from_slice(key);
     let mut nonce_bytes = [0u8; COINBASE_NONCE_BYTES];
     nonce_bytes.copy_from_slice(nonce);
-    match build_coinbase_extra(pubkey, &nonce_bytes, n_outputs, kem, leaf) {
+    let mut commitment_bytes = [0u8; DRAW_COMMITMENT_LEN];
+    commitment_bytes.copy_from_slice(commitment);
+    match build_coinbase_extra(
+        pubkey,
+        &nonce_bytes,
+        DrawCommitment::from_bytes(commitment_bytes),
+        n_outputs,
+        kem,
+        leaf,
+    ) {
         Ok(blob) => {
             // SAFETY: `out` checked above.
             unsafe { give(out, blob) };
@@ -408,6 +425,7 @@ mod tests {
     }
 
     const NONCE: [u8; COINBASE_NONCE_BYTES] = [0xC0, 0x1D, 0xBE, 0xEF, 0, 0, 0, 1];
+    const COMMITMENT: [u8; DRAW_COMMITMENT_LEN] = [0xDC; DRAW_COMMITMENT_LEN];
 
     fn coinbase(key: [u8; 32], n: usize, kem: &[u8], leaf: &[u8]) -> (i32, Vec<u8>, String) {
         let mut out = ShekylBuffer::null();
@@ -416,6 +434,7 @@ mod tests {
             shekyl_coinbase_extra(
                 key.as_ptr(),
                 NONCE.as_ptr(),
+                COMMITMENT.as_ptr(),
                 if kem.is_empty() {
                     std::ptr::null()
                 } else {
@@ -780,6 +799,7 @@ mod tests {
             shekyl_coinbase_extra(
                 [0x11u8; 32].as_ptr(),
                 std::ptr::null(),
+                COMMITMENT.as_ptr(),
                 std::ptr::null(),
                 0,
                 std::ptr::null(),

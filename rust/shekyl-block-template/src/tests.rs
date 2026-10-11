@@ -10,6 +10,7 @@
 
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
+use shekyl_chain_rules::harness::fixture::DRAW_COMMITMENT;
 use shekyl_chain_rules::harness::fixture::{
     anchored_on, point_at, recorded_with_work, root, spend, spendable_chain,
 };
@@ -144,6 +145,7 @@ fn context<'a>(
         miner,
         tx_key_secret: Zeroizing::new([0x77; 32]),
         extra_nonce: [0; tx_extra::COINBASE_NONCE_BYTES],
+        draw_commitment: DRAW_COMMITMENT,
         listed,
     }
 }

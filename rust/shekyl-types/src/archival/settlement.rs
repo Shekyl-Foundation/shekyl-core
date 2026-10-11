@@ -42,6 +42,9 @@ pub const ISSUED_DIGEST_LEN: usize = 32;
 /// Width of a [`DrawableDigest`].
 pub const DRAWABLE_DIGEST_LEN: usize = 32;
 
+/// Width of a [`DrawCommitment`].
+pub const DRAW_COMMITMENT_LEN: usize = 32;
+
 /// Width of a stored [`BlockDraws`].
 pub const BLOCK_DRAWS_LEN: usize = 21;
 
@@ -287,6 +290,43 @@ impl IssuedDigest {
             carry = sum >> 8;
         }
         // The carry out of the top byte is the reduction modulo 2^256.
+    }
+}
+
+/// The commitment a block's coinbase carries to its producer's witness key
+/// and draw seed (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2): 32 bytes, the
+/// coinbase extra's `0x0C` field.
+///
+/// **Every 32-byte value is a commitment. None means "absent" or
+/// "unset".** A commitment nobody can open, such as the all-zero one the
+/// genesis block carries, is still a commitment: its block issues no draw
+/// because no carrier can reveal a seed for it, not because a reader
+/// skipped it. The type has no zero constant, no `Default` and no
+/// emptiness test so that no reader can branch on one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DrawCommitment([u8; DRAW_COMMITMENT_LEN]);
+
+impl DrawCommitment {
+    /// The commitment a coinbase carries.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; DRAW_COMMITMENT_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes a coinbase carries.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; DRAW_COMMITMENT_LEN] {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for DrawCommitment {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "DrawCommitment(")?;
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        write!(f, ")")
     }
 }
 

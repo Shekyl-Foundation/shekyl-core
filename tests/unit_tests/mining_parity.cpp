@@ -273,7 +273,7 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
 // [0x01 pubkey, 0x02 nonce(8), 0x06 KEM ciphertexts, 0x07 leaf entries] --
 // the coinbase grammar (TXE-Q6'), which geblock (rust/shekyl-genesis-tool)
 // emits for genesis with an all-zero nonce. This test is the cutover's
-// byte-identity proof (TX_EXTRA_RUST_CUTOVER.md §8): read the four fields out
+// byte-identity proof (TX_EXTRA_RUST_CUTOVER.md §8): read the five fields out
 // of each network's genesis extra through the codec, hand them back to the
 // writer, and require the bytes that come out to be the bytes that went in.
 // A layout drift in either direction -- the writer, or geblock -- fails here,
@@ -312,6 +312,18 @@ TEST(mining_parity, coinbase_writer_reproduces_the_genesis_extra_byte_for_byte)
     ASSERT_EQ(size_t(SHEKYL_COINBASE_NONCE_BYTES), nonce.size()) << nc.name;
     EXPECT_TRUE(std::all_of(nonce.data(), nonce.data() + nonce.size(), [](uint8_t b) { return b == 0; }))
       << nc.name << ": genesis was not nonce-searched; its nonce is zero";
+    // The 0x0C draw commitment is read like any other block's: through the
+    // codec, as a field that is present. Genesis commits to 32 zero bytes
+    // (SO-D12, ruled 2026-10-10): a commitment nobody can open, carried and
+    // re-emitted below exactly as a non-zero one would be. This is the pin of
+    // that value; nothing in the daemon may read zero as "no commitment".
+    ShekylOwnedBuffer commitment;
+    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_field(extra.data(), extra.size(),
+        SHEKYL_TX_EXTRA_TAG_DRAW_COMMITMENT, 0, &commitment.buf))
+      << nc.name << ": genesis extra carries no 0x0C draw commitment";
+    ASSERT_EQ(size_t(SHEKYL_DRAW_COMMITMENT_BYTES), commitment.size()) << nc.name;
+    EXPECT_TRUE(std::all_of(commitment.data(), commitment.data() + commitment.size(), [](uint8_t b) { return b == 0; }))
+      << nc.name << ": the genesis draw commitment is the ruled 32 zero bytes";
     ShekylOwnedBuffer kem;
     ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_tx_extra_field(extra.data(), extra.size(),
         SHEKYL_TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0, &kem.buf))
@@ -323,16 +335,18 @@ TEST(mining_parity, coinbase_writer_reproduces_the_genesis_extra_byte_for_byte)
       << nc.name << ": genesis extra fails the coinbase grammar: " << msg;
     EXPECT_EQ(n_outputs * SHEKYL_HYBRID_KEM_CT_BYTES, kem.size()) << nc.name;
     EXPECT_EQ(n_outputs * SHEKYL_PQC_LEAF_ENTRY_BYTES, leaf.size()) << nc.name;
-    // Exactly the three fields: a second 0x01 / 0x06 / 0x07 or any other tag
+    // Exactly the five fields: a second 0x01 / 0x0C / 0x06 / 0x07 or any other tag
     // would survive the round trip below only by being dropped, so ask.
     ShekylOwnedBuffer none;
     EXPECT_EQ(SHEKYL_TX_EXTRA_ABSENT, shekyl_tx_extra_field(extra.data(), extra.size(),
         SHEKYL_TX_EXTRA_TAG_PUBKEY, 1, &none.buf)) << nc.name << ": a second 0x01";
     EXPECT_EQ(SHEKYL_TX_EXTRA_ABSENT, shekyl_tx_extra_field(extra.data(), extra.size(),
+        SHEKYL_TX_EXTRA_TAG_DRAW_COMMITMENT, 1, &none.buf)) << nc.name << ": a second 0x0C";
+    EXPECT_EQ(SHEKYL_TX_EXTRA_ABSENT, shekyl_tx_extra_field(extra.data(), extra.size(),
         SHEKYL_TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, 0, &none.buf)) << nc.name << ": a 0x0B";
 
     ShekylOwnedBuffer rebuilt;
-    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_coinbase_extra(pubkey, nonce.data(), kem.data(), kem.size(),
+    ASSERT_EQ(SHEKYL_TX_EXTRA_OK, shekyl_coinbase_extra(pubkey, nonce.data(), commitment.data(), kem.data(), kem.size(),
         leaf.data(), leaf.size(), n_outputs, &rebuilt.buf, msg, sizeof(msg)))
       << nc.name << ": the writer refused the genesis fields: " << msg;
     const std::vector<uint8_t> got(rebuilt.data(), rebuilt.data() + rebuilt.size());
