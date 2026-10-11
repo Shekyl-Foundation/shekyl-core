@@ -18,8 +18,8 @@
 //! # Public surface
 //!
 //! - [`challenge`] — `challenge_leaf_index`, `challenge_fire_height`, domain labels.
-//! - [`challenge_assignment`] — exact-min derived assignment urn
-//!   ([`ChallengeUrn`], [`assign_epoch`]); pure, no wire surface.
+//! - [`drawable_pair`] — one drawable `(P, s)` pair. The public urn that
+//!   scheduled these pairs is deleted; the secret draw replaces it.
 //! - [`path`] — [`SegmentPathOpening`], [`verify_segment_path`] (requires the
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
@@ -56,13 +56,13 @@ pub mod bond_floor;
 pub mod bond_post;
 pub mod bond_wire;
 pub mod challenge;
-pub mod challenge_assignment;
 pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
 pub mod constants;
 pub mod debit_auth;
 pub mod distinct;
+pub mod drawable_pair;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
@@ -132,10 +132,6 @@ pub use challenge::{
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
 };
-pub use challenge_assignment::{
-    assign_epoch, AssignmentError, ChallengeUrn, DrawablePair, FeedError,
-    CHALLENGE_ASSIGNMENT_CUSTOMIZATION,
-};
 pub use claimed_epochs::{
     claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,
     emission_block_claims_unique, epoch_is_claim_expired, epoch_is_not_settled, ClaimedEpochsError,
@@ -164,6 +160,7 @@ pub use constants::{
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
 };
+pub use drawable_pair::DrawablePair;
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
     claimant_reward_share, emission_vin_verify, emission_vin_verify_auth,

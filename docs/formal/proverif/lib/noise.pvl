@@ -1,0 +1,68 @@
+(* Copyright (c) 2026, The Shekyl Foundation
+ *
+ * All rights reserved.
+ * BSD-3-Clause
+ *
+ * Primitives for Shekyl's Noise handshakes. Both models load this file
+ * with `proverif -lib`, then lib/broken.pvl. The names, and what the
+ * symbolic model does not say, are docs/formal/proverif/README.md.
+ * EncryptAndHash as one letfun is lib/encrypt_and_hash.pvl, which only
+ * NNhfs loads.
+ *
+ * Keep this file to the declarations and these section notes. A long
+ * comment here does not change hybridXK's forward-secrecy resolution,
+ * and it does push that query over the 6 GiB address-space cap.
+ *)
+
+(* Types. bitstring is the Noise byte string. Asymmetric material has its
+   own types so a public key cannot stand where a ciphertext goes. *)
+
+type scalar.
+type point.
+type kemsk.
+type kempk.
+type kemct.
+type seed.
+type key.
+
+(* X25519, as a Diffie-Hellman group. Low-order points do not exist here. *)
+
+const g: point [data].
+fun exp(point, scalar): point.
+equation forall x: scalar, y: scalar; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+(* ML-KEM, as an IND-CCA KEM: a ciphertext opens only under the secret key. *)
+
+fun kpk(kemsk): kempk.
+fun kct(kempk, seed): kemct.
+fun kss(kempk, seed): bitstring.
+reduc forall sk: kemsk, r: seed; kdecaps(kct(kpk(sk), r), sk) = kss(kpk(sk), r).
+
+(* The symmetric state. kdfh is MixKeyAndHash's third output. split1 is
+   initiator to responder, split2 the other way. The nonce restarts at n0
+   per key. *)
+
+fun hinit(bitstring): bitstring.
+fun mixh(bitstring, bitstring): bitstring.
+fun kdfck(bitstring, bitstring): bitstring.
+fun kdfk(bitstring, bitstring): key.
+fun kdfh(bitstring, bitstring): bitstring.
+fun split1(bitstring): key.
+fun split2(bitstring): key.
+
+(* The AEAD, with the handshake hash as associated data. *)
+
+fun aead(key, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: key, n: bitstring, ad: bitstring, m: bitstring;
+      adec(k, n, ad, aead(k, n, ad, m)) = m.
+
+(* Type converters. [data] makes the wire bytes visible to the attacker. *)
+
+fun p2b(point): bitstring [data, typeConverter].
+fun kpk2b(kempk): bitstring [data, typeConverter].
+fun ct2b(kemct): bitstring [data, typeConverter].
+
+const n0: bitstring.
+const n1: bitstring.
+const n2: bitstring.
+const empty: bitstring.
