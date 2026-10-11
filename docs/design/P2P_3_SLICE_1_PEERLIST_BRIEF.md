@@ -122,8 +122,10 @@ Nothing else writes white. *Records-was, until 2026-10-11: except
 `HarvestDone` for the Foundation fleet (§3).*
 `SessionAccepted` keeps the session. `Confirmed` closes it. Both are
 that same draw. A dial of an address that was not that draw does not
-write white. `--add-peer` does not. An incoming peer does not. A
-finished harvest does not, except §3.
+write white. `--add-peer` does not. An incoming peer does not. *Records-was:
+"a finished harvest does not, except §3" — the harvest is absorbed into
+`Confirmed` (dialer brief arm 2, 2026-10-11), and §3's exception is
+withdrawn.*
 
 The other direction is demotion. A white address with no additional contact
 for `EXPIRATION_PERIOD` (24 hours) returns to gray. Additional contact is a
@@ -310,8 +312,9 @@ found. Same mechanism, same gray to white process."
   `src/p2p/net_node.inl:771`, the array at `:781`; the onion seeds
   `get_seed_nodes` returns) enter gray at each start, as operator-named
   addresses do (`Source::Operator`). They reach white only through a
-  drawn dial's `SessionAccepted` or `Confirmed`. **`HarvestDone` writes
-  no white for any address.** The file treats them as it treats any
+  drawn dial's `SessionAccepted` or `Confirmed`. **There is no harvest
+  outcome:** `HarvestDone` is deleted in PR-3, absorbed into `Confirmed`
+  (dialer brief arm 2). The file treats them as it treats any
   address (§7): they are public, and excluding them would need a seed
   list or a provenance tag in the crate, which is the special case just
   deleted.
@@ -396,7 +399,7 @@ The peerlist offers uniform draws and no ordered walk:
 | --- | --- |
 | `SessionAccepted` | Outstanding gray draw: move to white and set `last_observed`. The session stays. Already white, on a session this node opened: move the clock. Anything else: white unchanged |
 | `Confirmed` | Outstanding gray draw: the same white write. No session remains. Anything else: white unchanged |
-| `HarvestDone` | White unchanged, for every address (§3, ruled 2026-10-11). An outstanding draw of that address returns to drawable gray. *Records-was: one of the six Foundation hosts, the same white write, from any seat* |
+| *`HarvestDone` — DELETED in PR-3 (2026-10-11)* | Absorbed into `Confirmed` (dialer brief arm 2): a confirm-and-close dial learns the peer's sample as a harvest did, and the harvest's only difference, no white write, existed for §3's withdrawn exception. The crate's variant, `address()` arm, `apply` arm and test go in PR-3. *Records-was, same day: white unchanged for every address; before that: one of the six Foundation hosts, the same white write, from any seat* |
 | `DialFailed`, `PeerlistRefused` | Outstanding gray draw is dropped. A white address stays white |
 | `PayloadRefused` | No promotion, no demotion. An outstanding draw returns to drawable gray |
 
@@ -579,7 +582,7 @@ host to throttle; that is recorded there as the residual.
 | --- | --- |
 | `admit_gray(address)` | Insert into gray when the address sits nowhere. An address already gray, outstanding, or white is left where it sits; the call reports whether it newly entered gray, and a seated address is not a new intake charge. This is the incoming path, the gossip path, `--add-peer`, exclusive, priority, and load. Refused while the address is under an active ban (D4) and when the session's 24-hour intake would pass `2 × DISCLOSE_COUNT` distinct addresses (D-S1, `PeerlistRefused`) |
 | ban demotion | A white entry under an active ban moves to gray at the next white read: count, draw, or sample (D4, §5b). The clock is not copied across |
-| `bootstrap_harvested(addresses)` | `admit_gray` for each returned address. The dialed harvest peer is not promoted by this call |
+| `bootstrap_harvested(addresses)` | `admit_gray` for each address in a handshake reply's sample. The dialed peer is not promoted by this call; `apply(Confirmed)` or `apply(SessionAccepted)` is |
 | expiry | `now - last_observed >= EXPIRATION_PERIOD` moves that white address to gray and does not copy the clock across |
 
 `--add-exclusive-node` is a gray admit of the declared population
@@ -636,7 +639,7 @@ the range table.
 | Behavior | Where | Rust |
 | --- | --- | --- |
 | Promote from a bare address and stamp now | `set_peer_just_seen`, `src/p2p/net_peerlist.h:334` | No such function. White is written only by `apply` under §5 |
-| Two white writes on one kept outbound dial | `set_peer_just_seen` at `src/p2p/net_node.inl:1403` and `append_with_peer_white` at `:1707` | One `apply`, and only for `SessionAccepted` or `Confirmed` of the gray draw or `HarvestDone` of a Foundation host |
+| Two white writes on one kept outbound dial | `set_peer_just_seen` at `src/p2p/net_node.inl:1403` and `append_with_peer_white` at `:1707` | One `apply`, and only for `SessionAccepted` or `Confirmed` of the gray draw (*records-was:* or `HarvestDone` of a Foundation host, withdrawn 2026-10-11) |
 | `trust_last_seen` | `append_with_peer_white`, `src/p2p/net_peerlist.h:347` | No flag. The clock moves only on contact this node initiated |
 | Gossiped `last_seen` stored on gray insert | `src/p2p/net_peerlist.h:239`, `src/p2p/net_peerlist.h:405` | Ignored. Gray has no clock |
 | Time order as a rank | `by_time` at `src/p2p/net_peerlist.h:184`; the dial sort at `src/p2p/net_node.inl:1935-1938` | Uniform draws. Load is unordered |
@@ -668,10 +671,12 @@ consult the outbound cap. The fill's gray dial does keep one
 (`try_to_connect_and_handshake_with_new_peer` at `:2019`). Rust does
 not merge those into a harvest. A kept gray dial is `SessionAccepted`.
 A confirm while outbound is already at target is `Confirmed`: white
-is written and no session remains. A harvest stays `HarvestDone` and
-writes no white (§3, 2026-10-11; *records-was:* only for the Foundation
-fleet). *Records-was, earlier: this paragraph called the probe a harvest,
-so a peer outside that fleet stayed off white.*
+is written and no session remains. There is no harvest outcome
+(`HarvestDone` deleted 2026-10-11, absorbed into `Confirmed`;
+*records-was:* a harvest stayed `HarvestDone` and wrote no white, and
+before that wrote white only for the Foundation fleet). *Records-was,
+earlier: this paragraph called the probe a harvest, so a peer outside
+that fleet stayed off white.*
 
 The stripe field the register used to inherit is already gone from the
 peerlist. `src/p2p/net_peerlist.h:367` keeps the previous `last_seen`. `:414`
@@ -703,7 +708,7 @@ A `u16` named on both sides of the FFI is not the mitigation. The port carries
 no provenance either way. The residual lie is a caller whose `apply` promotes
 an address the peerlist did not draw.
 `SessionAccepted` or `Confirmed` of an undrawn address writes
-nothing. `HarvestDone` writes nothing (§3, 2026-10-11). The match
+nothing. There is no harvest outcome (2026-10-11). The match
 cannot be talked into a third door. `Confirmed` is not that door: it
 is the same gray draw, closed after the payload is accepted.
 
@@ -730,12 +735,12 @@ They check different things. Neither stands for the other.
    address at admit, and D7 reopens on the same event.
 3. **Model sequences (runtime).** An outstanding gray draw promotes on
    `SessionAccepted` and on `Confirmed`; either outcome on an undrawn
-   address does not; `HarvestDone` never does, seed or not; incoming
+   address does not; incoming
    and `--add-peer` stay gray; expiry returns white to gray; contact this node
    opened moves the clock; inbound contact does not; reload is gray only and
    does not draw former white first; `disclose` is a sample of white and
    carries no clock; `DialFailed` and `PeerlistRefused` drop an outstanding
-   gray draw; `PayloadRefused` and `HarvestDone` return that
+   gray draw; `PayloadRefused` returns that
    draw to drawable gray; a failed redial leaves white.
    The harness fails if it has no sequence (rule 47).
 4. **The C++ list is gone, and so is the old spelling.** `rg -n 'm_peers_white|peerlist_manager' src/p2p`
@@ -786,8 +791,8 @@ Worked against the paths this brief already knows:
 | Uniform gray draw, kept dial, `SessionAccepted` | Yes. The session stays |
 | Uniform gray draw, confirm while outbound is at target, `Confirmed` | Yes. No session remains |
 | Same address, already white, `SessionAccepted` on a session this node opened | Clock moves. Already white |
-| Compiled seed, `HarvestDone` | No (§3, 2026-10-11). Gray until drawn and confirmed, like any peer. *Records-was: Yes* |
-| Bootstrap harvest of anyone else | No. Returned addresses are gray |
+| Compiled seed, drawn and `Confirmed` | Yes, like any peer (§3, 2026-10-11). *Records-was: `HarvestDone`, Yes under the exception, then No* |
+| Addresses in a confirmed peer's reply | No. Gray only (`bootstrap_harvested`). *Records-was: "bootstrap harvest"* |
 | `--add-peer`, an exclusive list | No. Gray until drawn. *Records-was: priority, deleted 2026-10-11* |
 | Incoming peer, advertisement, received peerlist | No. Gray only |
 | Reload | No. Gray, unordered |
@@ -919,7 +924,7 @@ line):
 | Only clearnet addresses can be banned | `is_banned` takes an `IpAddr`; `NetworkAddress::Tor::ip()` is `None` | yes (D7). The Tor partition never demotes on a ban |
 | The clock is `Tick`, nanoseconds, with a hand-moved test clock | `shekyl-timing-engine/src/lib.rs:26` `Tick(u64)`; `ManualClock` `:46` | yes. `last_observed`, the window and the intake span are `Tick`s; `EXPIRATION_PERIOD` is 24 h in nanoseconds |
 | A uniform draw primitive exists and is already a transport-layer dependency | `shekyl-relay-privacy/src/rng.rs:33` `RelayRng`, `bounded_uniform`, `SplitMix64`; `shekyl-transport-layer/Cargo.toml` depends on `shekyl-relay-privacy` | yes. The crate uses it; no new RNG abstraction |
-| The `DialOutcome` variants are the ones §5's `apply` table names | §5 table: `SessionAccepted`, `Confirmed`, `HarvestDone`, `DialFailed`, `PeerlistRefused`, `PayloadRefused` | the dialer crate does not exist yet (PR-3); PR-2 defines the enum here and PR-3 consumes it |
+| The `DialOutcome` variants are the ones §5's `apply` table names | §5 table at the pre-flight: `SessionAccepted`, `Confirmed`, `HarvestDone`, `DialFailed`, `PeerlistRefused`, `PayloadRefused` (`HarvestDone` since absorbed into `Confirmed`, deleted in PR-3; 2026-10-11) | the dialer crate does not exist yet (PR-3); PR-2 defines the enum here and PR-3 consumes it |
 | The reference draft | local branch `feat/p2p3-slice1-peerlist`, one commit `6faa836dc1` (2026-09-23, base `dbfc07623d`): increment 1 as first drafted, with `Hypothesis`/`Observed` types, a `Reached` token and `complete_dial` | predates the 2026-09-25 partition ruling, the 2026-10-08 revision and D3/D4/D-S1. Read as a reference for the constructor-reachability shape (§11.1); not cherry-picked |
 
 ### 16.2 The crate (B4) — `rust/shekyl-peerlist`

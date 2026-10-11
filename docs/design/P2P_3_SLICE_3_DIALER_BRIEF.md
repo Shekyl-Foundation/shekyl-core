@@ -142,48 +142,58 @@ Each wake, for one connector, takes the first arm that applies.
    "sound good but essentially bypass all the identity protections we
    have built in and provide no actual value." `--add-peer` already
    jumpstarts a node; it enters gray and takes its chances in the draw.
-2. **Harvest — keyed on list state (Rick, 2026-10-11).** The aim is
-   `Harvest`. A fill draw is a harvest while **both** hold on this
-   connector: gray holds fewer addresses than the white diversity floor
-   (the composition's `white_diversity_floor`, 48; the exact floor is
-   this brief's review to settle), **and** the previous harvest on this
-   connector added at least one new gray address. The harvest is one
-   address drawn uniformly from gray, the list taken, the session
-   closed, no `adopt`, no white. Whatever the address is — a compiled
-   seed, an `--add-peer`, an address a peer sent. When either condition
-   fails, the arm does not apply and a free slot is arm 4's kept
-   `SessionAccepted`, as now. The first harvest after start has no
-   previous one and runs on the floor alone. One harvest per wake; the
-   cursor stops at the first `HarvestDone`.
+2. **Confirm-and-close while gray is thin (Rick, 2026-10-11).** The
+   aim is `Confirm`. While **both** hold on this connector — gray holds
+   fewer addresses than the white diversity floor (the composition's
+   `white_diversity_floor`, 48; the exact floor is this brief's review
+   to settle), **and** the previous fill dial on this connector added
+   at least one new gray address — a fill draw is confirm-and-close:
+   one address drawn uniformly from gray, the handshake run, the
+   peer's sample admitted to gray, `Confirmed`, the session closed.
+   Whatever the address is — a compiled seed, an `--add-peer`, an
+   address a peer sent. When either condition fails, a free slot is
+   arm 4's kept `SessionAccepted`. The first fill dial after start has
+   no previous one and runs on the floor alone.
 
-   *The wargame for the second condition.* The floor alone never
-   terminates when the reachable network is smaller than the floor —
-   at genesis, or on a private testnet — and an attacker who can keep
-   a victim's gray small (by feeding it few addresses, or addresses
-   that fail validity or the cap) would hold the victim in
-   harvest-only, never keeping a session. With the yield condition,
-   harvesting ends when it stops yielding: a harvest that adds nothing
-   new is the last one, and the next free slot is kept. A feeder of
-   unreachable addresses can only prolong harvesting, one wake per
-   address that turns out to be new, not prevent its end.
+   *There is no harvest.* A handshake reply carries the peer's
+   disclosure sample, so a confirm-and-close dial learns addresses
+   exactly as the harvest did; the harvest's one difference — no white
+   write — existed for the seed special case, now withdrawn (slice 1
+   §3). The `Harvest` aim and `DialOutcome::HarvestDone` are deleted
+   in PR-3 (the crate: the variant, its `address()` arm, its `apply`
+   arm and its test; recorded here, not changed in this PR, since the
+   removal is more than one line). *Records-was, same day, in order:
+   (i) a harvest keyed on identity — both lists empty
+   (`has_no_known_peers`, `net_peerlist.h:147`) or a fill pass that
+   added nothing, then one address per wake from the seed list
+   (`get_seed_nodes`, filled at `net_node.inl:2042`; clearnet once adds
+   `get_ip_seed_nodes`, `:2084`, after every seed has failed; the
+   `break` after `connect_to_seed`'s dial is `:2073`); (ii) a harvest
+   keyed on gray below the floor; (iii) that, and the previous harvest
+   yielded. The seed walk leaves with the dial path; the compiled seeds
+   are gray entries from the start.*
 
-   *Records-was (same day): gray below the floor was the whole
-   condition.* *Records-was, before that: keyed on identity —
-   both lists empty (`has_no_known_peers`, `net_peerlist.h:147`) or a
-   fill pass that added nothing, then one address per wake from the
-   seed list (`get_seed_nodes`, filled at `net_node.inl:2042`; clearnet
-   once adds `get_ip_seed_nodes`, `:2084`, after every seed has failed;
-   the `break` after `connect_to_seed`'s dial is `:2073`). That seed
-   walk leaves with the dial path; the compiled seeds are gray entries
-   from the start (slice 1 §3).*
+   *Wargame (a), the yield condition.* The floor alone never terminates
+   when the reachable network is smaller than the floor — at genesis,
+   or on a private testnet — and an attacker who can keep a victim's
+   gray small (few addresses, or addresses that fail validity or the
+   cap) would hold the victim in confirm-only, never keeping a session.
+   With the yield condition the phase ends when it stops yielding: a
+   dial that adds nothing new is the last confirm-and-close, and the
+   next free slot is kept. A feeder of unreachable addresses can only
+   prolong the phase, one wake per address that turns out to be new.
 
-   *The wargame for deleting the arm instead.* A fresh node's gray is
-   only the compiled seeds. Kept draws would make the seeds every new
-   node's first outbound peers and its first stem hop: a first-spy
-   position on every new node's first transactions, and a new-node
-   eclipse for whoever can sit where the seeds sit. Harvesting first
-   grows gray from the seeds' lists before any session is kept, so the
-   first kept draw is from a population the seeds do not dominate.
+   *Wargame (b), seeds on white early.* Under confirm-and-close a
+   fresh node's first `Confirmed` is likely a compiled seed, so seeds
+   reach a fresh node's white early. That is harmless: a `Confirmed`
+   takes no outbound slot and leaves no session, so a seed on white is
+   not a first outbound peer and not a stem hop; and nothing is
+   disclosed below `white_diversity_floor`, so a white list that is
+   mostly seeds is never handed to anyone. *Records-was: the wargame
+   for deleting the harvest arm outright — kept draws would have made
+   the seeds every new node's first outbound peers and first stem hop
+   (first-spy, new-node eclipse) — which this arm still answers,
+   because its draws are closed, not kept.*
 3. **`draw_white`.** The connector is under its outbound target, and
    white has an address that is not already an outbound session on
    that connector and that passes the candidate filter. The draw is
@@ -213,7 +223,7 @@ row does not yet exist, so the arms above would not see it. The
 dialer keeps a pending attempt from the moment `dial_channel`
 returns until every `DialOutcome`. A pending attempt's address and
 host are not candidates. A pending `Keep` counts toward the outbound
-target. A pending `Confirm` or `Harvest` does not. The set is empty
+target. A pending `Confirm` does not. The set is empty
 after the outcome, including failure before adopt.
 
 **The `Keep` count is the dialer's.** It is adopted `Keep` rows plus
@@ -253,7 +263,7 @@ tests keep one call. Callers of `Hub::connect` today are
 | Operation | What it does | Who calls it |
 | --- | --- | --- |
 | `dial_channel` | `Dial::connect`. Returns the channel. No row, no `adopt` | This slice's dialer |
-| `Hub::adopt` (`hub.rs:288`) | Registers a channel the connector already admitted. `write_row` (`:414`) inserts the row with `established: false` and `phase: Arming`, then posts `Post::Established` (`:41`) | The handshake owner, after a well-formed response that is not a harvest. `Post::Established` creates the strand handler. It is not promotion and it is not the relay flip |
+| `Hub::adopt` (`hub.rs:288`) | Registers a channel the connector already admitted. `write_row` (`:414`) inserts the row with `established: false` and `phase: Arming`, then posts `Post::Established` (`:41`) | The handshake owner, after every well-formed response (*records-was:* that is not a harvest; there is no harvest since 2026-10-11). `Post::Established` creates the strand handler. It is not promotion and it is not the relay flip |
 | `Hub::connect` | `dial_channel`, then `adopt` | Seam tests. The outbound dialer does not call it |
 
 The dialer passes a `DialAim` with the channel. The aim is input. The
@@ -264,15 +274,15 @@ the other.
 enum DialAim {
     Keep,
     Confirm,
-    Harvest,
 }
 ```
 
+*Records-was: a third aim, `Harvest`, absorbed into `Confirm`
+2026-10-11 (the fill, arm 2).*
+
 The handshake owner reads frames on the channel. Those frames are not
-`Post::Deliver`. On `Harvest`, or on any failure before a well-formed
-response, the owner does not adopt. There is no strand and no
-established delivery. A well-formed harvest peerlist is `HarvestDone`,
-and the session is closed.
+`Post::Deliver`. On any failure before a well-formed response, the
+owner does not adopt. There is no strand and no established delivery.
 
 On a well-formed response whose aim is `Keep` or `Confirm`, the owner
 adopts, then posts one handshake result. That post is not
@@ -347,7 +357,6 @@ enum DialOutcome {
     DialFailed { address: NetworkAddress, cause: CloseCause, reply: u16 },
     PeerlistRefused { address: NetworkAddress },
     PayloadRefused { address: NetworkAddress },
-    HarvestDone { address: NetworkAddress },
     Confirmed { address: NetworkAddress },
     SessionAccepted { address: NetworkAddress },
 }
@@ -358,7 +367,7 @@ enum DialOutcome {
 | `DialFailed` | The channel never reached a well-formed kept response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with | An outstanding gray draw is dropped. A white address stays white | Written when `implicates_address` is set for that cause and reply. A `network_id` mismatch is `LevinHandshakeRejected` and does write it | No subscription. The mismatch does not call `add_host_fail` |
 | `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected` | Same as `DialFailed` | Same as `DialFailed` with `LevinHandshakeRejected` | The score owner subscribes. A peerlist this node refuses is the event the score records |
 | `PayloadRefused` | Levin was well-formed and the strand refused the sync payload | No promotion, no demotion, no gray drop. An outstanding draw stays gray | Not written. The peer answered | None |
-| `HarvestDone` | Harvest handshake completed. The session is closed. No `adopt` | White unchanged, for every address (slice 1 §3, ruled 2026-10-11). An outstanding draw returns to drawable gray. *Records-was: promote only for the six Foundation hosts in `get_ip_seed_nodes`* | Cleared for that address | None |
+| *`HarvestDone` — DELETED in PR-3 (Rick, 2026-10-11)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did, and the harvest's only difference (no white write) existed for the withdrawn seed exception. The crate's variant, its `address()` arm, its `apply` arm and its test go in PR-3 | — | — |
 | `Confirmed` | Aim `Confirm`. The strand accepted the sync payload. The owner closed in that turn. The relay was not flipped | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address | None |
 | `SessionAccepted` | Aim `Keep`. The strand accepted the sync payload and the session stays | An outstanding gray draw moves to white and `last_observed` is set. An address that is already white, on a session this node opened, moves the clock. Anything else writes nothing | Cleared for that address | None |
 
@@ -512,31 +521,33 @@ attacker's share of honest addresses.
 
 ---
 
-## Seeds and harvest dials
+## Seeds, and the confirm-and-close dial
 
-`connect_to_seed` (`net_node.inl:2032`) and `just_take_peerlist` are
-one disposition: a harvest. The handshake runs. The response peerlist
-is admitted to gray through slice 1. The session is closed. There is
-no `adopt` and no `SessionAccepted`, and white does not change:
-`HarvestDone` writes no white for any address (slice 1 §3, Rick,
-2026-10-11; *records-was:* white changed through `HarvestDone` for the
-Foundation fleet).
+`connect_to_seed` (`net_node.inl:2032`) and `just_take_peerlist` were
+one disposition in the C++: a harvest — the handshake runs, the
+response peerlist is admitted to gray, the session is closed, no
+`adopt`, no white. In Rust that disposition is arm 2's confirm-and-close
+(`Confirmed`): the same handshake, the same sample admitted to gray, the
+same close, and the drawn address moves to white as any confirmed draw
+does. *Records-was, same day: `HarvestDone` writes no white for any
+address; before that, white changed through `HarvestDone` for the
+Foundation fleet.*
 
 **Seeds are ordinary peers (Rick, 2026-10-11).** The compiled seed
 addresses enter gray at each start as operator-named addresses do, and
 reach white only through a drawn dial's `SessionAccepted` or
 `Confirmed`. The peerlist a seed returns is network-learned, under
-slice 1's address-validity check and D-S1's cap. The harvest survives,
-re-keyed from identity to list state (the fill, arm 2): while gray is
-below the floor and the previous harvest added a new gray address,
-every fill draw is a harvest, whatever the address; when either fails,
+slice 1's address-validity check and D-S1's cap. The harvest is
+absorbed into `Confirmed` (the fill, arm 2): while gray is below the
+floor and the previous fill dial added a new gray address, every fill
+draw is confirm-and-close, whatever the address; when either fails,
 the draw is kept. The seed list is not an input to the dialer. The exception audit
 ([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §8,
-row 7) records the arm as absorbed on that ground. *Records-was (same
+row 7) records the arm as absorbed into `Confirmed`. *Records-was (same
 day): the arm was an open point for this brief's review, pending a
 decision whether it survived at all.*
 
-The C++ gray probe is not that harvest. `gray_peerlist_housekeeping`
+The C++ gray probe is not that dial either. `gray_peerlist_housekeeping`
 (`net_node.inl:3336`, declared `net_node.h:713`) dials one random gray
 peer through `check_connection_and_handshake_with_peer` (`:1715`),
 which calls `do_handshake_with_peer` with `just_take_peerlist`
@@ -554,9 +565,10 @@ strand accepts the payload. The gray dial that keeps a session is
 `try_to_connect_and_handshake_with_new_peer` (`:2019`,
 `just_take_peerlist` false). That is arm 4.
 
-A harvest that completes is `HarvestDone`. A harvest that fails is
-`DialFailed` or `PeerlistRefused`, with the connector's cause. A
-confirm the strand accepts is `Confirmed`. It is not `HarvestDone`.
+A confirm the strand accepts is `Confirmed`, whether the draw was arm
+2's thin-gray confirm-and-close or arm 5's confirm at target. One that
+fails is `DialFailed` or `PeerlistRefused`, with the connector's cause.
+*Records-was: a completed harvest was `HarvestDone`, deleted 2026-10-11.*
 
 ---
 
@@ -596,8 +608,8 @@ capped at the hour.
 `PeerlistRefused`. Only a refused dial, a rejected handshake, and an
 onion reply in `0x04 0x05 0xF0 0xF1 0xF2` write the memory. A
 handshake timeout, a peer close, a local failure, and a clearnet
-proxy reply do not. `PayloadRefused` does not. `HarvestDone`,
-`Confirmed`, and `SessionAccepted` clear the address.
+proxy reply do not. `PayloadRefused` does not. `Confirmed` and
+`SessionAccepted` clear the address.
 
 Slice 1's gray admission refuses an address the memory holds, and a
 banned one (`handle_remote_peerlist`, `net_node.inl:2472`). Until
@@ -821,9 +833,8 @@ from a peer.
 Differential against the current C++ wherever the behaviour is kept:
 the windows, which causes forget an address, an exclusive list as the
 whole candidate population, white promotion only on
-`SessionAccepted` or `Confirmed` of an outstanding gray draw (never on
-`HarvestDone`, 2026-10-11), and each kept row of the candidate
-filter. There is no subnet pass to assert (ruled 2026-10-11). Address
+`SessionAccepted` or `Confirmed` of an outstanding gray draw, and each
+kept row of the candidate filter. There is no subnet pass to assert (ruled 2026-10-11). Address
 validity is slice 1's falsifier §11.6: a network-learned address in
 each listed range, and port 0, is refused at `admit_gray`, an
 operator-named one is admitted, and `disclose` carries no non-global
@@ -840,10 +851,11 @@ unknown. After: the same dial leaves every io worker free, and the
 claim post lands.
 
 The handshake-result test above. `PayloadRefused` leaves the address
-off white and still on gray when it was an outstanding draw. A
-harvest leaves white unchanged for every address, a compiled seed
-included (slice 1 §3, 2026-10-11; *records-was:* `HarvestDone` for one
-of the six hosts wrote white).
+off white and still on gray when it was an outstanding draw. Arm 2's
+confirm-and-close, under the two conditions, is `Confirmed` and takes
+no slot; when either condition fails the same wake's draw is kept
+(*records-was:* a harvest left white unchanged; `HarvestDone` is
+deleted).
 `Confirmed` of an outstanding gray draw writes white, leaves no
 session, and never appears in the relay registry. That dial, started
 while `Keep` rows are already at the target, leaves the `Keep` count
