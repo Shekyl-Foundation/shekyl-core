@@ -563,19 +563,6 @@ impl SettlementKey {
         .key();
         lo..=hi
     }
-
-    /// Every epoch of one `(persona, shard)`, in epoch order. `SO-D2` puts
-    /// the epoch last so a window walk is this range. A cited epoch is
-    /// [`Self::key`]: one row inside it.
-    #[must_use]
-    pub const fn shard_range(
-        persona: PCanonicalId,
-        shard: ShardId,
-    ) -> core::ops::RangeInclusive<SettlementTuple> {
-        let lo = Self::new(persona, shard, SettlementEpoch::ZERO).key();
-        let hi = Self::new(persona, shard, SettlementEpoch::from_raw(u64::MAX)).key();
-        lo..=hi
-    }
 }
 
 /// The key of one issued draw:

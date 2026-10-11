@@ -212,41 +212,39 @@ pub(crate) enum TxSubmitOutcome {
     },
 }
 
-/// Daemon health facts consumed by the §5.3 watchdog escape ladder.
+/// Daemon health facts the wallet reads from `get_info`.
 ///
-/// A contract-accurate projection of the daemon's existing `get_info`
-/// surface — the summed connection count, the daemon's current height,
-/// and its network-estimated target height — carrying **no new RPC
-/// method** (`DAEMON_SUBMIT_VERDICT.md` §5.2 item 3). The wallet-side
-/// liveness kernel maps this into its
-/// [`DaemonHealthContext`](super::super::submit_watchdog::DaemonHealthContext);
-/// the split keeps this RPC-transport trait free of any liveness-policy
-/// type (the kernel depends on the trait, never the reverse).
+/// Whether the daemon has a peer it can relay through, its chain height,
+/// and whether it is synchronized. No new RPC
+/// (`DAEMON_SUBMIT_VERDICT.md` §5.2 item 3). The submit ladder takes this
+/// struct. A second copy would be free to grow a different reading of the
+/// same reply, which is the split [`SyncedChainFacts`] exists to forbid
+/// (`WSS-Q14`).
 ///
 /// # Trust classification (§7.2)
 ///
 /// Trusted under the own-daemon V3.0 deployment model; **untrusted**
-/// under the multi-daemon reopen. The damage cap is the ladder's rung 2:
-/// health context can only *delay* escalation, never authorize a
-/// rebuild.
+/// under the multi-daemon reopen — a lying "I'm healthy" makes the wallet
+/// wait on a non-propagating transaction, and a lying sync height flips
+/// backoff at will. The damage cap is the ladder's rung 2: these facts
+/// can only delay escalation, never authorize a rebuild.
+///
+/// [`SyncedChainFacts`]: super::super::daemon::synced_chain_facts::SyncedChainFacts
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DaemonHealth {
-    /// Outgoing + incoming connection count.
-    pub connections: u64,
+    /// Whether the daemon has a peer it can relay through: `get_info`'s
+    /// `has_peers`, from Health. Not a count, and not derived from one: the
+    /// counts are Status, which a daemon may zero or withhold.
+    pub has_peers: bool,
     /// The daemon's current chain height.
     pub height: u64,
-    /// The daemon's network-estimated target height (`0` when synced —
-    /// the info surface's convention).
-    pub target_height: u64,
-    /// The daemon's own `synchronized` flag (`core_rpc_server.cpp:248`,
-    /// from `check_core_ready()`).
+    /// The daemon's own `synchronized` flag: the protocol's predicate, as
+    /// `get_info` reports it, and the wallet's one source for whether the
+    /// daemon has caught up.
     ///
-    /// **Not decoration on top of the heights.** A daemon that has just
-    /// started with no peers reports `target_height == 0` *and*
-    /// `synchronized == false`: the height comparison alone reads that as
-    /// synced, at a genesis-adjacent height. That is the rebuilt-database
-    /// case `WSS-25` is about, so both halves are required —
-    /// `SyncedChainFacts` is where the two are combined.
+    /// The daemon's target height is deliberately not here. It comes from
+    /// heights peers claim, so the wallet decides nothing on it
+    /// (`daemon/synced_chain_facts.rs`, module docs).
     pub synchronized: bool,
 }
 
@@ -414,8 +412,8 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Result<TxSubmitOutcome, Self::Error>> + Send;
 
     /// Snapshot the daemon's health facts for the §5.3 watchdog escape
-    /// ladder (§5.2 item 3): the summed connection count and the
-    /// sync position, which distinguish "tx stuck" from "daemon has no
+    /// ladder (§5.2 item 3): whether the daemon has peers and its sync
+    /// position, which distinguish "tx stuck" from "daemon has no
     /// peers to relay to" and "daemon is behind." One `get_info` read;
     /// **no new RPC method** — the fields already exist on the info
     /// surface the wallet queries for network verification.

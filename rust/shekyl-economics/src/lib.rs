@@ -26,6 +26,7 @@ pub mod params;
 pub mod release;
 pub mod reward;
 pub mod supply;
+pub mod tip;
 pub mod volume;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
@@ -67,4 +68,5 @@ pub use reward::{
     GENESIS_HEIGHT, REPRICING_PASSES,
 };
 pub use supply::{CirculatingSupply, SupplyInvariantViolation};
+pub use tip::{project_at_tip, TipEconomics, TipOperands};
 pub use volume::TxVolume;

@@ -926,7 +926,6 @@ mod tests {
         // read straight through to `NoBondRecord`.
         let stale_high = SyncedChainFacts::new(
             ChainCount::from_raw(20_001),
-            0,
             true,
             BlockHash::from_bytes([0xAB; 32]),
         )

@@ -22,8 +22,9 @@ use shekyl_wire::tx_extra::{
     self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, PQC_LEAF_ENTRY_LEN,
 };
 
-/// Synthetic nonce for the block-id pin (testnet's real GENESIS_NONCE value,
-/// but nothing here depends on the config).
+/// Synthetic nonce for the block-id pin. It was testnet's `GENESIS_NONCE`
+/// until the nonce was rotated; nothing here depends on the config, so the
+/// vector stays as recorded.
 const KAT_NONCE: u32 = 10101;
 
 // --- pinned vectors (recaptured 2026-08-16: genesis-txkey-v2 payment identity) ---

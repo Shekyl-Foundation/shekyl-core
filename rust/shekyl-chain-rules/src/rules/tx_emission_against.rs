@@ -68,6 +68,8 @@
 //! refusals are fixtured on [`I15::verify`] directly and driven on the
 //! claim with its fee proof corrupted.
 
+use std::collections::BTreeSet;
+
 use shekyl_archival_retention::{
     emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
     emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
@@ -164,7 +166,9 @@ impl J23 {
                 budget: budget.to_raw(),
             });
         }
-        let epochs: Vec<SettlementEpoch> = cited.iter().map(|cited| cited.epoch).collect();
+        // The read's keys. The vin's epochs are already strictly increasing
+        // (`EpochsNotStrictlyIncreasing`), so the set is that list.
+        let epochs: BTreeSet<SettlementEpoch> = cited.iter().map(|cited| cited.epoch).collect();
         let credits = ServedAt::read(view, records.iter().map(|(persona, _)| *persona), &epochs)?;
         let mut gathered = Vec::with_capacity(cited.len());
         for cited in cited {

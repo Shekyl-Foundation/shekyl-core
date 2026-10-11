@@ -59,7 +59,7 @@
 //! refusal the rule writes, never a pass it arrives at by `?` or
 //! `unwrap_or_default`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
@@ -625,13 +625,20 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// is absent. What the emission gather credits (`SO-D11a`), read back
     /// by the claim verify.
     ///
+    /// `epochs` is the set of keys to read. Each implementation sees an
+    /// epoch once and lists each of its Served shards once, and none
+    /// orders or deduplicates what it is given. A claim cites each epoch
+    /// once for a different reason: the emission vin's epochs are strictly
+    /// increasing on the wire (`EpochsNotStrictlyIncreasing`), and CEN-J23
+    /// gathers once per cited epoch from that list.
+    ///
     /// The table is keyed `(P, shard, E)` (`SO-D2`). A store hops the
     /// persona's shards once and point-reads each requested epoch. CEN-J23
     /// asks once per bonded persona, for every epoch the claim cites.
     fn served_at(
         &self,
         persona: &PCanonicalId,
-        epochs: &[SettlementEpoch],
+        epochs: &BTreeSet<SettlementEpoch>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Self::Fault>;
 }
 
@@ -784,7 +791,10 @@ macro_rules! archival_reads {
             (epoch);
             (shekyl_types::archival::IssuedDigest::ZERO));
         $crate::archival_reads!(@emit $policy; served_at;
-            (persona: &shekyl_types::PCanonicalId, epochs: &[shekyl_types::SettlementEpoch]);
+            (
+                persona: &shekyl_types::PCanonicalId,
+                epochs: &::std::collections::BTreeSet<shekyl_types::SettlementEpoch>
+            );
             (
                 ::std::collections::BTreeMap<
                     shekyl_types::SettlementEpoch,
