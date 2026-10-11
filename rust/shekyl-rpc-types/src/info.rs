@@ -100,6 +100,15 @@ pub struct InfoHealth {
     /// The node is knowingly not following the heaviest chain it has seen
     /// (C2-R1b F-1(a)); sticky for the life of the process.
     pub following_degraded: bool,
+    /// Whether this node has at least one peer it can relay through: a
+    /// session that has finished its handshake, on any connector (RK-D14,
+    /// RK-Q4).
+    ///
+    /// Health, so every caller is told. It is a boolean and never a count:
+    /// how many peers a node has describes the node and belongs to Status,
+    /// which a daemon may withhold. A reader that wants "can this node
+    /// relay" reads this, and never infers it from the Status counts.
+    pub has_peers: bool,
 }
 
 /// Which network and protocol this daemon speaks. `get_version` is the
@@ -246,6 +255,7 @@ struct GetInfoWire {
     busy_syncing: bool,
     offline: bool,
     following_degraded: bool,
+    has_peers: bool,
 
     // Identity.
     nettype: DaemonNetwork,
@@ -400,6 +410,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             busy_syncing,
             offline,
             following_degraded,
+            has_peers,
             nettype,
             mainnet,
             testnet,
@@ -509,6 +520,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 busy_syncing,
                 offline,
                 following_degraded,
+                has_peers,
             },
             identity: InfoIdentity {
                 nettype,
@@ -583,6 +595,7 @@ impl From<GetInfoResponse> for GetInfoWire {
             busy_syncing: health.busy_syncing,
             offline: health.offline,
             following_degraded: health.following_degraded,
+            has_peers: health.has_peers,
             nettype: identity.nettype,
             mainnet: identity.nettype == DaemonNetwork::Mainnet,
             testnet: identity.nettype == DaemonNetwork::Testnet,

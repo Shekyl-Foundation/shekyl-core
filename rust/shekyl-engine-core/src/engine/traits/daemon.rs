@@ -215,8 +215,8 @@ pub(crate) enum TxSubmitOutcome {
 /// Daemon health facts consumed by the §5.3 watchdog escape ladder.
 ///
 /// A contract-accurate projection of the daemon's existing `get_info`
-/// surface — the summed connection count, the daemon's current height,
-/// and its network-estimated target height — carrying **no new RPC
+/// surface — whether it has peers, its current height, and whether it is
+/// synchronized — carrying **no new RPC
 /// method** (`DAEMON_SUBMIT_VERDICT.md` §5.2 item 3). The wallet-side
 /// liveness kernel maps this into its
 /// [`DaemonHealthContext`](super::super::submit_watchdog::DaemonHealthContext);
@@ -231,8 +231,10 @@ pub(crate) enum TxSubmitOutcome {
 /// rebuild.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DaemonHealth {
-    /// Outgoing + incoming connection count.
-    pub connections: u64,
+    /// Whether the daemon has a peer it can relay through: `get_info`'s
+    /// `has_peers`, from Health. Not a count, and not derived from one: the
+    /// counts are Status, which a daemon may zero or withhold.
+    pub has_peers: bool,
     /// The daemon's current chain height.
     pub height: u64,
     /// The daemon's own `synchronized` flag: the protocol's predicate, as
@@ -409,8 +411,8 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Result<TxSubmitOutcome, Self::Error>> + Send;
 
     /// Snapshot the daemon's health facts for the §5.3 watchdog escape
-    /// ladder (§5.2 item 3): the summed connection count and the
-    /// sync position, which distinguish "tx stuck" from "daemon has no
+    /// ladder (§5.2 item 3): whether the daemon has peers and its sync
+    /// position, which distinguish "tx stuck" from "daemon has no
     /// peers to relay to" and "daemon is behind." One `get_info` read;
     /// **no new RPC method** — the fields already exist on the info
     /// surface the wallet queries for network verification.

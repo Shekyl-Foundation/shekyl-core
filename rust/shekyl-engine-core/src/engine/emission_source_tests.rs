@@ -609,8 +609,7 @@ impl Rpc for BracketDaemon {
                 top_hash: shekyl_types::BlockHash::from_bytes(
                     crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1),
                 ),
-                outgoing_connections: 8,
-                incoming_connections: 0,
+                has_peers: true,
             }
             .to_value()
         } else {

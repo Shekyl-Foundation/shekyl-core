@@ -212,7 +212,7 @@ impl StubDaemon {
         Self {
             state: Arc::new(Mutex::new(DaemonState {
                 health: DaemonHealth {
-                    connections: 8,
+                    has_peers: true,
                     height: 10_000,
                     synchronized: true,
                 },
@@ -535,7 +535,7 @@ async fn peerless_daemon_alarms_without_probing() {
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.set_health(DaemonHealth {
-        connections: 0,
+        has_peers: false,
         height: 10_000,
         synchronized: true,
     });
@@ -564,7 +564,7 @@ async fn syncing_daemon_waits() {
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.set_health(DaemonHealth {
-        connections: 8,
+        has_peers: true,
         height: 5_000,
         synchronized: false,
     });

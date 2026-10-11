@@ -124,3 +124,11 @@ what `shekyl-daemon-rpc`'s method tests produce from the capture's own
 facts. `get_version_syncing_v3`, `sync_info_v3` and `get_info_syncing_v1`
 carried a target already; their replies did not move and they have no
 successor. The side cases keep their predecessor's `version`, as before.
+
+**3.47 added `has_peers` to `get_info`, and all five fixtures have a
+successor.** Each is its predecessor plus that member
+(`the_3_47_get_info_vectors_are_their_predecessors_plus_exactly_has_peers`):
+`true` everywhere but the peerless fixture. `synced_restricted_v3` is the
+one to read: `has_peers: true` beside two connection counts of `0`, which
+is the case the member exists for. `get_version_synced_v24` is the
+chain's 3.47 link; its members do not move.

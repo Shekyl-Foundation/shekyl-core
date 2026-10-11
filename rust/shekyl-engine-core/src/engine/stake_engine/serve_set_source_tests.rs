@@ -76,8 +76,7 @@ impl Rpc for ClaimSourceDaemon {
                         .expect("the fixture source carries a chain height")
                         .saturating_sub(1),
                 )),
-                outgoing_connections: 8,
-                incoming_connections: 0,
+                has_peers: true,
             }
             .to_value()
         } else {
@@ -594,8 +593,7 @@ impl Rpc for ScheduledDaemon {
                 target_height: (!self.synchronized).then_some(1_000_000),
                 synchronized: self.synchronized,
                 top_hash: shekyl_types::BlockHash::from_bytes(test_block_hash_at(tip)),
-                outgoing_connections: 8,
-                incoming_connections: 0,
+                has_peers: true,
             }
             .to_value()
         } else {

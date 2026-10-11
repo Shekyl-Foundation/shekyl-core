@@ -205,8 +205,8 @@ pub(crate) fn held_submits(wallet: &shekyl_engine_state::WalletLedger) -> Vec<He
 /// 2: health context can delay escalation, never trigger a rebuild.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DaemonHealthContext {
-    /// Outgoing + incoming connection count.
-    pub connections: u64,
+    /// Whether the daemon has a peer to relay to: `get_info`'s `has_peers`.
+    pub has_peers: bool,
     /// The daemon's current chain height.
     pub height: u64,
     /// The daemon's own `synchronized` flag — the one source for
@@ -225,9 +225,9 @@ impl DaemonHealthContext {
         self.synchronized
     }
 
-    /// The daemon has someone to relay to.
+    /// The daemon has someone to relay to: its own word, from Health.
     fn has_peers(&self) -> bool {
-        self.connections > 0
+        self.has_peers
     }
 }
 
@@ -686,7 +686,7 @@ mod tests {
 
     fn healthy() -> DaemonHealthContext {
         DaemonHealthContext {
-            connections: 8,
+            has_peers: true,
             height: 10_000,
             synchronized: true,
         }
@@ -777,7 +777,7 @@ mod tests {
         let past = CFG.escape_horizon_blocks;
 
         let behind = DaemonHealthContext {
-            connections: 8,
+            has_peers: true,
             height: 5_000,
             synchronized: false,
         };
@@ -787,7 +787,7 @@ mod tests {
         );
 
         let peerless = DaemonHealthContext {
-            connections: 0,
+            has_peers: false,
             height: 6_000,
             synchronized: true,
         };
@@ -795,6 +795,75 @@ mod tests {
             escape_ladder_step(&h, past, peerless, CFG),
             WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless)
         );
+    }
+
+    /// **§3.1's defect, pinned shut** (RK-D14). A held send, past its
+    /// horizon, against a restricted daemon whose node has peers: the reply
+    /// says `restricted`, writes zero for both connection counts, and says
+    /// `has_peers`. The ladder reaches its resubmit probe. Before
+    /// `has_peers` the health projection summed those zeros, and this was a
+    /// `DaemonPeerless` alarm that suppressed the probe — the recovery.
+    ///
+    /// The same holds when the daemon withholds Status altogether, as a
+    /// restricted reply will at RK-Q8. The control is the same reply from a
+    /// node with no peers, which is still the alarm.
+    #[test]
+    fn a_restricted_daemon_with_peers_reaches_the_probe_not_the_peerless_alarm() {
+        use crate::engine::daemon::synced_chain_facts::{health_from_get_info, GetInfoDocument};
+
+        let h = held(0);
+        let past = CFG.escape_horizon_blocks;
+        let reply = |has_peers: bool, status_withheld: bool| {
+            let mut reply = GetInfoDocument {
+                chain_count: shekyl_types::ChainCount::from_raw(10_000),
+                target_height: None,
+                synchronized: true,
+                top_hash: shekyl_types::BlockHash::from_bytes([0x11; 32]),
+                has_peers,
+            }
+            .to_reply();
+            reply.restricted = true;
+            let status = reply.node.shown().expect("the document shows Status");
+            assert_eq!(
+                (
+                    status.outgoing_connections_count,
+                    status.incoming_connections_count
+                ),
+                (0, 0),
+                "the reply's counts are zero, as a restricted daemon writes them"
+            );
+            if status_withheld {
+                reply.node = shekyl_rpc_types::Hidden::Withheld;
+                reply.peers = shekyl_rpc_types::Hidden::Withheld;
+            }
+            reply
+        };
+        let step = |has_peers: bool, status_withheld: bool| {
+            let health = health_from_get_info(&reply(has_peers, status_withheld));
+            escape_ladder_step(
+                &h,
+                past,
+                DaemonHealthContext {
+                    has_peers: health.has_peers,
+                    height: health.height,
+                    synchronized: health.synchronized,
+                },
+                CFG,
+            )
+        };
+
+        for status_withheld in [false, true] {
+            assert_eq!(
+                step(true, status_withheld),
+                WatchdogStep::ProbeResubmitSameBytes,
+                "peers, Status withheld: {status_withheld}"
+            );
+            assert_eq!(
+                step(false, status_withheld),
+                WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless),
+                "no peers, Status withheld: {status_withheld}"
+            );
+        }
     }
 
     /// Round-6 minor b presence branching: absent → the resubmit is the
@@ -884,7 +953,7 @@ mod tests {
         let h = held(0);
         let past = CFG.escape_horizon_blocks;
         let behind_and_peerless = DaemonHealthContext {
-            connections: 0,
+            has_peers: false,
             height: 5_000,
             synchronized: false,
         };
@@ -915,13 +984,13 @@ mod tests {
             (1_000_000, false),
         ] {
             let ctx = DaemonHealthContext {
-                connections: 1,
+                has_peers: true,
                 height,
                 synchronized,
             };
             let minted = SyncedChainFacts::from_health(
                 DaemonHealth {
-                    connections: 1,
+                    has_peers: true,
                     height,
                     synchronized,
                 },

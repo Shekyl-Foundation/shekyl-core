@@ -914,7 +914,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 22] = [
+    let links: [(&str, &str); 23] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1003,6 +1003,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v22.json"),
             include_str!("vectors/rpc/get_version_synced_v23.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v23.json"),
+            include_str!("vectors/rpc/get_version_synced_v24.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1021,7 +1025,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 22] = [
+    const ADDED_AT_LINK: [&[&str]; 23] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1044,6 +1048,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.44 (get_version drops hard_forks; hard_fork_info deleted; get_version gains nothing)
         &[], // 3.45 (get_info stops carrying emission_era, RK-D21; get_version gains nothing)
         &[], // 3.46 (no target is `null`, RK-Q7; this case has a target, so its members do not move)
+        &[], // 3.47 (get_info gains has_peers, RK-D14; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1055,7 +1060,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 22] = [
+    const REMOVED_AT_LINK: [&[&str]; 23] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1078,6 +1083,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &["hard_forks"], // 3.44 (block version is the constant 1; no schedule to report)
         &[], // 3.45 (the emission_era deletion is get_info's; get_version retires nothing)
         &[], // 3.46 (nothing leaves; the side cases gain members, pinned by their own test)
+        &[], // 3.47 (has_peers is get_info's; get_version retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1270,6 +1276,72 @@ fn the_3_46_vectors_are_their_predecessors_with_exactly_the_target_restated() {
             "case {i}: the successor is its predecessor with only the named members restated"
         );
     }
+}
+
+/// **3.47, by derivation.** `get_info` gains `has_peers` (RK-D14), and
+/// every fixture gains it: each successor is its predecessor plus exactly
+/// that member.
+///
+/// The value is the fixture's: a node with handshaken sessions says `true`,
+/// and the peerless one says `false`. **`synced_restricted` is the pair of
+/// bytes the member exists for** — `has_peers: true` beside connection
+/// counts a restricted listener writes as `0`. Before this member a reader
+/// could only ask those counts, and was told a node with twenty peers had
+/// none.
+#[test]
+fn the_3_47_get_info_vectors_are_their_predecessors_plus_exactly_has_peers() {
+    use serde_json::json;
+
+    for (before_raw, after_raw, has_peers) in [
+        (
+            include_str!("vectors/rpc/get_info_synced_v2.json"),
+            include_str!("vectors/rpc/get_info_synced_v3.json"),
+            true,
+        ),
+        (
+            include_str!("vectors/rpc/get_info_syncing_v1.json"),
+            include_str!("vectors/rpc/get_info_syncing_v2.json"),
+            true,
+        ),
+        (
+            include_str!("vectors/rpc/get_info_peerless_startup_v2.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v3.json"),
+            false,
+        ),
+        (
+            include_str!("vectors/rpc/get_info_synced_restricted_v2.json"),
+            include_str!("vectors/rpc/get_info_synced_restricted_v3.json"),
+            true,
+        ),
+        (
+            include_str!("vectors/rpc/get_info_burn_refusal_v2.json"),
+            include_str!("vectors/rpc/get_info_burn_refusal_v3.json"),
+            true,
+        ),
+    ] {
+        let mut derived = parsed(before_raw);
+        assert!(
+            derived
+                .as_object_mut()
+                .expect("vector is an object")
+                .insert("has_peers".to_owned(), json!(has_peers))
+                .is_none(),
+            "the predecessor must not already carry the member"
+        );
+        assert_eq!(
+            derived,
+            parsed(after_raw),
+            "the successor is its predecessor plus `has_peers` and nothing else"
+        );
+    }
+
+    // The restricted fixture is the case in the doc comment above.
+    let restricted = parsed(include_str!(
+        "vectors/rpc/get_info_synced_restricted_v3.json"
+    ));
+    assert_eq!(restricted["has_peers"], json!(true));
+    assert_eq!(restricted["outgoing_connections_count"], json!(0));
+    assert_eq!(restricted["incoming_connections_count"], json!(0));
 }
 
 #[test]
@@ -1803,8 +1875,9 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
 // serialized. The emitter that captured them stood for the two commits
 // before that handler was deleted, and went with it (the README beside the
 // vectors says how to read one). Four of them have a `_v2` successor,
-// derived at 3.46 when the target stopped being a sentinel; the tests below
-// read the newest of each.
+// derived at 3.46 when the target stopped being a sentinel, and all five
+// have one derived at 3.47 when `has_peers` arrived; the tests below read
+// the newest of each.
 // These tests pin the TYPE: that each vector is a `GetInfoResponse` and that
 // the response writes the vector back. The handler's parity is
 // `shekyl-daemon-rpc`'s.
@@ -1832,6 +1905,7 @@ mod get_info {
                 busy_syncing: false,
                 offline: false,
                 following_degraded: false,
+                has_peers: true,
             },
             identity: InfoIdentity {
                 nettype: DaemonNetwork::Mainnet,
@@ -1879,7 +1953,7 @@ mod get_info {
     #[test]
     fn synced_matches_the_oracle() {
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_v2.json"),
+            include_str!("vectors/rpc/get_info_synced_v3.json"),
             &synced(),
         );
     }
@@ -1891,7 +1965,7 @@ mod get_info {
         built.health.target_height = Nullable::value(1_300_000);
         built.health.busy_syncing = true;
         built.health.following_degraded = true;
-        assert_parity(include_str!("vectors/rpc/get_info_syncing_v1.json"), &built);
+        assert_parity(include_str!("vectors/rpc/get_info_syncing_v2.json"), &built);
     }
 
     #[test]
@@ -1899,8 +1973,9 @@ mod get_info {
         let mut built = synced();
         built.identity.nettype = DaemonNetwork::Fakechain;
         built.health.synchronized = false;
-        // Nobody to learn a target from.
+        // Nobody to learn a target from, and nobody to relay through.
         built.health.target_height = Nullable::NULL;
+        built.health.has_peers = false;
         let Hidden::Shown(node) = &mut built.node else {
             unreachable!("the fixture shows Status")
         };
@@ -1914,7 +1989,7 @@ mod get_info {
         peers.tor_incoming_socket_count = 0;
         peers.tor_outgoing_socket_count = 0;
         assert_parity(
-            include_str!("vectors/rpc/get_info_peerless_startup_v2.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v3.json"),
             &built,
         );
     }
@@ -1947,7 +2022,7 @@ mod get_info {
             grey_peerlist_size: 0,
         });
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_restricted_v2.json"),
+            include_str!("vectors/rpc/get_info_synced_restricted_v3.json"),
             &built,
         );
     }
@@ -1958,7 +2033,7 @@ mod get_info {
         built.economics.total_burned = built.economics.already_generated_coins + 1;
         built.economics.burn_pct = 0;
         assert_parity(
-            include_str!("vectors/rpc/get_info_burn_refusal_v2.json"),
+            include_str!("vectors/rpc/get_info_burn_refusal_v3.json"),
             &built,
         );
     }
@@ -1991,7 +2066,7 @@ mod get_info {
     /// key, for every key of both parts — never a part read as withheld.
     #[test]
     fn a_hidden_part_missing_one_key_is_refused_not_read_as_withheld() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
         for (part, keys) in [("status", &STATUS_KEYS[..]), ("peers", &PEERS_KEYS[..])] {
             for key in keys {
                 let mut doc = full.clone();
@@ -2012,7 +2087,7 @@ mod get_info {
     /// part is unaffected, and the reply writes back without those keys.
     #[test]
     fn a_hidden_part_with_no_keys_is_withheld_and_writes_none() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
 
         let mut doc = full.clone();
         for key in STATUS_KEYS {
@@ -2041,7 +2116,7 @@ mod get_info {
     /// it cannot carry the attribute on a flattened type.
     #[test]
     fn an_unknown_key_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
         doc.as_object_mut()
             .unwrap()
             .insert("emission_era".to_owned(), "Founding".into());
@@ -2057,12 +2132,13 @@ mod get_info {
             "height",
             // Nullable, and still required: absent is not `null` (RK-D23).
             "target_height",
+            "has_peers",
             "synchronized",
             "tx_pool_size",
             "restricted",
             "burn_pct",
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
             doc.as_object_mut().unwrap().remove(key);
             let refusal = decode(&doc).expect_err("a missing required key must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -2073,7 +2149,7 @@ mod get_info {
     /// decode. Each case changes one name of a repeated value.
     #[test]
     fn two_names_for_one_value_must_agree() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v2.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
         let cases: [(&str, serde_json::Value); 7] = [
             ("block_size_limit", 600_001.into()),
             ("block_size_median", 300_001.into()),

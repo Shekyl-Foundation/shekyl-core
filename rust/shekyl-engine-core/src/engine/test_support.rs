@@ -422,10 +422,6 @@ pub fn test_block_hash_at(height: u64) -> [u8; 32] {
     h
 }
 
-/// Outbound peers a healthy test daemon reports. Non-zero so a health
-/// reading is not the peerless alarm. Inbound is zero ("none").
-const TEST_DAEMON_OUTGOING_CONNECTIONS: u64 = 8;
-
 /// How far above its chain count a syncing test daemon places
 /// `target_height`, so the reply looks like a real syncing daemon's. No
 /// reader decides on it; the flag is what makes the double "syncing". It is
@@ -445,15 +441,14 @@ pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Va
         target_height,
         synchronized: !syncing,
         top_hash: BlockHash::from_bytes(test_block_hash_at(chain_count.saturating_sub(1))),
-        outgoing_connections: TEST_DAEMON_OUTGOING_CONNECTIONS,
-        incoming_connections: 0,
+        has_peers: true,
     }
     .to_value()
 }
 
 fn default_health() -> DaemonHealth {
     DaemonHealth {
-        connections: TEST_DAEMON_OUTGOING_CONNECTIONS,
+        has_peers: true,
         height: 0,
         synchronized: true,
     }

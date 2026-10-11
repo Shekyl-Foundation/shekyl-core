@@ -606,7 +606,7 @@ fn project_alarm(reason: AlarmReason) -> WatchdogAlarmReason {
 /// liveness-policy type; the driver bridges).
 fn health_context(health: DaemonHealth) -> DaemonHealthContext {
     DaemonHealthContext {
-        connections: health.connections,
+        has_peers: health.has_peers,
         height: health.height,
         synchronized: health.synchronized,
     }

@@ -460,6 +460,7 @@ mod tests {
                 busy_syncing: false,
                 offline: false,
                 following_degraded: false,
+                has_peers: true,
             },
             identity: InfoIdentity {
                 nettype: DaemonNetwork::Testnet,

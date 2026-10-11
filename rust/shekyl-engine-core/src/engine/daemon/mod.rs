@@ -422,8 +422,8 @@ impl DaemonEngine for DaemonClient {
     /// Snapshot daemon health via **one** `get_info` JSON-RPC read
     /// (§5.2 item 3). Identity is already gated at [`Rpc::post`].
     ///
-    /// The summed outgoing/incoming connection counts and the sync
-    /// position feed the §5.3 escape ladder's health gate.
+    /// Whether the daemon has peers and whether it is synchronized feed the
+    /// §5.3 escape ladder's health gate.
     ///
     /// The response decode lives in
     /// [`health_from_get_info`](synced_chain_facts::health_from_get_info)

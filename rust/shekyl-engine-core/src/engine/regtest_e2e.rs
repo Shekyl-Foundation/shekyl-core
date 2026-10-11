@@ -5556,6 +5556,12 @@ async fn restricted_listener_gets_stand_ins_and_caps_from_native_handlers() {
     );
     // The two listeners describe the same chain.
     assert_eq!(restricted_info.health.height, admin_info.health.height);
+    // Health is told to both. This daemon has no peers and its p2p hub is
+    // up, so it answers `false`; a hub that was not up would refuse.
+    assert!(
+        !restricted_info.health.has_peers && !admin_info.health.has_peers,
+        "a solitary daemon has no peers, and says so on both listeners"
+    );
 
     // ── JSON-RPC: the header cap ────────────────────────────────────────
     //
@@ -5714,6 +5720,47 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
     let admin = HttpRpc::new(format!("http://127.0.0.1:{}", origin.rpc_port()))
         .await
         .expect("unrestricted rpc client");
+
+    // RK-D14, on a live node. The origin holds a handshaken session to the
+    // sink. Its restricted listener still writes zero for both connection
+    // counts, and beside them says the node has peers, because Health is
+    // told to every caller. Before `has_peers` a wallet on this listener
+    // could only read the zeros, and raised a false "daemon has no peers"
+    // alarm in place of its resubmit probe (the pre-flight's §3.1).
+    let restricted_info: GetInfoResponse = restricted
+        .rpc_call("get_info", None::<serde_json::Value>)
+        .await
+        .expect("restricted get_info");
+    let admin_info: GetInfoResponse = admin
+        .rpc_call("get_info", None::<serde_json::Value>)
+        .await
+        .expect("admin get_info");
+    assert!(
+        restricted_info.health.has_peers && admin_info.health.has_peers,
+        "a node with a handshaken session has peers, on both listeners"
+    );
+    let restricted_status = restricted_info
+        .node
+        .shown()
+        .expect("a restricted reply carries the Status stand-ins until RK-Q8");
+    assert_eq!(
+        (
+            restricted_status.outgoing_connections_count,
+            restricted_status.incoming_connections_count
+        ),
+        (0, 0),
+        "the restricted listener's counts are the stand-ins, so `has_peers` \
+         above did not come from them"
+    );
+    assert!(
+        admin_info
+            .node
+            .shown()
+            .expect("the admin listener is shown Status")
+            .outgoing_connections_count
+            >= 1,
+        "the admin listener reports the session the pair was started with"
+    );
 
     let (wallet, _tmp, address) = mainnet_wallet(origin.rpc_port(), 0x5e).await;
     let arc = Arc::new(RwLock::new(wallet));

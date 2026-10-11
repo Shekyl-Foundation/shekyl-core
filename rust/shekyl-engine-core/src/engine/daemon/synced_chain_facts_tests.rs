@@ -27,8 +27,7 @@ fn document(height: u64, target_height: Option<u64>) -> GetInfoDocument {
         target_height,
         synchronized: true,
         top_hash: any_hash(),
-        outgoing_connections: 5,
-        incoming_connections: 3,
+        has_peers: true,
     }
 }
 
@@ -236,30 +235,39 @@ async fn a_reply_with_an_unknown_member_yields_no_facts() {
     assert!(matches!(err, RpcError::InvalidNode(_)), "{err:?}");
 }
 
-/// The connection counts are a Status field, which a daemon may withhold.
-/// Withheld reads as zero — "none known" — and nothing else about the reply
-/// changes.
+/// **Whether the daemon has peers is Health's word, and Status cannot
+/// change it** (RK-D14). The reply's Status counts are zero here, as a
+/// restricted daemon writes them, and then the whole Status part is
+/// withheld, as RK-Q8 will have it: `has_peers` reads the same through
+/// both. Before this the projection summed those counts, read a withheld
+/// part as zero, and called a restricted daemon peerless.
+///
+/// The edit that turns this red is the projection reading Status again.
 #[test]
-fn withheld_connection_counts_read_as_none_known() {
-    let mut reply = info(77, None);
-    assert_eq!(health_from_get_info(&reply).connections, 8);
-    reply.node = shekyl_rpc_types::Hidden::Withheld;
-    let health = health_from_get_info(&reply);
-    assert_eq!(health.connections, 0);
-    assert_eq!(health.height, 77);
-}
+fn has_peers_is_healths_word_whatever_status_says() {
+    for has_peers in [true, false] {
+        let mut reply = GetInfoDocument {
+            has_peers,
+            ..document(77, None)
+        }
+        .to_reply();
+        let status = reply.node.shown().expect("the document shows Status");
+        assert_eq!(
+            (
+                status.outgoing_connections_count,
+                status.incoming_connections_count
+            ),
+            (0, 0),
+            "the fixture's Status counts are zero, as a restricted daemon's are"
+        );
+        assert_eq!(health_from_get_info(&reply).has_peers, has_peers);
 
-/// Connection counts are summed with `saturating_add`, so a daemon reporting
-/// absurd counts cannot wrap the sum to a peerless reading.
-#[test]
-fn the_connection_sum_saturates_rather_than_wrapping() {
-    let reply = GetInfoDocument {
-        outgoing_connections: u64::MAX,
-        incoming_connections: 4,
-        ..document(1, None)
+        reply.node = shekyl_rpc_types::Hidden::Withheld;
+        reply.peers = shekyl_rpc_types::Hidden::Withheld;
+        let health = health_from_get_info(&reply);
+        assert_eq!(health.has_peers, has_peers, "Status withheld");
+        assert_eq!(health.height, 77);
     }
-    .to_reply();
-    assert_eq!(health_from_get_info(&reply).connections, u64::MAX);
 }
 
 /// The decode and the constructor compose: a synced reply yields facts at the
@@ -295,8 +303,7 @@ fn a_peerless_fresh_daemon_is_not_synchronized() {
     assert!(SyncedChainFacts::new(ChainCount::from_raw(5), false, any_hash()).is_none());
     let peerless = GetInfoDocument {
         synchronized: false,
-        outgoing_connections: 0,
-        incoming_connections: 0,
+        has_peers: false,
         ..document(5, None)
     }
     .to_reply();

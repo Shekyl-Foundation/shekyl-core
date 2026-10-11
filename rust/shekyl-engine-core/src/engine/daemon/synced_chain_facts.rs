@@ -144,7 +144,7 @@ impl SyncedChainFacts {
 
     /// Build from the engine's [`DaemonHealth`] projection of `get_info`.
     ///
-    /// The connection count is deliberately not carried: peerlessness is the
+    /// `has_peers` is deliberately not carried: peerlessness is the
     /// watchdog's escalation axis, not a synchronization fact, and a type
     /// named for one property that silently carries another is how a consumer
     /// comes to read the wrong one.
@@ -513,10 +513,13 @@ pub(crate) struct GetInfoDocument {
     pub(crate) synchronized: bool,
     /// Identity of the chain `chain_count` counts.
     pub(crate) top_hash: BlockHash,
-    /// Outbound peer count. Zero is "none known".
-    pub(crate) outgoing_connections: u64,
-    /// Inbound peer count. Same contract as [`Self::outgoing_connections`].
-    pub(crate) incoming_connections: u64,
+    /// Health's `has_peers`: whether the daemon has a handshaken session.
+    ///
+    /// The reply this builds writes **zero for every Status and Peers
+    /// count**, whatever this says. The wallet reads `has_peers` and may
+    /// not read those; a reader that went back to them would see a
+    /// peerless daemon in every test built on this document.
+    pub(crate) has_peers: bool,
 }
 
 #[cfg(test)]
@@ -538,6 +541,7 @@ impl GetInfoDocument {
                 busy_syncing: false,
                 offline: false,
                 following_degraded: false,
+                has_peers: self.has_peers,
             },
             identity: InfoIdentity {
                 nettype: DaemonNetwork::Fakechain,
@@ -565,8 +569,8 @@ impl GetInfoDocument {
                 free_space: 1 << 40,
                 database_size: 1 << 30,
                 version: "test".to_owned(),
-                outgoing_connections_count: self.outgoing_connections,
-                incoming_connections_count: self.incoming_connections,
+                outgoing_connections_count: 0,
+                incoming_connections_count: 0,
                 alt_blocks_count: 0,
                 rpc_connections_count: 1,
             }),
@@ -605,17 +609,17 @@ impl GetInfoDocument {
 /// `target_height` is decoded and not carried: nothing the wallet decides
 /// reads it (module docs).
 ///
-/// The connection counts are a Status field, which a daemon may withhold
-/// from this caller. Withheld reads as zero — "none known", which routes at
-/// worst to the operator-alarm rung. The sum is `saturating_add`.
+/// **Whether the daemon has peers is Health's `has_peers`, and only that**
+/// (RK-D14). This projection used to sum the two connection counts in the
+/// Status part and read a withheld Status as zero. A restricted daemon
+/// writes zero there, and one day withholds the part, so a public remote
+/// node with twenty peers read as peerless: the submit watchdog raised a
+/// false `DaemonPeerless` alarm in place of its resubmit probe. Status
+/// describes the node and is the daemon's to withhold. Health is told to
+/// every caller, and this reads nothing else.
 pub(crate) fn health_from_get_info(info: &GetInfoResponse) -> DaemonHealth {
-    let connections = info.node.shown().map_or(0, |status| {
-        status
-            .outgoing_connections_count
-            .saturating_add(status.incoming_connections_count)
-    });
     DaemonHealth {
-        connections,
+        has_peers: info.health.has_peers,
         height: info.health.height,
         synchronized: info.health.synchronized,
     }

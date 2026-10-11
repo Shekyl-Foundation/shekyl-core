@@ -1184,6 +1184,7 @@ fn info_reply(height: u64) -> String {
             busy_syncing: false,
             offline: false,
             following_degraded: false,
+            has_peers: true,
         },
         identity: InfoIdentity {
             nettype: DaemonNetwork::Mainnet,

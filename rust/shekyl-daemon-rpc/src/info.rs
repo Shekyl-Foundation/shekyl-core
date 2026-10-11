@@ -23,7 +23,8 @@
 //! answered, and five oracle vectors captured from that handler's own
 //! computation held it to that. Each later commit moves one thing off
 //! parity, with a vector derived from its predecessor: the `target_height`
-//! sentinel went first (RK-D15, 3.46). It still writes what the design
+//! sentinel went first (RK-D15, 3.46), then `has_peers` arrived (RK-D14,
+//! 3.47). It still writes what the design
 //! retires after that, each marked where it is written: the restricted
 //! stand-ins, the clearnet-only connection counts and their subtraction, a
 //! refused burn computation reported as zero, and a pool count whose
@@ -119,6 +120,9 @@ pub fn get_info(
     rpc_connections: u64,
 ) -> Result<GetInfoResponse, RpcFault> {
     let chain = facts.chain()?;
+    // Health, so read for every caller. A hub that is not up is a fault
+    // and refuses the reply: `false` would be an answer nobody gave.
+    let has_peers = facts.handshaken_sessions()? > 0;
     let pool_count = facts.pool_count(if disclosure.host {
         PoolScope::All
     } else {
@@ -220,6 +224,7 @@ pub fn get_info(
             busy_syncing: chain.busy_syncing,
             offline: chain.offline,
             following_degraded: chain.following_degraded,
+            has_peers,
         },
         identity: InfoIdentity {
             nettype: chain.nettype,
@@ -422,7 +427,7 @@ pub(crate) mod tests {
         assert_eq!(
             ours(&synced_facts(), Disclosure::FULL),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v2.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v3.json"
             ))
         );
     }
@@ -462,7 +467,7 @@ pub(crate) mod tests {
         assert_eq!(
             ours(&facts, Disclosure::FULL),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v1.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v2.json"
             ))
         );
     }
@@ -475,6 +480,7 @@ pub(crate) mod tests {
         facts.chain.core_target_height = None;
         facts.status.public_connections = 0;
         facts.status.public_outgoing_connections = 0;
+        facts.handshaken_sessions = 0;
         facts.peers.public_incoming_sockets = 0;
         facts.peers.public_outgoing_sockets = 0;
         facts.peers.tor_incoming_sockets = 0;
@@ -482,7 +488,7 @@ pub(crate) mod tests {
         assert_eq!(
             ours(&facts, Disclosure::FULL),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v2.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v3.json"
             ))
         );
     }
@@ -495,7 +501,7 @@ pub(crate) mod tests {
         assert_eq!(
             ours(&synced_facts(), Disclosure::VIEW),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v2.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v3.json"
             ))
         );
     }
@@ -508,9 +514,74 @@ pub(crate) mod tests {
         assert_eq!(
             ours(&facts, Disclosure::FULL),
             oracle(include_str!(
-                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_burn_refusal_v2.json"
+                "../../shekyl-rpc-types/tests/vectors/rpc/get_info_burn_refusal_v3.json"
             ))
         );
+    }
+
+    // ── RK-D14: has_peers ──────────────────────────────────────────────────
+
+    /// `has_peers` is the handshaken count compared with zero, and nothing
+    /// else moves it: not the Status counts, not the socket counts.
+    #[test]
+    fn has_peers_is_a_handshaken_session_and_nothing_else() {
+        for (handshaken, expected) in [(0, false), (1, true), (20, true), (u64::MAX, true)] {
+            let mut facts = synced_facts();
+            facts.handshaken_sessions = handshaken;
+            assert_eq!(
+                ours(&facts, Disclosure::FULL)["has_peers"],
+                serde_json::json!(expected),
+                "{handshaken} handshaken"
+            );
+        }
+
+        // Sockets and sessions open, none through its handshake: no peer.
+        let mut dialing = synced_facts();
+        dialing.handshaken_sessions = 0;
+        assert_eq!(ours(&dialing, Disclosure::FULL)["has_peers"], false);
+
+        // No Status count and no socket, one handshaken session: a peer.
+        let mut facts = synced_facts();
+        facts.status.public_connections = 0;
+        facts.status.public_outgoing_connections = 0;
+        facts.peers.public_incoming_sockets = 0;
+        facts.peers.public_outgoing_sockets = 0;
+        facts.handshaken_sessions = 1;
+        assert_eq!(ours(&facts, Disclosure::FULL)["has_peers"], true);
+    }
+
+    /// **§3.1's defect, at its source.** A restricted caller's reply still
+    /// carries zero for both connection counts, and beside them
+    /// `has_peers: true`, because Health is told to every caller. A reader
+    /// that asks "does this node have peers" now has a member that answers
+    /// it, instead of two that a restricted listener zeroes.
+    #[test]
+    fn a_restricted_reply_from_a_node_with_peers_says_it_has_peers() {
+        let reply = ours(&synced_facts(), Disclosure::VIEW);
+        assert_eq!(reply["has_peers"], true);
+        assert_eq!(reply["outgoing_connections_count"], 0);
+        assert_eq!(reply["incoming_connections_count"], 0);
+        assert_eq!(reply["restricted"], true);
+
+        // And the same member for the host's administrator.
+        assert_eq!(ours(&synced_facts(), Disclosure::FULL)["has_peers"], true);
+    }
+
+    /// **A missing hub refuses; it does not answer `false`** (§4.2). For
+    /// every caller: Health is everyone's, so there is no caller the fault
+    /// is not for. Until 3.47 the reply carried zero counts here and status
+    /// OK.
+    #[test]
+    fn a_missing_hub_refuses_every_caller() {
+        let mut facts = synced_facts();
+        facts.handshaken_fault = Some(FactsFault::HubAbsent);
+        for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
+            assert_eq!(
+                get_info(&facts, disclosure, 0),
+                Err(RpcFault::Facts(FactsFault::HubAbsent)),
+                "{disclosure:?}"
+            );
+        }
     }
 
     // ── RK-D24: gathering by part ──────────────────────────────────────────
@@ -527,6 +598,11 @@ pub(crate) mod tests {
         assert_eq!(facts.peers_reads.load(Ordering::Relaxed), 0);
         assert_eq!(facts.store_size_reads.load(Ordering::Relaxed), 1);
         assert_eq!(
+            facts.handshaken_reads.load(Ordering::Relaxed),
+            1,
+            "Health is shown to every caller, so its read is made for this one"
+        );
+        assert_eq!(
             *facts.pool_scopes.lock().expect("scopes"),
             vec![PoolScope::Broadcast],
             "the unrelayed count is host-only and is not read without the host axis"
@@ -542,6 +618,7 @@ pub(crate) mod tests {
         assert_eq!(facts.status_reads.load(Ordering::Relaxed), 1);
         assert_eq!(facts.peers_reads.load(Ordering::Relaxed), 1);
         assert_eq!(facts.store_size_reads.load(Ordering::Relaxed), 1);
+        assert_eq!(facts.handshaken_reads.load(Ordering::Relaxed), 1);
         assert_eq!(
             *facts.pool_scopes.lock().expect("scopes"),
             vec![PoolScope::All]
