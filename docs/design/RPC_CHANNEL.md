@@ -1283,8 +1283,8 @@ construction) instead of loopback TCP.
 - The readers of `get_info.restricted`, which RT-W10 retires:
   `shekyl-cli/src/commands/mine.rs:68` — the "restricted listener" refusal
   becomes a check for `mining-control` in the grant the handshake returned;
-  `stake_engine/serving/daemon_tip.rs:299` — moves to `has_peers` in RK-5c's
-  own commit, and RT-W13 confirms the read is gone.
+  `stake_engine/serving/daemon_tip.rs` — moved to `has_peers` in RK-5c's
+  commit 7 (2026-10-10), and RT-W13 confirms the read is gone.
 - The callers that **pass** the deleted flags: `shekyl-gui-wallet` starts
   its daemon with `--restricted-rpc` (`src-tauri/src/daemon_manager.rs:115`),
   and the regtest end-to-end harness starts a second listener with
