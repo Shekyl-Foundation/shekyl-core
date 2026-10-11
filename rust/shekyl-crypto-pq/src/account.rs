@@ -409,16 +409,20 @@ pub fn wide_reduce_to_scalar(input: &[u8; 64]) -> Scalar {
 /// `fips203` crate exposes `KeyGen_internal(d, z)` directly we can swap
 /// this for a one-line call without shifting any observable bytes (the
 /// direct API is also deterministic in `d_z` by FIPS 203 §7.1).
+///
+/// The seed is the whole secret of the ML-KEM key, so it is returned
+/// wrapped, and the digest is written straight into the wrapped buffer:
+/// there is no separate digest value to wipe, because `finalize` is never
+/// asked to return one. The hasher is consumed by that call and wipes its
+/// own state (`sha3`'s `zeroize` feature).
 #[must_use]
-pub fn ml_kem_chacha_seed_from_d_z(d_z: &[u8; 64]) -> [u8; 32] {
+pub fn ml_kem_chacha_seed_from_d_z(d_z: &[u8; 64]) -> Zeroizing<[u8; 32]> {
     let mut hasher = Sha3_256::new();
     hasher.update(MLKEM_CHACHA_SEED_PREFIX);
     hasher.update(d_z);
-    let digest = hasher.finalize();
-    let mut out = [0u8; 32];
-    debug_assert_eq!(digest.len(), 32, "SHA3-256 output must be 32 bytes");
-    out.copy_from_slice(&digest[..]);
-    out
+    let mut seed = Zeroizing::new([0u8; 32]);
+    hasher.finalize_into((&mut *seed).into());
+    seed
 }
 
 /// Produce an ML-KEM-768 `(ek, dk)` pair deterministically from a
