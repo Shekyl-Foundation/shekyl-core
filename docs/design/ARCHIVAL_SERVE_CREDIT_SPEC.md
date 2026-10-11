@@ -76,8 +76,9 @@ This section is the only place the document describes current behaviour.
 | Subject | Today | Where |
 | --- | --- | --- |
 | Live challenge mechanism | One beacon challenge per pair-epoch. The derived-assignment issuer is not wired | `src/cryptonote_core/blockchain.cpp:4746-4749` |
-| The public urn | Exists and is tested; no production caller, no FFI export. Draws without replacement in waves, from `block_hash(h − 1)` | `rust/shekyl-archival-retention/src/challenge_assignment.rs:151`, `:250-253`, `:278-280`; `src/blockchain_db/blockchain_db.h:2047-2048` |
-| Drawable-set construction, assignment cache, membership check | Not in code under any name | grep for `DrawableSet`, `EpochAssignmentCache`, `is_assigned`, `at_epoch_open`: no hits |
+| The public urn | Deleted 2026-10-10. It had no production caller. The secret draw's hash side is what replaced the selection; the draw producer is not live | was `rust/shekyl-archival-retention/src/challenge_assignment.rs`; `src/blockchain_db/blockchain_db.h:2047-2048` |
+| Drawable set | `DrawableSet::at_epoch_open` is built. It enumerates tip bonds. The journal walk that recovers a Release or a slash is not | `rust/shekyl-chain-rules/src/archival/drawable.rs` |
+| Assignment cache, membership check | Not in code | grep for `EpochAssignmentCache`, `is_assigned`: no hits |
 | Serve-credit acceptance | One C++ gate. The Rust validator has no rule for CEN-J8–J10 | `src/cryptonote_core/blockchain.cpp:4702`, `:4714`; `rust/shekyl-chain-rules/src/census.rs:492-494` |
 | Serve-credit dedup | Pair-epoch-wide: any earlier pass for `(P, s, E)` refuses the next | `src/cryptonote_core/blockchain.cpp:4760` |
 | Serve-credit vin record | Kept: `p_canonical_id`, `shard_id`, `settlement_epoch`, a 64-byte Ed25519 leg. Pruned: a segment path and a 3,309-byte ML-DSA leg. The signed preimage is over a leaf path | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379-402` |
@@ -909,7 +910,7 @@ with the reason recorded, and is not left inert.
 | The attestation path's pass records and witness | `rust/shekyl-archival-retention/src/attestation_wire.rs:136-144`, `:214-219`, `:234-236` | The pass is carried by the serve-credit input in a carrier (`SCS-P11`). Two records for one fact is the duplication `SCV-4` found |
 | CEN-B4's operand: the block's attestation witness, its root in the header and its verify path | `rust/shekyl-chain-rules/src/block.rs:113-115`; `src/cryptonote_core/blockchain.cpp:5089`; `rust/shekyl-ffi/src/archival_ffi/attestation.rs:161` | With no pass record on the block there is nothing for the root to commit to or the rule to judge |
 | The anchor window | `rust/shekyl-archival-retention/src/pass_anchor.rs:113-131` | Admission checks no anchor bound (§9.1); the anchor hash is one lookup by height |
-| The public urn | `rust/shekyl-archival-retention/src/challenge_assignment.rs` | Replaced by the secret draw. It has no production caller |
+| The public urn | deleted 2026-10-10; was `rust/shekyl-archival-retention/src/challenge_assignment.rs` | Replaced by the secret draw. `DrawablePair` moved to `drawable_pair.rs`. The other rows in this table stay until their implementations land |
 | The serve-credit input's leaf-path preimage, its segment path and its split signature legs | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379-402` | The record is `j` kept and the receipt prunable (§7.2); the receipt signs the delivery transcript |
 | The beacon's fire height and seal | `rust/shekyl-chain-rules/src/archival/slash.rs:10-11` and the C++ gate at `src/cryptonote_core/blockchain.cpp:4714` | One challenge per pair-epoch is replaced by per-block draws |
 

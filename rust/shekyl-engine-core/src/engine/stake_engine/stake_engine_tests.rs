@@ -43,7 +43,9 @@ use super::*;
 // test, not hoisted here behind a `cfg(any(…))` list that grows a term per
 // feature.
 use super::helpers::draw_entry_gap_guarded;
-use super::persona::{ActivatePersona, ActivePersona, MintPersonaHandle, ServingBodies};
+use super::persona::{
+    ActivatePersona, ActivePersona, EraseReleasedShards, MintPersonaHandle, ServingBodies,
+};
 use super::types::PersonaIdentity;
 use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::emission_claim::self_check_claims;
@@ -552,6 +554,7 @@ fn message_and_reply_types_are_send() {
     assert_send::<ActivatePersona>();
     assert_send::<ActivePersona>();
     assert_send::<ServingBodies>();
+    assert_send::<EraseReleasedShards>();
     assert_send::<shekyl_p_store::BodyStoreReader>();
     assert_send::<PersonaHandle>();
     assert_send::<PersonaIdentity>();

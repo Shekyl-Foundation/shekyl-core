@@ -101,7 +101,6 @@
 1	shekyl/pqc-leaf-key-v1	rust/shekyl-crypto-pq/src/leaf_commitment.rs	DOMAIN_PQC_LEAF_KEY	shekyl-live		PL-D3: k = H_ℓ(hybrid_pk), 64-byte read reduced mod ℓ; replaces mech-4 shekyl-pqc-leaf (retired 2026-09-14)
 1	shekyl/pqc-leaf-record-v1	rust/shekyl-crypto-pq/src/leaf_commitment.rs	DOMAIN_PQC_LEAF_RECORD	shekyl-live		PL-D3a: post-quantum record cSHAKE256(pk ‖ r_h) beside CM in tx_extra 0x07
 1	shekyl/archival-serve-credit-response-v1	rust/shekyl-archival-retention/src/challenge.rs	SERVE_CREDIT_RESPONSE_CUSTOMIZATION	shekyl-live
-1	shekyl/archival-challenge-assignment-v1	rust/shekyl-archival-retention/src/challenge_assignment.rs	CHALLENGE_ASSIGNMENT_CUSTOMIZATION	shekyl-live		per-draw challenge-assignment stream (PR #435)
 1	shekyl/archival-p-id-v1	rust/shekyl-archival-retention/src/id.rs	P_CANONICAL_ID_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-attestation-root-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_ROOT_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-pass-delivery-digest-v1	rust/shekyl-archival-retention/src/pass_anchor.rs	PASS_DELIVERY_DIGEST_CUSTOMIZATION	shekyl-live		2026-10-04: digest of the response P delivered, salted by the request's nonce — cSHAKE256(label, nonce ‖ framed)[..32]; the last term of the attestation countersignature transcript and a carried field of the pass record
