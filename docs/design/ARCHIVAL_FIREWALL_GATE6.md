@@ -711,12 +711,15 @@ p_slot.to_le_bytes()` is locked into the `ARCHIVAL_P_DERIVE_V1` derivation and K
 wire is fixed before any label is ever added. This is the genesis-frozen `info` construction
 for every row in §9.3's table.
 
-**ML-KEM intermediary (unchanged function, archival-only input):**
+**ML-KEM intermediary (same bytes, archival-only input):**
 
 ```text
 chacha_seed = SHA3-256( b"shekyl-mlkem-chacha-seed" || kem_d_z )
-(ek, dk)    = ML-KEM-768.KeyGen(ChaCha20Rng::from_seed(chacha_seed))
+(ek, dk)    = ML-KEM-768.KeyGen(SeededRng::from_seed(chacha_seed))
 ```
+
+`SeededRng::from_seed` is the stream `ChaCha20Rng::from_seed` produces. The
+cipher lives on the heap.
 
 The SHA3 prefix is **shared** with principal — collision resistance comes from distinct
 `kem_d_z` bytes from distinct HKDF info labels.

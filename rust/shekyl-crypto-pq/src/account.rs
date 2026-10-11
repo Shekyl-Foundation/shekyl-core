@@ -58,7 +58,7 @@
 //!                                                                 || d_z)[0..32]
 //!                                                                        │
 //!                                                                        ▼
-//!                                                                ChaCha20Rng::from_seed
+//!                                                                SeededRng::from_seed
 //!                                                                        │
 //!                                                                        ▼
 //!                                                                ml_kem_768::KG::
@@ -66,7 +66,9 @@
 //!                                                                  → (ek, dk)
 //! ```
 //!
-//! The SHA3-ChaCha intermediary exists because `fips203 = "=0.4.3"` does not
+//! That step is `SeededRng::from_seed`. The cipher lives on the heap, and the
+//! bytes are what `ChaCha20Rng::from_seed` produces. The SHA3-ChaCha
+//! intermediary exists because `fips203 = "=0.4.3"` does not
 //! publicly expose `KeyGen_internal(d, z)` per FIPS 203 §7.1; see
 //! `upstream-fips203-keygen-internal` in the stabilization plan for the
 //! tracking follow-up. The intermediary commits to all 64 bytes of `d_z` via
