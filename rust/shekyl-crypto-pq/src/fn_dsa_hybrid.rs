@@ -415,8 +415,8 @@ fn fn_dsa_keygen(
     [u8; FN_DSA_1024_PUBLIC_KEY_LENGTH],
     HeapSecret<FN_DSA_1024_SECRET_KEY_LENGTH>,
 ) {
-    // The stream every seeded key in this crate is generated from, wiped
-    // when this function returns.
+    // The stream every seeded key in this crate is generated from. The
+    // cipher is on the heap and is wiped there when this function returns.
     let mut rng = SeededRng::from_seed(seed);
     let mut generator = KeyPairGenerator1024::default();
     // Allocated at its final address and written there: the secret key is

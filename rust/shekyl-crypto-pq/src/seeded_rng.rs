@@ -16,9 +16,13 @@
 //! `rand_chacha`'s generator does not wipe itself. It holds the seed as its
 //! key and up to 256 bytes of buffered output, and it takes the seed by
 //! value, so dropping it left both on the stack of whoever generated the
-//! key. [`SeededRng`] produces the same stream and leaves nothing: it is the
-//! RustCrypto ChaCha20 cipher with its `zeroize` feature, whose core and
-//! output buffer are wiped on drop, keyed from a borrowed seed.
+//! key. [`SeededRng`] produces the same stream. The cipher is held on the
+//! heap: moving this generator copies a pointer, and drop wipes the cipher
+//! at that address. `ChaCha20Legacy::new` returns the cipher by value, and
+//! the crate has no constructor that writes into memory the caller owns, so
+//! [`SeededRng::from_seed`] still moves that one return into the box. A move
+//! does not wipe its source. That constructor temporary is the residue
+//! `FND-14` leaves open.
 //!
 //! # The stream, exactly
 //!
@@ -48,25 +52,38 @@
 use chacha20::cipher::{KeyIvInit as _, StreamCipher as _};
 use chacha20::{ChaCha20Legacy, Key, LegacyNonce};
 use rand::{CryptoRng, RngCore};
-use zeroize::Zeroizing;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
-/// A deterministic ChaCha20 stream over 32 seed bytes, wiped on drop.
+/// A deterministic ChaCha20 stream over 32 seed bytes.
 ///
-/// For seeded key generation and for pinning a test vector or a bench.
-/// Never a source of fresh randomness: the same seed is the same stream.
+/// The cipher is one heap allocation. Moving this value copies the pointer,
+/// and drop wipes the cipher there. Used for seeded key generation and for
+/// pinning a test vector or a bench. Never a source of fresh randomness: the
+/// same seed is the same stream.
 pub(crate) struct SeededRng {
-    stream: ChaCha20Legacy,
+    /// The cipher at one heap address. Moving [`SeededRng`] moves this
+    /// pointer. Moving the cipher out of the box would put its key schedule
+    /// back on a stack nobody wipes.
+    stream: Box<ChaCha20Legacy>,
 }
 
+/// Dropping the generator drops the box, which drops the cipher, which wipes
+/// its core and its output buffer. The marker records that. A second `Drop`
+/// would wipe a buffer the cipher's own drop has already wiped.
+impl ZeroizeOnDrop for SeededRng {}
+
 impl SeededRng {
-    /// The stream `rand_chacha::ChaCha20Rng::from_seed(*seed)` produces. The
-    /// seed is borrowed and copied once, into the cipher's key schedule,
-    /// which the cipher wipes.
+    /// The stream `rand_chacha::ChaCha20Rng::from_seed(*seed)` produces.
+    ///
+    /// The seed is borrowed and copied once, into the cipher's key schedule,
+    /// which the cipher wipes on drop. The value this returns is a pointer.
+    /// `ChaCha20Legacy::new` returns the cipher by value, and that return is
+    /// moved into the box: the slot it leaves is not wiped.
     pub(crate) fn from_seed(seed: &[u8; 32]) -> Self {
         // A borrow reinterpreted as the cipher's key type, not a copy.
         let key: &Key = seed.into();
         Self {
-            stream: ChaCha20Legacy::new(key, &LegacyNonce::default()),
+            stream: Box::new(ChaCha20Legacy::new(key, &LegacyNonce::default())),
         }
     }
 
@@ -124,8 +141,32 @@ mod tests {
     #[test]
     fn the_stream_is_wiped_on_drop() {
         fn wiped_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        wiped_on_drop::<SeededRng>();
         wiped_on_drop::<ChaCha20Legacy>();
         wiped_on_drop::<chacha20::ChaCha20LegacyCore>();
+    }
+
+    /// The property the generator exists for once a caller holds it: the
+    /// cipher is larger than a pointer, and this value is not.
+    #[test]
+    fn it_is_a_pointer() {
+        assert!(std::mem::size_of::<ChaCha20Legacy>() > std::mem::size_of::<usize>());
+        assert_eq!(
+            std::mem::size_of::<SeededRng>(),
+            std::mem::size_of::<usize>()
+        );
+    }
+
+    /// A move leaves the cipher at the address it was boxed into.
+    #[test]
+    fn a_move_does_not_move_the_cipher() {
+        let rng = SeededRng::from_seed(&[0x5a; 32]);
+        let addr = std::ptr::from_ref::<ChaCha20Legacy>(rng.stream.as_ref()) as usize;
+        let moved = rng;
+        assert_eq!(
+            std::ptr::from_ref::<ChaCha20Legacy>(moved.stream.as_ref()) as usize,
+            addr
+        );
     }
 
     /// One step of a call sequence against both generators.
