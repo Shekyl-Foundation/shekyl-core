@@ -7,16 +7,18 @@
 # (docs/design/RPC_CHANNEL.md section 4.1; RT-O15).
 #
 # The model and its expected verdicts live in
-# rust/shekyl-rpc-channel/model/run.py. This job installs the one ProVerif
-# version those verdicts are pinned to, by the same script a developer runs
-# (install_proverif.sh beside it), and runs every variant. It fails if a
-# property the design claims does not hold, and equally if a deliberately
-# broken variant passes.
+# rust/shekyl-rpc-channel/model/model.py. run.py executes them over the
+# shared libraries docs/formal/proverif/lib/noise.pvl and
+# docs/formal/proverif/lib/broken.pvl, in that order. This job installs the
+# one ProVerif version those verdicts are pinned to, by the same script a
+# developer runs (docs/formal/proverif/install_proverif.sh), and runs every
+# variant. It fails if a property the design claims does not hold, and
+# equally if a deliberately broken variant passes.
 #
-# It runs only when the model or this file changes. The model is symbolic
-# and does not read Rust code, so a code change cannot move its verdicts;
-# running it on every pull request would spend the better part of an hour
-# re-proving the same thing.
+# It runs when the model, either library, the install recipe, or this file
+# changes. The model is symbolic and does not read Rust code, so a code
+# change cannot move its verdicts; running it on every pull request would
+# spend the better part of an hour re-proving the same thing.
 
 name: ci/rpc-channel-model
 
@@ -25,6 +27,9 @@ on:
     branches: [dev]
     paths:
       - "rust/shekyl-rpc-channel/model/**"
+      - "docs/formal/proverif/lib/noise.pvl"
+      - "docs/formal/proverif/lib/broken.pvl"
+      - "docs/formal/proverif/install_proverif.sh"
       - ".github/workflows/rpc-channel-model.yml"
   workflow_dispatch:
 
@@ -51,10 +56,10 @@ jobs:
         with:
           path: ~/.cache/shekyl-proverif
           # Keyed on the recipe: a changed pin is a changed script.
-          key: proverif-${{ runner.os }}-${{ hashFiles('rust/shekyl-rpc-channel/model/install_proverif.sh') }}
+          key: proverif-${{ runner.os }}-${{ hashFiles('docs/formal/proverif/install_proverif.sh') }}
 
       - name: Install the pinned ProVerif
-        run: rust/shekyl-rpc-channel/model/install_proverif.sh "$HOME/.cache/shekyl-proverif"
+        run: docs/formal/proverif/install_proverif.sh "$HOME/.cache/shekyl-proverif"
 
       - name: Run the model
         run: |

@@ -454,7 +454,7 @@ failing under a named edit** before its pass is trusted:
    break; and each named edit failing as it must. Authentication is
    proved injectively, and all of it against a second enrolled client
    whose static keys the attacker holds
-   (`rust/shekyl-rpc-channel/model/run.py`; the record is in the RT-W8
+   (`rust/shekyl-rpc-channel/model/model.py`; the record is in the RT-W8
    pre-flight, §4.2).
 
 **clatter is a test-only cross-check, never a production dependency** —

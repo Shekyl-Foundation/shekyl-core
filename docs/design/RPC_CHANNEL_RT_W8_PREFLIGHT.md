@@ -207,7 +207,7 @@ so the two cannot disagree on a verdict without saying why.
 
 Run 2026-10-10 with ProVerif 2.05: **31 verdicts, all as
 `RPC_CHANNEL.md` §4.1 and §4.2 predict.** The table of variants, queries
-and expected verdicts is `rust/shekyl-rpc-channel/model/run.py`. The first
+and expected verdicts is `rust/shekyl-rpc-channel/model/model.py`. The first
 run had 27; review the same day added the ML-KEM half of the client's
 static identity to each of the four identity variants, and then
 strengthened what every row is asked (below).
@@ -291,21 +291,25 @@ is asked*, neither to what it says, brought every row back under it:
   finding it. They do not need the hint and do not carry it.
 
 The slowest row takes about 15 minutes on the dev box. The tightest is the
-later-key-leak pair, which peaks at 5,509 MiB of the 6,144, or 89.7 %: the
-runner prints each row's peak and warns, without failing, when one passes
-90 % of the cap. That pair sits just under the warning today. Two further steps were
+later-key-leak pair. At this preflight the single-file model peaked at
+5,509 MiB of the 6,144, or 89.7 %: the runner prints each row's peak and
+warns, without failing, when one passes 90 % of the cap. The landed form
+loads `lib/noise.pvl` and `lib/broken.pvl`; its peak is the one in
+`docs/formal/proverif/README.md`. Two further steps were
 planned if these had not sufficed, injectivity by a freshness argument and
 bounded-session variants; neither was needed and neither was tried.
 
 **Installing ProVerif.** One version, 2.05, by one recipe,
-`rust/shekyl-rpc-channel/model/install_proverif.sh`, run on the dev box and
-by the CI job alike; `run.py` refuses any other version. The go-ahead named
-opam. opam supplies the pinned OCaml toolchain, but ProVerif itself is
-built from its source release with `./build -nointeract`: the opam package
-depends on GTK 2 development headers for an interactive simulator the
-model does not use, and those need root. Every download is checked against
-a recorded SHA-256. The recipe was run from an empty directory to prove it
-before it was committed.
+`docs/formal/proverif/install_proverif.sh`, run on the dev box and by the
+CI job alike; `run.py` refuses any other version. The go-ahead named opam.
+opam supplies the pinned OCaml toolchain, but ProVerif itself is built from
+its source release with `./build -nointeract`: the opam package depends on
+GTK 2 development headers for an interactive simulator the model does not
+use, and those need root. Every download is checked against a recorded
+SHA-256, and the opam repository is pinned to one revision. The recipe
+first lived beside this model and was run from an empty directory before
+it was committed; once the shared recipe landed, that copy was deleted and
+both models use the one script.
 
 ---
 

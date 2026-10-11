@@ -27,6 +27,8 @@ import time
 
 from model import (
     CLAIMS,
+    BROKEN,
+    ENCRYPT_AND_HASH,
     LIB,
     VARIANTS,
     Claim,
@@ -68,7 +70,21 @@ def proverif_command(exe: str, model_path: str) -> list[str]:
     prlimit = shutil.which("prlimit")
     if prlimit is None:
         sys.exit("run.py: prlimit is required (util-linux) to cap each variant")
-    return [prlimit, f"--as={VARIANT_MEMORY_BYTES}", "--", exe, "-lib", str(LIB), model_path]
+    # Order is the one the pinned verdicts were re-checked against:
+    # primitives, then the break constants, then EncryptAndHash.
+    return [
+        prlimit,
+        f"--as={VARIANT_MEMORY_BYTES}",
+        "--",
+        exe,
+        "-lib",
+        str(LIB),
+        "-lib",
+        str(BROKEN),
+        "-lib",
+        str(ENCRYPT_AND_HASH),
+        model_path,
+    ]
 
 
 def run_variant(exe: str, row: Row) -> tuple[str, dict[str, Verdict], str | None, float]:
