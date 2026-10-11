@@ -264,7 +264,8 @@ is on (`SF-D3`, as ruled 2026-10-07).
   stores must agree on is the **shard partition `b_*`** — consensus,
   derived only from the daemon's retained length rows (F32) with
   `SHARD_BYTES` in one const-asserted home; the leaf partition and its
-  tie are a deletion surface at E4 / S-ARCH (Q12). The archiver-store
+  tie are a deletion surface at the cutover (`DEL-008`, Q12; *was* "at E4 /
+  S-ARCH", corrected 2026-10-10). The archiver-store
   retention horizon is a FOLLOWUPS row under either unit.
   A daemon *fetching* a shard through this route for its own reasons is
   episodic and carries no posture signal; *serving* would be durable, and

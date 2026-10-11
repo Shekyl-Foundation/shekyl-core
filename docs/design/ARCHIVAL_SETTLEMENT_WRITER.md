@@ -744,7 +744,7 @@ every pair the draw did not reach as a miss.
 | The slash fold | Settles the epoch, then decides on rows. A pair is a candidate only if its row for the epoch is Missed; Served, NonObservation and no row are each no slash. The window walks back through earlier rows, passing over an unobserved epoch (`SO-D10b`), and stops where the record's standing ends, at `n` observations, past the serve budget, and at the retention horizon (§14.4 step 3). A complete-tree record's candidates are the shards it has a row for, in shard order, where the pass used to walk every closed shard; it is still slashed on the first failing one only. The one-challenge beacon geometry is gone from the Rust pass | `rust/shekyl-archival-retention/src/failure_window.rs` (`settlement_window_slashable`); `rust/shekyl-chain-rules/src/archival/slash.rs` (`scan_epoch`, `settle`, `challenge_failed`, the adapter `window_slashable`) |
 | Accrual | A pair is credited for `E` iff its settlement row is Served. The slash pass of `E` gathers `r_market(·, E)` and `Σwork(E)` over the Served pairs, after it has slashed on the epoch, and the close freezes the budget only (§15, `SO-D11`). The claim verify re-gathers from the rows (`ChainView::served_at`, A17): one hop per persona for every epoch the claim cites (`ServedAt`) | `rust/shekyl-chain-rules/src/archival/close.rs` (`Transition::gather`, `gather_universe`, `ServedAt`); `rules/tx_emission_against.rs` |
 | When each runs | The close for `E` runs at connecting height `(E+1)·SEB − 1`. The slash pass settles `E` one epoch later, at `(E+2)·SEB − 1`, before that block's own close | `archival/mod.rs:159-184`; `archival/slash.rs:94-115`; `rust/shekyl-archival-retention/src/consensus_state/settlement_schedule.rs:190-193` |
-| `issued` | The length of a pair's counted draws in the stored index: those issued while it held the shard, read as `holds_shard_at` reads it. Nothing issues a draw on a block path yet, so the index is empty off Fakechain and the Rust pass settles and slashes nothing (`SO-D10a`) | `archival/slash.rs` (`counted`); `rust/shekyl-archival-retention/src/challenge_assignment.rs` (the urn, still without a caller outside its crate) |
+| `issued` | The length of a pair's counted draws in the stored index: those issued while it held the shard, read as `holds_shard_at` reads it. Nothing issues a draw on a block path yet, so the index is empty off Fakechain and the Rust pass settles and slashes nothing (`SO-D10a`) | `archival/slash.rs` (`counted`); the public urn was deleted 2026-10-10 (was `challenge_assignment.rs`, no caller outside its tests) |
 | A pass, per draw | The index row's `passed` bit is its home (`SO-D10c`), and settlement reads it. Only the Fakechain door sets it. The serve-credit pass row is still keyed `(P, shard, epoch, including height)` and names no draw; it is re-keyed or deleted when admission lands, and until then feeds accrual and the Release's served anchor, not the slash | `rust/shekyl-chain-store/src/schema.rs`; `store/archival_write.rs:183-211` |
 | The block's archival writes | `ArchivalDelta::settlements()` carries the rows the pass derived, by epoch, persona and shard; the store writes them in phase 9 ahead of the slash writes (`SO-D7`), insert-once. `ChainView` reads the row (A14), one epoch's issued draws in `(P, shard, h, j)` order (A15) and the epoch's digest (A16) | `archival/delta.rs` (`Settlement`); `rust/shekyl-chain-rules/src/view.rs`; `rust/shekyl-chain-store/src/store/archival_write.rs` (`write_settlements`) |
 | Pruning | The Rust store prunes no archival table by epoch. `prune_archival_epochs_before` is C++ only | `rust/shekyl-chain-store/src/store/prune.rs:132` |
@@ -1111,10 +1111,8 @@ the watermark and the closed-not-settled cases.
 ## 16. `SO-D12` — admission and the draw — RULED 2026-10-10
 
 **Status:** RULED 2026-10-10 (§16.6). Ten questions (§16.4), posed with
-recommendations and ruled the same day. Nothing here is built. The check
-`SO-D12i` was ruled conditional on is in §16.7 with the ruling that
-followed it; increment 1 is cleared to start. Grounded at
-`dev@e28979ff2`.
+recommendations and ruled the same day. Nothing here is built;
+increment 1 is cleared to start. Grounded at `dev@e28979ff2`.
 
 **The charge.** §14.4 step 5. The mechanism is ruled in
 [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4 to §10
@@ -1278,12 +1276,12 @@ The settlement-timing question `ESR-12`.
 | `SO-D12f` | **Agreed.** The shortfall is stored, with undo |
 | `SO-D12g` | **Agreed** |
 | `SO-D12h` | **Agreed.** The same journal fixes the complete-tree flag |
-| `SO-D12i` | **Required, on one condition: verify the live chain first.** The C++ daemon is consensus on testnet. If its coinbase check refuses `0x0C`, a template that writes it produces blocks the live validator refuses. Before increment 1 lands, confirm which code builds coinbases on testnet and whether the C++ admits `0x0C`. If it does not, the grammar change lands on both validators in one rule-07 change |
+| `SO-D12i` | **Required from increment 1, with no height gate.** The testnet runs tagged releases and the next tag is a regenesis, so nothing on `dev` reaches a running chain and there is no compatibility window. One condition, on correctness: the grammar that requires `0x0C` lands for the validator that judges blocks in that release. The C++ daemon is that validator until `DEL-008` and must accept the tag in increment 1 itself. What the change touches is in §16.7 |
 | `SO-D12j` | **Deferred** to increment 4's design text |
 
-The check `SO-D12i` asked for, and the ruling on what it found, are §16.7.
+What `SO-D12i` touches on the live chain, checked before it was ruled, is §16.7.
 
-### 16.7 The two checks the rulings asked for
+### 16.7 Two checks behind the rulings
 
 **Reinstate (`SO-D12b`, condition 1): it does not change holdings, so
 the walk-back has nothing to reverse for it.** A Reinstate is refused
@@ -1297,8 +1295,7 @@ that a Reinstate that one day restores holdings fails there and not in
 admission.
 
 **The live chain (`SO-D12i`): requiring `0x0C` is a consensus change on
-every network that already has a chain, and it changes genesis. Ruled
-below: required from increment 1.**
+every network that already has a chain, and it changes genesis.**
 
 - **Who builds coinbases.** The C++ `construct_miner_tx`
   (`src/cryptonote_core/cryptonote_tx_utils.cpp`). It does not lay out
@@ -1330,27 +1327,26 @@ below: required from increment 1.**
   layout in increment 1 changes what the live daemon parses, not only
   what the Rust validator does.
 
-**Ruled (maintainer, relayed 2026-10-10): require `0x0C` from increment
-1.** The testnet runs tagged releases, so nothing on `dev` reaches it
-before the next tag, and that tag is a regenesis. There is no
-compatibility window to manage and no height gate.
+**Ruled with this known (§16.6, `SO-D12i`).** Because the grammar is one
+Rust function both validators call, increment 1 meets the ruling's
+condition by changing that function and the writer together, with:
 
-The condition that remains is correctness. At the next tag the C++
-daemon is still the consensus validator and must accept the blocks, so
-the grammar that requires `0x0C` lands for the validator that judges
-blocks in that release, and the C++ must not refuse the tag. That is
-part of increment 1 itself, not a later step. Because the grammar is one
-Rust function both validators call, increment 1 meets it by changing
-that function and the writer together, with:
-
-- the C++ `construct_miner_tx` passing through whatever the writer now
-  needs, and the daemon's own block tests connecting blocks that carry
+- the C++ `construct_miner_tx` passing the commitment through to the
+  writer, and the daemon's own block tests connecting blocks that carry
   the tag;
-- the three `GENESIS_TX` constants regenerated, if the genesis coinbase
-  is judged by the grammar;
-- the record layout's change carried through the C++ serve-credit gate's
-  one read of it, so the daemon parses what the template and the wallet
-  write.
+- the three `GENESIS_TX` constants regenerated. The genesis coinbase is
+  judged by the grammar, at connect and at DB add, so it carries the tag
+  too. Its commitment is 32 zero bytes: a value nobody can open, never
+  read as absent;
+- a carrier's seed and `h` in a new transaction-extra field, `0x0D`,
+  required exactly once in a `serve_credit_only` transaction and refused
+  everywhere else;
+- the serve-credit record replaced. The C++ gate does not parse the new
+  record. It refuses a serve-credit input loudly, naming the retired
+  record and `DEL-008`, until the cutover; no production code produces
+  the old record, so the daemon accepts nothing it accepts today.
+
+The design of increment 1 is §16.8 and the rulings on it §16.9.
 
 ### 16.8 Increment 1 as designed — a regenesis, not a type half
 
@@ -1460,4 +1456,3 @@ commitment with `seed[32] ‖ h_le[8]`, and every vector there carries
 both. The condition is met by construction; increment 1 adds the test
 that the bytes fed to the commitment are the `0x0D` field's own seed and
 `h`, so the field and the commitment cannot name different values.
-

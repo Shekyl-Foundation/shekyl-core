@@ -1,0 +1,11 @@
+start 2026-10-10T19:34:26Z head 67faff8290 load 1.53 1.48 0.68 temp 55504 governor ondemand
+RT-P4 ML-KEM-768 decapsulation timing (fips203)
+arch=aarch64 os=linux samples_per_comparison=1000000 calibration=10000 crops=100
+pass: |t| < 4.5 on every real comparison; control: |t| > 10
+comparison=fixed-vs-valid max_abs_t=502.54 median_ns=267888 n0=499521 n1=500479 verdict=LEAK
+comparison=fixed-vs-invalid max_abs_t=12.16 median_ns=267480 n0=500483 n1=499517 verdict=LEAK
+comparison=fixed-vs-bitflip max_abs_t=19.73 median_ns=267592 n0=500478 n1=499522 verdict=LEAK
+comparison=valid-vs-invalid max_abs_t=463.66 median_ns=267684 n0=499020 n1=500980 verdict=LEAK
+control=planted-leak fraction=0.005 planted_ns=1338 max_abs_t=952.25 verdict=detected
+result=FAIL worst_real_abs_t=502.54 control_abs_t=952.25
+rc=1 end 2026-10-10T20:15:16Z load 1.00 1.00 1.00 temp 57452

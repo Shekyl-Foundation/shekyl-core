@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "Known-answer vectors for the three derivations of shekyl-rpc-channel",
+    "(RPC_CHANNEL.md RT-O14): the Noise prologue, the rendezvous name and",
+    "the static fingerprint. Produced by generate.py beside this file, which",
+    "carries its own cSHAKE256 and shares no code with the Rust crate.",
+    "vectors_sha256_hex covers the exact on-disk bytes of vectors.json.",
+    "Regenerate only for a deliberate change of encoding, which is a new",
+    "customization string, never an edit to these values."
+  ],
+  "check_command": "python3 docs/test_vectors/RPC_CHANNEL_NAMES_V1/generate.py --check",
+  "derivation_version": "v1",
+  "regeneration_command": "python3 docs/test_vectors/RPC_CHANNEL_NAMES_V1/generate.py",
+  "vectors_sha256_hex": "074d75a52ff5521cdbe381c3fa5afb75159427919b8396dc1a8e17f43b5d8ad8"
+}

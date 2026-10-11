@@ -14,12 +14,11 @@
 
 use shekyl_archival_retention::DrawablePair;
 use shekyl_types::archival::{BondRecord, Holdings};
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
-use crate::archival::closed_and_final;
+use crate::archival::{closed_and_final, ClosedUniverse};
 use crate::fault::ViewRead;
 use crate::rule_set::RuleSet;
-use crate::rules::miner::closed_shards_through;
 use crate::view::ChainView;
 
 /// The drawable `(P, s)` pairs of one settlement epoch, in canonical
@@ -35,8 +34,7 @@ impl DrawableSet {
     /// at `h_open(E)` (SO-D8 §7.4 pins 1–3).
     ///
     /// An empty chain, or an epoch that has not opened on this tip,
-    /// yields an empty set — genesis and a future `E` schedule nothing
-    /// (`ChallengeUrn` admits `D = 0`).
+    /// yields an empty set — genesis and a future `E` schedule nothing.
     ///
     /// # Errors
     ///
@@ -57,10 +55,17 @@ impl DrawableSet {
             return Ok(Self::default());
         }
         let records = view.bond_records().map_err(ViewRead::View)?;
-        let closed = closed_shards_through(view, h_open)?.get();
         let cap = rule_set.reorg_cap();
+        // `final_before(h_open + 1, cap)` is `closed_and_final` at `h_open`
+        // over the set. The per-shard walk re-derived the same predicate.
+        let h_next = h_open
+            .checked_add(BlockCount::ONE)
+            .expect("h_open + 1 fits");
+        let final_count = ClosedUniverse::final_before(view, h_next, cap)?
+            .count()
+            .get();
         let mut is_final = |shard: ShardId| closed_and_final(view, shard, h_open, cap);
-        let pairs = emit_pairs(records, epoch, closed, &mut is_final)?;
+        let pairs = emit_pairs(records, epoch, final_count, &mut is_final)?;
         Ok(Self { pairs })
     }
 
@@ -79,13 +84,15 @@ impl DrawableSet {
 
 /// Pin 1 (exclude `E_join ≥ E`), pin 2 (`CompleteTree` over the
 /// closed-and-final registry at `h_open`, not tip), pin 3 (sort persona
-/// canonical-id bytes, then `shard_id` numeric). `is_final` is the closed-and-final
-/// predicate at `h_open`; `closed` is that registry's upper bound so a
-/// CompleteTree walk does not invent shards past it.
+/// canonical-id bytes, then `shard_id` numeric). `final_count` is
+/// [`ClosedUniverse::final_before`] at `h_open + 1`: a CompleteTree expands
+/// `0..final_count` and does not re-derive the predicate per shard.
+/// `is_final` is that same predicate for a compact holding, which names
+/// shards rather than a prefix.
 fn emit_pairs<E>(
     records: impl IntoIterator<Item = (PCanonicalId, BondRecord)>,
     epoch: SettlementEpoch,
-    closed: u64,
+    final_count: u64,
     is_final: &mut impl FnMut(ShardId) -> Result<bool, E>,
 ) -> Result<Vec<DrawablePair>, E> {
     let mut pairs = Vec::new();
@@ -96,14 +103,11 @@ fn emit_pairs<E>(
         let p_id = persona.to_bytes();
         match &record.holdings {
             Holdings::CompleteTree => {
-                for shard in 0..closed {
-                    let shard = ShardId::from_raw(shard);
-                    if is_final(shard)? {
-                        pairs.push(DrawablePair {
-                            p_id,
-                            shard_id: shard.to_raw(),
-                        });
-                    }
+                for shard in 0..final_count {
+                    pairs.push(DrawablePair {
+                        p_id,
+                        shard_id: shard,
+                    });
                 }
             }
             Holdings::ShardSet(held) => {
@@ -125,7 +129,7 @@ fn emit_pairs<E>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archival::closed_and_final;
+    use crate::archival::{closed_and_final, ClosedUniverse};
     use crate::harness::fixture::{recorded, root};
     use crate::harness::MockChain;
     use crate::view::RecordedBlock;
@@ -215,7 +219,7 @@ mod tests {
     #[test]
     fn complete_tree_expands_the_closed_and_final_registry_not_tip() {
         let records = [complete(P1, 0)];
-        let pairs = emit_pairs(records, SettlementEpoch::from_raw(1), 3, &mut |s| {
+        let pairs = emit_pairs(records, SettlementEpoch::from_raw(1), 1, &mut |s| {
             Ok::<_, ()>(s.to_raw() == 0)
         })
         .expect("no predicate fault");
@@ -277,6 +281,13 @@ mod tests {
             let h_open = BlockHeight::from_raw(4);
             assert!(closed_and_final(&view, ShardId::from_raw(0), h_open, cap).unwrap());
             assert!(!closed_and_final(&view, ShardId::from_raw(1), h_open, cap).unwrap());
+            let universe = ClosedUniverse::final_before(
+                &view,
+                h_open.checked_add(BlockCount::ONE).expect("fits"),
+                cap,
+            )
+            .unwrap();
+            assert_eq!(universe.count().get(), 1);
         });
     }
 }
