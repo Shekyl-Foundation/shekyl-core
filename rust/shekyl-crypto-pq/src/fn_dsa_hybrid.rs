@@ -89,8 +89,10 @@
 //! signatures rather than decoding per signature — the choice belongs to
 //! the first consumer, the serve path's signing capability.
 
+use crate::heap_secret::HeapSecret;
 use crate::hybrid_combiner::{self, decode_canonical, encode_canonical, CANONICAL_OVERHEAD};
 use crate::rng::{key_material32, HedgedOsRng};
+use crate::seeded_rng::SeededRng;
 use crate::signature::{
     SignatureScheme, HYBRID_KEY_VERSION, HYBRID_SCHEME_ID_ED25519_FN_DSA_1024, HYBRID_SIG_VERSION,
 };
@@ -106,7 +108,6 @@ use fn_dsa::{
     FN_DSA_LOGN_1024, HASH_ID_RAW,
 };
 use rand::{CryptoRng, RngCore};
-use zeroize::Zeroizing;
 
 /// FN-DSA-1024 verifying-key length, from the crate.
 pub const FN_DSA_1024_PUBLIC_KEY_LENGTH: usize = vrfy_key_size(FN_DSA_LOGN_1024);
@@ -187,9 +188,15 @@ impl FnDsaHybridPublicKey {
 /// There is no canonical encoding for it and no `Clone`: the receipt key is
 /// re-derived from the wallet seed, and the witness key lives for one block
 /// in memory. Neither is written anywhere.
+///
+/// Both halves live on the heap ([`HeapSecret`]), each at the one address
+/// it was written to. An array held inline would be copied every time the
+/// key, or a bundle holding it, is moved, and a wipe on drop reaches only
+/// the last place a value rested: each earlier copy would stay on a stack
+/// nobody wipes. Moving this type moves two pointers.
 pub struct FnDsaHybridSecretKey {
-    ed25519: Zeroizing<[u8; ED25519_SECRET_KEY_LENGTH]>,
-    fn_dsa: Zeroizing<[u8; FN_DSA_1024_SECRET_KEY_LENGTH]>,
+    ed25519: HeapSecret<ED25519_SECRET_KEY_LENGTH>,
+    fn_dsa: HeapSecret<FN_DSA_1024_SECRET_KEY_LENGTH>,
 }
 
 impl std::fmt::Debug for FnDsaHybridSecretKey {
@@ -291,7 +298,10 @@ impl HybridEd25519FnDsa {
                 fn_dsa: fn_dsa_public,
             },
             FnDsaHybridSecretKey {
-                ed25519: Zeroizing::new(ed25519_signing.to_bytes()),
+                // The RFC 8032 secret key is the seed. Copied from the
+                // caller's borrow straight to the heap, so it is never a
+                // by-value array on this stack.
+                ed25519: HeapSecret::copied_from(ed25519_seed),
                 fn_dsa: fn_dsa_secret,
             },
         ))
@@ -342,8 +352,7 @@ impl HybridEd25519FnDsa {
         message: &[u8],
         rng_seed: &[u8; 32],
     ) -> Result<FnDsaHybridSignature, CryptoError> {
-        use rand::SeedableRng as _;
-        let mut rng = rand_chacha::ChaCha20Rng::from_seed(*rng_seed);
+        let mut rng = SeededRng::from_seed(rng_seed);
         Self::sign_with_rng(secret_key, domain, message, &mut rng)
     }
 }
@@ -404,16 +413,22 @@ fn fn_dsa_keygen(
     seed: &[u8; 32],
 ) -> (
     [u8; FN_DSA_1024_PUBLIC_KEY_LENGTH],
-    Zeroizing<[u8; FN_DSA_1024_SECRET_KEY_LENGTH]>,
+    HeapSecret<FN_DSA_1024_SECRET_KEY_LENGTH>,
 ) {
-    use rand::SeedableRng as _;
-    // ChaCha20 by name, so the derivation does not move with `rand`'s
-    // default generator.
-    let mut rng = rand_chacha::ChaCha20Rng::from_seed(*seed);
+    // The stream every seeded key in this crate is generated from, wiped
+    // when this function returns.
+    let mut rng = SeededRng::from_seed(seed);
     let mut generator = KeyPairGenerator1024::default();
-    let mut secret = Zeroizing::new([0u8; FN_DSA_1024_SECRET_KEY_LENGTH]);
+    // Allocated at its final address and written there: the secret key is
+    // never an array on this stack.
+    let mut secret = HeapSecret::<FN_DSA_1024_SECRET_KEY_LENGTH>::zeroed();
     let mut public = [0u8; FN_DSA_1024_PUBLIC_KEY_LENGTH];
-    generator.keygen(FN_DSA_LOGN_1024, &mut rng, secret.as_mut(), &mut public);
+    generator.keygen(
+        FN_DSA_LOGN_1024,
+        &mut rng,
+        secret.as_mut_slice(),
+        &mut public,
+    );
     (public, secret)
 }
 
@@ -450,6 +465,35 @@ fn fn_dsa_sign(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Moving a secret key moves two pointers and no key byte: an inline
+    /// array would leave an unwiped copy behind at every move.
+    #[test]
+    fn a_secret_key_holds_neither_half_inline() {
+        assert_eq!(
+            std::mem::size_of::<FnDsaHybridSecretKey>(),
+            2 * std::mem::size_of::<usize>(),
+            "both halves of the secret key must stay on the heap"
+        );
+    }
+
+    /// The Ed25519 half is the seed the caller passed, as RFC 8032 has it:
+    /// copying it from the borrow must give the key `SigningKey` would.
+    #[test]
+    fn the_ed25519_half_is_the_seed() {
+        let seed = [0x1d; 32];
+        let (public, secret) = HybridEd25519FnDsa::keypair_from_seeds(&seed, &[2; 32]).unwrap();
+        assert_eq!(
+            *secret.ed25519,
+            Ed25519SigningKey::from_bytes(&seed).to_bytes()
+        );
+        assert_eq!(
+            public.ed25519,
+            Ed25519SigningKey::from_bytes(&secret.ed25519)
+                .verifying_key()
+                .to_bytes()
+        );
+    }
     use crate::error::PqcVerifyError;
     use crate::signature::{verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_CARRIER};
 

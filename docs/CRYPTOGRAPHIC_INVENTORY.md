@@ -35,7 +35,7 @@ transcribed and **re-verified at source 2026-08-14** (crate manifests +
 | ML-KEM-768 | `fips203 =0.4.3` (**exact**) | Output encryption / address `ek` (hybrid KEM with X25519) | No external audit. Exact-pinned: the crate's internal `DummyRng { fill_bytes = unimplemented!() }` pattern makes silent minor-version drift a panic hazard (rationale at the pin) |
 | ML-DSA-65 | `fips204 =0.4.6` (**exact**) | PQ half of `HybridEd25519MlDsa` (all six §2 surfaces); per-persona archival signing key | No external audit. Same exact-pin rationale |
 | SLH-DSA-192s | `fips205 =0.4.1` (**exact**) | Wallet message signing (SM round; the last Module-LWE/SIS-**uncorrelated** signature surface) and the ratified address-v2 48-byte pk field | No external audit; **ACVP cross-check KATs vendored in our own `test_vectors/`** (NIST ACVP-Server `a7f283cdc`), which forecloses the unfixable nonconforming-keygen branch |
-| FN-DSA-1024 | `fn-dsa =0.4.0` with `fn-dsa-comm`, `-kgen`, `-sign`, `-vrfy` (**exact**, all five) | PQ half of `HybridEd25519FnDsa` (hybrid scheme 3). **No caller yet**: the serve-credit receipt and the witness's carrier signature move onto it in later changes | No external audit. **Pre-standard**: FIPS 206 is not final, and a genesis-tagged build on a pre-1.0 crate is refused (`check_fn_dsa_genesis_gate.py`). Dependency record: [`design/FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md) §2 |
+| FN-DSA-1024 | `fn-dsa =0.4.0` with `fn-dsa-comm`, `-kgen`, `-sign`, `-vrfy` (**exact**, all five) | PQ half of `HybridEd25519FnDsa` (hybrid scheme 3). Each archival persona derives a receipt key under it (`ArchivalPKeys::receipt_sign_pk`). **Nothing signs with it yet**: the serve-credit receipt and the witness's carrier signature move onto it in later changes | No external audit. **Pre-standard**: FIPS 206 is not final, and a genesis-tagged build on a pre-1.0 crate is refused (`check_fn_dsa_genesis_gate.py`). Dependency record: [`design/FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md) §2 |
 | Ed25519 | `ed25519-dalek 2.2.0` / `curve25519-dalek` | Classical half of every hybrid signature; the **house Schnorr** (`crate::schnorr`, raw spend scalar — dalek `SigningKey` structurally cannot sign for it) for reserve proofs and the message-signing outer half | RustCrypto/dalek lineage (community-audited upstream); house Schnorr is ours, hedged-nonce |
 | cSHAKE256 | `sha3 0.10` | Every domain-separated derivation/preimage (mechanism 1 of §3; 43 domains) | RustCrypto audited lineage |
 | Keccak-256 | `sha3 0.10` (`shekyl_crypto_hash::keccak256`; single implementation, empty-input KAT pins byte-identity; C ABI export keeps the `shekyl_cn_fast_hash` name) | Consensus content identity (txid / block / leaf / fingerprint) — **identity, never separation** (`keccak=identity, cSHAKE=separation`) | Same |
@@ -68,6 +68,17 @@ fail-safe policy as an adapter, and the crate itself mixes the signing key
 and the message into every draw. A fresh scheme-3 key takes its seeds from
 `key_material32`, which is fail-loud. The seeded entries that pin vectors
 and benches are behind `test-utils`.
+
+**Seeded key generation has one stream (2026-10-10).** A key that must come
+back from the wallet seed is generated from `seeded_rng::SeededRng`, a
+ChaCha20 stream over 32 seed bytes: ML-DSA-65 per-output and persona keys,
+the ML-KEM-768 address key, the FN-DSA-1024 receipt key. It is the stream
+`rand_chacha::ChaCha20Rng::from_seed` gives, which those keys were frozen
+on, from a generator that wipes its key and its buffered output on drop. It
+is deterministic by construction and is not an entropy source; the verdict
+above, that no deterministic seed is reachable from a path that should draw
+fresh randomness, is unchanged, because its only production callers are the
+three re-derivations.
 
 F-1..F-8 dispositions all landed in PR-SA-1 (F-7's test-keygen gating rode
 PR-SA-2 with the trait rewrite, as recorded); the per-finding table stays in
@@ -135,6 +146,9 @@ cSHAKE); the total was unchanged (one domain recategorized, not added). The
 message-signing identity — the seventh archival-P per-slot label, forced
 by the fork-(ii) address layout making `msg_sign_pk` a mandatory field of
 every address (persona receive addresses included, for uniformity). The
+2026-10-10 refresh adds two more: `shekyl-archival-p-receipt-ed25519-v1` and
+`shekyl-archival-p-receipt-fn-dsa-1024-v1`, the seeds of the persona's
+receipt key (hybrid scheme 3), the eighth and ninth archival-P labels. The
 2026-09-10 refresh adds three mechanism-1 customizations for digest v0:
 `shekyl/chain-digest/v0`, `shekyl/chain-digest/v0/chain`,
 `shekyl/chain-digest/v0/spent-elem`. The 2026-09-13 refresh **removes** one
@@ -176,7 +190,7 @@ and that label had no production caller.
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
 | 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 43 | 0 |
-| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 39 infos | 0 |
+| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 41 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |

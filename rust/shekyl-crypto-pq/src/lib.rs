@@ -62,6 +62,7 @@ mod encrypted_output_field;
 pub mod error;
 pub mod fn_dsa_hybrid;
 pub mod handle;
+pub mod heap_secret;
 mod hybrid_combiner;
 pub mod kem;
 pub mod key_image;
@@ -76,6 +77,7 @@ pub mod output;
 pub mod output_claim;
 pub mod rng;
 pub mod schnorr;
+mod seeded_rng;
 pub mod signature;
 pub mod wallet_envelope;
 
