@@ -384,10 +384,10 @@ that is a reading of the source, not an observation of this run.
 | Processor performance, % of the 2,611 MHz base | 164 to 174 through the run, no downward drift (73 before, 110 after) | |
 | CPU temperature | not measurable | not measurable |
 | Defender | real-time protection on, Tamper Protection on | same; no scan started in the window |
-| Total CPU load | 5.3 % | 5.4 % |
+| Total CPU load | 5.2 % | 5.4 % |
 
 CPU time used over the run by the things that could have disturbed it:
-Defender 4.67 s; the search indexer 0.01 s; Nextcloud 0.06 s; Google
+Defender 3.77 s; the search indexer 0.01 s; Nextcloud 0.06 s; Google
 Drive, OneDrive and rust-analyzer none; the editor, idle, 10.5 s across
 its nineteen processes. The maintainer's exclusion of the run's directory
 from scanning is as reported; the session could not read the exclusion
@@ -399,10 +399,22 @@ own services, which reads as "Defender used nothing". The figures above
 for Defender and the indexer come from the performance counters, which
 can read them, and agree with the process query wherever both can.
 
+**Where the conditions come from.** Two files the agent wrote at 01:40:09Z
+and 01:50:29Z, and its one-minute samples. All three were relayed as text,
+rebuilt here byte for byte, and match the SHA-256 the agent took on the
+machine (`806e37e4…`, `1b1630a4…`, `9bb1755e…`), as does the run's output
+(`25a91b35…`). The samples are `laptop_samples.tsv` in the captures; its
+rows after 01:51:42Z are the sampler left running after the run, kept
+because a captured file is not trimmed. The two condition files list what
+runs on the maintainer's own workstation and are kept in the Foundation's
+private repository, not here. The figures in the table are from those
+files; an earlier version of this section quoted Defender's CPU time as
+4.67 s from a capture the agent had superseded.
+
 **Disclosed.** The rulings that shaped this run's registration reached
-this lane relayed, as the registration says. So did this run's output and
-conditions: they are the agent's report from that machine, not files this
-lane copied.
+this lane relayed, as the registration says. This run's output and
+conditions are the agent's report from that machine, checked by checksum
+as above, not files this lane copied.
 
 ### The x86 code, read
 
