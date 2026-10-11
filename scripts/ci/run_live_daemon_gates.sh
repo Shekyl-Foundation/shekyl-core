@@ -140,7 +140,7 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
 #     that fixed the daemon's hard-fork table. Same pool cost as above.
 ARMED=(
-  engine::regtest_e2e::restricted_listener_gets_stand_ins_and_caps_from_native_handlers
+  engine::regtest_e2e::origin::restricted_listener_gets_stand_ins_and_caps_from_native_handlers
   engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::native_handlers_apply_their_own_request_caps
@@ -156,8 +156,8 @@ ARMED=(
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
   engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
   engine::regtest_e2e::get_output_histogram_stays_unrouted
-  engine::regtest_e2e::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
-  engine::regtest_e2e::get_info_console_commands_answer_on_the_in_process_arm
+  engine::regtest_e2e::origin::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
+  engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
 )
 
 # Consensus gates too heavy for the per-PR lane (13 + 19 min measured; the
