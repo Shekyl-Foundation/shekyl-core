@@ -1,0 +1,300 @@
+start 2026-10-10T22:56:05Z temp 57939
+RT-P4 DIAGNOSTIC, pregenerated inputs: ML-KEM-768 decapsulation timing (fips203)
+arch=aarch64 os=linux samples_per_comparison=1000000 calibration=10000 crops=100
+pass: |t| < 4.5 on every real comparison; control: |t| > 10
+  quantile=1 class0=262055 class1=262055 diff=0
+  quantile=5 class0=262166 class1=262166 diff=0
+  quantile=10 class0=262222 class1=262222 diff=0
+  quantile=25 class0=262351 class1=262333 diff=18
+  quantile=50 class0=262592 class1=262592 diff=0
+  quantile=75 class0=269332 class1=269333 diff=-1
+  quantile=90 class0=280055 class1=280018 diff=37
+  quantile=95 class0=281462 class1=281444 diff=18
+  quantile=99 class0=284777 class1=284721 diff=56
+  crop=raw n0=499655 n1=500345 mean0=266005.0 mean1=266012.6 diff=-7.6 t=-0.52
+  crop=0 cutoff=262240 n0=52435 n1=52733 mean0=262148.4 mean1=262148.5 diff=-0.1 t=-0.19
+  crop=1 cutoff=262296 n0=89840 n1=89982 mean0=262196.4 mean1=262196.1 diff=0.3 t=0.75
+  crop=2 cutoff=262333 n0=115242 n1=115471 mean0=262221.6 mean1=262221.4 diff=0.1 t=0.41
+  crop=3 cutoff=262370 n0=141214 n1=141649 mean0=262244.6 mean1=262244.5 diff=0.0 t=0.10
+  crop=4 cutoff=262407 n0=166280 n1=166774 mean0=262265.4 mean1=262265.4 diff=0.0 t=0.09
+  crop=5 cutoff=262444 n0=188855 n1=189383 mean0=262283.7 mean1=262283.7 diff=0.0 t=0.05
+  crop=6 cutoff=262481 n0=208052 n1=208538 mean0=262299.6 mean1=262299.5 diff=0.1 t=0.27
+  crop=7 cutoff=262518 n0=223381 n1=224129 mean0=262312.7 mean1=262312.8 diff=-0.1 t=-0.28
+  crop=8 cutoff=262555 n0=235995 n1=236688 mean0=262324.2 mean1=262324.2 diff=-0.0 t=-0.04
+  crop=9 cutoff=262629 n0=255222 n1=255981 mean0=262343.6 mean1=262343.6 diff=-0.0 t=-0.04
+  crop=10 cutoff=262703 n0=270937 n1=271649 mean0=262361.7 mean1=262361.6 diff=0.1 t=0.23
+  crop=11 cutoff=262777 n0=285191 n1=285603 mean0=262380.1 mean1=262379.6 diff=0.5 t=1.13
+  crop=14 cutoff=263055 n0=321613 n1=322002 mean0=262437.9 mean1=262437.3 diff=0.6 t=1.07
+  crop=19 cutoff=269240 n0=372641 n1=373048 mean0=262705.2 mean1=262706.2 diff=-1.0 t=-0.40
+  crop=24 cutoff=270148 n0=407757 n1=408476 mean0=263312.7 mean1=263317.7 diff=-5.0 t=-1.01
+  crop=29 cutoff=270629 n0=432082 n1=432883 mean0=263709.8 mean1=263715.2 diff=-5.3 t=-0.92
+  crop=34 cutoff=280555 n0=453445 n1=454110 mean0=264198.1 mean1=264199.8 diff=-1.7 t=-0.23
+  crop=39 cutoff=281295 n0=468861 n1=469558 mean0=264750.1 mean1=264752.1 diff=-2.0 t=-0.21
+  crop=44 cutoff=281555 n0=477732 n1=478471 mean0=265059.6 mean1=265062.5 diff=-2.9 t=-0.28
+  crop=49 cutoff=281777 n0=484309 n1=484922 mean0=265284.9 mean1=265283.2 diff=1.7 t=0.16
+  crop=54 cutoff=281926 n0=487543 n1=488250 mean0=265394.7 mean1=265396.1 diff=-1.3 t=-0.12
+  crop=59 cutoff=282055 n0=489107 n1=489762 mean0=265447.8 mean1=265447.3 diff=0.5 t=0.05
+  crop=64 cutoff=282221 n0=490584 n1=491255 mean0=265498.0 mean1=265497.9 diff=0.0 t=0.00
+  crop=69 cutoff=282555 n0=492379 n1=492992 mean0=265559.5 mean1=265557.4 diff=2.1 t=0.18
+  crop=74 cutoff=283018 n0=493452 n1=494137 mean0=265596.8 mean1=265597.2 diff=-0.3 t=-0.03
+  crop=79 cutoff=284018 n0=494253 n1=494984 mean0=265625.8 mean1=265627.7 diff=-1.9 t=-0.16
+  crop=84 cutoff=285833 n0=495450 n1=496134 mean0=265672.6 mean1=265672.6 diff=-0.1 t=-0.01
+  crop=89 cutoff=286610 n0=495896 n1=496579 mean0=265691.0 mean1=265691.0 diff=0.0 t=0.00
+  crop=94 cutoff=287610 n0=496320 n1=497002 mean0=265709.3 mean1=265709.2 diff=0.1 t=0.00
+  crop=99 cutoff=290332 n0=496954 n1=497671 mean0=265738.8 mean1=265740.3 diff=-1.5 t=-0.13
+  max_at_crop=22 cutoff=269906 n0=395656 n1=396611 diff=-9.5 t=-2.22
+comparison=fixed-vs-valid max_abs_t=2.22 median_ns=262629 n0=499655 n1=500345 verdict=no-evidence
+  quantile=1 class0=262074 class1=262092 diff=-18
+  quantile=5 class0=262185 class1=262185 diff=0
+  quantile=10 class0=262240 class1=262240 diff=0
+  quantile=25 class0=262352 class1=262352 diff=0
+  quantile=50 class0=262611 class1=262611 diff=0
+  quantile=75 class0=269314 class1=269333 diff=-19
+  quantile=90 class0=279944 class1=279907 diff=37
+  quantile=95 class0=281425 class1=281425 diff=0
+  quantile=99 class0=283944 class1=283906 diff=38
+  crop=raw n0=499028 n1=500972 mean0=265983.7 mean1=265982.6 diff=1.2 t=0.08
+  crop=0 cutoff=262296 n0=77608 n1=77731 mean0=262206.5 mean1=262206.8 diff=-0.3 t=-0.81
+  crop=1 cutoff=262370 n0=129856 n1=130303 mean0=262256.0 mean1=262256.2 diff=-0.2 t=-0.68
+  crop=2 cutoff=262407 n0=155950 n1=156521 mean0=262277.3 mean1=262277.5 diff=-0.2 t=-0.63
+  crop=3 cutoff=262444 n0=179667 n1=180362 mean0=262296.0 mean1=262296.2 diff=-0.2 t=-0.55
+  crop=4 cutoff=262481 n0=200024 n1=200694 mean0=262312.2 mean1=262312.3 diff=-0.1 t=-0.25
+  crop=5 cutoff=262518 n0=216795 n1=217612 mean0=262326.1 mean1=262326.2 diff=-0.1 t=-0.44
+  crop=6 cutoff=262555 n0=230389 n1=231282 mean0=262338.0 mean1=262338.1 diff=-0.2 t=-0.47
+  crop=7 cutoff=262592 n0=241552 n1=242255 mean0=262348.4 mean1=262348.4 diff=0.1 t=0.17
+  crop=8 cutoff=262647 n0=255144 n1=255976 mean0=262362.3 mean1=262362.4 diff=-0.0 t=-0.10
+  crop=9 cutoff=262703 n0=267015 n1=267937 mean0=262375.8 mean1=262375.9 diff=-0.1 t=-0.25
+  crop=10 cutoff=262777 n0=281484 n1=282504 mean0=262394.0 mean1=262394.2 diff=-0.1 t=-0.33
+  crop=11 cutoff=262869 n0=297164 n1=298343 mean0=262416.2 mean1=262416.4 diff=-0.3 t=-0.58
+  crop=14 cutoff=263166 n0=328334 n1=329542 mean0=262470.6 mean1=262470.8 diff=-0.2 t=-0.29
+  crop=19 cutoff=269425 n0=376603 n1=377774 mean0=262797.5 mean1=262795.8 diff=1.7 t=0.60
+  crop=24 cutoff=270388 n0=419748 n1=421559 mean0=263532.5 mean1=263538.6 diff=-6.1 t=-1.13
+  crop=29 cutoff=271055 n0=440613 n1=442647 mean0=263868.0 mean1=263875.8 diff=-7.8 t=-1.29
+  crop=34 cutoff=280796 n0=456990 n1=458862 mean0=264346.9 mean1=264348.8 diff=-2.0 t=-0.25
+  crop=39 cutoff=281444 n0=474552 n1=476316 mean0=264969.2 mean1=264965.0 diff=4.3 t=0.43
+  crop=44 cutoff=281740 n0=483939 n1=485796 mean0=265291.4 mean1=265289.2 diff=2.2 t=0.20
+  crop=49 cutoff=281962 n0=488394 n1=490195 mean0=265442.2 mean1=265437.6 diff=4.6 t=0.41
+  crop=54 cutoff=282129 n0=490129 n1=491983 mean0=265501.0 mean1=265497.9 diff=3.0 t=0.27
+  crop=59 cutoff=282388 n0=491692 n1=493568 mean0=265554.2 mean1=265551.7 diff=2.5 t=0.22
+  crop=64 cutoff=282870 n0=493089 n1=495011 mean0=265602.4 mean1=265601.3 diff=1.1 t=0.09
+  crop=69 cutoff=284222 n0=494162 n1=496114 mean0=265641.0 mean1=265640.9 diff=0.1 t=0.01
+  crop=74 cutoff=286981 n0=495709 n1=497685 mean0=265703.1 mean1=265703.7 diff=-0.6 t=-0.05
+  crop=79 cutoff=288407 n0=496146 n1=498115 mean0=265722.4 mean1=265722.6 diff=-0.2 t=-0.02
+  crop=84 cutoff=294259 n0=497142 n1=499072 mean0=265773.3 mean1=265771.1 diff=2.2 t=0.18
+  crop=89 cutoff=300314 n0=497675 n1=499560 mean0=265806.8 mean1=265801.5 diff=5.2 t=0.43
+  crop=94 cutoff=308814 n0=498047 n1=499940 mean0=265835.3 mean1=265830.6 diff=4.7 t=0.37
+  crop=99 cutoff=322425 n0=498354 n1=500277 mean0=265865.5 mean1=265863.6 diff=1.8 t=0.14
+  max_at_crop=27 cutoff=270703 n0=434214 n1=436276 diff=-8.9 t=-1.51
+comparison=fixed-vs-invalid max_abs_t=1.51 median_ns=262703 n0=499028 n1=500972 verdict=no-evidence
+  quantile=1 class0=262073 class1=262073 diff=0
+  quantile=5 class0=262166 class1=262166 diff=0
+  quantile=10 class0=262240 class1=262240 diff=0
+  quantile=25 class0=262351 class1=262351 diff=0
+  quantile=50 class0=262592 class1=262592 diff=0
+  quantile=75 class0=269278 class1=269314 diff=-36
+  quantile=90 class0=279944 class1=279944 diff=0
+  quantile=95 class0=281425 class1=281425 diff=0
+  quantile=99 class0=283240 class1=283370 diff=-130
+  crop=raw n0=499867 n1=500133 mean0=265963.8 mean1=265974.8 diff=-11.0 t=-0.76
+  crop=0 cutoff=262352 n0=133486 n1=133603 mean0=262244.1 mean1=262244.0 diff=0.1 t=0.17
+  crop=1 cutoff=262425 n0=175105 n1=175243 mean0=262277.5 mean1=262277.4 diff=0.1 t=0.25
+  crop=2 cutoff=262463 n0=202860 n1=202660 mean0=262299.8 mean1=262299.5 diff=0.3 t=0.99
+  crop=3 cutoff=262500 n0=219586 n1=219111 mean0=262313.7 mean1=262313.2 diff=0.5 t=1.49
+  crop=4 cutoff=262537 n0=233010 n1=232462 mean0=262325.5 mean1=262325.0 diff=0.5 t=1.44
+  crop=5 cutoff=262574 n0=243907 n1=243251 mean0=262335.7 mean1=262335.2 diff=0.6 t=1.57
+  crop=6 cutoff=262611 n0=253035 n1=252540 mean0=262345.0 mean1=262344.6 diff=0.4 t=0.97
+  crop=7 cutoff=262648 n0=261277 n1=260868 mean0=262353.9 mean1=262353.6 diff=0.2 t=0.63
+  crop=8 cutoff=262703 n0=271125 n1=270738 mean0=262365.3 mean1=262365.1 diff=0.2 t=0.48
+  crop=9 cutoff=262759 n0=283149 n1=282874 mean0=262380.6 mean1=262380.6 diff=0.0 t=0.07
+  crop=10 cutoff=262833 n0=295839 n1=295641 mean0=262398.2 mean1=262398.3 diff=-0.1 t=-0.15
+  crop=11 cutoff=262925 n0=308467 n1=308245 mean0=262417.5 mean1=262417.6 diff=-0.1 t=-0.15
+  crop=14 cutoff=263221 n0=334827 n1=334319 mean0=262467.2 mean1=262466.8 diff=0.4 t=0.63
+  crop=19 cutoff=269333 n0=375865 n1=375406 mean0=262749.9 mean1=262753.2 diff=-3.2 t=-1.22
+  crop=24 cutoff=270314 n0=417701 n1=417948 mean0=263463.7 mean1=263478.7 diff=-15.0 t=-2.84
+  crop=29 cutoff=270851 n0=438830 n1=439098 mean0=263803.2 mean1=263817.7 diff=-14.5 t=-2.43
+  crop=34 cutoff=280777 n0=457212 n1=457474 mean0=264304.9 mean1=264318.2 diff=-13.3 t=-1.68
+  crop=39 cutoff=281444 n0=475218 n1=475627 mean0=264943.6 mean1=264961.1 diff=-17.5 t=-1.74
+  crop=44 cutoff=281703 n0=483828 n1=484162 mean0=265239.3 mean1=265253.7 diff=-14.4 t=-1.33
+  crop=49 cutoff=281888 n0=488343 n1=488606 mean0=265392.2 mean1=265404.0 diff=-11.8 t=-1.05
+  crop=54 cutoff=282055 n0=490662 n1=490928 mean0=265470.5 mean1=265482.3 diff=-11.8 t=-1.03
+  crop=59 cutoff=282240 n0=492112 n1=492379 mean0=265519.6 mean1=265531.4 diff=-11.8 t=-1.02
+  crop=64 cutoff=282462 n0=493163 n1=493417 mean0=265555.4 mean1=265566.7 diff=-11.3 t=-0.97
+  crop=69 cutoff=282796 n0=494222 n1=494395 mean0=265592.0 mean1=265600.4 diff=-8.4 t=-0.72
+  crop=74 cutoff=283370 n0=494979 n1=495126 mean0=265618.6 mean1=265626.2 diff=-7.5 t=-0.64
+  crop=79 cutoff=286037 n0=496390 n1=496598 mean0=265672.9 mean1=265683.0 diff=-10.0 t=-0.85
+  crop=84 cutoff=286759 n0=496748 n1=496973 mean0=265687.8 mean1=265698.6 diff=-10.7 t=-0.90
+  crop=89 cutoff=288055 n0=497111 n1=497401 mean0=265703.6 mean1=265717.2 diff=-13.5 t=-1.13
+  crop=94 cutoff=292629 n0=497909 n1=498118 mean0=265742.6 mean1=265752.3 diff=-9.7 t=-0.80
+  crop=99 cutoff=296036 n0=498227 n1=498495 mean0=265760.8 mean1=265773.8 diff=-13.0 t=-1.07
+  max_at_crop=24 cutoff=270314 n0=417701 n1=417948 diff=-15.0 t=-2.84
+comparison=fixed-vs-bitflip max_abs_t=2.84 median_ns=262759 n0=499867 n1=500133 verdict=no-evidence
+  quantile=1 class0=262074 class1=262074 diff=0
+  quantile=5 class0=262185 class1=262185 diff=0
+  quantile=10 class0=262240 class1=262240 diff=0
+  quantile=25 class0=262369 class1=262369 diff=0
+  quantile=50 class0=262629 class1=262629 diff=0
+  quantile=75 class0=269296 class1=269314 diff=-18
+  quantile=90 class0=279907 class1=280000 diff=-93
+  quantile=95 class0=281444 class1=281444 diff=0
+  quantile=99 class0=283999 class1=284073 diff=-74
+  crop=raw n0=500804 n1=499196 mean0=266002.0 mean1=266007.1 diff=-5.1 t=-0.35
+  crop=0 cutoff=262258 n0=51476 n1=51240 mean0=262171.5 mean1=262171.4 diff=0.1 t=0.28
+  crop=1 cutoff=262314 n0=84676 n1=84046 mean0=262213.3 mean1=262213.1 diff=0.2 t=0.54
+  crop=2 cutoff=262351 n0=110009 n1=109459 mean0=262238.7 mean1=262238.8 diff=-0.0 t=-0.14
+  crop=3 cutoff=262388 n0=136462 n1=135347 mean0=262262.3 mean1=262262.1 diff=0.3 t=0.81
+  crop=4 cutoff=262407 n0=151676 n1=150286 mean0=262275.2 mean1=262274.9 diff=0.4 t=1.10
+  crop=5 cutoff=262444 n0=174982 n1=173571 mean0=262294.4 mean1=262294.2 diff=0.2 t=0.54
+  crop=6 cutoff=262481 n0=195122 n1=194170 mean0=262310.9 mean1=262311.2 diff=-0.3 t=-0.88
+  crop=7 cutoff=262518 n0=212416 n1=211385 mean0=262325.6 mean1=262325.9 diff=-0.3 t=-0.87
+  crop=8 cutoff=262555 n0=226747 n1=225812 mean0=262338.4 mean1=262338.8 diff=-0.4 t=-1.16
+  crop=9 cutoff=262629 n0=249233 n1=247969 mean0=262360.3 mean1=262360.4 diff=-0.2 t=-0.42
+  crop=10 cutoff=262704 n0=270334 n1=268933 mean0=262383.9 mean1=262384.1 diff=-0.1 t=-0.28
+  crop=11 cutoff=262795 n0=285408 n1=283813 mean0=262403.1 mean1=262403.1 diff=0.0 t=0.04
+  crop=14 cutoff=263092 n0=323609 n1=322390 mean0=262463.5 mean1=262464.4 diff=-0.9 t=-1.55
+  crop=19 cutoff=269240 n0=374172 n1=372376 mean0=262735.0 mean1=262731.7 diff=3.4 t=1.39
+  crop=24 cutoff=270185 n0=412063 n1=410478 mean0=263382.5 mean1=263385.5 diff=-3.0 t=-0.59
+  crop=29 cutoff=270777 n0=438034 n1=436341 mean0=263800.6 mean1=263803.3 diff=-2.8 t=-0.47
+  crop=34 cutoff=280610 n0=455888 n1=454116 mean0=264244.5 mean1=264248.1 diff=-3.6 t=-0.48
+  crop=39 cutoff=281240 n0=468673 n1=466954 mean0=264700.9 mean1=264708.0 diff=-7.1 t=-0.77
+  crop=44 cutoff=281536 n0=478660 n1=477138 mean0=265048.8 mean1=265063.8 diff=-14.9 t=-1.45
+  crop=49 cutoff=281740 n0=484966 n1=483227 mean0=265264.4 mean1=265272.5 diff=-8.1 t=-0.75
+  crop=54 cutoff=281907 n0=488819 n1=487063 mean0=265394.8 mean1=265402.7 diff=-7.9 t=-0.71
+  crop=59 cutoff=282074 n0=491249 n1=489481 mean0=265476.9 mean1=265484.6 diff=-7.8 t=-0.68
+  crop=64 cutoff=282295 n0=492913 n1=491167 mean0=265533.2 mean1=265541.9 diff=-8.7 t=-0.76
+  crop=69 cutoff=282592 n0=494179 n1=492506 mean0=265576.5 mean1=265587.8 diff=-11.3 t=-0.98
+  crop=74 cutoff=283055 n0=495115 n1=493490 mean0=265609.0 mean1=265622.1 diff=-13.0 t=-1.12
+  crop=79 cutoff=284240 n0=495890 n1=494268 mean0=265637.0 mean1=265650.2 diff=-13.2 t=-1.13
+  crop=84 cutoff=285666 n0=496716 n1=495104 mean0=265669.2 mean1=265682.9 diff=-13.7 t=-1.16
+  crop=89 cutoff=286944 n0=497415 n1=495863 mean0=265698.1 mean1=265714.4 diff=-16.2 t=-1.36
+  crop=94 cutoff=287296 n0=497540 n1=496021 mean0=265703.5 mean1=265721.2 diff=-17.7 t=-1.48
+  crop=99 cutoff=290406 n0=498264 n1=496714 mean0=265737.0 mean1=265753.2 diff=-16.2 t=-1.35
+  max_at_crop=14 cutoff=263092 n0=323609 n1=322390 diff=-0.9 t=-1.55
+comparison=valid-vs-invalid max_abs_t=1.55 median_ns=262629 n0=500804 n1=499196 verdict=no-evidence
+  quantile=1 class0=262073 class1=262073 diff=0
+  quantile=5 class0=262184 class1=262184 diff=0
+  quantile=10 class0=262240 class1=262240 diff=0
+  quantile=25 class0=262351 class1=262351 diff=0
+  quantile=50 class0=262610 class1=262592 diff=18
+  quantile=75 class0=269296 class1=269295 diff=1
+  quantile=90 class0=279981 class1=279925 diff=56
+  quantile=95 class0=281406 class1=281388 diff=18
+  quantile=99 class0=283963 class1=283796 diff=167
+  crop=raw n0=500413 n1=499587 mean0=265969.6 mean1=265968.9 diff=0.6 t=0.04
+  crop=0 cutoff=262203 n0=30583 n1=30337 mean0=262125.3 mean1=262126.4 diff=-1.1 t=-2.37
+  crop=1 cutoff=262259 n0=60477 n1=59989 mean0=262175.8 mean1=262176.4 diff=-0.6 t=-1.46
+  crop=2 cutoff=262314 n0=92266 n1=91886 mean0=262211.8 mean1=262212.5 diff=-0.6 t=-1.87
+  crop=3 cutoff=262351 n0=119187 n1=119098 mean0=262237.1 mean1=262237.9 diff=-0.8 t=-2.39
+  crop=4 cutoff=262388 n0=146372 n1=146388 mean0=262260.0 mean1=262260.8 diff=-0.8 t=-2.36
+  crop=5 cutoff=262425 n0=172090 n1=171918 mean0=262280.5 mean1=262281.0 diff=-0.5 t=-1.54
+  crop=6 cutoff=262462 n0=194555 n1=194351 mean0=262298.3 mean1=262298.7 diff=-0.4 t=-1.31
+  crop=7 cutoff=262499 n0=212988 n1=212979 mean0=262313.2 mean1=262313.8 diff=-0.5 t=-1.63
+  crop=8 cutoff=262537 n0=231344 n1=231432 mean0=262329.1 mean1=262329.7 diff=-0.6 t=-1.69
+  crop=9 cutoff=262610 n0=249976 n1=250177 mean0=262346.8 mean1=262347.5 diff=-0.6 t=-1.76
+  crop=10 cutoff=262666 n0=263202 n1=263104 mean0=262361.0 mean1=262361.3 diff=-0.3 t=-0.77
+  crop=11 cutoff=262758 n0=282372 n1=282512 mean0=262384.2 mean1=262384.7 diff=-0.6 t=-1.32
+  crop=14 cutoff=263037 n0=322505 n1=322233 mean0=262445.1 mean1=262445.1 diff=0.0 t=0.05
+  crop=19 cutoff=269203 n0=373055 n1=372604 mean0=262702.4 mean1=262702.5 diff=-0.1 t=-0.04
+  crop=24 cutoff=270166 n0=411526 n1=410880 mean0=263361.2 mean1=263359.1 diff=2.1 t=0.41
+  crop=29 cutoff=270666 n0=436222 n1=435708 mean0=263758.5 mean1=263759.0 diff=-0.5 t=-0.08
+  crop=34 cutoff=280629 n0=455443 n1=454860 mean0=264226.4 mean1=264227.0 diff=-0.6 t=-0.08
+  crop=39 cutoff=281203 n0=467824 n1=467315 mean0=264669.2 mean1=264672.8 diff=-3.6 t=-0.39
+  crop=44 cutoff=281444 n0=476842 n1=476389 mean0=264984.0 mean1=264989.8 diff=-5.8 t=-0.57
+  crop=49 cutoff=281648 n0=483850 n1=483298 mean0=265223.8 mean1=265226.4 diff=-2.6 t=-0.24
+  crop=54 cutoff=281833 n0=488217 n1=487514 mean0=265371.5 mean1=265369.1 diff=2.3 t=0.21
+  crop=59 cutoff=282037 n0=491054 n1=490275 mean0=265467.1 mean1=265462.3 diff=4.7 t=0.42
+  crop=64 cutoff=282333 n0=492988 n1=492188 mean0=265532.6 mean1=265527.3 diff=5.3 t=0.46
+  crop=69 cutoff=282759 n0=494338 n1=493587 mean0=265579.0 mean1=265575.4 diff=3.6 t=0.31
+  crop=74 cutoff=283629 n0=495244 n1=494498 mean0=265611.0 mean1=265607.7 diff=3.4 t=0.29
+  crop=79 cutoff=285796 n0=496450 n1=495754 mean0=265657.6 mean1=265656.3 diff=1.4 t=0.11
+  crop=84 cutoff=286407 n0=496854 n1=496117 mean0=265674.3 mean1=265671.2 diff=3.0 t=0.25
+  crop=89 cutoff=288611 n0=497605 n1=496810 mean0=265706.9 mean1=265701.5 diff=5.4 t=0.45
+  crop=94 cutoff=290518 n0=497979 n1=497172 mean0=265724.8 mean1=265718.9 diff=5.9 t=0.49
+  crop=99 cutoff=294370 n0=498542 n1=497722 mean0=265754.7 mean1=265748.2 diff=6.5 t=0.53
+  max_at_crop=3 cutoff=262351 n0=119187 n1=119098 diff=-0.8 t=-2.39
+comparison=invalid-vs-invalid max_abs_t=2.39 median_ns=262610 n0=500413 n1=499587 verdict=no-evidence
+  quantile=1 class0=262073 class1=262073 diff=0
+  quantile=5 class0=262166 class1=262166 diff=0
+  quantile=10 class0=262240 class1=262240 diff=0
+  quantile=25 class0=262351 class1=262351 diff=0
+  quantile=50 class0=262592 class1=262592 diff=0
+  quantile=75 class0=269296 class1=269277 diff=19
+  quantile=90 class0=280074 class1=280018 diff=56
+  quantile=95 class0=281425 class1=281425 diff=0
+  quantile=99 class0=283332 class1=283481 diff=-149
+  crop=raw n0=500150 n1=499850 mean0=265972.4 mean1=265964.6 diff=7.8 t=0.54
+  crop=0 cutoff=262240 n0=49369 n1=49399 mean0=262154.6 mean1=262154.4 diff=0.2 t=0.51
+  crop=1 cutoff=262314 n0=95397 n1=95236 mean0=262210.2 mean1=262209.9 diff=0.2 t=0.72
+  crop=2 cutoff=262351 n0=122182 n1=122236 mean0=262235.0 mean1=262235.0 diff=-0.0 t=-0.01
+  crop=3 cutoff=262388 n0=148928 n1=149350 mean0=262257.5 mean1=262257.8 diff=-0.3 t=-0.78
+  crop=4 cutoff=262425 n0=173871 n1=174237 mean0=262277.6 mean1=262277.7 diff=-0.1 t=-0.42
+  crop=5 cutoff=262444 n0=186945 n1=187269 mean0=262288.1 mean1=262288.1 diff=-0.1 t=-0.21
+  crop=6 cutoff=262499 n0=214131 n1=213871 mean0=262310.2 mean1=262309.8 diff=0.4 t=1.22
+  crop=7 cutoff=262536 n0=228663 n1=228685 mean0=262322.8 mean1=262322.6 diff=0.1 t=0.40
+  crop=8 cutoff=262592 n0=246070 n1=245881 mean0=262339.1 mean1=262338.8 diff=0.3 t=0.88
+  crop=9 cutoff=262630 n0=259794 n1=259235 mean0=262353.4 mean1=262352.7 diff=0.7 t=1.73
+  crop=10 cutoff=262721 n0=275655 n1=275162 mean0=262371.9 mean1=262371.4 diff=0.5 t=1.21
+  crop=11 cutoff=262795 n0=289996 n1=289342 mean0=262390.5 mean1=262389.9 diff=0.6 t=1.43
+  crop=14 cutoff=263074 n0=325705 n1=325503 mean0=262447.5 mean1=262447.7 diff=-0.2 t=-0.29
+  crop=19 cutoff=269277 n0=374362 n1=374541 mean0=262725.6 mean1=262729.0 diff=-3.4 t=-1.33
+  crop=24 cutoff=270166 n0=410638 n1=410868 mean0=263348.0 mean1=263351.4 diff=-3.4 t=-0.68
+  crop=29 cutoff=270648 n0=435141 n1=435288 mean0=263743.8 mean1=263745.5 diff=-1.7 t=-0.29
+  crop=34 cutoff=280666 n0=455359 n1=455318 mean0=264239.6 mean1=264238.0 diff=1.6 t=0.21
+  crop=39 cutoff=281351 n0=471965 n1=471847 mean0=264831.6 mean1=264827.4 diff=4.1 t=0.43
+  crop=44 cutoff=281592 n0=481116 n1=480988 mean0=265147.9 mean1=265143.6 diff=4.3 t=0.41
+  crop=49 cutoff=281740 n0=485683 n1=485402 mean0=265303.1 mean1=265293.7 diff=9.4 t=0.85
+  crop=54 cutoff=281907 n0=489241 n1=488981 mean0=265423.1 mean1=265414.6 diff=8.6 t=0.76
+  crop=59 cutoff=282092 n0=491443 n1=491103 mean0=265497.3 mean1=265486.2 diff=11.2 t=0.98
+  crop=64 cutoff=282370 n0=493206 n1=492824 mean0=265557.1 mean1=265544.6 diff=12.5 t=1.08
+  crop=69 cutoff=282851 n0=494595 n1=494203 mean0=265604.8 mean1=265592.0 diff=12.8 t=1.10
+  crop=74 cutoff=283426 n0=495205 n1=494816 mean0=265626.4 mean1=265613.7 diff=12.7 t=1.08
+  crop=79 cutoff=285259 n0=496071 n1=495680 mean0=265659.1 mean1=265646.4 diff=12.7 t=1.07
+  crop=84 cutoff=286851 n0=496940 n1=496615 mean0=265694.7 mean1=265684.7 diff=9.9 t=0.83
+  crop=89 cutoff=287962 n0=497331 n1=496976 mean0=265711.7 mean1=265700.5 diff=11.2 t=0.94
+  crop=94 cutoff=291518 n0=497933 n1=497650 mean0=265740.6 mean1=265732.8 diff=7.8 t=0.65
+  crop=99 cutoff=294018 n0=498261 n1=497995 mean0=265758.4 mean1=265751.6 diff=6.9 t=0.57
+  max_at_crop=20 cutoff=269592 n0=383105 n1=383566 diff=-8.1 t=-2.39
+comparison=valid-vs-valid max_abs_t=2.39 median_ns=262630 n0=500150 n1=499850 verdict=no-evidence
+  quantile=1 class0=262055 class1=263314 diff=-1259
+  quantile=5 class0=262166 class1=263426 diff=-1260
+  quantile=10 class0=262240 class1=263500 diff=-1260
+  quantile=25 class0=262370 class1=263629 diff=-1259
+  quantile=50 class0=262629 class1=263888 diff=-1259
+  quantile=75 class0=269332 class1=270629 diff=-1297
+  quantile=90 class0=280018 class1=281406 diff=-1388
+  quantile=95 class0=281481 class1=282740 diff=-1259
+  quantile=99 class0=283611 class1=284943 diff=-1332
+  crop=raw n0=499228 n1=500772 mean0=265983.6 mean1=267279.1 diff=-1295.5 t=-89.34
+  crop=0 cutoff=262351 n0=108054 n1=0 mean0=262228.3 mean1=0.0 diff=262228.3 t=0.00 (not counted)
+  crop=1 cutoff=262444 n0=170942 n1=0 mean0=262287.6 mean1=0.0 diff=262287.6 t=0.00 (not counted)
+  crop=2 cutoff=262537 n0=221945 n1=0 mean0=262332.7 mean1=0.0 diff=262332.7 t=0.00 (not counted)
+  crop=3 cutoff=262666 n0=257851 n1=0 mean0=262368.8 mean1=0.0 diff=262368.8 t=0.00 (not counted)
+  crop=4 cutoff=262907 n0=303403 n1=0 mean0=262429.0 mean1=0.0 diff=262429.0 t=0.00 (not counted)
+  crop=5 cutoff=263333 n0=340021 n1=6341 mean0=262499.1 mean1=263272.7 diff=-773.6 t=-975.54 (not counted)
+  crop=6 cutoff=263555 n0=349289 n1=72617 mean0=262523.9 mean1=263449.4 diff=-925.5 t=-1527.91
+  crop=7 cutoff=263629 n0=351705 n1=118383 mean0=262531.1 mean1=263501.5 diff=-970.3 t=-1596.98
+  crop=8 cutoff=263684 n0=353321 n1=155857 mean0=262536.2 mean1=263536.6 diff=-1000.3 t=-1626.54
+  crop=9 cutoff=263722 n0=354444 n1=183213 mean0=262539.9 mean1=263560.6 diff=-1020.7 t=-1638.06
+  crop=10 cutoff=263777 n0=355492 n1=208961 mean0=262543.5 mean1=263583.0 diff=-1039.5 t=-1643.04
+  crop=11 cutoff=263833 n0=356621 n1=233190 mean0=262547.4 mean1=263605.2 diff=-1057.8 t=-1637.67
+  crop=14 cutoff=264129 n0=360203 n1=297193 mean0=262561.5 mean1=263681.1 diff=-1119.6 t=-1563.11
+  crop=19 cutoff=269647 n0=383556 n1=364952 mean0=262915.2 mean1=263855.3 diff=-940.1 t=-366.92
+  crop=24 cutoff=270925 n0=439717 n1=384514 mean0=263845.8 mean1=264194.6 diff=-348.9 t=-70.97
+  crop=29 cutoff=271722 n0=444787 n1=427173 mean0=263929.2 mean1=264907.7 diff=-978.5 t=-166.14
+  crop=34 cutoff=281092 n0=461640 n1=449300 mean0=264501.4 mean1=265304.3 diff=-802.8 t=-105.09
+  crop=39 cutoff=281814 n0=484962 n1=453681 mean0=265316.4 mean1=265460.7 diff=-144.4 t=-15.47
+  crop=44 cutoff=282426 n0=492159 n1=464628 mean0=265560.7 mean1=265854.2 diff=-293.5 t=-28.49
+  crop=49 cutoff=282777 n0=493276 n1=476535 mean0=265599.2 mean1=266272.7 diff=-673.5 t=-61.59
+  crop=54 cutoff=282999 n0=493648 n1=484211 mean0=265612.3 mean1=266535.9 diff=-923.7 t=-81.91
+  crop=59 cutoff=283203 n0=493898 n1=489080 mean0=265621.1 mean1=266700.7 diff=-1079.6 t=-94.05
+  crop=64 cutoff=283388 n0=494056 n1=491517 mean0=265626.7 mean1=266782.9 diff=-1156.1 t=-99.85
+  crop=69 cutoff=283814 n0=494346 n1=494073 mean0=265637.3 mean1=266869.6 diff=-1232.4 t=-105.44
+  crop=74 cutoff=285203 n0=494991 n1=495888 mean0=265661.9 mean1=266933.3 diff=-1271.4 t=-107.80
+  crop=79 cutoff=286444 n0=495762 n1=496461 mean0=265693.2 mean1=266955.1 diff=-1261.8 t=-106.33
+  crop=84 cutoff=287740 n0=496257 n1=497241 mean0=265714.5 mean1=266986.7 diff=-1272.1 t=-106.51
+  crop=89 cutoff=289055 n0=496539 n1=497756 mean0=265727.4 mean1=267008.7 diff=-1281.3 t=-106.79
+  crop=94 cutoff=291444 n0=496962 n1=498281 mean0=265748.2 mean1=267033.1 diff=-1284.9 t=-106.40
+  crop=99 cutoff=294018 n0=497340 n1=498683 mean0=265768.7 mean1=267053.8 diff=-1285.2 t=-105.72
+  max_at_crop=10 cutoff=263777 n0=355492 n1=208961 diff=-1039.5 t=-1643.04
+control=planted-leak fraction=0.005 planted_ns=1313 max_abs_t=1643.04 verdict=detected
+result=PASS worst_real_abs_t=2.84 control_abs_t=1643.04
+rc=0 end 2026-10-10T23:35:00Z temp 58426

@@ -113,9 +113,9 @@ while IFS=$'\x1f' read -r mech literal file const status _key _notes || [[ -n "$
   # Well-formed mechanism id (reject typos like "55" that would create a silent
   # collision bucket in the distinctness test).
   case "$mech" in
-    1|2|3|4|5|6|x) ;;
+    1|2|3|4|5|6|7|x) ;;
     *)
-      echo "BAD MECH ID: '$mech' (literal b\"$literal\") — expected 1..6 or x" >&2
+      echo "BAD MECH ID: '$mech' (literal b\"$literal\") — expected 1..7 or x" >&2
       fail=1
       continue
       ;;
@@ -310,7 +310,11 @@ count_pattern() {
 # are byte strings fed to the existing nested combiner's one cSHAKE site
 # (hybrid_combiner.rs `preimage`). Neither has a signer yet, and neither
 # adds a call site.
-MECH1_EXPECTED=69
+# RT-W8: +2 (69 -> 71): `rendezvous_name` (shekyl/rpc-rendezvous-name-v1)
+# and `static_fingerprint` (shekyl/rpc-static-fingerprint-v1) in
+# shekyl-rpc-channel. Its tests call both through those functions and add
+# no site.
+MECH1_EXPECTED=71
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

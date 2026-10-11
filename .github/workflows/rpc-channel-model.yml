@@ -1,0 +1,64 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# RT-P7: the ProVerif model of the RPC channel's handshake
+# (docs/design/RPC_CHANNEL.md section 4.1; RT-O15).
+#
+# The model and its expected verdicts live in
+# rust/shekyl-rpc-channel/model/run.py. This job installs the one ProVerif
+# version those verdicts are pinned to, by the same script a developer runs
+# (install_proverif.sh beside it), and runs every variant. It fails if a
+# property the design claims does not hold, and equally if a deliberately
+# broken variant passes.
+#
+# It runs only when the model or this file changes. The model is symbolic
+# and does not read Rust code, so a code change cannot move its verdicts;
+# running it on every pull request would spend the better part of an hour
+# re-proving the same thing.
+
+name: ci/rpc-channel-model
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "rust/shekyl-rpc-channel/model/**"
+      - ".github/workflows/rpc-channel-model.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: rpc-channel-model-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    name: "RT-P7: hybridXK ProVerif model"
+    runs-on: ubuntu-latest
+    # One row (a variant and one query) is one ProVerif process. run.py
+    # bounds each row in time and in memory itself and reports either bound
+    # as a failure.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Restore the pinned ProVerif
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/shekyl-proverif
+          # Keyed on the recipe: a changed pin is a changed script.
+          key: proverif-${{ runner.os }}-${{ hashFiles('rust/shekyl-rpc-channel/model/install_proverif.sh') }}
+
+      - name: Install the pinned ProVerif
+        run: rust/shekyl-rpc-channel/model/install_proverif.sh "$HOME/.cache/shekyl-proverif"
+
+      - name: Run the model
+        run: |
+          export PATH="$HOME/.cache/shekyl-proverif/proverif2.05:$PATH"
+          # Two rows at a time: each may grow to run.py's 6 GiB cap, and
+          # two caps fit a hosted runner's memory where four would not.
+          python3 rust/shekyl-rpc-channel/model/run.py --jobs 2

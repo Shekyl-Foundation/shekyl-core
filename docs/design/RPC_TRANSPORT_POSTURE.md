@@ -5,6 +5,13 @@ and RT-O4 ruled (§7); RT-O2 closed as a corrected error; RT-O1 stays a
 probe whose result cannot move the mechanism (§7.1). **RT-W1 landed** with
 this round; **RT-W2 landed** 2026-08-22 (PR #539), **RT-W5 landed** 2026-08-22 (PR #533),
 **RT-W7 landed** 2026-08-23 (PR #542); **RT-W3 landed** 2026-08-22 (PR #532, results in §7.1).
+**Mechanism superseded 2026-10-09** by round R1,
+[`RPC_CHANNEL.md`](RPC_CHANNEL.md): RT-4 is re-ruled there as one hybrid
+post-quantum Noise channel (RT-10, RT-11), RT-1 is narrowed to plaintext
+listeners (RT-14), and the restricted listener's removal is RT-13's. The
+superseded text is deleted from this document, not kept beside its
+replacement. This round's premise (§1), scope (§2), threat model (§3) and
+landed slices stand.
 **Verified against:** `shekyl-core` @ `abb4e58dd` (PR #526 head). Every
 `file:line` below was read at that commit; the draft's anchors were against
 the pre-#526 layout and are re-anchored here.
@@ -42,7 +49,8 @@ node. We can decline to build the road.
 §1 is the premise. The three transports below are how it is enforced on
 each platform. They are the destination; today's daemon RPC is still
 plaintext loopback TCP (RT-W2), and the wallet's remote TCP still carries
-HTTP Basic until RT-W4.
+HTTP Basic until the channel's client slice lands
+([`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-W12).
 
 0. **Operator-to-operator.** Every RPC leg connects two machines the same
    person controls. The adversary is the network path, never the peer.
@@ -60,25 +68,16 @@ HTTP Basic until RT-W4.
    has your SID. That client check is load-bearing, not defense-in-depth:
    the pipe namespace has no parent directory, so nothing inherits the
    containment job that (1) gets from the `0700` dir.
-3. **Remote — pinned mutual TLS.** Over TCP to a **specific** address
-   (IPv4 or IPv6; a family is not a reason to refuse), or over an onion
-   service where reachability requires it. Same authentication either way;
-   the onion is NAT traversal, not a second security model (RT-8).
-
-**Key generation.** The daemon does not generate a certificate for the
-wallet. Each endpoint generates its own keypair, locally, and never
-transmits a private key. The direction that is server-side is
-*authorization*, not key generation: the server holds an allowlist of
-client public-key fingerprints, and each client pins the server's
-fingerprint. Exchange is out of band, and only public material ever moves.
-(RT-4 states the mechanism; this paragraph is the correction that the
-server is not a key factory.)
+3. **Remote — the RPC channel.** Ruled in round R1:
+   [`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-10. The onion is reachability,
+   not a second security model (RT-8).
 
 **IPv6.** There is no compelling reason to treat IPv6 as a second stack.
 `::1` is loopback the same way `127.0.0.1` is. A specific network IPv6
 address is a specific address under (3). A wildcard (`::`, mapped forms
-included) is still RT-1. Auth-less network IPv6 on the daemon is still
-RT-2 — no authentication — until RT-4 lands on that listener.
+included) is still RT-1 on a plaintext listener. Auth-less network IPv6 on
+the daemon is still RT-2 — no authentication — and stays so: the daemon's
+authenticated listener is the channel's, not a plaintext one.
 
 ---
 
@@ -143,10 +142,13 @@ wallet-RPC section carry the sentence verbatim, in bold.)
 
 ## 4. Rulings
 
-### RT-1 — Wildcard binds are refused
+### RT-1 — Wildcard binds are refused on plaintext listeners
 
-`0.0.0.0`, `::`, and `[::]` are refused on every RPC listener. A specific
-non-loopback address is permitted.
+`0.0.0.0`, `::`, and `[::]` are refused on every **plaintext** RPC
+listener. A specific non-loopback address is permitted. *Scope narrowed
+2026-10-09:* the channel listener authenticates every peer before it
+answers, so it may bind a wildcard
+([`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-14).
 
 *Rationale.* A wildcard bind is a bind to interfaces that do not exist yet.
 Binding a specific address is a decision about a network the operator can see;
@@ -160,7 +162,7 @@ today cannot cover an interface that appears later.
 Note `::` also captures IPv4 via dual-stack on most platforms, so refusing it
 is not redundant with refusing `0.0.0.0`.
 
-*Revisits on failure:* nothing. This is unconditional.
+*Revisits on failure:* nothing. On a plaintext listener this is unconditional.
 
 **Ruled 2026-08-21 — at startup, not at parse, and not both.** The draft
 said "at parse time". RT-W1 enforces it at **startup, before bind, on every
@@ -187,7 +189,7 @@ green was trusted.
 warning. There is no defensible deployment of an auth-less wallet RPC on a
 network interface.
 
-*Independent of RT-4.* This lands whether or not the transport work proceeds.
+*Independent of the transport mechanism.* This lands whether or not the transport work proceeds.
 Loopback with auth disabled stays allowed — it is the in-process host's
 posture and the OS enforces the machine boundary — and the Unix socket and
 the Windows pipe pass through, because their authorization rides the
@@ -215,98 +217,34 @@ No cleartext RPC leaves the host. HTTP Basic (`AuthConfig::check` in
 [`auth.rs`](../../rust/shekyl-wallet-rpc/src/auth.rs)) puts the
 credential on the wire in **every request**; under §3 that is equivalent to
 publishing it. Basic is retained only for loopback and is superseded on
-remote legs by RT-4. Until RT-W4 lands, an addressed non-loopback bind with
+remote legs by the RPC channel ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-10).
+Until its client slice lands (RT-W12), an addressed non-loopback bind with
 Basic is *permitted* (RT-1/RT-2 pass) and the server logs a warning at the
 bind seam naming what it costs — the doc describes the destination; the
 warning describes the interim.
 
-### RT-4 — Mechanism: pinned mutual TLS with a server-side fingerprint allowlist
+### RT-4 — Superseded 2026-10-09
 
-> **Under re-ruling — do not implement (2026-10-08).** Round R1,
-> [`RPC_CHANNEL.md`](RPC_CHANNEL.md), is a draft that proposes replacing
-> this mechanism with a hybrid post-quantum Noise channel (RT-10, RT-11).
-> RT-4 stands as ruled until R1 is ratified, but RT-W4 and RT-W6 are held:
-> building pinned mutual TLS now would build what that round replaces.
-> This note records a pending decision, not a ruling.
+The mechanism for remote legs is the RPC channel:
+[`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-10 and RT-11. Pinned mutual TLS, this
+ruling's former content, is recorded there as a rejected alternative with
+its reason (§12).
 
-Each endpoint generates its own keypair locally. Public-key fingerprints are
-exchanged out of band. The server holds an allowlist of client fingerprints;
-each client pins the server's fingerprint. No CA.
+### RT-5 — No early data
 
-**Why not a CA.** A CA exists to delegate trust to parties the root does not
-directly enrol. Under §1 every client is a device the operator physically
-holds — there is no delegation, only enrolment. A CA would add a long-lived
-*issuance-authority* private key that, once created, must be stored, backed
-up, rotated, and protected. The allowlist does not protect that key; it makes
-it **not exist**. Revocation is deleting a line.
-
-**Why the client generates its own keypair.** If the server mints the client's
-keypair, the client's *private key* must travel — QR, USB, copy-paste,
-possibly a cloud clipboard. Self-generation means only *public* material
-crosses, where interception is harmless. Server-as-root-of-trust is correct;
-server-as-key-generator is not.
-
-**Why not external-PSK TLS.** PSK was the first proposal and is rejected on
-four counts, each of which pinned certs avoid by construction. Anchors were
-read for this document, not remembered:
-
-| Hazard | External PSK | Pinned certs |
-|---|---|---|
-| Forward secrecy | TLS 1.3 offers `psk_ke` (PSK only) and `psk_dhe_ke` (PSK + (EC)DHE) (RFC 8446 §4.2.9); PSK-only is "at the cost of losing forward secrecy for the application data" (§2.2). `psk_dhe_ke` must be **asserted** on the negotiated connection, not assumed from a library default | always (EC)DHE — no mode to get wrong |
-| Wire privacy | the PSK identity is carried in the ClientHello's `pre_shared_key` extension (RFC 8446 §4.2.11), and "TLS does little to keep PSK identity information private … the identifier appearing in cleartext in a ClientHello" lets a passive adversary link connections (RFC 9257 §7) | client certificates are sent after the ServerHello, encrypted — **in TLS 1.3**; see the protocol floor below |
-| Reflection | the Selfie attack "reroutes a connection from the client to the server on the same endpoint" and needs an endpoint holding both roles with one PSK (RFC 9257 §4.1) | distinct keypairs per role — no symmetry to exploit |
-| Provisioning | TLS 1.3 "mandates that each PSK only be used with a single hash function", and cross-version reuse "may produce related outputs" — hence RFC 9258's importer binding identity, context, protocol and KDF | none |
-
-**Protocol floor — TLS 1.3 only, stated rather than implied (review
-correction, 2026-08-21).** The wire-privacy row above holds only in TLS 1.3:
-TLS 1.2 sends the client certificate in cleartext, which would hand the
-device identity to exactly the passive path adversary §3 names. So RT-4's
-mechanism is TLS 1.3 with no 1.2 fallback (RT-6 forbids the fallback; this
-names the floor), and RT-P2 does not leave it to a library default: the probe
-builds both ends with `with_protocol_versions(&[&TLS13])` and **asserts the
-negotiated version** on the live connection. The ratified text depended on
-this; it is now written down.
-
-**Review note — citation correction.** The draft attributed the tracking
-language to "RFC 9973"; no such clause could be located. The sentence as
-quoted is RFC 9257 §7 (*Guidance for External PSK Usage in TLS*), and the
-table cites that.
-
-PSK's one advantage — symmetric keys are quantum-resistant, whereas
-ECDHE+signature is not — is recorded as a considered trade, not an oversight.
-The channel carries a session, not a long-term commitment. *Rule-21 reopen:*
-a practical PQ or hybrid TLS path in the chosen stack (rustls, or whatever
-RT-W4 lands on). *Re-evaluation shape:* a new RT-P probe row in §7.1
-demonstrating the hybrid handshake under the served stack, then RT-4
-re-ruled in this document by the decision authority — not a dependency bump
-that turns the option on.
-
-**Scaling note.** Symmetric pinning (each side pins the other's exact cert)
-does not scale past two endpoints without N² provisioning. A server-side
-allowlist gives the laptop-plus-phone case linear provisioning while keeping
-the server as the single root of trust — which was the correct instinct behind
-the CA proposal.
-
-**Review note — the daemon precedent.** `shekyld` ruled 2026-07-10 (FOLLOWUPS,
-"Daemon Axum: onion-as-remote-RPC") that there is no in-daemon clearnet TLS;
-remote is an onion service or a reverse proxy outside the process. RT-4 is
-deliberately different for L1 and, if RT-O3 rules "now", for L2/L3: the
-wallet RPC holds spend authority and its clients must be *mutually*
-authenticated, which a reverse proxy that terminates TLS and forwards
-cleartext does not give the process itself. When RT-O3 is ruled, it must say
-in one sentence whether the daemon's reasoning transfers.
-
-### RT-5 — 0-RTT is disabled
-
-Early data is replayable by design: it "is not forward secret" and there are
-"no guarantees of non-replay between connections" (RFC 8446 §2.3). A replayed
-`transfer` is not theoretical.
+No request is sent before the handshake has authenticated both ends:
+replayable early data would make a replayed `transfer` possible. The
+requirement carries to the channel unchanged — its handshake has no
+early-data mode and its first two payloads are empty
+([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §4.1).
 
 ### RT-6 — No downgrade path
 
-A listener configured for authenticated TLS refuses cleartext and refuses
-unpinned TLS. There is no "try TLS, fall back to plain." Any fallback is a
-downgrade oracle.
+A listener that authenticates refuses anything that does not. There is no
+"try the secure form, fall back to plain": any fallback is a downgrade
+oracle. The requirement carries to the channel unchanged — one protocol
+name, no negotiation, and no fallback between legs
+([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §4.1, RT-15).
 
 ### RT-7 — Enrolment is where the security lives
 
@@ -326,18 +264,23 @@ floor. Generated 256-bit material clears it by construction.)
 Tor onion service is an **additional** listener for the case where the client
 is not on the operator's network: NAT traversal, no port forwarding, no
 dynamic DNS. It is not a replacement for TCP and not a security upgrade over
-RT-4.
+the channel.
 
 Routing a same-subnet hop through three relays is indefensible on latency for
 the modal deployment (desktop daemon; laptop and phone on the same LAN), so
 **TCP is first-class, not a fallback**.
 
-**RT-4 runs inside the onion service as well.** The failure mode to avoid is
-Tor authenticating via onion client auth while TCP authenticates via pinning —
+**The channel runs inside the onion service as well.** The failure mode to avoid is
+Tor authenticating via onion client auth while TCP authenticates another way —
 two provisioning flows, two config surfaces, and one of them weaker. One trust
 decision, one enrolment flow, regardless of transport.
 
-### RT-9 — `--public-node` and the restricted-RPC listener are removed
+### RT-9 — `--public-node` is removed
+
+*The restricted-RPC listener's removal, which this ruling's title once
+claimed and no slice of this round carried out, is
+[`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-13's: per-connection grants replace
+it, in RT-W10.*
 
 [`command_line_args.h:102-106`](../../src/daemon/command_line_args.h) offers
 exactly what §1 excludes: "Allow other users to use the node as a remote
@@ -514,7 +457,7 @@ factual; RT-O2 is closed as a corrected error, not a ruling.
 | RT-P2 | Does pinned mutual TLS work in the shape `shekyl-wallet-rpc` uses — rustls under hyper under axum, custom server-cert verifier on the client, client cert **required** on the server, server-side fingerprint allowlist? | Scratch crate: self-signed keypairs both ends, pin by SPKI fingerprint, assert a wrong pin on **either** side fails the handshake — **the bite check, and the half that matters most: a pinned-mTLS harness that never observes a rejection is a check that cannot fail** — and assert an un-allowlisted client is refused | Works; all three refusals fire | **RT-4** — if axum/hyper cannot be driven with a required client cert without unacceptable plumbing, the mechanism is re-ranked |
 | RT-P3 | ~~What does `ring` in the wallet-rpc graph do to the Windows lane?~~ **Withdrawn 2026-08-21** — `ring` is already in the graph (RT-O2), so the probe would measure today's state, not TLS's effect | — | — | — |
 
-**Results — 2026-08-22, PR #532, `rust/shekyl-rt-p2-spike` (DISPOSABLE; RT-W4
+**Results — 2026-08-22, PR #532, the `shekyl-rt-p2-spike` crate (deleted in RT-W8 of `RPC_CHANNEL.md` once its subject was superseded; DISPOSABLE; RT-W4
 rewrites what it keeps). Nine probes, each observed red under a named edit
 before its green was trusted.**
 
@@ -543,7 +486,7 @@ before its green was trusted.**
   mismatch is recoverable from hyper's error chain. The revisit trigger
   (axum/hyper cannot be driven with a required client cert without
   unacceptable plumbing) did not fire.
-- **Carried to RT-W4, from the probe's review:** ureq 3's `TlsConfig` has no
+- **Carried to RT-W4, from the probe's review** (*lapsed 2026-10-09 with RT-4: the channel uses no certificates, and its keys wipe on drop*)**:** ureq 3's `TlsConfig` has no
   custom-`ServerCertVerifier` hook, so the L1 client builds its connector on
   hyper-rustls (as probe 7 does) or a bespoke ureq `Connector`, and carries
   the typed pin error through instead of flattening to a string; two
@@ -562,9 +505,9 @@ before its green was trusted.**
 | RT-W1 | RT-1 + RT-2 on `shekyl-wallet-rpc`; help text; operator docs rewritten against the real binary (they described the retired C++ server) | nothing — lands now | **LANDED on this branch 2026-08-21** (`validate_listen`, both bind paths, wiring tests observed red then green) |
 | RT-W2 | RT-1 + RT-2 on the daemon RPC, every listener (the restricted one included) | — | **LANDED 2026-08-22.** Confirmed that day: no recommended configuration involves a remote daemon and none exists, so RT-2 on an auth-less daemon means loopback only. Site: not the two C++ confirm gates the row first named but the Rust seam every daemon listener passes through (`shekyl-daemon-rpc::bind::bind_listener`, on a strictly parsed `SocketAddr`) — rule 20, and one classifier shared with the wallet (`shekyl_rpc_transport::listen`). `--confirm-external-bind` retired through `removed_flags` (confirmation is not refusal). C++ no longer parses bind IPs: `--rpc-bind-ip` / `--rpc-bind-port` / `--rpc-bind-ipv6-address` go to Rust as given; `--rpc-use-ipv6` is a second family on the same FFI start, not a second C++ server. IPv6 loopback (`::1`) is loopback; network IPv6 is RT-2 until RT-4 |
 | RT-W3 | Stack probes (§7.1: RT-P1, RT-P2) | — | **LANDED 2026-08-22** (PR #532, `shekyl-rt-p2-spike`: nine probes green, results in §7.1; RT-P1 read from source; RT-4 unmoved) |
-| RT-W4 | RT-4/5/6/7 on L1; carries the four items §7.1's results name | RT-W3 (landed) | open — **held 2026-10-08: under re-ruling in [`RPC_CHANNEL.md`](RPC_CHANNEL.md) (R1, draft). Do not implement** |
+| RT-W4 | (was: RT-4/5/6/7 on L1) | — | **SUPERSEDED 2026-10-09** by [`RPC_CHANNEL.md`](RPC_CHANNEL.md) R1. Not open work: the wallet leg is on the channel (RT-W12 there) |
 | RT-W5 | RT-9 removal, the eleven-file reference set enumerated first | — | **LANDED 2026-08-22** (PR #533: `2fb5fad61` removes `--public-node`, `/get_public_nodes`, the P2P advertisement and bumps `CORE_RPC_VERSION`; `7279cf360` deletes the residue — `set_rpc_port`/`m_rpc_port`, `rpc_credits_per_hash`, `print_pl publicrpc`; bootstrap-daemon disposition `20c869b1d`) UPDATE 2026-08-31: the P2P wire half — `rpc_port` / `rpc_credits_per_hash` in `basic_node_data` and the peerlist entry, which #533 had left serialized at zero — deleted, peerlist store v7 drop-on-load (PR #587); the RT-9 disposition is now complete on both halves |
-| RT-W6 | RT-8 onion listener | RT-W4 | open — **held with RT-W4** (2026-10-08, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) R1, draft) |
+| RT-W6 | (was: RT-8 onion listener) | — | **SUPERSEDED 2026-10-09** by [`RPC_CHANNEL.md`](RPC_CHANNEL.md) R1. Not open work: the onion is reachability for the channel listener (§7 there) |
 | RT-W7 | `--daemon-address` warns in §1's terms at the point of configuration, CLI and `shekyl-wallet-rpc` both (RT-O4's addition) | — | **LANDED 2026-08-23** (PR #542; `shekyl_rpc_transport::network_posture::{operator_warning, daemon_disclosures}`; CLI on stderr after its session validates the address, server in its log at `run_server` before it binds; the proxied-daemon case, the mapped-loopback cross-pin with `listen`, and both wirings — the server's under a capturing subscriber, the CLI's on the built binary — each observed red; verify: `git grep operator_warning rust/`). Carried, with its trigger already fired: the GUI dials `HttpRpc::new` directly and says nothing; the one-call GUI fix and the outbound `ValidatedEndpoint` seam are FOLLOWUPS V3.2 |
 
 RT-W1 is ruled, independent, small, and strictly reduces attack surface. It
