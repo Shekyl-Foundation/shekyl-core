@@ -107,8 +107,8 @@ impl OnionIdentity {
     /// Whether the *seed* outlives the call is the caller's business, and both
     /// shapes are legitimate. A wallet-side derivation expands and drops it
     /// immediately. The `StakeEngine` deliberately keeps it in the persona's
-    /// `ArchivalPKeys` — under that field's `Zeroizing` and the actor's stop
-    /// wipe — because [`OnionIdentity`] is not `Clone` and the credential is
+    /// `ArchivalPKeys` — on the heap, wiped when the bundle drops, and under
+    /// the actor's stop wipe — because [`OnionIdentity`] is not `Clone` and the credential is
     /// therefore re-minted per request rather than cached. An earlier wording
     /// here said the seed "does not outlive this call", which described the
     /// first caller rather than this function; the property that holds for

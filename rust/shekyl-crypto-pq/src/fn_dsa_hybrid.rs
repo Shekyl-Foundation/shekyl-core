@@ -189,11 +189,11 @@ impl FnDsaHybridPublicKey {
 /// re-derived from the wallet seed, and the witness key lives for one block
 /// in memory. Neither is written anywhere.
 ///
-/// Both halves live on the heap ([`HeapSecret`]), each at the one address
-/// it was written to. An array held inline would be copied every time the
-/// key, or a bundle holding it, is moved, and a wipe on drop reaches only
-/// the last place a value rested: each earlier copy would stay on a stack
-/// nobody wipes. Moving this type moves two pointers.
+/// Both halves live on the heap, each at the one address it was written
+/// to, and are wiped there on drop. The bytes are borrowed, not
+/// dereferenced: the array is `Copy`, and a deref would let a caller
+/// rebuild the stack copy a move used to leave behind. Moving this type
+/// moves two pointers.
 pub struct FnDsaHybridSecretKey {
     ed25519: HeapSecret<ED25519_SECRET_KEY_LENGTH>,
     fn_dsa: HeapSecret<FN_DSA_1024_SECRET_KEY_LENGTH>,
@@ -331,10 +331,10 @@ impl HybridEd25519FnDsa {
     ) -> Result<FnDsaHybridSignature, CryptoError> {
         let (ed25519, fn_dsa) = hybrid_combiner::sign_nested(
             HYBRID_SCHEME_ID_ED25519_FN_DSA_1024,
-            &secret_key.ed25519,
+            secret_key.ed25519.as_array(),
             domain,
             message,
-            |inner| fn_dsa_sign(&secret_key.fn_dsa, rng, inner),
+            |inner| fn_dsa_sign(secret_key.fn_dsa.as_array(), rng, inner),
         )?;
         Ok(FnDsaHybridSignature { ed25519, fn_dsa })
     }
@@ -426,7 +426,7 @@ fn fn_dsa_keygen(
     generator.keygen(
         FN_DSA_LOGN_1024,
         &mut rng,
-        secret.as_mut_slice(),
+        secret.as_array_mut(),
         &mut public,
     );
     (public, secret)
@@ -483,13 +483,10 @@ mod tests {
     fn the_ed25519_half_is_the_seed() {
         let seed = [0x1d; 32];
         let (public, secret) = HybridEd25519FnDsa::keypair_from_seeds(&seed, &[2; 32]).unwrap();
-        assert_eq!(
-            *secret.ed25519,
-            Ed25519SigningKey::from_bytes(&seed).to_bytes()
-        );
+        assert_eq!(secret.ed25519.as_array(), &seed);
         assert_eq!(
             public.ed25519,
-            Ed25519SigningKey::from_bytes(&secret.ed25519)
+            Ed25519SigningKey::from_bytes(secret.ed25519.as_array())
                 .verifying_key()
                 .to_bytes()
         );

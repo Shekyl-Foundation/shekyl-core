@@ -221,7 +221,7 @@ fn run_tier1(v: &Tier1Vector) {
                 let bundle = derive_archival_p_keys(&master, net, fmt, v.p_slot)
                     .expect("bundle derives for a pinned vector");
                 assert_eq!(
-                    hex::encode(bundle.hs_id_seed.as_slice()),
+                    hex::encode(bundle.hs_id_seed()),
                     exp,
                     "{}: bundle hs_id_seed diverged from the pinned vector",
                     v.id

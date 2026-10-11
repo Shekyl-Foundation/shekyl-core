@@ -541,8 +541,9 @@ fn build_hybrid(
 /// [`ViewSecret`]), `ml_kem_dk` ([`MlKem768DecapKey`]), and `hybrid_sign_sk` /
 /// `bond_spend_sk` ([`HybridSecretKey`]), `receipt_sign_sk`
 /// ([`FnDsaHybridSecretKey`], both halves wiped on the heap) and `hs_id_seed`
-/// ([`HeapSecret`]) — so each wipes on drop via its own destructor. This is the rule-35 per-field discipline applied to a struct that
-/// also holds non-`Zeroize` public material.
+/// (a heap buffer wiped on drop) — so each wipes on drop via its own
+/// destructor. This is the rule-35 per-field discipline applied to a struct
+/// that also holds non-`Zeroize` public material.
 ///
 /// **Not persisted at rest.** Persist only `p_slot` (and the public
 /// `p_canonical_id`); rederive every secret on wallet open.
@@ -608,10 +609,11 @@ pub struct ArchivalPKeys {
     /// "rederive on each serve" premise and the caller discipline that follows
     /// from it.
     ///
-    /// On the heap ([`HeapSecret`]): the bundle is moved into the actor's
-    /// map and an inline array would be copied at each move, with only the
-    /// last copy wiped.
-    pub hs_id_seed: HeapSecret<32>,
+    /// On the heap: the bundle is moved into the actor's map and an inline
+    /// array would be copied at each move, with only the last copy wiped.
+    /// Borrowed through [`Self::hs_id_seed`]. Not dereferenced: the array is
+    /// `Copy`, and a deref would let `*seed` rebuild that stack copy.
+    hs_id_seed: HeapSecret<32>,
 }
 
 impl ArchivalPKeys {
@@ -636,6 +638,16 @@ impl ArchivalPKeys {
             identity_pk: self.hybrid_bond_id(),
             bond_spend_pk: &self.bond_spend_pk,
         }
+    }
+
+    /// The serving-onion seed, borrowed from the heap buffer this bundle
+    /// wipes on drop.
+    ///
+    /// `OnionIdentity::from_hs_id_seed` is the consumer. The borrow is the
+    /// buffer. A copy is `*keys.hs_id_seed()`.
+    #[must_use]
+    pub fn hs_id_seed(&self) -> &[u8; 32] {
+        self.hs_id_seed.as_array()
     }
 
     /// The persona's receive address. Same field set as the principal

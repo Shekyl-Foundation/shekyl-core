@@ -14,19 +14,29 @@
 //!
 //! [`HeapSecret`] holds the bytes behind a pointer. Moving it moves the
 //! pointer; the bytes stay at the one address they were written to and are
-//! wiped there on drop. The length stays in the type, so a consumer that
-//! wants `&[u8; N]` still gets one.
+//! wiped there on drop. The length stays in the type.
+//!
+//! The bytes are borrowed through [`HeapSecret::as_array`] and
+//! [`HeapSecret::as_array_mut`]. There is no [`Deref`]: `[u8; N]` is `Copy`,
+//! and a deref would let `*secret` rebuild the stack copy this type exists
+//! to prevent. A copy is `*secret.as_array()`, which is visible at the call.
+//! That is the same boundary [`crate::keys`] draws with `as_canonical_bytes`.
 //!
 //! It is its own type, and not `Zeroizing<Box<[u8; N]>>`, because `zeroize`
 //! implements `Zeroize` for `Box<[Z]>` and not for `Box<[Z; N]>`, and the
 //! orphan rule keeps that implementation out of this crate. `Zeroizing<Box<[u8]>>`
 //! compiles and loses the length.
+//!
+//! Crate-private. [`crate::archival_p::ArchivalPKeys::hs_id_seed`] is the
+//! public borrow of the one value other crates read. A crate that does not
+//! depend on this one does not gain a dependency to hold its own secrets
+//! this way; the type moves when such a crate needs it.
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// `N` secret bytes at one heap address, wiped on drop. No `Clone`, no
 /// `Copy`, and a `Debug` that prints nothing of the contents.
-pub struct HeapSecret<const N: usize>(Box<[u8; N]>);
+pub(crate) struct HeapSecret<const N: usize>(Box<[u8; N]>);
 
 impl<const N: usize> HeapSecret<N> {
     /// `N` zero bytes, allocated on the heap without an `N`-byte array ever
@@ -34,7 +44,7 @@ impl<const N: usize> HeapSecret<N> {
     /// becomes a boxed array by a conversion that checks the length and
     /// moves nothing.
     #[must_use]
-    pub fn zeroed() -> Self {
+    pub(crate) fn zeroed() -> Self {
         let boxed: Box<[u8; N]> = vec![0u8; N]
             .into_boxed_slice()
             .try_into()
@@ -45,30 +55,38 @@ impl<const N: usize> HeapSecret<N> {
     /// A copy of `bytes` at a fresh heap address. The source is borrowed, so
     /// whoever owns it still owns wiping it.
     #[must_use]
-    pub fn copied_from(bytes: &[u8; N]) -> Self {
+    pub(crate) fn copied_from(bytes: &[u8; N]) -> Self {
         let mut secret = Self::zeroed();
-        secret.0.copy_from_slice(bytes);
+        secret.as_array_mut().copy_from_slice(bytes);
         secret
     }
-}
 
-impl<const N: usize> std::ops::Deref for HeapSecret<N> {
-    type Target = [u8; N];
-
-    fn deref(&self) -> &[u8; N] {
+    /// The buffer. A copy of the secret is `*secret.as_array()`.
+    #[must_use]
+    pub(crate) fn as_array(&self) -> &[u8; N] {
         &self.0
     }
-}
 
-impl<const N: usize> std::ops::DerefMut for HeapSecret<N> {
-    fn deref_mut(&mut self) -> &mut [u8; N] {
+    /// The buffer, writable in place. Key generation writes through this
+    /// rather than returning an array.
+    pub(crate) fn as_array_mut(&mut self) -> &mut [u8; N] {
         &mut self.0
     }
 }
 
+impl<const N: usize> Zeroize for HeapSecret<N> {
+    fn zeroize(&mut self) {
+        // `&mut [u8; N]` into the heap buffer. `*self.0` would copy the
+        // array and wipe the copy.
+        self.as_array_mut().zeroize();
+    }
+}
+
+impl<const N: usize> ZeroizeOnDrop for HeapSecret<N> {}
+
 impl<const N: usize> Drop for HeapSecret<N> {
     fn drop(&mut self) {
-        self.0.zeroize();
+        self.zeroize();
     }
 }
 
@@ -100,20 +118,30 @@ mod tests {
     #[test]
     fn a_move_does_not_move_the_bytes() {
         let secret = HeapSecret::<64>::copied_from(&[0x5a; 64]);
-        let before: *const [u8; 64] = &raw const *secret;
+        let before = secret.as_array().as_ptr();
         let moved = std::convert::identity(secret);
         let boxed = Box::new(moved);
-        let after: *const [u8; 64] = &raw const **boxed;
+        let after = boxed.as_array().as_ptr();
         assert_eq!(before, after);
-        assert_eq!(**boxed, [0x5a; 64]);
+        assert_eq!(boxed.as_array(), &[0x5a; 64]);
     }
 
     #[test]
     fn zeroed_is_zero_and_copied_from_copies() {
-        assert_eq!(*HeapSecret::<48>::zeroed(), [0u8; 48]);
+        assert_eq!(HeapSecret::<48>::zeroed().as_array(), &[0u8; 48]);
         let mut secret = HeapSecret::<4>::copied_from(&[1, 2, 3, 4]);
-        secret[0] = 9;
-        assert_eq!(*secret, [9, 2, 3, 4]);
+        secret.as_array_mut()[0] = 9;
+        assert_eq!(secret.as_array(), &[9, 2, 3, 4]);
+    }
+
+    /// `zeroize` writes the heap buffer, not a copy of it.
+    #[test]
+    fn zeroize_wipes_the_heap_buffer() {
+        let mut secret = HeapSecret::<4>::copied_from(&[1, 2, 3, 4]);
+        let addr = secret.as_array().as_ptr();
+        secret.zeroize();
+        assert_eq!(secret.as_array().as_ptr(), addr);
+        assert_eq!(secret.as_array(), &[0, 0, 0, 0]);
     }
 
     #[test]
