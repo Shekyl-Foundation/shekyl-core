@@ -24,7 +24,7 @@
 
 use core::convert::Infallible;
 use core::marker::PhantomData;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainValid, ChainView, HeaderRecord, HeaderView, RecordedBlock,
@@ -184,7 +184,7 @@ impl<'id, T> ChainView<'id> for Stub<T> {
     fn served_at(
         &self,
         _: &PCanonicalId,
-        _: &[SettlementEpoch],
+        _: &BTreeSet<SettlementEpoch>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Infallible> {
         Ok(BTreeMap::new())
     }
