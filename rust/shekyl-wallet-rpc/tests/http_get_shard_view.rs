@@ -42,7 +42,7 @@ fn version_reply() -> String {
         version: CORE_RPC_VERSION,
         release: false,
         current_height: 1,
-        target_height: 0,
+        target_height: shekyl_rpc_types::Nullable::NULL,
         consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
         nettype: SERVED,
         genesis_hash: HashHex::from_bytes(genesis_hash_for(SERVED)),

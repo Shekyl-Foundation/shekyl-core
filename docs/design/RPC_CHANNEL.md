@@ -1362,6 +1362,10 @@ one-line reason for each rejection.
 
 *Removed since, by its slice:* `shekyl-rt-p2-spike`, the pinned-mutual-TLS
 probe crate R0 marked disposable — deleted in RT-W8.
+`shekyl-engine-core/src/engine/stake_engine/serving/daemon_tip.rs` no longer
+reads `get_info.restricted`; the peer check reads `has_peers`
+(`shekyl-engine-core/src/engine/stake_engine/serving/daemon_tip.rs:280`,
+RK-5c commit 7, 2026-10-10). RT-W13 confirms the read is gone.
 
 ### 11.2 Still true today; removed by the slice that changes the code
 
@@ -1373,7 +1377,6 @@ probe crate R0 marked disposable — deleted in RT-W8.
 | `bind.rs`'s refusal text and its two tests that assert the onion remedy | RT-W10 |
 | `ctl_client.rs`'s plaintext loopback-TCP path: `shekyld <command>` moves to the owner-only socket or pipe for a run-as-me daemon, and to the channel with the console key for a service (RT-15, §5) | RT-W10 |
 | `shekyl-cli/src/commands/mine.rs:68`: the "restricted listener" refusal becomes a check for `mining-control` in the grant the handshake returned | RT-W10 |
-| `stake_engine/serving/daemon_tip.rs:299`, the other reader of `get_info.restricted`: moves to `has_peers` in RK-5c's own commit | RK-5c; RT-W13 confirms the read is gone |
 | The daemon client's `https://` arm (`rust/shekyl-rpc-transport/src/http_client.rs:240-266`), and with it `hyper-rustls` and native-roots loading in the wallet's graph — not before the channel client exists (RT-O8) | RT-W12 |
 | Shipped Windows guidance that points operators at Task Scheduler (`removed_flags.cpp:159-161`, `INSTALLATION_GUIDE.md:229-235`): replaced by RT-16's two run modes (the scheduled task is rejected, §12) | RT-W14 |
 
