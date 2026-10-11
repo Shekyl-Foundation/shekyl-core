@@ -166,20 +166,18 @@ impl Partition {
         Some(self.pick_accepted(rng, |_, seat| matches!(seat, Seat::White(_))))
     }
 
-    /// The one white write. From any seat, or from none (a fleet harvest
-    /// of an address that was not listed). Stamps `now`. Over [`WHITE_CAP`],
-    /// a uniformly random *other* white seat is demoted to gray.
+    /// The one white write, from an outstanding seat. Stamps `now`. Over
+    /// [`WHITE_CAP`], a uniformly random *other* white seat is demoted to
+    /// gray. There is no write from no seat: the only caller promotes an
+    /// address it has just checked is outstanding (records-was: a
+    /// Foundation-fleet harvest could seat a new white entry; brief §3).
     pub(crate) fn promote<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
         now: Tick,
         rng: &mut R,
     ) {
-        if self.seats.contains(address) {
-            self.move_seat(address, Seat::White(now));
-        } else {
-            self.seat_new(address.clone(), Seat::White(now));
-        }
+        self.move_seat(address, Seat::White(now));
         self.evict_white_over_cap(address, rng);
     }
 

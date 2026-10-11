@@ -23,10 +23,11 @@ pub enum Source {
         /// That session's connector.
         connector: ConnectorId,
     },
-    /// Named by the operator: `--add-peer`, `--add-exclusive-node`,
-    /// `--add-priority-node`. Not capped. When gray is full, some other
-    /// entry is evicted so the named one stays (brief §2) — the whole of
-    /// the operator privilege.
+    /// Named by the operator: `--add-peer`, `--add-exclusive-node`, and
+    /// the compiled seed addresses at each start (brief §3). No session, so
+    /// nothing for the per-session cap to count against. The insert rule is
+    /// the same as for every source (brief §2): the address just seated
+    /// stays and, over the cap, a random other drawable seat goes.
     Operator,
     /// Read back from the address file at start. Not capped.
     Reload,
@@ -44,11 +45,10 @@ pub enum DialOutcome {
     /// target. The same white write as `SessionAccepted`; no session
     /// remains.
     Confirmed(NetworkAddress),
-    /// A harvest closed. A Foundation-fleet address writes white from any
-    /// seat (brief §3). Anyone else's harvest leaves white unchanged, and
-    /// an outstanding draw of that address returns to drawable gray: the
-    /// dial is over, and only [`crate::Peerlist::apply`] moves an
-    /// outstanding draw.
+    /// A harvest closed. White is unchanged for every address (brief §3:
+    /// seeds are ordinary peers), and an outstanding draw of that address
+    /// returns to drawable gray: the dial is over, and only
+    /// [`crate::Peerlist::apply`] moves an outstanding draw.
     HarvestDone(NetworkAddress),
     /// The dial did not reach a handshake. An outstanding gray draw is
     /// dropped; a white address stays white.
