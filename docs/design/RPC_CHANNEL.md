@@ -512,8 +512,13 @@ sender — bundle or not — makes the daemon do two operations with its
    `skem` leads it. A timing difference here is a remote
    oracle on the long-term key (KyberSlash was exactly this class, in
    implementations). Requirements: decapsulation is constant-time in the
-   pinned crate, **demonstrated** by RT-P4, not assumed; ML-KEM's implicit
-   rejection returns a pseudorandom key for an invalid ciphertext, and that
+   pinned crate, **demonstrated** by RT-P4, not assumed (**met 2026-10-11**
+   on the floor device's Cortex-A72 and on a Tiger Lake x86 core: no
+   dependence on the ciphertext of 0.5 % of a decapsulation or more, with
+   both builds' code read for branches and divisions; no efficiency-core
+   design measured; `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md`);
+   ML-KEM's implicit rejection returns a pseudorandom key for an invalid
+   ciphertext, and that
    must remain the only behaviour — the failure surfaces solely as message
    1's tag mismatch, with no branch, error variant, timing, or log line that
    distinguishes rejection from a bad tag.
@@ -1180,7 +1185,7 @@ construction) instead of loopback TCP.
 
 | # | Question | How | Revisits on failure |
 |---|---|---|---|
-| RT-P4 | Is ML-KEM-768 decapsulation in the pinned crate constant-time with respect to the ciphertext, including the implicit-rejection path? | Statistical timing test (dudect-style) over valid, invalid, and adversarially structured ciphertexts on the floor device and on x86, plus a source read of the decapsulation path for secret-dependent branches and divisions | §4.3; the crate choice for the channel's static key |
+| RT-P4 | Is ML-KEM-768 decapsulation in the pinned crate constant-time with respect to the ciphertext, including the implicit-rejection path? | Statistical timing test (dudect-style) over valid, invalid, and adversarially structured ciphertexts on the floor device and on x86, plus a source read of the decapsulation path for secret-dependent branches and divisions. **Met 2026-10-11** under a re-registered method, on the floor device and on a Tiger Lake laptop core; the first registration's floor-device run failed and was traced to its harness (`docs/benchmarks/rt_p4_mlkem_decaps_timing_20261010.md`, `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md`) | §4.3; the crate choice for the channel's static key |
 | RT-P5 | Does hyper/axum run over the record channel at full RPC load? | Scratch crate: stream adapter over `seal`/`open`; a block-batch response larger than many records; backpressure under a slow reader; half-close; a request split across records; observed failing with the adapter's record splitting removed; **and the record-size distribution** of real RPC traffic (wallet sync, a submission, block batches), which the padding classes are derived from (RT-O6) | RT-W9's adapter design |
 | RT-P6 | What does a handshake cost on the floor device (Pi 4), each side? | Time each message and the whole handshake, daemon and client, on the floor device; CPU per unauthenticated message 1; the cost of padding each record to each candidate size class | The handshake-deadline constant (derived from this, not chosen); the tunnel pool size; §4.3's amplification bound |
 | RT-P7 | Does `hybridXK`'s canonical token order (§4.1) reach the property each stage claims? | ProVerif model: daemon authentication at message 2, client authentication classical at message 3 and hybrid at the first record, secrecy of the transport keys, client-identity hiding — each query observed **failing** under a named edit (e.g. remove `skem` from message 1; move it after `e`; remove `se` from message 3) before its success is trusted | §4.1; **gates RT-W9** |

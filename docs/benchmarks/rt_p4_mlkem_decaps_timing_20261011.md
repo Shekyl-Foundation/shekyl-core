@@ -4,9 +4,8 @@
 the closing rule registered below, RT-P4 is met for the two core designs
 measured, Cortex-A72 and Tiger Lake, with the reach the control gives: no
 dependence on the ciphertext of 0.5 % of a decapsulation or more. No
-efficiency-core design has been measured. One thing the registration asks
-for is still owed: the reading of the laptop's x86 code. Until it is in
-this record, RT-P4 is not marked closed anywhere else.
+efficiency-core design has been measured. The reading of the laptop's x86
+code, which the registration also asks for, is at the end.
 The registration was first pushed on 2026-10-10 at 23:46Z and amended
 three times before any result was read, as its own note says. Results are
 added below "Registered before the run" and that section is not edited
@@ -404,3 +403,86 @@ can read them, and agree with the process query wherever both can.
 this lane relayed, as the registration says. So did this run's output and
 conditions: they are the agent's report from that machine, not files this
 lane copied.
+
+### The x86 code, read
+
+From `dumpbin /disasm` of the laptop's own binary (listing sha256
+`95ad5e80…`, 51,637 lines), made after the run. The excerpts were pulled
+and sent by the agent on that machine with the script that counted them;
+the passages the reading quotes or rests on are kept in
+`rt_p4_mlkem_decaps_timing_20261011_captures/laptop_x86_disasm_excerpts.txt`,
+and the full listing stayed on the machine. The reading below is this
+lane's, and where it rests on the crate's source and not on the listing it
+says so. It is the counterpart of the aarch64
+reading in the first record, and it finds the same things.
+
+- **Ciphertext comparison** (inline in `ml_kem_decaps_internal`): a loop of
+  exactly 1,088 iterations (`cmp r14, 440h`). Each compares one byte,
+  materialises the result with `sete`, passes it through
+  `subtle::black_box` and `and`s it into an accumulator. Its only
+  conditional jump is on the counter. There is no early exit.
+- **Implicit-rejection select:** the 0-or-1 choice is negated to a byte
+  mask, broadcast, and applied to the 32-byte key with two rounds of
+  `pand` / `pandn` / `por`. Both inputs are always read and both halves
+  always written. Its one conditional jump, `jo` after the `neg`, is the
+  overflow guard and fires only for `0x80`, which the choice cannot be.
+- **The other six conditional jumps in the decapsulation function:** four
+  bounds checks against constant lengths, and the two tests of whether
+  decrypt and re-encrypt returned an error. None reads ciphertext content.
+- **Every conditional jump in decrypt and in both re-encrypt bodies** (177
+  of them) was listed with its target and the two instructions before it.
+  The backward jumps are loop ends on a counter against a constant. The
+  forward jumps are bounds and length checks against constants, guards
+  into the shift-overflow panic, and tests of the decoder's result. All
+  targets are direct; there are no indirect or table-driven branches.
+- **Branches on values, which exist and do not vary with the ciphertext.**
+  The decoder's range check leaves its loop at the first coefficient that
+  is out of range, so in form its running time depends on a value. Where
+  it can fire is a question about its callers, and is read from the
+  source: every decoded value is masked to `d` bits first, and for `d`
+  below 12 the bound is 2^d, so the check cannot fail. On this path the
+  ciphertext is decoded with `d` = 10 and 4 and the recovered message with
+  `d` = 1. The listing agrees and goes further: the `d` = 10 and `d` = 4
+  decodes carry no range check at all, the compiler having removed it; the
+  `d` = 1 check is present, comparing against 2, and cannot be taken. The
+  checks against 3,329 (`0D01h`) are the `d` = 12 decodes, of key
+  material: two call sites in the source, each over the key's three
+  polynomials, which is why the check appears several times in each
+  function. Key material is the same for every ciphertext, and in range
+  for any key the crate generated.
+- **Division:** two in the ML-KEM code, one in each of the forward and
+  inverse NTT, as on aarch64. Each divides the constant 256 by twice an
+  entry of a seven-entry table of constants written to the stack as
+  immediates and indexed by the outer loop's counter. Nothing derived from
+  the ciphertext or the key reaches either operand. (One more division
+  exists in the binary, in the standard library's sort, which the harness
+  uses for its percentiles after the timed loop.)
+- **Counts**, for the 30 functions of `fips203`, `subtle` and Keccak: 8,480
+  instructions, 325 conditional jumps, 78 conditional moves or sets, 2
+  integer divisions, no floating-point division.
+
+What a reading of this kind does not give: a proof that no instruction's
+latency depends on its operands on this processor. The timing run above is
+the evidence for that, to its stated reach.
+
+## Where RT-P4 stands
+
+By the closing rule registered above: **a pass on the floor device and a
+pass on the laptop. RT-P4 is met**, for `fips203` 0.4.3's ML-KEM-768
+decapsulation as built by this workspace, on a Cortex-A72 and on a Tiger
+Lake core, to this reach: no dependence of decapsulation time on the
+ciphertext of 0.5 % of a decapsulation or more. Estimated from each run's
+control, and not part of either verdict, the runs would have shown about
+4 ns on the floor device and about 7.5 ns on the laptop.
+
+What it does not cover, so that nobody reads more into it:
+
+- **No efficiency-core design was measured.** A hybrid x86 processor's
+  second core design is a different machine for this question.
+- **Two builds, two processors.** A different compiler version, target or
+  optimisation setting produces different code; the code reading above is
+  of these two binaries.
+- **Time only.** Nothing here measures power, emanations or cache
+  side-effects observable by code sharing the machine.
+- **The first registration's floor-device failure stands in its own
+  record**, with the diagnosis that it was the harness.

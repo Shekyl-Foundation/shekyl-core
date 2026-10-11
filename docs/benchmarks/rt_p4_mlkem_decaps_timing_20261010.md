@@ -274,7 +274,8 @@ figure.
 
 **(c) The aarch64 code, read.** The registered binary was disassembled on
 the device (`objdump`), and every conditional branch in the `fips203`,
-`subtle` and Keccak functions was classified.
+`subtle` and Keccak functions was classified. The functions quoted here
+are kept whole in `floor_aarch64_disasm_excerpts.txt` in the captures.
 
 - **Ciphertext comparison** (`ct_ne`, inlined in
   `ml_kem_decaps_internal`): a loop of exactly 1,088 iterations that
