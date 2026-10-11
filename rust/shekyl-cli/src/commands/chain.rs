@@ -17,17 +17,7 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
     let dc = require_daemon(daemon)?;
     match dc.get_info() {
         Ok(info) => {
-            // The connection counts are a Status field, which a daemon may
-            // withhold. Today a restricted daemon writes zeros there, and a
-            // withheld part reads the same until this output learns to say
-            // "not disclosed" (RK-Q8).
-            let (outgoing, incoming) = info.node.shown().map_or((0, 0), |status| {
-                (
-                    status.outgoing_connections_count,
-                    status.incoming_connections_count,
-                )
-            });
-            Ok(json!({
+            let mut body = json!({
                 "status": info.status.0,
                 "height": info.health.height,
                 // Whether the daemon has caught up is its own flag. The
@@ -40,9 +30,16 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
                 "difficulty": u64::try_from(info.chain.difficulty & u128::from(u64::MAX))
                     .unwrap_or(u64::MAX),
                 "tx_count": info.chain.tx_count,
-                "outgoing_connections_count": outgoing,
-                "incoming_connections_count": incoming,
-            }))
+            });
+            // Status is wholly shown or wholly absent. A shown zero is a
+            // count — the restricted stand-in, until RK-Q8 deletes it.
+            // A withheld part is not that zero, so the keys stay off the
+            // object and the line below says the part was not disclosed.
+            if let Some(status) = info.node.shown() {
+                body["outgoing_connections_count"] = json!(status.outgoing_connections_count);
+                body["incoming_connections_count"] = json!(status.incoming_connections_count);
+            }
+            Ok(body)
         }
         Err(e) => failed(e.to_string()),
     }
@@ -73,6 +70,25 @@ fn sync_line(val: &Value) -> Option<String> {
     })
 }
 
+/// The connections line.
+///
+/// Both counts present, including a shown zero, print as counts. Either
+/// key absent is a withheld Status part: a zero would claim the node has
+/// no connections, which is a different fact.
+fn connections_line(val: &Value) -> String {
+    match (
+        val.get("outgoing_connections_count")
+            .and_then(Value::as_u64),
+        val.get("incoming_connections_count")
+            .and_then(Value::as_u64),
+    ) {
+        (Some(outgoing), Some(incoming)) => {
+            format!("  Connections:  {outgoing} out / {incoming} in")
+        }
+        _ => "  Connections:  not disclosed".to_owned(),
+    }
+}
+
 pub(crate) fn show_chain(val: &Value) {
     let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("?");
     let height = val.get("height").and_then(Value::as_u64).unwrap_or(0);
@@ -90,15 +106,7 @@ pub(crate) fn show_chain(val: &Value) {
         "  Tx count:     {}",
         val.get("tx_count").and_then(Value::as_u64).unwrap_or(0)
     );
-    println!(
-        "  Connections:  {} out / {} in",
-        val.get("outgoing_connections_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        val.get("incoming_connections_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    );
+    println!("{}", connections_line(val));
 }
 
 fn require_daemon(
@@ -295,7 +303,7 @@ fn print_coverage_row(row: &Value, profit_available: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::sync_line;
+    use super::{connections_line, sync_line};
     use serde_json::json;
 
     /// Synchronized is the flag's word. A target above the height, which a
@@ -333,5 +341,38 @@ mod tests {
     #[test]
     fn a_value_without_the_flag_reads_as_syncing() {
         assert!(sync_line(&json!({ "height": 10, "target_height": null })).is_some());
+    }
+
+    /// A withheld Status part omits the keys. Printing that as zero would
+    /// say the node has no connections. A shown zero still prints as zero:
+    /// that is the restricted stand-in, and RK-Q8 owns deleting it.
+    #[test]
+    fn withheld_connection_counts_are_not_a_zero() {
+        assert_eq!(
+            connections_line(&json!({})),
+            "  Connections:  not disclosed"
+        );
+        assert_eq!(
+            connections_line(&json!({ "outgoing_connections_count": 4 })),
+            "  Connections:  not disclosed"
+        );
+        assert_eq!(
+            connections_line(&json!({ "incoming_connections_count": 4 })),
+            "  Connections:  not disclosed"
+        );
+        assert_eq!(
+            connections_line(&json!({
+                "outgoing_connections_count": 0,
+                "incoming_connections_count": 0,
+            })),
+            "  Connections:  0 out / 0 in"
+        );
+        assert_eq!(
+            connections_line(&json!({
+                "outgoing_connections_count": 3,
+                "incoming_connections_count": 1,
+            })),
+            "  Connections:  3 out / 1 in"
+        );
     }
 }
