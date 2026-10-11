@@ -166,9 +166,10 @@ pub trait HolderSource: Send + Sync {
     /// carries nothing.
     ///
     /// The ruled producer is the epoch's drawable snapshot
-    /// (`DrawableSet::at_epoch_open`, `SO-D8` Q3). Until that is built, an
-    /// adapter reads the bond records' held sets at the tip; the
-    /// scheduler's draw is the same over either.
+    /// (`DrawableSet::at_epoch_open`, `SO-D8` Q3), which is built. An
+    /// adapter still reads the bond records' held sets at the tip until
+    /// the journal walk recovers holdings a Release or slash has cleared
+    /// there; the scheduler's draw is the same over either.
     ///
     /// # Errors
     ///
