@@ -23,14 +23,17 @@ device and on x86, including the implicit-rejection path.
 
 ## Registered before the run
 
-*Amended twice on the maintainer's review, both times before any timed
-run. First (`1ce9f13d0`): a limit on attempts after a void, and the floor
+*Amended three times, each before any result was read. First (`1ce9f13d0`): a limit on attempts after a void, and the floor
 device's recorded conditions. Second (2026-10-11): the x86 machine is a
 Windows laptop with two registered runs, one per core design; the shared
 Linux dev box is dropped; the re-run limit is per registered run and needs
-the cause fixed; and the closing rule names which runs close RT-P4. The
-method, the comparisons, the thresholds, the control and the inputs are as
-first pushed (`b1b9193c5`).*
+the cause fixed; and the closing rule names which runs close RT-P4.
+Third (2026-10-11, before any build on the laptop and while the
+floor-device run was under way, none of its output read): the laptop's
+processor is corrected from the machine's own enumeration, it has one core
+design and so one run, and its conditions are stated as that machine can
+meet them. The method, the comparisons, the thresholds, the control and
+the inputs are as first pushed (`b1b9193c5`).*
 
 **Subject.** `fips203` 0.4.3, `ml_kem_768`, `try_decaps`, built in release
 profile from this workspace's lock file. The harness is
@@ -90,9 +93,9 @@ Each comparison is read on its own figure. In particular
 ciphertext corresponds to, are not cleared by any other comparison's
 result.
 
-**Runs.** Three registered runs: one on the floor device, and two on the
-laptop, one pinned to a performance core and one to an efficiency core
-(below). Each is one run and each has its own verdict. A fail or an
+**Runs.** Two registered runs: one on the floor device, and one on the
+laptop, pinned to one logical processor (below). Each is one run and each
+has its own verdict. A fail or an
 inconclusive is not re-run to get a different answer. A **void** run may
 be made again, within these limits, fixed before anything runs:
 
@@ -106,8 +109,8 @@ be made again, within these limits, fixed before anything runs:
 
 **Inputs.** The registered runs draw their inputs from a seed that no run
 had used when this was registered: not the first registration's, and not
-any diagnostic's. All three draw the same inputs, so they are the same
-question put to three cores. The harness prints `inputs=registered` when
+any diagnostic's. Both draw the same inputs, so they are the same
+question put to two processors. The harness prints `inputs=registered` when
 it uses that seed.
 
 **Machines**, by role and processor.
@@ -132,39 +135,57 @@ it uses that seed.
   (`total_trans`). The last two say directly whether and how much the
   clock moved during the run, which is what the flags would be read for.
 
-- **x86: a Windows laptop with a 14th-generation Intel Core i9 (Raptor
-  Lake)**, a hybrid processor with two core designs. The exact processor
-  and its core layout are enumerated from the machine before the run and
-  recorded with the results. Two registered runs, each on **one logical
-  processor**, with that core's hyperthread sibling, where it has one,
-  left idle:
+- **x86: a Windows laptop with an 11th-generation Intel Core i9
+  (i9-11950H, Tiger Lake-H).** Enumerated from the machine before any
+  build there: one socket, eight physical cores, sixteen logical
+  processors; every core is the same design (one efficiency class) and
+  every core has two hyperthreads, logical processors `2n` and `2n+1`.
+  **One registered run, pinned to one logical processor, with its
+  hyperthread sibling left idle.**
 
-  - **the P-core run**, pinned to a logical processor of a performance
-    core;
-  - **the E-core run**, pinned to a logical processor of an efficiency
-    core.
+  *How this amendment reached the record.* The maintainer was at that
+  machine and gave these rulings there: that this is the machine, and that
+  Defender stays on. They came to this lane relayed by the agent on that
+  machine, not directly, and are recorded as relayed.
 
-  Each is its own verdict, for that core design. The P-core run is made
-  first.
+  *This is not what the second amendment registered, and the difference is
+  stated.* That amendment named a 14th-generation hybrid processor and two
+  runs, one per core design. The processor was named from memory; the
+  machine, asked, is the one above, and it has one core design. There is no
+  efficiency core to pin to, so the E-core run does not exist and is not
+  replaced by anything.
 
-  *Conditions.* A release build for the MSVC target, with `--locked`, from
-  a fresh clone of the pushed commit. Mains power; best-performance mode;
-  Defender real-time scanning paused; Windows Update and search indexing
-  deferred; nothing else running. Recorded with each run: the value of
-  `QueryPerformanceFrequency`; which logical processor was used and its
-  core type; the CPU temperature and clock speed at the start and the end;
-  and, since "idle" should be a recorded fact, how busy the sibling
-  logical processor was over the run. Any of these conditions that cannot
-  be set or read from the session that makes the run is recorded as not
-  set or not read, with the reason, and is not passed over.
+  *Conditions, as they can and cannot be met on this machine.* A release
+  build for the MSVC target, with `--locked`, from a fresh clone of the
+  pushed commit, on a drive that holds no synced folder. Mains power. The
+  session that makes the run is not elevated, and the rest follows from
+  that and from the machine:
+
+  | Condition registered in the second amendment | On this machine |
+  |---|---|
+  | Best-performance mode | recorded as found at the start; the session cannot change it. If the maintainer sets it before the run, that is what is recorded |
+  | Defender real-time scanning paused | **left on, as found.** The maintainer's ruling: most Windows machines run with it on, so a result measured with it on is the one an operator sees. (It also could not have been paused: with Tamper Protection on, the command to disable it is accepted silently and does nothing, which was found by reading the state back.) The maintainer reports having excluded the run's directory and binary from scanning; the session cannot read the exclusion list, so that is recorded as reported, not verified. A daily scan is scheduled for 02:00 local time, and the run is started well clear of it |
+  | Update and indexing deferred | cannot be stopped from this session. Recorded as found, with each service's CPU time over the run |
+  | Nothing else running | the session starts nothing else. What else is running, and its CPU time over the run, is recorded; closing the file-sync clients and the editor is the maintainer's to do |
+  | CPU temperature at start and end | **not readable** on this machine. Recorded as not measurable |
+  | CPU clock at start and end | the nominal figure does not move; the live reading is the processor-performance counter (a percentage of base clock), recorded at the start and the end and sampled through the run |
+
+  Also recorded: the value of `QueryPerformanceFrequency` (10,000,000 when
+  enumerated); which logical processor was used; and how busy its sibling
+  was over the run, since "idle" should be a recorded fact.
+
+  None of these conditions is a line. They are what a void or a marginal
+  figure would be read against, and the null comparisons are what says
+  whether the machine was quiet enough: a machine too disturbed to compare
+  a class with itself voids its own run.
 
   Two things differ from the floor device and are stated so the results
-  are read with them: the operating system, and the clock, which on
-  Windows is read through `QueryPerformanceCounter`; at its usual 10 MHz
-  one tick is 100 ns, a larger share of a decapsulation than the floor
-  device's 18.5 ns tick is of its own. The statistic averages over a
-  million samples and resolves below a tick; the control says whether it
-  resolved enough.
+  are read with them: the operating system, and the clock. Each
+  decapsulation is timed on its own, and on this machine one clock tick is
+  100 ns, so the per-class percentiles the harness prints move in 100 ns
+  steps and cannot show a difference smaller than that. The t statistic
+  averages over a million samples and resolves below a tick; the control
+  says whether it resolved enough.
 
 *The shared Linux dev box is dropped.* It was the x86 machine of the first
 record and of this registration as first pushed. It is too busy and too
@@ -199,10 +220,11 @@ NTT's division). The x86 code is read the same way, from the laptop's own
 binary, and recorded with the results.
 
 **What closes RT-P4.** A **pass on the floor device and on the laptop's
-P-core run**, under these lines: RT-P4 is met, and `RPC_CHANNEL.md` §4.3's
-"demonstrated by RT-P4" stands, with the reach above. The **E-core run is
-recorded as coverage** of a second x86 core design and does not gate the
-close. A **fail on any of the three runs is a finding for that core
-design**, reported with its evidence, and sends `libcrux-ml-kem` and
+run**, under these lines: RT-P4 is met, and `RPC_CHANNEL.md` §4.3's
+"demonstrated by RT-P4" stands, with the reach above, for the two core
+designs measured: Cortex-A72 and Tiger Lake. No efficiency-core design has
+been measured, and the record says so wherever the result is quoted. A
+**fail on either run is a finding for that core design**, reported with
+its evidence, and sends `libcrux-ml-kem` and
 RustCrypto `ml-kem` through this same harness, so that the choice of
 implementation goes to the maintainer with those numbers.
