@@ -4,8 +4,10 @@
 authorizes no implementation; slices are authorized one at a time (§13).
 §3's rulings were given on 2026-10-08 and 2026-10-09; §4–§8 (mechanism,
 failure modes, keys, authorization, listeners, tunnel) were ratified whole
-on 2026-10-09. §9 registers the probes, which are measurements still to
-run, not open design.
+on 2026-10-09. §9 registers the probes, which are measurements, not open
+design. Two have been run and are met, both in RT-W8: RT-P7 (the model,
+2026-10-10) and RT-P4 (constant-time decapsulation, 2026-10-11). RT-P5,
+RT-P6 and RT-P8 are still to run.
 **Verified against:** `shekyl-core` @ `a86ba6d13f` (`dev`). Every
 `file:line` into this repository was read at that commit. Citations into
 clatter name their own commit (§4.1).
@@ -1476,7 +1478,7 @@ rule-26 pre-flight before its first production commit.
 | Slice | Contents | Depends on | Authorization |
 |---|---|---|---|
 | RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, vectors pinned from clatter 2.3.0 under seeded randomness, which RT-W9 compares our handshake against (RT-O11), each observed changing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; creates `shekyl-rpc-channel` with the constants and naming functions (RT-O13); deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
-| RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); padded records in size classes derived from RT-P5 and RT-P6, one framing shared with P2P (RT-O6); one exclusion row in the domain registry, with its reason, for Noise protocol names — the RPC channel's and the P2P handshake's — which are literals mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; deadline from RT-P6 | RT-W8 | not authorized |
+| RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); padded records in size classes derived from RT-P5 and RT-P6, one framing shared with P2P (RT-O6); one exclusion row in the domain registry, with its reason, for Noise protocol names — the RPC channel's and the P2P handshake's — which are literals mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; deadline from RT-P6. **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | not authorized |
 | RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 | not authorized |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9) | RT-W9 | not authorized |

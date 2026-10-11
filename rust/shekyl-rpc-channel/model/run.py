@@ -54,7 +54,6 @@ import concurrent.futures
 import os
 import pathlib
 import re
-import resource
 import shutil
 import subprocess
 import sys
@@ -558,8 +557,16 @@ def verdicts(output):
     return found
 
 
-def _cap_memory():
-    resource.setrlimit(resource.RLIMIT_AS, (VARIANT_MEMORY_BYTES, VARIANT_MEMORY_BYTES))
+# The cap is applied by a shell that sets its own limit and then becomes
+# ProVerif. Rows are launched from worker threads, and a `preexec_fn` runs
+# Python between fork and exec, where a lock another thread held at the fork
+# is held for ever: the child can hang before ProVerif starts, and before the
+# deadline loop is watching it.
+_CAPPED = 'ulimit -v "$1" && exec "$2" "$3"'
+
+
+def _capped_command(binary, path):
+    return ["/bin/sh", "-c", _CAPPED, "sh", str(VARIANT_MEMORY_BYTES // 1024), binary, str(path)]
 
 
 def _report_as_done(results):
@@ -614,8 +621,8 @@ def main():
         # wait4 and its own peak memory read: the cap is only a good cap if
         # somebody can see how close each row runs to it.
         with open(work / f"{name}.{query}.out", "w+", encoding="utf-8") as sink:
-            child = subprocess.Popen([binary, str(path)], stdout=sink, stderr=subprocess.STDOUT,
-                                     preexec_fn=_cap_memory)
+            child = subprocess.Popen(_capped_command(binary, path), stdout=sink,
+                                     stderr=subprocess.STDOUT)
             deadline = started + VARIANT_TIMEOUT_SECONDS
             while True:
                 pid, status, usage = os.wait4(child.pid, os.WNOHANG)

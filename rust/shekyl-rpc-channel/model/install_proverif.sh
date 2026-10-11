@@ -46,7 +46,22 @@ fi
 mkdir -p "${PREFIX}"
 PREFIX="$(cd "${PREFIX}" && pwd)"
 BINARY="${PREFIX}/proverif${PROVERIF_VERSION}/proverif"
-if [ -x "${BINARY}" ] && "${BINARY}" -help 2>&1 | grep -q "^Proverif ${PROVERIF_VERSION}\."; then
+
+# Whether the binary at BINARY is the pinned version. Its help text is
+# captured whole and then matched: piped into an early-exiting `grep -q`
+# under pipefail, a good binary still writing when grep closes the pipe
+# would be read as a bad one (rule 46).
+is_pinned_proverif() {
+  local help
+  [ -x "${BINARY}" ] || return 1
+  help="$("${BINARY}" -help 2>&1)" || true
+  case "${help}" in
+    "Proverif ${PROVERIF_VERSION}."* | *$'\n'"Proverif ${PROVERIF_VERSION}."*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if is_pinned_proverif; then
   echo "install_proverif.sh: ${BINARY} is already ProVerif ${PROVERIF_VERSION}"
   exit 0
 fi
@@ -79,7 +94,11 @@ export OPAMCOLOR=never
 # container may not grant. The packages built are the pinned compiler and two
 # build tools, fetched from the opam repository.
 [ -d "${OPAMROOT}" ] || "${OPAM}" init --bare --no-setup --disable-sandboxing
-"${OPAM}" switch list --short | grep -qx pv || "${OPAM}" switch create pv "${OCAML_COMPILER}"
+switches="$("${OPAM}" switch list --short)"
+case $'\n'"${switches}"$'\n' in
+  *$'\n'pv$'\n'*) ;;
+  *) "${OPAM}" switch create pv "${OCAML_COMPILER}" ;;
+esac
 "${OPAM}" install --switch pv "${OCAMLFIND}" "${OCAMLBUILD}"
 
 fetch "${PROVERIF_URL}" "${PROVERIF_SHA256}" "proverif${PROVERIF_VERSION}.tar.gz"
@@ -89,7 +108,7 @@ cd "proverif${PROVERIF_VERSION}"
 eval "$("${OPAM}" env --switch pv --set-switch)"
 ./build -nointeract
 
-if ! "${BINARY}" -help 2>&1 | grep -q "^Proverif ${PROVERIF_VERSION}\."; then
+if ! is_pinned_proverif; then
   echo "install_proverif.sh: the build did not produce ProVerif ${PROVERIF_VERSION} at ${BINARY}" >&2
   exit 1
 fi

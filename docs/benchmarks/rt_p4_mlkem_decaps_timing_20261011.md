@@ -416,6 +416,13 @@ this lane relayed, as the registration says. This run's output and
 conditions are the agent's report from that machine, checked by checksum
 as above, not files this lane copied.
 
+**Confirmed afterwards by the maintainer, directly (2026-10-11).** Three
+things, in this lane and not by relay: that the laptop is the i9-11950H,
+with one core design and one registered run; that Defender stays on; and
+that the closing rule is as recorded, a pass on both machines. "RT-P4 is
+met as the record states." The registered section above keeps the word
+"relayed" because that is how the rulings stood when the runs were made.
+
 ### The x86 code, read
 
 From `dumpbin /disasm` of the laptop's own binary (listing sha256
@@ -498,3 +505,9 @@ What it does not cover, so that nobody reads more into it:
   side-effects observable by code sharing the machine.
 - **The first registration's floor-device failure stands in its own
   record**, with the diagnosis that it was the harness.
+
+**Standing check (ruled 2026-10-11).** The code that was measured is
+fixed by two pins, the ML-KEM crate and the Rust toolchain. When either
+changes, this harness is re-run under these same lines, registered before
+the run, on the floor device and on an x86 core. It is carried by the
+RT-W9 slice row in `RPC_CHANNEL.md` §13.
