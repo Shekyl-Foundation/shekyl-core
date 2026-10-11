@@ -27,11 +27,12 @@ serde.workspace = true
 hex = "0.4"
 zeroize = { workspace = true }
 rand = "0.8"
-rand_chacha = "0.3"
 # The stream cipher under `seeded_rng::SeededRng`, the one RNG a re-derivable
 # key is generated from. `rand_chacha`'s generator gives the same bytes and
 # does not wipe itself; this one does, and only with `zeroize` on (a test in
-# that module stops compiling if the feature is dropped). Already in
+# that module stops compiling if the feature is dropped). `rand_chacha` is a
+# dev-dependency: it is the oracle that test compares against, and no shipped
+# code builds a generator from it. Already in
 # `Cargo.lock` at this version with this feature, through `shekyl-chacha` —
 # adds no package to the supply chain (`17-dependency-discipline`).
 chacha20 = { version = "0.9", features = ["zeroize"] }
@@ -212,6 +213,11 @@ serde_json = "1"
 postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"] }
 
 [dev-dependencies]
+# The oracle for `seeded_rng::SeededRng`: every re-derivable key was frozen on
+# `ChaCha20Rng::from_seed`'s stream, and the test that holds the two equal
+# needs the original. Not a dependency of the library, so no shipped path can
+# reach for the generator that does not wipe itself.
+rand_chacha = "0.3"
 # Self-reference enabling `test-utils` for this crate's own integration tests
 # and benches (F-7): `generate_ephemeral_keypair_for_tests` is gated behind
 # that feature, and a separate integration-test crate cannot see the in-crate
