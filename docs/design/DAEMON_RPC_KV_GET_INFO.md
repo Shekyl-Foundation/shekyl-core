@@ -437,10 +437,21 @@ with the FFI shim as today's only implementation:
 the caller receives and reads only those. Health, Identity, Chain,
 Economics and Pool's broadcast count are read for every caller. Status and
 Peers are read only for a caller who receives them, so their reads cannot
-fail a caller who was never going to see them, and a public caller costs
-the node no filesystem or peer-registry read. `PeerFacts`'s session counts
+fail a caller who was never going to see them. `PeerFacts`'s session counts
 feed two parts: Status's two aggregate counts are read with Status, and
 Health's `has_peers`, from commit 7, is read for everyone.
+
+*What a public caller costs.* This paragraph first said such a caller
+"costs the node no filesystem or peer-registry read". That was wrong on
+both counts as built, and is corrected here (found in review of #1017,
+2026-10-10). The store's size is a filesystem read made for every caller
+while a restricted reply carries `database_size` rounded: the exception
+recorded below, which ends at RK-Q8. And since commit 7 the board's
+handshaken-session count is read for every caller of an online node,
+because Health is everyone's. What a public caller does not cost is the
+Status and Peers reads: the volume's free space, the start time, the
+alt-block count, the connection and socket counts, and the peerlist
+sizes.
 
 *Where the version string comes from.* The build's version string exists
 only in C++ (`SHEKYL_VERSION_FULL`); nothing in `rust/` has it. It is a

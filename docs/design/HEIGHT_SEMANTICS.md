@@ -40,8 +40,8 @@ age / depth / window — neither):
 | Difference | span between two instants | n/a | `BlockCount` (`rust/shekyl-types/src/lib.rs:342-348`) |
 
 C++ overloads "height" for the count (`m_db->height()`, `get_height`,
-`get_info.height` after `++res.height` at
-`src/rpc/core_rpc_server.cpp:206-207`). The Rust vocabulary already
+and `get_info.height`, which the C++ handler wrote as the top block's
+height plus one until that handler was deleted in RK-5c). The Rust vocabulary already
 splits the types; the remaining tax is callers that wrap a count in
 `BlockHeight` — and, found 2026-10-01, a whole surface the census did
 not walk that carries both quantities as bare `u64` (the daemon store
@@ -190,8 +190,8 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
   core reporting no target; synchronization is a separate fact. Since
   `CORE_RPC_VERSION` 3.46 the wire does not carry that `0` at all:
   `get_info`, `get_version` and `sync_info` write the core's target, or
-  `null` when it has none (`DAEMON_RPC_KV_GET_INFO.md` RK-D15, RK-Q7)
-  (`core_rpc_server::on_get_info`, `src/rpc/core_rpc_server.cpp:209`).
+  `null` when it has none (`DAEMON_RPC_KV_GET_INFO.md` RK-D15, RK-Q7;
+  `get_info`'s producer is `rust/shekyl-daemon-rpc/src/info.rs:231-234`).
   Inland code does not encode `0` as `ChainCount`.
 - **C6 Template height is `ChainCount::next_height()`.**
   `create_block_template` sets `height = m_db->height()`
@@ -241,8 +241,8 @@ producers cited at source.
 | --- | --- | --- | --- |
 | `GET /get_height` | `GetHeightResponse.height` (`rust/shekyl-rpc-types/src/chain.rs:179`) | COUNT | Facts POD already `+1` (`src/rpc/rpc_facts_ffi.cpp:73-75`); handler copies (`rust/shekyl-daemon-rpc/src/methods.rs:102-108`). Wallet client documents "amount of blocks", genesis-only = 1 (`rust/shekyl-rpc-client/src/lib.rs:380-384`). |
 | `get_block_count` | `GetBlockCountResponse.count` (`rust/shekyl-rpc-types/src/chain.rs:191`) | COUNT | Same chain-height as `/get_height`, honest field name. |
-| `GET /get_info` | `height` | COUNT | C++ still serves: `get_blockchain_top` then `++res.height` (`src/rpc/core_rpc_server.cpp:206-207`). |
-| `GET /get_info` | `target_height` | COUNT or `null` | The core count, forwarded, synchronized or not; `null` when the core reports none (`rust/shekyl-daemon-rpc/src/info.rs:215-218`). The `0`-when-synchronized sentinel was retired at `CORE_RPC_VERSION` 3.46 (RK-D15). The core stores the peer-advertised count (`core::set_target_blockchain_height`, `src/cryptonote_core/cryptonote_core.cpp`), so it is information and no reader decides on it. |
+| `GET /get_info` | `height` | COUNT | Served from Rust since RK-5c. The facts POD carries the chain's count, `get_current_blockchain_height()` (`src/rpc/rpc_facts_ffi.cpp:1101`), decoded as `ChainCount`; the handler writes its raw value (`rust/shekyl-daemon-rpc/src/info.rs:204`, `:227`). |
+| `GET /get_info` | `target_height` | COUNT or `null` | The core count, forwarded, synchronized or not; `null` when the core reports none (`rust/shekyl-daemon-rpc/src/info.rs:231-234`). The `0`-when-synchronized sentinel was retired at `CORE_RPC_VERSION` 3.46 (RK-D15). The core stores the peer-advertised count (`core::set_target_blockchain_height`, `src/cryptonote_core/cryptonote_core.cpp`), so it is information and no reader decides on it. |
 | `get_version`, `sync_info` | `target_height` | COUNT or `null` | The core count, forwarded; `null` when the core reported none (`rust/shekyl-daemon-rpc/src/methods.rs:115-116`, `rust/shekyl-daemon-rpc/src/methods.rs:130`, `rust/shekyl-daemon-rpc/src/methods.rs:1333-1335`). Inland: `Option<ChainCount>` (C5). The synchronized `0` was retired at `CORE_RPC_VERSION` 3.40, and the `0` (or omitted member) for "no target" at 3.46. |
 | `get_version` | `current_height` (`rust/shekyl-rpc-types/src/chain.rs:394`) | COUNT | `tip.chain_height.to_raw()` (`rust/shekyl-daemon-rpc/src/methods.rs:137`). |
 | `get_block_hash` number / `GetBlockRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:275`) / `GetBlockHeaderByHeightRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:319`) / `GetBlocksByHeightRequest.heights` (`rust/shekyl-rpc-types/src/bin_commands.rs:165`) | those fields | ORDINAL | Zero-indexed position (`rust/shekyl-rpc-client/src/lib.rs:410-413`). Bound vs COUNT is `height >= chain_height` (`src/rpc/rpc_facts_ffi.h:82`). |
@@ -334,8 +334,9 @@ quantity.
   `ChainCount`; `ChainTip.target_height` is `Option<ChainCount>`
   (`None` when the core reported no target, C5). `get_version` and
   `sync_info` forward that count (`0` only when the core reported none).
-  `get_info` still writes `0` when synchronized
-  (`core_rpc_server::on_get_info`). Wallet client `Rpc::get_height`
+  `get_info` still wrote `0` when synchronized at the time of this
+  ruling, from the C++ handler; that handler is deleted and the `0`
+  retired at 3.46. Wallet client `Rpc::get_height`
   returns `ChainCount` (name kept, C7). `ref_age_window` takes
   `ChainCount` vs `BlockHeight` and punches to raw at that one named
   site. Inland handlers bound a requested ordinal with

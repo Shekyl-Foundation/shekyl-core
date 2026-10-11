@@ -9,8 +9,21 @@
 //! `get_info` is gathered **by part** (RK-D24): a part the caller will not
 //! be shown is not read. So [`InfoFacts`] is not one snapshot of everything
 //! but six reads, and the handler makes only those its caller is entitled
-//! to. A read that is never made cannot fail the caller it was never for,
-//! and a public caller costs the node no filesystem or peer-registry read.
+//! to. A read that is never made cannot fail the caller it was never for.
+//!
+//! What a restricted (public) caller costs, exactly:
+//!
+//! - **Not read:** Status (start time, the volume's free space, the
+//!   alt-block count, the two connection counts) and Peers (the socket
+//!   counts and peerlist sizes).
+//! - **Read, as for every caller:** the chain, the pool's broadcast count,
+//!   and the board's handshaken-session count, which is behind Health's
+//!   `has_peers` and is skipped only for an offline node.
+//! - **Read, as a transitional exception:** the store's size on disk, one
+//!   `stat` of the data file. A restricted reply still carries
+//!   `database_size`, rounded, so the caller receives it and it is read
+//!   for them. It joins the not-read set when a restricted reply stops
+//!   carrying Status (RK-Q8).
 //!
 //! **This trait is the contract the store cutover inherits.** Today its one
 //! implementation reads the C++ core through the facts shim. When the Rust
