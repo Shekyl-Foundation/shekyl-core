@@ -1,10 +1,9 @@
 # RT-W9 — the channel itself: rule-26 pre-flight
 
 **Status:** Round 0 pre-flight — **questions RULED 2026-10-11** (Rick):
-`RT-O16`…`RT-O22`, §4, with **one part of RT-O21 still open** (which
-wallet RT-P5 measures). The substrate re-check is recorded (§2) and what
-could and could not be executed is stated (§3), so the slice's steps may
-proceed in the order of §5; step 3's measurement waits on the open part.
+`RT-O16`…`RT-O22`, §4, every part. The substrate re-check is recorded (§2)
+and what could and could not be executed is stated (§3), so the slice's
+steps may proceed in the order of §5.
 Slice RT-W9 was authorized 2026-10-11 (Rick, in this lane).
 **Ground:** `shekyl-core` `dev` **`258b4d8515`**, the merge of PR #1020.
 Every `file:line` below was read at that commit.
@@ -85,7 +84,8 @@ What the slice builds on, read at source.
 
 Each is kept as it was asked, with the recommendation it carried, and the
 ruling under it. Where the ruling differs from the recommendation, the
-ruling is what is built.
+ruling is what is built. The rulings were given in this lane and confirmed
+there as the maintainer's own, not a draft.
 
 ### RT-O16 — How do P2P's tests reach the record layer's internals after the move?
 
@@ -232,11 +232,16 @@ left open.
   the probe, registered with it and observed in it, not a detail chosen
   after.
 - **A rule-21 reopen is recorded:** the size classes are re-derived from
-  mainnet traffic once there is any. Until then they rest on testnet
+  mainnet traffic once there is any. Until then they rest on generated
   traffic and say so.
-- **Open:** which wallet. The ruling as it reached this lane left that
-  answer blank. Step 3's registration cannot be written without it, and
-  nothing before step 3 depends on it.
+- **Which wallet: a generated one** (ruled the same day, after the rest).
+  No existing testnet wallet is used. A new wallet has no history, so the
+  traffic is generated too: a regtest chain carrying full-size
+  transactions, which the wallet then syncs, and a submission from it.
+  What is generated, and how much, is part of step 3's registration and is
+  written there before anything runs. This makes the rule-21 reopen above
+  matter more, not less: the classes rest on generated traffic until
+  mainnet has its own.
 
 ### RT-O22 — Does the standing check also pin the codegen settings?
 
