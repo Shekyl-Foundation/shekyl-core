@@ -557,8 +557,9 @@ is needed is decided from RT-P6's measurement, not before it.
   handshake, its prefix and its two vector files; the test that asserts
   them is unchanged and passes where it was. Its tests reach the record
   layer's key schedule through a `test-support` feature that a gate keeps
-  out of every production build (RT-O16,
-  `scripts/ci/check_noise_test_support.py`).
+  out of every production build (RT-O16; a `TEST_ONLY` row of
+  `scripts/ci/check_test_only_features.py`, the workspace's existing gate
+  for features that must stay on dev-dependency edges).
 - **HTTP over records.** hyper and axum expect a byte stream; the channel
   delivers records of at most 64 KiB. A stream adapter — `AsyncRead` /
   `AsyncWrite` over seal/open, with backpressure, record splitting for

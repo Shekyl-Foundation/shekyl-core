@@ -20,8 +20,10 @@
 //!
 //! It exposes raw keys and lets a test set a nonce, so that a handshake's
 //! tests can pin the key schedule across the crate boundary. It is for
-//! `[dev-dependencies]` only. `scripts/ci/check_noise_test_support.py` fails
-//! the build if any other kind of dependency turns it on.
+//! `[dev-dependencies]` only. `scripts/ci/check_test_only_features.py` holds
+//! it there: CI fails if any other kind of dependency turns it on, and a
+//! second CI lane lints this crate with the feature off, as a release build
+//! compiles it.
 
 pub mod aead;
 pub mod channel;

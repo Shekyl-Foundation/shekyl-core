@@ -139,7 +139,7 @@ impl SendHalf {
 
     /// Test support: the chaining key and the record key, for a test that
     /// pins the key schedule. Raw keys: never reachable in a production
-    /// build (`scripts/ci/check_noise_test_support.py`).
+    /// build (`scripts/ci/check_test_only_features.py`).
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
@@ -175,7 +175,7 @@ impl RecvHalf {
 
     /// Test support: the chaining key and the record key, for a test that
     /// pins the key schedule. Raw keys: never reachable in a production
-    /// build (`scripts/ci/check_noise_test_support.py`).
+    /// build (`scripts/ci/check_test_only_features.py`).
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
