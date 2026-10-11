@@ -4,12 +4,14 @@
 Symbolic models of Shekyl's Noise handshakes, checked in CI against pinned
 verdicts. This directory is the shared library and the P2P transport's
 NNhfs model, which is PWD-T1's handshake. It is not the RPC slice RT-W8.
-The RPC channel's hybridXK model (RT-P7) lives with its crate and adopts
-the library when it merges.
+The RPC channel's hybridXK model (RT-P7) lives with its crate
+(`rust/shekyl-rpc-channel/model/`) and loads this library with `-lib`.
 
 ```text
 docs/formal/proverif/
-├── lib/noise.pvl             the shared library: symmetric state, X25519, ML-KEM, AEAD
+├── lib/noise.pvl             primitives both models load: symmetric state, X25519, ML-KEM, AEAD
+├── lib/broken.pvl            both models: broken_dh, broken_kem, loaded after noise.pvl
+├── lib/encrypt_and_hash.pvl  NNhfs only: eah/dah, the one-letfun EncryptAndHash
 ├── nnhfs/model.py            the pattern, the walk, the claims
 ├── nnhfs/run.py              executes variants/ and checks the pins
 ├── nnhfs/variants/*.pv       every variant the runner executes, generated and checked
@@ -35,9 +37,24 @@ row, not a query in this model.
 
 ## The library — `lib/noise.pvl`
 
-One declaration of each primitive, loaded with `proverif -lib`. The names
-and signatures are the ones the RT-P7 model declared inline, so that model
-adopts the library by replacing its prelude with `-lib`.
+One declaration of each primitive, loaded with `proverif -lib`, then
+`lib/broken.pvl`. hybridXK and NNhfs both load those two, in that order.
+NNhfs then loads `lib/encrypt_and_hash.pvl`. hybridXK does not: its pattern
+writes `aead` and `mixh` itself, and a letfun is a function the attacker
+can apply.
+
+The names and signatures are the ones the RT-P7 model used to declare
+inline. This file stays the declarations and the section notes. A long
+comment in it does not change the resolution of hybridXK's
+`identity_hidden_after_leak` query, and it does change the memory. With
+that essay loaded, the resident peak was 5,566 MiB and the 6 GiB
+address-space cap aborted the same search at the 61,000-rule step, where
+this file continues and proves. The essay is the section above. With the
+break constants loaded from `broken.pvl`, `run.py` records
+`identity_hidden_after_leak` at 5,287 MiB and
+`identity_hidden_kem_after_leak` at 5,289 MiB. Declaring the constants
+after the model's events instead peaked at 5,252 MiB on the same
+resolution, so they live in the one shared file.
 
 | Noise | Library | Notes |
 | --- | --- | --- |
@@ -45,11 +62,11 @@ adopts the library by replacing its prelude with `-lib`.
 | `MixHash(data)` | `mixh(h, data)` | |
 | `MixKey(ikm)` | `kdfck(ck, ikm)`, `kdfk(ck, ikm)` | HKDF's two outputs; the nonce restarts at `n0` per key |
 | `MixKeyAndHash(ikm)` | `… + kdfh(ck, ikm)` | the third output, mixed into `h` by the model that needs it |
-| `EncryptAndHash(m)` | `eah(k, n, h, m)` → `(ct, h')` | `aead` then `mixh` of the ciphertext; `dah` opens |
+| `EncryptAndHash(m)` | `eah(k, n, h, m)` → `(ct, h')` in `lib/encrypt_and_hash.pvl` | NNhfs only. `aead` then `mixh`; `dah` opens |
 | `Split()` | `split1(ck)`, `split2(ck)` | initiator→responder, responder→initiator |
 | X25519 | `g`, `exp`, the commutation equation | low-order points do not exist here |
 | ML-KEM-768 | `kpk`, `kct`, `kss`, `kdecaps` | a ciphertext opens only under its secret key |
-| a broken primitive | `broken_dh`, `broken_kem` | the model uses the constant in place of that primitive's output |
+| a broken primitive | `broken_dh`, `broken_kem` in `lib/broken.pvl` | Both models load the file after `noise.pvl`. The model uses the constant in place of that primitive's output |
 
 `kdfh` and `n2` have no NNhfs caller. They stay for hybridXK. A break is
 the constant substituted for the output, not an equation: a discrete-log
@@ -125,5 +142,5 @@ workflow, and fails if any verdict changes.
 
 `install_proverif.sh` is the one recipe: ProVerif 2.05 from source, a
 pinned OCaml, a pinned opam-repository revision, every download checked
-against a recorded SHA-256. The RT-P7 model adopts it and the library,
-deleting its own copy (FOLLOWUPS).
+against a recorded SHA-256. The RT-P7 model uses this recipe and the
+library; the copy that first lived beside that model is deleted.

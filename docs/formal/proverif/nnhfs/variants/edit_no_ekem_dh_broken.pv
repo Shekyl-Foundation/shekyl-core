@@ -4,7 +4,9 @@
    Edits:    no_ekem
    Breaks:   dh
    PWD-T1 Noise_NNhfs. The walk follows the pattern; an edit drops a token.
-   Load with: proverif -lib docs/formal/proverif/lib/noise.pvl <this file> *)
+   Load with: proverif -lib docs/formal/proverif/lib/noise.pvl
+   -lib docs/formal/proverif/lib/broken.pvl
+   -lib docs/formal/proverif/lib/encrypt_and_hash.pvl <this file> *)
 
 free c: channel.
 (* The honest pair's link under a passive attacker. Every message that
