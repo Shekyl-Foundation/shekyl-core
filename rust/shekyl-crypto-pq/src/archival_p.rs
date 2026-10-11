@@ -243,8 +243,27 @@ fn p_info(label: &[u8], p_slot: u32) -> Vec<u8> {
     out
 }
 
-/// HKDF-Expand `master_seed` to 64 bytes under `(net, fmt)` salt and the
-/// `(label, p_slot)` info. The 64-byte form is wide-reduced by scalar consumers.
+/// HKDF-Expand `master_seed` to `N` bytes under `(net, fmt)` salt and the
+/// `(label, p_slot)` info. The output is written into the `Zeroizing` it is
+/// returned in. A bare array filled and then wrapped would be `Copy`, so the
+/// wrap would leave the first copy on the stack.
+fn p_expand<const N: usize>(
+    master_seed: &[u8; MASTER_SEED_BYTES],
+    net: DerivationNetwork,
+    fmt: SeedFormat,
+    label: &[u8],
+    p_slot: u32,
+) -> Zeroizing<[u8; N]> {
+    let salt = salt_for(net, fmt);
+    let info = p_info(label, p_slot);
+    let hk = Hkdf::<Sha512>::new(Some(&salt), master_seed);
+    let mut out = Zeroizing::new([0u8; N]);
+    hk.expand(&info, out.as_mut())
+        .expect("output length is within HKDF-SHA-512's maximum");
+    out
+}
+
+/// HKDF-Expand to the 64-byte form scalar consumers wide-reduce.
 fn p_expand_64(
     master_seed: &[u8; MASTER_SEED_BYTES],
     net: DerivationNetwork,
@@ -252,17 +271,10 @@ fn p_expand_64(
     label: &[u8],
     p_slot: u32,
 ) -> Zeroizing<[u8; 64]> {
-    let salt = salt_for(net, fmt);
-    let info = p_info(label, p_slot);
-    let hk = Hkdf::<Sha512>::new(Some(&salt), master_seed);
-    let mut out = [0u8; 64];
-    hk.expand(&info, &mut out)
-        .expect("64 bytes < HKDF-SHA-512 max output");
-    Zeroizing::new(out)
+    p_expand(master_seed, net, fmt, label, p_slot)
 }
 
-/// HKDF-Expand `master_seed` to 32 bytes under `(net, fmt)` salt and the
-/// `(label, p_slot)` info. The 32-byte form is an RFC 8032 / ML-DSA keygen seed.
+/// HKDF-Expand to the 32-byte form an RFC 8032 or ML-DSA keygen seed takes.
 fn p_expand_32(
     master_seed: &[u8; MASTER_SEED_BYTES],
     net: DerivationNetwork,
@@ -270,13 +282,7 @@ fn p_expand_32(
     label: &[u8],
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    let salt = salt_for(net, fmt);
-    let info = p_info(label, p_slot);
-    let hk = Hkdf::<Sha512>::new(Some(&salt), master_seed);
-    let mut out = [0u8; 32];
-    hk.expand(&info, &mut out)
-        .expect("32 bytes < HKDF-SHA-512 max output");
-    Zeroizing::new(out)
+    p_expand(master_seed, net, fmt, label, p_slot)
 }
 
 // --- per-row intermediate derivations (KAT Tier-1 pins) ----------------------
