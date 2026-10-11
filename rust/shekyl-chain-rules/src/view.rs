@@ -556,13 +556,12 @@ pub trait ChainView<'id> {
     /// is absent. What the emission gather credits (`SO-D11a`), read back
     /// by the claim verify.
     ///
-    /// `epochs` is the set of keys to read, so the answer has one entry
-    /// per epoch and each shard once in it, for every implementation; none
-    /// has to order or deduplicate what it is given. This is the read's
-    /// own contract and not what keeps a claim from citing an epoch twice:
-    /// the emission vin's epochs are strictly increasing on the wire
-    /// (`EpochsNotStrictlyIncreasing`), and CEN-J23 gathers once per cited
-    /// epoch from that list.
+    /// `epochs` is the set of keys to read. Each implementation sees an
+    /// epoch once and lists each of its Served shards once, and none
+    /// orders or deduplicates what it is given. A claim cites each epoch
+    /// once for a different reason: the emission vin's epochs are strictly
+    /// increasing on the wire (`EpochsNotStrictlyIncreasing`), and CEN-J23
+    /// gathers once per cited epoch from that list.
     ///
     /// The table is keyed `(P, shard, E)` (`SO-D2`). A store hops the
     /// persona's shards once and point-reads each requested epoch. CEN-J23

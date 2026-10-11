@@ -867,12 +867,12 @@ fn settlement_key_range_is_the_persona() {
 }
 
 /// A17 hops shards and point-reads the cited epochs. A gap between shard
-/// ids, a Missed row, a NonObservation, an uncited Served row, another
-/// persona, and epochs given out of order each have one answer: the cited
-/// epochs' Served shards, ascending, each shard once. The epochs are the
-/// read's key set. A corrupt row on an
-/// epoch the caller did not cite is not decoded; the same bytes on a cited
-/// epoch are SI-7.
+/// ids, a Missed row, a NonObservation, an uncited Served row, and another
+/// persona each have one answer: the cited epochs' Served shards,
+/// ascending, each shard once. The caller passes a set, so order and a
+/// repeated epoch are not inputs of this read. A corrupt row on an epoch
+/// the caller did not cite is not decoded; the same bytes on a cited epoch
+/// are SI-7.
 #[test]
 fn a17_served_at_hops_shards_and_point_reads_the_cited_epochs() {
     let path = tmp("arch-a17");

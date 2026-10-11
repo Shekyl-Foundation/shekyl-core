@@ -166,8 +166,8 @@ impl J23 {
                 budget: budget.to_raw(),
             });
         }
-        // The read's keys. The vin's epochs are strictly increasing on the
-        // wire, so this is the same epochs as a set, not a deduplication.
+        // The read's keys. The vin's epochs are already strictly increasing
+        // (`EpochsNotStrictlyIncreasing`), so the set is that list.
         let epochs: BTreeSet<SettlementEpoch> = cited.iter().map(|cited| cited.epoch).collect();
         let credits = ServedAt::read(view, records.iter().map(|(persona, _)| *persona), &epochs)?;
         let mut gathered = Vec::with_capacity(cited.len());
