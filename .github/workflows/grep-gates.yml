@@ -281,6 +281,11 @@ jobs:
           # not retry (a pin mismatch, any other failure) are held here.
           run_one "Tor live-test retry rule self-test" \
             scripts/ci/test_run_live_tor_tests.sh
+          # The release-time frozen-tuple gate refuses a cut whose consensus
+          # surface moved with the testnet genesis unchanged. It runs against
+          # a previous tag at a cut, so this lane holds its rule instead.
+          run_one "Frozen-tuple gate self-test" \
+            python3 scripts/ci/test_check_frozen_tuple.py
 
           grep_absent "C++ residue: no shekyl_y" \
             grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'
