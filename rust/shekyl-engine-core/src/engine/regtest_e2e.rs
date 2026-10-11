@@ -5556,12 +5556,21 @@ async fn restricted_listener_gets_stand_ins_and_caps_from_native_handlers() {
     );
     // The two listeners describe the same chain.
     assert_eq!(restricted_info.health.height, admin_info.health.height);
-    // Health is told to both. This daemon has no peers and its p2p hub is
-    // up, so it answers `false`; a hub that was not up would refuse.
-    assert!(
-        !restricted_info.health.has_peers && !admin_info.health.has_peers,
-        "a solitary daemon has no peers, and says so on both listeners"
-    );
+    // Health is told to both. This daemon runs `--offline`, which binds no
+    // p2p hub at all. It still answers, and says it has no peers: offline
+    // is configuration, so the handler does not ask a board that is not
+    // there. A handler that asked would refuse this request, and the
+    // harness would never have seen the daemon come up.
+    for (listener, info) in [("restricted", &restricted_info), ("admin", &admin_info)] {
+        assert!(
+            info.health.offline,
+            "{listener}: the harness starts this daemon offline"
+        );
+        assert!(
+            !info.health.has_peers,
+            "{listener}: an offline daemon has no peers, and says so"
+        );
+    }
 
     // ── JSON-RPC: the header cap ────────────────────────────────────────
     //

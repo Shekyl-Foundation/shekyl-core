@@ -120,9 +120,21 @@ pub fn get_info(
     rpc_connections: u64,
 ) -> Result<GetInfoResponse, RpcFault> {
     let chain = facts.chain()?;
-    // Health, so read for every caller. A hub that is not up is a fault
-    // and refuses the reply: `false` would be an answer nobody gave.
-    let has_peers = facts.handshaken_sessions()? > 0;
+    // Health, so read for every caller.
+    //
+    // An offline node is the one case where the board is not read. Offline
+    // is configuration: the p2p layer was told not to start, so it binds no
+    // hub, and "no peers" is known without asking. That is a read avoided,
+    // not a fault mapped: the branch is on what the node was configured to
+    // be, and never on what the read returned.
+    //
+    // Everywhere else a hub that is not up is a fault and refuses the
+    // reply: `false` would be an answer nobody gave.
+    let has_peers = if chain.offline {
+        false
+    } else {
+        facts.handshaken_sessions()? > 0
+    };
     let pool_count = facts.pool_count(if disclosure.host {
         PoolScope::All
     } else {
@@ -567,13 +579,50 @@ pub(crate) mod tests {
         assert_eq!(ours(&synced_facts(), Disclosure::FULL)["has_peers"], true);
     }
 
+    /// **An offline node has no peers, and the board is not asked.** A
+    /// node started `--offline` binds no hub at all, so the read would
+    /// return the missing-hub fault and `get_info` would refuse on every
+    /// offline node. Offline is known from configuration, so the read is
+    /// not made: the count below is zero reads, with the fault armed to
+    /// show that nothing consulted it, and a session count of twenty to
+    /// show that nothing consulted that either.
+    ///
+    /// The edits that turn this red: reading the board for an offline
+    /// node, or turning the fault into `false` after the read.
+    #[test]
+    fn an_offline_node_has_no_peers_and_the_board_is_not_read() {
+        for fault in [None, Some(FactsFault::HubAbsent)] {
+            for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
+                let mut facts = synced_facts();
+                facts.chain.offline = true;
+                facts.handshaken_sessions = 20;
+                facts.handshaken_fault = fault;
+                let reply = serde_json::to_value(
+                    get_info(&facts, disclosure, 0).expect("an offline node answers"),
+                )
+                .expect("the reply serializes");
+                assert_eq!(reply["offline"], true);
+                assert_eq!(reply["has_peers"], false);
+                assert_eq!(
+                    facts.handshaken_reads.load(Ordering::Relaxed),
+                    0,
+                    "{disclosure:?}, fault {fault:?}: the board is not read for an offline node"
+                );
+            }
+        }
+    }
+
     /// **A missing hub refuses; it does not answer `false`** (§4.2). For
     /// every caller: Health is everyone's, so there is no caller the fault
     /// is not for. Until 3.47 the reply carried zero counts here and status
     /// OK.
+    ///
+    /// The node here is online. That is the state in which a missing hub is
+    /// a fact nobody has; an offline node is the test above.
     #[test]
     fn a_missing_hub_refuses_every_caller() {
         let mut facts = synced_facts();
+        assert!(!facts.chain.offline, "the fixture is an online node");
         facts.handshaken_fault = Some(FactsFault::HubAbsent);
         for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
             assert_eq!(

@@ -133,8 +133,10 @@ pub trait InfoFacts: Send + Sync {
     /// Peers facts. Called only on behalf of a caller who is shown Peers.
     fn peers(&self) -> Result<InfoPeersFacts, FactsFault>;
     /// Sessions that have finished the handshake, on every connector and in
-    /// both directions. Read for every caller: it is behind Health's
-    /// `has_peers`, and Health is never withheld.
+    /// both directions. Read for every caller of an online node: it is
+    /// behind Health's `has_peers`, and Health is never withheld. Not read
+    /// for a node that [`InfoChainFacts::offline`] says is offline, which
+    /// binds no hub and has no peers by configuration.
     ///
     /// A session before its handshake is not counted: it cannot relay,
     /// which is what every reader of `has_peers` is asking (RK-Q4).
