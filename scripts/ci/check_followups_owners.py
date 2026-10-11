@@ -76,8 +76,9 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # with #792/#800 (three pre-gate rows: two new, one re-titled); 317 on
 # 2026-10-01 when five grandfathered rows closed (the stub, the
 # target_height sentinel, the Ledger sources, the fcmp fuzz build, and
-# the false test-only-builder claim).
-GRANDFATHER_CEILING = 316
+# the false test-only-builder claim); 309 on 2026-10-11 when the two
+# alt-chain attestation rows closed by dissolution (DRS-E5 `E5-Q4`).
+GRANDFATHER_CEILING = 309
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

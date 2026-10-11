@@ -292,8 +292,6 @@ Age-stratify the foundation floor AND the terminal subsidy toward the irreplacea
 L12 floor-decay schedule should be coupled to the growth↔entry crossover, not a free constant (gate 5 / economics; substrate note).
 Bootstrap APR overshoot is a purse-efficiency note, not a correctness one (gate 5 / economics; substrate note).
 Vanguard eligibility flag set is a provisional pin, unseated only by operation (VG-2 / transport; rule-21 reopen record).
-Validate `prev_id` before attestation verify on the alt-chain path (consensus ordering; independent hardening, NOT a defect).
-Alt-chain attestation verify resolves bond pubkeys from main-chain state
 Land round 19: the relay floor follows raw `C` (FL-R20…FL-R23)
 Disclose the fee-tier privacy trade in the wallet/CLI tier picker
 Block-weight penalty and fee floor price the same expansion off different medians during a surge.

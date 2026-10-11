@@ -1,18 +1,19 @@
 # DRS-E5 — pool, alt chain, prune: the store's consuming increment (`E5-`)
 
-**Status:** OPEN — **Round 1 ruled in full 2026-10-10** (`E5-Q4` last:
-**δ** — B4 whole at the cheap tier with the bond read made *as of the fork
-point* by a read-only reverse replay of `undo_log`, §8; δ replaced γ the
-same day, the pricing premise γ rested on having been refuted at the tree,
-`E5-16`; δ's no-bond arm defers to promotion on the B5 precedent,
-`E5-17`); PR-a building (#1026, draft). Round 0 posed
+**Status:** OPEN — **Round 1 ruled in full 2026-10-10; `E5-Q4` closed by
+dissolution 2026-10-11** (CEN-B4's operand — the attestation witness, the
+header root, the verify path — is deleted by
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §11.1 under
+`SCS-P11`; the alt tier has no archival read to make and CEN-B4 is not
+ported to it, §8); PR-a building (#1026, draft). Round 0 posed
 2026-10-10 at `dev@14d68c00fc`, merged to `dev@ac95d6d04` before the PR
 opened. Pre-flight in §1.1, findings `E5-1…E5-17` (`E5-13…E5-15` are PR-a
-commit 1's measurement, §1.7; `E5-16` and `E5-17` are the review's);
-questions `E5-Q1…E5-Q11` in §8, each with its ruling under its default.
-a4's census amendment (one sentence on CEN-B4's row naming the cheap
-tier's read source and its three arms; CEN-K4's ladder order corrected;
-K4 stays whole) is drafted for ruling before it lands. **The
+commit 1's measurement, §1.7; `E5-16` and `E5-17` are the review's;
+`E5-6` and `E5-17` are dissolved with `E5-Q4`, `E5-16` stands with no
+consumer); questions `E5-Q1…E5-Q11` in §8, each with its ruling under its
+default. a4's census amendment (CEN-K4's row describes the C++ ladder in
+its landed order and names no attestation step for the Rust tier; CEN-B4's
+site pin re-pinned) is drafted for ruling before it lands. **The
 "prune" in this file's name is not an increment of this lane:** the
 retention prune is DRS-E1's and landed 2026-09-25 (S-PRUNE,
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §3's surface table;
@@ -290,10 +291,9 @@ carries the second spelling's deletion with owner `CHAIN_RULES_CRATE.md`.
   `:369`) is therefore two different things that one phrase hid: the
   *cheap tier* (C2-R1 §5.5 Q1a; K4) reads only shape facts (measured at
   `E5-14`: `tip` and the header record — two, not four; the attestation's
-  `bond_record` read Round 0 listed here is the one archival read the
-  cheap tier makes, answered **as of the fork point** from `undo_log`
-  under `E5-Q4`'s ruling δ — not a header fact and not on `HeaderView`,
-  §2.1), and the *promotion tier* (K5) is `validate`
+  `bond_record` read Round 0 listed here as a third is **not made**:
+  CEN-B4 is not ported to the alt tier, `E5-Q4` closed by dissolution,
+  §8), and the *promotion tier* (K5) is `validate`
   over the batch's own `BatchView` after the pops. The alt view is a
   **header view** (§2.1, `E5-Q3`). SAL-7 is not contradicted — it forbids
   an accessor that tells a rule "this hash is an alt block", and a stitched
@@ -305,12 +305,11 @@ carries the second spelling's deletion with owner `CHAIN_RULES_CRATE.md`.
   up to `D_max` below it. A bond slashed between the fork point and the tip
   makes an honest alt block fail the cheap tier. The error is one-sided
   (promotion re-validates against the true state; a wrong refusal is a
-  liveness cost, never a wrong admission) and bounded by `D_max`. §4 prices
-  it; `E5-Q4` asked whether to inherit it and ruled **δ**: the cheap tier
-  makes the read, and makes it *right* — `bond_record` as of the fork
-  point, reconstructed from `undo_log` (`E5-16`). *Records-was:* ruled γ
-  earlier the same day (the read deferred to promotion as B4b);
-  superseded by δ once γ's premise was refuted.
+  liveness cost, never a wrong admission) and bounded by `D_max`.
+  **Dissolved 2026-10-11** with `E5-Q4` (§8): the read exists only in the
+  C++ alt path, which is frozen and deleted with Slice C
+  (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §11.1, `SCS-P11`), and the Rust cheap
+  tier makes no archival read. Neither inherited nor fixed.
 - **E5-7 — the switch's rollback is the transaction.** SAL-14 is confirmed
   at the tree: `store.write`'s closure returning `Err` discards every pop,
   insert and connect; there is nothing to "roll back" and nothing to
@@ -401,9 +400,9 @@ unknown; commit 1 owes it rule by rule"), read at `dev@ac95d6d04`.
   re-bounding touches `anchors.rs` (E1 `:143–144`, E2), `timestamps.rs`
   (C1, C2, C3's window `:131–149`), `pow.rs` (D1, D3's seed `:142–152`),
   `difficulty.rs` (D4's window and `cumulative_after` `:227–266`) and
-  `attestation.rs` (B4's `anchor_window` `:188–203`, under any `E5-Q4`
-  option — see `E5-15`): five, and a different five from §1.0's (version
-  out, attestation in). Beside them: `rules/mod.rs` (the trait and the
+  `attestation.rs` (B4's `anchor_window` `:188–203` — a header fact, bound
+  on `HeaderView` as one; B4 itself is a main-chain rule only, `E5-Q4`):
+  five, and a different five from §1.0's (version out, attestation in). Beside them: `rules/mod.rs` (the trait and the
   `recorded` helper), `view.rs` (the split), the nine `ChainView`
   implementors (`BatchView`, the chain-rules harness views, the ingest
   test tree) each gaining `HeaderView`, and
@@ -431,11 +430,12 @@ unknown; commit 1 owes it rule by rule"), read at `dev@ac95d6d04`.
   view answers honestly, and the C++ passes `alt_chain` to
   `fill_pass_anchor_window` for the same reason, `blockchain.cpp:5034`) and
   the **bond's committed hybrid key** (`committed_hybrid_key`,
-  `view.bond_record(persona)` — the archival read `E5-6` is about). Under
-  every `E5-Q4` option B4's body is factored so the cheap tier can hand the
-  window read one view and the bond read another (or none); the `BlockRule`
-  impl passes its one view to both. This is the fact `E5-Q4`'s pricing
-  turns on (§8).
+  `view.bond_record(persona)` — the archival read `E5-6` was about). This
+  is the fact `E5-Q4`'s pricing turned on (§8); the dissolution made the
+  factoring moot. What the finding still decides: the ratified K4 row
+  names a step the Rust tier does not run, so a4's census amendment
+  rewrites it — the C++ ladder in its landed order, no attestation step
+  for the Rust tier (§5).
 - **E5-16 — the as-of-fork-point bond read exists today; `E5-Q4`'s
   "no table supports it" was false.** (Review finding, 2026-10-10, from
   the pruning lane; verified at the tree before this entry was written.)
@@ -465,39 +465,32 @@ unknown; commit 1 owes it rule by rule"), read at `dev@ac95d6d04`.
   reverse replay over a table the prune reaps would reconstruct a record
   that looks complete and is not. `rg ARCHIVAL_BOND store/prune.rs` → 0:
   the prune touches `UNDO_LOG`, `PROPERTIES` and the two shard tables, not
-  bonds. That absence is δ's reopen criterion (§8). Rule 05 on the
-  implementation: `replay` (`store/undo.rs:504`) is the function; δ is
-  that function in read-only mode, not a second walker.
+  bonds. **The finding stands with no consumer:** δ was built on this read
+  and dissolved with its subject (`E5-Q4`, 2026-10-11). Rule 05 for
+  whoever next needs an as-of-fork archival read: `replay`
+  (`store/undo.rs:504`) is the function, and the read is that function in
+  read-only mode, not a second walker.
 - **E5-17 — δ's fork-point read cannot see a bond that joins in the alt
   chain's own blocks, and that case is reachable at admission.** Found
   drafting a4's row text: the C++ comment above the alt path's attestation
   verify (`blockchain.cpp:2131–2133`) names it — "a pass from a bond that
   joined only on this alt chain is refused here" — and `docs/FOLLOWUPS.md`
-  carries it as *"Alt-chain attestation verify resolves bond pubkeys from
-  main-chain state"* (`:1242`), with two fixes "to be ruled, not
-  inherited": (i) defer the bond-key leg to promotion, (ii) a
-  connecting-chain bond view. δ is (ii) for every bond fact the fork point
-  carries; a join in an unexecuted alt block above the fork is in no view
-  the admission tier can read, and `committed_hybrid_key`
-  (`attestation.rs:160`) returns `None` for it. **Reachability, measured
-  (the fixture's own derivation):** admission checks no epoch arithmetic
-  on a pass record — `AttestationSet::verify_countersignatures` judges the
-  anchor window and the key (`attestation_admission.rs:78–96`: four
-  refusals, none about epochs), `settlement_epoch` is carried on the
-  49-byte record and compared to nothing at B4, and the C++ body
-  (`verify_block_attestation`, `blockchain.cpp:4978–5065`) reads no join
-  epoch. `J5` (claimed epoch ≥ join + 1) is a *claim-time* rule over
-  `serve_credit_epoch_ok`, `J15` governs the join's own admission; neither
-  constrains when a pass may be *carried*. So a pass under a bond joined
-  at height `j` is admissible in
-  block `j + 1` — well inside `D_max = 720` — and the FOLLOWUPS row's
-  scenario `[join(P), …, pass(P)]` fits in a fork. Not moot. **Ruled
-  2026-10-10 — (a), on the B5 precedent** (§2.1): the no-bond arm defers
-  to promotion rather than refusing, because a cheap-tier refusal stores
-  nothing and an honest heaviest chain carrying the pair would be refused
-  on every delivery and never promoted — a permanent fork, not a liveness
-  cost. The FOLLOWUPS row closes with a4 as handled (fix (i) for the one
-  arm no view can answer, fix (ii) for the rest), not as moot.
+  carried it as *"Alt-chain attestation verify resolves bond pubkeys from
+  main-chain state"*. A join in an unexecuted alt block above the fork is
+  in no view the admission tier can read. **Reachability, measured:**
+  admission checks no epoch arithmetic on a pass record —
+  `AttestationSet::verify_countersignatures` judges the anchor window and
+  the key (`attestation_admission.rs:78–96`: four refusals, none about
+  epochs), `settlement_epoch` is carried on the 49-byte record and
+  compared to nothing at B4, and the C++ body (`verify_block_attestation`,
+  `blockchain.cpp:4978–5065`) reads no join epoch; `J5` is claim-time,
+  `J15` governs the join's own admission. A pass under a bond joined at
+  `j` is admissible in block `j + 1`, inside `D_max = 720`. Not moot.
+  **Dissolved 2026-10-11** with `E5-Q4` (§8): the case lives in CEN-B4's
+  alt-tier read, which the Rust tier does not make and Slice C deletes
+  from the C++. The FOLLOWUPS row closes by dissolution — C++ frozen,
+  operand deleted by `ARCHIVAL_SERVE_CREDIT_SPEC.md` §11.1 — not as
+  handled.
 
 ---
 
@@ -561,79 +554,37 @@ adversary can buy (`E5-Q7`, rule-21 reopen in §4). Without (1) the
 deferral would be a hole; with it the deferral is the `AltValid`/`ChainValid`
 separation doing its one job. The same sentence covers every promotion-tier
 row — G1's `has_transaction`, the F-rows' emission reads, the I-rows — and
-**one arm of a cheap-tier row**: B4's pass record under a persona with **no
-bond at the fork point** (`E5-17`, ruled 2026-10-10 on this precedent). A
-bond that joins only in the alt chain's own unexecuted blocks is the same
-class of fact as the root — unevaluable until execution — so refusing it
-would be the exception to the rule this paragraph states, and a refusal at
-the cheap tier stores nothing, so an honest heaviest chain carrying
-`[join(P), …, pass(P)]` would be refused on every delivery and never
-promoted: a permanent fork, the worst category the hierarchy has. The arm
-therefore defers to promotion, stores, and is PoW-bounded by (2); what it
-costs — a forged pass under a persona nobody has bonded at the fork point
-is stored until promotion refuses it — is this paragraph's cost, not a new
-one. B5 is named because a committed root reads as the alarming case.
-Three instances of one cost now sit here — B5's stored root, this arm's
-stored pass, the next paragraph's journal scan — and each is bounded by
-the same PoW floor; a reader need not price them three times.
+the attestation witness for as long as CEN-B4 exists (next paragraph). B5
+is named because a committed root reads as the alarming case. The cheap
+tier has one cost, a stored row, and K4's PoW floor bounds it.
 
-**CEN-B4 at the cheap tier is whole, and its one archival read is priced
-here beside B5's.** Under `E5-Q4`'s ruling (**δ**, 2026-10-10) the cheap
-tier runs all of B4 — parse, root recompute, anchor window **and** the
-bond-key countersignatures — with `bond_record(p)` answered **as of the
-fork point**: a read-only reverse replay of `undo_log[fork+1 ..= tip]`
-filtered to `ARCHIVAL_BOND` (`E5-16`). Three arms on that read (`E5-17`):
-**no bond at the fork point → defer to promotion**, store, PoW-bounded
-exactly as B5 (the paragraph above); **bond present, signature invalid →
-refuse**; **forged under a key bonded at the fork point → refuse**. The
-read is *correct*, not the
-C++'s tip-snapshot approximation (`E5-6`): a bond the main chain slashed
-after the fork is unslashed on the alt chain and the replay says so; a
-bond the main chain gained after the fork does not exist on the alt chain
-and the replay says that too. **What it costs** — written here because
-the reason it is bounded is the same as B5's: a journal scan of up to
-`D_max` rows per alt block, filtered to one table ordinal, where the C++
-cost one record read. That is an attacker-drivable path, and it is bounded
-the way every cheap-tier cost is: **the tier's order puts the attestation
-step after PoW** — the C++'s, which the K4 row's falsifier pins
-("the order pinned", §3): `check_hash` at `blockchain.cpp:2116`,
-`verify_block_attestation` at `:2135`, with `:2123`'s own comment "Sits
-behind PoW" (the census row's *list* at `CONSENSUS_RULE_CENSUS_3.md:395`
-names attestation before PoW, but it enumerates the checks, not their
-order) — so each scan costs the attacker a PoW solution at alt difficulty
-(`E5-Q7`'s floor). Memoising the fork-point reconstruction
-across alt blocks sharing a fork is an optimisation a4 may take, not a
-requirement — per-block PoW already bounds it. A reader who finds B5's
-deferral and B4's scan apart would take one for an oversight; they are the
-two cheap-tier costs, both PoW-bounded, and the census sentence a4 adds to
-CEN-B4's row names the read's source in the words of this paragraph.
-*Records-was (γ, ruled and superseded 2026-10-10):* "the bond-key
-countersignature check is promotion's, so an alt block whose attestation
-witness is forged under a key nobody bonded is stored … K4's amended
-admission list names B4a and defers B4b" — the cost δ removed, retained as
-the shape the second ruling rejected.
+**CEN-B4 is not ported to the alt tier (`E5-Q4`, closed by dissolution
+2026-10-11).** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)
+(RULED 2026-10-07) §11.1 deletes B4's operand — the block's attestation
+witness, its root in the header and the verify path — under `SCS-P11`: the
+pass moves into a carrier transaction, which is validated at promotion
+against executed state like any transaction. The alt tier therefore has no
+archival read left to make, and an as-of-fork-point bond reconstruction
+(`E5-16`) would be work on a rule scheduled for deletion. For the record:
+B4 exists in Rust (`rules::attestation::B4`, `26bc5b994`) and runs on the
+main chain; it is not given an alt-tier site. The C++ alt ladder keeps its
+`verify_block_attestation` step (`blockchain.cpp:2135`, behind PoW since
+`4932b769b`) until Slice C deletes both. Until then an alt block's witness
+travels in `AltBlock` (SAL-13; K5b) and is judged at promotion by
+main-chain B4 over `BatchView` — the tier whose view has executed the
+chain the pass depends on. The C++'s tip-snapshot read (`E5-6`) and its
+join-in-the-fork case (`E5-17`) are facts about the frozen path, not
+shapes the Rust tier inherits or corrects.
 
-The cheap tier is then `alt_against(block, &alt_view, &bonds_at_fork,
-rule_set) -> Result<AltValid, Verdict>`, where `alt_view: impl
-HeaderView` is the stitched header view (`E5-Q3`) and `bonds_at_fork` is
-the as-of-fork-point bond read (`E5-16`; its trait shape — a bond-read
-view B4 is bound on, or the bond read as a second parameter to B4's body —
-is a3/a4's measurement, and the `check_block_rule_corrupt_sites.py`
-derivation (a2) admits a third rule form if one is needed, provided a
-blanket impl lifts it): B1/B2, the
-timestamp rule over `alt_window_plan`, E1/E2 (an alt block at or below the
-last anchor refused — E2's home), D1–D3 PoW against D4's difficulty read
-through the stitched `header_at` (= D5, as `census.rs:353` anticipated),
-K1a/K1b, `prevalidate_miner_transaction`'s form rows, and K4's attestation
-step as **B4, whole** (`E5-Q4` ruled δ, 2026-10-10): the window from the
-alt view, the bond key from the fork-point reconstruction. *Round 0 and
-commit 1 wrote (SUPERSEDED):* "the attestation's witness check (K5b)
-reading `bond_record` from the snapshot view passed alongside — the C++'s
-approximation, named"; *γ wrote (SUPERSEDED):* "B4a … no snapshot view is
-passed and no archival read is made — B4b is promotion's". The row set is
-fixed. `AltValid`
-carries `AltBlockFacts` and is what AL1 stores; it is not `ChainValid` and
-nothing converts it.
+The cheap tier is then `alt_against(block, &alt_view, rule_set) ->
+Result<AltValid, Verdict>`, where `alt_view: impl HeaderView` is the
+stitched header view (`E5-Q3`): B1/B2, the timestamp rule over
+`alt_window_plan`, E1/E2 (an alt block at or below the last anchor
+refused — E2's home), D1–D3 PoW against D4's difficulty read through the
+stitched `header_at` (= D5, as `census.rs:353` anticipated), K1a/K1b, and
+`prevalidate_miner_transaction`'s form rows. No attestation step
+(`E5-Q4`). The row set is fixed. `AltValid` carries `AltBlockFacts` and is
+what AL1 stores; it is not `ChainValid` and nothing converts it.
 
 The promotion tier is `validate` over `BatchView` inside the switch closure
 after the pops, exactly as any block connects. There is no "promotion view".
@@ -707,7 +658,7 @@ and site it lands in, and the witness. "slice 9" is the alt increment
 | CEN-K1b | a miner-tx claiming height 0 is refused | rule in `alt_against` — the claim read against the derived height, `Locus::Block` | `shekyl-chain-rules` `rules/alt` (slice 9) | mutation: a height-0 claim at derived height ≥ 1 refused |
 | CEN-K2 | alt linkage: the chain must connect to the main chain | by construction — `AltChain::build(snapshot, prev_id)` returns `Err(Unlinked)` and no view exists | store `AltChain` (slice 9) | the orphan case; a chain through two alt entries to a main row |
 | CEN-K3 | an alt block already stored is refused | by construction — AL1 `AlreadyHeld` (the belt E1 landed) | store `alt.rs` (landed) | the existing AL1 test; the census arm flips to `by_construction` |
-| CEN-K4 | alt blocks stored after version, timestamp, checkpoint, PoW | rule — `alt_against` is the tier; what it holds is the row | rules `alt_against` (slice 9) | each sub-check mutated once; the order pinned |
+| CEN-K4 | alt blocks stored after version, timestamp, checkpoint, PoW | rule — `alt_against` is the tier; what it holds is the row; no attestation step (`E5-Q4` dissolved — the C++ ladder's step is frozen and deleted with Slice C) | rules `alt_against` (slice 9) | each sub-check mutated once; the order pinned |
 | CEN-K5 | promotion re-validates every block through the full validator | sequencing — step 4 of §2.3 is `validate` + `connect`, nothing else connects | `shekyl-chain-ingest` switch (slice 9) | an alt chain carrying a body `validate` refuses leaves the store at the pre-switch digest |
 | CEN-K5b | each promoted block's attestation witness travels and is checked | sequencing — the witness is in `AltBlock`; `validate`'s attestation rule reads it | ingest switch + `AltBlock` (slice 9) | a tampered witness on an alt entry fails promotion |
 | CEN-K6 | switch iff alt cumulative difficulty strictly greater (checkpoint forces) | rule — `fork_choice`'s verdict matched; the crossing is Q1b's | `shekyl-difficulty` (landed) + ingest match (slice 9) | equal keeps; greater switches; checkpoint-forced promotes a lighter chain |
@@ -791,39 +742,11 @@ Adversarial items, each with the fixture that would notice:
   pool keeps the entry under `kept_by_block` with `Readiness` marking it
   not-relayable; M10 evicts it. Fixture: the demoted tx is in P7 after the
   switch and not in any template.
-- **The cheap tier's wrong-chain archival read (`E5-6`).** Fixture: a bond
-  slashed at `tip − 1`, an alt chain forking at `tip − 3` whose block
-  attests under that bond; the same chain presented one block longer (past
-  the switch threshold). *Round 0 wrote (SUPERSEDED by Round 1's `E5-Q4`
-  instruction):* "the fixture is the measurement `E5-Q4`'s ruling reads".
-  The fixture does not measure; it **asserts** the ruling. `E5-Q4` ruled
-  **δ** (2026-10-10, replacing γ): both presentations are **stored** —
-  B4 runs whole at the cheap tier and its bond read is answered as of the
-  fork point (`tip − 3`), where the bond is unslashed, by reverse replay
-  of `undo_log[tip−2 ..= tip]` — and the switch's promotion `validate`
-  runs B4 again over `BatchView` after the pops and **admits** them. A
-  second arm plants the forged case — a witness whose signature does not
-  verify under the key `P` **has** bonded at the fork point — and asserts
-  it is **refused at the cheap tier** with `B4` at `Locus::Block` and
-  never stored. A third arm plants the reverse error `E5-6` names: a bond
-  the main chain **gained** at `tip − 1` under which the alt block attests
-  — at the fork point no such bond exists, so under `E5-17` (a) the cheap
-  tier **defers and stores** it, and the switch's promotion `validate`
-  over `BatchView` (the gain popped) **refuses** it; the C++'s
-  tip-snapshot read would have admitted it outright. A fourth asserts the
-  reconstruction equals the record a fresh store holds after connecting
-  the fork-point chain alone (the E2 oracle's shape, applied to one
-  table). A fifth plants the FOLLOWUPS row's own scenario (`E5-17`): the
-  alt chain carries `join(P)` in one block and `pass(P)` in the next, off
-  a main chain that never bonded `P` — stored at the cheap tier (no bond
-  at the fork point → deferred), **admitted at promotion** where
-  `BatchView` has executed the join; its negative is the same chain with
-  the join removed, stored and then refused at promotion. The fixture's
-  name carries `E5-6`. *(Commit 1's α arm — "refuses both presentations with `B4` … a
-  bond change within `D_max` of the fork refuses an honest alt block" — is
-  the liveness cost δ removes; γ's arm — "stored too and refused at
-  promotion with `B4b`" — is the stored-forgery cost δ removes; both
-  retained as the shapes the rulings rejected.)*
+- **The cheap tier's wrong-chain archival read (`E5-6`) — dissolved.** No
+  fixture: the Rust cheap tier makes no archival read (`E5-Q4`), and the
+  read exists only in the C++ alt path Slice C deletes. What stays
+  testable is K5b's row (§3): a tampered witness on an alt entry fails
+  promotion, for as long as main-chain B4 exists.
 - **A `PoolView` that reaches `connect`.** Negative control: a test that
   tries `connect(validate(.., &pool_view, ..))` and does not compile — as
   a `trybuild` program beside a2's brand pins (`tests/trybuild/`), not a
@@ -847,8 +770,8 @@ drops, with PR-b the caller.
 | --- | --- | --- | --- |
 | a1 | this file on review; index rows; the §12 register rows (DEL-009, DEL-010). UPDATE 2026-10-10: Round 1's rulings recorded; the `header.rs` partition measured (`E5-13…E5-15`); `E5-Q4` priced | 1 | — |
 | a2 | `HeaderView { tip, header_at }` + `HeaderRecord` (`E5-13`); `HeaderRule` with the blanket `BlockRule` impl; `anchors.rs`, `timestamps.rs`, `pow.rs`, `difficulty.rs`, `attestation.rs` re-bounded (`E5-14` — not `header.rs`); `BatchView` and the eight test implementors gain `HeaderView`; `check_block_rule_corrupt_sites.py` reads both impl forms; the store's conformance suite split. UPDATE 2026-10-10: landed as measured — `HeaderRecord { hash, header, cumulative_difficulty }` embedded in `RecordedBlock` (`E5-13`, no `Deref`); `HeaderView { tip, header_at }` with `ChainView: HeaderView` (`E5-14`); D1, C1, C2, E1 are `HeaderRule`s under `impl<R: HeaderRule> BlockRule for R`, the window and seed helpers (`C3::window`, `mtp_median_at`, `D4::target`, `D3::expected_seed`, `E5::conflict_with`, `anchor_window`) bound on `HeaderView`; `recorded_header` lifts a hole to `Corrupt::HoleBelowTip { record: PerHeightRecord::Header }`; the gate **derives** the rule-trait set from the blanket impl and refuses a rule-shaped `check` under a trait it cannot reach (15 rules read: 11 + 4; the user's three probes red on D1). The falsifier did not fire: five rule files, the blanket impl composes with `run`. Beside it, a wrong-subject finding: `validate.rs`'s two brand `compile_fail` doctests had passed since `5fb2132fa` (2026-09-29) on E0046 — the stubs no longer implemented `ChainView` — not at `connect`; replaced by a `trybuild` suite with stderr snapshots and a positive control (`CHAIN_RULES_CRATE.md` §8.3) | 2 | yes — more than these five rule files, or the blanket impl not composing with `run`, is the fallback |
-| a3 | `AltChain::build` (K2), `AltView` over `ReadSnapshot` + chain (`HeaderView` only), K1a by construction, the stitched-view conformance test. UPDATE 2026-10-10 (δ): `AltView` stays a `HeaderView` and gains no archival method; a3 measures where B4's fork-point bond read is bound (§2.1 — a bond-read view trait lifted by a blanket impl, or a second parameter to B4's body) so a4 builds against a measured seam | 2 | yes |
-| a4 | **first commit, ruled before it lands:** the census amendment — one sentence on CEN-B4's row (`CONSENSUS_RULE_CENSUS.md`; the registry entry is unchanged) naming the cheap tier's bond-read source: as of the fork point, by reverse replay of `undo_log` filtered to `ARCHIVAL_BOND` (`E5-16`); K4 stays whole; the `attestation.rs:77–78` sentence stands. **Then** the as-of-fork-point bond read as `replay` in read-only mode (`store/undo.rs:504` is the function — rule 05, no second walker), its trait shape measured (§2.1); `alt_against` (K1b, K4's tier, D5 via D4, E2's arm, B4 whole from the alt view + the fork-point bonds); `AltValid` → AL1; census arms; the §4 `E5-6` fixture's five arms. UPDATE 2026-10-10: unblocked by `E5-Q4` ruled γ. UPDATE 2026-10-10 (later): γ superseded by δ — the B4a/B4b split and the `verify_countersignatures` seam measurement leave the row; the amendment is the one sentence above. UPDATE 2026-10-10 (`E5-17` ruled (a)): the CEN-B4 sentence carries the read's three arms — no bond at the fork point → deferred to promotion, stored, PoW-bounded as B5; bond present, signature invalid → refused; forged under a key bonded at the fork point → refused. The same census commit corrects CEN-K4's "admission ladder in execution order", ratified 2026-09-04 before `4932b769b` (2026-09-13) moved the attestation step behind PoW — δ's bound rests on that order and the row contradicts it. The commit also removes `docs/FOLLOWUPS.md`'s *"Alt-chain attestation verify resolves bond pubkeys from main-chain state"* row (handled: its fix (i) for the no-bond arm, (ii) for the rest) | 3 | yes |
+| a3 | `AltChain::build` (K2), `AltView` over `ReadSnapshot` + chain (`HeaderView` only), K1a by construction, the stitched-view conformance test | 2 | yes |
+| a4 | **first commit, ruled before it lands:** the census amendment (`CONSENSUS_RULE_CENSUS.md`; the registry entry is unchanged) — CEN-K4's row stops describing a ladder the Rust tier will not run: the C++ ladder is recorded in its landed order (version, timestamp, checkpoint, PoW, then attestation since `4932b769b`, 2026-09-13, then prevalidate) as the frozen path Slice C deletes, and the Rust tier's steps name no attestation step (`E5-Q4` dissolved); CEN-B4's site pin re-pinned to `verify_block_attestation` 4978–5065. **Then** `alt_against` (K1b, K4's tier, D5 via D4, E2's arm); `AltValid` → AL1; census arms. The `docs/FOLLOWUPS.md` rows *"Alt-chain attestation verify resolves bond pubkeys from main-chain state"* and *"Validate `prev_id` before attestation verify on the alt-chain path"* were closed by dissolution with the ruling (2026-10-11), not by this commit | 3 | yes |
 | a5 | the switch closure in `shekyl-chain-ingest` (§2.3): cap check, SAL-13 reads, pops, K7 under the verdict arm, K5 promotion, removes; K6 on `ForkChoiceVerdict`; `Switched` | 3 | yes |
 | a6 | the three refusals distinguished (cap, floor, verdict) and the §4 fixtures for the boundary and the floor | 2 | yes |
 | a7 | a reorg capture for the corpus (`E5-Q9`): the C++ produces one switch, the trace gains the event, the grader compares | 2 | yes |
@@ -1015,182 +938,42 @@ which is a settlement-writer change, not E5's. **Falsifier.** The fixture
 refuses an honest chain in a shape stressnet produces (a slash within
 `D_max` of a fork).
 
-**HELD 2026-10-10 — a third option to price, and the pricing** *(the
-ruling follows the pricing, below)*. The
-ruling's reasoning: the default refuses honest alt blocks, which is a
-consensus-liveness cost, and `16-architectural-inheritance.mdc` says
-migrate the inherited approximation rather than rationalize it. The third
-option: drop the witness check from the cheap tier entirely and let
-promotion do the real one. Two things to price — what the cheap tier loses
-by not checking, and whether any K-row requires the check before storage;
-if one does, the default stands and the §4 fixture asserts and names the
-refusal. The pricing, against `E5-15`:
+**CLOSED BY DISSOLUTION 2026-10-11 (maintainer).** The question is about
+CEN-B4 at the alt tier, and CEN-B4's operand is scheduled for deletion:
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) (RULED
+2026-10-07) §11.1 removes the attestation witness, its root in the header
+and the verify path under `SCS-P11` — the pass moves into a carrier
+transaction. A carrier is validated at promotion, against executed state,
+like any transaction, so the alt tier has no archival read left to make,
+and building the fork-point bond reconstruction would be work on a rule
+scheduled for deletion. For the record: B4 exists in Rust
+(`rules::attestation::B4`, `26bc5b994`) and is not ported to the alt tier;
+main-chain B4 and the C++ gate stay until Slice C deletes both. `E5-6` and
+`E5-17` dissolve on the same ground (§1.7); `E5-16` stands as a finding
+with no consumer. The census amendment this leaves for a4 is CEN-K4's row
+(§5), not CEN-B4's.
 
-- **α — the default.** Both B4 reads in the cheap tier; the bond read
-  from the tip snapshot. *Keeps:* CEN-K4 whole (its ratified admission list
-  names CEN-B4, `CONSENSUS_RULE_CENSUS_3.md:395`; CHECKED-CONFORMANT at
-  `CONSENSUS_STORE_RECONCILIATION.md:787`). *Costs:* the one-sided
-  refusal — an alt block attesting under a bond the **main** chain slashed,
-  released or never had within `D_max` of the fork is refused at the cheap
-  tier though honest on its own chain; bounded by `D_max`, and gone once
-  the alt chain is longer than the divergence (the main chain's record is
-  then the alt chain's). The reverse error (a bond the main chain has and
-  the alt chain lacks) admits a row promotion refuses — the same class as
-  B5's deferral, PoW-bounded.
-- **β — drop B4 from the cheap tier.** *Keeps:* liveness clean — no
-  honest alt block is refused for an archival fact. *Costs:* a block whose
-  attestation is malformed, whose root does not recompute, or whose
-  countersignatures are forged is **stored** and refused at promotion —
-  PoW-bounded like B5, and no worse in kind. *But:* **CEN-K4 names CEN-B4
-  in the admission tier (`E5-15`), so a K-row does require the check
-  before storage.** β is not a tier choice E5 can default; it is an
-  amendment to a ratified census row, and the row's own note calls the
-  deferral set "the reorg path's central unexamined design decision" —
-  which is to say the row is exactly where that decision was recorded.
-- **γ — split B4 across the tiers.** The stateless half (extra parse,
-  49-byte records and cap, witness decode and pairing, root recompute, the
-  A3 empty-witness arm) and the anchor window (a header fact the stitched
-  view answers honestly, as the C++'s `fill_pass_anchor_window(…,
-  alt_chain, …)` does) in the cheap tier; the bond-key countersignature
-  verification — the one archival read — promotion's. *Keeps:* liveness
-  clean, the `attestation_root` commitment checked before storage, the
-  window checked before storage. *Costs:* a forged-signature block under a
-  key nobody bonded is stored, PoW-bounded. *But:* it still amends K4 (B4
-  is no longer whole at admission), and it contradicts B4's own contract —
-  "every one is this row at `Locus::Block` — the census splits none of
-  them" (`attestation.rs:77–78`): a cheap tier that records B4 after half
-  of B4 has run makes coverage say a row ran when it did not, so γ needs a
-  B4a/B4b census split as well. Smaller than β in what it defers, larger
-  in what it touches.
+**Rejected — the four shapes priced and ruled 2026-10-10, all dissolved
+2026-10-11 on the ground above; none was built:**
 
-*Commit 1 wrote (SUPERSEDED by the ruling below):* "by the ruling's own
-criterion the default stands (a K-row requires the check; `E5-15`) … the
-question stays HELD until the ruling confirms or chooses β/γ".
+- **α** — B4 whole at the cheap tier, the bond read from the tip snapshot
+  (the C++'s read, `E5-6`). The question's default.
+- **β** — no B4 at the cheap tier, promotion does the check. The Rust
+  tier now has this shape, by dissolution and not by choice: K4's
+  attestation step leaves because its operand is deleted, not because β
+  was priced in.
+- **γ** — B4 split B4a/B4b across the tiers (ruled, superseded by δ the
+  same day on `E5-16`).
+- **δ** — B4 whole at the cheap tier, the bond read as of the fork point
+  by read-only reverse replay of `undo_log` (`E5-16`), the no-bond arm
+  deferring to promotion (`E5-17`). Ruled last; dissolved.
 
-**Ruled 2026-10-10 — γ, the split — SUPERSEDED the same day by δ (below);
-everything from here to γ's reopen clause is records-was.** `E5-15` decides it: B4 makes two
-view reads that differ in kind — the anchor window is a header fact the
-stitched view answers *honestly*, the bond key is the archival read that is
-*wrong* on an alt chain — so B4 as one row conflates a read that works with
-one that does not, and **that conflation, not the wrong-chain read, is the
-defect**. α inherits a broken check, β discards a working one; γ treats the
-measurement as the finding: liveness is clean and the half of B4 that can
-be honestly checked before storage still is. The anchor-window half stays
-at the cheap tier on its own merits — a header fact, honestly answerable on
-the stitched view, cheap, refusing before storage — not because the C++
-checks it there; had the C++ deferred it, it would still belong early.
-
-The objection commit 1 raised against γ does not hold. `attestation.rs:77–78`'s
-"the census splits none of them" describes the census as it stood; it is
-not a prohibition — were it one, CEN-K1a/K1b could not exist. C2-R1c split
-K1 because "the census row conflated claimed and derived"
-(`CONSENSUS_C2_R1_REORG.md:1033–1034`): one row, two operands of different
-kinds, split to match — the same shape on all fours. Rule 91 applies: a
-finding that refutes a sentence's premise edits the sentence, and `E5-15`
-refutes that one (a4 edits it).
-
-**The rows (γ — SUPERSEDED, no B4a/B4b exists).** **B4a** — the stateless half (extra parse, 49-byte records
-and cap, witness decode and pairing, root recompute, the A3 empty-witness
-arm) plus the anchor window: cheap tier, `HeaderRule`. **B4b** — the
-bond-key countersignature verification: promotion tier, `BlockRule`. One
-fact for a4, read at source: today `verify_countersignatures(window,
-pubkey_of)` (`attestation.rs:140`) judges the window arms (below the
-threshold, outside the window) and the key arms (no bond, bad signature)
-in one call, so B4a needs `AttestationSet` to expose window membership on
-its own — a4's first commit measures that seam before the row text is
-ruled. K4's admission list names B4a; what B4b's deferral costs is written in §2.1
-beside CEN-B5's statement — one cost, two instances. **The census
-amendment** (B4 → B4a/B4b in `census.rs` and `CONSENSUS_RULE_CENSUS.md`,
-K4's admission list, the reconciliation register rows, the
-`attestation.rs` sentence) is **a4's first commit**, drafted for ruling
-before it lands — the row text is ruled first, built second. a4 is
-unblocked on that.
-
-**The pattern, as γ stated it (SUPERSEDED — B4 is not an instance).** The
-census's granularity is inherited: a row says "here is one rule" and its
-boundary was drawn where the C++ put a check — often where a function
-ended. Every split so far has been that discovery: K1 (claimed vs derived
-height, C2-R1c), the per-class splits I9/H21 carry — and γ counted B4
-(header read vs archival read) as the third. δ withdraws that count: B4's
-two reads differ in *source*, not in kind, once the archival one is
-answered as of the fork point; a row whose operands come from two tables
-is still one rule. The test γ proposed — "two operands of different
-kinds" — survives as the question to ask, with the lesson δ adds: **a
-split justified by "nothing supports the honest read" is a split
-justified by a grep nobody ran.**
-
-**γ's reopen clause (SUPERSEDED — its criterion was already met at the
-tree):** "an as-of-height archival read landing in the settlement writer
-(`PDM-Q3`'s re-key reversed) would let B4b run honestly at the cheap tier
-too". The read had landed with DRS-E1's undo journal; `PDM-Q3` was never
-its subject (`E5-16`).
-
-**Ruled 2026-10-10 — δ, replacing γ: α's tier shape with the real read.**
-The review finding is `E5-16`: γ's premise — "an as-of-height archival
-read … that no table supports … a settlement-writer change" — was a cost
-claim in a question's *why*, and a cost claim is a finding like any other:
-it is checked at the tree before it is priced. Checked, it is false.
-`undo_log[height]` journals the pre-image of every `archival_bond` insert
-and replace for every block above `undo_floor` — a window the store
-refuses to let fall below `reorg_cap` (`Horizons::new`,
-`prune.rs:199–203`) — and the switch's up-front cap check (`E5-Q6`)
-guarantees the fork point is inside it. `bond_record(p)` as of the fork
-point is therefore a **read-only reverse replay** of
-`undo_log[fork+1 ..= tip]` filtered to the `ARCHIVAL_BOND` ordinal: the
-journal reconstructs the record (three `UndoEntry` arms, pre-images
-carried), nothing writes `ARCHIVAL_BOND` outside the journal
-(`archival_write.rs:164`, `:177`), and the un-journaled prune does not
-touch bonds (`rg ARCHIVAL_BOND store/prune.rs` → 0). No new table, no
-writer change, not `PDM-Q3`'s subject.
-
-With the read available, every reason for γ falls: α's liveness cost was
-the *wrong* read's, not the tier's; β's and γ's stored-forgery cost was
-the price of not reading; the B4a/B4b census split was the price of a read
-that did not exist. δ keeps **K4 whole** — its ratified admission list
-names CEN-B4 and B4 runs there, whole — keeps `attestation.rs:77–78`'s
-"the census splits none of them" as a true sentence, needs **no census
-split**, and carries **no liveness cost**: an honest alt block attesting
-under a bond the main chain slashed after the fork is admitted, because at
-the fork point the bond stands. The census amendment shrinks to **one
-sentence on CEN-B4's row** naming the cheap tier's read source (a4's first
-commit, still ruled before it lands — §5).
-
-**What δ costs, said here so a reviewer need not work it out.** A journal
-scan of up to `D_max` rows per alt block, filtered to one table ordinal,
-where α cost one record read. Attacker-drivable — but the tier's order
-puts the attestation step after PoW (`blockchain.cpp:2116` → `:2135`;
-the K4 row's falsifier pins the order), so each scan costs a PoW solution
-at alt difficulty. Memoising the fork-point reconstruction across alt
-blocks sharing a fork is an optimisation a4 may take, not a requirement.
-Rule 05: `replay` (`store/undo.rs:504`) is the function; δ is that function
-in read-only mode — a mode of the one walker, not a second walker. Where
-the bond read lives in the type system (the alt view is a `HeaderView`,
-`E5-Q3`, and gains no archival method) is a3/a4's measurement, §2.1.
-
-**Amended 2026-10-10 — the read's no-bond arm defers (`E5-17`, ruled
-(a)).** The fork-point reconstruction cannot carry a bond that joins in
-the alt chain's own unexecuted blocks, and that pass is admissible one
-block after its join (§1.7's measurement: no epoch arithmetic runs at B4).
-Refusing it at the cheap tier would store nothing and refuse an honest
-heaviest chain on every delivery — a permanent fork. So: no bond at the
-fork point → defer to promotion, store, PoW-bounded as B5 (§2.1, where it
-is priced beside B5's statement); bond present and signature invalid →
-refuse; forged under a key bonded at the fork point → refuse. The
-re-admitted slice of γ's stored-forgery exposure is passes under personas
-nobody has bonded at the fork point, bounded by the PoW that `E5-Q7`
-ruled sufficient.
-
-**Reopen (rule 21):** δ rests on the journal being complete for
-`ARCHIVAL_BOND`. **A prune that reaps `ARCHIVAL_BOND` un-journaled refutes
-δ** — falsify by `rg ARCHIVAL_BOND rust/shekyl-chain-store/src/store/prune.rs`
-returning non-empty, or by a third `ARCHIVAL_BOND` write site that does not
-go through `open_insert_table`/`open_replace_table` (`rg
-'open_table\(ARCHIVAL_BOND' rust/shekyl-chain-store/src/store/` matching
-outside `*_tests.rs` — today it matches nowhere else; the reads in
-`archival_reads.rs` go through `txn.table`). Either reopens the question at α's pricing, since the
-reconstruction would then be silently incomplete; the §4 fixture's fourth
-arm (reconstruction equals a fresh store's record) is the runtime form of
-the same check.
+**Reopen (rule 21):** the dissolution rests on §11.1 landing. If B4's
+operand is still on the block when `DEL-009` (the C++ reorg path) is
+retired — falsify by `rg 'B4 implemented' rust/shekyl-chain-rules/src/census.rs`
+returning non-empty at that commit — the question reopens at δ's pricing,
+and the as-of-fork read is still `replay` (`store/undo.rs:504`) in
+read-only mode.
 
 ### E5-Q5 — Does `ForkChoiceVerdict` gain a `ForcedSwitch` arm, and is K7's discard a match on it?
 
@@ -1305,3 +1088,4 @@ Not E5's; found while reading the census at the pin.
 | 2026-10-10 | **`E5-Q4` ruled γ — B4 split into B4a (stateless + anchor window, cheap tier) and B4b (bond-key countersignature, promotion).** `E5-15` decides it: two reads of different kinds in one row is the defect, not the wrong-chain read. The "census splits none of them" objection refuted by the K1a/K1b precedent (C2-R1c); the split test stated once in §8 (two operands of different kinds → transcription artifact). B4b's deferral cost written beside B5's in §2.1. a4 unblocked; its first commit is the census amendment, drafted for ruling before it lands. a2 authorized and started. **SUPERSEDED the same day by δ (next row); B4a/B4b were never built.** |
 | 2026-10-10 | **`E5-Q4` re-ruled δ, replacing γ — B4 whole at the cheap tier, its bond read made as of the fork point by read-only reverse replay of `undo_log` (`E5-16`).** The pruning lane's review of #1026 refuted γ's premise at the tree: `undo_log` journals every `ARCHIVAL_BOND` pre-image above `undo_floor`, the retention never falls below `reorg_cap`, the prune does not touch bonds — the as-of-height read existed, so the split, the stored-forgery cost and the liveness cost all leave. Cost: a journal scan ≤ `D_max` rows per alt block, after PoW. Reopen: a prune that reaps `ARCHIVAL_BOND` un-journaled. a4's amendment shrinks to one sentence on CEN-B4's row (§5). Same review: the prune half of the lane's name is empty — said in §0, the index row and the parent plan's §7 (the prune is E1's, landed 2026-09-25; E5 owns only the reorg × floor interaction, §4); `E5-9`, the `failure_window.rs` asymmetry and `PopBelowFloor` confirmed carried correctly. Lesson recorded in §8: a cost claim in a question's *why* is checked at the tree like any finding, the "nothing supports X" ones first. |
 | 2026-10-10 | **`E5-17` ruled (a) — δ's no-bond arm defers to promotion, on the B5 precedent.** Drafting a4's row text surfaced the case the C++ comment (`blockchain.cpp:2131–2133`) and the FOLLOWUPS row already named: a bond that joins in the alt chain's own unexecuted blocks is in no view the admission tier can read. Measured reachable — admission runs no epoch arithmetic on a pass record, so `[join(P), pass(P)]` fits in two blocks, far inside `D_max = 720` (`SEB = 10_000 > D_max`, `reorg.rs:73`); not moot. A cheap-tier refusal stores nothing and would refuse an honest heaviest chain on every delivery — a permanent fork — so the arm defers, stores, and is PoW-bounded as B5; signature invalid under a bonded key, or forged under a bonded key, refuse. Priced in §2.1 beside B5's statement, as the third instance of one cost. a4's census commit carries the three arms on CEN-B4's row, corrects CEN-K4's pre-`4932b769b` ladder order, and removes the FOLLOWUPS row. §4's fixture gains a fifth arm. |
+| 2026-10-11 | **`E5-Q4` δ and `E5-17` CLOSED BY DISSOLUTION (maintainer).** `ARCHIVAL_SERVE_CREDIT_SPEC.md` (RULED 2026-10-07) §11.1 deletes CEN-B4's operand — the attestation witness, the header root, the verify path — under `SCS-P11`: the pass moves into a carrier transaction, validated at promotion against executed state like any transaction, so the alt tier has no archival read left to make; the fork-point bond reconstruction would be work on a rule scheduled for deletion. Framing: B4 exists in Rust (`26bc5b994`) and is not ported to the alt tier; main-chain B4 and the C++ gate stay until Slice C deletes both. `E5-6` dissolved on the same ground (the wrong-chain read exists only in the frozen C++ path); `E5-16` stands with no consumer. α/β/γ/δ moved to §8's rejected list with the one-line reason; the superseded text deleted (live documents are current-only). a3 loses its δ UPDATE (`AltView` stays `HeaderView`-only); a4 loses the CEN-B4 sentence, the replay read, "B4 whole" and the `E5-6` fixture arms — `alt_against` = K1b, D5 via D4, E2's arm; a4's census commit keeps CEN-K4's order correction (now: the C++ ladder in its landed order, no attestation step for the Rust tier) and CEN-B4's site re-pin. FOLLOWUPS rows "Alt-chain attestation verify resolves bond pubkeys from main-chain state" and "Validate `prev_id` before attestation verify on the alt-chain path" closed by dissolution (the second also already held at the tree: `prev_id` resolves at `blockchain.cpp:2012–2019`, attestation runs at `:2135`). Out of this lane, opened as a separate Slice C round: the serve-credit spec's stale §2 B4 row and "nothing built" banner, the SO-D8 §2.2 restatement, the carrier reorg-survival reopen. Branch merged to `dev@258b4d851` first (clean; inland 150/150, coverage 118/151 unchanged). |
