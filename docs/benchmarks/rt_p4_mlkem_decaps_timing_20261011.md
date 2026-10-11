@@ -1,7 +1,12 @@
 # `RT-P4`: is ML-KEM-768 decapsulation constant-time? Re-registration, runs of 2026-10-11
 
-**State of this record: the floor-device run is in and PASSES; the laptop
-run has not been made.** RT-P4 closes on both, so it is not yet closed.
+**State of this record: both registered runs are in and both PASS.** By
+the closing rule registered below, RT-P4 is met for the two core designs
+measured, Cortex-A72 and Tiger Lake, with the reach the control gives: no
+dependence on the ciphertext of 0.5 % of a decapsulation or more. No
+efficiency-core design has been measured. One thing the registration asks
+for is still owed: the reading of the laptop's x86 code. Until it is in
+this record, RT-P4 is not marked closed anywhere else.
 The registration was first pushed on 2026-10-10 at 23:46Z and amended
 three times before any result was read, as its own note says. Results are
 added below "Registered before the run" and that section is not edited
@@ -306,4 +311,96 @@ this run used. That amendment was pushed before this run's output was
 read: the file was copied off the device with its checksum and not opened
 until then.
 
-### The laptop — NOT YET RUN
+### The laptop — PASS
+
+One attempt, 2026-10-11 01:41:14Z to 01:50:15Z, on the Windows laptop
+(Intel Core i9-11950H, family 6 model 141; Windows 11 Enterprise build
+22631), made by the agent on that machine from a fresh clone of
+`7b7046579` on a drive holding no synced folder. `rustc` 1.94.0,
+`x86_64-pc-windows-msvc`, release profile, `--locked`; binary sha256
+`1077f646…`. The binary was not executed before this run. Its output is
+`rt_p4_mlkem_decaps_timing_20261011_captures/laptop_registered_attempt1.txt`,
+as relayed by that agent; the relayed text is 4,959 bytes, the size the
+agent reports for the file on the machine.
+
+```text
+RT-P4 ML-KEM-768 decapsulation timing (fips203), inputs prepared before the loop
+arch=x86_64 os=windows samples_per_comparison=1000000 calibration=10000 crops=100 inputs=registered
+pass: |t| < 4.5 on every real comparison; null comparisons: |t| < 4.5; control: |t| > 10
+comparison=fixed-vs-valid max_abs_t=1.15 median_ns=63200 n0=499545 n1=500455 verdict=no-evidence
+comparison=fixed-vs-invalid max_abs_t=2.46 median_ns=65000 n0=499434 n1=500566 verdict=no-evidence
+comparison=fixed-vs-bitflip max_abs_t=3.00 median_ns=63800 n0=498225 n1=501775 verdict=no-evidence
+comparison=valid-vs-invalid max_abs_t=2.29 median_ns=61300 n0=500011 n1=499989 verdict=no-evidence
+null=invalid-vs-invalid max_abs_t=1.50 median_ns=64200 n0=500041 n1=499959 verdict=no-evidence
+null=valid-vs-valid max_abs_t=1.71 median_ns=60800 n0=499595 n1=500405 verdict=no-evidence
+control=planted-leak fraction=0.005 planted_ns=304 max_abs_t=182.88 verdict=detected
+result=PASS worst_real_abs_t=3.00 worst_null_abs_t=1.71 control_abs_t=182.88
+```
+
+The class counts are the floor device's to the sample: the two machines
+were asked about the same ciphertexts.
+
+Read in the registered order:
+
+| Line | Registered | Observed | |
+|---|---|---|---|
+| 1. the control | `|t|` > 10 | 182.88 | detected; not void |
+| 2. the null comparisons | `|t|` < 4.5 | 1.50, 1.71 | not void |
+| 3–5. the four comparisons | all `|t|` < 4.5 | 1.15, 2.46, 3.00, 2.29 | **pass** |
+
+**The two comparisons an attacker's choice corresponds to, each on its
+own figure.** `valid-vs-invalid`: 2.29, at a cut-off where the class means
+differ by 1.4 ns. `fixed-vs-bitflip`: 3.00, at a cut-off where they differ
+by 2.4 ns.
+
+**What this says, with its reach.** On this processor, with this build,
+the time `fips203` 0.4.3 takes to decapsulate does not depend on the
+ciphertext by 0.5 % of a decapsulation (304 ns here) or more.
+
+*An estimate beside it, not part of the verdict.* The control landed 41
+times over the 4.5 line, against 338 times on the floor device. By the
+same proportion the line corresponds to about 7.5 ns here, 0.012 % of a
+decapsulation: this run saw about an eighth as finely as the floor
+device's, relative to the work measured. The clock is why the per-class
+percentiles are nearly all equal: they move in 100 ns steps, as
+registered. The means the statistic is computed from differ by a few
+nanoseconds or less at the cut-offs where it peaks.
+
+**The exit code was not captured.** The agent started the process in a
+way that lost the handle before the code could be read, and did not run
+again to get it, which a second run would not have been allowed to
+supply. The verdict above is read from the printed statistics. The
+harness has one exit path, which returns 0 exactly when it prints `PASS`;
+that is a reading of the source, not an observation of this run.
+
+**Conditions, recorded as registered.**
+
+| | Start (01:40Z) | End (01:50Z) |
+|---|---|---|
+| Logical processor | 4, pinned from the first instruction (`start /affinity 10`); affinity read back from the running process as `0x10`; normal priority | |
+| Its sibling, logical 5 | idle: 0 % in six of eight one-minute samples, at most 1.03 % | |
+| Logical 4 | 100 % in every sample of the run | |
+| `QueryPerformanceFrequency` | 10,000,000 | 10,000,000 |
+| Power | mains, 91 %; plan Balanced, no overlay | same |
+| Processor performance, % of the 2,611 MHz base | 164 to 174 through the run, no downward drift (73 before, 110 after) | |
+| CPU temperature | not measurable | not measurable |
+| Defender | real-time protection on, Tamper Protection on | same; no scan started in the window |
+| Total CPU load | 5.3 % | 5.4 % |
+
+CPU time used over the run by the things that could have disturbed it:
+Defender 4.67 s; the search indexer 0.01 s; Nextcloud 0.06 s; Google
+Drive, OneDrive and rust-analyzer none; the editor, idle, 10.5 s across
+its nineteen processes. The maintainer's exclusion of the run's directory
+from scanning is as reported; the session could not read the exclusion
+list. Best-performance mode was not set: the plan was Balanced, as found.
+
+One thing about how these were read, kept because it nearly falsified
+them: an unelevated process query returns zero CPU time for the system's
+own services, which reads as "Defender used nothing". The figures above
+for Defender and the indexer come from the performance counters, which
+can read them, and agree with the process query wherever both can.
+
+**Disclosed.** The rulings that shaped this run's registration reached
+this lane relayed, as the registration says. So did this run's output and
+conditions: they are the agent's report from that machine, not files this
+lane copied.
