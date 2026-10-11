@@ -1,17 +1,18 @@
 # RT-W9 — the channel itself: rule-26 pre-flight
 
-**Status:** Round 0 pre-flight — **questions OPEN** (`RT-O16`…`RT-O22`,
-§4). The substrate re-check is recorded (§2) and what could and could not
-be executed is stated (§3). **No production commit is made on RT-W9 until
-§4 is ruled** (rule 26's halt). Slice RT-W9 was authorized 2026-10-11
-(Rick, in this lane).
+**Status:** Round 0 pre-flight — **questions RULED 2026-10-11** (Rick):
+`RT-O16`…`RT-O22`, §4, with **one part of RT-O21 still open** (which
+wallet RT-P5 measures). The substrate re-check is recorded (§2) and what
+could and could not be executed is stated (§3), so the slice's steps may
+proceed in the order of §5; step 3's measurement waits on the open part.
+Slice RT-W9 was authorized 2026-10-11 (Rick, in this lane).
 **Ground:** `shekyl-core` `dev` **`258b4d8515`**, the merge of PR #1020.
 Every `file:line` below was read at that commit.
 **Parent:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md) (round R1, ruled 2026-10-09)
 §4.1, §4.3, §4.4, §9 and the RT-W9 row of §13; the P2P round's framing
 ruling, [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D14 item 4.
-Family `RT-` (registered); this document mints items **RT-O16…RT-O22**
-inside it.
+Family `RT-` (registered); this document minted items **RT-O16…RT-O22**
+inside it, now ruled.
 **Decision authority:** Rick.
 
 ---
@@ -80,9 +81,11 @@ What the slice builds on, read at source.
 
 ---
 
-## 4. Open questions
+## 4. The seven questions — RULED 2026-10-11 (Rick)
 
-Each has a recommendation. None is decided here.
+Each is kept as it was asked, with the recommendation it carried, and the
+ruling under it. Where the ruling differs from the recommendation, the
+ruling is what is built.
 
 ### RT-O16 — How do P2P's tests reach the record layer's internals after the move?
 
@@ -106,6 +109,8 @@ a feature that exposes raw keys if someone enables it in production, which
 the gate exists to stop and which the clatter gate already shows how to
 check.
 
+**RULED: (a)**, with the gate built on the clatter gate's mechanism.
+
 ### RT-O17 — Does the symmetric state move with the record layer?
 
 F-5: `Sym` is the piece both handshakes share and the design names only
@@ -119,6 +124,10 @@ F-5: `Sym` is the piece both handshakes share and the design names only
 for the record layer, in the more delicate half. It widens the extraction
 by about seventy lines and one more test's reach (F-5).
 
+**RULED: (a).** The shared crate is named **`shekyl-noise`**, since it
+holds the AEAD primitives, the symmetric state and the record layer. The
+symmetric state takes the protocol name as a parameter.
+
 ### RT-O18 — Where does the seeded generator live?
 
 F-12: the red-first test must use the generator the vectors were made
@@ -131,6 +140,11 @@ dependency of a test-only crate; clatter stays out of every production
 graph, and the existing gate proves it. The alternative, a small shared
 test-support crate, is one more crate for sixty lines.
 
+**RULED: as recommended, with one condition.** The entry to our handshake
+that takes a seeded generator exists only under the test-support feature.
+Production draws from the operating system's source and takes no
+generator.
+
 ### RT-O19 — Which crate holds the handshake, and which the adapter?
 
 F-15, F-16.
@@ -141,6 +155,9 @@ because it brings `tokio` and the handshake has no need of an async
 runtime; a daemon, a wallet and the tunnel all use both, but a test of the
 handshake should not have to build a runtime. The record crate needs a
 name; **proposed: `shekyl-noise-record`.**
+
+**RULED: as recommended**, with the shared crate named `shekyl-noise`
+(RT-O17), not the name proposed here.
 
 ### RT-O20 — How does a receiver learn a record's size class?
 
@@ -174,6 +191,26 @@ interval named. **Recommended:** keep the record layer's present rule
 (F-9) for the channel in RT-W9, and let the P2P round's decision apply to
 both when it is made, since the code is shared.
 
+**RULED: (d), a masked class byte** — none of the three above.
+
+- At each key and each rekey, a **header-protection key** is derived from
+  the record key, under a new registered label.
+- The class byte is **masked** with one keystream byte computed from that
+  key and the record's nonce.
+- The **unmasked** byte is bound as associated data. One AEAD operation
+  per record.
+- The byte is **omitted for a single-class table**, so P2P's one window
+  carries none.
+- **Rekey stays at 1,000 nonces** until the P2P round decides for both.
+- `RPC_CHANNEL.md` §4.4 states what this removes (reading record
+  boundaries from cleartext) and what it does not (burst sizes, and the
+  handshake's own fingerprint).
+
+What the ruling leaves to step 5, to be brought back before it is built:
+the exact derivation of the header-protection key, the exact keystream
+function, and the label's text and registry mechanism. They are a wire
+format and are proposed there, not assumed here.
+
 ### RT-O21 — Where do the two measurements run?
 
 - **RT-P5's distribution** needs real traffic: a wallet syncing, a
@@ -185,6 +222,21 @@ both when it is made, since the code is shared.
 
 Which hosts, and whether a wallet with a long enough history exists on
 the testnet to make "wallet sync" mean something, is for Rick.
+
+**RULED: as recommended**, with the measurement widened and one part
+left open.
+
+- RT-P5 measures **both** the HTTP message sizes for each method **and**
+  the record boundaries as the adapter emits them.
+- The adapter **combines writes until a flush**. That policy is part of
+  the probe, registered with it and observed in it, not a detail chosen
+  after.
+- **A rule-21 reopen is recorded:** the size classes are re-derived from
+  mainnet traffic once there is any. Until then they rest on testnet
+  traffic and say so.
+- **Open:** which wallet. The ruling as it reached this lane left that
+  answer blank. Step 3's registration cannot be written without it, and
+  nothing before step 3 depends on it.
 
 ### RT-O22 — Does the standing check also pin the codegen settings?
 
@@ -198,6 +250,13 @@ either pinned version.
 optimisation keys as resolved, and the gate failing on any key it does not
 recognise so that a new one cannot slip past.
 
+**RULED: yes.** The gate reads `[profile.release]`,
+`cmake/BuildRust.cmake` and the gitian descriptors (`contrib/gitian/`),
+and fails on any key it does not recognise.
+
+*Also ruled:* two registry rows with one reason, for the two protocol
+names (F-20), is accepted.
+
 ---
 
 ## 5. Plan
@@ -208,11 +267,11 @@ This document is step 0 and is the only content of the first.
 | # | Step | Depends on | Notes |
 |---|---|---|---|
 | 0 | This pre-flight | — | Docs only |
-| 1 | Extract the record layer | RT-O16, RT-O17 | A refactor. Proof: P2P's two vector files untouched and its tests passing in place; `shekyl-clearnet`'s tests passing; the fuzz targets building |
+| 1 | Extract the record layer and the symmetric state into `shekyl-noise` | RT-O16, RT-O17 | A refactor. Proof: P2P's two vector files untouched and its tests passing in place; `shekyl-clearnet`'s tests passing; the fuzz targets building |
 | 2 | The handshake, red first | RT-O18, RT-O19 | The comparison with the pinned vectors is written and observed failing before the implementation. Then one test per requirement of §4.3 |
 | 3 | RT-P5: the adapter and the size distribution | step 2; RT-O21 | The adapter is observed failing with record splitting removed. The distribution's method is registered, and its host claimed, before it runs |
 | 4 | RT-P6: handshake cost on the floor device | step 2; step 3's candidate classes | Registered before it runs; quiet claim |
-| 5 | Padded records | RT-O20; steps 3 and 4 | Class table from the measurements. P2P's wire format does not change; its interim framing stays in the crate as debt owned by the P2P lane |
+| 5 | Padded records, with the masked class byte | RT-O20; steps 3 and 4 | The header-protection construction is proposed and confirmed first. Class table from the measurements. P2P's wire format does not change; its interim framing stays in the crate as debt owned by the P2P lane |
 | 6 | Registry exclusion rows; the standing-check gate | RT-O22 | Each shown failing under a named edit |
 
 **Named edits, fixed now so they are not improvised later.**

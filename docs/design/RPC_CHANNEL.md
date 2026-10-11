@@ -17,8 +17,8 @@ clatter name their own commit (§4.1).
 RT-O5′ into RT-15; RT-O9 in four parts, `RT-O9.1`…`RT-O9.4`); probes
 `RT-P4…RT-P8`; slices `RT-W8…RT-W14`. RT-O11…RT-O15 are the RT-W8
 pre-flight's. `RT-O16…RT-O22` are the RT-W9 pre-flight's
-([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md)) and
-are **open**. No new family (rule 94).
+([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md)),
+ruled 2026-10-11 but for one part of RT-O21. No new family (rule 94).
 **Decision authority:** Rick.
 **Relationship to R0:** R0's §1 premise (every RPC leg is
 operator-to-operator; the adversary is the path, never the peer) and §3
@@ -576,7 +576,26 @@ is needed is decided from RT-P6's measurement, not before it.
     one window for P2P, the RPC's classes for the channel. A second framing
     is not built.
   - **The class sizes are not chosen here.** They are derived from the
-    record-size distribution measured in RT-P5 and RT-P6 (§9).
+    record-size distribution measured in RT-P5 and RT-P6 (§9), on testnet
+    traffic. *Rule-21 reopen (RT-O21):* mainnet traffic exists; the classes
+    are derived again from it.
+  - **How a receiver learns a record's class — RULED (RT-O20,
+    2026-10-11): one masked byte.** A table with several classes puts one
+    byte in front of each record naming its class. A header-protection key
+    is derived from the record key, under its own registered label, at each
+    key and each rekey; the byte is masked with one keystream byte computed
+    from that key and the record's nonce; and the unmasked byte is bound
+    into the record's AEAD as associated data, so a changed byte fails the
+    tag. There is one AEAD operation per record. A table with a single
+    class carries no byte at all, which is P2P's case.
+    - **What this removes:** reading the stream as records without the
+      keys. An observer cannot parse record boundaries or classes out of
+      the bytes; a middlebox cannot key a rule to a cleartext class byte.
+    - **What it does not remove:** burst sizes. The bytes that cross the
+      wire in one burst, and when, are as visible as before, and with
+      them roughly how much was sent. Nor does it hide the handshake: its
+      four messages have fixed sizes and are recognisable as this
+      handshake.
   - **Timing stays visible** — when a connection opens and how long a burst
     lasts. Cover traffic is out of scope. *Rule-21 reopen:* a measured
     timing correlation on a real wallet leg.
@@ -1338,6 +1357,23 @@ construction) instead of loopback TCP.
   (§4.4, §5, §7.1). **RT-O15:** the ProVerif model lives in the channel
   crate with a runner and a CI job that fails if a property fails or a
   deliberately broken variant passes.
+- **RT-O16…RT-O22 — the RT-W9 pre-flight's questions. RULED 2026-10-11**
+  ([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md) §4).
+  **RT-O16:** P2P's existing tests reach the extracted record layer's
+  internals through a test-support feature, kept out of production graphs
+  by a gate. **RT-O17:** the symmetric state moves with the record layer;
+  the shared crate is `shekyl-noise`, and the state takes the protocol
+  name as a parameter. **RT-O18:** our handshake is compared with the
+  pinned vectors inside the cross-check crate; its seeded entry exists
+  only under the test-support feature. **RT-O19:** the handshake lives in
+  `shekyl-rpc-channel`, the stream adapter in its own crate. **RT-O20:** a
+  record's size class travels as one masked byte (§4.4); rekey stays at
+  1,000 nonces until the P2P round decides for both. **RT-O21:** RT-P5
+  measures HTTP message sizes per method and the adapter's record
+  boundaries, the flush policy included; the classes are re-derived from
+  mainnet traffic when there is any; **which wallet it measures is still
+  open.** **RT-O22:** the RT-P4 standing check also attests the release
+  build's codegen settings.
 
 ---
 
@@ -1480,7 +1516,7 @@ rule-26 pre-flight before its first production commit.
 | Slice | Contents | Depends on | Authorization |
 |---|---|---|---|
 | RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, vectors pinned from clatter 2.3.0 under seeded randomness, which RT-W9 compares our handshake against (RT-O11), each observed changing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; creates `shekyl-rpc-channel` with the constants and naming functions (RT-O13); deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
-| RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); padded records in size classes derived from RT-P5 and RT-P6, one framing shared with P2P (RT-O6); one exclusion row in the domain registry, with its reason, for Noise protocol names — the RPC channel's and the P2P handshake's — which are literals mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; deadline from RT-P6. **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | **authorized 2026-10-11**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md), its questions `RT-O16…RT-O22` open; nothing built |
+| RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); padded records in size classes derived from RT-P5 and RT-P6, one framing shared with P2P (RT-O6); one exclusion row in the domain registry, with its reason, for Noise protocol names — the RPC channel's and the P2P handshake's — which are literals mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; deadline from RT-P6. **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | **authorized 2026-10-11**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md), its questions `RT-O16…RT-O22` ruled 2026-10-11 (one part of RT-O21 open); nothing built |
 | RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 | not authorized |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9) | RT-W9 | not authorized |
