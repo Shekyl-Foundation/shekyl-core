@@ -37,12 +37,6 @@ members = [
     # See DAEMON_RELAY_PRIVACY.md §94.
     "shekyl-tor-transit-spike",
 
-    # DISPOSABLE probe (RT-P2, RPC_TRANSPORT_POSTURE.md §7.1): pinned mutual TLS
-    # under axum with the wrong-pin bite check. Named `-spike` on purpose --
-    # nothing in it is canonical; RT-W4 rewrites what it keeps and deletes the
-    # rest (rule 15: debt, labelled at birth).
-    "shekyl-rt-p2-spike",
-
     # Canonical genesis block/tx binary wire-format serializer — the clean,
     # Shekyl-owned replacement for the vendored shekyl-oxide block/tx/ct modules
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
@@ -252,6 +246,16 @@ members = [
     # Per-P archival-firewall network transport (2d-2 SP-T1)
     "shekyl-p-transport",
     "shekyl-p2p-transport",
+
+    # The RPC channel (docs/design/RPC_CHANNEL.md, round R1). Slice RT-W8:
+    # the three domain strings and the derivations that carry them, against
+    # independently generated vectors. The handshake lands here in RT-W9.
+    "shekyl-rpc-channel",
+    # Test-only: holds clatter, an independent implementation of the channel's
+    # handshake pattern, to the community vector and pins hybrid vectors from
+    # it (RT-O11, RT-O12). Nothing may depend on it; the gate is
+    # scripts/ci/check_clatter_not_in_production.py.
+    "shekyl-rpc-channel-xcheck",
 
     # The peer address union. Levin frames it; the transport layer selects
     # a connector from it. Neither crate defines a second copy.
