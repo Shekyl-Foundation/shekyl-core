@@ -5,13 +5,12 @@
 
 //! Remote-arm identity handshake (`VC-3`).
 //!
-//! Comparison is [`shekyl_rpc_types::IdentityExpectation::check`]. This
+//! Decode and comparison are [`shekyl_rpc_types::IdentityExpectation::read`]. This
 //! module fetches `get_version` over the blocking control transport and
 //! formats the refusal.
 
 use shekyl_rpc_types::{
-    core_rpc_version_string, DaemonNetwork, GetVersionResponse, IdentityExpectation,
-    IdentityMismatch,
+    core_rpc_version_string, DaemonNetwork, IdentityExpectation, IdentityMismatch,
 };
 
 use crate::ctl_client;
@@ -61,29 +60,45 @@ fn handshake(src: &Source) -> Result<(), String> {
         )
     })?;
 
+    let result = get_version_result(address, timeout)?;
+    IdentityExpectation::exact(network)
+        .read(&result)
+        .map(|_| ())
+        .map_err(|refusal| {
+            let message = console_identity_message(&refusal.mismatch);
+            match refusal.evidence {
+                Some(evidence) => format!("{message} (evidence: {evidence})"),
+                None => message,
+            }
+        })
+}
+
+/// `get_version`'s `result`, undecoded, with no identity check before it.
+///
+/// Undecoded because reading it is `shekyl_rpc_types`' (`RK-D25`): the
+/// handshake hands it to [`IdentityExpectation::read`], and the `version`
+/// command to [`shekyl_rpc_types::daemon_rpc_version`]. A daemon that
+/// answers with a JSON-RPC error is reported in its own words.
+pub(super) fn get_version_result(
+    address: &str,
+    timeout: std::time::Duration,
+) -> Result<serde_json::Value, String> {
     let body = serde_json::to_vec(&serde_json::json!({
         "jsonrpc": "2.0", "id": "0", "method": "get_version", "params": {},
     }))
     .map_err(|e| format!("cannot encode the handshake request: {e}"))?;
     let raw = ctl_client::post_blocking(address, "/json_rpc", body, timeout)
         .map_err(|(_, reason)| reason)?;
-
-    let theirs: GetVersionResponse = match json_rpc_result(&raw, "get_version") {
-        Ok(reply) => reply,
-        Err(reason) if reason.starts_with("get_version failed:") => {
-            return Err(reason);
-        }
-        Err(reason) => {
-            return Err(format!(
+    json_rpc_result(&raw, "get_version").map_err(|reason| {
+        if reason.starts_with("get_version failed:") {
+            reason
+        } else {
+            format!(
                 "{} (evidence: {reason})",
                 console_identity_message(&IdentityMismatch::unreadable())
-            ))
+            )
         }
-    };
-
-    IdentityExpectation::exact(network)
-        .check(&theirs)
-        .map_err(|m| console_identity_message(&m))
+    })
 }
 
 fn console_identity_message(m: &IdentityMismatch) -> String {

@@ -65,7 +65,7 @@ use serde_json::json;
 use shekyl_chain_ingest::source::{Injection, ServeCredit};
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
-use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
+use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse, GetInfoResponse};
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId, TxHash};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
@@ -73,6 +73,11 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 /// races on the RPC port and is resource-heavy (each mines blocks). Serialize all
 /// regtest e2e tests through one async lock — held for the daemon's lifetime via
 /// [`RegtestDaemon`], released on drop.
+///
+/// The lock is in-process only. Each daemon takes a fresh ephemeral port and
+/// temp datadir and removes both on drop, so nothing sweeps the process table:
+/// a `pkill` of `shekyl-regtest-` would also kill another `cargo test`
+/// process's daemon, and this lock cannot see that process.
 static SERIAL: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
 
 fn serial_lock() -> Arc<Mutex<()>> {
@@ -150,37 +155,32 @@ pub(super) struct RegtestDaemon {
     /// production one).
     schedule: Option<RegtestSchedule>,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
-    _serial: OwnedMutexGuard<()>,
+    /// `None` on the sink of a [`origin::StemSinkPair`], whose origin holds
+    /// the one guard for both.
+    _serial: Option<OwnedMutexGuard<()>>,
 }
 
-/// `get_info` result fields we care about.
-#[derive(Deserialize, Debug)]
-struct GetInfoResp {
-    height: u64,
-    /// Pool population — the mined-yet signal for a submitted tx (see
-    /// `mine_until_pool_empty`).
-    #[serde(default)]
-    tx_pool_size: u64,
-    /// Daemon version string — provenance for the live-oracle spend capture.
-    #[serde(default)]
-    version: String,
-    /// Cumulative destroyed atomic units — `compute_fee_burn`'s
-    /// `actually_destroyed` term only (`blockchain.cpp` feeds it
-    /// `block_burn_amount` and rolls it back on pop). The sibling
-    /// `staker_pool_amount` term does *not* land here; it goes to the
-    /// `archival_budget_accrual` row. See the A6 assertion for why the
-    /// destroyed half is nonetheless evidence about the pool half.
-    #[serde(default)]
-    total_burned: u64,
-    /// The C++'s block-weight limit in force for the next block —
-    /// `Blockchain::get_current_cumulative_block_weight_limit`, twice the
-    /// effective median (CEN-G6b). What the C++ template fills up to.
-    #[serde(default)]
-    block_weight_limit: u64,
-    /// The C++'s effective median in force for the next block
-    /// (`get_current_cumulative_block_weight_median`).
-    #[serde(default)]
-    block_weight_median: u64,
+/// How a spawned daemon takes part in peer-to-peer.
+#[derive(Clone, Copy, Debug)]
+enum Peering {
+    /// `--offline`: no listener and no dial. The protocol starts
+    /// synchronized, so a submitted transaction finds no route and is
+    /// broadcast-recorded within milliseconds.
+    Offline,
+    /// Bound on loopback and dialling exactly one peer.
+    ///
+    /// `--add-exclusive-node` is what keeps the daemon off the public
+    /// network: p2p reads `--regtest` as mainnet, and an exclusive list is
+    /// the condition under which it dials no seed. `--no-ephemeral-tor`
+    /// declines the managed Tor, so the node is clearnet-only and a local
+    /// origin takes the stem slot, not a hidden own-edge.
+    Linked {
+        p2p_port: u16,
+        peer_p2p_port: u16,
+        /// `--no-sync`: the daemon never reports itself synchronized, so it
+        /// drops every transaction a peer sends it and relays none.
+        sink: bool,
+    },
 }
 
 /// `generateblocks` result fields we care about.
@@ -189,6 +189,52 @@ pub(super) struct GenerateBlocksResp {
     height: u64,
     #[serde(default)]
     blocks: Vec<String>,
+}
+
+/// How one regtest daemon is spawned.
+///
+/// The fields are the postures a caller can ask for, named at the call
+/// site. The serial guard stays with the caller: one daemon takes it, and
+/// a stem/sink pair takes it once, on the origin.
+struct RegtestSpawn {
+    serial: Option<OwnedMutexGuard<()>>,
+    schedule: Option<RegtestSchedule>,
+    restricted_listener: bool,
+    console: bool,
+    peering: Peering,
+}
+
+impl RegtestSpawn {
+    /// Offline, non-interactive, one listener, the genesis-pinned schedule.
+    fn new(serial: Option<OwnedMutexGuard<()>>) -> Self {
+        Self {
+            serial,
+            schedule: None,
+            restricted_listener: false,
+            console: false,
+            peering: Peering::Offline,
+        }
+    }
+
+    fn with_console(mut self) -> Self {
+        self.console = true;
+        self
+    }
+
+    fn with_restricted_listener(mut self) -> Self {
+        self.restricted_listener = true;
+        self
+    }
+
+    fn with_schedule(mut self, schedule: Option<RegtestSchedule>) -> Self {
+        self.schedule = schedule;
+        self
+    }
+
+    fn with_peering(mut self, peering: Peering) -> Self {
+        self.peering = peering;
+        self
+    }
 }
 
 impl RegtestDaemon {
@@ -212,9 +258,33 @@ impl RegtestDaemon {
         l.local_addr().expect("local_addr").port()
     }
 
+    /// A free port that is none of `taken`. Each probe binds :0 and releases
+    /// immediately, so the kernel is free to hand back the same number twice
+    /// — and a daemon given one number for two listeners dies at startup,
+    /// intermittently. (The TOCTOU window between releasing a probe and the
+    /// daemon binding is unchanged; this only removes the self-collision,
+    /// which is the part we create.)
+    fn free_port_excluding(taken: &[u16]) -> u16 {
+        for _ in 0..64 {
+            let port = Self::free_port();
+            if !taken.contains(&port) {
+                return port;
+            }
+        }
+        panic!("could not obtain a port distinct from {taken:?}");
+    }
+
     /// Spawn the daemon and wait until its RPC answers `get_info`.
     pub(super) async fn start() -> RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
+    }
+
+    /// Spawn the daemon with its interactive console live, so a test can put
+    /// commands to the **in-process** arm. Opt-in: without `--non-interactive`
+    /// the daemon exits on stdin EOF, which every other spawn relies on.
+    pub(super) async fn start_with_console() -> RegtestDaemon {
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).with_console()).await
     }
 
     /// Spawn the daemon with a second, restricted listener, so one daemon serves
@@ -230,15 +300,9 @@ impl RegtestDaemon {
     /// The restricted listener is opt-in rather than always-on: this harness is
     /// `#[ignore]`d, so CI would not catch a regression it introduced into the
     /// spawn that every other e2e test shares.
-    /// Spawn the daemon with its interactive console live, so a test can put
-    /// commands to the **in-process** arm. Opt-in: without `--non-interactive`
-    /// the daemon exits on stdin EOF, which every other spawn relies on.
-    pub(super) async fn start_with_console() -> RegtestDaemon {
-        Self::start_inner(None, false, true).await
-    }
-
     pub(super) async fn start_with_restricted_listener() -> RegtestDaemon {
-        Self::start_inner(None, true, false).await
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).with_restricted_listener()).await
     }
 
     /// Spawn the daemon with an optional regtest schedule on the child's
@@ -256,25 +320,32 @@ impl RegtestDaemon {
     pub(super) async fn start_with_regtest_schedule(
         schedule: Option<RegtestSchedule>,
     ) -> RegtestDaemon {
-        Self::start_inner(schedule, false, false).await
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).with_schedule(schedule)).await
     }
 
-    async fn start_inner(
-        schedule: Option<RegtestSchedule>,
-        restricted_listener: bool,
-        console: bool,
-    ) -> RegtestDaemon {
-        // Serialize across this test binary so no two in-process daemons race on
-        // a port. Each instance uses a unique ephemeral port + temp datadir and
-        // kills its own child (+ removes its datadir) on Drop, so no global daemon
-        // sweep is needed. A `pkill -f shekyl-regtest-` would also kill a
-        // concurrent `cargo test` *process*'s daemon — the in-process lock can't
-        // serialize across processes — so it is deliberately not done here.
-        let serial = serial_lock().lock_owned().await;
+    /// Spawn one daemon. The caller owns the serial guard, so a test that
+    /// spawns two daemons takes it once.
+    async fn spawn(spec: RegtestSpawn) -> RegtestDaemon {
+        let RegtestSpawn {
+            serial,
+            schedule,
+            restricted_listener,
+            console,
+            peering,
+        } = spec;
         install_wallet_tracing();
 
         let bin = Self::binary();
-        let rpc_port = Self::free_port();
+        let p2p_ports: &[u16] = match &peering {
+            Peering::Offline => &[],
+            Peering::Linked {
+                p2p_port,
+                peer_p2p_port,
+                ..
+            } => &[*p2p_port, *peer_p2p_port],
+        };
+        let rpc_port = Self::free_port_excluding(p2p_ports);
         let data_dir = std::env::temp_dir().join(format!("shekyl-regtest-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
@@ -283,7 +354,6 @@ impl RegtestDaemon {
         let mut cmd = Command::new(&bin);
         cmd.args([
             "--regtest",
-            "--offline",
             "--no-igd",
             "--fixed-difficulty",
             "1",
@@ -299,12 +369,29 @@ impl RegtestDaemon {
             "--log-level",
             "1",
         ]);
-        // Distinct from the main port. Both probes bind :0 and release
-        // immediately, so the kernel is free to hand back the same number
-        // twice — and the daemon would then try to bind both listeners to it
-        // and die at startup, intermittently. (The pre-existing TOCTOU window
-        // between releasing a probe and the daemon binding is unchanged; this
-        // only removes the self-collision, which is the part we create.)
+        match peering {
+            Peering::Offline => {
+                cmd.arg("--offline");
+            }
+            Peering::Linked {
+                p2p_port,
+                peer_p2p_port,
+                sink,
+            } => {
+                cmd.args([
+                    "--p2p-bind-ip",
+                    "127.0.0.1",
+                    "--p2p-bind-port",
+                    &p2p_port.to_string(),
+                    "--no-ephemeral-tor",
+                    "--add-exclusive-node",
+                    &format!("127.0.0.1:{peer_p2p_port}"),
+                ]);
+                if sink {
+                    cmd.arg("--no-sync");
+                }
+            }
+        }
         // `--non-interactive` unless the test drives the daemon's own console:
         // the console is what reads stdin, and suppressing it is what makes
         // the in-process arm unreachable.
@@ -312,14 +399,9 @@ impl RegtestDaemon {
             cmd.arg("--non-interactive");
         }
         let restricted_port = restricted_listener.then(|| {
-            let mut port = Self::free_port();
-            for _ in 0..64 {
-                if port != rpc_port {
-                    return port;
-                }
-                port = Self::free_port();
-            }
-            panic!("could not obtain a restricted port distinct from {rpc_port}");
+            let mut taken = p2p_ports.to_vec();
+            taken.push(rpc_port);
+            Self::free_port_excluding(&taken)
         });
         if let Some(port) = restricted_port {
             // A second listener on the same daemon. This flag binds an extra
@@ -398,7 +480,7 @@ impl RegtestDaemon {
             }
             match self
                 .rpc
-                .json_rpc_call::<GetInfoResp>("get_info", None)
+                .json_rpc_call::<GetInfoResponse>("get_info", None)
                 .await
             {
                 Ok(_) => return,
@@ -415,9 +497,10 @@ impl RegtestDaemon {
 
     pub(super) async fn height(&self) -> u64 {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .health
             .height
     }
 
@@ -428,19 +511,24 @@ impl RegtestDaemon {
     /// it, and this crate's version is not that identity.
     pub(super) async fn version(&self) -> String {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .node
+            .shown()
+            .expect("the harness's own listener is shown Status")
             .version
+            .clone()
     }
 
     /// Transactions currently in the daemon's pool — the drain loop's
     /// condition and the pop legs' return-to-pool observable.
     pub(super) async fn tx_pool_size(&self) -> u64 {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .pool
             .tx_pool_size
     }
 
@@ -449,10 +537,13 @@ impl RegtestDaemon {
     pub(super) async fn weight_limit(&self) -> (u64, u64) {
         let info = self
             .rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info");
-        (info.block_weight_median, info.block_weight_limit)
+        (
+            info.chain.block_weight_median,
+            info.chain.block_weight_limit,
+        )
     }
 
     /// Non-coinbase transaction hashes carried by the block named by `hash`
@@ -513,9 +604,10 @@ impl RegtestDaemon {
     /// pins it to 0 (A6 pool-half disposition).
     pub(super) async fn total_burned(&self) -> u64 {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .economics
             .total_burned
     }
 
@@ -1856,9 +1948,10 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         .expect("already_generated_coins");
     let total_burned = daemon
         .rpc
-        .json_rpc_call::<GetInfoResp>("get_info", None)
+        .json_rpc_call::<GetInfoResponse>("get_info", None)
         .await
         .expect("get_info")
+        .economics
         .total_burned;
     // CEN-F20's operand over the C++'s headers: the listed-transaction
     // count over the prior `min(height, W)` blocks.
@@ -2478,6 +2571,22 @@ async fn transfer_to(
     batch: u64,
     max_batches: usize,
 ) {
+    submit_transfer(daemon, arc, address, recipient, amount, batch, max_batches).await;
+    daemon.generate_blocks(1, address).await;
+}
+
+/// Build (retrying past the C2 reference-spendability gate) + submit a transfer
+/// of exactly `amount` to `recipient`, and leave it in the pool. Returns the
+/// hash of a fresh accept.
+async fn submit_transfer(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    recipient: &str,
+    amount: shekyl_units::AtomicUnits,
+    batch: u64,
+    max_batches: usize,
+) -> TxHash {
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     let request = TxRequest {
         recipients: vec![TxRecipient {
@@ -2506,14 +2615,15 @@ async fn transfer_to(
         }
     }
     let pending = pending.expect("transfer must build once reference-spendable");
-    let tx_hash = {
+    let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the transfer (consensus verify)")
     };
-    eprintln!("daemon accepted transfer: {tx_hash:?}");
-    daemon.generate_blocks(1, address).await;
+    let tx_hash = require_fresh_accept(outcome, "the transfer");
+    eprintln!("daemon accepted transfer: {tx_hash}");
+    tx_hash
 }
 
 async fn refresh(arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>) {
@@ -5211,114 +5321,6 @@ fn jsonrpc_body(method: &str, params: &serde_json::Value) -> serde_json::Value {
     json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params })
 }
 
-/// The restricted RPC posture reaches the C++ handlers behind the FFI bridge.
-///
-/// This is the regression guard for the bridge's origin context. Until
-/// 2026-08-26 the dispatchers passed `nullptr` for the handler's
-/// `connection_context*`, so `m_restricted && ctx` was false at every site and
-/// a restricted listener behaved as an unrestricted one — no request caps,
-/// and, on the pool paths, disclosure of transactions the node had not
-/// broadcast.
-///
-/// **Every leg here crosses the bridge, and only those legs are here.** RK-4c
-/// migrated `/get_transactions` and `/is_key_image_spent` to native Rust, so
-/// their cap assertions stopped saying anything about the bridge while still
-/// passing under a name that claimed they did — six green assertions where the
-/// bridge had three. They now live in
-/// `native_handlers_apply_their_own_request_caps`, which is what they actually
-/// test. What remains: `/get_info`'s field trimming on `dispatch_json`, and
-/// the JSON-RPC origin cap on `dispatch_jsonrpc_we`
-/// (`get_block_header_by_hash` over `RESTRICTED_BLOCK_COUNT`). Admin-only
-/// method gating is `admin_methods_are_refused_only_on_the_restricted_listener`
-/// in `shekyl-daemon-rpc`. The WE result-envelope shape is
-/// `jsonrpc_we_carries_handler_status_through_the_result_envelope`. The
-/// histogram deletion gate is `get_output_histogram_stays_unrouted`.
-///
-/// Both listeners come from one daemon, so the postures are compared against
-/// the same chain in the same process, and the unrestricted rows are the
-/// blast-radius check: the fix must not narrow the admin listener.
-#[tokio::test]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
-    /// `RESTRICTED_BLOCK_COUNT`, the cap on `get_block_header_by_hash`.
-    const BLOCK_CAP: usize = 1000;
-
-    let daemon = RegtestDaemon::start_with_restricted_listener().await;
-    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
-        .await
-        .expect("restricted rpc client");
-    let unrestricted = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-        .await
-        .expect("unrestricted rpc client");
-
-    // Hashes that resolve to nothing: a cap is a request-shape refusal and
-    // fires before any lookup, so the chain's contents are irrelevant.
-    let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
-
-    // ── the bridge's REST template ──────────────────────────────────────
-    //
-    // The two capped routes above are native as of RK-4c, so they no longer
-    // reach `dispatch_json`. `/get_info` still does, and its restricted arm is
-    // the same `caller_is_restricted(ctx)` at core_rpc_server.cpp:209 — with
-    // `start_time` forced to 0 and `free_space` to u64::MAX, both observable
-    // without a populated chain. If a dispatcher stops passing the origin,
-    // these two answers become the admin ones.
-    let admin_info: serde_json::Value = unrestricted
-        .rpc_call("get_info", None::<serde_json::Value>)
-        .await
-        .expect("admin get_info");
-    let restricted_info: serde_json::Value = restricted
-        .rpc_call("get_info", None::<serde_json::Value>)
-        .await
-        .expect("restricted get_info");
-    assert_eq!(
-        restricted_info
-            .get("start_time")
-            .and_then(serde_json::Value::as_u64),
-        Some(0),
-        "a restricted listener must not disclose the node's start time; if this \
-         is the real start time the handler saw a null connection context"
-    );
-    assert_eq!(
-        restricted_info
-            .get("free_space")
-            .and_then(serde_json::Value::as_u64),
-        Some(u64::MAX),
-        "a restricted listener must not disclose free space"
-    );
-    assert!(
-        admin_info
-            .get("start_time")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            > 0,
-        "the admin listener must still report the start time — otherwise the \
-         assertions above would hold for a daemon that reports nothing to anyone"
-    );
-
-    // JSON-RPC goes through `dispatch_jsonrpc_we`, a separate template. Over
-    // the block cap the handler writes `error_resp`, so the reply is an error
-    // envelope and `result` never appears. That is the remaining origin
-    // witness on this template: if the dispatcher stops passing `ctx`, the
-    // cap does not fire.
-    let hdr: serde_json::Value = restricted
-        .rpc_call(
-            "json_rpc",
-            Some(jsonrpc_body(
-                "get_block_header_by_hash",
-                &json!({ "hashes": hashes(BLOCK_CAP + 1) }),
-            )),
-        )
-        .await
-        .expect("restricted get_block_header_by_hash over cap");
-    assert_eq!(
-        hdr.pointer("/error/message").and_then(|m| m.as_str()),
-        Some("Too many block headers requested in restricted mode"),
-        "a restricted listener must refuse more than {BLOCK_CAP} block hashes; \
-         if this succeeds the JSON-RPC template stopped passing the origin"
-    );
-}
-
 /// `dispatch_jsonrpc_we` can carry a handler's non-OK `res.status` in the
 /// JSON-RPC *result* envelope, not only in `error`.
 ///
@@ -5326,7 +5328,7 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
 /// (`get_output_histogram` was the last). The remaining witness is a
 /// universal cap on the admin listener. This is not an origin check: if a
 /// WE handler grows a restricted `res.status` refusal, that leg belongs on
-/// `restricted_listener_applies_request_caps_through_the_ffi_bridge`.
+/// `restricted_listener_gets_stand_ins_and_caps_from_native_handlers`.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn jsonrpc_we_carries_handler_status_through_the_result_envelope() {
@@ -5631,3 +5633,6 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
          got:\n{out}"
     );
 }
+
+#[path = "regtest_e2e_origin.rs"]
+mod origin;
