@@ -23,13 +23,13 @@
 //!   anchor's hash. Per block, view-bound ([`E1`], a header rule: the
 //!   anchors are header facts and the view is not read); reads the anchors
 //!   from the `Trust` input that carries them into `validate`.
-//! - **CEN-E2** — an alternative block at or below the last anchor is
-//!   refused; `D_max`'s second band lands in the same function (`PDM-Q11`).
-//!   **No Rust site**: the store admits no alternative block, and on the
+//! - **CEN-E2** — an alternative rooted below the current anchor is
+//!   refused, and so is one that would pop more than `D_max` recorded
+//!   blocks: `PDM-Q11`'s two bands, one function. Its home is the alt
+//!   tier's module ([`crate::rules::alt::E2`]), run by `crate::alt_against`
+//!   before any header is read; it has no main-chain arm because on the
 //!   main chain the floor holds by construction (a candidate at `tip + 1`
-//!   is above every anchor `≤ tip`). Subsumed behind the alt `ChainView`
-//!   (slice 9) *and* `D_max`'s numeric (`PDM-Q11`, provisional) — the D5
-//!   shape, with two blockers rather than one.
+//!   is above every anchor `≤ tip`) and nothing is popped.
 
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 

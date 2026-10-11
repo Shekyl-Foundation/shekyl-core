@@ -88,6 +88,7 @@
 //! read observed. A transaction rule's error stays the view's own fault; a
 //! hole there is a [`ViewRead`] at the function that walked the heights.
 
+pub(crate) mod alt;
 pub(crate) mod anchors;
 pub(crate) mod attestation;
 pub(crate) mod block_weight;
@@ -341,6 +342,22 @@ pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
     let verdict = R::check(cx, view)?;
+    if verdict.is_ok() {
+        coverage.insert(R::ROW);
+    }
+    Ok(verdict)
+}
+
+/// [`run`] for a [`HeaderRule`] over a [`HeaderView`]: the alt tier's
+/// runner (`crate::alt_against`), where the view is a stitched chain of
+/// headers that implements no `ChainView`. A [`BlockRule`] cannot be
+/// named here — the bound is what keeps the cheap tier to header facts.
+pub(crate) fn run_header<'id, R: HeaderRule, H: HeaderView<'id>>(
+    cx: &BlockContext<'_>,
+    view: &H,
+    coverage: &mut RuleCoverage,
+) -> Result<Verdict<()>, ViewRead<H::Fault>> {
+    let verdict = <R as HeaderRule>::check(cx, view)?;
     if verdict.is_ok() {
         coverage.insert(R::ROW);
     }
