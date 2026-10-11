@@ -310,7 +310,10 @@ count_pattern() {
 # are byte strings fed to the existing nested combiner's one cSHAKE site
 # (hybrid_combiner.rs `preimage`). Neither has a signer yet, and neither
 # adds a call site.
-MECH1_EXPECTED=69
+# Public urn (2026-10-10): 69 -> 68. challenge_assignment.rs is deleted.
+# Its one test-only cshake256_32 site goes with it. The scheme-3 domains
+# stay; receipt signing is the FN-DSA lane's increment.
+MECH1_EXPECTED=68
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

@@ -89,6 +89,7 @@ pub(crate) struct Inner {
 }
 
 /// The writer: fill, refill, erase. The serving loop never holds this.
+/// The pin-release erase asks the stake actor, which is the only owner.
 pub struct BodyStore {
     inner: Arc<Inner>,
 }

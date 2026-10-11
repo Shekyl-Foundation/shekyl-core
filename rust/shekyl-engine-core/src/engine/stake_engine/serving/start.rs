@@ -174,11 +174,11 @@ where
             return Ok(None);
         };
 
-        // Outside the engine lock: the reader is an actor ask, and the
+        // Outside the engine lock: both handles are actor asks, and the
         // store lives on the stake actor, not on `Engine`. An empty store
-        // answers 404 until fill (`WSS-Q4`) lands. Erase (`WSS-Q8`) is the
-        // same writer's later message. The reader still decrypts (`WSS-Q13`
-        // is not met).
+        // answers 404 until fill (`WSS-Q4`) lands. The reader still
+        // decrypts (`WSS-Q13` is not met). Pin-release erase asks this
+        // actor (`WSS-Q8`); the host does not receive the writer.
         let bodies = stake
             .serving_bodies()
             .await
@@ -238,6 +238,7 @@ where
             curve_tree,
             claim_rpc,
             p_id.to_bytes(),
+            crate::engine::stake_engine::serve_set_source::ReleasedRows::Actor(stake.actor.clone()),
         );
 
         Ok(Some(spawn_serving_task(
