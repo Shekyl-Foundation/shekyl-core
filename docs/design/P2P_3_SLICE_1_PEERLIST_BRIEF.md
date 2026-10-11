@@ -129,6 +129,44 @@ confirmed handshake, or a later successful exchange, on a connection this node
 opened to that address. It moves the clock forward. Contact that arrived
 inbound does not. One failed redial does not demote; the clock does.
 
+**Address validity — RULED 2026-10-11 (Rick; formerly the dialer
+brief's D2a).** `admit_gray` and both draws refuse an address that is
+not dialable on the public internet. Refused:
+
+- IPv4: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`,
+  `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, the
+  documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`,
+  `203.0.113.0/24`), multicast (`224.0.0.0/4`) and reserved
+  (`240.0.0.0/4`).
+- IPv6: loopback, unspecified, link-local (`fe80::/10`), ULA
+  (`fc00::/7`), documentation (`2001:db8::/32`), multicast
+  (`ff00::/8`), and the IPv4-embedding prefixes 6to4 (`2002::/16`),
+  Teredo (`2001::/32`) and NAT64 (`64:ff9b::/96`).
+- Port 0, on every address type. `tor_address::unknown()` is port 0
+  and never enters a list (this closes PWD-B11's question; the row in
+  `FOLLOWUPS.md` retires when the check lands).
+
+The check is at admit and at both draws, not at admit alone: a
+persisted file predates the rule's current list, and the draw is what
+the dialer acts on. `--allow-local-ip` is the one operator override,
+for test networks; it admits the private ranges today's flag admits
+(`is_ip_local`, `contrib/epee/include/net/local_ip.h:41`: `10/8`,
+`172.16/12`, `192.168/16`) and nothing else — loopback stays refused,
+as `is_host_allowed` refuses it today. *The override's exact set is
+this brief's reading of the ruling, for Rick's review.* The check
+lands with increment 3 (D5: in PR-3), because until the cutover the
+C++ filters are still in front of every admit.
+
+*Records-was, the C++ at `8848e773`:* two filters, not one.
+`sanitize_peerlist` (`net_node.inl:2417`) drops loopback, `is_local`,
+`0.0.0.0` and IPv4 port 0 from a received list, with no regard for the
+flag; `peerlist_manager::is_host_allowed` (`net_peerlist.h:273`) drops
+loopback always and `is_local` unless `--allow-local-ip`, at every
+list insert. For IPv6 both know only loopback and link-local
+(`net_utils_base.cpp:45-46`). `Peerlist::admit_gray` on `dev` has no
+validity check. Without this ruling the cutover would delete both C++
+filters and leave none.
+
 **White's target is draw diversity (ruled 2026-09-25).** Outbound
 connections are drawn uniformly from white, so a small white list is a
 small set of hosts an attacker can dominate. The target is enough
@@ -637,6 +675,14 @@ They check different things. Neither stands for the other.
      the uniform sample with the sample that leaves out current
      outbound sessions, under the observer of §5a; the results are
      recorded in §5a.
+6. **Address validity (Rick, 2026-10-11; lands with increment 3).** One
+   address from each range §2 lists, and a port-0 address of each type,
+   is refused by `admit_gray` and is never returned by `draw_gray` or
+   `draw_white` after a `restore` that carried it. With
+   `--allow-local-ip`, an address in each of the three private IPv4
+   ranges is admitted and a loopback address is still refused. The
+   test enumerates the ranges from the same table the check reads, and
+   fails if that table is empty (rule 47).
 
 A harness that requires Rust membership to match the C++ is the wrong oracle.
 §8 is a list of intentional divergences.
@@ -682,7 +728,7 @@ cannot express. Fix the signature. That does not widen white.
 | --- | --- | --- |
 | 1 | The crate `shekyl-peerlist`: gray, white, `EXPIRATION_PERIOD`, the draws, the door, the cached sample (D3), ban demotion (D4), the per-session intake cap (D-S1), the snapshot, the address file. No FFI, no C++ | The crate's tests cover §11.2, §11.3 and §11.5, and `git diff dev..HEAD --stat -- src/ contrib/` is empty |
 | 2 | The divergence ledger of §8, checked against the tree at the increment's pin; the D3 exception instrument and its results in §5a | Each §8 row names the Rust operation that replaces it, and §11.1 passes. **Checked 2026-10-09 at the PR-2 pin (§16.1):** every C++ site in §8 is where the row says (the `net_peerlist.h` lines moved by four, §16.1), and each row's Rust column is an operation the crate has — `Peerlist::apply` (rows 1, 2, 3, 7), `Source::Session` admits with no clock (row 4), `draw_gray` / `draw_white` / `restore` uniform (row 5), `Partition::expire` through every white read (row 6), `insert_gray`'s keep-the-named eviction (row 8) |
-| 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions. Delete every remaining `pruning_seed` in `src/`, `rust/`, and `tests/` | §11.3 |
+| 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions. Delete every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. The address-validity check of §2 (ruled 2026-10-11) lands here, with `--allow-local-ip` as the constructor's one input from the C++. **D5 (Rick, 2026-10-11):** this increment lands with slice 3 as one cutover PR, PR-3 | §11.3, §11.4, §11.6 |
 
 Increment 1 changes no production behavior. Increment 3 is the cutover. The
 crate boundary is what makes `White`'s constructor crate-private; `shekyl-ffi`
@@ -739,10 +785,13 @@ does.*
 
 ## 16. PR-2 — pre-flight (rule 26 Round 0, 2026-10-09)
 
-**Status: OPEN — pre-flight recorded and increments 1 and 2 built on
+**Status: LANDED (as of 2026-10-10) — PR-2 merged as #1021
+(`5d68a72302`): increments 1 and 2 are on `dev`, the §5a measurement is
+in and the exception is not adopted, D-PR2-1 and D-PR2-2 are RULED
+(§16.3, 2026-10-09). Increment 3 is PR-3's (D5, 2026-10-11).**
+*Records-was: OPEN — pre-flight recorded and increments 1 and 2 built on
 `feat/p2p3-pr2-peerlist`, stacked on #1018 (`487d4550fc`), rebased onto
-`dev` when #1018 merges; the §5a measurement is in and the exception is
-not adopted; D-PR2-1 and D-PR2-2 are RULED (§16.3, 2026-10-09).** PR-2 is increments 1 and 2 (§13). The
+`dev` when #1018 merges.* PR-2 is increments 1 and 2 (§13). The
 rulings it implements are D3 (§5a), D4 (§5b), D-S1 (§5c) and the PR-2
 additions (§11.5), written in #1018's docs commit so they reach `dev`
 first. This section is the substrate re-check between those rulings

@@ -1895,6 +1895,17 @@ the attacker's gain.
 **`N` and `T` are measured**, on the Rust transport after the cutover,
 against the honest reconnect rate per host; neither is set here.
 
+**The IPv6 key is a prefix, not an address (Rick, 2026-10-11).** A
+throttle keyed per host is free to bypass on IPv6: one customer
+allocation is a `/64` or larger, so it holds an effectively unlimited
+number of hosts, and the per-host inbound cap was deleted
+(`has_too_many_connections`, slice 2's fold). This is the one place in
+the P2P-3 lane where grouping by prefix matters — the Rust dialer has
+no subnet grouping (`P2P_3_SLICE_3_DIALER_BRIEF.md`, "The candidate
+filter", ruled the same day) — because it is where address abundance
+meets an inbound-driven budget. The prefix length is decided with `N`
+and `T`, after the cutover, not here.
+
 **Residual.** Tor has no host to throttle: an inbound rendezvous
 carries no address (D7, "this zone, no address"). The per-session cap
 of D-S1 and Tor's proof-of-work on the rendezvous are what bound a

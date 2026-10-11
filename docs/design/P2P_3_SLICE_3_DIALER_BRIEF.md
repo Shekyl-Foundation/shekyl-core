@@ -7,6 +7,14 @@ field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol
 constant `DISCLOSE_COUNT = 12` (slice 1 brief D3); the timed-sync
 self-insertion is deleted at the cutover.
+**UPDATE 2026-10-11 (Rick):** no subnet grouping in the Rust dialer —
+the C++ `/24` pass leaves with the dial path and nothing replaces it,
+so the PWD-B9 keys proposed as D1 and D2 are withdrawn, not ruled
+("The candidate filter" below); **D5 is ruled** — slice 1 increment 3
+lands with this slice as one cutover PR (PR-3); address validity moves
+to Rust (slice 1 brief §2, "Address validity"). PR-3 is gated only on
+this brief's review closing; no derivation and no measurement gates it
+(Ruling B).
 Lines below were read on `dev` at `f317d979c4` (2026-10-08), which
 contains #991 and #1002. `record_addr_failed` takes the address, the
 cause, and the reply (`net_node.h:675`). `shekyl_seam_session_cause`
@@ -421,17 +429,28 @@ under it, is dropped with the C++ dial path.
 | Recently failed (`is_addr_recently_failed`) | Kept | This slice's failed-address memory |
 | One candidate per host while the list is built | Kept | A host that advertises many ports is not drawn more often. The port kept for a host is chosen uniformly, not first in list order. The address that is dialed is still host and port |
 | White-list index weighted by `last_seen`, and the cap of the 20 most recent (`net_node.inl:1948`, weighted pick `:1970-1974`) | Dropped | The uniform draw already ruled. A last-seen weight is the eclipse lever in the wargame below |
+| Address validity: `sanitize_peerlist` (`net_node.inl:2417`) and `peerlist_manager::is_host_allowed` (`net_peerlist.h:273`) | Kept, in slice 1 (Rick, 2026-10-11) | Slice 1's `admit_gray` and both draws refuse an address that is not dialable on the public internet (slice 1 brief §2, "Address validity"). `--allow-local-ip` is the one operator override. Neither C++ filter survives the cutover; the Rust check is the one filter, so a dial candidate is never one of those addresses |
+| The `/24` subnet pass, both passes (`net_node.inl:1842-1933`, public zone only) | Dropped (Rick, 2026-10-11) | No subnet grouping. The draw is slice 1's: uniform over eligible addresses, and an address is a host and a port, not a `/24`. See the ruling below |
 
-**Pending Rick, not a kept row.** PWD-B9 owns outbound diversity. Two
-keys are proposed under it and are not in force: (i) the
-occupied-subnet set is outbound sessions on that connector only, so an
-inbound session does not occupy a subnet; (ii) IPv6 that is not
-v4-mapped is grouped by `/32`, and a v4-mapped IPv6 address stays
-`/24`. The C++ second pass, which lifts the limit when the first pass
-yields no candidate, is what the binary does today
-(`net_node.inl:1842-1933` is the subnet pass, public zone only). It
-leaves with the C++ dial path. It is not a Rust rule until those keys
-are ruled. The index does not say this slice has ruled them.
+**No subnet grouping — RULED 2026-10-11 (Rick).** The C++ `/24` pass
+(`net_node.inl:1842-1933`: the subnet-limited first pass and the second
+pass that lifts the limit when the first yields no candidate) leaves
+with the C++ dial path, and nothing replaces it. The draw is slice 1's,
+uniform over eligible addresses; an address is a host and a port, not a
+`/24`. So the two PWD-B9 keys this brief carried — (i) the
+occupied-subnet set is outbound sessions on that connector only;
+(ii) IPv6 that is not v4-mapped is grouped by `/32` — are **withdrawn,
+not ruled**, and with no grouping rule there is no fallback question
+(the proposed D1a). *Records-was: the keys were proposed as D1 and D2
+of the 2026-10-08 close-out brief and sat here as "Pending Rick, not a
+kept row" from `5ceb44a9`; they were never ruled until now.* The one
+place a prefix still matters is the clearnet reconnect throttle's IPv6
+key ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md), "Clearnet
+reconnect throttle"), which is decided with `N` and `T` after the
+cutover. *Reopen if* §99's PM-2a
+([`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md)), run with a
+many-address adversary on clearnet, shows occupation beyond the
+attacker's share of honest addresses.
 
 ---
 
@@ -569,6 +588,14 @@ lines; it does not add a second copy.
 
 ## What is deleted
 
+**D5 — RULED 2026-10-11 (Rick).** Slice 1 increment 3 (the C++
+peerlist's deletion, slice 1 brief §13) lands with this slice as one
+cutover PR, PR-3. The reasoning stands as the close-out brief gave it:
+increment 3 alone would have the C++ dial path build `DialOutcome`
+from a cause it reads after the strand can reap the row (the known
+defect below), would add an FFI surface the dialer deletes one PR
+later, and would need an exception to the freeze.
+
 Each name is where it is on `dev` at `f317d979c4`. A deletion check
 uses `rg -n -e`. A `\|` inside the pattern is a literal pipe under
 ripgrep's default, so that form matches nothing and the gate is green
@@ -637,6 +664,7 @@ keep the callers named below.
 | `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |
 | The timed-sync self-insertion (handshake-address ruling, 2026-10-09) | `net_node.inl:2717` to `:2735`: `outgoing_to_same_zone`, the `max_peerlist_size` subtraction, and the `local_peerlist_new.insert` of `zone.m_our_address` | `rg -n -e outgoing_to_same_zone src/p2p` returns nothing. Before deletion it hits `:2717`, `:2718` and `:2730` |
+| The C++ address filters (address-validity ruling, 2026-10-11) | `sanitize_peerlist`: definition `net_node.inl:2417`, declaration `net_node.h:510`, call `:2456` in `handle_remote_peerlist`. `peerlist_manager::is_host_allowed` (`net_peerlist.h:273`) and `m_allow_local_ip` (`:201`) go with the C++ peerlist (slice 1 §11.4). The flag itself stays: `arg_p2p_allow_local_ip` (`net_node.cpp:123`), read at `net_node.inl:486`, becomes an input to the Rust peerlist's construction instead of `peerlist_manager::init` (`:1078`) | `rg -n -e sanitize_peerlist src/p2p` returns nothing. Before deletion it hits the declaration, the definition and the call. `rg -n -e allow_local_ip src/p2p` still hits the argument and its read; zero hits fails, because the override was kept |
 | The C++ in-flight nonce mint and erase | call `:1347`, guard `:1348`, `mint_recorded_handshake_nonce` `:1497`, `erase_outbound_handshake_nonce` `:1516` | `rg -n -e mint_recorded_handshake_nonce -e erase_outbound_handshake_nonce src/p2p` returns nothing. `rg -n -e detect_self_handshake src/p2p` still hits the declaration and the call in `handle_handshake` (`:2789`). Zero hits on `detect_self_handshake` fails. The dialer's `HandshakeNonceSet` is what `shekyl_dial_take_handshake_nonce` reads |
 
 ---
@@ -657,8 +685,11 @@ fill the outbound set. The answer is slice 1's uniform draw within a
 connector. This slice does not sort by `last_seen` and does not give
 `--add-peer` a better chance than any other gray address. Exclusive
 and priority nodes are operator-named and are not part of that draw.
-Whether an inbound session occupies a subnet is the pending PWD-B9
-paragraph above. It is not a kept filter.
+There is no subnet grouping (ruled 2026-10-11, "The candidate
+filter"): an attacker who spreads addresses across prefixes gains
+nothing a prefix rule would have denied, and an attacker within one
+prefix is bounded by the uniform draw's share, which is what PM-2a's
+clearnet variant measures.
 
 **The failed-address memory as something an attacker can drive.** A
 peer, or a directory, that can force a forgetting cause can suppress
@@ -716,10 +747,11 @@ the windows, which causes forget an address, exclusive and priority
 nodes dialed before the draw, white promotion only on
 `SessionAccepted` or `Confirmed` of an outstanding gray draw or
 `HarvestDone` of a Foundation host, and each kept row of the candidate
-filter. The
-subnet pass is not a Rust assertion until the pending keys are ruled.
-A hidden-connector handshake does not carry the clearnet port. A dial
-to our own listener is detected.
+filter. There is no subnet pass to assert (ruled 2026-10-11). Address
+validity is slice 1's falsifier §11.6: each listed range, and port 0,
+is refused at `admit_gray` and at both draws, so no dial candidate is
+one of them. A hidden-connector handshake does not carry the clearnet
+port. A dial to our own listener is detected.
 
 Property tests on draw uniformity, within one connector, including a
 full gray list.
