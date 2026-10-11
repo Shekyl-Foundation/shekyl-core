@@ -241,7 +241,7 @@ followed the timing engine directly.*
 
 | # | Slice | Inherits | Flips | Greens when it lands |
 | --- | --- | --- | --- | --- |
-| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, **874 lines** at `fdf17b729` (*was 878; PR #821 removed the seed field*). Moves into Rust: the gray list and the white list, the one door between them, expiry, and the store. **The brief is the contract** ([`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md), **REVISED 2026-09-23**). *Records-was "differentially testable against the C++"* | **The field is already gone.** *Records-was three received-seed sites at `net_peerlist.h:367` and `:414`, plus an unsanitized load. `:367` keeps the previous white `last_seen`; `:414` is `return true` at the end of `append_with_peer_gray`. The field is already absent. Leftover spellings of `pruning_seed` in code are deleted by the implementation PR the brief describes, not by this document.* | I2's remaining acceptance rules; the white-list writer invariant | The field is already absent, so the slice opens with no predecessor on this axis. The implementation PR deletes every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. *Records-was a pending gate, then a comment at `net_peerlist.cpp:84` treated as an allowed hit.* Greens when `m_peers_white` and `peerlist_manager` are gone from `src/p2p`, `rg -n pruning_seed src rust tests` returns nothing, and `White`'s only constructor is the one `apply(DialOutcome)` calls for `SessionAccepted` or `Confirmed` of an outstanding gray draw, or `HarvestDone` of a Foundation-fleet address. A harness that must match C++ membership is not the gate. **UPDATE 2026-10-10/11:** increments 1 and 2 landed as #1021 (`5d68a72302`); increment 3, with the address-validity check ruled 2026-10-11 (brief §2), lands with slice 3 in PR-3 (D5, ruled 2026-10-11) |
+| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, **874 lines** at `fdf17b729` (*was 878; PR #821 removed the seed field*). Moves into Rust: the gray list and the white list, the one door between them, expiry, and the store. **The brief is the contract** ([`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md), **REVISED 2026-09-23**). *Records-was "differentially testable against the C++"* | **The field is already gone.** *Records-was three received-seed sites at `net_peerlist.h:367` and `:414`, plus an unsanitized load. `:367` keeps the previous white `last_seen`; `:414` is `return true` at the end of `append_with_peer_gray`. The field is already absent. Leftover spellings of `pruning_seed` in code are deleted by the implementation PR the brief describes, not by this document.* | I2's remaining acceptance rules; the white-list writer invariant | The field is already absent, so the slice opens with no predecessor on this axis. The implementation PR deletes every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. *Records-was a pending gate, then a comment at `net_peerlist.cpp:84` treated as an allowed hit.* Greens when `m_peers_white` and `peerlist_manager` are gone from `src/p2p`, `rg -n pruning_seed src rust tests` returns nothing, and `White`'s only constructor is the one `apply(DialOutcome)` calls for `SessionAccepted` or `Confirmed` of an outstanding gray draw, or `HarvestDone` of a Foundation-fleet address (*the fleet case withdrawn 2026-10-11*, slice 1 brief §3: `HarvestDone` writes no white). A harness that must match C++ membership is not the gate. **UPDATE 2026-10-10/11:** increments 1 and 2 landed as #1021 (`5d68a72302`); increment 3, with the address-validity check ruled 2026-10-11 (brief §2), lands with slice 3 in PR-3 (D5, ruled 2026-10-11) |
 | **2** | **Socket admission — folded into the transport layer, 2026-09-25.** The ceiling, enforced at accept. The count it needs lives in the transport layer ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D1, D3, D8), so the accept path is not edited twice. *Records-was "Admission policy — the ceiling, and nothing else after §2.9.4".* | the transport layer's socket count, and a **measured `--in-peers`** (§7.3) rather than `UINT32_MAX` | **I7** (mechanism deleted), **I8** (closed) | `rg -n 'has_too_many_connections' src/` returns nothing; `is_host_limit` is a counter comparison; `census_inbound` no longer walks the Levin registry |
 | **3** | **Discovery and the dialer (rescoped 2026-10-07).** Seed handling, the dial-candidate selection, and the Rust dialer. **Promotion pace (2026-09-25, arms named 2026-10-08):** when slice 1 reports white below its refill line (above the diversity floor), this slice dials gray on the fill's jittered wake. A free slot is a kept session (`SessionAccepted`). Outbound already at target is one confirm-and-close (`Confirmed`). The inherited 60 s housekeeping timer is not the pace. The brief is [`P2P_3_SLICE_3_DIALER_BRIEF.md`](P2P_3_SLICE_3_DIALER_BRIEF.md). *Records-was: discovery policy without the dialer, including `m_used_stripe_peers`' removal as the named green.* **UPDATE 2026-10-11 (Rick):** no subnet grouping — the C++ `/24` pass leaves with the dial path and nothing replaces it; the PWD-B9 keys proposed as D1 and D2 are withdrawn, not ruled (reopen on PM-2a's clearnet many-address run). D5 is ruled: slice 1 increment 3 lands with this slice as one cutover PR, PR-3. Address validity moves to Rust (slice 1 brief §2). PR-3 is gated only on the dialer brief's review closing | slice 1. Slice 2 is already the transport layer | B9's mechanism half, which is the uniform draw and no grouping (2026-10-11); PWC-E9's re-derivation; the `idle_worker` dial defect | the C++ dial functions named in the brief are gone. `rg` commands are in the brief |
 | **4** | **Inbound handshake state machine** — the phases after a session exists, and PWD-B1/B2's per-peer state. **UPDATE 2026-10-07:** the outbound handshake invoke is slice 3's, a timing-engine owner. This slice does not dial. | slices 1–3 | **B1, B2**; B7's remainder and PWC-E5 | PWD-B1's four unguarded invoke handlers are guarded |
@@ -369,6 +369,12 @@ the seam**. Slice 1 deletes the C++ peerlist. `apply` writes nothing for
 `SessionAccepted` or `Confirmed` of an address that was not the gray
 draw, and writes white for `HarvestDone` only when the address is in
 that fleet. `Confirmed` closes the session. It is the same door.
+**UPDATE 2026-10-11 (Rick): the fleet case above is withdrawn.** Seeds
+are ordinary peers: the compiled addresses enter gray at each start as
+operator-named addresses do, are not saved, and reach white only
+through a drawn dial's `SessionAccepted` or `Confirmed`; `HarvestDone`
+writes no white for any address (slice 1 brief §3; the exception audit,
+§8 below).
 
 ---
 
@@ -841,3 +847,58 @@ has its specified landing site after all. Check:
 `rg -n 'net_node|src/p2p' docs/design/DAEMON_REDB_STORE.md` returning a scope
 row. **At `f9e000f76` it returns nothing**, which is the evidence this
 amendment rests on.
+
+---
+
+## 8. The exception audit — RULED 2026-10-11 (Rick)
+
+**The test.** A special case is acceptable only if no remote party can
+trigger it or benefit from it. One that only the local operator controls
+is configuration. Any other special case is attack surface.
+
+**The verdicts.** Not pass/fail. Each case is one of:
+
+- **absorbed** — the standard rule already handles it once its input is
+  modelled correctly; the row says how, and the special-case wording or
+  code is removed;
+- **deleted**;
+- **irreducible** — for Rick, with the reason the standard rule cannot
+  express it.
+
+The target is an empty irreducible column. Where a case is a flag that
+switches a rule off, the row asks whether it is instead data the rule
+reads (rule 71, data not control flow) and says which.
+
+**Standing rule.** A brief or PR that adds a special case names who can
+trigger it and who benefits. If a remote party can do either, it does not
+land without Rick's ruling and a wargame.
+
+### 8.1 Every special case in the P2P briefs and `shekyl-peerlist`, at `8848e773`
+
+| # | Case | Where | Trigger | Beneficiary | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| 1 | The Foundation fleet's `HarvestDone` writes white from any seat | slice 1 brief §3; `Peerlist::fleet`, `peerlist.rs:45-56`; the fleet arm of `apply`, `:298-305` | **Remote**: a seed host completing a handshake | **Remote**: six hosts hold a white seat on every node and are over-represented in every disclosure sample | **Deleted** (seeds are ordinary peers, slice 1 §3). The crate symbols go in the PR that records this |
+| 2 | The `--add-peer` eviction "privilege": the named address is the one a full gray list keeps | slice 1 brief §2 (*records-was* text); `Source::Operator` doc, `outcome.rs:26-30` | Local operator | Local | **Absorbed.** `insert_gray` keeps the address just seated and evicts a uniformly random *other* drawable seat for every source (`partition.rs:134-145`, `:471-482`); a failed dial drops any drawn address (`drop_outstanding`, `:216-222`). An unreachable named address is drawn, fails, leaves gray, and is re-supplied only by the operator's next start. The sentence is rewritten as the uniform insert rule; no code change |
+| 3 | Operator-named addresses admitted whatever the range; network-learned ones refused unless global | slice 1 brief §2, address validity | Local operator | Local | **Absorbed.** One predicate whose input is `(address, Source)`: `Source` is data the rule reads, not a second path. The rule is against what peers say |
+| 4 | `--allow-local-ip` | slice 1 brief §2, §7 | Local operator | Local | **Absorbed as data (rule 71).** The rule is "refuse a network-learned address in the refused set, and disclose none in it"; the flag chooses the set (the §2 table, or empty). Not keyed on nettype. The same datum governs what the file holds (§7) |
+| 5a | Priority nodes: a reserved outbound slot outside the uniform draw, a guaranteed stem candidate, redialled forever when unreachable | dialer brief arm 1 (*records-was*); `m_priority_peers`, `net_node.inl:558`, `:2132`, `:2906` | Local operator | Local in intent; in effect a named remote host holds a permanent outbound seat and a stem position on this node | **Deleted** (Rick, 2026-10-11: they "bypass all the identity protections we have built in and provide no actual value"). `--add-priority-node` becomes a retired flag refused by name in PR-3; `--add-peer` already jumpstarts |
+| 5b | Exclusive nodes: an exclusive list skips the draw and every later arm | dialer brief arm 1 | Local operator | Local | **Absorbed as a network declaration, like `--allow-local-ip` (rule 71: data).** The node's candidate set is the named addresses and the ordinary rules run over it; not a dialer arm, not an exception. Its help text names the cost: a single exclusive peer is the first hop of every transaction this node originates. Users on `dev`: `scripts/bench/drs_bench.py:328`, `scripts/bench/ba_t5_session2_run.sh:99` |
+| 6 | `is_self_dial` on a seed, beside the own-address filter | dialer brief, candidate filter row 1 | Local (our own address is a seed) | Local | **Absorbed.** The C++ seed path bypassed the peerlist, so it carried its own copy of "a dial to ourselves is not a peer". With seeds in gray (slice 1 §3) the one own-address rule covers them |
+| 7 | The fill's harvest arm: when both lists are empty, dial one seed and close | dialer brief, the fill, arm 2; `Harvest` aim; `HarvestDone` | Local state (empty lists) | Local | **Absorbed, pending the dialer brief's review.** With the compiled seeds in gray from the start, the uniform gray draw reaches them as it reaches any address; the arm does no work the standard rule does not. The review decides whether the arm, the aim and the `HarvestDone` variant survive. Whatever survives writes no white |
+| 8 | `Source::Operator` and `Source::Reload` are not counted by D-S1's per-session cap | `outcome.rs:26-32`; slice 1 brief §5c | Local | Local | **Absorbed as data.** The cap's key is a session id (`Source::Session { id, .. }`); a source with no session has no key to count against. Not an exemption from the rule, an input the rule has no row for |
+| 9 | D4: a ban demotes white to gray at the next read, clearnet only | slice 1 brief §5b; `BanQuery` | This node's own scoring of the banned host; the reconnect throttle never feeds a ban (D-S1), so a path attacker's forged resets cannot | None remote: the banned host loses its seat | **Absorbed.** A predicate the white read consults (`BanQuery`), not a list mutation. "Clearnet only" is the predicate's domain: only a clearnet address can be banned (`P2P_TRANSPORT_LAYER.md` D7), which is data of the address type |
+| 10 | One foreign-connector entry refuses the whole received list (D7); the 25th address in 24 h refuses the whole list (D-S1, F2) | slice 1 brief §2, §5c | Remote (the sender) | None: the sender loses its list | **Absorbed.** The admit rule applied to a list atomically, so a sender cannot smuggle part of a bad list through; not an exception to it |
+| 11 | D3's sample exception: leave current outbound sessions out of the disclosure sample | slice 1 brief §5a | — | Would have been a remote observer (the absence observer) | **Deleted** — not adopted, 2026-10-09, on the §5a measurement |
+| 12 | A local origin rides the hidden stem slot; stem width 1 is refused with a hidden connector | `DAEMON_RELAY_PRIVACY.md` §98; `shekyl-relay` | Local configuration (a connector declaring `address_hidden_from_peer`) | Local | **Absorbed as data.** The local source's candidate set is "address-hiding sessions", read from the connector's declaration; the rule is the same pin-over-`stems`-candidates every source gets, with a different candidate set. The width-1 refusal is a rejected configuration, not a branch |
+| 13 | `--out-peers 0` is legal; a positive cap below the hidden floor (12) is refused | dialer brief, the composition | Local operator | Local | **Absorbed.** Configuration validation at the setter; the fill reads the cap as data |
+
+**Irreducible: none.** Every row is configuration the local operator
+controls, data the standard rule reads, or deleted.
+
+### 8.2 What this audit does not cover
+
+The transport layer's admission ceiling and its rate-limit table
+(`P2P_TRANSPORT_LAYER.md`) and the relay's timing rules were read for
+seed- or operator-specific carve-outs and carry none; they are not
+re-audited row by row here. A new special case anywhere in the P2P lane
+enters this table before it lands, under the standing rule above.

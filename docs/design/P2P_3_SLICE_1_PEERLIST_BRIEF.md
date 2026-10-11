@@ -80,7 +80,8 @@ the random-draw eviction apply within each connector's lists.
 
 **Gray** is every address that arrived and has not been confirmed by the door
 in §2. Gossip, a peerlist a neighbor sent, an inbound peer, a peer's
-advertisement, `--add-peer`, `--add-exclusive-node`, `--add-priority-node`,
+advertisement, `--add-peer`, `--add-exclusive-node` (*records-was:*
+`--add-priority-node`, deleted 2026-10-11, dialer brief arm 1),
 and every address reloaded from disk land here. An incoming address is added
 only to gray.
 
@@ -109,7 +110,7 @@ only if its connector is the session's connector. One foreign entry rejects
 the peer's whole list (`net_node.inl:2460-2466`). `--add-peer` routes to its
 connector by address type. An address whose type no local connector serves
 is not admitted. Promotion, the 24-hour demotion (`EXPIRATION_PERIOD`), and
-§3's Foundation-seed exception operate within one connector.
+the seeds of §3 operate within one connector.
 
 An address moves from gray to white only when both of these happened, in
 order:
@@ -117,7 +118,8 @@ order:
 1. This node drew it uniformly from gray.
 2. The dialer emitted `SessionAccepted` or `Confirmed` for that address.
 
-Nothing else writes white, except `HarvestDone` for the fleet in §3.
+Nothing else writes white. *Records-was, until 2026-10-11: except
+`HarvestDone` for the Foundation fleet (§3).*
 `SessionAccepted` keeps the session. `Confirmed` closes it. Both are
 that same draw. A dial of an address that was not that draw does not
 write white. `--add-peer` does not. An incoming peer does not. A
@@ -148,11 +150,16 @@ dialable on the public internet. Refused:
   and never enters a list from the network (this closes PWD-B11's
   question; the row in `FOLLOWUPS.md` retires when the check lands).
 
+The attack this closes: a remote peer pushes `192.168.1.1:80` or
+`10.0.0.5:22` and the victim's node dials into its own LAN. The rule
+turns on who supplied the address, not on its range.
+
 Four scope lines, each ruled:
 
 - **Operator-named addresses are admitted whatever the range.**
-  `--add-peer` (`Source::Operator`) enters gray as named; exclusive
-  and priority nodes are dialed as named. The operator is trusted
+  `--add-peer` (`Source::Operator`) enters gray as named; an exclusive
+  list is the candidate population as named (priority nodes are deleted,
+  dialer brief arm 1). The operator is trusted
   about the operator's own network; the rule is against what peers
   say.
 - **`disclose` never includes a non-global address.** Whatever
@@ -164,12 +171,19 @@ Four scope lines, each ruled:
   not this list's; a private-range inbound session is accepted or not
   on that layer's rules and the address it advertises is what this
   rule judges.
-- **`--allow-local-ip` is the one override**, for private test
-  networks, where every address is non-global: it lifts the refusal
-  at `admit_gray` and the exclusion at `disclose` together, since a
-  test network that admitted private addresses but never disclosed
-  them could not discover beyond `--add-peer`. *That the override
-  lifts both sites is this brief's reading, for Rick's review.*
+- **`--allow-local-ip` is the one override**, for a private test
+  network whose nodes find each other through peerlist exchange (the
+  §99 Level 2 testnet is one). It lifts the refusal at `admit_gray`
+  and the exclusion at `disclose` together: a network that admitted
+  private addresses but never disclosed them could not discover beyond
+  `--add-peer`. It is a flag, not keyed on nettype (rule 71); and under
+  the exception audit it is data the rule reads, not a branch — the
+  rule is "refuse a network-learned address in the refused set", and
+  the flag chooses the set (the table above, or empty).
+
+*Why Rust.* The list and the dialer are Rust, and address policy is
+list policy (rules 20 and 40); a C++ filter in front of a Rust list
+would be the second site rule 05 forbids.
 
 The draws are not a check site. *Records-was, the brief's first
 reading of the ruling (2026-10-11, same day): the check was at admit
@@ -267,33 +281,57 @@ no other drawable gray seat remains, gray may sit over the cap by that
 handful rather than cancelling one. Over the white cap, demote a random
 white address to gray. The
 caps move with the crate and are not re-derived
-(`src/cryptonote_config.h:176-177`). An `admit` of an address the operator
-just named evicts some other gray address when gray is at cap, so the named
-address is the one that stays. That is the whole of the `--add-peer` privilege.
-It is not a white-list write, and it is not a bias on the draw.
+(`src/cryptonote_config.h:176-177`). The insert rule is uniform across
+sources: `insert_gray` seats the address just admitted and, over the cap,
+evicts a uniformly random *other* drawable gray seat
+(`partition.rs:134-145`, `:471-482`), whatever the source was. There is
+no `--add-peer` privilege. An operator-named address that is unreachable
+is drawn like any other, fails, and leaves gray with the draw
+(`drop_outstanding`, `:216-222`); it is re-supplied only by the
+operator's next start. *Records-was (to 2026-10-11): "an `admit` of an
+address the operator just named evicts some other gray address … that is
+the whole of the `--add-peer` privilege" — a special-case reading of the
+uniform rule, absorbed by the exception audit
+([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §8); no
+code changed.*
 
 ---
 
-## 3. The Foundation seeds are the exception
+## 3. Seeds are ordinary peers — RULED 2026-10-11
 
-**Seeds are declared per connector (ruled 2026-09-25).** The exception below
+**Seeds are declared per connector (ruled 2026-09-25).** Everything below
 operates inside the connector that owns those addresses.
 
-The hardcoded Foundation seed fleet is six literal addresses
-(`get_ip_seed_nodes`, `src/p2p/net_node.inl:771`, the array at `:781`).
-`HarvestDone` for one of those addresses writes white even though the
-address was not drawn from gray.
+**The ruling (Rick, 2026-10-11).** "A seed is a peer, nothing special,
+except that its IP and `.onion` are hardcoded so that they can always be
+found. Same mechanism, same gray to white process."
 
-That exception is the fleet, not the word "seed". `--seed-node`, `--add-peer`,
-and a peerlist taken from a seed are not it. Addresses a seed returns are
-incoming, and they are admitted to gray.
+- The compiled seed addresses (`get_ip_seed_nodes`,
+  `src/p2p/net_node.inl:771`, the array at `:781`; the onion seeds
+  `get_seed_nodes` returns) enter gray at each start, as operator-named
+  addresses do (`Source::Operator`). They are not saved to the address
+  file (§7). They reach white only through a drawn dial's
+  `SessionAccepted` or `Confirmed`. **`HarvestDone` writes no white for
+  any address.**
+- The peerlist a seed returns is network-learned (`Source::Session`): the
+  address-validity check of §2 applies to it, and D-S1's per-session cap
+  counts it.
+- `--seed-node` is an operator-named address, like `--add-peer`.
 
-The fleet is not loaded onto white. Startup does not treat those six as
-already confirmed. The handshake is still required. Today's seed dial
-closes on `just_take_peerlist` before any white write
-(`src/p2p/net_node.inl:1695`, from `connect_to_seed` at `:2032`). For
-this fleet, `apply(HarvestDone)` writes white. For every other harvest,
-that close leaves white unchanged.
+*Why.* The exception gave six remote hosts a guaranteed white seat on
+every node and over-represented them in every disclosure sample. Under
+the exception audit ([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md)
+§8) a remote party both triggered it (by completing a handshake) and
+benefited from it; that is attack surface, not configuration.
+
+*Records-was (2026-09-23 to 2026-10-11): "The Foundation seeds are the
+exception."* `HarvestDone` for one of the six fleet addresses wrote white
+even though the address was not drawn from gray; the fleet was not loaded
+onto white, and the handshake was still required. In #1021 this was
+`Peerlist::fleet` (`peerlist.rs:45-56`) and the fleet arm of `apply`'s
+`HarvestDone` match (`:298-305`); both are deleted in the PR that records
+this ruling. The September design round had said "the seed path satisfies
+provenance but confers no promotion rights". That was right.
 
 ---
 
@@ -356,7 +394,7 @@ The peerlist offers uniform draws and no ordered walk:
 | --- | --- |
 | `SessionAccepted` | Outstanding gray draw: move to white and set `last_observed`. The session stays. Already white, on a session this node opened: move the clock. Anything else: white unchanged |
 | `Confirmed` | Outstanding gray draw: the same white write. No session remains. Anything else: white unchanged |
-| `HarvestDone` | One of the six Foundation hosts: the same white write, from any seat. Anyone else: white unchanged, and an outstanding draw of that address returns to drawable gray |
+| `HarvestDone` | White unchanged, for every address (§3, ruled 2026-10-11). An outstanding draw of that address returns to drawable gray. *Records-was: one of the six Foundation hosts, the same white write, from any seat* |
 | `DialFailed`, `PeerlistRefused` | Outstanding gray draw is dropped. A white address stays white |
 | `PayloadRefused` | No promotion, no demotion. An outstanding draw returns to drawable gray |
 
@@ -542,11 +580,12 @@ host to throttle; that is recorded there as the residual.
 | `bootstrap_harvested(addresses)` | `admit_gray` for each returned address. The dialed harvest peer is not promoted by this call |
 | expiry | `now - last_observed >= EXPIRATION_PERIOD` moves that white address to gray and does not copy the clock across |
 
-`--add-exclusive-node` and `--add-priority-node` are gray admits. Today
+`--add-exclusive-node` is a gray admit of the declared population
+(*records-was:* and `--add-priority-node`, deleted 2026-10-11). Today
 `connect_to_peerlist` (`src/p2p/net_node.inl:2912`) dials them straight onto
 white. `apply` writes white on that path only for `SessionAccepted`
-or `Confirmed` of an outstanding gray draw, or `HarvestDone` of a
-Foundation host.
+or `Confirmed` of an outstanding gray draw. *Records-was: or
+`HarvestDone` of a Foundation host (withdrawn 2026-10-11, §3).*
 
 ---
 
@@ -572,9 +611,17 @@ Dropping `last_seen` from the stored entry is a format change. The version
 constant bumps (rule 42). The loader already drops a pre-current file
 wholesale.
 
-A node boots with gray only. It draws from gray until white exists, and it
-dials the Foundation fleet under §3. How many dials run at once is the
-outbound cap, owned outside this slice (`P2P_DEFAULT_OUT_PEERS`).
+A node boots with gray only. The compiled seed addresses are in gray from
+the start (§3), so the first draws reach them as they reach any other gray
+address. How many dials run at once is the outbound cap, owned outside
+this slice (`P2P_DEFAULT_OUT_PEERS`).
+
+**What the file holds (Rick, 2026-10-11).** The compiled seed addresses
+are not written: they are re-supplied at every start. A non-global
+address (§2's ranges) is never written unless `--allow-local-ip` is set,
+and `restore` applies the same refusal as a backstop, so a file written
+under the flag does not seed a node started without it. Lands with
+increment 3, with the range table.
 
 ---
 
@@ -588,8 +635,8 @@ outbound cap, owned outside this slice (`P2P_DEFAULT_OUT_PEERS`).
 | Gossiped `last_seen` stored on gray insert | `src/p2p/net_peerlist.h:239`, `src/p2p/net_peerlist.h:405` | Ignored. Gray has no clock |
 | Time order as a rank | `by_time` at `src/p2p/net_peerlist.h:184`; the dial sort at `src/p2p/net_node.inl:1935-1938` | Uniform draws. Load is unordered |
 | White list never expires on age | trim is capacity only, `src/p2p/net_peerlist.h:215` | `EXPIRATION_PERIOD` demotes to gray |
-| Foundation seed handshake does not promote | the `just_take_peerlist` close at `src/p2p/net_node.inl:1695` | §3. `HarvestDone` for this fleet writes white |
-| `--add-peer` kept off the trim front by a synthetic absence of `last_seen` | `src/p2p/net_peerlist.h:444` | The named address is admitted to gray and is not the one a full list drops. The draw is still uniform |
+| Foundation seed handshake does not promote | the `just_take_peerlist` close at `src/p2p/net_node.inl:1695` | Kept since 2026-10-11, not a divergence: `HarvestDone` writes no white (§3). *Records-was: §3's fleet exception wrote white here* |
+| `--add-peer` kept off the trim front by a synthetic absence of `last_seen` | `src/p2p/net_peerlist.h:444` | The uniform insert rule (§2): the address just seated stays and a random other drawable seat goes, for every source. No privilege, and the draw is still uniform |
 
 `append_with_peer_white(const peerlist_entry&)` accepts any entry. Porting
 that signature is the hole §5 closes.
@@ -616,9 +663,9 @@ consult the outbound cap. The fill's gray dial does keep one
 not merge those into a harvest. A kept gray dial is `SessionAccepted`.
 A confirm while outbound is already at target is `Confirmed`: white
 is written and no session remains. A harvest stays `HarvestDone` and
-writes white only for the Foundation fleet. *Records-was: this
-paragraph called the probe a harvest, so a peer outside that fleet
-stayed off white.*
+writes no white (§3, 2026-10-11; *records-was:* only for the Foundation
+fleet). *Records-was, earlier: this paragraph called the probe a harvest,
+so a peer outside that fleet stayed off white.*
 
 The stripe field the register used to inherit is already gone from the
 peerlist. `src/p2p/net_peerlist.h:367` keeps the previous `last_seen`. `:414`
@@ -648,9 +695,9 @@ and the sentence that slices 3 and 5 both had to move the dial first.*
 
 A `u16` named on both sides of the FFI is not the mitigation. The port carries
 no provenance either way. The residual lie is a caller whose `apply` promotes
-an address the peerlist did not draw and that is not in the Foundation fleet.
-`SessionAccepted` or `Confirmed` of an undrawn ordinary address writes
-nothing. `HarvestDone` writes white only for the six hosts. The match
+an address the peerlist did not draw.
+`SessionAccepted` or `Confirmed` of an undrawn address writes
+nothing. `HarvestDone` writes nothing (§3, 2026-10-11). The match
 cannot be talked into a third door. `Confirmed` is not that door: it
 is the same gray draw, closed after the payload is accepted.
 
@@ -662,8 +709,9 @@ They check different things. Neither stands for the other.
 
 1. **Constructor reachability (source).** `White` has no public constructor.
    The only call is inside `apply`, and that match promotes only
-   `SessionAccepted` or `Confirmed` of an outstanding gray draw, or
-   `HarvestDone` of a Foundation-fleet address. There is no `bool` on
+   `SessionAccepted` or `Confirmed` of an outstanding gray draw
+   (*records-was:* or `HarvestDone` of a Foundation-fleet address,
+   withdrawn 2026-10-11). There is no `bool` on
    either type, and no
    `last_seen` beside `last_observed`. There is no ordered iterator. The
    check fails if it cannot find the constructor it is asserting about
@@ -676,12 +724,12 @@ They check different things. Neither stands for the other.
    address at admit, and D7 reopens on the same event.
 3. **Model sequences (runtime).** An outstanding gray draw promotes on
    `SessionAccepted` and on `Confirmed`; either outcome on an undrawn
-   ordinary address does not; a Foundation seed `HarvestDone` does; incoming
+   address does not; `HarvestDone` never does, seed or not; incoming
    and `--add-peer` stay gray; expiry returns white to gray; contact this node
    opened moves the clock; inbound contact does not; reload is gray only and
    does not draw former white first; `disclose` is a sample of white and
    carries no clock; `DialFailed` and `PeerlistRefused` drop an outstanding
-   gray draw; `PayloadRefused`, and a non-fleet `HarvestDone`, return that
+   gray draw; `PayloadRefused` and `HarvestDone` return that
    draw to drawable gray; a failed redial leaves white.
    The harness fails if it has no sequence (rule 47).
 4. **The C++ list is gone, and so is the old spelling.** `rg -n 'm_peers_white|peerlist_manager' src/p2p`
@@ -720,9 +768,10 @@ A harness that requires Rust membership to match the C++ is the wrong oracle.
 
 ## 12. Reversion
 
-The contract reopens only for a third way onto white: not a gray draw this
-node dialed and confirmed, and not a confirmed handshake with the Foundation
-fleet. Inconvenience is the mechanism working.
+The contract reopens only for a second way onto white other than a gray
+draw this node dialed and confirmed. Inconvenience is the mechanism
+working. *Records-was: "a third way … and not a confirmed handshake with
+the Foundation fleet"; that second way was withdrawn 2026-10-11 (§3).*
 
 Worked against the paths this brief already knows:
 
@@ -731,9 +780,9 @@ Worked against the paths this brief already knows:
 | Uniform gray draw, kept dial, `SessionAccepted` | Yes. The session stays |
 | Uniform gray draw, confirm while outbound is at target, `Confirmed` | Yes. No session remains |
 | Same address, already white, `SessionAccepted` on a session this node opened | Clock moves. Already white |
-| Foundation fleet, `HarvestDone` | Yes. §3 |
+| Compiled seed, `HarvestDone` | No (§3, 2026-10-11). Gray until drawn and confirmed, like any peer. *Records-was: Yes* |
 | Bootstrap harvest of anyone else | No. Returned addresses are gray |
-| `--add-peer`, exclusive, priority | No. Gray until drawn |
+| `--add-peer`, an exclusive list | No. Gray until drawn. *Records-was: priority, deleted 2026-10-11* |
 | Incoming peer, advertisement, received peerlist | No. Gray only |
 | Reload | No. Gray, unordered |
 | White, no contact for `EXPIRATION_PERIOD` | Demote to gray |
@@ -774,8 +823,8 @@ neighbor `shekyl-peer-policy` owns the inbound ceiling, not these lists.
 - No policy for which draw to dial next, and no seed-list editing. Choosing
   which connector to dial is slice 3's, not this slice's. Slice 3
   calls `draw_gray`, `draw_white`, and `apply`. It does not grow a third
-  door. The Foundation fleet is data this slice reads, not a second
-  selector.
+  door. *Records-was: the Foundation fleet was data this slice read;
+  since 2026-10-11 (§3) it reads none.*
 - No connection object. Slice 5. Expiry and the clock do not wait for it.
 - The gray cap 5000 and the white cap 1000 are not re-derived. No
   `--in-peers` number, no refusal-window number. `DISCLOSE_COUNT` and

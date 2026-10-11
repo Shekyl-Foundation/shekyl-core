@@ -113,11 +113,35 @@ block a p2p io worker.
 
 Each wake, for one connector, takes the first arm that applies.
 
-1. **Exclusive, then priority.** Exclusive nodes, then clearnet
-   priority nodes. Today they are `connect_to_peerlist` at
-   `net_node.inl:2912`, called from `connections_maker` (`:2111`) at
-   `:2116` and `:2132`. The aim is `Keep`. An exclusive list skips
-   harvest and every later arm. Offline skips the wake.
+1. **A closed network (`--add-exclusive-node`).** Not a dialer arm
+   (Rick, 2026-10-11): an exclusive list is a network declaration. The
+   node's candidate set is the named addresses, and the ordinary rules
+   — the uniform draw, the door, the cap, the clock — run over that
+   set. Nothing is skipped and nothing is reserved; the population is
+   smaller. Today the C++ dials the list at `connect_to_peerlist`
+   (`net_node.inl:2912`, from `connections_maker` `:2111` at `:2116`),
+   which goes with the dial path. Its help text (`net_node.cpp:126`,
+   today "Specify list of peers to connect to only") is rewritten in
+   PR-3 to say that it declares a closed network and to name only peers
+   the operator controls, because a single exclusive peer is the first
+   hop of every transaction this node originates. Its users on
+   `dev`: `scripts/bench/drs_bench.py:328` and
+   `scripts/bench/ba_t5_session2_run.sh:99`, both loopback test
+   networks. Offline skips the wake.
+
+   **Priority nodes — DELETED (Rick, 2026-10-11).** `--add-priority-node`
+   is deleted in PR-3 as a retired flag refused by name (`REMOVED_FLAGS`,
+   `src/common/removed_flags.cpp:70`). The deletion takes
+   `m_priority_peers` (`net_node.h:767`), its parse (`net_node.inl:558`),
+   the clearnet arm (`:2132`), and the priority half of
+   `is_priority_node` (`:2906`; its callers at `:1670`, `:1681`, `:1727`
+   and `:1737` only choose a log level), and the row in
+   `USER_GUIDE.md`. *Records-was: "Exclusive, then priority" — a
+   reserved outbound slot outside the uniform draw, a guaranteed stem
+   candidate, redialled forever when unreachable.* Rick: priority nodes
+   "sound good but essentially bypass all the identity protections we
+   have built in and provide no actual value." `--add-peer` already
+   jumpstarts a node; it enters gray and takes its chances in the draw.
 2. **Harvest.** The aim is `Harvest`. Both lists are empty (`has_no_known_peers`,
    `net_peerlist.h:147`), or the previous fill pass added no session
    while the connector is still under its outbound target. One seed
@@ -300,7 +324,7 @@ enum DialOutcome {
 | `DialFailed` | The channel never reached a well-formed kept response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with | An outstanding gray draw is dropped. A white address stays white | Written when `implicates_address` is set for that cause and reply. A `network_id` mismatch is `LevinHandshakeRejected` and does write it | No subscription. The mismatch does not call `add_host_fail` |
 | `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected` | Same as `DialFailed` | Same as `DialFailed` with `LevinHandshakeRejected` | The score owner subscribes. A peerlist this node refuses is the event the score records |
 | `PayloadRefused` | Levin was well-formed and the strand refused the sync payload | No promotion, no demotion, no gray drop. An outstanding draw stays gray | Not written. The peer answered | None |
-| `HarvestDone` | Harvest handshake completed. The session is closed. No `adopt` | Promote only when the address is one of the six Foundation hosts in `get_ip_seed_nodes` (`net_node.inl:771`, the array at `:781`). Every other harvest leaves white unchanged | Cleared for that address | None |
+| `HarvestDone` | Harvest handshake completed. The session is closed. No `adopt` | White unchanged, for every address (slice 1 §3, ruled 2026-10-11). An outstanding draw returns to drawable gray. *Records-was: promote only for the six Foundation hosts in `get_ip_seed_nodes`* | Cleared for that address | None |
 | `Confirmed` | Aim `Confirm`. The strand accepted the sync payload. The owner closed in that turn. The relay was not flipped | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address | None |
 | `SessionAccepted` | Aim `Keep`. The strand accepted the sync payload and the session stays | An outstanding gray draw moves to white and `last_observed` is set. An address that is already white, on a session this node opened, moves the clock. Anything else writes nothing | Cleared for that address | None |
 
@@ -422,14 +446,14 @@ under it, is dropped with the C++ dial path.
 
 | Filter | Disposition | Reason |
 | --- | --- | --- |
-| Our own address (`zone.m_our_address`, and `is_self_dial` on a seed) | Kept | A dial to ourselves is not a peer |
+| Our own address (`zone.m_our_address`, and `is_self_dial` on a seed) | Kept, as one rule | A dial to ourselves is not a peer. The seed-specific `is_self_dial` was the C++ seed path's own copy of the check, needed because that path bypassed the peerlist; with seeds in gray (slice 1 §3) the one own-address rule covers them (exception audit, absorbed) |
 | One outbound per host (`has_outbound_connection_to_host`) | Kept | One outbound session per host on that connector |
 | Peer already in use (`is_peer_used`) | Kept | A second session to an address we already have |
 | Banned (`is_remote_host_allowed`, `net_node.inl:243`) | Kept | Calls `shekyl_ban_remaining_ns` (`seam_ffi.rs:706`). A return of 2 is banned. The check is already Rust |
 | Recently failed (`is_addr_recently_failed`) | Kept | This slice's failed-address memory |
 | One candidate per host while the list is built | Kept | A host that advertises many ports is not drawn more often. The port kept for a host is chosen uniformly, not first in list order. The address that is dialed is still host and port |
 | White-list index weighted by `last_seen`, and the cap of the 20 most recent (`net_node.inl:1948`, weighted pick `:1970-1974`) | Dropped | The uniform draw already ruled. A last-seen weight is the eclipse lever in the wargame below |
-| Address validity (`sanitize_peerlist`, `net_node.inl:2417`; `peerlist_manager::is_host_allowed`, `net_peerlist.h:273`) | Kept, in slice 1, at admit (Rick, 2026-10-11) | A network-learned address — a received peerlist, an inbound advertisement — is refused at slice 1's `admit_gray` unless dialable on the public internet; `disclose` never includes a non-global address (slice 1 brief §2, "Address validity"). Not a dial-time filter: a gray or white address is global or operator-named, and operator-named addresses (`--add-peer`, exclusive, priority) are dialed whatever the range. `--allow-local-ip` is the one override, for private test networks |
+| Address validity (`sanitize_peerlist`, `net_node.inl:2417`; `peerlist_manager::is_host_allowed`, `net_peerlist.h:273`) | Kept, in slice 1, at admit (Rick, 2026-10-11) | A network-learned address — a received peerlist, an inbound advertisement — is refused at slice 1's `admit_gray` unless dialable on the public internet; `disclose` never includes a non-global address (slice 1 brief §2, "Address validity"). Not a dial-time filter: a gray or white address is global or operator-named, and operator-named addresses (`--add-peer`, an exclusive list) are dialed whatever the range; priority nodes are deleted. `--allow-local-ip` is the one override, for private test networks |
 | The `/24` subnet pass, both passes (`net_node.inl:1842-1933`, public zone only) | Dropped (Rick, 2026-10-11) | No subnet grouping. The draw is slice 1's: uniform over eligible addresses, and an address is a host and a port, not a `/24`. See the ruling below |
 
 **No subnet grouping — RULED 2026-10-11 (Rick).** The C++ `/24` pass
@@ -459,8 +483,23 @@ attacker's share of honest addresses.
 `connect_to_seed` (`net_node.inl:2032`) and `just_take_peerlist` are
 one disposition: a harvest. The handshake runs. The response peerlist
 is admitted to gray through slice 1. The session is closed. There is
-no `adopt` and no `SessionAccepted`. White changes only through
-`HarvestDone` for the Foundation fleet, slice 1 §3.
+no `adopt` and no `SessionAccepted`, and white does not change:
+`HarvestDone` writes no white for any address (slice 1 §3, Rick,
+2026-10-11; *records-was:* white changed through `HarvestDone` for the
+Foundation fleet).
+
+**Seeds are ordinary peers (Rick, 2026-10-11).** The compiled seed
+addresses enter gray at each start as operator-named addresses do, are
+not saved, and reach white only through a drawn dial's `SessionAccepted`
+or `Confirmed`. The peerlist a seed returns is network-learned, under
+slice 1's address-validity check and D-S1's cap. **Open for this
+brief's review:** with the seeds in gray from the start, the fill's
+uniform gray draw reaches them as it reaches any address, so the
+separate harvest arm (arm 2 of the fill) and the `Harvest` aim do no
+work the standard rule does not; the review decides whether they
+survive, and `HarvestDone` with them. The exception audit
+([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §8)
+records the arm as absorbed pending that decision.
 
 The C++ gray probe is not that harvest. `gray_peerlist_housekeeping`
 (`net_node.inl:3336`, declared `net_node.h:713`) dials one random gray
@@ -665,6 +704,7 @@ keep the callers named below.
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |
 | The timed-sync self-insertion (handshake-address ruling, 2026-10-09) | `net_node.inl:2717` to `:2735`: `outgoing_to_same_zone`, the `max_peerlist_size` subtraction, and the `local_peerlist_new.insert` of `zone.m_our_address` | `rg -n -e outgoing_to_same_zone src/p2p` returns nothing. Before deletion it hits `:2717`, `:2718` and `:2730` |
 | `peerlist_manager::is_host_allowed` and `m_allow_local_ip` (address-validity ruling, 2026-10-11) | `net_peerlist.h:273` and `:201`; they go with the C++ peerlist (slice 1 §11.4). **Not in this table:** `sanitize_peerlist` (`net_node.inl:2417`, declaration `net_node.h:510`, call `:2456`) stays with `handle_remote_peerlist` until slice 4 — the Rust rule at `admit_gray` supersedes it, and the C++ copy is deleted with the handler (Rick, 2026-10-11). The flag stays: `arg_p2p_allow_local_ip` (`net_node.cpp:123`), read at `net_node.inl:486`, becomes an input to the Rust peerlist's construction instead of `peerlist_manager::init` (`:1078`) | `rg -n -e is_host_allowed -e m_allow_local_ip src/p2p` returns nothing. `rg -n -e sanitize_peerlist src/p2p` still hits the declaration, the definition and the call; zero hits fails, because the deletion is slice 4's. `rg -n -e allow_local_ip src/p2p` still hits the argument and its read; zero hits fails, because the override was kept |
+| Priority nodes (Rick, 2026-10-11) | `arg_p2p_add_priority_node` (`net_node.cpp:125`, declared `net_node.h:820`, added `net_node.inl:118`); `m_priority_peers` (`net_node.h:767`); the parse (`net_node.inl:556-558`); the clearnet arm (`:2132`); `is_priority_node` (`:2906`, declared `net_node.h:679`), whose callers (`:1670`, `:1681`, `:1727`, `:1737`) only choose a log level | `rg -n -e priority_node -e m_priority_peers -e priority-node src/p2p` returns nothing. Before deletion it hits the argument, its registration, the parse, the arm, the predicate and its four callers. `rg -n -e add-priority-node src/common/removed_flags.cpp` hits the retired-flag row; zero hits fails, because the flag is refused by name, not forgotten |
 | The C++ in-flight nonce mint and erase | call `:1347`, guard `:1348`, `mint_recorded_handshake_nonce` `:1497`, `erase_outbound_handshake_nonce` `:1516` | `rg -n -e mint_recorded_handshake_nonce -e erase_outbound_handshake_nonce src/p2p` returns nothing. `rg -n -e detect_self_handshake src/p2p` still hits the declaration and the call in `handle_handshake` (`:2789`). Zero hits on `detect_self_handshake` fails. The dialer's `HandshakeNonceSet` is what `shekyl_dial_take_handshake_nonce` reads |
 
 ---
@@ -683,8 +723,9 @@ not the clock.
 recent, front-of-list, or attacker-supplied addresses lets an eclipse
 fill the outbound set. The answer is slice 1's uniform draw within a
 connector. This slice does not sort by `last_seen` and does not give
-`--add-peer` a better chance than any other gray address. Exclusive
-and priority nodes are operator-named and are not part of that draw.
+`--add-peer` a better chance than any other gray address. An exclusive
+list is the draw's population, not an exception to it; priority nodes
+are deleted (the fill, arm 1).
 There is no subnet grouping (ruled 2026-10-11, "The candidate
 filter"): an attacker who spreads addresses across prefixes gains
 nothing a prefix rule would have denied, and an attacker within one
@@ -735,18 +776,18 @@ all of them. Both the hidden outbound sessions and that total are lower limits.
 **What a peer can make us dial.** A peerlist, an advertisement, and a
 timed-sync payload are gray entries. They become dials only through
 the uniform draw, at the paced rate. A peer cannot name an address
-and have this node dial it next. Exclusive and priority nodes are not
-accepted from a peer.
+and have this node dial it next. An exclusive list is not accepted
+from a peer.
 
 ---
 
 ## Tests
 
 Differential against the current C++ wherever the behaviour is kept:
-the windows, which causes forget an address, exclusive and priority
-nodes dialed before the draw, white promotion only on
-`SessionAccepted` or `Confirmed` of an outstanding gray draw or
-`HarvestDone` of a Foundation host, and each kept row of the candidate
+the windows, which causes forget an address, an exclusive list as the
+whole candidate population, white promotion only on
+`SessionAccepted` or `Confirmed` of an outstanding gray draw (never on
+`HarvestDone`, 2026-10-11), and each kept row of the candidate
 filter. There is no subnet pass to assert (ruled 2026-10-11). Address
 validity is slice 1's falsifier §11.6: a network-learned address in
 each listed range, and port 0, is refused at `admit_gray`, an
@@ -765,8 +806,9 @@ claim post lands.
 
 The handshake-result test above. `PayloadRefused` leaves the address
 off white and still on gray when it was an outstanding draw. A
-harvest of anyone outside the Foundation fleet leaves white
-unchanged. `HarvestDone` for one of the six hosts writes white.
+harvest leaves white unchanged for every address, a compiled seed
+included (slice 1 §3, 2026-10-11; *records-was:* `HarvestDone` for one
+of the six hosts wrote white).
 `Confirmed` of an outstanding gray draw writes white, leaves no
 session, and never appears in the relay registry. That dial, started
 while `Keep` rows are already at the target, leaves the `Keep` count
