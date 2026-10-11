@@ -178,7 +178,7 @@ criterion-only and have no instruction count to gate.
 | **BA-I33** | `rust/shekyl-randomx-differential/src/mode_latency.rs`, `rust/shekyl-randomx-differential/tests/worst_case_ratio.rs` | Rust-to-C RandomX latency ratio, typical and adversarial | CI runner, daily and weekly cron | The ratio bounds 3.0 and 5.0 (`rust/shekyl-randomx-differential/src/mode_latency.rs:127`) | **Keep, gated** — no aarch64 leg (BA-G9) |
 | **BA-I34** | `rust/shekyl-wss-q1b-bench` (four binaries) | Wallet proving-state edges: spend-time replay against proving, open-time refetch, root read, path assembly | floor and others (BA-I96 to BA-I103) | The spend-edge and open-edge thresholds (`docs/design/WALLET_SIDE_STORE.md:815`, `:816`) | **Keep, tracked** (T3) |
 | **BA-I35** | `rust/shekyl-sp-t3-spike` binaries `pd-f2-measure`, `pd-f2-u1b`, `serve-only` | Whole-shard fetch over Tor against the production serve endpoint and fetch client; content verification is stubbed to accept (`rust/shekyl-sp-t3-spike/src/harness.rs:460`) | internal node and floor (BA-I91 to BA-I95) | `W`, `L`, the retry budget, `p_attempt`, and the per-epoch read capacity (§4) | **Rewrite** — every archival latency constant rests on a crate that calls itself disposable, with a verify step that verifies nothing |
-| **BA-I36** | `rust/shekyl-tor-transit-spike`, `rust/shekyl-rt-p2-spike/tests/probes.rs` | Tor transit and RPC-transport probes | none recorded in `docs/benchmarks/` | Not traced | **Keep, tracked** — pending BA-Q12 |
+| **BA-I36** | `rust/shekyl-tor-transit-spike` (the RPC-transport probe crate `shekyl-rt-p2-spike` was deleted in RT-W8, its subject superseded) | Tor transit probe | none recorded in `docs/benchmarks/` | Not traced | **Keep, tracked** — pending BA-Q12 |
 
 ### 2.4 Scripts
 

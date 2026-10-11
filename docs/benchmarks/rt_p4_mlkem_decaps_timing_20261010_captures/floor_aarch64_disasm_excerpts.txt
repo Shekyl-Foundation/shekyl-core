@@ -1,0 +1,570 @@
+Excerpts of `objdump -d -C --no-show-raw-insn` of the floor device's first registered binary
+(rt_p4_decaps_timing, aarch64, sha256 76aa66d0b5b3d03957febaf00bdbddff007a41690d8ff1dcd8657ed7cdd9fe32),
+the listing the aarch64 code reading in rt_p4_mlkem_decaps_timing_20261010.md was made from.
+Whole functions: the select, subtle::black_box, ml_kem_decaps_internal, byte_decode, ntt, ntt_inv.
+
+===== <[T; N] as subtle::ConditionallySelectable>::conditional_assign
+   10694: and w8, w2, #0xff
+   10698: cmp w8, #0x80
+   1069c: b.eq 106c0 <<[T; N] as subtle::ConditionallySelectable>::conditional_assign+0x2c>  // b.none
+   106a0: neg w8, w2
+   106a4: ldp q1, q4, [x0]
+   106a8: dup v0.16b, w8
+   106ac: ldp q2, q3, [x1]
+   106b0: bit v1.16b, v2.16b, v0.16b
+   106b4: bsl v0.16b, v3.16b, v4.16b
+   106b8: stp q1, q0, [x0]
+   106bc: ret
+   106c0: stp x29, x30, [sp, #-16]!
+   106c4: mov x29, sp
+   106c8: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   106cc: add x0, x0, #0x518
+   106d0: bl 9160 <core::panicking::panic_const::panic_const_neg_overflow>
+
+===== subtle::black_box
+   10680: sub sp, sp, #0x10
+   10684: strb w0, [sp, #12]
+   10688: ldrb w0, [sp, #12]
+   1068c: add sp, sp, #0x10
+   10690: ret
+
+===== fips203::ml_kem::ml_kem_decaps_internal
+   106d4: stp x29, x30, [sp, #-80]!
+   106d8: stp x28, x25, [sp, #16]
+   106dc: stp x24, x23, [sp, #32]
+   106e0: stp x22, x21, [sp, #48]
+   106e4: stp x20, x19, [sp, #64]
+   106e8: mov x29, sp
+   106ec: sub sp, sp, #0x4d0
+   106f0: cmp x3, #0x47f
+   106f4: str xzr, [sp]
+   106f8: b.ls 108a0 <fips203::ml_kem::ml_kem_decaps_internal+0x1cc>  // b.plast
+   106fc: cmp x3, #0x91f
+   10700: b.ls 108bc <fips203::ml_kem::ml_kem_decaps_internal+0x1e8>  // b.plast
+   10704: cmp x3, #0x93f
+   10708: b.ls 108d8 <fips203::ml_kem::ml_kem_decaps_internal+0x204>  // b.plast
+   1070c: cmp x3, #0x95f
+   10710: b.ls 108f4 <fips203::ml_kem::ml_kem_decaps_internal+0x220>  // b.plast
+   10714: mov x19, x8
+   10718: add x8, sp, #0x90
+   1071c: mov w3, #0x480                  // #1152
+   10720: mov w5, #0x440                  // #1088
+   10724: mov x20, x4
+   10728: mov x23, x2
+   1072c: mov w21, w1
+   10730: mov w22, w0
+   10734: bl 115dc <fips203::k_pke::k_pke_decrypt>
+   10738: ldrb w8, [sp, #144]
+   1073c: cmp w8, #0x1
+   10740: b.ne 10758 <fips203::ml_kem::ml_kem_decaps_internal+0x84>  // b.any
+   10744: ldp x8, x9, [sp, #152]
+   10748: stp x8, x9, [x19, #8]
+   1074c: mov w8, #0x1                    // #1
+   10750: strb w8, [x19]
+   10754: b 10884 <fips203::ml_kem::ml_kem_decaps_internal+0x1b0>
+   10758: add x8, sp, #0x90
+   1075c: ldr w10, [sp, #148]
+   10760: add x0, sp, #0x70
+   10764: ldur w9, [x8, #1]
+   10768: ldur q0, [x8, #8]
+   1076c: ldrb w8, [sp, #176]
+   10770: mov w1, #0x2                    // #2
+   10774: str w9, [sp, #16]
+   10778: ldr x9, [sp, #168]
+   1077c: strb w8, [sp, #47]
+   10780: add x8, sp, #0x10
+   10784: stur x9, [sp, #39]
+   10788: mov w9, #0x20                   // #32
+   1078c: stp x8, x9, [sp, #112]
+   10790: add x8, x23, #0x920
+   10794: stp x8, x9, [sp, #128]
+   10798: add x8, sp, #0x90
+   1079c: stur w10, [sp, #19]
+   107a0: stur q0, [sp, #23]
+   107a4: bl f8d0 <fips203::helpers::g>
+   107a8: ldp q0, q1, [sp, #144]
+   107ac: add x8, sp, #0x70
+   107b0: add x0, x23, #0x940
+   107b4: mov x1, x20
+   107b8: mov w2, #0x440                  // #1088
+   107bc: mov w25, #0x440                  // #1088
+   107c0: stp q0, q1, [sp, #48]
+   107c4: ldp q0, q2, [sp, #176]
+   107c8: stp q0, q2, [sp, #80]
+   107cc: bl fd60 <fips203::helpers::j>
+   107d0: add x0, sp, #0x90
+   107d4: mov w1, wzr
+   107d8: mov w2, #0x440                  // #1088
+   107dc: add x24, sp, #0x90
+   107e0: bl 4c30 <memset@plt>
+   107e4: add x2, x23, #0x480
+   107e8: add x4, sp, #0x10
+   107ec: add x6, sp, #0x50
+   107f0: add x7, sp, #0x90
+   107f4: mov w0, w22
+   107f8: mov w1, w21
+   107fc: mov w3, #0x4a0                  // #1184
+   10800: mov w5, #0x20                   // #32
+   10804: str x25, [sp]
+   10808: bl 1442c <fips203::k_pke::k_pke_encrypt>
+   1080c: cbz x0, 10820 <fips203::ml_kem::ml_kem_decaps_internal+0x14c>
+   10810: mov w8, #0x1                    // #1
+   10814: stp x0, x1, [x19, #8]
+   10818: strb w8, [x19]
+   1081c: b 10884 <fips203::ml_kem::ml_kem_decaps_internal+0x1b0>
+   10820: mov x8, xzr
+   10824: mov w21, #0x1                    // #1
+   10828: ldrb w9, [x20, x8]
+   1082c: ldrb w10, [x24, x8]
+   10830: add x22, x8, #0x1
+   10834: cmp w9, w10
+   10838: cset w0, eq // eq = none
+   1083c: bl 10680 <subtle::black_box>
+   10840: cmp x22, #0x440
+   10844: and w21, w0, w21
+   10848: mov x8, x22
+   1084c: b.ne 10828 <fips203::ml_kem::ml_kem_decaps_internal+0x154>  // b.any
+   10850: mov w0, w21
+   10854: bl 10680 <subtle::black_box>
+   10858: mov w8, #0x1                    // #1
+   1085c: bic w0, w8, w0
+   10860: bl 10680 <subtle::black_box>
+   10864: mov w2, w0
+   10868: add x0, sp, #0x30
+   1086c: add x1, sp, #0x70
+   10870: bl 10694 <<[T; N] as subtle::ConditionallySelectable>::conditional_assign>
+   10874: ldp q0, q1, [sp, #48]
+   10878: strb wzr, [x19]
+   1087c: stur q0, [x19, #1]
+   10880: stur q1, [x19, #17]
+   10884: add sp, sp, #0x4d0
+   10888: ldp x20, x19, [sp, #64]
+   1088c: ldp x22, x21, [sp, #48]
+   10890: ldp x24, x23, [sp, #32]
+   10894: ldp x28, x25, [sp, #16]
+   10898: ldp x29, x30, [sp], #80
+   1089c: ret
+   108a0: adrp x8, 7d000 <__abi_tag+0x1ad68>
+   108a4: add x8, x8, #0x590
+   108a8: mov x0, xzr
+   108ac: mov w1, #0x480                  // #1152
+   108b0: mov x2, x3
+   108b4: mov x3, x8
+   108b8: bl 8fa4 <core::slice::index::slice_index_fail>
+   108bc: adrp x8, 7d000 <__abi_tag+0x1ad68>
+   108c0: add x8, x8, #0x578
+   108c4: mov w0, #0x480                  // #1152
+   108c8: mov w1, #0x920                  // #2336
+   108cc: mov x2, x3
+   108d0: mov x3, x8
+   108d4: bl 8fa4 <core::slice::index::slice_index_fail>
+   108d8: adrp x8, 7d000 <__abi_tag+0x1ad68>
+   108dc: add x8, x8, #0x560
+   108e0: mov w0, #0x920                  // #2336
+   108e4: mov w1, #0x940                  // #2368
+   108e8: mov x2, x3
+   108ec: mov x3, x8
+   108f0: bl 8fa4 <core::slice::index::slice_index_fail>
+   108f4: adrp x8, 7d000 <__abi_tag+0x1ad68>
+   108f8: add x8, x8, #0x548
+   108fc: mov w0, #0x940                  // #2368
+   10900: mov w1, #0x960                  // #2400
+   10904: mov x2, x3
+   10908: mov x3, x8
+   1090c: bl 8fa4 <core::slice::index::slice_index_fail>
+
+===== fips203::byte_fns::byte_decode
+   10910: stp x29, x30, [sp, #-32]!
+   10914: stp x28, x19, [sp, #16]
+   10918: mov x29, sp
+   1091c: movi v0.2d, #0x0
+   10920: mov x19, x8
+   10924: stp q0, q0, [sp, #-512]!
+   10928: stp q0, q0, [sp, #32]
+   1092c: stp q0, q0, [sp, #64]
+   10930: stp q0, q0, [sp, #96]
+   10934: stp q0, q0, [sp, #128]
+   10938: stp q0, q0, [sp, #160]
+   1093c: stp q0, q0, [sp, #192]
+   10940: stp q0, q0, [sp, #224]
+   10944: stp q0, q0, [sp, #256]
+   10948: stp q0, q0, [sp, #288]
+   1094c: stp q0, q0, [sp, #320]
+   10950: stp q0, q0, [sp, #352]
+   10954: stp q0, q0, [sp, #384]
+   10958: stp q0, q0, [sp, #416]
+   1095c: stp q0, q0, [sp, #448]
+   10960: stp q0, q0, [sp, #480]
+   10964: cbz x2, 10a10 <fips203::byte_fns::byte_decode+0x100>
+   10968: cmp w0, #0x1f
+   1096c: b.hi 109f8 <fips203::byte_fns::byte_decode+0xe8>  // b.pmore
+   10970: mov w11, #0xffffffff             // #-1
+   10974: mov w9, wzr
+   10978: mov w8, wzr
+   1097c: lsl w12, w11, w0
+   10980: mov x10, xzr
+   10984: add x11, x1, x2
+   10988: mov w13, #0x100                  // #256
+   1098c: mov x14, sp
+   10990: mvn w12, w12
+   10994: b 109a8 <fips203::byte_fns::byte_decode+0x98>
+   10998: add x1, x1, #0x1
+   1099c: mov w8, w15
+   109a0: cmp x1, x11
+   109a4: b.eq 10a10 <fips203::byte_fns::byte_decode+0x100>  // b.none
+   109a8: cmp w8, #0x1f
+   109ac: b.hi 10aa4 <fips203::byte_fns::byte_decode+0x194>  // b.pmore
+   109b0: ldrb w16, [x1]
+   109b4: add w15, w8, #0x8
+   109b8: cmp w15, w0
+   109bc: lsl w8, w16, w8
+   109c0: orr w9, w8, w9
+   109c4: b.cc 10998 <fips203::byte_fns::byte_decode+0x88>  // b.lo, b.ul, b.last
+   109c8: cmp x10, #0x100
+   109cc: csel x8, x10, x13, hi // hi = pmore
+   109d0: cmp x8, x10
+   109d4: b.eq 10a90 <fips203::byte_fns::byte_decode+0x180>  // b.none
+   109d8: sub w15, w15, w0
+   109dc: and w16, w9, w12
+   109e0: lsr w9, w9, w0
+   109e4: cmp w15, w0
+   109e8: strh w16, [x14, x10, lsl #1]
+   109ec: add x10, x10, #0x1
+   109f0: b.cs 109d0 <fips203::byte_fns::byte_decode+0xc0>  // b.hs, b.nlast
+   109f4: b 10998 <fips203::byte_fns::byte_decode+0x88>
+   109f8: cmp x2, #0x4
+   109fc: b.cc 10a10 <fips203::byte_fns::byte_decode+0x100>  // b.lo, b.ul, b.last
+   10a00: cmp w0, #0x20
+   10a04: b.eq 10ab0 <fips203::byte_fns::byte_decode+0x1a0>  // b.none
+   10a08: cmp x2, #0x4
+   10a0c: b.ne 10aa4 <fips203::byte_fns::byte_decode+0x194>  // b.any
+   10a10: mov w9, #0x1                    // #1
+   10a14: cmp w0, #0xc
+   10a18: mov w10, #0xd01                  // #3329
+   10a1c: lsl w9, w9, w0
+   10a20: mov x8, xzr
+   10a24: csel w9, w9, w10, cc // cc = lo, ul, last
+   10a28: mov x10, sp
+   10a2c: cmp x8, #0x200
+   10a30: b.eq 10a6c <fips203::byte_fns::byte_decode+0x15c>  // b.none
+   10a34: ldrh w11, [x10, x8]
+   10a38: add x8, x8, #0x2
+   10a3c: cmp w9, w11
+   10a40: b.hi 10a2c <fips203::byte_fns::byte_decode+0x11c>  // b.pmore
+   10a44: adrp x8, 53000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x3989>
+   10a48: add x8, x8, #0x192
+   10a4c: mov w9, #0x1c                   // #28
+   10a50: stp x8, x9, [x19, #8]
+   10a54: mov w8, #0x1                    // #1
+   10a58: strh w8, [x19]
+   10a5c: add sp, sp, #0x200
+   10a60: ldp x28, x19, [sp, #16]
+   10a64: ldp x29, x30, [sp], #32
+   10a68: ret
+   10a6c: add x0, x19, #0x2
+   10a70: mov x1, sp
+   10a74: mov w2, #0x200                  // #512
+   10a78: bl 4900 <memcpy@plt>
+   10a7c: strh wzr, [x19]
+   10a80: add sp, sp, #0x200
+   10a84: ldp x28, x19, [sp, #16]
+   10a88: ldp x29, x30, [sp], #32
+   10a8c: ret
+   10a90: adrp x2, 7d000 <__abi_tag+0x1ad68>
+   10a94: add x2, x2, #0x5d8
+   10a98: mov x0, x8
+   10a9c: mov w1, #0x100                  // #256
+   10aa0: bl 9224 <core::panicking::panic_bounds_check>
+   10aa4: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   10aa8: add x0, x0, #0x5a8
+   10aac: bl 917c <core::panicking::panic_const::panic_const_shl_overflow>
+   10ab0: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   10ab4: add x0, x0, #0x5c0
+   10ab8: bl 917c <core::panicking::panic_const::panic_const_shl_overflow>
+
+===== fips203::ntt::ntt
+   10c18: sub sp, sp, #0x80
+   10c1c: stp x29, x30, [sp, #80]
+   10c20: str x21, [sp, #96]
+   10c24: stp x20, x19, [sp, #112]
+   10c28: add x29, sp, #0x50
+   10c2c: mov x1, x0
+   10c30: mov x0, x8
+   10c34: mov w2, #0x200                  // #512
+   10c38: mov x19, x8
+   10c3c: bl 4900 <memcpy@plt>
+   10c40: adrp x9, 52000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x2989>
+   10c44: adrp x10, 52000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x2989>
+   10c48: mov w13, #0xfb77                 // #64375
+   10c4c: ldr q0, [x9, #1728]
+   10c50: adrp x9, 52000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x2989>
+   10c54: ldr q1, [x10, #1744]
+   10c58: ldr q2, [x9, #1760]
+   10c5c: add x9, sp, #0x8
+   10c60: mov w10, #0x2                    // #2
+   10c64: mov x8, xzr
+   10c68: stur q0, [sp, #24]
+   10c6c: add x9, x9, #0x10
+   10c70: stur q1, [sp, #40]
+   10c74: adrp x11, 53000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x3989>
+   10c78: add x11, x11, #0x1ca
+   10c7c: stur q2, [sp, #56]
+   10c80: mov w12, #0x100                  // #256
+   10c84: movk w13, #0x13a, lsl #16
+   10c88: str x10, [sp, #72]
+   10c8c: mov w10, #0x1                    // #1
+   10c90: mov w14, #0xd01                  // #3329
+   10c94: b 10ca4 <fips203::ntt::ntt+0x8c>
+   10c98: add x8, x8, #0x1
+   10c9c: cmp x8, #0x7
+   10ca0: b.eq 10d8c <fips203::ntt::ntt+0x174>  // b.none
+   10ca4: ldr x15, [x9, x8, lsl #3]
+   10ca8: tbnz x15, #63, 10e10 <fips203::ntt::ntt+0x1f8>
+   10cac: cbz x15, 10da0 <fips203::ntt::ntt+0x188>
+   10cb0: lsl x16, x15, #1
+   10cb4: udiv x17, x12, x16
+   10cb8: mul x18, x17, x16
+   10cbc: cmp x18, #0x100
+   10cc0: cinc x17, x17, ne // ne = any
+   10cc4: cbz x17, 10c98 <fips203::ntt::ntt+0x80>
+   10cc8: mov x18, xzr
+   10ccc: lsl x1, x15, #2
+   10cd0: mov x2, x19
+   10cd4: b 10ce8 <fips203::ntt::ntt+0xd0>
+   10cd8: sub x17, x17, #0x1
+   10cdc: add x18, x18, x16
+   10ce0: add x2, x2, x1
+   10ce4: cbz x17, 10c98 <fips203::ntt::ntt+0x80>
+   10ce8: lsl x0, x10, #1
+   10cec: cmp x0, #0xff
+   10cf0: b.hi 10e00 <fips203::ntt::ntt+0x1e8>  // b.pmore
+   10cf4: adds x10, x10, #0x1
+   10cf8: b.cs 10df4 <fips203::ntt::ntt+0x1dc>  // b.hs, b.nlast
+   10cfc: adds x3, x18, x15
+   10d00: b.cs 10de8 <fips203::ntt::ntt+0x1d0>  // b.hs, b.nlast
+   10d04: cmp x18, x3
+   10d08: b.cs 10cd8 <fips203::ntt::ntt+0xc0>  // b.hs, b.nlast
+   10d0c: ldrh w0, [x11, x0, lsl #1]
+   10d10: mov x3, xzr
+   10d14: add x4, x15, x18
+   10d18: add x5, x2, x16
+   10d1c: add x7, x18, x3
+   10d20: add x6, x4, x3
+   10d24: cmp x6, x7
+   10d28: b.cc 10ddc <fips203::ntt::ntt+0x1c4>  // b.lo, b.ul, b.last
+   10d2c: cmp x6, #0x100
+   10d30: b.cs 10db8 <fips203::ntt::ntt+0x1a0>  // b.hs, b.nlast
+   10d34: ldrh w6, [x5, x3, lsl #1]
+   10d38: mul w6, w6, w0
+   10d3c: umull x7, w6, w13
+   10d40: lsr x7, x7, #36
+   10d44: mul w7, w7, w14
+   10d48: subs w6, w6, w7
+   10d4c: b.cc 10dd0 <fips203::ntt::ntt+0x1b8>  // b.lo, b.ul, b.last
+   10d50: ldrh w7, [x2, x3, lsl #1]
+   10d54: and w6, w6, #0xffff
+   10d58: sub w20, w7, w6
+   10d5c: add w6, w6, w7
+   10d60: sub w6, w6, #0xd01
+   10d64: and w7, w14, w20, lsr #16
+   10d68: and w21, w14, w6, lsr #16
+   10d6c: add w7, w7, w20
+   10d70: strh w7, [x5, x3, lsl #1]
+   10d74: add w6, w21, w6
+   10d78: strh w6, [x2, x3, lsl #1]
+   10d7c: add x3, x3, #0x1
+   10d80: cmp x15, x3
+   10d84: b.ne 10d1c <fips203::ntt::ntt+0x104>  // b.any
+   10d88: b 10cd8 <fips203::ntt::ntt+0xc0>
+   10d8c: ldp x20, x19, [sp, #112]
+   10d90: ldr x21, [sp, #96]
+   10d94: ldp x29, x30, [sp, #80]
+   10d98: add sp, sp, #0x80
+   10d9c: ret
+   10da0: adrp x0, 53000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x3989>
+   10da4: add x0, x0, #0x1ae
+   10da8: adrp x2, 7d000 <__abi_tag+0x1ad68>
+   10dac: add x2, x2, #0x5f0
+   10db0: mov w1, #0x1b                   // #27
+   10db4: bl 9384 <core::panicking::panic>
+   10db8: add x8, x15, x18
+   10dbc: adrp x2, 7d000 <__abi_tag+0x1ad68>
+   10dc0: add x2, x2, #0x680
+   10dc4: add x0, x8, x3
+   10dc8: mov w1, #0x100                  // #256
+   10dcc: bl 9224 <core::panicking::panic_bounds_check>
+   10dd0: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   10dd4: add x0, x0, #0x728
+   10dd8: bl 91b4 <core::panicking::panic_const::panic_const_sub_overflow>
+   10ddc: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   10de0: add x0, x0, #0x668
+   10de4: bl 9128 <core::panicking::panic_const::panic_const_add_overflow>
+   10de8: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   10dec: add x0, x0, #0x650
+   10df0: bl 9128 <core::panicking::panic_const::panic_const_add_overflow>
+   10df4: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   10df8: add x0, x0, #0x638
+   10dfc: bl 9128 <core::panicking::panic_const::panic_const_add_overflow>
+   10e00: adrp x2, 7d000 <__abi_tag+0x1ad68>
+   10e04: add x2, x2, #0x620
+   10e08: mov w1, #0x100                  // #256
+   10e0c: bl 9224 <core::panicking::panic_bounds_check>
+   10e10: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   10e14: add x0, x0, #0x608
+   10e18: bl 9144 <core::panicking::panic_const::panic_const_mul_overflow>
+
+===== fips203::ntt::ntt_inv
+   10e1c: stp x29, x30, [sp, #-64]!
+   10e20: str x28, [sp, #16]
+   10e24: stp x22, x21, [sp, #32]
+   10e28: stp x20, x19, [sp, #48]
+   10e2c: mov x29, sp
+   10e30: sub sp, sp, #0x250
+   10e34: mov x1, x0
+   10e38: mov w20, #0xfb77                 // #64375
+   10e3c: add x0, sp, #0x50
+   10e40: mov w2, #0x200                  // #512
+   10e44: mov x19, x8
+   10e48: movk w20, #0x13a, lsl #16
+   10e4c: bl 4900 <memcpy@plt>
+   10e50: adrp x9, 52000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x2989>
+   10e54: adrp x10, 52000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x2989>
+   10e58: mov x8, xzr
+   10e5c: ldr q0, [x9, #1776]
+   10e60: adrp x9, 52000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x2989>
+   10e64: ldr q1, [x10, #1792]
+   10e68: ldr q2, [x9, #1808]
+   10e6c: add x9, sp, #0x8
+   10e70: mov w10, #0x80                   // #128
+   10e74: stur q0, [sp, #24]
+   10e78: add x9, x9, #0x10
+   10e7c: mov w11, #0x100                  // #256
+   10e80: stur q1, [sp, #40]
+   10e84: adrp x12, 53000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x3989>
+   10e88: add x12, x12, #0x1ca
+   10e8c: stur q2, [sp, #56]
+   10e90: mov w13, #0xd01                  // #3329
+   10e94: str x10, [sp, #72]
+   10e98: mov w10, #0x7f                   // #127
+   10e9c: b 10eac <fips203::ntt::ntt_inv+0x90>
+   10ea0: add x8, x8, #0x1
+   10ea4: cmp x8, #0x7
+   10ea8: b.eq 10f98 <fips203::ntt::ntt_inv+0x17c>  // b.none
+   10eac: ldr x14, [x9, x8, lsl #3]
+   10eb0: tbnz x14, #63, 11074 <fips203::ntt::ntt_inv+0x258>
+   10eb4: cbz x14, 11000 <fips203::ntt::ntt_inv+0x1e4>
+   10eb8: lsl x15, x14, #1
+   10ebc: udiv x16, x11, x15
+   10ec0: mul x17, x16, x15
+   10ec4: cmp x17, #0x100
+   10ec8: cinc x16, x16, ne // ne = any
+   10ecc: cbz x16, 10ea0 <fips203::ntt::ntt_inv+0x84>
+   10ed0: add x18, sp, #0x50
+   10ed4: mov x17, xzr
+   10ed8: lsl x1, x14, #2
+   10edc: add x2, x18, x15
+   10ee0: b 10efc <fips203::ntt::ntt_inv+0xe0>
+   10ee4: add x17, x17, x15
+   10ee8: sub x16, x16, #0x1
+   10eec: sub x10, x10, #0x1
+   10ef0: add x2, x2, x1
+   10ef4: add x18, x18, x1
+   10ef8: cbz x16, 10ea0 <fips203::ntt::ntt_inv+0x84>
+   10efc: lsl x0, x10, #1
+   10f00: cmp x0, #0xff
+   10f04: b.hi 11064 <fips203::ntt::ntt_inv+0x248>  // b.pmore
+   10f08: cbz x10, 11058 <fips203::ntt::ntt_inv+0x23c>
+   10f0c: adds x3, x17, x14
+   10f10: b.cs 1104c <fips203::ntt::ntt_inv+0x230>  // b.hs, b.nlast
+   10f14: cmp x17, x3
+   10f18: b.cs 10ee4 <fips203::ntt::ntt_inv+0xc8>  // b.hs, b.nlast
+   10f1c: ldrh w4, [x12, x0, lsl #1]
+   10f20: mov x3, xzr
+   10f24: add x5, x14, x17
+   10f28: add x0, x17, x3
+   10f2c: cmp x0, #0xff
+   10f30: b.hi 11024 <fips203::ntt::ntt_inv+0x208>  // b.pmore
+   10f34: add x0, x5, x3
+   10f38: cmp x0, #0x100
+   10f3c: b.cs 11034 <fips203::ntt::ntt_inv+0x218>  // b.hs, b.nlast
+   10f40: ldrh w0, [x18, x3, lsl #1]
+   10f44: ldrh w6, [x2, x3, lsl #1]
+   10f48: sub w7, w6, w0
+   10f4c: add w0, w0, w6
+   10f50: and w21, w13, w7, lsr #16
+   10f54: add w7, w21, w7
+   10f58: and w7, w7, #0xffff
+   10f5c: mul w7, w7, w4
+   10f60: umull x21, w20, w7
+   10f64: lsr x21, x21, #36
+   10f68: mul w6, w21, w13
+   10f6c: sub w21, w0, #0xd01
+   10f70: and w22, w13, w21, lsr #16
+   10f74: subs w0, w7, w6
+   10f78: add w6, w22, w21
+   10f7c: strh w6, [x18, x3, lsl #1]
+   10f80: b.cc 11018 <fips203::ntt::ntt_inv+0x1fc>  // b.lo, b.ul, b.last
+   10f84: strh w0, [x2, x3, lsl #1]
+   10f88: add x3, x3, #0x1
+   10f8c: cmp x14, x3
+   10f90: b.ne 10f28 <fips203::ntt::ntt_inv+0x10c>  // b.any
+   10f94: b 10ee4 <fips203::ntt::ntt_inv+0xc8>
+   10f98: mov x8, xzr
+   10f9c: add x9, sp, #0x50
+   10fa0: mov w10, #0xce7                  // #3303
+   10fa4: mov w11, #0xd01                  // #3329
+   10fa8: ldrh w12, [x9, x8]
+   10fac: umull x12, w12, w10
+   10fb0: umull x13, w12, w20
+   10fb4: lsr x13, x13, #36
+   10fb8: mul w13, w13, w11
+   10fbc: subs w12, w12, w13
+   10fc0: b.cc 11018 <fips203::ntt::ntt_inv+0x1fc>  // b.lo, b.ul, b.last
+   10fc4: add x13, x8, #0x2
+   10fc8: strh w12, [x9, x8]
+   10fcc: cmp x13, #0x200
+   10fd0: mov x8, x13
+   10fd4: b.ne 10fa8 <fips203::ntt::ntt_inv+0x18c>  // b.any
+   10fd8: add x1, sp, #0x50
+   10fdc: mov x0, x19
+   10fe0: mov w2, #0x200                  // #512
+   10fe4: bl 4900 <memcpy@plt>
+   10fe8: add sp, sp, #0x250
+   10fec: ldp x20, x19, [sp, #48]
+   10ff0: ldr x28, [sp, #16]
+   10ff4: ldp x22, x21, [sp, #32]
+   10ff8: ldp x29, x30, [sp], #64
+   10ffc: ret
+   11000: adrp x0, 53000 <anon.d1f2df70971083c03361f50d21d42acc.10.llvm.1566078725010641372+0x3989>
+   11004: add x0, x0, #0x1ae
+   11008: adrp x2, 7d000 <__abi_tag+0x1ad68>
+   1100c: add x2, x2, #0x5f0
+   11010: mov w1, #0x1b                   // #27
+   11014: bl 9384 <core::panicking::panic>
+   11018: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   1101c: add x0, x0, #0x728
+   11020: bl 91b4 <core::panicking::panic_const::panic_const_sub_overflow>
+   11024: adrp x2, 7d000 <__abi_tag+0x1ad68>
+   11028: add x2, x2, #0x6f8
+   1102c: mov w1, #0x100                  // #256
+   11030: bl 9224 <core::panicking::panic_bounds_check>
+   11034: add x8, x14, x17
+   11038: adrp x2, 7d000 <__abi_tag+0x1ad68>
+   1103c: add x2, x2, #0x710
+   11040: add x0, x8, x3
+   11044: mov w1, #0x100                  // #256
+   11048: bl 9224 <core::panicking::panic_bounds_check>
+   1104c: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   11050: add x0, x0, #0x6e0
+   11054: bl 9128 <core::panicking::panic_const::panic_const_add_overflow>
+   11058: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   1105c: add x0, x0, #0x6c8
+   11060: bl 91b4 <core::panicking::panic_const::panic_const_sub_overflow>
+   11064: adrp x2, 7d000 <__abi_tag+0x1ad68>
+   11068: add x2, x2, #0x6b0
+   1106c: mov w1, #0x100                  // #256
+   11070: bl 9224 <core::panicking::panic_bounds_check>
+   11074: adrp x0, 7d000 <__abi_tag+0x1ad68>
+   11078: add x0, x0, #0x698
+   1107c: bl 9144 <core::panicking::panic_const::panic_const_mul_overflow>
+
