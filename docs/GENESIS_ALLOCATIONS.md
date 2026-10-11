@@ -90,10 +90,16 @@ Source of truth: [`config/genesis_recipients.testnet.json`](../config/genesis_re
 Genesis identity:
 
 ```text
-GENESIS_NONCE  10101
+GENESIS_NONCE  10102
 tx hash        fc41d1169933f70ec58f0547250de6432f67c110e2aefd4dbf9037ab1b0ba452
-block id       52425d8da3a90e41ff54780129bdbe9897aa28c3d0a9c80b04b4b5ea35c911d8
+block id       b0ef992f179554ad2e9bb150296d49bc0da6e07f12b853b1901108c4c805bc76
 ```
+
+The testnet nonce was `10101` (block id `52425d8d…c911d8`) through
+`v3.1.0-alpha.9`. It was moved for the next cut because a consensus rule
+changed with the genesis unchanged, which would have left the old and new
+builds sharing a network id (`RELEASE_PROMOTION.md` §6). The transaction, and
+so the allocations above, are the same.
 
 Addresses are truncated above for readability only — the full strings are
 in the linked JSON files, which are the bytes genesis actually commits to.

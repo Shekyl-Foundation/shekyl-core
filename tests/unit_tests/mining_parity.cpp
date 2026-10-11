@@ -245,7 +245,7 @@ TEST(mining_parity, genesis_identity_is_pow_independent)
   };
   const NetCase nets[] = {
     { cryptonote::MAINNET,  "mainnet",  "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3" },
-    { cryptonote::TESTNET,  "testnet",  "52425d8da3a90e41ff54780129bdbe9897aa28c3d0a9c80b04b4b5ea35c911d8" },
+    { cryptonote::TESTNET,  "testnet",  "b0ef992f179554ad2e9bb150296d49bc0da6e07f12b853b1901108c4c805bc76" },
     { cryptonote::STAGENET, "stagenet", "65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0" },
   };
 
