@@ -25,7 +25,8 @@ use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES
 use shekyl_crypto_pq::archival_p::{
     derive_archival_p_keys, derive_p_account_sign_seed, derive_p_bond_spend_ed_seed,
     derive_p_bond_spend_ml_dsa_seed, derive_p_hs_id_seed, derive_p_kem_d_z, derive_p_ml_dsa_seed,
-    derive_p_spend_wide, derive_p_view_wide, ArchivalPKeys,
+    derive_p_receipt_ed_seed, derive_p_receipt_fn_dsa_seed, derive_p_spend_wide,
+    derive_p_view_wide, ArchivalPKeys,
 };
 use shekyl_crypto_pq::archival_p_freeze::archival_p_derive_manifest_self_check;
 
@@ -125,6 +126,7 @@ struct Tier2Expected {
     ml_kem_ek_hex: String,
     hybrid_sign_pk_hex: String,
     bond_spend_pk_hex: String,
+    receipt_sign_pk_hex: String,
     p_canonical_id_hex: String,
     spend_sk_hex: String,
     view_sk_hex: String,
@@ -159,6 +161,17 @@ fn decode_master(s: &str) -> [u8; MASTER_SEED_BYTES] {
     out
 }
 
+/// Both values are pinned, and they are not the same value. `differ` names
+/// why a collapse is a bug: `"labels must differ"`, `"networks must differ"`,
+/// `"slots must differ"`.
+fn assert_pinned_pair(id: &str, a: &[u8], b: &[u8], exp_a: &str, exp_b: &str, differ: &str) {
+    let a_hex = hex::encode(a);
+    let b_hex = hex::encode(b);
+    assert_eq!(a_hex, exp_a, "{id} a");
+    assert_eq!(b_hex, exp_b, "{id} b");
+    assert_ne!(a_hex, b_hex, "{id} {differ}");
+}
+
 fn keys_for(v_network: &str, v_format: &str, master_hex: &str, p_slot: u32) -> ArchivalPKeys {
     let net = parse_network(v_network);
     let fmt = parse_seed_format(v_format);
@@ -186,6 +199,8 @@ fn run_tier1(v: &Tier1Vector) {
         | "ml_dsa_seed"
         | "bond_spend_ed_seed"
         | "bond_spend_ml_dsa_seed"
+        | "receipt_ed_seed"
+        | "receipt_fn_dsa_seed"
         | "hs_id_seed" => {
             let out = match v.kind.as_str() {
                 "account_sign_seed" => derive_p_account_sign_seed(&master, net, fmt, v.p_slot),
@@ -194,6 +209,8 @@ fn run_tier1(v: &Tier1Vector) {
                 "bond_spend_ml_dsa_seed" => {
                     derive_p_bond_spend_ml_dsa_seed(&master, net, fmt, v.p_slot)
                 }
+                "receipt_ed_seed" => derive_p_receipt_ed_seed(&master, net, fmt, v.p_slot),
+                "receipt_fn_dsa_seed" => derive_p_receipt_fn_dsa_seed(&master, net, fmt, v.p_slot),
                 "hs_id_seed" => derive_p_hs_id_seed(&master, net, fmt, v.p_slot),
                 _ => unreachable!(),
             };
@@ -215,7 +232,7 @@ fn run_tier1(v: &Tier1Vector) {
                 let bundle = derive_archival_p_keys(&master, net, fmt, v.p_slot)
                     .expect("bundle derives for a pinned vector");
                 assert_eq!(
-                    hex::encode(bundle.hs_id_seed.as_slice()),
+                    hex::encode(bundle.hs_id_seed()),
                     exp,
                     "{}: bundle hs_id_seed diverged from the pinned vector",
                     v.id
@@ -235,97 +252,74 @@ fn run_tier1(v: &Tier1Vector) {
             let exp = v.expected.out_hex.as_deref().expect("out_hex");
             assert_eq!(hex::encode(pk), exp, "{}", v.id);
         }
-        "hs_id_label_separation" => {
-            // GF-9 serving seed vs identity account-sign seed: two L=32 Ed25519
-            // seeds under the same (seed, net, fmt, slot) must differ, or the
-            // serving `.onion` key would collide with the on-chain identity key.
-            // `out_a` = hs-id, `out_b` = account-sign (the pair this id names).
-            let hs = derive_p_hs_id_seed(&master, net, fmt, v.p_slot);
-            let acct = derive_p_account_sign_seed(&master, net, fmt, v.p_slot);
-            let a_hex = hex::encode(hs.as_slice());
-            let b_hex = hex::encode(acct.as_slice());
-            assert_eq!(
-                a_hex,
+        "hs_id_label_separation" | "receipt_label_separation" | "label_separation" => {
+            // Two seeds under one (seed, net, fmt, slot). hs-id vs account-sign:
+            // the serving onion is not the on-chain identity. receipt vs
+            // account-sign: scheme 3 shares no seed with the identity key.
+            // label_separation: the GF-1 identity seed is not the bond-spend seed.
+            let (a, b) = match v.kind.as_str() {
+                "hs_id_label_separation" => (
+                    derive_p_hs_id_seed(&master, net, fmt, v.p_slot),
+                    derive_p_account_sign_seed(&master, net, fmt, v.p_slot),
+                ),
+                "receipt_label_separation" => (
+                    derive_p_receipt_ed_seed(&master, net, fmt, v.p_slot),
+                    derive_p_account_sign_seed(&master, net, fmt, v.p_slot),
+                ),
+                "label_separation" => (
+                    derive_p_account_sign_seed(&master, net, fmt, v.p_slot),
+                    derive_p_bond_spend_ed_seed(&master, net, fmt, v.p_slot),
+                ),
+                _ => unreachable!(),
+            };
+            assert_pinned_pair(
+                &v.id,
+                a.as_slice(),
+                b.as_slice(),
                 v.expected.out_a_hex.as_deref().expect("out_a_hex"),
-                "{} a",
-                v.id
-            );
-            assert_eq!(
-                b_hex,
                 v.expected.out_b_hex.as_deref().expect("out_b_hex"),
-                "{} b",
-                v.id
+                "labels must differ",
             );
-            assert_ne!(a_hex, b_hex, "{} labels must differ", v.id);
         }
-        "hs_id_network_separation" => {
-            // GF-9 serving identity is **network-scoped** like every sibling
-            // label (salt = salt_for(net, fmt)). Same seed, format, and slot under
-            // two different networks MUST yield different HS keys — otherwise one
-            // wallet would serve at the *same* `.onion` on mainnet and testnet,
-            // linking the two personas. This is **un-regenerate-around-able**: it
-            // asserts inequality on a live computation, so dropping `net` from the
-            // derivation fails here even if the frozen corpus is rebuilt.
+        "hs_id_network_separation" | "receipt_network_separation" => {
+            // The salt is `salt_for(net, fmt)`. The inequality is a live
+            // computation, so dropping `net` fails here even if the corpus is
+            // rebuilt around the new bytes. One wallet must not serve at the
+            // same `.onion`, or hold the same receipt key, on two networks.
             let net_b = parse_network(v.network_b.as_deref().expect("network_b"));
-            let a = derive_p_hs_id_seed(&master, net, fmt, v.p_slot);
-            let b = derive_p_hs_id_seed(&master, net_b, fmt, v.p_slot);
-            let a_hex = hex::encode(a.as_slice());
-            let b_hex = hex::encode(b.as_slice());
-            assert_eq!(
-                a_hex,
+            let (a, b) = match v.kind.as_str() {
+                "hs_id_network_separation" => (
+                    derive_p_hs_id_seed(&master, net, fmt, v.p_slot),
+                    derive_p_hs_id_seed(&master, net_b, fmt, v.p_slot),
+                ),
+                "receipt_network_separation" => (
+                    derive_p_receipt_fn_dsa_seed(&master, net, fmt, v.p_slot),
+                    derive_p_receipt_fn_dsa_seed(&master, net_b, fmt, v.p_slot),
+                ),
+                _ => unreachable!(),
+            };
+            assert_pinned_pair(
+                &v.id,
+                a.as_slice(),
+                b.as_slice(),
                 v.expected.out_a_hex.as_deref().expect("out_a_hex"),
-                "{} a",
-                v.id
-            );
-            assert_eq!(
-                b_hex,
                 v.expected.out_b_hex.as_deref().expect("out_b_hex"),
-                "{} b",
-                v.id
+                "networks must differ",
             );
-            assert_ne!(a_hex, b_hex, "{} networks must differ", v.id);
         }
         "slot_separation" => {
             // Same inputs, two p_slots: identity keys must differ.
             let p_slot_b = v.p_slot_b.expect("p_slot_b");
             let a = derive_archival_p_keys(&master, net, fmt, v.p_slot).unwrap();
             let b = derive_archival_p_keys(&master, net, fmt, p_slot_b).unwrap();
-            let a_hex = hex::encode(a.hybrid_sign_pk.to_canonical_bytes().unwrap());
-            let b_hex = hex::encode(b.hybrid_sign_pk.to_canonical_bytes().unwrap());
-            assert_eq!(
-                a_hex,
+            assert_pinned_pair(
+                &v.id,
+                &a.hybrid_sign_pk.to_canonical_bytes().unwrap(),
+                &b.hybrid_sign_pk.to_canonical_bytes().unwrap(),
                 v.expected.out_a_hex.as_deref().expect("out_a_hex"),
-                "{} a",
-                v.id
-            );
-            assert_eq!(
-                b_hex,
                 v.expected.out_b_hex.as_deref().expect("out_b_hex"),
-                "{} b",
-                v.id
+                "slots must differ",
             );
-            assert_ne!(a_hex, b_hex, "{} slots must differ", v.id);
-        }
-        "label_separation" => {
-            // GF-1-carve: identity Ed25519 seed vs bond-spend Ed25519 seed must
-            // differ under the same (seed, net, fmt, slot) — distinct labels.
-            let acct = derive_p_account_sign_seed(&master, net, fmt, v.p_slot);
-            let bond = derive_p_bond_spend_ed_seed(&master, net, fmt, v.p_slot);
-            let a_hex = hex::encode(acct.as_slice());
-            let b_hex = hex::encode(bond.as_slice());
-            assert_eq!(
-                a_hex,
-                v.expected.out_a_hex.as_deref().expect("out_a_hex"),
-                "{} a",
-                v.id
-            );
-            assert_eq!(
-                b_hex,
-                v.expected.out_b_hex.as_deref().expect("out_b_hex"),
-                "{} b",
-                v.id
-            );
-            assert_ne!(a_hex, b_hex, "{} labels must differ", v.id);
         }
         other => panic!("unknown tier1 kind: {other}"),
     }
@@ -369,6 +363,15 @@ fn run_tier2(v: &Tier2Vector) {
         hex::encode(k.bond_spend_pk.to_canonical_bytes().unwrap()),
         e.bond_spend_pk_hex,
         "{} bond_spend_pk",
+        v.id
+    );
+    // The receipt key's secret half has no encoding by design; it is pinned
+    // through the two Tier-1 seeds it is generated from and through this
+    // public half, which is what the bond record will carry.
+    assert_eq!(
+        hex::encode(k.receipt_sign_pk.to_canonical_bytes()),
+        e.receipt_sign_pk_hex,
+        "{} receipt_sign_pk",
         v.id
     );
     assert_eq!(
@@ -465,6 +468,9 @@ fn build_tier1_vectors() -> Vec<serde_json::Value> {
     let mldsa = derive_p_ml_dsa_seed(m, net, fmt, 0);
     let bond_ed = derive_p_bond_spend_ed_seed(m, net, fmt, 0);
     let bond_ml = derive_p_bond_spend_ml_dsa_seed(m, net, fmt, 0);
+    let receipt_ed = derive_p_receipt_ed_seed(m, net, fmt, 0);
+    let receipt_fn_dsa = derive_p_receipt_fn_dsa_seed(m, net, fmt, 0);
+    let receipt_fn_dsa_net_b = derive_p_receipt_fn_dsa_seed(m, DerivationNetwork::Testnet, fmt, 0);
     let hs_id = derive_p_hs_id_seed(m, net, fmt, 0);
     let hs_id_pk = ed25519_dalek::SigningKey::from_bytes(&hs_id)
         .verifying_key()
@@ -554,6 +560,18 @@ fn build_tier1_vectors() -> Vec<serde_json::Value> {
             bond_ml.as_slice(),
         ),
         mk_intermediate(
+            "receipt_ed_seed_mainnet_bip39_slot0",
+            "receipt_ed_seed",
+            0,
+            receipt_ed.as_slice(),
+        ),
+        mk_intermediate(
+            "receipt_fn_dsa_seed_mainnet_bip39_slot0",
+            "receipt_fn_dsa_seed",
+            0,
+            receipt_fn_dsa.as_slice(),
+        ),
+        mk_intermediate(
             "hs_id_seed_mainnet_bip39_slot0",
             "hs_id_seed",
             0,
@@ -620,6 +638,24 @@ fn build_tier1_vectors() -> Vec<serde_json::Value> {
             }
         }),
         serde_json::json!({
+            "id": "receipt_network_separation_mainnet_vs_testnet", "kind": "receipt_network_separation",
+            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
+            "network_b": "testnet", "p_slot": 0,
+            "expected": {
+                "out_a_hex": hex::encode(receipt_fn_dsa.as_slice()),
+                "out_b_hex": hex::encode(receipt_fn_dsa_net_b.as_slice())
+            }
+        }),
+        serde_json::json!({
+            "id": "receipt_label_separation_receipt_vs_account_sign", "kind": "receipt_label_separation",
+            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
+            "p_slot": 0,
+            "expected": {
+                "out_a_hex": hex::encode(receipt_ed.as_slice()),
+                "out_b_hex": hex::encode(acct.as_slice())
+            }
+        }),
+        serde_json::json!({
             "id": "slot_separation_slot0_vs_slot7", "kind": "slot_separation",
             "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
             "p_slot": 0, "p_slot_b": 7,
@@ -663,6 +699,7 @@ fn build_tier2_vector(
             "ml_kem_ek_hex": hex::encode(k.ml_kem_ek),
             "hybrid_sign_pk_hex": hex::encode(k.hybrid_sign_pk.to_canonical_bytes().unwrap()),
             "bond_spend_pk_hex": hex::encode(k.bond_spend_pk.to_canonical_bytes().unwrap()),
+            "receipt_sign_pk_hex": hex::encode(k.receipt_sign_pk.to_canonical_bytes()),
             "p_canonical_id_hex": hex::encode(p_canonical_id(&k)),
             "spend_sk_hex": hex::encode(k.spend_sk.as_canonical_bytes()),
             "view_sk_hex": hex::encode(k.view_sk.as_canonical_bytes()),
@@ -720,6 +757,7 @@ fn kat_regenerate_archival_p_derive_v1() {
         ],
         "derivation_version": "v1",
         "fips203_pin": "=0.4.3",
+        "fn_dsa_pin": "=0.4.0",
         "vectors_sha256_hex": hex::encode(vectors_hash),
         "regeneration_command": "cargo test -p shekyl-crypto-pq kat_regenerate_archival_p_derive_v1 -- --ignored --nocapture",
         "tier1_count": tier1.len(),
