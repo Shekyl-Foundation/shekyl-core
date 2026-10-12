@@ -542,25 +542,21 @@ impl Fixtures for BondRecord {
 impl Fixtures for AltBlock {
     fn fixtures() -> Vec<(&'static str, Self)> {
         use shekyl_types::BlockWeight;
-        let facts = |weight: Option<u64>| AltBlockFacts {
+        let facts = |weight: u64| AltBlockFacts {
             height: BlockHeight::from_raw(41),
-            block_weight: weight.map(BlockWeight::from_raw),
+            block_weight: BlockWeight::from_raw(weight),
             cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4), // lo = 4, hi = 5
-            coins_generated: AtomicUnits::from_raw(1_234_567),
         };
         let block = super::alt::test_block_bytes(41);
         vec![
-            // Weight undetermined at admission, no witness: the two
-            // absences are one presence byte each.
+            // Weight is mandatory. The two fixtures differ by the witness.
             (
-                "weight_unknown_no_witness",
-                AltBlock::checked(facts(None), &block, None).expect("fixture"),
+                "weight_no_witness",
+                AltBlock::checked(facts(2_048), &block, None).expect("fixture"),
             ),
-            // Every optional part present: a weight and a 40-byte witness.
             (
                 "weight_and_witness",
-                AltBlock::checked(facts(Some(2_048)), &block, Some(vec![0xA5; 40]))
-                    .expect("fixture"),
+                AltBlock::checked(facts(2_048), &block, Some(vec![0xA5; 40])).expect("fixture"),
             ),
         ]
     }

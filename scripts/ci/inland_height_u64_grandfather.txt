@@ -70,9 +70,7 @@ rust/shekyl-chain-rules/src/rules/anchors_tests.rs	1	let at = |height: u64| Anch
 rust/shekyl-chain-rules/src/rules/tx_conformance_trips.rs	1	pub(super) fn coinbase_ok(height: u64) -> Transaction {
 rust/shekyl-chain-store/src/archival_snapshot.rs	2	height: u64,
 rust/shekyl-chain-store/src/codec/alt.rs	1	pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
-rust/shekyl-chain-store/src/store/alt_tests.rs	1	fn alt(height: u64, block: &[u8], witness: Option<Vec<u8>>) -> AltBlock {
 rust/shekyl-chain-store/src/store/alt_tests.rs	1	fn hash_at(store: &ChainStore, height: u64) -> Option<BlockHash> {
-rust/shekyl-chain-store/src/store/alt_tests.rs	1	fn side_block(height: u64, previous: BlockHash, key_image: usize) -> (BlockHash, Vec<u8>) {
 rust/shekyl-chain-store/src/store/alt_tests.rs	1	fn tip_height(store: &ChainStore) -> Option<u64> {
 rust/shekyl-chain-store/src/store/amendments_tests.rs	1	fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
 rust/shekyl-chain-store/src/store/archival_write.rs	4	height: u64,

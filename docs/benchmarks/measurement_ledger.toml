@@ -460,6 +460,7 @@ path_set = "p-fetch"
 id = "clearnet-span"
 spec = [
   "rust/shekyl-clearnet/src",
+  "rust/shekyl-noise/src",
   "rust/shekyl-p2p-transport/src",
   "rust/shekyl-transport-layer/src",
 ]
@@ -481,6 +482,10 @@ stale_through = [
   { through = "4bc4ad7380", note = "A doc comment in declaration.rs names the hidden stem slot's pin in place of the own-edge draw (PR-1, #1018). No code changed in these paths. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime gained a thread-start hook parameter at this commit (a ThreadStart, since reshaped into ThreadHooks on runtime_with_thread_hooks; the two-argument runtime came back at da7b70c8cf, heard below). The clearnet tests passed the empty hook, so their runtime threads started exactly as before; no production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "da7b70c8cf", note = "SH-3: the ordinary runtime constructor is a budget and a name again. The clearnet tests call it with the same two arguments they had before the hook parameter (the serving runtime alone uses ThreadHooks through runtime_with_thread_hooks), so their runtime threads start as before. No production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "e3a167bac2", note = "RT-W9 step 1 (PR #1038): the record layer (aead.rs, channel.rs) and the handshake's symmetric state move out of shekyl-p2p-transport into a new crate, shekyl-noise, which this path set now names so that later changes to that code are heard here. A refactor: the same functions run in the same order on the same bytes, the pinned handshake vectors are untouched and their test is byte-identical. Split now returns a named struct instead of the caller taking the chaining key out of the state, which is one move of three 32-byte values per handshake. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "edcae056fc", note = "RT-W9 step 1 review (PR #1038): SymmetricState::into_halves owns the initiator/responder key order, and the hash, HKDF and AEAD stay crate-private. The same HKDF still feeds the same two record directions; the pinned handshake vectors are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "1c42c17c21", note = "RT-W9 step 1 review (PR #1038): into_halves and Established::split are must_use. No bytes on the wire moved. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "d03aeb2e0f", note = "RT-W9 step 1 review (PR #1038): the split yields two Directions, and the length-prefixed framer stays in shekyl-p2p-transport. The same HKDF still feeds the same two record directions; the pinned handshake vectors and the post-rekey record are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]

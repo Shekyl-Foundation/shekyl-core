@@ -16,10 +16,13 @@
 //! connects repeatedly (`pop.rs`, `connect.rs`), so a switch is one closure:
 //!
 //! ```text
+//! // Judged over the pre-pop snapshot (SAL-13). The snapshot stays live
+//! // through the write: the verdict is `AltValid<'_, AltView<'_>>`, branded
+//! // to that view, and does not outlive it.
+//! let demoted: Vec<AltValid<'_, AltView<'_>>> = each block above the split;
 //! store.write(|batch| {
-//!     let demoted = read the tip's bytes, facts and witness   // before the pop
 //!     batch.pop()?;                                           // ×N to the split
-//!     batch.insert_alt_block(&demoted.id, &demoted.block)?;   // ×N
+//!     batch.insert_alt_block(demoted)?;                       // ×N (CEN-K7)
 //!     batch.connect(valid, facts, in_force)?;                 // ×M from the alt chain
 //!     batch.remove_alt_block(&promoted)?;                     // ×M
 //!     Ok(())
@@ -28,6 +31,10 @@
 //!
 //! A failure anywhere aborts everything; the store never shows a
 //! half-switched chain, and there is nothing to roll back (SAL-1, SAL-14).
+//! Whether a demoted block re-enters through the tier, as the sketch has it
+//! and as the C++ did (`handle_alternative_block` from the switch, CEN-K7),
+//! or through a constructor of its own is the switch's to rule
+//! (`DRS_E5_POOL_ALT_PRUNE.md` §5 a5); AL1 takes the verdict either way.
 //!
 //! # Not chain state, so not journaled
 //!
@@ -47,6 +54,7 @@
 //! with `assert!`.
 
 use redb::{ReadableTable, ReadableTableMetadata};
+use shekyl_chain_rules::AltValid;
 use shekyl_store_codec::{Canonical, Coded};
 use shekyl_types::BlockHash;
 
@@ -58,6 +66,7 @@ use super::alt_reads::{self, key, AltEntry, ALT_BLOCKS_CELL};
 use super::error::{AltCannot, EngineError, StoreError};
 use super::keyed::check_row;
 use super::write::WriteBatch;
+use super::AltView;
 
 impl WriteBatch<'_, '_> {
     /// Open the alt table for this batch's writes. Never while a connect's
@@ -74,26 +83,33 @@ impl WriteBatch<'_, '_> {
             .map_err(|e| EngineError::Table(e).into())
     }
 
-    /// **AL1.** Store `block` under `id`.
+    /// **AL1.** Store the block the cheap tier `admitted`, under its hash.
+    ///
+    /// The only way a row enters `alt_blocks`: the argument is the verdict
+    /// of [`alt_against`](shekyl_chain_rules::alt_against) over **this**
+    /// store's stitched [`AltView`]. The verdict is branded to the view
+    /// type that minted it, so a verdict from any other `AltChainView`
+    /// does not unify with this argument — the same belt `connect` wears
+    /// for `ChainValid`. The tier and the write stay two operations: the
+    /// token is minted on a snapshot, and the snapshot stays live through
+    /// the write (a later switch judges, then pops, then inserts). The row
+    /// is [`AltBlock::admitted`] of the verdict — the block, its witness,
+    /// and the height, cumulative difficulty and weight the tier derived.
+    /// The key is the verdict's hash (CEN-B6 over the block it stores), so
+    /// there is no caller-supplied identity for the store to verify
+    /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, `AltValid → AL1`).
     ///
     /// # Errors
     ///
-    /// [`AltCannot::IdentityMismatch`] if `id` is not the hash of the block
-    /// `block` carries — the key is the record's identity and the store
-    /// verifies the one it is given (the `chain_reads::block_body` belt
-    /// class; the C++ trusted the caller). [`AltCannot::AlreadyHeld`] if the
-    /// store already holds `id` — CEN-K3's belt, typed; the caller need not
-    /// (and inside a batch, cannot usefully) pre-read (SAL-4). Engine faults
-    /// otherwise.
-    pub fn insert_alt_block(&self, id: &BlockHash, block: &AltBlock) -> Result<(), StoreError> {
-        let actual = block.block().hash();
-        if actual != *id {
-            return Err(AltCannot::IdentityMismatch { key: *id, actual }.into());
-        }
-        let encoded = block.encoded();
+    /// [`AltCannot::AlreadyHeld`] if the store already holds the hash —
+    /// CEN-K3's belt, typed; the caller need not (and inside a batch, cannot
+    /// usefully) pre-read (SAL-4). Engine faults otherwise.
+    pub fn insert_alt_block(&self, admitted: AltValid<'_, AltView<'_>>) -> Result<(), StoreError> {
+        let id = admitted.hash();
+        let encoded = AltBlock::admitted(admitted).encoded();
         check_row::<Coded<AltBlock>>(ALT_BLOCKS_CELL, &encoded.as_encoded())?;
         let mut table = self.alt_table()?;
-        let key = key(id);
+        let key = key(&id);
         if table.get(key).map_err(EngineError::Storage)?.is_some() {
             return Err(AltCannot::AlreadyHeld.into());
         }

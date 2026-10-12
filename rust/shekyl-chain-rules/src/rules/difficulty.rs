@@ -51,7 +51,9 @@
 //!
 //! # The window is the view's
 //!
-//! `N + 1` point reads of [`ChainView::block_at`] per block. The C++ caches
+//! `N + 1` point reads of [`HeaderView::header_at`] per block — header
+//! facts only (timestamp and work), so an unexecuted alt chain answers them
+//! (DRS-E5 `E5-14`). The C++ caches
 //! the window on the `Blockchain` object ("ND: Speedup"); this crate does
 //! not, deliberately: a windowed read is a reopening with E2's replay
 //! number attached, not a pre-provision (rule 21; slice 2 §3).
@@ -66,9 +68,9 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault};
 use crate::rule_set::{DifficultyRule, RuleSet};
-use crate::rules::{recorded, Rule};
+use crate::rules::{recorded_header, Rule};
 use crate::verdict::{InvalidBlock, Locus, Verdict};
-use crate::view::ChainView;
+use crate::view::HeaderView;
 
 /// The difficulty a candidate must satisfy, **non-zero by construction**
 /// (CEN-D6). The inner type is [`NonZeroU128`]: a zero target cannot be
@@ -184,12 +186,12 @@ impl D4 {
     /// target for block **1** given a tip at 0; block 0 itself has no tip,
     /// the DAA is not consulted, and its target is
     /// [`Target::GENESIS_BLOCK`] — `1`, under every rule set.
-    pub(crate) fn target<'id, V: ChainView<'id>>(
-        view: &V,
+    pub(crate) fn target<'id, H: HeaderView<'id>>(
+        view: &H,
         connecting: BlockHeight,
         rule_set: &RuleSet,
         coverage: &mut RuleCoverage,
-    ) -> Result<Verdict<Target>, Fault<V::Fault>> {
+    ) -> Result<Verdict<Target>, Fault<H::Fault>> {
         coverage.insert(Self::ROW);
         if let Some(fixed) = D7::fixed_target(rule_set, connecting, coverage) {
             return Ok(Ok(D6::record(fixed, coverage)));
@@ -224,10 +226,10 @@ impl D4 {
     /// it). Cumulative difficulty is checked **strictly increasing** as it
     /// is read (SI-10 observed from this side: equal adjacent work is as
     /// corrupt as a decrease — every target is at least one).
-    fn window<'id, V: ChainView<'id>>(
-        view: &V,
+    fn window<'id, H: HeaderView<'id>>(
+        view: &H,
         chain_height: BlockHeight,
-    ) -> Result<Window, Fault<V::Fault>> {
+    ) -> Result<Window, Fault<H::Fault>> {
         let n = u64::try_from(N_USIZE).expect("N fits u64");
         let mut window = Window::default();
         if chain_height.to_raw() < n {
@@ -237,17 +239,17 @@ impl D4 {
         let mut previous: Option<CumulativeDifficulty> = None;
         for h in first..=chain_height.to_raw() {
             let height = BlockHeight::from_raw(h);
-            let block = recorded(view, height)?;
-            if previous.is_some_and(|p| block.cumulative_difficulty <= p) {
+            let record = recorded_header(view, height)?;
+            if previous.is_some_and(|p| record.cumulative_difficulty <= p) {
                 return Err(Fault::Corrupt(Corrupt::CumulativeDifficultyNotMonotone {
                     at: height,
                 }));
             }
-            previous = Some(block.cumulative_difficulty);
+            previous = Some(record.cumulative_difficulty);
             window
                 .timestamps
-                .push(Timestamp::from_raw(block.header.timestamp));
-            window.work.push(block.cumulative_difficulty);
+                .push(Timestamp::from_raw(record.header.timestamp));
+            window.work.push(record.cumulative_difficulty);
         }
         Ok(window)
     }
@@ -256,14 +258,14 @@ impl D4 {
     /// with `target`: the parent's plus the target (`ZERO` plus the target
     /// at genesis). What the store persists as `block_info.cumulative_
     /// difficulty` (Q5: the validator computes, the store records).
-    pub(crate) fn cumulative_after<'id, V: ChainView<'id>>(
-        view: &V,
+    pub(crate) fn cumulative_after<'id, H: HeaderView<'id>>(
+        view: &H,
         connecting: BlockHeight,
         target: Target,
-    ) -> Result<CumulativeDifficulty, Fault<V::Fault>> {
+    ) -> Result<CumulativeDifficulty, Fault<H::Fault>> {
         let parent = match connecting.to_raw().checked_sub(1) {
             None => CumulativeDifficulty::ZERO,
-            Some(h) => recorded(view, BlockHeight::from_raw(h))?.cumulative_difficulty,
+            Some(h) => recorded_header(view, BlockHeight::from_raw(h))?.cumulative_difficulty,
         };
         parent
             .to_raw()
