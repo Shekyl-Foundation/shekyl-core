@@ -18,7 +18,6 @@ The leaf-era archival data-scope schema (sets A/B/C, "B + C") survives outside i
 `#[serde(default)]` still lets an omitted daemon field become its zero value.
 `CEN-L8`'s settlement clause has no production caller; census home is already the slash pass.
 `SO-D9` — `ERR_EPOCH_MISMATCH` on the serve-credit admission path is a tautology; RULED (i) 2026-09-13, implementation owed.
-Serve-credit inclusion incentive and archival weight pricing — the fee-and-weight round Q9 names but nothing scheduled.
 Connect-path regression for the hash-gated FCMP++ proof-skip (`CEN-M8` fix wiring).
 `get_archival_emission_claim_source` walks the entire serve-credit table per unauthenticated RPC
 `shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.
