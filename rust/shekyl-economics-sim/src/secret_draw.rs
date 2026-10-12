@@ -36,7 +36,8 @@
 use serde::Serialize;
 
 use shekyl_archival_retention::{
-    CHALLENGE_RESPONSE_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS,
+    draw_count, draw_horizon, CHALLENGE_RESPONSE_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_types::SHARD_LENGTH;
 
@@ -229,6 +230,27 @@ pub fn block_target(pairs: u32, shortfall: u64, in_flight: u64, h: u64) -> (f64,
 /// epoch.
 #[must_use]
 pub fn run_epoch(pairs: u32, dropout_permille: u32, in_flight: InFlight, seed: u64) -> DrawRun {
+    run_epoch_under(CountRule::Sim, pairs, dropout_permille, in_flight, seed)
+}
+
+/// Which count rule an epoch runs under. Both exist for one commit: the
+/// equivalence test runs them on the same seeds before the sim's own rule
+/// is deleted (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, Appendix A2, N1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CountRule {
+    /// [`horizon`], [`block_target`] and an `f64` carry.
+    Sim,
+    /// `draw_horizon` and `draw_count`, with their 32-bit carry.
+    Production,
+}
+
+fn run_epoch_under(
+    rule: CountRule,
+    pairs: u32,
+    dropout_permille: u32,
+    in_flight: InFlight,
+    seed: u64,
+) -> DrawRun {
     assert!(pairs > 0, "a settlement epoch needs at least one pair");
     assert!(dropout_permille <= 1000, "dropout is a share of blocks");
     let seb = SETTLEMENT_EPOCH_BLOCKS;
@@ -246,6 +268,7 @@ pub fn run_epoch(pairs: u32, dropout_permille: u32, in_flight: InFlight, seed: u
     let mut unrevealed_recent: u64 = 0;
     let mut all_recent: u64 = 0;
     let mut carry = 0.0f64;
+    let mut carry32 = 0u32;
     let (mut drawn, mut issued, mut max_per_block, mut capped_blocks) = (0u64, 0u64, 0u64, 0u64);
 
     for h in 0..seb + w2 + 1 {
@@ -283,12 +306,30 @@ pub fn run_epoch(pairs: u32, dropout_permille: u32, in_flight: InFlight, seed: u
             InFlight::Unrevealed => unrevealed_recent,
             InFlight::AllRecent => all_recent,
         };
-        let (target, capped) = block_target(pairs, state.shortfall, pending, h);
-        capped_blocks += u64::from(capped);
-        carry += target;
-        let count = carry.floor();
-        carry -= count;
-        let count = count as u64;
+        let count = match rule {
+            CountRule::Sim => {
+                let (target, capped) = block_target(pairs, state.shortfall, pending, h);
+                capped_blocks += u64::from(capped);
+                carry += target;
+                let count = carry.floor();
+                carry -= count;
+                count as u64
+            }
+            CountRule::Production => {
+                let net = state.shortfall.saturating_sub(pending);
+                let horizon = draw_horizon(h, seb, w2);
+                let priced = |shortfall, carry| {
+                    draw_count(u64::from(pairs), shortfall, horizon, seb, carry)
+                        .expect("the epoch and the horizon are positive")
+                };
+                // The cap binds where no larger shortfall would raise the
+                // target: production's own answer, with no cap restated.
+                capped_blocks += u64::from(priced(net, 0) == priced(u64::MAX, 0));
+                let (count, next) = priced(net, carry32);
+                carry32 = next;
+                count
+            }
+        };
 
         let block_draws: Vec<u32> = (0..count).map(|_| state.draw(&mut rng)).collect();
         drawn += count;
@@ -780,6 +821,49 @@ mod tests {
         assert_eq!(r.issued_hist.iter().sum::<u32>(), D);
         assert!(r.issued <= r.drawn);
         assert!(r.issued >= r.unpaid_reads + 3 * u64::from(r.issued_hist[3]));
+    }
+
+    /// The sim's count rule against production's, on the same seeds. The
+    /// two share every random draw, so one block that counted differently
+    /// would send the rest of the epoch down a different path.
+    #[test]
+    fn the_sim_count_rule_and_productions_run_the_same_epoch() {
+        let mut compared = 0;
+        let mut cap_flag_extra = 0;
+        for pairs in [1, 7, 500, D, 4 * D] {
+            for dropout in [0, 100, 500, 1000] {
+                for in_flight in [InFlight::Unrevealed, InFlight::AllRecent] {
+                    for seed in 1..=3 {
+                        let sim = run_epoch_under(CountRule::Sim, pairs, dropout, in_flight, seed);
+                        let production =
+                            run_epoch_under(CountRule::Production, pairs, dropout, in_flight, seed);
+                        // Every draw and every issued count: the two rules
+                        // counted each block alike.
+                        assert_eq!(
+                            (sim.drawn, sim.issued, sim.issued_hist, sim.max_per_block),
+                            (
+                                production.drawn,
+                                production.issued,
+                                production.issued_hist,
+                                production.max_per_block
+                            ),
+                            "D={pairs} dropout={dropout} {in_flight:?} seed={seed}"
+                        );
+                        assert_eq!(sim.unpaid_reads, production.unpaid_reads);
+                        // The cap flag is a report column, not an input. The
+                        // sim's is `wanted > cap`; production's rule is asked
+                        // whether a larger shortfall would raise the target,
+                        // which also flags a target exactly at the cap.
+                        assert!(production.capped_blocks >= sim.capped_blocks);
+                        cap_flag_extra += production.capped_blocks - sim.capped_blocks;
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(compared, 120);
+        // 15 blocks of 1.2 million sit exactly at the cap.
+        assert_eq!(cap_flag_extra, 15);
     }
 
     #[test]
