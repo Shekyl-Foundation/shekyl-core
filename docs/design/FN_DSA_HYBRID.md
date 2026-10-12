@@ -453,8 +453,9 @@ and are held since:
 
 The signatures in them are real: a key derived from a fixed seed, the
 ML-DSA half signed from a fixed seed, verified under the key before
-anything is compared. No fixture changed across the generalization, and the
-two test files changed only in the signer's `impl` headers and one cast.
+anything is compared. No fixture changed across the generalization. The
+fetch side's pin test did not change at all; the serve side's changed in an
+import, its signer's two `impl` headers and one cast.
 Every existing test of the two crates and of their consumers passes with
 its expectations as they were; what changed in them is type plumbing.
 
