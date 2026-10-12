@@ -33,6 +33,24 @@
 //! Dropout, the filing lag, the inclusion latency, the reorg loss and each
 //! block's seed and hash have no production owner: a declared divergence
 //! (§4 of the same document).
+//!
+//! Three limits of the model, stated where the numbers are made (§5.19):
+//!
+//! - **The reorg term is independent per bundle.** Each bundle included in
+//!   the last `R` blocks of its window is lost with probability `p_reorg`,
+//!   on its own roll. A real reorg removes a run of consecutive blocks and
+//!   loses every bundle in that run together. That correlated loss is not
+//!   modelled. And `p_reorg` having no effect at `M = 30` follows from the
+//!   parameters: with `R = 3` and a latency of `1..=3`, the latest honest
+//!   inclusion is `h + 473` and the zone starts at `h + 498`. A deeper
+//!   reorg or a longer latency reaches it.
+//! - **The section budget is not modelled.** A filed bundle is included
+//!   after its latency whatever else is waiting. Inclusion is never refused
+//!   for lack of room, so a backlog near the budget is unexamined.
+//! - **Common random numbers.** The same seeds drive dropout, lag, latency
+//!   and the loss roll in every cell. That makes differences between cells
+//!   sharp. The cells are therefore not independent samples, and they all
+//!   share one realised dropout.
 
 use serde::Serialize;
 
@@ -159,7 +177,9 @@ impl Fate {
 }
 
 /// One block's rolls. All four are taken for every block, used or not, so
-/// two cells that differ in one parameter read the same rolls.
+/// every cell runs on common random numbers: two cells that differ in one
+/// parameter read the same rolls, and differ by that parameter alone. The
+/// price is that cells are not independent samples.
 #[derive(Debug, Clone, Copy)]
 pub struct Rolls {
     /// Uniform on `0..1000`. The producer drops out below the dropout.
@@ -781,7 +801,7 @@ fn render_header(out: &mut impl std::fmt::Write) -> std::fmt::Result {
         "iss/pr",
         "draws/blk",
         "max",
-        "capped",
+        "cap sum",
         "obs",
         "epochs",
         "adm %",
@@ -907,12 +927,23 @@ pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::f
     writeln!(
         out,
         "columns: M = margin in blocks; lat = inclusion latency, uniform on the range; R = reorg \
-         depth; p_re = p_reorg; drn/pr, iss/pr = draws per pair made, issued; capped = blocks \
-         where the cap bound (D*H + SEB*u > 9*D*H, production's draw_target), over all seeds; obs = 1 - short; epochs = epochs to m misses for a pair \
+         depth; p_re = p_reorg; drn/pr, iss/pr = draws per pair made, issued; cap sum = blocks \
+         where the cap bound (D*H + SEB*u > 9*D*H, production's draw_target), summed over the \
+         cell's {SEEDS} seeds: divide by {SEEDS} for blocks per epoch; obs = 1 - short; epochs = epochs to m misses for a pair \
          that never serves; adm/never/late/lost = where the blocks' bundles went; att/dr, max, \
          last = select_draw attempts per draw, the most, and draws that reached attempt \
          {DRAW_ATTEMPTS}; f64blk, f64dr = blocks where ESR-11's f64 rule gives another count on \
          the same inputs (all seeds), and the largest difference in an epoch's total draws"
+    )?;
+    writeln!(
+        out,
+        "model: the cells run on common random numbers (the same {SEEDS} seeds drive dropout, \
+         lag, latency and loss in every cell), so they are not independent samples and share one \
+         realised dropout; p_reorg loses each bundle on its own roll, where a real reorg loses \
+         every bundle in a run of blocks together; p_reorg cannot act at M = {HONEST_MARGIN_BLOCKS} \
+         only because R = {DEFAULT_REORG_DEPTH} and the latency is at most {} blocks; the section \
+         budget is not modelled",
+        DEFAULT_LATENCY.1
     )?;
     out.write_str(&window_lines())?;
     let verdict = match bar_holds(&report.cells) {
@@ -1533,6 +1564,25 @@ mod tests {
         assert!(rows[2].contains("10%  30  2..=5  7  0.10 |"), "{}", rows[2]);
         for row in &rows {
             assert_eq!(out.matches(row.as_str()).count(), 1, "{row}");
+        }
+        // The cap column names its unit, in the label and in the legend.
+        let labels = out.lines().nth(1).expect("the column labels");
+        assert!(labels.contains(" cap sum |"), "{labels}");
+        assert!(!labels.contains("capped"), "{labels}");
+        assert!(out.contains(&format!(
+            "summed over the cell's {SEEDS} seeds: divide by {SEEDS} for blocks per epoch"
+        )));
+        // The cell's figure is the sum of its runs', and that is what the
+        // row prints.
+        let summed: u64 = report.cells[1].runs.iter().map(|r| r.blocks_at_cap).sum();
+        assert_eq!(report.cells[1].blocks_at_cap, summed);
+        // The model's limits are on the output, not only in the document.
+        for needle in [
+            "common random numbers",
+            "every bundle in a run of blocks together",
+            "the section budget is not modelled",
+        ] {
+            assert!(out.contains(needle), "missing {needle:?}");
         }
         // The first line says only what holds for every row.
         let first = out.lines().next().expect("a header");
