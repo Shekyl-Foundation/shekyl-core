@@ -1247,15 +1247,6 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  uint64_t node_server<t_payload_net_handler>::get_public_connections_count()
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return public_zone->second.m_net_server.get_config_object().get_connections_count();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::deinit()
   {
     kill();
@@ -2205,15 +2196,6 @@ namespace nodetool
       }
     }
     return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_public_outgoing_connections_count()
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return get_outgoing_connections_count(public_zone->first);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>

@@ -139,7 +139,10 @@ def collect_node_metrics(daemon: DaemonRPC) -> NodeMetrics:
         info = daemon.get_info()
         m.height = info.get("height", 0)
         m.difficulty = info.get("difficulty", 0)
-        m.tx_pool_size = info.get("tx_pool_size", 0)
+        # The entries the node has broadcast: one quantity whoever asks, so
+        # it compares across nodes. Required: a reply without it is not a
+        # get_info reply, and reading that as an empty pool would hide it.
+        m.tx_pool_size = info["tx_pool_size"]
 
         tree = daemon.get_curve_tree_info()
         m.curve_tree_root = tree.get("root", "")

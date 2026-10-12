@@ -1225,6 +1225,9 @@ fn info_reply(height: u64) -> String {
             white_peerlist_size: 10,
             grey_peerlist_size: 20,
         }),
+        host: Hidden::Shown(shekyl_rpc_types::InfoHost {
+            tx_pool_unbroadcast_count: 0,
+        }),
         restricted: false,
     })
     .expect("a get_info reply serializes")
@@ -1981,12 +1984,19 @@ fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
     );
 }
 
-/// A restricted daemon discloses no start time, and the uptime clause is
-/// omitted rather than reported as zero.
+/// **A daemon that withholds Status is not a daemon with no connections
+/// and no uptime.** A restricted listener's reply carries no Status part.
+/// The line says the connection counts were not disclosed, where it would
+/// have printed `0(out)+0(in)`, and omits the uptime clause.
 #[test]
-fn a_daemon_that_hides_its_start_time_gets_no_uptime_clause() {
+fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
     let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-    info["start_time"] = serde_json::json!(0);
+    let members = info.as_object_mut().unwrap();
+    for key in STATUS_PART_KEYS {
+        members
+            .remove(*key)
+            .unwrap_or_else(|| panic!("`{key}` is a Status member of the fixture"));
+    }
     let address = route_server(vec![
         ("/get_info", info.to_string()),
         ("/mining_status", mining_reply(false, 0, false)),
@@ -1994,7 +2004,30 @@ fn a_daemon_that_hides_its_start_time_gets_no_uptime_clause() {
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("not mining"), "{out}");
-    assert!(!out.contains("uptime"), "{out}");
+    // The disclosure clause is the end of the line: the uptime clause is
+    // what would follow it. `trim_end` keeps that check from depending on
+    // whether the harness keeps a trailing newline.
+    assert!(
+        out.trim_end().ends_with("connections not disclosed"),
+        "no counts and no uptime clause: {out}"
+    );
+    assert!(!out.contains("(out)") && !out.contains("uptime"), "{out}");
+}
+
+/// A daemon that does show Status and reports no connections prints the
+/// zeros: that is a count, and it gets its uptime.
+#[test]
+fn a_shown_zero_connection_count_prints_as_zero() {
+    let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+    info["outgoing_connections_count"] = serde_json::json!(0);
+    info["incoming_connections_count"] = serde_json::json!(0);
+    let address = route_server(vec![
+        ("/get_info", info.to_string()),
+        ("/mining_status", mining_reply(false, 0, false)),
+    ]);
+    let (code, out) = run(&["status"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("0(out)+0(in) connections, uptime "), "{out}");
 }
 
 /// A remote daemon that will not serve `/mining_status` still gets a
@@ -2456,33 +2489,43 @@ const STATUS_PART_KEYS: &[&str] = &[
     "rpc_connections_count",
 ];
 
-/// A daemon that does not disclose its version — an empty string from a
-/// restricted listener today, the whole Status part absent later — is a
-/// failure that says so, not an empty line.
+/// A daemon that does not disclose its version withholds the Status part.
+/// That is a failure that says so, not an empty line.
 #[test]
 fn version_says_when_the_daemon_does_not_disclose_it() {
-    let full: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-
-    let mut empty = full.clone();
-    empty["version"] = serde_json::json!("");
-
-    let mut withheld = full;
+    let mut withheld: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
     let members = withheld.as_object_mut().unwrap();
     for key in STATUS_PART_KEYS {
         members
             .remove(*key)
             .unwrap_or_else(|| panic!("`{key}` is a Status member of the fixture"));
     }
+    let address = route_server(vec![
+        ("json_rpc:get_version", agreeing_get_version()),
+        ("/get_info", withheld.to_string()),
+    ]);
+    let (code, out) = run(&["version"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert_eq!(out, "The daemon software version is not available.");
+}
 
-    for reply in [empty, withheld] {
-        let address = route_server(vec![
-            ("json_rpc:get_version", agreeing_get_version()),
-            ("/get_info", reply.to_string()),
-        ]);
-        let (code, out) = run(&["version"], Some(&address));
-        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-        assert_eq!(out, "The daemon software version is not available.");
-    }
+/// **An empty version is not "undisclosed"** (RK-D23). A reply that shows
+/// Status with an empty `version` is contract drift: it is refused as a
+/// malformed reply that says what is wrong with it. Until 3.48 the empty
+/// string was the restricted stand-in, and this command read it as
+/// "not available".
+#[test]
+fn version_refuses_a_shown_status_with_an_empty_version() {
+    let mut empty: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+    empty["version"] = serde_json::json!("");
+    let address = route_server(vec![
+        ("json_rpc:get_version", agreeing_get_version()),
+        ("/get_info", empty.to_string()),
+    ]);
+    let (code, out) = run(&["version"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert_ne!(out, "The daemon software version is not available.");
+    assert!(out.contains("empty `version`"), "{out}");
 }
 
 /// `print_pool_stats`, on the remote arm, with both legs: the pool's

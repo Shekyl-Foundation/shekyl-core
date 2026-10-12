@@ -38,7 +38,7 @@ use std::time::Instant;
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    form, seed_height, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt,
+    form, seed_height, validate, AtHeight, Candidate, ChainValid, Fault, FormAttempt, HeaderView,
     RuleSet, Substrate, Trust,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
@@ -102,8 +102,8 @@ fn judge<'b, 'id>(
     };
     let seed = match seed_height(connecting) {
         None => BlockHash::NULL,
-        Some(at) => match view.block_at(at)? {
-            AtHeight::Recorded(block) => block.hash,
+        Some(at) => match view.header_at(at)? {
+            AtHeight::Recorded(record) => record.hash,
             AtHeight::AboveTip => panic!("the seed height is below the tip"),
         },
     };

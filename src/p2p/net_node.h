@@ -501,8 +501,6 @@ namespace nodetool
     bool log_connections();
 
     // These functions only return information for the "public" zone
-    virtual uint64_t get_public_connections_count();
-    size_t get_public_outgoing_connections_count();
     size_t get_public_white_peers_count();
     size_t get_public_gray_peers_count();
     void get_public_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);

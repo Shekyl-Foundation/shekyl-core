@@ -501,6 +501,7 @@ mod tests {
                 white_peerlist_size: 0,
                 grey_peerlist_size: 0,
             }),
+            host: Hidden::Withheld,
             restricted: false,
         })
         .expect("a get_info reply serializes")

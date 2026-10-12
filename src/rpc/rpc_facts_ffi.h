@@ -513,11 +513,18 @@ typedef struct shekyl_rpc_info_chain_facts {
 
 int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out);
 
-// The pool's population. `include_unrelayed` = 0 counts the broadcast set,
-// which is what every caller may be told; non-zero adds the entries this node
-// has not broadcast, which is host-only data (RPC_CHANNEL.md §6.1, RT-O9.3)
-// and is asked for only on behalf of a caller who may see it.
-int shekyl_rpc_info_pool_count(core_rpc_handle* h, uint8_t include_unrelayed, uint64_t* out);
+// The pool's population, as two counts of one pool state.
+//
+// `*out_broadcast` is the entries this node has broadcast: what every caller
+// may be told. With `with_unbroadcast` non-zero, `*out_unbroadcast` is the
+// entries it holds and has not yet broadcast, which is host-only data
+// (RPC_CHANNEL.md §6.1, RT-O9.3) and is asked for only on behalf of a caller
+// who may see it. Both are then counted under one hold of the pool's lock, so
+// they describe one pool; a pool whose broadcast set is larger than the whole
+// is ERR_INCONSISTENT. With `with_unbroadcast` zero the second count is not
+// made and `out_unbroadcast` is not written (it may be null).
+int shekyl_rpc_info_pool_counts(core_rpc_handle* h, uint8_t with_unbroadcast,
+    uint64_t* out_broadcast, uint64_t* out_unbroadcast);
 
 // Status facts, read only for a caller who is shown Status. The store's
 // on-disk size is NOT here: a restricted reply still carries it, rounded, so
@@ -526,8 +533,6 @@ typedef struct shekyl_rpc_info_status_facts {
     uint64_t start_time;
     uint64_t free_space;                   // of the data directory's volume
     uint64_t alt_blocks_count;
-    uint64_t public_connections;           // the clearnet zone's sessions
-    uint64_t public_outgoing_connections;  // of which outbound
 } shekyl_rpc_info_status_facts;
 
 // The build's version string (SHEKYL_VERSION_FULL) is written to
@@ -649,17 +654,16 @@ struct info_chain_scalars
 int info_chain(cryptonote::Blockchain& bc, const info_chain_scalars& scalars,
     shekyl_rpc_info_chain_facts* out) noexcept;
 
-int info_pool_count(const cryptonote::tx_memory_pool& pool, uint8_t include_unrelayed,
-    uint64_t* out) noexcept;
+int info_pool_counts(const cryptonote::tx_memory_pool& pool, uint8_t with_unbroadcast,
+    uint64_t* out_broadcast, uint64_t* out_unbroadcast) noexcept;
 
 // `get_info`'s Status facts. The alt-block count is the one chain-store read;
-// the rest are `core` and p2p scalars the adapter snapshots.
+// the rest are `core` scalars the adapter snapshots. The connection counts
+// are not here: Rust reads them from the seam board, with `has_peers`.
 struct info_status_scalars
 {
   uint64_t start_time;
   uint64_t free_space;
-  uint64_t public_connections;
-  uint64_t public_outgoing_connections;
 };
 
 int info_status(cryptonote::Blockchain& bc, const info_status_scalars& scalars,
