@@ -59,6 +59,21 @@
 //! consumes what admission writes. The rule types that succeed CEN-B4
 //! land in `rules/` at the cutover and call into here.
 //!
+//! # Precondition on the rule set: `W₂ + L ≤` anchor depth
+//!
+//! Step 8 refuses a record whose `anchor_height` is not below `h`
+//! (CEN-J36, `SCS-P32`). An honest read satisfies that only because the
+//! response window plus the anchor lag does not exceed the anchor depth,
+//! and `W₂` is rule-set data. The relation is
+//! [`RuleSet::anchor_covers_response_window`], and it is held where rule
+//! sets are made, not here: on the production constants where they are
+//! defined (`shekyl-archival-retention`, `pass_anchor.rs`), on every
+//! issued set at compile time, and on a Fakechain set in
+//! [`RuleSet::fakechain`]. So every `rule_set` this function can be
+//! handed satisfies it. [`verify_bundle`] does not re-check it: under a
+//! set that broke it the rule would still be the rule, and honest
+//! producers would be the ones refused.
+//!
 //! # Three answers, three positions
 //!
 //! As everywhere in this crate, a refusal is not a fault

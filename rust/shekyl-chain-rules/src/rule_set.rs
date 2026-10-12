@@ -27,6 +27,7 @@
 use core::fmt;
 
 use shekyl_address::Network;
+use shekyl_archival_retention::anchor_depth_covers_response_window;
 pub use shekyl_archival_retention::{SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -216,6 +217,17 @@ impl FakechainSchedule {
         self.reorg_cap
     }
 
+    /// Whether an honest challenge read under this pair's epoch is anchored
+    /// below the block it answers for: `W₂ + L ≤` anchor depth
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` `SCS-P32`;
+    /// `shekyl_archival_retention::anchor_depth_covers_response_window`).
+    /// [`RuleSet::fakechain`] asserts it, so no rule set is built on a pair
+    /// for which it is false.
+    #[must_use]
+    pub const fn anchor_covers_response_window(self) -> bool {
+        anchor_depth_covers_response_window(self.settlement)
+    }
+
     /// Whether this is [`PRODUCTION`](Self::PRODUCTION) — the pair no lever
     /// was pulled to reach, so a public network may carry it (`const`,
     /// where `==` cannot yet be).
@@ -304,6 +316,19 @@ impl RuleSet {
         fixed: Option<core::num::NonZeroU128>,
         schedule: FakechainSchedule,
     ) -> Self {
+        // `SCS-P32`, at arm: the relation is rule-set data, so the one
+        // constructor of a non-issued set holds its schedule to it, as
+        // `ISSUED` is held to it at compile time below. A lever that
+        // lengthens the epoch until `W₂ + L` passes the anchor depth is
+        // refused here, loudly, and not at a bundle refusal on a running
+        // chain (rule 71: nettype selects data; the data satisfies the
+        // same invariant).
+        assert!(
+            schedule.anchor_covers_response_window(),
+            "shekyl-chain-rules: this Fakechain schedule's response window plus the anchor lag \
+             exceeds the pass-anchor depth (W2 + L > depth, SCS-P32): an honest challenge read \
+             would be refused at bundle admission. Shorten the settlement epoch."
+        );
         let difficulty = match fixed {
             Some(fixed) => DifficultyRule::Fixed(Target::fixed(fixed)),
             None => DifficultyRule::Lwma1,
@@ -343,6 +368,21 @@ impl RuleSet {
     #[must_use]
     pub const fn reorg_cap(&self) -> BlockCount {
         self.reorg_cap
+    }
+
+    /// Whether an honest challenge read under this rule set is anchored
+    /// below the block it answers for: `W₂ + L ≤` anchor depth, with `W₂`
+    /// this set's own (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1, `SCS-P32`).
+    ///
+    /// **True of every rule set this crate can build**: of each issued set
+    /// by the compile-time assertion beside [`Self::for_id`]'s table, and
+    /// of a Fakechain set by the assertion in [`Self::fakechain`]. It is
+    /// the precondition under which the bundle rule's `anchor_height < h`
+    /// (CEN-J36) refuses no honest record; the rule itself does not read
+    /// it.
+    #[must_use]
+    pub const fn anchor_covers_response_window(&self) -> bool {
+        anchor_depth_covers_response_window(self.settlement_schedule)
     }
 
     /// The rule set `id` names; `None` for an id no schedule has issued.
@@ -544,6 +584,23 @@ const fn well_formed(schedule: &RuleSchedule) -> bool {
     }
     true
 }
+
+// Every issued rule set anchors an honest challenge read below its block
+// (`W₂ + L ≤` anchor depth, `SCS-P32`), at compile time. `GENESIS` is the
+// production triple, also asserted where the anchor's constants are
+// (`pass_anchor.rs`); this is the same relation on every set a schedule
+// may name, so a second issued set with a longer epoch cannot land
+// without it.
+const _: () = {
+    let mut i = 0;
+    while i < RuleSet::ISSUED.len() {
+        assert!(
+            RuleSet::ISSUED[i].anchor_covers_response_window(),
+            "an issued rule set's W2 + L exceeds the pass-anchor depth (SCS-P32)"
+        );
+        i += 1;
+    }
+};
 
 // Every schedule `for_network` can return is well formed, at compile time.
 const _: () = {

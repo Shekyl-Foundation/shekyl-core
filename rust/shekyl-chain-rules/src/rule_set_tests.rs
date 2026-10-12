@@ -349,6 +349,110 @@ fn a_fakechain_schedule_refuses_a_cap_not_inside_its_epoch() {
     );
 }
 
+/// `SCS-P32`'s rule-set relation, `W₂ + L ≤` anchor depth, at its exact
+/// boundary and one past it, on hand-built schedules. With `L` = 4 and a
+/// depth of 720 the widest window that fits is 716 blocks, and `W₂` is
+/// `SEB / 20`: an epoch of 14,320 to 14,339 blocks sits exactly on the
+/// boundary and 14,340 is the first that violates it.
+///
+/// Bites against `<` for `≤` (the boundary rows turn false), against a
+/// relation that ignores `L` (14,340 through 14,419 turn true), and
+/// against a `None` window read as a violation. Does not cover whether the
+/// persona's gate and the requester agree on `L`; that is `SF-D8`'s.
+#[test]
+fn the_anchor_depth_covers_the_response_window_up_to_its_boundary() {
+    use shekyl_archival_retention::{
+        anchor_depth_covers_response_window, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
+    };
+    assert_eq!(
+        PASS_ANCHOR_DEPTH_BLOCKS.to_raw(),
+        720,
+        "the fixture's premise"
+    );
+    assert_eq!(PASS_ANCHOR_LAG_BLOCKS.to_raw(), 4, "the fixture's premise");
+    let schedule =
+        |seb: u64| SettlementSchedule::new(SettlementEpochBlocks::new(seb).expect("non-zero"));
+    let window = |seb: u64| {
+        schedule(seb)
+            .challenge_response_blocks()
+            .map(core::num::NonZeroU64::get)
+    };
+
+    // The boundary: W₂ = 716, and 716 + 4 = 720.
+    for seb in [14_320u64, 14_339] {
+        assert_eq!(window(seb), Some(716));
+        assert!(
+            anchor_depth_covers_response_window(schedule(seb)),
+            "SEB {seb}"
+        );
+        let pair = FakechainSchedule::new(
+            SettlementEpochBlocks::new(seb).expect("non-zero"),
+            BlockCount::from_raw(64),
+        )
+        .expect("0 < cap < SEB");
+        assert!(pair.anchor_covers_response_window(), "SEB {seb}");
+        assert!(RuleSet::fakechain(None, pair).anchor_covers_response_window());
+    }
+    // One past it: W₂ = 717.
+    for seb in [14_340u64, 14_419, 20_000, 1_000_000, u64::MAX] {
+        assert!(window(seb) >= Some(717));
+        assert!(
+            !anchor_depth_covers_response_window(schedule(seb)),
+            "SEB {seb}"
+        );
+        let pair = FakechainSchedule::new(
+            SettlementEpochBlocks::new(seb).expect("non-zero"),
+            BlockCount::from_raw(64),
+        )
+        .expect("0 < cap < SEB");
+        assert!(!pair.anchor_covers_response_window(), "SEB {seb}");
+    }
+    // An epoch too short to have a window has nothing to cover.
+    assert_eq!(window(19), None);
+    assert!(anchor_depth_covers_response_window(schedule(19)));
+}
+
+/// Every rule set the crate builds satisfies the relation: each issued set,
+/// the set every network's schedule names at any height, and the Fakechain
+/// sets on the epochs this workspace's fixtures use. Bites if the
+/// compile-time assertion over `ISSUED` is dropped and a set with a longer
+/// epoch is issued, or if a fixture epoch is lengthened past the boundary.
+#[test]
+fn every_rule_set_the_crate_builds_anchors_below_its_block() {
+    assert!(RuleSet::GENESIS.anchor_covers_response_window());
+    assert!(FakechainSchedule::PRODUCTION.anchor_covers_response_window());
+    for set in RuleSet::ISSUED {
+        assert!(set.anchor_covers_response_window(), "{:?}", set.id());
+    }
+    for network in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
+        let schedule = RuleSchedule::for_network(network);
+        for height in [0u64, 1, 10_000, u64::MAX] {
+            let id = schedule.rules_at(BlockHeight::from_raw(height));
+            let set = RuleSet::for_id(id).expect("a schedule names issued sets");
+            assert!(
+                set.anchor_covers_response_window(),
+                "{network:?} at {height}"
+            );
+        }
+    }
+    // The epochs fixtures across the workspace lever to (2 through 512,
+    // and the production 10,000).
+    for seb in [2u64, 10, 20, 50, 100, 200, 512, 2_000, 10_000] {
+        let set = RuleSet::fakechain(None, pair(seb, 1));
+        assert!(set.anchor_covers_response_window(), "SEB {seb}");
+    }
+}
+
+/// The one constructor of a non-issued rule set refuses a schedule that
+/// violates the relation, loudly. Bites if the assertion in `fakechain` is
+/// removed: a regtest levered to a long epoch would then run a rule set
+/// under which honest records are refused at CEN-J36.
+#[test]
+#[should_panic(expected = "W2 + L > depth, SCS-P32")]
+fn a_fakechain_set_on_a_schedule_that_outruns_the_anchor_is_refused() {
+    let _ = RuleSet::fakechain(None, pair(14_340, 64));
+}
+
 /// A valid `(SEB, cap)` pair for the tests above.
 fn pair(seb: u64, cap: u64) -> FakechainSchedule {
     FakechainSchedule::new(
