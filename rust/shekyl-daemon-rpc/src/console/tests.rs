@@ -2001,8 +2001,11 @@ fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("not mining"), "{out}");
+    // The disclosure clause is the end of the line: the uptime clause is
+    // what would follow it. `trim_end` keeps that check from depending on
+    // whether the harness keeps a trailing newline.
     assert!(
-        out.ends_with("connections not disclosed"),
+        out.trim_end().ends_with("connections not disclosed"),
         "no counts and no uptime clause: {out}"
     );
     assert!(!out.contains("(out)") && !out.contains("uptime"), "{out}");
