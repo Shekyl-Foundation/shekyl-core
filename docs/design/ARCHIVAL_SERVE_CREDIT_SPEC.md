@@ -1278,6 +1278,17 @@ body store (§7.5) and is re-admissible on the new chain if `h` survives and
 (§9.1). Past its window it is lost, and `h` settles as an unrevealed
 block: NonObservation, never misses.
 
+**A pop does not strand the evidence.** DRS-E5 states that as a
+requirement on the pop and left the mechanism to this slice
+(`DRS_E5_POOL_ALT_PRUNE.md` §3, CEN-K10). The mechanism is the bundle
+queue's re-check after a reorg, and the holding store is the body store:
+a main-chain block not yet past `D_max` holds its bundles' bodies, so when
+it is popped the bodies are still there and their bundles go back to the
+queue (§7.5, `SCS-P27`, `SCS-P28`). Every node that connected the popped
+block holds them; a node that never saw that block gets the bundle as it
+gets any other, from the queue's relay or as a body fetched for the block
+that next references it. Nothing is re-filed and nothing is re-signed.
+
 **Pruning.** Both tables for `E` are dropped after the settlement of `E`
 is final.
 
@@ -1649,14 +1660,14 @@ change that carries this specification fixes it; the rest are open.
 | `SCS-F9` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.6.1 and §7.6.2 distinguished "unpruned validators" from "a pruned node". No such split exists: every daemon prunes (§8). **Fixed:** §7.6.1 is replaced by a pointer here and §7.6.2 says every node verifies at connect |
 | `SCS-F10` | `rust/shekyl-wire/src/transaction.rs:202` calls the pruned-record ceiling a twin of a `cryptonote_config.h` constant. `src/cryptonote_config.h:417-423` says it deliberately has no copy there |
 | `SCS-F11` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6 (`SO-D8d`) rules three local integrity layers for a writer that re-derives `issued` by replaying the urn: per-record assignment equality, a persisted digest of `D` compared against a re-walk, and `passes ≤ issued`. Under §10 here `issued` is stored at admission and read at settlement, so the first layer has no second derivation to compare. Which layers carry over is not ruled. §6 there is unchanged and says so. **Ruled 2026-10-07 (R11):** the first layer becomes a running digest folded at admission and checked against every stored issued draw, including a draw the selection then drops; the second and third carry over (§9.5). §6.2 of the proposal states the same check |
-| `SCS-F12` | **A carrier had no way to travel.** At `dev@258b4d851` the C++ pool never relays a zero-fee transaction (`src/cryptonote_core/tx_pool.cpp:1179`), a zero-fee transaction from a peer fails the fee check, and the Rust submit path calls the zero-fee arm unreachable (`rust/shekyl-daemon-rpc/src/submit/verifier.rs:59-62`). A carrier returned to the pool by a pop was never relayed and failed the template's re-check against the new tip. No Rust pool policy existed. **Dissolved 2026-10-11:** there is no carrier; bundles travel by `SCS-P27` and `SCS-P28` |
+| `SCS-F12` | **A carrier had no way to travel.** At `dev@258b4d851` the C++ pool never relays a zero-fee transaction (`src/cryptonote_core/tx_pool.cpp:1179`), a zero-fee transaction from a peer fails the fee check, and the Rust submit path calls the zero-fee arm unreachable (`rust/shekyl-daemon-rpc/src/submit/verifier.rs:59-62`). A carrier returned to the pool by a pop was never relayed and failed the template's re-check against the new tip. No Rust pool policy existed. **Dissolved 2026-10-11:** there is no carrier; bundles travel by `SCS-P27` and `SCS-P28` DRS-E5 filed the pop's half of this as a FOLLOWUPS row, *A popped serve-credit carrier survives the C++ pool's pop path and is never relayed again*, to be closed by this slice naming the re-inclusion mechanism and the holding store. §10 names them; the row is removed |
 | `SCS-F13` | **§9.2 let one transaction issue draws whose records were in another.** A block could need two carriers (§7.4, as it stood), and the first admitted carrier issued every draw of `h`. The miner of a late block could include one and leave out the other: about 104 pairs took misses, at no cost, with the pairs chosen in advance because carriers are public. An honest reorg, or a second carrier that no miner picked up, did the same with no attacker. **Fixed 2026-10-11** by `SCS-P14` |
 | `SCS-F14` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §2.2 records the reorg case as "safe, recorded as checked". What it shows is that no connected record references a removed block. It does not show that an honest receipt survives a reorg, and its evidence item 11 ("re-inclusion admits") was false at the tree (`SCS-F12`). **Fixed** there with this change |
 | `SCS-F15` | `rust/shekyl-economics-sim/src/secret_draw.rs` carries its own count rule, in `f64`, and its own weighted selection, and calls no function of `rust/shekyl-archival-retention/src/secret_draw.rs`. Its module documentation says the draw has no production owner. §12's figures are from the sim's rule, not the consensus one. Open: owed with the sim's next run (§11) |
 | `SCS-F16` | This document's §2 was pinned at `dev@0e1d1d6126` and still said CEN-B4 had no Rust rule; its banner said nothing was built while §16 listed landed constants; §15 carried a second, older copy of its table. **Fixed** with this change |
 | `SCS-F17` | The bundle brief gives a reference as under 100 B. With a 32-byte prunable hash and, since `SCS-P39`, a 4-byte count, it is `76 + ⌈count(h) / 8⌉` B: 113 B at the count cap for `D` = 324,000, and 425 B at `D` = 3,100,000. §7.5 states the range. The brief also gives that cap as 291; with the carry it is 292 (§7.4) |
 | `SCS-F18` | `ARCHIVAL_SETTLEMENT_WRITER.md` §16.6 on PR #1032 recorded `SO-D12d` as "the FN-DSA lane builds increments 2 to 4". `SCS-P26` supersedes it for increments 3 and 4. **Fixed** on that branch by the settlement lane, 2026-10-12 |
-| `SCS-F19` | DRS-E5 (PR #1026) dissolved its alternative-tier CEN-B4 work (`E5-Q4` δ, `E5-17`) because this slice deleted B4's operand, and under `SCS-P17` and `SCS-P23` a block again carries a root recomputed when an alternative block arrives. **Closed 2026-10-12, smaller than it read:** what δ did was a bond read at the alternative chain's cheap tier. What returns is a stateless recomputation from references, with no bond read, and DRS-E5's brief already asks for that arrival check. δ stays dissolved; DRS-E5 reopens nothing |
+| `SCS-F19` | DRS-E5 (PR #1026, merged 2026-10-12) dissolved its alternative-tier CEN-B4 work (`E5-Q4` δ, `E5-17`) because this slice deleted B4's operand, and under `SCS-P17` and `SCS-P23` a block again carries a root recomputed when an alternative block arrives. **Closed 2026-10-12, smaller than it read:** what δ did was a bond read at the alternative chain's cheap tier. What returns is a stateless recomputation from references, with no bond read, and DRS-E5's brief already asks for that arrival check. δ stays dissolved; DRS-E5 reopens nothing |
 
 ---
 
