@@ -5,7 +5,10 @@
 cheap tier makes no chain-state read, and a check whose operand is chain
 state — a persona's bonded key — is promotion-tier on the ground §2.1
 already gives CEN-B5's root, an unexecuted alt chain cannot answer it; §8);
-PR-a building (#1026, draft). Round 0 posed
+**PR-a cut at a4 (maintainer, 2026-10-12): PR #1026 carries a1–a4 — the
+header partition, the cheap tier, AL1, the census arms — and the Slice C
+transport-handoff docs (§2.2, §2.3), and is on review; a5–a8 are the
+switch PR, cut from `dev` after it merges; PR-b is unchanged (§5).** Round 0 posed
 2026-10-10 at `dev@14d68c00fc`, merged to `dev@ac95d6d04` before the PR
 opened. Pre-flight in §1.1, findings `E5-1…E5-18` (`E5-13…E5-15` are PR-a
 commit 1's measurement, §1.7; `E5-16` and `E5-17` are the review's;
@@ -986,15 +989,29 @@ Adversarial items, each with the fixture that would notice:
 
 ---
 
-## 5. Commit plan — Round 0 (proposed), two increments
+## 5. Commit plan — Round 0 (proposed), two increments; PR-a cut in two 2026-10-12
 
-Two PRs, matching REDB table 3's slices. **PR-a — slice 9 (alt, switch; 4.K
-less K9/K10, D5, E2).** **PR-b — slice 10 (pool; 4.M, K9, K10).** K9 and K10
-are STAGED out of PR-a with their consumer named (rule 23): they are pool
-rows, and PR-a has no pool. The order is a question (`E5-Q10`): the default
-is a-then-b because the switch's pool returns are the only thing PR-a cannot
-test without PR-b, and PR-a can land them as a `Vec<Transaction>` the caller
-drops, with PR-b the caller.
+Two increments, matching REDB table 3's slices. **PR-a — slice 9 (alt,
+switch; 4.K less K9/K10, D5, E2).** **PR-b — slice 10 (pool; 4.M, K9,
+K10).** K9 and K10 are STAGED out of PR-a with their consumer named (rule
+23): they are pool rows, and PR-a has no pool. The order is a question
+(`E5-Q10`): the default is a-then-b because the switch's pool returns are
+the only thing PR-a cannot test without PR-b, and PR-a can land them as a
+`Vec<Transaction>` the caller drops, with PR-b the caller.
+
+**UPDATE 2026-10-12 — PR-a lands as two PRs (maintainer).** PR #1026 is
+**cut at a4**: it carries a1–a4 and the Slice C
+transport-handoff docs (§2.2, §2.3, the 2026-10-11 rows below) and goes to
+review, so this file's rulings — the cheap-tier rule, the `E5-Q4`
+dissolution, the transport handoff — land on `dev` as a file the Slice C
+round can cite. **a5–a8 are the switch PR**: the closure (a5), the refusals
+and fixtures (a6), the reorg capture (a7) and its docs (a8), cut from `dev`
+after #1026 merges. Where this file says "PR-a" of the switch's work — the
+`Vec<Transaction>` return and its single caller (`E5-Q2`, `E5-Q10`), the
+DRS-X cutover's trigger (§7), SAL-13/14's carried-and-built flip — it names
+the switch PR. PR-b is unchanged. Bundle transport (O1, O2, B10) stays
+blocked on Slice C's spec PR as the b1 and a5 rows record; the cut moves
+no blocker.
 
 | # | commit | cost | falsifier applies |
 | --- | --- | --- | --- |
@@ -1016,10 +1033,12 @@ drops, with PR-b the caller.
 
 **Expectation: fifteen commits, 8 + 7, costs 17 + 15** (2026-10-11; *was*
 16 + 14 before the Slice C bundle redesign raised a5 and b1 by one each —
-estimates revised before landing, not overruns). Every commit after
-a1/b1 carries the falsifier: if a landed cost exceeds its estimate the
-overrun is written into the row as a finding, not absorbed (slice 7 §5.1).
-Eight is under the rule-06 ceiling for each PR.
+estimates revised before landing, not overruns). **Across three PRs since
+the 2026-10-12 cut: #1026 a1–a4 (cost 8 = 1 + 2 + 2 + 3, no overrun
+written on any row), the switch PR a5–a8 (cost 9), PR-b b1–b7 (cost
+15).** Every commit after a1/b1 carries the falsifier: if a landed cost
+exceeds its estimate the overrun is written into the row as a finding,
+not absorbed (slice 7 §5.1). Each PR is under the rule-06 ceiling.
 
 ---
 
@@ -1062,7 +1081,8 @@ the plan's closure.
   virtuals); the `--keep-alt-blocks` flag and its `core::init` arm
   (`cryptonote_core.cpp:185`, `:650`); the two FFI exports
   `shekyl_difficulty_fork_choice` and `shekyl_difficulty_alt_window_plan`,
-  whose only callers are here. Trigger: the DRS-X cutover, after PR-a.
+  whose only callers are here. Trigger: the DRS-X cutover, after the
+  switch PR (a5–a8; "PR-a" before the 2026-10-12 cut, §5).
   Falsifier: `git grep -E 'rollback_blockchain_switching|switch_to_alternative_blockchain|handle_alternative_block|build_alt_chain' src/`
   → 0 (SAL-14's, widened); `rg 'shekyl_difficulty_(fork_choice|alt_window_plan)' src/`
   → 0 while the Rust symbols are read natively.
@@ -1140,7 +1160,7 @@ Rule 25's single-FFI-crate rule is unaffected. **Otherwise.** The pool in
 `shekyl-chain-ingest` grows that crate past the ratchet and couples the
 replay harness to relay state. **Falsifier.** A circular dependency between
 the two (the switch needs the pool for returns, the pool needs the switch
-for nothing) — PR-a's `Vec<Transaction>` return is the cut.
+for nothing) — the switch PR's `Vec<Transaction>` return is the cut.
 
 **Ruled 2026-10-10 — yes, with a condition.** `shekyl-mempool` holds the
 FSM and the store wiring, **never a rule**: G10 forbids a second admission
@@ -1309,7 +1329,10 @@ their own PR and the pool's returns path untestable until the switch exists.
 **Falsifier.** PR-a's `Vec<Transaction>` return has a second caller before
 PR-b — then it is a silent interface, and b goes first.
 
-**Ruled 2026-10-10 — yes, PR-a first.**
+**Ruled 2026-10-10 — yes, PR-a first.** Since the 2026-10-12 cut (§5) the
+order reads #1026 (a1–a4), then the switch PR (a5–a8, where the
+`Vec<Transaction>` return lands), then PR-b; the falsifier is the switch
+PR's.
 
 ### E5-Q11 — Does `--keep-alt-blocks` die with DEL-009?
 
@@ -1348,3 +1371,4 @@ Not E5's; found while reading the census at the pin.
 | 2026-10-10 | **`E5-17` ruled (a) — δ's no-bond arm defers to promotion, on the B5 precedent.** Drafting a4's row text surfaced the case the C++ comment (`blockchain.cpp:2131–2133`) and the FOLLOWUPS row already named: a bond that joins in the alt chain's own unexecuted blocks is in no view the admission tier can read. Measured reachable — admission runs no epoch arithmetic on a pass record, so `[join(P), pass(P)]` fits in two blocks, far inside `D_max = 720` (`SEB = 10_000 > D_max`, `reorg.rs:73`); not moot. A cheap-tier refusal stores nothing and would refuse an honest heaviest chain on every delivery — a permanent fork — so the arm defers, stores, and is PoW-bounded as B5; signature invalid under a bonded key, or forged under a bonded key, refuse. Priced in §2.1 beside B5's statement, as the third instance of one cost. a4's census commit carries the three arms on CEN-B4's row, corrects CEN-K4's pre-`4932b769b` ladder order, and removes the FOLLOWUPS row. §4's fixture gains a fifth arm. |
 | 2026-10-11 | **`E5-Q4` RULED β — no B4 at the cheap tier, promotion does the check (maintainer); `E5-6` and `E5-17` dissolved under it.** Ground: the cheap tier makes no chain-state read; any check whose operand is chain state — a persona's bonded key, a bond snapshot — is promotion-tier, on the ground §2.1 already gives CEN-B5's root (an unexecuted alt chain cannot answer it; promotion validates against executed state, where the read is correct and free). `E5-17` dissolves directly — a key bonded only inside the alt chain's own unexecuted blocks is read at promotion, after those blocks execute; `E5-6` the same way; `E5-16` stands with no consumer. β is the choice, made for B5's reason; α, γ and δ rejected in §8 with one line each (δ: correct read, wrong tier — reconstructing executed state to answer a question promotion answers for free). Framing: B4 exists in Rust (`26bc5b994`) and is not ported to the alt tier; main-chain B4 and the C++ gate stay until `DEL-009`. The question was first closed that morning on a ground outside this lane (a Slice C ruling the Slice C round has since reopened) and re-grounded in a4 the same day; the conclusion did not move, and E5's reason now depends on no Slice C design. a3 loses its δ UPDATE (`AltView` stays `HeaderView`-only); a4 loses the CEN-B4 sentence, the replay read, "B4 whole" and the `E5-6` fixture arms — `alt_against` = K1b, D5 via D4, E2's arm; a4's census commit keeps CEN-K4's order correction (the C++ ladder in its landed order, no attestation step for the Rust tier) and CEN-B4's site re-pin. FOLLOWUPS rows "Alt-chain attestation verify resolves bond pubkeys from main-chain state" and "Validate `prev_id` before attestation verify on the alt-chain path" closed with the ruling: the first is `E5-17`, held in Rust by where the check sits; the second orders against a step the Rust tier has not got, and already held at the tree (`prev_id` resolves at `blockchain.cpp:2012–2019`, attestation runs at `:2135`). Out of this lane, with the Slice C round: the serve-credit spec's stale §2 B4 row and "nothing built" banner, the SO-D8 §2.2 restatement, serve-credit evidence's reorg survival. Branch merged to `dev@258b4d851` first (clean; inland 150/150, coverage 118/151 unchanged), and to `dev@834471689` before the re-grounding (clean; inland 148/148, coverage 118/151, 15 block rules, unchanged). |
 | 2026-10-11 | **The Slice C bundle redesign hands transport to E5 (maintainer); `E5-Q1` reopened in part and re-ruled.** Ground: #1026 @ `bacdd62b4`, `dev@834471689`; lands before b1 and a5; a3, a4 and the `E5-Q4` B4 dissolution are unaffected. *What changed:* serve-credit carriers (`serve_credit_only` transactions) are gone; each block `h` has one bundle (reveal + every pass record for `h`), admitted whole in a block section committed by the header root — not a transaction (no fee, key images or inputs). Slice C owns the verifier (pure chain-rules function, bundle × view → verdict + kept projection) and defines the verifier view trait and the kept projection type in its spec PR; SO-D12 owns the recorded state and the cutover; E5 owns transport, built against the two contracts once they land (blocker named in §2.2 and the b1 row; falsify by both existing under `rust/shekyl-chain-rules/`). *What E5 builds* (§2.2, §2.3, §5): O1 the body store keyed by hash in `shekyl-mempool` with the holder rule and the register invariant; O2 the bundle queue, not a `PoolRecord` arm, admitted by Slice C's verifier through the view trait (`E5-Q2`'s condition met: the crate calls the rule), keyed by `h`, bounded `W₂` (500), three evictions, re-checked after a reorg by the same verifier, persisted and reconciled at open, no Dandelion++ (B12); b6 the bundle section, earliest `h` first to `c · 9·D/SEB` (`c = 2`, provisional), outside fee median and penalty; B10 the alt row stores references only (the folded `archival_alt_attestation_witness` field replaced, rule 42) with stateless arrival checks; a5 the pre-closure body fetch (unfetchable → no switch, local outcome), the view trait on `BatchView`, invalid bundle fails the switch (`E5-7`). Costs a5 `3 → 4`, b1 `2 → 3`; expectation 17 + 15. *`E5-Q1`:* "`kept_by_block` skips `policy_form`" deleted from §2.2 — a returned transaction runs the same door, policy included, on the 2026-10-02 ruling that the fee-floor bypass for block-carried transactions is a bug (C2-R2 Q9's reopening, FOLLOWUPS); K10's retention of an unverifiable returned transaction (kept, not relayable, M10 evicts) unaffected; M3 needs no carrier exemption; **M11 deleted**, redundant with M3 (b1 retires the census row and `PolicyRow`, policy `0 / 9 → 0 / 8`). *No C++:* the sidecar path (`cryptonote_protocol_defs.h:71`, `blockchain.cpp` demote/promote, `db_lmdb`'s witness table) is a `DEL-008` deletion. *Not E5's:* the Levin block payload carrying references (its owning lane; flagged, not built); the verifier, view trait and kept projection (Slice C); the draw state (SO-D12). Docs only; no code — the previous "no carrier or bundle cites in E5" direction is superseded by this handoff. |
+| 2026-10-12 | **PR-a cut at a4 (maintainer).** Ground: #1026 at `07f9f0f77`, three behind `dev`. #1026 carries a1–a4 and the Slice C transport-handoff docs and goes to review, so this file's rulings — the cheap-tier rule, the `E5-Q4` dissolution, the transport handoff — land on `dev` as a file the Slice C round can cite rather than a chat ruling. a5–a8 become the switch PR (closure, refusals and fixtures, reorg capture, docs), cut from `dev` after #1026 merges; PR-b unchanged (§5's UPDATE; `E5-Q10`'s order re-read; §7's DRS-X trigger re-pointed). Costs by PR: 8 + 9 + 15. `origin/dev` merged (`adb2013da`, the v3.1.0-alpha.10 cut; one conflict, `CHANGELOG.md`'s Unreleased head — E5's K8 entry kept under Unreleased above the new alpha.10 section); both ratchets re-derived on the merged tree and unchanged: `consensus: implemented 126 / validator-enforced 151 … held-by-store 4 … enforced 153`, `policy 0 / 9`, inland height 148/148. The `shekyl-seam` hub-test hang (two occurrences, the second on this lane's verify run of `2da6ec3ab`) is raised with its owner (P2P-3, #1037) and recorded in FOLLOWUPS with the backtrace; not E5's. Bundle transport stays blocked on Slice C's spec PR as recorded. |
