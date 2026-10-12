@@ -10,7 +10,7 @@ use blake2::Blake2s256;
 use zeroize::Zeroizing;
 
 use crate::aead::{self, HASH_LEN};
-use crate::channel::{self, RecvHalf, SendHalf};
+use crate::direction::Direction;
 
 /// What the symmetric state can fail at. A handshake maps these into its own
 /// error type; which of the two it was says nothing a peer may be told.
@@ -25,7 +25,7 @@ pub enum SymmetricError {
 /// Which side of Noise `Split` this peer is.
 ///
 /// The initiator sends with the first transport key and receives with the
-/// second. The responder does the opposite. [`SymmetricState::into_halves`]
+/// second. The responder does the opposite. [`SymmetricState::into_directions`]
 /// is the only place that assignment is made.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SplitRole {
@@ -120,25 +120,39 @@ impl SymmetricState {
         self.h
     }
 
-    /// Noise's `Split`, then the two record halves for `role`.
+    /// Noise's `Split` for `role`: the send direction, then the receive direction.
     ///
     /// Each direction keeps its own chaining key. Rekey advances the two
-    /// directions independently.
-    #[must_use = "the record halves are the session"]
-    pub fn into_halves(self, role: SplitRole) -> (SendHalf, RecvHalf) {
+    /// directions independently. No key leaves this function.
+    #[must_use = "the directions are the session"]
+    pub fn into_directions(self, role: SplitRole) -> (Direction, Direction) {
         let (first, second) = aead::hkdf(&self.ck, &[]);
         let (send_key, recv_key) = match role {
             SplitRole::Initiator => (first, second),
             SplitRole::Responder => (second, first),
         };
-        channel::halves(self.ck, send_key, recv_key)
+        let recv_ck = self.ck.clone();
+        (
+            Direction::new(self.ck, send_key),
+            Direction::new(recv_ck, recv_key),
+        )
     }
 
-    /// The chaining key, for a test that pins the key schedule.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn chaining_key(&self) -> [u8; HASH_LEN] {
+    #[cfg(test)]
+    fn chaining_key(&self) -> [u8; HASH_LEN] {
         *self.ck
+    }
+
+    /// A state whose chaining key is `ck`, for a test that pins `Split`
+    /// without running a handshake.
+    #[cfg(test)]
+    fn with_chaining_key(ck: [u8; HASH_LEN]) -> Self {
+        Self {
+            ck: Zeroizing::new(ck),
+            h: [0u8; HASH_LEN],
+            k: None,
+            n: 0,
+        }
     }
 }
 
@@ -181,6 +195,10 @@ mod tests {
         let mut sym = SymmetricState::new(name, b"prologue");
         let chaining_key = sym.chaining_key();
         assert_eq!(chaining_key, aead::hash(name));
+        assert_eq!(
+            hex_of(&chaining_key),
+            "c349a55a6b5c0428654e131abf703a8f9a223cb0512dabbca0187cd23c901bba"
+        );
         sym.mix_hash(b"more");
         assert_eq!(sym.chaining_key(), chaining_key);
         assert_ne!(sym.handshake_hash(), chaining_key);
@@ -194,8 +212,8 @@ mod tests {
         let responder = SymmetricState::new(name, prologue);
         let chaining_key = initiator.chaining_key();
         let (first, second) = aead::hkdf(&chaining_key, &[]);
-        let (initiator_send, initiator_recv) = initiator.into_halves(SplitRole::Initiator);
-        let (responder_send, responder_recv) = responder.into_halves(SplitRole::Responder);
+        let (initiator_send, initiator_recv) = initiator.into_directions(SplitRole::Initiator);
+        let (responder_send, responder_recv) = responder.into_directions(SplitRole::Responder);
         assert_eq!(initiator_send.ck_and_k().1, *first);
         assert_eq!(initiator_recv.ck_and_k().1, *second);
         assert_eq!(responder_send.ck_and_k().1, *second);
@@ -262,10 +280,10 @@ mod tests {
             "a621e3943a29c1d984b43727697fbec096107d0b569031ac7e0f1131de19f4f4"
         );
 
-        let (ini_send, _) = ini.into_halves(SplitRole::Initiator);
-        let (resp_send, _) = resp.into_halves(SplitRole::Responder);
-        let t0 = aead::seal(&ini_send.ck_and_k().1, 0, &[], &p2).unwrap();
-        let t1 = aead::seal(&resp_send.ck_and_k().1, 0, &[], &p3).unwrap();
+        let (mut ini_send, _) = ini.into_directions(SplitRole::Initiator);
+        let (mut resp_send, _) = resp.into_directions(SplitRole::Responder);
+        let (t0, _) = ini_send.seal(&p2, &[]).unwrap();
+        let (t1, _) = resp_send.seal(&p3, &[]).unwrap();
         assert_eq!(
             hex_of(&t0),
             "79285da88da3535f52b07b70006c85706de7ddb1fd3dddac995b7e"
@@ -274,5 +292,49 @@ mod tests {
             hex_of(&t1),
             "ffdad3a7f0db4c39077f223659c5c1d107666405566ecdf4ab53bf"
         );
+    }
+
+    /// The chaining key the pinned NNhfs transcript ends on, and the transport
+    /// keys `Split` and one rekey produce from it. `kat_m1.hex` and
+    /// `kat_m2.hex` pin that transcript in the P2P handshake.
+    #[test]
+    fn split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys() {
+        const CHAINING_KEY: &str =
+            "aa12aef4d4c33f500f4798ec3787281d0e236e5dbe3d2711902f635ab7019763";
+        const INITIATOR_SEND_KEY: &str =
+            "149dfa9c12e1b59a8dd22c9768a9ea3d4821ffb20aff0ddfde5680c886891370";
+        const AFTER_REKEY_CK: &str =
+            "65f18eb7ce1929333b118ed5a9d35a6f00857f80e49409598848f2438a4f52c4";
+        const AFTER_REKEY_K: &str =
+            "50c5ecd6feb1f40d4be1dce0309789c6c2e8a60f2188812090f7c2c56f0b2223";
+        const OTHER_AFTER_REKEY_CK: &str =
+            "8f3c7d5c411c203dd55aa134d6a11b04a8a36ee50a0cb990915be4a082ca4655";
+        const OTHER_AFTER_REKEY_K: &str =
+            "2ece957080019fedc1e7d21bf46dce09ac2619495194edd54c35ef0280d31e4a";
+
+        let ck = unhex32(CHAINING_KEY);
+        let (mut send, recv) =
+            SymmetricState::with_chaining_key(ck).into_directions(SplitRole::Initiator);
+        let (mut other, other_recv) =
+            SymmetricState::with_chaining_key(ck).into_directions(SplitRole::Responder);
+        assert_eq!(send.ck_and_k().0, ck);
+        assert_eq!(send.ck_and_k().1, unhex32(INITIATOR_SEND_KEY));
+        assert_eq!(recv.ck_and_k().1, other.ck_and_k().1);
+        assert_eq!(other_recv.ck_and_k().1, send.ck_and_k().1);
+
+        for _ in 0..crate::REKEY_NONCES {
+            send.seal(&[0], &[]).unwrap();
+            other.seal(&[0], &[]).unwrap();
+        }
+        let (ck_after, k_after) = send.ck_and_k();
+        assert_eq!(ck_after, unhex32(AFTER_REKEY_CK));
+        assert_eq!(k_after, unhex32(AFTER_REKEY_K));
+        let (ck_back, k_back) = other.ck_and_k();
+        assert_eq!(ck_back, unhex32(OTHER_AFTER_REKEY_CK));
+        assert_eq!(k_back, unhex32(OTHER_AFTER_REKEY_K));
+    }
+
+    fn unhex32(s: &str) -> [u8; HASH_LEN] {
+        unhex(s).try_into().unwrap()
     }
 }

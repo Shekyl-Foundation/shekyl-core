@@ -3,19 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Post-`Split` records. Each record is an encrypted 2-byte length and an
-//! encrypted body, two nonces. A plaintext longer than [`MAX_BODY`] bytes is
-//! several records; the concatenation is the session byte stream.
+//! The interim record framer. Each record is an encrypted 2-byte length and
+//! an encrypted body, two nonces of a [`Direction`]. A plaintext longer than
+//! [`MAX_BODY`] bytes is several records; the concatenation is the session
+//! byte stream.
 //!
-//! Rekey is `HKDF(ck, k)` after [`REKEY_NONCES`] nonce uses in that direction.
-//! The nonce resets. Nothing is written to mark it. An empty body is rejected:
-//! a session write of no bytes is not a record.
+//! An empty body is rejected: a session write of no bytes is not a record.
+//! This framer is the length-prefixed wire the clearnet seam speaks today.
+//! It is not the channel's classed records.
 
-use zeroize::Zeroizing;
+use shekyl_noise::{Direction, DirectionError, TAG_LEN};
 
-use crate::aead::{self, HASH_LEN, TAG_LEN};
-
-pub const REKEY_NONCES: u64 = 1_000;
 const MAX_BODY: usize = u16::MAX as usize; // `usize::from` is not const here (E0658).
 const LENGTH_WIRE: usize = 2 + TAG_LEN;
 const LENGTH_AAD: &[u8] = b"len";
@@ -30,48 +28,12 @@ pub enum RecordError {
     State,
 }
 
-pub(crate) struct Direction {
-    ck: Zeroizing<[u8; HASH_LEN]>,
-    k: Zeroizing<[u8; HASH_LEN]>,
-    n: u64,
-}
-
-impl Direction {
-    fn new(ck: Zeroizing<[u8; HASH_LEN]>, k: Zeroizing<[u8; HASH_LEN]>) -> Self {
-        Self { ck, k, n: 0 }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn force_nonce(&mut self, n: u64) {
-        self.n = n;
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
-        (*self.ck, *self.k)
-    }
-
-    fn bump(&mut self) -> Result<(), RecordError> {
-        self.n = self.n.checked_add(1).ok_or(RecordError::State)?;
-        if self.n == REKEY_NONCES {
-            let (ck, k) = aead::hkdf(&self.ck, &self.k[..]);
-            self.ck = ck;
-            self.k = k;
-            self.n = 0;
+impl From<DirectionError> for RecordError {
+    fn from(err: DirectionError) -> Self {
+        match err {
+            DirectionError::Decrypt => Self::Decrypt,
+            DirectionError::State => Self::State,
         }
-        Ok(())
-    }
-
-    fn encrypt(&mut self, plaintext: &[u8], ad: &[u8]) -> Result<Vec<u8>, RecordError> {
-        let ct = aead::seal(&self.k, self.n, ad, plaintext).ok_or(RecordError::State)?;
-        self.bump()?;
-        Ok(ct)
-    }
-
-    fn decrypt(&mut self, ciphertext: &[u8], ad: &[u8]) -> Result<Vec<u8>, RecordError> {
-        let pt = aead::open(&self.k, self.n, ad, ciphertext).ok_or(RecordError::Decrypt)?;
-        self.bump()?;
-        Ok(pt)
     }
 }
 
@@ -87,21 +49,13 @@ pub struct RecvHalf {
     dead: bool,
 }
 
-/// Build the two halves from `Split`'s output. `send_k` seals what this
-/// side sends; `recv_k` opens what it receives. Each half keeps its own
-/// chaining key, because rekey advances the two directions independently.
-pub(crate) fn halves(
-    ck: Zeroizing<[u8; HASH_LEN]>,
-    send_k: Zeroizing<[u8; HASH_LEN]>,
-    recv_k: Zeroizing<[u8; HASH_LEN]>,
-) -> (SendHalf, RecvHalf) {
-    let recv_ck = ck.clone();
+/// The two halves of one session. `send` seals what this side sends; `recv`
+/// opens what it receives. Each direction already holds its own chaining key.
+pub(crate) fn session(send: Direction, recv: Direction) -> (SendHalf, RecvHalf) {
     (
-        SendHalf {
-            dir: Direction::new(ck, send_k),
-        },
+        SendHalf { dir: send },
         RecvHalf {
-            dir: Direction::new(recv_ck, recv_k),
+            dir: recv,
             pending_body: None,
             dead: false,
         },
@@ -112,8 +66,8 @@ impl SendHalf {
     #[cfg(test)]
     fn seal_empty_body(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
-        let len_ct = self.dir.encrypt(&0u16.to_be_bytes(), LENGTH_AAD).unwrap();
-        let body_ct = self.dir.encrypt(&[], BODY_AAD).unwrap();
+        let (len_ct, _) = self.dir.seal(&0u16.to_be_bytes(), LENGTH_AAD).unwrap();
+        let (body_ct, _) = self.dir.seal(&[], BODY_AAD).unwrap();
         out.extend_from_slice(&len_ct);
         out.extend_from_slice(&body_ct);
         out
@@ -129,22 +83,6 @@ impl SendHalf {
             seal_chunk(&mut self.dir, chunk, &mut out)?;
         }
         Ok(out)
-    }
-
-    /// Test support: set the nonce, to reach the rekey boundary.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn force_nonce(&mut self, n: u64) {
-        self.dir.force_nonce(n);
-    }
-
-    /// Test support: the chaining key and the record key, for a test that
-    /// pins the key schedule. Raw keys: never reachable in a production
-    /// build (`scripts/ci/check_test_only_features.py`).
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
-        self.dir.ck_and_k()
     }
 }
 
@@ -166,22 +104,6 @@ impl RecvHalf {
             ok => ok,
         }
     }
-
-    /// Test support: set the nonce, to reach the rekey boundary.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn force_nonce(&mut self, n: u64) {
-        self.dir.force_nonce(n);
-    }
-
-    /// Test support: the chaining key and the record key, for a test that
-    /// pins the key schedule. Raw keys: never reachable in a production
-    /// build (`scripts/ci/check_test_only_features.py`).
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
-        self.dir.ck_and_k()
-    }
 }
 
 fn seal_chunk(send: &mut Direction, chunk: &[u8], out: &mut Vec<u8>) -> Result<(), RecordError> {
@@ -190,8 +112,8 @@ fn seal_chunk(send: &mut Direction, chunk: &[u8], out: &mut Vec<u8>) -> Result<(
     }
     let body_len = u16::try_from(chunk.len()).map_err(|_| RecordError::Oversize)?;
     let len_bytes = body_len.to_be_bytes();
-    let len_ct = send.encrypt(&len_bytes, LENGTH_AAD)?;
-    let body_ct = send.encrypt(chunk, BODY_AAD)?;
+    let (len_ct, _) = send.seal(&len_bytes, LENGTH_AAD)?;
+    let (body_ct, _) = send.seal(chunk, BODY_AAD)?;
     out.extend_from_slice(&len_ct);
     out.extend_from_slice(&body_ct);
     Ok(())
@@ -208,7 +130,7 @@ fn open_record(
         if buf.len() < LENGTH_WIRE {
             return Err(RecordError::Truncated);
         }
-        let len_pt = recv.decrypt(&buf[..LENGTH_WIRE], LENGTH_AAD)?;
+        let (len_pt, _) = recv.open(&buf[..LENGTH_WIRE], LENGTH_AAD)?;
         if len_pt.len() != 2 {
             return Err(RecordError::Decrypt);
         }
@@ -220,7 +142,7 @@ fn open_record(
     if buf.len() < total {
         return Err(RecordError::Truncated);
     }
-    let body = recv.decrypt(&buf[LENGTH_WIRE..total], BODY_AAD)?;
+    let (body, _) = recv.open(&buf[LENGTH_WIRE..total], BODY_AAD)?;
     if body.len() != body_len {
         return Err(RecordError::Decrypt);
     }
@@ -234,38 +156,30 @@ fn open_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::noise::{Initiator, Responder};
 
-    /// Two ends of one session: one chaining key, and two record keys the
-    /// two ends hold in opposite order. The record layer needs only the keys.
+    /// Two ends of one handshake. The framer sees directions, not keys.
     fn pair() -> (SendHalf, RecvHalf, SendHalf, RecvHalf) {
-        let ck = || Zeroizing::new([0x51u8; HASH_LEN]);
-        let first = || Zeroizing::new([0xa7u8; HASH_LEN]);
-        let second = || Zeroizing::new([0x3cu8; HASH_LEN]);
-        let (a_send, a_recv) = halves(ck(), first(), second());
-        let (b_send, b_recv) = halves(ck(), second(), first());
+        let nid = [0x11u8; 16];
+        let (ini, m1) = Initiator::new(&nid).unwrap();
+        let (resp, m2) = Responder::new(&nid)
+            .read_message1(&m1)
+            .unwrap()
+            .write_message2()
+            .unwrap();
+        let ini = ini.read_message2(&m2).unwrap();
+        let (a_send, a_recv) = ini.split();
+        let (b_send, b_recv) = resp.split();
         (a_send, a_recv, b_send, b_recv)
     }
 
     #[test]
-    fn roundtrip_and_rekey_boundary() {
+    fn roundtrip() {
         let (mut a_send, _a_recv, _b_send, mut b_recv) = pair();
-        let (send_ck, send_k) = a_send.ck_and_k();
-        let (recv_ck, recv_k) = b_recv.ck_and_k();
-        assert_eq!(send_ck, recv_ck);
-        assert_ne!(send_ck, send_k);
-        assert_ne!(recv_ck, recv_k);
-
         let ct = a_send.seal(b"levin").unwrap();
         let (pt, n) = b_recv.open_one(&ct).unwrap();
         assert_eq!(n, ct.len());
         assert_eq!(pt, b"levin");
-
-        a_send.force_nonce(REKEY_NONCES - 1);
-        b_recv.force_nonce(REKEY_NONCES - 1);
-        let ct = a_send.seal(b"boundary").unwrap();
-        assert_eq!(b_recv.open_one(&ct).unwrap().0, b"boundary");
-        let ct = a_send.seal(b"after").unwrap();
-        assert_eq!(b_recv.open_one(&ct).unwrap().0, b"after");
     }
 
     #[test]

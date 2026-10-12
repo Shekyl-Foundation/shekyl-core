@@ -6,9 +6,9 @@
 //! Private entry points for the C5 bench. The numbers are a run record.
 //! They are not a budget.
 
-use shekyl_noise::channel::REKEY_NONCES;
-use shekyl_noise::{rekey_hkdf, RecvHalf, SendHalf, HASH_LEN};
+use shekyl_noise::{rekey_hkdf, HASH_LEN, REKEY_NONCES};
 
+use crate::channel::{RecvHalf, SendHalf};
 use crate::noise::{Initiator, Responder};
 use crate::prefix::NetworkId;
 
@@ -77,5 +77,5 @@ pub fn seal_opens_before_rekey() -> u64 {
 pub fn rekey_once() {
     let chaining_key = [1u8; HASH_LEN];
     let record_key = [2u8; HASH_LEN];
-    std::hint::black_box(rekey_hkdf(&chaining_key, &record_key));
+    rekey_hkdf(&chaining_key, &record_key);
 }

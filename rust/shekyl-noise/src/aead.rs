@@ -7,7 +7,7 @@
 //!
 //! A key and a nonce come from the caller. These functions stay in this
 //! crate. A handshake drives [`crate::SymmetricState`] and finishes in
-//! [`crate::SymmetricState::into_halves`].
+//! [`crate::SymmetricState::into_directions`].
 //!
 //! HMAC-BLAKE2s is RFC 2104 over BLAKE2s-256. `hkdf` is Noise's two-output
 //! HKDF: `HMAC(ck, ikm)` then `HMAC(temp, 0x01)` and `HMAC(temp, out1 || 0x02)`.
@@ -107,16 +107,16 @@ pub(crate) fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -
         .ok()
 }
 
-/// One rekey derivation: `HKDF(chaining_key, record_key)`, three HMAC-BLAKE2s.
+/// Run one rekey derivation, `HKDF(chaining_key, record_key)`, and discard it.
 ///
-/// The record layer runs that same derivation when a direction's nonce
-/// reaches the rekey boundary. This function exists so the C5 bench can
-/// time it apart from a session, and only while that bench's feature is on.
+/// [`crate::Direction`] runs that same derivation when its nonce reaches the
+/// rekey boundary. This function exists so the C5 bench can time those three
+/// HMAC-BLAKE2s apart from a session. The derived keys do not leave this crate.
 #[cfg(feature = "rekey-timing")]
-#[must_use = "the derived keys are the work the bench times"]
-pub fn rekey_hkdf(
-    chaining_key: &[u8; HASH_LEN],
-    record_key: &[u8; HASH_LEN],
-) -> (Zeroizing<[u8; HASH_LEN]>, Zeroizing<[u8; HASH_LEN]>) {
-    hkdf(chaining_key, record_key)
+pub fn rekey_hkdf(chaining_key: &[u8; HASH_LEN], record_key: &[u8; HASH_LEN]) {
+    let chaining_key = std::hint::black_box(*chaining_key);
+    let record_key = std::hint::black_box(*record_key);
+    let (ck, k) = hkdf(&chaining_key, &record_key);
+    std::hint::black_box(*ck);
+    std::hint::black_box(*k);
 }

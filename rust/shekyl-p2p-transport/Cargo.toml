@@ -24,9 +24,6 @@ c5-bench = ["shekyl-noise/rekey-timing"]
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
 shekyl-levin = { path = "../shekyl-levin" }
-# The pinned-vector test asserts the key schedule and the rekey through the
-# record layer's test accessors.
-shekyl-noise = { path = "../shekyl-noise", features = ["test-support"] }
 
 [[bench]]
 name = "c5"

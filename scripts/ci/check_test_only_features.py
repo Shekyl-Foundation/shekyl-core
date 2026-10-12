@@ -208,16 +208,6 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "crate's [dev-dependencies] already carry for the rest of the driver. "
     "A driver that shipped would be a second producer (the crate's own "
     "docs); this row is what keeps it in tests",
-    (
-        "shekyl-noise",
-        "test-support",
-    ): "exposes the record layer's raw chaining and record keys (ck_and_k), a "
-    "settable record nonce (force_nonce) and the symmetric state's chaining "
-    "key, which were cfg(test)-private until the record layer got a crate of "
-    "its own (RPC_CHANNEL.md section 4.4, RT-O16). shekyl-p2p-transport's "
-    "pinned-vector test asserts the key schedule and the rekey through them, "
-    "unchanged, from its [dev-dependencies] edge. On a normal edge every "
-    "session's transport keys would be readable through a public method",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -232,9 +222,9 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
         "rekey-timing",
     ): (
         "shekyl-p2p-transport",
-        "exposes rekey_hkdf so the C5 bench can time one Noise HKDF apart from "
-        "a session (BA-I22). The derivation stays crate-private on every other "
-        "build. The bench is the one caller, and the feature dies with it",
+        "runs one rekey HKDF so the C5 bench can time it apart from a session "
+        "(BA-I22). The derived keys stay in the crate; the function returns "
+        "nothing. The bench is the one caller, and the feature dies with it",
     ),
 }
 

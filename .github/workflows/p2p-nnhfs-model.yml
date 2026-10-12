@@ -18,9 +18,10 @@
 #
 # It runs when the model, the library, this file, or the handshake's Rust
 # changes: noise.rs (the token order), prefix.rs (the network id the
-# prologue mixes), and in shekyl-noise, which the handshake is built on,
-# channel.rs (the length and body seals), aead.rs (the hash, HKDF and AEAD)
-# and symmetric.rs (the symmetric state). The model does not read the Rust, so a code change
+# prologue mixes), channel.rs (the length and body seals), and in
+# shekyl-noise, which the handshake is built on, direction.rs (the nonce
+# and the rekey), aead.rs (the hash, HKDF and AEAD) and symmetric.rs (the
+# symmetric state). The model does not read the Rust, so a code change
 # cannot move a verdict by itself; those files are on the list because
 # that is the moment to ask whether the model still describes the code.
 # Like the sibling job it carries no merge_group trigger: an uncached
@@ -36,7 +37,8 @@ on:
       - "docs/formal/proverif/**"
       - "rust/shekyl-p2p-transport/src/noise.rs"
       - "rust/shekyl-p2p-transport/src/prefix.rs"
-      - "rust/shekyl-noise/src/channel.rs"
+      - "rust/shekyl-p2p-transport/src/channel.rs"
+      - "rust/shekyl-noise/src/direction.rs"
       - "rust/shekyl-noise/src/aead.rs"
       - "rust/shekyl-noise/src/symmetric.rs"
       - ".github/workflows/p2p-nnhfs-model.yml"
