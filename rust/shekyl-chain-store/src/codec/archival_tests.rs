@@ -520,7 +520,7 @@ fn the_v7_corpus_maps_onto_the_record_without_loss() {
     );
 }
 
-// ---- the receipt key (layout 23, FN-DSA increment 3) ------------------------
+// ---- the receipt key (layout 24, FN-DSA increment 3) ------------------------
 
 /// The receipt key is trailing and optional. A record that commits none is
 /// the layout-22 bytes exactly — hand-assembled here from that layout, with

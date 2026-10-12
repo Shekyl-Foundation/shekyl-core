@@ -44,7 +44,7 @@
 //! receipt_sign_pk      absent when empty; else u32 len ‖ bytes   1 ≤ len ≤ MAX_BOND_KEY_BYTES
 //! ```
 //!
-//! # The receipt key is trailing and optional (layout 23)
+//! # The receipt key is trailing and optional (layout 24)
 //!
 //! `receipt_sign_pk` sits after `bond_spend_pk` in the struct and **last**
 //! in the bytes, and a record that commits none writes nothing for it. So
