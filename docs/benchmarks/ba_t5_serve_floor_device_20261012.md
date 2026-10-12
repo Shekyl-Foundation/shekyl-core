@@ -450,4 +450,8 @@ mechanism cells, **0.91** of the no-serve sync rate — inside the 0.90 to
   `scripts/bench/ba_t5_sync_poll.sh`; the reader
   `scripts/bench/ba_t5_session3_reading.py`, with a selftest of fifteen
   cases. The first start's outputs and the rehearsal's were removed from
-  the device with the run directory and are not in the tree.
+  the device with the run directory and are not in the tree. Two review
+  changes after the run, neither touching this capture: the T2′ daemon
+  pid lookup takes the newest match of its anchored pattern, and the
+  reader says when a topology has no valid no-serve window instead of
+  failing on an empty range (a selftest case covers it).

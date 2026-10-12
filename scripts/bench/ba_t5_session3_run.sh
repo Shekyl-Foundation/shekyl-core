@@ -185,7 +185,11 @@ sync_start() {  # a fresh data directory, then the daemon, then wait until it is
       systemd-run --user --scope --quiet --unit="$SCOPE_UNIT" -- \
         setsid --fork --wait "${cmd[@]}" > "$WORK/syncdata/stdout.log" 2>&1 &
       sleep 3
-      SYNC_PID=$(pgrep -f "^$SHEKYLD --testnet --data-dir $WORK/syncdata" | head -1)
+      # One quoted pattern (the quotes keep its spaces inside one argument),
+      # anchored at the executable so setsid's own argument list is not it;
+      # -n takes the newest should a stale daemon of an earlier start still
+      # be exiting.
+      SYNC_PID=$(pgrep -n -f "^$SHEKYLD --testnet --data-dir $WORK/syncdata")
       ;;
   esac
   echo "${SYNC_PID:-na}" > "$WORK/syncdata/pid"

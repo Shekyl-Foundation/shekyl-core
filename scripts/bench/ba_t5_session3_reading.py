@@ -308,9 +308,14 @@ def main() -> int:
         quiet_rates = [r for label, r in rates.items() if cell_of(label).startswith("quiet") and r is not None]
         quiet_median = med(quiet_rates) if quiet_rates else float("nan")
         hypothesis[topology] = p2_hypothesis(ctx)
-        print(f"\n== {topology}: sync windows {len(wins)}, pre-window points dropped from {stale}; "
-              f"no-serve rate median {quiet_median:.2f} blocks/s over {len(quiet_rates)} valid windows "
-              f"(range {min(quiet_rates):.2f} to {max(quiet_rates):.2f}) ==")
+        # Every no-serve window can be void under the validity rule (a daemon
+        # that reached its target, or stalled, through a whole topology);
+        # the windows are present, so the session is complete, and the
+        # reading says so rather than failing on an empty range.
+        quiet_text = (f"no-serve rate median {quiet_median:.2f} blocks/s over {len(quiet_rates)} valid windows "
+                      f"(range {min(quiet_rates):.2f} to {max(quiet_rates):.2f})" if quiet_rates
+                      else "NO VALID no-serve window under the registered rule; every share in this topology is void")
+        print(f"\n== {topology}: sync windows {len(wins)}, pre-window points dropped from {stale}; {quiet_text} ==")
         void = sorted(label for label, r in rates.items() if r is None)
         if void:
             print(f"  void under the registered rule: {', '.join(void)}")
@@ -430,6 +435,8 @@ def _synthetic(root: Path, **tweak: object) -> Path:
     drop_window = set(tweak.get("drop_window", ()))  # type: ignore[arg-type]
     drop_ctx = set(tweak.get("drop_ctx", ()))  # type: ignore[arg-type]
     untaken = set(tweak.get("untaken", ()))  # type: ignore[arg-type]
+    # Topologies whose no-serve windows all stall twice: void under the rule.
+    quiet_void = set(tweak.get("quiet_void", ()))  # type: ignore[arg-type]
     no_stale = bool(tweak.get("no_stale", False))
     t2_context = str(tweak.get("t2_context", "split"))
     quiet_rate = 2.5
@@ -462,7 +469,7 @@ def _synthetic(root: Path, **tweak: object) -> Path:
                 return
             ctx.append(f"CTX\t{_stamp(clock)}\t{topology}\t{tag}\t{key}\t{value}")
 
-        def window(label: str, seconds: float, blocks_per_s: float) -> None:
+        def window(label: str, seconds: float, blocks_per_s: float, stalls: int = 0) -> None:
             nonlocal height, last_point
             if label in drop_window:
                 return
@@ -472,7 +479,7 @@ def _synthetic(root: Path, **tweak: object) -> Path:
             first = height
             while k * point_every <= seconds:
                 at = clock + k * point_every
-                h = first + int(round(blocks_per_s * k * point_every))
+                h = first if 0 < k <= stalls else first + int(round(blocks_per_s * k * point_every))
                 syn.append(f"SYNCH\t{_stamp(at)}\t{label}\t{topology}\t{h}\t{target}")
                 last_point = (at, h)
                 height = h
@@ -510,7 +517,8 @@ def _synthetic(root: Path, **tweak: object) -> Path:
         for pas in PASSES:
             obs.append(f"NOTE\tpass {pas} order {' '.join(orders[pas])}")
             env_row(f"pass.{topology}.{pas}.start")
-            window(f"{topology}.{pas}.quiet", quiet_seconds, quiet_rate)
+            quiet_stalls = 2 if topology in quiet_void else 0
+            window(f"{topology}.{pas}.quiet", quiet_seconds, quiet_rate, quiet_stalls)
             clock += quiet_seconds
             for cell in orders[pas]:
                 label = f"{topology}.{pas}.{cell}"
@@ -530,7 +538,7 @@ def _synthetic(root: Path, **tweak: object) -> Path:
                 window(label, wall_ms / 1000, quiet_rate * share_at.get((topology, cell), default_share[topology][cell]))
                 clock += wall_ms / 1000
                 env_row(f"end.{label}")
-                window(f"{topology}.{pas}.quiet{cell}", quiet_seconds, quiet_rate)
+                window(f"{topology}.{pas}.quiet{cell}", quiet_seconds, quiet_rate, quiet_stalls)
                 clock += quiet_seconds
             env_row(f"pass.{topology}.{pas}.end")
         context("after")
@@ -602,6 +610,9 @@ def selftest() -> int:
     run("cut responses are counted per block and per cell", 0, (
         "t1.1.mech64     ", "cut   3", "mech64  share", "cut 9 of 1536 responses"),
         cut={("t1", "mech64"): 3})
+    run("every no-serve window void: said, not a crash, and every share in that topology void", 0, (
+        "t2p: sync windows 21", "NO VALID no-serve window under the registered rule", "t2p.1.mech8", "VOID",
+        "T2' mech8 nan %"), quiet_void={"t2p"})
     run("a capture with no pre-window points reads the same", 0, (
         "pre-window points dropped from 0", "96 % and 92 %: held"), no_stale=True)
     if failures:
@@ -609,7 +620,7 @@ def selftest() -> int:
         for failure in failures:
             print("  " + failure)
         return 1
-    print("selftest: 15 cases pass")
+    print("selftest: 16 cases pass")
     return 0
 
 
