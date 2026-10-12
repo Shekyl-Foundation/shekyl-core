@@ -30,8 +30,9 @@
 //! rounded up. It still writes what the design retires after that, each
 //! marked where it is written: a refused burn computation reported as
 //! zero, and a pool count whose meaning depends on the caller. The
-//! connection counts went to the board at 3.49 (RK-Q3): every connector,
-//! one snapshot with `has_peers`, and no subtraction.
+//! connection counts went to the board at 3.49 (RK-Q3): handshaken
+//! sessions on every connector, one snapshot with `has_peers`, and no
+//! subtraction.
 //!
 //! **The store's size is a Status member and is read with Status.** While
 //! a restricted reply carried it rounded, it was read for every caller, so

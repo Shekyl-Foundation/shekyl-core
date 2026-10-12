@@ -13,24 +13,26 @@
 //!
 //! What a restricted (public) caller costs, exactly:
 //!
-//! - **Not read:** Status (start time, the volume's free space, the
-//!   alt-block count, the two connection counts) and Peers (the socket
-//!   counts and peerlist sizes).
-//! - **Read, as for every caller:** the chain, the pool's broadcast count,
-//!   and the board's session counts, which are behind Health's `has_peers`
-//!   and are skipped only for an offline node.
-//! - **Read, as a transitional exception:** the store's size on disk, one
-//!   `stat` of the data file. A restricted reply still carries
-//!   `database_size`, rounded, so the caller receives it and it is read
-//!   for them. It joins the not-read set when a restricted reply stops
-//!   carrying Status (RK-Q8).
+//! - **Not read:** Status and Peers. Status is the start time, the
+//!   volume's free space, the alt-block count, the build's version, and
+//!   the store's size. Peers is the socket counts and the peerlist sizes.
+//! - **Read, as for every caller of an online node:** the chain, the
+//!   pool's broadcast count, and one snapshot of the board's handshaken
+//!   sessions. Health's `has_peers` is that snapshot. An offline node
+//!   skips it: offline binds no hub, and no sessions is configuration.
+//!
+//! The two connection counts are not a read of their own. When Status is
+//! shown they are that same snapshot, per direction. A restricted reply
+//! does not carry them. There is no further exception. Until RK-Q8 the
+//! store's size was read for every caller, because a restricted reply
+//! carried it rounded up; that read ended with the stand-ins.
 //!
 //! **This trait is the contract the store cutover inherits.** Today its one
 //! implementation reads the C++ core through the facts shim. When the Rust
 //! store replaces the C++ one, the implementation changes and this does
 //! not — which is why the rules that matter are stated here, on the trait,
 //! and tested against a double, rather than left to the C++ side to get
-//! right. Two in particular:
+//! right. Three in particular:
 //!
 //! - [`InfoFacts::chain`] describes **one** chain state. Everything it
 //!   returns that comes from the chain store is read under one lock and

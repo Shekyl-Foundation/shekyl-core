@@ -190,7 +190,7 @@ pub unsafe extern "C" fn shekyl_seam_session_counts(out: *mut ShekylSeamSessionC
     let Some(hub) = hub() else {
         return SHEKYL_SEAM_COUNT_ERR_NO_HUB;
     };
-    // One copy of the board; all three counts are of it.
+    // One copy of the board; both counts are of it.
     let board = hub.board();
     let count = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
     let counts = ShekylSeamSessionCounts {

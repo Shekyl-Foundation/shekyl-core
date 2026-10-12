@@ -414,15 +414,16 @@ every caller.) Health's
 another tip's difficulty. `synchronized` and the target come from the same
 adapter call (`src/rpc/rpc_facts_ffi.cpp:1179-1186` is the pattern).
 
-**As built in commit 4** these are five reads on one trait, `InfoFacts`
+**Commit 4 built five reads** on one trait, `InfoFacts`
 (`rust/shekyl-daemon-rpc/src/info_facts.rs`): `chain`, `pool_count`,
-`store_size`, `status` and `peers`. The grouping below is by what is read
-and for whom, which is what matters; the split into five traits was a
-sketch and bought nothing a second implementation needs yet. `NodeFacts`'
-three flags ride the chain snapshot, since they are read for every caller
-with it. At parity the session counts are still the C++ ones — the
-clearnet zone's total and its outbound count — carried in the Status read;
-reading them from the seam board is RK-Q3's commit.
+`store_size`, `status` and `peers`. **The trait has six.** RK-Q3 added
+`sessions`. The grouping below is by what is read and for whom, which is
+what matters; the split into five traits was a sketch and bought nothing
+a second implementation needs yet. `NodeFacts`' three flags ride the
+chain snapshot, since they are read for every caller with it. At commit 4
+the session counts were still the C++ ones — the clearnet zone's total
+and its outbound count — carried in the Status read. RK-Q3 moved them
+onto the seam board; the `PeerFacts` row is that read.
 
 Behind traits (`InfoChainFacts`, `PoolFacts`, `PeerFacts`, `NodeFacts`, `StatusFacts`),
 with the FFI shim as today's only implementation:
@@ -433,48 +434,51 @@ with the FFI shim as today's only implementation:
 | `PoolFacts` | pool count over the broadcast set; the unrelayed count | The broadcast count is read for every caller. The unrelayed count is read only with the host axis (RK-D24) |
 | `PeerFacts` | per-connector, per-direction session counts (feeding Health's `has_peers` and Status's two counts); peerlist sizes; per-connector socket counts | **Session counts from the seam board**, the one store; no subtraction. **Every read returns `Result<_, FactsFault>`, never a bare `u64`** (below). Whether `daemon-rpc` reads the hub directly or through new exports is an implementation detail for rule 25. **As built (commit 7, then RK-Q3's commit):** one export, `shekyl_seam_session_counts`, returns the handshaken rows in each direction from **one** copy of the board, and `InfoFacts::sessions` reads it. **A session is a handshaken row, for the counts as for `has_peers` (RK-Q3, ruled by Rick 2026-10-12; RK-Q4's filter).** `has_peers` is not stored: it is whether either count is non-zero, so in any reply that shows Status, `has_peers == (outgoing_connections_count + incoming_connections_count > 0)`, and a test holds every such reply to it. This commit first counted any row, handshake finished or not; that was changed before merge for three reasons. Peers' per-connector socket counts already report transport sockets, dials in flight included, so the session counts should not count sockets a second time. One reply should define a connection once, and any-row counts allowed `has_peers: false` beside a non-zero count. And a pre-handshake inbound row costs an outsider almost nothing, so counting it let anyone inflate this node's reported connectivity. It is made for every caller of an online node, because Health needs it; Status's two counts are projected from the same read and cost no second one. An offline node's counts are zero by configuration and the board is not read |
 | `NodeFacts` | offline, busy syncing, following degraded | Health's, read for every caller |
-| `StatusFacts` | start time, free space, alt-block count, and the store's on-disk size | Read only for a caller who receives Status (RK-D24), with one exception below |
+| `StatusFacts` | start time, free space, alt-block count, and the store's on-disk size | Read only for a caller who receives Status (RK-D24). The store's size is one of those reads. There is no exception |
 
 **Gathering by part — RK-D24.** The handler asks `Disclosure` which parts
 the caller receives and reads only those. Health, Identity, Chain,
 Economics and Pool's broadcast count are read for every caller. Status and
 Peers are read only for a caller who receives them, so their reads cannot
-fail a caller who was never going to see them. `PeerFacts`'s session counts
-feed two parts: Status's two aggregate counts are read with Status, and
-Health's `has_peers`, from commit 7, is read for everyone.
+fail a caller who was never going to see them. The session snapshot is
+read for every online caller, because Health's `has_peers` is everyone's,
+and Status's two counts are that snapshot projected into the part. They
+are not a second read made with Status.
 
-*What a public caller costs.* This paragraph first said such a caller
-"costs the node no filesystem or peer-registry read". That was wrong on
-both counts as built, and is corrected here (found in review of #1017,
-2026-10-10). The store's size is a filesystem read made for every caller
-while a restricted reply carries `database_size` rounded: the exception
-recorded below, which ends at RK-Q8. And since commit 7 the board's
-handshaken-session count is read for every caller of an online node,
-because Health is everyone's. What a public caller does not cost is the
-Status and Peers reads: the volume's free space, the start time, the
-alt-block count, the connection and socket counts, and the peerlist
-sizes.
+*What a public caller costs.* A public caller of an online node costs the
+chain, the pool's broadcast count, and one snapshot of handshaken
+sessions. The snapshot is Health's `has_peers`. Its counts are not written
+into a restricted reply. An offline node skips the snapshot. What a public
+caller does not cost is Status and Peers: the volume's free space, the
+start time, the alt-block count, the build's version, the store's size,
+the socket counts, and the peerlist sizes. Until 2026-10-11 the store's
+size was also read for this caller, because the reply carried it rounded
+(below). An earlier draft of this paragraph said a public caller cost no
+filesystem read and no peer-registry read; both halves were wrong as built
+(review of #1017, 2026-10-10).
 
 *Where the version string comes from.* The build's version string exists
 only in C++ (`SHEKYL_VERSION_FULL`); nothing in `rust/` has it. It is a
 Status field, so it rides the Status facts export as a string, one source,
-and is not read for a caller who will be shown the empty stand-in.
+and it is read only for a caller who is shown Status. A caller who is not
+shown Status gets no `version` key. An empty string is not how this reply
+withholds the version: a shown Status whose `version` is empty is refused
+(`GetInfoShapeError::EmptyVersion`).
 
-*One exception, for as long as parity lasts.* A restricted reply carries
-`database_size` today — rounded up to 5 GiB, but derived from the real
-size. The caller receives it, so it is read for that caller, and a failure
-of that one read refuses a `View` caller as it does a `Full` one. It joins
-the not-read set in RK-Q8's commit, when a restricted reply stops carrying
-Status at all. The other restricted stand-ins need no read: zero,
-`u64::MAX` and the empty string are constants.
+*Until RK-Q8, one read was made for a caller who would not be told its
+answer.* A restricted reply carried `database_size`, rounded up to 5 GiB
+but derived from the real size. The caller received that stand-in, so the
+size was read for that caller, and a failure refused a `View` caller as it
+did a `Full` one. The other stand-ins needed no read: zero, `u64::MAX` and
+the empty string were constants.
 
-**The exception ended 2026-10-11, with RK-Q8's commit.** The size is read
-with Status and for no one else. The test that pinned the exception,
+**That exception ended 2026-10-11, with RK-Q8.** The size is read with
+Status and for no one else. The test that pinned the exception,
 `an_unreadable_store_size_refuses_both_callers_while_parity_lasts`, is
 replaced by `an_unreadable_store_size_refuses_a_full_caller_and_not_a_view_caller`:
 with the size read failing, a view caller gets the reply it gets when the
 read succeeds and the read is not made for it, and a full caller gets the
-refusal. Gathering by part (RK-D24) now has no exception.
+refusal. Gathering by part (RK-D24) has no exception.
 
 *The size read must be able to fail, and say so (ruled 2026-10-10,
 RK-D23).* `BlockchainLMDB::get_database_size`
@@ -493,43 +497,53 @@ stat and its failure are entirely in Rust and are tested there, and the
 C++ side is tested for the name that crosses. Ruled 2026-10-10: no live
 test spanning the boundary is wanted.)
 
-*The test this decision requires* (commit 4): with `StatusFacts`' start
-time, free space and alt-block count set to fail, a `View` caller gets a
-full reply and a `Full` caller gets the refusal. A second case pins the
-exception: with the size read failing, both are refused.
+*The test this decision requires:* with Status's start time, free space
+and alt-block count set to fail, a `View` caller gets a full reply and a
+`Full` caller gets the refusal. The size read follows Status. With it
+failing, a view caller gets that same reply and the read is not made, and
+a full caller gets the refusal
+(`an_unreadable_store_size_refuses_a_full_caller_and_not_a_view_caller`).
 
 `rpc_connections_count` is the Rust connection tracker read natively; the
 two JSON-patch sites (`handlers/json.rs:82-100`, `json_rpc.rs:136-146`) are
 deleted.
 
-`has_peers` = at least one **handshaken** session on any connector. The
-board export does not read the handshake flag today
-(`rust/shekyl-ffi/src/seam_board_ffi.rs:69-74`); the facts read needs the
-handshaken count (RK-Q4).
+`has_peers` is at least one handshaken session on any connector (RK-Q4).
+It is not stored. `shekyl_seam_session_counts` returns the handshaken rows
+in each direction from one copy of the board
+(`rust/shekyl-ffi/src/seam_board_ffi.rs:186-199`), and
+`SessionCounts::has_peers` is whether either count is non-zero. The
+any-row export `shekyl_seam_board_count` does not read the handshake flag
+(`seam_board_ffi.rs:71-74`). That count is a dial cap. It is not this
+reply.
 
-**A missing hub is a fault, not zero peers.** Today's exports cannot say
-so. `shekyl_seam_board_count` returns `0` for a missing hub, `0` for an
-index that is not a connector or a direction, and `u64::MAX` when the
-count does not fit (`seam_board_ffi.rs:69-85`);
-`shekyl_seam_socket_count` returns `0` for the same three cases
-(`rust/shekyl-ffi/src/seam_ffi.rs:526-539`). Read through them, a daemon
+**A missing hub is a fault, not zero peers.** The any-row exports still
+cannot say so. `shekyl_seam_board_count` returns `0` for a missing hub,
+`0` for an index that is not a connector or a direction, and `u64::MAX`
+when the count does not fit (`seam_board_ffi.rs:76-87`);
+`shekyl_seam_socket_count` returns `0` for a missing hub and for an
+index that is not a connector or a direction
+(`rust/shekyl-ffi/src/seam_ffi.rs:528-538`). Read through either, a daemon
 whose hub is not up would report `has_peers = false` — the false
 `DaemonPeerless` of §3.1, rebuilt one layer down (RK-D23: that `0` is not
-an answer). So `PeerFacts` distinguishes them: a missing hub is a
-`FactsFault` (`rust/shekyl-daemon-rpc/src/chain_facts.rs:196`); zero
-sessions is `Ok(0)`; an index that is not a connector or direction is a
-programming error at the call site and is not representable as a count.
+an answer). The session export can say so. It returns
+`SHEKYL_SEAM_COUNT_ERR_NO_HUB` and writes nothing, and
+`InfoFacts::sessions` maps that to `FactsFault::HubAbsent`
+(`rust/shekyl-daemon-rpc/src/chain_facts.rs:216-221`). Zero sessions is
+`Ok`. `has_peers` is read from that result, never from an export that
+answers a missing hub with `0`.
 
-**The type lands at parity; the refusal does not.** The C++ handler
-answers a missing hub with zero counts and status OK, so a native handler
-that refused in commit 4 would differ from the oracle on a state no
-vector can express — a behaviour change inside the parity commit, which
-RK-D13 and the parent's RK-D8 forbid. In commit 4 `PeerFacts` already
-returns `Result`, and the handler maps the missing-hub fault to today's
-zeros in one named arm, as the serializer writes today's stand-ins. Commit
-7 deletes that arm: it is the commit that introduces `has_peers`, the
-first field for which the zero is a false answer, and it carries the
-version bump. From there a missing hub makes `get_info` refuse.
+**Commit 4's plan: the type lands at parity; the refusal does not.** The
+C++ handler answered a missing hub with zero counts and status OK, so a
+native handler that refused in commit 4 would have differed from the
+oracle on a state no vector can express — a behaviour change inside the
+parity commit, which RK-D13 and the parent's RK-D8 forbid. The plan was
+that `PeerFacts` already returned `Result`, and the handler mapped the
+missing-hub fault to the parity zeros in one named arm, as the serializer
+wrote the parity stand-ins. Commit 7 would delete that arm: it is the
+commit that introduces `has_peers`, the first field for which the zero is
+a false answer, and it carries the version bump. The next paragraph is
+why that arm was never in the tree.
 
 **Correction, 2026-10-10 (commit 7): the paragraph above describes a
 parity arm that commit 4 did not build.** At commit 4 nothing on the Rust
@@ -541,18 +555,22 @@ named arm to map one. The reply was the one the paragraph wanted, and the
 mechanism was not the one it describes. §4.4's "hub absent, parity" row
 and the mention in §5 row 4's gates recorded a test that did not exist.
 
-**As built in commit 7.** `Board::established_count` (`shekyl-seam`) and
-the export `shekyl_seam_established_count` (`shekyl-ffi`) give the
-handshaken count, with a missing hub as its own return code and nothing
-written. `shekyl-daemon-rpc` reads it directly: both sides are Rust, the
-crates share the daemon's link image, and the call does not visit C++.
-`InfoFacts::handshaken_sessions` returns `FactsFault::HubAbsent`
-(`rust/shekyl-daemon-rpc/src/chain_facts.rs`) for that code, and the
-handler reads it for every caller, since Health is everyone's. So the
-refusal is new in commit 7, not an arm removed. The Status counts and
-the Peers socket counts still cross as before and still read a missing
-hub as `0`; they are unreachable in that state, because the Health read
-refuses first. RK-Q3's commit moves the Status counts onto the board.
+**As built in commit 7, and replaced by RK-Q3.** Commit 7's
+`Board::established_count` (`shekyl-seam`) took no direction, and the
+export `shekyl_seam_established_count` (`shekyl-ffi`) wrote one handshaken
+total, with a missing hub as its own return code and nothing written.
+`shekyl-daemon-rpc` read it directly: both sides are Rust, the crates
+share the daemon's link image, and the call does not visit C++.
+`InfoFacts::handshaken_sessions` returned `FactsFault::HubAbsent` for
+that code, and the handler read it for every caller, since Health is
+everyone's. So the refusal was new in commit 7, not an arm removed. The
+Status counts and the Peers socket counts still crossed from C++ and
+still read a missing hub as `0`; they were unreachable in that state,
+because the Health read refused first. RK-Q3 replaced that export.
+`shekyl_seam_session_counts` returns the handshaken count in each
+direction from one snapshot, `sessions` is the trait method, and Status's
+two counts are that snapshot. The total is not stored. It is the two
+directions, and `has_peers` is whether either is non-zero.
 
 **An offline node is not a missing hub (found in review of commit 7,
 2026-10-10).** A daemon started `--offline` returns from p2p
