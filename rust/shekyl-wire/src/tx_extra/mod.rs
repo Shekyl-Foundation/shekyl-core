@@ -25,7 +25,7 @@
 use std::borrow::Cow;
 use std::io::{self, Read, Write};
 
-pub use shekyl_types::archival::DrawCommitment;
+pub use shekyl_types::archival::{DrawCommitment, DRAW_COMMITMENT_LEN};
 
 use crate::bytes::{read_array, read_byte};
 use crate::varint::{read_varint, write_varint};
@@ -823,6 +823,15 @@ pub fn conforming_pqc_leaf_entry() -> [u8; PQC_LEAF_ENTRY_LEN] {
     );
     e
 }
+
+/// The `0x0C` draw commitment every fixture coinbase carries: a fixed value
+/// with no opening, so a fixture block commits to a seed nobody reveals and
+/// issues no draw. Not zero, so a fixture cannot pass for the genesis
+/// block's commitment by accident. One constant for every crate's fixtures
+/// and for the C++ test writer, as [`conforming_pqc_leaf_entry`] is for the
+/// leaf entry.
+pub const CONFORMING_DRAW_COMMITMENT: DrawCommitment =
+    DrawCommitment::from_bytes([0xDC; DRAW_COMMITMENT_LEN]);
 
 /// `n` conforming `0x07` entries, concatenated.
 #[must_use]

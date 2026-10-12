@@ -1436,8 +1436,9 @@ was going to be, landed as one rule-07 change.
    with `SCHEMA_VERSION` 22 to 23, and no block writer: `count` needs
    `D`, which is increment 2's. The same shape as `SO-D10a`'s empty
    index. **LANDED:** `archival_block_draws` (`u64 → BlockDraws`,
-   ordinal 40) and `archival_drawable_digest` (`u64 → DrawableDigest`,
-   ordinal 41), layout 23, read as `ChainView::block_draws` (A18) and
+   ordinal 40; its draw count is 32 bits, the width of a draw index) and
+   `archival_drawable_digest` (`u64 → DrawableDigest`, ordinal 41),
+   layout 23, read as `ChainView::block_draws` (A18) and
    `ChainView::drawable_digest` (A19). Both reads answer `None` for a row
    that is not there; an all-zero digest is returned as a digest
    (`rust/shekyl-chain-store/src/schema.rs`; `store/archival_reads.rs`).
@@ -1501,10 +1502,13 @@ for decisions 7 and 8 in the table above:**
 
 **The slow C++ tests (ruled 2026-10-12).** Rust's writer generates a key
 on every call. The C++ unit scaffolds that lay a coinbase by hand build
-up to 180,000 blocks, so they call a test-only writer that takes a fixed
-commitment (`shekyl_test_coinbase_extra`; the precedent is
-`shekyl_test_conforming_pqc_leaf_entry`). Production is unchanged, and
-the test writer shares the production writer's one body.
+up to 180,000 blocks, so they call a test-only writer
+(`shekyl_test_coinbase_extra`; the precedent is
+`shekyl_test_conforming_pqc_leaf_entry`). It has the production writer's
+signature and writes the one fixture commitment every Rust fixture
+coinbase carries (`CONFORMING_DRAW_COMMITMENT`), so the C++ passes no
+bytes of its own. Production is unchanged, and the two writers share one
+body.
 
 **The split (ruled 2026-10-11), by what is checked:** the Slice C round
 builds the bundle verifier as a pure rule, receipts included, FN-DSA

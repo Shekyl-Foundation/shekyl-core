@@ -35,8 +35,9 @@ on:
   pull_request:
     branches: [dev]
     paths:
-      - "rust/shekyl-ffi/src/relay_zone_ffi/**"
-      - "rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
+      # Every Rust export is an operand: the gate also checks that each
+      # header declaration names one.
+      - "rust/**/*.rs"
       - "src/shekyl/shekyl_ffi.h"
       - "scripts/ci/check_ffi_signatures.sh"
       - "scripts/ci/cbindgen-ffi-signatures.toml"

@@ -729,7 +729,7 @@ fn validator_rejects_a_kem_field_of_the_wrong_length() {
 /// shape the validator already accepts.
 fn coinbase_with_outputs(n: usize) -> Transaction {
     use shekyl_wire::tx_extra::{
-        self, DrawCommitment, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES,
+        self, TxExtraField, COINBASE_NONCE_BYTES, CONFORMING_DRAW_COMMITMENT, HYBRID_KEM_CT_BYTES,
     };
     let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
     let mut tx = blk.miner_transaction;
@@ -747,7 +747,7 @@ fn coinbase_with_outputs(n: usize) -> Transaction {
     tx.prefix.extra = tx_extra::build_coinbase_extra(
         pk,
         &[0u8; COINBASE_NONCE_BYTES],
-        DrawCommitment::from_bytes([0xDC; 32]),
+        CONFORMING_DRAW_COMMITMENT,
         n,
         &vec![0x6a; HYBRID_KEM_CT_BYTES * n],
         &tx_extra::conforming_pqc_leaf_blob(n),

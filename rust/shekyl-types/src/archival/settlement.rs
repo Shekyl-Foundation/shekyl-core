@@ -45,8 +45,9 @@ pub const DRAWABLE_DIGEST_LEN: usize = 32;
 /// Width of a [`DrawCommitment`].
 pub const DRAW_COMMITMENT_LEN: usize = 32;
 
-/// Width of a stored [`BlockDraws`].
-pub const BLOCK_DRAWS_LEN: usize = 21;
+/// Width of a stored [`BlockDraws`]: the count and the carry at four bytes
+/// each, the shortfall at eight, and the revealed flag.
+pub const BLOCK_DRAWS_LEN: usize = size_of::<u32>() + size_of::<u32>() + size_of::<u64>() + 1;
 
 /// What one epoch settled for one pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -344,9 +345,11 @@ impl core::fmt::Debug for DrawCommitment {
 /// the block that wrote them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BlockDraws {
-    /// How many draws this block's producer made. Draw indices are below
-    /// it.
-    pub count: u64,
+    /// How many draws this block's producer made. A draw is named by its
+    /// index below this count, and an index is 32 bits on the wire, so the
+    /// count is held at that width: a row cannot record a draw no record
+    /// could name.
+    pub count: u32,
     /// The 32-bit fraction carried to the next block's count.
     pub carry: u32,
     /// The visible shortfall the count was computed from.

@@ -233,8 +233,9 @@ mod tests {
 
         // Whatever seed a block committed to, and whatever it hashes to,
         // there is no pair for a draw to select.
-        for seed in [[0u8; 32], [0xDC; 32]] {
-            assert_eq!(select_draw(&seed, &[0x22; 32], 0, d, |_| true), None);
+        const BLOCK_HASH: [u8; 32] = [0x22; 32];
+        for seed in [[0u8; 32], [0x11; 32]] {
+            assert_eq!(select_draw(&seed, &BLOCK_HASH, 0, d, |_| true), None);
         }
     }
 

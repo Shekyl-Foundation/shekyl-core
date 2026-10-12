@@ -465,7 +465,7 @@ where
         // witness key or seed yet, so its blocks issue no draw. The driver
         // that reveals a seed commits to one it can open (`SO-D12`
         // increment 3).
-        let mut commitment = [0xDC; 32];
+        let mut commitment = *shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT.as_bytes();
         commitment[..8].copy_from_slice(&self.next_tx_secret.to_le_bytes());
         self.next_tx_secret += 1;
         let rule_set: RuleSet = self.rules.in_force(facts.connecting);

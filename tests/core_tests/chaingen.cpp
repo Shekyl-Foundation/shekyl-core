@@ -656,8 +656,9 @@ void test_generator::fill_nonce(cryptonote::block& blk, const difficulty_type& d
   }
 }
 
-// The coinbase extra through the one writer (shekyl_coinbase_extra), zero
-// nonce: [0x01 pubkey, 0x02 nonce(8), 0x06 KEM, 0x07 leaf entries] for
+// The coinbase extra through the test writer (shekyl_test_coinbase_extra),
+// zero nonce: [0x01 pubkey, 0x02 nonce(8), 0x0C draw commitment, 0x06 KEM,
+// 0x07 leaf entries] for
 // tx.vout.size() outputs, judged by the coinbase grammar before it is handed
 // back. Every block_validation coinbase is built here, so a test that expects
 // a block to be refused is refused for the reason it is about, never for a
@@ -668,11 +669,10 @@ static bool write_coinbase_extra(transaction& tx, const crypto::public_key& tx_p
   const uint8_t nonce[SHEKYL_COINBASE_NONCE_BYTES] = {0};
   char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
   ShekylOwnedBuffer extra;
-  // The test writer, with a fixed commitment: a hand-laid coinbase needs
-  // no key generated for it (the production writer draws one per call).
-  const uint8_t commitment[32] = {0xDC};
+  // The test writer: a hand-laid coinbase needs no key generated for it
+  // (the production writer draws one per call).
   const int32_t rc = shekyl_test_coinbase_extra(
-    reinterpret_cast<const uint8_t*>(&tx_pub), nonce, commitment,
+    reinterpret_cast<const uint8_t*>(&tx_pub), nonce,
     kem_blob.empty() ? nullptr : kem_blob.data(), kem_blob.size(),
     leaf_blob.empty() ? nullptr : leaf_blob.data(), leaf_blob.size(),
     tx.vout.size(), &extra.buf, msg, sizeof(msg));

@@ -235,7 +235,7 @@ use super::{Canonical, CodecError};
 ///   three has a C++ counterpart to compare.
 /// - `23` — the secret draw's per-block state and the drawable set's
 ///   digest (`ARCHIVAL_SETTLEMENT_WRITER.md` §16, `SO-D12` increment 1).
-///   `archival_block_draws` (`u64 → block_draws`) and
+///   `archival_block_draws` (`u64 → block_draws`, 17 bytes) and
 ///   `archival_drawable_digest` (`u64 → drawable_digest`) are born
 ///   Rust-only, appended at ordinals 40 and 41 so no existing ordinal
 ///   moves. No block writes either yet. A `22` file lacks both, and

@@ -19,17 +19,11 @@
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use shekyl_crypto_pq::output::{construct_output, OutputData};
-use shekyl_wire::tx_extra::{self, DrawCommitment, COINBASE_NONCE_BYTES};
+use shekyl_wire::tx_extra::{self, COINBASE_NONCE_BYTES, CONFORMING_DRAW_COMMITMENT};
 use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 use zeroize::Zeroizing;
 
 use crate::Recipient;
-
-/// The `0x0C` commitment every harness coinbase carries. A fixed value
-/// with no opening: the harness has no producer, so its blocks commit to
-/// a seed nobody reveals and issue no draw. Not zero, so a fixture cannot
-/// pass for the genesis block's commitment by accident.
-pub const DRAW_COMMITMENT: DrawCommitment = DrawCommitment::from_bytes([0xDC; 32]);
 
 /// The coinbase tx secret `r` for a block at `height`: the height in the
 /// low eight bytes under a fixed `0x0A` fill. The fill keeps the value
@@ -77,9 +71,10 @@ fn output(recipient: &Recipient, height: u64, amount: u64) -> OutputData {
 /// one: one `Input::Gen(height)` (CEN-F1, F5), one output (F4) whose key
 /// and mask are the shared secret's (F9, F10), `Ct::Null` with one
 /// committed base (F3), and the grammar's `extra` for one output —
-/// `[0x01 r·G, 0x02 nonce(8), 0x06 KEM, 0x07 leaf]` — built by the
-/// grammar's one constructor (I19, I20). The nonce is zero: no rule reads
-/// its value. `unlock_time` is the caller's: CEN-F6 says what it must be
+/// `[0x01 r·G, 0x02 nonce(8), 0x0C commitment, 0x06 KEM, 0x07 leaf]` —
+/// built by the grammar's one constructor (I19, I20). The nonce is zero and
+/// the commitment is the fixtures' conforming one: no rule reads either
+/// value. `unlock_time` is the caller's: CEN-F6 says what it must be
 /// for a block the validator will pass, and a fixture built to exercise
 /// the store at the top of the height range needs the bytes, not the
 /// verdict.
@@ -99,7 +94,7 @@ pub fn paying(recipient: &Recipient, height: u64, unlock_time: u64, amount: u64)
     let extra = tx_extra::build_coinbase_extra(
         tx_pubkey(height),
         &[0; COINBASE_NONCE_BYTES],
-        DRAW_COMMITMENT,
+        CONFORMING_DRAW_COMMITMENT,
         1,
         &kem_blob,
         &leaf_blob,

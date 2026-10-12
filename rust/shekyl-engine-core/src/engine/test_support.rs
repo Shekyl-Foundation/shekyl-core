@@ -1197,7 +1197,8 @@ pub(crate) fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
 /// validator on the grammar before it reaches the property under test.
 pub(crate) fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {
     use shekyl_wire::tx_extra::{
-        self, DrawCommitment, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, TX_EXTRA_PUBKEY_LEN,
+        self, COINBASE_NONCE_BYTES, CONFORMING_DRAW_COMMITMENT, HYBRID_KEM_CT_BYTES,
+        TX_EXTRA_PUBKEY_LEN,
     };
     let kem = vec![0x6au8; HYBRID_KEM_CT_BYTES * n_outputs];
     let leaf = if n_outputs == 0 {
@@ -1208,7 +1209,7 @@ pub(crate) fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {
     tx_extra::build_coinbase_extra(
         [0x11; TX_EXTRA_PUBKEY_LEN],
         &[0; COINBASE_NONCE_BYTES],
-        DrawCommitment::from_bytes([0xDC; 32]),
+        CONFORMING_DRAW_COMMITMENT,
         n_outputs,
         &kem,
         &leaf,

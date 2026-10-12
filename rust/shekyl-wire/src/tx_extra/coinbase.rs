@@ -230,8 +230,14 @@ impl std::fmt::Display for CoinbaseBuildError {
 
 impl std::error::Error for CoinbaseBuildError {}
 
-/// How many leading [`COINBASE_TAGS`] a coinbase with no outputs carries.
-const LEAFLESS_TAGS: usize = 3;
+/// The trailing [`COINBASE_TAGS`] that exist only when the coinbase has
+/// outputs: the KEM ciphertexts and the leaf entries, one of each per
+/// output.
+const OUTPUT_FIELD_TAGS: usize = 2;
+
+/// How many leading [`COINBASE_TAGS`] a coinbase with no outputs carries:
+/// all but the output fields.
+const LEAFLESS_TAGS: usize = COINBASE_TAGS.len() - OUTPUT_FIELD_TAGS;
 
 /// The tag list a coinbase of `n_outputs` must carry, in order.
 fn canonical_tags(n_outputs: usize) -> &'static [u8] {
@@ -432,9 +438,8 @@ mod tests {
         TX_EXTRA_TAG_PADDING, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
     };
 
-    /// A commitment with no opening, and not the all-zero one: a test that
-    /// means genesis's says so.
-    const COMMITMENT: DrawCommitment = DrawCommitment::from_bytes([0xDC; 32]);
+    use crate::tx_extra::CONFORMING_DRAW_COMMITMENT as COMMITMENT;
+    use crate::tx_extra::DRAW_COMMITMENT_LEN;
 
     fn conforming(n: usize) -> Vec<TxExtraField> {
         let kem = vec![0x44u8; HYBRID_KEM_CT_BYTES * n];
@@ -586,7 +591,7 @@ mod tests {
     /// round-trips, and it is not the same as no commitment.
     #[test]
     fn an_all_zero_commitment_is_a_commitment_like_any_other() {
-        let zero = DrawCommitment::from_bytes([0; 32]);
+        let zero = DrawCommitment::from_bytes([0; DRAW_COMMITMENT_LEN]);
         for n in [0usize, 1] {
             let kem = vec![0x44u8; HYBRID_KEM_CT_BYTES * n];
             let leaf = if n == 0 {

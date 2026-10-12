@@ -17,7 +17,7 @@ use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::Coded;
 use shekyl_types::archival::{
     BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
-    SettlementRow, MAX_ATTESTATION_WITNESS_BYTES,
+    SettlementRow, BLOCK_DRAWS_LEN, MAX_ATTESTATION_WITNESS_BYTES,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -1123,9 +1123,9 @@ fn a18_block_draws_reads_the_row_or_none() {
     drop(snap);
     drop(store);
 
-    // Twenty bytes of fields, then a flag that is neither 0 nor 1.
-    let mut bytes = [0u8; 21];
-    bytes[20] = 2;
+    // The fields zeroed, then a flag that is neither 0 nor 1.
+    let mut bytes = [0u8; BLOCK_DRAWS_LEN];
+    bytes[BLOCK_DRAWS_LEN - 1] = 2;
     plant(&path, |txn| {
         let mut t = txn.open_table(ARCHIVAL_BLOCK_DRAWS).expect("t");
         t.insert(

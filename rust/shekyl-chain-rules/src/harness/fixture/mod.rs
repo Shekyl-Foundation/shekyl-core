@@ -25,8 +25,9 @@ use crate::verdict::TxSlot;
 
 pub use crate::rules::tx_against::newest_admissible_reference;
 pub use price::{priced, priced_at, repriced};
-pub use shekyl_harness_wallet::coinbase::{paid, Paid, DRAW_COMMITMENT};
+pub use shekyl_harness_wallet::coinbase::{paid, Paid};
 pub use shekyl_harness_wallet::MinerWallet;
+pub use shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT;
 
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
@@ -316,14 +317,14 @@ pub fn pqc_extra(n_outputs: usize) -> Vec<u8> {
 /// `[0x01 pubkey, 0x02 nonce(8), 0x0C commitment, 0x06, 0x07]`, built by
 /// the grammar's own constructor so the fixture cannot drift from the
 /// rule. The pubkey is `G`, the nonce zero and the commitment
-/// [`DRAW_COMMITMENT`]: no rule reads any of the three values.
+/// [`CONFORMING_DRAW_COMMITMENT`]: no rule reads any of the three values.
 pub fn coinbase_extra(n_outputs: usize) -> Vec<u8> {
     let kem = vec![0x5A; HYBRID_KEM_CT_BYTES * n_outputs];
     let leaf = conforming_pqc_leaf_blob(n_outputs);
     tx_extra::build_coinbase_extra(
         G,
         &[0; COINBASE_NONCE_BYTES],
-        DRAW_COMMITMENT,
+        CONFORMING_DRAW_COMMITMENT,
         n_outputs,
         &kem,
         &leaf,

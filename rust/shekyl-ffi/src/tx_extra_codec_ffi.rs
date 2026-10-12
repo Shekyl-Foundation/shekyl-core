@@ -62,10 +62,9 @@ use std::os::raw::c_char;
 use shekyl_wire::tx_extra::{
     admitted_leaf_blob, build_coinbase_extra, check_tx_extra_shape, parse, tag_carries_payload,
     CoinbaseBuildError, DrawCommitment, ExtraShapeError, ExtraSubject, TxExtraField,
-    COINBASE_NONCE_BYTES, COINBASE_NONCE_OFFSET_FROM_PUBKEY, TX_EXTRA_PUBKEY_LEN,
+    COINBASE_NONCE_BYTES, COINBASE_NONCE_OFFSET_FROM_PUBKEY, CONFORMING_DRAW_COMMITMENT,
+    TX_EXTRA_PUBKEY_LEN,
 };
-
-use shekyl_types::archival::DRAW_COMMITMENT_LEN;
 
 use crate::archival_ffi::commit_and_discard;
 use crate::legacy_types::ShekylBuffer;
@@ -375,26 +374,27 @@ pub unsafe extern "C" fn shekyl_coinbase_extra(
     }
 }
 
-/// [`shekyl_coinbase_extra`] with the commitment given, for C++ **tests**
+/// [`shekyl_coinbase_extra`] without the key generation, for C++ **tests**
 /// that lay a coinbase by hand and build tens of thousands of blocks.
 ///
 /// The production writer generates an FN-DSA-1024 key on every call, about
-/// 6 ms, which a test appending 130,000 blocks cannot pay. This takes the
-/// 32 bytes from its caller and draws nothing. Same grammar, same layout,
-/// same refusals; only where the commitment comes from differs.
+/// 6 ms, which a test appending 130,000 blocks cannot pay. This writes
+/// [`CONFORMING_DRAW_COMMITMENT`], the fixture value every Rust fixture
+/// coinbase carries, and draws nothing. The signature is the production
+/// writer's, so a test helper differs from production by the function it
+/// names and by nothing it passes. Same grammar, same layout, same
+/// refusals: the two share [`lay_coinbase_extra`].
 ///
 /// Test-support surface, not consensus, as
 /// `shekyl_test_conforming_pqc_leaf_entry` is. No production C++ calls it:
 /// the daemon's coinbase is built by [`shekyl_coinbase_extra`].
 ///
 /// # Safety
-/// As [`shekyl_coinbase_extra`], and `draw_commitment` is readable for
-/// [`DRAW_COMMITMENT_LEN`] bytes.
+/// As [`shekyl_coinbase_extra`].
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_test_coinbase_extra(
     tx_pubkey: *const u8,
     nonce: *const u8,
-    draw_commitment: *const u8,
     kem: *const u8,
     kem_len: usize,
     leaf: *const u8,
@@ -404,15 +404,6 @@ pub unsafe extern "C" fn shekyl_test_coinbase_extra(
     out_msg: *mut c_char,
     out_msg_cap: usize,
 ) -> i32 {
-    if draw_commitment.is_null() {
-        return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
-    }
-    // SAFETY: caller contract on `draw_commitment`, checked non-null.
-    let Some(given) = (unsafe { bytes(draw_commitment, DRAW_COMMITMENT_LEN) }) else {
-        return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
-    };
-    let mut commitment = [0u8; DRAW_COMMITMENT_LEN];
-    commitment.copy_from_slice(given);
     let fields = CoinbaseFields {
         tx_pubkey,
         nonce,
@@ -425,7 +416,7 @@ pub unsafe extern "C" fn shekyl_test_coinbase_extra(
     // SAFETY: the caller's contracts, passed through unchanged.
     unsafe {
         lay_coinbase_extra(&fields, out, out_msg, out_msg_cap, || {
-            Some(DrawCommitment::from_bytes(commitment))
+            Some(CONFORMING_DRAW_COMMITMENT)
         })
     }
 }
@@ -540,7 +531,7 @@ mod tests {
     const NONCE: [u8; COINBASE_NONCE_BYTES] = [0xC0, 0x1D, 0xBE, 0xEF, 0, 0, 0, 1];
     /// A commitment for extras these tests lay out by hand. The writer
     /// under test takes none: it draws its own, read back with [`drawn`].
-    const COMMITMENT: DrawCommitment = DrawCommitment::from_bytes([0xDC; 32]);
+    const COMMITMENT: DrawCommitment = CONFORMING_DRAW_COMMITMENT;
 
     /// The commitment the writer drew into `extra`.
     fn drawn(extra: &[u8]) -> DrawCommitment {
@@ -594,10 +585,10 @@ mod tests {
     }
 
     /// The test writer lays the same extra as the pure writer for the
-    /// commitment it is given, and draws nothing: two calls agree byte for
+    /// conforming commitment, and draws nothing: two calls agree byte for
     /// byte, which two calls of the production writer never do.
     #[test]
-    fn the_test_writer_carries_the_commitment_it_is_given() {
+    fn the_test_writer_carries_the_conforming_commitment() {
         let kem = vec![0x44u8; shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES];
         let leaf = conforming_pqc_leaf_blob(1);
         let call = || {
@@ -607,7 +598,6 @@ mod tests {
                 shekyl_test_coinbase_extra(
                     [0x11u8; 32].as_ptr(),
                     NONCE.as_ptr(),
-                    COMMITMENT.as_bytes().as_ptr(),
                     kem.as_ptr(),
                     kem.len(),
                     leaf.as_ptr(),
@@ -628,26 +618,6 @@ mod tests {
             build_coinbase_extra([0x11; 32], &NONCE, COMMITMENT, 1, &kem, &leaf).expect("builds")
         );
         assert_eq!(call().1, extra);
-        // A null commitment is a pointer fault, not a default.
-        let mut out = ShekylBuffer::null();
-        let mut msg = [0 as c_char; 256];
-        let rc = unsafe {
-            shekyl_test_coinbase_extra(
-                [0x11u8; 32].as_ptr(),
-                NONCE.as_ptr(),
-                std::ptr::null(),
-                kem.as_ptr(),
-                kem.len(),
-                leaf.as_ptr(),
-                leaf.len(),
-                1,
-                &raw mut out,
-                msg.as_mut_ptr(),
-                msg.len(),
-            )
-        };
-        assert_eq!(rc, SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR);
-        assert!(out.ptr.is_null());
     }
 
     #[test]

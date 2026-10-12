@@ -393,7 +393,7 @@ impl Canonical for IssuedDigest {
 /// Layout:
 ///
 /// ```text
-/// count       u64 LE   draws this block's producer made
+/// count       u32 LE   draws this block's producer made
 /// carry       u32 LE   the fraction carried to the next block's count
 /// shortfall   u64 LE   the visible shortfall the count was computed from
 /// revealed    u8       0 = seed not revealed, 1 = revealed
@@ -413,7 +413,7 @@ impl Canonical for BlockDraws {
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut r = Reader::new(Self::NAME, bytes);
-        let count = r.u64()?;
+        let count = r.u32()?;
         let carry = r.u32()?;
         let shortfall = r.u64()?;
         let revealed = match r.u8()? {

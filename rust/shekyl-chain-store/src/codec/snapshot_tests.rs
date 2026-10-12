@@ -733,7 +733,7 @@ impl Fixtures for IssuedDigest {
 impl Fixtures for BlockDraws {
     fn fixtures() -> Vec<(&'static str, Self)> {
         let row = |revealed| BlockDraws {
-            count: 0x0102_0304_0506_0708,
+            count: 0x0102_0304,
             carry: 0x1112_1314,
             shortfall: 0x2122_2324_2526_2728,
             revealed,

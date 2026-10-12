@@ -88,7 +88,8 @@ using TempLMDB = TempArchivalLMDB<cryptonote::BlockchainLMDB>;
 /// (F-B1a): the DB layer writes the accrual row before the epoch-close hook,
 /// so the epoch-boundary KAT below can assert the close sums it.
 // A minimal coinbase for the DB-level scaffolds below: no outputs, so its
-// extra is the coinbase grammar's leafless layout [0x01 pubkey, 0x02 nonce(8)]
+// extra is the coinbase grammar's leafless layout [0x01 pubkey, 0x02 nonce(8),
+// 0x0C draw commitment]
 // (TXE-Q6'). The DB collector applies the same shape rule admission applies,
 // so an empty extra -- which passed while the rule was only CEN-I19's
 // "no fields without outputs" -- is now refused below admission too. Built by
@@ -105,11 +106,10 @@ inline cryptonote::transaction minimal_coinbase(uint64_t height)
   const uint8_t nonce[SHEKYL_COINBASE_NONCE_BYTES] = {0};
   char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
   ShekylOwnedBuffer extra;
-  // The test writer, with a fixed commitment: the production writer
-  // generates a key per call, and the scaffolds here append up to 180,000
-  // blocks. Nothing opens this commitment, as nothing opens a real one yet.
-  const uint8_t commitment[32] = {0xDC};
-  const int32_t rc = shekyl_test_coinbase_extra(pubkey, nonce, commitment, nullptr, 0, nullptr, 0, 0,
+  // The test writer: the production writer generates a key per call, and
+  // the scaffolds here append up to 180,000 blocks. It writes Rust's
+  // fixture commitment, which nothing opens.
+  const int32_t rc = shekyl_test_coinbase_extra(pubkey, nonce, nullptr, 0, nullptr, 0, 0,
     &extra.buf, msg, sizeof(msg));
   if (rc != SHEKYL_TX_EXTRA_OK)
     throw std::runtime_error(std::string("minimal_coinbase: writer refused: ") + msg);

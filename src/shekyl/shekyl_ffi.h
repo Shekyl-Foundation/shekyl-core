@@ -1461,16 +1461,16 @@ int32_t shekyl_coinbase_extra(
     char* out_msg,
     size_t out_msg_cap);
 
-/// shekyl_coinbase_extra with the 32-byte draw commitment given, for C++
-/// TESTS that lay a coinbase by hand: the production writer generates a key
-/// on every call, which a test building tens of thousands of blocks cannot
-/// pay. Same grammar, layout and refusals. Test-support surface, not
+/// shekyl_coinbase_extra without the key generation, for C++ TESTS that lay
+/// a coinbase by hand: the production writer generates a key on every call,
+/// which a test building tens of thousands of blocks cannot pay. It writes
+/// the fixture commitment Rust's own fixtures carry and draws nothing. Same
+/// signature, grammar, layout and refusals. Test-support surface, not
 /// consensus, as shekyl_test_conforming_pqc_leaf_entry is; no production
 /// code calls it.
 int32_t shekyl_test_coinbase_extra(
     const uint8_t* tx_pubkey,
     const uint8_t* nonce,
-    const uint8_t* draw_commitment,
     const uint8_t* kem,
     size_t kem_len,
     const uint8_t* leaf,

@@ -26,6 +26,11 @@
 // -> the same error, before any C++ call site was touched. That parameter
 // was then removed again; the control is what it showed about the gate.
 //
+// The gate script also walks the other way, header -> Rust, over the whole
+// header: a declaration naming no Rust export fails by name. Its control: a
+// declaration of a function that does not exist, appended to the header,
+// is reported and the gate exits non-zero.
+//
 // Order matters: the hand-written header comes first so its type
 // definitions (ShekylRelayBlob, the callback typedefs, the #define flag
 // values) exist before the generated declarations reference them.

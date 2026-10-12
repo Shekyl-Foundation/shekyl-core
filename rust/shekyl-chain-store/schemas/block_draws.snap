@@ -2,8 +2,8 @@
 #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
 # and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
 codec = block_draws
-fixed_width = 21
+fixed_width = 17
 [fixtures]
-no_draws = 000000000000000000000000000000000000000000
-in_flight = 080706050403020114131211282726252423222100
-revealed = 080706050403020114131211282726252423222101
+no_draws = 0000000000000000000000000000000000
+in_flight = 0403020114131211282726252423222100
+revealed = 0403020114131211282726252423222101

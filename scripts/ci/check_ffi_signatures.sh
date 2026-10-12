@@ -12,7 +12,11 @@
 # compile error. See ffi_signature_gate.cpp for the full mechanism note and
 # the negative controls run at introduction.
 #
-# Scope: the files in SURFACES below, deliberately. Full-surface generation
+# Two directions. Signatures are compared for the files in SURFACES. And
+# every function the header declares anywhere must be a Rust export, so a
+# declaration cannot outlive the function it names.
+#
+# Signature scope: the files in SURFACES below, deliberately. Full-surface generation
 # is blocked on a named cbindgen limitation (cross-crate constant re-exports
 # render as unresolved identifiers — the account/PQ surface). A file is
 # gateable when every type crossing the boundary is defined in-file or is
@@ -109,6 +113,26 @@ for surface in "${SURFACES[@]}"; do
   done
 done
 
+# The other direction: every function the header declares must be exported
+# by Rust somewhere. The loop above walks Rust -> header, so a declaration
+# left behind when its export was removed or renamed is invisible to it (the
+# generated header simply omits the name and the compile compares nothing).
+# This walks header -> Rust over the WHOLE header, not per surface: a stale
+# declaration is wrong whichever file its export lived in, and no manifest
+# of which declaration belongs to which file has to be kept in step.
+all_exports="$(grep -rhoE 'extern "C" fn shekyl_[a-z0-9_]+' rust --include='*.rs' --exclude-dir=target | awk '{print $NF}' | sort -u)"
+declared="$(grep -oE '(^|[ *(])shekyl_[a-z0-9_]+\(' <<<"${header_decls}" | grep -oE 'shekyl_[a-z0-9_]+' | sort -u)"
+if [ -z "${all_exports}" ] || [ -z "${declared}" ]; then
+  echo "error: found no Rust exports or no header declarations — a pattern is wrong" >&2
+  exit 1
+fi
+stale="$(comm -23 <(echo "${declared}") <(echo "${all_exports}"))"
+if [ -n "${stale}" ]; then
+  echo "error: src/shekyl/shekyl_ffi.h declares functions no Rust source exports:" >&2
+  echo "${stale}" | sed 's/^/  /' >&2
+  exit 1
+fi
+
 g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src scripts/ci/ffi_signature_gate.cpp
 
-echo "FFI signatures: hand-written header agrees with the Rust definitions (${total} exports over ${#SURFACES[@]} files checked)"
+echo "FFI signatures: hand-written header agrees with the Rust definitions (${total} exports over ${#SURFACES[@]} files checked; $(wc -l <<<"${declared}") declarations all exported)"
