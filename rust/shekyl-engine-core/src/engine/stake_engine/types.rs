@@ -9,8 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_bond_builder::BondBuildError;
 use shekyl_archival_retention::epoch_is_claim_expired;
+use shekyl_archival_retention::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSignature, FnDsaHybridSigner};
+use shekyl_crypto_pq::signature::{HybridPublicKey, SCHEME_DOMAIN_RECEIPT};
 use shekyl_scanner::GuaranteedScanner;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::BroadcastTimelineObserver;
@@ -114,6 +116,20 @@ pub(crate) enum HeldPersona {
 }
 
 impl HeldPersona {
+    /// Take a derived bundle into the held set, tagged `bonded` or ephemeral,
+    /// decoding its receipt key once for the persona's life
+    /// ([`HeldReceiptKey`]). The one constructor: a persona cannot be held
+    /// without its receipt key beside it, so the two cannot have different
+    /// lifetimes.
+    pub(crate) fn hold(keys: ArchivalPKeys, bonded: bool) -> Self {
+        let receipt = HeldReceiptKey::decode(&keys);
+        if bonded {
+            HeldPersona::Bonded(BondedPersona(keys, receipt))
+        } else {
+            HeldPersona::Ephemeral(EphemeralPersona(keys, receipt))
+        }
+    }
+
     /// Borrow the underlying derived bundle (read-only; the secret never
     /// escapes — callers project the public [`PersonaIdentity`] out of it).
     pub(crate) fn keys(&self) -> &ArchivalPKeys {
@@ -122,15 +138,87 @@ impl HeldPersona {
             HeldPersona::Ephemeral(e) => &e.0,
         }
     }
+
+    /// The persona's decoded receipt key. Mutable because signing writes the
+    /// key's own working buffers; the actor's message loop is the one
+    /// borrower.
+    pub(crate) fn receipt_key_mut(&mut self) -> &mut HeldReceiptKey {
+        match self {
+            HeldPersona::Bonded(b) => &mut b.1,
+            HeldPersona::Ephemeral(e) => &mut e.1,
+        }
+    }
 }
 
 /// A held persona that carries a live bond. The wipe path cannot accept this
 /// type (typed contract #4), so a bonded persona is never zeroized while a bond
 /// depends on its `bond_spend` key.
-pub(crate) struct BondedPersona(pub(crate) ArchivalPKeys);
+///
+/// The second field is the persona's decoded receipt key. It is a field of
+/// the persona, not a map beside the held set, so that every path that drops
+/// the bundle — the activation wipe, the retire wipe, `on_stop` — drops and
+/// wipes the decoded key with it, with no second removal to forget.
+pub(crate) struct BondedPersona(pub(crate) ArchivalPKeys, pub(crate) HeldReceiptKey);
 
 /// A held persona with no live bond — the only thing [`wipe_ephemeral`] accepts.
-pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys);
+/// Its second field is the decoded receipt key, as on [`BondedPersona`].
+pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys, pub(crate) HeldReceiptKey);
+
+/// A persona's **receipt key, decoded once and held** — Ed25519 +
+/// FN-DSA-1024, hybrid scheme 3 (`FN_DSA_HYBRID.md` §6, `FND-4`).
+///
+/// **STAGED.** Nothing on the live serve path signs with this key: the
+/// serving task is handed the identity key's capability
+/// (`serving::pass_key`), and the receipt capability
+/// (`serving::receipt_key`) is built and tested but not selected. See that
+/// module for who switches and what would falsify the staging.
+///
+/// The decoded key is 118,640 bytes on the heap per held persona, wiped in
+/// place when the persona drops (`FnDsaHybridSigner`). It is decoded when
+/// the persona enters the held set, which is where the actor already holds
+/// `ArchivalPKeys::receipt_sign_sk`; no signature pays for a decode.
+///
+/// A receipt key that does not decode leaves the persona held and the actor
+/// running: the identity key, the bond-spend key and everything live are
+/// unaffected, and each receipt signature asked of this persona is refused
+/// with the scheme's own error. Derivation only ever yields a key the scheme
+/// generated, so this arm is for corrupted memory; it exists so that a
+/// staged key cannot give the live actor a way to fail to start.
+pub(crate) struct HeldReceiptKey(Option<FnDsaHybridSigner>);
+
+impl HeldReceiptKey {
+    fn decode(keys: &ArchivalPKeys) -> Self {
+        Self(FnDsaHybridSigner::new(&keys.receipt_sign_sk).ok())
+    }
+
+    /// The state a receipt key that did not decode is held in. Derivation
+    /// cannot produce one, so a test builds it directly.
+    #[cfg(test)]
+    pub(crate) fn undecoded() -> Self {
+        Self(None)
+    }
+
+    /// Sign one 112-byte pass transcript under `SCHEME_DOMAIN_RECEIPT`.
+    ///
+    /// The one place the receipt domain and the transcript are paired for
+    /// signing, as `sign_pass_transcript` is for the identity key: the
+    /// domain is not a parameter, so no caller can have this key sign
+    /// anything else.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidKeyMaterial` if the key did not decode when the persona was
+    /// taken into the held set, or if the scheme's signer gives up.
+    pub(crate) fn sign_transcript(
+        &mut self,
+        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<FnDsaHybridSignature, shekyl_crypto_pq::CryptoError> {
+        self.0
+            .as_mut()
+            .ok_or(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)?
+            .sign(SCHEME_DOMAIN_RECEIPT, message)
+    }
+}
 
 /// Wipe a retired ephemeral persona.
 ///
@@ -607,6 +695,15 @@ pub(crate) enum StakeEngineError {
     /// `late_sign_failures` counter and the client sees a refusal trailer.
     #[error("pass countersignature failed: {0}")]
     PassCountersign(#[source] shekyl_crypto_pq::CryptoError),
+
+    /// Signing a pass transcript with the held persona's **receipt key**
+    /// (hybrid scheme 3) failed inside the scheme — malformed resident key
+    /// material, the same class as [`Self::PassCountersign`], kept apart from
+    /// it so an operator can tell which of the persona's two signing keys
+    /// failed. STAGED with the receipt capability (`serving::receipt_key`):
+    /// no live path constructs it.
+    #[error("receipt signature failed: {0}")]
+    ReceiptSign(#[source] shekyl_crypto_pq::CryptoError),
 }
 
 /// The bonded union's transient scan inputs (SP-3 dual extractor): one

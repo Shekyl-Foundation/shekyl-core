@@ -543,11 +543,10 @@ impl Actor for StakeEngine {
             .bundles
             .into_iter()
             .map(|(slot, keys)| {
-                let tagged = if args.bonded.contains(&slot) {
-                    HeldPersona::Bonded(BondedPersona(keys))
-                } else {
-                    HeldPersona::Ephemeral(EphemeralPersona(keys))
-                };
+                // Tags the bundle, and decodes its receipt key beside it
+                // (`HeldPersona::hold`). The seed is not involved: the key
+                // bytes were derived at `assemble()` with the rest.
+                let tagged = HeldPersona::hold(keys, args.bonded.contains(&slot));
                 (slot, tagged)
             })
             .collect::<BTreeMap<_, _>>();

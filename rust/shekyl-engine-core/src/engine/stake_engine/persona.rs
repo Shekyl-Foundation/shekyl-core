@@ -9,6 +9,7 @@ use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
 use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_p_host::sign_pass_transcript;
 use shekyl_tor_control_wallet::service::OnionIdentity;
@@ -227,6 +228,54 @@ impl Message<SignPassTranscript> for StakeEngine {
         // once that re-key is staged (SH2_RESIDENT_KEY_AUDIT.md §6).
         sign_pass_transcript(&held.keys().hybrid_sign_sk, &msg.message)
             .map_err(StakeEngineError::PassCountersign)
+    }
+}
+
+/// Sign one pass transcript with the held persona's **receipt key** —
+/// Ed25519 + FN-DSA-1024, hybrid scheme 3, under `SCHEME_DOMAIN_RECEIPT`
+/// (`FN_DSA_HYBRID.md` §6, increment 4).
+///
+/// **STAGED.** The receipt-key counterpart of [`SignPassTranscript`], with
+/// one production sender, `serving::receipt_key::ResidentReceiptKey`, which
+/// the serving task is not started with. [`SignPassTranscript`] stays the
+/// live signer until the settlement lane's cutover switches the serve path
+/// in the change that makes a verifier accept scheme-3 receipts.
+///
+/// The shape is [`SignPassTranscript`]'s for the same reason: the secret
+/// does not cross the actor boundary. The 112-byte transcript goes in, the
+/// signature comes out. The domain is fixed where the key is held
+/// ([`HeldReceiptKey::sign_transcript`]), so this handler cannot sign
+/// anything else with the key even if asked. The transcript is the one the
+/// identity key signs today, unchanged.
+///
+/// The key was decoded when the persona entered the held set; the handler
+/// decodes nothing (`FND-4`).
+///
+/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], and there is
+/// no gate on the [`HeldPersona::Bonded`] tag, both as in
+/// [`SignPassTranscript`] and for its reasons.
+pub(crate) struct SignReceiptTranscript {
+    pub p_slot: PSlot,
+    pub message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+}
+
+impl Message<SignReceiptTranscript> for StakeEngine {
+    type Reply = Result<FnDsaHybridSignature, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: SignReceiptTranscript,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let held = self
+            .held
+            .get_mut(&msg.p_slot)
+            .ok_or(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })?;
+        held.receipt_key_mut()
+            .sign_transcript(&msg.message)
+            .map_err(StakeEngineError::ReceiptSign)
     }
 }
 
