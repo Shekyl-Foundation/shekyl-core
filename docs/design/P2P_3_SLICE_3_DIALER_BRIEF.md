@@ -240,10 +240,10 @@ added.
 disclosure sample, so a confirm-and-close dial learns addresses
 exactly as the harvest did; the harvest's one difference — no white
 write — existed for the seed special case, now withdrawn (slice 1
-§3). The `Harvest` aim and `DialOutcome::HarvestDone` are deleted in
-PR-3 (the crate: the variant, its `address()` arm, its `apply` arm
-and its test; recorded here, not changed in #1037, since the removal
-is more than one line).
+§3). `DialAim` is `Keep` and `Confirm`. `DialOutcome::HarvestDone` is
+DELETED: the variant, its `address()` arm, its `apply` arm and its
+test are gone. *Records-was: left for PR-3 because the removal was
+called more than one line.*
 
 The next wake can run while a dial is still in flight. Until
 `Hub::adopt`, that address is not an outbound session and a `Keep`
@@ -395,7 +395,7 @@ enum DialOutcome {
 | `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with | An outstanding gray draw is dropped. A white address stays white | Tor only (R2): written when `implicates_address` is set for that cause and reply, which on clearnet it never is. A `network_id` mismatch is `LevinHandshakeRejected`; on Tor it writes, on clearnet it does not. *Records-was: written on every connector* | No subscription. The mismatch does not call `add_host_fail` |
 | `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected` | Same as `DialFailed` | Same as `DialFailed` with `LevinHandshakeRejected`: Tor only (R2) | The score owner subscribes. A peerlist this node refuses is the event the score records |
 | `PayloadRefused` | Levin was well-formed and the strand refused the sync payload | No promotion, no demotion, no gray drop. An outstanding draw stays gray | Not written. The peer answered | None |
-| *`HarvestDone` — DELETED in PR-3 (Rick, 2026-10-11)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did, and the harvest's only difference (no white write) existed for the withdrawn seed exception. The crate's variant, its `address()` arm, its `apply` arm and its test go in PR-3 | — | — |
+| *`HarvestDone` — DELETED (Rick, 2026-10-11; no crate symbol)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was: left for PR-3 as "more than one line"* | — | — |
 | `Confirmed` | Aim `Confirm`. The strand accepted the sync payload. The owner closed in that turn. The relay was not flipped | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address | None |
 | `SessionAccepted` | Aim `Keep`. The strand accepted the sync payload and the session stays | An outstanding gray draw moves to white and `last_observed` is set. An address that is already white, on a session this node opened, moves the clock. Anything else writes nothing | Cleared for that address | None |
 

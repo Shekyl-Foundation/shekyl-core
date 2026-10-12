@@ -11,10 +11,9 @@
 //! from disk. **White** is an address this node confirmed by dialling it:
 //! the only way in is a uniform gray draw that the dialer then reports as
 //! `SessionAccepted` or `Confirmed` (brief §2). Nothing else writes white —
-//! not an inbound session, not a transcript, not an operator assertion, not
-//! a seed's harvest (seeds are ordinary peers, §3) — and that is a type fact here:
-//! there is no exported white type, and the only function that writes a
-//! white seat is [`Peerlist::apply`].
+//! not an inbound session, not a transcript, not an operator assertion —
+//! and that is a type fact here: there is no exported white type, and the
+//! only function that writes a white seat is [`Peerlist::apply`].
 //!
 //! An address has one seat. An outstanding draw is still gray: it counts
 //! toward gray, the snapshot names it gray, and the file keeps it. It is

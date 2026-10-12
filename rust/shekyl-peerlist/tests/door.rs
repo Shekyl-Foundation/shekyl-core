@@ -135,42 +135,6 @@ fn either_outcome_on_an_undrawn_ordinary_address_writes_nothing() {
 }
 
 #[test]
-fn a_harvest_writes_no_white_for_any_address() {
-    // Brief §3 (Rick, 2026-10-11): seeds are ordinary peers. A harvest of
-    // an address that was never drawn leaves it where it was, and a
-    // harvest of an outstanding draw returns it to drawable gray.
-    let mut rng = SplitMix64::new(3);
-    let mut list = Peerlist::new();
-    let undrawn = v4(250);
-    list.apply(
-        &DialOutcome::HarvestDone(undrawn.clone()),
-        at_hours(1),
-        &mut rng,
-    );
-    assert!(
-        !list.is_white(&undrawn) && !list.is_gray(&undrawn),
-        "an undrawn harvest seats nothing"
-    );
-
-    let drawn = v4(30);
-    assert_eq!(
-        list.admit_gray(&drawn, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
-        Ok(true)
-    );
-    draw_until(&mut list, &drawn, &mut rng);
-    list.apply(
-        &DialOutcome::HarvestDone(drawn.clone()),
-        at_hours(1),
-        &mut rng,
-    );
-    assert!(
-        list.is_gray(&drawn) && !list.is_white(&drawn),
-        "a harvest returns the draw to drawable gray"
-    );
-    draw_until(&mut list, &drawn, &mut rng);
-}
-
-#[test]
 fn an_outstanding_draw_survives_eviction_and_gray_may_sit_over_the_cap() {
     let mut rng = SplitMix64::new(14);
     let mut list = Peerlist::new();

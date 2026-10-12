@@ -299,11 +299,9 @@ impl Peerlist {
             DialOutcome::DialFailed(address) | DialOutcome::PeerlistRefused(address) => {
                 partition.drop_outstanding(address);
             }
-            // A harvest closed, or the strand refused the payload: the dial
-            // is over, white is unchanged, and an outstanding draw returns to
-            // drawable gray. `HarvestDone` writes no white for any address
-            // (brief §3, 2026-10-11; records-was: the Foundation fleet).
-            DialOutcome::HarvestDone(address) | DialOutcome::PayloadRefused(address) => {
+            // The strand refused the payload. White is unchanged. An
+            // outstanding draw returns to drawable gray.
+            DialOutcome::PayloadRefused(address) => {
                 partition.settle_outstanding(address);
             }
         }

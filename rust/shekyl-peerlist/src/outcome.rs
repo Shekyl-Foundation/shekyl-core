@@ -43,13 +43,9 @@ pub enum DialOutcome {
     SessionAccepted(NetworkAddress),
     /// The dial confirmed the address and closed: outbound was already at
     /// target. The same white write as `SessionAccepted`; no session
-    /// remains.
+    /// remains. A confirm-and-close dial is this outcome. There is no
+    /// harvest outcome.
     Confirmed(NetworkAddress),
-    /// A harvest closed. White is unchanged for every address (brief §3:
-    /// seeds are ordinary peers), and an outstanding draw of that address
-    /// returns to drawable gray: the dial is over, and only
-    /// [`crate::Peerlist::apply`] moves an outstanding draw.
-    HarvestDone(NetworkAddress),
     /// The dial did not reach a handshake. An outstanding gray draw is
     /// dropped; a white address stays white.
     DialFailed(NetworkAddress),
@@ -67,7 +63,6 @@ impl DialOutcome {
         match self {
             Self::SessionAccepted(a)
             | Self::Confirmed(a)
-            | Self::HarvestDone(a)
             | Self::DialFailed(a)
             | Self::PeerlistRefused(a)
             | Self::PayloadRefused(a) => a,
