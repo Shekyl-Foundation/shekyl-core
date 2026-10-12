@@ -66,9 +66,11 @@ use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{leaves_per_segment, BlockHeight};
 use shekyl_p_serve::{
     PServeEndpoint, PassKey, PassSigner, ProviderError, ShardBody, ShardProvider,
-    StoreShardProvider, TestKeySigner, REQUEST_HEADER_NAME, SIGNATURE_ENVELOPE_LEN,
+    StoreShardProvider, TestKeySigner, MAX_INFLIGHT, REQUEST_HEADER_NAME, SIGNATURE_ENVELOPE_LEN,
 };
 use shekyl_p_store::{BodyStore, StoreKey};
+use shekyl_runtime::{runtime_with_thread_hooks, Pool, RuntimeBudget, ThreadHooks, ThreadName};
+use shekyl_thread_priority::lower_current_thread;
 use shekyl_types::ShardId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -208,9 +210,14 @@ fn check_whole(shard_id: u64, out: &[u8]) {
         declared,
         "the body is not the length the head declares"
     );
-    assert!(
-        declared > size_of(shard_id).1 + SIGNATURE_ENVELOPE_LEN,
-        "the declared length does not cover the shard, its frame and the envelope"
+    // The body is the shard's bytes and the signature envelope, nothing
+    // more: the served frame was deleted with the unframed body (PR #1015,
+    // 2026-10-10). Sessions 1 and 2 measured the framed body, a header of a
+    // few bytes more per response.
+    assert_eq!(
+        declared,
+        size_of(shard_id).1 + SIGNATURE_ENVELOPE_LEN,
+        "the declared length is not the shard and its envelope"
     );
 }
 
@@ -301,9 +308,77 @@ fn percentile(sorted: &[u64], per_mille: usize) -> u64 {
     sorted[((sorted.len() - 1) * per_mille) / 1000]
 }
 
+/// The endpoint's runtime, built one of three ways by `BAT5_PRIORITY`.
+///
+/// Unset: today's probe runtime, four workers and Tokio's blocking
+/// defaults (sessions 1 and 2). `budget`: the serving host's budget
+/// (`SERVING_WORKERS` workers, `MAX_INFLIGHT` blocking threads) through
+/// the single constructor, every thread at the priority it inherits.
+/// `thread`: the same budget and constructor with the start hook the
+/// serving host installs — every worker and blocking thread lowers its
+/// own CPU priority as it starts (`SH-3`). It is the mechanism, not
+/// `shekyl-p-host` itself: the probe serves synthetic shards with an
+/// ephemeral key and has no onion. A `thread` arm whose lowering fails
+/// panics; a block that silently measured normal priority would be a
+/// wrong number with the right label.
+enum EndpointRuntime {
+    Plain(Runtime),
+    Pool(Pool),
+}
+
+impl std::ops::Deref for EndpointRuntime {
+    type Target = Runtime;
+
+    fn deref(&self) -> &Runtime {
+        match self {
+            Self::Plain(runtime) => runtime,
+            Self::Pool(pool) => pool,
+        }
+    }
+}
+
+/// `shekyl-p-host`'s serving budget (`runtime.rs`: `SERVING_WORKERS`,
+/// `SERVING_BLOCKING = MAX_INFLIGHT`), restated here because this crate
+/// cannot depend on the host that depends on it. The record of the run
+/// that uses it says so.
+const HOST_SERVING_WORKERS: usize = 2;
+
+fn endpoint_runtime() -> EndpointRuntime {
+    let host_budget = RuntimeBudget {
+        workers: std::num::NonZeroUsize::new(HOST_SERVING_WORKERS).expect("workers"),
+        blocking: std::num::NonZeroUsize::new(MAX_INFLIGHT).expect("blocking"),
+    };
+    let name = ThreadName::new("sk-serving-probe").expect("thread name");
+    match env("BAT5_PRIORITY").as_deref() {
+        None => EndpointRuntime::Plain(
+            Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .expect("endpoint runtime"),
+        ),
+        Some("budget") => EndpointRuntime::Pool(
+            runtime_with_thread_hooks(host_budget, &name, ThreadHooks::none())
+                .expect("endpoint runtime"),
+        ),
+        Some("thread") => EndpointRuntime::Pool(
+            runtime_with_thread_hooks(
+                host_budget,
+                &name,
+                ThreadHooks::pair(
+                    || lower_current_thread().expect("lower the serving thread's priority"),
+                    || {},
+                ),
+            )
+            .expect("endpoint runtime"),
+        ),
+        Some(other) => panic!("BAT5_PRIORITY must be unset, budget or thread, not {other:?}"),
+    }
+}
+
 /// The endpoint's side: its runtime, the endpoint, and the lateness task.
 struct Served {
-    runtime: Runtime,
+    runtime: EndpointRuntime,
     endpoint: PServeEndpoint,
     signer: Arc<TestKeySigner>,
     provider: Arc<Shards>,
@@ -351,11 +426,7 @@ impl Served {
             full: synthetic(size_of(3).1),
         });
 
-        let runtime = Builder::new_multi_thread()
-            .worker_threads(4)
-            .enable_all()
-            .build()
-            .expect("endpoint runtime");
+        let runtime = endpoint_runtime();
         let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
         let endpoint = runtime
             .block_on(PServeEndpoint::bind(
