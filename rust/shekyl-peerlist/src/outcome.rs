@@ -37,14 +37,16 @@ pub enum Source {
 /// white, through [`crate::Peerlist::apply`], whose match is total.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialOutcome {
-    /// The dial was kept as a session. An outstanding gray draw promotes;
-    /// an address already white moves its clock; anything else leaves white
-    /// unchanged.
+    /// The dial was kept as a session. An outstanding gray draw moves to
+    /// white and `last_observed` is set to the report's time. An address
+    /// already white moves that clock, because the session stayed.
+    /// Anything else leaves the lists unchanged.
     SessionAccepted(NetworkAddress),
     /// The dial confirmed the address and closed: outbound was already at
-    /// target. The same white write as `SessionAccepted`; no session
-    /// remains. A confirm-and-close dial is this outcome. There is no
-    /// harvest outcome.
+    /// target, and no session remains. An outstanding gray draw moves to
+    /// white, the same write as `SessionAccepted`. An address already white
+    /// keeps its clock: the session did not stay. Anything else leaves the
+    /// lists unchanged.
     Confirmed(NetworkAddress),
     /// The dial did not reach a handshake. An outstanding gray draw is
     /// dropped; a white address stays white.
@@ -68,6 +70,22 @@ impl DialOutcome {
             | Self::PayloadRefused(a) => a,
         }
     }
+}
+
+/// What a confirmation does to `last_observed` on an address that is
+/// already white.
+///
+/// An outstanding draw does not consult this: both confirmations write
+/// white and stamp the report's time. The clock moves only when the
+/// session stayed. A later confirmation picks one of these at
+/// [`crate::Peerlist::apply`]; the seat match cannot forget it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WhiteClock {
+    /// `SessionAccepted`. The session stayed, so `last_observed` becomes
+    /// the report's time.
+    Move,
+    /// `Confirmed`. The session closed in that turn, so the clock stays.
+    Hold,
 }
 
 /// Why an address was not admitted to gray.

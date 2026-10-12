@@ -12,7 +12,7 @@ use shekyl_relay_privacy::{rng::RelayRng, ConnectionId};
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{connector_for, BanList, ConnectorId};
 
-use crate::outcome::{DialOutcome, ListName, Refusal, Source};
+use crate::outcome::{DialOutcome, ListName, Refusal, Source, WhiteClock};
 use crate::partition::Partition;
 use crate::{white_diversity_floor, DISCLOSE_COUNT, WHITE_REFILL_LINE};
 
@@ -280,17 +280,21 @@ impl Peerlist {
     }
 
     /// The only writer of white and the only drop of an outstanding gray
-    /// draw (brief §5). The match is total.
+    /// draw (brief §5). The match is total: the seat, and, for a
+    /// confirmation, whether the session stayed.
     pub fn apply<R: RelayRng + ?Sized>(&mut self, outcome: &DialOutcome, now: Tick, rng: &mut R) {
         let Some(connector) = Self::connector_of(outcome.address()) else {
             return;
         };
         let partition = self.partition_mut(connector);
         match outcome {
-            // The one white write, or a clock move, or nothing: decided by
-            // the seat alone, inside `confirm` (brief §2, §11.1).
-            DialOutcome::SessionAccepted(address) | DialOutcome::Confirmed(address) => {
-                partition.confirm(address, now, rng);
+            // Outstanding draw: white, clock stamped `now`. Already white:
+            // the clock moves only because the session stayed (brief §5).
+            DialOutcome::SessionAccepted(address) => {
+                partition.confirm(address, now, rng, WhiteClock::Move);
+            }
+            DialOutcome::Confirmed(address) => {
+                partition.confirm(address, now, rng, WhiteClock::Hold);
             }
             DialOutcome::DialFailed(address) | DialOutcome::PeerlistRefused(address) => {
                 partition.drop_outstanding(address);

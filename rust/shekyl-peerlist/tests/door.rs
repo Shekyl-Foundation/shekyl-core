@@ -332,6 +332,39 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
 }
 
 #[test]
+fn a_confirm_and_close_does_not_move_a_white_clock() {
+    let mut rng = SplitMix64::new(13);
+    let mut list = Peerlist::new();
+    let connector = Peerlist::connector_of(&v4(1)).expect("served");
+    let peer = v4(11);
+    assert_eq!(
+        list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
+        Ok(true)
+    );
+    draw_until(&mut list, &peer, &mut rng);
+    list.apply(&DialOutcome::Confirmed(peer.clone()), at_hours(0), &mut rng);
+    assert!(list.is_white(&peer));
+    // The same address, already white, confirmed and closed again.
+    list.apply(
+        &DialOutcome::Confirmed(peer.clone()),
+        at_hours(20),
+        &mut rng,
+    );
+    assert!(list.is_white(&peer));
+    assert_eq!(
+        list.next_expiry(connector),
+        Some(Tick::new(EXPIRATION_PERIOD_NANOS)),
+        "a confirm-and-close does not move the clock"
+    );
+    assert_eq!(
+        list.white_count(connector, at_hours(24), &mut NoBans, &mut rng),
+        0,
+        "24 h after the promotion, not after the later confirm"
+    );
+    assert!(list.is_gray(&peer));
+}
+
+#[test]
 fn reload_is_gray_only_and_does_not_draw_former_white_first() {
     // Fifty addresses, ten of them white, saved and restored into fresh
     // lists; the first draw after reload is a former white one about a

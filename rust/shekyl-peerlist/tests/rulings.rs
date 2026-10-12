@@ -118,10 +118,11 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
             "every requester in the window gets the same sample, unchanged"
         );
     }
-    // Keep white alive past its own 24-hour expiry, then cross the window:
-    // 24 h after the draw a new sample is drawn.
+    // A kept session moves the clock, so white outlives its own 24-hour
+    // expiry. A confirm-and-close would not. Then cross the window: 24 h
+    // after the draw a new sample is drawn.
     for n in 1..=100 {
-        list.apply(&DialOutcome::Confirmed(v4(n)), at_hours(23), &mut rng);
+        list.apply(&DialOutcome::SessionAccepted(v4(n)), at_hours(23), &mut rng);
     }
     let later = list.disclose(
         connector,
@@ -149,9 +150,10 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
     let windows = 3_000_u32;
     for w in 0..windows {
         let now = Tick::new(u64::from(w) * DISCLOSE_WINDOW_NANOS + 1);
-        // Keep white alive across windows: re-confirm everything.
+        // A kept session moves the clock. A confirm-and-close would let
+        // white expire and the sample go empty.
         for a in &white {
-            list.apply(&DialOutcome::Confirmed(a.clone()), now, &mut rng);
+            list.apply(&DialOutcome::SessionAccepted(a.clone()), now, &mut rng);
         }
         let sample = list.disclose(connector, now, &mut NoBans, &mut rng);
         assert_eq!(sample.len(), DISCLOSE_COUNT);
@@ -652,8 +654,14 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
         "to the window's last tick"
     );
     // At the next draw the floor is checked: still below it, nothing.
+    // The kept sessions move the clock, so the empty sample is the floor
+    // and not an expiry of every white address.
     for a in &white[1..] {
-        list.apply(&DialOutcome::Confirmed(a.clone()), at_hours(24), &mut rng);
+        list.apply(
+            &DialOutcome::SessionAccepted(a.clone()),
+            at_hours(24),
+            &mut rng,
+        );
     }
     assert!(
         list.disclose(
