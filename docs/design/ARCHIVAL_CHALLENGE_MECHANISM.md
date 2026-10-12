@@ -2367,18 +2367,45 @@ other threads and not against the daemon's, and the fix for that shape is
 a CPU weight on the cgroup, which is its own follow-up and not a change to
 this mechanism.
 
+**Confirming run, read (2026-10-12).** `BA-T5` session 3
+([`ba_t5_serve_floor_device_20261012.md`](../benchmarks/ba_t5_serve_floor_device_20261012.md)),
+the shipped mechanism in the probe's serving runtime beside a daemon
+syncing a 4,800-block chain, three passes per topology:
+
+- **T1, daemon and serving process in one cgroup** (the sidecar shape):
+  the daemon kept **93 % at N = 8 and 91 % at N = 64** of its no-serve
+  sync rate, against 38 % for the same runtime at normal priority —
+  session 2's external nice reproduced. Serving at 6.6 and 7.9 responses
+  per second, p99 wake lateness 82 and 697 ms. `serving_priority_nice`
+  is current on this capture at 0.91.
+- **T2′, daemon in a different cpu cgroup** (an approximation of the
+  resident-service shape; T2 itself needs root this lane does not have):
+  the daemon kept **65 % at N = 8**, between the control's 29 % and T1's
+  93 %, and serving ran at 18 to 23 per second with p99 lateness of 19 to
+  100 ms. Nice does not cross the cgroup boundary: the serving group takes
+  the fair share its `cpu.weight` gives it, and nice inside the group
+  lowers the load it presents but does not yield the share. **The
+  mechanism gives a resident-service staker part of the benefit, not all
+  of it.** The fix for that shape is a lower CPU weight for the wallet's
+  serving host — its own cgroup, or a unit setting — which is its own
+  decision and is carried in `docs/FOLLOWUPS.md`; this mechanism is
+  unchanged.
+- Every mechanism block's serving threads read nice 19 in `/proc`; at
+  N = 64 two responses in 1,536 per topology were cut by the 30 s
+  write-stall timeout while the threads yielded.
+
 **Ledger.** A constant row `serving_priority_nice` (the Linux nice
 value, 19) on a new path set `serving-runtime` covering the serving
 runtime's construction and the priority crate. The budget constants are
 rows of their own on that path set, `serving_workers` (`2`) and
-`serving_blocking` (`MAX_INFLIGHT`), both *unmeasured* until the
-confirming run is the first measurement of this budget. The nice row is
-*estimated*
-until the confirming run lands — a band of 0.90 to 1.00 for the share of
-its no-serve sync rate the daemon keeps, from the external-nice arm —
-and only a *current* row listens to its path set, so a later change to
-the priority setup trips the ledger once that run has promoted the row,
-not before. The row's carrier says so.
+`serving_blocking` (`MAX_INFLIGHT`), both *unmeasured*: the confirming
+run ran under them and derived neither, so they stay unmeasured with
+that run as their evidence. The nice row was *estimated* — a band of 0.90
+to 1.00 for the share of its no-serve sync rate the daemon keeps, from
+the external-nice arm — until the confirming run landed, and is
+*current* on that run's T1 capture at 0.91 (2026-10-12). A current row
+listens to its path set, so a change to the priority setup now trips the
+ledger.
 
 ## 10. Standing rules for any agent working this
 

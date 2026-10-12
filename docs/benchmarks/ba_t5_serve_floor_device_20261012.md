@@ -1,10 +1,32 @@
 # `BA-T5` session 3: the `SH-3` confirming block — the shipped priority mechanism beside a syncing daemon, in two scheduler topologies. Floor run of 2026-10-12 (a discovery run)
 
-**State of this record: PRE-REGISTERED. No observation has been taken.**
+**State of this record: RUN COMPLETE, 2026-10-12 15:45Z to 16:27Z (the
+second start; the first is discarded, as the registration history says).**
 Everything below the heading "Registered before the run" was committed and
-pushed before the device was claimed for the measured run. The results are
-added under "Reading" by a later commit; the registered text is not edited
-after the run. A later change of reading gets its own section that says so.
+pushed before the measured run, and was last amended at `004ed6c6df`,
+before the start that counts. The results are under "Reading"; the
+registered text is not edited after the run. A later change of reading
+gets its own section that says so.
+
+**In one paragraph.** With the daemon and the serving probe in one cgroup
+(T1, the sidecar shape), the shipped mechanism gives the syncing daemon
+**93 % of its no-serve sync rate at N = 8 and 91 % at N = 64**,
+reproducing session 2's external nice (90 to 97 %), against 38 % for the
+same runtime at normal priority; serving runs at 6.6 and 7.9 responses per
+second with p99 wake lateness of 82 and 697 ms. With the daemon in a
+different cpu cgroup (T2′, the approximation of a resident service), the
+mechanism gives the daemon **65 % at N = 8** — between the normal-priority
+control's 29 % and T1's 93 %, matching neither registered hypothesis — and
+serving runs at 18 to 23 per second with p99 lateness of 19 to 100 ms: the
+serving group takes the fair share the cgroup weights give it, and nice
+inside that group lowers its load but does not yield it. Every mechanism
+block's serving threads read nice 19 in `/proc`; no control block's did.
+`serving_priority_nice` is measured at **0.91** on the T1 capture, inside
+its 0.90 to 1.00 estimate. P1 held; P2, P3 and P4 missed, each on the T2′
+side and each in the same direction: the daemon kept less and serving
+took more than a shared scheduling group would allow. The fix for the
+resident-service shape is a CPU weight for the wallet's serving host, its
+own cgroup or a unit setting, carried as a follow-up for a ruling.
 
 *Registration history.* Registered at `71c3bf0db9`. A rehearsal of both
 topologies in miniature (`BAT5_S3_DRY=1`, 2026-10-12 14:53Z, discarded)
@@ -243,12 +265,164 @@ dated note with each topology's result.
 
 ## Reading
 
-*Not yet taken.*
+Taken 2026-10-12 from the second start's capture, tree `004ed6c6df`,
+probe sha256 `3f65399b9645c17e…`, rustc 1.94.0, release profile. Per
+topology: the store-writing block and nine cells, every one exited 0;
+21 sync windows, none opened on a point from before it (the fixed poll);
+every registered cell, window, environment row and context row present.
+The resident daemon was not mining and did not restart. The numbers
+below are what `ba_t5_session3_reading.py` prints over the eight capture
+files; the T2′ `mech64` one-interval figures are computed beside it and
+labelled.
+
+### The scheduling context, as captured
+
+| | T1 | T2′ |
+| --- | --- | --- |
+| Daemon's cgroup | `…/user@<uid>.service/tmux-spawn-<id>.scope` (the run script's own) | `…/user@<uid>.service/app.slice/ba-t5-s3-<stamp>.scope` |
+| Serving probe's cgroup | the same scope | `…/user@<uid>.service/tmux-spawn-<id>.scope` |
+| Effective cpu cgroup of each | one: the tmux scope (`cpu.weight` 100) | daemon: `app.slice`; probe: the tmux scope (each `cpu.weight` 100, siblings under `user@<uid>.service`, whose `subtree_control` enables `cpu`) |
+| `sched_autogroup_enabled` | 1 | 1 |
+| P2 hypothesis the reader selects from this | (b): one cgroup | **(a)**: different cpu cgroups |
+
+The resident daemon sits in `/system.slice/shekyld-testnet.service`,
+a sibling of `user.slice` under a root whose `subtree_control` enables
+`cpu`: the same split as T2′, one level higher. T2′ reproduces T2's
+structure for this question.
+
+### The cells
+
+Cell medians over the three passes. Share: the block's sync rate over the
+mean of its two adjacent no-serve windows (session 2's median-of-all
+denominator in brackets). The no-serve medians were 2.81 blocks/s (T1,
+range 2.73 to 2.96) and 2.84 (T2′, 2.66 to 2.97): the daemon ran evenly
+through both syncs, unlike session 2's threefold spread, so the two
+denominators agree to a point or two.
+
+| Topology | Cell | Daemon's share of no-serve | Responses/s | p99 wake lateness | Cut responses | Serving threads at nice 19 |
+| --- | --- | --- | --- | --- | --- | --- |
+| T1 | mech8 | **93 %** (91) — 79, 93, 94 | 6.6 (5.3 to 11.4) | 82 ms | 0 of 1,536 | every block |
+| T1 | mech64 | **91 %** (90) — 90, 91, 96 | 7.9 (7.2 to 16.7) | 697 ms | 2 of 1,536 | every block |
+| T1 | ctrl8 | 38 % (37) — 37, 38, 38 | 31.4 | 7.1 ms | 0 of 12,288 | none |
+| T2′ | mech8 | **65 %** (65) — 65, 65, 65 | 18.4 | 18.7 ms | 0 of 1,536 | every block |
+| T2′ | mech64 | *void under the registered rule* (one-interval reading, two of three blocks: 51 %, 52 %) | 23.4 | 100 ms | 2 of 1,536 | every block |
+| T2′ | ctrl8 | 29 % (29) — 29, 29, 30 | 35.0 | 5.6 ms | 0 of 12,288 | none |
+
+*The T2′ `mech64` windows.* At 23 responses per second a 512-fetch block
+lasts 22 s, and the daemon wrote at most two log lines inside it; the
+registered rule needs three. Two of the three windows hold one interval
+of about 14 s, which reads 1.45 and 1.47 blocks/s against adjacent
+no-serve windows of 2.82 to 2.97 — about 51 %, printed here outside the
+rule and in no median. The third window holds one point and reads
+nothing. The cell's share is unmeasured under the rule; what the two
+intervals say is consistent with `mech8`'s 65 % and the direction of P2.
+
+### The mechanism took
+
+Every mechanism block's probe showed its serving-runtime threads
+(`sk-serving-prob…`) at nice 19 and nothing else at 19 — the two
+requester workers and the test's own threads at 0 — 23 to 66 serving
+threads per block (two workers and the blocking threads the in-flight
+count needed). Every control block's serving threads read 0. The thread
+histograms are in the `_ctx.tsv` files, one row per block.
+
+### The predictions, against the measurements
+
+| # | Prediction | Measured | |
+| --- | --- | --- | --- |
+| P1 | T1 with the mechanism keeps 90 to 100 % at N = 8 and N = 64 | 93 % and 91 % | **held** |
+| P2 | T2′ with the mechanism: (a) predicted from the context — the share falls toward the normal-priority control; (b) it matches T1 | 65 % at N = 8: 36 points above the control's 29 %, 28 points below T1's 93 %; by the registered reading nearer T1 than the control but not within 10 points of it | **missed** — neither (a) nor (b) as registered |
+| P3 | Serving throughput with the mechanism 5 to 17 responses/s | T1 6.6 and 7.9; T2′ 18.4 and 23.4 | **missed** (T2′) |
+| P4 | Serving executor p99 wake lateness with the mechanism 0.05 to 0.8 s | T1 82 and 697 ms; T2′ 19 and 100 ms | **missed** (T2′ at N = 8) |
+
+What the three misses say together is one thing, and it is the thing P2
+was registered to find: in T2′ the serving group is weighed against the
+daemon's group as a group, and inside its own group the serving threads'
+nice 19 is measured against the two requester workers and nothing else.
+The group takes about the fair share its `cpu.weight` entitles it to under
+contention, serves at 18 to 23 per second with a lightly loaded executor,
+and the daemon keeps 65 % — more than the 29 % it keeps against the same
+runtime at normal priority, because a group whose runnable threads carry
+nice-19 weights presents a far smaller load to the scheduler's balancing
+and to the parent's fair-share accounting than one whose threads carry
+nice-0 weights, but far less than the 93 % it keeps when the two share a
+group and nice orders every thread against every other. The registered
+reading of P2 drew its line at "nearer the control" and "within ten
+points of T1"; the measurement landed between the two lines.
+
+### Cut responses at N = 64
+
+Two of 1,536 responses in each topology's `mech64` cell were cut: the
+endpoint's 30 s write-stall timeout dropped a connection that made no
+progress for that long while the serving threads yielded at nice 19
+beside the syncing daemon. None at N = 8, none in any control block. The
+first start, before the probe recorded a cut as data, lost three of its
+six `mech64` blocks to this. A witness fetching from a persona in that
+state would see a reset and retry under `SF-D6`; two in 1,536 is the
+measured rate at the floor's worst case.
+
+### The ledger row
+
+`serving_priority_nice` moves from *estimated* to *current* on this
+session's T1 capture (`ba_t5_serve_floor_device_20261012_t1_obs.tsv`,
+tree `004ed6c6df`). The measured value is the lower of the two T1
+mechanism cells, **0.91** of the no-serve sync rate — inside the 0.90 to
+1.00 estimate taken from session 2's external-nice arm.
+
+### Environment
+
+- T1: 55.0 to 78.4 °C over 26 samples; 3 of 26 between-block clock samples
+  below 1.8 GHz (1.1 to 1.6 GHz, the governor's transients, as session 2
+  argued); `MemAvailable` ≥ 5,764 MB; the syncing daemon 350 to 621 MB RSS
+  over a 4,800-block chain.
+- T2′: 67.7 to **80.3 °C**, the board already warm from T1's sync and
+  serving at 18 to 35 responses per second through its passes; every
+  clock sample at 1.8 GHz; `MemAvailable` ≥ 5,790 MB. The one reading over
+  80 °C is at the end of the second pass; CPU per response is 65 to 67 ms
+  in every cell of both topologies, so the clock held through the blocks.
+- Two syncs of the 4,800-block chain, each about 23 minutes at 2.8 blocks
+  per second with the probe idle; three passes fitted inside each with
+  more than 600 blocks to spare.
+
+### Limits of this run
+
+- **T2′ is not T2.** The resident-service shape proper puts the daemon in
+  `system.slice` against the wallet in `user.slice`; T2′ puts it in
+  `app.slice` against the tmux scope, both under `user@<uid>.service`.
+  The structure the result turns on — two cpu cgroups at equal weight
+  under a parent with the controller on — is the same; the weights and
+  the surrounding load are the device's, not a staker's.
+- **P2's registered reading could not say "in between".** It offered two
+  lines and the measurement fell between them; the miss is the reading's
+  coarseness as much as the hypothesis's. The next registration of this
+  question should predict the daemon's share as a band from the cgroup
+  weights, not as a choice between two endpoints.
+- **The T2′ `mech64` cell has no share under the rule.** At 23 responses
+  per second the block is too short for three log lines; a later run at
+  this throughput needs 1,024 fetches or more in that cell.
+- **Three blocks per cell**, as in session 2; the T2′ cells are
+  remarkably tight (65, 65, 65; 29, 29, 30), the T1 cells less so
+  (79 to 94 at `mech8`, where the first block ran during the daemon's
+  early, slower sync).
+- **Not measured:** the real T2, Tor, a cold cache, other shard sizes, a
+  CPU weight on the serving group.
 
 ## Files
 
-*Added with the reading.* The probe is
-`rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs` (`BAT5_PRIORITY`); the
-run script is `scripts/bench/ba_t5_session3_run.sh`, the sync poll
-`scripts/bench/ba_t5_sync_poll.sh`; the reader
-`scripts/bench/ba_t5_session3_reading.py`, with a selftest.
+- `ba_t5_serve_floor_device_20261012_t1_obs.tsv` (sha256 `cf5637bcbdbeddd4b3e94299a66242c4ba12b828e07633db84417194b1c64952`),
+  `_t1_env.tsv` (`d90d5ef30a81ee4e943cd8d35c2f6a9a9bcae8731c3ec99fe9843995da5d2d45`),
+  `_t1_sync.tsv` (`afb2a967e514f1b71d720b8e76d6afcebe6e56c0b81186338e5cb18a642e71ef`),
+  `_t1_ctx.tsv` (`a335a50de867866c996ee656ca6543c97caea92185cd674b4e952fe28f45e6cf`): topology T1.
+- `ba_t5_serve_floor_device_20261012_t2p_obs.tsv` (`6f7ae28d7a45c71a0dac05b67417c943d3cdbb1ef26f74db065efbad887e6cf2`),
+  `_t2p_env.tsv` (`600c5f0e9711d042f071e2ba5f5df800d4a17aa28885cccd5c64618feb0bd7d0`),
+  `_t2p_sync.tsv` (`040cc4bb5b5776e880954dc2e028930c34d55b895a859e548f564a4b31a4bda3`),
+  `_t2p_ctx.tsv` (`22970af981dd40306e98fd7ffb65003ff2d841b466c08c83bb9df9fce36341e3`): topology T2′.
+  The files are byte-identical to the ones the device wrote (checksums
+  matched on both sides). Headers name roles, not hosts.
+- The probe is `rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs`
+  (`BAT5_PRIORITY`, the `Fetch` outcome); the run script
+  `scripts/bench/ba_t5_session3_run.sh`, the sync poll
+  `scripts/bench/ba_t5_sync_poll.sh`; the reader
+  `scripts/bench/ba_t5_session3_reading.py`, with a selftest of fifteen
+  cases. The first start's outputs and the rehearsal's were removed from
+  the device with the run directory and are not in the tree.

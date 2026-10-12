@@ -11,6 +11,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **A CPU weight for the wallet's serving host when the daemon is a separate service (`SH-3` follow-up).** `BA-T5` session 3 (2026-10-12) measured the shipped per-thread nice 19 beside a syncing daemon in two scheduler topologies: with the daemon and the wallet in one cgroup the daemon keeps 91 to 93 % of its sync rate; with the daemon in a different cpu cgroup — the resident-service shape of a Pi staker, where `system.slice` and `user.slice` are weighed as groups under a root with the `cpu` controller on — it keeps 65 %, because nice does not cross a cgroup boundary and the serving group takes the fair share its `cpu.weight` gives it (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8, "Confirming run, read"). The fix is a lower CPU weight for the wallet's serving host: its own cgroup under the wallet's scope, or a unit setting (`CPUWeight=`) where the wallet is a service. This is a decision about what the wallet may do to its own cgroup without privilege and what an installer sets, not a change to the mechanism; it needs a ruling and then a measurement in the real T2 topology (a system unit, which needs root on the floor device). Falsify by a T2 measurement that reads 90 % or more with nice alone.
+  - Owner: [`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
+  - Target: pre-genesis
+
 - **The GUI wallet cannot decode a 3.42 `get_info` reply.** `already_generated_coins` has been a JSON number since #1005 and the GUI decodes it as a string, so the wallet reports its daemon disconnected and chain health fails. No interim fix (2026-10-08): testnet is not exercising the GUI, so the break is accepted until RK-5c's amount-encoding commit (RK-Q2) lands and the GUI lane, parked until the daemon is stable, makes its side of the change (`DAEMON_RPC_KV_GET_INFO.md` §5.1). RK-Q2 was ruled 2026-10-09 (decimal strings); blocked on RK-5c reaching that commit and on the GUI lane resuming.
   - Owner: [`DAEMON_RPC_KV_GET_INFO.md`](design/DAEMON_RPC_KV_GET_INFO.md) §3.3
   - Target: pre-genesis
