@@ -380,7 +380,9 @@ pub enum StoreCannot {
     /// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3) was
     /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that carries
     /// a release's anchors — a public network's posture. The door writes
-    /// a bit the rules did not admit and opens on Fakechain only.
+    /// a bit the rules did not admit and opens on Fakechain only, as the
+    /// C++'s `regtest_inject_archival_serve_credit` refuses off
+    /// `FAKECHAIN` (`blockchain.cpp:4715`).
     InjectionOffFakechain,
     /// The regtest serve-credit injection named a persona with no bond
     /// record. The door writes the one row the rules did not admit, but

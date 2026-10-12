@@ -264,6 +264,7 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("getblocktemplate",         on_getblocktemplate,          COMMAND_RPC_GETBLOCKTEMPLATE),
         DJRPC_WE("get_miner_data",          on_getminerdata,              COMMAND_RPC_GETMINERDATA),
         DJRPC_WE("generateblocks",          on_generateblocks,             COMMAND_RPC_GENERATEBLOCKS),
+        DJRPC_WE("inject_archival_serve_credit", on_inject_archival_serve_credit, COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT),
         DJRPC_WE("set_bans",              on_set_bans,                    COMMAND_RPC_SETBANS),
         DJRPC_WE("get_bans",              on_get_bans,                    COMMAND_RPC_GETBANS),
         DJRPC_WE("banned",                on_banned,                      COMMAND_RPC_BANNED),
