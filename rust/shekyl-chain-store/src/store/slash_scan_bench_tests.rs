@@ -327,9 +327,10 @@ fn listing(h: u64, personas: u64) -> Vec<Listed> {
     };
     if k < personas {
         // Keyless joins (wire `post_kind` 0): the records' `receipt_sign_pk`
-        // is empty, as it was when `SLASHED_SNAPSHOT_BODY_KECCAK` was taken.
-        // The wallet's builder commits a receipt key since FN-DSA increment
-        // 3, and a keyed join here would grow each bond row by the key and
+        // is empty, as it was when `SLASHED_SNAPSHOT_BODY_KECCAK` was taken,
+        // and a keyless record's stored bytes are what they were then. The
+        // wallet's builder commits a receipt key since FN-DSA increment 3,
+        // and a keyed join here would grow each bond row by the key and
         // move that pin for a reason the slash scan has no part in. A slash
         // over a keyed record is the ingest's live-lane slash chain.
         return vec![Listed::JoinKeyless { slot: slot(k) }];
@@ -784,17 +785,6 @@ impl SlashedChain {
             got.row_count(),
             per_family.join(", ")
         );
-        // The layout-22 pin still holds over the body with each bond row's
-        // receipt key field cut back out: the re-pin above is that field
-        // and nothing else.
-        let legacy = without_receipt_keys(&body);
-        assert_eq!(
-            hex(&keccak256(&legacy)),
-            SLASHED_SNAPSHOT_BODY_KECCAK_LAYOUT_22,
-            "the 0x04 body minus the bond rows' receipt keys ({} bytes) is not the layout-22 \
-             body — something besides `receipt_sign_pk` moved",
-            legacy.len()
-        );
         // And the trace's reader decodes exactly what the read encoded.
         let back = ArchivalSnapshot::read_body(&mut body.as_slice()).expect("reads");
         assert_eq!(back, got);
@@ -842,15 +832,7 @@ impl SlashedChain {
 /// close, so the tip holds thirteen budget rows (epochs 0–12) and twelve
 /// Σwork rows (epochs 0–11) where it held thirteen of each — one row
 /// fewer, 4 + 16 = 20 bytes, the whole delta from 18 856. Nothing else
-/// moved. Re-pinned 2026-10-12 at store layout 23 (FN-DSA increment 3):
-/// `bond_record` gained `receipt_sign_pk`, `u32 len ‖ bytes` after
-/// `bond_spend_pk`, and the four personas' joins commit no receipt key, so
-/// each of the four bond rows grew by its empty key's four-byte length
-/// prefix — 4 × 4 = 16 bytes, the whole delta from 18 836, the row count
-/// unchanged at 60. Nothing else moved, and the assertion beside this one
-/// holds that mechanically: the body with those four prefixes cut back out
-/// is the layout-22 body, to the hash
-/// ([`SLASHED_SNAPSHOT_BODY_KECCAK_LAYOUT_22`]). *Records-was:*
+/// moved. *Records-was:*
 /// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`
 /// (ARW-Q18); `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
 /// (speed factor alone); `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
@@ -859,60 +841,9 @@ impl SlashedChain {
 /// `d765602075af61f158b360063e38595dfc967138fc4b83d8a3dbf499e75fc42b`
 /// (the I13 flip, 19 396 bytes, 70 rows, until CEN-J27);
 /// `4d44488217508fac2d48422da0312ef31fdbe958935d0903832e05edb3fcb0a4`
-/// (CEN-J27, 18 856 bytes, 61 rows, until `SO-D11`);
-/// `ec2d0b760803781c389d97d7e019933ca84e5b7e01c3f067e5c8510fd797f001`
-/// (`SO-D11`, 18 836 bytes, 60 rows, until layout 23).
+/// (CEN-J27, 18 856 bytes, 61 rows, until `SO-D11`).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "bfffc5d95e3f1b6488dadfd5f5c802a6d34a2a38a7d9e5cd22e41233e2704924";
-
-/// The pin [`SLASHED_SNAPSHOT_BODY_KECCAK`] held at store layout 22, kept
-/// as a live expectation: [`without_receipt_keys`] over the layout-23 body
-/// must still hash to it. The layout change is then exactly the receipt
-/// key field of each bond row, and a second cause hiding in the same
-/// re-pin fails this line.
-const SLASHED_SNAPSHOT_BODY_KECCAK_LAYOUT_22: &str =
     "ec2d0b760803781c389d97d7e019933ca84e5b7e01c3f067e5c8510fd797f001";
-
-/// `body` with the `receipt_sign_pk` field — its `u32` length prefix and
-/// its bytes — cut out of every `archival_bond` row, and each such row's
-/// length prefix shortened to match: the body as store layout 22 framed
-/// it. Walked by the framing alone, like [`body_sections`]: a bond row is
-/// `persona[32] ‖ u32 len ‖ hybrid_pubkey ‖ u32 len ‖ bond_spend_pk ‖
-/// u32 len ‖ receipt_sign_pk ‖ …`.
-fn without_receipt_keys(body: &[u8]) -> Vec<u8> {
-    let u32_at = |at: usize| {
-        usize::try_from(u32::from_le_bytes(
-            body[at..at + 4].try_into().expect("4 bytes"),
-        ))
-        .expect("fits")
-    };
-    let sections = body_sections(body);
-    let bond = sections[SnapshotFamily::Bond as usize].clone();
-    let mut out = body[..bond.start].to_vec();
-    let n_rows = u64::from_le_bytes(
-        body[bond.start..bond.start + 8]
-            .try_into()
-            .expect("8 bytes"),
-    );
-    out.extend_from_slice(&n_rows.to_le_bytes());
-    let mut at = bond.start + 8;
-    for _ in 0..n_rows {
-        let row_len = u32_at(at);
-        let row = at + 4;
-        let hybrid_len = u32_at(row + 32);
-        let spend_at = row + 32 + 4 + hybrid_len;
-        let receipt_at = spend_at + 4 + u32_at(spend_at);
-        let receipt_field = 4 + u32_at(receipt_at);
-        let shortened = u32::try_from(row_len - receipt_field).expect("fits");
-        out.extend_from_slice(&shortened.to_le_bytes());
-        out.extend_from_slice(&body[row..receipt_at]);
-        out.extend_from_slice(&body[receipt_at + receipt_field..row + row_len]);
-        at = row + row_len;
-    }
-    assert_eq!(at, bond.end, "the bond rows are the whole bond section");
-    out.extend_from_slice(&body[bond.end..]);
-    out
-}
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own

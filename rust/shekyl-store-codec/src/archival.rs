@@ -31,7 +31,6 @@
 //! ```text
 //! hybrid_pubkey        u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES
 //! bond_spend_pk        u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES
-//! receipt_sign_pk      u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES; len 0 = none committed
 //! endpoint             [u8; 32]
 //! join_settlement_epoch u64
 //! bonded_total         u64                         atomic units
@@ -42,7 +41,21 @@
 //! claimed_epochs       u32 n ‖ u64 × n, strictly increasing,             n ≤ MAX_CLAIMED_EPOCH_ENTRIES,
 //!                      last − first ≤ MAX_CLAIM_AGE_W_EPOCHS
 //! first_paying_height  u8 present ‖ (u64 height if present)
+//! receipt_sign_pk      absent when empty; else u32 len ‖ bytes   1 ≤ len ≤ MAX_BOND_KEY_BYTES
 //! ```
+//!
+//! # The receipt key is trailing and optional (layout 23)
+//!
+//! `receipt_sign_pk` sits after `bond_spend_pk` in the struct and **last**
+//! in the bytes, and a record that commits none writes nothing for it. So
+//! a keyless record's encoding is exactly what it was before the field
+//! existed: every stored row, snapshot and captured trace taken over
+//! keyless records holds those bytes still (the C++ daemon's records are
+//! all keyless — it has no receipt-form JoinMarket). The price is a layout
+//! that depends on content, and it is paid in the decoder: bytes after
+//! `first_paying_height` are a present key or a refusal, and a present key
+//! of length zero is refused, because it would be a second encoding of the
+//! keyless record.
 //!
 //! # The v7 cross-check (ruled on PR #840)
 //!
@@ -74,7 +87,6 @@ impl Canonical for BondRecord {
     fn encode_into(&self, out: &mut Vec<u8>) {
         put_bytes(out, &self.hybrid_pubkey);
         put_bytes(out, &self.bond_spend_pk);
-        put_bytes(out, &self.receipt_sign_pk);
         out.extend_from_slice(&self.endpoint);
         out.extend_from_slice(&self.join_settlement_epoch.to_raw().to_le_bytes());
         out.extend_from_slice(&self.bonded_total.to_raw().to_le_bytes());
@@ -105,6 +117,11 @@ impl Canonical for BondRecord {
                 out.extend_from_slice(&h.to_raw().to_le_bytes());
             }
         }
+        // Trailing and optional: a keyless record ends here, byte for byte
+        // as it did before the field existed (module docs).
+        if !self.receipt_sign_pk.is_empty() {
+            put_bytes(out, &self.receipt_sign_pk);
+        }
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
@@ -119,12 +136,6 @@ impl Canonical for BondRecord {
             .bytes_bounded(
                 MAX_BOND_KEY_BYTES,
                 "bond_spend_pk exceeds MAX_BOND_KEY_BYTES",
-            )?
-            .to_vec();
-        let receipt_sign_pk = r
-            .bytes_bounded(
-                MAX_BOND_KEY_BYTES,
-                "receipt_sign_pk exceeds MAX_BOND_KEY_BYTES",
             )?
             .to_vec();
         let endpoint = r.array::<32>("buffer ends inside the endpoint")?;
@@ -201,6 +212,25 @@ impl Canonical for BondRecord {
                 Some(height)
             }
             _ => return Err(r.invalid("first-paying-height presence byte is neither 0 nor 1")),
+        };
+        // Nothing left: a keyless record. Fewer than a length prefix left:
+        // not a field, so trailing bytes. Otherwise a present receipt key,
+        // which is never empty — the empty key's one encoding is absence.
+        let receipt_sign_pk = if r.is_empty() {
+            Vec::new()
+        } else if r.remaining() < 4 {
+            return Err(r.invalid("trailing bytes after the record"));
+        } else {
+            let key = r.bytes_bounded(
+                MAX_BOND_KEY_BYTES,
+                "receipt_sign_pk exceeds MAX_BOND_KEY_BYTES",
+            )?;
+            if key.is_empty() {
+                return Err(r.invalid(
+                    "receipt_sign_pk is present and empty; an empty key is encoded by absence",
+                ));
+            }
+            key.to_vec()
         };
         if !r.is_empty() {
             return Err(r.invalid("trailing bytes after the record"));

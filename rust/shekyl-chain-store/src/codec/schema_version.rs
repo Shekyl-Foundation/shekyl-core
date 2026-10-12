@@ -234,24 +234,20 @@ use super::{Canonical, CodecError};
 ///   open with the true reason. No snapshot family moves: none of the
 ///   three has a C++ counterpart to compare.
 /// - `23` — the bond record carries the persona's receipt key
-///   (`FN_DSA_HYBRID.md` §6, increment 3; `ARCHIVAL_SERVE_CREDIT_SPEC.md`
-///   §6.3). `bond_record` gains `receipt_sign_pk`, `u32 len ‖ bytes`
-///   immediately after `bond_spend_pk` and bounded by `MAX_BOND_KEY_BYTES`:
-///   the canonical Ed25519 + FN-DSA-1024 hybrid public key a JoinMarket in
-///   its receipt form (bond-post `post_kind` 5) commits, empty for a record
-///   a keyless JoinMarket created. Every stored record moves — the empty
-///   key is four length bytes — so a `22` file's `archival_bond` rows
-///   decode under `23` with the endpoint read as a key length, and the
-///   bump refuses the file at open instead. `bond_record.snap` moves; no
-///   table, ordinal or property cell does. The archival snapshot's
-///   `archival_bond` family (`archival_snapshot.rs`) encodes both of its
-///   legs through this codec, so they move together: a C++-side row has
-///   no receipt key and is pushed with an empty one. A trace **captured**
-///   under `22` holds the daemon's bond rows in the `22` bytes, so the E2
-///   replay of the `bond-post` chain (`shekyl-chain-ingest`,
-///   `tests/vectors/bond-post`) reports its Bond family unequal against a
-///   `23` store until that chain is re-captured; the logical-state digest
-///   at its tip is unaffected.
+///   (`FN_DSA_HYBRID.md` §8, increment 3; `ARCHIVAL_SERVE_CREDIT_SPEC.md`
+///   §6.3). `bond_record` gains `receipt_sign_pk` as a **trailing, optional**
+///   field: nothing when the record commits no key, `u32 len ‖ bytes`
+///   (`1 ≤ len ≤ MAX_BOND_KEY_BYTES`) after `first_paying_height` when it
+///   does — the canonical Ed25519 + FN-DSA-1024 hybrid public key a
+///   JoinMarket in its receipt form (bond-post `post_kind` 5) commits. A
+///   keyless record's bytes do not move, so every row a `22` store holds
+///   decodes unchanged and every snapshot or captured trace taken over
+///   keyless records still compares equal (the C++ daemon's are all
+///   keyless). The layout still gained a form: a `22` binary reading a
+///   keyed row sees trailing bytes and calls the cell corrupt, so the bump
+///   refuses the file at open with the true reason. `bond_record.snap`
+///   moves in its keyed fixture only; no table, ordinal or property cell
+///   moves.
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(23);
 
 /// A layout version as stored in the `schema_version` cell.

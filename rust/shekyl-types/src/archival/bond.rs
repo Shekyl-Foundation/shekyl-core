@@ -277,6 +277,8 @@ pub struct BondRecord {
     /// touch it, and no post kind exists that could (bond records are
     /// immutable in this respect, as in `bond_spend_pk` and the endpoint).
     /// That a non-empty value is a key is CEN-J28's, judged before connect.
+    /// At rest it is the record's trailing, optional field: an empty key is
+    /// stored as nothing (`shekyl-store-codec`'s layout notes).
     pub receipt_sign_pk: Vec<u8>,
     /// The 32-byte serving endpoint, written once at JoinMarket connect. Any
     /// 32 bytes — zero is a value the vin carried, not an absence.
