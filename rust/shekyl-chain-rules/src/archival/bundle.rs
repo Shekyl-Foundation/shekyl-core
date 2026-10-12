@@ -39,9 +39,19 @@
 //!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it implements [`BundleView`] on its store, calls
 //!   [`check_section`] and [`verify_bundle`] at admission from a block
 //!   rule, writes what [`Admitted`] carries, and deletes the attestation
-//!   path (CEN-B4). DRS-E5 runs the same two functions from the bundle
-//!   queue against the tip, and [`check_section`] alone when an
-//!   alternative block arrives.
+//!   path (CEN-B4). DRS-E5 is transport
+//!   (`docs/design/DRS_E5_POOL_ALT_PRUNE.md` §2.2, §2.3). Its alternative
+//!   tier has landed ([`crate::alt_against`]) and does not call this
+//!   module: an alternative block's row still carries the attestation
+//!   witness, not bundle references. When E5 replaces that with
+//!   references it calls [`open_reference`] and [`check_section`] at an
+//!   alternative block's arrival, and nothing else of this module there;
+//!   at the switch the full `validate` runs [`verify_bundle`] over the
+//!   switch's batch view, on which E5 implements [`BundleView`]. A body
+//!   that cannot be fetched before the switch is no switch and no verdict,
+//!   which is [`BundleRefused::BodyNotReferenced`]'s side of the same
+//!   line. The body store and the bundle queue are not built; the queue
+//!   will run both functions against the tip.
 //! - **The census rows** these refusals name, CEN-J29 through CEN-J37, are
 //!   registered `pending` for the same reason: a `pending` row is in the
 //!   denominator and no rule type is bound to it. The cutover flips them.

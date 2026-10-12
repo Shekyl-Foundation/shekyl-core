@@ -1667,7 +1667,8 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 
 /// **The falsifier of this module's STAGED disposition** (rule 23): no
 /// file on the connect path names the bundle verifier. It reads the
-/// sources of `form` / `validate`, the block types and every rule, and
+/// sources of `form` / `validate`, the alternative tier, the block types
+/// and every rule, and
 /// fails when one of them mentions `verify_bundle`, `check_section`,
 /// `open_body`, `open_reference` or `BundleView`.
 ///
@@ -1680,7 +1681,13 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 #[test]
 fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = vec![src.join("validate.rs"), src.join("block.rs")];
+    // `alt.rs` is the alternative tier (DRS-E5): the other entry a block
+    // is judged through, and where the section check will be called.
+    let mut files = vec![
+        src.join("validate.rs"),
+        src.join("block.rs"),
+        src.join("alt.rs"),
+    ];
     for entry in std::fs::read_dir(src.join("rules")).expect("src/rules is a directory") {
         let path = entry.expect("a directory entry").path();
         let is_rule_source = path.extension().is_some_and(|e| e == "rs")
