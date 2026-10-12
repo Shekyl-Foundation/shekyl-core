@@ -72,9 +72,12 @@ For every `(owner, feature) → (enabler, why)` in `CONSUMER_OWNED`:
      it, for the same reason as the test-only limb.
 
 Registering a row is what makes a feature consumer-owned; the feature and its
-row land in the same commit. The registry may be empty — today it is — and
-`--selftest` exercises the limb on synthetic metadata so the gate asserts its
-own subject with zero live rows (rule 47) rather than passing vacuously.
+row land in the same commit. The live row is `shekyl-noise` / `rekey-timing`,
+enabled only by `shekyl-p2p-transport`. The registry may be empty again when
+that bench is gone. `--selftest` exercises the limb on synthetic metadata —
+the four ways the construction rots, and the one shape it allows — so the
+gate asserts its subject even with no live row (rule 47) rather than passing
+vacuously.
 
 # The third limb — every feature a governed crate declares is categorized
 
