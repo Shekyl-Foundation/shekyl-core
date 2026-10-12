@@ -597,9 +597,22 @@ with `count = count(h)`, the bitmap `⌈count / 8⌉` bytes, and each record
   `attestation_root` becomes `bundle_root`, in the same rule-42 bump that
   changes what it commits to. The field keeps its place; it does not keep
   a name for a value it no longer holds.
-- The strings for the root's per-bundle term and for the hash of a
-  bundle's prunable bytes land with their constants, and the vectors for
-  all three with the verifier (§11).
+- **The prunable hash and the header root**, fixed when the verifier was
+  built (PR #1047):
+
+  ```text
+  prunable_hash = cSHAKE256_32("shekyl/archival-bundle-prunable-v1",
+                               witness_pk[1,837] ‖ witness_sig[1,356] ‖ r₁ ‖ … ‖ rₙ)
+
+  root = cSHAKE256_32("shekyl/archival-bundle-root-v1",
+                      n_le[4] ‖ len₁_le[4] ‖ ref₁ ‖ … ‖ lenₙ_le[4] ‖ refₙ)
+  refᵢ = seed[32] ‖ h_le[8] ‖ bitmap ‖ prunable_hash[32]
+  ```
+
+  The root frames each reference by its byte length, not by `count(h)`:
+  a reference does not carry the count, and the root must be recomputable
+  on an alternative block with no chain (§9.1). The vectors for all three
+  hashes are pinned in the verifier's tests.
 
 ### 7.4 Size and the section budget
 
@@ -738,7 +751,9 @@ signature, whose commitment covers them (§7.3).
 Admission is a block rule. A block whose bundle section fails any check
 below is invalid; nothing admits part of a section or part of a bundle.
 Checks run in this order, and the order decides which refusal a test
-observes. Each refusal is a typed verdict naming its census row.
+observes. Step 7 runs over every record before step 8 runs over any;
+within step 8 records go in ascending `j`, each anchor check before its
+own receipt. Each refusal is a typed verdict naming its census row.
 
 **The section**, for block `h_incl`:
 
@@ -1019,7 +1034,20 @@ pub fn verify_bundle<V: BundleView>(
 ```
 
 A refusal is a typed verdict naming its census row and, for a record, the
-draw `j` that failed. A view fault is not a verdict (§9.5).
+draw `j` that failed. Three outcomes are not verdicts on a block:
+
+- **a view fault**, the store's own failure (§9.5);
+- **the body is not the one referenced**: its hash is not the reference's.
+  The block committed to the reference, and a block whose body cannot be
+  had is not connected. This is checked before anything else;
+- **the view could not answer** something it should hold: the snapshot of
+  `epoch(h)`, the hash at `h` or at an anchor, a drawn pair's key.
+
+`draw_count(h)` answering "no such block" does refuse the bundle, and so
+does a block with no `0x0C`, as a failed opening.
+
+Built as PR #1047 (`check_section`, `verify_bundle`, `open_body`), with
+census rows CEN-J29 to J37 `pending` until the cutover wires it.
 
 **The view.** One method for each thing §9.1 reads, and nothing else.
 
@@ -1085,8 +1113,10 @@ impl EpochSnapshot {
 ```
 
 - **A snapshot in which a pair has no receipt key cannot be built.** Its
-  one constructor takes each persona's bond record as of `h_open(E)` and
-  fails on a record without the key. So "a pair in `D` lacks a key" is
+  one constructor takes the epoch, each persona's id with its receipt
+  key's bytes, and the pairs, and fails on a pair whose persona has no
+  key or a key that does not parse. The settlement lane feeds it from
+  each persona's bond record as of `h_open(E)`. So "a pair in `D` lacks a key" is
   not a state the verifier meets.
 - **Both methods read one value.** `select_draw` is given `len()`; the
   verifier indexes `pair()` and `receipt_key()` with the index it
@@ -1578,11 +1608,10 @@ constant or registry row yet.
 | `shekyl/archival-witness-carrier-scheme-v1` | signature domain | The witness's signature on a carrier. Landed as a constant with no signer; not used for the bundle (§6.2) |
 | `shekyl/archival-witness-bundle-scheme-v1` | signature domain | The witness's signature on the bundle, under scheme 3, §7.3. Minted with the verifier |
 
-Four are minted with their constants when the verifier is built (rule
-30): the witness's bundle signature domain and the bundle commitment,
-whose strings are fixed above, and the header
-root's per-bundle term and the hash of a bundle's prunable bytes, whose
-strings are named then.
+Four were minted with their constants when the verifier was built
+(PR #1047, rule 30): the witness's bundle signature domain, the bundle
+commitment, `shekyl/archival-bundle-prunable-v1` and
+`shekyl/archival-bundle-root-v1` (§7.3).
 The seed and the witness key have no label: they are fresh randomness.
 
 ---
