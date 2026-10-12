@@ -168,26 +168,29 @@ impl CloseCause {
     /// Whether remembering this cause should stop us dialing the address.
     ///
     /// Forgetting shrinks the dial set, and a shrunken set favours whoever
-    /// is feeding us addresses. A cause that does not name the destination
-    /// leaves the address dialable.
+    /// is feeding us addresses. So the memory is written only on evidence
+    /// that names the destination and that the network path cannot forge.
     ///
-    /// [`CloseKind::DialFailed`] is a direct connect the peer refused
-    /// (TCP RST). Any other connect error is [`CloseKind::LocalClose`]:
-    /// network unreachable, address not available, and permission denied
-    /// are this node's link. [`CloseKind::LevinHandshakeRejected`] is the Levin layer judging the
-    /// peer. [`CloseKind::ProxyRefused`] depends on `connector`. A clearnet
-    /// proxy's reply is the exit's claim about a host, and the cache would
-    /// suppress that whole host for an hour, so no clearnet reply counts.
-    /// An onion dial counts only the replies that name that onion: RFC 1928
-    /// host unreachable (`0x04`) and connection refused (`0x05`), and the
-    /// Tor SOCKS extended codes for a descriptor that is missing (`0xF0`)
-    /// or unusable (`0xF1`) and an introduction that failed (`0xF2`).
+    /// On clearnet nothing qualifies (R2, 2026-10-12). A refused dial
+    /// ([`CloseKind::DialFailed`]) is a TCP RST, and the handshake is not
+    /// authenticated, so a party on the path can forge the reset and can
+    /// forge [`CloseKind::LevinHandshakeRejected`]. Either would suppress
+    /// an honest address. A clearnet proxy's reply is the exit's claim
+    /// about a host. Every clearnet cause leaves the address dialable.
+    ///
+    /// An onion dial counts only [`CloseKind::ProxyRefused`] with a reply
+    /// that names that onion. The reply comes from this node's own Tor
+    /// process, not from the path: RFC 1928 host unreachable (`0x04`) and
+    /// connection refused (`0x05`), and the Tor SOCKS extended codes for a
+    /// descriptor that is missing (`0xF0`) or unusable (`0xF1`) and an
+    /// introduction that failed (`0xF2`).
     /// Introduction and rendezvous timeouts (`0xF7`, `0xF3`), general
     /// failure, a ruleset, network unreachable, and TTL expired do not.
     /// A command or address type this node sent (`0x07`, `0x08`), an onion
     /// address Tor rejected (`0xF6`; we validate it before dialing), and
     /// client-authorization errors (`0xF4`, `0xF5`) do not either. Any
-    /// other reply does not.
+    /// other reply does not. A refused connect on an onion dial is this
+    /// node's SOCKS port, which says nothing about the onion.
     ///
     /// The extended codes arrive only when the managed `SocksPort` asks
     /// for them (`auto ExtendedErrors`). Tor 0.4.9.11 leaves that off
@@ -195,13 +198,9 @@ impl CloseCause {
     /// reports an introduction timeout as reply 4.
     #[must_use]
     pub const fn implicates_address(self, connector: ConnectorId) -> bool {
-        match self.kind {
-            CloseKind::DialFailed | CloseKind::LevinHandshakeRejected => true,
-            CloseKind::ProxyRefused => {
-                connector_is_tor(connector) && onion_reply_names_the_destination(self.reply_code)
-            }
-            _ => false,
-        }
+        connector_is_tor(connector)
+            && matches!(self.kind, CloseKind::ProxyRefused)
+            && onion_reply_names_the_destination(self.reply_code)
     }
 }
 
@@ -372,28 +371,49 @@ mod tests {
             .collect()
     }
 
-    /// Every reply byte, on both connectors. An onion dial counts `0x04`,
-    /// `0x05`, `0xF0`, `0xF1`, and `0xF2`. `0xF3` and `0xF7` stay dialable.
-    /// A clearnet proxy reply never counts. This does not launch Tor and
-    /// does not cover the directory attacker who can force reply 4.
+    /// R2: no cause writes the failed-address memory on clearnet. That
+    /// covers every kind, the two that wrote it before
+    /// (`DialFailed`, `LevinHandshakeRejected`) by name, and every proxy
+    /// reply.
     #[test]
-    fn implicates_address_over_every_reply_and_both_connectors() {
+    fn no_clearnet_cause_implicates_the_address() {
+        for kind in CloseKind::ALL {
+            // `ProxyRefused` carries a reply; every reply is the loop below.
+            if *kind == CloseKind::ProxyRefused {
+                continue;
+            }
+            assert!(
+                !CloseCause::new(*kind).implicates_address(ConnectorId::Clearnet),
+                "{kind:?} on clearnet must leave the address dialable"
+            );
+        }
+        for kind in [CloseKind::DialFailed, CloseKind::LevinHandshakeRejected] {
+            assert!(CloseKind::ALL.contains(&kind), "{kind:?} is in ALL");
+            assert!(!CloseCause::new(kind).implicates_address(ConnectorId::Clearnet));
+        }
+        for reply in 0u16..=0x0100 {
+            assert!(
+                !CloseCause::proxy_refused(reply).implicates_address(ConnectorId::Clearnet),
+                "clearnet reply {reply:#x} must stay dialable"
+            );
+        }
+    }
+
+    /// An onion dial writes the memory for exactly five proxy replies:
+    /// `0x04`, `0x05`, `0xF0`, `0xF1`, and `0xF2`. `0xF3` and `0xF7` stay
+    /// dialable, and so does every kind that is not a proxy reply. This
+    /// does not launch Tor and does not cover the directory attacker who
+    /// can force reply 4.
+    #[test]
+    fn an_onion_dial_implicates_only_the_five_destination_naming_replies() {
         for kind in CloseKind::ALL {
             if *kind == CloseKind::ProxyRefused {
                 continue;
             }
-            let cause = CloseCause::new(*kind);
-            let expect = matches!(
-                kind,
-                CloseKind::DialFailed | CloseKind::LevinHandshakeRejected
+            assert!(
+                !CloseCause::new(*kind).implicates_address(ConnectorId::Tor),
+                "{kind:?} on an onion dial is not a destination-naming reply"
             );
-            for connector in [ConnectorId::Clearnet, ConnectorId::Tor] {
-                assert_eq!(
-                    cause.implicates_address(connector),
-                    expect,
-                    "{kind:?} on {connector:?}"
-                );
-            }
         }
         for reply in 0u16..=0x00FF {
             let cause = CloseCause::proxy_refused(reply);
@@ -404,10 +424,6 @@ mod tests {
                 cause.implicates_address(ConnectorId::Tor),
                 onion,
                 "onion reply {reply:#x}"
-            );
-            assert!(
-                !cause.implicates_address(ConnectorId::Clearnet),
-                "clearnet reply {reply:#x} must stay dialable"
             );
         }
         assert!(!CloseCause::proxy_refused(0x0100).implicates_address(ConnectorId::Tor));

@@ -15,8 +15,8 @@ use shekyl_seam::{CloseCause, CloseKind, ConnectorId, SocketId};
 use crate::seam_ffi::hub;
 
 /// 1 when remembering `(kind, reply)` on `connector` should stop dials to
-/// that address. An unknown kind is 0. An unknown connector does not
-/// count a proxy reply: an unclear cause stays dialable.
+/// that address. An unknown kind is 0 and an unknown connector is 0: an
+/// unclear cause stays dialable.
 #[no_mangle]
 pub extern "C" fn shekyl_close_implicates_address(kind: u8, reply: u16, connector: u8) -> i32 {
     let Some(kind) = CloseKind::ALL
@@ -31,10 +31,7 @@ pub extern "C" fn shekyl_close_implicates_address(kind: u8, reply: u16, connecto
         .copied()
         .find(|item| *item as u8 == connector)
     else {
-        return i32::from(matches!(
-            kind,
-            CloseKind::DialFailed | CloseKind::LevinHandshakeRejected
-        ));
+        return 0;
     };
     let cause = if matches!(kind, CloseKind::ProxyRefused) {
         CloseCause::proxy_refused(reply)

@@ -656,9 +656,15 @@ from our own Tor process, not from the path.
 
 **PR-3 code change:** `implicates_address(self, connector)` returns
 `false` when `connector` is the clearnet connector, for every
-`CloseKind`; the Tor arms are unchanged. Its test: each clearnet cause
-that wrote the memory before (`DialFailed`, `LevinHandshakeRejected`)
-no longer does, and each Tor reply in the set still does.
+`CloseKind`. On Tor it returns `true` only for `ProxyRefused` with a
+reply in the set; `DialFailed` and `LevinHandshakeRejected` no longer
+write on Tor either, which is what "only an onion reply writes the
+memory" below already said. *Records-was: "the Tor arms are
+unchanged", which kept those two kinds writing on Tor and contradicted
+the paragraph after next.* Its tests: no clearnet cause writes the
+memory, the two that wrote it before (`DialFailed`,
+`LevinHandshakeRejected`) by name; and on Tor exactly the five replies
+do.
 
 Windows come from `failed_addr_cache::window` (`net_node.h:263`).
 Tor starts at the short window and doubles, capped at the hour.

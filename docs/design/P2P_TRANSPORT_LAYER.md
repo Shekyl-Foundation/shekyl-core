@@ -405,9 +405,10 @@ holds a count, so the destroy post has not run.
   records that cause. `PeerClosed` is the reader's end-of-file and
   nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
   that sends FIN is `PeerClosed`. Forgetting the address is
-  `implicates_address` with the connector: a refused dial and a
-  rejected handshake count; a clearnet proxy reply does not; an onion
-  reply counts only for `0x04`, `0x05`, `0xF0`, `0xF1`, and `0xF2`.
+  `implicates_address` with the connector: no clearnet cause counts
+  (R2, 2026-10-12), and an onion dial counts only a proxy reply of
+  `0x04`, `0x05`, `0xF0`, `0xF1`, or `0xF2`. *Records-was: a refused
+  dial and a rejected handshake counted on every connector.*
 - Rust records the D12 cause through `Sockets::close`. The first
   `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
   where the first call put it.
