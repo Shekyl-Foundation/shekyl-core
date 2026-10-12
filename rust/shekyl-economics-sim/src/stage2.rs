@@ -21,7 +21,7 @@ use serde::Serialize;
 use std::io::Write;
 
 use shekyl_chain_rules::EffectiveMedian;
-use shekyl_economics::{params::SCALE, ClosedShardCount, TxVolume};
+use shekyl_economics::{params::SCALE, CirculatingSupply, ClosedShardCount, TxVolume};
 
 use crate::burden::{
     bond_opp_cost_skl, burden_cost_fiat_per_year, normal_tx_archival_bytes, ordinary_tx_fee,
@@ -249,6 +249,11 @@ pub struct A1YearAgg {
 /// attacker rebuilds that fill instead of offering the transactions again.
 #[derive(Debug, Clone, Copy)]
 pub struct LastBlock {
+    /// The consensus height the block was priced at, and the net supply
+    /// its burn read: with the volume, the operands production's
+    /// composition takes.
+    pub chain_height: u64,
+    pub supply: CirculatingSupply,
     pub already_generated: u64,
     pub volume: TxVolume,
     pub sigma_scaled: u64,
@@ -395,6 +400,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             &economic,
         );
         let last_block = LastBlock {
+            chain_height: abs_height,
+            supply: priced.supply,
             already_generated: priced.fee_point.already_generated,
             volume: priced.volume,
             sigma_scaled: priced.emission_share,

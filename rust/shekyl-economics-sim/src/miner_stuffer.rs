@@ -51,8 +51,8 @@ use std::collections::HashSet;
 
 use shekyl_block_template::Fill;
 use shekyl_economics::{
-    compute_burn_split_at, penalty_free_weight, split_block_emission, ClosedShardCount,
-    EconomicParams,
+    penalty_free_weight, price_emission, CirculatingSupply, ClosedShardCount, EconomicParams,
+    EmissionInputs,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
@@ -317,7 +317,8 @@ struct Block<'a> {
     honest: Fill<'a>,
     /// Weight the honest bodies leave under the emission's full weight.
     room: u64,
-    burn_pct: u64,
+    height: u64,
+    supply: CirculatingSupply,
     closed_shards: ClosedShardCount,
     honest_weight: u64,
     honest_fee: u64,
@@ -354,24 +355,41 @@ impl<'a> Block<'a> {
             median,
             honest,
             room,
-            burn_pct: last.burn_pct_scaled,
+            height: last.chain_height,
+            supply: last.supply,
             closed_shards: ClosedShardCount::new(last.closed_shards),
             honest_weight: last.honest_tx.weight,
             honest_fee: last.honest_tx.fee_atomic,
         }
     }
 
-    /// The miner's payout for one block: his emission leg, his fee income,
-    /// less the fees he paid to list his own bodies, plus `recovery` of the
-    /// staker pool those fees funded. The pool share is taken from his own
-    /// fees only, on the block's one burn split.
-    fn net(&self, reward: u64, total_fees: u64, own_fees: u64, recovery: PoolShare) -> i128 {
-        let (miner_emission, _) = split_block_emission(reward, self.at.sigma_scaled);
-        let split =
-            compute_burn_split_at(total_fees, self.burn_pct, self.closed_shards, self.economic);
-        let recovered = recovery.of(split.staker_pool_amount, own_fees, total_fees);
-        i128::from(miner_emission) + i128::from(split.miner_fee_income) + i128::from(recovered)
-            - i128::from(own_fees)
+    /// The miner's payout for the block at `bodies_weight` listing
+    /// `total_fees`: what production's composition owes him, less the fees
+    /// he paid to list his own bodies, plus `recovery` of the staker pool
+    /// those fees funded. The pool share is taken from his own fees only,
+    /// on the block's one burn split. `None` where the composition refuses
+    /// the block.
+    fn net(
+        &self,
+        bodies_weight: u64,
+        total_fees: u64,
+        own_fees: u64,
+        recovery: PoolShare,
+    ) -> Option<i128> {
+        let paid = price_emission(&EmissionInputs {
+            height: self.height,
+            median_weight: self.median,
+            block_weight: bodies_weight,
+            already_generated: self.at.already_generated,
+            tx_volume: self.at.volume,
+            total_fees,
+            supply: self.supply,
+            closed_shards: self.closed_shards,
+            params: self.economic,
+        })
+        .ok()?;
+        let recovered = recovery.of(paid.fee_burn.staker_pool_amount, own_fees, total_fees);
+        Some(i128::from(paid.owed.to_raw()) + i128::from(recovered) - i128::from(own_fees))
     }
 
     /// The relay stuffer: the rate that gets his bodies listed, and his
@@ -519,8 +537,8 @@ impl<'a> Block<'a> {
         let total_fees = kept_fees.checked_add(own_fees)?;
         let reward_before = self.honest.reward();
         let reward_after = self.honest.reward_at(total_weight).ok()?;
-        let net_before = self.net(reward_before, self.honest.fees(), 0, recovery);
-        let net_after = self.net(reward_after, total_fees, own_fees, recovery);
+        let net_before = self.net(self.honest.bodies_weight(), self.honest.fees(), 0, recovery)?;
+        let net_after = self.net(total_weight, total_fees, own_fees, recovery)?;
         let block_cost = u128::try_from((net_before - net_after).max(0)).unwrap_or(u128::MAX);
         Some(PricedPacking {
             block_cost,
@@ -820,8 +838,10 @@ mod tests {
     use shekyl_block_template::Fill;
     use shekyl_chain_rules::medians_from;
     use shekyl_economics::{
-        compute_burn_split_at, paid_block_reward, split_block_emission, TxVolume,
+        burn::calc_burn_pct_at, compute_burn_split_at, emission_share_at, paid_block_reward,
+        split_block_emission, TxVolume, BLOCKS_PER_YEAR,
     };
+    use shekyl_units::AtomicUnits;
 
     use crate::fee_model::OrdinaryTx;
 
@@ -831,12 +851,21 @@ mod tests {
         let economic = params.economic();
         let zone = economic.full_reward_zone;
         let volume = TxVolume::per_block(params.tx_volume_baseline);
+        // The share and the burn are production's at these operands, as
+        // the cursor's are: the payout reprices the block from them.
+        let chain_height = 2 * BLOCKS_PER_YEAR;
+        let already_generated = economic.emission_curve_asymptote / 3;
+        let supply = CirculatingSupply::derive(
+            AtomicUnits::from_raw(already_generated),
+            AtomicUnits::from_raw(0),
+        )
+        .expect("nothing burned");
         let at = FeePoint {
-            already_generated: economic.emission_curve_asymptote / 3,
+            already_generated,
             volume,
             long_term_median: zone,
-            sigma_scaled: 100_000,
-            burn_pct_scaled: 200_000,
+            sigma_scaled: emission_share_at(chain_height),
+            burn_pct_scaled: calc_burn_pct_at(volume, supply, &economic),
             chain_leaves: 50_000_000,
             params: &economic,
         };
@@ -851,6 +880,8 @@ mod tests {
         .expect("priced");
         fill.admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered);
         LastBlock {
+            chain_height,
+            supply,
             already_generated: at.already_generated,
             volume,
             sigma_scaled: at.sigma_scaled,
