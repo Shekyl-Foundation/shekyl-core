@@ -226,8 +226,18 @@ pub const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
 /// epochs retained below the tip at an on-time slash pass,
 /// `MAX_CLAIM_AGE_W + 1 − LAG`. `25` at the shipped values. The assert
 /// below holds [`ARCHIVAL_FAILURE_WINDOW_N`] to it.
-pub const FAILURE_WINDOW_N_GATHER_BOUND: u64 =
-    MAX_CLAIM_AGE_W + 1 - SLASH_SETTLEMENT_TIP_LAG_EPOCHS;
+///
+/// The subtraction is checked. A lag past `MAX_CLAIM_AGE_W + 1` is a
+/// gather with no epoch left to read, and it fails here with that reason.
+pub const FAILURE_WINDOW_N_GATHER_BOUND: u64 = {
+    match (MAX_CLAIM_AGE_W + 1).checked_sub(SLASH_SETTLEMENT_TIP_LAG_EPOCHS) {
+        Some(bound) => bound,
+        None => panic!(
+            "the C++ gather reads MAX_CLAIM_AGE_W + 1 - LAG epochs below an on-time slash; \
+             a lag past that span leaves no epoch on disk to read"
+        ),
+    }
+};
 
 /// **Prune-horizon coupling — the C++ gather may not out-reach the
 /// serve-credit ledger's retention.** At the moment epoch `E` is settled
