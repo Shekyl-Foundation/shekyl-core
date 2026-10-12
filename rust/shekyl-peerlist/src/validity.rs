@@ -191,6 +191,8 @@ impl RefusedSet {
 #[cfg(test)]
 mod tests {
     use super::{in_prefix, RefusedSet, REFUSED_V4, REFUSED_V6};
+    use shekyl_net_address::NetworkAddress;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn a_prefix_compares_whole_bytes_and_the_bits_of_the_last_one() {
@@ -235,8 +237,12 @@ mod tests {
     fn the_non_global_set_reads_both_tables_and_the_empty_set_reads_none() {
         assert_eq!(RefusedSet::NON_GLOBAL.v4, REFUSED_V4);
         assert_eq!(RefusedSet::NON_GLOBAL.v6, REFUSED_V6);
-        assert!(RefusedSet::NON_GLOBAL.port_zero);
         assert!(RefusedSet::EMPTY.v4.is_empty() && RefusedSet::EMPTY.v6.is_empty());
-        assert!(!RefusedSet::EMPTY.port_zero);
+        let port_zero = NetworkAddress::Ipv4 {
+            ip: Ipv4Addr::new(11, 0, 0, 1),
+            port: 0,
+        };
+        assert_eq!(RefusedSet::NON_GLOBAL.refuses(&port_zero), Some("port 0"));
+        assert_eq!(RefusedSet::EMPTY.refuses(&port_zero), None);
     }
 }

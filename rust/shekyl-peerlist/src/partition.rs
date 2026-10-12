@@ -26,6 +26,7 @@ use shekyl_timing_engine::Tick;
 use crate::index::Index;
 use crate::outcome::WhiteClock;
 use crate::sample::sample_prefix;
+use crate::validity::RefusedSet;
 use crate::{
     DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS,
     SESSION_INTAKE_CAP, WHITE_CAP,
@@ -389,9 +390,11 @@ impl Partition {
     /// demotion and expiry) nothing is drawn and the reply is empty.
     /// Otherwise a fresh uniform draw of `min(DISCLOSE_COUNT, population)`
     /// over white plus this node's own address, cached for the window.
+    /// An address `refused` holds is not in the population (brief §2).
     pub(crate) fn disclose<R: RelayRng + ?Sized>(
         &mut self,
         floor: usize,
+        refused: &RefusedSet,
         now: Tick,
         rng: &mut R,
     ) -> Vec<NetworkAddress> {
@@ -403,9 +406,13 @@ impl Partition {
         if self.white_seats < floor {
             return Vec::new();
         }
-        let mut population: Vec<NetworkAddress> = self.white_iter().cloned().collect();
+        let mut population: Vec<NetworkAddress> = self
+            .white_iter()
+            .filter(|address| refused.refuses(address).is_none())
+            .cloned()
+            .collect();
         if let Some(own) = &self.own_address {
-            if !population.contains(own) {
+            if refused.refuses(own).is_none() && !population.contains(own) {
                 population.push(own.clone());
             }
         }

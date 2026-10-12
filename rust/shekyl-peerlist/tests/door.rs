@@ -11,21 +11,21 @@
 use std::net::Ipv4Addr;
 
 use shekyl_peerlist::{
-    ConnectionId, DialOutcome, ListName, NetworkAddress, NoBans, Peerlist, Refusal, Source, Tick,
-    EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP,
+    ConnectionId, DialOutcome, ListName, NetworkAddress, NoBans, Peerlist, Refusal, RefusedSet,
+    Source, Tick, EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP,
 };
 use shekyl_relay_privacy::rng::SplitMix64;
 
 fn v4(n: u8) -> NetworkAddress {
     NetworkAddress::Ipv4 {
-        ip: Ipv4Addr::new(10, 0, 0, n),
+        ip: Ipv4Addr::new(11, 0, 0, n),
         port: 18080,
     }
 }
 
 fn v4_wide(n: u16) -> NetworkAddress {
     NetworkAddress::Ipv4 {
-        ip: Ipv4Addr::new(10, 1, (n >> 8) as u8, (n & 0xff) as u8),
+        ip: Ipv4Addr::new(11, 1, (n >> 8) as u8, (n & 0xff) as u8),
         port: 18080,
     }
 }
@@ -85,7 +85,7 @@ fn an_outstanding_gray_draw_promotes_on_session_accepted_and_on_confirmed() {
         (DialOutcome::Confirmed, "confirmed"),
     ] {
         let mut rng = SplitMix64::new(1);
-        let mut list = Peerlist::new();
+        let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         let peer = v4(1);
         assert_eq!(
             list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
@@ -102,7 +102,7 @@ fn an_outstanding_gray_draw_promotes_on_session_accepted_and_on_confirmed() {
 #[test]
 fn either_outcome_on_an_undrawn_ordinary_address_writes_nothing() {
     let mut rng = SplitMix64::new(2);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let undrawn = v4(2);
     list.apply(
         &DialOutcome::SessionAccepted(undrawn.clone()),
@@ -137,7 +137,7 @@ fn either_outcome_on_an_undrawn_ordinary_address_writes_nothing() {
 #[test]
 fn an_outstanding_draw_survives_eviction_and_gray_may_sit_over_the_cap() {
     let mut rng = SplitMix64::new(14);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     for n in 0..GRAY_CAP {
         let n = u16::try_from(n).expect("fits");
@@ -198,7 +198,7 @@ fn an_outstanding_draw_survives_eviction_and_gray_may_sit_over_the_cap() {
 
     // Every gray seat outstanding: the next admit has nobody else to drop,
     // so gray sits one over the cap and the draws stay.
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     for n in 0..GRAY_CAP {
         let n = u16::try_from(n).expect("fits");
         assert_eq!(
@@ -235,7 +235,7 @@ fn an_outstanding_draw_survives_eviction_and_gray_may_sit_over_the_cap() {
 #[test]
 fn incoming_and_add_peer_stay_gray() {
     let mut rng = SplitMix64::new(4);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     assert_eq!(
         list.admit_gray(
@@ -265,7 +265,7 @@ fn incoming_and_add_peer_stay_gray() {
 #[test]
 fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
     let mut rng = SplitMix64::new(5);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let peer = v4(6);
     assert_eq!(
@@ -334,7 +334,7 @@ fn expiry_returns_white_to_gray_and_contact_this_node_opened_moves_the_clock() {
 #[test]
 fn a_confirm_and_close_does_not_move_a_white_clock() {
     let mut rng = SplitMix64::new(13);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let peer = v4(11);
     assert_eq!(
@@ -370,7 +370,7 @@ fn reload_is_gray_only_and_does_not_draw_former_white_first() {
     // lists; the first draw after reload is a former white one about a
     // fifth of the time, not first.
     let mut rng = SplitMix64::new(6);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     for n in 1..=50u8 {
         assert_eq!(
@@ -393,7 +393,7 @@ fn reload_is_gray_only_and_does_not_draw_former_white_first() {
     let trials = 2_000_u32;
     for seed in 0..trials {
         let mut rng = SplitMix64::new(100 + u64::from(seed));
-        let mut fresh = Peerlist::new();
+        let mut fresh = Peerlist::new(RefusedSet::NON_GLOBAL);
         assert_eq!(fresh.restore(saved.clone(), &mut rng), 50);
         assert_eq!(
             fresh.white_count(connector, at_hours(0), &mut NoBans, &mut rng),
@@ -431,7 +431,7 @@ fn failed_and_refused_dials_drop_the_draw_and_a_refused_payload_leaves_it_gray()
         (DialOutcome::PayloadRefused, false),
     ] {
         let mut rng = SplitMix64::new(7);
-        let mut list = Peerlist::new();
+        let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         let peer = v4(7);
         assert_eq!(
             list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
@@ -447,7 +447,7 @@ fn failed_and_refused_dials_drop_the_draw_and_a_refused_payload_leaves_it_gray()
 #[test]
 fn a_failed_redial_leaves_white() {
     let mut rng = SplitMix64::new(8);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let peer = v4(8);
     assert_eq!(
         list.admit_gray(&peer, Source::Operator, at_hours(0), &mut NoBans, &mut rng),
@@ -469,7 +469,7 @@ fn a_failed_redial_leaves_white() {
 #[test]
 fn no_entry_crosses_connectors() {
     let mut rng = SplitMix64::new(9);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let clear = Peerlist::connector_of(&v4(1)).expect("served");
     let hidden = Peerlist::connector_of(&onion(1)).expect("served");
     assert_ne!(clear, hidden);
@@ -537,7 +537,7 @@ fn no_entry_crosses_connectors() {
 
     // Reload derives the connector again and keeps the partition.
     let saved = list.persistable();
-    let mut fresh = Peerlist::new();
+    let mut fresh = Peerlist::new(RefusedSet::NON_GLOBAL);
     assert_eq!(fresh.restore(saved, &mut rng), 3);
     assert_eq!(fresh.gray_count(clear), 2);
     assert_eq!(fresh.gray_count(hidden), 1);
@@ -546,7 +546,7 @@ fn no_entry_crosses_connectors() {
 #[test]
 fn gray_eviction_is_a_draw_that_keeps_the_address_just_named() {
     let mut rng = SplitMix64::new(10);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     for n in 0..GRAY_CAP {
         let n = u16::try_from(n).expect("fits");
@@ -578,7 +578,7 @@ fn gray_eviction_is_a_draw_that_keeps_the_address_just_named() {
 #[test]
 fn white_eviction_demotes_a_random_other_entry() {
     let mut rng = SplitMix64::new(11);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     for n in 0..=WHITE_CAP {
         let n = u16::try_from(n).expect("fits");
@@ -602,7 +602,7 @@ fn white_eviction_demotes_a_random_other_entry() {
 #[test]
 fn the_snapshot_names_each_address_and_its_list_without_a_clock() {
     let mut rng = SplitMix64::new(12);
-    let mut list = Peerlist::new();
+    let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     assert_eq!(
         list.admit_gray(&v4(1), Source::Operator, at_hours(0), &mut NoBans, &mut rng),
         Ok(true)

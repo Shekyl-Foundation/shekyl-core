@@ -27,9 +27,13 @@ pub enum Source {
     /// the compiled seed addresses at each start (brief §3). No session, so
     /// nothing for the per-session cap to count against. The insert rule is
     /// the same as for every source (brief §2): the address just seated
-    /// stays and, over the cap, a random other drawable seat goes.
+    /// stays and, over the cap, a random other drawable seat goes. The
+    /// refused set does not apply: the operator is trusted about the
+    /// operator's own network.
     Operator,
-    /// Read back from the address file at start. Not capped.
+    /// Read back from the address file at start. Not capped. The refused
+    /// set applies, as a backstop: a file written under `--allow-local-ip`
+    /// does not seed a node started without it.
     Reload,
 }
 
@@ -102,6 +106,11 @@ pub enum Refusal {
     /// The address is under an active ban (D4): refused at admit while the
     /// ban lasts.
     Banned,
+    /// The address is in the refused set and the operator did not name it
+    /// (brief §2, address validity): a private, reserved or otherwise
+    /// non-global range, or port 0. In a received list, one such entry is
+    /// [`Self::PeerlistRefused`] for the whole list (R4).
+    NotGlobal,
     /// The session has already put [`crate::SESSION_INTAKE_CAP`] distinct
     /// addresses into gray within the intake span (D-S1). The caller
     /// applies this to the session.

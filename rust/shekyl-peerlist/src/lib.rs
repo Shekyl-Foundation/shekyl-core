@@ -54,6 +54,7 @@ mod outcome;
 mod partition;
 mod peerlist;
 mod sample;
+mod validity;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -68,6 +69,7 @@ pub use shekyl_net_address::NetworkAddress;
 pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
 pub use shekyl_transport_layer::{connector_for, ConnectorId};
+pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 
 /// `DISCLOSE_COUNT`: how many white addresses one disclosure sample
 /// carries, and the most a received message may carry (D3, Rick,
