@@ -1,7 +1,7 @@
 # `TRC-1` step 2: what does an ordinary operator relay carry? Registration, 2026-10-12
 
-**State of this record: REGISTERED 2026-10-12, Part A only. Nothing has
-been collected under it yet.** The four questions the draft posed were
+**State of this record: REGISTERED 2026-10-12, Part A only. Collection
+started 2026-10-12 05:55Z and runs to 2026-11-10; nothing has been read.** The four questions the draft posed were
 ruled on 2026-10-12 and are recorded under "Ruled before registration".
 "Registered before the run" is not edited from here on; an amendment is
 dated and says what had been read. Results are added below it.
@@ -224,4 +224,9 @@ by then.
 
 ## Results
 
-None. Nothing has been collected under this record.
+None read. **Collection started 2026-10-12 05:55Z**, after this
+registration was pushed (2026-10-12, `1dacebeda`).
+
+The dry run ran from 04:55Z to 05:55Z and its output was deleted: 60 rows
+at 60-second spacing, every column present and numeric, the slowest
+snapshot 526 ms, no address in the output. No figure from it was read.
