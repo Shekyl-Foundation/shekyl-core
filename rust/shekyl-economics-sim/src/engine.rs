@@ -289,7 +289,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         let burn_pct = priced.burn_pct;
 
         outputs.accrue(priced.filled.included);
-        let effective_reward = priced.filled.paid_reward;
+        let paid_reward = priced.paid_reward();
         let miner_emission = priced.paid.split.miner_emission;
         let staker_emission = priced.paid.split.staker_emission;
 
@@ -299,7 +299,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         // "no burden yet" baseline (stage2 threads real n via burden::closed_shards).
         let fee_split = priced.paid.fee_burn;
 
-        already_generated += u128::from(effective_reward);
+        already_generated += u128::from(paid_reward);
         total_burned += fee_split.actually_destroyed as u128;
 
         staker_emission_earned_year += staker_emission as u128;
@@ -310,7 +310,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             let supply_emitted_pct =
                 already_generated as f64 / emission_curve_asymptote as f64 * 100.0;
 
-            let avg_block_reward = effective_reward as f64 / COIN;
+            let avg_block_reward = paid_reward as f64 / COIN;
 
             let staked_amount = match staked_atomic {
                 Some(locked) => locked as f64 / COIN,
@@ -327,7 +327,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 0.0
             };
 
-            let miner_no_share = effective_reward as f64;
+            let miner_no_share = paid_reward as f64;
             let miner_pct = if miner_no_share > 0.0 {
                 miner_emission as f64 / miner_no_share * 100.0
             } else {

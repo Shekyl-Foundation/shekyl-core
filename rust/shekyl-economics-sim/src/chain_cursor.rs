@@ -69,8 +69,18 @@ pub(crate) struct PricedBlock<'a> {
     pub(crate) filled: Filled,
     /// The block as production prices it, at the bodies' weight: the fill
     /// lists no coinbase, so its bytes are not in the weight the penalty
-    /// reads (§4 of the design document).
+    /// reads (§4 of the design document). The ledger advances by
+    /// [`Self::paid_reward`]; the fill's own copy of that figure is checked
+    /// against it in [`ChainCursor::price`] and is not what a fold accumulates.
     pub(crate) paid: PaidEmission,
+}
+
+impl PricedBlock<'_> {
+    /// The paid reward the ledger advances by: [`PaidEmission::paid`].
+    #[must_use]
+    pub(crate) fn paid_reward(&self) -> u64 {
+        self.paid.paid.to_raw()
+    }
 }
 
 impl ChainCursor {
@@ -174,7 +184,7 @@ mod tests {
                 chain_height: 1,
                 demand: 5,
                 leaves: 0,
-                already_generated: u128::from(first.filled.paid_reward),
+                already_generated: u128::from(first.paid_reward()),
                 total_burned: 0,
                 closed_shards: ClosedShardCount::ZERO,
             },

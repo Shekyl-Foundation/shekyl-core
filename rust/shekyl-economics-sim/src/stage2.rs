@@ -415,7 +415,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         };
         let total_fees = priced.filled.fees;
         fold.add_block(priced.filled.included);
-        let effective = priced.filled.paid_reward;
+        let paid_reward = priced.paid_reward();
         let staker_emission = priced.paid.split.staker_emission;
         // The whole burn, before its split: the candidate re-splits it. The
         // two legs production returns sum to it exactly.
@@ -425,11 +425,11 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         year_emission_atomic += u128::from(staker_emission);
         year_burn_atomic += u128::from(whole_burn);
         year_fees_atomic += u128::from(total_fees);
-        year_total_emission_atomic += u128::from(effective);
+        year_total_emission_atomic += u128::from(paid_reward);
         year_carried += u128::from(priced.filled.included);
         year_demand += u128::from(demand);
         year_expired += u128::from(priced.filled.expired);
-        already_generated += u128::from(effective);
+        already_generated += u128::from(paid_reward);
         // The ledger advances by what production destroys at this block's
         // closed-shard count. At the shipped parameters that is the flat
         // split at every count (`the_shipped_split_is_flat_at_every_count`).

@@ -52,7 +52,7 @@ use std::collections::HashSet;
 use shekyl_block_template::Fill;
 use shekyl_economics::{
     burn::calc_burn_pct_at, penalty_free_weight, price_emission, CirculatingSupply,
-    ClosedShardCount, EconomicParams, EmissionInputs,
+    ClosedShardCount, EconomicParams, EmissionInputs, PaidEmission,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
@@ -307,6 +307,44 @@ impl Envelope {
     }
 }
 
+/// The miner's payout for one priced block: what the composition owes him,
+/// less the fees he paid to list his own bodies, plus `recovery` of the
+/// staker pool those fees funded. The pool share is taken from his own fees
+/// only, on the block's one burn split. `total_fees` is the fee sum `paid`
+/// was priced at.
+fn miner_net(paid: &PaidEmission, total_fees: u64, own_fees: u64, recovery: PoolShare) -> i128 {
+    let recovered = recovery.of(paid.fee_burn.staker_pool_amount, own_fees, total_fees);
+    i128::from(paid.owed.to_raw()) + i128::from(recovered) - i128::from(own_fees)
+}
+
+/// One weight at this block's site, as production prices it.
+///
+/// A weight inside the fill's bound is a block the composition accepts.
+/// A refusal is the invariant breaking, the same way the cursor's
+/// `expect` treats the block the fill just listed.
+fn price_weight(
+    height: u64,
+    median_weight: u64,
+    point: &FeePoint<'_>,
+    supply: CirculatingSupply,
+    closed_shards: ClosedShardCount,
+    block_weight: u64,
+    total_fees: u64,
+) -> PaidEmission {
+    price_emission(&EmissionInputs {
+        height,
+        median_weight,
+        block_weight,
+        already_generated: point.already_generated,
+        tx_volume: point.volume,
+        total_fees,
+        supply,
+        closed_shards,
+        params: point.params,
+    })
+    .expect("the search only offers a weight the fill's bound admits")
+}
+
 /// The block the honest fold built, and the operands an attacker prices it
 /// at.
 struct Block<'a> {
@@ -322,6 +360,9 @@ struct Block<'a> {
     closed_shards: ClosedShardCount,
     honest_weight: u64,
     honest_fee: u64,
+    /// The block as the fold listed it, priced once. A packing prices only
+    /// the block it would list, against this.
+    honest_paid: PaidEmission,
 }
 
 impl<'a> Block<'a> {
@@ -353,6 +394,17 @@ impl<'a> Block<'a> {
         let room = penalty_free_weight(median, economic)
             .min(honest.bodies_weight_bound())
             .saturating_sub(honest.bodies_weight());
+        let supply = last.supply;
+        let closed_shards = ClosedShardCount::new(last.closed_shards);
+        let honest_paid = price_weight(
+            last.chain_height,
+            median,
+            &at,
+            supply,
+            closed_shards,
+            honest.bodies_weight(),
+            honest.fees(),
+        );
         Self {
             at,
             economic,
@@ -361,45 +413,26 @@ impl<'a> Block<'a> {
             honest,
             room,
             height: last.chain_height,
-            supply: last.supply,
-            closed_shards: ClosedShardCount::new(last.closed_shards),
+            supply,
+            closed_shards,
             honest_weight: last.honest_tx.weight,
             honest_fee: last.honest_tx.fee_atomic,
+            honest_paid,
         }
     }
 
-    /// The miner's payout for the block at `bodies_weight` listing
-    /// `total_fees`: what production's composition owes him, less the fees
-    /// he paid to list his own bodies, plus `recovery` of the staker pool
-    /// those fees funded. The pool share is taken from his own fees only,
-    /// on the block's one burn split. `None` where the composition refuses
-    /// the block.
-    fn net(
-        &self,
-        bodies_weight: u64,
-        total_fees: u64,
-        own_fees: u64,
-        recovery: PoolShare,
-    ) -> Option<i128> {
-        let paid = price_emission(&EmissionInputs {
-            height: self.height,
-            median_weight: self.median,
-            block_weight: bodies_weight,
-            already_generated: self.at.already_generated,
-            tx_volume: self.at.volume,
+    /// The block at `bodies_weight` listing `total_fees`, as production
+    /// prices it.
+    fn priced_at(&self, bodies_weight: u64, total_fees: u64) -> PaidEmission {
+        price_weight(
+            self.height,
+            self.median,
+            &self.at,
+            self.supply,
+            self.closed_shards,
+            bodies_weight,
             total_fees,
-            supply: self.supply,
-            closed_shards: self.closed_shards,
-            params: self.economic,
-        })
-        .ok()?;
-        let recovered = recovery.of(paid.fee_burn.staker_pool_amount, own_fees, total_fees);
-        debug_assert_eq!(
-            self.honest.reward_at(bodies_weight).ok(),
-            Some(paid.paid.to_raw()),
-            "the fill and the composition price one block"
-        );
-        Some(i128::from(paid.owed.to_raw()) + i128::from(recovered) - i128::from(own_fees))
+        )
     }
 
     /// The relay stuffer: the rate that gets his bodies listed, and his
@@ -545,10 +578,9 @@ impl<'a> Block<'a> {
             return None;
         }
         let total_fees = kept_fees.checked_add(own_fees)?;
-        let reward_before = self.honest.reward();
-        let reward_after = self.honest.reward_at(total_weight).ok()?;
-        let net_before = self.net(self.honest.bodies_weight(), self.honest.fees(), 0, recovery)?;
-        let net_after = self.net(total_weight, total_fees, own_fees, recovery)?;
+        let after = self.priced_at(total_weight, total_fees);
+        let net_before = miner_net(&self.honest_paid, self.honest.fees(), 0, recovery);
+        let net_after = miner_net(&after, total_fees, own_fees, recovery);
         let block_cost = u128::try_from((net_before - net_after).max(0)).unwrap_or(u128::MAX);
         Some(PricedPacking {
             block_cost,
@@ -556,8 +588,8 @@ impl<'a> Block<'a> {
             dropped,
             stuffed,
             weight: body.weight,
-            reward_before,
-            reward_after,
+            reward_before: self.honest_paid.paid.to_raw(),
+            reward_after: after.paid.to_raw(),
             archival: body.archival,
         })
     }
