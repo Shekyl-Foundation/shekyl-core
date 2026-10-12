@@ -22,8 +22,14 @@
 #   1. the set of functions whose error position is `ViewRead<…>` (the
 #      "lifting" functions: `recorded`, `anchor_window`, `committed_hybrid_key`,
 #      the drain and archival helpers, …), read off their signatures;
-#   2. every `impl BlockRule for X { … }` body, for the ways `Corrupt` can
-#      enter that rule's error:
+#   2. every rule impl body — `impl T for X { … }` for every rule trait `T` —
+#      for the ways `Corrupt` can enter that rule's error. The rule traits are
+#      *derived*, not listed: `BlockRule` (whose declaration must exist), plus
+#      every trait a blanket impl lifts into one, transitively
+#      (`impl<R: HeaderRule> BlockRule for R` makes `HeaderRule` a rule trait,
+#      DRS-E5 `E5-14`). A second hardcoded pattern would be broken by the
+#      third form the way the first was by the second — the floor dropping
+#      from 15 to 11 with the gate green. The sites:
 #        - the path `ViewRead::Corrupt`, in either form the crate writes it:
 #          the constructor call `ViewRead::Corrupt(…)` and the constructor
 #          passed as a function (`map_err(ViewRead::Corrupt)`, the conversion
@@ -59,9 +65,14 @@
 # which never names `ViewRead::Corrupt` or a converter, cannot produce
 # `Corrupt`. That is what the absence of a site establishes.
 #
-# Rule 47: the gate asserts its own subject. No rule files, no `impl
-# BlockRule` at all, fewer than MIN_BLOCK_RULES of them, no lifting function,
-# or `recorded` not among them — each exits 2, never a vacuous pass.
+# Rule 47: the gate asserts its own subject. No rule files, no `trait
+# BlockRule`, no rule impl at all, fewer than MIN_BLOCK_RULES of them across
+# every derived form, no lifting function, or `recorded` not among them —
+# each exits 2, never a vacuous pass. And the derivation asserts itself: the
+# gate independently finds every `fn check` carrying a rule's signature
+# (`-> Result<Verdict<()>, ViewRead<…>>`) and refuses when the trait it is
+# declared or implemented for is not in the derived set. A rule form the
+# blanket walk cannot reach is therefore a red run, not a quiet shortfall.
 # `--selftest` bites every refusal red on synthetic sources and reports how
 # many fired.
 #
@@ -91,14 +102,44 @@ CORRUPT_CAPABLE: dict[str, str] = {
     "B4": "anchor_window through recorded; committed_hybrid_key",
 }
 
-# Fewer `impl BlockRule` than this and the walk did not find the crate.
-MIN_BLOCK_RULES = 10
+# Fewer rule impls than this, summed over every derived form, and the walk did
+# not find the crate (15 at DRS-E5 a2: 11 `BlockRule`, 4 `HeaderRule`). A
+# whole form going unread drops the count by at least four; this floor sees
+# that, and the self-assertion above sees it by signature first.
+MIN_BLOCK_RULES = 14
 
 # The lifting function every parent-side read goes through (`rules/mod.rs`);
 # its absence from the set means the signature walk is not reading signatures.
 SENTINEL_LIFTER = "recorded"
 
-IMPL_RE = re.compile(r"impl\s+BlockRule\s+for\s+(\w+)\s*\{")
+# The root rule trait; every other rule trait is reached from it through a
+# blanket impl. Its declaration must exist for the derivation to have a root.
+ROOT_RULE_TRAIT = "BlockRule"
+TRAIT_DECL_RE = re.compile(r"\btrait\s+(\w+)\b")
+# A blanket impl lifting one trait into another, in the two forms Rust
+# writes it: `impl<R: A + B> T for R {` and `impl<R> T for R where R: A + B {`.
+BLANKET_RE = re.compile(r"\bimpl\s*<\s*(\w+)\s*:\s*([^>{]+?)\s*>\s*(\w+)\s+for\s+\1\s*\{")
+BLANKET_WHERE_RE = re.compile(
+    r"\bimpl\s*<\s*(\w+)\s*>\s*(\w+)\s+for\s+\1\s+where\s+\1\s*:\s*([^{]+?)\s*\{"
+)
+# A rule's `check`, by signature: the shape this gate reads, found without
+# reference to the derived trait set so the set can be checked against it.
+RULE_CHECK_RE = re.compile(
+    r"\bfn\s+check\s*<[^{;]*?>\s*\([^{;]*?\)\s*->\s*Result<\s*Verdict<\(\)>\s*,\s*ViewRead<",
+    re.DOTALL,
+)
+IMPL_HEADER_RE = re.compile(r"\bimpl\b")
+IMPL_TRAIT_RE = re.compile(r"\b(\w+)\s+for\b")
+
+
+def rule_impl_re(traits: set[str]) -> re.Pattern[str]:
+    """`impl T for X {` for every derived rule trait `T` (not the blanket
+    impls, whose `impl<` the pattern does not admit)."""
+    alt = "|".join(re.escape(t) for t in sorted(traits))
+    return re.compile(rf"\bimpl\s+({alt})\s+for\s+(\w+)\s*\{{")
+
+
+
 # `fn name<…>(…) -> Result<…, ViewRead<…>>`: from `fn name` to the body's `{`
 # without crossing a `;` or another `{`, with `ViewRead<` in the return type.
 LIFTER_RE = re.compile(
@@ -140,6 +181,9 @@ class Report:
     lifters: set[str] = field(default_factory=set)
     converters: set[str] = field(default_factory=set)
     rules: dict[str, list[Site]] = field(default_factory=dict)
+    # The derived rule traits, and how many impls each form has.
+    traits: set[str] = field(default_factory=set)
+    forms: dict[str, int] = field(default_factory=dict)
 
 
 def _strip_comments(text: str) -> str:
@@ -271,6 +315,55 @@ def crate_sources(src: Path) -> dict[str, str]:
     return files
 
 
+def rule_traits(stripped: Mapping[str, str]) -> set[str]:
+    """The traits whose impls are block rules: `ROOT_RULE_TRAIT`, plus every
+    trait a blanket impl lifts into one, to a fixed point."""
+    declared = {m.group(1) for text in stripped.values() for m in TRAIT_DECL_RE.finditer(text)}
+    if ROOT_RULE_TRAIT not in declared:
+        raise Refused(f"no `trait {ROOT_RULE_TRAIT}` declared: the derivation has no root")
+    edges: list[tuple[str, set[str]]] = []
+    for text in stripped.values():
+        for m in BLANKET_RE.finditer(text):
+            edges.append((m.group(3), {b.strip() for b in m.group(2).split("+")}))
+        for m in BLANKET_WHERE_RE.finditer(text):
+            edges.append((m.group(2), {b.strip() for b in m.group(3).split("+")}))
+    traits = {ROOT_RULE_TRAIT}
+    changed = True
+    while changed:
+        changed = False
+        for target, bounds in edges:
+            if target in traits and not bounds <= traits:
+                traits |= bounds
+                changed = True
+    return traits
+
+
+def _check_bearing_traits(stripped: Mapping[str, str]) -> set[tuple[str, str, str]]:
+    """Every trait that declares or is implemented with a rule-shaped `check`:
+    `(trait, where, path)`, `where` the declaring `trait` or the `impl … for`
+    header. Found by signature alone, independently of the derived set."""
+    found: set[tuple[str, str, str]] = set()
+    for path, text in stripped.items():
+        heads = sorted(
+            [(m.start(), "trait", m.group(1)) for m in TRAIT_DECL_RE.finditer(text)]
+            + [(m.start(), "impl", "") for m in IMPL_HEADER_RE.finditer(text)]
+        )
+        for m in RULE_CHECK_RE.finditer(text):
+            enclosing = [h for h in heads if h[0] < m.start()]
+            if not enclosing:
+                raise Refused(f"{path}: a rule-shaped `check` outside any trait or impl")
+            start, kind, name = enclosing[-1]
+            if kind == "trait":
+                found.add((name, f"trait {name}", path))
+                continue
+            header = text[start : text.find("{", start)]
+            t = IMPL_TRAIT_RE.search(header)
+            if t is None:
+                continue  # an inherent `check`: nothing dispatches it as a rule
+            found.add((t.group(1), header.strip(), path))
+    return found
+
+
 def analyze(files: dict[str, str]) -> Report:
     report = Report()
     stripped = {path: _strip_comments(text) for path, text in files.items()}
@@ -286,11 +379,27 @@ def analyze(files: dict[str, str]) -> Report:
             f"`{SENTINEL_LIFTER}` is not among the lifting functions "
             f"({sorted(report.lifters)}): the signature walk is not reading signatures"
         )
+    report.traits = rule_traits(stripped)
+    unreached = sorted(
+        (t, where, path)
+        for t, where, path in _check_bearing_traits(stripped)
+        if t not in report.traits
+    )
+    if unreached:
+        listed = "; ".join(f"`{where}` ({path})" for _, where, path in unreached)
+        raise Refused(
+            f"a rule-shaped `check` under a trait the blanket walk cannot reach from "
+            f"`{ROOT_RULE_TRAIT}`: {listed}. Derived rule traits: {sorted(report.traits)}. "
+            f"A new rule form is a blanket impl into an existing one, not a pattern added here"
+        )
+    impl_re = rule_impl_re(report.traits)
+    report.forms = {t: 0 for t in report.traits}
     for path, text in stripped.items():
-        for m in IMPL_RE.finditer(text):
-            rule = m.group(1)
+        for m in impl_re.finditer(text):
+            trait, rule = m.group(1), m.group(2)
             if rule in report.rules:
-                raise Refused(f"two `impl BlockRule for {rule}` blocks")
+                raise Refused(f"two rule impls for {rule}")
+            report.forms[trait] += 1
             open_idx = m.end() - 1
             end = _balanced_body(text, open_idx)
             body = text[open_idx:end]
@@ -325,11 +434,13 @@ def analyze(files: dict[str, str]) -> Report:
                 sites.append(Site(rule, path, line, "Err( in the outer position"))
             report.rules[rule] = sites
     if not report.rules:
-        raise Refused("no `impl BlockRule for …` found")
+        raise Refused(
+            "no rule impl found (`impl T for …` for T in " f"{sorted(report.traits)})"
+        )
     if len(report.rules) < MIN_BLOCK_RULES:
         raise Refused(
-            f"only {len(report.rules)} block rules found ({sorted(report.rules)}); "
-            f"the crate has at least {MIN_BLOCK_RULES}"
+            f"only {len(report.rules)} block rules found ({sorted(report.rules)}, "
+            f"by form {report.forms}); the crate has at least {MIN_BLOCK_RULES}"
         )
     return report
 
@@ -351,7 +462,7 @@ def judge(report: Report, capable: Mapping[str, str] = CORRUPT_CAPABLE) -> list[
             )
     for rule, read in sorted(capable.items()):
         if rule not in report.rules:
-            errs.append(f"CORRUPT_CAPABLE names {rule}, which has no `impl BlockRule`: stale")
+            errs.append(f"CORRUPT_CAPABLE names {rule}, which has no rule impl: stale")
         elif not report.rules[rule]:
             errs.append(
                 f"CORRUPT_CAPABLE names {rule} (halt from {read}), whose body has no "
@@ -362,8 +473,9 @@ def judge(report: Report, capable: Mapping[str, str] = CORRUPT_CAPABLE) -> list[
 
 def describe(report: Report) -> str:
     capable = sorted(r for r, s in report.rules.items() if s)
+    forms = ", ".join(f"{n} {t}" for t, n in sorted(report.forms.items()))
     return (
-        f"block rules: {len(report.rules)}; lifting functions: {len(report.lifters)}; "
+        f"block rules: {len(report.rules)} ({forms}); lifting functions: {len(report.lifters)}; "
         f"converters: {len(report.converters)}; "
         f"Corrupt-capable: {capable or 'none'}"
     )
@@ -380,11 +492,49 @@ pub fn recorded<'id, V: ChainView<'id>>(view: &V, height: BlockHeight)
     }
 }
 pub(crate) fn refused<T, F>(rule: CenRow, locus: Locus) -> Result<Verdict<T>, F> { todo!() }
+pub fn recorded_header<'id, H: HeaderView<'id>>(view: &H, height: BlockHeight)
+    -> Result<HeaderRecord, ViewRead<H::Fault>> { todo!() }
+"""
+# The rule traits as `rules/mod.rs` declares them: the root, and the header
+# form the blanket impl lifts into it (DRS-E5 `E5-14`).
+_TRAITS = """
+pub(crate) trait BlockRule: Rule {
+    fn check<'id, V: ChainView<'id>>(cx: &BlockContext<'_>, view: &V)
+        -> Result<Verdict<()>, ViewRead<V::Fault>>;
+}
+pub(crate) trait HeaderRule: Rule {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, view: &H)
+        -> Result<Verdict<()>, ViewRead<H::Fault>>;
+}
+"""
+_BLANKET = """
+impl<R: HeaderRule> BlockRule for R {
+    fn check<'id, V: ChainView<'id>>(cx: &BlockContext<'_>, view: &V)
+        -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        <R as HeaderRule>::check(cx, view)
+    }
+}
+"""
+_BLANKET_WHERE = """
+impl<R> BlockRule for R where R: HeaderRule {
+    fn check<'id, V: ChainView<'id>>(cx: &BlockContext<'_>, view: &V)
+        -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        <R as HeaderRule>::check(cx, view)
+    }
+}
+"""
+# A third form: declared and implemented with a rule's `check`, reached by
+# no blanket impl. The derivation cannot see it; the self-assertion must.
+_THIRD_FORM = """
+pub(crate) trait TxRule: Rule {
+    fn check<'id, V: ChainView<'id>>(cx: &BlockContext<'_>, view: &V)
+        -> Result<Verdict<()>, ViewRead<V::Fault>>;
+}
 """
 
 _RULE_T = """
-impl BlockRule for {name} {{
-    fn check<'id, V: ChainView<'id>>(cx: &BlockContext<'_>, view: &V)
+impl {trait} for {name} {{
+    fn check<'id, V: {view}<'id>>(cx: &BlockContext<'_>, view: &V)
         -> Result<Verdict<()>, {err}> {{
         {body}
     }}
@@ -392,8 +542,13 @@ impl BlockRule for {name} {{
 """
 
 
-def _rule(name: str, body: str, err: str = "ViewRead<V::Fault>") -> str:
-    return _RULE_T.format(name=name, body=body, err=err)
+def _rule(name: str, body: str, err: str = "ViewRead<V::Fault>", trait: str = "BlockRule") -> str:
+    view = "HeaderView" if trait == "HeaderRule" else "ChainView"
+    return _RULE_T.format(trait=trait, name=name, body=body, err=err, view=view)
+
+
+def _header_rule(name: str, body: str) -> str:
+    return _rule(name, body, trait="HeaderRule")
 
 
 
@@ -423,19 +578,38 @@ _CONVERTER = """
 fn parent_read<VF>(fault: Fault<VF>) -> ViewRead<VF> { ViewRead::View(fault) }
 """
 _MAP_PARENT = "let e = derive(view).map_err(parent_read)?; Ok(Ok(()))"
+# The header-rule forms of the three probes the gate must catch on a
+# `HeaderRule` as on a `BlockRule`: a direct `Err(ViewRead::Corrupt(..))`, a
+# `?` on an unlisted `ViewRead`-returning helper, and the same helper
+# defined in another module.
+_H_PLAIN = "if cx.connecting.is_zero() { return Ok(Ok(())); } let _ = view.tip()?; Ok(Ok(()))"
+_H_LIFTS = "let h = recorded_header(view, cx.connecting)?; Ok(Ok(()))"
+_H_HELPER = """
+fn seed_hash<'id, H: HeaderView<'id>>(view: &H, c: BlockHeight) -> Result<BlockHash, ViewRead<H::Fault>> { todo!() }
+"""
+_H_CALLS_HELPER = "let s = seed_hash(view, cx.connecting)?; Ok(Ok(()))"
+_H_CROSS = "let s = super::seeds::seed_hash(view, cx.connecting)?; Ok(Ok(()))"
 
 
 def _synthetic(*, b4_body: str = _B4, extra: dict[str, str] | None = None, n_plain: int = 12,
-               mod: str = _MOD, err: str = "ViewRead<V::Fault>", anchor: str = _ANCHOR) -> dict[str, str]:
-    files = {"rules/mod.rs": mod, "rules/attestation.rs": anchor + _rule("B4", b4_body, err)}
+               n_header: int = 3, mod: str = _MOD, err: str = "ViewRead<V::Fault>",
+               anchor: str = _ANCHOR, traits: str = _TRAITS, blanket: str = _BLANKET,
+               header_extra: dict[str, str] | None = None) -> dict[str, str]:
+    files = {
+        "rules/mod.rs": traits + blanket + mod,
+        "rules/attestation.rs": anchor + _rule("B4", b4_body, err),
+    }
     plain = "\n".join(_rule(f"R{i}", _PLAIN, err) for i in range(n_plain))
     # A comment that mentions the literal must not be a site, and neither is
     # a method on `view` nor a `Vec::extend` sharing a lifting method's name.
     files["rules/body.rs"] = (
         "// a comment naming ViewRead::Corrupt( and recorded(view, h)? is prose\n" + plain
     )
+    files["rules/header.rs"] = "\n".join(_header_rule(f"H{i}", _H_PLAIN) for i in range(n_header))
     for name, body in (extra or {}).items():
         files[f"rules/{name.lower()}.rs"] = _rule(name, body, err)
+    for name, body in (header_extra or {}).items():
+        files[f"rules/{name.lower()}.rs"] = _header_rule(name, body)
     return files
 
 
@@ -496,15 +670,45 @@ def selftest() -> None:
     p.clean("Vec::extend shares a lifter's name",
             _synthetic(extra={"F8": "pairs.extend(xs); Ok(Ok(()))"},
                        mod=_MOD + "impl Acc { fn extend(&mut self) -> Result<(), ViewRead<F>> { todo!() } }"))
+    # The three probes on a `HeaderRule`: the derived form is read exactly as
+    # the root form is.
+    p.red("header rule: direct Corrupt", _synthetic(header_extra={"D7": _LITERAL}),
+          "block rule D7 has a Corrupt site")
+    p.red("header rule: lifts through recorded_header", _synthetic(header_extra={"D8": _H_LIFTS}),
+          "block rule D8 has a Corrupt site")
+    p.red("header rule: unlisted ViewRead helper",
+          _synthetic(header_extra={"D9": _H_HELPER + _H_CALLS_HELPER}),
+          "block rule D9 has a Corrupt site")
+    cross = _synthetic(header_extra={"C4": _H_CROSS})
+    cross["rules/seeds.rs"] = _H_HELPER
+    p.red("header rule: cross-module helper", cross, "block rule C4 has a Corrupt site")
+    p.clean("header rule: ? on a view method only", _synthetic(header_extra={"C9": _H_PLAIN}))
+    p.clean("blanket impl in where-clause form", _synthetic(blanket=_BLANKET_WHERE))
     p.red("B4 lost its sites", _synthetic(b4_body=_PLAIN), "no Corrupt site: stale entry")
-    p.red("B4 impl gone", {"rules/mod.rs": _MOD, "rules/body.rs": _synthetic()["rules/body.rs"]},
-          "has no `impl BlockRule`: stale")
-    p.red("no impls", {"rules/mod.rs": _MOD}, "no `impl BlockRule", subject=True)
-    p.red("too few impls", _synthetic(n_plain=2), "block rules found", subject=True)
+    no_b4 = _synthetic()
+    del no_b4["rules/attestation.rs"]
+    no_b4["rules/mod.rs"] += _ANCHOR
+    p.red("B4 impl gone", no_b4, "has no rule impl: stale")
+    p.red("no impls", {"rules/mod.rs": _TRAITS + _BLANKET + _MOD}, "no rule impl found", subject=True)
+    p.red("too few impls", _synthetic(n_plain=2, n_header=0), "block rules found", subject=True)
+    p.red("too few impls across forms", _synthetic(n_plain=6, n_header=6), "block rules found",
+          subject=True)
     p.red("no lifters", _synthetic(mod="pub fn x() -> u8 { 0 }", err="V::Fault", anchor="",
-                                   b4_body=_PLAIN), "no function returns", subject=True)
+                                   b4_body=_PLAIN, traits="", blanket="", n_header=0),
+          "no function returns", subject=True)
     p.red("sentinel missing", _synthetic(mod=_MOD.replace("fn recorded", "fn recorded_block")),
           "is not among the lifting functions", subject=True)
+    # The derivation asserts itself (rule 47).
+    p.red("no trait BlockRule", _synthetic(traits=_TRAITS.replace("trait BlockRule", "trait BlokRule")),
+          "no `trait BlockRule` declared", subject=True)
+    p.red("blanket impl gone: HeaderRule unreached", _synthetic(blanket=""),
+          "the blanket walk cannot reach", subject=True)
+    p.red("a third form with no blanket impl",
+          _synthetic(traits=_TRAITS + _THIRD_FORM)
+          | {"rules/z9.rs": _rule("Z9", _PLAIN, trait="TxRule")},
+          "the blanket walk cannot reach", subject=True)
+    p.red("the third form declared but never implemented",
+          _synthetic(traits=_TRAITS + _THIRD_FORM), "`trait TxRule`", subject=True)
     try:
         analyze({})
     except Refused as e:

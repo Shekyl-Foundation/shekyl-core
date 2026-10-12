@@ -148,16 +148,19 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
         .into_option()
         .map_or(height, |target| target.max(height));
     let network = network_label(info.identity.nettype);
-    // Status is a part a daemon may withhold. Today a restricted one writes
-    // stand-ins there instead — a start time of zero, zero connections — and
-    // a withheld part reads the same way here.
-    let (start_time, outgoing, incoming) = info.node.shown().map_or((0, 0, 0), |status| {
-        (
-            status.start_time,
-            status.outgoing_connections_count,
-            status.incoming_connections_count,
-        )
-    });
+    // Status is a part a daemon may withhold, and a restricted one does.
+    // A withheld part is not a node with no connections and no uptime: the
+    // line says the counts were not disclosed and leaves the uptime off.
+    let status = info.node.shown();
+    let connections = status.map_or_else(
+        || "connections not disclosed".to_owned(),
+        |status| {
+            format!(
+                "{}(out)+{}(in) connections",
+                status.outgoing_connections_count, status.incoming_connections_count
+            )
+        },
+    );
     let mining_text = match &mining {
         MiningReadout::Unavailable => "mining info unavailable".to_owned(),
         MiningReadout::Syncing => "syncing".to_owned(),
@@ -182,15 +185,13 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
         .map_or_else(|| "unknown".to_owned(), mining_speed);
     let mut line = format!(
         "Height: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
-         {}(out)+{}(in) connections",
+         {connections}",
         height,
         sync_percentage(height, net_height),
-        outgoing,
-        incoming
     );
-    // A restricted listener does not disclose the start time, and the C++
-    // omitted the whole clause rather than reporting an uptime of zero.
-    if start_time != 0 {
+    // No Status, no start time, so no uptime clause: an uptime of zero
+    // would be a claim. The C++ omitted the clause on the same grounds.
+    if let Some(start_time) = status.map(|status| status.start_time) {
         let uptime = now.saturating_sub(start_time);
         line.push_str(&format!(
             ", uptime {}d {}h {}m {}s",

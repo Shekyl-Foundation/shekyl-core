@@ -6512,3 +6512,41 @@ changing the mechanism.
 
 ---
 
+## 2026-10-12 — Serving co-residence: the daemon's slice, no adaptive back-off, and the T2 measurement redefined
+
+**Decision (maintainer, 2026-10-12; brief relayed to the serving lane).**
+On the `BA-T5` session 3 finding that the per-thread nice (`SH-3`) gives a
+daemon in a different cpu cgroup only part of its CPU back
+([`ba_t5_serve_floor_device_20261012.md`](benchmarks/ba_t5_serve_floor_device_20261012.md);
+[`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
+§9.8):
+
+1. **A headless staker's daemon runs in its own top-level `shekyl.slice`
+   with a CPU weight above `user.slice`'s** (`CPUWeight=400`, reasoned,
+   not measured: 4:1 against `user.slice` under contention, about 80 %
+   of the CPU to the daemon while the per-user wallet serves). The slice
+   ships with the `.deb`, and `shekyld.service` joins it. The wallet
+   stays a per-user process. **A wallet as a system service is
+   rejected**: it breaks per-user custody, the same ruling `WP-D7` makes
+   on Windows.
+2. **Beyond that, the in-process nice-19 mechanism plus the serving gate
+   are the defence. No adaptive back-off.**
+3. **The T2 measurement is redefined**: the time to verify a block while
+   the daemon is synced and following the tip, idle against serving at
+   N = 64, with and without the slice weight — not the sync rate. The
+   syncing arms of sessions 2 and 3 are a stress case production
+   prevents: a daemon that is not following the tip serves nothing
+   (`DaemonTipCache::stamp_not_following`, the gate's `own_height`
+   refusal); the probe served through a sync only because its test
+   signer carries a fixed height. Their figures stand as the cost of
+   contention, cited as such.
+4. **The write-stall timer measures the peer.** `WRITE_STALL_TIMEOUT`
+   wrapped the whole write and so counted a starved serving task's own
+   lateness as a stall (two cut responses in 1,536 at N = 64 in session
+   3, every one with a client that was reading). It is restructured to
+   wrap only the wait for the socket to become writable; a socket the
+   peer is draining never starts the clock. `WRITE_TIMEOUT` is
+   unchanged. Its own PR, with a probe smoke run in CI so the floor probe
+   cannot break silently again.
+
+---

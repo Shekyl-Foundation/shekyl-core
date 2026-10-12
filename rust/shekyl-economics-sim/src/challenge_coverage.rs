@@ -64,20 +64,13 @@ impl SplitMix64 {
         z ^ (z >> 31)
     }
 
-    /// The next generator word. [`Self::below`] draws a bounded range from
-    /// these; a caller that wants the raw stream, such as a 32-byte seed,
-    /// takes the words themselves.
-    pub(crate) fn word(&mut self) -> u64 {
-        self.next()
-    }
-
     /// Uniform draw in `[0, n)` by rejection (no modulo bias).
     /// `n` must be nonzero — an empty range has no uniform draw.
     pub(crate) fn below(&mut self, n: u64) -> u64 {
         assert!(n > 0, "uniform draw from an empty range");
         let zone = u64::MAX - (u64::MAX % n);
         loop {
-            let v = self.word();
+            let v = self.next();
             if v < zone {
                 return v % n;
             }

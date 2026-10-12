@@ -933,15 +933,6 @@ predictions fixed before the run
 rule and weighting of §4, a reveal lag uniform on `0..=W₂`, and each
 block independently unrevealed with the stated probability.
 
-> The table is the 2026-10-07 run's, made on the sim's own sampler and
-> count rule. The sim has since been moved onto this spec's functions
-> (`select_draw`, `draw_count`, `draw_horizon`). On them the three rows
-> read 0.46 % (0.44 – 0.47), 1.08 % (1.03 – 1.13) and 3.78 % (3.59 – 3.96),
-> the bar's figure is 1.13 % where the text below says 1.18 %, and no
-> verdict changes
-> ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
-> Appendix A2, N1).
-
 | Dropout | Pairs short of 3 issued: mean (min – max) | Draws per pair, drawn / issued | Draws per block, mean / max | Fetch per won block |
 | --- | --- | --- | --- | --- |
 | 0 % | 0.46 % (0.45 – 0.48) | 3.61 / 3.61 | 117.1 / 172 | 351 MB |
