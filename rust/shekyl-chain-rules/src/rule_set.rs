@@ -473,7 +473,8 @@ impl RuleSet {
 }
 
 impl fmt::Debug for RuleSet {
-    // The row list is 153 names long; a failing assertion wants the count.
+    // The row list is every enforced census row (`CenRow::ALL` on the
+    // genesis set); a failing assertion wants the count, not the names.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuleSet")
             .field("id", &self.id)
