@@ -6464,3 +6464,68 @@ verify also re-gathers on any pass, so it moves with the gather.
    in the implementing change.**
 
 ---
+
+## 2026-10-11 — Serve credit: one bundle per block replaces the carrier transaction (`SCS-P14`–`P30`)
+
+**Decision (maintainer, 2026-10-11; the Slice C Round 0 reopen).** The
+specification is
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
+§7, §9 and §13.5. This entry records what was decided and what it
+replaces. Nothing of it is built.
+
+**Why it was reopened.** The reopen asked whether a carrier survives a
+reorg. Grounding found that a carrier could not travel at all: a zero-fee
+transaction is never relayed and cannot be admitted from a peer
+(`SCS-F12`). Under that sat one defect. A block could need two carriers,
+and the first one admitted issued every draw of the block, so the miner of
+a late block could include one and leave out the other. The pairs whose
+records were in the second took misses, at no cost to the miner, and the
+pairs could be chosen in advance (`SCS-F13`).
+
+1. **One bundle per block `h`**: the reveal and every pass record,
+   admitted whole or not at all. A bundle with no passes is valid and
+   required. *Replaces* the `serve_credit_only` carrier transaction; it
+   reverses `SCS-P11` (the serve-credit input carries the pass) and drops
+   `n ≥ 1`.
+2. **No node can refuse a valid bundle, and no rule acts on its absence.**
+   Non-inclusion through all of `W₂` is NonObservation, never misses.
+3. **The bundle sits beside the block**; the header root covers each
+   bundle's kept bytes and a hash of its prunable bytes. Kept: seed, `h`,
+   and a pass bitmap of `count(h)` bits, in place of the list of `j`.
+4. **`W₂` stays the only consensus window.** `W₂ + D_max` is rejected. The
+   challenger files by `h + W₂ − M`, `M = 30` blocks, provisional and not
+   consensus. *Struck from the wargames:* a miner rewriting `M` blocks to
+   clear a friend's misses, which is majority-class hashrate.
+5. **The receipt key is read from the `h_open(E)` bond snapshot**, the one
+   the drawable set is drawn from: one type, two methods.
+6. **The section has a budget counted in draws**, `c · 9·D / SEB` with
+   `c = 2` provisional, and is outside the fee median and the penalty
+   curve. This dissolves the unpaid-inclusion and cap-raise items of the
+   fee-and-weight row in FOLLOWUPS.
+7. **The prunable part is archival content in the shard domain**, kept
+   past `D_max`, then discarded and backfilled. "Never after the prune" is
+   withdrawn. `SHT-Q1`'s wording is amended to admit bundles.
+8. **Alternative chains:** stateless checks on arrival, everything else at
+   the switch.
+9. **No C++.** Bundles exist only in Rust; the C++ sidecar path goes at
+   `DEL-008`.
+10. **Dandelion++ for bundles is withdrawn**; reopen when
+    block-origination privacy is designed.
+11. **FN-DSA increments 3 and 4 are Slice C's.** *Supersedes* `SO-D12d`'s
+    "the FN-DSA lane builds increments 2 to 4" for those two.
+12. **Transport is by reference**: blocks carry references, bodies live in
+    one store keyed by hash, and the pool gains a separate bundle queue.
+    DRS-E5 builds both; Slice C supplies the rule.
+13. **No fee-floor bypass by how a transaction arrived** (`E5-Q1`, partly
+    reopened): the ruling of 2026-10-02 applied to DRS-E5.
+14. **Housekeeping:** `SCV-Q5`'s gate accepts `ByConstruction`; the
+    specification's §2 is re-pinned; the proposal's §2.2 is restated as
+    referential integrity; the sim is to call the production draw
+    functions.
+
+**Open.** Five questions found while writing the bundle in, each with a
+recommendation (specification §13.6, `SCS-P31`–`P35`): a bound on the
+anchor, the budget's integer form, whether the header root is the existing
+`attestation_root`, the bundle's bytes, and what a backfill verifies.
+
+---
