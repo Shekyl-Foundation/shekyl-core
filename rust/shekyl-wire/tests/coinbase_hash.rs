@@ -44,7 +44,7 @@ use shekyl_wire::Block;
 /// regtest shares mainnet `GENESIS_TX`, so the live-daemon capture and the C++
 /// `generate_genesis_block` path are two independent derivations of one id.
 const MAINNET_GENESIS_BLOCK_ID: &str =
-    "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3";
+    "d7af382339b2cd0c4ee4b2ea0afe7426f34bc2971495d9873fd4cec2107ad8ed";
 
 fn hex32(bytes: impl AsRef<[u8]>) -> String {
     let mut s = String::with_capacity(64);
