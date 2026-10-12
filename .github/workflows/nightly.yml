@@ -189,6 +189,13 @@ jobs:
     # green until a fresh clone ran the tests by hand two commits later
     # (e3d0931d77).
     #
+    # `full_scale_maturity_reproduces_doc_figures` reproduces the public urn,
+    # which production no longer has: records-was, the instrument that
+    # justified the secret draw, with no production owner by design. It
+    # stays in this list until the challenge design's §7.1 and §8 are
+    # retired, and leaves with its module in that PR
+    # (ECONOMICS_SIM_PRODUCTION_REBASE.md §4).
+    #
     # The crate's other two ignored tests, `regen_baseline_fixture` and
     # `regen_stage2_narration_fixtures`, WRITE the committed fixtures. They
     # are named below as helpers and never run here: a lane that

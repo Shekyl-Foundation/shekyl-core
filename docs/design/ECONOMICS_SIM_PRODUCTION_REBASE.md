@@ -413,7 +413,11 @@ defect.
 | The fee-floor instrument's floor at `SCALE` resolution (Appendix A R29) | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
 | The fee-ladder instrument's nearest-pow2 rule (R26) | An alternative the instrument measures against the owner's ceiling snap; it has no owner because it was not chosen | `fee_ladder.rs`; the ceiling arm calls `quantize_pow2_ceil` |
 | The ArticMine transliteration's KAT inputs (R30) | The 300 000 in the inherited-ladder tests is an input of the C++ `scaling_2021` vectors, fixed with them; importing the zone would move a KAT with the config | `fee_ladder.rs` tests |
-| The secret draw: weighting, count per block, reveal lag and dropout (ESR-11) | The mechanism is being designed (Slice C Round 0); no production function exists to call. `SETTLEMENT_EPOCH_BLOCKS`, `CHALLENGE_RESPONSE_BLOCKS`, `SHARD_LENGTH` and the failure-window `(m, n)` are production's | `secret_draw.rs`; §5.13 fixes the model before the run |
+| The secret draw's reveal lag and dropout (ESR-11) | Who reveals a block's seed, and when, is behaviour production cannot know. The selection, the count per block and its horizon are production's and are called since ESR-8 (`select_draw`, `draw_count`, `draw_horizon`), as are `SETTLEMENT_EPOCH_BLOCKS`, `CHALLENGE_RESPONSE_BLOCKS`, `SHARD_LENGTH` and the failure-window `(m, n)`. The shortfall the count rule is given is net of draws in flight, under each of two readings | `secret_draw.rs`; §5.13 fixes the model before the run |
+| The public urn and its even-spread schedule (`challenge_coverage.rs`, R21) | records-was — instrument that justified the secret draw; no production owner by design. `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn. The module is deleted in the PR that retires §7.1 and §8 of the challenge design | `challenge_coverage.rs`; its full-scale reproduction stays in the nightly lane with this reason beside it |
+| The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs`, R22) | Production's rule is a predicate over one window, not a probability. The closed forms are the analysis of that predicate and are cross-checked against the predicate-backed kernel by test | Stated at each form |
+| The ArticMine transliteration (`fee_ladder.rs`, D7) | The inherited ladder is reproduced as the thing the Shekyl ladder is measured against. It has no production owner because production does not run it | `fee_ladder.rs`; its KAT inputs are the row above |
+| Maturity operands (`MATURITY_D = 324_000`, 40 000 projected pairs; D13) | Assumptions about a network that does not exist yet, not values of the chain | Named as assumptions where they are defined |
 | Demand does not respond to the fee or to congestion | A schedule is a number of transactions per block, the same whatever they cost or however long they wait: no elasticity, no rung escalation, no resubmission after expiry. What the chain fails to carry expires; it is not deterred | Stated at the head of this document beside the result it governs |
 
 ## 5. Predictions, written before any run (2026-10-02)
@@ -1066,6 +1070,11 @@ production owner yet; the sim leads the code here (the second ruling in
 
 ### 5.14 ESR-11 — what the run said (2026-10-07, at `6681692ed9`)
 
+> The figures below are that run's, on the sim's own sampler and count
+> rule. Since ESR-8 the module calls production's `select_draw`,
+> `draw_count` and `draw_horizon`; every verdict here holds and the
+> shares move within seed noise (Appendix A2, N1).
+
 `cargo run --release -p shekyl-economics-sim -- --secret-draw`, twelve
 cells at eight seeds each. Maturity, `D = 324,000`:
 
@@ -1563,11 +1572,11 @@ constant that no caller passes.
 
 | Status | Rows |
 | --- | --- |
-| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R10, R13, R15, R16, R17, R18, R19, R23, N2, N3 |
+| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R10, R13, R15, R16, R17, R18, R19, R23, N1, N2, N3 |
 | Closed by deletion | R2, R31, D8 |
-| Closed by a §4 declaration | 1, 2, 3, R29; R11 (the recorder; the three folds import); R26 (the nearest arm; the ceiling arm imports); R30 (the KAT zone; the bond imports) |
+| Closed by a §4 declaration | 1, 2, 3, R29; **in ESR-8:** R21, R22, D7, D13; R11 (the recorder; the three folds import); R26 (the nearest arm; the ceiling arm imports); R30 (the KAT zone; the bond imports) |
 | Staking-excepted (ruled 2026-10-03) | D4 |
-| **Open** | R21, R22; D1, D3, D5, D6, D7, D9, D10, D11, D12, D13; N1, N4 |
+| **Open** | D1, D3, D5, D6, D9, D10, D11, D12; N4 |
 
 Item 5 was a roll-up of R24–R26 and D6 and is open through D6 alone.
 
@@ -1586,8 +1595,8 @@ ESR-8 did.
 | R17 | `BandedCurveParams::from_plateau_value(8_000)` (`population.rs:43`) | `shekyl_archival_retention::reward_arithmetic::ARCHIVAL_PROVISIONAL_CURVE` | Closed: `reward_curve()` returns the constant |
 | R18 | `AGE_WEIGHT_MILLI = 1_000` (`population.rs:56`); production's is 2 000. Declared inert in its own comment, not in §4 | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI`, or a §4 row saying why the sim's differs | Closed by import (1 000 → 2 000). No figure moved, which is the inertness its comment claimed |
 | R19 | `N_HARD_BOUND = 25` (`mn_feasibility.rs:55`) | A new `pub` export: the bound exists in production only as a const-assert over a private constant (`failure_window.rs`) | Closed: `FAILURE_WINDOW_N_GATHER_BOUND`, a named `pub` constant the assert now reads |
-| R21 | The exact-min urn and its even-spread schedule (`challenge_coverage.rs`). **Its production owner no longer exists**: `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn | A decision (below) | Open; direction below |
-| R22 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs:136`). Cross-checked against the predicate-backed kernel by test; no production counterpart to import | A §4 row | Open |
+| R21 | The exact-min urn and its even-spread schedule (`challenge_coverage.rs`). **Its production owner no longer exists**: `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn | A decision (below) | Closed by the §4 row the direction worded |
+| R22 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs:136`). Cross-checked against the predicate-backed kernel by test; no production counterpart to import | A §4 row | Closed by its §4 row |
 | R23 | `1.0 + SLASH_GRACE_EPOCHS` (`cartel.rs:249`) | A new `pub` export of `SLASH_SETTLEMENT_TIP_LAG_EPOCHS`, private today | Closed: the constant is `pub` and `cartel.rs` reads it |
 
 ### The dead-referent rows
@@ -1606,7 +1615,7 @@ ESR-8 did.
 
 | # | What was found | Closes by |
 | --- | --- | --- |
-| N1 | **The secret draw's count rule is restated.** §4's ESR-11 row says "no production function exists to call". It does now: `shekyl_archival_retention::{draw_horizon, draw_count, select_draw}`. The sim keeps its own `horizon()`, `block_target()` and three constants (`MIN_HORIZON_BLOCKS`, `CATCH_UP_BY_PERMILLE`, `CAP_MULTIPLE`); only `COUNTED_DRAWS` is pinned to its owner. Whether the sim's f64 `block_target` equals production's fixed-point `draw_count` was read, not run | An equivalence run on the same inputs, its result recorded here, then the calls switched. A disagreement goes to the challenge lane before the sim moves |
+| N1 | **The secret draw's count rule is restated.** §4's ESR-11 row says "no production function exists to call". It does now: `shekyl_archival_retention::{draw_horizon, draw_count, select_draw}`. The sim keeps its own `horizon()`, `block_target()` and three constants (`MIN_HORIZON_BLOCKS`, `CATCH_UP_BY_PERMILLE`, `CAP_MULTIPLE`); only `COUNTED_DRAWS` is pinned to its owner. Whether the sim's f64 `block_target` equals production's fixed-point `draw_count` was read, not run | **Closed:** the sim calls all three. The result is below |
 | N2 | **The recorder priced a block the chain does not build.** It paid `effective_emission` on the schedule's whole demand, fifty transactions a block. At the control arm's fee that is 630 to 765 kB against a 300 kB penalty-free zone: over the block-weight limit while the median sits at the zone, so the missing penalty was the smaller half of it. The loop's own comment declared the omission; §4 declared its volume operand only | **Fixed in ESR-8:** the recorder steps the cursor. The vectors were regenerated and every column that moved is accounted for below |
 | N3 | `stage2.rs` split the fee burn at the flat `staker_pool_share` where the engine and budget folds use `compute_burn_split_at` at `n = 0`. The two are equal at the shipped parameters and nothing failed if they stopped being equal | **Closed:** the stage-2 ledger advances by production's destroyed amount at the fold's closed-shard count, and `the_shipped_split_is_flat_at_every_count` fails when the shipped asymptote leaves the floor |
 | N4 | `Cargo.toml` justifies the `shekyl-chain-rules` dependency by `EMISSION_SPLIT_EPOCH`, which that crate no longer provides. The dependency is still used, for the medians, the volume span and the reference-block age | Text |
@@ -1634,7 +1643,46 @@ recorded as direction, not as a signed ruling.
    is there, not a third copy in the sim. Built; see below.
 3. **The secret draw (N1).** Equivalence first: the sim's rule and
    production's run on the same inputs, agreement or the delta recorded,
-   and only then the calls switched.
+   and only then the calls switched. Done; see below.
+
+### N1: the secret draw on production's rule
+
+**Equivalence, before the switch** (commit `2395057f41`). An epoch ran
+under either count rule on one random stream: the sim's `horizon()`,
+`block_target()` and `f64` carry, or production's `draw_horizon` and
+`draw_count` with their 32-bit carry. 120 epochs: set sizes 1, 7, 500,
+4 096 and 16 384; dropout 0, 10, 50 and 100 %; both in-flight readings;
+three seeds. Drawn, issued, the issued histogram, the largest block and
+the unpaid reads were equal in every epoch, so the two rules count every
+block alike. Nothing went to the challenge lane.
+
+The cap flag, a report column, differed in 15 of 1.2 million blocks. The
+sim flagged `wanted > cap`. Production's rule is asked whether a larger
+shortfall would raise the target, which also flags a target exactly at
+the cap and restates no cap.
+
+**The switch.** The sim's rule and its three constants are deleted. The
+full evidence output (`--secret-draw`, twelve cells at eight seeds) is
+byte-identical before and after.
+
+**The selection.** Each draw is production's `select_draw` on a
+per-block seed, in place of a sampler with the same weights. The sim's
+`FULL_WEIGHT_DIVISOR` is deleted: production writes that weight as a
+mask inside `select_draw` and names no constant for it. This is a
+different random stream, so §5.14's figures are not reproduced digit for
+digit. Every verdict column holds. At maturity, `D = 324,000`:
+
+| Reading | Dropout | Short of 3, max over seeds: sampler → `select_draw` | Seeds over 3 % |
+| --- | --- | --- | --- |
+| A | 0 % | 0.48 % → 0.47 % | 0 → 0 |
+| A | 10 % (the bar) | 1.18 % → 1.13 % | 0 → 0 |
+| A | 30 % | 3.96 % → 3.96 % | 8 → 8 |
+| B | 0 % | 1.44 % → 1.42 % | 0 → 0 |
+| B | 10 % (the bar) | 2.67 % → 2.66 % | 0 → 0 |
+| B | 30 % | 6.46 % → 6.24 % | 8 → 8 |
+
+The run now hashes every draw and takes about three minutes in release,
+where it took a second. The nightly lane carries it.
 
 ### R10 as built, and what it found about `price_emission`
 
