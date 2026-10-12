@@ -21,7 +21,7 @@ use core::convert::Infallible;
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, ChainValid, ChainView, Corrupt, Fault, FormAttempt,
-    PaidEmission, RuleSet, StructurallyValid, Substrate, Trust, ViewRead, Weights,
+    HeaderView, PaidEmission, RuleSet, StructurallyValid, Substrate, Trust, ViewRead, Weights,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
@@ -149,13 +149,13 @@ impl Substrate for FixtureSubstrate {
 /// identity of the block at `shekyl_chain_rules::seed_height(connecting)`.
 /// Read from the same view the verdict will be minted against, as E2's
 /// replay driver will.
-fn expected_seed<'id, V: ChainView<'id>>(view: &V) -> Result<BlockHash, V::Fault> {
+fn expected_seed<'id, V: HeaderView<'id>>(view: &V) -> Result<BlockHash, V::Fault> {
     let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
     let Some(seed_height) = shekyl_chain_rules::seed_height(connecting) else {
         return Ok(BlockHash::NULL);
     };
-    Ok(match view.block_at(seed_height)? {
-        AtHeight::Recorded(block) => block.hash,
+    Ok(match view.header_at(seed_height)? {
+        AtHeight::Recorded(record) => record.hash,
         AtHeight::AboveTip => panic!("the seed height is below the tip"),
     })
 }
@@ -185,8 +185,10 @@ pub(super) fn priced_on(store: &ChainStore, candidate: Candidate) -> Candidate {
 }
 
 /// The stateless stage over the fixture substrate, under `GENESIS`,
-/// claiming the seed `view` expects.
-pub(super) fn formed<'id, V: ChainView<'id>>(
+/// claiming the seed `view` expects. `view` is any [`HeaderView`]: the
+/// batch's chain view for a connect, the stitched `AltView` for the alt
+/// tier (`alt_tests::admitted`) — the seed is a header read either way.
+pub(super) fn formed<'id, V: HeaderView<'id>>(
     view: &V,
     candidate: Candidate,
 ) -> Result<StructurallyValid, V::Fault> {
@@ -195,7 +197,7 @@ pub(super) fn formed<'id, V: ChainView<'id>>(
 
 /// [`formed`] under an explicit rule set (a Fakechain set for tests that
 /// run a shortened schedule).
-pub(super) fn formed_under<'id, V: ChainView<'id>>(
+pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     view: &V,
     candidate: Candidate,
     rules: &RuleSet,

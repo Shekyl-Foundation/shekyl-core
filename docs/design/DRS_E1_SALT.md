@@ -13,6 +13,14 @@ three arms (`AlreadyHeld`, `NotHeld`, `IdentityMismatch`) — a malformed
 block, an empty witness and a zero weight are `AltBlockError` at
 `checked`, not a fourth arm — and SAL-2's key-types claim corrected (the
 floor moved 25 → 24).
+**Moved by DRS-E5 a4 (2026-10-11; weight and brand 2026-10-12):** AL1 is
+`insert_alt_block(&self, AltValid<'_, AltView<'_>>)` — the cheap tier's
+verdict builds the row and keys it, branded to the store's `AltView`, so
+the `IdentityMismatch` arm this record describes is deleted and `AltCannot`
+has two arms; `coins_generated` is gone from the row and `block_weight` is
+`BlockWeight` (no presence byte; zero is a codec refusal) at
+`SCHEMA_VERSION` 24. The §3 and §11 rows below record the increment **as
+it landed**; `DRS_E5_POOL_ALT_PRUNE.md` §1.1 is the shape of record.
 This file stays in `design/` as the E1/E5 boundary statement (§0, §2.2,
 §2.3, SAL-13, SAL-14) until E5's plan owns it.
 **Round 0 executed 2026-09-24** at `dev` @ `9532b58f5`
@@ -255,6 +263,9 @@ and `pop`; **no separate handle, no separate transaction** (`SAL-Q1`).
   `block_cumulative_weight = 0` when a transaction cannot be found
   (`:2345`, "we can't determine the block weight") and persists it
   (`:2355`). `Option<BlockWeight>`; `None` is the sentinel (`SAL-Q4`).
+  UPDATE 2026-10-12 (DRS-E5, unreleased schema 24): `coins_generated` is
+  gone (CEN-K8). `block_weight` is `BlockWeight`; zero is a codec refusal,
+  not an absence. a5 does not inherit an absence arm.
 - **Remove-absent is a refusal, not a throw and not a no-op.** `AltCannot::NotHeld`.
 - **Add-existing is a refusal.** `AltCannot::AlreadyHeld` — the one belt
   CEN-K3 asked to survive.
@@ -280,6 +291,13 @@ and `pop`; **no separate handle, no separate transaction** (`SAL-Q1`).
 | `FOLDED_INTO: &[(&str, &str, &str)]` | `(lmdb_name, host_table, reason)` | `schema.rs`, beside `MIRRORED_ELSEWHERE` | The bijection gate's fourth direction: an X-macro table whose bytes now live as a **field of another table's record**. Rule-47 self-assertion as the other two: an entry naming a table not in the X-macro is red; an entry whose host is not a `TableDefinition` in `schema.rs` is red; an entry whose LMDB name *is* still defined in `schema.rs` is red (SAL-2). |
 
 No new vocabulary in `shekyl-types`: every scalar the record needs exists.
+
+UPDATE 2026-10-12 (DRS-E5 a4, unreleased schema 24): the `AltBlock` row
+above is the increment as it landed. `coins_generated` is gone (CEN-K8).
+`block_weight` is `BlockWeight`, not `Option`; zero is a codec refusal
+(`ZeroWeight`), not an absence. `AltCannot::IdentityMismatch` was deleted
+when the key became `AltValid::hash`. `AltBlock::admitted` builds the row
+from the verdict.
 
 ### 3.5 What this surface inherits, and for how long
 
@@ -560,7 +578,7 @@ Nothing that was accepted becomes refused, or the reverse.
 | **SAL-Q1** | Do the alt tables stay in the **consensus file** (same `Database`, same `WriteBatch`), or move to a second file as the pool did — or into the pool file? | **RULED: consensus file — approved, with the method written into the row.** The answer was reached by checking S-POOL's grounds *against this surface* — privacy-bearing state (absent: alt blocks are public), never inside a chain write (absent: SAL-10), discardable wholesale (satisfied by AL3) — which is why the two files differ *for a reason* rather than by whoever asked first; `SPL-Q2`'s reopening criterion is what sent the question here, and this row is its discharge. | SAL-1: the switch is the one place atomicity with `connect`/`pop` is the property, and it is only expressible in one transaction. SAL-10: the C++ already writes alt rows inside the chain batch. The pool's grounds (`SPL-Q2`: privacy-bearing state; never inside a chain write; discardable wholesale) are absent, absent, and satisfied by AL3. "Not chain state" (§11.2) is a *digest* statement, honoured by `Excluded`, not a file statement. The pool file is wrong for the same reason a second file is: a switch would then span two databases with no transaction across them. |
 | **SAL-Q2** | One row per alt block — record, block bytes and witness in one `Coded<AltBlock>` — or the LMDB shape, three tables (`alt_meta`, `alt_block`, `alt_witness`) with an SI-16-style pairing invariant? | **RULED: one row — approved.** Three tables would reproduce LMDB's split for no reason; the record is one logical thing and the split was storage mechanics. | Every reader that wants the record's bytes wants the block too, or wants only membership (SAL-12, served by AL5 without a decode). The pairings become unrepresentable rather than enforced; CW-2's lifetime clause is a field's lifetime. Alt blocks are few (a table dropped at every init) so the copy cost of one row is not a consideration. Precedent for bytes inside a `Coded` record: `BondRecord` (`codec/archival.rs:305`). Reopens if E5 shows a hot record-only read — a walk that needs `height`/`coins_generated` per step without the block — in which case `alt_record` splits the row *by op*, not by table. |
 | **SAL-Q3** | `remove` of an absent key: typed refusal (`AltCannot::NotHeld`, the C++ throw at `:4354`) or idempotent success (the pool's P3 choice)? | **RULED: refusal — approved, reason REPLACED.** | *Ruled reason:* removing what is not held is a **caller-contract violation**, and `AltCannot::NotHeld` makes the caller state what it expected — L14's insert-versus-upsert ruling applied to a remove. Had the C++ returned silently the answer would still be refusal. *The posed reason* ("the C++ throws; polarity reproduced") was the transcription reflex and happened to reach the right answer; kept here only as the record of what was posed. The consequence stands: an absent key means the switch's own bookkeeping is wrong, and surfacing it aborts SAL-1's closure. |
-| **SAL-Q4** | `block_weight: Option<BlockWeight>` with `None` for the C++ zero sentinel, or `BlockWeight` with zero carried? | **RULED: `Option` — approved by the discriminator, not by pattern.** `0` is an impossible weight (every block has a coinbase), so the sentinel is unambiguous; and `None` carries a distinct, caller-actionable meaning — *not yet validated far enough to have a weight* — which is exactly what a cumulative-weight comparison must not consume silently. | `:2345` writes `0` for "cannot determine"; a block with a miner tx never weighs zero, so the sentinel is unambiguous and the type says what the zero meant. The consumer (`get_alternate_chains`'s `block_weight` field; the alt window's weight inputs if any) decides what to do with `None` — the rule's business, not the store's (S-ARCH discipline). |
+| **SAL-Q4** | `block_weight: Option<BlockWeight>` with `None` for the C++ zero sentinel, or `BlockWeight` with zero carried? | **RULED: `Option` — approved by the discriminator, not by pattern.** `0` is an impossible weight (every block has a coinbase), so the sentinel is unambiguous; and `None` carries a distinct, caller-actionable meaning — *not yet validated far enough to have a weight* — which is exactly what a cumulative-weight comparison must not consume silently. UPDATE 2026-10-12: closed. No writer produced an absence (`AltBlock::admitted` always measured a weight), and a5 does not inherit an absence arm. Unreleased schema 24 stores `BlockWeight`; zero is refused. A later writer that needs an absent weight bumps the layout. | `:2345` writes `0` for "cannot determine"; a block with a miner tx never weighs zero, so the sentinel is unambiguous and the type says what the zero meant. The consumer (`get_alternate_chains`'s `block_weight` field; the alt window's weight inputs if any) decides what to do with `None` — the rule's business, not the store's (S-ARCH discipline). |
 | **SAL-Q5** | Keep AL5 `contains` as a separate op, or fold it into AL4 (`alt_block(h)?.is_some()`)? | **RULED: keep — approved, on performance, stated so.** `have_block` per announced hash is a hot path, and a full record read (decode plus a block-blob copy) to answer a membership question is real waste. **Performance is the legitimate reason for a separate read here**; the op is not an accidental duplicate of AL4 and its doc comment says why it exists. | `have_block_unlocked` (`:3004`) runs per announced hash; a membership test that decodes and copies a block for a `bool` is the wrong shape on a p2p path. `contains` is a `get` whose guard is dropped undecoded. |
 | **SAL-Q6** | `FOLDED_INTO` as a fourth gate direction (own array, own three refusals), or widen `MIRRORED_ELSEWHERE`'s twin cell to mean "table or host"? | **RULED: own direction — approved.** Widening `MIRRORED_ELSEWHERE` would make one vocabulary term mean two relationships — the defect `RELAY_STATE_REFERENCE_SHAPES.md` is about, arriving in a gate's vocabulary. | A twin *table* is checked by opening its definition in the named file; a host *field* is checked by the host table's definition existing here and the LMDB name's definition not. Different checks, different failure messages; one array that means two things is the allowlist-by-name the gate was built to avoid (SPL-2). |
 

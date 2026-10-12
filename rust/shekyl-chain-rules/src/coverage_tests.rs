@@ -121,26 +121,39 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
         .iter()
         .filter(|row| row.status() == RowStatus::ByConstruction)
         .count();
+    let held_by_store = CenRow::ALL
+        .iter()
+        .filter(|row| row.status() == RowStatus::HeldByStore)
+        .count();
     let mut coverage = RuleCoverage::EMPTY;
     for row in RuleSet::GENESIS.enforced() {
         coverage.insert(row);
     }
     assert!(coverage.is_complete_for(&RuleSet::GENESIS));
-    // Complete is `enforced − held − at-open − by-construction`: the rows
-    // the C++ ingest driver holds (A1, A4 after slice 1) are not the
-    // validator's to evaluate; the rows this crate enforces at another site
-    // (E5 at writer open, slice 3) and the rows that hold by construction
-    // (F2, F8, F19, slice 4) can never be in a per-block coverage. The
-    // census denominator itself moves for none of them.
+    // Complete is `enforced − held − at-open − by-construction −
+    // held-by-store`: the rows the C++ ingest driver holds (A1, A4 after
+    // slice 1) are not the validator's to evaluate; the rows this crate
+    // enforces at another site (E5 at writer open, slice 3; the alt tier's
+    // rows, DRS-E5 slice 9), the rows that hold by construction (F2, F8,
+    // F19, slice 4) and the rows the store holds (K1a, K2, K3, K8, slice 9)
+    // can never be in a per-block coverage. The census denominator itself
+    // moves for none of them.
     assert_eq!(
         coverage.len(),
-        CenRow::ALL.len() - held - at_open - by_construction
+        CenRow::ALL.len() - held - at_open - by_construction - held_by_store
     );
     assert_eq!(held, 2, "slice 1 holds exactly A1 and A4");
-    assert_eq!(at_open, 1, "slice 3 enforces exactly E5 at open");
+    assert_eq!(
+        at_open, 5,
+        "slice 3 enforces E5 at open; DRS-E5 slice 9 enforces K1b, K4, D5, E2 at the alt tier"
+    );
     assert_eq!(
         by_construction, 16,
         "slice 4: F2, F8, F19, F21; slice 5: H2, H8, H12, H13, H23; slice 6: I2, I3; slice 7: G3, G4, G5; DRS-E4: L8, L9 hold by construction"
+    );
+    assert_eq!(
+        held_by_store, 4,
+        "DRS-E5 slice 9: K1a, K2, K3, K8 are held by the store"
     );
     for row in [
         CenRow::A1,
@@ -150,6 +163,14 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
         CenRow::F8,
         CenRow::F19,
         CenRow::F21,
+        CenRow::K1a,
+        CenRow::K1b,
+        CenRow::K2,
+        CenRow::K3,
+        CenRow::K4,
+        CenRow::K8,
+        CenRow::D5,
+        CenRow::E2,
     ] {
         assert!(!coverage.contains(row));
         assert!(!RuleSet::GENESIS.enforced().any(|r| r == row));
@@ -166,7 +187,7 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
     }
     assert_eq!(
         short.len(),
-        CenRow::ALL.len() - held - at_open - by_construction - 1
+        CenRow::ALL.len() - held - at_open - by_construction - held_by_store - 1
     );
     assert!(!short.is_complete_for(&RuleSet::GENESIS));
 }
