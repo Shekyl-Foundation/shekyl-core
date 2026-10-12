@@ -1235,10 +1235,7 @@ This lane's increments, each its own change:
 1. **State, and the coinbase commitment** (§16.8). The per-block draw
    table and the drawable set's digest cell with their view reads,
    layout 23; `0x0C` required in every coinbase and drawn inside Rust's
-   writer, with the genesis regenerated; the serve-credit record, its
-   input and the `serve_credit_only` class deleted with nothing in their
-   place. The Rust validator admits no serve credit from here until the
-   merged increment.
+   writer, with the genesis regenerated.
 2. **The Release journal, and the snapshot.**
    - The journal stores the **full bond record** as a Release's
      pre-image, not the holdings alone, so a pair released after
@@ -1361,20 +1358,17 @@ condition by changing that function and the writer together, with:
   judged by the grammar, at connect and at DB add, so it carries the tag
   too. Its commitment is 32 zero bytes: a value nobody can open, never
   read as absent;
-- the serve-credit record, its input and the `serve_credit_only` class
-  deleted from the Rust validator, with nothing in their place (§16.9,
-  the carrier rulings). The C++ serve-credit gate is not edited; no
-  production code produces the record, so no credit the daemon accepts
-  today is lost.
+- the serve-credit input and its record left as they are, on both
+  sides (§16.9).
 
 The design of increment 1 is §16.8 and the rulings on it §16.9.
 
 ### 16.8 Increment 1 as designed — a regenesis, not a type half
 
 **Status:** the first increment's design, written before its code.
-Decisions 1 to 6 are **LANDED**. Decision 7 is **retired** and
-decision 8 is **restated as a deletion**, both by the carrier rulings of
-2026-10-11 (§16.9). Decisions 3, 7 and 8 fix bytes or retire a
+Decisions 1 to 6 are **LANDED**. Decision 7 is **retired** by the
+carrier rulings of 2026-10-11, and decision 8 **changes nothing in this
+increment** (§16.9). Decisions 3, 7 and 8 fix bytes or retire a
 live path; they were flagged and are ruled, with conditions, in §16.9.
 
 **What the increment is.** Genesis is judged by the coinbase grammar at
@@ -1454,20 +1448,19 @@ was going to be, landed as one rule-07 change.
    block carries the block's records, and the seed and `h` are the
    bundle's kept bytes. With no carrier transaction there is nothing for
    the field to ride in. The tag `0x0D` is unassigned.
-8. **The serve-credit record is deleted, and nothing replaces it**
-   (ruled 2026-10-11, §16.9). The serve-credit input and the
-   `serve_credit_only` transaction class go with it (rule 15): the pass
-   is carried by the bundle, so an input and a class with no successor
-   would be a second, dead way to say it. Until bundle admission is
-   wired the Rust validator admits no serve credit, which follows from
-   the deletion and needs no refusal of its own. The C++ serve-credit
-   gate is not edited; `DEL-008` deletes it. **Not built at this commit.**
+8. **The serve-credit record: not changed by this increment.** It was
+   first to be replaced here, then deleted here, then deleted in its own
+   change; on 2026-10-12 that was re-ruled (§16.9). The Rust input, its
+   rules and the tests that use it are landed code and stay. The C++
+   that serves the Rust wallet stays until the Rust daemon serves the
+   same method. Bundle admission is built beside the input, in the
+   merged increment, and the input's fate is decided there.
 
 **Commit order, as landed.** Design text and census; store tables,
 schema and view reads; the `0x0C` field, grammar and writer; genesis
 regeneration and every pin; vector recapture; the commitment drawn
-inside Rust's writer with the C++ threading deleted. The serve-credit
-deletion of decision 8 follows.
+inside Rust's writer with the C++ threading deleted; a test-only writer
+for the C++ scaffolds that lay a coinbase by hand.
 
 ### 16.9 Rulings on increment 1 (maintainer, relayed 2026-10-10)
 
@@ -1475,7 +1468,7 @@ deletion of decision 8 follows.
 | --- | --- |
 | 3, genesis commits to 32 zero bytes | **Agreed, on two conditions.** **No code treats an all-zero commitment as absent or unset.** Zero is a valid value nobody can open; a reader that uses it as a sentinel makes genesis a special case. A test holds that the genesis block's `0x0C` parses and is carried like any other. **Height 0 issues nothing, pinned by a test:** `D` is empty at genesis, so `count(0) = 0`, and no reveal can name `h = 0`. A nothing-up-my-sleeve hash was considered and buys nothing: neither value can be opened, and zeros are obvious to a reader of the genesis block |
 | 7, seed and `h` in `0x0D` (superseded 2026-10-11, below) | **Agreed.** The transaction extra is the carrier-level slot and is in the kept prefix, which is what settlement needs. Three conditions. **Exactly once** in a `serve_credit_only` transaction and refused everywhere else, as part of that transaction's exact ordered tag grammar. **Canonical varint for `h`:** a non-minimal encoding is refused, so one carrier has one byte form. **The set commitment covers the field's content**, seed and `h` both, so the witness signature binds it; that input is in the commitment's vectors |
-| 8, the record is replaced in increment 1 (superseded 2026-10-11, below: deleted, not replaced, and no C++ refusal) | **Agreed: increment 1, not 4. It is the more correct state.** The old record is the one the Rust validator admits today without checking anything, the hole the round started from; once replaced, the Rust validator admits no serve credit until increment 4 wires admission whole, which is fail-closed by construction. Nothing on the testnet gets worse: no production code signs the old record, so the C++ gate already accepts nothing real and its beacon-era fold behaves the same with or without credits. The C++ tests that drive the old record are deleted with the reason recorded (rule 15). **One condition: the C++ refusal is loud.** A typed refusal that names the retired serve-credit record and `DEL-008`, not a codec parse error that happens to fail. One line at the existing refusal site and nothing more (rule 20) |
+| 8, the record is replaced in increment 1 (superseded: not changed by this increment, below) | **Agreed: increment 1, not 4. It is the more correct state.** The old record is the one the Rust validator admits today without checking anything, the hole the round started from; once replaced, the Rust validator admits no serve credit until increment 4 wires admission whole, which is fail-closed by construction. Nothing on the testnet gets worse: no production code signs the old record, so the C++ gate already accepts nothing real and its beacon-era fold behaves the same with or without credits. The C++ tests that drive the old record are deleted with the reason recorded (rule 15). **One condition: the C++ refusal is loud.** A typed refusal that names the retired serve-credit record and `DEL-008`, not a codec parse error that happens to fail. One line at the existing refusal site and nothing more (rule 20) |
 
 **Decision 4, ruled (b): the commitment is drawn inside Rust's
 coinbase-extra writer, with no new C++.** No header, no parameter on
@@ -1495,12 +1488,23 @@ for decisions 7 and 8 in the table above:**
 - **There are no carriers.** One bundle per block replaces them. The
   seed and `h` are the bundle's kept bytes.
 - **`0x0D` is dropped.** The field is not built; decision 7 is retired.
-- **The serve-credit record is deleted and not replaced.** The
-  serve-credit input and the `serve_credit_only` class are deleted with
-  nothing in their place (rule 15). Until bundle admission is wired the
-  Rust validator admits no serve credit, by the deletion.
-- **No C++ refusal.** The C++ serve-credit gate is not touched;
-  `DEL-008` deletes it.
+- **The serve-credit input is not deleted by this lane's increment 1**
+  (re-ruled 2026-10-12). The rule for deleting C++ is that it is
+  unreachable, or that its Rust replacement serves everything that
+  consumed it. The C++ serve-credit path is still reachable and its
+  readers feed the landed Rust wallet through
+  `get_archival_emission_claim_source`, so it stays until the Rust
+  daemon serves that method (`DAEMON_RPC_KV_CUTOVER.md`, `RK-9`). Landed
+  Rust is not deleted: the input, its rules, the submit path and the
+  wallet all stay.
+- **No C++ refusal** is added for the input.
+
+**The slow C++ tests (ruled 2026-10-12).** Rust's writer generates a key
+on every call. The C++ unit scaffolds that lay a coinbase by hand build
+up to 180,000 blocks, so they call a test-only writer that takes a fixed
+commitment (`shekyl_test_coinbase_extra`; the precedent is
+`shekyl_test_conforming_pqc_leaf_entry`). Production is unchanged, and
+the test writer shares the production writer's one body.
 
 **The split (ruled 2026-10-11), by what is checked:** the Slice C round
 builds the bundle verifier as a pure rule, receipts included, FN-DSA

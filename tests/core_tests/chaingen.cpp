@@ -668,8 +668,11 @@ static bool write_coinbase_extra(transaction& tx, const crypto::public_key& tx_p
   const uint8_t nonce[SHEKYL_COINBASE_NONCE_BYTES] = {0};
   char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
   ShekylOwnedBuffer extra;
-  const int32_t rc = shekyl_coinbase_extra(
-    reinterpret_cast<const uint8_t*>(&tx_pub), nonce,
+  // The test writer, with a fixed commitment: a hand-laid coinbase needs
+  // no key generated for it (the production writer draws one per call).
+  const uint8_t commitment[32] = {0xDC};
+  const int32_t rc = shekyl_test_coinbase_extra(
+    reinterpret_cast<const uint8_t*>(&tx_pub), nonce, commitment,
     kem_blob.empty() ? nullptr : kem_blob.data(), kem_blob.size(),
     leaf_blob.empty() ? nullptr : leaf_blob.data(), leaf_blob.size(),
     tx.vout.size(), &extra.buf, msg, sizeof(msg));
