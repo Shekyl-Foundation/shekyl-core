@@ -31,10 +31,10 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
                     .unwrap_or(u64::MAX),
                 "tx_count": info.chain.tx_count,
             });
-            // Status is wholly shown or wholly absent. A shown zero is a
-            // count — the restricted stand-in, until RK-Q8 deletes it.
-            // A withheld part is not that zero, so the keys stay off the
-            // object and the line below says the part was not disclosed.
+            // Status is wholly shown or wholly absent, and a restricted
+            // daemon withholds it. A withheld part is not a zero, so the
+            // keys stay off the object and the line below says the part
+            // was not disclosed. A shown zero is a count.
             if let Some(status) = info.node.shown() {
                 body["outgoing_connections_count"] = json!(status.outgoing_connections_count);
                 body["incoming_connections_count"] = json!(status.incoming_connections_count);
@@ -345,7 +345,7 @@ mod tests {
 
     /// A withheld Status part omits the keys. Printing that as zero would
     /// say the node has no connections. A shown zero still prints as zero:
-    /// that is the restricted stand-in, and RK-Q8 owns deleting it.
+    /// it is a count, from a daemon that disclosed it.
     #[test]
     fn withheld_connection_counts_are_not_a_zero() {
         assert_eq!(

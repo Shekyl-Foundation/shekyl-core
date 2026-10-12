@@ -491,18 +491,24 @@ impl RuleSet {
     /// The consensus rows this rule set holds a block to **and the
     /// per-block stages can evaluate**, in census order. Excluded: rows
     /// held by the C++ ingest driver ([`RowStatus::HeldByCxx`]), which are
-    /// not the validator's; and rows this crate enforces at another site
-    /// ([`RowStatus::EnforcedAt`] — CEN-E5 at writer open) or holds by
-    /// construction ([`RowStatus::ByConstruction`] — CEN-F2, F8, F19), which
-    /// no per-block coverage could contain. So `Coverage::is_complete_for`
-    /// measures `enforced − held − at-open − by-construction` — the census
-    /// denominator itself never moves for any of them (the gate prints the
-    /// subtractions beside it).
+    /// not the validator's; rows this crate enforces at another site
+    /// ([`RowStatus::EnforcedAt`] — CEN-E5 at writer open, the alt tier's
+    /// K1b, K4, D5, E2) or holds by construction
+    /// ([`RowStatus::ByConstruction`] — CEN-F2, F8, F19), which no per-block
+    /// coverage could contain; and rows a Rust crate below the validator
+    /// holds ([`RowStatus::HeldByStore`] — CEN-K1a, K2, K3, K8). So
+    /// `Coverage::is_complete_for` measures
+    /// `enforced − held − at-open − by-construction − held-by-store` — the
+    /// census denominator itself never moves for any of them (the gate
+    /// prints the subtractions beside it).
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_ {
         self.enforced.iter().copied().filter(|row| {
             !matches!(
                 row.status(),
-                RowStatus::HeldByCxx | RowStatus::EnforcedAt | RowStatus::ByConstruction
+                RowStatus::HeldByCxx
+                    | RowStatus::EnforcedAt
+                    | RowStatus::ByConstruction
+                    | RowStatus::HeldByStore
             )
         })
     }
@@ -569,7 +575,7 @@ impl fmt::Debug for RuleSet {
             .field(
                 "enforced",
                 &format_args!(
-                    "{} of {} rows (per-block; held, at-open and by-construction rows excluded)",
+                    "{} of {} rows (per-block; held, at-open, by-construction and store-held rows excluded)",
                     self.enforced().count(),
                     CenRow::ALL.len()
                 ),

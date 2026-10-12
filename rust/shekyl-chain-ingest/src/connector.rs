@@ -60,8 +60,8 @@ use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
     recorded, validate, ArchivalDelta, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian,
-    Fault, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale, StructurallyValid, Verdict,
-    ViewRead, Weights,
+    Fault, HeaderView, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale,
+    StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};

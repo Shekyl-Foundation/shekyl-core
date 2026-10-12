@@ -38,7 +38,10 @@ use shekyl_wire::{
 use crate::block::Candidate;
 use crate::rule_set::RuleSet;
 use crate::tree_growth::TreeFrontier;
-use crate::view::{AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip};
+use crate::view::{
+    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
+    Tip,
+};
 
 /// Invariant brand, as in `verdict.rs`.
 type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
@@ -322,7 +325,7 @@ impl MockChain {
         let block = self.recorded.last()?;
         Some(Tip {
             height,
-            hash: block.hash,
+            hash: block.header.hash,
         })
     }
 
@@ -379,9 +382,23 @@ pub struct MockView<'a, 'id> {
     _brand: Brand<'id>,
 }
 
-impl<'id> ChainView<'id> for MockView<'_, 'id> {
+impl<'id> HeaderView<'id> for MockView<'_, 'id> {
     type Fault = Infallible;
 
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        Ok(self.chain.tip())
+    }
+
+    /// The header half of [`ChainView::block_at`], the same vector read.
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+        Ok(match self.chain.block(height) {
+            AtHeight::Recorded(block) => AtHeight::Recorded(block.header.clone()),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
+    }
+}
+
+impl<'id> ChainView<'id> for MockView<'_, 'id> {
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
         Ok(self.chain.key_images.contains(key_image))
     }
@@ -402,7 +419,7 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
             .chain
             .recorded
             .iter()
-            .position(|block| block.hash == *hash)
+            .position(|block| block.header.hash == *hash)
             .map(|index| BlockHeight::from_raw(u64::try_from(index).expect("a Vec fits in u64"))))
     }
 
@@ -411,10 +428,6 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
             AtHeight::Recorded(tree) => AtHeight::Recorded(tree.root),
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
-    }
-
-    fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        Ok(self.chain.tip())
     }
 
     /// The store's contract, on the mock's vector: `end` past `tip + 1` is

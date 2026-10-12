@@ -60,9 +60,9 @@ use shekyl_wire::tx_extra::{parse, TxExtraField};
 
 use crate::census::CenRow;
 use crate::fault::{Corrupt, ViewRead};
-use crate::rules::{recorded, BlockContext, BlockRule, Rule};
+use crate::rules::{recorded_header, BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::ChainView;
+use crate::view::{ChainView, HeaderView};
 
 /// CEN-B4: `attestation_root` recomputes over the coinbase's kept headers
 /// paired with the sidecar witness, and every pass record's
@@ -177,17 +177,22 @@ fn committed_hybrid_key<'id, V: ChainView<'id>>(
 /// [`PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT`](shekyl_archival_retention::PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT).
 ///
 /// Every height in the window is strictly below the predecessor, so a
-/// conforming view has each block recorded. [`recorded`] reports
+/// conforming view has each block recorded. [`recorded_header`] reports
 /// `AboveTip` there as [`Corrupt::HoleBelowTip`] — the halt, not an absent
 /// window. An absent window is only genesis (no predecessor) or a
 /// predecessor below the anchor floor, and a record on that chain is
 /// CEN-B4's refusal. The table this fills is exactly the shape
 /// [`PassAnchorWindow::shape_for_predecessor`] named, so a `from_table`
 /// error is the window type disagreeing with itself.
-pub(crate) fn anchor_window<'id, V: ChainView<'id>>(
-    view: &V,
+///
+/// Bound to [`HeaderView`]: the window is block identities, header facts an
+/// alt chain answers from its headers alone (DRS-E5 `E5-15`). The bond-key
+/// read above is not a header fact; on an alt chain it is answered as of
+/// the fork point from the undo journal, not from this view (`E5-Q4` δ).
+pub(crate) fn anchor_window<'id, H: HeaderView<'id>>(
+    view: &H,
     connecting: BlockHeight,
-) -> Result<Option<PassAnchorWindow>, ViewRead<V::Fault>> {
+) -> Result<Option<PassAnchorWindow>, ViewRead<H::Fault>> {
     let Some(predecessor) = connecting.checked_sub_count(BlockCount::ONE) else {
         return Ok(None);
     };
@@ -200,8 +205,8 @@ pub(crate) fn anchor_window<'id, V: ChainView<'id>>(
         let height = first
             .checked_add(BlockCount::from_raw(offset as u64))
             .expect("window heights lie below the predecessor");
-        let block = recorded(view, height)?;
-        hashes.push(*block.hash.as_bytes());
+        let record = recorded_header(view, height)?;
+        hashes.push(*record.hash.as_bytes());
     }
     Ok(Some(
         PassAnchorWindow::from_table(predecessor, &hashes)

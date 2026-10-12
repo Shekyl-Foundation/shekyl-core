@@ -138,8 +138,11 @@ SCOPE = (
 # (2026-10-09, `SLK-Q1`: `prune_at_boundary` grew a rule-set operand and
 # its height was typed as `BlockHeight` — the slash floor is built from it
 # — rather than re-recorded; the two lanes each took one row off 152, and
-# the merge of 2026-10-10 is where the ceiling reads both).
-GRANDFATHER_CEILING = 150
+# the merge of 2026-10-10 is where the ceiling reads both); 148 at DRS-E5
+# a3 (2026-10-11: the alt fixtures `alt` and `side_block` became
+# `pub(super)` for the `AltView` tests, and a touched site is typed —
+# both take `BlockHeight` — not re-recorded).
+GRANDFATHER_CEILING = 148
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

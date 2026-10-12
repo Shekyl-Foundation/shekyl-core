@@ -56,8 +56,8 @@ pub enum Flag {
 }
 
 /// How a row is held: not yet, by a rule type `validate` runs, by a rule
-/// type this crate enforces at another site, or by the C++ ingest driver
-/// until cutover.
+/// type this crate enforces at another site, by construction, by a Rust
+/// crate below the validator, or by the C++ ingest driver until cutover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowStatus {
     /// No rule yet; the row is counted in the denominator only.
@@ -101,14 +101,45 @@ pub enum RowStatus {
     /// type or item that holds the property — not a rule type, so no
     /// `ROW` assertion applies), and `falsifier` names the test in this
     /// crate that would fail if the property lapsed — a `#[test]` that
-    /// exercises the parser, or `doctest:<item>` for a `compile_fail`
-    /// doctest on `<item>` (F19's). The gate asserts the falsifier is
-    /// defined (rule 47: a property with no way to fail is a claim).
+    /// exercises the parser, `doctest:<item>` for a `compile_fail`
+    /// doctest on `<item>`, or `trybuild:<test>` for the `#[test]` under
+    /// `tests/` that compares `compile_fail` programs against stderr
+    /// snapshots (F19's since 2026-10-10: its doctests had been green on
+    /// a stub that no longer implemented `ChainView`, not at `connect`).
+    /// The gate asserts the falsifier is defined (rule 47: a property
+    /// with no way to fail is a claim).
     ///
     /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced), as
     /// [`EnforcedAt`](Self::EnforcedAt) is, and counted as Rust-enforced by
     /// the gate; unlike `EnforcedAt` there is no site that *runs*.
     ByConstruction,
+    /// A row **a Rust crate below the validator** enforces — the store,
+    /// whose alt-chain indexing is where the row's operand lives
+    /// (`DRS_E5_POOL_ALT_PRUNE.md` `E5-18`, decided 2026-10-11). The
+    /// validator cannot evaluate it: the rules crate imports no store
+    /// (DRS-D12 (i), `check_chain_rules_no_store.sh`), so the dependency
+    /// direction is store → rules and the refusal is minted on the store's
+    /// side of it. Four at mint: CEN-K1a and CEN-K2 (`AltChain::build`
+    /// links an alt entry to a recorded row or refuses it), CEN-K3
+    /// (`insert_alt_block` refuses a held hash) and CEN-K8 (`HeaderRecord`
+    /// carries no `coins_generated` for an alt entry to disturb).
+    ///
+    /// The registry entry cites the crate and the test that proves the
+    /// holder refuses — `held_by_store("<crate>", "<test>")` — and the gate
+    /// asserts a `#[test] fn <test>` is **defined** in that crate's `src/`
+    /// or `tests/`, never merely that the token appears (the same shape as
+    /// [`HeldByCxx`](Self::HeldByCxx); a `#[test]` is to a Rust crate what
+    /// `GENERATE_AND_PLAY` is to `core_tests`). Nothing the compiler can
+    /// pin from here: the holder is outside this crate by construction.
+    ///
+    /// Not `by_construction`: that status is a claim about a **type** in
+    /// this crate with a falsifier in this crate, and a runtime test in
+    /// another crate is neither. Not `enforced_at`: that site is this
+    /// crate's. Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced)
+    /// as both are (per-block completeness is what `validate` evaluates),
+    /// and **counted as Rust-enforced** by the gate, printed as its own
+    /// figure — unlike a C++ hold it has no expiry.
+    HeldByStore,
     /// Acceptance topology the C++ ingest driver decides — where a block
     /// *goes* (`ALREADY_EXISTS`, `ORPHANED`), not whether it is valid — and
     /// so not a predicate `validate` can evaluate (`CHAIN_RULES_SLICE_1.md`
@@ -151,8 +182,8 @@ pub trait Row:
 
 /// `RowStatus` from an entry's status token. A status other than `pending`,
 /// `implemented(path)`, `enforced_at(path, "test")`,
-/// `by_construction(path, "falsifier")` or `held_by_cxx("file", "test")` is
-/// a macro error at the entry.
+/// `by_construction(path, "falsifier")`, `held_by_store("crate", "test")` or
+/// `held_by_cxx("file", "test")` is a macro error at the entry.
 macro_rules! census_status {
     (pending) => {
         $crate::census::RowStatus::Pending
@@ -165,6 +196,9 @@ macro_rules! census_status {
     };
     (by_construction($path:path, $falsifier:literal)) => {
         $crate::census::RowStatus::ByConstruction
+    };
+    (held_by_store($krate:literal, $test:literal)) => {
+        $crate::census::RowStatus::HeldByStore
     };
     (held_by_cxx($file:literal, $test:literal)) => {
         $crate::census::RowStatus::HeldByCxx
@@ -188,6 +222,10 @@ macro_rules! census_pin {
     // Nothing the compiler can pin: the holder is a C++ test. The gate
     // asserts the cited file exists and contains the test (rule 47).
     (held_by_cxx($file:literal, $test:literal), $name:ident, $var:ident) => {};
+    // Nothing the compiler can pin either: the holder is a crate this one
+    // does not import (DRS-D12 (i)). The gate asserts the named `#[test]`
+    // is defined in that crate (rule 47).
+    (held_by_store($krate:literal, $test:literal), $name:ident, $var:ident) => {};
     // The same two pins as `implemented`: the site exists and is bound to
     // this row. The test is the gate's to assert (a `#[test]` in this crate).
     (enforced_at($path:path, $test:literal), $name:ident, $var:ident) => {
@@ -217,7 +255,8 @@ macro_rules! census_pin {
 ///
 /// Per entry, `status` is `pending`, `implemented(rust::path::to::RuleType)`,
 /// `enforced_at(rust::path::to::RuleType, "test_fn_in_this_crate")`,
-/// `by_construction(rust::path::to::Property, "falsifier_test")` or
+/// `by_construction(rust::path::to::Property, "falsifier_test")`,
+/// `held_by_store("shekyl-chain-store", "test_fn_in_that_crate")` or
 /// `held_by_cxx("tests/…​.cpp", "gen_test_name")`.
 /// Entries must be listed in census §4 order restricted to the flag; the gate
 /// asserts this so `index()` is census-derived. The variant name is the census
@@ -349,14 +388,12 @@ census_rows! {
         // D4 the target definition, recorded at `D4::target`; D6 held by the
         // `Target` type (`NonZeroU128`), recorded at every production path
         // (`D6::record` / `D6::mint`) so Fakechain `Fixed` and genesis-block
-        // `1` cover the row as well as LWMA-1 (slice 2 Q4). D5 is **subsumed
-        // by D4 over an alt view**: the same LWMA-1
-        // reads its window through `ChainView::block_at`, and the alt
-        // stitching is what an alt view's `block_at` does — it stays
-        // `pending` until slice 9 lands that view and a fixture drives D4
-        // over it (slice 2 Q7; the A5 → 4.G shape).
+        // `1` cover the row as well as LWMA-1 (slice 2 Q4). D5 is D4's
+        // algorithm over the stitched view — `D5::target` wraps `D4::target`
+        // and records the row at the one site that feeds D4 an alt view,
+        // `alt_against` (DRS-E5 slice 9); not per block, so `enforced_at`.
         D4 implemented(crate::rules::difficulty::D4),
-        D5 pending,
+        D5 enforced_at(crate::rules::alt::D5, "the_alt_target_follows_the_window_it_is_fed"),
         D6 implemented(crate::rules::difficulty::D6),
         // D7 as data on a Fakechain rule set (`DifficultyRule::Fixed`), the
         // override arm D4 consults on every block (slice 2 Q10, arm (d)).
@@ -364,12 +401,11 @@ census_rows! {
         // 4.E Checkpoints and fast-sync trust — the anchor model's rows
         // (`CHAIN_RULES_SLICE_3.md` §0; `PDM-Q5`).
         E1 implemented(crate::rules::anchors::E1),
-        // E2 has no Rust site: the store admits no alternative block and the
-        // main chain satisfies the anchor floor by construction. Subsumed
-        // behind the alt `ChainView` (slice 9) AND `D_max`'s numeric
-        // (`PDM-Q11`, provisional) — the D5 shape with two blockers; the
-        // longer wait governs (slice 3 §2).
-        E2 pending,
+        // E2 the anchor floor and the rolling reorg cap, judged over the fork
+        // an alternative would cause (`E2::check`, `alt_against`, DRS-E5
+        // slice 9). The main chain satisfies both by construction, so the
+        // row is the alt tier's alone — `enforced_at`, not per block.
+        E2 enforced_at(crate::rules::alt::E2, "an_alternative_rooted_below_the_anchor_is_refused_and_one_at_or_above_it_is_not"),
         // E5 is enforced once, by the writer at open — not per block
         // (slice 3 Q4 (a)); the test named is the refusal fixture.
         E5 enforced_at(crate::rules::anchors::E5, "a_recorded_block_that_is_not_the_anchor_is_the_conflict"),
@@ -392,7 +428,7 @@ census_rows! {
         F16 implemented(crate::rules::reward::F16),
         F17 implemented(crate::rules::reward::F17),
         F18 implemented(crate::rules::reward::F18),
-        F19 by_construction(crate::view::ChainView, "doctest:validate"),
+        F19 by_construction(crate::view::ChainView, "trybuild:a_verdict_connects_under_the_view_it_was_judged_against_and_no_other"),
         F20 implemented(crate::rules::miner::F20),
         F21 by_construction(shekyl_economics::EMISSION_SPLIT_EPOCH, "the_staker_share_starts_at_block_one"),
         // 4.G Block body (per-tx and block-level, main-chain connect)
@@ -549,17 +585,25 @@ census_rows! {
         J35 pending,
         J36 pending,
         J37 pending,
-        // 4.K Reorg / alternative chains
-        K1a pending,
-        K1b pending,
-        K2 pending,
-        K3 pending,
-        K4 pending,
+        // 4.K Reorg / alternative chains (DRS-E5 slice 9, the alt tier).
+        // The store holds what its structures make true — the chain's root
+        // and linkage (K1a, K2), a held hash refused at insert (K3), no
+        // supply word on an alt row (K8) — and the rules crate imports no
+        // store (DRS-D12 (i)), so each is `held_by_store` with the test in
+        // `shekyl-chain-store` that proves it (E5-18). The alt tier's own
+        // rows are `enforced_at` its sites: the height-0 claim (K1b), the
+        // tier as the set and order of its steps (K4). K5–K7, K9 and K10
+        // are promotion's and the pop path's (slice 10).
+        K1a held_by_store("shekyl-chain-store", "a_chain_through_two_alt_entries_reaches_a_recorded_row"),
+        K1b enforced_at(crate::rules::alt::K1b, "a_height_zero_claim_is_refused_before_anything_is_read"),
+        K2 held_by_store("shekyl-chain-store", "the_orphan_is_unlinked_at_the_first_unheld_hash"),
+        K3 held_by_store("shekyl-chain-store", "insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals"),
+        K4 enforced_at(crate::rules::alt::K4, "the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else"),
         K5 pending,
         K5b pending,
         K6 pending,
         K7 pending,
-        K8 pending,
+        K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
         K9 pending,
         K10 pending,
         // 4.L Storage layer (constraints that reject chain data at write time)
