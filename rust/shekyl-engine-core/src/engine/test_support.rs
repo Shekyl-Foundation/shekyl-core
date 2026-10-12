@@ -1191,12 +1191,14 @@ pub(crate) fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
 #[cfg(test)]
 /// The `tx_extra` a coinbase with `n` outputs must carry (CEN-I20,
 /// `GENESIS_TX_WIRE_FORMAT.md` §9.6b): exactly `[0x01 pubkey, 0x02 nonce(8),
-/// 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order, the PQC pair absent when
+/// 0x0C commitment(32), 0x06 KEM(1120·n), 0x07 leaf(64·n)]` in that order, the
+/// PQC pair absent when
 /// `n == 0`. A coinbase fixture carrying only the I19 pair fails the wire
 /// validator on the grammar before it reaches the property under test.
 pub(crate) fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {
     use shekyl_wire::tx_extra::{
-        self, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, TX_EXTRA_PUBKEY_LEN,
+        self, COINBASE_NONCE_BYTES, CONFORMING_DRAW_COMMITMENT, HYBRID_KEM_CT_BYTES,
+        TX_EXTRA_PUBKEY_LEN,
     };
     let kem = vec![0x6au8; HYBRID_KEM_CT_BYTES * n_outputs];
     let leaf = if n_outputs == 0 {
@@ -1207,6 +1209,7 @@ pub(crate) fn conforming_coinbase_extra(n_outputs: usize) -> Vec<u8> {
     tx_extra::build_coinbase_extra(
         [0x11; TX_EXTRA_PUBKEY_LEN],
         &[0; COINBASE_NONCE_BYTES],
+        CONFORMING_DRAW_COMMITMENT,
         n_outputs,
         &kem,
         &leaf,
