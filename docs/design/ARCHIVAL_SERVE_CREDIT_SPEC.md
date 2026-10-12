@@ -1378,7 +1378,8 @@ Carried with the implementation:
 - **The sim** calls the production draw functions instead of carrying its
   own count rule and selection (`SCS-F15`), with a term for bundles lost
   to a reorg or an expired window. Implemented as a new mode beside the
-  old one on PR #1050 (open): `ESR-13` (§12).
+  old one, `--secret-draw-production` (PR #1050, merged 2026-10-12):
+  `ESR-13` (§12).
 - **Registry:** a row in
   [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) for every
   label in §16, landing with its constant. The registry has no status for
@@ -1495,12 +1496,14 @@ block independently unrevealed with the stated probability.
   Neither is priced in currency.
 
 **Re-run on the production functions, with bundle loss (`ESR-13`,
-2026-10-12).** *These figures are from PR #1050, which is open: the mode
-that produced them, `--secret-draw-production`, and the sim plan's §5.17
-and §5.18 that record its predictions and results, are on that branch
-and not in this tree.* The count is `draw_count`'s and every draw is
-`select_draw`'s; a bundle is filed, included or lost whole. On that
-branch the predictions are committed before the results.
+2026-10-12).** The mode is `--secret-draw-production`
+(`rust/shekyl-economics-sim/src/secret_draw_production.rs`, PR #1050,
+merged 2026-10-12), and the sim plan records its predictions, results and
+a review addendum
+([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.17 to §5.19). The count is `draw_count`'s and every draw is
+`select_draw`'s; a bundle is filed, included or lost whole. The predictions
+were committed before the results.
 
 - **The bar holds:** 1.02 % short (0.98–1.09) at 10 % dropout with the
   filing margin `M = 30`.
