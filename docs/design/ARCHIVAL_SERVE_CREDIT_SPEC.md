@@ -450,10 +450,6 @@ The bond record carries two keys:
   `p_canonical_id` and authorizes JoinMarket and Reinstate;
 - a **receipt key**, Ed25519 + FN-DSA-1024, used for nothing but
   receipts. The identity key's signature on the JoinMarket post binds it.
-  *(Built 2026-10-12 in the Rust validator and store,
-  [`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §8: the JoinMarket's receipt form
-  is bond-post `post_kind` `5`, CEN-J28 requires the key to parse, and the
-  record keeps it for its life. Nothing signs with it yet.)*
 
 The reason is algorithm isolation: persona identity stays on a finalized
 standard, and the pre-standard scheme touches only signatures whose value

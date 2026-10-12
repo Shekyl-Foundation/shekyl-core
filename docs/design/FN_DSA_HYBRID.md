@@ -254,6 +254,8 @@ receipt key exactly as it holds the identity key. Nothing else changed in
 the engine: there is no receipt-signing message and no serving capability
 for this key yet, because nothing signs with it until the bond record
 carries its public half. Both land with their caller in increment 4.
+*(2026-10-12: the record carries the public half since increment 3, §8.
+Still nothing signs with the key; that is increment 4.)*
 
 **The secret half is pinned through its seeds.** `FnDsaHybridSecretKey` has
 no encoding by design, so the corpus holds the two seeds and the public key,
