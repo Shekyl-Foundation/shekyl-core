@@ -187,6 +187,10 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     bond_debit: u64,
     record_exists: u8,
 ) -> u8 {
+    // Kind `0` only. The C side marshals no receipt key, so a kind-`5`
+    // JoinMarket (`BondPostKind::JoinMarketReceipt`) cannot be rebuilt from
+    // these arguments and is refused as it was before the byte was assigned
+    // — never verified as the keyless post it is not.
     if !matches!(
         BondPostKind::from_u8(post_kind),
         Ok(BondPostKind::JoinMarket)
@@ -212,6 +216,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     let vin = bond_post_vin(
         BondKind::JoinMarket {
             bond_spend_pk,
+            receipt_sign_pk: None,
             endpoint,
         },
         holdings,

@@ -472,6 +472,7 @@ fn join_market_bond_post() -> Input {
         p_canonical_id: PCanonicalId::from_bytes([7u8; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![9u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+            receipt_sign_pk: None,
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
@@ -479,6 +480,89 @@ fn join_market_bond_post() -> Input {
         bond_credit: 100,
         bond_debit: 0,
     }))
+}
+
+/// [`join_market_bond_post`] with its kind replaced — the in-memory face of
+/// the bond post's kind rules, judged by [`Transaction::validate`].
+fn bond_post_spend_with_kind(kind: BondPostKind) -> Transaction {
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    let mut post = join_market_bond_post();
+    if let Input::BondPost(bp) = &mut post {
+        bp.kind = kind;
+    }
+    tx.prefix.inputs.push(post);
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths.push(pqc_auths[0].clone());
+    }
+    tx
+}
+
+/// A JoinMarket carrying a receipt key (`post_kind` 5) validates and
+/// re-parses value-identical; a receipt key of any other length is refused
+/// in memory with the length named, as `read` refuses it on the wire.
+#[test]
+fn bond_post_receipt_key_is_canonical_length_or_refused_by_validate() {
+    use shekyl_wire::transaction::{BOND_POST_RECEIPT_KEY_LEN, PQC_HYBRID_SINGLE_KEY_LEN};
+    let join = |receipt_len: usize| BondPostKind::JoinMarket {
+        bond_spend_pk: vec![9u8; PQC_HYBRID_SINGLE_KEY_LEN],
+        receipt_sign_pk: Some(vec![0x5C; receipt_len]),
+        endpoint: [0xEE; 32],
+    };
+    let tx = bond_post_spend_with_kind(join(BOND_POST_RECEIPT_KEY_LEN));
+    tx.validate()
+        .expect("a canonical-length receipt key validates");
+    let reparsed = Transaction::from_bytes(&tx.serialize()).expect("re-parses");
+    assert_eq!(reparsed, tx, "round trip must be value-identical");
+
+    for len in [
+        0,
+        BOND_POST_RECEIPT_KEY_LEN - 1,
+        BOND_POST_RECEIPT_KEY_LEN + 1,
+    ] {
+        let err = bond_post_spend_with_kind(join(len))
+            .validate()
+            .expect_err("a non-canonical receipt key must not validate");
+        assert!(
+            err.to_string()
+                .contains(&format!("bond_post receipt_sign_pk {len} != canonical")),
+            "len {len}: {err}"
+        );
+    }
+}
+
+/// `Other` carrying either JoinMarket tag — 0, or 5 with its receipt key —
+/// is a misconstruction that never validates. Today the size bound's counting
+/// write reaches the writer's guard first and panics on it (`serialized_len`
+/// `.expect`s the write; the conformance registry's note on the `Other`
+/// invariant), before `BondPost::validate`'s own guard returns its error.
+/// Either is a refusal, so this asserts the one thing both give — never
+/// `Ok` — and that tag 5 gets exactly what tag 0 gets. `Other(2)` (Release)
+/// is the control: the guard is the tag, not `Other`.
+#[test]
+fn bond_post_other_with_a_joinmarket_tag_never_validates() {
+    use shekyl_wire::transaction::{BOND_POST_KIND_JOINMARKET, BOND_POST_KIND_JOINMARKET_RECEIPT};
+    // `Err(message)` for a returned refusal, `Err(panic message)` for the
+    // writer's guard reached through the counting write.
+    let outcome = |tag: u8| -> Result<(), String> {
+        let tx = bond_post_spend_with_kind(BondPostKind::Other(tag));
+        match std::panic::catch_unwind(move || tx.validate()) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(panic) => Err(panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_default()),
+        }
+    };
+    let keyless = outcome(BOND_POST_KIND_JOINMARKET).expect_err("Other(0) never validates");
+    let receipt = outcome(BOND_POST_KIND_JOINMARKET_RECEIPT).expect_err("Other(5) never validates");
+    assert!(
+        keyless.contains("must not use the JoinMarket tag"),
+        "{keyless}"
+    );
+    assert_eq!(receipt, keyless);
+    assert_eq!(outcome(2), Ok(()), "Other(Release) is not a JoinMarket tag");
 }
 
 #[test]

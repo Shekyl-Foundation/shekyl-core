@@ -60,6 +60,7 @@ fn bond_post_for(p: &ArchivalPKeys) -> BondPost {
         p_canonical_id: canonical_id(p),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: Vec::new(),
+            receipt_sign_pk: None,
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,

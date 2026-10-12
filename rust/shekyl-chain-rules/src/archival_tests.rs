@@ -73,6 +73,7 @@ fn join(p: PCanonicalId, shards: &[u64]) -> Input {
         p,
         WireKind::JoinMarket {
             bond_spend_pk: vec![0xb5; SINGLE_KEY_CANONICAL_LEN],
+            receipt_sign_pk: None,
             endpoint: [0xe0; 32],
         },
         WireHoldings::ShardSetCompact(shards.to_vec()),

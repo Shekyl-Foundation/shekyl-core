@@ -504,6 +504,11 @@ census_rows! {
         J10 pending,
         J11 implemented(crate::rules::tx_inputs::J11),
         J12 implemented(crate::rules::tx_inputs::J12),
+        // J28 (FN-DSA increment 3, minted 2026-10-12 with its
+        // implementation): a JoinMarket's `receipt_sign_pk` parses as a
+        // canonical `FnDsaHybridPublicKey`. Filed with the bond post's
+        // key-shape rows (after J12), not by number — J27's precedent.
+        J28 implemented(crate::rules::tx_inputs::J28),
         J13 implemented(crate::rules::tx_bond::J13),
         J14 implemented(crate::rules::tx_bond::J14),
         J15 implemented(crate::rules::tx_bond::J15),

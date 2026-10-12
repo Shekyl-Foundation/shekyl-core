@@ -429,6 +429,7 @@ fn cen_g10_two_bond_posts_for_one_p_are_refused_whatever_their_kinds() {
     let chain = spendable_chain();
     let join = || BondPostKind::JoinMarket {
         bond_spend_pk: vec![0xb3; SINGLE_KEY_CANONICAL_LEN],
+        receipt_sign_pk: None,
         endpoint: [0xe0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
     };
     // Mixed kinds — a JoinMarket and a Release for one P — still two posts.

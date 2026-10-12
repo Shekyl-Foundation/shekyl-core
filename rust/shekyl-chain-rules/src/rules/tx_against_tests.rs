@@ -950,6 +950,110 @@ fn i18_is_vacuous_on_a_serve_credit_and_does_not_reach_for_its_countersignature(
     );
 }
 
+// ---- the receipt key under the identity signature (FN-DSA increment 3) ----
+
+/// The receipt key a JoinMarket commits is **signed for by the identity
+/// key**: it rides the signed prefix, so the bond post's slot — the
+/// identity key's (CEN-J13's credit arm), verified by CEN-I18 over CEN-I17's
+/// preimage — covers every byte of it (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+/// §6.3, "the identity key's signature on the JoinMarket post binds it").
+/// No new signature and no new check: the existing one refuses.
+///
+/// The fixture join commits a receipt key and is signed at anchoring, so
+/// the persona's identity signature is over the key. It verifies; then
+/// **one flipped bit of the receipt key**, in the Ed25519 half and in the
+/// FN-DSA half, with nothing re-signed, is refused under I18 at the post's
+/// input. The key bytes here are not a parseable key and need not be: this
+/// is the signature's coverage, on the sequence that verifies it — CEN-J28
+/// is `tx_form`'s, and a substituted key that *does* parse is exactly the
+/// case this row, and only this row, refuses.
+///
+/// Red edit: drop `receipt_sign_pk` from `BondPost::write` in
+/// `shekyl-wire` (so the signed prefix no longer carries it) and the
+/// flipped posts verify.
+#[test]
+fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
+    use shekyl_wire::transaction::{BondPostKind, BOND_POST_RECEIPT_KEY_LEN};
+
+    fn receipt_key_of(tx: &mut Transaction) -> (usize, &mut Vec<u8>) {
+        tx.prefix
+            .inputs
+            .iter_mut()
+            .enumerate()
+            .find_map(|(index, item)| match item {
+                Input::BondPost(post) => match &mut post.kind {
+                    BondPostKind::JoinMarket {
+                        receipt_sign_pk: Some(key),
+                        ..
+                    } => Some((index, key)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("the join commits a receipt key")
+    }
+
+    let chain = spendable_chain();
+    let mut unsigned = join();
+    for item in &mut unsigned.prefix.inputs {
+        if let Input::BondPost(post) = item {
+            if let BondPostKind::JoinMarket {
+                receipt_sign_pk, ..
+            } = &mut post.kind
+            {
+                *receipt_sign_pk = Some(vec![0x5c; BOND_POST_RECEIPT_KEY_LEN]);
+            }
+        }
+    }
+    let signed = anchored_on(&chain, unsigned);
+
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = TxContext::derive(&signed, TxSlot::Lone, &mut coverage).expect("a join classifies");
+    judge_signatures(&cx, &mut coverage)
+        .expect("the identity key signed the post it posted, receipt key included");
+    assert!(coverage.contains(CenRow::I18));
+
+    // Byte 8 is the first of the Ed25519 half, the last byte is in the
+    // FN-DSA half (the canonical encoding's layout).
+    for at in [8usize, BOND_POST_RECEIPT_KEY_LEN - 1] {
+        let mut tampered = signed.clone();
+        let (post_input, key) = receipt_key_of(&mut tampered);
+        key[at] ^= 0x01;
+        assert_ne!(tampered, signed);
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&tampered, TxSlot::Lone, &mut coverage)
+            .expect("the tampered join classifies");
+        // Every slot's message binds the whole prefix, so the first slot
+        // judged refuses; the post's own slot is held separately below.
+        let refused = judge_signatures(&cx, &mut coverage).expect_err("a moved receipt key");
+        assert_eq!(refused.rule, CenRow::I18, "byte {at}");
+        assert!(!coverage.contains(CenRow::I18), "byte {at}");
+
+        // The post's own slot — the identity key's — no longer verifies
+        // over the body that carries the moved key, and did over the
+        // signed one.
+        let slot_verifies = |tx: &Transaction| {
+            let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
+                panic!("a join is Fcmp");
+            };
+            let auth = &pqc_auths[post_input];
+            let hash = tx.pqc_signing_payload_hashes()[post_input];
+            shekyl_crypto_pq::signature::verify_pqc_auth(
+                auth.scheme_id,
+                &auth.hybrid_public_key,
+                &auth.hybrid_signature,
+                hash.as_bytes(),
+            )
+            .is_ok()
+        };
+        assert!(slot_verifies(&signed), "byte {at}: the signed post's slot");
+        assert!(
+            !slot_verifies(&tampered),
+            "byte {at}: the tampered post's slot"
+        );
+    }
+}
+
 // ---- CEN-I2, by construction ------------------------------------------
 
 /// CEN-I2 — a non-coinbase transaction's CT is `FcmpPlusPlusPqc` — holds

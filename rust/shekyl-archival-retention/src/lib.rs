@@ -125,7 +125,7 @@ pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondKind, BondPostKind, HoldingsDescriptor,
     HoldingsKind, HoldingsKindScan, LastServedScan, ShardSet, ShardSetError,
     WireError as BondWireError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
-    VIN_TYPE_ARCHIVAL_BOND_POST,
+    RECEIPT_SIGN_PK_CANONICAL_BYTES, VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,

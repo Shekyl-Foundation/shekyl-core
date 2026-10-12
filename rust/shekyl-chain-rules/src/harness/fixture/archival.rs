@@ -252,6 +252,7 @@ pub fn join_market(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
             p_canonical_id: who.id,
             kind: BondPostKind::JoinMarket {
                 bond_spend_pk: who.bond_spend,
+                receipt_sign_pk: None,
                 endpoint: [0xe0; 32],
             },
             holdings: Holdings::CompleteTree,

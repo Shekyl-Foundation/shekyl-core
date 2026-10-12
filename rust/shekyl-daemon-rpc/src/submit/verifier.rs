@@ -863,12 +863,17 @@ fn retention_vin(
         Holdings::CompleteTree => (HoldingsKind::CompleteTree, ShardSet::empty()),
     };
     let kind = match &bond.kind {
-        WireBondPostKind::JoinMarket { endpoint, .. } => {
-            shekyl_archival_retention::BondKind::JoinMarket {
-                bond_spend_pk: bond_spend_pk.to_vec(),
-                endpoint: *endpoint,
-            }
-        }
+        WireBondPostKind::JoinMarket {
+            receipt_sign_pk,
+            endpoint,
+            ..
+        } => shekyl_archival_retention::BondKind::JoinMarket {
+            bond_spend_pk: bond_spend_pk.to_vec(),
+            // Either wire form of a JoinMarket: the receipt key rides
+            // through so the retention view is the post that was sent.
+            receipt_sign_pk: receipt_sign_pk.clone(),
+            endpoint: *endpoint,
+        },
         WireBondPostKind::Other(_) => post_kind.unit_kind()?,
     };
     Some(ArchivalBondPostVin {

@@ -8,6 +8,7 @@
 use core::fmt;
 use std::io::{self, Read, Write};
 
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN;
 use shekyl_curve_io::{read_byte, read_bytes, read_varint, write_varint};
 
@@ -27,6 +28,13 @@ pub const VIN_TYPE_ARCHIVAL_BOND_POST: u8 = 0x03;
 /// only if P-set uniformity is abandoned. (Truncation ≠ shorter-valid is
 /// also true — PR #229 — and incidental to that load-bearing reason.)
 pub const HYBRID_PUBKEY_CANONICAL_BYTES: usize = SINGLE_KEY_CANONICAL_LEN;
+
+/// Exact canonical length of the receipt key a kind-`5` JoinMarket carries:
+/// [`FnDsaHybridPublicKey::CANONICAL_LEN`] (Ed25519 + FN-DSA-1024,
+/// `FN_DSA_HYBRID.md` §6). Uniform for the reason `bond_spend_pk` is: every
+/// receipt key is the same shape, so none marks its persona. The length is
+/// the wire's refusal; that the bytes are a key is CEN-J28's.
+pub const RECEIPT_SIGN_PK_CANONICAL_BYTES: usize = FnDsaHybridPublicKey::CANONICAL_LEN;
 
 // The holdings vocabulary the daemon store also persists moved to
 // `shekyl-types` (`DRS_E1_SARCH.md` `SAR-Q2`, 2026-09-23); re-exported at the
@@ -49,12 +57,26 @@ pub const ENDPOINT_BYTES: usize = 32;
 /// persona's bond is fixed at join. The byte stays unassigned — `from_u8(3)` is
 /// [`WireError::InvalidPostKind`] — so the name cannot be silently re-minted
 /// (rule 23). Holdings change is persona rotation (`Release` + `JoinMarket`).
+///
+/// Discriminant `4` was `EndpointUpdate`. **REJECTED 2026-09-13**
+/// (`ARCHIVAL_ENDPOINT_UPDATE.md`): a bonded persona's endpoint never changes,
+/// so no kind exists to rotate it. Like `3`, the byte stays unassigned —
+/// `from_u8(4)` is [`WireError::InvalidPostKind`].
+///
+/// Discriminant `5` is a JoinMarket that also commits the persona's receipt
+/// key (`FN_DSA_HYBRID.md` §6–§7) — the next byte no ruling has refused. It
+/// is a JoinMarket in every respect but its coupled fields; a caller asking
+/// "is this a JoinMarket?" reads [`BondPostKind::is_join_market`], never
+/// `== JoinMarket`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BondPostKind {
     JoinMarket = 0,
     Reinstate = 1,
     Release = 2,
+    /// JoinMarket carrying `receipt_sign_pk` between `bond_spend_pk` and the
+    /// endpoint.
+    JoinMarketReceipt = 5,
 }
 
 impl BondPostKind {
@@ -63,28 +85,43 @@ impl BondPostKind {
             0 => Ok(Self::JoinMarket),
             1 => Ok(Self::Reinstate),
             2 => Ok(Self::Release),
+            5 => Ok(Self::JoinMarketReceipt),
             _ => Err(WireError::InvalidPostKind(v)),
         }
     }
 
-    /// Unit kinds: Reinstate / Release. `None` for JoinMarket, which needs
-    /// `bond_spend_pk` and the endpoint before it is a [`BondKind`].
+    /// Whether this byte is a JoinMarket, with a receipt key or without.
+    /// The one predicate for the question: the two forms differ in their
+    /// coupled fields and in nothing a rule, a fold or an authorizer reads.
+    #[must_use]
+    pub const fn is_join_market(self) -> bool {
+        matches!(self, Self::JoinMarket | Self::JoinMarketReceipt)
+    }
+
+    /// Unit kinds: Reinstate / Release. `None` for a JoinMarket in either
+    /// form, which needs `bond_spend_pk` and the endpoint before it is a
+    /// [`BondKind`].
     pub const fn unit_kind(self) -> Option<BondKind> {
         match self {
             Self::Reinstate => Some(BondKind::Reinstate),
             Self::Release => Some(BondKind::Release),
-            Self::JoinMarket => None,
+            Self::JoinMarket | Self::JoinMarketReceipt => None,
         }
     }
 }
 
 /// Kind of a decoded [`ArchivalBondPostVin`]. JoinMarket is the only variant
-/// that carries extra data (`bond_spend_pk` + serving endpoint). Holdings and
-/// the amount terms live on the vin — every kind has them.
+/// that carries extra data (`bond_spend_pk`, the optional receipt key and
+/// the serving endpoint). Holdings and the amount terms live on the vin —
+/// every kind has them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BondKind {
     JoinMarket {
         bond_spend_pk: Vec<u8>,
+        /// The persona's receipt key, canonical `FnDsaHybridPublicKey`
+        /// bytes. `None` ⇔ wire kind `0`; `Some` ⇔ wire kind `5`
+        /// ([`BondPostKind::JoinMarketReceipt`]).
+        receipt_sign_pk: Option<Vec<u8>>,
         endpoint: [u8; ENDPOINT_BYTES],
     },
     Reinstate,
@@ -94,15 +131,39 @@ pub enum BondKind {
 impl BondKind {
     pub const fn tag(&self) -> BondPostKind {
         match self {
-            Self::JoinMarket { .. } => BondPostKind::JoinMarket,
+            Self::JoinMarket {
+                receipt_sign_pk: None,
+                ..
+            } => BondPostKind::JoinMarket,
+            Self::JoinMarket {
+                receipt_sign_pk: Some(_),
+                ..
+            } => BondPostKind::JoinMarketReceipt,
             Self::Reinstate => BondPostKind::Reinstate,
             Self::Release => BondPostKind::Release,
         }
     }
 
+    /// Whether this is a JoinMarket, in either wire form.
+    #[must_use]
+    pub const fn is_join_market(&self) -> bool {
+        matches!(self, Self::JoinMarket { .. })
+    }
+
     pub fn bond_spend_pk(&self) -> Option<&[u8]> {
         match self {
             Self::JoinMarket { bond_spend_pk, .. } => Some(bond_spend_pk.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// The receipt key a kind-`5` JoinMarket commits; `None` for a keyless
+    /// JoinMarket and for every other kind.
+    pub fn receipt_sign_pk(&self) -> Option<&[u8]> {
+        match self {
+            Self::JoinMarket {
+                receipt_sign_pk, ..
+            } => receipt_sign_pk.as_deref(),
             _ => None,
         }
     }
@@ -177,6 +238,7 @@ pub enum WireError {
     UnknownVinType(u8),
     HybridPubkeyLenNotCanonical { got: usize },
     BondSpendPkLenNotCanonical { got: usize },
+    ReceiptSignPkLenNotCanonical { got: usize },
     HoldingsCountExceeded { got: usize },
     HoldingsDuplicateShard { shard_id: u64 },
     ShardListForbiddenForCompleteTree,
@@ -206,6 +268,12 @@ impl fmt::Display for WireError {
                 write!(
                     f,
                     "bond_spend_pk length {got} != canonical single-key length"
+                )
+            }
+            Self::ReceiptSignPkLenNotCanonical { got } => {
+                write!(
+                    f,
+                    "receipt_sign_pk length {got} != canonical FN-DSA hybrid key length"
                 )
             }
             Self::HoldingsCountExceeded { got } => {
@@ -316,6 +384,7 @@ impl ArchivalBondPostVin {
             p_canonical_id,
             kind: BondKind::JoinMarket {
                 bond_spend_pk,
+                receipt_sign_pk: None,
                 endpoint,
             },
             holdings,
@@ -375,20 +444,36 @@ impl ArchivalBondPostVin {
         self.kind.endpoint()
     }
 
+    pub fn receipt_sign_pk(&self) -> Option<&[u8]> {
+        self.kind.receipt_sign_pk()
+    }
+
     /// Write-time checks the kind type cannot hold: hybrid-key length,
-    /// JoinMarket `bond_spend_pk` length, holdings bounds. Presence couplings
-    /// are the variant — they are not checked here.
+    /// JoinMarket `bond_spend_pk` and `receipt_sign_pk` lengths, holdings
+    /// bounds. Presence couplings are the variant — they are not checked here.
     pub fn check_couplings(&self) -> Result<(), WireError> {
         if self.hybrid_public_key.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
             return Err(WireError::HybridPubkeyLenNotCanonical {
                 got: self.hybrid_public_key.len(),
             });
         }
-        if let BondKind::JoinMarket { bond_spend_pk, .. } = &self.kind {
+        if let BondKind::JoinMarket {
+            bond_spend_pk,
+            receipt_sign_pk,
+            ..
+        } = &self.kind
+        {
             if bond_spend_pk.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
                 return Err(WireError::BondSpendPkLenNotCanonical {
                     got: bond_spend_pk.len(),
                 });
+            }
+            if let Some(receipt_sign_pk) = receipt_sign_pk {
+                if receipt_sign_pk.len() != RECEIPT_SIGN_PK_CANONICAL_BYTES {
+                    return Err(WireError::ReceiptSignPkLenNotCanonical {
+                        got: receipt_sign_pk.len(),
+                    });
+                }
             }
         }
         if self.holdings.kind == HoldingsKind::ShardSetCompact
@@ -413,11 +498,17 @@ impl ArchivalBondPostVin {
         w.write_all(&[self.post_kind() as u8])?;
         if let BondKind::JoinMarket {
             bond_spend_pk,
+            receipt_sign_pk,
             endpoint,
         } = &self.kind
         {
             write_varint(&bond_spend_pk.len(), w)?;
             w.write_all(bond_spend_pk)?;
+            // Present ⇔ the kind byte above is `JoinMarketReceipt` (`tag`).
+            if let Some(receipt_sign_pk) = receipt_sign_pk {
+                write_varint(&receipt_sign_pk.len(), w)?;
+                w.write_all(receipt_sign_pk)?;
+            }
             w.write_all(endpoint)?;
         }
         write_holdings_descriptor(w, &self.holdings)?;
@@ -443,16 +534,28 @@ impl ArchivalBondPostVin {
         let p_canonical_id = read_bytes(r)?;
         let tag = BondPostKind::from_u8(read_byte(r)?)?;
         let kind = match tag {
-            BondPostKind::JoinMarket => {
+            BondPostKind::JoinMarket | BondPostKind::JoinMarketReceipt => {
                 let spk_len: usize = read_varint(r)?;
                 if spk_len != HYBRID_PUBKEY_CANONICAL_BYTES {
                     return Err(WireError::BondSpendPkLenNotCanonical { got: spk_len });
                 }
                 let mut bond_spend_pk = vec![0u8; spk_len];
                 r.read_exact(&mut bond_spend_pk)?;
+                let receipt_sign_pk = if tag == BondPostKind::JoinMarketReceipt {
+                    let rpk_len: usize = read_varint(r)?;
+                    if rpk_len != RECEIPT_SIGN_PK_CANONICAL_BYTES {
+                        return Err(WireError::ReceiptSignPkLenNotCanonical { got: rpk_len });
+                    }
+                    let mut receipt_sign_pk = vec![0u8; rpk_len];
+                    r.read_exact(&mut receipt_sign_pk)?;
+                    Some(receipt_sign_pk)
+                } else {
+                    None
+                };
                 let endpoint = read_bytes(r)?;
                 BondKind::JoinMarket {
                     bond_spend_pk,
+                    receipt_sign_pk,
                     endpoint,
                 }
             }

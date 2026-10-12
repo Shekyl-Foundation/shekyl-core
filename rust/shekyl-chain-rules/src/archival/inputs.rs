@@ -67,6 +67,7 @@ impl super::Transition {
                     post,
                     bond_spend_pk,
                     endpoint,
+                    ..
                 }) => self.join(view, post, bond_spend_pk, endpoint, locus),
                 Some(BondArm::Release { post }) => self.release(view, post, locus),
                 Some(BondArm::Reinstate { post }) => self.reinstate(view, post, locus),

@@ -363,6 +363,13 @@ const SITES: &[Site] = &[
         j12_short_bond_spend_pk,
         "CEN-J12: JoinMarket commits a canonical-length `bond_spend_pk`",
     ),
+    rule(
+        "bond_post receipt_sign_pk {} != canonical",
+        Face::Memory,
+        CenRow::J28,
+        j28_short_receipt_sign_pk,
+        "CEN-J28: a JoinMarket's `receipt_sign_pk` parses as a canonical FN-DSA hybrid public key, so one of another length is not one; from bytes the length is `read_len_prefixed_exact`'s parse arm and the row judges content",
+    ),
     invariant(
         "BondPostKind::Other must not use the JoinMarket tag\"",
         Face::Memory,
@@ -853,11 +860,12 @@ fn every_refusal_arm_of_the_twin_is_classified() {
     let invariant = count(|a| matches!(a, Arm::Invariant));
     assert_eq!(
         (parse, rule, policy, invariant),
-        (16, 40, 1, 5),
+        (16, 41, 1, 5),
         "the four counts (parse, rule, policy, invariant) moved — re-derive them, do not re-pin \
-         (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened)"
+         (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened; \
+         (16, 40, 1, 5) over 62 before CEN-J28's in-memory receipt-key arm, 2026-10-12)"
     );
-    assert_eq!(parse + rule + policy + invariant, 62);
+    assert_eq!(parse + rule + policy + invariant, 63);
 }
 
 /// Shape: a trip is a rule or a policy arm's; a rule arm without one is a
