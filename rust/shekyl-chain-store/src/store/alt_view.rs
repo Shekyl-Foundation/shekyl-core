@@ -13,7 +13,10 @@
 //! asserted its linkage while rebuilding (CEN-K2). Here the rebuild is
 //! [`AltChain::build`], the linkage is the constructor's refusal, and the
 //! stitched chain is a view the cheap-tier rules read through
-//! [`HeaderView`] — **and only `HeaderView`**.
+//! [`HeaderView`] — **and only `HeaderView`**. The chain also names the
+//! fork it describes ([`AltChain::fork`]: its root and the recorded tip of
+//! the same snapshot), so `alt_against`'s two operands come from one read
+//! and the verdict it mints is what AL1 stores.
 //!
 //! # `HeaderView` only
 //!
@@ -48,7 +51,7 @@
 //! (CEN-K1a). A candidate whose parent is unknown is not a K1a case; it is
 //! K2's orphan, and `build` refuses it before any height exists.
 
-use shekyl_chain_rules::{AtHeight, HeaderRecord, HeaderView, Tip};
+use shekyl_chain_rules::{AtHeight, Fork, HeaderRecord, HeaderView, Tip};
 use shekyl_store_codec::{Canonical, CodecError};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
@@ -71,6 +74,9 @@ pub(super) const ALT_HEIGHT_MISMATCH: &str = "alt block's recorded height disagr
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AltChain {
     root: Tip,
+    /// The recorded tip on the snapshot the walk ran on (`Fork`'s second
+    /// operand; read before the walk).
+    recorded_tip: Tip,
     entries: Vec<AltEntry>,
 }
 
@@ -91,12 +97,20 @@ impl AltChain {
     /// and is SI-7 — the row's own bookkeeping cannot be read as the chain
     /// it is in.
     ///
+    /// The recorded tip is read on the same snapshot, first: it is the
+    /// other operand of the fork the chain describes ([`AltChain::fork`],
+    /// CEN-E2's pop count), and an empty store holds nothing, so every
+    /// parent is the orphan there before any walk.
+    ///
     /// # Errors
     ///
     /// [`AltCannot::Unlinked`] for the orphan; SI-7 for an alt row that
     /// does not decode, does not hash to its key, or sits at the wrong
     /// height; engine errors pass through.
     pub fn build(snapshot: &ReadSnapshot<'_>, prev_id: &BlockHash) -> Result<Self, StoreError> {
+        let Some(recorded_tip) = snapshot.tip()?.recorded else {
+            return Err(AltCannot::Unlinked { at: *prev_id }.into());
+        };
         let mut parent_first = Vec::new();
         let mut cursor = *prev_id;
         let root = loop {
@@ -132,13 +146,29 @@ impl AltChain {
                 .into_plain());
             }
         }
-        Ok(Self { root, entries })
+        Ok(Self {
+            root,
+            recorded_tip,
+            entries,
+        })
     }
 
     /// The fork point: the recorded row the chain leaves from.
     #[must_use]
     pub const fn root(&self) -> Tip {
         self.root
+    }
+
+    /// The fork a block over this chain would cause — CEN-E2's operands,
+    /// both from the snapshot the chain was built on: the root, and the
+    /// recorded tip as it stood there. What `alt_against` takes beside the
+    /// view.
+    #[must_use]
+    pub const fn fork(&self) -> Fork {
+        Fork {
+            root: self.root,
+            recorded_tip: self.recorded_tip,
+        }
     }
 
     /// The alt entries above the root, ascending; empty when the parent is

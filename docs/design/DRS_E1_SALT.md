@@ -13,6 +13,12 @@ three arms (`AlreadyHeld`, `NotHeld`, `IdentityMismatch`) — a malformed
 block, an empty witness and a zero weight are `AltBlockError` at
 `checked`, not a fourth arm — and SAL-2's key-types claim corrected (the
 floor moved 25 → 24).
+**Moved by DRS-E5 a4 (2026-10-11):** AL1 is `insert_alt_block(&self,
+AltValid)` — the cheap tier's verdict builds the row and keys it, so the
+`IdentityMismatch` arm this record describes is deleted and `AltCannot`
+has two arms; `coins_generated` is gone from the row (`SCHEMA_VERSION`
+23). The §3 and §11 rows below record the increment **as it landed**;
+`DRS_E5_POOL_ALT_PRUNE.md` §1.1 is the shape of record.
 This file stays in `design/` as the E1/E5 boundary statement (§0, §2.2,
 §2.3, SAL-13, SAL-14) until E5's plan owns it.
 **Round 0 executed 2026-09-24** at `dev` @ `9532b58f5`

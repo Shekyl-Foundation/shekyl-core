@@ -30,16 +30,37 @@
 //!   A field with no reader is not stored, so "nothing reads it" is the
 //!   type, not a grep. Deleted at `SCHEMA_VERSION` 23 (rule 42).
 //!
-//! # Construction and decoding refuse the same things
+//! # The row is built from the verdict
 //!
-//! [`AltBlock::checked`] is the constructor; the fields are private so it
-//! is the *only* constructor. It refuses block bytes that are not a block
+//! [`AltBlock::admitted`] is the constructor: it takes the cheap tier's
+//! verdict, [`AltValid`], and nothing else (DRS-E5 a4, `AltValid → AL1`).
+//! The verdict carries the block, its witness, and the three facts the tier
+//! derived over the stitched chain — the height, the cumulative difficulty,
+//! the measured weight — so there is no call site at which a fact is typed
+//! by hand, and no row the store holds that no tier admitted. The
+//! constructor is infallible: the block is a parsed [`Block`] already, the
+//! witness is a typed [`AttestationWitness`](shekyl_types::archival::AttestationWitness)
+//! (non-empty, within the bound the codec checks), and a measured weight is
+//! never zero (a block weighs at least its coinbase's bytes).
+//!
+//! [`AltBlock::checked`] builds a *value* from bare facts and bytes,
+//! refusing what the codec would refuse: block bytes that are not a block
 //! ([`BlockBody::parse`] — the `blocks` table's own rule), a witness that
 //! is present and empty or over its bound
 //! ([`AttestationWitnessBytes::well_formed`] — the height-keyed twin's own
 //! rule; "empty stores no row" is `None`), and a weight of zero (the
-//! sentinel re-minted). [`Canonical::decode`] refuses the same three, so a
-//! row that decodes is a row `checked` would have built (SI-14's shape).
+//! sentinel re-minted). The codec's own tests, the schema snapshot and the
+//! store's planted-row fixtures build rows this way; AL1 does not take one
+//! — the write boundary is the verdict's type, not this constructor's
+//! visibility. [`Canonical::decode`] refuses the same three, so a row that
+//! decodes is a row `checked` would have built (SI-14's shape).
+//!
+//! `block_weight` keeps its `Option` from S-ALT (`SAL-Q4`) though
+//! `admitted` always writes `Some`: the one remaining question is whether a
+//! demoted block re-enters through the tier or through a constructor of its
+//! own, which is the switch's (`DRS_E5_POOL_ALT_PRUNE.md` §5 a5), and the
+//! arm goes — with a layout bump — when that lands with no writer of
+//! `None`.
 //!
 //! # The value is the block
 //!
@@ -54,13 +75,15 @@
 //! offered.
 //!
 //! What the record does not carry is its own hash: the key is the identity.
-//! AL1 refuses a caller-supplied key that is not `block.hash()`
-//! (`AltCannot::IdentityMismatch`). AL4 and AL7 refuse a row already on
-//! disk whose block does not hash to its key, as SI-7 — the belt
+//! AL1 takes the key from the verdict ([`AltValid::hash`], CEN-B6's one
+//! keccak over the block it stores), so no caller supplies one and there is
+//! no mismatch to refuse. AL4 and AL7 refuse a row already on disk whose
+//! block does not hash to its key, as SI-7 — the belt
 //! `chain_reads::block_body` applies to a blob against `block_info.hash`,
 //! verification of an identity rather than computation of a consensus
 //! value (C2-R8 Q4). The C++ trusted the caller (`blockchain.cpp:2359`).
 
+use shekyl_chain_rules::AltValid;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::{BlockHeight, BlockWeight};
@@ -100,7 +123,9 @@ impl core::error::Error for AltBlockError {}
 /// One alternative-chain block: its bookkeeping, its bytes, and the
 /// attestation witness it carries across a reorg.
 ///
-/// Built only through [`AltBlock::checked`]; read through the accessors.
+/// Built from the cheap tier's verdict through [`AltBlock::admitted`]
+/// (inside the crate, from bare facts through [`AltBlock::checked`]); read
+/// through the accessors.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AltBlock {
     height: BlockHeight,
@@ -132,7 +157,36 @@ impl AltBlock {
     /// Presence byte for a present optional field.
     const PRESENT: u8 = 1;
 
-    /// Build a record, refusing what the codec would refuse.
+    /// **AL1's input.** The row for a block the cheap tier admitted: the
+    /// block and witness the verdict carries, under the height, cumulative
+    /// difficulty and weight it derived over the stitched chain
+    /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.1). Infallible — module docs, *The row
+    /// is built from the verdict*.
+    #[must_use]
+    pub fn admitted(valid: AltValid) -> Self {
+        let height = valid.height();
+        let cumulative_difficulty = valid.cumulative_difficulty();
+        let block_weight = valid.block_weight();
+        debug_assert!(
+            block_weight.to_raw() != 0,
+            "a measured block weight is at least its coinbase's bytes"
+        );
+        let candidate = valid.into_candidate();
+        Self {
+            height,
+            block_weight: Some(block_weight),
+            cumulative_difficulty,
+            block: candidate.block,
+            attestation_witness: candidate
+                .attestation_witness
+                .map(|witness| witness.as_bytes().to_vec()),
+        }
+    }
+
+    /// Build a value from bare facts and bytes, refusing what the codec
+    /// would refuse. Not AL1's input — that is [`AltBlock::admitted`]; this
+    /// is how the codec's tests, the schema snapshot and the store's
+    /// planted-row fixtures build a row.
     ///
     /// # Errors
     ///

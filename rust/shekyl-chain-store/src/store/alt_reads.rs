@@ -76,9 +76,9 @@ pub(super) fn alt_block<T: ReadTables>(
 }
 
 /// The `block_body` belt for this table: `block.hash()` is `id`, or the
-/// row is SI-7. Insert refuses the same disagreement as
-/// [`super::error::AltCannot::IdentityMismatch`] before the row exists;
-/// this is the row that reached the file around that boundary.
+/// row is SI-7. AL1 cannot write this disagreement — it keys the row by
+/// its verdict's hash; this is the row that reached the file around that
+/// boundary.
 fn bound_to_key(id: BlockHash, block: AltBlock) -> Result<AltBlock, ReadFault> {
     if block.block().hash() == id {
         return Ok(block);

@@ -463,11 +463,12 @@ pub enum StoreCannot {
 /// (`StoreCannot`'s shape; `DRS_E1_SALT.md` §3.4).
 ///
 /// Each is a **decision about what the caller asked** made visible
-/// (`SAL-Q3` as ruled, and the identity belt with it): the caller states
-/// what it expected of the table, and the store says when the table
-/// disagrees, instead of doing something silently different. A row
-/// already on disk whose block does not hash to its key is not one of
-/// these — that is SI-7 at AL4/AL7, the row having bypassed this boundary.
+/// (`SAL-Q3` as ruled): the caller states what it expected of the table,
+/// and the store says when the table disagrees, instead of doing something
+/// silently different. A row already on disk whose block does not hash to
+/// its key is not one of these — that is SI-7 at AL4/AL7, the row having
+/// bypassed the write boundary (AL1 keys a row by its verdict's hash, so no
+/// caller supplies an identity to disagree with).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AltCannot {
     /// [`AltChain::build`](super::AltChain::build) from a parent whose
@@ -487,17 +488,6 @@ pub enum AltCannot {
     /// is not held is a caller-contract violation — L14's insert-versus-upsert
     /// ruling applied to a remove — not an idempotent no-op.
     NotHeld,
-    /// `insert_alt_block` whose key is not the hash of the block it stores.
-    /// The key is the alt block's identity and the record does not carry a
-    /// second one, so the store verifies the one it is given — the belt
-    /// class `chain_reads::block_body` applies to a blob against
-    /// `block_info.hash`. The C++ trusted the caller (`blockchain.cpp:2359`).
-    IdentityMismatch {
-        /// The key the caller supplied.
-        key: BlockHash,
-        /// What the block bytes hash to.
-        actual: BlockHash,
-    },
 }
 
 /// The pool store's typed refusals — the pool's decisions, not faults
@@ -703,10 +693,6 @@ impl core::fmt::Display for AltCannot {
             ),
             Self::AlreadyHeld => f.write_str("insert of an alt block the store already holds"),
             Self::NotHeld => f.write_str("remove of an alt block the store does not hold"),
-            Self::IdentityMismatch { key, actual } => write!(
-                f,
-                "insert of an alt block under key {key} whose bytes hash to {actual}"
-            ),
         }
     }
 }

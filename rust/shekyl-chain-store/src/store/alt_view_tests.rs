@@ -9,15 +9,19 @@
 //! the alt entries' above it, and CEN-K1a holds by construction — no build
 //! yields a candidate at height zero. A row whose recorded height disagrees
 //! with its chain is SI-7, the assertion the C++ rebuild made.
+//!
+//! Rows the tier would have written go through it (`alt_tests::admitted`
+//! then AL1); rows the tier would never write — an orphan's, a row whose
+//! height disagrees with its chain — are planted (`alt_tests::plant`),
+//! because that is the only way they reach a file.
 
-use shekyl_chain_rules::{AtHeight, HeaderRecord, HeaderView, Tip};
+use shekyl_chain_rules::{AtHeight, Candidate, Fork, HeaderRecord, HeaderView, Tip};
 use shekyl_types::{BlockHash, BlockHeight};
 
-use super::alt_tests::{alt, h, side_block};
+use super::alt_tests::{admitted, alt, h, plant, side_block, side_candidate, with_witness};
 use super::connect_fixtures::connect_chain;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
-use crate::codec::AltBlock;
 
 /// `BatchView::header_at(h)` — the main-chain read the stitched view must
 /// agree with below the fork point.
@@ -34,24 +38,31 @@ fn recorded(at: AtHeight<HeaderRecord>) -> HeaderRecord {
     }
 }
 
-fn insert(store: &ChainStore, id: BlockHash, block: &AltBlock) {
-    let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(&id, block)?));
+/// Through the tier and AL1; the row's key.
+fn admit(store: &ChainStore, candidate: Candidate) -> BlockHash {
+    let valid = admitted(store, candidate);
+    let id = valid.hash();
+    let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(valid)?));
     out.expect("insert alt");
+    id
 }
 
 #[test]
 fn the_orphan_is_unlinked_at_the_first_unheld_hash() {
     // CEN-K2's refusal. A parent nobody holds; then a two-entry chain whose
     // first entry links to a hash nobody holds — the refusal names that
-    // hash, not the parent the caller asked about.
+    // hash, not the parent the caller asked about. The tier refuses an
+    // orphan before AL1 is reached (`admitted` would panic here), so the
+    // two rows are planted: this is what a file holds if something wrote
+    // around AL1, and the walk still finds the gap.
     let path = tmp("alt-view-orphan");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &[vec![], vec![]]).hashes;
     let unknown = BlockHash::from_bytes([0x0F; 32]);
     let (a, a_bytes) = side_block(h(1), unknown, 3);
     let (b, b_bytes) = side_block(h(2), a, 4);
-    insert(&store, a, &alt(h(1), &a_bytes, None));
-    insert(&store, b, &alt(h(2), &b_bytes, None));
+    plant(&store, a, &alt(h(1), &a_bytes, None));
+    plant(&store, b, &alt(h(2), &b_bytes, None));
 
     let snap = store.begin_read().expect("read");
     let unlinked = |at: BlockHash| StoreError::from(AltCannot::Unlinked { at }).to_string();
@@ -77,8 +88,9 @@ fn the_orphan_is_unlinked_at_the_first_unheld_hash() {
     );
     drop(snap);
 
-    // An empty store holds nothing: every parent is the orphan (K2), and
-    // no height is ever derived (K1a has no case here).
+    // An empty store holds nothing: every parent is the orphan (K2), found
+    // before any walk — there is no recorded tip to fork from — and no
+    // height is ever derived (K1a has no case here).
     let empty_path = tmp("alt-view-empty");
     let empty = ChainStore::create(&empty_path, EPOCH).expect("create");
     let snap = empty.begin_read().expect("read");
@@ -102,10 +114,8 @@ fn a_chain_through_two_alt_entries_reaches_a_recorded_row() {
     let path = tmp("alt-view-chain");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
-    let (a, a_bytes) = side_block(h(1), main[0], 3);
-    let (b, b_bytes) = side_block(h(2), a, 4);
-    insert(&store, a, &alt(h(1), &a_bytes, None));
-    insert(&store, b, &alt(h(2), &b_bytes, None));
+    let a = admit(&store, side_candidate(h(1), main[0], 3));
+    let b = admit(&store, side_candidate(h(2), a, 4));
 
     let snap = store.begin_read().expect("read");
     let at = |h: u64, hash: BlockHash| Tip {
@@ -122,6 +132,14 @@ fn a_chain_through_two_alt_entries_reaches_a_recorded_row() {
     );
     assert_eq!(over_b.parent(), at(2, b));
     assert_eq!(over_b.candidate_height(), BlockHeight::from_raw(3));
+    assert_eq!(
+        over_b.fork(),
+        Fork {
+            root: at(0, main[0]),
+            recorded_tip: at(2, main[2]),
+        },
+        "the fork names the root and the recorded tip of the one snapshot"
+    );
 
     let over_a = AltChain::build(&snap, &a).expect("links");
     assert_eq!(over_a.root(), at(0, main[0]));
@@ -134,6 +152,8 @@ fn a_chain_through_two_alt_entries_reaches_a_recorded_row() {
     assert!(over_main.entries().is_empty());
     assert_eq!(over_main.parent(), at(1, main[1]));
     assert_eq!(over_main.candidate_height(), BlockHeight::from_raw(2));
+    assert_eq!(over_main.fork().root, at(1, main[1]));
+    assert_eq!(over_main.fork().recorded_tip, at(2, main[2]));
 
     // K1a: the lowest root is genesis, and a candidate over it sits at 1.
     // There is no chain whose candidate height is 0 — the falsifier is a
@@ -162,14 +182,15 @@ fn the_alt_view_is_the_recorded_chain_below_the_fork_and_the_entries_above() {
     let path = tmp("alt-view-stitched");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &[vec![], vec![], vec![], vec![]]).hashes;
-    let (a, a_bytes) = side_block(h(2), main[1], 3);
-    let (b, b_bytes) = side_block(h(3), a, 4);
-    let a_row = alt(h(2), &a_bytes, None);
-    let b_row = alt(h(3), &b_bytes, Some(vec![0xA5; 8]));
-    insert(&store, a, &a_row);
-    insert(&store, b, &b_row);
+    let a = admit(&store, side_candidate(h(2), main[1], 3));
+    let b = admit(&store, with_witness(side_candidate(h(3), a, 4), &[0xA5; 8]));
 
     let snap = store.begin_read().expect("read");
+    // The rows as the tier wrote them: what the stitched view must answer
+    // above the fork point.
+    let a_row = snap.alt_block(&a).expect("get").expect("held");
+    let b_row = snap.alt_block(&b).expect("get").expect("held");
+    assert_eq!(b_row.attestation_witness(), Some(&[0xA5; 8][..]));
     let chain = AltChain::build(&snap, &b).expect("links");
     let view = AltView::new(&snap, chain);
 
@@ -247,14 +268,16 @@ fn a_row_whose_height_disagrees_with_its_chain_is_si7() {
     // The C++ asserted linkage "at the claimed height" while rebuilding
     // (CEN-K2's row). A row that links to genesis and claims height 5 is
     // not a chain anyone can be judged against; it is the store's own
-    // bookkeeping disagreeing with itself — SI-7, not a refusal.
+    // bookkeeping disagreeing with itself — SI-7, not a refusal. AL1 cannot
+    // write it (the verdict's height is derived over the chain), so the
+    // rows are planted.
     let path = tmp("alt-view-height");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &[vec![], vec![]]).hashes;
     let (a, a_bytes) = side_block(h(5), main[0], 3);
-    insert(&store, a, &alt(h(5), &a_bytes, None));
+    plant(&store, a, &alt(h(5), &a_bytes, None));
     let (b, b_bytes) = side_block(h(6), a, 4);
-    insert(&store, b, &alt(h(6), &b_bytes, None));
+    plant(&store, b, &alt(h(6), &b_bytes, None));
 
     let snap = store.begin_read().expect("read");
     let is_si7 = |e: &StoreError| {

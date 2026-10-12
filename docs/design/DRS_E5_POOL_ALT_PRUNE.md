@@ -159,24 +159,45 @@ the expectation, and a second is owed only if a ruling refutes a finding in
 
 ### 1.1 S-ALT, as landed (`store/alt.rs`, `codec/alt.rs`)
 
-AL1 `insert_alt_block(&self, id, &AltBlock)` refusing `IdentityMismatch`
-and `AlreadyHeld` (the latter is CEN-K3's belt); AL2 `remove_alt_block`
-(`NotHeld`); AL3 `drop_alt_blocks -> u64`; AL4 `alt_block`; AL5
-`has_alt_block`; AL6 `alt_block_count`; AL7 `alt_blocks -> Vec<AltEntry>`.
-`alt_table` asserts `!journal().is_recording()` — alt rows are **not
-journaled and not in the digest**. `AltBlock { block, witness, facts }`,
-`AltBlockFacts { height, block_weight: Option<BlockWeight>,
-cumulative_difficulty }` (`codec/alt.rs`; the supply word `coins_generated`
-the record carried at open was deleted at a4, `SCHEMA_VERSION` 23 — K8,
-§2.1). The
-module doc's switch sketch is one `store.write` closure: read the demoted
-tip → `pop()`×N → `insert_alt_block`×N → `connect`×M →
-`remove_alt_block`×M. The hand-offs this round binds itself to:
+AL1 `insert_alt_block(&self, AltValid)` — **the cheap tier's verdict is
+the only thing that writes an alt row** (a4; at open the signature was
+`(&self, id, &AltBlock)` with an `IdentityMismatch` belt, which lost its
+producer when the key became `AltValid::hash` and was deleted). The row is
+built from the verdict (`AltBlock::admitted`: the derived height and
+cumulative difficulty, the measured weight, the block and its witness);
+`AlreadyHeld` is CEN-K3's belt. AL2 `remove_alt_block` (`NotHeld`); AL3
+`drop_alt_blocks -> u64`; AL4 `alt_block`; AL5 `has_alt_block`; AL6
+`alt_block_count`; AL7 `alt_blocks -> Vec<AltEntry>`. `alt_table` asserts
+`!journal().is_recording()` — alt rows are **not journaled and not in the
+digest**. `AltBlock { block, witness, facts }`, `AltBlockFacts { height,
+block_weight: Option<BlockWeight>, cumulative_difficulty }`
+(`codec/alt.rs`; the supply word `coins_generated` the record carried at
+open was deleted at a4, `SCHEMA_VERSION` 23 — K8, §2.1; `AltBlock::checked`
+still builds a row from bare facts for the codec's tests, the schema
+snapshot and the store's planted-row fixtures — it is not AL1's input).
+`AltChain::fork()` names the fork the tier judges against (root and
+recorded tip, one snapshot). The module doc's switch sketch is one
+`store.write` closure: judge the demoted blocks over the pre-pop snapshot
+→ `pop()`×N → `insert_alt_block`×N → `connect`×M → `remove_alt_block`×M.
+The hand-offs this round binds itself to:
 
 - **SAL-7** — alt data never reaches `ChainView`; "no `ChainView` accessor
   is minted" for alt membership. (`DRS_E1_SALT.md:400–406`.)
 - **SAL-13** — demotion reads the tip's bytes, facts and witness through the
-  batch's view *before* `pop()`.
+  batch's view *before* `pop()`; with AL1 taking a verdict (a4), the read
+  is the tier judging the demoted block over the pre-pop snapshot. Whether
+  a demoted block re-enters *through the tier* (the sketch's shape and the
+  C++'s, `handle_alternative_block` from the switch, CEN-K7) or through a
+  constructor of its own is the switch's to rule — **a5**, §5.
+- **SAL-Q4** — `block_weight: Option<BlockWeight>` was ruled for the C++'s
+  zero sentinel ("not yet validated far enough to have a weight"). AL1's
+  only writer now always has a weight (`AltBlock::admitted` writes `Some`;
+  the tier measured it), so the `Option` carries a state no writer
+  produces. **Reopened, falsifier named:** when a5 lands and no writer of
+  `None` exists (`rg 'block_weight: None' rust/shekyl-chain-store/src/`
+  outside tests → 0), the `Option` goes with a layout bump
+  (`SCHEMA_VERSION`, `alt_block.snap`). It stays through a4 because a5 may
+  yet mint a demotion constructor that lacks one.
 - **SAL-14** — `rollback_blockchain_switching` (`blockchain.cpp:980`) is a
   deletion: the redb transaction is the rollback; falsifier
   `git grep rollback_blockchain_switching src/` → 0 after cutover; and the
@@ -708,9 +729,9 @@ caller in the same PR.
 ```text
 store.write(|batch| {
     // 0. the cap, before anything is popped (E5-Q6; C2-R1 Q1c F-1(a): a refusal here is local, never a verdict)
-    // 1. SAL-13: read tip bytes + facts + witness through batch.view(), N times
+    // 1. SAL-13: the demoted blocks, judged by the cheap tier over the pre-pop snapshot, N verdicts (or a5's demotion constructor — a5 rules which)
     // 2. pop() × N          — PopBelowFloor surfaces here as F-1 fail-stop, not as a peer-punishable failure
-    // 3. insert_alt_block × N   (K7: demoted blocks re-enter as alt blocks — unless the verdict's arm says discard)
+    // 3. insert_alt_block(AltValid) × N   (K7: demoted blocks re-enter as alt blocks — unless the verdict's arm says discard)
     // 4. for each alt entry: validate(formed, &batch.view(), in_force, trust) → connect  (K5; K5b's witness travels in the AltBlock)
     // 5. remove_alt_block × M
     Ok(Switched { demoted, promoted })
@@ -857,8 +878,8 @@ drops, with PR-b the caller.
 | a1 | this file on review; index rows; the §12 register rows (DEL-009, DEL-010). UPDATE 2026-10-10: Round 1's rulings recorded; the `header.rs` partition measured (`E5-13…E5-15`); `E5-Q4` priced | 1 | — |
 | a2 | `HeaderView { tip, header_at }` + `HeaderRecord` (`E5-13`); `HeaderRule` with the blanket `BlockRule` impl; `anchors.rs`, `timestamps.rs`, `pow.rs`, `difficulty.rs`, `attestation.rs` re-bounded (`E5-14` — not `header.rs`); `BatchView` and the eight test implementors gain `HeaderView`; `check_block_rule_corrupt_sites.py` reads both impl forms; the store's conformance suite split. UPDATE 2026-10-10: landed as measured — `HeaderRecord { hash, header, cumulative_difficulty }` embedded in `RecordedBlock` (`E5-13`, no `Deref`); `HeaderView { tip, header_at }` with `ChainView: HeaderView` (`E5-14`); D1, C1, C2, E1 are `HeaderRule`s under `impl<R: HeaderRule> BlockRule for R`, the window and seed helpers (`C3::window`, `mtp_median_at`, `D4::target`, `D3::expected_seed`, `E5::conflict_with`, `anchor_window`) bound on `HeaderView`; `recorded_header` lifts a hole to `Corrupt::HoleBelowTip { record: PerHeightRecord::Header }`; the gate **derives** the rule-trait set from the blanket impl and refuses a rule-shaped `check` under a trait it cannot reach (15 rules read: 11 + 4; the user's three probes red on D1). The falsifier did not fire: five rule files, the blanket impl composes with `run`. Beside it, a wrong-subject finding: `validate.rs`'s two brand `compile_fail` doctests had passed since `5fb2132fa` (2026-09-29) on E0046 — the stubs no longer implemented `ChainView` — not at `connect`; replaced by a `trybuild` suite with stderr snapshots and a positive control (`CHAIN_RULES_CRATE.md` §8.3) | 2 | yes — more than these five rule files, or the blanket impl not composing with `run`, is the fallback |
 | a3 | `AltChain::build` (K2), `AltView` over `ReadSnapshot` + chain (`HeaderView` only), K1a by construction, the stitched-view conformance test. UPDATE 2026-10-11: landed as specified — `store/alt_view.rs`: `AltChain::build(&ReadSnapshot, &prev_id)` walks `previous` from the parent (recorded hash → root, alt row → entry, neither → `AltCannot::Unlinked { at }`, the new refusal variant), then holds each entry's recorded height to `root + 1 + i` (the C++ rebuild's assertion; a disagreement is SI-7 under `alt_blocks`, reason `alt block's recorded height disagrees with its chain`); `AltView<'s>` implements `HeaderView` and nothing else — `header_at` is `chain_reads::block_body` at or below the root (one body with `BatchView`) and the entry's `{ hash, header, cumulative_difficulty }` above, `tip` the parent; `candidate_height() = parent + 1 ≥ 1` (K1a). Four tests in `store/alt_view_tests.rs`, including the stitched-view conformance test against `BatchView::header_at` below the fork with the negative control that the recorded reader still answers `main[2]` where the view answers `a`; the height check was mutation-tested (disabled → the SI-7 test fails). Finding `E5-18`: the census registry's `by_construction` form cannot name a store-homed property or credit a store-crate falsifier, so K1a/K2 stay `pending` in `census.rs` until a4's census-arms commit chooses the form | 2 | yes |
-| a4 | **first commit, ruled before it lands:** the census amendment (`CONSENSUS_RULE_CENSUS.md`; the registry entry is unchanged) — CEN-K4's row stops describing a ladder the Rust tier will not run: the C++ ladder is recorded in its landed order (version, timestamp, checkpoint, PoW, then attestation since `4932b769b`, 2026-09-13, then prevalidate) as the frozen path `DEL-009` retires, and the Rust tier's steps name no attestation step (`E5-Q4` β); CEN-B4's site pin re-pinned to `verify_block_attestation` 4979–5066 (signature to closing brace; `:4978` is the separator comment). **Then** `alt_against` (K1b, K4's tier, D5 via D4, E2's arm); `AltValid` → AL1; census arms. The `docs/FOLLOWUPS.md` rows *"Alt-chain attestation verify resolves bond pubkeys from main-chain state"* and *"Validate `prev_id` before attestation verify on the alt-chain path"* were closed with the ruling (2026-10-11), not by this commit. UPDATE 2026-10-11: `alt_against` landed (`alt.rs`, `rules/alt.rs`; §2.1 has the ladder): K1b a `FormRule` run before any header read; E2 a two-band function over `Fork { root, recorded_tip }`, the cap read from `RuleSet::reorg_cap` and binding only when anchored; D5 wrapping `D4::target`; F4/F5/F6 re-bound `HeaderRule` (`E5-14` amended: six files, 15 rules = 8 + 7); `AltValid` with no supply field; twelve tests, the row set pinned. Registry entries unchanged in this commit — K1b/E2/D5/K4 flip to `enforced_at` in the census-arms commit, with K1a/K2/K3 (`held_by_store`, `E5-18`) and K8. UPDATE 2026-10-11 (second commit): the alt row loses its supply word — `coins_generated` deleted from `AltBlock`/`AltBlockFacts`, `SCHEMA_VERSION` 22 → 23, `alt_block.snap` re-pinned, layout pin `an_alt_row_has_no_supply_word`, the FOLLOWUPS supply-accumulation row closed (§2.1 "K8") | 3 | yes |
-| a5 | the switch closure in `shekyl-chain-ingest` (§2.3): cap check, SAL-13 reads, pops, K7 under the verdict arm, K5 promotion, removes; K6 on `ForkChoiceVerdict`; `Switched` | 3 | yes |
+| a4 | **first commit, ruled before it lands:** the census amendment (`CONSENSUS_RULE_CENSUS.md`; the registry entry is unchanged) — CEN-K4's row stops describing a ladder the Rust tier will not run: the C++ ladder is recorded in its landed order (version, timestamp, checkpoint, PoW, then attestation since `4932b769b`, 2026-09-13, then prevalidate) as the frozen path `DEL-009` retires, and the Rust tier's steps name no attestation step (`E5-Q4` β); CEN-B4's site pin re-pinned to `verify_block_attestation` 4979–5066 (signature to closing brace; `:4978` is the separator comment). **Then** `alt_against` (K1b, K4's tier, D5 via D4, E2's arm); `AltValid` → AL1; census arms. The `docs/FOLLOWUPS.md` rows *"Alt-chain attestation verify resolves bond pubkeys from main-chain state"* and *"Validate `prev_id` before attestation verify on the alt-chain path"* were closed with the ruling (2026-10-11), not by this commit. UPDATE 2026-10-11: `alt_against` landed (`alt.rs`, `rules/alt.rs`; §2.1 has the ladder): K1b a `FormRule` run before any header read; E2 a two-band function over `Fork { root, recorded_tip }`, the cap read from `RuleSet::reorg_cap` and binding only when anchored; D5 wrapping `D4::target`; F4/F5/F6 re-bound `HeaderRule` (`E5-14` amended: six files, 15 rules = 8 + 7); `AltValid` with no supply field; twelve tests, the row set pinned. Registry entries unchanged in this commit — K1b/E2/D5/K4 flip to `enforced_at` in the census-arms commit, with K1a/K2/K3 (`held_by_store`, `E5-18`) and K8. UPDATE 2026-10-11 (second commit): the alt row loses its supply word — `coins_generated` deleted from `AltBlock`/`AltBlockFacts`, `SCHEMA_VERSION` 22 → 23, `alt_block.snap` re-pinned, layout pin `an_alt_row_has_no_supply_word`, the FOLLOWUPS supply-accumulation row closed (§2.1 "K8"). UPDATE 2026-10-11 (third commit): `AltValid` → AL1 — `insert_alt_block(&self, AltValid)`; the row from the verdict (`AltBlock::admitted`, infallible; key = `AltValid::hash`, CEN-B6); `AltCannot::IdentityMismatch` deleted with its producer; `AltChain` reads the recorded tip first (an empty store: `Unlinked` before any walk) and offers `fork()`; the store's alt tests admit rows through `form` + `alt_against` over the stitched `AltView` and plant only what the tier would never write (SI-7, the orphan); `connect_fixtures::{formed, expected_seed}` widened to `HeaderView`. No layout change. Two questions handed to a5 and written at §1.1: demotion re-entry's constructor, and SAL-Q4's `Option` | 3 | yes |
+| a5 | the switch closure in `shekyl-chain-ingest` (§2.3): cap check, SAL-13 reads, pops, K7 under the verdict arm, K5 promotion, removes; K6 on `ForkChoiceVerdict`; `Switched`. **Rules, from a4:** how a demoted block re-enters — through the tier (`alt_against` over the pre-pop snapshot, the sketch's shape) or through a demotion constructor of its own — and, with that, whether `AltBlock::block_weight` keeps its `Option` (§1.1 SAL-Q4 reopen: no writer of `None` → the `Option` goes with a layout bump) | 3 | yes |
 | a6 | the three refusals distinguished (cap, floor, verdict) and the §4 fixtures for the boundary and the floor | 2 | yes |
 | a7 | a reorg capture for the corpus (`E5-Q9`): the C++ produces one switch, the trace gains the event, the grader compares | 2 | yes |
 | a8 | docs: census 4.K/D5/E2 re-pinned; `DRS_E1_SALT.md` SAL-13/14 marked carried-and-built; index; CHANGELOG | 1 | yes |
