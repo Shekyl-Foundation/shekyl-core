@@ -1,6 +1,6 @@
 [package]
 name = "shekyl-noise"
-description = "Noise symmetric primitives, symmetric state and record layer shared by the P2P and RPC transports"
+description = "Noise symmetric state and transport direction shared by the P2P and RPC transports"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,8 +12,17 @@ blake2 = { version = "0.10", default-features = false }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 zeroize = { workspace = true }
 
+[dev-dependencies]
+# The cacophony NN vector drives the symmetric state through an X25519
+# exchange. Direction does not, so the dependency stays off the production
+# graph.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
 [features]
-# Raw keys and a settable nonce, for a handshake's tests to pin the key
-# schedule from another crate. Dev-dependencies only: it is a TEST_ONLY row
-# of scripts/ci/check_test_only_features.py.
-test-support = []
+# One rekey HKDF, for the P2P transport's C5 bench. The derived keys stay in
+# this crate. That crate's `c5-bench` feature is the only enabler
+# (CONSUMER_OWNED in check_test_only_features.py).
+rekey-timing = []
+
+[lints]
+workspace = true

@@ -294,7 +294,7 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_info_chain_facts, nettype) == 156, "nettype offset");
   static_assert(offsetof(shekyl_rpc_info_chain_facts, protocol_version) == 157,
     "protocol_version offset");
-  static_assert(sizeof(shekyl_rpc_info_status_facts) == 40, "info-status facts POD changed size");
+  static_assert(sizeof(shekyl_rpc_info_status_facts) == 24, "info-status facts POD changed size");
   static_assert(sizeof(shekyl_rpc_info_peers_facts) == 48, "info-peers facts POD changed size");
   static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 40, "fee-estimate facts POD changed size");
 

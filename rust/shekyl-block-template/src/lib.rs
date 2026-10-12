@@ -113,7 +113,7 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
-use shekyl_wire::tx_extra::{self, CoinbaseBuildError, COINBASE_NONCE_BYTES};
+use shekyl_wire::tx_extra::{self, CoinbaseBuildError, DrawCommitment, COINBASE_NONCE_BYTES};
 use zeroize::Zeroizing;
 
 mod fill;
@@ -196,6 +196,12 @@ pub struct TemplateContext<'a> {
     pub tx_key_secret: Zeroizing<[u8; 32]>,
     /// The `0x02` nonce field's bytes (a pool's extra-nonce slot).
     pub extra_nonce: [u8; COINBASE_NONCE_BYTES],
+    /// The `0x0C` field: the producer's commitment to this block's witness
+    /// key and draw seed (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2). The
+    /// caller's, like the transaction secret: this crate draws no
+    /// randomness and holds neither secret, so a template stays a function
+    /// of its context.
+    pub draw_commitment: DrawCommitment,
     /// The bodies to list, in block order. Each must carry a fee
     /// (`Ct::Fcmp`): a coinbase-shaped body cannot be listed.
     pub listed: &'a [Transaction],
@@ -219,6 +225,7 @@ impl fmt::Debug for TemplateContext<'_> {
             .field("miner", &self.miner)
             .field("tx_key_secret", &"[redacted]")
             .field("extra_nonce", &self.extra_nonce)
+            .field("draw_commitment", &self.draw_commitment)
             .field("listed", &self.listed.len())
             .finish()
     }
@@ -571,6 +578,7 @@ fn coinbase(cx: &TemplateContext<'_>, amount: u64) -> Result<Transaction, Templa
     let extra = tx_extra::build_coinbase_extra(
         tx_pubkey(&cx.tx_key_secret),
         &cx.extra_nonce,
+        cx.draw_commitment,
         1,
         &kem_blob,
         &leaf_blob,

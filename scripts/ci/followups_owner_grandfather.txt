@@ -67,7 +67,6 @@ Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing history s
 Phase 4b: build concurrency permit stays 1 — raising it is a rule-21 reopen gated on anonymized segment fetch.
 GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in` single-structured-output funding must land before genesis.
 Block-height representation unification at the WI-2 anchoring seam
-Alt-chain supply accumulation advances by the coinbase, not the emission subsidy.
 Should the genesis block header carry a real mint timestamp instead of 0?
 The pool admits duplicate archival unique-keys that only fail at connect.
 External cryptographic review of the `FcmpMembershipOnly` soundness [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md)
@@ -228,7 +227,6 @@ Derive PWD-B2's timed-sync `min`/`jitter` split.
 Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.
 Measure address volatility for ephemeral-per-boot onion endpoints (PWD-E8), then rule the acceptable dead fraction.
 Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.
-Decide `sanitize_peerlist`'s port-0 handling, where the IPv4-only rule collides with `tor_address::unknown()` being port 0.
 Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
 FCMP++ sender-side output verification — inherited `wallet2::sanity_check` [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc)
 Hardening-pass commit 8 follow-up: WalletPrefs round-trip property test (`2k.a2` deferred test).
@@ -292,8 +290,6 @@ Age-stratify the foundation floor AND the terminal subsidy toward the irreplacea
 L12 floor-decay schedule should be coupled to the growth↔entry crossover, not a free constant (gate 5 / economics; substrate note).
 Bootstrap APR overshoot is a purse-efficiency note, not a correctness one (gate 5 / economics; substrate note).
 Vanguard eligibility flag set is a provisional pin, unseated only by operation (VG-2 / transport; rule-21 reopen record).
-Validate `prev_id` before attestation verify on the alt-chain path (consensus ordering; independent hardening, NOT a defect).
-Alt-chain attestation verify resolves bond pubkeys from main-chain state
 Land round 19: the relay floor follows raw `C` (FL-R20…FL-R23)
 Disclose the fee-tier privacy trade in the wallet/CLI tier picker
 Block-weight penalty and fee floor price the same expansion off different medians during a surge.

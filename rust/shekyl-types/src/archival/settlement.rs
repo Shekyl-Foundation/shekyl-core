@@ -39,6 +39,16 @@ pub const SETTLEMENT_ROW_LEN: usize = 3;
 /// Width of an [`IssuedDigest`].
 pub const ISSUED_DIGEST_LEN: usize = 32;
 
+/// Width of a [`DrawableDigest`].
+pub const DRAWABLE_DIGEST_LEN: usize = 32;
+
+/// Width of a [`DrawCommitment`].
+pub const DRAW_COMMITMENT_LEN: usize = 32;
+
+/// Width of a stored [`BlockDraws`]: the count and the carry at four bytes
+/// each, the shortfall at eight, and the revealed flag.
+pub const BLOCK_DRAWS_LEN: usize = size_of::<u32>() + size_of::<u32>() + size_of::<u64>() + 1;
+
 /// What one epoch settled for one pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettlementOutcome {
@@ -281,6 +291,94 @@ impl IssuedDigest {
             carry = sum >> 8;
         }
         // The carry out of the top byte is the reduction modulo 2^256.
+    }
+}
+
+/// The commitment a block's coinbase carries to its producer's witness key
+/// and draw seed (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2): 32 bytes, the
+/// coinbase extra's `0x0C` field.
+///
+/// **Every 32-byte value is a commitment. None means "absent" or
+/// "unset".** A commitment nobody can open, such as the all-zero one the
+/// genesis block carries, is still a commitment: its block issues no draw
+/// because no carrier can reveal a seed for it, not because a reader
+/// skipped it. The type has no zero constant, no `Default` and no
+/// emptiness test so that no reader can branch on one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DrawCommitment([u8; DRAW_COMMITMENT_LEN]);
+
+impl DrawCommitment {
+    /// The commitment a coinbase carries.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; DRAW_COMMITMENT_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes a coinbase carries.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; DRAW_COMMITMENT_LEN] {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for DrawCommitment {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "DrawCommitment(")?;
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        write!(f, ")")
+    }
+}
+
+/// What the count rule recorded for one block
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10).
+///
+/// `count` and `carry` are the rule's output at this block, and the next
+/// block's rule reads `carry`. `shortfall` is the visible shortfall the
+/// rule saw. `revealed` is whether a carrier has revealed this block's
+/// seed: until one has, the block's draws are in flight and none of them
+/// is issued.
+///
+/// A row is written when its block connects and `revealed` is set by the
+/// block that first admits the seed. Both are consensus state, undone with
+/// the block that wrote them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BlockDraws {
+    /// How many draws this block's producer made. A draw is named by its
+    /// index below this count, and an index is 32 bits on the wire, so the
+    /// count is held at that width: a row cannot record a draw no record
+    /// could name.
+    pub count: u32,
+    /// The 32-bit fraction carried to the next block's count.
+    pub carry: u32,
+    /// The visible shortfall the count was computed from.
+    pub shortfall: u64,
+    /// Whether this block's seed has been revealed.
+    pub revealed: bool,
+}
+
+/// The digest of one epoch's drawable set, written when the epoch opens
+/// and compared with a re-walk when the epoch settles (`SO-D8d` layer 2,
+/// `SO-D10g`).
+///
+/// It is 32 opaque bytes to everything but the function that computes it.
+/// There is no zero value that means "none": an epoch whose set was never
+/// recorded has no digest, and a read says so with `None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DrawableDigest([u8; DRAWABLE_DIGEST_LEN]);
+
+impl DrawableDigest {
+    /// The digest a store holds.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; DRAWABLE_DIGEST_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes a store holds.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; DRAWABLE_DIGEST_LEN] {
+        &self.0
     }
 }
 

@@ -521,15 +521,34 @@ impl RegtestDaemon {
             .clone()
     }
 
-    /// Transactions currently in the daemon's pool — the drain loop's
-    /// condition and the pop legs' return-to-pool observable.
+    /// Every transaction this daemon holds in its pool, broadcast or not —
+    /// the drain loop's condition and the pop legs' return-to-pool
+    /// observable.
+    ///
+    /// `get_info` reports the pool as two counts: the entries the node has
+    /// broadcast, told to every caller, and the entries it has not yet
+    /// broadcast, told only to the host's administrator (RK-Q10). Both
+    /// callers of this mean "everything", and a transaction a wallet has
+    /// just submitted sits in the second count until its stem ends, so
+    /// this is their sum. The harness talks to the unrestricted listener,
+    /// which stands in for the host until the RPC channel exists; a reply
+    /// without the host part would mean it was answered as someone else,
+    /// and is a failure, never a zero.
     pub(super) async fn tx_pool_size(&self) -> u64 {
-        self.rpc
+        let info = self
+            .rpc
             .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
-            .expect("get_info")
-            .pool
+            .expect("get_info");
+        let unbroadcast = info
+            .host
+            .shown()
+            .expect("the harness's listener is the host's, and is told the host-only part")
+            .tx_pool_unbroadcast_count;
+        info.pool
             .tx_pool_size
+            .checked_add(unbroadcast)
+            .expect("two pool counts fit a u64")
     }
 
     /// The C++'s `(effective median, block-weight limit)` in force for the
@@ -2006,6 +2025,16 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     };
     let params = EconomicParams::default();
     let rule_set = RuleSet::GENESIS;
+    // The daemon drew this template's commitment; the Rust producer is
+    // handed the same one, as it is handed the same header operands.
+    let draw_commitment = shekyl_wire::tx_extra::parse(&cxx_block.miner_transaction.prefix.extra)
+        .expect("the daemon's coinbase extra parses")
+        .into_iter()
+        .find_map(|field| match field {
+            shekyl_wire::tx_extra::TxExtraField::DrawCommitment(c) => Some(c),
+            _ => None,
+        })
+        .expect("the daemon's coinbase carries a 0x0C draw commitment");
     let build_with = |listed: &[Transaction]| {
         build(&TemplateContext {
             height: BlockHeight::from_raw(height),
@@ -2031,6 +2060,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             miner: &miner,
             tx_key_secret: Zeroizing::new([0x42; 32]),
             extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
+            draw_commitment,
             listed,
         })
     };
@@ -5328,7 +5358,7 @@ fn jsonrpc_body(method: &str, params: &serde_json::Value) -> serde_json::Value {
 /// (`get_output_histogram` was the last). The remaining witness is a
 /// universal cap on the admin listener. This is not an origin check: if a
 /// WE handler grows a restricted `res.status` refusal, that leg belongs on
-/// `restricted_listener_gets_stand_ins_and_caps_from_native_handlers`.
+/// `restricted_listener_is_withheld_status_and_capped_by_native_handlers`.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn jsonrpc_we_carries_handler_status_through_the_result_envelope() {

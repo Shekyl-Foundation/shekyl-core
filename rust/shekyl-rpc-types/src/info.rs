@@ -38,16 +38,19 @@
 //! names every key, refuses any other, and is converted to and from the
 //! parts. The whole-part rule of [`Hidden`] lives in that conversion.
 //!
-//! # At parity nothing is absent yet
+//! # A part the caller is not shown is absent
 //!
-//! A restricted reply today carries every key, with stand-ins for what it
-//! does not disclose: zeroed counts, `free_space` as `u64::MAX`, an empty
-//! `version`, and `database_size` rounded up to 5 GiB. That last one is
-//! derived from a real read, so no constant written for an absent part could
-//! reproduce it. Until the commit that makes a restricted reply omit them
-//! (RK-Q8), the handler builds a restricted caller's Status and Peers as
-//! present parts holding those stand-ins, and [`Hidden::Withheld`] is reached
-//! only by decoding.
+//! A reply to a caller who is not shown Status or Peers does not carry
+//! those parts: none of their keys is on the wire, and the reply decodes
+//! with the part [`Hidden::Withheld`] (RK-Q8, `CORE_RPC_VERSION` 3.48).
+//!
+//! Until then such a reply carried every key, with stand-ins for what it
+//! did not disclose: zeroed counts, `free_space` as `u64::MAX`, an empty
+//! `version`, and `database_size` rounded up to 5 GiB. Each was a value
+//! that meant "not this value", and a reader could not tell it from an
+//! answer: a wallet read the zeroed connection counts as a node with no
+//! peers. A reader of a hidden part now asks [`Hidden::shown`] and is told
+//! when there is nothing to read.
 
 use serde::{Deserialize, Serialize};
 
@@ -158,10 +161,26 @@ pub struct InfoEconomics {
 /// The pool, as far as this reply goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoPool {
-    /// Entries in the pool. Today the count depends on who asks: the
-    /// broadcast set for a restricted caller, every entry for any other.
-    /// RK-Q10 splits it.
+    /// Pool entries this node has **broadcast**. One quantity, for every
+    /// caller.
+    ///
+    /// An entry this node holds and has not yet broadcast is not counted
+    /// here, whoever asks: it is in [`InfoHost`]. That includes a
+    /// transaction on its stem, which has been relayed to one peer and not
+    /// broadcast. Until 3.50 this member was the broadcast set for a
+    /// restricted caller and every entry for any other (RK-Q10).
     pub tx_pool_size: u64,
+}
+
+/// What only the host's own administrator is told (`RPC_CHANNEL.md` §6.1,
+/// RT-O9.3). It belongs to no grant, `admin` included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InfoHost {
+    /// Pool entries this node holds and has **not yet broadcast**: its own
+    /// transactions and the ones it is carrying on a stem. Whether such an
+    /// entry exists says where a transaction originated, which is what the
+    /// relay's stem phase hides, so it is told to nobody else.
+    pub tx_pool_unbroadcast_count: u64,
 }
 
 /// What describes this node and not the network: its build, its uptime, its
@@ -203,6 +222,9 @@ pub struct GetInfoResponse {
     /// [`RpcStatus`], as on every method.
     pub node: Hidden<InfoStatus>,
     pub peers: Hidden<InfoPeers>,
+    /// The host-only part: withheld from every caller but the host's
+    /// administrator.
+    pub host: Hidden<InfoHost>,
     /// Whether the caller was answered as a restricted one. Transitional:
     /// the RPC channel's handshake returns the grant instead (RT-W10).
     pub restricted: bool,
@@ -218,6 +240,12 @@ pub enum GetInfoShapeError {
     },
     /// Two wire names for one value disagree.
     Disagreement { value: &'static str, detail: String },
+    /// The Status part is shown and its `version` is empty. An empty
+    /// string was what a restricted reply wrote for "not disclosed" until
+    /// 3.48; a reply that does not disclose the version now withholds the
+    /// part. A shown part names the build, so an empty one is not an
+    /// answer and is not read as "undisclosed" (RK-D23).
+    EmptyVersion,
 }
 
 impl core::fmt::Display for GetInfoShapeError {
@@ -231,6 +259,10 @@ impl core::fmt::Display for GetInfoShapeError {
             Self::Disagreement { value, detail } => {
                 write!(f, "the reply's names for {value} disagree: {detail}")
             }
+            Self::EmptyVersion => f.write_str(
+                "the status part carries an empty `version`: a shown part names the build, \
+                 and a reply that does not disclose it withholds the part",
+            ),
         }
     }
 }
@@ -324,6 +356,10 @@ struct GetInfoWire {
     white_peerlist_size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grey_peerlist_size: Option<u64>,
+
+    // Host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tx_pool_unbroadcast_count: Option<u64>,
 
     restricted: bool,
 }
@@ -449,6 +485,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             tor_outgoing_socket_count,
             white_peerlist_size,
             grey_peerlist_size,
+            tx_pool_unbroadcast_count,
             restricted,
         } = wire;
 
@@ -490,6 +527,9 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 rpc_connections_count,
             }
         );
+        if node.shown().is_some_and(|status| status.version.is_empty()) {
+            return Err(GetInfoShapeError::EmptyVersion);
+        }
         let peers = hidden_part!(
             "peers",
             [
@@ -507,6 +547,13 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 tor_outgoing_socket_count,
                 white_peerlist_size,
                 grey_peerlist_size,
+            }
+        );
+        let host = hidden_part!(
+            "host",
+            [tx_pool_unbroadcast_count],
+            InfoHost {
+                tx_pool_unbroadcast_count,
             }
         );
 
@@ -563,6 +610,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             pool: InfoPool { tx_pool_size },
             node,
             peers,
+            host,
             restricted,
         })
     }
@@ -579,6 +627,7 @@ impl From<GetInfoResponse> for GetInfoWire {
             pool,
             node,
             peers,
+            host,
             restricted,
         } = reply;
         let (difficulty, wide_difficulty, difficulty_top64) = split_128(chain.difficulty);
@@ -634,6 +683,7 @@ impl From<GetInfoResponse> for GetInfoWire {
             tor_outgoing_socket_count: peers.as_ref().map(|p| p.tor_outgoing_socket_count),
             white_peerlist_size: peers.as_ref().map(|p| p.white_peerlist_size),
             grey_peerlist_size: peers.as_ref().map(|p| p.grey_peerlist_size),
+            tx_pool_unbroadcast_count: host.shown().map(|h| h.tx_pool_unbroadcast_count),
             restricted,
         }
     }

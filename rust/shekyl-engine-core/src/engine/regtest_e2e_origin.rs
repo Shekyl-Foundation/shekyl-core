@@ -205,9 +205,11 @@ impl StemSinkPair {
 /// Two legs, both native:
 ///
 /// - `/get_info`: the listener's posture becomes the handler's
-///   `Disclosure`. A restricted caller gets the stand-ins for Status
-///   (`start_time` 0, `free_space` `u64::MAX`, an empty `version`) and is
-///   told it is restricted; the unrestricted listener gets the real values.
+///   `Disclosure`. A restricted caller's reply carries no Status and no
+///   Peers part, and says it is restricted; the unrestricted listener's
+///   carries both, with real values. Until `CORE_RPC_VERSION` 3.48 the
+///   restricted reply carried the parts with stand-ins, and this test was
+///   named for them.
 /// - `get_block_header_by_hash` over `RESTRICTED_BLOCK_COUNT` is refused on
 ///   the restricted listener.
 ///
@@ -223,7 +225,7 @@ impl StemSinkPair {
 /// listener.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn restricted_listener_gets_stand_ins_and_caps_from_native_handlers() {
+async fn restricted_listener_is_withheld_status_and_capped_by_native_handlers() {
     /// `RESTRICTED_BLOCK_COUNT`, the cap on `get_block_header_by_hash`.
     const BLOCK_CAP: usize = 1000;
 
@@ -252,28 +254,29 @@ async fn restricted_listener_gets_stand_ins_and_caps_from_native_handlers() {
         .node
         .shown()
         .expect("the admin listener is shown Status");
-    // At parity a restricted reply still carries Status, holding stand-ins.
-    let restricted_status = restricted_info
-        .node
-        .shown()
-        .expect("a restricted reply carries the Status stand-ins until RK-Q8");
     assert!(
         restricted_info.restricted && !admin_info.restricted,
         "each listener must say which it is"
     );
+    // A restricted caller is not shown Status or Peers, so the reply does
+    // not carry them (RK-Q8). If either part is here, the handler answered
+    // a restricted caller as it answers the host's administrator, or went
+    // back to writing values that mean "not this value".
     assert_eq!(
-        restricted_status.start_time, 0,
-        "a restricted listener must not disclose the node's start time; if this \
-         is the real start time the handler answered a restricted caller in full"
+        restricted_info.node,
+        shekyl_rpc_types::Hidden::Withheld,
+        "a restricted listener must not disclose Status: the start time, free \
+         space, the store's size, the build's version, the connection counts"
     );
     assert_eq!(
-        restricted_status.free_space,
-        u64::MAX,
-        "a restricted listener must not disclose free space"
+        restricted_info.peers,
+        shekyl_rpc_types::Hidden::Withheld,
+        "a restricted listener must not disclose Peers: the socket counts and \
+         the peerlist sizes"
     );
-    assert_eq!(
-        restricted_status.version, "",
-        "a restricted listener must not disclose the build's version"
+    assert!(
+        admin_info.peers.shown().is_some(),
+        "the admin listener is shown Peers"
     );
     assert!(
         admin_status.start_time > 0 && !admin_status.version.is_empty(),
@@ -377,11 +380,12 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
         .expect("unrestricted rpc client");
 
     // RK-D14, on a live node. The origin holds a handshaken session to the
-    // sink. Its restricted listener still writes zero for both connection
-    // counts, and beside them says the node has peers, because Health is
-    // told to every caller. Before `has_peers` a wallet on this listener
-    // could only read the zeros, and raised a false "daemon has no peers"
-    // alarm in place of its resubmit probe (the pre-flight's §3.1).
+    // sink. Its restricted listener withholds Status, so it reports no
+    // connection counts, and it still says the node has peers, because
+    // Health is told to every caller. Before `has_peers` a wallet on this
+    // listener could only read two counts written as zero, and raised a
+    // false "daemon has no peers" alarm in place of its resubmit probe (the
+    // pre-flight's §3.1).
     let restricted_info: GetInfoResponse = restricted
         .rpc_call("get_info", None::<serde_json::Value>)
         .await
@@ -394,18 +398,11 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
         restricted_info.health.has_peers && admin_info.health.has_peers,
         "a node with a handshaken session has peers, on both listeners"
     );
-    let restricted_status = restricted_info
-        .node
-        .shown()
-        .expect("a restricted reply carries the Status stand-ins until RK-Q8");
     assert_eq!(
-        (
-            restricted_status.outgoing_connections_count,
-            restricted_status.incoming_connections_count
-        ),
-        (0, 0),
-        "the restricted listener's counts are the stand-ins, so `has_peers` \
-         above did not come from them"
+        restricted_info.node,
+        shekyl_rpc_types::Hidden::Withheld,
+        "the restricted listener's reply carries no connection counts at all, \
+         so `has_peers` above did not come from them"
     );
     assert!(
         admin_info

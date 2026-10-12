@@ -120,7 +120,8 @@ through `shekyl-socks`. `shekyl-p-transport` still enables ureq's
 not fire: the timing-engine round opened 2026-09-25.
 
 **What is built, and what the first commit is.** The crypto core is
-`shekyl-p2p-transport`: `noise`, `channel`, `prefix`, `aead`. HMAC is
+`shekyl-p2p-transport` (`noise`, `prefix`, `channel`) and the shared Noise
+state in `shekyl-noise` (`aead`, `direction`, `symmetric`). HMAC is
 `hmac_blake2s`. `read_message1` range-checks the encapsulation key and
 `ResponderReady` stores the parsed key. `OnionPow`'s default is
 `Enabled`. `InboundCeiling` is in `shekyl-peer-policy`. The timing
@@ -1385,9 +1386,9 @@ declaration, not a new set of branches.
 
 - **Clearnet is plain clearnet, plus the Noise layer.** The declaration is what
   clearnet provides natively. The stack includes Noise because clearnet
-  declares no native encryption. `noise.rs`, `channel.rs`, `prefix.rs` and
-  `aead.rs` are that layer (`channel.rs` and `aead.rs` live in
-  `shekyl-noise` since the RPC channel began sharing them). The option-off path is the exception in ruling 4;
+  declares no native encryption. `noise.rs`, `channel.rs` and `prefix.rs`
+  are that layer in `shekyl-p2p-transport`. `aead.rs`, `direction.rs` and
+  `symmetric.rs` are the shared state in `shekyl-noise`. The option-off path is the exception in ruling 4;
   the flip is "enforce the contract". `--proxy` is a D3 dial duty and changes
   no declared capability.
 - **Tor is a complete overlay, not a VPN.** The Tor connector speaks onion to
@@ -1895,6 +1896,17 @@ the attacker's gain.
 
 **`N` and `T` are measured**, on the Rust transport after the cutover,
 against the honest reconnect rate per host; neither is set here.
+
+**The IPv6 key is a prefix, not an address (Rick, 2026-10-11).** A
+throttle keyed per host is free to bypass on IPv6: one customer
+allocation is a `/64` or larger, so it holds an effectively unlimited
+number of hosts, and the per-host inbound cap was deleted
+(`has_too_many_connections`, slice 2's fold). This is the one place in
+the P2P-3 lane where grouping by prefix matters — the Rust dialer has
+no subnet grouping (`P2P_3_SLICE_3_DIALER_BRIEF.md`, "The candidate
+filter", ruled the same day) — because it is where address abundance
+meets an inbound-driven budget. The prefix length is decided with `N`
+and `T`, after the cutover, not here.
 
 **Residual.** Tor has no host to throttle: an inbound rendezvous
 carries no address (D7, "this zone, no address"). The per-session cap

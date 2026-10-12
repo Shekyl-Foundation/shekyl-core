@@ -17,24 +17,20 @@ fips203 = "=0.4.3"
 rand_core = { version = "0.6", features = ["getrandom"] }
 # cSHAKE256: the one audited home (`shekyl-crypto-hash`), not a second copy.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
-# The symmetric primitives, the symmetric state and the record layer, shared
-# with the P2P handshake (RPC_CHANNEL.md section 4.4).
+# The symmetric state and the transport directions, shared with the P2P
+# handshake (RPC_CHANNEL.md section 4.4). The length-prefixed framer stays
+# in shekyl-p2p-transport.
 shekyl-noise = { path = "../shekyl-noise" }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 zeroize = { workspace = true }
-
-[features]
-# The handshake's entry points that take a random-number generator, so the
-# cross-check can drive it from the seeded streams the pinned vectors were
-# made with (RT-O18). Production draws from the operating system and takes no
-# generator. Dev-dependencies only: a TEST_ONLY row of
-# scripts/ci/check_test_only_features.py.
-test-support = []
 
 [dev-dependencies]
 # The known-answer vectors are JSON with hex fields.
 serde_json = "1"
 hex = "0.4"
+# The seeded generator the pinned handshake comparison compiles in
+# (RT-O18). The same source file is compiled by shekyl-rpc-channel-xcheck.
+sha3 = { version = "0.10", default-features = false }
 # Read only to hold two lengths this crate restates equal to their owners':
 # the network id (`shekyl-p2p-transport`) and the ML-KEM-768 encapsulation key
 # (`shekyl-crypto-pq`). Neither is a production edge.

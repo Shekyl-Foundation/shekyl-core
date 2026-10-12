@@ -14,11 +14,7 @@
 //! the Noise layer's public record path. The D11 fuzz targets call those
 //! same methods. This crate stays the Noise layer.
 
-// The AEAD primitives, the symmetric state and the record layer live in
-// `shekyl-noise`, which the RPC channel shares. They are named here so that
-// this crate's modules reach them as before.
-use shekyl_noise::{aead, channel};
-
+mod channel;
 mod noise;
 mod prefix;
 

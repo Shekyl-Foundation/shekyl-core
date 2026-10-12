@@ -4,17 +4,19 @@
 // BSD-3-Clause
 
 //! The handshake through its public API, as a daemon and a client would use
-//! it: that it completes and keys a working record channel, and that each
+//! it: that it completes and keys two transport directions, and that each
 //! message is refused as that message and as nothing finer
 //! (`RPC_CHANNEL.md` §4.3).
 //!
-//! Byte-equality with an independent implementation is elsewhere
-//! (`shekyl-rpc-channel-xcheck`). Everything here draws from the operating
-//! system, as production does.
+//! Byte-equality with an independent implementation is the pinned comparison
+//! beside the handshake. Everything here draws from the operating system, as
+//! production does.
 
+use shekyl_noise::Direction;
 use shekyl_rpc_channel::handshake::{
-    Client, Daemon, FirstRecord, HandshakeError, PendingSession, StaticKeypair, MESSAGE1_LEN,
-    MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, MLKEM768_CT_LEN, TAG_LEN,
+    Client, Daemon, FirstMessageRefused, HandshakeError, PendingSession, StaticKeypair,
+    MESSAGE1_LEN, MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, MLKEM768_CT_LEN, TAG_LEN,
+    TRANSPORT_AD,
 };
 use shekyl_rpc_channel::{NetworkId, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
 
@@ -56,11 +58,11 @@ fn a_handshake_completes_and_keys_a_record_channel() {
     let client = client.read_message2(&message2).unwrap();
     let (client, message3) = client.write_message3(REQUEST).unwrap();
     assert_eq!(message3.len(), MESSAGE3_OVERHEAD + REQUEST.len());
-    let (daemon, claimed) = daemon.read_message3(&message3).unwrap();
+    let daemon = daemon.read_message3(&message3).unwrap();
 
-    // What the daemon decides admission on: an identity, and only that.
+    // What the daemon decides admission on: a fingerprint, and only that.
     assert_eq!(
-        claimed.fingerprint().as_bytes(),
+        daemon.fingerprint().as_bytes(),
         client_id.public().fingerprint().as_bytes()
     );
 
@@ -71,14 +73,13 @@ fn a_handshake_completes_and_keys_a_record_channel() {
     let session_hash = client.handshake_hash();
     assert_eq!(session_hash, pending.handshake_hash());
 
-    // The client's first record is what authenticates it against both
-    // primitives, and what releases everything the daemon was not given
-    // before: its record halves, the client, and what the client asked for.
-    let (mut client_send, mut client_recv) = client.split();
-    let record = client_send.seal(b"first request").unwrap();
-    let mut session = pending.open_first_record(&record).unwrap();
-    assert_eq!(session.first_record, b"first request");
-    assert_eq!(session.consumed, record.len());
+    // The client's first transport message authenticates it against both
+    // primitives, and releases everything the daemon was not given before:
+    // its directions, the client, and what the client asked for.
+    let (mut client_send, mut client_recv) = client.into_directions();
+    let (message, _) = client_send.seal(b"first request", TRANSPORT_AD).unwrap();
+    let mut session = pending.open_first_message(&message).unwrap();
+    assert_eq!(session.first_message, b"first request");
     assert_eq!(session.request, REQUEST);
     assert_eq!(
         session.client.fingerprint().as_bytes(),
@@ -86,10 +87,12 @@ fn a_handshake_completes_and_keys_a_record_channel() {
     );
     assert_eq!(session.handshake_hash, session_hash);
 
-    let record = session.send.seal(b"first reply").unwrap();
-    assert_eq!(client_recv.open_one(&record).unwrap().0, b"first reply");
-    let record = client_send.seal(b"second request").unwrap();
-    assert_eq!(session.recv.open_one(&record).unwrap().0, b"second request");
+    let (reply, _) = session.send.seal(b"first reply", TRANSPORT_AD).unwrap();
+    let (opened, _) = client_recv.open(&reply, TRANSPORT_AD).unwrap();
+    assert_eq!(opened, b"first reply");
+    let (second, _) = client_send.seal(b"second request", TRANSPORT_AD).unwrap();
+    let (opened, _) = session.recv.open(&second, TRANSPORT_AD).unwrap();
+    assert_eq!(opened, b"second request");
 }
 
 #[test]
@@ -103,7 +106,7 @@ fn two_handshakes_between_the_same_parties_share_nothing() {
         let (daemon, m2) = daemon.write_message2().unwrap();
         let client = client.read_message2(&m2).unwrap();
         let (client, m3) = client.write_message3(REQUEST).unwrap();
-        let (daemon, _) = daemon.read_message3(&m3).unwrap();
+        let daemon = daemon.read_message3(&m3).unwrap();
         let (_, m4) = daemon.write_message4(GRANT).unwrap();
         let (client, _) = client.read_message4(&m4).unwrap();
         (client.handshake_hash(), m1, m3)
@@ -243,7 +246,7 @@ fn a_changed_or_short_message_4_is_refused_as_message_4() {
         let (daemon, m2) = daemon.write_message2().unwrap();
         let client = client.read_message2(&m2).unwrap();
         let (client, m3) = client.write_message3(REQUEST).unwrap();
-        let (daemon, _) = daemon.read_message3(&m3).unwrap();
+        let daemon = daemon.read_message3(&m3).unwrap();
         let (_, mut m4) = daemon.write_message4(GRANT).unwrap();
         match case {
             Some(position) => m4[position] ^= 0x01,
@@ -286,122 +289,126 @@ fn an_impostor_cannot_answer_message_1() {
 }
 
 /// A daemon and a client through message 4: the daemon's pending session,
-/// and the client's two record halves.
+/// and the client's two transport directions.
 fn through_message_4(
     client_id: &StaticKeypair,
     daemon_id: &StaticKeypair,
-) -> (
-    PendingSession,
-    shekyl_noise::SendHalf,
-    shekyl_noise::RecvHalf,
-) {
+) -> (PendingSession, Direction, Direction) {
     let (client, m1) = Client::start(&NETWORK, client_id, daemon_id.public()).unwrap();
     let daemon = Daemon::new(&NETWORK, daemon_id).read_message1(&m1).unwrap();
     let (daemon, m2) = daemon.write_message2().unwrap();
     let client = client.read_message2(&m2).unwrap();
     let (client, m3) = client.write_message3(REQUEST).unwrap();
-    let (daemon, _claimed) = daemon.read_message3(&m3).unwrap();
+    let daemon = daemon.read_message3(&m3).unwrap();
     let (pending, m4) = daemon.write_message4(GRANT).unwrap();
     let (client, _grant) = client.read_message4(&m4).unwrap();
-    let (send, recv) = client.split();
+    let (send, recv) = client.into_directions();
     (pending, send, recv)
 }
 
-/// §4.1, §6.2: until the client's first record opens, the daemon holds a
-/// pending session and nothing it could serve with. That the halves, the
-/// client and the request are *unreachable* before then is a property of
-/// the type, shown by the examples on `PendingSession` that must not
-/// compile. This shows the other half: what does and does not release them.
+/// §4.1, §6.2: until the client's first transport message opens, the daemon
+/// holds a pending session and nothing it could serve with. That the
+/// directions, the client and the request are unreachable before then is a
+/// property of the type, shown by the examples on `PendingSession` that
+/// must not compile. This shows the other half: what does and does not
+/// release them.
 #[test]
-fn only_a_first_record_from_the_client_releases_the_session() {
+fn only_the_clients_first_message_releases_the_session() {
     let (client_id, daemon_id) = identities();
 
-    // Bytes that are not a record at all.
+    // Bytes that are not a transport message at all.
     let (pending, _, _) = through_message_4(&client_id, &daemon_id);
     assert!(matches!(
-        pending.open_first_record(&[0xa5; 64]),
-        Err(FirstRecord::Refused)
+        pending.open_first_message(&[0xa5; 64]),
+        Err(FirstMessageRefused)
     ));
 
-    // A real record, changed in transit.
+    // A real message, changed in transit.
     let (pending, mut send, _) = through_message_4(&client_id, &daemon_id);
-    let mut record = send.seal(b"first request").unwrap();
-    let last = record.len() - 1;
-    record[last] ^= 0x01;
+    let (mut message, _) = send.seal(b"first request", TRANSPORT_AD).unwrap();
+    let last = message.len() - 1;
+    message[last] ^= 0x01;
     assert!(matches!(
-        pending.open_first_record(&record),
-        Err(FirstRecord::Refused)
+        pending.open_first_message(&message),
+        Err(FirstMessageRefused)
     ));
 
-    // A real record from another session of the same client: whoever
+    // A real message from another session of the same client: whoever
     // completed *this* handshake has to be the one who sends it.
     let (pending, _, _) = through_message_4(&client_id, &daemon_id);
     let (_, mut other_send, _) = through_message_4(&client_id, &daemon_id);
-    let record = other_send.seal(b"first request").unwrap();
+    let (message, _) = other_send.seal(b"first request", TRANSPORT_AD).unwrap();
     assert!(matches!(
-        pending.open_first_record(&record),
-        Err(FirstRecord::Refused)
+        pending.open_first_message(&message),
+        Err(FirstMessageRefused)
     ));
 
     // The daemon's own sending direction is not the client's.
     let (pending, mut send, _) = through_message_4(&client_id, &daemon_id);
-    let record = send.seal(b"first request").unwrap();
-    let session = pending.open_first_record(&record).unwrap();
+    let (message, _) = send.seal(b"first request", TRANSPORT_AD).unwrap();
+    let mut session = pending.open_first_message(&message).unwrap();
     let (other_pending, _, _) = through_message_4(&client_id, &daemon_id);
-    let mut daemon_send = session.send;
-    let echoed = daemon_send.seal(b"first request").unwrap();
+    let (echoed, _) = session.send.seal(b"first request", TRANSPORT_AD).unwrap();
     assert!(matches!(
-        other_pending.open_first_record(&echoed),
-        Err(FirstRecord::Refused)
+        other_pending.open_first_message(&echoed),
+        Err(FirstMessageRefused)
     ));
 }
 
-/// A record that has not all arrived decides nothing: the session comes
-/// back, and the rest of the record then opens it.
+/// A ciphertext that is not a whole transport message does not open, and
+/// the session is consumed: there is no second try with the rest of the
+/// bytes. Framing belongs to a later slice.
 #[test]
-fn part_of_a_first_record_neither_admits_nor_refuses() {
+fn a_short_first_message_is_refused_and_the_session_is_consumed() {
     let (client_id, daemon_id) = identities();
     let (pending, mut send, _) = through_message_4(&client_id, &daemon_id);
-    let record = send.seal(b"first request, arriving in pieces").unwrap();
-
-    let pending = match pending.open_first_record(&[]) {
-        Err(FirstRecord::Incomplete(pending)) => pending,
-        other => panic!("no bytes: {:?}", other.err()),
+    let (message, _) = send
+        .seal(b"first request, arriving in pieces", TRANSPORT_AD)
+        .unwrap();
+    let Err(error) = pending.open_first_message(&message[..message.len() - 1]) else {
+        panic!("a short message opened");
     };
-    let pending = match pending.open_first_record(&record[..10]) {
-        Err(FirstRecord::Incomplete(pending)) => pending,
-        other => panic!("ten bytes: {:?}", other.err()),
-    };
-    let pending = match pending.open_first_record(&record[..record.len() - 1]) {
-        Err(FirstRecord::Incomplete(pending)) => pending,
-        other => panic!("all but one byte: {:?}", other.err()),
-    };
-    let session = pending.open_first_record(&record).unwrap();
-    assert_eq!(session.first_record, b"first request, arriving in pieces");
-    assert_eq!(session.request, REQUEST);
+    assert_eq!(
+        error.to_string(),
+        "the first transport message was not accepted"
+    );
+    assert_eq!(format!("{error:?}"), "FirstMessageRefused");
 }
 
-/// This crate writes no log line: the claim the module documentation makes
-/// about message 1, held at the only place it can be broken, the manifest.
-/// A logging dependency here would be the first step to a line that tells
-/// one refusal from another.
+/// This crate writes no log line. The claim is held where it can be broken:
+/// the production sources, and every key in the manifest.
 #[test]
-fn the_crate_has_no_logging_dependency() {
+fn the_crate_writes_no_log_line() {
+    let sources = [
+        include_str!("../src/lib.rs"),
+        include_str!("../src/handshake.rs"),
+        include_str!("../src/identity.rs"),
+    ];
+    for source in sources {
+        for (number, line) in source.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            for needle in [
+                "println!",
+                "eprintln!",
+                "dbg!",
+                "log::",
+                "tracing::",
+                "slog::",
+            ] {
+                assert!(!code.contains(needle), "line {}: {needle}", number + 1);
+            }
+        }
+    }
     let manifest = include_str!("../Cargo.toml");
-    let mut in_dependencies = false;
     for line in manifest.lines() {
         let line = line.trim();
-        if line.starts_with('[') {
-            in_dependencies = line == "[dependencies]";
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if !in_dependencies || line.starts_with('#') || line.is_empty() {
-            continue;
-        }
-        let name = line.split(['=', ' ']).next().unwrap_or_default();
+        let key = line.split(['=', ' ']).next().unwrap_or_default();
         assert!(
-            !matches!(name, "log" | "tracing" | "slog" | "shekyl-logging"),
-            "{name} is a logging crate"
+            !matches!(key, "log" | "tracing" | "slog" | "shekyl-logging"),
+            "{key} is a logging crate"
         );
     }
 }

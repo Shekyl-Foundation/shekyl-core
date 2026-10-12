@@ -1283,16 +1283,20 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
  * inside an `extra` again.
  *
  * Codes: shape verdicts keep their SHEKYL_TX_EXTRA_PQC_SHAPE_* /
- * SHEKYL_TX_EXTRA_SHAPE_* values (0 OK, 1..=17) and are returned unchanged
+ * SHEKYL_TX_EXTRA_SHAPE_* values (0 OK, 1..=20) and are returned unchanged
  * by the leaf read and the coinbase writer when the rule refuses; this
  * family's own outcomes start at 100 so the two cannot collide. A null
  * pointer is SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR everywhere.
  *
  * The shape rule (shekyl_wire::tx_extra::check_tx_extra_shape) is CEN-I19 on
  * every transaction plus, on a coinbase, the closed coinbase grammar
- * (TXE-Q6', consensus): the extra is exactly [0x01 pubkey, 0x02 nonce of
- * SHEKYL_COINBASE_NONCE_BYTES, 0x06 KEM(1120*n), 0x07 leaf(64*n)] in that
- * order and nothing else; off the coinbase, no 0x02 at all. */
+ * (TXE-Q6', consensus; amended 2026-10-10, SO-D12i): the extra is exactly
+ * [0x01 pubkey, 0x02 nonce of SHEKYL_COINBASE_NONCE_BYTES, 0x0C draw
+ * commitment of 32 bytes, 0x06 KEM(1120*n), 0x07 leaf(64*n)] in that order
+ * and nothing else; off the coinbase, no 0x02 and no 0x0C at all. The draw
+ * commitment never crosses this boundary as a value: Rust draws it inside
+ * shekyl_coinbase_extra and judges it inside shekyl_tx_extra_shape_of, so
+ * C++ has no name for its tag, its width or its refusal codes (18..=20). */
 /// Per-output widths of the two PQC fields (shekyl_wire::tx_extra::
 /// HYBRID_KEM_CT_BYTES = X25519 ct(32) + ML-KEM-768 ct(1088), and
 /// PQC_LEAF_ENTRY_LEN = CM(32) ‖ record(32)); a 0x06 field is 1120·n bytes
@@ -1308,7 +1312,9 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
 /// the template adds it to the pubkey's offset in the block blob rather than
 /// re-encoding the 0x02 tag and the length byte.
 size_t shekyl_coinbase_nonce_offset_from_pubkey(void);
-/// Coinbase grammar refusals (12..=17), beside the CEN-I19 codes (1..=11).
+/// Coinbase grammar refusals C++ names (12..=17), beside the CEN-I19 codes
+/// (1..=11). The draw-commitment refusals (18..=20) have no define: no C++
+/// branches on one, and the rule's own sentence is what gets logged.
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING   12
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH    13
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE 14
@@ -1430,14 +1436,39 @@ bool shekyl_tx_prunable_hash(
     uint8_t* out_hash);
 
 /// Build the coinbase extra in the grammar's one layout: [PubKey(tx_pubkey
-/// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), PqcKemCiphertext(kem),
-/// PqcLeafEntries(leaf)] — [PubKey, Nonce] when n_outputs == 0 — judged by
-/// the coinbase grammar before it is handed back in `out`. kem is
+/// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), DrawCommitment,
+/// PqcKemCiphertext(kem), PqcLeafEntries(leaf)] — [PubKey, Nonce,
+/// DrawCommitment] when n_outputs == 0 — judged by the coinbase grammar
+/// before it is handed back in `out`. The draw commitment is not an input:
+/// each call draws a fresh witness key and seed in Rust, commits to them
+/// and writes the commitment, so two calls with the same arguments return
+/// different bytes and the caller holds no secret (rule 36). If the OS
+/// random source or key generation fails the call returns 104 with a
+/// message and builds nothing; there is no fallback value. kem is
 /// 1120·n_outputs bytes and leaf 64·n_outputs, as shekyl_construct_output
 /// produced them; anything else is refused with the shape code naming the
 /// field, so a template that could not pass admission is refused at
 /// construction, not at the miner.
 int32_t shekyl_coinbase_extra(
+    const uint8_t* tx_pubkey,
+    const uint8_t* nonce,
+    const uint8_t* kem,
+    size_t kem_len,
+    const uint8_t* leaf,
+    size_t leaf_len,
+    size_t n_outputs,
+    ShekylBuffer* out,
+    char* out_msg,
+    size_t out_msg_cap);
+
+/// shekyl_coinbase_extra without the key generation, for C++ TESTS that lay
+/// a coinbase by hand: the production writer generates a key on every call,
+/// which a test building tens of thousands of blocks cannot pay. It writes
+/// the fixture commitment Rust's own fixtures carry and draws nothing. Same
+/// signature, grammar, layout and refusals. Test-support surface, not
+/// consensus, as shekyl_test_conforming_pqc_leaf_entry is; no production
+/// code calls it.
+int32_t shekyl_test_coinbase_extra(
     const uint8_t* tx_pubkey,
     const uint8_t* nonce,
     const uint8_t* kem,
@@ -3404,7 +3435,7 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //!
 //! A bitmask rather than a bare `bool`, so a second flag cannot be transposed
 //! onto this one by argument order. Function signatures on this surface are
-//! gated by `scripts/ci/check_relay_ffi_signatures.sh`. Flag values are not:
+//! gated by `scripts/ci/check_ffi_signatures.sh`. Flag values are not:
 //! `zone_flag_bits_do_not_transpose` pins the number. Bit 0 is not a flag.
 //! Keep the noise value in sync with `SHEKYL_RELAY_ZONE_NOISE_ENABLED` in
 //! `relay_zone_ffi`.
@@ -4344,12 +4375,19 @@ std::uint64_t shekyl_seam_board_count(std::uint32_t connector, std::uint32_t dir
 /// Rows in `direction` on every connector, handshake or not. A missing hub,
 /// or a direction index that is not one, is 0.
 std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
-/// Rows that have finished the Levin handshake, on every connector and in
-/// both directions, written through `out`. Returns 0 when it wrote a count,
-/// -1 when `out` is null, and -2 when no hub is bound: there is then no
-/// count, which is not a count of zero. Read by the daemon RPC (Rust) for
-/// `get_info`'s `has_peers`; no C++ calls it.
-std::int32_t shekyl_seam_established_count(std::uint64_t* out);
+/// The board's sessions per direction, over one snapshot: rows on every
+/// connector that have finished the Levin handshake. A row before its
+/// handshake is a socket, not a session, and is not counted here.
+struct shekyl_seam_session_counts_t {
+  std::uint64_t outbound;
+  std::uint64_t inbound;
+};
+static_assert(sizeof(shekyl_seam_session_counts_t) == 16, "seam session counts");
+/// Writes the counts through `out`. Returns 0 when it wrote them, -1 when
+/// `out` is null, and -2 when no hub is bound: there are then no counts,
+/// which is not counts of zero. Read by the daemon RPC (Rust) for
+/// `get_info`; no C++ calls it.
+std::int32_t shekyl_seam_session_counts(shekyl_seam_session_counts_t* out);
 
 /// 1 when the board row for `id` has finished the Levin handshake, 0 when
 /// the row is present and the handshake has not, -1 when there is no row.

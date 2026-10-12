@@ -24,6 +24,7 @@ use shekyl_relay_privacy::{rng::RelayRng, ConnectionId};
 use shekyl_timing_engine::Tick;
 
 use crate::index::Index;
+use crate::outcome::WhiteClock;
 use crate::sample::sample_prefix;
 use crate::{
     DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS,
@@ -43,7 +44,7 @@ struct Sample {
 /// `Outstanding` is a gray address the dialer has drawn and not yet
 /// reported. Readers outside this module still call it gray. The clock on
 /// `White` is `last_observed` (brief §4): not a sort key, not a rank.
-/// White is reached only from [`Partition::promote`], which only
+/// White is reached only from [`Partition::confirm`], which only
 /// [`crate::Peerlist::apply`] calls (brief §11.1). No `Deserialize`: the
 /// file cannot carry a white entry (§7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,10 +98,6 @@ impl Partition {
 
     pub(crate) fn is_white(&self, address: &NetworkAddress) -> bool {
         matches!(self.seat_of(address), Some(Seat::White(_)))
-    }
-
-    pub(crate) fn is_outstanding(&self, address: &NetworkAddress) -> bool {
-        matches!(self.seat_of(address), Some(Seat::Outstanding))
     }
 
     /// Whether the address already has a seat. A seated address is not a
@@ -166,31 +163,43 @@ impl Partition {
         Some(self.pick_accepted(rng, |_, seat| matches!(seat, Seat::White(_))))
     }
 
-    /// The one white write. From any seat, or from none (a fleet harvest
-    /// of an address that was not listed). Stamps `now`. Over [`WHITE_CAP`],
-    /// a uniformly random *other* white seat is demoted to gray.
-    pub(crate) fn promote<R: RelayRng + ?Sized>(
+    /// A dial this node opened was confirmed.
+    ///
+    /// One read of the seat, then [`WhiteClock`] where the seat is already
+    /// white (brief §5):
+    ///
+    /// - outstanding: the one white write. The seat becomes white, the
+    ///   clock is `now`, and over [`WHITE_CAP`] a uniformly random *other*
+    ///   white seat is demoted to gray. `clock` is not consulted.
+    /// - already white, [`WhiteClock::Move`]: `last_observed` becomes
+    ///   `now`. The seat does not change.
+    /// - already white, [`WhiteClock::Hold`]: nothing. A confirm-and-close
+    ///   does not extend a white lifetime.
+    /// - undrawn gray, or not listed: nothing. A dial of an address that
+    ///   was not the draw does not write white (brief §2).
+    pub(crate) fn confirm<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
         now: Tick,
         rng: &mut R,
+        clock: WhiteClock,
     ) {
-        if self.seats.contains(address) {
-            self.move_seat(address, Seat::White(now));
-        } else {
-            self.seat_new(address.clone(), Seat::White(now));
+        match (self.seat_of(address), clock) {
+            (Some(Seat::Outstanding), _) => {
+                self.move_seat(address, Seat::White(now));
+                self.evict_white_over_cap(address, rng);
+            }
+            (Some(Seat::White(_)), WhiteClock::Move) => self.write_clock(address, now),
+            (Some(Seat::White(_)), WhiteClock::Hold) | (Some(Seat::Gray) | None, _) => {}
         }
-        self.evict_white_over_cap(address, rng);
     }
 
-    /// Move the clock of an address that is already white.
-    pub(crate) fn touch(&mut self, address: &NetworkAddress, now: Tick) -> bool {
+    /// Stamp `last_observed`. The address is white; this is not a seat
+    /// change, so the tallies stay.
+    fn write_clock(&mut self, address: &NetworkAddress, now: Tick) {
         match self.seats.get_mut(address) {
-            Some(Seat::White(observed)) => {
-                *observed = now;
-                true
-            }
-            _ => false,
+            Some(Seat::White(observed)) => *observed = now,
+            _ => debug_assert!(false, "write_clock follows a white seat"),
         }
     }
 

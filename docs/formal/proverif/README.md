@@ -32,7 +32,7 @@ pinned vectors (`noise.rs` tests, the Cacophony NN vector) and the
 differential tests. Downgrade is decided outside Noise, by the clearnet
 encryption flag (`--clearnet-transport-encrypt`); a session that never
 starts this handshake is not this model's subject. The rekey chain that
-`split` hands to both `Direction`s (`channel.rs` `halves`) is a FOLLOWUPS
+`into_directions` hands to both `Direction`s (`direction.rs`) is a FOLLOWUPS
 row, not a query in this model.
 
 ## The library — `lib/noise.pvl`
@@ -137,9 +137,9 @@ name a row which flips it, and refuses a `variants/` directory that is not
 exactly the files it would generate. Each variant runs under `prlimit`, so
 the address-space cap is on the child and the runner can run variants in
 parallel. CI (`.github/workflows/p2p-nnhfs-model.yml`) runs the same script
-on changes to this directory, to the handshake's Rust (`noise.rs` and
-`prefix.rs` in `shekyl-p2p-transport`; `channel.rs`, `aead.rs` and
-`symmetric.rs` in `shekyl-noise`), or to the workflow, and fails if any
+on changes to this directory, to the handshake's Rust (`noise.rs`,
+`prefix.rs` and `channel.rs` in `shekyl-p2p-transport`; `direction.rs`,
+`aead.rs` and `symmetric.rs` in `shekyl-noise`), or to the workflow, and fails if any
 verdict changes.
 
 `install_proverif.sh` is the one recipe: ProVerif 2.05 from source, a

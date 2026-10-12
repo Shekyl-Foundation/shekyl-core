@@ -783,7 +783,7 @@ mod tests {
     /// every Status count zero, `has_peers: true`. It is followed.
     ///
     /// Then the same node behind a daemon that withholds Status and Peers
-    /// altogether, which is what a restricted reply becomes at RK-Q8: still
+    /// altogether, which is what a restricted reply is since RK-Q8 (3.48): still
     /// followed. And the control: the same two replies from a node that
     /// really has no peers are `NoPeers`, restricted or not, so the check
     /// is no longer one a restricted daemon is excused from.

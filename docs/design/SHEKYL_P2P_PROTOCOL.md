@@ -138,12 +138,12 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 |---|---|---|---|
 | **T1** handshake `Noise_NNhfs…` | **IMPLEMENTED** (as of 2026-09-24) | `rust/shekyl-p2p-transport`: `Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`, messages 1216 and 1152. `--clearnet-transport-encrypt` is the clearnet connector's channel option (`channel_choice`), off by default. The pipe is gone. Levin stays the session. The flip deletes the option | **No** — Rick ruled; the default flip is a later commit |
 | **T2** PW-3 retired, no padding band | NOT IMPLEMENTED | no padding band present or pinned | No — transport cluster |
-| **T3** BOLT-8 rekeying | **IMPLEMENTED** (as of 2026-09-24) | `channel.rs` `REKEY_NONCES = 1000`; each record spends two nonces (encrypted length, then body), so 500 records | No — transport cluster |
+| **T3** BOLT-8 rekeying | **IMPLEMENTED** (as of 2026-09-24) | `shekyl-noise` `direction.rs` `REKEY_NONCES = 1000`; the interim framer spends two nonces per record (encrypted length, then body), so 500 records | No — transport cluster |
 | **T4** `e1` / `ekem1` normative | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` writes `e, e1` then `e, ee, ekem1`; empty payloads | No — transport cluster |
 | **T5** 8-byte prefix stays | **INTERIM** (as of 2026-09-25) | The encrypting path uses `prefix_for` (`prefix.rs`). The plaintext path still starts with `LEVIN_SIGNATURE`. That start is deleted at the flip; it is not a finished wire | n/a |
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
 | **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
-| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages, `ck` after `ee` and after the KEM mix, both transport keys' rekey (`ck'`, `k'`), and the initial chaining key. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis: `A7BED0CCF3F623E8`, `C3DC15690125728A`, `166195003AFF953A` | No — follows T1 |
+| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages and the record after one rekey in each direction. The transport keys and their rekey (`ck'`, `k'`) are pinned from that transcript's chaining key in `shekyl-noise` (`split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys`); the initial chaining key is the hash of the protocol name, pinned beside `SymmetricState`. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis: `A7BED0CCF3F623E8`, `C3DC15690125728A`, `166195003AFF953A` | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | **the surface is *every* dispatch, invoke and notify** — not the four p2p invokes; all four invoke routes and all nine `HANDLE_NOTIFY_T2` entries (`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`) are still unguarded, so transaction floods spend no tokens and PWD-B12's memory bound rests on a charge that is not happening. *Records-was: this cell read “the decision names four unguarded invoke handlers” until 2026-10-07 — the same scope error §PWD-B1 records making twice, restated in the status table where a grep reader meets it first.* **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
 | **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
@@ -155,7 +155,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
 | **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
-| **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
+| **B11** `sanitize_peerlist` port-0 | **NOT IMPLEMENTED** | **RULED 2026-10-11 (Rick).** A network-learned address with port 0 is refused at `admit_gray` on every address type, so `tor_address::unknown()` never enters from the network. The check lands with slice 1 increment 3 in PR-3; `sanitize_peerlist` stays until slice 4. *Records-was:* deferred, named blocker the tor port-0 semantics were disputed | No — not an alpha.8 wire item; the check is in flight for PR-3 |
 | **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/graph/mod.rs:864` | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
 | **I2** peerlist acceptance restricted | **IMPLEMENTED** | #637 | done |
@@ -186,9 +186,9 @@ decision** (see the updates above) — **39** as of those mints:
 |---|---|
 | IMPLEMENTED | 14 *(B5 this PR; B3/B3a/B4 #675; B6 #677; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
 | PARTIAL | 2 *(B9 the outbound cap; I7 the inbound one — both are a shipped mechanism whose NUMBER is unruled)* |
-| NOT IMPLEMENTED | 11 |
+| NOT IMPLEMENTED | 12 *(the sweep's 11, plus B11 on 2026-10-11. Not a fresh recount of the rows)* |
 | NO BUILD REQUIRED | 2 |
-| DEFERRED | 3 |
+| DEFERRED | 2 *(the sweep's 3, minus B11. I4 and E8 remain. Not a fresh recount of the rows)* |
 | BLOCKED on another row | 1 |
 | RULED ELSEWHERE | 2 |
 | SUPERSEDED | 1 |
@@ -196,11 +196,11 @@ decision** (see the updates above) — **39** as of those mints:
 | never ruled / not ruled | 1 (A1) |
 | OPEN — routed to its own round | 1 *(I8 — minted with no implementation by design; rule 20 makes the eviction subsystem a planning activity)* |
 
-**13 of 39 are ruled and unbuilt** (11 NOT IMPLEMENTED + 2 PARTIAL). **I8 is
+**14 of 39 are ruled and unbuilt** on the sweep's formula (12 NOT IMPLEMENTED + 2 PARTIAL), which now includes B11 and is not a fresh recount. **I8 is
 not among them** — it is not yet ruled, so it is neither built nor unbuilt in
-this figure's sense; it changes the denominator only. Six of those thirteen are
+this figure's sense; it changes the denominator only. Six of those fourteen are
 the transport cluster, which Rick has ruled out of alpha.8.
-*(The label fits twelve of them. **I7 is the inverse case** — mechanism built,
+*(The label fits thirteen of them. **I7 is the inverse case** — mechanism built,
 number unruled — and is counted here only because this figure's stated formula
 is "NOT IMPLEMENTED + PARTIAL". Read it as "not finished", not as "unbuilt".)*
 *(This read 18 at the #665 ruling. E7 and E9 landed 2026-09-09; B7 landed in
@@ -3036,11 +3036,11 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D5 (anchor keys; `first_seen` ordering) | **Ruled** | PWD-I3 |
 | PWC-D6 (address-keyed continuity) | **Ruled** | PWD-I3 |
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
-| PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here. **Owner: PWD-B11**, a row minted for it because "cluster B" is not an owner; target pre-genesis, queued in FOLLOWUPS | PWD-B11 |
+| PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Ruled 2026-10-11 (Rick).** A network-learned address with port 0 is refused at `admit_gray` on every address type. `tor_address::unknown()` never enters from the network. The check is in flight until slice 1 increment 3 (PR-3); `sanitize_peerlist` stays until slice 4. *Records-was:* deferred, named blocker the tor port-0 semantics were disputed (named by #587). **Owner: PWD-B11**, minted because "cluster B" is not an owner | PWD-B11, slice 1 brief §2 |
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
 | PWC-D11 (back-ping gate to white list) | **Ruled — and the mechanism is now deleted, which supersedes the split this row first recorded.** PWD-I2 ruled the gate's *destination* (gray, not white); PWD-I1's consumer inventory then showed the gate's only job was the whitelist promotion PWD-I2 had just forbidden, so **the back-ping and `COMMAND_PING` are deleted** rather than retained-and-redirected. **PWD-B10** carries the deletion. *An earlier version of this cell left retention "still cluster B's" beside the deletion, giving two verdicts at once; deletion is the single outcome.* | PWD-I1, PWD-I2 → PWD-B10 |
 
-**Sum check: 6 ruled + 2 absorbed + 2 deferred = 10.** ✅
+**Sum check: 7 ruled + 2 absorbed + 1 deferred = 10.** ✅ PWC-D9 moved deferred → ruled on 2026-10-11. PWC-D8 stays the one deferred row (LV-3).
 
 *Row-movement history, kept as history rather than as a second disposition:*
 PWC-D11 began **deferred**, moved to **ruled** when PWD-I2's white-list writer

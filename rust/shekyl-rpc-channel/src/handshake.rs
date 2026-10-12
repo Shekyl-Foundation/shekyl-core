@@ -18,19 +18,22 @@
 //! `e` and `s` each carry an X25519 key and then an ML-KEM-768 key. Both
 //! sides are authenticated by key agreement against both primitives: the
 //! daemon when message 2 opens, the client classically when message 3 opens
-//! and against both when its first transport record does.
+//! and against both when its first transport message does.
 //!
 //! The type at each step is the only thing that step can do, and transport
-//! keys exist only after message 4.
+//! directions exist only after message 4. They are [`shekyl_noise::Direction`]s
+//! from [`shekyl_noise::SymmetricState::into_directions`]. This handshake
+//! does not frame them.
 //!
-//! # The client is not authenticated until its first record opens
+//! # The client is not authenticated until its first transport message opens
 //!
-//! Message 3 proves the client's X25519 key and not its ML-KEM key. The
-//! daemon side therefore ends in [`PendingSession`], not in record halves:
-//! what message 3 claimed is a [`ClaimedClient`], good for the admission
-//! lookup and nothing more, and the record halves, the authenticated client
-//! and what it asked for all come out of
-//! [`PendingSession::open_first_record`] together or not at all.
+//! Message 3 proves the client's X25519 key and not its ML-KEM key. Between
+//! message 3 and message 4, [`DaemonReadyForMessage4::fingerprint`] is the
+//! enrolment lookup and a claim. A copy of that fingerprint kept afterwards
+//! is still only a claim. After message 4 the daemon holds a
+//! [`PendingSession`], whose only operation is
+//! [`PendingSession::open_first_message`]. The directions, the authenticated
+//! client and what it asked for all come out of that together, or not at all.
 //!
 //! # What a stranger can make the daemon do (§4.3)
 //!
@@ -58,22 +61,24 @@
 //!
 //! # Randomness
 //!
-//! Every entry point draws from the operating system. The `_with_rng` forms
-//! exist only under the `test-support` feature, for the cross-check that
-//! drives this handshake from the seeded streams its pinned vectors were made
-//! with; no build that ships has them.
+//! Every entry point draws from the operating system. The pinned comparison
+//! calls the same private constructors with the seeded generator its vectors
+//! were made with (RT-O18). Production takes no generator.
 
 use fips203::ml_kem_768;
-use fips203::traits::{Decaps, Encaps, KeyGen, SerDes};
+use fips203::traits::{Decaps, Encaps, SerDes};
 use rand_core::{CryptoRngCore, OsRng};
-use shekyl_noise::channel::halves;
-use shekyl_noise::{RecordError, RecvHalf, SendHalf, SymmetricState};
-use x25519_dalek::{PublicKey, StaticSecret};
+use shekyl_noise::{Direction, SplitRole, SymmetricState};
 use zeroize::Zeroizing;
 
-use crate::{
-    prologue, static_fingerprint, NetworkId, StaticFingerprint, MLKEM768_EK_LEN, X25519_PUBLIC_LEN,
-};
+use crate::{prologue, NetworkId, StaticFingerprint, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+
+#[path = "identity.rs"]
+mod identity;
+
+use identity::{dh, Ephemeral};
+
+pub use identity::{InvalidStaticPublic, StaticKeypair, StaticPublic};
 
 /// The Noise protocol name. It is hashed into the transcript, so it is part
 /// of the wire format.
@@ -99,6 +104,14 @@ pub const MESSAGE3_OVERHEAD: usize =
 /// Message 4 without its payload: the sealed `skem` ciphertext and the
 /// payload's tag.
 pub const MESSAGE4_OVERHEAD: usize = MLKEM768_CT_LEN + TAG_LEN + TAG_LEN;
+
+/// Associated data of this handshake's transport messages.
+///
+/// One Noise ciphertext, no framing. Empty, and the same on both sides:
+/// [`Established::into_directions`] seals with it, and
+/// [`PendingSession::open_first_message`] opens with it. A caller does not
+/// supply a different value.
+pub const TRANSPORT_AD: &[u8] = b"";
 
 /// Why a handshake stopped.
 ///
@@ -136,139 +149,6 @@ impl core::fmt::Display for HandshakeError {
 
 impl std::error::Error for HandshakeError {}
 
-/// A static public bundle: an X25519 key and an ML-KEM-768 encapsulation
-/// key, the latter already checked as FIPS 203 requires.
-///
-/// The daemon's is what every enrolled client holds. The client's is what
-/// the daemon learns in message 3 and looks up.
-#[derive(Clone)]
-pub struct StaticPublic {
-    x25519: [u8; X25519_PUBLIC_LEN],
-    mlkem_ek_bytes: [u8; MLKEM768_EK_LEN],
-    mlkem_ek: ml_kem_768::EncapsKey,
-}
-
-/// The two halves did not form a usable bundle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidStaticPublic;
-
-impl core::fmt::Display for InvalidStaticPublic {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("not a valid static public bundle")
-    }
-}
-
-impl std::error::Error for InvalidStaticPublic {}
-
-impl StaticPublic {
-    /// Build a bundle from its two halves, checking the encapsulation key.
-    ///
-    /// # Errors
-    ///
-    /// When the encapsulation key fails FIPS 203's input check.
-    pub fn from_parts(
-        x25519: [u8; X25519_PUBLIC_LEN],
-        mlkem_ek: [u8; MLKEM768_EK_LEN],
-    ) -> Result<Self, InvalidStaticPublic> {
-        let parsed =
-            ml_kem_768::EncapsKey::try_from_bytes(mlkem_ek).map_err(|_| InvalidStaticPublic)?;
-        Ok(Self {
-            x25519,
-            mlkem_ek_bytes: mlkem_ek,
-            mlkem_ek: parsed,
-        })
-    }
-
-    /// The X25519 half.
-    pub fn x25519(&self) -> &[u8; X25519_PUBLIC_LEN] {
-        &self.x25519
-    }
-
-    /// The ML-KEM-768 half, as it travels.
-    pub fn mlkem_ek(&self) -> &[u8; MLKEM768_EK_LEN] {
-        &self.mlkem_ek_bytes
-    }
-
-    /// The fingerprint an operator compares and an allowlist stores (§5).
-    pub fn fingerprint(&self) -> StaticFingerprint {
-        static_fingerprint(&self.x25519, &self.mlkem_ek_bytes)
-    }
-}
-
-/// A long-term identity: both secret halves and the public bundle.
-///
-/// The secrets wipe themselves when this is dropped (`x25519-dalek`'s and
-/// `fips203`'s types do it), and nothing here hands them out.
-pub struct StaticKeypair {
-    x25519: StaticSecret,
-    mlkem_dk: ml_kem_768::DecapsKey,
-    public: StaticPublic,
-}
-
-impl StaticKeypair {
-    /// A new identity from the operating system's randomness.
-    ///
-    /// # Errors
-    ///
-    /// [`HandshakeError::Local`] when the generator fails.
-    pub fn generate() -> Result<Self, HandshakeError> {
-        Self::generate_from(&mut OsRng)
-    }
-
-    /// As [`Self::generate`], from the caller's generator. Test support.
-    ///
-    /// # Errors
-    ///
-    /// [`HandshakeError::Local`] when the generator fails.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub fn generate_with_rng(rng: &mut impl CryptoRngCore) -> Result<Self, HandshakeError> {
-        Self::generate_from(rng)
-    }
-
-    // X25519 first, then ML-KEM: the order a static bundle is sent in.
-    fn generate_from(rng: &mut impl CryptoRngCore) -> Result<Self, HandshakeError> {
-        let x25519 = StaticSecret::random_from_rng(&mut *rng);
-        let (ek, mlkem_dk) =
-            ml_kem_768::KG::try_keygen_with_rng(rng).map_err(|_| HandshakeError::Local)?;
-        let public = StaticPublic::from_parts(PublicKey::from(&x25519).to_bytes(), ek.into_bytes())
-            .map_err(|_| HandshakeError::Local)?;
-        Ok(Self {
-            x25519,
-            mlkem_dk,
-            public,
-        })
-    }
-
-    /// The public bundle.
-    pub fn public(&self) -> &StaticPublic {
-        &self.public
-    }
-}
-
-/// One side's ephemeral pair for one handshake.
-struct Ephemeral {
-    x25519: StaticSecret,
-    mlkem_dk: ml_kem_768::DecapsKey,
-    x25519_public: [u8; X25519_PUBLIC_LEN],
-    mlkem_ek: [u8; MLKEM768_EK_LEN],
-}
-
-impl Ephemeral {
-    // The X25519 scalar, then ML-KEM's `d` and `z`.
-    fn generate(rng: &mut impl CryptoRngCore) -> Result<Self, HandshakeError> {
-        let x25519 = StaticSecret::random_from_rng(&mut *rng);
-        let (ek, mlkem_dk) =
-            ml_kem_768::KG::try_keygen_with_rng(rng).map_err(|_| HandshakeError::Local)?;
-        Ok(Self {
-            x25519_public: PublicKey::from(&x25519).to_bytes(),
-            mlkem_ek: ek.into_bytes(),
-            x25519,
-            mlkem_dk,
-        })
-    }
-}
-
 // Every use of a long-term secret while reading message 1 goes through
 // `long_term_key_used`, which counts it under test. A message refused on
 // public grounds must not move the count.
@@ -280,17 +160,6 @@ thread_local! {
 fn long_term_key_used() {
     #[cfg(test)]
     LONG_TERM_USES.with(|count| count.set(count.get() + 1));
-}
-
-/// X25519, refusing a result the peer's key alone determined. `None` means
-/// the peer sent a low-order point: the result is all zero whatever our
-/// secret is, and it is never mixed.
-fn dh(
-    secret: &StaticSecret,
-    public: &[u8; X25519_PUBLIC_LEN],
-) -> Option<x25519_dalek::SharedSecret> {
-    let shared = secret.diffie_hellman(&PublicKey::from(*public));
-    shared.was_contributory().then_some(shared)
 }
 
 /// The state both sides start from: the protocol name, the prologue, and the
@@ -347,22 +216,6 @@ impl Client {
         daemon: &StaticPublic,
     ) -> Result<(ClientAwaitingMessage2<'a>, Vec<u8>), HandshakeError> {
         Self::start_from(network_id, own, daemon, &mut OsRng)
-    }
-
-    /// As [`Self::start`], from the caller's generator. Test support.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::start`].
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub fn start_with_rng<'a>(
-        network_id: &NetworkId,
-        own: &'a StaticKeypair,
-        daemon: &StaticPublic,
-        rng: &mut impl CryptoRngCore,
-    ) -> Result<(ClientAwaitingMessage2<'a>, Vec<u8>), HandshakeError> {
-        Self::start_from(network_id, own, daemon, rng)
     }
 
     fn start_from<'a>(
@@ -583,46 +436,22 @@ pub struct DaemonReadyForMessage2 {
 /// The daemon after message 2. The next call reads message 3.
 pub struct DaemonAwaitingMessage3 {
     sym: SymmetricState,
-    ephemeral: StaticSecret,
+    ephemeral: x25519_dalek::StaticSecret,
 }
 
-/// Who message 3 says the client is. **A claim, not yet an authenticated
-/// client.**
+/// The daemon after message 3, before message 4.
 ///
-/// When the daemon holds this, the client's X25519 key is proven and its
-/// ML-KEM key is not: client authentication is classical at message 3 and
-/// hybrid only when the client's first transport record opens (§4.1).
-/// Someone who can break X25519 can produce a message 3 that claims any
-/// enrolled client.
-///
-/// So this carries the identity and nothing else, for the one decision that
-/// has to be made now: whether this client is enrolled, and therefore
-/// whether to send message 4. It is not something to log a connection
-/// against, count, or stamp a last-seen time from. What the client asked
-/// for is not here at all; it comes with the authenticated client, from
-/// [`PendingSession::open_first_record`].
-pub struct ClaimedClient {
-    claimed: StaticPublic,
-}
-
-impl ClaimedClient {
-    /// The fingerprint to look up in the enrolment list.
-    pub fn fingerprint(&self) -> StaticFingerprint {
-        self.claimed.fingerprint()
-    }
-
-    /// The bundle the client claims.
-    pub fn claimed_static(&self) -> &StaticPublic {
-        &self.claimed
-    }
-}
-
-/// The daemon after message 3. The next call writes message 4, if the
-/// daemon admits the client; dropping this instead refuses it.
+/// [`Self::fingerprint`] is who message 3 claims the client is, for the
+/// enrolment lookup that decides whether to write message 4. It is a claim:
+/// the client's X25519 key is proven and its ML-KEM key is not. Someone who
+/// can break X25519 can produce a message 3 that claims any enrolled client.
+/// A copy kept after [`Self::write_message4`] is still only that claim.
+/// Logging a connection, counting it, or stamping a last-seen time waits
+/// for the authenticated client [`PendingSession::open_first_message`] yields.
+/// Message 3's payload stays here until then.
 pub struct DaemonReadyForMessage4 {
     sym: SymmetricState,
     client: StaticPublic,
-    /// Message 3's payload. Held, not handed out: see [`ClaimedClient`].
     request: Vec<u8>,
 }
 
@@ -630,7 +459,7 @@ impl<'a> Daemon<'a> {
     /// A daemon ready to read one message 1.
     pub fn new(network_id: &NetworkId, own: &'a StaticKeypair) -> Self {
         Self {
-            sym: initial_state(network_id, &own.public),
+            sym: initial_state(network_id, own.public()),
             own,
         }
     }
@@ -715,21 +544,6 @@ impl DaemonReadyForMessage2 {
         self.write_from(&mut OsRng)
     }
 
-    /// As [`Self::write_message2`], from the caller's generator. Test
-    /// support.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::write_message2`].
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub fn write_message2_with_rng(
-        self,
-        rng: &mut impl CryptoRngCore,
-    ) -> Result<(DaemonAwaitingMessage3, Vec<u8>), HandshakeError> {
-        self.write_from(rng)
-    }
-
     fn write_from(
         mut self,
         rng: &mut impl CryptoRngCore,
@@ -779,9 +593,9 @@ impl DaemonReadyForMessage2 {
 }
 
 impl DaemonAwaitingMessage3 {
-    /// Read message 3. Returns who the client claims to be, for the
-    /// admission decision, and the state that can write message 4. Message
-    /// 3's payload stays inside that state until the client is
+    /// Read message 3. Returns the state that can write message 4, whose
+    /// [`DaemonReadyForMessage4::fingerprint`] is the enrolment lookup.
+    /// Message 3's payload stays inside that state until the client is
     /// authenticated against both primitives.
     ///
     /// # Errors
@@ -790,7 +604,7 @@ impl DaemonAwaitingMessage3 {
     pub fn read_message3(
         mut self,
         message3: &[u8],
-    ) -> Result<(DaemonReadyForMessage4, ClaimedClient), HandshakeError> {
+    ) -> Result<DaemonReadyForMessage4, HandshakeError> {
         const S_KEM: usize = X25519_PUBLIC_LEN + TAG_LEN;
         const PAYLOAD: usize = S_KEM + MLKEM768_EK_LEN + TAG_LEN;
         let fail = HandshakeError::Message3;
@@ -821,18 +635,27 @@ impl DaemonAwaitingMessage3 {
 
         // FIPS 203's input check on the key message 4 will encapsulate to.
         let client = StaticPublic::from_parts(x25519, mlkem_ek).map_err(|_| fail)?;
-        Ok((
-            DaemonReadyForMessage4 {
-                sym: self.sym,
-                client: client.clone(),
-                request: payload,
-            },
-            ClaimedClient { claimed: client },
-        ))
+        Ok(DaemonReadyForMessage4 {
+            sym: self.sym,
+            client,
+            request: payload,
+        })
     }
 }
 
 impl DaemonReadyForMessage4 {
+    /// The fingerprint to look up in the enrolment list.
+    ///
+    /// A claim, not an authenticated client. [`StaticFingerprint`] is
+    /// `Copy`, so a caller can keep this value past [`Self::write_message4`].
+    /// The copy is still only the claim. The authenticated client is what
+    /// [`PendingSession::open_first_message`] yields, and this state does
+    /// not outlive message 4.
+    #[must_use]
+    pub fn fingerprint(&self) -> StaticFingerprint {
+        self.client.fingerprint()
+    }
+
     /// Write message 4, carrying `payload`. Call this only for a client the
     /// daemon admits.
     ///
@@ -844,22 +667,6 @@ impl DaemonReadyForMessage4 {
         payload: &[u8],
     ) -> Result<(PendingSession, Vec<u8>), HandshakeError> {
         self.write_from(payload, &mut OsRng)
-    }
-
-    /// As [`Self::write_message4`], from the caller's generator. Test
-    /// support.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::write_message4`].
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub fn write_message4_with_rng(
-        self,
-        payload: &[u8],
-        rng: &mut impl CryptoRngCore,
-    ) -> Result<(PendingSession, Vec<u8>), HandshakeError> {
-        self.write_from(payload, rng)
     }
 
     fn write_from(
@@ -909,15 +716,18 @@ pub struct Established {
 impl Established {
     /// The handshake hash: a value both sides hold that is unique to this
     /// session. Not a secret.
+    #[must_use]
     pub fn handshake_hash(&self) -> [u8; HANDSHAKE_HASH_LEN] {
         self.sym.handshake_hash()
     }
 
-    /// Noise's `Split`: the two record halves. The client sends with the
-    /// first transport key.
-    pub fn split(self) -> (SendHalf, RecvHalf) {
-        let keys = self.sym.split();
-        halves(keys.chaining_key, keys.first, keys.second)
+    /// The two transport directions. The client sends with the first.
+    ///
+    /// Seal and open with [`TRANSPORT_AD`]. The first ciphertext the client
+    /// sends is what authenticates it to the daemon.
+    #[must_use = "the directions are the session"]
+    pub fn into_directions(self) -> (Direction, Direction) {
+        self.sym.into_directions(SplitRole::Initiator)
     }
 }
 
@@ -925,14 +735,12 @@ impl Established {
 /// against both primitives.**
 ///
 /// Message 4 was sealed to the client's long-term ML-KEM key. Only the
-/// holder of that key can derive the transport keys, so only it can produce
-/// a first record that opens. Until one does, the client is the classical
-/// claim of message 3 (§4.1), and this type is how "nothing is served
-/// before then" (§6.2) is kept: its one operation is
-/// [`Self::open_first_record`]. It has no `split`, no sending half and no
-/// way to read who the client is or what it asked for. A daemon cannot
-/// serve, or even see the request, before the first record opens, because
-/// there is nothing to do either with.
+/// holder of that key can derive the transport directions, so only it can
+/// produce a first message that opens. Until one does, the client is the
+/// classical claim [`DaemonReadyForMessage4::fingerprint`] returned, and
+/// this type is how "nothing is served before then" (§6.2) is kept: its
+/// one operation is [`Self::open_first_message`]. It has no directions and
+/// no way to read who the client is or what it asked for.
 ///
 /// ```compile_fail,E0599
 /// # use shekyl_rpc_channel::handshake::PendingSession;
@@ -941,10 +749,17 @@ impl Established {
 /// }
 /// ```
 ///
-/// ```compile_fail,E0616
+/// ```compile_fail,E0599
+/// # use shekyl_rpc_channel::handshake::PendingSession;
+/// fn split_early(pending: PendingSession) {
+///     let _ = pending.into_directions();
+/// }
+/// ```
+///
+/// ```compile_fail,E0609
 /// # use shekyl_rpc_channel::handshake::PendingSession;
 /// fn send_early(pending: &mut PendingSession) {
-///     let _ = pending.send.seal(b"served before authentication");
+///     let _ = &pending.send;
 /// }
 /// ```
 ///
@@ -962,14 +777,12 @@ impl Established {
 /// }
 /// ```
 pub struct PendingSession {
-    send: SendHalf,
-    recv: RecvHalf,
-    handshake_hash: [u8; HANDSHAKE_HASH_LEN],
+    sym: SymmetricState,
     client: StaticPublic,
     request: Vec<u8>,
 }
 
-/// What the client's first transport record proved, and everything that was
+/// What the client's first transport message proved, and everything that was
 /// withheld until it did.
 pub struct AuthenticatedSession {
     /// The client, now authenticated against both X25519 and ML-KEM. This
@@ -977,85 +790,80 @@ pub struct AuthenticatedSession {
     pub client: StaticPublic,
     /// Message 3's payload: what the client asked for.
     pub request: Vec<u8>,
-    /// The first record's plaintext. It is the first request (§6.2).
-    pub first_record: Vec<u8>,
-    /// How many bytes of the buffer the first record took.
-    pub consumed: usize,
-    /// The daemon's sending half.
-    pub send: SendHalf,
-    /// The daemon's receiving half, past the first record.
-    pub recv: RecvHalf,
+    /// The first transport message's plaintext.
+    pub first_message: Vec<u8>,
+    /// The daemon's sending direction. Its nonce is still 0.
+    pub send: Direction,
+    /// The daemon's receiving direction, past the first message.
+    pub recv: Direction,
     /// The handshake hash.
     pub handshake_hash: [u8; HANDSHAKE_HASH_LEN],
 }
 
-/// Why a first record did not authenticate the client.
-pub enum FirstRecord {
-    /// The buffer does not yet hold a whole record. Nothing was decided;
-    /// call again with more bytes. Boxed: the session carries the client's
-    /// bundle and is far larger than the refusal beside it.
-    Incomplete(Box<PendingSession>),
-    /// The record did not open. Whoever completed the handshake does not
-    /// hold the client's ML-KEM key. The session is gone.
-    Refused,
-}
+/// The first transport message was not accepted.
+///
+/// The session is gone. Which way it failed is not distinguished.
+#[derive(Debug)]
+pub struct FirstMessageRefused;
 
-impl core::fmt::Debug for FirstRecord {
+impl core::fmt::Display for FirstMessageRefused {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(match self {
-            Self::Incomplete(_) => "FirstRecord::Incomplete",
-            Self::Refused => "FirstRecord::Refused",
-        })
+        f.write_str("the first transport message was not accepted")
     }
 }
 
+impl std::error::Error for FirstMessageRefused {}
+
 impl PendingSession {
     fn new(sym: SymmetricState, client: StaticPublic, request: Vec<u8>) -> Self {
-        let handshake_hash = sym.handshake_hash();
-        let keys = sym.split();
-        // The daemon sends with the second transport key.
-        let (send, recv) = halves(keys.chaining_key, keys.second, keys.first);
         Self {
-            send,
-            recv,
-            handshake_hash,
+            sym,
             client,
             request,
         }
     }
 
     /// The handshake hash. Not a secret, and it names no client.
+    #[must_use]
     pub fn handshake_hash(&self) -> [u8; HANDSHAKE_HASH_LEN] {
-        self.handshake_hash
+        self.sym.handshake_hash()
     }
 
-    /// Open the client's first transport record from the front of `buffer`.
+    /// Open the client's first transport message.
+    ///
+    /// `ciphertext` is one Noise message, sealed under [`TRANSPORT_AD`].
+    /// The epoch the direction reports is discarded: a bare ciphertext has
+    /// no header to carry it.
     ///
     /// # Errors
     ///
-    /// [`FirstRecord::Incomplete`], handing this back, when `buffer` holds
-    /// less than one record. [`FirstRecord::Refused`] when the record does
-    /// not open; the session is consumed and cannot be tried again.
-    pub fn open_first_record(mut self, buffer: &[u8]) -> Result<AuthenticatedSession, FirstRecord> {
-        match self.recv.open_one(buffer) {
-            Ok((first_record, consumed)) => Ok(AuthenticatedSession {
-                client: self.client,
-                request: self.request,
-                first_record,
-                consumed,
-                send: self.send,
-                recv: self.recv,
-                handshake_hash: self.handshake_hash,
-            }),
-            Err(RecordError::Truncated) => Err(FirstRecord::Incomplete(Box::new(self))),
-            Err(_) => Err(FirstRecord::Refused),
-        }
+    /// [`FirstMessageRefused`] when the message does not open. The session
+    /// is consumed and cannot be tried again.
+    pub fn open_first_message(
+        self,
+        ciphertext: &[u8],
+    ) -> Result<AuthenticatedSession, FirstMessageRefused> {
+        let handshake_hash = self.sym.handshake_hash();
+        let (send, mut recv) = self.sym.into_directions(SplitRole::Responder);
+        let (first_message, _) = recv
+            .open(ciphertext, TRANSPORT_AD)
+            .map_err(|_| FirstMessageRefused)?;
+        Ok(AuthenticatedSession {
+            client: self.client,
+            request: self.request,
+            first_message,
+            send,
+            recv,
+            handshake_hash,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::identity::draw_x25519;
     use super::*;
+    use x25519_dalek::{PublicKey, StaticSecret};
     use zeroize::ZeroizeOnDrop;
 
     const NETWORK: NetworkId = [0x42; 16];
@@ -1101,11 +909,11 @@ mod tests {
     /// three Diffie-Hellman tokens, since all three go through `dh`.
     #[test]
     fn a_low_order_point_yields_nothing_to_mix() {
-        let secret = StaticSecret::random_from_rng(OsRng);
+        let secret = draw_x25519(&mut OsRng).unwrap();
         for point in low_order_points() {
             assert!(dh(&secret, &point).is_none(), "{point:02x?}");
         }
-        let honest = PublicKey::from(&StaticSecret::random_from_rng(OsRng)).to_bytes();
+        let honest = PublicKey::from(&draw_x25519(&mut OsRng).unwrap()).to_bytes();
         assert!(dh(&secret, &honest).is_some());
     }
 
@@ -1185,3 +993,7 @@ mod tests {
         wiping_feature_is_on::<x25519_dalek::SharedSecret>();
     }
 }
+
+#[cfg(test)]
+#[path = "pinned_handshake.rs"]
+mod pinned;

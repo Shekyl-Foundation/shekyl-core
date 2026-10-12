@@ -3,15 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Noise symmetric primitives shared by the handshakes and the record layer.
+//! Noise symmetric primitives for the symmetric state and the record layer.
 //!
-//! These are raw: a key and a nonce come from the caller. They are public
-//! because two crates build handshakes on them, not because they are a
-//! general-purpose API. Nothing outside a Noise handshake or this crate's
-//! record layer should call them.
+//! A key and a nonce come from the caller. These functions stay in this
+//! crate. A handshake drives [`crate::SymmetricState`] and finishes in
+//! [`crate::SymmetricState::into_directions`].
 //!
-//! HMAC-BLAKE2s is RFC 2104 over BLAKE2s-256. `hkdf` is Noise's two-output
-//! HKDF: `HMAC(ck, ikm)` then `HMAC(temp, 0x01)` and `HMAC(temp, out1 || 0x02)`.
+//! HMAC-BLAKE2s is RFC 2104 over BLAKE2s-256. `hkdf` is Noise's HKDF:
+//! `HMAC(ck, ikm)`, then one block per output. Two outputs for `MixKey`,
+//! `Split` and rekey; three for `MixKeyAndHash`. The two-output bytes are
+//! the first two of the three-output form.
 
 use blake2::digest::Digest;
 use blake2::Blake2s256;
@@ -22,10 +23,7 @@ use zeroize::Zeroizing;
 pub const HASH_LEN: usize = 32;
 pub const TAG_LEN: usize = 16;
 
-/// One hash-length output of the key derivation, wiped when dropped.
-pub type HashOutput = Zeroizing<[u8; HASH_LEN]>;
-
-pub fn hash(data: &[u8]) -> [u8; HASH_LEN] {
+pub(crate) fn hash(data: &[u8]) -> [u8; HASH_LEN] {
     let digest = Blake2s256::digest(data);
     let mut out = [0u8; HASH_LEN];
     out.copy_from_slice(&digest);
@@ -65,34 +63,42 @@ fn hmac_blake2s(key: &[u8], data: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
     out
 }
 
-/// Noise `HKDF(ck, ikm) -> (output1, output2)`.
-pub fn hkdf(
+/// Noise `HKDF(ck, ikm)`.
+///
+/// `N` is 2 or 3. Two outputs are `MixKey`, `Split` and rekey. Three are
+/// `MixKeyAndHash`: the chaining key, the handshake-hash mix, and the cipher
+/// key, from one HMAC chain. Asking for two does not compute the third block.
+pub(crate) fn hkdf<const N: usize>(
     ck: &[u8; HASH_LEN],
     ikm: &[u8],
-) -> (Zeroizing<[u8; HASH_LEN]>, Zeroizing<[u8; HASH_LEN]>) {
+) -> [Zeroizing<[u8; HASH_LEN]>; N] {
+    const {
+        assert!(
+            N == 2 || N == 3,
+            "Noise HKDF yields two outputs, or three for MixKeyAndHash"
+        );
+    }
     let temp = hmac_blake2s(ck, ikm);
-    let out1 = hmac_blake2s(&temp[..], &[0x01]);
-    let mut second = Zeroizing::new([0u8; HASH_LEN + 1]);
-    second[..HASH_LEN].copy_from_slice(&out1[..]);
-    second[HASH_LEN] = 0x02;
-    let out2 = hmac_blake2s(&temp[..], &second[..]);
-    (out1, out2)
-}
-
-/// Noise `HKDF(ck, ikm) -> (output1, output2, output3)`, the three-output
-/// form `MixKeyAndHash` uses. Its first two outputs are [`hkdf`]'s.
-pub fn hkdf3(ck: &[u8; HASH_LEN], ikm: &[u8]) -> (HashOutput, HashOutput, HashOutput) {
-    let temp = hmac_blake2s(ck, ikm);
-    let out1 = hmac_blake2s(&temp[..], &[0x01]);
-    let mut second = Zeroizing::new([0u8; HASH_LEN + 1]);
-    second[..HASH_LEN].copy_from_slice(&out1[..]);
-    second[HASH_LEN] = 0x02;
-    let out2 = hmac_blake2s(&temp[..], &second[..]);
-    let mut third = Zeroizing::new([0u8; HASH_LEN + 1]);
-    third[..HASH_LEN].copy_from_slice(&out2[..]);
-    third[HASH_LEN] = 0x03;
-    let out3 = hmac_blake2s(&temp[..], &third[..]);
-    (out1, out2, out3)
+    let mut previous = hmac_blake2s(&temp[..], &[0x01]);
+    let mut outputs = std::array::from_fn(|_| Zeroizing::new([0u8; HASH_LEN]));
+    let mut index = 0;
+    loop {
+        if index + 1 == N {
+            outputs[index] = previous;
+            break;
+        }
+        // The next block's counter is 0x02, then 0x03. `index` here is 0, or
+        // 1 when three outputs were asked for.
+        let counter = u8::try_from(index + 2).expect("the HKDF counter is 2 or 3");
+        let mut block = Zeroizing::new([0u8; HASH_LEN + 1]);
+        block[..HASH_LEN].copy_from_slice(&previous[..]);
+        block[HASH_LEN] = counter;
+        let next = hmac_blake2s(&temp[..], &block[..]);
+        outputs[index] = previous;
+        previous = next;
+        index += 1;
+    }
+    outputs
 }
 
 pub(crate) fn nonce(n: u64) -> Nonce {
@@ -101,7 +107,7 @@ pub(crate) fn nonce(n: u64) -> Nonce {
     Nonce::from(raw)
 }
 
-pub fn seal(key: &[u8; HASH_LEN], n: u64, ad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn seal(key: &[u8; HASH_LEN], n: u64, ad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new_from_slice(key).ok()?;
     cipher
         .encrypt(
@@ -114,7 +120,7 @@ pub fn seal(key: &[u8; HASH_LEN], n: u64, ad: &[u8], plaintext: &[u8]) -> Option
         .ok()
 }
 
-pub fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new_from_slice(key).ok()?;
     cipher
         .decrypt(
@@ -127,21 +133,35 @@ pub fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -> Optio
         .ok()
 }
 
+/// Run one rekey derivation, `HKDF(chaining_key, record_key)`, and discard it.
+///
+/// [`crate::Direction`] runs that same derivation when its nonce reaches the
+/// rekey boundary. This function exists so the C5 bench can time those three
+/// HMAC-BLAKE2s apart from a session. The derived keys do not leave this crate.
+#[cfg(feature = "rekey-timing")]
+pub fn rekey_hkdf(chaining_key: &[u8; HASH_LEN], record_key: &[u8; HASH_LEN]) {
+    let chaining_key = std::hint::black_box(*chaining_key);
+    let record_key = std::hint::black_box(*record_key);
+    let [ck, k] = hkdf(&chaining_key, &record_key);
+    std::hint::black_box(*ck);
+    std::hint::black_box(*k);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `hkdf3` is `hkdf` with one more block: the same chain, so the same
-    /// first two outputs, and a third that is neither.
+    /// Three outputs are two outputs and one more block: the same chain, so
+    /// the same first two, and a third that is neither.
     #[test]
     fn the_three_output_form_extends_the_two_output_form() {
         let ck = [0x5au8; HASH_LEN];
         let ikm = b"input key material";
-        let (a1, a2) = hkdf(&ck, ikm);
-        let (b1, b2, b3) = hkdf3(&ck, ikm);
-        assert_eq!(*a1, *b1);
-        assert_eq!(*a2, *b2);
-        assert_ne!(*b3, *b1);
-        assert_ne!(*b3, *b2);
+        let [two_first, two_second] = hkdf(&ck, ikm);
+        let [three_first, three_second, three_third] = hkdf(&ck, ikm);
+        assert_eq!(*two_first, *three_first);
+        assert_eq!(*two_second, *three_second);
+        assert_ne!(*three_third, *three_first);
+        assert_ne!(*three_third, *three_second);
     }
 }

@@ -17,16 +17,13 @@ zeroize = { workspace = true }
 
 [features]
 # The C5 bench times private handshake and record code. Production builds
-# leave it off.
-c5-bench = []
+# leave it off. `rekey-timing` is the one HKDF the bench calls on its own.
+c5-bench = ["shekyl-noise/rekey-timing"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
 shekyl-levin = { path = "../shekyl-levin" }
-# The pinned-vector test asserts the key schedule and the rekey through the
-# record layer's test accessors.
-shekyl-noise = { path = "../shekyl-noise", features = ["test-support"] }
 
 [[bench]]
 name = "c5"

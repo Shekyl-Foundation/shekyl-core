@@ -72,9 +72,12 @@ For every `(owner, feature) → (enabler, why)` in `CONSUMER_OWNED`:
      it, for the same reason as the test-only limb.
 
 Registering a row is what makes a feature consumer-owned; the feature and its
-row land in the same commit. The registry may be empty — today it is — and
-`--selftest` exercises the limb on synthetic metadata so the gate asserts its
-own subject with zero live rows (rule 47) rather than passing vacuously.
+row land in the same commit. The live row is `shekyl-noise` / `rekey-timing`,
+enabled only by `shekyl-p2p-transport`. The registry may be empty again when
+that bench is gone. `--selftest` exercises the limb on synthetic metadata —
+the four ways the construction rots, and the one shape it allows — so the
+gate asserts its subject even with no live row (rule 47) rather than passing
+vacuously.
 
 # The third limb — every feature a governed crate declares is categorized
 
@@ -208,36 +211,25 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "crate's [dev-dependencies] already carry for the rest of the driver. "
     "A driver that shipped would be a second producer (the crate's own "
     "docs); this row is what keeps it in tests",
-    (
-        "shekyl-noise",
-        "test-support",
-    ): "exposes the record layer's raw chaining and record keys (ck_and_k), a "
-    "settable record nonce (force_nonce) and the symmetric state's chaining "
-    "key, which were cfg(test)-private until the record layer got a crate of "
-    "its own (RPC_CHANNEL.md section 4.4, RT-O16). shekyl-p2p-transport's "
-    "pinned-vector test asserts the key schedule and the rekey through them, "
-    "unchanged, from its [dev-dependencies] edge. On a normal edge every "
-    "session's transport keys would be readable through a public method",
-    (
-        "shekyl-rpc-channel",
-        "test-support",
-    ): "exposes the hybridXK handshake's entry points that take a caller's "
-    "random-number generator (StaticKeypair::generate_with_rng, "
-    "Client::start_with_rng, write_message2_with_rng, "
-    "write_message4_with_rng), so shekyl-rpc-channel-xcheck can drive it from "
-    "the seeded streams its pinned vectors were made with (RPC_CHANNEL.md "
-    "section 4.1 anchor 2, RT-O18). Production draws from the operating "
-    "system and takes no generator; on a normal edge a caller could supply "
-    "the handshake's ephemeral secrets",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
 # A row is the declaration that the feature dies with its enabler; the feature
-# and its row land together. Empty today: the first candidate is
+# and its row land together. The shape this class was written for remains
 # `("shekyl-chain-store", "comparator-parity") → ("<the DRS-E2 comparator
 # crate>", "TxHeader.unlock_time for the LMDB txindex parity diff")`, which
 # lands only if E2 asks for the column (DRS_E1_STX.md STX-9 / STX-Q3).
-CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {}
+CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
+    (
+        "shekyl-noise",
+        "rekey-timing",
+    ): (
+        "shekyl-p2p-transport",
+        "runs one rekey HKDF so the C5 bench can time it apart from a session "
+        "(BA-I22). The derived keys stay in the crate; the function returns "
+        "nothing. The bench is the one caller, and the feature dies with it",
+    ),
+}
 
 # (owning crate, feature) → why it is an ordinary, permanent feature. The third
 # category, so that a governed crate's feature table can be exhaustively
@@ -295,7 +287,6 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-p-host",
         "shekyl-chain-ingest",
         "shekyl-noise",
-        "shekyl-rpc-channel",
     }
 )
 

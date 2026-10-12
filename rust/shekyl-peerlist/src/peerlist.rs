@@ -12,7 +12,7 @@ use shekyl_relay_privacy::{rng::RelayRng, ConnectionId};
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{connector_for, BanList, ConnectorId};
 
-use crate::outcome::{DialOutcome, ListName, Refusal, Source};
+use crate::outcome::{DialOutcome, ListName, Refusal, Source, WhiteClock};
 use crate::partition::Partition;
 use crate::{white_diversity_floor, DISCLOSE_COUNT, WHITE_REFILL_LINE};
 
@@ -44,29 +44,31 @@ impl BanQuery for NoBans {
 /// `peers` grant: no clock, no order, no outstanding-draw state.
 pub type Snapshot = Vec<(NetworkAddress, ListName)>;
 
-/// The peer lists of one node: a gray and a white list per connector, the
-/// door between them, and the Foundation fleet the door makes an exception
-/// for.
+/// The peer lists of one node: a gray and a white list per connector and
+/// the one door between them. Seeds are ordinary peers (brief §3, Rick
+/// 2026-10-11): this crate holds no seed list and makes no exception for
+/// one. The daemon admits the compiled seed addresses to gray at each
+/// start as `Source::Operator`, and they reach white as any address does.
 #[derive(Debug)]
 pub struct Peerlist {
     /// One partition per connector, indexed by [`ConnectorId::index`].
     partitions: Vec<Partition>,
-    /// The hardcoded Foundation seed fleet (brief §3). Data this crate
-    /// reads: `HarvestDone` of one of these writes white. Supplied by the
-    /// daemon, which owns the compiled list.
-    fleet: Vec<NetworkAddress>,
+}
+
+impl Default for Peerlist {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Peerlist {
-    /// Empty lists. `fleet` is the Foundation seed fleet; a harvest of any
-    /// other address writes nothing.
+    /// Empty lists, one partition per connector.
     #[must_use]
-    pub fn new(fleet: Vec<NetworkAddress>) -> Self {
+    pub fn new() -> Self {
         Self {
             partitions: (0..ConnectorId::COUNT)
                 .map(|_| Partition::default())
                 .collect(),
-            fleet,
         }
     }
 
@@ -278,35 +280,27 @@ impl Peerlist {
     }
 
     /// The only writer of white and the only drop of an outstanding gray
-    /// draw (brief §5). The match is total.
+    /// draw (brief §5). The match is total: the seat, and, for a
+    /// confirmation, whether the session stayed.
     pub fn apply<R: RelayRng + ?Sized>(&mut self, outcome: &DialOutcome, now: Tick, rng: &mut R) {
         let Some(connector) = Self::connector_of(outcome.address()) else {
             return;
         };
-        let fleet = self.fleet.contains(outcome.address());
         let partition = self.partition_mut(connector);
         match outcome {
-            DialOutcome::SessionAccepted(address) | DialOutcome::Confirmed(address) => {
-                if partition.is_outstanding(address) {
-                    partition.promote(address, now, rng);
-                } else {
-                    // Already white on a session this node opened: the clock
-                    // moves. An undrawn ordinary address: nothing.
-                    partition.touch(address, now);
-                }
+            // Outstanding draw: white, clock stamped `now`. Already white:
+            // the clock moves only because the session stayed (brief §5).
+            DialOutcome::SessionAccepted(address) => {
+                partition.confirm(address, now, rng, WhiteClock::Move);
             }
-            DialOutcome::HarvestDone(address) => {
-                if fleet {
-                    partition.promote(address, now, rng);
-                } else {
-                    // The dial is over. White is unchanged; an outstanding
-                    // draw returns to drawable gray.
-                    partition.settle_outstanding(address);
-                }
+            DialOutcome::Confirmed(address) => {
+                partition.confirm(address, now, rng, WhiteClock::Hold);
             }
             DialOutcome::DialFailed(address) | DialOutcome::PeerlistRefused(address) => {
                 partition.drop_outstanding(address);
             }
+            // The strand refused the payload. White is unchanged. An
+            // outstanding draw returns to drawable gray.
             DialOutcome::PayloadRefused(address) => {
                 partition.settle_outstanding(address);
             }

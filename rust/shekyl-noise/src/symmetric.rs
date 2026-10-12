@@ -10,6 +10,7 @@ use blake2::Blake2s256;
 use zeroize::Zeroizing;
 
 use crate::aead::{self, HASH_LEN};
+use crate::direction::Direction;
 
 /// What the symmetric state can fail at. A handshake maps these into its own
 /// error type; which of the two it was says nothing a peer may be told.
@@ -21,16 +22,15 @@ pub enum SymmetricError {
     State,
 }
 
-/// What `Split` yields.
+/// Which side of Noise `Split` this peer is.
 ///
-/// `first` and `second` are the two transport keys in the order
-/// `HKDF(ck, zerolen)` returns them: the initiator sends with `first` and
-/// receives with `second`, the responder the other way round. The chaining
-/// key comes too, because the record layer rekeys from it.
-pub struct SplitKeys {
-    pub chaining_key: Zeroizing<[u8; HASH_LEN]>,
-    pub first: Zeroizing<[u8; HASH_LEN]>,
-    pub second: Zeroizing<[u8; HASH_LEN]>,
+/// The initiator sends with the first transport key and receives with the
+/// second. The responder does the opposite. [`SymmetricState::into_directions`]
+/// is the only place that assignment is made.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SplitRole {
+    Initiator,
+    Responder,
 }
 
 /// Noise's `SymmetricState`: the chaining key, the handshake hash, and the
@@ -74,7 +74,7 @@ impl SymmetricState {
     }
 
     pub fn mix_key(&mut self, ikm: &[u8]) {
-        let (ck, k) = aead::hkdf(&self.ck, ikm);
+        let [ck, k] = aead::hkdf(&self.ck, ikm);
         self.ck = ck;
         self.k = Some(k);
         self.n = 0;
@@ -84,17 +84,11 @@ impl SymmetricState {
     /// handshake hash and the cipher key together. The hybrid patterns use
     /// it for a static KEM's shared secret.
     pub fn mix_key_and_hash(&mut self, ikm: &[u8]) {
-        let (ck, temp_h, temp_k) = aead::hkdf3(&self.ck, ikm);
+        let [ck, temp_h, temp_k] = aead::hkdf(&self.ck, ikm);
         self.ck = ck;
         self.mix_hash(&temp_h[..]);
         self.k = Some(temp_k);
         self.n = 0;
-    }
-
-    /// Whether a cipher key has been mixed in yet. Before one has,
-    /// [`Self::encrypt_and_hash`] passes its input through in the clear.
-    pub fn has_key(&self) -> bool {
-        self.k.is_some()
     }
 
     pub fn encrypt_and_hash(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, SymmetricError> {
@@ -137,20 +131,221 @@ impl SymmetricState {
         self.h
     }
 
-    /// Noise's `Split`.
-    pub fn split(self) -> SplitKeys {
-        let (first, second) = aead::hkdf(&self.ck, &[]);
-        SplitKeys {
-            chaining_key: self.ck,
-            first,
-            second,
-        }
+    /// Noise's `Split` for `role`: the send direction, then the receive direction.
+    ///
+    /// Each direction keeps its own chaining key. Rekey advances the two
+    /// directions independently. No key leaves this function.
+    #[must_use = "the directions are the session"]
+    pub fn into_directions(self, role: SplitRole) -> (Direction, Direction) {
+        let [first, second] = aead::hkdf(&self.ck, &[]);
+        let (send_key, recv_key) = match role {
+            SplitRole::Initiator => (first, second),
+            SplitRole::Responder => (second, first),
+        };
+        let recv_ck = self.ck.clone();
+        (
+            Direction::new(self.ck, send_key),
+            Direction::new(recv_ck, recv_key),
+        )
     }
 
-    /// The chaining key, for a test that pins the key schedule.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn chaining_key(&self) -> [u8; HASH_LEN] {
+    #[cfg(test)]
+    fn chaining_key(&self) -> [u8; HASH_LEN] {
         *self.ck
+    }
+
+    /// A state whose chaining key is `ck`, for a test that pins `Split`
+    /// without running a handshake.
+    #[cfg(test)]
+    fn with_chaining_key(ck: [u8; HASH_LEN]) -> Self {
+        Self {
+            ck: Zeroizing::new(ck),
+            h: [0u8; HASH_LEN],
+            k: None,
+            n: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use x25519_dalek::{PublicKey, StaticSecret};
+
+    fn hex_of(bytes: &[u8]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            out.push(char::from(HEX[usize::from(b >> 4)]));
+            out.push(char::from(HEX[usize::from(b & 0xf)]));
+        }
+        out
+    }
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_name_that_fits_is_padded_into_the_chaining_key() {
+        let name = b"short-name";
+        assert!(name.len() <= HASH_LEN);
+        let sym = SymmetricState::new(name, b"");
+        let mut padded = [0u8; HASH_LEN];
+        padded[..name.len()].copy_from_slice(name);
+        assert_eq!(sym.chaining_key(), padded);
+    }
+
+    #[test]
+    fn a_long_name_is_hashed_and_the_prologue_leaves_the_chaining_key() {
+        let name = b"Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s";
+        assert!(name.len() > HASH_LEN);
+        let mut sym = SymmetricState::new(name, b"prologue");
+        let chaining_key = sym.chaining_key();
+        assert_eq!(chaining_key, aead::hash(name));
+        assert_eq!(
+            hex_of(&chaining_key),
+            "c349a55a6b5c0428654e131abf703a8f9a223cb0512dabbca0187cd23c901bba"
+        );
+        sym.mix_hash(b"more");
+        assert_eq!(sym.chaining_key(), chaining_key);
+        assert_ne!(sym.handshake_hash(), chaining_key);
+    }
+
+    #[test]
+    fn the_initiator_sends_the_first_transport_key() {
+        let name = b"Noise_NN_25519_ChaChaPoly_BLAKE2s";
+        let prologue = b"prologue";
+        let initiator = SymmetricState::new(name, prologue);
+        let responder = SymmetricState::new(name, prologue);
+        let chaining_key = initiator.chaining_key();
+        let [first, second] = aead::hkdf(&chaining_key, &[]);
+        let (initiator_send, initiator_recv) = initiator.into_directions(SplitRole::Initiator);
+        let (responder_send, responder_recv) = responder.into_directions(SplitRole::Responder);
+        assert_eq!(initiator_send.ck_and_k().1, *first);
+        assert_eq!(initiator_recv.ck_and_k().1, *second);
+        assert_eq!(responder_send.ck_and_k().1, *second);
+        assert_eq!(responder_recv.ck_and_k().1, *first);
+        assert_eq!(initiator_send.ck_and_k().0, chaining_key);
+        assert_eq!(responder_recv.ck_and_k().0, chaining_key);
+    }
+
+    /// Cacophony `Noise_NN_25519_ChaChaPoly_BLAKE2s`, the classical pattern the
+    /// P2P handshake's symmetric state shares. Source: snow
+    /// `tests/vectors/cacophony.txt` at
+    /// `8ac60f51cfe3e010c84f0a454cc575ad9204fa12`
+    /// (https://github.com/mcginty/snow/blob/8ac60f51cfe3e010c84f0a454cc575ad9204fa12/tests/vectors/cacophony.txt).
+    #[test]
+    fn cacophony_nn_blake2s_matches_sym() {
+        let prologue = unhex("4a6f686e2047616c74");
+        let init_e: [u8; HASH_LEN] =
+            unhex("893e28b9dc6ca8d611ab664754b8ceb7bac5117349a4439a6b0569da977c464a")
+                .try_into()
+                .unwrap();
+        let resp_e: [u8; HASH_LEN] =
+            unhex("bbdb4cdbd309f1a1f2e1456967fe288cadd6f712d65dc7b7793d5e63da6b375b")
+                .try_into()
+                .unwrap();
+        let p0 = unhex("4c756477696720766f6e204d69736573");
+        let p1 = unhex("4d757272617920526f746862617264");
+        let p2 = unhex("462e20412e20486179656b");
+        let p3 = unhex("4361726c204d656e676572");
+        let name = b"Noise_NN_25519_ChaChaPoly_BLAKE2s";
+
+        let init_sec = StaticSecret::from(init_e);
+        let resp_sec = StaticSecret::from(resp_e);
+        let init_pub = PublicKey::from(&init_sec).to_bytes();
+        let resp_pub = PublicKey::from(&resp_sec).to_bytes();
+
+        let mut ini = SymmetricState::new(name, &prologue);
+        ini.mix_hash(&init_pub);
+        let mut msg1 = init_pub.to_vec();
+        msg1.extend(ini.encrypt_and_hash(&p0).unwrap());
+        assert_eq!(
+            hex_of(&msg1),
+            "ca35def5ae56cec33dc2036731ab14896bc4c75dbb07a61f879f8e3afa4c79444c756477696720766f6e204d69736573"
+        );
+
+        let mut resp = SymmetricState::new(name, &prologue);
+        resp.mix_hash(&init_pub);
+        assert_eq!(resp.decrypt_and_hash(&msg1[HASH_LEN..]).unwrap(), p0);
+        resp.mix_hash(&resp_pub);
+        let shared = resp_sec.diffie_hellman(&PublicKey::from(init_pub));
+        resp.mix_key(shared.as_bytes());
+        let mut msg2 = resp_pub.to_vec();
+        msg2.extend(resp.encrypt_and_hash(&p1).unwrap());
+        assert_eq!(
+            hex_of(&msg2),
+            "95ebc60d2b1fa672c1f46a8aa265ef51bfe38e7ccb39ec5be34069f144808843ff34a6759d06e7733c83aeb5556c15bc762b664b3ba0556b1e7eaea4168bb6"
+        );
+
+        ini.mix_hash(&resp_pub);
+        let shared = init_sec.diffie_hellman(&PublicKey::from(resp_pub));
+        ini.mix_key(shared.as_bytes());
+        assert_eq!(ini.decrypt_and_hash(&msg2[HASH_LEN..]).unwrap(), p1);
+        assert_eq!(
+            hex_of(&ini.handshake_hash()),
+            "a621e3943a29c1d984b43727697fbec096107d0b569031ac7e0f1131de19f4f4"
+        );
+
+        let (mut ini_send, _) = ini.into_directions(SplitRole::Initiator);
+        let (mut resp_send, _) = resp.into_directions(SplitRole::Responder);
+        let (t0, _) = ini_send.seal(&p2, &[]).unwrap();
+        let (t1, _) = resp_send.seal(&p3, &[]).unwrap();
+        assert_eq!(
+            hex_of(&t0),
+            "79285da88da3535f52b07b70006c85706de7ddb1fd3dddac995b7e"
+        );
+        assert_eq!(
+            hex_of(&t1),
+            "ffdad3a7f0db4c39077f223659c5c1d107666405566ecdf4ab53bf"
+        );
+    }
+
+    /// The chaining key the pinned NNhfs transcript ends on, and the transport
+    /// keys `Split` and one rekey produce from it. `kat_m1.hex` and
+    /// `kat_m2.hex` pin that transcript in the P2P handshake.
+    #[test]
+    fn split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys() {
+        const CHAINING_KEY: &str =
+            "aa12aef4d4c33f500f4798ec3787281d0e236e5dbe3d2711902f635ab7019763";
+        const INITIATOR_SEND_KEY: &str =
+            "149dfa9c12e1b59a8dd22c9768a9ea3d4821ffb20aff0ddfde5680c886891370";
+        const AFTER_REKEY_CK: &str =
+            "65f18eb7ce1929333b118ed5a9d35a6f00857f80e49409598848f2438a4f52c4";
+        const AFTER_REKEY_K: &str =
+            "50c5ecd6feb1f40d4be1dce0309789c6c2e8a60f2188812090f7c2c56f0b2223";
+        const OTHER_AFTER_REKEY_CK: &str =
+            "8f3c7d5c411c203dd55aa134d6a11b04a8a36ee50a0cb990915be4a082ca4655";
+        const OTHER_AFTER_REKEY_K: &str =
+            "2ece957080019fedc1e7d21bf46dce09ac2619495194edd54c35ef0280d31e4a";
+
+        let ck = unhex32(CHAINING_KEY);
+        let (mut send, recv) =
+            SymmetricState::with_chaining_key(ck).into_directions(SplitRole::Initiator);
+        let (mut other, other_recv) =
+            SymmetricState::with_chaining_key(ck).into_directions(SplitRole::Responder);
+        assert_eq!(send.ck_and_k().0, ck);
+        assert_eq!(send.ck_and_k().1, unhex32(INITIATOR_SEND_KEY));
+        assert_eq!(recv.ck_and_k().1, other.ck_and_k().1);
+        assert_eq!(other_recv.ck_and_k().1, send.ck_and_k().1);
+
+        for _ in 0..crate::REKEY_NONCES {
+            send.seal(&[0], &[]).unwrap();
+            other.seal(&[0], &[]).unwrap();
+        }
+        let (ck_after, k_after) = send.ck_and_k();
+        assert_eq!(ck_after, unhex32(AFTER_REKEY_CK));
+        assert_eq!(k_after, unhex32(AFTER_REKEY_K));
+        let (ck_back, k_back) = other.ck_and_k();
+        assert_eq!(ck_back, unhex32(OTHER_AFTER_REKEY_CK));
+        assert_eq!(k_back, unhex32(OTHER_AFTER_REKEY_K));
+    }
+
+    fn unhex32(s: &str) -> [u8; HASH_LEN] {
+        unhex(s).try_into().unwrap()
     }
 }
