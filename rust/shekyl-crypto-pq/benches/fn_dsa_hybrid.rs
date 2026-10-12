@@ -10,11 +10,17 @@
 //! OS-seeded hedged draw; FN-DSA signing is rejection sampling, so its time
 //! is a distribution and this arm reports it as one. The instruction-count
 //! sibling (`fn_dsa_hybrid_iai`) pins the draw instead.
+//!
+//! Two arms are of the held key, [`FnDsaHybridSigner`] (`FND-4`):
+//! `fn_dsa_hybrid_sign_held` is the production entry with the key decoded
+//! before the loop, and `fn_dsa_hybrid_hold_key` is the one decode, with
+//! the wipe that ends the key's life.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use shekyl_crypto_pq::fn_dsa_hybrid::{
-    FnDsaHybridPublicKey, FnDsaHybridSecretKey, FnDsaHybridSignature, HybridEd25519FnDsa,
+    FnDsaHybridPublicKey, FnDsaHybridSecretKey, FnDsaHybridSignature, FnDsaHybridSigner,
+    HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
 
@@ -55,6 +61,25 @@ fn bench_sign(c: &mut Criterion) {
     });
 }
 
+fn bench_sign_held(c: &mut Criterion) {
+    let (_public, secret) = keypair();
+    let mut signer = FnDsaHybridSigner::new(&secret).expect("the generated key decodes");
+    c.bench_function("fn_dsa_hybrid_sign_held", |b| {
+        b.iter(|| {
+            signer
+                .sign(SCHEME_DOMAIN_RECEIPT, black_box(&MESSAGE))
+                .expect("sign")
+        })
+    });
+}
+
+fn bench_hold_key(c: &mut Criterion) {
+    let (_public, secret) = keypair();
+    c.bench_function("fn_dsa_hybrid_hold_key", |b| {
+        b.iter(|| FnDsaHybridSigner::new(black_box(&secret)).expect("the generated key decodes"))
+    });
+}
+
 fn bench_verify(c: &mut Criterion) {
     let (public, signature) = signed();
     c.bench_function("fn_dsa_hybrid_verify", |b| {
@@ -83,5 +108,12 @@ fn bench_keygen(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_sign, bench_verify, bench_keygen);
+criterion_group!(
+    benches,
+    bench_sign,
+    bench_sign_held,
+    bench_hold_key,
+    bench_verify,
+    bench_keygen
+);
 criterion_main!(benches);

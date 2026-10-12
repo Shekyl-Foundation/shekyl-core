@@ -12,12 +12,19 @@
 //! trajectory, and the count, is the same on every run. The count is that of
 //! the code path the runner's CPU selects; the pinned crate dispatches to
 //! AVX2 at run time where it is present.
+//!
+//! `crypto_bench_fn_dsa_hybrid_sign_held` is the same signature through
+//! [`FnDsaHybridSigner`], which decoded the key in its setup: the same
+//! message, domain and draw, so the two sign arms emit the same bytes and
+//! the difference between their counts is the per-signature decode
+//! (`FND-4`).
 
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
 use shekyl_crypto_pq::fn_dsa_hybrid::{
-    FnDsaHybridPublicKey, FnDsaHybridSecretKey, FnDsaHybridSignature, HybridEd25519FnDsa,
+    FnDsaHybridPublicKey, FnDsaHybridSecretKey, FnDsaHybridSignature, FnDsaHybridSigner,
+    HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
 
@@ -58,6 +65,27 @@ fn crypto_bench_fn_dsa_hybrid_sign(keys: (FnDsaHybridPublicKey, FnDsaHybridSecre
     black_box(signature);
 }
 
+fn held_key() -> FnDsaHybridSigner {
+    let (_public, secret) = keypair();
+    FnDsaHybridSigner::new(&secret).expect("the generated key decodes")
+}
+
+#[library_benchmark]
+#[bench::receipt(setup = held_key)]
+fn crypto_bench_fn_dsa_hybrid_sign_held(mut signer: FnDsaHybridSigner) -> FnDsaHybridSigner {
+    let signature = signer
+        .sign_with_rng_seed(
+            SCHEME_DOMAIN_RECEIPT,
+            black_box(&MESSAGE),
+            black_box(&SIGN_RNG_SEED),
+        )
+        .expect("seeded sign");
+    black_box(signature);
+    // Handed back so the key's wipe on drop, paid once per key and not per
+    // signature, falls outside the count.
+    signer
+}
+
 #[library_benchmark]
 #[bench::receipt(setup = signed)]
 fn crypto_bench_fn_dsa_hybrid_verify(signed: (FnDsaHybridPublicKey, FnDsaHybridSignature)) {
@@ -76,6 +104,7 @@ library_benchmark_group!(
     name = fn_dsa_hybrid;
     benchmarks =
         crypto_bench_fn_dsa_hybrid_sign,
+        crypto_bench_fn_dsa_hybrid_sign_held,
         crypto_bench_fn_dsa_hybrid_verify,
 );
 
