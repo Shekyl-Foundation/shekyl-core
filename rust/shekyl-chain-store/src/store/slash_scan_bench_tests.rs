@@ -326,7 +326,13 @@ fn listing(h: u64, personas: u64) -> Vec<Listed> {
         return Vec::new();
     };
     if k < personas {
-        return vec![Listed::Join { slot: slot(k) }];
+        // Keyless joins (wire `post_kind` 0): the records' `receipt_sign_pk`
+        // is empty, as it was when `SLASHED_SNAPSHOT_BODY_KECCAK` was taken.
+        // The wallet's builder commits a receipt key since FN-DSA increment
+        // 3, and a keyed join here would grow each bond row by the key and
+        // move that pin for a reason the slash scan has no part in. A slash
+        // over a keyed record is the ingest's live-lane slash chain.
+        return vec![Listed::JoinKeyless { slot: slot(k) }];
     }
     if k - personas < CREDIT_BLOCKS {
         return (0..CREDITS_PER_BLOCK)

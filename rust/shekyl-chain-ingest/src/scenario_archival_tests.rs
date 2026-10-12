@@ -375,7 +375,9 @@ fn join_committing(
 /// A Reinstate's positive needs an open interval, which only a slash
 /// writes, and no default-lane chain reaches the slash scan (module docs);
 /// the Release here is this lane's witness that an in-place record update
-/// keeps the key.
+/// keeps the key. The Reinstate's — and the slash's before it — is the
+/// live lane's `the_levered_slash_chain_judges_each_row_on_one_record`,
+/// over a join the production constructor built.
 ///
 /// Red edits: delete `J28` from `tx_form`'s `judge_tx!` line and the
 /// corrupted key connects; replace the fold's copy in `archival/inputs.rs`

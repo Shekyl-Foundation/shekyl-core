@@ -72,6 +72,13 @@ pub(in super::super) enum Listed {
     /// row; the credit for it is [`serve_credit`]'s ([`credited`] pairs
     /// them).
     Join { slot: u32 },
+    /// [`Listed::Join`] in the JoinMarket's **keyless** wire form
+    /// (`post_kind` 0, [`Grown::join_keyless`]): the same spend and the
+    /// same post with no receipt key, so the record it opens has an empty
+    /// `receipt_sign_pk`. For the one chain whose pinned snapshot bytes
+    /// were taken over keyless records (`slash_scan_bench_tests`); every
+    /// other fixture joins as a wallet does.
+    JoinKeyless { slot: u32 },
     /// A body listed as given, anchored for its height ([`anchor`]): a
     /// serve credit, an emission. Never a spend or a join — their
     /// reference and proof are the chain's to make, not a value a test
@@ -326,6 +333,15 @@ impl Grown {
         self.spend_posting(coinbase, 0, Some(&bond))
     }
 
+    /// [`Self::join`] with the post in its keyless form — [`Listed::JoinKeyless`]
+    /// realised ([`Persona::join_keyless`]).
+    pub(in super::super) fn join_keyless(&mut self, slot: u32) -> Transaction {
+        let coinbase = self.next_coinbase();
+        let persona = Persona::at(slot);
+        let bond = persona.join_keyless(complete_tree(), JOIN_ENDPOINT);
+        self.spend_posting(coinbase, 0, Some(&bond))
+    }
+
     /// The lowest matured coinbase no block spent and no spend built for
     /// this block took. Panics when none has matured: the chain is below
     /// `FIRST_SPEND_HEIGHT`, or the block lists more spends than
@@ -464,6 +480,7 @@ impl Grown {
                 Listed::Spend { fee } => self.spend(*fee),
                 Listed::Spends { n, fee } => self.spend_many(*n, *fee),
                 Listed::Join { slot } => self.join(*slot),
+                Listed::JoinKeyless { slot } => self.join_keyless(*slot),
                 Listed::Body(tx) => anchor(&self.hashes, height, tx.clone()),
             })
             .collect()

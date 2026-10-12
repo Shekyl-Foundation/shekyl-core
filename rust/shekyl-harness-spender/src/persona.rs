@@ -47,7 +47,7 @@ use shekyl_tx_builder::{InputTerm, OutputTerm};
 use shekyl_types::archival::{BondRecord, Holdings};
 use shekyl_types::{PCanonicalId, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::BondPost;
+use shekyl_wire::transaction::{BondPost, BondPostKind};
 use shekyl_wire::Input;
 
 use crate::PostedBond;
@@ -106,6 +106,13 @@ impl Persona {
             .expect("the bond-spend key encodes")
     }
 
+    /// The receipt key, canonical bytes — `receipt_sign_pk` on a JoinMarket
+    /// ([`Self::join`] commits it) and on the bond record that join writes.
+    #[must_use]
+    pub fn receipt_key(&self) -> Vec<u8> {
+        self.keys.bond_post_keys().receipt_pk().to_canonical_bytes()
+    }
+
     /// `P_canonical_id`, derived from the identity key as the verifier
     /// derives it.
     #[must_use]
@@ -155,7 +162,9 @@ impl Persona {
 
     /// A JoinMarket over `holdings` at `endpoint`, through the production
     /// constructor: the total is the floor of the holdings, the credit is
-    /// the total, the slot is the identity key's.
+    /// the total, the slot is the identity key's. The post is the receipt
+    /// form (wire `post_kind` 5) and commits [`Self::receipt_key`], as a
+    /// wallet's does.
     #[must_use]
     pub fn join(&self, holdings: HoldingsDescriptor, endpoint: [u8; 32]) -> PostedBond<'_> {
         let built = build_join_market_vin(self.keys.bond_post_keys(), holdings, endpoint)
@@ -167,6 +176,26 @@ impl Persona {
             built.vin().hybrid_public_key.clone(),
             &self.keys.hybrid_sign_sk,
         )
+    }
+
+    /// [`Self::join`] in the JoinMarket's **keyless** form (wire `post_kind`
+    /// 0): the production constructor's post with its receipt key taken
+    /// back out, signed by the identity key as it then stands. No wallet
+    /// emits this any more; the wire still carries it and the validator
+    /// still admits it, writing a record whose `receipt_sign_pk` is empty.
+    /// For a fixture whose pinned bytes were taken over keyless records
+    /// (the store's slash-tip snapshot), and for the keyless form's own
+    /// witnesses.
+    #[must_use]
+    pub fn join_keyless(&self, holdings: HoldingsDescriptor, endpoint: [u8; 32]) -> PostedBond<'_> {
+        let mut post = self.join_post(holdings, endpoint);
+        match &mut post.kind {
+            BondPostKind::JoinMarket {
+                receipt_sign_pk, ..
+            } => *receipt_sign_pk = None,
+            BondPostKind::Other(_) => unreachable!("the constructor builds a JoinMarket"),
+        }
+        self.post_by_hand(post)
     }
 
     /// A Release of `record_bonded_total`, through the production
