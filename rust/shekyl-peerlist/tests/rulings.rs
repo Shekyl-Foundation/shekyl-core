@@ -82,7 +82,7 @@ fn with_white(
 #[test]
 fn below_the_floor_the_sample_is_empty() {
     let mut rng = SplitMix64::new(1);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let floor = u16::try_from(white_diversity_floor()).expect("fits");
     with_white(&mut list, 1, floor - 1, &mut rng);
@@ -101,7 +101,7 @@ fn below_the_floor_the_sample_is_empty() {
 #[test]
 fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
     let mut rng = SplitMix64::new(2);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     with_white(&mut list, 1, 100, &mut rng);
     let first = list.disclose(connector, at_hours(1), &mut NoBans, &mut rng);
@@ -118,10 +118,11 @@ fn the_sample_is_cached_for_the_window_and_redrawn_after_it() {
             "every requester in the window gets the same sample, unchanged"
         );
     }
-    // Keep white alive past its own 24-hour expiry, then cross the window:
-    // 24 h after the draw a new sample is drawn.
+    // A kept session moves the clock, so white outlives its own 24-hour
+    // expiry. A confirm-and-close would not. Then cross the window: 24 h
+    // after the draw a new sample is drawn.
     for n in 1..=100 {
-        list.apply(&DialOutcome::Confirmed(v4(n)), at_hours(23), &mut rng);
+        list.apply(&DialOutcome::SessionAccepted(v4(n)), at_hours(23), &mut rng);
     }
     let later = list.disclose(
         connector,
@@ -139,7 +140,7 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
     // window. Over many fresh windows every member, ours included, appears
     // about a fifth of the time.
     let mut rng = SplitMix64::new(3);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 59, &mut rng);
     let own = v4(9_999);
@@ -149,9 +150,10 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
     let windows = 3_000_u32;
     for w in 0..windows {
         let now = Tick::new(u64::from(w) * DISCLOSE_WINDOW_NANOS + 1);
-        // Keep white alive across windows: re-confirm everything.
+        // A kept session moves the clock. A confirm-and-close would let
+        // white expire and the sample go empty.
         for a in &white {
-            list.apply(&DialOutcome::Confirmed(a.clone()), now, &mut rng);
+            list.apply(&DialOutcome::SessionAccepted(a.clone()), now, &mut rng);
         }
         let sample = list.disclose(connector, now, &mut NoBans, &mut rng);
         assert_eq!(sample.len(), DISCLOSE_COUNT);
@@ -185,7 +187,7 @@ fn the_sample_is_uniform_over_white_with_our_own_address_as_one_member() {
 
 #[test]
 fn own_address_must_belong_to_the_connector() {
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let clear = Peerlist::connector_of(&v4(1)).expect("served");
     let hidden = Peerlist::connector_of(&onion(1)).expect("served");
     // Refused before the partition stores it.
@@ -206,7 +208,7 @@ fn own_address_must_belong_to_the_connector() {
 #[test]
 fn a_received_list_longer_than_disclose_count_is_refused_whole() {
     let mut rng = SplitMix64::new(4);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let long: Vec<NetworkAddress> = (1..=13).map(v4).collect();
     assert_eq!(
@@ -238,7 +240,7 @@ fn a_received_list_longer_than_disclose_count_is_refused_whole() {
 #[test]
 fn the_sample_carries_no_gray_and_no_clock() {
     let mut rng = SplitMix64::new(5);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     with_white(&mut list, 1, 60, &mut rng);
     for n in 500..600 {
@@ -261,7 +263,7 @@ fn the_sample_carries_no_gray_and_no_clock() {
 #[test]
 fn a_banned_white_entry_is_demoted_on_the_next_white_read_and_the_floor_drops() {
     let mut rng = SplitMix64::new(6);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 50, &mut rng);
     let mut bans = BanList::new();
@@ -293,7 +295,7 @@ fn a_banned_white_entry_is_demoted_on_the_next_white_read_and_the_floor_drops() 
 #[test]
 fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_admission() {
     let mut rng = SplitMix64::new(7);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 10, &mut rng);
     let banned = white[3].clone();
@@ -327,7 +329,7 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
     let trials = 5_u32;
     for seed in 0..trials {
         let mut rng = SplitMix64::new(100 + u64::from(seed));
-        let mut list = Peerlist::new(Vec::new());
+        let mut list = Peerlist::new();
         let white = with_white(&mut list, 1, 10, &mut rng);
         let banned = white[3].clone();
         let mut bans = BanList::new();
@@ -372,7 +374,7 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
 #[test]
 fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
     let mut rng = SplitMix64::new(8);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, 60, &mut rng);
     let mut bans = BanList::new();
@@ -423,7 +425,7 @@ fn a_ban_does_not_rebuild_the_cached_sample_and_tor_never_demotes() {
 #[test]
 fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() {
     let mut rng = SplitMix64::new(9);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let s = session(1);
     let first: Vec<NetworkAddress> = (1..=12).map(v4).collect();
@@ -512,7 +514,7 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
 #[test]
 fn a_seated_address_is_not_a_new_intake_charge() {
     let mut rng = SplitMix64::new(31);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let session_id = session(4);
     let white = with_white(&mut list, 1, 12, &mut rng);
@@ -583,7 +585,7 @@ fn a_seated_address_is_not_a_new_intake_charge() {
 #[test]
 fn the_intake_cap_is_the_same_on_every_connector() {
     let mut rng = SplitMix64::new(10);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let hidden = Peerlist::connector_of(&onion(1)).expect("served");
     let s = session(3);
     for n in 1..=24u8 {
@@ -623,7 +625,7 @@ fn the_intake_cap_is_the_same_on_every_connector() {
 #[test]
 fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_window() {
     let mut rng = SplitMix64::new(21);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let floor = u16::try_from(white_diversity_floor()).expect("fits");
     let white = with_white(&mut list, 1, floor, &mut rng);
@@ -652,8 +654,14 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
         "to the window's last tick"
     );
     // At the next draw the floor is checked: still below it, nothing.
+    // The kept sessions move the clock, so the empty sample is the floor
+    // and not an expiry of every white address.
     for a in &white[1..] {
-        list.apply(&DialOutcome::Confirmed(a.clone()), at_hours(24), &mut rng);
+        list.apply(
+            &DialOutcome::SessionAccepted(a.clone()),
+            at_hours(24),
+            &mut rng,
+        );
     }
     assert!(
         list.disclose(
@@ -672,7 +680,7 @@ fn a_drawn_sample_is_served_unchanged_when_white_drops_below_the_floor_mid_windo
 #[test]
 fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     let mut rng = SplitMix64::new(22);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let s = session(7);
     let first: Vec<NetworkAddress> = (1..=12).map(v4).collect();
@@ -727,7 +735,7 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
 #[test]
 fn mass_demotion_leaves_gray_at_or_below_its_cap() {
     let mut rng = SplitMix64::new(23);
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     // 200 white, confirmed at hour 0.
     let white = with_white(&mut list, 1, 200, &mut rng);
@@ -757,7 +765,7 @@ fn mass_demotion_leaves_gray_at_or_below_its_cap() {
         "the demoted entries are the ones kept, bar the few a later demotion evicted: {demoted_in_gray}"
     );
     // The same through a subnet ban.
-    let mut list = Peerlist::new(Vec::new());
+    let mut list = Peerlist::new();
     let white = with_white(&mut list, 1, 200, &mut rng);
     for n in 10_000..10_000 + u16::try_from(GRAY_CAP).expect("fits") {
         let _admitted = list.admit_gray(&v4(n), Source::Reload, at_hours(0), &mut NoBans, &mut rng);

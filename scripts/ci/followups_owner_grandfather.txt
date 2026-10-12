@@ -228,7 +228,6 @@ Derive PWD-B2's timed-sync `min`/`jitter` split.
 Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.
 Measure address volatility for ephemeral-per-boot onion endpoints (PWD-E8), then rule the acceptable dead fraction.
 Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.
-Decide `sanitize_peerlist`'s port-0 handling, where the IPv4-only rule collides with `tor_address::unknown()` being port 0.
 Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
 FCMP++ sender-side output verification — inherited `wallet2::sanity_check` [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc)
 Hardening-pass commit 8 follow-up: WalletPrefs round-trip property test (`2k.a2` deferred test).
