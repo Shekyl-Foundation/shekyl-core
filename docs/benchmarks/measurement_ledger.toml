@@ -275,6 +275,7 @@ stale_through = [
   { through = "11a2d409f", note = "Doc comment in provider.rs on what a leaf-segment body is refused as. No executable code changed; the verdict's arms are untouched." },
   { through = "8ed51316e", note = "StoreShardProvider reads the sealed body store: each chunk is an AEAD open where the floor capture read a frozen segment. One decrypt per chunk is added on the serve path. Not measured." },
   { through = "dc40167ad", note = "A doc comment in provider.rs: content-length is fixed from the meta row before any chunk byte, and a later chunk authentication failure can only close the stream. No read, hash, sign or socket operation changed. The key check this commit adds is at store open, off this path." },
+  { through = "976c7d0564", note = "p-serve (976c7d0564): the write-stall bound counts only waits the peer causes. write_bounded tries the socket on every poll, arms the 30 s clock only when a poll finds no room and clears it on progress; a starved serving task that finds the socket writable is never charged. Chunk size, read, digest and sign are untouched, so a served response costs what it did; the change moves only the cut a starved task could suffer, and the next floor block should show zero cuts. Not re-measured." },
 ]
 
 [[path_set]]
@@ -319,6 +320,7 @@ stale_through = [
   { through = "8ed51316e", note = "StoreShardProvider reads the sealed body store: each chunk is an AEAD open where the floor capture read a frozen segment. One decrypt per chunk is added on the serve path. The client is unchanged. Not measured." },
   { through = "b45e0c389", note = "A doc comment in shekyl-p-fetch header.rs: with_nonce is the challenge's derived nonce, not only a test helper. No executable fetch or serve code changed; no cost moved." },
   { through = "dc40167ad", note = "A doc comment in provider.rs: content-length is fixed from the meta row before any chunk byte, and a later chunk authentication failure can only close the stream. No read, hash, sign or socket operation changed. The key check this commit adds is at store open, off this path." },
+  { through = "976c7d0564", note = "p-serve (976c7d0564): the write-stall bound counts only waits the peer causes. write_bounded tries the socket on every poll, arms the 30 s clock only when a poll finds no room and clears it on progress; a starved serving task that finds the socket writable is never charged. Chunk size, read, digest and sign are untouched, so a served response costs what it did; the change moves only the cut a starved task could suffer, and the next floor block should show zero cuts. Not re-measured." },
 ]
 
 [[constant]]
