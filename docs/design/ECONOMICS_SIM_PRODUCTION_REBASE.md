@@ -1563,29 +1563,32 @@ constant that no caller passes.
 
 | Status | Rows |
 | --- | --- |
-| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2 |
+| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R13, R15, R16, R17, R18, R19, R23 |
 | Closed by deletion | R2, R31, D8 |
 | Closed by a §4 declaration | 1, 2, 3, R29; R11 (the recorder; the three folds import); R26 (the nearest arm; the ceiling arm imports); R30 (the KAT zone; the bond imports) |
 | Staking-excepted (ruled 2026-10-03) | D4 |
-| **Open** | R3, R10, R13, R15, R16, R17, R18, R19, R21, R22, R23; D1, D3, D5, D6, D7, D9, D10, D11, D12, D13 |
+| **Open** | R10, R21, R22; D1, D3, D5, D6, D7, D9, D10, D11, D12, D13; N1, N2, N3, N4 |
 
 Item 5 was a roll-up of R24–R26 and D6 and is open through D6 alone.
 
-### The eleven open restated rows
+### The eleven restated rows open at the re-census
 
-| # | What remains | Closes by |
-| --- | --- | --- |
-| R3 | Two test literals, `let coin: u64 = 1_000_000_000` (`fee_ladder.rs:3004`, `:3098`). Every non-test `COIN` derives from `shekyl_units::ATOMIC_UNITS_PER_SKL` | `crate::burden::COIN` |
-| R10 | No fold restates the three differences Appendix A listed: the penalty, the net supply and the height-0 share are production's. What remains is that each fold composes the reward chain from production's parts (`split_block_emission`, `compute_burn_split_at`) and none calls `price_emission`, which owns the order they run in | A decision (below) |
-| R13 | `0.25` as the flat staker share in the fee-horizon report (`fee_horizon.rs:151`) and its test (`:203`). The literal moved here from `onset.rs` with the closed form | `escalation::floor_share()` |
-| R15 | Report strings that spell a constant: "0.75" (`stage2.rs:622`, `:1241`; `scenarios.rs:430`, with "75 coins" and "7_500 coins" at `:437`, `:444`), "4096 shards" (`stage2.rs:1508`) | Interpolate `ARCHIVAL_BOND_FLOOR_ATOMIC` and `MAX_HOLDINGS_SHARDS` |
-| R16 | One table header, "split-loss@4096" (`admission.rs:155`); the value beside it already reads the constant | Interpolate `MAX_HOLDINGS_SHARDS` |
-| R17 | `BandedCurveParams::from_plateau_value(8_000)` (`population.rs:43`) | `shekyl_archival_retention::reward_arithmetic::ARCHIVAL_PROVISIONAL_CURVE` |
-| R18 | `AGE_WEIGHT_MILLI = 1_000` (`population.rs:56`); production's is 2 000. Declared inert in its own comment, not in §4 | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI`, or a §4 row saying why the sim's differs |
-| R19 | `N_HARD_BOUND = 25` (`mn_feasibility.rs:55`) | A new `pub` export: the bound exists in production only as a const-assert over a private constant (`failure_window.rs`) |
-| R21 | The exact-min urn and its even-spread schedule (`challenge_coverage.rs`). **Its production owner no longer exists**: `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn | A decision (below) |
-| R22 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs:136`). Cross-checked against the predicate-backed kernel by test; no production counterpart to import | A §4 row |
-| R23 | `1.0 + SLASH_GRACE_EPOCHS` (`cartel.rs:249`) | A new `pub` export of `SLASH_SETTLEMENT_TIP_LAG_EPOCHS`, private today |
+The first two columns are the tree at `258b4d851`. The last says what
+ESR-8 did.
+
+| # | What remained | Closes by | In ESR-8 |
+| --- | --- | --- | --- |
+| R3 | Two test literals, `let coin: u64 = 1_000_000_000` (`fee_ladder.rs:3004`, `:3098`). Every non-test `COIN` derives from `shekyl_units::ATOMIC_UNITS_PER_SKL` | `crate::burden::COIN` | Closed: both tests read `crate::burden::COIN` |
+| R10 | No fold restates the three differences Appendix A listed: the penalty, the net supply and the height-0 share are production's. What remains is that each fold composes the reward chain from production's parts (`split_block_emission`, `compute_burn_split_at`) and none calls `price_emission`, which owns the order they run in | A decision (below) | Open; direction below |
+| R13 | `0.25` as the flat staker share in the fee-horizon report (`fee_horizon.rs:151`) and its test (`:203`). The literal moved here from `onset.rs` with the closed form | `escalation::floor_share()` | Closed: the share and its label come from `floor_share()` |
+| R15 | Report strings that spell a constant: "0.75" (`stage2.rs:622`, `:1241`; `scenarios.rs:430`, with "75 coins" and "7_500 coins" at `:437`, `:444`), "4096 shards" (`stage2.rs:1508`) | Interpolate `ARCHIVAL_BOND_FLOOR_ATOMIC` and `MAX_HOLDINGS_SHARDS` | Closed: every string interpolates the constant. Both narration fixtures match byte for byte |
+| R16 | One table header, "split-loss@4096" (`admission.rs:155`); the value beside it already reads the constant | Interpolate `MAX_HOLDINGS_SHARDS` | Closed |
+| R17 | `BandedCurveParams::from_plateau_value(8_000)` (`population.rs:43`) | `shekyl_archival_retention::reward_arithmetic::ARCHIVAL_PROVISIONAL_CURVE` | Closed: `reward_curve()` returns the constant |
+| R18 | `AGE_WEIGHT_MILLI = 1_000` (`population.rs:56`); production's is 2 000. Declared inert in its own comment, not in §4 | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI`, or a §4 row saying why the sim's differs | Closed by import (1 000 → 2 000). No figure moved, which is the inertness its comment claimed |
+| R19 | `N_HARD_BOUND = 25` (`mn_feasibility.rs:55`) | A new `pub` export: the bound exists in production only as a const-assert over a private constant (`failure_window.rs`) | Closed: `FAILURE_WINDOW_N_GATHER_BOUND`, a named `pub` constant the assert now reads |
+| R21 | The exact-min urn and its even-spread schedule (`challenge_coverage.rs`). **Its production owner no longer exists**: `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn | A decision (below) | Open; direction below |
+| R22 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs:136`). Cross-checked against the predicate-backed kernel by test; no production counterpart to import | A §4 row | Open |
+| R23 | `1.0 + SLASH_GRACE_EPOCHS` (`cartel.rs:249`) | A new `pub` export of `SLASH_SETTLEMENT_TIP_LAG_EPOCHS`, private today | Closed: the constant is `pub` and `cartel.rs` reads it |
 
 ### The dead-referent rows
 
@@ -1601,39 +1604,37 @@ Item 5 was a roll-up of R24–R26 and D6 and is open through D6 alone.
 
 ### Found by this pass, in neither Appendix A nor §4
 
-- **The secret draw's count rule is restated.** §4's ESR-11 row says "no
-  production function exists to call". It does now:
-  `shekyl_archival_retention::{draw_horizon, draw_count, select_draw}`.
-  The sim keeps its own `horizon()`, `block_target()` and three constants
-  (`MIN_HORIZON_BLOCKS`, `CATCH_UP_BY_PERMILLE`, `CAP_MULTIPLE`); only
-  `COUNTED_DRAWS` is pinned to its owner. Whether the sim's f64
-  `block_target` equals production's fixed-point `draw_count` was read,
-  not run.
-- **The recorder pays no weight penalty** (`record.rs:206-207`). §4
-  declares its volume operand only.
-- `stage2.rs` splits the fee burn at the flat `staker_pool_share` where
-  the engine and budget folds use `compute_burn_split_at` at `n = 0`. The
-  two are equal at the shipped parameters.
-- `Cargo.toml` justifies the `shekyl-chain-rules` dependency by
-  `EMISSION_SPLIT_EPOCH`, which that crate no longer provides. The
-  dependency is still used, for the medians, the volume span and the
-  reference-block age.
+| # | What was found | Closes by |
+| --- | --- | --- |
+| N1 | **The secret draw's count rule is restated.** §4's ESR-11 row says "no production function exists to call". It does now: `shekyl_archival_retention::{draw_horizon, draw_count, select_draw}`. The sim keeps its own `horizon()`, `block_target()` and three constants (`MIN_HORIZON_BLOCKS`, `CATCH_UP_BY_PERMILLE`, `CAP_MULTIPLE`); only `COUNTED_DRAWS` is pinned to its owner. Whether the sim's f64 `block_target` equals production's fixed-point `draw_count` was read, not run | An equivalence run on the same inputs, its result recorded here, then the calls switched. A disagreement goes to the challenge lane before the sim moves |
+| N2 | **The recorder pays no weight penalty** (`record.rs`, the `effective_emission` call). §4 declares its volume operand only | Fixed in ESR-8 |
+| N3 | `stage2.rs` splits the fee burn at the flat `staker_pool_share` where the engine and budget folds use `compute_burn_split_at` at `n = 0`. The two are equal at the shipped parameters and nothing fails if they stop being equal | A test that fails when the escalation asymptote and the flat share diverge |
+| N4 | `Cargo.toml` justifies the `shekyl-chain-rules` dependency by `EMISSION_SPLIT_EPOCH`, which that crate no longer provides. The dependency is still used, for the medians, the volume span and the reference-block age | Text |
 
-### Three decisions the imports wait on
+A fifth observation, not a row: the bound R19 imports is the C++
+gather's. `failure_window.rs` holds a second, tighter condition for the
+Rust gather (`WINDOW_MIN_OBSERVATION_PER_MILLE`), which at the shipped
+values admits no `n` above 13. `mn_feasibility.rs` sweeps `n` to 25
+under the name "hard bound". The sweep is unchanged here; which bound
+the report should name is a question for the lane that owns the window.
 
-1. **R21.** The urn the sim reproduces has no production code behind it.
-   `challenge_coverage.rs` either models a mechanism that was replaced,
-   and is deleted with the figures it reproduces marked as records, or it
-   is kept as the instrument that justified the replacement and declared
-   in §4. One of its tests is in the nightly lane.
-2. **R10.** Whether a fold that composes production's parts in its own
-   order counts as calling production, or must call `price_emission`.
-   The folds need intermediate values `price_emission` returns
-   (`PaidEmission`), so the call is possible.
-3. **The secret draw.** Whether ESR-8 moves the sim onto
-   `draw_horizon` / `draw_count`, which changes ESR-11's committed
-   figures if the two differ, or §4's row is rewritten to say the sim's
-   rule is the design and production's is the copy under test.
+### Direction on the three decisions (received 2026-10-12)
+
+Relayed review direction, matching what this pass recommended. It is
+recorded as direction, not as a signed ruling.
+
+1. **R21.** `challenge_coverage.rs` stays, with a §4 row: "records-was —
+   instrument that justified the secret draw; no production owner by
+   design". The nightly lane keeps
+   `full_scale_maturity_reproduces_doc_figures`, with that reason beside
+   it. The module is deleted in the PR that retires the challenge
+   design's §7.1 and §8.
+2. **R10.** The folds call `price_emission`. Where its signature does
+   not fit a fold, that is a finding about `price_emission` and the fix
+   is there, not a third copy in the sim.
+3. **The secret draw (N1).** Equivalence first: the sim's rule and
+   production's run on the same inputs, agreement or the delta recorded,
+   and only then the calls switched.
 
 ## Appendix B — census of `shekyl-staking-sim` (as reported, at `bb021f254`)
 
