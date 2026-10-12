@@ -271,10 +271,11 @@ is. The switch is the settlement lane's cutover, in the change that makes a
 verifier accept scheme-3 receipts (the bundle verifier).
 
 The number is 9 and the findings start at `FND-19` because another open
-change (#1046, increment 3) adds §8 and `FND-16`–`FND-18`. This section
-does not touch the banner, §5's table or §6, which that change edits; the
-banner's findings range is to be moved to cover `FND-19`–`FND-22` by
-whichever of the two merges second.
+change (#1046, increment 3) adds §8 and `FND-16`–`FND-18`. This change
+leaves alone what that one edits — the banner, the end of §5's table and
+§6 — and touches §5 in one cell, `FND-4`'s disposition, which that change
+does not. The banner's findings range is to be moved to cover
+`FND-19`–`FND-22` by whichever of the two merges second.
 
 | Piece | Where |
 | --- | --- |
