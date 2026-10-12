@@ -317,6 +317,9 @@ count_pattern() {
 # and `static_fingerprint` (shekyl/rpc-static-fingerprint-v1) in
 # shekyl-rpc-channel. Its tests call both through those functions and add
 # no site.
+# Bundle verifier, the scheme domain (2026-10-12): 70 stays 70.
+# shekyl/archival-witness-bundle-scheme-v1 is a third byte string fed to the
+# nested combiner's one cSHAKE site, as the receipt's and the carrier's are.
 MECH1_EXPECTED=70
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
