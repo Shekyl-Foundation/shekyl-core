@@ -1547,7 +1547,8 @@ is over.
   dropout, including 0 %.
 - *(c) `p_reorg` at `M = 30`: held.* The three cells are identical in
   every field of every seed's run, at both pair counts and for the lazy
-  producer as well.
+  producer as well. (Corrected 2026-10-12: this is a consequence of the
+  model's parameters, not a property of the mechanism. See §5.19.)
 - *(c) `p_reorg` at `M = 0`: held.* 0.004 to 0.005 % and 0.05 to 0.06 %
   of blocks are lost at 0.01 and 0.1 (predicted 0.006 % and 0.06 % of
   filed bundles). The short share moves by at most 0.01 points (predicted
@@ -1558,7 +1559,8 @@ is over.
   blocks.
 - *(c) Lazy, `M = 30`: held.* 2.17 % short (2.11 – 2.24), predicted 1.3
   to 2.5 %: about twice the bar cell, under the bar. `p_reorg` has no
-  effect.
+  effect. (Corrected 2026-10-12: at `R = 3` and a latency of `1..=3`; see
+  §5.19.)
 - *(c) Lazy, `M = 3`, `p_reorg = 0`: missed, narrowly.* 2.34 %, which is
   0.16 points above lazy `M = 30`; I predicted within 0.15. Twenty-seven
   more blocks of delay cost more than I allowed.
@@ -1595,7 +1597,10 @@ bend them was never reached.
 
 - *The margin is worth having, and its size is not critical.* With
   `M = 30` no honest bundle is late and none is exposed to a reorg in the
-  last three blocks. With `M = 0`, 0.4 % are late, and the short share
+  last three blocks. (Corrected 2026-10-12: "none is exposed" holds for a
+  reorg of depth `R = 3` and a latency of at most 3 blocks, which are this
+  model's parameters. A deeper reorg or a longer latency reaches a bundle
+  filed with `M = 30`. See §5.19.) With `M = 0`, 0.4 % are late, and the short share
   rises by 0.05 to 0.14 points. That is small against the bar.
 - *The reorg term is second-order for an honest producer and first-order
   for a lazy one.* Honest lag with `M = 0` exposes 0.6 % of bundles, and
@@ -1630,6 +1635,14 @@ blocks are not carried in. Further:
 - The eight seeds read the same rolls in every cell, by design: cells
   compare with each other more tightly than with ESR-11 or with the
   nominal dropout. Every cell at 10 % nominal dropout ran at 9.83 %.
+  (Corrected 2026-10-12, in the standard terms: the cells are run with
+  **common random numbers**. The same eight seeds drive dropout, lag,
+  latency and the loss roll in every cell. That is a variance-reduction
+  choice, and it makes the differences between cells sharp. Its price is
+  that the cells are not independent samples, and all of them share one
+  realised dropout: 9.83 % at the nominal 10 %, 29.58 % at the nominal
+  30 %.)
+- (Added 2026-10-12.) The section budget is not modelled; see §5.19.
 - The seed and the block hash are the generator's bytes. Nothing here
   exercises the commitment, the nonce, or a verifier recomputing a draw.
 - The attempts per draw are the producer's and the verifier's hashing
@@ -1666,6 +1679,54 @@ included: 325,089 capped blocks over the set under both predicates. The
 "Blocks at the cap, per epoch" column of §5.18 stands as printed, and now
 means "blocks where the cap bound". No block of the set landed exactly on
 the cap.
+
+**The cap column's unit (maintainer's review, 2026-10-12).** Three
+places carried the count in three units, and only one said which.
+
+| Where | Unit |
+| --- | --- |
+| §5.14's and §5.18's tables, "Blocks at the cap, per epoch" | blocks in one epoch: the mean over the cell's eight seeds |
+| The binary's column, and `blocks_at_cap` on a cell in the JSON | blocks summed over the cell's eight seeds: eight times the tables' figure |
+| `blocks_at_cap` on a run in the JSON | blocks in that one epoch |
+
+So the binary prints 1,870 where §5.18 prints 234, and 49,744 where it
+prints 6,218. The tables' unit is the one this document uses, and they
+stand. The binary's column was labelled `capped`, with the unit only in
+the legend; it is now `cap sum`, and the legend gives the division by
+eight. The 325,089 above is the cell figure summed over all 60 cells,
+that is over 480 epochs: 677 an epoch on average, and 298,464 of it is
+the six lazy `M = 0` cells.
+
+**Why `p_reorg` does nothing at `M = 30`, and what the reorg term is not
+(maintainer's review, 2026-10-12).** §5.18 reports that the three
+`p_reorg` cells at `M = 30` are identical. That is arithmetic on this
+model's parameters. The reorg zone is the last `R = 3` blocks of the
+window, `h + 498` to `h + 500`. An honest producer with `M = 30` files by
+`h + 470`, and the inclusion latency is `1..=3`, so its bundle is in a
+block by `h + 473`. The latest inclusion cannot reach the zone. It is not
+a property of the mechanism: a reorg deeper than 27 blocks, or a latency
+longer than 27, reaches a bundle filed with `M = 30`, and the margin's
+size is what stands between them.
+
+The model also loses each exposed bundle independently, with probability
+`p_reorg`. A reorg does not behave that way. It removes a run of
+consecutive blocks, and every bundle included in that run is lost
+together. Loss is correlated across the blocks whose bundles shared the
+run, and many producers' draws go at once. This run does not model that,
+and its loss figures say nothing about it: the share of pairs left short
+by one deep reorg is not the share left short by the same number of
+bundles lost one at a time.
+
+**Not modelled: the section budget (maintainer's review, 2026-10-12).** A
+block has room for `c · (⌊9·D/SEB⌋ + 1)` draws' worth of bundles, and a
+bundle is charged `max(count, 1)`. In the model a filed bundle is
+included after its latency whatever else is waiting: inclusion is never
+refused for lack of room. So nothing here examines a backlog near the
+budget, which is where lazy producers filing together, or a burst after
+an outage, would be felt.
+
+**Common random numbers.** §5.18's sentence on the seeds is restated
+there in the standard terms.
 
 **Each row's timing.** §5.18's tables do not carry the inclusion latency
 or the reorg depth, and the mode's own table printed the defaults in its
