@@ -32,8 +32,10 @@
 //! and no subtraction. The pool count was split at 3.50 (RK-Q10):
 //! `tx_pool_size` is the entries this node has broadcast, for every
 //! caller, and the entries it has not yet broadcast are a host-only part.
-//! It still writes one thing the design retires after that, marked where
-//! it is written: a refused burn computation reported as zero.
+//! A burn computation that refuses stopped being reported as zero at 3.51
+//! (RK-Q9): the store has contradicted itself, and the method refuses with
+//! a fault that says how. Nothing the C++ handler wrote for "not this
+//! value" is left in this reply.
 //!
 //! **The store's size is a Status member and is read with Status.** While
 //! a restricted reply carried it rounded, it was read for every caller, so
@@ -50,7 +52,7 @@ use shekyl_rpc_types::{
 
 use crate::chain_facts::FactsFault;
 use crate::info_facts::{InfoFacts, PoolScope, SessionCounts};
-use crate::methods::RpcFault;
+use crate::methods::{RpcFault, StoreFault};
 
 /// What a caller is shown: which parts its grants select, and whether it is
 /// the host's administrator.
@@ -118,6 +120,10 @@ impl Disclosure {
 ///
 /// [`RpcFault::Facts`] when a read made on this caller's behalf fails. A
 /// read that is not made cannot.
+///
+/// [`RpcFault::Store`] when the chain snapshot contradicts itself: more
+/// burned than generated. Every caller is refused, since the contradiction
+/// is in what every caller is told.
 pub fn get_info(
     facts: &dyn InfoFacts,
     disclosure: Disclosure,
@@ -206,15 +212,19 @@ pub fn get_info(
         },
         &EconomicParams::default(),
     );
-    // Parity: a refused burn computation is reported as zero, and logged.
-    // `0` % is a legitimate burn, so RK-Q9 turns this into a store fault.
-    let burn_pct = tip.burn_pct.unwrap_or_else(|violation| {
-        tracing::error!(
-            %violation,
-            "get_info: the burn computation refused; reporting burn_pct 0"
-        );
-        0
-    });
+    // More burned than generated is the store contradicting itself. `0` %
+    // is a legitimate burn, so it cannot stand for that: the method refuses,
+    // and the refusal carries the invariant and its operands. The same text
+    // is logged here, once, where it is found.
+    let burn_pct = tip.burn_pct.map_err(|violation| {
+        let fault = StoreFault::SupplyInvariant {
+            coins_generated: violation.coins_generated,
+            total_burned: violation.total_burned,
+            chain_height: chain.chain_height,
+        };
+        tracing::error!("get_info refused: {fault}");
+        RpcFault::Store(fault)
+    })?;
 
     Ok(GetInfoResponse {
         status: RpcStatus::ok(),

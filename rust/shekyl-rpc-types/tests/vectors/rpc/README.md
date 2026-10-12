@@ -154,3 +154,11 @@ holds `9`, the entries broadcast, and gains
 The restricted fixture already held `9` and does not move: that every
 caller now reads that number under that key is the change.
 `get_version_synced_v27` is the chain's 3.50 link.
+
+**3.51 retired a fixture and moved no vector.** `get_info` refuses when
+the store holds more burned than generated (RK-Q9), where it answered
+`burn_pct: 0`. `get_info_burn_refusal_v1` to `_v4` record that old reply.
+They stay, held to each other by the derivation tests, and no test decodes
+the newest as a current reply: the daemon does not send it. The refusal is
+tested in `shekyl-daemon-rpc`. `get_version_synced_v28` is the chain's
+3.51 link.

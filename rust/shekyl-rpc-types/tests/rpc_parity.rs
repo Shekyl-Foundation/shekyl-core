@@ -914,7 +914,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 26] = [
+    let links: [(&str, &str); 27] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1019,6 +1019,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v26.json"),
             include_str!("vectors/rpc/get_version_synced_v27.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v27.json"),
+            include_str!("vectors/rpc/get_version_synced_v28.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1037,7 +1041,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 26] = [
+    const ADDED_AT_LINK: [&[&str]; 27] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1064,6 +1068,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.48 (a restricted get_info omits Status and Peers, RK-Q8; get_version gains nothing)
         &[], // 3.49 (get_info's connection counts come from the seam board, RK-Q3; get_version gains nothing)
         &[], // 3.50 (get_info's pool count is split by broadcast state, RK-Q10; get_version gains nothing)
+        &[], // 3.51 (get_info refuses on a broken supply invariant, RK-Q9; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1075,7 +1080,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 26] = [
+    const REMOVED_AT_LINK: [&[&str]; 27] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1102,6 +1107,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.48 (the withheld parts are get_info's; get_version retires nothing)
         &[], // 3.49 (no member moves on either method; the counts' source and meaning do)
         &[], // 3.50 (the host-only member is get_info's; get_version retires nothing)
+        &[], // 3.51 (no member moves on any reply; one state stops being answered)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -2009,7 +2015,8 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
 // derived at 3.46 when the target stopped being a sentinel, and all five
 // have one derived at 3.47 when `has_peers` arrived, and the restricted one
 // another at 3.48 when it stopped carrying Status and Peers; the tests
-// below read the newest of each.
+// below read the newest of each. The burn-refusal fixture ends at `_v4`:
+// the daemon refuses that state since 3.51.
 // These tests pin the TYPE: that each vector is a `GetInfoResponse` and that
 // the response writes the vector back. The handler's parity is
 // `shekyl-daemon-rpc`'s.
@@ -2146,16 +2153,12 @@ mod get_info {
         );
     }
 
-    #[test]
-    fn burn_refusal_matches_the_oracle() {
-        let mut built = synced();
-        built.economics.total_burned = built.economics.already_generated_coins + 1;
-        built.economics.burn_pct = 0;
-        assert_parity(
-            include_str!("vectors/rpc/get_info_burn_refusal_v4.json"),
-            &built,
-        );
-    }
+    // The burn-refusal fixture has no test here. `get_info_burn_refusal_v1`
+    // to `_v4` record a reply with `burn_pct: 0` beside more burned than
+    // generated, which the daemon sent until 3.51 and now refuses to send
+    // (RK-Q9). The files stay as the record, held to each other by the
+    // derivation tests above; the refusal is tested where it is made, in
+    // `shekyl-daemon-rpc`.
 
     const STATUS_KEYS: [&str; 8] = [
         "start_time",
