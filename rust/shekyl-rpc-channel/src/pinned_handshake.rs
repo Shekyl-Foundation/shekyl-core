@@ -133,10 +133,13 @@ fn run() -> Run {
         .seal(&request, TRANSPORT_AD)
         .expect("client transport message");
     assert_eq!(epoch, KeyEpoch::INITIAL);
-    let mut session = pending
-        .open_first_message(&client_ciphertext)
+    let (mut session, first_message) = pending
+        .open_first_message(|recv| {
+            recv.open(&client_ciphertext, TRANSPORT_AD)
+                .map(|(plaintext, _)| plaintext)
+        })
         .expect("the client's first message opens");
-    assert_eq!(session.first_message, request);
+    assert_eq!(first_message, request);
     assert_eq!(session.request, payloads[2], "message 3's payload");
     assert_eq!(
         session.client.x25519(),

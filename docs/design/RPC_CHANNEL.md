@@ -412,6 +412,15 @@ The prologue (§4.4) is unchanged.
   lookup and a claim, not an authenticated client. A caller can copy that
   fingerprint; the copy is still only a claim. After message 4 the daemon
   holds `PendingSession`, whose only operation is `open_first_message`.
+  It lends its receiving direction, for that one call, to an opener the
+  caller supplies: the channel's record framer (§4.4), which the handshake
+  does not contain. **The opener's result is not what releases the
+  session (ruled 2026-10-12).** A direction counts the ciphertexts it has
+  opened, a failed tag not among them, and the session is released only if
+  the opener succeeded *and* the receiving direction itself opened at
+  least one. An opener that reports success having opened nothing is
+  refused like any other failure, and there is a test with exactly that
+  opener.
   On success that yields `AuthenticatedSession`: the transport directions,
   the authenticated client and message 3's payload. On failure the session
   is gone. `PendingSession` does not expose the request, the directions or
@@ -992,6 +1001,13 @@ outside the grant is refused with its own error — a dedicated JSON-RPC
 code and HTTP 403 on REST — never "method not found" or a 404. The default
 request is the `view` preset (§6.1). Nothing is served until the client's first
 transport record decrypts (§4.1).
+
+**Both payloads are fixed-length (ruled 2026-10-12).** The handshake
+carries the message-3 and message-4 payloads as opaque bytes; their
+encoding is RT-W10's. Whatever it is, each payload has one length for
+every grant, so that neither message's size on the wire tells an observer
+what was requested or what was granted. Message 3 is then always the same
+size, and so is message 4.
 
 **Open, for RT-W10's pre-flight: what message 4 carries.** The paragraph
 above has the daemon clamp the *request* to the ceiling and return the

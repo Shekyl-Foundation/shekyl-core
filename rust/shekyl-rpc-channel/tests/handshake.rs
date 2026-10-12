@@ -12,7 +12,7 @@
 //! beside the handshake. Everything here draws from the operating system, as
 //! production does.
 
-use shekyl_noise::Direction;
+use shekyl_noise::{Direction, DirectionError};
 use shekyl_rpc_channel::handshake::{
     Client, Daemon, FirstMessageRefused, HandshakeError, PendingSession, StaticKeypair,
     MESSAGE1_LEN, MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, MLKEM768_CT_LEN, TAG_LEN,
@@ -78,8 +78,8 @@ fn a_handshake_completes_and_keys_a_record_channel() {
     // its directions, the client, and what the client asked for.
     let (mut client_send, mut client_recv) = client.into_directions();
     let (message, _) = client_send.seal(b"first request", TRANSPORT_AD).unwrap();
-    let mut session = pending.open_first_message(&message).unwrap();
-    assert_eq!(session.first_message, b"first request");
+    let (mut session, first) = pending.open_first_message(bare(&message)).unwrap();
+    assert_eq!(first, b"first request");
     assert_eq!(session.request, REQUEST);
     assert_eq!(
         session.client.fingerprint().as_bytes(),
@@ -306,6 +306,64 @@ fn through_message_4(
     (pending, send, recv)
 }
 
+/// The tests' opener: the first message is one bare Noise ciphertext under
+/// [`TRANSPORT_AD`]. The channel's record framer will be another opener;
+/// this one exists only here.
+fn bare(ciphertext: &[u8]) -> impl FnOnce(&mut Direction) -> Result<Vec<u8>, DirectionError> + '_ {
+    move |recv| {
+        recv.open(ciphertext, TRANSPORT_AD)
+            .map(|(plaintext, _)| plaintext)
+    }
+}
+
+/// The session is released by what the receiving direction did, not by
+/// what the opener says. An opener is code the handshake does not own: the
+/// record framer, or a mistake. Whatever it returns, a direction that has
+/// opened no ciphertext has authenticated nobody.
+#[test]
+fn an_opener_that_opened_nothing_is_refused_whatever_it_returns() {
+    let (client_id, daemon_id) = identities();
+
+    // Returns Ok without touching the direction.
+    let (pending, _, _) = through_message_4(&client_id, &daemon_id);
+    assert!(matches!(
+        pending.open_first_message(|_recv| Ok::<_, ()>("authenticated, honest")),
+        Err(FirstMessageRefused)
+    ));
+
+    // Tries, fails, and says Ok anyway. A failed tag is not an open.
+    let (pending, _, _) = through_message_4(&client_id, &daemon_id);
+    assert!(matches!(
+        pending.open_first_message(|recv| {
+            assert!(recv.open(&[0xa5; 64], TRANSPORT_AD).is_err());
+            assert!(recv.open(&[0x5a; 64], TRANSPORT_AD).is_err());
+            Ok::<_, ()>(())
+        }),
+        Err(FirstMessageRefused)
+    ));
+
+    // Opens the real first message and then reports failure: refused too.
+    // Both conditions are required, and the session is not handed out on
+    // the direction's count alone.
+    let (pending, mut send, _) = through_message_4(&client_id, &daemon_id);
+    let (message, _) = send.seal(b"first request", TRANSPORT_AD).unwrap();
+    assert!(matches!(
+        pending.open_first_message(|recv| {
+            recv.open(&message, TRANSPORT_AD).unwrap();
+            Err::<(), _>("the framing after it was wrong")
+        }),
+        Err(FirstMessageRefused)
+    ));
+
+    // The control: the same message, opened and reported as opened.
+    let (pending, mut send, _) = through_message_4(&client_id, &daemon_id);
+    let (message, _) = send.seal(b"first request", TRANSPORT_AD).unwrap();
+    let (session, first) = pending.open_first_message(bare(&message)).unwrap();
+    assert_eq!(first, b"first request");
+    assert_eq!(session.recv.opened(), 1);
+    assert_eq!(session.send.opened(), 0);
+}
+
 /// §4.1, §6.2: until the client's first transport message opens, the daemon
 /// holds a pending session and nothing it could serve with. That the
 /// directions, the client and the request are unreachable before then is a
@@ -319,7 +377,7 @@ fn only_the_clients_first_message_releases_the_session() {
     // Bytes that are not a transport message at all.
     let (pending, _, _) = through_message_4(&client_id, &daemon_id);
     assert!(matches!(
-        pending.open_first_message(&[0xa5; 64]),
+        pending.open_first_message(bare(&[0xa5; 64])),
         Err(FirstMessageRefused)
     ));
 
@@ -329,7 +387,7 @@ fn only_the_clients_first_message_releases_the_session() {
     let last = message.len() - 1;
     message[last] ^= 0x01;
     assert!(matches!(
-        pending.open_first_message(&message),
+        pending.open_first_message(bare(&message)),
         Err(FirstMessageRefused)
     ));
 
@@ -339,18 +397,18 @@ fn only_the_clients_first_message_releases_the_session() {
     let (_, mut other_send, _) = through_message_4(&client_id, &daemon_id);
     let (message, _) = other_send.seal(b"first request", TRANSPORT_AD).unwrap();
     assert!(matches!(
-        pending.open_first_message(&message),
+        pending.open_first_message(bare(&message)),
         Err(FirstMessageRefused)
     ));
 
     // The daemon's own sending direction is not the client's.
     let (pending, mut send, _) = through_message_4(&client_id, &daemon_id);
     let (message, _) = send.seal(b"first request", TRANSPORT_AD).unwrap();
-    let mut session = pending.open_first_message(&message).unwrap();
+    let (mut session, _) = pending.open_first_message(bare(&message)).unwrap();
     let (other_pending, _, _) = through_message_4(&client_id, &daemon_id);
     let (echoed, _) = session.send.seal(b"first request", TRANSPORT_AD).unwrap();
     assert!(matches!(
-        other_pending.open_first_message(&echoed),
+        other_pending.open_first_message(bare(&echoed)),
         Err(FirstMessageRefused)
     ));
 }
@@ -365,7 +423,7 @@ fn a_short_first_message_is_refused_and_the_session_is_consumed() {
     let (message, _) = send
         .seal(b"first request, arriving in pieces", TRANSPORT_AD)
         .unwrap();
-    let Err(error) = pending.open_first_message(&message[..message.len() - 1]) else {
+    let Err(error) = pending.open_first_message(bare(&message[..message.len() - 1])) else {
         panic!("a short message opened");
     };
     assert_eq!(

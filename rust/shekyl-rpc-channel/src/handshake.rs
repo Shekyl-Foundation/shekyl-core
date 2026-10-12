@@ -107,10 +107,11 @@ pub const MESSAGE4_OVERHEAD: usize = MLKEM768_CT_LEN + TAG_LEN + TAG_LEN;
 
 /// Associated data of this handshake's transport messages.
 ///
-/// One Noise ciphertext, no framing. Empty, and the same on both sides:
-/// [`Established::into_directions`] seals with it, and
-/// [`PendingSession::open_first_message`] opens with it. A caller does not
-/// supply a different value.
+/// One Noise ciphertext, no framing. Empty, and the same on both sides: a
+/// bare message is sealed with it on [`Established::into_directions`]'s
+/// directions and opened with it by the opener handed to
+/// [`PendingSession::open_first_message`]. The channel's record framer has
+/// its own associated data and does not use this.
 pub const TRANSPORT_AD: &[u8] = b"";
 
 /// Why a handshake stopped.
@@ -790,8 +791,6 @@ pub struct AuthenticatedSession {
     pub client: StaticPublic,
     /// Message 3's payload: what the client asked for.
     pub request: Vec<u8>,
-    /// The first transport message's plaintext.
-    pub first_message: Vec<u8>,
     /// The daemon's sending direction. Its nonce is still 0.
     pub send: Direction,
     /// The daemon's receiving direction, past the first message.
@@ -829,33 +828,51 @@ impl PendingSession {
         self.sym.handshake_hash()
     }
 
-    /// Open the client's first transport message.
+    /// Let `opener` open the client's first transport message, and release
+    /// the session only if it did.
     ///
-    /// `ciphertext` is one Noise message, sealed under [`TRANSPORT_AD`].
-    /// The epoch the direction reports is discarded: a bare ciphertext has
-    /// no header to carry it.
+    /// The receiving direction is lent to `opener` for this one call. What
+    /// the first message looks like on the wire is the opener's business:
+    /// the channel's record framer is one, and it is not part of the
+    /// handshake. A bare Noise message is another, opened with
+    /// [`TRANSPORT_AD`].
+    ///
+    /// **The opener's word is not what releases the session.** After it
+    /// returns, the receiving direction must itself have opened at least one
+    /// ciphertext ([`Direction::opened`]): a tag verified under a key only
+    /// the client's ML-KEM key could have produced. An opener that returns
+    /// `Ok` without opening anything, or after only failed attempts, has
+    /// authenticated nobody, and the session is refused exactly as if it
+    /// had returned an error. So is one that opens a ciphertext and then
+    /// returns `Err`.
+    ///
+    /// On success, returns the session and whatever the opener returned.
     ///
     /// # Errors
     ///
-    /// [`FirstMessageRefused`] when the message does not open. The session
-    /// is consumed and cannot be tried again.
-    pub fn open_first_message(
+    /// [`FirstMessageRefused`] when the opener fails or the direction opened
+    /// nothing. The session is consumed and cannot be tried again: its
+    /// sending direction, the client and the request are dropped unseen.
+    pub fn open_first_message<T, E>(
         self,
-        ciphertext: &[u8],
-    ) -> Result<AuthenticatedSession, FirstMessageRefused> {
+        opener: impl FnOnce(&mut Direction) -> Result<T, E>,
+    ) -> Result<(AuthenticatedSession, T), FirstMessageRefused> {
         let handshake_hash = self.sym.handshake_hash();
         let (send, mut recv) = self.sym.into_directions(SplitRole::Responder);
-        let (first_message, _) = recv
-            .open(ciphertext, TRANSPORT_AD)
-            .map_err(|_| FirstMessageRefused)?;
-        Ok(AuthenticatedSession {
-            client: self.client,
-            request: self.request,
-            first_message,
-            send,
-            recv,
-            handshake_hash,
-        })
+        let opened = opener(&mut recv).map_err(|_| FirstMessageRefused)?;
+        if recv.opened() == 0 {
+            return Err(FirstMessageRefused);
+        }
+        Ok((
+            AuthenticatedSession {
+                client: self.client,
+                request: self.request,
+                send,
+                recv,
+                handshake_hash,
+            },
+            opened,
+        ))
     }
 }
 
