@@ -61,6 +61,11 @@ SCOPE_UNIT="ba-t5-s3-$STAMP"
 QUIET_S=45
 FETCHES_MECH=512
 FETCHES_CTRL=4096
+# BAT5_S3_DRY=1: a rehearsal of every path in miniature — short windows,
+# a handful of fetches — run and discarded before the registered start
+# (rule: dry-run every registered cell first). Its outputs are not a
+# capture and the record does not quote them.
+if [ "${BAT5_S3_DRY:-}" = 1 ]; then QUIET_S=6; FETCHES_MECH=16; FETCHES_CTRL=48; fi
 # The daemon must still be syncing through the last window: stop a pass
 # before it starts if fewer than this many blocks remain.
 MIN_BLOCKS_LEFT=600
