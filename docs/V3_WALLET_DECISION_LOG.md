@@ -6484,10 +6484,10 @@ ruled in the serve-credit specification; this rules how it is built.
    digest. A Reinstate was checked and does not change holdings.
 3. **Increment 3 is staged**, with no network-type branch: no tree
    admits a carrier without checking its receipts.
-4. **The FN-DSA lane builds FN-DSA increments 2 to 4** (changed
-   2026-10-11; ruled on 2026-10-10 as the settlement lane's). Increment 2
-   has landed from that lane and it is building 3 and 4. The settlement
-   lane's receipt check waits for them.
+4. **The FN-DSA lane closed at increment 2; increments 3 and 4 and the
+   receipt check belong to the Slice C round** (changed 2026-10-11; ruled
+   on 2026-10-10 as the settlement lane's). The settlement lane builds
+   none of the three and does not own the receipt check.
 5. **Rust deletions land in the increment that replaces each piece; C++
    deletions at `DEL-008`.**
 6. **The visible shortfall is stored, with undo.**
