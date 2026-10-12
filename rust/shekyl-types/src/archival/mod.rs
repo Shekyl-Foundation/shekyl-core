@@ -639,8 +639,10 @@ pub use bond::{
 };
 pub use serve::{PassCount, ServedShard};
 pub use settlement::{
-    IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow, SettlementRowError,
-    COUNTED_DRAWS, ISSUED_DIGEST_LEN, SERVE_THRESHOLD_PASSES, SETTLEMENT_ROW_LEN,
+    BlockDraws, DrawCommitment, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
+    SettlementOutcome, SettlementRow, SettlementRowError, BLOCK_DRAWS_LEN, COUNTED_DRAWS,
+    DRAWABLE_DIGEST_LEN, DRAW_COMMITMENT_LEN, ISSUED_DIGEST_LEN, SERVE_THRESHOLD_PASSES,
+    SETTLEMENT_ROW_LEN,
 };
 pub use slash::{SlashLogEntry, SlashedHolding};
 pub use view::ShardView;
