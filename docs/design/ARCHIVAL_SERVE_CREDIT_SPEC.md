@@ -1308,8 +1308,9 @@ Carried with the implementation:
   (`SO-D9` (i) and membership; `SCS-P30`). CEN-J8, J9 and J10 are the
   first rows to use it. Their successors are block rules (`SCS-P16`).
 - **The sim** calls the production draw functions instead of carrying its
-  own count rule and selection (`SCS-F15`), and gains a term for bundles
-  lost to a reorg or an expired window before §12's bar is read again.
+  own count rule and selection (`SCS-F15`), with a term for bundles lost
+  to a reorg or an expired window. Done as a new mode beside the old one:
+  `ESR-13`, PR #1050 (§12).
 - **Registry:** a row in
   [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) for every
   label in §16, landing with its constant. The registry has no status for
@@ -1425,9 +1426,28 @@ block independently unrevealed with the stated probability.
   0.30 read failure, which is the 2-of-3 rule's cost and is much larger.
   Neither is priced in currency.
 
-The sim does not model the reads, dropout that is correlated in time or
-selective, or a bundle lost to a reorg or to a window that closed on it
-(§11). It runs one epoch from its open, which is the whole state
+**Re-run on the production functions, with bundle loss (`ESR-13`,
+2026-10-12; PR #1050, sim plan §5.17 and §5.18).** The count is
+`draw_count`'s and every draw is `select_draw`'s; a bundle is filed,
+included or lost whole. Predictions were committed before the run.
+
+- **The bar holds:** 1.02 % short (0.98–1.09) at 10 % dropout with the
+  filing margin `M = 30`.
+- **The `(m, n)` figures above did not move**, as predicted: they depend
+  on the read-failure rate, not on the observation rate.
+- **The integer count rule and the `f64` one agree** in every block of
+  every epoch run.
+- **With `M = 30`, loss to a reorg near the deadline has no effect**: the
+  latest honest inclusion is clear of the blocks such a reorg reaches.
+  With `M = 0`, 0.4 % of bundles arrive late and the short share rises by
+  0.05 to 0.14 points.
+- **A producer that files at the last admissible block is the costly
+  case.** At `M = 30` it loses no bundle and still doubles the short
+  share, to 2.17 %. At a 3-block margin with a 10 % loss rate it reads
+  3.48 %, over the bar. This is the evidence behind V5.
+
+Neither run models the reads, or dropout or loss that is correlated in
+time or aimed at particular blocks. It runs one epoch from its open, which is the whole state
 of the count rule: the carry starts at zero and in-flight stops at the
 epoch's open (§4.3), so no epoch's counts depend on the one before.
 
