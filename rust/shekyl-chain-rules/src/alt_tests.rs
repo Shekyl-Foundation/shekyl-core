@@ -23,7 +23,7 @@ use crate::rule_set::{FakechainSchedule, RuleSet, SettlementEpochBlocks};
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::Locus;
-use crate::view::{AtHeight, HeaderRecord};
+use crate::view::{AtHeight, HeaderRecord, Tip};
 
 const fn height(raw: u64) -> BlockHeight {
     BlockHeight::from_raw(raw)
@@ -76,10 +76,7 @@ impl<'id, V: HeaderView<'id>> AltChainView<'id> for Forked<'_, V> {
 /// pops nothing. The tier's steady-state input.
 fn fork_at_tip(chain: &MockChain) -> Fork {
     let tip = chain.tip().expect("a non-empty chain");
-    Fork {
-        root: tip,
-        recorded_tip: tip,
-    }
+    Fork::new(tip, tip).expect("a tip is not above itself")
 }
 
 /// A fork rooted at `root` on `chain`, popping every recorded block above
@@ -95,10 +92,28 @@ fn fork_rooted_at(chain: &MockChain, root: u64) -> Fork {
             hash: header.hash,
         }
     });
-    Fork {
-        root,
-        recorded_tip: tip,
-    }
+    Fork::new(root, tip).expect("the fixture roots at or below the tip")
+}
+
+#[test]
+fn an_inverted_fork_is_not_a_fork() {
+    // A root above the recorded tip is not a span of blocks. `Fork::new`
+    // refuses it; E2 never sees the saturated zero that used to admit it.
+    let above = Tip {
+        height: height(5),
+        hash: BlockHash::from_bytes([1; 32]),
+    };
+    let below = Tip {
+        height: height(4),
+        hash: BlockHash::from_bytes([2; 32]),
+    };
+    assert!(Fork::new(above, below).is_err());
+    let fork = Fork::new(below, above).expect("the lower tip is the root");
+    assert_eq!(fork.root(), below);
+    assert_eq!(fork.recorded_tip(), above);
+    assert_eq!(fork.pops(), BlockCount::from_raw(1));
+    let level = Fork::new(below, below).expect("a fork at the tip pops nothing");
+    assert_eq!(level.pops(), BlockCount::ZERO);
 }
 
 /// The rows the tier evaluates beyond `form`'s: the three alt arms and the
@@ -203,7 +218,7 @@ fn the_alt_tier_derives_the_facts_validate_derives_over_the_same_chain() {
     // is the parent's plus one, the cumulative difficulty is the parent's
     // plus the target CEN-D5 derived — the same target CEN-D4 derives,
     // since the algorithm is one function over whichever window it is
-    // fed. The weight is the candidate's bytes, `Some` on every alt row.
+    // fed. The weight is the candidate's bytes.
     let chain = chain_of(12);
     chain.with_view(|view| {
         let input = candidate_on(&chain, Vec::new());

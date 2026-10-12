@@ -53,6 +53,13 @@
 //! another block refuses at A2 and mints nothing; on the store's path the
 //! row costs one comparison and never fires.
 //!
+//! The verdict is branded to the view type that minted it, as
+//! [`ChainValid`](crate::ChainValid) is. The store's `insert_alt_block`
+//! names its `AltView`, so a verdict from any other `AltChainView` does
+//! not unify with the row it would write. The tier and the write stay two
+//! operations: a later switch judges on a snapshot, then pops, then
+//! inserts, and the token has to exist between those steps.
+//!
 //! # The ladder
 //!
 //! The C++'s `handle_alternative_block` (`blockchain.cpp:1974`–`:2358`), in
@@ -62,29 +69,27 @@
 //! stitched view — the seed (CEN-D3), the newest-11 window (CEN-C3, the
 //! C++'s `timestamps.resize(11)`), the target (CEN-D5 over D4, D6 the zero
 //! guard), the cumulative difficulty after the block — and the header
-//! predicates in census order: A2 (the parent link, above), C1, C2, D1
-//! (PoW at the alt target), E1, F4, F5, F6. The expensive step, the
+//! predicates in census order, the header ladder's three segments — A2,
+//! then C1, C2, D1, then E1, F4, F5, F6 — which `validate` runs with its
+//! chain-state rules between the calls. The expensive step, the
 //! longhash, is `form`'s and has been paid before this tier is reached, so
 //! the cheap exits here save header reads, not hashing.
 
+use core::marker::PhantomData;
+
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{BlockHash, BlockHeight, BlockWeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, BlockWeight};
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, Stale};
+use crate::header_ladder::{self, HeaderFacts};
 use crate::rule_set::RuleSet;
 use crate::rules::alt::{K1b, D5, E2, K4};
-use crate::rules::anchors::E1;
 use crate::rules::block_weight::block_weight;
-use crate::rules::difficulty::D4;
-use crate::rules::miner::{F4, F5, F6};
-use crate::rules::pow::{D1b, D1, D3};
-use crate::rules::timestamps::{C1, C2, C3};
-use crate::rules::topology::A2;
-use crate::rules::{self, BlockContext, FormContext};
+use crate::rules::{self, FormContext};
 use crate::trust::Trust;
-use crate::verdict::Verdict;
+use crate::verdict::{Brand, Verdict};
 use crate::view::{HeaderView, Tip};
 
 /// The alt tier's view: a [`HeaderView`] over a stitched alternative chain
@@ -101,21 +106,68 @@ pub trait AltChainView<'id>: HeaderView<'id> {
     fn fork(&self) -> Fork;
 }
 
+/// A root placed above the recorded tip. Not a fork: the span of recorded
+/// blocks it would pop is not a [`BlockCount`](shekyl_types::BlockCount).
+///
+/// [`Fork::new`] is the only constructor, so this pair cannot be judged.
+/// The store's `AltChain::build` reports the same pair as SI-7 on
+/// `block_heights` — the height came from `height_of` — before a [`Fork`]
+/// exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvertedFork {
+    /// The claimed fork point.
+    pub root: Tip,
+    /// The recorded tip it sits above.
+    pub recorded_tip: Tip,
+}
+
 /// Where an alternative chain leaves the recorded one, and where the
 /// recorded one ends — CEN-E2's operands.
 ///
 /// `root` is the last recorded block the alternative shares (the store's
 /// `AltChain::root`); `recorded_tip` is the recorded chain's tip in the
 /// same snapshot. The blocks the alternative would pop are
-/// `recorded_tip.height − root.height`. Both halves come from one
-/// snapshot: a root from one read and a tip from another can disagree,
-/// and a root above the tip is read as popping nothing.
+/// [`pops`](Self::pops): `recorded_tip.height − root.height`. A root above
+/// the tip is not a value ([`Fork::new`] returns [`InvertedFork`]); the
+/// saturated zero that used to admit it is not a span this type can name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fork {
-    /// The fork point: a recorded block, at or below `recorded_tip`.
-    pub root: Tip,
-    /// The recorded chain's tip.
-    pub recorded_tip: Tip,
+    root: Tip,
+    recorded_tip: Tip,
+}
+
+impl Fork {
+    /// `root` at or below `recorded_tip`. A root above the tip is
+    /// [`InvertedFork`].
+    pub const fn new(root: Tip, recorded_tip: Tip) -> Result<Self, InvertedFork> {
+        if root.height.to_raw() > recorded_tip.height.to_raw() {
+            Err(InvertedFork { root, recorded_tip })
+        } else {
+            Ok(Self { root, recorded_tip })
+        }
+    }
+
+    /// The fork point: a recorded block, at or below [`recorded_tip`](Self::recorded_tip).
+    #[must_use]
+    pub const fn root(self) -> Tip {
+        self.root
+    }
+
+    /// The recorded chain's tip on the snapshot the fork was read from.
+    #[must_use]
+    pub const fn recorded_tip(self) -> Tip {
+        self.recorded_tip
+    }
+
+    /// Recorded blocks the alternative would pop. Defined for every `Fork`:
+    /// [`new`](Self::new) refused a root above the tip.
+    #[must_use]
+    pub const fn pops(self) -> BlockCount {
+        self.recorded_tip
+            .height
+            .checked_sub(self.root.height)
+            .expect("Fork::new refused a root above its recorded tip")
+    }
 }
 
 /// An alternative block the cheap tier admitted: what the store's AL1
@@ -124,16 +176,29 @@ pub struct Fork {
 /// Not a [`ChainValid`](crate::ChainValid), and nothing converts it into
 /// one: the rows evaluated are the header rules and the alt arms
 /// ([`coverage`](Self::coverage) says which), and a block this admits is
-/// re-judged in full by `validate` when its chain is promoted. Carries no
-/// brand — the view it was judged against is a stitched chain, not a
-/// batch, and the store accepts it only into the alt table.
+/// re-judged in full by `validate` when its chain is promoted.
+///
+/// Branded as `ChainValid` is: `'id` invariant, and `V` the view type that
+/// minted it. The store's `insert_alt_block` takes
+/// `AltValid<'_, AltView<'_>>`, so a verdict from any other view does not
+/// unify with the row. `'id` is the view's, not the write batch's: the
+/// token is minted before `write` opens, and a batch's `'id` does not exist
+/// yet. Not `Clone`.
+///
+/// ```compile_fail
+/// use shekyl_chain_rules::AltValid;
+/// // Would compile if `'id` were covariant; the brand is invariant.
+/// fn relabel<'long: 'short, 'short, V>(valid: AltValid<'long, V>) -> AltValid<'short, V> {
+///     valid
+/// }
+/// ```
 ///
 /// The derived facts are the candidate's position and work — the
 /// connecting height the stitched view derived, the cumulative difficulty
 /// after it, the wire weight of the bodies it carries. No supply figure:
 /// the parent's `coins_generated` is executed-chain state this tier does
 /// not read (CEN-K8), so the row has no honest value for one.
-pub struct AltValid {
+pub struct AltValid<'id, V> {
     candidate: Candidate,
     hash: BlockHash,
     height: BlockHeight,
@@ -141,9 +206,11 @@ pub struct AltValid {
     block_weight: BlockWeight,
     rule_set: RuleSet,
     coverage: RuleCoverage,
+    _brand: Brand<'id>,
+    _view: PhantomData<fn(V) -> V>,
 }
 
-impl core::fmt::Debug for AltValid {
+impl<V> core::fmt::Debug for AltValid<'_, V> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AltValid")
             .field("hash", &self.hash)
@@ -156,7 +223,7 @@ impl core::fmt::Debug for AltValid {
     }
 }
 
-impl AltValid {
+impl<'id, V> AltValid<'id, V> {
     /// The block as received: header, miner transaction, listed bodies
     /// and the attestation witness beside it.
     #[must_use]
@@ -213,20 +280,6 @@ impl AltValid {
     }
 }
 
-/// Run the listed header rules in order; the first refusal is the verdict.
-/// A [`ViewRead`](crate::ViewRead) becomes [`Fault`] through [`From`].
-macro_rules! judge_header {
-    ($cx:expr, $view:expr, $coverage:expr; $($rule:ty),+ $(,)?) => {
-        $(
-            if let Err(refused) =
-                rules::run_header::<$rule, H>(&$cx, $view, &mut $coverage).map_err(Fault::from)?
-            {
-                return Ok(Err(refused));
-            }
-        )+
-    };
-}
-
 /// The alt tier: judge a [`StructurallyValid`] block against the
 /// alternative chain `alt_view` stitches, under `rule_set` and `trust`,
 /// for the fork the view describes ([`AltChainView::fork`]).
@@ -257,7 +310,7 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
     alt_view: &H,
     rule_set: &RuleSet,
     trust: &Trust,
-) -> Result<Verdict<AltValid>, Fault<H::Fault>> {
+) -> Result<Verdict<AltValid<'id, H>>, Fault<H::Fault>> {
     if formed.rule_set() != *rule_set {
         return Err(Fault::Stale(Stale::RuleSet {
             formed_under: Box::new(formed.rule_set()),
@@ -279,37 +332,33 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
         return Ok(Err(refused));
     }
 
-    // The definitions over the stitched chain, as `validate` derives them
-    // over the recorded one: the connecting height from the view's tip
-    // (the parent, so `root + 1 + entries` — CEN-K1a's `≥ 1` is the
-    // store's construction), the seed, the newest-11 window, the target
-    // (CEN-D5 over D4; D6's zero guard refuses), the work after the block.
-    let tip = alt_view.tip().map_err(Fault::View)?;
-    let connecting = Tip::connecting_height(tip.as_ref());
-    D3::verify_seed(alt_view, connecting, &formed, &mut coverage)?;
-    let mtp_window = C3::window(alt_view, connecting, &mut coverage)?;
-    let target = match D5::target(alt_view, connecting, rule_set, &mut coverage)? {
-        Ok(target) => target,
+    // The definitions over the stitched chain, the same derivation
+    // `validate` runs over the recorded one. CEN-D5 records only when that
+    // derivation produced a target: a D6 refusal is D4's verdict.
+    let HeaderFacts {
+        connecting,
+        cumulative_difficulty,
+        context,
+    } = match header_ladder::derive(&formed, alt_view, rule_set, trust, &mut coverage)? {
+        Ok(facts) => facts,
         Err(refused) => return Ok(Err(refused)),
     };
-    let cumulative_difficulty = D4::cumulative_after(alt_view, connecting, target)?;
-    D1b::record(&mut coverage);
+    D5::record(&mut coverage);
 
-    // The header predicates, in census order (`DRS_E5` §2.1, CEN-K4's
-    // ladder): A2 first — the view's tip is the candidate's parent on the
-    // store's path by construction, and this function holds the relation
-    // it cannot see (module docs); no B5 and no B4 (chain-state reads;
-    // promotion's), no body rule and no slot loop (nothing here has a body
-    // the chain executed).
-    let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
-    judge_header!(cx, alt_view, coverage; A2, C1, C2, D1, E1, F4, F5, F6);
+    // The header ladder (`DRS_E5` §2.1, CEN-K4): the three segments
+    // `validate` calls with B5, B4 and G1 between them. Nothing between
+    // them here — those three read chain state.
+    if let Err(refused) = header_ladder::judge_header_ladder(&context, alt_view, &mut coverage)? {
+        return Ok(Err(refused));
+    }
 
     // The ladder ran to its end: the block is accepted into storage after
     // these rows and no other (CEN-K4 — the tier is the row).
     K4::record(&mut coverage);
 
     let hash = formed.hash();
-    let block_weight = block_weight(formed.candidate());
+    let block_weight = block_weight(context.formed.candidate());
+    drop(context);
     let (candidate, _stateless) = formed.into_parts();
     Ok(Ok(AltValid {
         candidate,
@@ -319,6 +368,8 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
         block_weight,
         rule_set: *rule_set,
         coverage,
+        _brand: PhantomData,
+        _view: PhantomData,
     }))
 }
 

@@ -42,19 +42,15 @@
 //! last step passes, and what it holds is the set and the order, pinned by
 //! the tier's tests.
 
-use shekyl_types::BlockHeight;
 use shekyl_wire::Input;
 
 use crate::alt::Fork;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::Fault;
 use crate::rule_set::RuleSet;
-use crate::rules::difficulty::{Target, D4};
 use crate::rules::{FormContext, FormRule, Rule};
 use crate::trust::Trust;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
-use crate::view::HeaderView;
 
 /// CEN-K1b: an alternative block whose coinbase claims height 0 is
 /// refused before anything else is read.
@@ -174,16 +170,14 @@ impl E2 {
             coverage.insert(Self::ROW);
             return Ok(());
         };
-        if fork.root.height < anchor.height {
+        if fork.root().height < anchor.height {
             return Err(InvalidBlock::new(Self::ROW, Locus::Block));
         }
-        // How many recorded blocks the alternative would pop. The root is a
-        // recorded height at or below the tip (the store's `AltChain::build`
-        // walked to it), so the subtraction is defined; a caller handing a
-        // root above its own tip has misstated the fork, and the saturated
-        // zero admits rather than refuses — which is why the store derives
-        // both halves of the `Fork` from one snapshot.
-        let pops = fork.recorded_tip.height.saturating_sub(fork.root.height);
+        // How many recorded blocks the alternative would pop. [`Fork::new`]
+        // refused a root above the recorded tip, so the span is defined;
+        // the store faults that pair as SI-7 before a `Fork` exists
+        // (`AltChain::build`).
+        let pops = fork.pops();
         if pops > rule_set.reorg_cap() {
             return Err(InvalidBlock::new(Self::ROW, Locus::Block));
         }
@@ -196,11 +190,13 @@ impl E2 {
 /// stitched chain answers — the recorded prefix to the fork point, the alt
 /// entries above it, ending at the candidate's parent.
 ///
-/// The arithmetic is [`D4::target`]'s and is not restated: D4 records its
-/// own row (and CEN-D6's zero guard, whose refusal is the C++'s
-/// height-0 sentinel made a verdict). D5 is the fact that the window came
-/// from an alternative chain, recorded at the one site that feeds D4 such
-/// a view. A main-chain `validate` never records it.
+/// The arithmetic is [`D4::target`](crate::rules::difficulty::D4::target)'s
+/// and is not restated: D4 records its own row (and CEN-D6's zero guard,
+/// whose refusal is the C++'s height-0 sentinel made a verdict). D5 is the
+/// fact that the window came from an alternative chain. It is recorded by
+/// the alt tier only when that call produced a target — a D6 refusal is
+/// D4's verdict, and this row did not run. A main-chain `validate` never
+/// records it.
 pub(crate) struct D5;
 
 impl Rule for D5 {
@@ -208,19 +204,9 @@ impl Rule for D5 {
 }
 
 impl D5 {
-    /// [`D4::target`] over `view`, with this row recorded beside D4's.
-    ///
-    /// # Errors
-    ///
-    /// As [`D4::target`]: the view's fault, or a corrupt observation.
-    pub(crate) fn target<'id, H: HeaderView<'id>>(
-        view: &H,
-        connecting: BlockHeight,
-        rule_set: &RuleSet,
-        coverage: &mut RuleCoverage,
-    ) -> Result<Verdict<Target>, Fault<H::Fault>> {
-        let target = D4::target(view, connecting, rule_set, coverage)?;
+    /// Record the row: the shared header derivation produced a target over
+    /// an alternative chain.
+    pub(crate) fn record(coverage: &mut RuleCoverage) {
         coverage.insert(Self::ROW);
-        Ok(target)
     }
 }

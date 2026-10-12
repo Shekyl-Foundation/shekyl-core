@@ -44,7 +44,7 @@ pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -
     AltBlock::checked(
         AltBlockFacts {
             height,
-            block_weight: Some(BlockWeight::from_raw(300 + raw)),
+            block_weight: BlockWeight::from_raw(300 + raw),
             cumulative_difficulty: CumulativeDifficulty::from_raw(1_000 + u128::from(raw)),
         },
         block,
@@ -107,22 +107,34 @@ pub(super) fn with_witness(candidate: Candidate, witness: &[u8]) -> Candidate {
     ))
 }
 
-/// The cheap tier over the committed store — what AL1 takes. CEN-K2's walk
-/// from the candidate's parent ([`AltChain::build`]), the stitched view,
-/// `form` claiming the seed that view answers, then `alt_against` over the
-/// view, which names its own fork. Panics where a fixture would be wrong:
-/// the parent does not link, a row of the tier refuses, the view faults.
-pub(super) fn admitted(store: &ChainStore, candidate: Candidate) -> AltValid {
-    let snap = store.begin_read().expect("read");
-    let chain = AltChain::build(&snap, &candidate.block.header.previous)
+/// The cheap tier over `snap` — what AL1 takes. CEN-K2's walk from the
+/// candidate's parent ([`AltChain::build`]), the stitched view, `form`
+/// claiming the seed that view answers, then `alt_against` over the view,
+/// which names its own fork. The token is branded to that `AltView`, so
+/// `snap` has to outlive it through `insert_alt_block`. Panics where a
+/// fixture would be wrong: the parent does not link, a row of the tier
+/// refuses, the view faults.
+pub(super) fn admitted<'s>(
+    snap: &'s ReadSnapshot<'s>,
+    candidate: Candidate,
+) -> AltValid<'s, AltView<'s>> {
+    let chain = AltChain::build(snap, &candidate.block.header.previous)
         .expect("the fixture's parent links to the recorded chain");
-    let view = AltView::new(&snap, chain);
+    let view = AltView::new(snap, chain);
     let formed = formed(&view, candidate).expect("the stitched view answers the seed");
     match alt_against(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
         Ok(Ok(valid)) => valid,
         Ok(Err(refused)) => panic!("the fixture satisfies every row of the tier: {refused}"),
         Err(fault) => panic!("the stitched view answers: {fault}"),
     }
+}
+
+/// Judge `candidate` on a fresh snapshot and insert it. The snapshot stays
+/// live through the write, which is what the verdict's brand requires.
+fn insert_admitted(store: &ChainStore, candidate: Candidate) -> Result<(), TestErr> {
+    let snap = store.begin_read().expect("read");
+    let valid = admitted(&snap, candidate);
+    store.write(|batch| Ok(batch.insert_alt_block(valid)?))
 }
 
 fn tip_height(store: &ChainStore) -> Option<u64> {
@@ -153,12 +165,11 @@ fn insert_read_enumerate_remove_and_drop() {
 
     // `a` first: `b`'s chain walks through `a`'s row, so `b` is judged on a
     // snapshot that holds it (K2 — the tier reads what the store holds).
-    let out: Result<(), TestErr> =
-        store.write(|batch| Ok(batch.insert_alt_block(admitted(&store, a_cand))?));
-    out.expect("insert a");
+    insert_admitted(&store, a_cand).expect("insert a");
     let b_cand = with_witness(side_candidate(h(2), a, 4), &witness);
     let b = b_cand.block.hash();
-    let b_valid = admitted(&store, b_cand);
+    let judged = store.begin_read().expect("read");
+    let b_valid = admitted(&judged, b_cand);
     assert_eq!(b_valid.height(), h(2), "derived over the stitched chain");
     let out: Result<(), TestErr> = store.write(|batch| {
         batch.insert_alt_block(b_valid)?;
@@ -194,7 +205,7 @@ fn insert_read_enumerate_remove_and_drop() {
         assert_eq!(got.attestation_witness(), None);
         assert_eq!(got.height(), BlockHeight::from_raw(1));
         assert!(
-            got.block_weight().is_some_and(|w| w.to_raw() > 0),
+            got.block_weight().to_raw() > 0,
             "the row's weight is the one the tier measured"
         );
         assert_eq!(snap.alt_block_count().expect("len"), 2);
@@ -224,7 +235,8 @@ fn insert_read_enumerate_remove_and_drop() {
 
     // `a` again, judged afresh: the tier does not know the store once held
     // it, and the store no longer does.
-    let a_again = admitted(&store, side_candidate(h(1), main[0], 3));
+    let judged = store.begin_read().expect("read");
+    let a_again = admitted(&judged, side_candidate(h(1), main[0], 3));
     let out: Result<u64, TestErr> = store.write(|batch| {
         batch.insert_alt_block(a_again)?;
         Ok(batch.drop_alt_blocks()?)
@@ -247,17 +259,12 @@ fn insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals() {
     let main = connect_chain(&store, &[vec![]]).hashes;
     let a = side_candidate(h(1), main[0], 5).block.hash();
 
-    let out: Result<(), TestErr> = store.write(|batch| {
-        Ok(batch.insert_alt_block(admitted(&store, side_candidate(h(1), main[0], 5)))?)
-    });
-    out.expect("first insert");
+    insert_admitted(&store, side_candidate(h(1), main[0], 5)).expect("first insert");
 
     // The same block, admitted again: the tier judges it the same way (it
     // reads the chain, not the alt table's membership), and the store
     // refuses the second row. K3's belt is the store's, not the tier's.
-    let out: Result<(), TestErr> = store.write(|batch| {
-        Ok(batch.insert_alt_block(admitted(&store, side_candidate(h(1), main[0], 5)))?)
-    });
+    let out = insert_admitted(&store, side_candidate(h(1), main[0], 5));
     assert_eq!(
         out,
         Err(TestErr::Store(
@@ -452,16 +459,20 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     // top' through the tier, carrying its witness (CW-2): the alt row is
     // the verdict. Its parent is recorded, so the chain has no entries and
     // the fork pops one block.
-    let alt_valid = admitted(&store, with_witness(alt_cand.clone(), &alt_witness));
+    // The snapshot stays live through the write: the verdict borrows it.
+    let judged = store.begin_read().expect("read");
+    let alt_valid = admitted(&judged, with_witness(alt_cand.clone(), &alt_witness));
     assert_eq!(alt_valid.hash(), alt_top);
     let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(alt_valid)?));
     out.expect("hold top'");
+    drop(judged);
 
     // The demoted block, judged by the tier over the snapshot the switch
     // reads — before the pop (SAL-13), as the sketch in `store::alt` has
     // it; whether the switch re-enters demotions this way is a5's
     // (`DRS_E5_POOL_ALT_PRUNE.md` §5). The bytes are the recorded ones.
-    let demoted = admitted(&store, Candidate::new(main_top.clone(), main_txs.clone()));
+    let judged = store.begin_read().expect("read");
+    let demoted = admitted(&judged, Candidate::new(main_top.clone(), main_txs.clone()));
     assert_eq!(demoted.hash(), main_top_hash);
 
     // The switch to top': demote top, promote top'.
@@ -500,11 +511,13 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         );
         assert_eq!(snap.alt_block_count().expect("len"), 1);
     }
+    drop(judged);
 
     // The same switch back, failing at its last step: nothing landed. top'
     // is judged over the pre-switch snapshot again (it is the tip there;
     // the tier reads the chain its parent is on, not the alt table).
-    let re_demoted = admitted(&store, alt_cand.clone());
+    let judged = store.begin_read().expect("read");
+    let re_demoted = admitted(&judged, alt_cand.clone());
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         batch.pop()?;
@@ -559,13 +572,15 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
         .logical_state_digest_v0()
         .expect("digest");
 
+    let judged = store.begin_read().expect("read");
     let a_valid = admitted(
-        &store,
+        &judged,
         with_witness(side_candidate(h(1), main[0], 6), &[0xC3; 40]),
     );
     let a = a_valid.hash();
     let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(a_valid)?));
     out.expect("insert");
+    drop(judged);
     let snap = store.begin_read().expect("read");
     assert!(snap.has_alt_block(&a).expect("has"), "the write landed");
     assert_eq!(

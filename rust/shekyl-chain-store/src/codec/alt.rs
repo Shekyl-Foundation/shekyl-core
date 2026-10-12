@@ -15,10 +15,12 @@
 //! - `cumulative_difficulty` is **one** `u128`, the encoding the chain
 //!   codec already uses for `block_info` (`chain.rs`), not the two `u64`
 //!   halves the C++ splits by hand at three sites (SAL-5);
-//! - `block_weight` is `Option` — the C++ stores `0` for "could not be
-//!   determined at admission" (`blockchain.cpp:2345`), and no block weighs
-//!   zero, so the sentinel is `None` (`SAL-Q4`); the field is named for what
-//!   it holds — the block's own weight, not a cumulative one (SAL-11);
+//! - `block_weight` is a [`BlockWeight`] — the block's own weight, not a
+//!   cumulative one (SAL-11). The C++ stored `0` for "could not be
+//!   determined" (`blockchain.cpp:2345`). Nothing writes an undetermined
+//!   weight: the cheap tier measures one, and zero is a codec refusal
+//!   ([`AltBlockError::ZeroWeight`]), not an absence. This layout stores
+//!   the eight bytes with no presence byte;
 //! - the block and the witness are **fields**, so an alt record without
 //!   its block, or a witness outliving its block, is not a value
 //!   (`SAL-Q2`; CW-2's lifetime clause made structural, SAL-6);
@@ -48,19 +50,18 @@
 //! ([`BlockBody::parse`] — the `blocks` table's own rule), a witness that
 //! is present and empty or over its bound
 //! ([`AttestationWitnessBytes::well_formed`] — the height-keyed twin's own
-//! rule; "empty stores no row" is `None`), and a weight of zero (the
-//! sentinel re-minted). The codec's own tests, the schema snapshot and the
-//! store's planted-row fixtures build rows this way; AL1 does not take one
-//! — the write boundary is the verdict's type, not this constructor's
-//! visibility. [`Canonical::decode`] refuses the same three, so a row that
-//! decodes is a row `checked` would have built (SI-14's shape).
+//! rule; "empty stores no row" is `None`), and a weight of zero. The
+//! codec's own tests, the schema snapshot and the store's planted-row
+//! fixtures build rows this way; AL1 does not take one — the write
+//! boundary is the verdict's type, not this constructor's visibility.
+//! [`Canonical::decode`] refuses the same three, so a row that decodes is
+//! a row `checked` would have built (SI-14's shape).
 //!
-//! `block_weight` keeps its `Option` from S-ALT (`SAL-Q4`) though
-//! `admitted` always writes `Some`: the one remaining question is whether a
-//! demoted block re-enters through the tier or through a constructor of its
-//! own, which is the switch's (`DRS_E5_POOL_ALT_PRUNE.md` §5 a5), and the
-//! arm goes — with a layout bump — when that lands with no writer of
-//! `None`.
+//! The weight is mandatory in this layout. [`AltBlock::admitted`] always
+//! measured one, and no other writer produced an absence, so a presence
+//! byte is not a case the type can name. A later writer that needs an
+//! absent weight bumps the layout. The switch's demotion re-entry is a5's
+//! (`DRS_E5_POOL_ALT_PRUNE.md` §5); it does not inherit an absence arm.
 //!
 //! # The value is the block
 //!
@@ -101,8 +102,8 @@ pub enum AltBlockError {
     /// A witness was given and is not a well-formed witness — empty, or over
     /// its bound. Absence is `None`, never an empty `Some`.
     WitnessMalformed,
-    /// A weight of zero was given. Zero is the C++ sentinel for "not
-    /// determined"; here that is `None`.
+    /// A weight of zero was given. A block weighs at least its coinbase;
+    /// zero is not a weight this record stores.
     ZeroWeight,
 }
 
@@ -113,7 +114,7 @@ impl core::fmt::Display for AltBlockError {
             Self::WitnessMalformed => {
                 "attestation witness is present and empty or over its bound; absence is None"
             }
-            Self::ZeroWeight => "a block weight of zero is the sentinel; undetermined is None",
+            Self::ZeroWeight => "a block weight of zero is refused",
         })
     }
 }
@@ -129,7 +130,7 @@ impl core::error::Error for AltBlockError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AltBlock {
     height: BlockHeight,
-    block_weight: Option<BlockWeight>,
+    block_weight: BlockWeight,
     cumulative_difficulty: CumulativeDifficulty,
     /// Parsed once, at construction or decode. The wire form is
     /// [`Block::serialize`] of this value.
@@ -145,25 +146,26 @@ pub struct AltBlock {
 pub struct AltBlockFacts {
     /// The block's height on its alternative chain.
     pub height: BlockHeight,
-    /// The block's own weight, `None` if admission could not determine it.
-    pub block_weight: Option<BlockWeight>,
+    /// The block's own weight. Zero is refused.
+    pub block_weight: BlockWeight,
     /// Cumulative difficulty at this block along its chain.
     pub cumulative_difficulty: CumulativeDifficulty,
 }
 
 impl AltBlock {
-    /// Presence byte for an absent optional field.
+    /// Presence byte for an absent witness.
     const ABSENT: u8 = 0;
-    /// Presence byte for a present optional field.
+    /// Presence byte for a present witness.
     const PRESENT: u8 = 1;
 
     /// **AL1's input.** The row for a block the cheap tier admitted: the
     /// block and witness the verdict carries, under the height, cumulative
     /// difficulty and weight it derived over the stitched chain
     /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.1). Infallible — module docs, *The row
-    /// is built from the verdict*.
+    /// is built from the verdict*. `V` is the view the tier judged over;
+    /// the row does not keep it.
     #[must_use]
-    pub fn admitted(valid: AltValid) -> Self {
+    pub fn admitted<V>(valid: AltValid<'_, V>) -> Self {
         let height = valid.height();
         let cumulative_difficulty = valid.cumulative_difficulty();
         let block_weight = valid.block_weight();
@@ -174,7 +176,7 @@ impl AltBlock {
         let candidate = valid.into_candidate();
         Self {
             height,
-            block_weight: Some(block_weight),
+            block_weight,
             cumulative_difficulty,
             block: candidate.block,
             attestation_witness: candidate
@@ -193,13 +195,13 @@ impl AltBlock {
     /// [`AltBlockError::BlockMalformed`] if `block` does not parse;
     /// [`AltBlockError::WitnessMalformed`] if `attestation_witness` is
     /// `Some` and not a well-formed witness; [`AltBlockError::ZeroWeight`]
-    /// if `facts.block_weight` is `Some(0)`.
+    /// if `facts.block_weight` is zero.
     pub fn checked(
         facts: AltBlockFacts,
         block: &[u8],
         attestation_witness: Option<Vec<u8>>,
     ) -> Result<Self, AltBlockError> {
-        if facts.block_weight.is_some_and(|w| w.to_raw() == 0) {
+        if facts.block_weight.to_raw() == 0 {
             return Err(AltBlockError::ZeroWeight);
         }
         let block = BlockBody::parse(block).map_err(|_| AltBlockError::BlockMalformed)?;
@@ -232,9 +234,9 @@ impl AltBlock {
         self.height
     }
 
-    /// The block's own weight, `None` if admission could not determine it.
+    /// The block's own weight.
     #[must_use]
-    pub const fn block_weight(&self) -> Option<BlockWeight> {
+    pub const fn block_weight(&self) -> BlockWeight {
         self.block_weight
     }
 
@@ -264,13 +266,7 @@ impl Canonical for AltBlock {
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.height.to_raw().to_le_bytes());
-        match self.block_weight {
-            None => out.push(Self::ABSENT),
-            Some(w) => {
-                out.push(Self::PRESENT);
-                out.extend_from_slice(&w.to_raw().to_le_bytes());
-            }
-        }
+        out.extend_from_slice(&self.block_weight.to_raw().to_le_bytes());
         out.extend_from_slice(&self.cumulative_difficulty.to_raw().to_le_bytes());
         put_bytes(out, &self.block.serialize());
         match &self.attestation_witness {
@@ -285,11 +281,10 @@ impl Canonical for AltBlock {
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut r = Reader::new(Self::NAME, bytes);
         let height = BlockHeight::from_raw(r.u64()?);
-        let block_weight = match r.u8()? {
-            Self::ABSENT => None,
-            Self::PRESENT => Some(BlockWeight::from_raw(r.u64()?)),
-            _ => return Err(r.invalid("block_weight presence byte is not 0 or 1")),
-        };
+        let block_weight = BlockWeight::from_raw(r.u64()?);
+        if block_weight.to_raw() == 0 {
+            return Err(r.invalid("block weight is zero"));
+        }
         let cumulative_difficulty = CumulativeDifficulty::from_raw(u128::from_le_bytes(
             r.array::<16>("buffer ends inside the cumulative difficulty")?,
         ));
@@ -303,9 +298,6 @@ impl Canonical for AltBlock {
         };
         if !r.is_empty() {
             return Err(r.invalid("trailing bytes after the alt block record"));
-        }
-        if block_weight.is_some_and(|w| w.to_raw() == 0) {
-            return Err(r.invalid("block weight is zero; undetermined is a missing option"));
         }
         let block = BlockBody::parse(&block_bytes)
             .map_err(|_| r.invalid("alt block bytes do not parse as a block"))?;

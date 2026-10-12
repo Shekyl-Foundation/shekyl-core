@@ -40,7 +40,8 @@ fn recorded(at: AtHeight<HeaderRecord>) -> HeaderRecord {
 
 /// Through the tier and AL1; the row's key.
 fn admit(store: &ChainStore, candidate: Candidate) -> BlockHash {
-    let valid = admitted(store, candidate);
+    let snap = store.begin_read().expect("read");
+    let valid = admitted(&snap, candidate);
     let id = valid.hash();
     let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(valid)?));
     out.expect("insert alt");
@@ -134,10 +135,7 @@ fn a_chain_through_two_alt_entries_reaches_a_recorded_row() {
     assert_eq!(over_b.candidate_height(), BlockHeight::from_raw(3));
     assert_eq!(
         over_b.fork(),
-        Fork {
-            root: at(0, main[0]),
-            recorded_tip: at(2, main[2]),
-        },
+        Fork::new(at(0, main[0]), at(2, main[2])).expect("root is not above the tip"),
         "the fork names the root and the recorded tip of the one snapshot"
     );
 
@@ -152,8 +150,8 @@ fn a_chain_through_two_alt_entries_reaches_a_recorded_row() {
     assert!(over_main.entries().is_empty());
     assert_eq!(over_main.parent(), at(1, main[1]));
     assert_eq!(over_main.candidate_height(), BlockHeight::from_raw(2));
-    assert_eq!(over_main.fork().root, at(1, main[1]));
-    assert_eq!(over_main.fork().recorded_tip, at(2, main[2]));
+    assert_eq!(over_main.fork().root(), at(1, main[1]));
+    assert_eq!(over_main.fork().recorded_tip(), at(2, main[2]));
 
     // K1a: the lowest root is genesis, and a candidate over it sits at 1.
     // There is no chain whose candidate height is 0 — the falsifier is a

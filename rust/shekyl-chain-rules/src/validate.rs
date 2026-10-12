@@ -49,18 +49,15 @@ use crate::block::{Candidate, Derived, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
+use crate::header_ladder::{self, HeaderFacts};
 use crate::rule_set::RuleSet;
-use crate::rules::anchors::E1;
 use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::body::{G1, G10, G2, G7, G9};
-use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B6};
-use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
-use crate::rules::pow::{D1b, D1, D2, D3};
+use crate::rules::miner::{Emission, F1, F10, F3, F7, F9};
+use crate::rules::pow::D2;
 use crate::rules::reward;
-use crate::rules::timestamps::{C1, C2, C3};
-use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
 use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
@@ -68,11 +65,11 @@ use crate::rules::tx_emission::{J19, J20, J22, J24};
 use crate::rules::tx_emission_against::judge_emission_claim;
 use crate::rules::tx_extra::{I19, I20};
 use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J2};
-use crate::rules::{self, BlockContext, FormContext};
+use crate::rules::{self, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
 use crate::verdict::{ChainValid, TxSlot, Verdict};
-use crate::view::{ChainView, Tip};
+use crate::view::ChainView;
 
 /// Run the listed stateless rules in order; the first refusal is the verdict.
 ///
@@ -221,41 +218,42 @@ pub fn validate<'id, V: ChainView<'id>>(
 
     let mut coverage = *formed.coverage();
 
-    // Definitions the predicates read, derived once and recorded where they
-    // are derived: the connecting height (one tip read), the seed
-    // verification (D3), the MTP window (C3), the target (D4, minted
+    // Definitions the predicates read, derived once — the same function the
+    // alt tier calls — and recorded where they are derived: the connecting
+    // height, the seed (D3), the MTP window (C3), the target (D4, minted
     // through D6) and the work it implies, the comparison (D1b). B6 was
-    // recorded by `form` (the identity is stateless) and rides on the token.
-    let tip = view.tip().map_err(Fault::View)?;
-    let connecting = Tip::connecting_height(tip.as_ref());
-    // The seed claim first: a stale seed means the longhash below was
-    // computed against a chain this is not, and nothing else is worth
-    // judging until `form` is redone.
-    D3::verify_seed(view, connecting, &formed, &mut coverage)?;
-    let mtp_window = C3::window(view, connecting, &mut coverage)?;
-    let target = match D4::target(view, connecting, rule_set, &mut coverage)? {
-        Ok(target) => target,
-        // CEN-D6: the ratified algorithm derived zero for this height; the
-        // block is refused, as the C++ refuses it. A verdict, not a fault
-        // (rules::difficulty module docs).
+    // recorded by `form` and rides on the token. CEN-D6's zero is a
+    // refusal, not a fault (rules::difficulty module docs). This tier does
+    // not record D5: the window is the recorded chain.
+    let HeaderFacts {
+        connecting,
+        cumulative_difficulty,
+        context: cx,
+    } = match header_ladder::derive(&formed, view, rule_set, trust, &mut coverage)? {
+        Ok(facts) => facts,
         Err(refused) => return Ok(Err(refused)),
     };
-    let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
-    D1b::record(&mut coverage);
+    let target = cx.target;
 
-    // View-bound block-level predicates (4.A–4.G), in census order, with
-    // one placement the C++'s order fixes: B4 (the attestation set) runs
-    // after D1 and before the slot loop, where `verify_block_attestation`
-    // runs — before the coinbase is judged — so a coinbase extra that does
-    // not parse is B4's refusal, not I20's (slice 8 §4). B4 is always
-    // evaluated: no sidecar is the empty witness against the mined root.
-    // G1 (no listed transaction already on the chain, or twice in this
-    // block) is here, **before** the slot loop — the C++'s order, and the
-    // only one under which it has a witness on a spend: after the loop I7
-    // and L1 refuse the same shapes first (slice 7 Q8; `body_tests` pins
-    // it).
-    let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
-    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, B4, E1, F4, F5, F6, G1);
+    // View-bound block-level predicates (4.A–4.G). The header rules are the
+    // ladder's three segments, written once and shared with the alt tier.
+    // Between them, the C++'s insertion points: B5 after the parent link;
+    // B4 (the attestation set) after D1 and before the coinbase rows, where
+    // `verify_block_attestation` runs — so a coinbase extra that does not
+    // parse is B4's refusal, not I20's (slice 8 §4); G1 before the slot
+    // loop, the only place it has a witness on a spend (slice 7 Q8).
+    if let Err(refused) = header_ladder::parent_link(&cx, view, &mut coverage)? {
+        return Ok(Err(refused));
+    }
+    judge_block!(cx, view, coverage; B5);
+    if let Err(refused) = header_ladder::clock_and_proof(&cx, view, &mut coverage)? {
+        return Ok(Err(refused));
+    }
+    judge_block!(cx, view, coverage; B4);
+    if let Err(refused) = header_ladder::anchor_and_coinbase(&cx, view, &mut coverage)? {
+        return Ok(Err(refused));
+    }
+    judge_block!(cx, view, coverage; G1);
 
     // The 4.F definitions (F11, F13, F15, F20): the emission this height is
     // priced at, F14b's operand once the block's weight is known (below).
@@ -340,6 +338,8 @@ pub fn validate<'id, V: ChainView<'id>>(
         Err(refused) => return Ok(Err(refused)),
     };
 
+    // `cx` borrows `formed`. The derived scalars above are `Copy`.
+    drop(cx);
     let hash = formed.hash();
     let (candidate, _stateless) = formed.into_parts();
     let block = ValidatedBlock::derive(

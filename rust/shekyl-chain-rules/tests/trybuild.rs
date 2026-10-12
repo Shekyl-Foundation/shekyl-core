@@ -35,4 +35,5 @@ fn a_verdict_connects_under_the_view_it_was_judged_against_and_no_other() {
     t.pass("tests/trybuild/verdict_connects_under_its_own_view.rs");
     t.compile_fail("tests/trybuild/verdict_does_not_escape_its_view.rs");
     t.compile_fail("tests/trybuild/unbranded_view_does_not_connect.rs");
+    t.compile_fail("tests/trybuild/alt_verdict_does_not_cross_views.rs");
 }

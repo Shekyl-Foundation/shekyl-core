@@ -238,9 +238,13 @@ use super::{Canonical, CodecError};
 ///   the C++ `alt_block_data_t`'s coinbase-paid approximation that nothing
 ///   consensus-bearing read; the Rust admission tier reads no executed
 ///   fact and derives none, and promotion re-derives supply by executing
-///   the chain. The fixture `alt_block` re-pins eight bytes shorter; no
-///   table moves. A `22` file's alt rows would decode with their block
-///   bytes mis-framed, so the bump refuses the file at open rather than
+///   the chain. The same unreleased layout drops the weight's presence
+///   byte: `block_weight` is `BlockWeight`, eight bytes, always, and a
+///   zero weight is a codec refusal. Admission always measured one; the
+///   absence arm had no writer, and a later demotion does not inherit it.
+///   The fixture `alt_block` re-pins for both; no table moves. A `22`
+///   file's alt rows would decode with their block bytes mis-framed, so
+///   the bump refuses the file at open rather than
 ///   letting `decode` report a parse failure as corruption. The refusal
 ///   is `header::verify`'s
 ///   [`StoreCannot::SchemaVersionMismatch`](crate::store::StoreCannot::SchemaVersionMismatch),

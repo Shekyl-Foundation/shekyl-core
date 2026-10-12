@@ -16,8 +16,10 @@
 //! connects repeatedly (`pop.rs`, `connect.rs`), so a switch is one closure:
 //!
 //! ```text
-//! let demoted: Vec<AltValid> = each block above the split, judged by the
-//!     cheap tier over the snapshot the switch reads (SAL-13: before the pop);
+//! // Judged over the pre-pop snapshot (SAL-13). The snapshot stays live
+//! // through the write: the verdict is `AltValid<'_, AltView<'_>>`, branded
+//! // to that view, and does not outlive it.
+//! let demoted: Vec<AltValid<'_, AltView<'_>>> = each block above the split;
 //! store.write(|batch| {
 //!     batch.pop()?;                                           // ×N to the split
 //!     batch.insert_alt_block(demoted)?;                       // ×N (CEN-K7)
@@ -64,6 +66,7 @@ use super::alt_reads::{self, key, AltEntry, ALT_BLOCKS_CELL};
 use super::error::{AltCannot, EngineError, StoreError};
 use super::keyed::check_row;
 use super::write::WriteBatch;
+use super::AltView;
 
 impl WriteBatch<'_, '_> {
     /// Open the alt table for this batch's writes. Never while a connect's
@@ -83,12 +86,17 @@ impl WriteBatch<'_, '_> {
     /// **AL1.** Store the block the cheap tier `admitted`, under its hash.
     ///
     /// The only way a row enters `alt_blocks`: the argument is the verdict
-    /// of [`alt_against`](shekyl_chain_rules::alt_against) over the
-    /// stitched [`AltView`](super::AltView), and the row is
-    /// [`AltBlock::admitted`] of it — the block, its witness, and the
-    /// height, cumulative difficulty and weight the tier derived. The key
-    /// is the verdict's hash (CEN-B6 over the block it stores), so there is
-    /// no caller-supplied identity for the store to verify
+    /// of [`alt_against`](shekyl_chain_rules::alt_against) over **this**
+    /// store's stitched [`AltView`]. The verdict is branded to the view
+    /// type that minted it, so a verdict from any other `AltChainView`
+    /// does not unify with this argument — the same belt `connect` wears
+    /// for `ChainValid`. The tier and the write stay two operations: the
+    /// token is minted on a snapshot, and the snapshot stays live through
+    /// the write (a later switch judges, then pops, then inserts). The row
+    /// is [`AltBlock::admitted`] of the verdict — the block, its witness,
+    /// and the height, cumulative difficulty and weight the tier derived.
+    /// The key is the verdict's hash (CEN-B6 over the block it stores), so
+    /// there is no caller-supplied identity for the store to verify
     /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, `AltValid → AL1`).
     ///
     /// # Errors
@@ -96,7 +104,7 @@ impl WriteBatch<'_, '_> {
     /// [`AltCannot::AlreadyHeld`] if the store already holds the hash —
     /// CEN-K3's belt, typed; the caller need not (and inside a batch, cannot
     /// usefully) pre-read (SAL-4). Engine faults otherwise.
-    pub fn insert_alt_block(&self, admitted: AltValid) -> Result<(), StoreError> {
+    pub fn insert_alt_block(&self, admitted: AltValid<'_, AltView<'_>>) -> Result<(), StoreError> {
         let id = admitted.hash();
         let encoded = AltBlock::admitted(admitted).encoded();
         check_row::<Coded<AltBlock>>(ALT_BLOCKS_CELL, &encoded.as_encoded())?;

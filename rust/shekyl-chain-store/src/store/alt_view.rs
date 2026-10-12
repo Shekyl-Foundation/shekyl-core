@@ -67,18 +67,26 @@ use crate::codec::AltBlock;
 /// `previous` chain derives: the row claims one place and links to another.
 pub(super) const ALT_HEIGHT_MISMATCH: &str = "alt block's recorded height disagrees with its chain";
 
+/// SI-7 reason when `block_heights` names a root above the recorded tip
+/// read on the same snapshot. The height came from `height_of`, so the
+/// corrupt cell is `block_heights`, not `alt_blocks`.
+const ALT_ROOT_ABOVE_RECORDED_TIP: &str = "alt chain root is above the recorded tip";
+
+/// The cell `height_of` reads. Named here so the inverted-root fault and
+/// that read agree on the table.
+const BLOCK_HEIGHTS_CELL: &str = "block_heights";
+
 /// The alt entries from the fork point to a candidate's parent, walked
 /// from the parent back to a recorded row (AL4 per step), ascending.
 ///
 /// The root is where the chain leaves the recorded one; `entries[i]` is
 /// the alt block at `root + 1 + i`. Zero entries is a chain whose parent is
-/// a recorded row — the first alternative block off a fork point.
+/// a recorded row — the first alternative block off a fork point. The
+/// [`Fork`] is built at the end of the walk, so a root above the recorded
+/// tip is not a chain this type holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AltChain {
-    root: Tip,
-    /// The recorded tip on the snapshot the walk ran on (`Fork`'s second
-    /// operand; read before the walk).
-    recorded_tip: Tip,
+    fork: Fork,
     entries: Vec<AltEntry>,
 }
 
@@ -134,43 +142,48 @@ impl AltChain {
         parent_first.reverse();
         let entries = parent_first;
 
-        let mut derived = root.height;
+        // A root above the tip is `block_heights` disagreeing with the tip
+        // read first. Refused before a `Fork` exists: the type has no
+        // inverted value, and the saturated span that used to admit one
+        // is not a pop.
+        let fork = Fork::new(root, recorded_tip).map_err(|_| {
+            undecodable(
+                BLOCK_HEIGHTS_CELL,
+                CodecError::Invalid {
+                    codec: BLOCK_HEIGHTS_CELL,
+                    reason: ALT_ROOT_ABOVE_RECORDED_TIP,
+                },
+            )
+            .into_plain()
+        })?;
+
+        let mut derived = fork.root().height;
         for entry in &entries {
-            derived = derived.saturating_add(BlockCount::from_raw(1));
+            let Some(next) = derived.checked_add(BlockCount::ONE) else {
+                return Err(height_mismatch());
+            };
+            derived = next;
             if entry.block.height() != derived {
-                return Err(undecodable(
-                    ALT_BLOCKS_CELL,
-                    CodecError::Invalid {
-                        codec: AltBlock::NAME,
-                        reason: ALT_HEIGHT_MISMATCH,
-                    },
-                )
-                .into_plain());
+                return Err(height_mismatch());
             }
         }
-        Ok(Self {
-            root,
-            recorded_tip,
-            entries,
-        })
+        Ok(Self { fork, entries })
     }
 
     /// The fork point: the recorded row the chain leaves from.
     #[must_use]
     pub const fn root(&self) -> Tip {
-        self.root
+        self.fork.root()
     }
 
     /// The fork a block over this chain would cause — CEN-E2's operands,
-    /// both from the snapshot the chain was built on: the root, and the
-    /// recorded tip as it stood there. What the view hands `alt_against`
-    /// as its [`AltChainView::fork`].
+    /// both from the snapshot the chain was built on. Infallible: [`build`]
+    /// refused a root above the recorded tip before this value existed.
+    ///
+    /// [`build`]: Self::build
     #[must_use]
     pub const fn fork(&self) -> Fork {
-        Fork {
-            root: self.root,
-            recorded_tip: self.recorded_tip,
-        }
+        self.fork
     }
 
     /// The alt entries above the root, ascending; empty when the parent is
@@ -184,7 +197,7 @@ impl AltChain {
     /// the root.
     #[must_use]
     pub fn parent(&self) -> Tip {
-        self.entries.last().map_or(self.root, |e| Tip {
+        self.entries.last().map_or(self.root(), |e| Tip {
             height: e.block.height(),
             hash: e.id,
         })
@@ -192,11 +205,27 @@ impl AltChain {
 
     /// **CEN-K1a.** The height a candidate over this chain sits at:
     /// `root + 1 + len`. Never zero — the root is a recorded height — so
-    /// an alternative genesis has no constructor.
+    /// an alternative genesis has no constructor. A parent at the last
+    /// representable height has no next height; that is a bug in the
+    /// chain, not a height of `u64::MAX`.
     #[must_use]
     pub fn candidate_height(&self) -> BlockHeight {
-        self.parent().height.saturating_add(BlockCount::from_raw(1))
+        self.parent()
+            .height
+            .checked_add(BlockCount::ONE)
+            .expect("AltChain: the candidate height overflowed u64")
     }
+}
+
+fn height_mismatch() -> StoreError {
+    undecodable(
+        ALT_BLOCKS_CELL,
+        CodecError::Invalid {
+            codec: AltBlock::NAME,
+            reason: ALT_HEIGHT_MISMATCH,
+        },
+    )
+    .into_plain()
 }
 
 /// The alt tier's [`HeaderView`]: a committed snapshot stitched with an
@@ -246,7 +275,7 @@ impl<'id> HeaderView<'id> for AltView<'_> {
     /// parent, [`AtHeight::AboveTip`]. A recorded row at or below the root
     /// that is missing or undecodable is SI-7, as on every reader.
     fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {
-        let root = self.chain.root.height;
+        let root = self.chain.root().height;
         if height <= root {
             let txn = self.snapshot.txn();
             let tip = chain_reads::tip_of(txn).map_err(chain_reads::ReadFault::into_plain)?;
