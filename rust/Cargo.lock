@@ -4281,6 +4281,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-curve-tree",
  "shekyl-economics",
+ "shekyl-fcmp",
  "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",

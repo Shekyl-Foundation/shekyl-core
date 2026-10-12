@@ -25,8 +25,9 @@
 //!
 //! - **`slew`** — `C` along Poisson-driven volume traces (stationary,
 //!   720-block ramps, and INSTANTANEOUS steps, the worst case a linear ramp
-//!   cannot show), with the shipped integer-truncated SMA
-//!   (`tx_count_sum / 720`, `blockchain.cpp:2115`) and the exact rational
+//!   cannot show), with the integer-truncated SMA the C++ shipped when
+//!   this was measured (`tx_count_sum / 720`; `Blockchain::get_tx_volume_window`
+//!   now passes the exact pair) and the exact rational
 //!   SMA (`tx_count_sum` against `baseline·720`) side by side. The integer
 //!   operand is a hidden quantizer: one tick is `1/V` of `M_r`, 2 % at the
 //!   baseline, 2.5 % at the low rail — in one block. Under the lookback a

@@ -58,7 +58,7 @@ use shekyl_economics::{
 /// `config/consensus_constants.json`.
 pub(crate) const FULL_REWARD_ZONE: u64 = shekyl_economics::FULL_REWARD_ZONE;
 
-/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h:70`).
+/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h`).
 /// Declared exception: no single Rust owner exists;
 /// `rust/shekyl-engine-core/src/engine/fee_policy.rs` carries the same
 /// pinned copy wallet-side.
@@ -185,12 +185,13 @@ pub(crate) fn correction_factor_ratio(
 
 /// UNROUNDED four-rung ladder, an exact integer transliteration of
 /// `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
-/// (`blockchain.cpp:4475-4508`), including its folded-division order.
+/// (`blockchain.cpp`, the five-argument overload), including its
+/// folded-division order.
 /// Instrument-local by design: this is the artifact under derivation, and
 /// the comparison column must reproduce it bit-for-bit, not idealize it.
 ///
 /// The 5-arg C++ this transliterates does not clamp its medians — the
-/// production wrapper (`blockchain.cpp:4527-4537`) guarantees
+/// production wrapper (the same function's grace-blocks overload) guarantees
 /// `Mlw ≥ zone` and `Mnw ≥ Mlw` before it is ever called. The
 /// `debug_assert`s document that precondition so an instrument grid row
 /// below the zone fails loudly instead of printing fees the daemon cannot
@@ -538,12 +539,10 @@ pub struct RungTable {
     pub corrected_raw_c: [u64; SERVED_SLOTS],
     /// What a §5.2 daemon would serve (`C_q`, ceiling rule).
     pub served_ceil_cq: [u64; SERVED_SLOTS],
-    /// `check_fee` acceptance bound at this state. Modeled as
-    /// `floor − floor/50` per byte: the real check takes 2% off the
-    /// *total* and rounds up to the quantization mask
-    /// (`blockchain.cpp:4462-4466`) — both divergences are bounded well
-    /// below every measured state's margin, and the mask examination is
-    /// CEN-M3's held row.
+    /// Admission's acceptance bound at this state, per byte: the relay
+    /// floor itself, since FL-R23 set the slack to zero. The real check
+    /// rounds the total up to the quantization mask, which a per-byte
+    /// figure does not show; the mask examination is CEN-M3's held row.
     pub relay_floor_accept: u64,
     /// FL-C6/FL-V5: does the raw-`C` corrected floor bounce off
     /// `check_fee`?

@@ -176,7 +176,10 @@ fn main() {
     if gate7 {
         eprintln!("\nGate-7 scenario set complete. JSON written to stdout.");
     } else {
-        eprintln!("\nAll 8 scenarios complete. JSON written to stdout.");
+        eprintln!(
+            "\nAll {} scenarios complete. JSON written to stdout.",
+            results.len()
+        );
     }
 }
 

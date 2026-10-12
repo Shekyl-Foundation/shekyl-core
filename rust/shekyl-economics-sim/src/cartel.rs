@@ -886,7 +886,9 @@ mod tests {
 
     #[test]
     fn reinstate_breakeven_pins_at_representative_reward() {
-        // Representative run (2026-07-30): at ~2.4156 SKL/shard/epoch the cycle
+        // 2.4156 SKL/shard/epoch is a test input: the reward a run of
+        // 2026-07-30 showed, before the byte-keyed re-derivation, and not a
+        // figure the sim reports today. At it the cycle
         // broke even near f = 0.0274; at the max end it was ~0.0002. Pin the
         // order of magnitude so a DP or bond-scale regression cannot silently
         // move the binding claim. Exact digit drift inside the band is fine;

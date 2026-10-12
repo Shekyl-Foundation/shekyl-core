@@ -124,7 +124,7 @@ pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
     let baseline = params.tx_volume_baseline;
     ScenarioConfig {
         name: "mass_unstaking".into(),
-        description: "80% of stakers unlock within one epoch (~35 days) at year 3".into(),
+        description: "80% of stakers unlock within 25,000 blocks (~35 days) at year 3".into(),
         sim_years: 5,
         volume: VolumeSchedule {
             get_volume: Box::new(move |_block, _bpy| baseline),

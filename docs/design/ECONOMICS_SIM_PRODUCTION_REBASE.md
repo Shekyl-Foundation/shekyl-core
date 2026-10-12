@@ -418,6 +418,9 @@ defect.
 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs`, R22) | Production's rule is a predicate over one window, not a probability. The closed forms are the analysis of that predicate and are cross-checked against the predicate-backed kernel by test | Stated at each form |
 | The ArticMine transliteration (`fee_ladder.rs`, D7) | The inherited ladder is reproduced as the thing the Shekyl ladder is measured against. It has no production owner because production does not run it | `fee_ladder.rs`; its KAT inputs are the row above |
 | Maturity operands (`MATURITY_D = 324_000`, 40 000 projected pairs; D13) | Assumptions about a network that does not exist yet, not values of the chain | Named as assumptions where they are defined |
+| Gate-7's locked supply counts one shard per `blocks_per_shard` blocks (`engine.rs`, D1) | The partition is by archival bytes (`shard_of`), and the engine fold carries no byte fold to read it from. The default cadence is one shard per `SETTLEMENT_EPOCH_BLOCKS`; the sim's own stage-2 fold closes about 524 000 shards in ten years, one per five blocks, so the default understates the locked supply by about three orders of magnitude. **Not a neutral choice:** a gate-7 figure is a floor on the lock, not an estimate of it | Stated at `ArchivalLockModel::blocks_per_shard`. Moving gate-7 onto the byte fold moves its committed figures and is its own step, with its predictions written first |
+| The A3 and A4 base paths score through the plateau curve (`population.rs`, `stranding.rs`, D3) | Credited work is linear in production; the curve is kept there for counterfactuals only. The two base paths predate that and still read `curve_milli` | `distribution.rs` and OQ-4 name themselves counterfactual; `redistribution.rs` is linear. Re-basing A3 and A4 moves both narration fixtures and is its own step, with its predictions written first |
+| The FL-R18 rejection race and its thin-margin count (`fee_ladder.rs`, D6) | records-was — the instrument that measured the race under the admission rule of its round: a 2 % acceptance buffer and no lookback. FL-R23 set the slack to zero and admits against the minimum floor over a lookback; production names no margin for the served rung, so the 1.020 threshold has nothing to import. `fee_floor.rs` is the instrument for the rule as it stands and calls `RELAY_ADMISSION_SLACK_BP` and `RELAY_FLOOR_LOOKBACK` | Stated at `FeedbackResult::race_refused`; `FEE_LADDER_ROUND.md` quotes its counts as that round's |
 | Demand does not respond to the fee or to congestion | A schedule is a number of transactions per block, the same whatever they cost or however long they wait: no elasticity, no rung escalation, no resubmission after expiry. What the chain fails to carry expires; it is not deterred | Stated at the head of this document beside the result it governs |
 
 ## 5. Predictions, written before any run (2026-10-02)
@@ -1572,11 +1575,11 @@ constant that no caller passes.
 
 | Status | Rows |
 | --- | --- |
-| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R10, R13, R15, R16, R17, R18, R19, R23, N1, N2, N3 |
+| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R10, R13, R15, R16, R17, R18, R19, R23, D5, N1, N2, N3; text: D9, D10, D11, D12, N4 |
 | Closed by deletion | R2, R31, D8 |
-| Closed by a §4 declaration | 1, 2, 3, R29; **in ESR-8:** R21, R22, D7, D13; R11 (the recorder; the three folds import); R26 (the nearest arm; the ceiling arm imports); R30 (the KAT zone; the bond imports) |
+| Closed by a §4 declaration | 1, 2, 3, R29; **in ESR-8:** R21, R22, D1, D3, D6, D7, D13; R11 (the recorder; the three folds import); R26 (the nearest arm; the ceiling arm imports); R30 (the KAT zone; the bond imports) |
 | Staking-excepted (ruled 2026-10-03) | D4 |
-| **Open** | D1, D3, D5, D6, D9, D10, D11, D12; N4 |
+| **Open** | none |
 
 Item 5 was a roll-up of R24–R26 and D6 and is open through D6 alone.
 
@@ -1601,15 +1604,15 @@ ESR-8 did.
 
 ### The dead-referent rows
 
-| # | What remains | Closes by |
-| --- | --- | --- |
-| D1 | One shard per `SETTLEMENT_EPOCH_BLOCKS` blocks (`engine.rs:83`), called a model parameter where it is defined | `shekyl_types::archival::shard_of`, or a §4 row |
-| D3 | The A3 and A4 base paths still score through the plateau curve; credited work is linear in production | A §4 row, or the linear owner |
-| D5 | Proof-response widths as literals (`proxy.rs:92`) | `shekyl_fcmp::tree` constants, which needs a new dependency |
-| D6 | The retired 2 % relay buffer, as `* 98` and `< 1020` (`fee_ladder.rs:1717`, `:2329`, `:2505`), in a file that also asserts the slack is 0 | `relay_floor_admits` |
-| D7 | The ArticMine transliteration (`fee_ladder.rs:198-210`). §4 declares its KAT inputs, not the transliteration | A §4 row |
-| D9–D12 | Stale citations, "8 scenarios" where there are nine, "~35 days" for an epoch, a dated representative run | Text |
-| D13 | Maturity operands as literals (`MATURITY_D = 324_000`, 40 000 projected pairs) | A §4 row naming them as assumptions |
+| # | What remained | Closes by | In ESR-8 |
+| --- | --- | --- | --- |
+| D1 | One shard per `SETTLEMENT_EPOCH_BLOCKS` blocks (`engine.rs:83`), called a model parameter where it is defined | `shekyl_types::archival::shard_of`, or a §4 row | §4 row. The row says the default understates the lock by about three orders of magnitude; moving gate-7 onto the byte fold is a separate step |
+| D3 | The A3 and A4 base paths still score through the plateau curve; credited work is linear in production | A §4 row, or the linear owner | §4 row. Re-basing A3 and A4 on linear work is a separate step |
+| D5 | Proof-response widths as literals (`proxy.rs:92`) | `shekyl_fcmp::tree` constants, which needs a new dependency | Closed by import: `RESPONSE_BYTES` is built from `shekyl_fcmp::tree`'s widths and `CHALLENGED_LEAF_LEN`, and a const-assert holds it at 6 784 |
+| D6 | The retired 2 % relay buffer, as `* 98` and `< 1020` (`fee_ladder.rs:1717`, `:2329`, `:2505`), in a file that also asserts the slack is 0 | `relay_floor_admits` | §4 row, records-was. Production has no margin constant to import; the comment that called the 2 % buffer admission's is corrected |
+| D7 | The ArticMine transliteration (`fee_ladder.rs:198-210`). §4 declares its KAT inputs, not the transliteration | A §4 row | §4 row |
+| D9–D12 | Stale citations, "8 scenarios" where there are nine, "~35 days" for an epoch, a dated representative run | Text | Text fixed: line numbers into C++ replaced by the function named; the scenario count is read from the run; the always-empty `stuffing_profitable` field is deleted; "one epoch" is "25,000 blocks"; the 2026-07-30 figure is labelled a test input |
+| D13 | Maturity operands as literals (`MATURITY_D = 324_000`, 40 000 projected pairs) | A §4 row naming them as assumptions | §4 row |
 
 ### Found by this pass, in neither Appendix A nor §4
 
@@ -1618,7 +1621,7 @@ ESR-8 did.
 | N1 | **The secret draw's count rule is restated.** §4's ESR-11 row says "no production function exists to call". It does now: `shekyl_archival_retention::{draw_horizon, draw_count, select_draw}`. The sim keeps its own `horizon()`, `block_target()` and three constants (`MIN_HORIZON_BLOCKS`, `CATCH_UP_BY_PERMILLE`, `CAP_MULTIPLE`); only `COUNTED_DRAWS` is pinned to its owner. Whether the sim's f64 `block_target` equals production's fixed-point `draw_count` was read, not run | **Closed:** the sim calls all three. The result is below |
 | N2 | **The recorder priced a block the chain does not build.** It paid `effective_emission` on the schedule's whole demand, fifty transactions a block. At the control arm's fee that is 630 to 765 kB against a 300 kB penalty-free zone: over the block-weight limit while the median sits at the zone, so the missing penalty was the smaller half of it. The loop's own comment declared the omission; §4 declared its volume operand only | **Fixed in ESR-8:** the recorder steps the cursor. The vectors were regenerated and every column that moved is accounted for below |
 | N3 | `stage2.rs` split the fee burn at the flat `staker_pool_share` where the engine and budget folds use `compute_burn_split_at` at `n = 0`. The two are equal at the shipped parameters and nothing failed if they stopped being equal | **Closed:** the stage-2 ledger advances by production's destroyed amount at the fold's closed-shard count, and `the_shipped_split_is_flat_at_every_count` fails when the shipped asymptote leaves the floor |
-| N4 | `Cargo.toml` justifies the `shekyl-chain-rules` dependency by `EMISSION_SPLIT_EPOCH`, which that crate no longer provides. The dependency is still used, for the medians, the volume span and the reference-block age | Text |
+| N4 | `Cargo.toml` justified the `shekyl-chain-rules` dependency by `EMISSION_SPLIT_EPOCH`, which that crate no longer provides. The dependency is still used, for the medians, the volume span and the reference-block age | **Closed:** the comment says what it is used for |
 
 A fifth observation, not a row: the bound R19 imports is the C++
 gather's. `failure_window.rs` holds a second, tighter condition for the

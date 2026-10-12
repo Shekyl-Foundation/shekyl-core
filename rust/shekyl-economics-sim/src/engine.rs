@@ -37,7 +37,6 @@ pub struct ScenarioResult {
     pub years: Vec<YearSnapshot>,
     pub final_supply_emitted_pct: f64,
     pub final_total_burned: f64,
-    pub stuffing_profitable: Option<bool>,
 }
 
 pub struct VolumeSchedule {
@@ -79,6 +78,11 @@ pub struct ArchivalLockModel {
     /// cadence), with a denser sensitivity arm. Must be **> 0** — zero has
     /// no model meaning and `locked_atomic` panics on it rather than
     /// silently reporting zero locked supply.
+    ///
+    /// The default is far sparser than the chain: the stage-2 byte fold
+    /// closes a shard about every five blocks. A gate-7 lock figure is
+    /// therefore a floor, not an estimate
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4).
     pub blocks_per_shard: u64,
     /// Bonded archiver population `N_P` (enters the admission arm only;
     /// L11 attractor envelope: lean ≈ 79, thick ≈ 154, fee-era-thin band
@@ -365,7 +369,6 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         final_supply_emitted_pct: already_generated as f64 / emission_curve_asymptote as f64
             * 100.0,
         final_total_burned: total_burned as f64 / COIN,
-        stuffing_profitable: None,
         years: snapshots,
     }
 }
