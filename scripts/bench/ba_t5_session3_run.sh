@@ -65,7 +65,8 @@ FETCHES_CTRL=4096
 # a handful of fetches — run and discarded before the registered start
 # (rule: dry-run every registered cell first). Its outputs are not a
 # capture and the record does not quote them.
-if [ "${BAT5_S3_DRY:-}" = 1 ]; then QUIET_S=6; FETCHES_MECH=16; FETCHES_CTRL=48; fi
+THREAD_READ_AFTER_S=8
+if [ "${BAT5_S3_DRY:-}" = 1 ]; then QUIET_S=6; FETCHES_MECH=16; FETCHES_CTRL=48; THREAD_READ_AFTER_S=2; fi
 # The daemon must still be syncing through the last window: stop a pass
 # before it starts if fewer than this many blocks remain.
 MIN_BLOCKS_LEFT=600
@@ -107,6 +108,16 @@ cgroup_facts() {  # tag role pid — the process's cgroup, its parent's controll
   ctx "$tag" "$role.parent.controllers" "$(cat /sys/fs/cgroup$parent/cgroup.controllers 2>/dev/null)"
   ctx "$tag" "$role.parent.subtree_control" "$(cat /sys/fs/cgroup$parent/cgroup.subtree_control 2>/dev/null)"
   ctx "$tag" "$role.cpu.weight" "$(cat /sys/fs/cgroup$cg/cpu.weight 2>/dev/null || echo na)"
+  # The group the scheduler actually weighs: the nearest ancestor (or the
+  # cgroup itself) whose parent enables the cpu controller for it. Two
+  # processes with different cpu cgroups are weighed against each other as
+  # groups; nice decides nothing across that line.
+  local cpu=$cg
+  while [ "$cpu" != "/" ] && ! grep -qw cpu "/sys/fs/cgroup$(dirname "$cpu")/cgroup.subtree_control" 2>/dev/null; do
+    cpu=$(dirname "$cpu")
+  done
+  ctx "$tag" "$role.cpu_cgroup" "$cpu"
+  ctx "$tag" "$role.cpu_cgroup.weight" "$(cat /sys/fs/cgroup$cpu/cpu.weight 2>/dev/null || echo na)"
 }
 ctx_capture() {  # tag — the scheduling context of the daemon and of this script (the probe's parent)
   ctx "$1" "sched_autogroup_enabled" "$(cat /proc/sys/kernel/sched_autogroup_enabled)"
@@ -143,7 +154,7 @@ probe() {  # label mode [VAR=value ...] — runs the probe, reading its threads 
   env BAT5_STORE="$WORK/store" BAT5_MODE="$mode" BAT5_LABEL="$label" "$@" \
     "$PROBE" --ignored --nocapture > "$out" 2>>"$ERR" &
   local pid=$!
-  sleep 8
+  sleep "$THREAD_READ_AFTER_S"
   kill -0 "$pid" 2>/dev/null && probe_threads "$label" "$pid"
   wait "$pid"; local rc=$?
   grep -E '^(OBS|PHASE|LATE|BLOCK|ABANDON|TTFB)	' "$out" >> "$OBS"

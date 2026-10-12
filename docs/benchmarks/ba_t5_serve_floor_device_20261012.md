@@ -6,6 +6,23 @@ pushed before the device was claimed for the measured run. The results are
 added under "Reading" by a later commit; the registered text is not edited
 after the run. A later change of reading gets its own section that says so.
 
+*Registration history.* Registered at `71c3bf0db9`. A rehearsal of both
+topologies in miniature (`BAT5_S3_DRY=1`, 2026-10-12 14:53Z, discarded)
+showed every path working — the T2′ daemon starting in its scope and
+stopping with it, the context rows, the thread reading with every serving
+thread at nice 19 — and two things the registration did not know: under
+`tmux` the run script's cgroup is tmux's own scope in the user's systemd
+instance (`user@<uid>.service/tmux-spawn-….scope`), not a login session
+scope, and the T2′ daemon's scope sits under `app.slice`, which does not
+enable `cpu` for its children, so the group the scheduler weighs for the
+daemon is `app.slice` itself. The split the P2 reasoning rests on is
+unchanged — two cpu cgroups at equal weight under one parent with the
+controller on — but it is one level higher than written below. This
+amendment adds the *effective cpu cgroup* of each process to the capture
+(the nearest ancestor whose parent enables `cpu`), makes it the reader's
+first test for P2, and changes nothing else. Pushed before the measured
+run.
+
 This session confirms `SH-3`
 ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](../design/ARCHIVAL_CHALLENGE_MECHANISM.md)
 §9.8, ruled 2026-10-09): the serving host runs its threads below the
@@ -181,8 +198,10 @@ marked **held** or **missed**; neither is a pass or a fail.
   topology: `sched_autogroup_enabled`, the root's `subtree_control`, and
   for the daemon and for the run script (the probe's parent, which the
   probe inherits): `/proc/<pid>/cgroup`, `/proc/<pid>/autogroup`, the
-  parent cgroup's `cgroup.controllers` and `cgroup.subtree_control`, and
-  the cgroup's `cpu.weight`; plus the resident daemon's cgroup. Per
+  parent cgroup's `cgroup.controllers` and `cgroup.subtree_control`, the
+  cgroup's `cpu.weight`, and the effective cpu cgroup — the nearest
+  ancestor whose parent enables `cpu` — with its weight; plus the resident
+  daemon's cgroup. Per
   block: the probe's own cgroup and autogroup and its thread histogram.
 - **The sync poll** is session 2's, as fixed in its review.
 - **Environment rows** before and after every block and pass, as in

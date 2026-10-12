@@ -246,6 +246,14 @@ def p2_hypothesis(ctx: list[list[str]]) -> tuple[str, str]:
     (b) otherwise: one scheduling group, nice applies across the two."""
     before = {key: value for _utc, _topology, tag, key, value in ctx if tag == "before"}
     daemon, serving = before.get("daemon.cgroup", ""), before.get("serving.cgroup", "")
+    # The groups the scheduler weighs, when the capture names them: the
+    # nearest ancestor whose parent enables the cpu controller. Two different
+    # ones are the split; otherwise fall back to the parents' subtree_control.
+    daemon_cpu, serving_cpu = before.get("daemon.cpu_cgroup"), before.get("serving.cpu_cgroup")
+    if daemon_cpu and serving_cpu and daemon_cpu != serving_cpu:
+        return "a", f"different cpu cgroups ({daemon_cpu} vs {serving_cpu}); nice does not cross them"
+    if daemon_cpu and serving_cpu and daemon_cpu == serving_cpu and daemon != serving:
+        return "b", f"one cpu cgroup ({daemon_cpu}) over both; nice orders the two processes' threads against each other"
     cpu_split = any("cpu" in before.get(k, "").split() for k in ("daemon.parent.subtree_control", "serving.parent.subtree_control"))
     autogroup = before.get("sched_autogroup_enabled", "0") == "1"
     daemon_ag, serving_ag = before.get("daemon.autogroup", ""), before.get("serving.autogroup", "")
@@ -476,6 +484,9 @@ def _synthetic(root: Path, **tweak: object) -> Path:
                 sub = "cpu memory pids" if t2_context == "split" else "memory pids"
             ctx_row(tag, "daemon.parent.subtree_control", sub)
             ctx_row(tag, "serving.parent.subtree_control", sub)
+            if t2_context == "split" and topology == "t2p":
+                ctx_row(tag, "daemon.cpu_cgroup", "/user.slice/user-1004.slice/user@1004.service/app.slice")
+                ctx_row(tag, "serving.cpu_cgroup", "/user.slice/user-1004.slice/user@1004.service/tmux-spawn-1.scope")
             ctx_row(tag, "daemon.autogroup", "/autogroup-100 nice 0")
             own_session = topology == "t2p" and t2_context != "nocpu-sameag"
             ctx_row(tag, "serving.autogroup", "/autogroup-200 nice 0" if own_session else "/autogroup-100 nice 0")
@@ -542,7 +553,7 @@ def selftest() -> int:
 
     run("control: every prediction holds, T2' predicted (a) and observed (a)", 0, (
         "P1 T1 with the mechanism keeps 90 to 100 % of the no-serve sync rate at N=8 and N=64: 96 % and 92 %: held",
-        "hypothesis (a) selected from the context (different cgroups",
+        "hypothesis (a) selected from the context (different cpu cgroups (/user.slice/user-1004.slice/user@1004.service/app.slice vs",
         "observed (a): held",
         "P3 serving throughput with the mechanism 5 to 17 responses/s: t1 mech8 6.0, t1 mech64 8.0, t2p mech8 6.0, t2p mech64 8.0: held",
         "P4 serving executor p99 wake lateness with the mechanism 50 to 800 ms: t1 mech8 75 ms, t1 mech64 640 ms",
