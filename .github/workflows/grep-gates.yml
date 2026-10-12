@@ -62,6 +62,10 @@ jobs:
       # tip on a pull request, the group's base in the merge queue, the
       # previous tip on a push. Empty is a failure below, not a skip.
       FREEZE_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+      # For the release-promotion test below: the pull request's head
+      # commit, and a token to ask how far it is ahead of `dev`.
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
 
@@ -176,8 +180,36 @@ jobs:
           # does not have.
           run_one "Ruling A: dial-path freeze self-test" \
             python3 scripts/ci/test_check_dial_path_freeze.py
-          run_one "Ruling A: the C++ dial path is frozen until its deletion" \
-            python3 scripts/ci/check_dial_path_freeze.py --base "${FREEZE_BASE}"
+          # The freeze judges a change against the tree it enters, which is
+          # `dev`. On a pull request into `main` the base is the last
+          # release, so the gate would read a whole epoch as one change: lines
+          # added before the freeze was ruled, and lines admitted since under
+          # an UNFREEZE line in their own pull request, all fail together
+          # (the v3.1.0-alpha.10 promotion: 224 lines in net_node.inl, none
+          # of them new to `dev`).
+          #
+          # A release promotion is exempt, and what makes one is decided by
+          # its commits, not its branch name: base `main`, and a head commit
+          # that is already in `dev`'s history (scripts/ci/
+          # is_release_promotion.py says why a name is not enough). GitHub is
+          # asked how far the head is ahead of `dev`; a request that fails
+          # leaves the answer empty, which is "not a promotion", and the
+          # freeze runs.
+          run_one "Release-promotion rule self-test" \
+            python3 scripts/ci/is_release_promotion.py --selftest
+          ahead_by=""
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ -n "${PR_HEAD_SHA}" ]; then
+            if ! ahead_by="$(gh api "repos/${GITHUB_REPOSITORY}/compare/dev...${PR_HEAD_SHA}" --jq '.ahead_by')"; then
+              ahead_by=""
+            fi
+          fi
+          if python3 scripts/ci/is_release_promotion.py --event "${GITHUB_EVENT_NAME}" \
+               --base-ref "${GITHUB_BASE_REF:-}" --ahead-by "${ahead_by}"; then
+            echo "SKIP: Ruling A dial-path freeze: every commit here is already in dev, where it was judged"
+          else
+            run_one "Ruling A: the C++ dial path is frozen until its deletion" \
+              python3 scripts/ci/check_dial_path_freeze.py --base "${FREEZE_BASE}"
+          fi
 
           run_one "SA-3b: domain-registry" \
             scripts/ci/domain_registry_gate.sh
@@ -281,6 +313,11 @@ jobs:
           # not retry (a pin mismatch, any other failure) are held here.
           run_one "Tor live-test retry rule self-test" \
             scripts/ci/test_run_live_tor_tests.sh
+          # The release-time frozen-tuple gate refuses a cut whose consensus
+          # surface moved with the testnet genesis unchanged. It runs against
+          # a previous tag at a cut, so this lane holds its rule instead.
+          run_one "Frozen-tuple gate self-test" \
+            python3 scripts/ci/test_check_frozen_tuple.py
 
           grep_absent "C++ residue: no shekyl_y" \
             grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'

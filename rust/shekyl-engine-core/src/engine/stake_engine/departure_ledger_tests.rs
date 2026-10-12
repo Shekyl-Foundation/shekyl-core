@@ -26,7 +26,6 @@ use crate::engine::test_support::test_block_hash_at;
 fn view_at(tip: u64) -> AnchoredView {
     let synced = SyncedChainFacts::new(
         ChainCount::from_raw(tip + 1),
-        0,
         true,
         BlockHash::from_bytes(test_block_hash_at(tip)),
     )

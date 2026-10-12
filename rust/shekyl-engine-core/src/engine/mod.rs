@@ -413,7 +413,7 @@ pub mod staking_read;
 pub(crate) mod submit_lifecycle;
 /// PR-4 (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the submit
 /// watchdog's pure decision kernel — F14-lock-keyed held tracking, the
-/// privacy-tiered escape ladder with presence branching, health-context
+/// privacy-tiered escape ladder with presence branching, daemon-health
 /// gating, and the F35 horizon bound. Driven by [`submit_lifecycle`].
 pub(crate) mod submit_watchdog;
 /// CT-5c: production no longer uses synthetic membership vectors — the signer

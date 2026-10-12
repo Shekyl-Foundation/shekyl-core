@@ -179,6 +179,17 @@ impl Board {
             .count()
     }
 
+    /// Rows that have finished the handshake, on every connector and in
+    /// both directions.
+    ///
+    /// The count behind "does this node have a peer": a row before its
+    /// handshake cannot relay. It is not a dial cap; [`Self::count`] is, and
+    /// reads the rows this one leaves out.
+    #[must_use]
+    pub fn established_count(&self) -> usize {
+        self.rows.iter().filter(|row| row.established()).count()
+    }
+
     /// Rows in `direction` on every connector, handshake or not.
     ///
     /// This is [`Self::count`] summed across [`ConnectorId::ALL`]. A

@@ -224,7 +224,7 @@ fn run_tier1(v: &Tier1Vector) {
                     .expect("chacha_seed_hex"),
                 &v.id,
             );
-            assert_eq!(got, exp, "{}", v.id);
+            assert_eq!(*got, exp, "{}", v.id);
         }
         "network_format_separation" => {
             let master = decode_hex(v.master_seed_hex.as_ref().expect("master_seed_hex"), &v.id);
