@@ -153,9 +153,15 @@ attempt on the connector.
 
 - **(a) No kept outbound session on the connector.** The next
   successful dial is kept (`Keep`), whatever the draw. A node with no
-  outbound connection keeps its first success. *The draw's list is
-  this brief's reading, for the review: white when white holds an
-  eligible address, else gray.*
+  outbound connection keeps its first success. The draw is (b)'s
+  (Rick, 2026-10-12): eligible white if white holds at least
+  `white_diversity_floor`, otherwise gray if gray holds at least the
+  floor; if neither reaches the floor, gray when it holds a drawable
+  address, otherwise white. The dial is kept either way. *Records-was,
+  the brief's reading: white when white holds an eligible address,
+  else gray — struck because a node whose only session drops while
+  white is a few early confirms, mostly seeds, would keep from that
+  small list.*
 - **(b) One or more kept sessions, and under the outbound target.** A
   keep-dial (`Keep`) draws uniformly from eligible white if white holds
   at least `white_diversity_floor`; otherwise from gray, if gray holds
