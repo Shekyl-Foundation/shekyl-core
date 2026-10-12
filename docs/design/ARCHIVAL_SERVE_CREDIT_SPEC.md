@@ -891,6 +891,10 @@ chain's proof of work. No bond state is rebuilt at the fork point.
   An honest read satisfies it because `W₂ + L ≤` anchor depth, and that
   relation is asserted on every rule set, as rule-set data (rule 71), so
   a set that shortens the epoch or the depth cannot break it silently.
+  A Fakechain schedule that breaks it is refused where it is built, as a
+  typed error (PR #1047). The daemon's regtest epoch lever does not reach
+  that constructor in Rust today; the replay tool's epoch flag is the one
+  input that does.
 
 The anchor stays on the wire for `P`'s gate and for organic reads.
 
@@ -1630,10 +1634,24 @@ Found while writing the bundle into §7 and §9, and the contracts into
 
 ### 13.8 Amended on review, 2026-10-12
 
-Two defects in the section budget, found on review of this change. The
-maintainer directed that review findings be resolved in the way that best
-serves the design; these are the resolutions, recorded here so that they
-can be confirmed or reversed in one place.
+Two defects in the section budget, found on review of this change and
+resolved here.
+
+- **`SCS-P39` is confirmed by the maintainer (2026-10-12), read as built
+  on PR #1047.** On review of that PR's earlier tree he had ruled another
+  fix for the same defect: the count taken from the chain as an
+  `Option<u32>`, with the budget check waiting for the switch wherever the
+  chain had none. **That ruling is withdrawn** in favour of this one. His
+  reasons: every node computes the same sum from the same bytes, on the
+  main chain and on an alternative block alike, so no node can disagree
+  about the budget; an overstated count can only fail the budget on a
+  bundle that was invalid anyway; an understated one passes at arrival and
+  is refused by the full check, at connect or at the switch; and the
+  withdrawn form left the budget unchecked until the switch for every
+  bundle above the fork point, where this one bounds an alternative
+  section on arrival. The cost is 4 kept bytes per bundle.
+- **`SCS-P40`** was reviewed as built on the same PR, with nothing asked
+  of it.
 
 | # | Defect | Amendment |
 | --- | --- | --- |
