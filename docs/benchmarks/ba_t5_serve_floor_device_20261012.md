@@ -20,8 +20,22 @@ unchanged — two cpu cgroups at equal weight under one parent with the
 controller on — but it is one level higher than written below. This
 amendment adds the *effective cpu cgroup* of each process to the capture
 (the nearest ancestor whose parent enables `cpu`), makes it the reader's
-first test for P2, and changes nothing else. Pushed before the measured
-run.
+first test for P2, and changes nothing else. That registration was
+`b5c9de437e`. **The first measured start under it (14:59Z to 15:38Z) is
+discarded**: three of its six `mech64` blocks exited 101 when a response
+was reset mid-read — the endpoint's 30 s write-stall timeout dropping a
+connection that made no progress for that long, at 64 in flight with the
+serving threads at nice 19 beside the syncing daemon. The probe treated
+the reset as a failed block, as it had treated a refusal before session
+2's amendment, and for the same reason the fix is the same: a cut
+response is recorded (an `outcome` of `cut` on its `OBS` row, a `cut`
+count on the `BLOCK` row) and the block goes on, retrying nothing. The
+endpoint does not count a cut response as served, so throughput over
+`served` is unchanged in meaning; the reader prints the cuts per block
+and per cell. The first start's other readings (every mechanism block's
+serving threads at nice 19, the T2′ daemon in its own scope, the context
+rows) are not quoted; the run is repeated whole under this registration.
+Pushed before the second start.
 
 This session confirms `SH-3`
 ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](../design/ARCHIVAL_CHALLENGE_MECHANISM.md)

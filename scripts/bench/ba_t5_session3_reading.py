@@ -20,7 +20,10 @@ before it prints what was measured, and prints the figure the ledger row
 printing any figure, if the files do not hold the complete registered
 session.
 
-Row formats are session 2's (`ba_t5_session2_reading.py`) plus:
+Row formats are session 2's (`ba_t5_session2_reading.py`) with two
+additions from the probe — an `outcome` word on `OBS` rows (served,
+refused, cut) and a `cut` count on `BLOCK` rows, a cut being a response
+the endpoint's 30 s write-stall timeout dropped mid-way — plus:
 
   CTX    utc topology tag key value        (scheduling context, run script)
 
@@ -286,6 +289,7 @@ def main() -> int:
     share_s2: dict[str, dict[str, list[float]]] = {t: defaultdict(list) for t in TOPOLOGIES}
     rate: dict[str, dict[str, list[float]]] = {t: defaultdict(list) for t in TOPOLOGIES}
     p99: dict[str, dict[str, list[float]]] = {t: defaultdict(list) for t in TOPOLOGIES}
+    cut: dict[str, dict[str, list[int]]] = {t: defaultdict(list) for t in TOPOLOGIES}
     took: dict[str, dict[str, list[bool]]] = {t: defaultdict(list) for t in TOPOLOGIES}
     hypothesis: dict[str, tuple[str, str]] = {}
     env_all: dict[str, list[list[str]]] = {}
@@ -320,6 +324,8 @@ def main() -> int:
             cell = cell_of(label)
             pas = int(label.split(".")[1])
             served, wall_ms = int(b[7]), int(b[5])
+            cut_here = int(b[9]) if len(b) > 9 else 0
+            cut[topology][cell].append(cut_here)
             r = served / (wall_ms / 1000)
             lat = late.get(label)
             p99_us = float(lat[7]) if lat else float("nan")
@@ -339,14 +345,15 @@ def main() -> int:
                 share_s2[topology][cell].append(s2)
             share_text = (f"share {s * 100:3.0f} % (s2 method {s2 * 100:3.0f} %)" if s is not None else
                           ("VOID window" if own is None else "VOID: both adjacent no-serve windows void"))
-            print(f"    {label:14s} {r:6.1f}/s  p99 {p99_us / 1000:6.1f} ms  sync {own if own is None else round(own, 2)!s:>5} blocks/s  "
+            print(f"    {label:14s} {r:6.1f}/s  cut {cut_here:3d}  p99 {p99_us / 1000:6.1f} ms  sync {own if own is None else round(own, 2)!s:>5} blocks/s  "
                   f"{share_text}  threads at nice {SERVING_NICE}: {'yes' if ok else 'NO' if ok is False else 'unread'}")
         print("  cell medians:")
         for cell in CELLS:
             sh = med(share[topology][cell]) if share[topology][cell] else float("nan")
             sh2 = med(share_s2[topology][cell]) if share_s2[topology][cell] else float("nan")
             print(f"    {cell:7s} share {sh * 100:4.0f} % over {len(share[topology][cell])} valid (s2 method {sh2 * 100:4.0f} %)  "
-                  f"rate {med(rate[topology][cell]):6.1f}/s  p99 {med(p99[topology][cell]) / 1000:6.1f} ms")
+                  f"rate {med(rate[topology][cell]):6.1f}/s  p99 {med(p99[topology][cell]) / 1000:6.1f} ms  "
+                  f"cut {sum(cut[topology][cell])} of {len(cut[topology][cell]) * (512 if cell != 'ctrl8' else 4096)} responses")
 
     def cell_share(topology: str, cell: str) -> float:
         v = share[topology][cell]
@@ -513,7 +520,8 @@ def _synthetic(root: Path, **tweak: object) -> Path:
                 wall_ms = int(fetches / r * 1000)
                 p = p99_at.get((topology, cell), default_p99[cell])
                 env_row(f"start.{label}")
-                obs.append(f"BLOCK\t{label}\tload\tfull-store\t{n}\t{fetches}\t{wall_ms}\t15000\t{fetches}\t0")
+                cut_n = int(tweak.get("cut", {}).get((topology, cell), 0))  # type: ignore[union-attr]
+                obs.append(f"BLOCK\t{label}\tload\tfull-store\t{n}\t{fetches}\t{wall_ms}\t15000\t{fetches - cut_n}\t0\t{cut_n}")
                 obs.append(f"LATE\t{label}\tload\tfull-store\t{n}\t9000\t1000\t2000\t{p}\t{p}\t{p}")
                 if label not in drop_exit:
                     obs.append(f"EXIT\t{label}\tload\t0")
@@ -591,6 +599,9 @@ def selftest() -> int:
         drop_ctx={("t2p", "before", "daemon.cgroup")})
     run("incomplete: a block without its thread reading", 2, ("t1.1.mech64: no thread reading of the probe",),
         drop_ctx={("t1", "t1.1.mech64", "probe.threads")})
+    run("cut responses are counted per block and per cell", 0, (
+        "t1.1.mech64     ", "cut   3", "mech64  share", "cut 9 of 1536 responses"),
+        cut={("t1", "mech64"): 3})
     run("a capture with no pre-window points reads the same", 0, (
         "pre-window points dropped from 0", "96 % and 92 %: held"), no_stale=True)
     if failures:
@@ -598,7 +609,7 @@ def selftest() -> int:
         for failure in failures:
             print("  " + failure)
         return 1
-    print("selftest: 14 cases pass")
+    print("selftest: 15 cases pass")
     return 0
 
 
