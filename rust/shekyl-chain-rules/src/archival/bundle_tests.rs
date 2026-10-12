@@ -565,7 +565,10 @@ fn a_record_filed_under_another_draws_bit_refuses_at_its_receipt() {
 // ------------------------------------------------- step 4: the commitment
 
 /// The witness key and the seed open `h`'s `0x0C`, or the bundle is
-/// refused: another seed, another witness key, a block with no `0x0C`.
+/// refused: another seed, another witness key, a chain that committed to
+/// something else. A mismatch is the verdict and only a mismatch is: a
+/// view with no `0x0C` for `h` is a hole
+/// (`a_view_with_a_hole_is_unanswered_and_never_a_verdict`).
 /// Red edit: skip the comparison — the second case, a bundle wholly
 /// authored and signed by a key the producer never committed to, admits.
 #[test]
@@ -606,12 +609,20 @@ fn a_bundle_that_does_not_open_the_commitment_refuses() {
     );
     assert!(judge(&forger, &forged_ref, &forged_body).is_ok());
 
-    // A block with no `0x0C` has nothing to open.
-    world.view.commitments.remove(&world.h);
-    assert_eq!(
-        judge(&world, &reference, &body),
-        invalid(BundleInvalid::Commitment)
-    );
+    // The chain committed to other bytes: one flipped bit of `h`'s
+    // `0x0C`, and an all-zero one. Each is a commitment, and neither is
+    // this bundle's.
+    let honest = world.view.commitments[&world.h];
+    let mut one_bit = honest;
+    one_bit[19] ^= 0x04;
+    for other in [one_bit, [0u8; 32]] {
+        world.view.commitments.insert(world.h, other);
+        let refused = judge(&world, &reference, &body).expect_err("another commitment");
+        assert_eq!(refused, BundleRefused::Invalid(BundleInvalid::Commitment));
+        assert_eq!(refused.verdict().map(BundleInvalid::row), Some(CenRow::J33));
+    }
+    world.view.commitments.insert(world.h, honest);
+    assert!(judge(&world, &reference, &body).is_ok());
 }
 
 // ------------------------------------------ step 5: the witness signature
@@ -1127,7 +1138,12 @@ fn a_fetched_body_is_checked_by_hash_and_then_parsed() {
 /// epoch's snapshot, no hash for `h`, or an empty drawable set under a
 /// block that has draws: none is a verdict. A conforming view presents
 /// none of these, and a refusal here would make a store's hole into a
-/// consensus rule. Red edit: map any of them to a `BundleInvalid`.
+/// consensus rule. The first case is a view with no `0x0C` for a block it
+/// just gave a draw count for: every coinbase carries one (CEN-I20), so
+/// that is the view not answering, and the block is not called invalid
+/// for it. Red edit: map any of them to a `BundleInvalid` — for the
+/// first, return `BundleInvalid::Commitment` on a `None` commitment, as
+/// the rule did before; `verdict()` is then `Some` and this test fails.
 #[test]
 fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let fresh = || {
@@ -1143,6 +1159,23 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
         assert_eq!(refused.verdict(), None, "{refused:?} is not a verdict");
         refused
     };
+
+    let (mut world, bundle) = fresh();
+    world.view.commitments.remove(&world.h);
+    world.view.take_reads();
+    assert_eq!(
+        unanswered(&world, &bundle),
+        BundleRefused::Unanswered(BundleUnanswered::DrawCommitment { height: world.h })
+    );
+    assert_eq!(
+        world.view.take_reads(),
+        [
+            BundleRead::Revealed,
+            BundleRead::DrawCount,
+            BundleRead::DrawCommitment
+        ],
+        "the count was answered, and then the commitment was not"
+    );
 
     let (mut world, bundle) = fresh();
     world.view.snapshots.clear();

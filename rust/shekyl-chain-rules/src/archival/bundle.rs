@@ -67,8 +67,11 @@
 //!   rule's, and this rule does not read them.
 //! - [`BundleView::draw_commitment`] is the coinbase's `0x0C` field. The
 //!   coinbase grammar (CEN-I20) now requires exactly one, so a block of
-//!   the chain always has it; this rule still answers a `None` with
-//!   [`BundleInvalid::Commitment`] and not a panic.
+//!   the chain always has it. A `None` for a block whose draw count the
+//!   view just answered is therefore the view failing to answer, and the
+//!   rule returns [`BundleUnanswered::DrawCommitment`], not a verdict:
+//!   calling the block invalid would turn a store's hole into a consensus
+//!   rule. [`BundleInvalid::Commitment`] is the mismatch and nothing else.
 //! - `ChainView::drawable_digest(E)` is **not** one of this rule's reads.
 //!   It is the settlement writer's check that `D` did not drift
 //!   (specification §9.5, check 2). What this rule reads of `D` is
@@ -387,8 +390,9 @@ pub enum BundleInvalid {
     Count,
     /// The number of records is not the number of set bits. CEN-J32.
     RecordCount,
-    /// `draw_commit(witness_pk, seed)` is not `h`'s `0x0C` — or `h` carries
-    /// no `0x0C` to open. CEN-J33.
+    /// `draw_commit(witness_pk, seed)` is not `h`'s `0x0C`. A view that has
+    /// no `0x0C` for `h` is not this arm: every coinbase carries one
+    /// (CEN-I20), so that is [`BundleUnanswered::DrawCommitment`]. CEN-J33.
     Commitment,
     /// The witness key or signature is not a scheme-3 key or signature, or
     /// the signature does not verify over the bundle commitment. CEN-J34.
@@ -471,6 +475,13 @@ pub enum BundleUnanswered {
         /// `epoch(h)`.
         epoch: SettlementEpoch,
     },
+    /// No `0x0C` commitment for `h`, whose draw count the view answered.
+    /// The coinbase grammar requires exactly one in every block
+    /// (CEN-I20), so a block of the chain cannot lack it.
+    DrawCommitment {
+        /// The block asked about: `h`.
+        height: BlockHeight,
+    },
     /// No hash for a block at or below `h`.
     BlockHash {
         /// The height asked.
@@ -531,6 +542,9 @@ impl<F: fmt::Display> fmt::Display for BundleRefused<F> {
             Self::BodyNotReferenced => f.write_str("the body is not the one the reference names"),
             Self::Unanswered(BundleUnanswered::Snapshot { epoch }) => {
                 write!(f, "the view has no snapshot of epoch {epoch}")
+            }
+            Self::Unanswered(BundleUnanswered::DrawCommitment { height }) => {
+                write!(f, "the view has no 0x0C commitment at height {height}")
             }
             Self::Unanswered(BundleUnanswered::BlockHash { height }) => {
                 write!(f, "the view has no block hash at height {height}")
@@ -666,8 +680,13 @@ pub fn verify_bundle<V: BundleView>(
 
     // 4. Commitment. Until the producer releases its bundle nobody else
     // can open `h`'s `0x0C`, so this is checked before either signature.
+    // No `0x0C` for a block the view just gave a draw count for is the
+    // view's hole, not the block's defect: CEN-I20 puts one in every
+    // coinbase.
     let Some(committed) = view.draw_commitment(h)? else {
-        return invalid(BundleInvalid::Commitment);
+        return Err(BundleRefused::Unanswered(
+            BundleUnanswered::DrawCommitment { height: h },
+        ));
     };
     if draw_commit(body.witness_public_key(), &kept.seed) != committed {
         return invalid(BundleInvalid::Commitment);
