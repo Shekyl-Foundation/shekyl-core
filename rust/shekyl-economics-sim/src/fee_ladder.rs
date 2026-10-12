@@ -1477,14 +1477,29 @@ fn dwell_scenario(
 // Feedback map (FL-C7) — on the SERVED (quantized) ladder
 // ---------------------------------------------------------------------------
 
+/// FL-R18's thin-margin line, in thousandths of `served/floor`.
+///
+/// The race was measured against the 2% acceptance buffer admission had
+/// then (`served * 100 < floor * 98`). FL-R23 set the slack to zero and
+/// production names no margin to import, so `1_020` stays as that round's
+/// threshold and its counts stay with it
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4, D6).
+const FL_R18_THIN_MARGIN_MILLI: u64 = 1_020;
+
+/// The two factors of FL-R18's acceptance comparison: a quote was refused
+/// when `served * NUM < floor * DEN`, which is `needed - needed/50`.
+const FL_R18_ACCEPT_NUM: u128 = 100;
+const FL_R18_ACCEPT_DEN: u128 = 98;
+
 #[derive(Serialize)]
 pub struct FeedbackResult {
     /// FL-R18 rejection-race (§4.5b): quotes issued along the trace, and
     /// how many would be REFUSED at admission `RACE_LAGS[i]` blocks later
     /// because the relay floor rose above the quoted (already
-    /// floor-clamped) economy rung. The count applies the 2% acceptance
-    /// buffer admission had when FL-R18 was measured. FL-R23 has since
-    /// set the slack to zero and added a lookback
+    /// floor-clamped) economy rung. The count applies
+    /// [`FL_R18_ACCEPT_NUM`] / [`FL_R18_ACCEPT_DEN`], the 2% buffer
+    /// admission had when FL-R18 was measured. FL-R23 has since set the
+    /// slack to zero and added a lookback
     /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, Appendix A2, D6).
     pub race_quotes: u64,
     pub race_refused: [u64; 4],
@@ -1493,10 +1508,11 @@ pub struct FeedbackResult {
     /// shrinks `R`), so `race_refused` is structurally zero and proves
     /// nothing on its own. What decides a refusal is the MARGIN a quote
     /// carries over the floor it was clamped against: `served/floor` in
-    /// thousandths, minimised over the trace. A quote survives a median
-    /// contraction of factor `f` iff `f² ≤ (served/floor)·(100/98)`, so
-    /// this margin converts directly into the median move the quote can
-    /// absorb — the exposure the fixed-median traces cannot show.
+    /// thousandths, minimised over the trace. Under the buffer FL-R18
+    /// measured, a quote survived a median contraction of factor `f` iff
+    /// `f² ≤ (served/floor)·(100/98)`, and a margin below
+    /// [`FL_R18_THIN_MARGIN_MILLI`] was that round's thin line. FL-R23
+    /// removed the buffer (§4, D6); the line stays so the counts stay.
     pub race_margin_min_milli: u64,
     /// Chain age and median of the swept state (§1.8 interior grid;
     /// PR #614 review — feedback was previously pinned to (age 4, zone)).
@@ -1708,14 +1724,17 @@ fn feedback_scenario(
             last_tail_fee = Some(fee);
         }
     }
-    // Refused iff the quote misses `check_fee`'s acceptance bound at
-    // admission: accept requires `fee >= needed - needed/50`, i.e.
-    // `served * 100 >= floor_at_admission * 98`.
+    // FL-R18's refusal count, under the 2% buffer that round's admission
+    // had (`served * FL_R18_ACCEPT_NUM < floor * FL_R18_ACCEPT_DEN`).
+    // Not the slack production admits at: `RELAY_ADMISSION_SLACK_BP` is 0
+    // (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4, D6).
     let mut race_refused = [0u64; 4];
     for (i, &lag) in RACE_LAGS.iter().enumerate() {
         let lag = lag as usize;
         for h in 0..served_economy.len().saturating_sub(lag) {
-            if u128::from(served_economy[h]) * 100 < u128::from(floors[h + lag]) * 98 {
+            if u128::from(served_economy[h]) * FL_R18_ACCEPT_NUM
+                < u128::from(floors[h + lag]) * FL_R18_ACCEPT_DEN
+            {
                 race_refused[i] += 1;
             }
         }
@@ -2327,7 +2346,7 @@ pub fn report() -> FeeLadderReport {
                                 oscillating += 1;
                                 worst_transitions = worst_transitions.max(fb.tail_transitions);
                             }
-                            if fb.race_margin_min_milli < 1020 {
+                            if fb.race_margin_min_milli < FL_R18_THIN_MARGIN_MILLI {
                                 thin_margin_cells += 1;
                             }
                         }
@@ -2503,7 +2522,7 @@ pub fn report() -> FeeLadderReport {
             } else if reference.contains(&key) {
                 recovered_cells += 1;
             }
-            if fb.race_margin_min_milli < 1020 {
+            if fb.race_margin_min_milli < FL_R18_THIN_MARGIN_MILLI {
                 thin_margin_cells += 1;
             }
         }
