@@ -124,6 +124,7 @@ impl SymmetricState {
     ///
     /// Each direction keeps its own chaining key. Rekey advances the two
     /// directions independently.
+    #[must_use = "the record halves are the session"]
     pub fn into_halves(self, role: SplitRole) -> (SendHalf, RecvHalf) {
         let (first, second) = aead::hkdf(&self.ck, &[]);
         let (send_key, recv_key) = match role {

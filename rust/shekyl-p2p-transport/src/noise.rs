@@ -286,6 +286,8 @@ impl ResponderReady {
 }
 
 impl<const INITIATOR: bool> Established<INITIATOR> {
+    /// The record halves for this role. Dropping them drops the session.
+    #[must_use = "the record halves are the session"]
     pub fn split(self) -> (SendHalf, RecvHalf) {
         let role = if INITIATOR {
             SplitRole::Initiator
