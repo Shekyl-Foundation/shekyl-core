@@ -81,7 +81,7 @@ use core::fmt;
 use shekyl_archival_retention::bond_floor::bond_floor_of;
 use shekyl_archival_retention::{
     reinstate_connect, BadInterval, HoldingsKind, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    MAX_HOLDINGS_SHARDS, SLASH_GRACE_EPOCHS,
+    MAX_HOLDINGS_SHARDS, SLASH_SETTLEMENT_TIP_LAG_EPOCHS,
 };
 
 use crate::proxy::{bond_at_risk_skl, epochs_per_year, expected_epochs_to_first_slash};
@@ -246,7 +246,7 @@ pub fn reinstate_structural_downtime_epochs() -> f64 {
         })
         .expect("reinstate_connect admits no reinstatement within 64 epochs of a slash");
     // Reachable downtime: the fold's epoch minus the slash epoch.
-    let reachability_downtime = 1.0 + SLASH_GRACE_EPOCHS as f64;
+    let reachability_downtime = SLASH_SETTLEMENT_TIP_LAG_EPOCHS as f64;
     reachability_downtime.max(validation_downtime)
 }
 
@@ -792,7 +792,7 @@ mod tests {
         // reinstate lands in e+2 and the forgone span is {e+1, e+2} = 2 (epoch e
         // is the absorbing miss, already unpaid in the model). The probed
         // validation leg admits a same-epoch close (downtime 0) — slack. If
-        // this pin goes red: SLASH_GRACE_EPOCHS moved, or the
+        // this pin goes red: SLASH_SETTLEMENT_TIP_LAG_EPOCHS moved, or the
         // connect grew a cooldown gate that now out-binds reachability —
         // re-read the remedy curve's baseline from the new floor; do not
         // patch the pin without doing so.

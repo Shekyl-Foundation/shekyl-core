@@ -220,7 +220,14 @@ const _: () = assert!(
 /// that block (it advances its watermark on every connect, so it does not
 /// drift behind the tip). `2` at `k = 1` — **on every schedule**, since the
 /// grace is denominated in epochs.
-const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
+pub const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
+
+/// The largest failure window `n` the C++ gather can read whole: the
+/// epochs retained below the tip at an on-time slash pass,
+/// `MAX_CLAIM_AGE_W + 1 − LAG`. `25` at the shipped values. The assert
+/// below holds [`ARCHIVAL_FAILURE_WINDOW_N`] to it.
+pub const FAILURE_WINDOW_N_GATHER_BOUND: u64 =
+    MAX_CLAIM_AGE_W + 1 - SLASH_SETTLEMENT_TIP_LAG_EPOCHS;
 
 /// **Prune-horizon coupling — the C++ gather may not out-reach the
 /// serve-credit ledger's retention.** At the moment epoch `E` is settled
@@ -250,7 +257,7 @@ const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
 /// constant — a regtest chain was not a faithful model of the slash path. That
 /// caveat is gone with the constant.)
 const _: () = assert!(
-    (ARCHIVAL_FAILURE_WINDOW_N as u64) + SLASH_SETTLEMENT_TIP_LAG_EPOCHS <= MAX_CLAIM_AGE_W + 1,
+    (ARCHIVAL_FAILURE_WINDOW_N as u64) <= FAILURE_WINDOW_N_GATHER_BOUND,
     "the C++ failure-window gather reaches further back than the epoch-scoped \
      archival tables are retained (prune_archival_epochs_before deletes below \
      tip - MAX_CLAIM_AGE_W). Against archival_serve_credit a pruned bit reads as \

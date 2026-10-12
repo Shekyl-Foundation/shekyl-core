@@ -46,13 +46,15 @@
 use core::fmt;
 
 use shekyl_archival_retention::{
-    FAILURE_WINDOW_M, FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS, SETTLEMENT_EPOCH_BLOCKS,
+    FAILURE_WINDOW_M, FAILURE_WINDOW_N, FAILURE_WINDOW_N_GATHER_BOUND, MAX_HOLDINGS_SHARDS,
+    SETTLEMENT_EPOCH_BLOCKS,
 };
 
 use crate::proxy::A5_REWARD_HORIZON_EPOCHS;
 
-/// Hard ceiling on `n` (prune-horizon assert, `failure_window.rs`).
-pub const N_HARD_BOUND: u32 = 25;
+/// Hard ceiling on `n`: production's prune-horizon bound, the largest window
+/// the retained epochs can supply.
+pub const N_HARD_BOUND: u32 = FAILURE_WINDOW_N_GATHER_BOUND as u32;
 
 /// Bond life used by the report — A5's reward horizon (~5 y), not a second
 /// lifetime constant.
