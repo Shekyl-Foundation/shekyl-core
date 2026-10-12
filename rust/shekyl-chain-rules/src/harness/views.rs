@@ -258,6 +258,7 @@ impl<'a, 'id> MockView<'a, 'id> {
             record: BondRecord {
                 hybrid_pubkey: key.0,
                 bond_spend_pk: Vec::new(),
+                receipt_sign_pk: Vec::new(),
                 endpoint: [0; 32],
                 join_settlement_epoch: SettlementEpoch::ZERO,
                 bonded_total: AtomicUnits::ZERO,

@@ -194,6 +194,7 @@ mod tests {
         BondRecord {
             hybrid_pubkey: vec![0x0a; 64],
             bond_spend_pk: vec![0x0b; 32],
+            receipt_sign_pk: Vec::new(),
             endpoint: [0; 32],
             join_settlement_epoch: epoch(2),
             bonded_total: AtomicUnits::from_raw(2),

@@ -53,6 +53,7 @@ fn record() -> BondRecord {
     BondRecord {
         hybrid_pubkey: vec![0x11; 64],
         bond_spend_pk: vec![0x22; 32],
+        receipt_sign_pk: Vec::new(),
         endpoint: [0x33; 32],
         join_settlement_epoch: epoch(3),
         bonded_total: AtomicUnits::from_raw(5_000_000_000),

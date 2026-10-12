@@ -358,6 +358,10 @@ pub unsafe extern "C" fn shekyl_e2_archival_snapshot_push_bond(
     let record = BondRecord {
         hybrid_pubkey: hybrid_pubkey.to_vec(),
         bond_spend_pk: bond_spend_pk.to_vec(),
+        // The C++ record has no receipt key and this export's signature
+        // carries none: a record the C++ store holds was created by a
+        // keyless JoinMarket (the C++ decoder has no `post_kind` 5).
+        receipt_sign_pk: Vec::new(),
         endpoint,
         join_settlement_epoch: SettlementEpoch::from_raw(join_settlement_epoch),
         bonded_total: AtomicUnits::from_raw(bonded_total),

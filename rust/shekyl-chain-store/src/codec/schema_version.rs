@@ -233,7 +233,26 @@ use super::{Canonical, CodecError};
 ///   it as a sealed file missing a table (SI-7); the bump refuses it at
 ///   open with the true reason. No snapshot family moves: none of the
 ///   three has a C++ counterpart to compare.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(22);
+/// - `23` — the bond record carries the persona's receipt key
+///   (`FN_DSA_HYBRID.md` §6, increment 3; `ARCHIVAL_SERVE_CREDIT_SPEC.md`
+///   §6.3). `bond_record` gains `receipt_sign_pk`, `u32 len ‖ bytes`
+///   immediately after `bond_spend_pk` and bounded by `MAX_BOND_KEY_BYTES`:
+///   the canonical Ed25519 + FN-DSA-1024 hybrid public key a JoinMarket in
+///   its receipt form (bond-post `post_kind` 5) commits, empty for a record
+///   a keyless JoinMarket created. Every stored record moves — the empty
+///   key is four length bytes — so a `22` file's `archival_bond` rows
+///   decode under `23` with the endpoint read as a key length, and the
+///   bump refuses the file at open instead. `bond_record.snap` moves; no
+///   table, ordinal or property cell does. The archival snapshot's
+///   `archival_bond` family (`archival_snapshot.rs`) encodes both of its
+///   legs through this codec, so they move together: a C++-side row has
+///   no receipt key and is pushed with an empty one. A trace **captured**
+///   under `22` holds the daemon's bond rows in the `22` bytes, so the E2
+///   replay of the `bond-post` chain (`shekyl-chain-ingest`,
+///   `tests/vectors/bond-post`) reports its Bond family unequal against a
+///   `23` store until that chain is re-captured; the logical-state digest
+///   at its tip is unaffected.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(23);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -290,10 +309,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(22));
-        assert_eq!(SCHEMA_VERSION.encode(), [22, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(23));
+        assert_eq!(SCHEMA_VERSION.encode(), [23, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[22, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[23, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

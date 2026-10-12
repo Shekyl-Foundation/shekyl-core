@@ -23,7 +23,8 @@ use super::{
 // `ARW-Q8`) — shapes only. The `Canonical` codec is `shekyl-store-codec`'s.
 // ---------------------------------------------------------------------------
 
-/// Upper bound on the bond record's two key fields' byte length — the C++
+/// Upper bound on the byte length of each of the bond record's key fields
+/// (`hybrid_pubkey`, `bond_spend_pk`, `receipt_sign_pk`) — the C++
 /// codec's `kMaxPubkeyLen`. A **codec** cap, not the canonical length: every
 /// record is created by JoinMarket connect, whose vin serializer enforces the
 /// exact hybrid-key length; a store bounds what an untrusted decode will
@@ -267,6 +268,16 @@ pub struct BondRecord {
     /// immutable for the record's life; every later `bond_debit` verifies
     /// against this copy, never the identity key.
     pub bond_spend_pk: Vec<u8>,
+    /// The persona's receipt key: canonical `FnDsaHybridPublicKey` bytes
+    /// (Ed25519 + FN-DSA-1024, 1,837 bytes; `FN_DSA_HYBRID.md` §6), the key
+    /// every receipt this persona signs is verified under. **Empty** for a
+    /// record created by a keyless JoinMarket (wire `post_kind` `0`), which
+    /// committed none. Set once, at JoinMarket connect, from the post the
+    /// identity key signed, and never changed: Reinstate and Release do not
+    /// touch it, and no post kind exists that could (bond records are
+    /// immutable in this respect, as in `bond_spend_pk` and the endpoint).
+    /// That a non-empty value is a key is CEN-J28's, judged before connect.
+    pub receipt_sign_pk: Vec<u8>,
     /// The 32-byte serving endpoint, written once at JoinMarket connect. Any
     /// 32 bytes — zero is a value the vin carried, not an absence.
     pub endpoint: [u8; 32],

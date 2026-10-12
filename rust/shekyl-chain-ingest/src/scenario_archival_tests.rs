@@ -332,6 +332,209 @@ async fn two_posts_for_one_persona_in_one_block_are_j16s_then_g10s() {
     scenario.close().await;
 }
 
+/// The persona's JoinMarket post from the production constructor, with its
+/// receipt key set by hand to `receipt_sign_pk` — `Some` is wire `post_kind`
+/// 5, `None` is `post_kind` 0 — signed by the identity key over the post as
+/// it then stands.
+fn join_committing(
+    persona: &Persona,
+    receipt_sign_pk: Option<Vec<u8>>,
+) -> shekyl_harness_spender::PostedBond<'_> {
+    let mut post = persona.join_post(complete_tree(), ENDPOINT);
+    match &mut post.kind {
+        BondPostKind::JoinMarket {
+            receipt_sign_pk: slot,
+            ..
+        } => *slot = receipt_sign_pk,
+        BondPostKind::Other(_) => unreachable!("the constructor builds a JoinMarket"),
+    }
+    persona.post_by_hand(post)
+}
+
+/// The receipt key through the production stack (FN-DSA increment 3,
+/// `FN_DSA_HYBRID.md` §6): posts a persona's keys built and signed, riding
+/// real spends, judged by `validate` over the redb store's view and
+/// connected.
+///
+/// - **CEN-J28's refusal.** A JoinMarket whose receipt key is the persona's
+///   own with one byte of its FN-DSA half made undecodable — canonical
+///   length, so the wire carries it — is refused on J28 at the transaction,
+///   and no record is written.
+/// - **The accept, and the record.** The same persona's JoinMarket
+///   committing its real derived receipt key (`ArchivalPKeys::
+///   receipt_sign_pk`, wire `post_kind` 5) connects, J28 among the rows
+///   that judged the block; the verdict's `Insert` carries **exactly those
+///   bytes** as `receipt_sign_pk`, and the store's row is the verdict's.
+/// - **A keyless JoinMarket** (wire `post_kind` 0) beside it connects as it
+///   always has, and its record's receipt key is empty.
+/// - **A Release leaves the key alone.** The next block releases the keyed
+///   record: the `Update` post-image — bonded to zero, holding nothing —
+///   still carries the key, byte for byte, in the verdict and in the store.
+///   The receipt key is set once at JoinMarket and no later post changes it.
+///
+/// A Reinstate's positive needs an open interval, which only a slash
+/// writes, and no default-lane chain reaches the slash scan (module docs);
+/// the Release here is this lane's witness that an in-place record update
+/// keeps the key.
+///
+/// Red edits: delete `J28` from `tx_form`'s `judge_tx!` line and the
+/// corrupted key connects; replace the fold's copy in `archival/inputs.rs`
+/// `join` with `Vec::new()` and the record's key is empty.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_join_markets_receipt_key_is_the_records_and_a_release_leaves_it() {
+    // Two spends in the join block, of coinbases 0 and 1; the release
+    // spends coinbase 2 one block later.
+    let connecting = first_spending_height() + BlockCount::ONE;
+    let mut scenario = Scenario::open("scenario-archival-receipt-key");
+    let mined = scenario
+        .mine(ChainCount::from_next_height(connecting).to_raw())
+        .await;
+    let mut spender = Spender::over(&mined);
+    let keyed = Persona::at(5);
+    let keyless = Persona::at(6);
+    let key = keyed.keys().receipt_sign_pk.to_canonical_bytes();
+    assert_eq!(
+        key.len(),
+        shekyl_wire::transaction::BOND_POST_RECEIPT_KEY_LEN
+    );
+
+    // The FN-DSA half starts at byte 44 of the canonical encoding
+    // (`version ‖ scheme ‖ reserved(2) ‖ len(4) ‖ ed25519(32) ‖ len(4)`);
+    // its first byte is the encoding's header, and no other value decodes.
+    let mut not_a_key = key.clone();
+    not_a_key[44] ^= 0xff;
+    let refused = join_committing(&keyed, Some(not_a_key));
+    refused_at(
+        scenario
+            .mine_listing(vec![spender.spend_coinbase_posting(
+                scenario.wallet(),
+                BlockHeight::ZERO,
+                connecting,
+                FEE,
+                Some(&refused),
+            )])
+            .await,
+        CenRow::J28,
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
+    );
+    assert!(
+        scenario
+            .bond_record(keyed.id())
+            .await
+            .expect("answers")
+            .is_none(),
+        "a refused join writes no record"
+    );
+
+    // The refused block wrote nothing: the honest joins land at the same
+    // height, on the same coinbases.
+    let join_keyed = join_committing(&keyed, Some(key.clone()));
+    let join_keyless = join_committing(&keyless, None);
+    let block = scenario
+        .mine_listing(vec![
+            spender.spend_coinbase_posting(
+                scenario.wallet(),
+                BlockHeight::ZERO,
+                connecting,
+                FEE,
+                Some(&join_keyed),
+            ),
+            spender.spend_coinbase_posting(
+                scenario.wallet(),
+                BlockHeight::from_raw(1),
+                connecting,
+                FEE,
+                Some(&join_keyless),
+            ),
+        ])
+        .await
+        .unwrap_or_else(|outcome| panic!("both joins connect: {outcome}"));
+    assert_eq!(block.height, connecting);
+    for row in [
+        CenRow::J11,
+        CenRow::J12,
+        CenRow::J28,
+        CenRow::J13,
+        CenRow::J14,
+        CenRow::J27,
+        CenRow::I18,
+        CenRow::L7,
+    ] {
+        assert!(block.judged_by.contains(&row), "{row} judged the block");
+    }
+    let records = block.archival.records();
+    assert_eq!(records.len(), 2, "one insert per join");
+    assert_eq!(records[0].persona(), &keyed.id());
+    assert_eq!(
+        records[0].record().receipt_sign_pk,
+        key,
+        "the record carries exactly the bytes the post committed"
+    );
+    assert_eq!(records[0].record().bond_spend_pk, keyed.bond_spend());
+    assert_eq!(records[0].record().hybrid_pubkey, keyed.identity());
+    assert_eq!(records[1].persona(), &keyless.id());
+    assert!(
+        records[1].record().receipt_sign_pk.is_empty(),
+        "a keyless JoinMarket commits no receipt key"
+    );
+    let joined = records[0].record().clone();
+    assert_eq!(
+        scenario.bond_record(keyed.id()).await.expect("read"),
+        Some(joined.clone()),
+        "the store's row is the verdict's, receipt key included"
+    );
+    assert_eq!(
+        scenario.bond_record(keyless.id()).await.expect("read"),
+        Some(records[1].record().clone()),
+    );
+    spender.push(&block);
+
+    // The release of the keyed record: its post-image keeps the key.
+    let next = connecting + BlockCount::ONE;
+    let release = keyed.release(joined.bonded_total.to_raw());
+    let block = scenario
+        .mine_listing(vec![spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::from_raw(2),
+            next,
+            FEE,
+            Some(&release),
+        )])
+        .await
+        .unwrap_or_else(|outcome| panic!("the release connects: {outcome}"));
+    let records = block.archival.records();
+    assert_eq!(records.len(), 1, "the release is the block's one write");
+    assert_eq!(records[0].persona(), &keyed.id());
+    let released = records[0].record();
+    assert_eq!(
+        released.bonded_total.to_raw(),
+        0,
+        "the release emptied the bond"
+    );
+    assert_ne!(released, &joined, "the release changed the record");
+    assert_eq!(
+        released.receipt_sign_pk, key,
+        "a Release does not touch the receipt key"
+    );
+    assert_eq!(
+        scenario.bond_record(keyed.id()).await.expect("read"),
+        Some(released.clone()),
+        "the store's post-image keeps the key"
+    );
+    assert_eq!(
+        scenario
+            .bond_record(keyless.id())
+            .await
+            .expect("read")
+            .map(|record| record.receipt_sign_pk),
+        Some(Vec::new()),
+        "another persona's release does not touch this record"
+    );
+    scenario.close().await;
+}
+
 /// A chain with one bonded persona and a few blocks past the join, as the
 /// injector finds it: the blocks (for a replay) and the persona. The
 /// persona holds a complete tree — shard 7 with every other; a compact

@@ -39,6 +39,7 @@ fn base() -> BondRecord {
     BondRecord {
         hybrid_pubkey: vec![0x11; 64],
         bond_spend_pk: vec![0x22; 32],
+        receipt_sign_pk: Vec::new(),
         endpoint: [0x33; 32],
         join_settlement_epoch: SettlementEpoch::from_raw(3),
         bonded_total: AtomicUnits::from_raw(5_000_000_000),
@@ -48,6 +49,13 @@ fn base() -> BondRecord {
         first_paying_emission_height: None,
     }
 }
+
+/// Offset of the holdings kind byte in `base().encode()`: the two
+/// length-prefixed keys `base()` fills (64 and 32 bytes), the receipt key's
+/// length prefix (`base()` commits none, so the prefix is all of it), the
+/// endpoint, the join epoch and the bonded total. The receipt key's four
+/// bytes joined the sum with layout 23.
+const KIND_AT: usize = 4 + 64 + 4 + 32 + 4 + 32 + 8 + 8;
 
 fn round_trips(record: &BondRecord) -> Vec<u8> {
     let bytes = record.encode();
@@ -140,7 +148,7 @@ fn every_cap_is_a_refusal_one_past_it_before_any_allocation() {
     let mut bytes = base().encode();
     // base() is a complete tree: its holdings byte is the last of the
     // fixed prefix. Rewrite it to compact + an over-cap count.
-    let kind_at = 4 + 64 + 4 + 32 + 32 + 8 + 8;
+    let kind_at = KIND_AT;
     assert_eq!(bytes[kind_at], HoldingsKind::CompleteTree as u8);
     bytes.truncate(kind_at);
     bytes.push(HoldingsKind::ShardSetCompact as u8);
@@ -178,7 +186,7 @@ fn the_decode_refuses_what_the_type_makes_unrepresentable() {
     // A duplicate shard inside a compact holding — the row a desynced C++
     // writer could have produced — is SI-14's decode-side refusal.
     let mut bytes = base().encode();
-    let kind_at = 4 + 64 + 4 + 32 + 32 + 8 + 8;
+    let kind_at = KIND_AT;
     bytes.truncate(kind_at);
     bytes.push(HoldingsKind::ShardSetCompact as u8);
     bytes.extend_from_slice(&2u32.to_le_bytes());
@@ -387,6 +395,7 @@ fn record_from_v7_fields(f: &serde_json::Value) -> BondRecord {
     BondRecord {
         hybrid_pubkey: hex_bytes(&f["hybrid_pubkey_hex"]),
         bond_spend_pk: hex_bytes(&f["bond_spend_pk_hex"]),
+        receipt_sign_pk: Vec::new(),
         endpoint: hex_bytes(&f["endpoint_hex"])
             .try_into()
             .expect("32-byte endpoint"),
@@ -516,4 +525,109 @@ fn the_v7_corpus_maps_onto_the_record_without_loss() {
         seen_complete && seen_compact && seen_open && seen_clean_close && seen_paid && seen_unpaid,
         "the corpus exercises both holdings kinds, both interval entry kinds and both paid states"
     );
+}
+
+// ---- the receipt key (layout 23, FN-DSA increment 3) ------------------------
+
+/// The receipt key is `u32 len ‖ bytes` immediately after `bond_spend_pk`
+/// and before the endpoint: a record that commits one is the keyless
+/// record's bytes with the four zero length bytes replaced by the length
+/// and the key. Nothing after it moves relative to it.
+#[test]
+fn the_receipt_key_sits_between_bond_spend_pk_and_the_endpoint() {
+    let keyless = base();
+    assert!(keyless.receipt_sign_pk.is_empty());
+    let keyless_bytes = round_trips(&keyless);
+    // hybrid_pubkey (4 + 64) then bond_spend_pk (4 + 32), then the prefix.
+    let prefix_at = 4 + 64 + 4 + 32;
+    assert_eq!(
+        &keyless_bytes[prefix_at..prefix_at + 4],
+        &0u32.to_le_bytes(),
+        "a keyless record stores a zero length and no bytes"
+    );
+    assert_eq!(
+        &keyless_bytes[prefix_at + 4..prefix_at + 4 + 32],
+        &[0x33; 32],
+        "the endpoint follows the empty key directly"
+    );
+    assert_eq!(prefix_at + 4 + 32 + 8 + 8, KIND_AT);
+
+    let key = vec![0x44; 1_837];
+    let keyed = BondRecord {
+        receipt_sign_pk: key.clone(),
+        ..base()
+    };
+    let keyed_bytes = round_trips(&keyed);
+    let mut expected = keyless_bytes[..prefix_at].to_vec();
+    expected.extend_from_slice(&1_837u32.to_le_bytes());
+    expected.extend_from_slice(&key);
+    expected.extend_from_slice(&keyless_bytes[prefix_at + 4..]);
+    assert_eq!(keyed_bytes, expected);
+    assert_eq!(
+        BondRecord::decode(&keyed_bytes).unwrap().receipt_sign_pk,
+        key
+    );
+    // Distinct from both neighbours: a decode that read the key into
+    // another slot would not round-trip `base()`'s 0x22 and 0x33 fills.
+    let decoded = BondRecord::decode(&keyed_bytes).unwrap();
+    assert_eq!(decoded.bond_spend_pk, vec![0x22; 32]);
+    assert_eq!(decoded.endpoint, [0x33; 32]);
+}
+
+/// The receipt key is bounded like the other two keys, before anything is
+/// allocated for it, and refused under its own name. At the cap it
+/// round-trips.
+#[test]
+fn the_receipt_key_is_bounded_by_the_key_cap_under_its_own_name() {
+    round_trips(&BondRecord {
+        receipt_sign_pk: vec![0xcc; MAX_BOND_KEY_BYTES],
+        ..base()
+    });
+
+    let mut bytes = base().encode();
+    let prefix_at = 4 + 64 + 4 + 32;
+    bytes.truncate(prefix_at);
+    bytes.extend_from_slice(&(u32::try_from(MAX_BOND_KEY_BYTES).unwrap() + 1).to_le_bytes());
+    assert_eq!(
+        BondRecord::decode(&bytes),
+        Err(invalid("receipt_sign_pk exceeds MAX_BOND_KEY_BYTES"))
+    );
+
+    // The same over-cap length one field earlier is `bond_spend_pk`'s
+    // refusal, not this one: each key names itself.
+    let mut bytes = base().encode();
+    bytes.truncate(4 + 64);
+    bytes.extend_from_slice(&(u32::try_from(MAX_BOND_KEY_BYTES).unwrap() + 1).to_le_bytes());
+    assert_eq!(
+        BondRecord::decode(&bytes),
+        Err(invalid("bond_spend_pk exceeds MAX_BOND_KEY_BYTES"))
+    );
+}
+
+/// The C++ v7 record has no receipt key. Every corpus record maps onto a
+/// `BondRecord` whose key is empty, and the empty key costs exactly its
+/// four-byte length prefix.
+#[test]
+fn a_v7_corpus_record_carries_no_receipt_key() {
+    let text = fs::read_to_string(corpus_path()).expect("the v7 corpus");
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("corpus is JSON");
+    let cases = doc["cases"].as_array().expect("cases");
+    assert!(!cases.is_empty());
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let record = record_from_v7_fields(&case["fields"]);
+        assert!(record.receipt_sign_pk.is_empty(), "{name}");
+        let bytes = record.encode();
+        let prefix_at = 4 + record.hybrid_pubkey.len() + 4 + record.bond_spend_pk.len();
+        assert_eq!(
+            &bytes[prefix_at..prefix_at + 4],
+            &0u32.to_le_bytes(),
+            "{name}"
+        );
+        assert_eq!(
+            &bytes[prefix_at + 4..prefix_at + 4 + 32],
+            &record.endpoint[..],
+            "{name}"
+        );
+    }
 }

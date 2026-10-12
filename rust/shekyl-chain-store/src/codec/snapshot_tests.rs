@@ -485,6 +485,7 @@ impl Fixtures for BondRecord {
         let base = BondRecord {
             hybrid_pubkey: vec![0x11; 4],
             bond_spend_pk: vec![0x22; 3],
+            receipt_sign_pk: Vec::new(),
             endpoint: [0x33; 32],
             join_settlement_epoch: SettlementEpoch::from_raw(3),
             bonded_total: AtomicUnits::from_raw(1_000_000),
@@ -497,13 +498,15 @@ impl Fixtures for BondRecord {
             // Every optional part absent: a complete tree, clean standing,
             // nothing claimed, never paid — the join-time record.
             ("complete_tree_at_join", base.clone()),
-            // Every part present, each with a distinct value: two held
+            // Every part present, each with a distinct value: a receipt key
+            // (`base` commits none — the keyless join), two held
             // shards (insertion order kept, not sorted), an open bad interval
             // followed by a zero-length clean-close marker, two claimed
             // epochs strictly increasing, a first-paying height.
             (
                 "compact_fully_populated",
                 BondRecord {
+                    receipt_sign_pk: vec![0x44; 5],
                     holdings: Holdings::shard_set(vec![
                         HeldShard {
                             shard: ShardId::from_raw(42),

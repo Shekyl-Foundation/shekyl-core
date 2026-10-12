@@ -31,6 +31,7 @@
 //! ```text
 //! hybrid_pubkey        u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES
 //! bond_spend_pk        u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES
+//! receipt_sign_pk      u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES; len 0 = none committed
 //! endpoint             [u8; 32]
 //! join_settlement_epoch u64
 //! bonded_total         u64                         atomic units
@@ -73,6 +74,7 @@ impl Canonical for BondRecord {
     fn encode_into(&self, out: &mut Vec<u8>) {
         put_bytes(out, &self.hybrid_pubkey);
         put_bytes(out, &self.bond_spend_pk);
+        put_bytes(out, &self.receipt_sign_pk);
         out.extend_from_slice(&self.endpoint);
         out.extend_from_slice(&self.join_settlement_epoch.to_raw().to_le_bytes());
         out.extend_from_slice(&self.bonded_total.to_raw().to_le_bytes());
@@ -117,6 +119,12 @@ impl Canonical for BondRecord {
             .bytes_bounded(
                 MAX_BOND_KEY_BYTES,
                 "bond_spend_pk exceeds MAX_BOND_KEY_BYTES",
+            )?
+            .to_vec();
+        let receipt_sign_pk = r
+            .bytes_bounded(
+                MAX_BOND_KEY_BYTES,
+                "receipt_sign_pk exceeds MAX_BOND_KEY_BYTES",
             )?
             .to_vec();
         let endpoint = r.array::<32>("buffer ends inside the endpoint")?;
@@ -200,6 +208,7 @@ impl Canonical for BondRecord {
         Ok(Self {
             hybrid_pubkey,
             bond_spend_pk,
+            receipt_sign_pk,
             endpoint,
             join_settlement_epoch,
             bonded_total,

@@ -66,9 +66,9 @@ impl super::Transition {
                 Some(BondArm::JoinMarket {
                     post,
                     bond_spend_pk,
+                    receipt_sign_pk,
                     endpoint,
-                    ..
-                }) => self.join(view, post, bond_spend_pk, endpoint, locus),
+                }) => self.join(view, post, bond_spend_pk, receipt_sign_pk, endpoint, locus),
                 Some(BondArm::Release { post }) => self.release(view, post, locus),
                 Some(BondArm::Reinstate { post }) => self.reinstate(view, post, locus),
                 None => refused(L7::ROW, locus),
@@ -85,11 +85,18 @@ impl super::Transition {
     /// JoinMarket (`db_lmdb.cpp` `apply_archival_bond_post`, the join arm):
     /// a new record joining at the open epoch, every held shard added at
     /// that epoch, no claims, no first-paying height.
+    ///
+    /// The receipt key the post commits (`FN_DSA_HYBRID.md` §6) is copied
+    /// into the record byte for byte — CEN-J28 has judged it a key — and a
+    /// keyless post (wire `post_kind` `0`) leaves the record's empty. This
+    /// is the only arm that writes `receipt_sign_pk`: [`Self::release`] and
+    /// [`Self::reinstate`] mutate the record in place and do not name it.
     fn join<'id, V: ChainView<'id>>(
         &mut self,
         view: &V,
         post: &BondPost,
         bond_spend_pk: &[u8],
+        receipt_sign_pk: Option<&[u8]>,
         endpoint: [u8; 32],
         locus: Locus,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
@@ -120,6 +127,7 @@ impl super::Transition {
         let record = BondRecord {
             hybrid_pubkey: post.hybrid_public_key.clone(),
             bond_spend_pk: bond_spend_pk.to_vec(),
+            receipt_sign_pk: receipt_sign_pk.map(<[u8]>::to_vec).unwrap_or_default(),
             endpoint,
             join_settlement_epoch: self.epoch,
             bonded_total: AtomicUnits::from_raw(post.bonded_total_atomic),
