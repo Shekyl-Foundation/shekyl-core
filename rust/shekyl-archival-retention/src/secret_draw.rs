@@ -171,6 +171,50 @@ pub fn draw_horizon(r: u64, seb: u64, response_window: u64) -> u64 {
     span.max(DRAW_HORIZON_FLOOR)
 }
 
+/// One block's draw target before the carry, and which side of the cap
+/// it came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DrawTarget {
+    /// `t`: the target in draws, with 32 fractional bits.
+    pub fixed: u128,
+    /// Whether the cap bound: `D·H + SEB·u > 9·D·H`, strictly. A target
+    /// that lands exactly on the cap is not capped; nothing was held down.
+    pub capped: bool,
+}
+
+/// The count rule's target at one block: base plus top-up, under the cap.
+///
+/// ```text
+/// t      = ( min(D·H + SEB·u, 9·D·H) << 32 ) / (SEB·H)      (u128, floor)
+/// capped = D·H + SEB·u > 9·D·H
+/// ```
+///
+/// `shortfall` is `u`: the visible shortfall less what is in flight. This
+/// is the only place the cap is computed; [`draw_count`] adds the carry to
+/// `t` and nothing else. `capped` is not consensus state. It exists so a
+/// caller that reports on the cap asks the rule, and does not keep a second
+/// copy of it.
+///
+/// `None` when `SEB` or `H` is zero — neither is in production; the
+/// genesis schedule pins both well above.
+#[must_use]
+pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Option<DrawTarget> {
+    if seb == 0 || horizon == 0 {
+        return None;
+    }
+    let d = u128::from(set_size);
+    let h = u128::from(horizon);
+    let epoch = u128::from(seb);
+    let u = u128::from(shortfall);
+    let weighted = d.saturating_mul(h).saturating_add(epoch.saturating_mul(u));
+    let cap = d.saturating_mul(h).saturating_mul(9);
+    let numer = weighted.min(cap).checked_shl(32)?;
+    Some(DrawTarget {
+        fixed: numer / epoch.saturating_mul(h),
+        capped: weighted > cap,
+    })
+}
+
 /// One block's draw count and the 32-bit fractional carry it leaves.
 ///
 /// ```text
@@ -179,6 +223,8 @@ pub fn draw_horizon(r: u64, seb: u64, response_window: u64) -> u64 {
 /// count  = acc >> 32
 /// carry  = acc & (2^32 − 1)
 /// ```
+///
+/// `t` is [`draw_target`]'s.
 ///
 /// `None` when `SEB` or `H` is zero — neither is in production; the
 /// genesis schedule pins both well above.
@@ -190,17 +236,7 @@ pub fn draw_count(
     seb: u64,
     prev_carry: u32,
 ) -> Option<(u64, u32)> {
-    if seb == 0 || horizon == 0 {
-        return None;
-    }
-    let d = u128::from(set_size);
-    let h = u128::from(horizon);
-    let epoch = u128::from(seb);
-    let u = u128::from(shortfall);
-    let weighted = d.saturating_mul(h).saturating_add(epoch.saturating_mul(u));
-    let cap = d.saturating_mul(h).saturating_mul(9);
-    let numer = weighted.min(cap).checked_shl(32)?;
-    let t = numer / epoch.saturating_mul(h);
+    let t = draw_target(set_size, shortfall, horizon, seb)?.fixed;
     let acc = u128::from(prev_carry).saturating_add(t);
     let count = u64::try_from(acc >> 32).unwrap_or(u64::MAX);
     let carry = u32::try_from(acc & 0xffff_ffff).expect("a 32-bit mask fits a u32");
@@ -491,6 +527,102 @@ mod tests {
         // The 9× cap: a huge shortfall cannot push t above 9·D/SEB.
         let (count, _) = draw_count(10_000, u64::MAX, 200, 10_000, 0).expect("H and SEB");
         assert_eq!(count, 9);
+    }
+
+    /// Independent oracle: the comparison `D·H + SEB·u > 9·D·H` done by
+    /// hand at D = SEB = 10,000 and H = 200, where it reads
+    /// `2,000,000 + 10,000·u > 18,000,000`, so the two sides meet at
+    /// u = 1,600.
+    ///
+    /// Bites against: a `capped` that is `>=`, a `capped` inferred from the
+    /// target (1,600 and 1,601 give the same target), and a cap that is not
+    /// nine times the base.
+    /// Does NOT cover: the count and the carry; the next test and
+    /// `the_count_carries_the_fraction_and_caps_at_nine_times_base` do.
+    #[test]
+    fn the_cap_binds_only_when_the_uncapped_side_exceeds_it() {
+        let nine = 9u128 << 32;
+        let at = |u| draw_target(10_000, u, 200, 10_000).expect("H and SEB");
+        // One below: 17,990,000 / 2,000,000 = 1799/200 = 8.995 draws,
+        // floored at 32 fractional bits. Under the cap.
+        let below = at(1_599);
+        assert!(!below.capped);
+        assert_eq!(below.fixed, (1_799u128 << 32) / 200);
+        assert!(below.fixed < nine);
+        // Exactly on the cap: nine draws, and nothing was held down.
+        assert_eq!(
+            at(1_600),
+            DrawTarget {
+                fixed: nine,
+                capped: false
+            }
+        );
+        // One above: the same nine draws, and now the cap is why.
+        assert_eq!(
+            at(1_601),
+            DrawTarget {
+                fixed: nine,
+                capped: true
+            }
+        );
+        assert_eq!(
+            at(u64::MAX),
+            DrawTarget {
+                fixed: nine,
+                capped: true
+            }
+        );
+        // No shortfall is the base alone, a ninth of the cap.
+        assert_eq!(
+            at(0),
+            DrawTarget {
+                fixed: 1u128 << 32,
+                capped: false
+            }
+        );
+        // An empty set draws nothing and is not capped: 0 > 0 is false.
+        assert_eq!(
+            draw_target(0, 0, 200, 10_000),
+            Some(DrawTarget {
+                fixed: 0,
+                capped: false
+            })
+        );
+        assert_eq!(draw_target(10_000, 0, 0, 10_000), None);
+        assert_eq!(draw_target(10_000, 0, 200, 0), None);
+    }
+
+    /// Bites against: a `draw_count` whose target is not `draw_target`'s,
+    /// or a carry step other than add, shift and mask.
+    /// Does NOT cover: whether the target is the specification's; the
+    /// hand-checked values above and in
+    /// `the_count_carries_the_fraction_and_caps_at_nine_times_base` do.
+    #[test]
+    fn the_count_is_the_target_plus_the_carry() {
+        let mask = u128::from(u32::MAX);
+        for set_size in [1, 4_096, 5_000, 10_000, 324_000] {
+            for shortfall in [0, 1, 1_599, 1_600, 1_601, 7_000, 972_000, u64::MAX] {
+                for horizon in [200, 2_500, 7_000] {
+                    for carry in [0, 1, 1 << 31, u32::MAX] {
+                        let target =
+                            draw_target(set_size, shortfall, horizon, 10_000).expect("H and SEB");
+                        let acc = target.fixed + u128::from(carry);
+                        let expected = (
+                            u64::try_from(acc >> 32).expect("nine draws a pair at most"),
+                            u32::try_from(acc & mask).expect("masked"),
+                        );
+                        assert_eq!(
+                            draw_count(set_size, shortfall, horizon, 10_000, carry),
+                            Some(expected),
+                            "D = {set_size}, u = {shortfall}, H = {horizon}, carry = {carry}"
+                        );
+                        // The target never exceeds the cap, capped or not.
+                        assert!(target.fixed <= ((9 * u128::from(set_size)) << 32) / 10_000);
+                    }
+                }
+            }
+        }
+        assert_eq!(draw_count(10_000, 0, 0, 10_000, 0), None);
     }
 
     #[test]
