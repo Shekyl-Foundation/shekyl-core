@@ -205,10 +205,10 @@ pub use reward_arithmetic::{
     WORK_MILLI_SCALE,
 };
 pub use secret_draw::{
-    challenge_nonce, draw_commit, draw_count, draw_horizon, select_draw,
-    serve_credit_batch_commitment, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS,
-    DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION, DRAW_HORIZON_FLOOR,
-    SERVE_CREDIT_BATCH_CUSTOMIZATION,
+    challenge_nonce, draw_commit, draw_count, draw_horizon, draw_target, select_draw,
+    serve_credit_batch_commitment, DrawTarget, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION,
+    CHALLENGE_READS, DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION,
+    DRAW_HORIZON_FLOOR, SERVE_CREDIT_BATCH_CUSTOMIZATION,
 };
 pub use segment_freeze::{
     challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,
