@@ -73,7 +73,7 @@ fn fork_rooted_at(chain: &MockChain, root: u64) -> Fork {
 /// The rows the tier evaluates beyond `form`'s: the three alt arms and the
 /// header ladder — CEN-K4's set, in census order. D7 is the fixed-target
 /// consultation D4 records on every derivation (`None` under GENESIS).
-const ALT_TIER_ROWS: [CenRow; 16] = [
+const ALT_TIER_ROWS: [CenRow; 17] = [
     CenRow::C1,
     CenRow::C2,
     CenRow::C3,
@@ -90,6 +90,7 @@ const ALT_TIER_ROWS: [CenRow; 16] = [
     CenRow::F5,
     CenRow::F6,
     CenRow::K1b,
+    CenRow::K4,
 ];
 
 #[test]

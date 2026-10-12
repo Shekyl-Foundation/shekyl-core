@@ -34,6 +34,12 @@
 //!   alt tier feeds it stitches the recorded prefix with the alt suffix
 //!   (`AltView::header_at` in the store) — so the row records at the site
 //!   that fed D4 an alt view, and the algorithm records its own.
+//!
+//! A fourth row is the tier itself: **CEN-K4** ([`K4`]) — an alternative
+//! block is stored only after the ladder above has run, in that order, and
+//! nothing else. It has no predicate of its own; it is recorded when the
+//! last step passes, and what it holds is the set and the order, pinned by
+//! the tier's tests.
 
 use shekyl_types::BlockHeight;
 use shekyl_wire::Input;
@@ -83,6 +89,38 @@ impl FormRule for K1b {
             [Input::Gen(0)] => Err(InvalidBlock::new(Self::ROW, Locus::Block)),
             _ => Ok(()),
         }
+    }
+}
+
+/// CEN-K4: an alternative block is accepted into storage after the cheap
+/// tier's ladder — the version rows, linkage, the timestamp rows over the
+/// stitched window, the anchor floor, PoW at the alt target, the
+/// coinbase's prevalidate-only rows — and before anything that reads
+/// executed state, which is promotion's (`validate_miner_transaction`,
+/// `check_tx_inputs`, the curve root, the attestation set).
+///
+/// The row is the tier, not a step of it. [`alt_against`](crate::alt_against)
+/// records it after the last header predicate passes, so an [`AltValid`]
+/// carries it iff every step ran; the set of steps is pinned by
+/// `the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else`
+/// and their order by `the_fork_is_judged_before_the_header_ladder`
+/// (`alt_tests.rs`). A step added to the tier that reads chain state fails
+/// the first pin; a step reordered fails the second. Not run by `validate`
+/// — a main-chain block is not stored before it is executed — so the
+/// registry status is `enforced_at` this site, outside per-block coverage,
+/// as CEN-E5 is at writer open.
+///
+/// [`AltValid`]: crate::AltValid
+pub(crate) struct K4;
+
+impl Rule for K4 {
+    const ROW: CenRow = CenRow::K4;
+}
+
+impl K4 {
+    /// Record the row: the ladder ran to its end.
+    pub(crate) fn record(coverage: &mut RuleCoverage) {
+        coverage.insert(Self::ROW);
     }
 }
 

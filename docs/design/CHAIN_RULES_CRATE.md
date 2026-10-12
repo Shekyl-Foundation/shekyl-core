@@ -1074,19 +1074,31 @@ census_rows! {
 ```
 
 Grammar: header `pub enum <Name>: <Consensus|Policy> { … }`; per entry
-`<Var> <pending | implemented(<rust::path>) | enforced_at(<rust::path>, "<test_fn>") | held_by_cxx("<repo/file.cpp>", "<test>")> ,`
+`<Var> <pending | implemented(<rust::path>) | enforced_at(<rust::path>, "<test_fn>") | by_construction(<rust::path>, "<falsifier>") | held_by_store("<crate>", "<test_fn>") | held_by_cxx("<repo/file.cpp>", "<test>")> ,`
 with optional `///` doc and `//` comments between entries. `enforced_at`
 (slice 3, Q4 — [`CHAIN_RULES_SLICE_3.md`](CHAIN_RULES_SLICE_3.md)) marks a
 row **this crate** enforces at a site other than the per-block stages (CEN-E5
-at writer open); it takes the same compile pins as `implemented` plus a Rust
-`#[test]` in the crate that the gate asserts is *defined* (rule 47), leaves
+at writer open; the alt tier's CEN-K1b, K4, D5, E2 — DRS-E5 slice 9); it
+takes the same compile pins as `implemented` plus a Rust `#[test]` in the
+crate that the gate asserts is *defined* (rule 47), leaves
 `RuleSet::enforced()` like a hold, and counts as implemented unlike one.
+`by_construction` (slice 4, Q4) marks a row the type system or the wire's
+parser holds, with the falsifier the gate asserts (§6 table).
+`held_by_store` (DRS-E5 `E5-18`, 2026-10-11) marks a row **a Rust crate
+below the validator** holds — the store's structures make it true (CEN-K1a,
+K2, K3, K8), and the rules crate imports no store (DRS-D12 (i)), so the
+dependency runs store → rules and no compile pin from this crate can name
+the site. The value names who enforces the row: the holder crate (a
+workspace crate other than this one) and the `#[test]` in it the gate
+asserts is *defined*. It leaves `RuleSet::enforced()` and counts as
+implemented, like `enforced_at`; unlike a C++ hold it has no expiry.
 `held_by_cxx`
 (slice 1, Q2 — [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §4.1) marks
 acceptance topology the C++ ingest driver decides until cutover; the value is
 the C++ **test that proves the holder refuses**, which the gate asserts
 exists, and the row leaves `RuleSet::enforced()` so per-block completeness is
-`E − H − O` (`O` the at-open rows). Entries are in census §4 order restricted to the flag
+`E − H − O − B − S` (`O` the at-open rows, `B` by construction, `S` held by
+store). Entries are in census §4 order restricted to the flag
 (subsystem, then row order within the table) — the gate asserts this so
 `index()` is census-derived, not arbitrary.
 
@@ -1159,7 +1171,8 @@ figures are still printed, as derived), **0** when they agree.
 | ≥ 1 `census_rows!` invocation; braces balance | `no census_rows! invocation` / `has no closing brace` (2) |
 | exactly one `census_rows!` per flag; header parses; flag ∈ {`Consensus`, `Policy`} | `no registry for flag F` / `N registries for flag F` / `unparseable header at line N` / `unknown flag` (2) |
 | ≥ 1 entry per registry | `registry <Name> empty` (2) |
-| entry grammar — `Var pending,`, `Var implemented(rust::path),`, `Var enforced_at(rust::path, "test_fn"),` or `Var held_by_cxx("file", "test"),`; `implemented` / `enforced_at` **must** carry a non-empty path; `enforced_at` **must** carry a quoted identifier that is a `#[test] fn` defined in the crate (a mention in a comment or a call is not a definition); `held_by_cxx` **must** carry a quoted repo-relative file and a quoted identifier | `unparseable entry at line N` (2) |
+| entry grammar — `Var pending,`, `Var implemented(rust::path),`, `Var enforced_at(rust::path, "test_fn"),`, `Var held_by_store("crate", "test_fn"),` or `Var held_by_cxx("file", "test"),`; `implemented` / `enforced_at` **must** carry a non-empty path; `enforced_at` **must** carry a quoted identifier that is a `#[test] fn` defined in the crate (a mention in a comment or a call is not a definition); `held_by_store` **must** carry a quoted crate name (`[a-z][a-z0-9]*(-[a-z0-9]+)*` — a path or `..` is not a name) and a quoted identifier; `held_by_cxx` **must** carry a quoted repo-relative file and a quoted identifier | `unparseable entry at line N` (2) |
+| every `held_by_store` entry (DRS-E5 `E5-18`, 2026-10-11) names a holder that is a workspace crate — `rust/<crate>/src/` exists — **other than `shekyl-chain-rules`** (a row this crate holds is `enforced_at` or `by_construction`), and a test that is a `#[test] fn <test>` **defined** in that crate's `src/` or `tests/` (comments stripped; a call or a longer name is not a definition) — the test that proves the holder refuses, as `held_by_cxx`'s does | `held_by_store entry X (line N): holder crate … is this crate` / `… is not a workspace crate` / `holder test … is not a #[test] fn defined in …` (1) |
 | `Var by_construction(rust::path, "falsifier"),` — the falsifier **must** exist (rule 47) in one of three shapes: a `#[test] fn <name>` defined in the crate; `doctest:<item>`, a ```` ```compile_fail ```` doctest in the `///` block above `fn <item>`; or `trybuild:<test>` (added 2026-10-10, DRS-E5 a2), a `#[test] fn <test>` defined in `src/` or `tests/` whose body calls `.compile_fail(…)` — the test that compares a must-not-compile program's stderr to its snapshot. A shared `#[test]` falsifier names every row it serves as `CenRow::<id>` (slice 5 Q6) | `falsifier … is not a #[test] fn defined in the crate` / `names no fn <item> … carrying a compile_fail doctest` / `is not a #[test] fn <test> defined in the crate (src/ or tests/)` / `runs no compile_fail(…) program` / `serves N rows but its body does not name CenRow::<id>` (1) |
 | no attribute on an entry (a `#[cfg]` the gate cannot evaluate would let the compiled enum and the counted enum differ; the enum's own attributes are fine) | `attribute on entry at line N` (2) |
 | nothing after the enum's closing brace inside the invocation | `text after the enum body at line N` (2) |
@@ -1177,14 +1190,16 @@ figures are still printed, as derived), **0** when they agree.
 ### 6.3 Output format (ruling §9.4, verbatim shape)
 
 ```text
-consensus: implemented I / validator-enforced (E−H)   held-by-cxx H   at-open O   enforced E   ratified R / enforced E   (E = C-rows − bucket 3; validator-enforced = E − held; per-block completeness over E − held − at-open)
-policy:    implemented I / validator-enforced (E−H)   held-by-cxx H   at-open O   enforced E   ratified R / enforced E   (E = P-rows − bucket 3; validator-enforced = E − held; per-block completeness over E − held − at-open)
+consensus: implemented I / validator-enforced (E−H)   held-by-cxx H   at-open O   by-construction B   held-by-store S   enforced E   ratified R / enforced E   (E = C-rows − bucket 3; validator-enforced = E − held; per-block completeness over E − held − at-open − by-construction − held-by-store)
+policy:    implemented I / validator-enforced (E−H)   held-by-cxx H   at-open O   by-construction B   held-by-store S   enforced E   ratified R / enforced E   (E = P-rows − bucket 3; validator-enforced = E − held; per-block completeness over E − held − at-open − by-construction − held-by-store)
 ```
 
-`I` = entries of that registry with status `implemented` **or `enforced_at`**
-(Rust enforces both); `O` = entries with status `enforced_at` — printed so the
-per-block completeness denominator `E − H − O` (what `Coverage::is_complete_for`
-measures against) can be read off the line; `H` = entries with
+`I` = entries of that registry with status `implemented`, `enforced_at`,
+`by_construction` **or `held_by_store`** (Rust enforces all four); `O` =
+entries with status `enforced_at`, `B` = `by_construction`, `S` =
+`held_by_store` — printed so the per-block completeness denominator
+`E − H − O − B − S` (what `Coverage::is_complete_for` measures against) can
+be read off the line; `H` = entries with
 status `held_by_cxx`; `E` = enforced rows of that flag from the census; `R` =
 census rows of that flag in bucket 1 or 2. **`H` is a subtraction, not a
 denominator** (slice 1, Q2 condition 3): `E` is printed and never moves for a
@@ -1246,7 +1261,15 @@ on that branch):** `consensus: implemented 97 / validator-enforced 151
 held-by-cxx 2 at-open 1 by-construction 16 enforced 153 ratified 127 /
 enforced 153`. The denominator moved down by the rejected kind
 (`validator-enforced 152 → 151`, `enforced 154 → 153`); nothing was ported.
-Policy unchanged (`implemented 0 / enforced 9`).
+Policy unchanged (`implemented 0 / enforced 9`). **After DRS-E5 a4's
+census-arms commit (2026-10-11, `feat/drs-e5-round-0`, PR #1026; measured on
+the tree carrying `dev` `834471689`):** `consensus: implemented 126 /
+validator-enforced 151   held-by-cxx 2   at-open 5   by-construction 16
+held-by-store 4   enforced 153   ratified 129 / enforced 153` — eight rows
+flipped, none per block: the alt tier's K1b, K4, D5, E2 `enforced_at`
+(`at-open 1 → 5`) and the store's K1a, K2, K3, K8 `held_by_store` (the
+`held-by-store` term added by that commit). The denominator did not move;
+the per-block reading fell from `E − 19` to `E − 27`. Policy unchanged.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.

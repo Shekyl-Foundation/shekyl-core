@@ -14,7 +14,9 @@
 //! timestamp, cumulative difficulty — and no other. So this tier runs the
 //! [`HeaderRule`](crate::rules::HeaderRule)s of `validate`'s ladder, the
 //! three rows only an alternative has ([`rules::alt`](crate::rules::alt):
-//! CEN-K1b, CEN-E2, CEN-D5), and nothing whose operand is chain state. Any
+//! CEN-K1b, CEN-E2, CEN-D5), and nothing whose operand is chain state —
+//! which set, in which order, is itself a row (CEN-K4, recorded when the
+//! ladder ends). Any
 //! check that reads executed state — a bonded key, a bond snapshot, a tree
 //! root, a key image — is **promotion-tier**, on the ground `DRS_E5` §2.1
 //! already gives CEN-B5: an unexecuted alternative cannot answer it, and
@@ -60,7 +62,7 @@ use crate::block::{Candidate, StructurallyValid};
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, Stale};
 use crate::rule_set::RuleSet;
-use crate::rules::alt::{K1b, D5, E2};
+use crate::rules::alt::{K1b, D5, E2, K4};
 use crate::rules::anchors::E1;
 use crate::rules::block_weight::block_weight;
 use crate::rules::difficulty::D4;
@@ -271,6 +273,10 @@ pub fn alt_against<'id, H: HeaderView<'id>>(
     // rule and no slot loop (nothing here has a body the chain executed).
     let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
     judge_header!(cx, alt_view, coverage; C1, C2, D1, E1, F4, F5, F6);
+
+    // The ladder ran to its end: the block is accepted into storage after
+    // these rows and no other (CEN-K4 — the tier is the row).
+    K4::record(&mut coverage);
 
     let hash = formed.hash();
     let block_weight = block_weight(formed.candidate());

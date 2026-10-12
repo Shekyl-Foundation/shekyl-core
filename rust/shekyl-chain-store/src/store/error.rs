@@ -475,8 +475,8 @@ pub enum AltCannot {
     /// `previous` chain reaches neither a recorded row nor another alt row
     /// — CEN-K2's orphan. `at` is the first hash the store does not hold.
     /// Not a fault: the chain the caller named does not connect, and the
-    /// ingest door answers the peer accordingly (the C++'s
-    /// `m_marked_as_orphaned`).
+    /// ingest door answers the peer accordingly (the C++'s orphan branch,
+    /// `SHEKYL_BLOCK_INGEST_ORPHANED`).
     Unlinked {
         /// The first hash on the walk that neither table holds.
         at: BlockHash,
