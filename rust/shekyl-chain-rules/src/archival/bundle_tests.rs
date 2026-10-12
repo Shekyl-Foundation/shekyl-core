@@ -237,17 +237,91 @@ fn kat_the_verifier_derives_the_specifications_selection() {
             .insert(world.h, BlockHash::from_bytes([0x22; 32]));
         for index in (0..8).filter(|i| short(*i)) {
             world.view.short.insert((world.h, index));
-            // The same pair short at another height is not short at `h`.
-            world
-                .view
-                .short
-                .remove(&(BlockHeight::from_raw(world.h.to_raw() + 1), index));
         }
         let (reference, body) = world.bundle(&[]);
         let admitted = judge(&world, &reference, &body).expect("an all-miss bundle admits");
         let derived: Vec<u64> = admitted.draws.iter().map(|d| d.index).collect();
         assert_eq!(derived, expected, "{state}");
     }
+}
+
+/// The issued counts a draw is selected against are those visible **at
+/// `h`**, the bundle's block (§4.4, §9.1 step 6) — not at the including
+/// block and not at any other height. Every pair is made short at the
+/// heights around `h` (the block below, `h_incl`, the last block of the
+/// window) and the derivation does not move: it is §4.5's "none short"
+/// row. The same pairs made short at `h` move it to the "all short" row.
+/// Both expected rows are the specification's, written as numbers.
+///
+/// Bites against the verifier asking `visibly_short` at `h_incl`, or at
+/// any height that is not the reference's `h`, and against a selection
+/// that ignores the answer. Does not cover how a store computes "visible
+/// at `h`"; the fixture is told.
+///
+/// **Red edit:** in `derive_draws`, ask `view.visibly_short` at
+/// `kept.h + 1` (which is `h_incl` here) instead of `kept.h`. The first
+/// half then derives the "all short" row and the second the "none short"
+/// row, and both assertions fail.
+#[test]
+fn visibly_short_is_asked_at_h_and_at_no_other_height() {
+    const NONE_SHORT: [u64; 6] = [3, 4, 1, 2, 7, 4];
+    const ALL_SHORT: [u64; 6] = [3, 2, 3, 4, 0, 5];
+    let mut world = BundleWorld::with(BundleWorld::H, [0x11; 32], 6, &RuleSet::GENESIS);
+    world
+        .view
+        .hashes
+        .insert(world.h, BlockHash::from_bytes([0x22; 32]));
+    let h = world.h.to_raw();
+    let h_incl = h + 1;
+    let derive = |world: &BundleWorld| -> Vec<u64> {
+        let (reference, body) = world.bundle(&[]);
+        judge_at(world, &reference, &body, h_incl)
+            .expect("an all-miss bundle admits")
+            .draws
+            .iter()
+            .map(|d| d.index)
+            .collect()
+    };
+    assert_eq!(derive(&world), NONE_SHORT, "the control: nothing short");
+
+    // Every pair short at other heights, `h_incl` among them.
+    let elsewhere = [h - 1, h_incl, h + 500];
+    for height in elsewhere {
+        for index in 0..8 {
+            world
+                .view
+                .short
+                .insert((BlockHeight::from_raw(height), index));
+        }
+    }
+    assert_eq!(
+        world.view.short.len(),
+        24,
+        "the entries are there to be read"
+    );
+    assert_eq!(
+        derive(&world),
+        NONE_SHORT,
+        "short at another height is not short at h"
+    );
+
+    // The same pairs short at `h`.
+    for index in 0..8 {
+        world.view.short.insert((world.h, index));
+    }
+    assert_eq!(derive(&world), ALL_SHORT, "short at h moves the selection");
+    assert_ne!(NONE_SHORT, ALL_SHORT);
+
+    // Taken away again at the other heights only: still the row for `h`.
+    for height in elsewhere {
+        for index in 0..8 {
+            assert!(world
+                .view
+                .short
+                .remove(&(BlockHeight::from_raw(height), index)));
+        }
+    }
+    assert_eq!(derive(&world), ALL_SHORT);
 }
 
 /// The specification's §5.2 nonce vectors, re-pinned through the
