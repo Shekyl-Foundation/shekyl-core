@@ -179,7 +179,8 @@ open was deleted at a4, `SCHEMA_VERSION` 23 — K8, §2.1; `AltBlock::checked`
 still builds a row from bare facts for the codec's tests, the schema
 snapshot and the store's planted-row fixtures — it is not AL1's input).
 `AltChain::fork()` names the fork the tier judges against (root and
-recorded tip, one snapshot). The module doc's switch sketch is one
+recorded tip, one snapshot), and `AltView` hands it to the tier as its
+`AltChainView::fork` (§2.1). The module doc's switch sketch is one
 `store.write` closure: judge the demoted blocks over the pre-pop snapshot
 → `pop()`×N → `insert_alt_block`×N → `connect`×M → `remove_alt_block`×M.
 The hand-offs this round binds itself to:
@@ -458,7 +459,13 @@ unknown; commit 1 owes it rule by rule"), read at `dev@ac95d6d04`.
   is not taken, because the clause was a proxy for the split sprawling,
   and a sixth file re-bound under the same blanket impl, with no new
   view method and no change to `run`, is the mechanism working, not
-  sprawl. Recorded so the clause is not read as unfired.
+  sprawl. Recorded so the clause is not read as unfired. UPDATE
+  2026-10-12 (review finding on #1026): **seven** — `topology.rs`'s A2
+  reads the tip's hash and nothing else, and the alt ladder runs it first
+  (§2.1): the tier cannot see that the view was built from the
+  candidate's `previous`, so it checks the link as `validate` does (15
+  rules read: 7 `BlockRule` + 8 `HeaderRule`). Same mechanism, same
+  reading of the count clause.
 - **E5-15 — CEN-K4 names CEN-B4 in the admission tier; a K-row does
   require the attestation check before storage.** The ratified row
   (`CONSENSUS_RULE_CENSUS_3.md:395`): "alt blocks are accepted into storage
@@ -661,30 +668,42 @@ executed the chain the pass depends on. The C++ alt ladder keeps its
 frozen path, not shapes the Rust tier inherits or corrects: under β both
 reads happen after the blocks they depend on execute.
 
-The cheap tier is `alt_against(formed, &alt_view, &fork, &rule_set,
-&trust) -> Result<Verdict<AltValid>, Fault>` (`shekyl-chain-rules`
-`alt.rs`, landed a4 2026-10-11), where `formed` is `form`'s token — B1/B2,
-B6, D2, the 4.F form rows F1/F3/F7/F9/F10 and G2 ride in on it — and
-`alt_view: impl HeaderView` is the stitched header view (`E5-Q3`). Its
-ladder, in the C++'s order where the order is a rule: **K1b** (the
-height-0 claim, a `FormRule` run first, before any header read); **E2**
-over the `Fork { root, recorded_tip }` the store derives from one
-snapshot — the anchor floor (`root < current()` refused) and the rolling
-cap (`recorded_tip − root > reorg_cap` refused), the cap binding only
-when anchored (`PDM-Q11`'s binding condition), neither band reading the
-view; then the definitions over the stitched chain — D3's seed, C3's
-window, **D5** (`D4::target` over the stitched `header_at`, recording
-its own row beside D4/D6/D7), `cumulative_after`, D1b — and the header
-predicates C1, C2, D1, E1, F4, F5, F6. F4–F6 (`miner.rs`) are `HeaderRule`s
-since a4: they read `cx.connecting` and nothing else of the chain, so the
-re-bounded files are six, `E5-14`'s five plus `miner.rs` (15 rules read:
-8 + 7). No attestation step, no A2 (the parent is the view's tip by
-construction), no B5, no body rule, no slot loop. K1a is the store's
+The cheap tier is `alt_against(formed, &alt_view, &rule_set, &trust)
+-> Result<Verdict<AltValid>, Fault>` (`shekyl-chain-rules` `alt.rs`,
+landed a4 2026-10-11; signature as amended 2026-10-12, below), where
+`formed` is `form`'s token — B1/B2, B6, D2, the 4.F form rows
+F1/F3/F7/F9/F10 and G2 ride in on it — and `alt_view: impl AltChainView`
+is the stitched header view (`E5-Q3`) that also names the fork it
+describes (`AltChainView::fork() -> Fork { root, recorded_tip }`; the
+store's `AltView` answers from the `AltChain` it was built over, so E2's
+operands and the headers come from one snapshot by type, not by the
+caller's care). Its ladder, in the C++'s order where the order is a rule:
+**K1b** (the height-0 claim, a `FormRule` run first, before any header
+read); **E2** over the view's `Fork` — the anchor floor (`root <
+current()` refused) and the rolling cap (`recorded_tip − root >
+reorg_cap` refused), the cap binding only when anchored (`PDM-Q11`'s
+binding condition), neither band reading a header; then the definitions
+over the stitched chain — D3's seed, C3's window, **D5** (`D4::target`
+over the stitched `header_at`, recording its own row beside D4/D6/D7),
+`cumulative_after`, D1b — and the header predicates **A2**, C1, C2, D1,
+E1, F4, F5, F6. A2 (`topology.rs`) is a `HeaderRule` since 2026-10-12 and
+the ladder's first predicate, as it is `validate`'s: on the store's path
+the view's tip *is* the candidate's parent by construction
+(`AltChain::build` from `previous`), but `alt_against` sees a view and a
+token, not that derivation, and a view handed over for another block
+would otherwise mint an `AltValid` for a chain the block is not on
+(review finding, 2026-10-12; `16-architectural-inheritance.mdc`, a claim
+about the construction is not the function's contract). F4–F6
+(`miner.rs`) are `HeaderRule`s since a4: they read `cx.connecting` and
+nothing else of the chain, so the re-bounded files are seven, `E5-14`'s
+five plus `miner.rs` and `topology.rs` (15 rules read: 7 `BlockRule` +
+8 `HeaderRule`). No
+attestation step, no B5, no body rule, no slot loop. K1a is the store's
 (`AltChain` construction; registered `held_by_store` in the census-arms
 commit, `E5-18`). The row set is pinned by
 `alt_tests::the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else`
-(form's rows + {C1, C2, C3, D1, D1b, D3, D4, D5, D6, D7, E1, E2, F4, F5,
-F6, K1b, K4}, and `covers_landed` false; K4 is the tier itself — recorded
+(form's rows + {A2, C1, C2, C3, D1, D1b, D3, D4, D5, D6, D7, E1, E2, F4,
+F5, F6, K1b, K4}, and `covers_landed` false; K4 is the tier itself — recorded
 by `alt_against` after the last header predicate, so an `AltValid` carries
 it iff every step ran, and registered `enforced_at` that site with the
 row-set pin as its test, census-arms commit). `AltValid` carries the block, its
@@ -1372,3 +1391,4 @@ Not E5's; found while reading the census at the pin.
 | 2026-10-11 | **`E5-Q4` RULED β — no B4 at the cheap tier, promotion does the check (maintainer); `E5-6` and `E5-17` dissolved under it.** Ground: the cheap tier makes no chain-state read; any check whose operand is chain state — a persona's bonded key, a bond snapshot — is promotion-tier, on the ground §2.1 already gives CEN-B5's root (an unexecuted alt chain cannot answer it; promotion validates against executed state, where the read is correct and free). `E5-17` dissolves directly — a key bonded only inside the alt chain's own unexecuted blocks is read at promotion, after those blocks execute; `E5-6` the same way; `E5-16` stands with no consumer. β is the choice, made for B5's reason; α, γ and δ rejected in §8 with one line each (δ: correct read, wrong tier — reconstructing executed state to answer a question promotion answers for free). Framing: B4 exists in Rust (`26bc5b994`) and is not ported to the alt tier; main-chain B4 and the C++ gate stay until `DEL-009`. The question was first closed that morning on a ground outside this lane (a Slice C ruling the Slice C round has since reopened) and re-grounded in a4 the same day; the conclusion did not move, and E5's reason now depends on no Slice C design. a3 loses its δ UPDATE (`AltView` stays `HeaderView`-only); a4 loses the CEN-B4 sentence, the replay read, "B4 whole" and the `E5-6` fixture arms — `alt_against` = K1b, D5 via D4, E2's arm; a4's census commit keeps CEN-K4's order correction (the C++ ladder in its landed order, no attestation step for the Rust tier) and CEN-B4's site re-pin. FOLLOWUPS rows "Alt-chain attestation verify resolves bond pubkeys from main-chain state" and "Validate `prev_id` before attestation verify on the alt-chain path" closed with the ruling: the first is `E5-17`, held in Rust by where the check sits; the second orders against a step the Rust tier has not got, and already held at the tree (`prev_id` resolves at `blockchain.cpp:2012–2019`, attestation runs at `:2135`). Out of this lane, with the Slice C round: the serve-credit spec's stale §2 B4 row and "nothing built" banner, the SO-D8 §2.2 restatement, serve-credit evidence's reorg survival. Branch merged to `dev@258b4d851` first (clean; inland 150/150, coverage 118/151 unchanged), and to `dev@834471689` before the re-grounding (clean; inland 148/148, coverage 118/151, 15 block rules, unchanged). |
 | 2026-10-11 | **The Slice C bundle redesign hands transport to E5 (maintainer); `E5-Q1` reopened in part and re-ruled.** Ground: #1026 @ `bacdd62b4`, `dev@834471689`; lands before b1 and a5; a3, a4 and the `E5-Q4` B4 dissolution are unaffected. *What changed:* serve-credit carriers (`serve_credit_only` transactions) are gone; each block `h` has one bundle (reveal + every pass record for `h`), admitted whole in a block section committed by the header root — not a transaction (no fee, key images or inputs). Slice C owns the verifier (pure chain-rules function, bundle × view → verdict + kept projection) and defines the verifier view trait and the kept projection type in its spec PR; SO-D12 owns the recorded state and the cutover; E5 owns transport, built against the two contracts once they land (blocker named in §2.2 and the b1 row; falsify by both existing under `rust/shekyl-chain-rules/`). *What E5 builds* (§2.2, §2.3, §5): O1 the body store keyed by hash in `shekyl-mempool` with the holder rule and the register invariant; O2 the bundle queue, not a `PoolRecord` arm, admitted by Slice C's verifier through the view trait (`E5-Q2`'s condition met: the crate calls the rule), keyed by `h`, bounded `W₂` (500), three evictions, re-checked after a reorg by the same verifier, persisted and reconciled at open, no Dandelion++ (B12); b6 the bundle section, earliest `h` first to `c · 9·D/SEB` (`c = 2`, provisional), outside fee median and penalty; B10 the alt row stores references only (the folded `archival_alt_attestation_witness` field replaced, rule 42) with stateless arrival checks; a5 the pre-closure body fetch (unfetchable → no switch, local outcome), the view trait on `BatchView`, invalid bundle fails the switch (`E5-7`). Costs a5 `3 → 4`, b1 `2 → 3`; expectation 17 + 15. *`E5-Q1`:* "`kept_by_block` skips `policy_form`" deleted from §2.2 — a returned transaction runs the same door, policy included, on the 2026-10-02 ruling that the fee-floor bypass for block-carried transactions is a bug (C2-R2 Q9's reopening, FOLLOWUPS); K10's retention of an unverifiable returned transaction (kept, not relayable, M10 evicts) unaffected; M3 needs no carrier exemption; **M11 deleted**, redundant with M3 (b1 retires the census row and `PolicyRow`, policy `0 / 9 → 0 / 8`). *No C++:* the sidecar path (`cryptonote_protocol_defs.h:71`, `blockchain.cpp` demote/promote, `db_lmdb`'s witness table) is a `DEL-008` deletion. *Not E5's:* the Levin block payload carrying references (its owning lane; flagged, not built); the verifier, view trait and kept projection (Slice C); the draw state (SO-D12). Docs only; no code — the previous "no carrier or bundle cites in E5" direction is superseded by this handoff. |
 | 2026-10-12 | **PR-a cut at a4 (maintainer).** Ground: #1026 at `07f9f0f77`, three behind `dev`. #1026 carries a1–a4 and the Slice C transport-handoff docs and goes to review, so this file's rulings — the cheap-tier rule, the `E5-Q4` dissolution, the transport handoff — land on `dev` as a file the Slice C round can cite rather than a chat ruling. a5–a8 become the switch PR (closure, refusals and fixtures, reorg capture, docs), cut from `dev` after #1026 merges; PR-b unchanged (§5's UPDATE; `E5-Q10`'s order re-read; §7's DRS-X trigger re-pointed). Costs by PR: 8 + 9 + 15. `origin/dev` merged (`adb2013da`, the v3.1.0-alpha.10 cut; one conflict, `CHANGELOG.md`'s Unreleased head — E5's K8 entry kept under Unreleased above the new alpha.10 section); both ratchets re-derived on the merged tree and unchanged: `consensus: implemented 126 / validator-enforced 151 … held-by-store 4 … enforced 153`, `policy 0 / 9`, inland height 148/148. The `shekyl-seam` hub-test hang (two occurrences, the second on this lane's verify run of `2da6ec3ab`) is raised with its owner (P2P-3, #1037) and recorded in FOLLOWUPS with the backtrace; not E5's. Bundle transport stays blocked on Slice C's spec PR as recorded. |
+| 2026-10-12 | **Review findings on #1026 (four), addressed.** (1) *`alt_against` could mint an `AltValid` for a view and fork unrelated to the block* — valid in substance: "the parent is the view's tip by construction" was a claim about `AltChain::build`, not about the function's contract (`16-architectural-inheritance.mdc`, a claim about the code is not the code). Two changes, neither the reviewer's suggested shape: A2 (`topology.rs`) re-bound `HeaderRule` — it reads the tip's hash and nothing else — and run first in the tier's ladder, the belt `validate` already wears, so a view handed over for another block refuses at CEN-A2 with the same verdict `validate` gives and mints nothing (rejected: a new `Corrupt` arm — `Corrupt` maps exhaustively to a store invariant and this is a caller's mismatch; `Stale` — the form's premise is intact; a panic — `validate` does not); and the fork is read **from the view** (`AltChainView: HeaderView { fn fork(&self) -> Fork }`, the store's `AltView` answering from its `AltChain`), so `alt_against` loses its `fork` parameter and a fork from one read beside a chain from another is unrepresentable (`05-system-thinking.mdc`, a type defends the call; a check of `recorded_tip` against a stitched view would be partial, so the pairing is by type, not by a comparison). `ALT_TIER_ROWS` 17 → 18; a wrong-parent test; `E5-14` seven files (§2.1, the E5-14 UPDATE). (2), (4) *The schema-23 upgrade note understated the cost* — valid: `header::verify` refuses a `22` file at open before AL3's alt-table drop can run, so the path is a rebuild from the block corpus (rule 15's pre-genesis path), not a restart; `schema_version.rs`'s `23` entry and the CHANGELOG line corrected. (3) *The FOLLOWUPS seam row is a report, not a one-liner* — the row was four physical lines inside rule 95's twenty, and the maintainer ruled the backtrace rides in the row (2026-10-12, 12:57); the body prose tightened to the finding, the two dated occurrences, the diagnosis and the falsifiers; the backtrace sub-bullet stays. Ratchets unchanged (A2 was `implemented` already). |

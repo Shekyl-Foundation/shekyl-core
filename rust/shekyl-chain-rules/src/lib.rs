@@ -150,7 +150,7 @@ mod view;
 #[cfg(any(test, feature = "harness"))]
 pub mod harness;
 
-pub use alt::{alt_against, AltValid, Fork};
+pub use alt::{alt_against, AltChainView, AltValid, Fork};
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
     closed_and_final, shard_close, shard_close_height, Accrual, ArchivalDelta, ClosedUniverse,

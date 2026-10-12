@@ -23,7 +23,7 @@ use crate::rule_set::{FakechainSchedule, RuleSet, SettlementEpochBlocks};
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::Locus;
-use crate::view::AtHeight;
+use crate::view::{AtHeight, HeaderRecord};
 
 const fn height(raw: u64) -> BlockHeight {
     BlockHeight::from_raw(raw)
@@ -40,6 +40,37 @@ const fn anchor(raw: u64, fill: u8) -> Anchor {
 /// 5, so CEN-E1 never fires on the hash; the table exists for its
 /// `current()`.
 const ANCHORED_AT_5: ReleaseAnchors = ReleaseAnchors::for_tests(None, &[anchor(5, 0xA5)]);
+
+/// A mock view paired with the fork the test says it describes — the
+/// [`AltChainView`] the tier takes. The store's `AltView` derives both
+/// from one snapshot; the tests pick the pair, including pairs the store
+/// cannot build, to reach each arm.
+struct Forked<'v, V> {
+    view: &'v V,
+    fork: Fork,
+}
+
+const fn forked<V>(view: &V, fork: Fork) -> Forked<'_, V> {
+    Forked { view, fork }
+}
+
+impl<'id, V: HeaderView<'id>> HeaderView<'id> for Forked<'_, V> {
+    type Fault = V::Fault;
+
+    fn tip(&self) -> Result<Option<Tip>, V::Fault> {
+        self.view.tip()
+    }
+
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, V::Fault> {
+        self.view.header_at(height)
+    }
+}
+
+impl<'id, V: HeaderView<'id>> AltChainView<'id> for Forked<'_, V> {
+    fn fork(&self) -> Fork {
+        self.fork
+    }
+}
 
 /// The fork an alternative extending the recorded tip would cause: it
 /// pops nothing. The tier's steady-state input.
@@ -71,9 +102,12 @@ fn fork_rooted_at(chain: &MockChain, root: u64) -> Fork {
 }
 
 /// The rows the tier evaluates beyond `form`'s: the three alt arms and the
-/// header ladder — CEN-K4's set, in census order. D7 is the fixed-target
-/// consultation D4 records on every derivation (`None` under GENESIS).
-const ALT_TIER_ROWS: [CenRow; 17] = [
+/// header ladder — CEN-K4's set, in census order. A2 is the ladder's
+/// parent link, the one header fact the tier checks against its own
+/// candidate; D7 is the fixed-target consultation D4 records on every
+/// derivation (`None` under GENESIS).
+const ALT_TIER_ROWS: [CenRow; 18] = [
+    CenRow::A2,
     CenRow::C1,
     CenRow::C2,
     CenRow::C3,
@@ -97,17 +131,16 @@ const ALT_TIER_ROWS: [CenRow; 17] = [
 fn the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else() {
     // CEN-K4: the tier's row set is `form`'s rows plus exactly
     // `ALT_TIER_ROWS`. Every row `validate` adds that reads chain state —
-    // the parent link A2, the tree root B5, the attestation set B4, the
-    // weight medians, the emission, every per-transaction row — is absent:
-    // not skipped, unreachable, since the view is a `HeaderView`.
+    // the tree root B5, the attestation set B4, the weight medians, the
+    // emission, every per-transaction row — is absent: not skipped,
+    // unreachable, since the view is a `HeaderView`.
     let chain = chain_of(12);
     chain.with_view(|view| {
         let input = candidate_on(&chain, Vec::new());
         let stateless = *formed_on(&chain, input.clone()).coverage();
         let valid = judged(alt_against(
             formed_on(&chain, input),
-            &view,
-            &fork_at_tip(&chain),
+            &forked(&view, fork_at_tip(&chain)),
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
         ))
@@ -122,7 +155,7 @@ fn the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else(
             valid.coverage().iter().collect::<Vec<_>>(),
             expected.iter().collect::<Vec<_>>()
         );
-        for absent in [CenRow::A2, CenRow::B4, CenRow::B5, CenRow::G6, CenRow::F14b] {
+        for absent in [CenRow::B4, CenRow::B5, CenRow::G6, CenRow::F14b] {
             assert!(
                 !valid.coverage().contains(absent),
                 "{absent} is a chain-state row"
@@ -131,6 +164,35 @@ fn the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else(
         assert!(
             !valid.coverage().covers_landed(&RuleSet::GENESIS),
             "an alt verdict is never parity evidence for the block"
+        );
+    });
+}
+
+#[test]
+fn a_view_whose_tip_is_not_the_candidates_parent_is_refused_on_the_parent_link() {
+    // CEN-A2, the ladder's first header predicate: a view built for another
+    // block — here the chain the candidate was formed on, one block short —
+    // has a tip the candidate does not extend. The tier refuses at A2 and
+    // mints no `AltValid` for a chain the block is not on; the fork and the
+    // alt arms before the ladder pass, so the row is the ladder's.
+    let formed_on_chain = chain_of(12);
+    let shorter = chain_of(11);
+    let input = candidate_on(&formed_on_chain, Vec::new());
+    assert_ne!(
+        input.block.header.previous,
+        shorter.tip().expect("non-empty").hash,
+        "the fixture's parent is the longer chain's tip"
+    );
+    shorter.with_view(|view| {
+        assert_refused(
+            judged(alt_against(
+                formed_on(&formed_on_chain, input.clone()),
+                &forked(&view, fork_at_tip(&shorter)),
+                &RuleSet::GENESIS,
+                &Trust::UNANCHORED,
+            )),
+            CenRow::A2,
+            Locus::Block,
         );
     });
 }
@@ -154,8 +216,7 @@ fn the_alt_tier_derives_the_facts_validate_derives_over_the_same_chain() {
         .expect("well-formed on the main chain");
         let alt = judged(alt_against(
             formed_on(&chain, input.clone()),
-            &view,
-            &fork_at_tip(&chain),
+            &forked(&view, fork_at_tip(&chain)),
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
         ))
@@ -202,8 +263,7 @@ fn the_alt_target_follows_the_window_it_is_fed() {
     let on_recorded = recorded.with_view(|view| {
         judged(alt_against(
             formed_on(&recorded, candidate_on(&recorded, Vec::new())),
-            &view,
-            &fork_at_tip(&recorded),
+            &forked(&view, fork_at_tip(&recorded)),
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
         ))
@@ -213,8 +273,7 @@ fn the_alt_target_follows_the_window_it_is_fed() {
     let on_stitched = stitched.with_view(|view| {
         judged(alt_against(
             formed_on(&stitched, candidate_on(&stitched, Vec::new())),
-            &view,
-            &fork_at_tip(&stitched),
+            &forked(&view, fork_at_tip(&stitched)),
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
         ))
@@ -243,8 +302,7 @@ fn a_height_zero_claim_is_refused_before_anything_is_read() {
         assert_refused(
             judged(alt_against(
                 formed_on(&empty, input),
-                &view,
-                &below_anchor,
+                &forked(&view, below_anchor),
                 &RuleSet::GENESIS,
                 &anchored,
             )),
@@ -265,8 +323,7 @@ fn an_alternative_rooted_below_the_anchor_is_refused_and_one_at_or_above_it_is_n
         assert_refused(
             judged(alt_against(
                 formed_on(&chain, candidate_on(&chain, Vec::new())),
-                &view,
-                &fork_rooted_at(&chain, 4),
+                &forked(&view, fork_rooted_at(&chain, 4)),
                 &RuleSet::GENESIS,
                 &anchored,
             )),
@@ -277,8 +334,7 @@ fn an_alternative_rooted_below_the_anchor_is_refused_and_one_at_or_above_it_is_n
             // Popping 11 − root blocks: 6 and 4, both inside GENESIS's cap.
             judged(alt_against(
                 formed_on(&chain, candidate_on(&chain, Vec::new())),
-                &view,
-                &fork_rooted_at(&chain, root),
+                &forked(&view, fork_rooted_at(&chain, root)),
                 &RuleSet::GENESIS,
                 &anchored,
             ))
@@ -314,8 +370,7 @@ fn an_alternative_popping_more_than_the_cap_is_refused_only_when_anchored() {
         assert_refused(
             judged(alt_against(
                 formed(&chain),
-                &view,
-                &fork_rooted_at(&chain, 7),
+                &forked(&view, fork_rooted_at(&chain, 7)),
                 &capped,
                 &anchored,
             )),
@@ -324,16 +379,14 @@ fn an_alternative_popping_more_than_the_cap_is_refused_only_when_anchored() {
         );
         judged(alt_against(
             formed(&chain),
-            &view,
-            &fork_rooted_at(&chain, 7),
+            &forked(&view, fork_rooted_at(&chain, 7)),
             &capped,
             &Trust::UNANCHORED,
         ))
         .expect("no anchor, no cap");
         judged(alt_against(
             formed(&chain),
-            &view,
-            &fork_rooted_at(&chain, 8),
+            &forked(&view, fork_rooted_at(&chain, 8)),
             &capped,
             &anchored,
         ))
@@ -355,8 +408,7 @@ fn the_fork_is_judged_before_the_header_ladder() {
         assert_refused(
             judged(alt_against(
                 formed_on(&chain, stale.clone()),
-                &view,
-                &fork_at_tip(&chain),
+                &forked(&view, fork_at_tip(&chain)),
                 &RuleSet::GENESIS,
                 &anchored,
             )),
@@ -366,8 +418,7 @@ fn the_fork_is_judged_before_the_header_ladder() {
         assert_refused(
             judged(alt_against(
                 formed_on(&chain, stale),
-                &view,
-                &fork_rooted_at(&chain, 2),
+                &forked(&view, fork_rooted_at(&chain, 2)),
                 &RuleSet::GENESIS,
                 &anchored,
             )),
@@ -407,8 +458,7 @@ fn a_rule_set_the_token_was_not_formed_under_is_stale_not_a_verdict() {
     chain.with_view(|view| {
         match alt_against(
             formed_under_other,
-            &view,
-            &fork_at_tip(&chain),
+            &forked(&view, fork_at_tip(&chain)),
             &distinct,
             &Trust::UNANCHORED,
         ) {

@@ -27,7 +27,8 @@
 //!   split rather than a silent reorg. Both read the **fork** — where the
 //!   alternative leaves the recorded chain and how long the recorded chain
 //!   is — which no [`HeaderView`] states, so the rule is a function over
-//!   the [`Fork`] the caller derived, recorded at its site as CEN-E5 is.
+//!   the [`Fork`] the alt view names (`AltChainView::fork`), recorded at
+//!   its site as CEN-E5 is.
 //! - **CEN-D5** ([`D5`]) — the alt chain's difficulty is CEN-D4's
 //!   algorithm over the stitched window. The algorithm is `D4::target`
 //!   unchanged; what D5 names is the window's provenance — the view the

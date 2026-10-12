@@ -109,17 +109,16 @@ pub(super) fn with_witness(candidate: Candidate, witness: &[u8]) -> Candidate {
 
 /// The cheap tier over the committed store — what AL1 takes. CEN-K2's walk
 /// from the candidate's parent ([`AltChain::build`]), the stitched view,
-/// `form` claiming the seed that view answers, then `alt_against` for the
-/// fork the chain names. Panics where a fixture would be wrong: the parent
-/// does not link, a row of the tier refuses, the view faults.
+/// `form` claiming the seed that view answers, then `alt_against` over the
+/// view, which names its own fork. Panics where a fixture would be wrong:
+/// the parent does not link, a row of the tier refuses, the view faults.
 pub(super) fn admitted(store: &ChainStore, candidate: Candidate) -> AltValid {
     let snap = store.begin_read().expect("read");
     let chain = AltChain::build(&snap, &candidate.block.header.previous)
         .expect("the fixture's parent links to the recorded chain");
     let view = AltView::new(&snap, chain);
-    let fork = view.chain().fork();
     let formed = formed(&view, candidate).expect("the stitched view answers the seed");
-    match alt_against(formed, &view, &fork, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+    match alt_against(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
         Ok(Ok(valid)) => valid,
         Ok(Err(refused)) => panic!("the fixture satisfies every row of the tier: {refused}"),
         Err(fault) => panic!("the stitched view answers: {fault}"),

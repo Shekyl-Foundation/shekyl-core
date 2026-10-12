@@ -13,10 +13,12 @@
 //! asserted its linkage while rebuilding (CEN-K2). Here the rebuild is
 //! [`AltChain::build`], the linkage is the constructor's refusal, and the
 //! stitched chain is a view the cheap-tier rules read through
-//! [`HeaderView`] — **and only `HeaderView`**. The chain also names the
-//! fork it describes ([`AltChain::fork`]: its root and the recorded tip of
-//! the same snapshot), so `alt_against`'s two operands come from one read
-//! and the verdict it mints is what AL1 stores.
+//! [`HeaderView`] — **and only `HeaderView`**, plus the one fact the alt
+//! tier takes beside the headers: the fork the chain describes
+//! ([`AltChain::fork`]: its root and the recorded tip of the same
+//! snapshot), which the view hands to `alt_against` itself as its
+//! [`AltChainView`]. The two operands cannot come from two reads, and the
+//! verdict the tier mints is what AL1 stores.
 //!
 //! # `HeaderView` only
 //!
@@ -51,7 +53,7 @@
 //! (CEN-K1a). A candidate whose parent is unknown is not a K1a case; it is
 //! K2's orphan, and `build` refuses it before any height exists.
 
-use shekyl_chain_rules::{AtHeight, Fork, HeaderRecord, HeaderView, Tip};
+use shekyl_chain_rules::{AltChainView, AtHeight, Fork, HeaderRecord, HeaderView, Tip};
 use shekyl_store_codec::{Canonical, CodecError};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
@@ -161,8 +163,8 @@ impl AltChain {
 
     /// The fork a block over this chain would cause — CEN-E2's operands,
     /// both from the snapshot the chain was built on: the root, and the
-    /// recorded tip as it stood there. What `alt_against` takes beside the
-    /// view.
+    /// recorded tip as it stood there. What the view hands `alt_against`
+    /// as its [`AltChainView::fork`].
     #[must_use]
     pub const fn fork(&self) -> Fork {
         Fork {
@@ -217,6 +219,14 @@ impl<'s> AltView<'s> {
     #[must_use]
     pub const fn chain(&self) -> &AltChain {
         &self.chain
+    }
+}
+
+impl<'id> AltChainView<'id> for AltView<'_> {
+    /// [`AltChain::fork`]: the chain the view is stitched over names it,
+    /// on the snapshot the view reads.
+    fn fork(&self) -> Fork {
+        self.chain.fork()
     }
 }
 
