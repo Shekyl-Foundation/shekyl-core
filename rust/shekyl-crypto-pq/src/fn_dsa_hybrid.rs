@@ -212,6 +212,18 @@ impl std::fmt::Debug for FnDsaHybridSecretKey {
     }
 }
 
+// Test-support surface, behind `test-utils`.
+#[cfg(any(test, feature = "test-utils"))]
+impl FnDsaHybridSecretKey {
+    /// Make the FN-DSA half undecodable, in place: its header byte, which
+    /// names the degree, is moved off 1024. For tests of what a holder of
+    /// this key does when the key does not decode. No key byte is read out.
+    pub fn corrupt_fn_dsa_half_for_tests(&mut self) {
+        let header = &mut self.fn_dsa.as_array_mut()[0];
+        *header = header.wrapping_sub(1);
+    }
+}
+
 /// A canonical Ed25519 + FN-DSA-1024 signature.
 #[derive(Clone, PartialEq, Eq)]
 pub struct FnDsaHybridSignature {
@@ -1097,6 +1109,21 @@ mod tests {
                 Err(CryptoError::InvalidKeyMaterial)
             ));
         }
+    }
+
+    /// The test seam other crates corrupt a key through makes a key the
+    /// held signer refuses to build from, and leaves the Ed25519 half alone.
+    #[test]
+    fn the_test_corruption_makes_the_key_undecodable() {
+        let (_, mut sk) = keypair();
+        let ed25519_before = *sk.ed25519.as_array();
+        FnDsaHybridSigner::new(&sk).expect("control: the intact key decodes");
+        sk.corrupt_fn_dsa_half_for_tests();
+        assert!(matches!(
+            FnDsaHybridSigner::new(&sk),
+            Err(CryptoError::InvalidKeyMaterial)
+        ));
+        assert_eq!(sk.ed25519.as_array(), &ed25519_before);
     }
 
     /// Moving the signer moves two pointers: neither half is inline, and
