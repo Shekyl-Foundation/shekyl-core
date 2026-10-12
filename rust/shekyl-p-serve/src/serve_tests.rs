@@ -922,3 +922,6 @@ mod invariant;
 
 #[path = "serve_bench_seam_tests.rs"]
 mod bench_seam;
+
+#[path = "serve_wire_pin_tests.rs"]
+mod wire_pin;

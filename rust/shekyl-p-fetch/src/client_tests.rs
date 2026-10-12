@@ -1434,3 +1434,6 @@ async fn dropping_a_fetch_mid_check_keeps_the_slot_until_the_entry_is_gone() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
+
+#[path = "client_wire_pin_tests.rs"]
+mod wire_pin;
