@@ -190,17 +190,17 @@ every changed row.
 | — consensus-flagged | 168 |
 | — policy-flagged | 9 |
 | Bucket 1 (Shekyl-specific, spec'd) | 90 |
-| Bucket 2 (inherited, ratified on record) | 44 |
+| Bucket 2 (inherited, ratified on record) | 45 |
 | Bucket 3 (deletion disposition recorded or executed) | 14 |
-| Bucket 4 (inherited, not ratified — classes recorded) | 29 |
+| Bucket 4 (inherited, not ratified — classes recorded) | 28 |
 
-Sum check: `90 + 44 + 14 + 29 = 177 = 168 + 9` (CEN-J28 minted bucket 1, consensus, on 2026-10-12, FN-DSA increment 3, `89 + 44 + 14 + 29 = 176 = 167 + 9` before it; CEN-B7, consensus, moved bucket 4 → 3 on 2026-10-08, deleted with the hard-fork mechanism; CEN-J27 minted bucket 1 on 2026-10-08, PR #1003, `88 + 44 + 13 + 30 = 175 = 166 + 9` before both; CEN-J17, consensus, moved bucket 1 → 3 on 2026-10-04 — immutable-bond 2026-09-20, slice 8 Q1 ruled (a); the table caught up 2026-10-05. The table had read `89 + 44 + 11 + 31` while the by-flag line already counted consensus bucket 3 as 12, so that 11/31 pair lagged the 2026-09-23 recount by one and the sum was unchanged; the move takes the parser's bucket 1 from 89 to 88 and its bucket 3 from 12 to 13, and the table is brought to the parser. CEN-L16 added to bucket 1 on 2026-09-23 by S-ARCH's pre-flight; CEN-I20 the same day; before them `87 + 44 + 11 + 31 = 173 = 164 + 9`, recounted 2026-09-14 with the census's own commands below, after C2-R8 applied CEN-L1 4 → 2 and CEN-L2/L3/L4/L5/L6/L13 4 → 3 to the rows — §7 #20; the line had read `87 + 43 + 5 + 38` from the 2026-09-06 recount after R2's eight bucket-4 → 2 promotions, before that `87 + 35 + 5 + 46` the same day, and before that `86 + 25 + 5 + 55 = 171` since the C1 era while the table above it had already moved — records-was). **By flag** (the cross-tab C2-R8 §10 uses, because a consensus denominator that counts policy rows promotes them by proximity): consensus `[87, 40, 13, 26] = 166`, policy `[1, 4, 0, 4] = 9` (recounted 2026-10-05 with the §11 commands after CEN-J17 left bucket 1 for bucket 3; the line had read `[88, 40, 12, 26] = 166` from the 2026-09-23 recount after CEN-I20 and CEN-L16 joined bucket 1 and CEN-F12 left for bucket 3 — records-was; before that `[86, 40, 11, 27] = 164` from the 2026-09-14 recount — records-was). Merged set = 161 CEN rows
-+ 11 minted (`CEN-A7, B6, B7, F20, F21, H23, H24, L15`, `CEN-I19`
-2026-09-06 with its implementation, `CEN-I20` 2026-09-23 with its implementation, and `CEN-L16` 2026-09-23 as an R8-class placement row) + 3 split (`CEN-D1b, F14b`, and
+Sum check: `90 + 45 + 14 + 28 = 177 = 168 + 9` — **recounted 2026-10-12 from the §4 rows with the commands below**, and this line and the table above are what those commands print. CEN-J28 minted bucket 1, consensus, on 2026-10-12, FN-DSA increment 3: the rows gave `89 + 45 + 14 + 28 = 176 = 167 + 9` before it. The table and this line had read bucket 2 = 44 and bucket 4 = 29 (`89 + 44 + 14 + 29` before J28, `90 + 44 + 14 + 29` with it): a sum that closed over a bucket-4 → 2 promotion the rows had taken and the table had not — records-was, and the history that follows in this parenthesis is of that lagging table, kept as written (CEN-B7, consensus, moved bucket 4 → 3 on 2026-10-08, deleted with the hard-fork mechanism; CEN-J27 minted bucket 1 on 2026-10-08, PR #1003, `88 + 44 + 13 + 30 = 175 = 166 + 9` before both; CEN-J17, consensus, moved bucket 1 → 3 on 2026-10-04 — immutable-bond 2026-09-20, slice 8 Q1 ruled (a); the table caught up 2026-10-05. The table had read `89 + 44 + 11 + 31` while the by-flag line already counted consensus bucket 3 as 12, so that 11/31 pair lagged the 2026-09-23 recount by one and the sum was unchanged; the move takes the parser's bucket 1 from 89 to 88 and its bucket 3 from 12 to 13, and the table is brought to the parser. CEN-L16 added to bucket 1 on 2026-09-23 by S-ARCH's pre-flight; CEN-I20 the same day; before them `87 + 44 + 11 + 31 = 173 = 164 + 9`, recounted 2026-09-14 with the census's own commands below, after C2-R8 applied CEN-L1 4 → 2 and CEN-L2/L3/L4/L5/L6/L13 4 → 3 to the rows — §7 #20; the line had read `87 + 43 + 5 + 38` from the 2026-09-06 recount after R2's eight bucket-4 → 2 promotions, before that `87 + 35 + 5 + 46` the same day, and before that `86 + 25 + 5 + 55 = 171` since the C1 era while the table above it had already moved — records-was). **By flag** (the cross-tab C2-R8 §10 uses, because a consensus denominator that counts policy rows promotes them by proximity): consensus `[89, 41, 14, 24] = 168`, policy `[1, 4, 0, 4] = 9` (recounted 2026-10-12 from the rows, C/P column against bucket column; `[88, 41, 14, 24] = 167` before CEN-J28. The line had read `[87, 40, 13, 26] = 166` from the 2026-10-05 recount, taken after CEN-J17 left bucket 1 for bucket 3 and not moved for CEN-J27's minting, CEN-B7's move to bucket 3 or the bucket-2 promotion above — records-was; before that it had read `[88, 40, 12, 26] = 166` from the 2026-09-23 recount after CEN-I20 and CEN-L16 joined bucket 1 and CEN-F12 left for bucket 3 — records-was; before that `[86, 40, 11, 27] = 164` from the 2026-09-14 recount — records-was). Merged set = 161 CEN rows
++ 13 minted (`CEN-A7, B6, B7, F20, F21, H23, H24, L15`, `CEN-I19`
+2026-09-06 with its implementation, `CEN-I20` 2026-09-23 with its implementation, `CEN-L16` 2026-09-23 as an R8-class placement row, and `CEN-J27` 2026-10-08 and `CEN-J28` 2026-10-12 with theirs — `161 + 13 + 3 = 177`; the line had read 11 minted, without the last two, 2026-10-12) + 3 split (`CEN-D1b, F14b`, and
 `CEN-K1 → K1a/K1b` on 2026-09-04 — that split was never carried into this
 decomposition, so the line summed to 171 while the table above it said 172). Bucket-4 class split (recounted 2026-09-14 over the bucket-4 rows only,
 after C2-R8): 2 `examined-disposition` + 1 `KAT-port`
-+ 1 `pinned-not-re-derived` + 27 `none` = 31, the bucket-4 total (the seven
++ 1 `pinned-not-re-derived` + 24 `none` = 28, the bucket-4 total (recounted 2026-10-12 from the rows; the line had read `… + 27 none = 31` from the 2026-09-14 recount — records-was) (the seven
 R8 rows that left were all `none`; CEN-L14 stays and moves `none` →
 `examined-disposition` — the mechanism ruled, the per-site semantic routed to
 R8b; the 2026-09-06 line read `1 + 1 + 1 + 35 = 38`). The line had earlier read `… + 46 none = 55`,
@@ -216,30 +216,33 @@ Reproducible counts (run against this file):
 
 ```sh
 f=docs/design/CONSENSUS_RULE_CENSUS.md
-grep -c '^| CEN-' "$f"                                                          # rows = 173
+grep -c '^| CEN-' "$f"                                                          # rows = 177
 grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$5); print $5}' | sort | uniq -c  # C/P
 grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$6); print $6}' | sort | uniq -c  # buckets
 grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$7); print $7}' | sort | uniq -c  # classes
+grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$5); gsub(/ /,"",$6); print $5, $6}' | sort | uniq -c  # by flag × bucket
 ```
 
 ### 3.1 Per-subsystem breakdown
 
+Recounted 2026-10-12 from the §4 rows (id letter against bucket; a policy row counts in its bucket column and again under Policy). The table had totalled 173 since before CEN-I20, CEN-L16, CEN-J27 and CEN-J28 were minted and CEN-J17 and CEN-B7 moved to bucket 3.
+
 | Subsystem | Rows | B1 | B2 | B3 | B4 | Policy |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | A topology | 7 | 1 | 3 | 0 | 3 | 0 |
-| B header / version / attestation / root | 7 | 2 | 1 | 1 | 3 | 0 |
+| B header / version / attestation / root | 7 | 2 | 2 | 1 | 2 | 0 |
 | C timestamps | 3 | 1 | 2 | 0 | 0 | 0 |
 | D PoW / difficulty | 8 | 4 | 2 | 0 | 2 | 0 |
 | E checkpoints / fast-sync | 5 | 0 | 3 | 2 | 0 | 0 |
 | F miner tx / emission | 22 | 13 | 4 | 1 | 4 | 0 |
 | G block body (connect) | 14 | 7 | 2 | 1 | 4 | 0 |
 | H tx non-input consensus | 24 | 9 | 7 | 1 | 7 | 0 |
-| I FCMP++ inputs / PQC | 19 | 15 | 4 | 0 | 0 | 0 |
-| J archival tx families | 26 | 26 | 0 | 0 | 0 | 0 |
+| I FCMP++ inputs / PQC | 20 | 16 | 4 | 0 | 0 | 0 |
+| J archival tx families | 28 | 27 | 0 | 1 | 0 | 0 |
 | K reorg / alt chains | 12 | 1 | 11 | 0 | 0 | 0 |
-| L storage layer | 15 | 6 | 1 | 7 | 1 | 0 |
+| L storage layer | 16 | 7 | 1 | 7 | 1 | 0 |
 | M mempool admission | 11 | 2 | 4 | 0 | 5 | 9 |
-| **Total** | **173** | **87** | **44** | **13** | **29** | **9** |
+| **Total** | **177** | **90** | **45** | **14** | **28** | **9** |
 
 ### 3.2 Inverse spot-check (union of both walks' tables; all six MUST be present)
 
