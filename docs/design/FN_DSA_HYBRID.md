@@ -281,31 +281,38 @@ does not. The banner's findings range is to be moved to cover
 | --- | --- |
 | The held key | `FnDsaHybridSigner` (`rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs`): decodes an `FnDsaHybridSecretKey` once into a heap slot, then `sign(&mut self, domain, message)`. Same nested body as the scheme (`hybrid_combiner::sign_nested`); the scheme's own sign path is unchanged |
 | Byte identity | `a_held_key_signs_the_bytes_the_scheme_signs`, and `the_held_key_reproduces_the_pinned_signatures` in `tests/kat_fn_dsa_hybrid_v1.rs`, which reads `FN_DSA_HYBRID_V1_KAT.json` and so runs on the AVX2, no-AVX2 and aarch64 lanes. No vector was added or changed |
-| The key in the actor | `HeldReceiptKey` (`rust/shekyl-engine-core/src/engine/stake_engine/types.rs`), a field of `BondedPersona` and `EphemeralPersona` beside the bundle, built by `HeldPersona::hold` when the actor takes the bundle in |
+| The key in the actor | `HeldReceiptKey` (`rust/shekyl-engine-core/src/engine/stake_engine/types.rs`), a field of `BondedPersona` and `EphemeralPersona` beside the bundle: a slot that is empty until the persona's first receipt signature and holds the decoded key from then on (`HeldPersona::sign_receipt_transcript`) |
 | The actor message | `SignReceiptTranscript` (`stake_engine/persona.rs`): the 112-byte transcript in, an `FnDsaHybridSignature` out, the domain fixed to `SCHEME_DOMAIN_RECEIPT` where the key is held. `StakeEngineHandle::sign_receipt_transcript_blocking` is its blocking sender |
 | The capability | `ResidentReceiptKey` (`stake_engine/serving/receipt_key.rs`): a weak actor handle and a slot, `ready` and `sign_receipt`, the shape and refusals of `ResidentPassKey` |
 | The staging gate | `the_serving_task_is_not_started_with_the_receipt_key` reads `serving/start.rs`; the capability's methods carry `expect(dead_code)`, so a production caller fails the lint lane |
 | Benches | `crypto_bench_fn_dsa_hybrid_sign_held` (gated) and criterion `fn_dsa_hybrid_sign_held`, `fn_dsa_hybrid_hold_key`; manifest §13 |
 
-**Where the decoded key lives.** In the stake actor and nowhere else. It is
-decoded when a persona enters the held set, which is where the actor
-already holds `ArchivalPKeys::receipt_sign_sk`, and it is a field of the
-held persona, not a map beside the set: the activation wipe, the retire
-wipe and `on_stop` each drop the persona, and the decoded key is wiped with
-it (`a_wiped_persona_takes_its_receipt_key_with_it`). The serving role
-holds a weak handle and a slot.
+**Where the decoded key lives.** In the stake actor and nowhere else, as a
+field of the held persona, not a map beside the set: the activation wipe,
+the retire wipe and `on_stop` each drop the persona, and a decoded key is
+wiped with it (`a_wiped_persona_takes_its_receipt_key_with_it`). The
+serving role holds a weak handle and a slot.
 
-**A receipt key that does not decode does not stop the actor.** The persona
-stays held and each receipt signature asked of it is refused with the
-scheme's error (`an_undecoded_receipt_key_refuses_to_sign`). Derivation
-only yields keys the scheme generated, so the arm is for corrupted memory.
-It is shaped this way so that a staged key adds no way for the live actor
-to fail to start; the cutover can make it fatal if it wants that.
+**It is decoded by the first receipt signature, not when the actor starts.**
+A staged capability must cost the live path nothing, and until the cutover
+no persona is asked for a receipt. A decode needs up to 360 KiB of stack in
+an optimized build and leaves 118,640 bytes on the heap; done at start,
+every staker's wallet would pay that per held slot at open for a key
+nothing signs with. So the actor's start does no FN-DSA work
+(`starting_the_actor_decodes_no_receipt_key`), the slot of a persona that
+never signs a receipt stays empty for its life, the first signature builds
+the key and each later one signs from that same key
+(`the_first_receipt_builds_the_key_and_the_second_reuses_it`). The empty
+slot holds no key bytes: what it decodes is `ArchivalPKeys::receipt_sign_sk`
+in the bundle beside it, borrowed at the first signature.
 
-**What every staker's wallet now pays at open**, although nothing signs
-with the key yet: one decode per held slot, 52 µs and 118,640 bytes of heap
-each on the x86_64 development host, on the stack `FND-4`'s row below gives
-for construction.
+**A receipt key that does not decode is refused at that first signature**,
+with the scheme's typed error, and at each later one the same way; the slot
+stays empty and no failure is remembered in its place
+(`a_corrupted_receipt_key_refuses_at_the_first_signature`, and
+`…_through_the_actor` for the identity key and the other personas being
+unaffected). Nothing checks the key at start. The cutover, which makes
+receipt signing live, is where a start-time check belongs if one is wanted.
 
 ### 9.1 `FND-4`'s disposition — measured
 
@@ -327,6 +334,22 @@ Building the held key once (`FnDsaHybridSigner::new`): 544 KiB unoptimized,
 
 `FND-4`'s row gave 640 KiB and 256 KiB for per-call signing, from a ladder
 that doubled; the 8 KiB ladder puts the same path at 568 KiB and 248 KiB.
+
+Through the actor, where the first receipt pays the decode
+(`the_first_receipt_pays_the_decode_and_later_ones_do_not`, same host, same
+ladder; the actor's task on a current-thread runtime's one thread):
+
+| | Unoptimized | Optimized |
+| --- | --- | --- |
+| Start an actor holding personas and query it, no receipt | 152 KiB | 56 KiB |
+| Start, first receipt, second receipt | 608 KiB | 376 KiB |
+| A held persona's first receipt, alone | 544 KiB | 360 KiB |
+| A held persona's later receipt, alone | 112 KiB | 16 KiB (the ladder's first step) |
+
+A later receipt cannot be given a stack of its own through the actor, whose
+task stays on the thread it started on, so the last two rows are of the
+held persona directly. The first row is below what one decode needs: the
+test starts the actor on a stack a decode does not fit in.
 
 ### 9.2 Findings
 
