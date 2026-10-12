@@ -86,6 +86,14 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6, Appendix B
   - Target: pre-genesis
 
+- **Move gate-7's locked supply onto the byte fold.** `ArchivalLockModel` counts one shard per `blocks_per_shard` blocks, by default one per settlement epoch; the partition is by archival bytes and the stage-2 baseline closes one about every eleven blocks, so a gate-7 lock figure is low by a factor near 900. Declared in §4 at ESR-8 (Appendix A2, D1) and not changed there: the change moves gate-7's committed figures, and a step that moves figures writes its predictions first.
+  - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §4, Appendix A2
+  - Target: pre-genesis
+
+- **Re-base the A3 and A4 base paths on linear credited work.** `population.rs` and `stranding.rs` still score through the plateau `curve_milli`, which production keeps for counterfactuals only. Declared in §4 at ESR-8 (Appendix A2, D3): the change moves both stage-2 narration fixtures, so its predictions are written first.
+  - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §4, Appendix A2
+  - Target: pre-genesis
+
 - **Re-derive the escalation knee band, then the shipped knee.** ESR-6 moved the band's low anchor (the baseline's closed shards at 10 y) from 523,841 to 229,864: under the production fill rule the baseline carries 22 of its 50 transactions a block for eleven years. The knee is not re-pinned to that, since the all-Standard demand it rests on moves again at ESR-10 (rung mix) and in the reading pass. On the design's emission curve (ESF 22 per block, 2026-10-04) the band's high, the largest final count, fell to 2,079,614, and the shipped knee, 2,250,000, is OUT-OF-BAND. It is held, not re-pinned (2026-10-04): a band swept now would be derived from the capacity the inherited zone and `w_ref` allow rather than from demand, and with the asymptote at the floor the escalation is flat, so the knee changes nothing in consensus. Until ESR-10 `stage2::an_out_of_band_knee_is_held_only_while_the_escalation_is_flat` prints the band and the knee's standing on every run, fails if the shipped knee leaves `KNEE_BAND[1]`, and fails if the asymptote leaves the floor over an out-of-band knee. The in-band requirement fails hard again at ESR-10. Waits on ESR-10 and the reading pass. Falsifier: the shipped knee equals the band's middle under the fee arm the reading pass settles on.
   - Owner: the GF-7 ceremony ([`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md) §11.4) pins it; the re-derivation is the sim lane's (`SCC-Q2`)
   - Target: pre-genesis

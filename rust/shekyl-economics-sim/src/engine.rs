@@ -80,7 +80,7 @@ pub struct ArchivalLockModel {
     /// silently reporting zero locked supply.
     ///
     /// The default is far sparser than the chain: the stage-2 byte fold
-    /// closes a shard about every five blocks. A gate-7 lock figure is
+    /// closes a shard about every eleven blocks. A gate-7 lock figure is
     /// therefore a floor, not an estimate
     /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4).
     pub blocks_per_shard: u64,
