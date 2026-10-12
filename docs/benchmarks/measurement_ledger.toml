@@ -489,6 +489,7 @@ stale_through = [
   { through = "1c42c17c21", note = "RT-W9 step 1 review (PR #1038): into_halves and Established::split are must_use. No bytes on the wire moved. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "d03aeb2e0f", note = "RT-W9 step 1 review (PR #1038): the split yields two Directions, and the length-prefixed framer stays in shekyl-p2p-transport. The same HKDF still feeds the same two record directions; the pinned handshake vectors and the post-rekey record are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "4ae7de867a", note = "RT-W9 step 2 (PR #1039): has_key is gone and the two HKDF functions are one. The two-output bytes are unchanged, and the P2P handshake still uses two outputs. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "7813b29af9", note = "RT-W9 step 2: Direction counts the ciphertexts it has opened (one saturating add of a u64 on each successful open, none on a failed tag) and exposes the count, for the RPC handshake's pending session to gate on. The P2P record path opens through Direction, so that add is on it, twice per record. It is one integer add beside two AEAD operations; no I/O changed. Dial, handshake, and gap waits are unchanged. Not re-measured." },
 ]
 
 [[constant]]
