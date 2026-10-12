@@ -1,10 +1,14 @@
 # RT-W9 — the channel itself: rule-26 pre-flight
 
 **Status:** Round 0 pre-flight — **questions RULED 2026-10-11** (Rick):
-`RT-O16`…`RT-O22`, §4, every part. The substrate re-check is recorded (§2)
-and what could and could not be executed is stated (§3), so the slice's
-steps may proceed in the order of §5.
-Slice RT-W9 was authorized 2026-10-11 (Rick, in this lane).
+`RT-O16`…`RT-O22`, §4, every part. **RE-RULED 2026-10-12 (PR #1034):**
+`RT-O16`, `RT-O18`, `RT-O20`, and the sequencing half of `RT-O21`. The
+re-rulings are what is built. An implementation opened against the
+2026-10-11 text of those four is rebuilt to this document. The substrate
+re-check is recorded (§2) and what could and could not be executed is
+stated (§3), so the slice's steps may proceed in the order of §5.
+Slice RT-W9 was authorized 2026-10-11 (Rick, in this lane). The
+authorization is decision-anchored to PR #1034.
 **Ground:** `shekyl-core` `dev` **`258b4d8515`**, the merge of PR #1020.
 Every `file:line` below was read at that commit.
 **Parent:** [`RPC_CHANNEL.md`](RPC_CHANNEL.md) (round R1, ruled 2026-10-09)
@@ -18,10 +22,14 @@ inside it, now ruled.
 
 ## 1. What RT-W9 is, and is not
 
-RT-W9 builds the channel: the record layer in a crate both transports use,
-Shekyl's own `hybridXK` handshake, the stream adapter that lets hyper and
-axum run over records, padded records, and the handshake deadline. It also
-adds one registry exclusion and turns RT-P4's standing check into a gate.
+RT-W9 builds the channel. `shekyl-noise` holds the handshake symmetric
+state and `Direction`, the one nonce-and-rekey type both framers sit on.
+The interim record framer stays in `shekyl-p2p-transport`: it has live
+callers, and its wire bytes are not this slice's to change. Beside that,
+the slice builds Shekyl's own `hybridXK` handshake, `ClassedRecord`, the
+stream adapter `shekyl-rpc-stream`, and the handshake deadline. It also
+adds two registry exclusion rows and turns RT-P4's standing check into a
+gate.
 
 It builds **no user of the channel**. No listener, no enrolment, no
 grants, no tunnel, no client posture: those are RT-W10 to RT-W12. Where a
@@ -41,8 +49,8 @@ What the slice builds on, read at source.
 | # | Claim the slice rests on | Where read | Finding |
 |---|---|---|---|
 | F-1 | The record layer is two files that can move | `rust/shekyl-p2p-transport/src/aead.rs` (104 lines), `channel.rs` (296) | **True for the code, not for its tests.** `channel.rs` uses `aead.rs` and nothing else in the crate. Its tests do: `channel.rs:221` builds its key pairs by running the P2P handshake (`crate::noise::{Initiator, Responder}`). Moved as they are, those tests would make the record crate depend on the crate that depends on it |
-| F-2 | Moving it changes only where code lives | `aead.rs:17-93`; `channel.rs:18`, `:90`; `noise.rs:29-30`; `c5_bench.rs:9-10` | **Seven items become public API of a crate.** `noise.rs` reaches `aead::{hash, hkdf, seal, open, HASH_LEN, TAG_LEN}` and `channel::halves`, all `pub(crate)` today. Across a crate boundary each must be `pub`. `REKEY_NONCES` (`channel.rs:18`) is read by `c5_bench.rs` and by tests. `Direction` can stay private. These are raw primitives: an HKDF and an AEAD seal that take a key and a nonce from the caller |
-| F-3 | The P2P vectors keep passing where they are | `noise.rs:537-609` | **The test that asserts them straddles the cut.** `pinned_messages_mix_steps_and_rekey` asserts `kat_m1.hex` and `kat_m2.hex` (`:549`, `:554`), which need only `noise.rs`. The same test then asserts the key schedule and the rekey through `ck_and_k()` and `force_nonce()` (`:558-581`), which are `#[cfg(test)] pub(crate)` on the record types (`channel.rs:44-52`, `:131-140`, `:161-170`). After the move `noise.rs` cannot see another crate's `cfg(test)` items. The classical anchor has the same reach: `cacophony_nn_blake2s_matches_sym` seals with a raw transport key (`:681-682`). **This is on step 1's critical path:** that test passing unchanged is the proof that P2P's bytes did not move (RT-O16) |
+| F-2 | Moving it changes only where code lives | `aead.rs:17-93`; `channel.rs:18`, `:90`; `noise.rs:29-30`; `c5_bench.rs:9-10` | **Seven items become public API of a crate.** `noise.rs` reaches `aead::{hash, hkdf, seal, open, HASH_LEN, TAG_LEN}` and `channel::halves`, all `pub(crate)` today. Across a crate boundary each must be `pub`. `REKEY_NONCES` (`channel.rs:18`) is read by `c5_bench.rs` and by tests. `Direction` can stay private. These are raw primitives: an HKDF and an AEAD seal that take a key and a nonce from the caller. The RT-O16 re-ruling refuses that promotion: callers use `SymmetricState` and `Direction`, and the primitives stay `pub(crate)` |
+| F-3 | The P2P vectors keep passing where they are | `noise.rs:537-609` | **The test that asserts them straddles the cut.** `pinned_messages_mix_steps_and_rekey` asserts `kat_m1.hex` and `kat_m2.hex` (`:549`, `:554`), which need only `noise.rs`. The same test then asserts the key schedule and the rekey through `ck_and_k()` and `force_nonce()` (`:558-581`), which are `#[cfg(test)] pub(crate)` on the record types (`channel.rs:44-52`, `:131-140`, `:161-170`). After the move `noise.rs` cannot see another crate's `cfg(test)` items. The classical anchor has the same reach: `cacophony_nn_blake2s_matches_sym` seals with a raw transport key (`:681-682`). **This is on step 1's critical path.** The re-ruling narrows the untouched proof to the vector assertions at `:549-554`; the key-schedule half moves with the types (RT-O16) |
 | F-4 | The crate already has a pattern for exposing private entry points | `lib.rs:23-26`; `c5_bench.rs`; `Cargo.toml` (`c5-bench` feature) | **True.** A feature-gated, `#[doc(hidden)]` module of entry points that production builds leave off. The same shape would carry the test accessors of F-3 |
 | F-5 | The handshake's symmetric state is shared | `noise.rs:58-131` | **It is private to the P2P handshake.** `Sym` — `mix_hash`, `mix_key`, `encrypt_and_hash`, `decrypt_and_hash` — is exactly what `hybridXK` needs and is not in either file the design names for extraction. Either it moves too, or the RPC handshake carries a second copy of a Noise symmetric state (RT-O17). The classical test vector that anchors it (`:617`) reads its fields directly |
 | F-6 | Who depends on the transport crate | every `Cargo.toml` under `rust/` | Four production dependents: `shekyl-clearnet` (handshake and record types), `shekyl-transport-layer` (two flight-length constants), `shekyl-levin` and `shekyl-ffi` (the network id). `shekyl-rpc-channel` depends on it for tests only. The record types reach exactly one of them, `shekyl-clearnet` (`seam.rs:13`, `handshake.rs:18`) |
@@ -56,10 +64,10 @@ What the slice builds on, read at source.
 | F-14 | The key types wipe themselves | `fips203` 0.4.3's `types.rs:6-18` and `lib.rs:95`; `noise.rs:26` | `fips203`'s key and shared-secret types derive `Zeroize` and `ZeroizeOnDrop`. `x25519-dalek`'s `StaticSecret` wipes on drop. The chaining key and transport keys are `Zeroizing` already (`noise.rs:59`, `channel.rs:34-35`). The long-term static pair is new in this slice and gets a type of its own |
 | F-15 | The channel crate can hold the handshake | `rust/shekyl-rpc-channel/Cargo.toml`, `src/lib.rs` | Today it is names only: one dependency, `shekyl-crypto-hash`, and no secret anywhere. The handshake brings `fips203`, `x25519-dalek`, `zeroize`, `rand_core` and the record crate; the adapter brings `tokio` (RT-O19) |
 | F-16 | The HTTP stack the adapter must sit under | `rust/shekyl-daemon-rpc/Cargo.toml:21-22`, `rust/shekyl-rpc-transport/Cargo.toml:30-36`; `rust/Cargo.lock` | Server: `axum` 0.8.8 on `tokio` 1.51. Client: `hyper` 1.9 with `hyper-util` 0.1.20. Both sides take a `tokio` `AsyncRead + AsyncWrite` |
-| F-17 | P2P's framing ruling leaves room for the channel's | `P2P_TRANSPORT_LAYER.md` D14 item 4 | Fixed-window framing is ruled and unbuilt: one window is one record with **one nonce**, its plaintext opening with an authenticated 2-byte occupancy. Three things in it are explicitly not chosen: the window size, the flush policy for a partly filled window, and whether rekey becomes every-record; all wait on that round's step 7. Its sentence "the channel has its own framing" is, in context, the record channel as against Levin's `fragment.rs`, not P2P as against RPC, and does not contradict §4.4's one shared framing |
+| F-17 | P2P's framing ruling leaves room for the channel's | `P2P_TRANSPORT_LAYER.md` D14 item 4 | Fixed-window framing is ruled and unbuilt: one window is one record with **one nonce**, its plaintext opening with an authenticated 2-byte occupancy. Three things in it are explicitly not chosen: the window size, the flush policy for a partly filled window, and whether rekey becomes every-record; all wait on that round's step 7. Its sentence "the channel has its own framing" is, in context, the record channel as against Levin's `fragment.rs`, not P2P as against RPC. It does not contradict §4.4 as re-ruled 2026-10-12: two framers on one `Direction`, not one framer with a mode |
 | F-18 | A record's wire length is known before it is read | F-9; F-17; §4.4 | **Not with more than one class.** Today the length travels encrypted in front of the body. P2P's single window needs no length at all. A channel with several classes needs the receiver to learn which class a record is, and the ruled design does not say how (RT-O20) |
 | F-19 | Nobody else is building P2P framing | open pull requests; remote branches | **Nobody is.** No open pull request touches `shekyl-p2p-transport`. `origin/feat/p2p-cutover` is not ahead of `dev`. The one open pull request that touches RPC files is #1017 (`get_info` to Rust), which does not touch either transport crate |
-| F-20 | The registry can carry an exclusion | `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv:54-58`, `:258-261`; `rust/shekyl-crypto-pq/tests/domain_registry.rs:73` | Mechanism `x`, status `excluded`, in the bottom block, each with its reason. The test pins the excluded count at 8. The registry is keyed by literal, so two protocol names are two rows and the pin goes to 10. The §13 row says "one exclusion row"; it will be two rows with one reason |
+| F-20 | The registry can carry an exclusion | `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv:54-58`, `:258-261`; `rust/shekyl-crypto-pq/tests/domain_registry.rs:73` | Mechanism `x`, status `excluded`, in the bottom block, each with its reason. The test pins the excluded count at 8. The registry is keyed by literal, so two protocol names are two rows and the pin goes to 10. At the pin the §13 row said "one exclusion row". The 2026-10-12 edit of this pre-flight makes it two rows with one reason |
 | F-21 | The standing check has fixed inputs to read | `rust/Cargo.lock` (`fips203` 0.4.3); `rust/rust-toolchain.toml` (`channel = "1.94.0"`, bump policy at `:26`); `rust/Cargo.toml:664-666`; `cmake/BuildRust.cmake:23`, `:212` | The crate version and the toolchain are each one line in one file. The release profile sets `panic` and `overflow-checks` and nothing that changes optimisation (no `opt-level`, `lto`, `codegen-units`). The C++ build bridge passes `--release` and link arguments only. That is the baseline the proposed codegen attestation would pin (RT-O22) |
 | F-22 | The model that gates this slice is where the design says | `rust/shekyl-rpc-channel/model/` (`model.py`, `run.py`); `docs/formal/proverif/`; `.github/workflows/rpc-channel-model.yml:69` | The channel's model stayed in its crate; the review of #1020 moved the shared library and the install recipe to `docs/formal/proverif/` and added the P2P handshake's model beside them. The CI job is unchanged in what it runs |
 
@@ -109,7 +117,22 @@ a feature that exposes raw keys if someone enables it in production, which
 the gate exists to stop and which the clatter gate already shows how to
 check.
 
-**RULED: (a)**, with the gate built on the clatter gate's mechanism.
+**RULED 2026-10-11: (a) — SUPERSEDED 2026-10-12.** Rule 26 B2 rejects a
+public test-only API with no production caller. The `c5-bench` feature is
+a benchmark hook, not an exception, and it is not reused for keys.
+
+**RE-RULED 2026-10-12 (PR #1034): (b), narrowed to the lines the parent
+actually pins.** `RPC_CHANNEL.md` §4.4 requires `kat_m1.hex` and
+`kat_m2.hex`, asserted at `noise.rs:549-554`, to stay byte-identical and
+keep passing in place. Those assertions stay in `noise.rs`. Everything
+below them in `pinned_messages_mix_steps_and_rekey`, and the whole of
+`cacophony_nn_blake2s_matches_sym`, inspects types that are moving. Those
+assertions move with `Direction` and `SymmetricState` and stay
+`#[cfg(test)]` inside `shekyl-noise`. `ck_and_k` and `force_nonce` are not
+exported. `hash`, `hkdf`, `seal` and `open` stay `pub(crate)`. There is
+no `test-support` feature. The C5 bench may keep a feature that times one
+HKDF; that feature does not return a traffic key and does not set a
+nonce.
 
 ### RT-O17 — Does the symmetric state move with the record layer?
 
@@ -124,9 +147,21 @@ F-5: `Sym` is the piece both handshakes share and the design names only
 for the record layer, in the more delicate half. It widens the extraction
 by about seventy lines and one more test's reach (F-5).
 
-**RULED: (a).** The shared crate is named **`shekyl-noise`**, since it
-holds the AEAD primitives, the symmetric state and the record layer. The
-symmetric state takes the protocol name as a parameter.
+**RULED: (a).** The shared crate is named **`shekyl-noise`**. The
+symmetric state takes the protocol name as a parameter. Its type is
+`SymmetricState`. **Narrowed 2026-10-12:** the crate does not hold the
+interim record framer. It holds the AEAD primitives (crate-private),
+`SymmetricState`, and `Direction`. A handshake ends by splitting into
+two `Direction`s (`TransportKeys::into_directions`). The caller builds
+its own framer around those. `Direction::seal` returns the ciphertext
+and a key epoch, which advances only when rekey runs. `ClassedRecord`
+stores the header-protection key against that epoch and derives it
+again only when the epoch changes. The header key is not a field of
+`Direction`, so the interim framer's directions do not hold a key they
+never send. The label is read in one function, `header_protection_key`,
+which is crate-private and born with `ClassedRecord` in step 5. The
+epoch is part of `Direction` in step 1, so step 5 does not change the
+signature.
 
 ### RT-O18 — Where does the seeded generator live?
 
@@ -140,10 +175,22 @@ dependency of a test-only crate; clatter stays out of every production
 graph, and the existing gate proves it. The alternative, a small shared
 test-support crate, is one more crate for sixty lines.
 
-**RULED: as recommended, with one condition.** The entry to our handshake
-that takes a seeded generator exists only under the test-support feature.
-Production draws from the operating system's source and takes no
-generator.
+**RULED 2026-10-11: as recommended, under the test-support feature —
+SUPERSEDED 2026-10-12.** That feature is a public test-only entry with no
+production caller, which rule 26 B2 forbids. Moving clatter into
+`shekyl-rpc-channel` is not the repair: the clatter gate allows exactly
+one manifest to name it, the cross-check crate, and forbids any crate
+from depending on that crate.
+
+**RE-RULED 2026-10-12 (PR #1034).** The comparison lives in
+`shekyl-rpc-channel`, in `mod tests` beside the handshake, so it calls a
+private constructor. Production construction draws from the operating
+system's source and takes no generator. The seeded generator has one
+source file. The handshake's test module and the cross-check crate's
+tests each compile that file; neither exports it, and neither feature
+turns it on. The cross-check crate still owns clatter and still
+regenerates the pinned vectors. A second copy of the generator is the
+duplication this ruling refuses.
 
 ### RT-O19 — Which crate holds the handshake, and which the adapter?
 
@@ -157,7 +204,10 @@ handshake should not have to build a runtime. The record crate needs a
 name; **proposed: `shekyl-noise-record`.**
 
 **RULED: as recommended**, with the shared crate named `shekyl-noise`
-(RT-O17), not the name proposed here.
+(RT-O17), not the name proposed here. **Named 2026-10-12:** the adapter
+crate is `shekyl-rpc-stream`. It depends on `ClassedRecord` and on
+tokio. It does not depend on the handshake, and the handshake does not
+depend on it.
 
 ### RT-O20 — How does a receiver learn a record's size class?
 
@@ -200,16 +250,22 @@ both when it is made, since the code is shared.
 - The **unmasked** byte is bound as associated data. One AEAD operation
   per record.
 - The byte is **omitted for a single-class table**, so P2P's one window
-  carries none.
+  carries none. **SUPERSEDED 2026-10-12.** A table's length is not a wire
+  fork. `ClassedRecord` sends the byte for every table, including a
+  one-row table. `FixedWindow` is a different type: no header byte, the
+  plaintext starting with the 2-byte occupancy D14 already specifies.
+  RT-W9 does not build `FixedWindow`. The interim framer is neither type,
+  and it is not moved in order to become one of them.
 - **Rekey stays at 1,000 nonces** until the P2P round decides for both.
-- `RPC_CHANNEL.md` §4.4 states what this removes (reading record
-  boundaries from cleartext) and what it does not (burst sizes, and the
-  handshake's own fingerprint).
+  The constant is `REKEY_NONCES` on `Direction`, one name.
 
-What the ruling leaves to step 5, to be brought back before it is built:
-the exact derivation of the header-protection key, the exact keystream
-function, and the label's text and registry mechanism. They are a wire
-format and are proposed there, not assumed here.
+**RE-RULED 2026-10-12 (PR #1034): the bytes are specified, in
+`RPC_CHANNEL.md` §4.4.** The header-protection key, the keystream byte,
+the label and its registry row, and the privacy claim all live there.
+Step 5 implements that section. It does not propose the wire format
+again. The 2026-10-11 claim that masking stops an observer parsing
+record boundaries is superseded in the same section: the mask removes a
+cleartext delimiter, and a public length set can still be segmented.
 
 ### RT-O21 — Where do the two measurements run?
 
@@ -227,13 +283,19 @@ the testnet to make "wallet sync" mean something, is for Rick.
 left open.
 
 - RT-P5 measures **both** the HTTP message sizes for each method **and**
-  the record boundaries as the adapter emits them.
+  the record boundaries as the adapter emits them. **Sequencing re-ruled
+  2026-10-12:** the sizes are step 3, and they are what the classes are
+  derived from. The boundaries are step 5, observed from `ClassedRecord`
+  under the flush policy step 3 registered. The adapter is not built on
+  the interim framer in order to measure it.
 - The adapter **combines writes until a flush**. That policy is part of
   the probe, registered with it and observed in it, not a detail chosen
   after.
-- **A rule-21 reopen is recorded:** the size classes are re-derived from
-  mainnet traffic once there is any. Until then they rest on generated
-  traffic and say so.
+- **Rule-21 reopen (RT-O21).** The classes are not held open waiting for
+  mainnet. They ship from the registered generated trace. *Reopen when* a
+  mainnet RPC trace is registered in the measurement ledger, the same
+  shape as RT-P4's registration. *Re-evaluation:* a design-round entry
+  that re-derives the table and names which classes moved. Rick decides.
 - **Which wallet: a generated one** (ruled the same day, after the rest).
   No existing testnet wallet is used. A new wallet has no history, so the
   traffic is generated too: a regtest chain carrying full-size
@@ -260,7 +322,7 @@ recognise so that a new one cannot slip past.
 and fails on any key it does not recognise.
 
 *Also ruled:* two registry rows with one reason, for the two protocol
-names (F-20), is accepted.
+names (F-20), is accepted. The §13 row says so.
 
 ---
 
@@ -272,12 +334,12 @@ This document is step 0 and is the only content of the first.
 | # | Step | Depends on | Notes |
 |---|---|---|---|
 | 0 | This pre-flight | — | Docs only |
-| 1 | Extract the record layer and the symmetric state into `shekyl-noise` | RT-O16, RT-O17 | A refactor. Proof: P2P's two vector files untouched and its tests passing in place; `shekyl-clearnet`'s tests passing; the fuzz targets building |
-| 2 | The handshake, red first | RT-O18, RT-O19 | The comparison with the pinned vectors is written and observed failing before the implementation. Then one test per requirement of §4.3 |
-| 3 | RT-P5: the adapter and the size distribution | step 2; RT-O21 | The adapter is observed failing with record splitting removed. The distribution's method is registered, and its host claimed, before it runs |
+| 1 | Extract `SymmetricState` and `Direction` into `shekyl-noise`. The AEAD primitives stay crate-private | RT-O16, RT-O17 | Not a move of `channel.rs`. `SendHalf` and `RecvHalf` stay in `shekyl-p2p-transport`, call `Direction`, and keep today's wire bytes. They are live: the clearnet seam and the fuzz targets call them. Proof: `kat_m1.hex` and `kat_m2.hex` untouched; the assertions at `noise.rs:549-554` passing in place; `shekyl-clearnet`'s tests passing; the fuzz targets building. Key-schedule assertions move with `Direction` and stay `#[cfg(test)]`. No `test-support` feature. `Direction::seal` reports a key epoch from this step, so step 5 does not change its signature |
+| 2 | The handshake, red first | RT-O18, RT-O19 | The comparison is an in-crate test, written and observed failing before the implementation. Production construction takes no generator. One generator source, compiled into that test and into the cross-check crate. Then one test per requirement of §4.3 |
+| 3 | RT-P5 sizes | step 2; RT-O21 | HTTP message sizes per method, on the generated wallet and the generated chain. No adapter. The method, the flush policy and the host claim are registered before it runs. The classes are derived from this trace |
 | 4 | RT-P6: handshake cost on the floor device | step 2; step 3's candidate classes | Registered before it runs; quiet claim |
-| 5 | Padded records, with the masked class byte | RT-O20; steps 3 and 4 | The header-protection construction is proposed and confirmed first. Class table from the measurements. P2P's wire format does not change; its interim framing stays in the crate as debt owned by the P2P lane |
-| 6 | Registry exclusion rows; the standing-check gate | RT-O22 | Each shown failing under a named edit |
+| 5 | `ClassedRecord` and `shekyl-rpc-stream` | RT-O20; steps 3 and 4 | The wire format is §4.4 of the parent, already specified. The adapter is written once, against `ClassedRecord`, and observed failing with splitting removed. Record boundaries are observed here, under step 3's flush policy. The header-label registry row lands with the constant. `FixedWindow` is not built. The interim framer is not copied into `shekyl-noise` |
+| 6 | Two registry exclusion rows; the standing-check gate | RT-O22 | One row for each protocol-name literal, one reason, excluded-count pin 8 → 10. Each gate is shown failing under a named edit |
 
 **Named edits, fixed now so they are not improvised later.**
 
