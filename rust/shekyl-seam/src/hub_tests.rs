@@ -727,5 +727,11 @@ fn moving_bytes_does_not_republish_the_board() {
     service(&rig, true);
     assert_eq!(rig.hub.publish_count(), opened_at);
     rig.hub.close(opened.id);
+    // The delivery was accepted, so the pump may already be back in
+    // `recv_blocking`, and `close` does not end the session's inbound
+    // channel: the connector does, by dropping its sender. This rig holds
+    // that sender, so drop it. Without this the join waits forever when
+    // the pump wins the race with `close`.
+    drop(opened);
     pump.join().expect("pump");
 }
