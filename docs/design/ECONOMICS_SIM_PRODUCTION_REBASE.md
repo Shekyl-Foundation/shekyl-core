@@ -1645,6 +1645,50 @@ blocks are not carried in. Further:
 figures, reproduced by calling its `cell`: 0.46 / 1.10 / 3.83 % short,
 117.1 / 127.1 / 155.9 draws per block, 242 blocks at the cap at 30 %.
 
+### 5.19 ESR-13 — addendum after review (2026-10-12, at `e3f2b15966`)
+
+The review of the pull request found three defects in the mode. None is in
+the model of §5.17, and §5.17 and the tables of §5.18 are left as written.
+
+**The cap column's predicate was approximate. No recorded figure changed.**
+The run counted a block as at the cap when its `(count, carry)` equalled
+the one an unbounded shortfall gives. That also holds when an uncapped
+target lands exactly on the cap (`SEB·u = 8·D·H`), where nothing was held
+down. Production now answers the question: `draw_target` in
+`shekyl-archival-retention` is the computation `draw_count` already made,
+factored out, and it returns `capped` as `D·H + SEB·u > 9·D·H`, strictly.
+`draw_count` calls it; its signature, outputs and vectors are unchanged.
+The sim asks it and holds no copy of the cap term.
+
+The evidence set was run again at `e3f2b15966`. Every field of every one
+of the 480 runs is identical to the recorded run's, the cap count
+included: 325,089 capped blocks over the set under both predicates. The
+"Blocks at the cap, per epoch" column of §5.18 stands as printed, and now
+means "blocks where the cap bound". No block of the set landed exactly on
+the cap.
+
+**Each row's timing.** §5.18's tables do not carry the inclusion latency
+or the reorg depth, and the mode's own table printed the defaults in its
+header, which ESR-11's-timing rows do not use. For the rows of §5.18:
+
+| Rows | Inclusion latency | `R` |
+| --- | --- | --- |
+| ESR-11, `f64` | none: the seed lands at its lag | none |
+| ESR-11's timing | `0..=0` | 3, never acting (`p_reorg = 0`) |
+| Bundle, honest lag and Bundle, lazy, every `M` and `p_reorg` | `1..=3` | 3 |
+
+The mode's table now prints both on every row, beside `M` and `p_reorg`,
+and its header states only what holds for every row.
+
+**Sections.** The table's sections were found by removing adjacent
+duplicates from the cells' pair counts, which is right only while the
+cells arrive grouped. They did in the recorded run, so its output had each
+section once. The sections are now an ordered set.
+
+**Time.** The second run took 350 s of wall time against 112 s, on the
+same machine at a load average near 30. The two times measure the
+machine, not the change.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
