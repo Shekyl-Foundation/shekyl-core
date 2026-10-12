@@ -45,8 +45,9 @@ use crate::nullable::Nullable;
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `CORE_RPC_VERSION_MINOR`. 3.49: `get_info`'s two connection counts are
-/// sessions on every connector, per direction, from one snapshot of the
-/// seam board (RK-Q3). They were clearnet-only, and the incoming one was a
+/// handshaken sessions on every connector, per direction, from one snapshot
+/// of the seam board (RK-Q3), so `has_peers` is true exactly when they are
+/// not both zero. They were clearnet-only, and the incoming one was a
 /// total from one store minus an outbound count from another. A shown
 /// Status with an empty `version` is refused. `get_version` gains nothing.
 /// 3.48: a `get_info` reply to a caller who is not

@@ -144,15 +144,15 @@ pub trait InfoFacts: Send + Sync {
     fn status(&self) -> Result<InfoStatusFacts, FactsFault>;
     /// Peers facts. Called only on behalf of a caller who is shown Peers.
     fn peers(&self) -> Result<InfoPeersFacts, FactsFault>;
-    /// The node's sessions, counted over one snapshot of the seam board.
-    /// Read for every caller of an online node: `handshaken` is behind
-    /// Health's `has_peers`, and Health is never withheld. Not read for a
-    /// node that [`InfoChainFacts::offline`] says is offline, which binds no
-    /// hub and has no sessions by configuration.
+    /// The node's sessions, per direction, from one snapshot of the seam
+    /// board. Read for every caller of an online node: Health's `has_peers`
+    /// is whether there is one, and Health is never withheld. Not read for
+    /// a node that [`InfoChainFacts::offline`] says is offline, which binds
+    /// no hub and has no sessions by configuration.
     ///
-    /// The two directional counts are Status members. They come from this
-    /// read and not from a second one so that a reply cannot say a node has
-    /// peers and no connections, or the reverse.
+    /// The two counts are also Status members. They and `has_peers` are
+    /// this one read and one definition of a session, so a reply cannot say
+    /// a node has peers and no connections, or the reverse.
     ///
     /// # Errors
     ///
@@ -163,17 +163,18 @@ pub trait InfoFacts: Send + Sync {
 }
 
 /// The node's p2p sessions, on every connector, from one board snapshot.
+///
+/// **A session has finished its handshake** (RK-Q4, and RK-Q3 as ruled
+/// 2026-10-12). A row before its handshake is a socket: it cannot relay,
+/// the Peers part's socket counts already report it, and an inbound one
+/// costs whoever opened it almost nothing, so counting it would let anyone
+/// inflate this node's reported connectivity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionCounts {
-    /// Sessions this node opened, handshake finished or not. A dial in
-    /// flight is a connection.
+    /// Handshaken sessions this node opened.
     pub outbound: u64,
-    /// Sessions opened to this node, handshake finished or not.
+    /// Handshaken sessions opened to this node.
     pub inbound: u64,
-    /// Sessions in either direction that have finished the handshake. A
-    /// session before its handshake cannot relay, which is what every
-    /// reader of `has_peers` is asking (RK-Q4).
-    pub handshaken: u64,
 }
 
 impl SessionCounts {
@@ -181,8 +182,15 @@ impl SessionCounts {
     pub const NONE: Self = Self {
         outbound: 0,
         inbound: 0,
-        handshaken: 0,
     };
+
+    /// Whether the node has a peer it can relay through: a session in
+    /// either direction. The one definition of `has_peers`; it is not
+    /// stored beside the counts, so it cannot disagree with them.
+    #[must_use]
+    pub const fn has_peers(self) -> bool {
+        self.outbound > 0 || self.inbound > 0
+    }
 }
 
 /// The seam board's session counts.
@@ -197,7 +205,6 @@ pub fn sessions() -> Result<SessionCounts, FactsFault> {
     let mut counts = crate::ffi::SeamSessionCountsFfi {
         outbound: u64::MAX,
         inbound: u64::MAX,
-        established: u64::MAX,
     };
     // SAFETY: `counts` is a valid, writable struct of the export's layout.
     let code = unsafe { crate::ffi::shekyl_seam_session_counts(&raw mut counts) };
@@ -213,7 +220,6 @@ fn sessions_from(
         crate::ffi::SHEKYL_SEAM_COUNT_OK => Ok(SessionCounts {
             outbound: counts.outbound,
             inbound: counts.inbound,
-            handshaken: counts.established,
         }),
         crate::ffi::SHEKYL_SEAM_COUNT_ERR_NO_HUB => Err(FactsFault::HubAbsent),
         other => Err(FactsFault::Unknown(other)),
@@ -346,34 +352,44 @@ mod tests {
             SeamSessionCountsFfi, SHEKYL_SEAM_COUNT_ERR_NO_HUB, SHEKYL_SEAM_COUNT_OK,
         };
 
-        let pod = |outbound, inbound, established| SeamSessionCountsFfi {
-            outbound,
-            inbound,
-            established,
-        };
+        let pod = |outbound, inbound| SeamSessionCountsFfi { outbound, inbound };
         assert_eq!(
-            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(0, 0, 0)),
+            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(0, 0)),
             Ok(SessionCounts::NONE)
         );
         assert_eq!(
-            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(8, 12, 7)),
+            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(8, 12)),
             Ok(SessionCounts {
                 outbound: 8,
                 inbound: 12,
-                handshaken: 7,
             }),
             "each count lands in its own member"
         );
         assert_eq!(
-            sessions_from(SHEKYL_SEAM_COUNT_ERR_NO_HUB, pod(0, 0, 0)),
+            sessions_from(SHEKYL_SEAM_COUNT_ERR_NO_HUB, pod(0, 0)),
             Err(FactsFault::HubAbsent),
             "no hub is not zero sessions, whatever the slots hold"
         );
-        assert_eq!(
-            sessions_from(-1, pod(0, 0, 0)),
-            Err(FactsFault::Unknown(-1))
-        );
-        assert_eq!(sessions_from(1, pod(3, 3, 3)), Err(FactsFault::Unknown(1)));
+        assert_eq!(sessions_from(-1, pod(0, 0)), Err(FactsFault::Unknown(-1)));
+        assert_eq!(sessions_from(1, pod(3, 3)), Err(FactsFault::Unknown(1)));
+    }
+
+    /// `has_peers` is a session in either direction, and only that.
+    #[test]
+    fn has_peers_is_a_session_in_either_direction() {
+        for (outbound, inbound, expected) in [
+            (0, 0, false),
+            (1, 0, true),
+            (0, 1, true),
+            (8, 12, true),
+            (u64::MAX, u64::MAX, true),
+        ] {
+            assert_eq!(
+                SessionCounts { outbound, inbound }.has_peers(),
+                expected,
+                "{outbound} out, {inbound} in"
+            );
+        }
     }
 
     /// The unit-test binary links no hub, and the stub that stands in for

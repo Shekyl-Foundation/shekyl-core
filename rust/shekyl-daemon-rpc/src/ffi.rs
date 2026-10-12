@@ -943,24 +943,22 @@ pub const SHEKYL_SEAM_COUNT_OK: i32 = 0;
 /// No hub is bound in this process: there are no counts, which is not zeros.
 pub const SHEKYL_SEAM_COUNT_ERR_NO_HUB: i32 = -2;
 
-/// Twin of `shekyl-ffi`'s `ShekylSeamSessionCounts`: the board's sessions
-/// counted over one snapshot. The layout is asserted on both sides.
+/// Twin of `shekyl-ffi`'s `ShekylSeamSessionCounts`: the board's handshaken
+/// sessions per direction, over one snapshot. The layout is asserted on
+/// both sides.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeamSessionCountsFfi {
-    /// Rows outbound on every connector, handshake or not.
+    /// Handshaken sessions this node opened, on every connector.
     pub outbound: u64,
-    /// Rows inbound on every connector, handshake or not.
+    /// Handshaken sessions opened to this node, on every connector.
     pub inbound: u64,
-    /// Rows that have finished the handshake, both directions.
-    pub established: u64,
 }
 
 const _: () = {
     assert!(std::mem::offset_of!(SeamSessionCountsFfi, outbound) == 0);
     assert!(std::mem::offset_of!(SeamSessionCountsFfi, inbound) == 8);
-    assert!(std::mem::offset_of!(SeamSessionCountsFfi, established) == 16);
-    assert!(std::mem::size_of::<SeamSessionCountsFfi>() == 24);
+    assert!(std::mem::size_of::<SeamSessionCountsFfi>() == 16);
 };
 
 extern "C" {

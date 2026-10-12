@@ -138,7 +138,7 @@ pub fn get_info(
     } else {
         facts.sessions()?
     };
-    let has_peers = sessions.handshaken > 0;
+    let has_peers = sessions.has_peers();
     let pool_count = facts.pool_count(if disclosure.host {
         PoolScope::All
     } else {
@@ -154,9 +154,9 @@ pub fn get_info(
             free_space: status.free_space,
             database_size: facts.store_size()?,
             version: status.version,
-            // Sessions on every connector, per direction, handshake
-            // finished or not: a dial in flight is a connection. Whether
-            // any of them can relay is `has_peers`, from the same snapshot.
+            // Handshaken sessions on every connector, per direction: the
+            // same sessions `has_peers` is about, from the same snapshot.
+            // A socket before its handshake is in Peers' socket counts.
             outgoing_connections_count: sessions.outbound,
             incoming_connections_count: sessions.inbound,
             alt_blocks_count: status.alt_blocks_count,
@@ -352,7 +352,6 @@ pub(crate) mod tests {
             sessions: SessionCounts {
                 outbound: 8,
                 inbound: 12,
-                handshaken: 20,
             },
             sessions_fault: None,
             sessions_reads: AtomicUsize::new(0),
@@ -510,28 +509,34 @@ pub(crate) mod tests {
 
     // ── RK-D14: has_peers ──────────────────────────────────────────────────
 
-    /// `has_peers` is the handshaken count compared with zero, and nothing
-    /// else moves it: not the connection counts, not the socket counts.
+    /// `has_peers` is a handshaken session in either direction, and
+    /// nothing else moves it: not the socket counts, not the peerlists.
     #[test]
     fn has_peers_is_a_handshaken_session_and_nothing_else() {
-        for (handshaken, expected) in [(0, false), (1, true), (20, true), (u64::MAX, true)] {
+        for (outbound, inbound, expected) in [
+            (0, 0, false),
+            (1, 0, true),
+            (0, 1, true),
+            (8, 12, true),
+            (u64::MAX, u64::MAX, true),
+        ] {
             let mut facts = synced_facts();
-            facts.sessions.handshaken = handshaken;
+            facts.sessions = SessionCounts { outbound, inbound };
             assert_eq!(
                 ours(&facts, Disclosure::FULL)["has_peers"],
                 serde_json::json!(expected),
-                "{handshaken} handshaken"
+                "{outbound} out, {inbound} in"
             );
         }
 
-        // Eight dials and twelve inbound sessions open, none through its
-        // handshake: twenty connections, and no peer.
+        // Sockets open in both directions and a full peerlist, with no
+        // session through its handshake: no peer.
         let mut dialing = synced_facts();
-        dialing.sessions.handshaken = 0;
+        dialing.sessions = SessionCounts::NONE;
         let reply = ours(&dialing, Disclosure::FULL);
         assert_eq!(reply["has_peers"], false);
-        assert_eq!(reply["outgoing_connections_count"], 8);
-        assert_eq!(reply["incoming_connections_count"], 12);
+        assert_eq!(reply["public_outgoing_socket_count"], 10);
+        assert_eq!(reply["white_peerlist_size"], 500);
 
         // No socket counted, one handshaken session: a peer.
         let mut facts = synced_facts();
@@ -540,32 +545,29 @@ pub(crate) mod tests {
         facts.sessions = SessionCounts {
             outbound: 1,
             inbound: 0,
-            handshaken: 1,
         };
         assert_eq!(ours(&facts, Disclosure::FULL)["has_peers"], true);
     }
 
     // ── RK-Q3: the connection counts ───────────────────────────────────────
 
-    /// **The two connection counts are the board's, per direction, and
-    /// they are written as they are read** (RK-Q3). Each direction lands in
-    /// its own member, including the cases the old arithmetic got wrong.
+    /// **The two connection counts are the board's handshaken sessions,
+    /// per direction, written as they are read** (RK-Q3). Each direction
+    /// lands in its own member, including the cases the old arithmetic got
+    /// wrong.
     ///
     /// Until 3.49 the incoming count was a clearnet total from one store
     /// minus an outbound count from another, with no common lock, as an
     /// unsigned subtraction. A total read a moment before a new outbound
     /// session and an outbound count read after it gave `7 - 8`, which the
     /// reply carried as 18446744073709551615 incoming connections. There is
-    /// no subtraction now, so the last row cannot wrap: it is two counts.
+    /// no subtraction now, so the `(8, 7)` row cannot wrap: it is two
+    /// counts.
     #[test]
     fn the_connection_counts_are_the_boards_per_direction() {
         for (outbound, inbound) in [(8, 12), (0, 0), (5, 0), (0, 5), (8, 7), (u64::MAX, 3)] {
             let mut facts = synced_facts();
-            facts.sessions = SessionCounts {
-                outbound,
-                inbound,
-                handshaken: 1,
-            };
+            facts.sessions = SessionCounts { outbound, inbound };
             let reply = ours(&facts, Disclosure::FULL);
             assert_eq!(
                 reply["outgoing_connections_count"],
@@ -575,6 +577,45 @@ pub(crate) mod tests {
                 reply["incoming_connections_count"],
                 serde_json::json!(inbound)
             );
+        }
+    }
+
+    /// **The invariant: in any reply that shows Status, `has_peers` is
+    /// exactly "the two connection counts are not both zero"** (RK-Q3 as
+    /// ruled 2026-10-12). One reply defines a connection once. The counts
+    /// are handshaken sessions, the same filter as `has_peers` (RK-Q4), so
+    /// the two cannot disagree: no `has_peers: false` beside a count, and
+    /// no `has_peers: true` beside two zeros.
+    ///
+    /// It holds for an offline node too, where all three come from
+    /// configuration and none from the board. The counts are compared
+    /// without adding them, so two large counts cannot wrap the check.
+    ///
+    /// The edit that turns this red is a count that includes a row
+    /// `has_peers` does not: a socket before its handshake, which an
+    /// outsider can open for almost nothing.
+    #[test]
+    fn has_peers_is_exactly_a_nonzero_connection_count_wherever_status_is_shown() {
+        for offline in [false, true] {
+            for (outbound, inbound) in [
+                (0, 0),
+                (1, 0),
+                (0, 1),
+                (8, 12),
+                (u64::MAX, 0),
+                (u64::MAX, u64::MAX),
+            ] {
+                let mut facts = synced_facts();
+                facts.chain.offline = offline;
+                facts.sessions = SessionCounts { outbound, inbound };
+                let reply = get_info(&facts, Disclosure::FULL, 0).expect("a full caller");
+                let status = reply.node.shown().expect("a full caller is shown Status");
+                assert_eq!(
+                    reply.health.has_peers,
+                    status.outgoing_connections_count > 0 || status.incoming_connections_count > 0,
+                    "offline {offline}, {outbound} out, {inbound} in: {status:?}"
+                );
+            }
         }
     }
 
@@ -637,7 +678,6 @@ pub(crate) mod tests {
             for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
                 let mut facts = synced_facts();
                 facts.chain.offline = true;
-                facts.sessions.handshaken = 20;
                 facts.sessions_fault = fault;
                 let reply = serde_json::to_value(
                     get_info(&facts, disclosure, 0).expect("an offline node answers"),
