@@ -137,10 +137,15 @@ opened to that address. It moves the clock forward. Contact that arrived
 inbound does not. One failed redial does not demote; the clock does.
 
 **Address validity — RULED 2026-10-11 (Rick; formerly the dialer
-brief's D2a; scope settled the same day).** An address learned from
-the network — a received peerlist or an inbound advertisement, which
-is `Source::Session` — is refused at `admit_gray` unless it is
-dialable on the public internet. Refused:
+brief's D2a; scope settled the same day; R4 2026-10-12).** An address
+learned from the network — a received peerlist or an inbound
+advertisement, which is `Source::Session` — is refused at `admit_gray`
+unless it is dialable on the public internet. **A non-global address
+in a received list refuses the whole list** (`PeerlistRefused`), the
+same rule as one foreign-connector entry (above, D7): honest nodes
+never send one, since `disclose` filters them, so the entry is
+evidence about the sender, not about one address (R4, Rick,
+2026-10-12). Refused:
 
 - IPv4: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`,
   `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, the
@@ -228,7 +233,9 @@ constant, the same on every node and every connector. It replaces
 `P2P_MAX_PEERS_IN_HANDSHAKE` (`:194`, also 250): the size this node
 sends and the most it accepts in one message. It is not tied to the
 outbound target. `white_diversity_floor` is
-`INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) times `DISCLOSE_COUNT`, 48.
+`INTERIM_WHITE_DIVERSITY_MULTIPLE` (4) times `DISCLOSE_COUNT`, 48 —
+**R5 (Rick, 2026-10-12): the floor stays 48**, which closed the dialer
+brief review's one explicit open point.
 Both are labelled `Assumption` in `DAEMON_RELAY_PRIVACY.md` §97 and
 derived on the Rust path after PR-3. *Records-was (2026-10-08):
 `disclose_count` was that connector's outbound target, `hidden_out` or
@@ -765,10 +772,12 @@ They check different things. Neither stands for the other.
      the uniform sample with the sample that leaves out current
      outbound sessions, under the observer of §5a; the results are
      recorded in §5a.
-6. **Address validity (Rick, 2026-10-11; lands with increment 3).** One
-   address from each range §2 lists, and a port-0 address of each type,
-   offered as `Source::Session` is refused by `admit_gray`; the same
-   address as `Source::Operator` is admitted; once in white it is
+6. **Address validity (Rick, 2026-10-11, R4 2026-10-12; lands with
+   increment 3).** One address from each range §2 lists, and a port-0
+   address of each type, offered as `Source::Session` is refused by
+   `admit_gray`, and a received list that carries one is refused whole
+   (`PeerlistRefused`) with none of its global entries admitted (R4);
+   the same address as `Source::Operator` is admitted; once in white it is
    absent from every `disclose` sample while a global address beside
    it is present. With `--allow-local-ip`, the `Source::Session` offer
    is admitted and the address appears in the sample. The test
