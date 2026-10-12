@@ -105,11 +105,16 @@ the fail-safe was measured at. The two targets stay separate.
 
 ## The fill
 
-One owner, one wake, one dial. The wake is the spacing of the ruling
-below, drawn per dial. The spacing has the same shape on every
-connector. The connector changes which list is drawn, not the clock.
-The 60-second housekeeping timer is not the pace. The owner does not
-block a p2p io worker.
+One owner, one wake, one dial. **The wake (R3, Rick, 2026-10-12):**
+`0.5 s + U(0, 1.0 s)`, mean 1 s — PWD-B2's bounded-uniform shape
+(`P2P_2_DISPATCH_BRIEF.md`, cadence jitter) — drawn per dial. It is
+labelled `Assumption` in `DAEMON_RELAY_PRIVACY.md` §97's "Dial wake
+spacing" row and re-measured on the Rust dialer after PR-3 (Ruling B).
+*Records-was: "the jittered spacing ruled on 2026-09-25", shape ruled
+and no number.* The spacing has the same shape on every connector.
+The connector changes which list is drawn, not the clock. The
+60-second housekeeping timer is not the pace. The owner does not block
+a p2p io worker.
 
 **The population.** A closed network (`--add-exclusive-node`) is not a
 dialer arm (Rick, 2026-10-11): an exclusive list is a network
@@ -805,9 +810,11 @@ keep the callers named below.
 **Dial timing as a fingerprint.** An observer who sees when this node
 dials can tell a fresh process from a steady one, and can tell Tor
 from clearnet if the spacing is the connector's RTT. The answer is
-the jittered spacing already ruled on 2026-09-25, drawn per dial, not
-a fixed delay and not the 60-second timer. The spacing is the same
-shape for every connector. The connector changes which list is drawn,
+the per-dial wake of `0.5 s + U(0, 1.0 s)` (R3), not a fixed delay
+and not the 60-second timer; the uniform term is what an observer
+cannot predict from the last dial, and the 0.5 s floor keeps two
+dials from landing in one RTT. The spacing is the same shape for every
+connector. The connector changes which list is drawn,
 not the clock.
 
 **Candidate-draw bias as an eclipse lever.** A draw that prefers
