@@ -488,6 +488,7 @@ stale_through = [
   { through = "edcae056fc", note = "RT-W9 step 1 review (PR #1038): SymmetricState::into_halves owns the initiator/responder key order, and the hash, HKDF and AEAD stay crate-private. The same HKDF still feeds the same two record directions; the pinned handshake vectors are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "1c42c17c21", note = "RT-W9 step 1 review (PR #1038): into_halves and Established::split are must_use. No bytes on the wire moved. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "d03aeb2e0f", note = "RT-W9 step 1 review (PR #1038): the split yields two Directions, and the length-prefixed framer stays in shekyl-p2p-transport. The same HKDF still feeds the same two record directions; the pinned handshake vectors and the post-rekey record are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "4ae7de867a", note = "RT-W9 step 2 (PR #1039): has_key is gone and the two HKDF functions are one. The two-output bytes are unchanged, and the P2P handshake still uses two outputs. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
