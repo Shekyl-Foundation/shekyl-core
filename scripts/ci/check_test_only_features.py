@@ -222,11 +222,21 @@ TEST_ONLY: dict[tuple[str, str], str] = {
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
 # A row is the declaration that the feature dies with its enabler; the feature
-# and its row land together. Empty today: the first candidate is
+# and its row land together. The shape this class was written for remains
 # `("shekyl-chain-store", "comparator-parity") → ("<the DRS-E2 comparator
 # crate>", "TxHeader.unlock_time for the LMDB txindex parity diff")`, which
 # lands only if E2 asks for the column (DRS_E1_STX.md STX-9 / STX-Q3).
-CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {}
+CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
+    (
+        "shekyl-noise",
+        "rekey-timing",
+    ): (
+        "shekyl-p2p-transport",
+        "exposes rekey_hkdf so the C5 bench can time one Noise HKDF apart from "
+        "a session (BA-I22). The derivation stays crate-private on every other "
+        "build. The bench is the one caller, and the feature dies with it",
+    ),
+}
 
 # (owning crate, feature) → why it is an ordinary, permanent feature. The third
 # category, so that a governed crate's feature table can be exhaustively

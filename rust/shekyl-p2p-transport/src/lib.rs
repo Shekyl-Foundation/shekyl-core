@@ -14,11 +14,6 @@
 //! the Noise layer's public record path. The D11 fuzz targets call those
 //! same methods. This crate stays the Noise layer.
 
-// The AEAD primitives, the symmetric state and the record layer live in
-// `shekyl-noise`, which the RPC channel shares. They are named here so that
-// this crate's modules reach them as before.
-use shekyl_noise::{aead, channel};
-
 mod noise;
 mod prefix;
 
@@ -27,7 +22,6 @@ mod prefix;
 #[doc(hidden)]
 pub mod c5_bench;
 
-pub use channel::{RecordError, RecvHalf, SendHalf};
 pub use noise::{
     Established, HandshakeError, Initiator, Responder, ResponderReady, MESSAGE1_LEN, MESSAGE2_LEN,
     PROTOCOL_NAME,
@@ -35,6 +29,7 @@ pub use noise::{
 pub use prefix::{
     network_id_from_genesis, prefix_for, NetworkId, NETWORK_ID_DST, PREFIX_LEN, WIRE_PREFIX_DST,
 };
+pub use shekyl_noise::{RecordError, RecvHalf, SendHalf};
 
 /// Wire size of the initiator's first flight, prefix included.
 pub const INITIATOR_FLIGHT_LEN: usize = PREFIX_LEN + MESSAGE1_LEN;

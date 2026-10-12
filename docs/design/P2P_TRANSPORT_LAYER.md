@@ -120,7 +120,8 @@ through `shekyl-socks`. `shekyl-p-transport` still enables ureq's
 not fire: the timing-engine round opened 2026-09-25.
 
 **What is built, and what the first commit is.** The crypto core is
-`shekyl-p2p-transport`: `noise`, `channel`, `prefix`, `aead`. HMAC is
+`shekyl-p2p-transport` (`noise`, `prefix`) and the shared record layer in
+`shekyl-noise` (`aead`, `channel`, `symmetric`). HMAC is
 `hmac_blake2s`. `read_message1` range-checks the encapsulation key and
 `ResponderReady` stores the parsed key. `OnionPow`'s default is
 `Enabled`. `InboundCeiling` is in `shekyl-peer-policy`. The timing

@@ -6,8 +6,9 @@
 //! Private entry points for the C5 bench. The numbers are a run record.
 //! They are not a budget.
 
-use crate::aead::{self, HASH_LEN};
-use crate::channel::{RecvHalf, SendHalf};
+use shekyl_noise::channel::REKEY_NONCES;
+use shekyl_noise::{rekey_hkdf, RecvHalf, SendHalf, HASH_LEN};
+
 use crate::noise::{Initiator, Responder};
 use crate::prefix::NetworkId;
 
@@ -67,15 +68,14 @@ impl Session {
 /// How many `seal_open` calls fit before either direction rekeys.
 ///
 /// Each call spends two nonces on the send half and two on the receive half.
-/// Rekey runs when a direction's nonce reaches [`crate::channel::REKEY_NONCES`].
+/// Rekey runs when a direction's nonce reaches [`REKEY_NONCES`].
 pub fn seal_opens_before_rekey() -> u64 {
-    crate::channel::REKEY_NONCES / 2
+    REKEY_NONCES / 2
 }
 
 /// One Noise HKDF: three HMAC-BLAKE2s. This is the rekey step.
 pub fn rekey_once() {
-    let ck = [1u8; HASH_LEN];
-    let key = [2u8; HASH_LEN];
-    let derived = aead::hkdf(&ck, &key);
-    std::hint::black_box(derived);
+    let chaining_key = [1u8; HASH_LEN];
+    let record_key = [2u8; HASH_LEN];
+    std::hint::black_box(rekey_hkdf(&chaining_key, &record_key));
 }

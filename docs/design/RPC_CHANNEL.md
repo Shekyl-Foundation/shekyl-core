@@ -507,7 +507,7 @@ sender — bundle or not — makes the daemon do two operations with its
    token)
    (`x25519-dalek`, constant-time by construction). A low-order `e` gives
    an all-zero result; it is refused and never mixed, as the P2P handshake
-   already does (`noise.rs:504`, `low_order_x25519_does_not_mix`). The same
+   already does (`noise.rs:435`, `low_order_x25519_does_not_mix`). The same
    refusal applies to `se` in message 3, where the key is also long-term.
 2. **ML-KEM-768 decapsulation with the static decapsulation key against an
    attacker-chosen ciphertext** — the first thing message 1 asks for, since
@@ -560,6 +560,11 @@ is needed is decided from RT-P6's measurement, not before it.
   out of every production build (RT-O16; a `TEST_ONLY` row of
   `scripts/ci/check_test_only_features.py`, the workspace's existing gate
   for features that must stay on dev-dependency edges).
+  `SymmetricState::into_halves` is the split: the initiator sends with the
+  first transport key and the responder with the second, and that choice
+  lives in this crate. The hash, HKDF and AEAD stay crate-private. The C5
+  bench times one rekey through `rekey-timing`, which only
+  `shekyl-p2p-transport`'s `c5-bench` feature enables.
 - **HTTP over records.** hyper and axum expect a byte stream; the channel
   delivers records of at most 64 KiB. A stream adapter — `AsyncRead` /
   `AsyncWrite` over seal/open, with backpressure, record splitting for

@@ -3,12 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Noise symmetric primitives shared by the handshakes and the record layer.
+//! Noise symmetric primitives for the symmetric state and the record layer.
 //!
-//! These are raw: a key and a nonce come from the caller. They are public
-//! because two crates build handshakes on them, not because they are a
-//! general-purpose API. Nothing outside a Noise handshake or this crate's
-//! record layer should call them.
+//! A key and a nonce come from the caller. These functions stay in this
+//! crate. A handshake drives [`crate::SymmetricState`] and finishes in
+//! [`crate::SymmetricState::into_halves`].
 //!
 //! HMAC-BLAKE2s is RFC 2104 over BLAKE2s-256. `hkdf` is Noise's two-output
 //! HKDF: `HMAC(ck, ikm)` then `HMAC(temp, 0x01)` and `HMAC(temp, out1 || 0x02)`.
@@ -22,7 +21,7 @@ use zeroize::Zeroizing;
 pub const HASH_LEN: usize = 32;
 pub const TAG_LEN: usize = 16;
 
-pub fn hash(data: &[u8]) -> [u8; HASH_LEN] {
+pub(crate) fn hash(data: &[u8]) -> [u8; HASH_LEN] {
     let digest = Blake2s256::digest(data);
     let mut out = [0u8; HASH_LEN];
     out.copy_from_slice(&digest);
@@ -63,7 +62,7 @@ fn hmac_blake2s(key: &[u8], data: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
 }
 
 /// Noise `HKDF(ck, ikm) -> (output1, output2)`.
-pub fn hkdf(
+pub(crate) fn hkdf(
     ck: &[u8; HASH_LEN],
     ikm: &[u8],
 ) -> (Zeroizing<[u8; HASH_LEN]>, Zeroizing<[u8; HASH_LEN]>) {
@@ -82,7 +81,7 @@ pub(crate) fn nonce(n: u64) -> Nonce {
     Nonce::from(raw)
 }
 
-pub fn seal(key: &[u8; HASH_LEN], n: u64, ad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn seal(key: &[u8; HASH_LEN], n: u64, ad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new_from_slice(key).ok()?;
     cipher
         .encrypt(
@@ -95,7 +94,7 @@ pub fn seal(key: &[u8; HASH_LEN], n: u64, ad: &[u8], plaintext: &[u8]) -> Option
         .ok()
 }
 
-pub fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new_from_slice(key).ok()?;
     cipher
         .decrypt(
@@ -106,4 +105,18 @@ pub fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -> Optio
             },
         )
         .ok()
+}
+
+/// One rekey derivation: `HKDF(chaining_key, record_key)`, three HMAC-BLAKE2s.
+///
+/// The record layer runs that same derivation when a direction's nonce
+/// reaches the rekey boundary. This function exists so the C5 bench can
+/// time it apart from a session, and only while that bench's feature is on.
+#[cfg(feature = "rekey-timing")]
+#[must_use = "the derived keys are the work the bench times"]
+pub fn rekey_hkdf(
+    chaining_key: &[u8; HASH_LEN],
+    record_key: &[u8; HASH_LEN],
+) -> (Zeroizing<[u8; HASH_LEN]>, Zeroizing<[u8; HASH_LEN]>) {
+    hkdf(chaining_key, record_key)
 }

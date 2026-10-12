@@ -13,10 +13,10 @@
 
 use zeroize::Zeroizing;
 
-use crate::aead::{self, TAG_LEN};
+use crate::aead::{self, HASH_LEN, TAG_LEN};
 
 pub const REKEY_NONCES: u64 = 1_000;
-const MAX_BODY: usize = u16::MAX as usize;
+const MAX_BODY: usize = u16::MAX as usize; // `usize::from` is not const here (E0658).
 const LENGTH_WIRE: usize = 2 + TAG_LEN;
 const LENGTH_AAD: &[u8] = b"len";
 const BODY_AAD: &[u8] = b"body";
@@ -31,13 +31,13 @@ pub enum RecordError {
 }
 
 pub(crate) struct Direction {
-    ck: Zeroizing<[u8; 32]>,
-    k: Zeroizing<[u8; 32]>,
+    ck: Zeroizing<[u8; HASH_LEN]>,
+    k: Zeroizing<[u8; HASH_LEN]>,
     n: u64,
 }
 
 impl Direction {
-    fn new(ck: Zeroizing<[u8; 32]>, k: Zeroizing<[u8; 32]>) -> Self {
+    fn new(ck: Zeroizing<[u8; HASH_LEN]>, k: Zeroizing<[u8; HASH_LEN]>) -> Self {
         Self { ck, k, n: 0 }
     }
 
@@ -47,7 +47,7 @@ impl Direction {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
+    fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
         (*self.ck, *self.k)
     }
 
@@ -88,13 +88,14 @@ pub struct RecvHalf {
 }
 
 /// Build the two halves from `Split`'s output. `send_k` seals what this
-/// side sends; `recv_k` opens what it receives.
-pub fn halves(
-    ck: Zeroizing<[u8; 32]>,
-    send_k: Zeroizing<[u8; 32]>,
-    recv_k: Zeroizing<[u8; 32]>,
+/// side sends; `recv_k` opens what it receives. Each half keeps its own
+/// chaining key, because rekey advances the two directions independently.
+pub(crate) fn halves(
+    ck: Zeroizing<[u8; HASH_LEN]>,
+    send_k: Zeroizing<[u8; HASH_LEN]>,
+    recv_k: Zeroizing<[u8; HASH_LEN]>,
 ) -> (SendHalf, RecvHalf) {
-    let recv_ck = Zeroizing::new(*ck);
+    let recv_ck = ck.clone();
     (
         SendHalf {
             dir: Direction::new(ck, send_k),
@@ -142,7 +143,7 @@ impl SendHalf {
     /// build (`scripts/ci/check_test_only_features.py`).
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
+    pub fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
         self.dir.ck_and_k()
     }
 }
@@ -178,7 +179,7 @@ impl RecvHalf {
     /// build (`scripts/ci/check_test_only_features.py`).
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn ck_and_k(&self) -> ([u8; 32], [u8; 32]) {
+    pub fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
         self.dir.ck_and_k()
     }
 }
@@ -187,8 +188,9 @@ fn seal_chunk(send: &mut Direction, chunk: &[u8], out: &mut Vec<u8>) -> Result<(
     if chunk.is_empty() || chunk.len() > MAX_BODY {
         return Err(RecordError::Oversize);
     }
-    let len = (chunk.len() as u16).to_be_bytes();
-    let len_ct = send.encrypt(&len, LENGTH_AAD)?;
+    let body_len = u16::try_from(chunk.len()).map_err(|_| RecordError::Oversize)?;
+    let len_bytes = body_len.to_be_bytes();
+    let len_ct = send.encrypt(&len_bytes, LENGTH_AAD)?;
     let body_ct = send.encrypt(chunk, BODY_AAD)?;
     out.extend_from_slice(&len_ct);
     out.extend_from_slice(&body_ct);
@@ -210,7 +212,7 @@ fn open_record(
         if len_pt.len() != 2 {
             return Err(RecordError::Decrypt);
         }
-        let body_len = u16::from_be_bytes([len_pt[0], len_pt[1]]) as usize;
+        let body_len = usize::from(u16::from_be_bytes([len_pt[0], len_pt[1]]));
         *pending_body = Some(body_len);
         body_len
     };
@@ -233,14 +235,12 @@ fn open_record(
 mod tests {
     use super::*;
 
-    /// Two ends of one session, keyed as `Split` keys them: one chaining
-    /// key, and two record keys that the two ends hold in opposite order.
-    /// Before this layer had a crate of its own these came from running the
-    /// P2P handshake; the record layer needs only the keys.
+    /// Two ends of one session: one chaining key, and two record keys the
+    /// two ends hold in opposite order. The record layer needs only the keys.
     fn pair() -> (SendHalf, RecvHalf, SendHalf, RecvHalf) {
-        let ck = || Zeroizing::new([0x51u8; 32]);
-        let first = || Zeroizing::new([0xa7u8; 32]);
-        let second = || Zeroizing::new([0x3cu8; 32]);
+        let ck = || Zeroizing::new([0x51u8; HASH_LEN]);
+        let first = || Zeroizing::new([0xa7u8; HASH_LEN]);
+        let second = || Zeroizing::new([0x3cu8; HASH_LEN]);
         let (a_send, a_recv) = halves(ck(), first(), second());
         let (b_send, b_recv) = halves(ck(), second(), first());
         (a_send, a_recv, b_send, b_recv)
