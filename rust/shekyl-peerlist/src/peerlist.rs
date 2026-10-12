@@ -12,6 +12,7 @@ use shekyl_relay_privacy::{rng::RelayRng, ConnectionId};
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{connector_for, BanList, ConnectorId};
 
+use crate::address_file::{self, AddressFileError};
 use crate::outcome::{DialOutcome, ListName, Refusal, Source, WhiteClock};
 use crate::partition::Partition;
 use crate::validity::RefusedSet;
@@ -413,6 +414,26 @@ impl Peerlist {
                 self.admit_gray(address, Source::Reload, Tick::new(0), &mut NoBans, rng) == Ok(true)
             })
             .count()
+    }
+
+    /// The address file's bytes (brief §7): [`Self::persistable`] in the
+    /// current [`crate::address_file`] format.
+    #[must_use]
+    pub fn to_file_bytes(&self) -> Vec<u8> {
+        address_file::encode(&self.persistable())
+    }
+
+    /// Reload from the address file's bytes. A file this build cannot
+    /// read is dropped whole: the error is returned and the lists are
+    /// left as they were. Returns how many addresses were admitted to
+    /// gray.
+    pub fn restore_file<R: RelayRng + ?Sized>(
+        &mut self,
+        bytes: &[u8],
+        rng: &mut R,
+    ) -> Result<usize, AddressFileError> {
+        let addresses = address_file::decode(bytes)?;
+        Ok(self.restore(addresses, rng))
     }
 
     /// Every address and which list it is on, across connectors. No

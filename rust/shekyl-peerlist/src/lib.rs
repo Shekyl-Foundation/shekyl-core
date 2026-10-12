@@ -49,6 +49,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod address_file;
 mod index;
 mod outcome;
 mod partition;
