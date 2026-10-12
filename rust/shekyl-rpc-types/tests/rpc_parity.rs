@@ -914,7 +914,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 24] = [
+    let links: [(&str, &str); 25] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1011,6 +1011,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v24.json"),
             include_str!("vectors/rpc/get_version_synced_v25.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v25.json"),
+            include_str!("vectors/rpc/get_version_synced_v26.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1029,7 +1033,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 24] = [
+    const ADDED_AT_LINK: [&[&str]; 25] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1054,6 +1058,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.46 (no target is `null`, RK-Q7; this case has a target, so its members do not move)
         &[], // 3.47 (get_info gains has_peers, RK-D14; get_version gains nothing)
         &[], // 3.48 (a restricted get_info omits Status and Peers, RK-Q8; get_version gains nothing)
+        &[], // 3.49 (get_info's connection counts come from the seam board, RK-Q3; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1065,7 +1070,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 24] = [
+    const REMOVED_AT_LINK: [&[&str]; 25] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1090,6 +1095,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.46 (nothing leaves; the side cases gain members, pinned by their own test)
         &[], // 3.47 (has_peers is get_info's; get_version retires nothing)
         &[], // 3.48 (the withheld parts are get_info's; get_version retires nothing)
+        &[], // 3.49 (no member moves on either method; the counts' source and meaning do)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -2149,6 +2155,28 @@ mod get_info {
         assert_eq!(reply.peers, Hidden::Withheld);
         assert!(matches!(reply.node, Hidden::Shown(_)));
         assert_eq!(serde_json::to_value(&reply).unwrap(), doc);
+    }
+
+    /// **An empty `version` in a shown Status is refused, not read as
+    /// "undisclosed"** (RK-D23). Until 3.48 a restricted reply wrote the
+    /// empty string there to mean it; such a reply now withholds the part.
+    /// So a shown part with an empty version is contract drift, and it is
+    /// an error that says so. The same document with the part withheld
+    /// decodes.
+    #[test]
+    fn a_shown_status_with_an_empty_version_is_refused() {
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
+        doc["version"] = "".into();
+        let refusal = decode(&doc).expect_err("an empty version is not an answer");
+        assert!(refusal.contains("empty `version`"), "got {refusal:?}");
+
+        for key in STATUS_KEYS {
+            doc.as_object_mut().unwrap().remove(key);
+        }
+        assert_eq!(
+            decode(&doc).expect("a withheld Status decodes").node,
+            Hidden::Withheld
+        );
     }
 
     /// The crate's refusal of unknown keys holds for this reply too, though

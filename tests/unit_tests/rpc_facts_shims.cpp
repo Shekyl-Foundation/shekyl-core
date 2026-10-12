@@ -1674,15 +1674,11 @@ TEST(rpc_facts_shims, info_status_reads_the_alt_block_count_and_passes_its_scala
   daemon_rpc_facts::info_status_scalars scalars{};
   scalars.start_time = 1699990000;
   scalars.free_space = 123456789012ull;
-  scalars.public_connections = 20;
-  scalars.public_outgoing_connections = 8;
   shekyl_rpc_info_status_facts facts{};
   ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::info_status(bap.bc, scalars, &facts));
   EXPECT_EQ(3u, facts.alt_blocks_count);
   EXPECT_EQ(1699990000u, facts.start_time);
   EXPECT_EQ(123456789012ull, facts.free_space);
-  EXPECT_EQ(20u, facts.public_connections);
-  EXPECT_EQ(8u, facts.public_outgoing_connections);
 }
 
 // The store's data file is named first, and it is the name that crosses: the

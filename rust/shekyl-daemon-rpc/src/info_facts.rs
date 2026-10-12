@@ -17,8 +17,8 @@
 //!   alt-block count, the two connection counts) and Peers (the socket
 //!   counts and peerlist sizes).
 //! - **Read, as for every caller:** the chain, the pool's broadcast count,
-//!   and the board's handshaken-session count, which is behind Health's
-//!   `has_peers` and is skipped only for an offline node.
+//!   and the board's session counts, which are behind Health's `has_peers`
+//!   and are skipped only for an offline node.
 //! - **Read, as a transitional exception:** the store's size on disk, one
 //!   `stat` of the data file. A restricted reply still carries
 //!   `database_size`, rounded, so the caller receives it and it is read
@@ -38,9 +38,11 @@
 //! - [`InfoFacts::store_size`] reports a size it could not read as
 //!   [`FactsFault::StoreUnreadable`], never as `0` (RK-D23). The size is
 //!   read on this side, by [`store_file_size`], for that reason.
-//! - [`InfoFacts::handshaken_sessions`] reports a p2p layer that is not up
-//!   as [`FactsFault::HubAbsent`], never as `0` sessions. It is read from
-//!   the seam board, which is Rust's, without visiting C++.
+//! - [`InfoFacts::sessions`] reports a p2p layer that is not up as
+//!   [`FactsFault::HubAbsent`], never as zero sessions. It is read from
+//!   the seam board, which is Rust's, without visiting C++, and it is
+//!   **one** snapshot: `has_peers` and the two connection counts describe
+//!   the same board.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -89,18 +91,15 @@ pub struct InfoChainFacts {
 
 /// What describes this node. Read only for a caller who is shown Status.
 ///
-/// The store's on-disk size is not here: a restricted reply still carries
-/// it, rounded, so it is its own read ([`InfoFacts::store_size`]).
+/// The store's on-disk size is not here: it is read on this side, so that
+/// a failure is a fault ([`InfoFacts::store_size`]). The connection counts
+/// are not here either: they come from the board ([`InfoFacts::sessions`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoStatusFacts {
     pub start_time: u64,
     /// Free space on the data directory's volume.
     pub free_space: u64,
     pub alt_blocks_count: u64,
-    /// The clearnet zone's sessions.
-    pub public_connections: u64,
-    /// Of which outbound.
-    pub public_outgoing_connections: u64,
     /// The build's version string.
     pub version: String,
 }
@@ -145,42 +144,77 @@ pub trait InfoFacts: Send + Sync {
     fn status(&self) -> Result<InfoStatusFacts, FactsFault>;
     /// Peers facts. Called only on behalf of a caller who is shown Peers.
     fn peers(&self) -> Result<InfoPeersFacts, FactsFault>;
-    /// Sessions that have finished the handshake, on every connector and in
-    /// both directions. Read for every caller of an online node: it is
-    /// behind Health's `has_peers`, and Health is never withheld. Not read
-    /// for a node that [`InfoChainFacts::offline`] says is offline, which
-    /// binds no hub and has no peers by configuration.
+    /// The node's sessions, counted over one snapshot of the seam board.
+    /// Read for every caller of an online node: `handshaken` is behind
+    /// Health's `has_peers`, and Health is never withheld. Not read for a
+    /// node that [`InfoChainFacts::offline`] says is offline, which binds no
+    /// hub and has no sessions by configuration.
     ///
-    /// A session before its handshake is not counted: it cannot relay,
-    /// which is what every reader of `has_peers` is asking (RK-Q4).
+    /// The two directional counts are Status members. They come from this
+    /// read and not from a second one so that a reply cannot say a node has
+    /// peers and no connections, or the reverse.
     ///
     /// # Errors
     ///
     /// [`FactsFault::HubAbsent`] when the p2p hub is not up. Zero sessions
     /// is an answer — a node with nobody to talk to — and is never returned
     /// for a hub that is not there.
-    fn handshaken_sessions(&self) -> Result<u64, FactsFault>;
+    fn sessions(&self) -> Result<SessionCounts, FactsFault>;
 }
 
-/// The seam board's handshaken-session count.
+/// The node's p2p sessions, on every connector, from one board snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionCounts {
+    /// Sessions this node opened, handshake finished or not. A dial in
+    /// flight is a connection.
+    pub outbound: u64,
+    /// Sessions opened to this node, handshake finished or not.
+    pub inbound: u64,
+    /// Sessions in either direction that have finished the handshake. A
+    /// session before its handshake cannot relay, which is what every
+    /// reader of `has_peers` is asking (RK-Q4).
+    pub handshaken: u64,
+}
+
+impl SessionCounts {
+    /// No sessions: what an offline node has, by configuration.
+    pub const NONE: Self = Self {
+        outbound: 0,
+        inbound: 0,
+        handshaken: 0,
+    };
+}
+
+/// The seam board's session counts.
 ///
 /// # Errors
 ///
 /// [`FactsFault::HubAbsent`] when no hub is bound; [`FactsFault::Unknown`]
 /// for a code the export does not document.
-pub fn handshaken_sessions() -> Result<u64, FactsFault> {
-    // A value no board can hold: if the export claimed success without
-    // writing, the answer would not pass for a small count.
-    let mut count = u64::MAX;
-    // SAFETY: `count` is a valid, writable `u64` for the call.
-    let code = unsafe { crate::ffi::shekyl_seam_established_count(&raw mut count) };
-    handshaken_from(code, count)
+pub fn sessions() -> Result<SessionCounts, FactsFault> {
+    // Values no board can hold: if the export claimed success without
+    // writing, the answer would not pass for small counts.
+    let mut counts = crate::ffi::SeamSessionCountsFfi {
+        outbound: u64::MAX,
+        inbound: u64::MAX,
+        established: u64::MAX,
+    };
+    // SAFETY: `counts` is a valid, writable struct of the export's layout.
+    let code = unsafe { crate::ffi::shekyl_seam_session_counts(&raw mut counts) };
+    sessions_from(code, counts)
 }
 
 /// What a return code of the board's count export means.
-fn handshaken_from(code: i32, count: u64) -> Result<u64, FactsFault> {
+fn sessions_from(
+    code: i32,
+    counts: crate::ffi::SeamSessionCountsFfi,
+) -> Result<SessionCounts, FactsFault> {
     match code {
-        crate::ffi::SHEKYL_SEAM_COUNT_OK => Ok(count),
+        crate::ffi::SHEKYL_SEAM_COUNT_OK => Ok(SessionCounts {
+            outbound: counts.outbound,
+            inbound: counts.inbound,
+            handshaken: counts.established,
+        }),
         crate::ffi::SHEKYL_SEAM_COUNT_ERR_NO_HUB => Err(FactsFault::HubAbsent),
         other => Err(FactsFault::Unknown(other)),
     }
@@ -267,12 +301,16 @@ impl InfoFacts for FfiInfoFacts {
 
     fn status(&self) -> Result<InfoStatusFacts, FactsFault> {
         let (pod, version) = self.core.info_status().map_err(FactsFault::from_code)?;
+        // The build always has a version. An empty one is a shim that did
+        // not write it, and the reply type refuses it on the reading side;
+        // it is a fault here and not a reply nobody could decode.
+        if version.is_empty() {
+            return Err(FactsFault::Inconsistent);
+        }
         Ok(InfoStatusFacts {
             start_time: pod.start_time,
             free_space: pod.free_space,
             alt_blocks_count: pod.alt_blocks_count,
-            public_connections: pod.public_connections,
-            public_outgoing_connections: pod.public_outgoing_connections,
             version,
         })
     }
@@ -289,8 +327,8 @@ impl InfoFacts for FfiInfoFacts {
         })
     }
 
-    fn handshaken_sessions(&self) -> Result<u64, FactsFault> {
-        handshaken_sessions()
+    fn sessions(&self) -> Result<SessionCounts, FactsFault> {
+        sessions()
     }
 }
 
@@ -304,24 +342,45 @@ mod tests {
     /// at.
     #[test]
     fn a_missing_hub_is_a_fault_and_zero_sessions_is_an_answer() {
-        use crate::ffi::{SHEKYL_SEAM_COUNT_ERR_NO_HUB, SHEKYL_SEAM_COUNT_OK};
+        use crate::ffi::{
+            SeamSessionCountsFfi, SHEKYL_SEAM_COUNT_ERR_NO_HUB, SHEKYL_SEAM_COUNT_OK,
+        };
 
-        assert_eq!(handshaken_from(SHEKYL_SEAM_COUNT_OK, 0), Ok(0));
-        assert_eq!(handshaken_from(SHEKYL_SEAM_COUNT_OK, 7), Ok(7));
+        let pod = |outbound, inbound, established| SeamSessionCountsFfi {
+            outbound,
+            inbound,
+            established,
+        };
         assert_eq!(
-            handshaken_from(SHEKYL_SEAM_COUNT_ERR_NO_HUB, 0),
-            Err(FactsFault::HubAbsent),
-            "no hub is not zero sessions, whatever the count slot holds"
+            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(0, 0, 0)),
+            Ok(SessionCounts::NONE)
         );
-        assert_eq!(handshaken_from(-1, 0), Err(FactsFault::Unknown(-1)));
-        assert_eq!(handshaken_from(1, 3), Err(FactsFault::Unknown(1)));
+        assert_eq!(
+            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(8, 12, 7)),
+            Ok(SessionCounts {
+                outbound: 8,
+                inbound: 12,
+                handshaken: 7,
+            }),
+            "each count lands in its own member"
+        );
+        assert_eq!(
+            sessions_from(SHEKYL_SEAM_COUNT_ERR_NO_HUB, pod(0, 0, 0)),
+            Err(FactsFault::HubAbsent),
+            "no hub is not zero sessions, whatever the slots hold"
+        );
+        assert_eq!(
+            sessions_from(-1, pod(0, 0, 0)),
+            Err(FactsFault::Unknown(-1))
+        );
+        assert_eq!(sessions_from(1, pod(3, 3, 3)), Err(FactsFault::Unknown(1)));
     }
 
     /// The unit-test binary links no hub, and the stub that stands in for
-    /// the export says so. The read through it is the fault, not `0`.
+    /// the export says so. The read through it is the fault, not zeros.
     #[test]
     fn the_read_with_no_hub_linked_is_the_fault() {
-        assert_eq!(handshaken_sessions(), Err(FactsFault::HubAbsent));
+        assert_eq!(sessions(), Err(FactsFault::HubAbsent));
     }
 
     /// A scratch directory under the system temp dir, removed on drop.

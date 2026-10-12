@@ -1179,8 +1179,6 @@ int info_status(cryptonote::Blockchain& bc, const info_status_scalars& scalars,
     out->alt_blocks_count = bc.get_alternative_blocks_count();
     out->start_time = scalars.start_time;
     out->free_space = scalars.free_space;
-    out->public_connections = scalars.public_connections;
-    out->public_outgoing_connections = scalars.public_outgoing_connections;
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
@@ -1360,13 +1358,10 @@ int shekyl_rpc_info_status(core_rpc_handle* h, shekyl_rpc_info_status_facts* out
   try
   {
     cryptonote::core& core = h->rpc->get_core();
-    auto& p2p = h->rpc->get_p2p();
     daemon_rpc_facts::info_status_scalars scalars{};
     scalars.start_time = static_cast<uint64_t>(core.get_start_time());
     // Throws when the volume cannot be queried; the barrier below reports it.
     scalars.free_space = core.get_free_space();
-    scalars.public_connections = p2p.get_public_connections_count();
-    scalars.public_outgoing_connections = p2p.get_public_outgoing_connections_count();
     const int rc = daemon_rpc_facts::info_status(core.get_blockchain_storage(), scalars, out);
     if (rc != SHEKYL_RPC_FACTS_OK)
       return rc;
@@ -1966,8 +1961,6 @@ void shekyl_rpc_info_status_facts_test_fill(shekyl_rpc_info_status_facts* out, u
   out->start_time = field_value(seed, 0);
   out->free_space = field_value(seed, 1);
   out->alt_blocks_count = field_value(seed, 2);
-  out->public_connections = field_value(seed, 3);
-  out->public_outgoing_connections = field_value(seed, 4);
 }
 
 int shekyl_rpc_info_status_facts_test_check(const shekyl_rpc_info_status_facts* facts, uint64_t seed)

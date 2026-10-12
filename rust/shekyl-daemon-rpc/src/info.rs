@@ -28,9 +28,10 @@
 //! not shown Status or Peers gets a reply without those parts, where it got
 //! zeros, an empty version, `u64::MAX` of free space and the store's size
 //! rounded up. It still writes what the design retires after that, each
-//! marked where it is written: the clearnet-only connection counts and
-//! their subtraction, a refused burn computation reported as zero, and a
-//! pool count whose meaning depends on the caller.
+//! marked where it is written: a refused burn computation reported as
+//! zero, and a pool count whose meaning depends on the caller. The
+//! connection counts went to the board at 3.49 (RK-Q3): every connector,
+//! one snapshot with `has_peers`, and no subtraction.
 //!
 //! **The store's size is a Status member and is read with Status.** While
 //! a restricted reply carried it rounded, it was read for every caller, so
@@ -45,7 +46,7 @@ use shekyl_rpc_types::{
     InfoPeers, InfoPool, InfoStatus, RpcStatus,
 };
 
-use crate::info_facts::{InfoFacts, PoolScope};
+use crate::info_facts::{InfoFacts, PoolScope, SessionCounts};
 use crate::methods::RpcFault;
 
 /// What a caller is shown: which parts its grants select, and whether it is
@@ -120,21 +121,24 @@ pub fn get_info(
     rpc_connections: u64,
 ) -> Result<GetInfoResponse, RpcFault> {
     let chain = facts.chain()?;
-    // Health, so read for every caller.
+    // The node's sessions, from one snapshot of the board. Health's
+    // `has_peers` needs it, and Health is every caller's, so it is read for
+    // every caller. The two connection counts in Status are the same read.
     //
     // An offline node is the one case where the board is not read. Offline
     // is configuration: the p2p layer was told not to start, so it binds no
-    // hub, and "no peers" is known without asking. That is a read avoided,
-    // not a fault mapped: the branch is on what the node was configured to
-    // be, and never on what the read returned.
+    // hub, and "no sessions" is known without asking. That is a read
+    // avoided, not a fault mapped: the branch is on what the node was
+    // configured to be, and never on what the read returned.
     //
     // Everywhere else a hub that is not up is a fault and refuses the
-    // reply: `false` would be an answer nobody gave.
-    let has_peers = if chain.offline {
-        false
+    // reply: `false` and zero would be answers nobody gave.
+    let sessions = if chain.offline {
+        SessionCounts::NONE
     } else {
-        facts.handshaken_sessions()? > 0
+        facts.sessions()?
     };
+    let has_peers = sessions.handshaken > 0;
     let pool_count = facts.pool_count(if disclosure.host {
         PoolScope::All
     } else {
@@ -150,14 +154,11 @@ pub fn get_info(
             free_space: status.free_space,
             database_size: facts.store_size()?,
             version: status.version,
-            outgoing_connections_count: status.public_outgoing_connections,
-            // Parity: the clearnet total and its outbound count are two
-            // reads of two stores with no common lock, subtracted unsigned,
-            // as the C++ handler did. RK-Q3 replaces both with per-direction
-            // counts from the one store.
-            incoming_connections_count: status
-                .public_connections
-                .wrapping_sub(status.public_outgoing_connections),
+            // Sessions on every connector, per direction, handshake
+            // finished or not: a dial in flight is a connection. Whether
+            // any of them can relay is `has_peers`, from the same snapshot.
+            outgoing_connections_count: sessions.outbound,
+            incoming_connections_count: sessions.inbound,
             alt_blocks_count: status.alt_blocks_count,
             rpc_connections_count: rpc_connections,
         })
@@ -283,9 +284,9 @@ pub(crate) mod tests {
         pub(crate) store_size: u64,
         pub(crate) status: InfoStatusFacts,
         pub(crate) peers: InfoPeersFacts,
-        pub(crate) handshaken_sessions: u64,
-        pub(crate) handshaken_fault: Option<FactsFault>,
-        pub(crate) handshaken_reads: AtomicUsize,
+        pub(crate) sessions: SessionCounts,
+        pub(crate) sessions_fault: Option<FactsFault>,
+        pub(crate) sessions_reads: AtomicUsize,
         pub(crate) chain_fault: Option<FactsFault>,
         pub(crate) pool_fault: Option<FactsFault>,
         pub(crate) store_size_fault: Option<FactsFault>,
@@ -332,8 +333,6 @@ pub(crate) mod tests {
                 start_time: 1_699_990_000,
                 free_space: 123_456_789_012,
                 alt_blocks_count: 3,
-                public_connections: 20,
-                public_outgoing_connections: 8,
                 version: "3.1.0-oracle".to_owned(),
             },
             peers: InfoPeersFacts {
@@ -350,9 +349,13 @@ pub(crate) mod tests {
             status_fault: None,
             peers_fault: None,
             // Eight outbound and twelve inbound, all handshaken.
-            handshaken_sessions: 20,
-            handshaken_fault: None,
-            handshaken_reads: AtomicUsize::new(0),
+            sessions: SessionCounts {
+                outbound: 8,
+                inbound: 12,
+                handshaken: 20,
+            },
+            sessions_fault: None,
+            sessions_reads: AtomicUsize::new(0),
             status_reads: AtomicUsize::new(0),
             peers_reads: AtomicUsize::new(0),
             store_size_reads: AtomicUsize::new(0),
@@ -392,10 +395,9 @@ pub(crate) mod tests {
             self.peers_fault.map_or(Ok(self.peers), Err)
         }
 
-        fn handshaken_sessions(&self) -> Result<u64, FactsFault> {
-            self.handshaken_reads.fetch_add(1, Ordering::Relaxed);
-            self.handshaken_fault
-                .map_or(Ok(self.handshaken_sessions), Err)
+        fn sessions(&self) -> Result<SessionCounts, FactsFault> {
+            self.sessions_reads.fetch_add(1, Ordering::Relaxed);
+            self.sessions_fault.map_or(Ok(self.sessions), Err)
         }
     }
 
@@ -468,9 +470,7 @@ pub(crate) mod tests {
         facts.chain.nettype = DaemonNetwork::Fakechain;
         facts.chain.synchronized = false;
         facts.chain.core_target_height = None;
-        facts.status.public_connections = 0;
-        facts.status.public_outgoing_connections = 0;
-        facts.handshaken_sessions = 0;
+        facts.sessions = SessionCounts::NONE;
         facts.peers.public_incoming_sockets = 0;
         facts.peers.public_outgoing_sockets = 0;
         facts.peers.tor_incoming_sockets = 0;
@@ -511,12 +511,12 @@ pub(crate) mod tests {
     // ── RK-D14: has_peers ──────────────────────────────────────────────────
 
     /// `has_peers` is the handshaken count compared with zero, and nothing
-    /// else moves it: not the Status counts, not the socket counts.
+    /// else moves it: not the connection counts, not the socket counts.
     #[test]
     fn has_peers_is_a_handshaken_session_and_nothing_else() {
         for (handshaken, expected) in [(0, false), (1, true), (20, true), (u64::MAX, true)] {
             let mut facts = synced_facts();
-            facts.handshaken_sessions = handshaken;
+            facts.sessions.handshaken = handshaken;
             assert_eq!(
                 ours(&facts, Disclosure::FULL)["has_peers"],
                 serde_json::json!(expected),
@@ -524,19 +524,83 @@ pub(crate) mod tests {
             );
         }
 
-        // Sockets and sessions open, none through its handshake: no peer.
+        // Eight dials and twelve inbound sessions open, none through its
+        // handshake: twenty connections, and no peer.
         let mut dialing = synced_facts();
-        dialing.handshaken_sessions = 0;
-        assert_eq!(ours(&dialing, Disclosure::FULL)["has_peers"], false);
+        dialing.sessions.handshaken = 0;
+        let reply = ours(&dialing, Disclosure::FULL);
+        assert_eq!(reply["has_peers"], false);
+        assert_eq!(reply["outgoing_connections_count"], 8);
+        assert_eq!(reply["incoming_connections_count"], 12);
 
-        // No Status count and no socket, one handshaken session: a peer.
+        // No socket counted, one handshaken session: a peer.
         let mut facts = synced_facts();
-        facts.status.public_connections = 0;
-        facts.status.public_outgoing_connections = 0;
         facts.peers.public_incoming_sockets = 0;
         facts.peers.public_outgoing_sockets = 0;
-        facts.handshaken_sessions = 1;
+        facts.sessions = SessionCounts {
+            outbound: 1,
+            inbound: 0,
+            handshaken: 1,
+        };
         assert_eq!(ours(&facts, Disclosure::FULL)["has_peers"], true);
+    }
+
+    // ── RK-Q3: the connection counts ───────────────────────────────────────
+
+    /// **The two connection counts are the board's, per direction, and
+    /// they are written as they are read** (RK-Q3). Each direction lands in
+    /// its own member, including the cases the old arithmetic got wrong.
+    ///
+    /// Until 3.49 the incoming count was a clearnet total from one store
+    /// minus an outbound count from another, with no common lock, as an
+    /// unsigned subtraction. A total read a moment before a new outbound
+    /// session and an outbound count read after it gave `7 - 8`, which the
+    /// reply carried as 18446744073709551615 incoming connections. There is
+    /// no subtraction now, so the last row cannot wrap: it is two counts.
+    #[test]
+    fn the_connection_counts_are_the_boards_per_direction() {
+        for (outbound, inbound) in [(8, 12), (0, 0), (5, 0), (0, 5), (8, 7), (u64::MAX, 3)] {
+            let mut facts = synced_facts();
+            facts.sessions = SessionCounts {
+                outbound,
+                inbound,
+                handshaken: 1,
+            };
+            let reply = ours(&facts, Disclosure::FULL);
+            assert_eq!(
+                reply["outgoing_connections_count"],
+                serde_json::json!(outbound)
+            );
+            assert_eq!(
+                reply["incoming_connections_count"],
+                serde_json::json!(inbound)
+            );
+        }
+    }
+
+    /// `has_peers` and the two counts are **one** read of the board, so a
+    /// full caller costs one board read, not two, and the three describe
+    /// the same snapshot.
+    #[test]
+    fn has_peers_and_the_connection_counts_are_one_board_read() {
+        let facts = synced_facts();
+        get_info(&facts, Disclosure::FULL, 0).expect("a full caller is answered");
+        assert_eq!(facts.sessions_reads.load(Ordering::Relaxed), 1);
+    }
+
+    /// An offline node shown its own Status reports zero connections in
+    /// both directions, and the board is not read. Zero is the answer
+    /// here, not a stand-in: the node was configured to have no sessions.
+    #[test]
+    fn an_offline_node_reports_zero_connections_without_reading_the_board() {
+        let mut facts = synced_facts();
+        facts.chain.offline = true;
+        facts.sessions_fault = Some(FactsFault::HubAbsent);
+        let reply = ours(&facts, Disclosure::FULL);
+        assert_eq!(reply["outgoing_connections_count"], 0);
+        assert_eq!(reply["incoming_connections_count"], 0);
+        assert_eq!(reply["has_peers"], false);
+        assert_eq!(facts.sessions_reads.load(Ordering::Relaxed), 0);
     }
 
     /// **§3.1's defect, at its source.** A restricted caller's reply does
@@ -573,8 +637,8 @@ pub(crate) mod tests {
             for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
                 let mut facts = synced_facts();
                 facts.chain.offline = true;
-                facts.handshaken_sessions = 20;
-                facts.handshaken_fault = fault;
+                facts.sessions.handshaken = 20;
+                facts.sessions_fault = fault;
                 let reply = serde_json::to_value(
                     get_info(&facts, disclosure, 0).expect("an offline node answers"),
                 )
@@ -582,7 +646,7 @@ pub(crate) mod tests {
                 assert_eq!(reply["offline"], true);
                 assert_eq!(reply["has_peers"], false);
                 assert_eq!(
-                    facts.handshaken_reads.load(Ordering::Relaxed),
+                    facts.sessions_reads.load(Ordering::Relaxed),
                     0,
                     "{disclosure:?}, fault {fault:?}: the board is not read for an offline node"
                 );
@@ -601,7 +665,7 @@ pub(crate) mod tests {
     fn a_missing_hub_refuses_every_caller() {
         let mut facts = synced_facts();
         assert!(!facts.chain.offline, "the fixture is an online node");
-        facts.handshaken_fault = Some(FactsFault::HubAbsent);
+        facts.sessions_fault = Some(FactsFault::HubAbsent);
         for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
             assert_eq!(
                 get_info(&facts, disclosure, 0),
@@ -625,7 +689,7 @@ pub(crate) mod tests {
         assert_eq!(facts.peers_reads.load(Ordering::Relaxed), 0);
         assert_eq!(facts.store_size_reads.load(Ordering::Relaxed), 0);
         assert_eq!(
-            facts.handshaken_reads.load(Ordering::Relaxed),
+            facts.sessions_reads.load(Ordering::Relaxed),
             1,
             "Health is shown to every caller, so its read is made for this one"
         );
@@ -645,7 +709,7 @@ pub(crate) mod tests {
         assert_eq!(facts.status_reads.load(Ordering::Relaxed), 1);
         assert_eq!(facts.peers_reads.load(Ordering::Relaxed), 1);
         assert_eq!(facts.store_size_reads.load(Ordering::Relaxed), 1);
-        assert_eq!(facts.handshaken_reads.load(Ordering::Relaxed), 1);
+        assert_eq!(facts.sessions_reads.load(Ordering::Relaxed), 1);
         assert_eq!(
             *facts.pool_scopes.lock().expect("scopes"),
             vec![PoolScope::All]

@@ -2483,33 +2483,43 @@ const STATUS_PART_KEYS: &[&str] = &[
     "rpc_connections_count",
 ];
 
-/// A daemon that does not disclose its version — an empty string from a
-/// restricted listener today, the whole Status part absent later — is a
-/// failure that says so, not an empty line.
+/// A daemon that does not disclose its version withholds the Status part.
+/// That is a failure that says so, not an empty line.
 #[test]
 fn version_says_when_the_daemon_does_not_disclose_it() {
-    let full: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-
-    let mut empty = full.clone();
-    empty["version"] = serde_json::json!("");
-
-    let mut withheld = full;
+    let mut withheld: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
     let members = withheld.as_object_mut().unwrap();
     for key in STATUS_PART_KEYS {
         members
             .remove(*key)
             .unwrap_or_else(|| panic!("`{key}` is a Status member of the fixture"));
     }
+    let address = route_server(vec![
+        ("json_rpc:get_version", agreeing_get_version()),
+        ("/get_info", withheld.to_string()),
+    ]);
+    let (code, out) = run(&["version"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert_eq!(out, "The daemon software version is not available.");
+}
 
-    for reply in [empty, withheld] {
-        let address = route_server(vec![
-            ("json_rpc:get_version", agreeing_get_version()),
-            ("/get_info", reply.to_string()),
-        ]);
-        let (code, out) = run(&["version"], Some(&address));
-        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-        assert_eq!(out, "The daemon software version is not available.");
-    }
+/// **An empty version is not "undisclosed"** (RK-D23). A reply that shows
+/// Status with an empty `version` is contract drift: it is refused as a
+/// malformed reply that says what is wrong with it. Until 3.48 the empty
+/// string was the restricted stand-in, and this command read it as
+/// "not available".
+#[test]
+fn version_refuses_a_shown_status_with_an_empty_version() {
+    let mut empty: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+    empty["version"] = serde_json::json!("");
+    let address = route_server(vec![
+        ("json_rpc:get_version", agreeing_get_version()),
+        ("/get_info", empty.to_string()),
+    ]);
+    let (code, out) = run(&["version"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert_ne!(out, "The daemon software version is not available.");
+    assert!(out.contains("empty `version`"), "{out}");
 }
 
 /// `print_pool_stats`, on the remote arm, with both legs: the pool's

@@ -422,8 +422,6 @@ impl CoreRpc {
             start_time: 0,
             free_space: 0,
             alt_blocks_count: 0,
-            public_connections: 0,
-            public_outgoing_connections: 0,
         };
         let mut version = [0u8; INFO_VERSION_CAP];
         let mut version_len: usize = 0;

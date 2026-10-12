@@ -140,3 +140,8 @@ fourteen keys of those two parts
 which also asserts that each removed key held its stand-in). The other
 four fixtures are full replies and have no successor.
 `get_version_synced_v25` is the chain's 3.48 link.
+
+**3.49 moved no `get_info` vector.** The two connection counts changed
+source (the seam board, every connector) and so meaning, which is why the
+version moved (RK-D8), but the fixtures hold 8 outbound and 12 inbound
+under either source. `get_version_synced_v26` is the chain's 3.49 link.

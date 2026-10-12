@@ -221,6 +221,12 @@ pub enum GetInfoShapeError {
     },
     /// Two wire names for one value disagree.
     Disagreement { value: &'static str, detail: String },
+    /// The Status part is shown and its `version` is empty. An empty
+    /// string was what a restricted reply wrote for "not disclosed" until
+    /// 3.48; a reply that does not disclose the version now withholds the
+    /// part. A shown part names the build, so an empty one is not an
+    /// answer and is not read as "undisclosed" (RK-D23).
+    EmptyVersion,
 }
 
 impl core::fmt::Display for GetInfoShapeError {
@@ -234,6 +240,10 @@ impl core::fmt::Display for GetInfoShapeError {
             Self::Disagreement { value, detail } => {
                 write!(f, "the reply's names for {value} disagree: {detail}")
             }
+            Self::EmptyVersion => f.write_str(
+                "the status part carries an empty `version`: a shown part names the build, \
+                 and a reply that does not disclose it withholds the part",
+            ),
         }
     }
 }
@@ -493,6 +503,9 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 rpc_connections_count,
             }
         );
+        if node.shown().is_some_and(|status| status.version.is_empty()) {
+            return Err(GetInfoShapeError::EmptyVersion);
+        }
         let peers = hidden_part!(
             "peers",
             [

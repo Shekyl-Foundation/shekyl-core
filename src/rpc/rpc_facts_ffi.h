@@ -526,8 +526,6 @@ typedef struct shekyl_rpc_info_status_facts {
     uint64_t start_time;
     uint64_t free_space;                   // of the data directory's volume
     uint64_t alt_blocks_count;
-    uint64_t public_connections;           // the clearnet zone's sessions
-    uint64_t public_outgoing_connections;  // of which outbound
 } shekyl_rpc_info_status_facts;
 
 // The build's version string (SHEKYL_VERSION_FULL) is written to
@@ -653,13 +651,12 @@ int info_pool_count(const cryptonote::tx_memory_pool& pool, uint8_t include_unre
     uint64_t* out) noexcept;
 
 // `get_info`'s Status facts. The alt-block count is the one chain-store read;
-// the rest are `core` and p2p scalars the adapter snapshots.
+// the rest are `core` scalars the adapter snapshots. The connection counts
+// are not here: Rust reads them from the seam board, with `has_peers`.
 struct info_status_scalars
 {
   uint64_t start_time;
   uint64_t free_space;
-  uint64_t public_connections;
-  uint64_t public_outgoing_connections;
 };
 
 int info_status(cryptonote::Blockchain& bc, const info_status_scalars& scalars,

@@ -695,10 +695,6 @@ pub struct InfoStatusFactsFfi {
     pub start_time: u64,
     pub free_space: u64,
     pub alt_blocks_count: u64,
-    /// The clearnet zone's sessions.
-    pub public_connections: u64,
-    /// Of which outbound.
-    pub public_outgoing_connections: u64,
 }
 
 /// Twin of `shekyl_rpc_info_peers_facts` (RK-5c): read only for a caller who
@@ -724,7 +720,7 @@ const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, core_target_height
 const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, synchronized) == 152);
 const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, nettype) == 156);
 const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, protocol_version) == 157);
-const _: () = assert!(std::mem::size_of::<InfoStatusFactsFfi>() == 40);
+const _: () = assert!(std::mem::size_of::<InfoStatusFactsFfi>() == 24);
 const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 48);
 
 // RK-5a layout pins. `ConnectionFactsFfi`, `SyncSpanFactsFfi` and
@@ -942,21 +938,42 @@ extern "C" {
     ) -> i32;
 }
 
-/// [`shekyl_seam_established_count`] wrote a count.
+/// [`shekyl_seam_session_counts`] wrote the counts.
 pub const SHEKYL_SEAM_COUNT_OK: i32 = 0;
-/// No hub is bound in this process: there is no count, which is not zero.
+/// No hub is bound in this process: there are no counts, which is not zeros.
 pub const SHEKYL_SEAM_COUNT_ERR_NO_HUB: i32 = -2;
 
+/// Twin of `shekyl-ffi`'s `ShekylSeamSessionCounts`: the board's sessions
+/// counted over one snapshot. The layout is asserted on both sides.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SeamSessionCountsFfi {
+    /// Rows outbound on every connector, handshake or not.
+    pub outbound: u64,
+    /// Rows inbound on every connector, handshake or not.
+    pub inbound: u64,
+    /// Rows that have finished the handshake, both directions.
+    pub established: u64,
+}
+
+const _: () = {
+    assert!(std::mem::offset_of!(SeamSessionCountsFfi, outbound) == 0);
+    assert!(std::mem::offset_of!(SeamSessionCountsFfi, inbound) == 8);
+    assert!(std::mem::offset_of!(SeamSessionCountsFfi, established) == 16);
+    assert!(std::mem::size_of::<SeamSessionCountsFfi>() == 24);
+};
+
 extern "C" {
-    /// Handshaken sessions on the seam board, every connector and both
-    /// directions, written through `out`.
+    /// The seam board's session counts, from one snapshot, written through
+    /// `out`.
     ///
     /// **Rust on both sides.** The board is `shekyl-ffi`'s (it owns the
     /// process hub), this crate does not depend on that one, and the two
     /// share the daemon's link image, so the read crosses as a C symbol
-    /// without visiting C++. The codes are restated above because the
-    /// definition cannot be imported; `shekyl-ffi`'s own test pins them.
-    pub fn shekyl_seam_established_count(out: *mut u64) -> i32;
+    /// without visiting C++. The codes and the struct are restated above
+    /// because the definitions cannot be imported; each side asserts the
+    /// layout and `shekyl-ffi`'s own test pins the codes.
+    pub fn shekyl_seam_session_counts(out: *mut SeamSessionCountsFfi) -> i32;
 }
 
 extern "C" {
@@ -1174,11 +1191,11 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_peer_list_free(_owner: *mut std::ffi::c_void) {}
-    /// "No hub here", never a count: a stub that wrote `0` would let a
+    /// "No hub here", never counts: a stub that wrote zeros would let a
     /// handler's test read a process with no p2p layer as a node with no
     /// peers, which is the answer the real export exists to refuse.
     #[no_mangle]
-    pub extern "C" fn shekyl_seam_established_count(_out: *mut u64) -> i32 {
+    pub extern "C" fn shekyl_seam_session_counts(_out: *mut SeamSessionCountsFfi) -> i32 {
         SHEKYL_SEAM_COUNT_ERR_NO_HUB
     }
     // The two constant exports have no "no core here" answer to give, and no
