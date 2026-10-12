@@ -15,6 +15,9 @@
 //! (SAL-7): alt-store membership is not a recorded-chain fact (CEN-A4), and
 //! a rule that asked would be a rule about the store's contents (C2-R8).
 //! These reads belong to the reorg's orchestration (E5) and to the RPCs.
+//! The alt tier's own view, [`super::AltView`], is a `HeaderView` stitched
+//! from these rows and the recorded chain below the fork point — and
+//! deliberately not a `ChainView` (DRS-E5 `E5-13`; `alt_view.rs`).
 //!
 //! The block is already parsed. [`AltBlock::block`] is that
 //! [`shekyl_wire::Block`]; a row that does not decode, or whose block does
@@ -73,9 +76,9 @@ pub(super) fn alt_block<T: ReadTables>(
 }
 
 /// The `block_body` belt for this table: `block.hash()` is `id`, or the
-/// row is SI-7. Insert refuses the same disagreement as
-/// [`super::error::AltCannot::IdentityMismatch`] before the row exists;
-/// this is the row that reached the file around that boundary.
+/// row is SI-7. AL1 cannot write this disagreement — it keys the row by
+/// its verdict's hash; this is the row that reached the file around that
+/// boundary.
 fn bound_to_key(id: BlockHash, block: AltBlock) -> Result<AltBlock, ReadFault> {
     if block.block().hash() == id {
         return Ok(block);

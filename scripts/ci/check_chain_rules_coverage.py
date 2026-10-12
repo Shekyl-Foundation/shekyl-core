@@ -11,10 +11,12 @@
 # registries — `CenRow` for the consensus flag, `PolicyRow` for the policy
 # flag — one variant per ENFORCED row (bucket ≠ 3) of CONSENSUS_RULE_CENSUS.md
 # §4, in census order, each marked `pending`, `implemented(path)`,
-# `enforced_at(path, "test")` or `held_by_cxx("file", "test")`. The registry is
-# the crate's claim about which rules exist, which rows this crate enforces at
-# a site other than the per-block stages, and which rows the C++ ingest driver
-# still holds; the census is
+# `enforced_at(path, "test")`, `by_construction(path, "falsifier")`,
+# `held_by_store("crate", "test")` or `held_by_cxx("file", "test")`. The
+# registry is the crate's claim about which rules exist, which rows this crate
+# enforces at a site other than the per-block stages, which rows a Rust crate
+# below the validator holds, and which rows the C++ ingest driver still holds;
+# the census is
 # the denominator that claim is measured against. Nothing else compares them, so
 # this gate does, and it is the ONLY place the crate's "N of M" figure is
 # computed (CHAIN_RULES_CRATE.md §6; CONSENSUS_C2_R8_STORE_PLACEMENT.md §9.4).
@@ -30,7 +32,8 @@
 #   grammar   — one `census_rows!` per flag, a parseable header, every entry
 #               `Var pending,`, `Var implemented(rust::path),`,
 #               `Var enforced_at(rust::path, "test_fn"),`,
-#               `Var by_construction(rust::path, "falsifier"),` or
+#               `Var by_construction(rust::path, "falsifier"),`,
+#               `Var held_by_store("crate", "test_fn"),` or
 #               `Var held_by_cxx("tests/….cpp", "gen_test"),`, no attribute
 #               on an entry (a `#[cfg]` the gate cannot evaluate would let the
 #               compiled enum and the counted enum differ);
@@ -51,6 +54,18 @@
 #               hold), printed separately, and excluded by `RuleSet::enforced`
 #               from per-block completeness (the compiler's side of the same
 #               fact);
+#   held-by-store — a `held_by_store` row (DRS_E5_POOL_ALT_PRUNE.md E5-18) is
+#               enforced by a Rust crate BELOW the validator — the store, whose
+#               alt-chain construction and write path are where the row's
+#               operand lives, and which this crate cannot import (DRS-D12 (i):
+#               the dependency runs store → rules). The entry names the crate
+#               and the `#[test]` in it that proves the holder refuses; the
+#               gate asserts the crate is a workspace crate other than this
+#               one and that a `#[test] fn <name>(` is DEFINED in its `src/`
+#               or `tests/` (rule 47). Counted as implemented (the enforcement
+#               is Rust's), printed separately, excluded from per-block
+#               completeness by `RuleSet::enforced`; unlike a C++ hold it has
+#               no expiry;
 #   G1 direct — the crate's Cargo.toml names neither `redb` nor
 #               `shekyl-chain-store` in any dependency table (the transitive
 #               half is `check_chain_rules_no_store.sh`, which needs cargo).
@@ -62,11 +77,11 @@
 # assertion), so this gate does not run cargo and does not need to.
 #
 # The held figure is a SUBTRACTION, not a third denominator: the line prints
-# `implemented I / validator-enforced (E − H)   held-by-cxx H   at-open O   by-construction B   enforced E`
+# `implemented I / validator-enforced (E − H)   held-by-cxx H   at-open O   by-construction B   held-by-store S   enforced E`
 # with E fixed, so coverage cannot improve by moving rows out of scope. `I`
-# includes the at-open and by-construction rows (Rust enforces them); `O`
-# and `B` are printed so the per-block completeness denominator,
-# `E − H − O − B`, can be read off the line.
+# includes the at-open, by-construction and held-by-store rows (Rust
+# enforces them); `O`, `B` and `S` are printed so the per-block completeness
+# denominator, `E − H − O − B − S`, can be read off the line.
 #
 # Rule 47: the gate asserts its own subject. A missing registry file, a
 # registry `lib.rs` does not compile (`mod census;` absent), a flag with no
@@ -117,20 +132,28 @@ BANNED_PACKAGES = ("redb", "shekyl-chain-store")
 INVOCATION_RE = re.compile(r"\bcensus_rows!\s*\{")
 HEADER_RE = re.compile(r"^pub\s+enum\s+([A-Z][A-Za-z0-9]*)\s*:\s*([A-Z][A-Za-z]*)\s*\{$")
 # One entry: `Var pending,`, `Var implemented(a::b::c),`,
-# `Var enforced_at(a::b::c, "test_fn"),` or
+# `Var enforced_at(a::b::c, "test_fn"),`,
+# `Var by_construction(a::b::c, "falsifier"),`,
+# `Var held_by_store("crate-name", "test_fn"),` or
 # `Var held_by_cxx("path/in/repo.cpp", "test_name"),`. The variant is the
 # census id without `CEN-` (`D1b`, `K1a`); a path is a plain Rust path; a test
-# is an identifier; the holder is a repo-relative file.
+# is an identifier; a C++ holder is a repo-relative file; a store holder is a
+# workspace crate name (`rust/<name>/`).
 _RUST_PATH = r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*"
+_CRATE_NAME = r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
 ENTRY_RE = re.compile(
     r"^(?P<var>[A-Z]+\d+[a-z]?)\s+"
     r"(?:(?P<pending>pending)"
     rf"|(?P<implemented>implemented)\(\s*(?P<impl_path>{_RUST_PATH})\s*\)"
     rf'|(?P<enforced_at>enforced_at)\(\s*(?P<site>{_RUST_PATH})\s*,\s*"(?P<proof>[A-Za-z_]\w*)"\s*\)'
-    rf'|(?P<by_construction>by_construction)\(\s*(?P<property>{_RUST_PATH})\s*,\s*"(?P<falsifier>(?:doctest:)?[A-Za-z_]\w*)"\s*\)'
+    rf'|(?P<by_construction>by_construction)\(\s*(?P<property>{_RUST_PATH})\s*,\s*"(?P<falsifier>(?:doctest:|trybuild:)?[A-Za-z_]\w*)"\s*\)'
+    rf'|(?P<held_store>held_by_store)\(\s*"(?P<krate>{_CRATE_NAME})"\s*,\s*"(?P<store_test>[A-Za-z_]\w*)"\s*\)'
     r'|(?P<held>held_by_cxx)\(\s*"(?P<file>[^"\s]+)"\s*,\s*"(?P<test>[A-Za-z_]\w*)"\s*\))'
     r"\s*,$"
 )
+# The crate whose registry this is. A `held_by_store` entry naming it is a
+# row this crate holds, and that is `enforced_at` or `by_construction`.
+THIS_CRATE = "shekyl-chain-rules"
 
 
 # A `#[test]` function definition in the crate's sources, by name. Attributes
@@ -169,10 +192,10 @@ DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 @dataclass(frozen=True)
 class Entry:
     variant: str  # "A1"
-    status: str  # "pending" | "implemented" | "enforced_at" | "by_construction" | "held_by_cxx"
+    status: str  # "pending" | "implemented" | "enforced_at" | "by_construction" | "held_by_store" | "held_by_cxx"
     path: str | None  # implemented / enforced_at: the rule type's Rust path; by_construction: the property's
     proof: str | None  # enforced_at: the `#[test]` that proves the site refuses; by_construction: the falsifier
-    holder: tuple[str, str] | None  # held_by_cxx: (repo-relative file, test name)
+    holder: tuple[str, str] | None  # held_by_cxx: (repo-relative file, test); held_by_store: (crate, test)
     line: int  # 1-based, in the registry file
 
     @property
@@ -181,8 +204,9 @@ class Entry:
 
     @property
     def implemented(self) -> bool:
-        """Rust enforces the row — per block, at another site, or by construction."""
-        return self.status in ("implemented", "enforced_at", "by_construction")
+        """Rust enforces the row — per block, at another site, by construction,
+        or in a Rust crate below the validator."""
+        return self.status in ("implemented", "enforced_at", "by_construction", "held_by_store")
 
     @property
     def at_open(self) -> bool:
@@ -191,6 +215,10 @@ class Entry:
     @property
     def by_construction(self) -> bool:
         return self.status == "by_construction"
+
+    @property
+    def held_by_store(self) -> bool:
+        return self.status == "held_by_store"
 
     @property
     def held(self) -> bool:
@@ -218,23 +246,29 @@ class Inputs:
     # The crate's Rust sources, concatenated, in which an `enforced_at` proof
     # test must be defined. `None` when the crate has no sources to read.
     crate_src: str | None = None
+    # The sources of another workspace crate, by crate name — where a
+    # `held_by_store` holder test must be defined. `None` when no such
+    # crate exists. The repo reader in production; a dict in the self-test.
+    crate_sources: Callable[[str], str | None] = lambda _name: None
 
 
 @dataclass(frozen=True)
 class Figures:
     flag: str
     registry: str
-    implemented: int  # rows Rust enforces: per block, plus the at-open rows
+    implemented: int  # rows Rust enforces: per block, plus the at-open, by-construction and held-by-store rows
     held: int  # rows the C++ ingest driver holds until cutover
     at_open: int  # rows this crate enforces outside the per-block stages
     by_construction: int  # rows that hold by construction (type system / parser), with a falsifier
-    enforced: int  # the census denominator; never moves for a hold, an at-open or a by-construction row
+    held_by_store: int  # rows a Rust crate below the validator holds, with the test that proves it
+    enforced: int  # the census denominator; never moves for a hold, an at-open, a by-construction or a store-held row
     ratified: int
     by_subsystem: dict[str, tuple[int, int, int]]  # subsystem -> (implemented, held, enforced)
     implemented_ids: tuple[str, ...]
     held_rows: tuple[tuple[str, str, str], ...]  # (id, file, test)
     at_open_rows: tuple[tuple[str, str, str], ...]  # (id, site, proof test)
     by_construction_rows: tuple[tuple[str, str, str], ...]  # (id, property, falsifier)
+    held_by_store_rows: tuple[tuple[str, str, str], ...]  # (id, crate, test)
 
     @property
     def validator_enforced(self) -> int:
@@ -242,8 +276,8 @@ class Figures:
 
     @property
     def per_block(self) -> int:
-        """What `Coverage::is_complete_for` measures against: `E − H − O − B`."""
-        return self.validator_enforced - self.at_open - self.by_construction
+        """What `Coverage::is_complete_for` measures against: `E − H − O − B − S`."""
+        return self.validator_enforced - self.at_open - self.by_construction - self.held_by_store
 
 
 # --------------------------------------------------------------------------
@@ -331,6 +365,8 @@ def _parse_one(start_line: int, body: str) -> Registry:
             status, path, proof, holder = "enforced_at", em.group("site"), em.group("proof"), None
         elif em.group("by_construction"):
             status, path, proof, holder = "by_construction", em.group("property"), em.group("falsifier"), None
+        elif em.group("held_store"):
+            status, path, proof, holder = "held_by_store", None, None, (em.group("krate"), em.group("store_test"))
         else:
             status, path, proof, holder = "held_by_cxx", None, None, (em.group("file"), em.group("test"))
         entries.append(Entry(variant=em.group("var"), status=status, path=path, proof=proof, holder=holder, line=n))
@@ -412,6 +448,7 @@ def figures(rows: list[Row], reg: Registry) -> Figures:
     held = [e for e in reg.entries if e.held and e.id in subsystem_of]
     at_open = [e for e in implemented if e.at_open]
     by_construction = [e for e in implemented if e.by_construction]
+    held_by_store = [e for e in implemented if e.held_by_store]
     by_sub: dict[str, list[int]] = {}
     for r in enforced:
         by_sub.setdefault(r.subsystem, [0, 0, 0])[2] += 1
@@ -426,6 +463,7 @@ def figures(rows: list[Row], reg: Registry) -> Figures:
         held=len(held),
         at_open=len(at_open),
         by_construction=len(by_construction),
+        held_by_store=len(held_by_store),
         enforced=len(enforced),
         ratified=sum(1 for r in enforced if r.bucket in RATIFIED_BUCKETS),
         by_subsystem={k: (v[0], v[1], v[2]) for k, v in by_sub.items()},
@@ -433,6 +471,7 @@ def figures(rows: list[Row], reg: Registry) -> Figures:
         held_rows=tuple((e.id, e.holder[0], e.holder[1]) for e in held if e.holder),
         at_open_rows=tuple((e.id, e.path or "", e.proof or "") for e in at_open),
         by_construction_rows=tuple((e.id, e.path or "", e.proof or "") for e in by_construction),
+        held_by_store_rows=tuple((e.id, e.holder[0], e.holder[1]) for e in held_by_store if e.holder),
     )
 
 
@@ -487,12 +526,17 @@ def check_by_construction(entries: list[Entry], crate_src: str | None, errors: l
     """Every `by_construction` entry names a falsifier defined in this crate.
 
     The compiler pins the property's home (`use path as _`); the falsifier is
-    the gate's to assert (rule 47): either a `#[test] fn <name>` that would
-    fail if the property lapsed, or `doctest:<item>` — a `compile_fail`
-    doctest on `fn <item>`, the shape a type-system property is falsified
-    by (CEN-F19: a verdict judged against one view cannot connect under
-    another). A row true by construction with no way to fail is a claim,
-    not a row (CHAIN_RULES_SLICE_4.md Q4).
+    the gate's to assert (rule 47): a `#[test] fn <name>` that would fail if
+    the property lapsed; or `doctest:<item>` — a `compile_fail` doctest on
+    `fn <item>`; or `trybuild:<test>` — a `#[test] fn <test>` (under the
+    crate's `tests/`, read with `src/`) whose body runs `compile_fail`
+    programs against stderr snapshots. The last is the shape a type-system
+    property is falsified by when its program carries a stub that can drift
+    (CEN-F19: a verdict judged against one view cannot connect under
+    another; its doctests were found green on E0046 from 2026-09-29 to
+    2026-10-10, the stub view having fallen behind `ChainView` —
+    CHAIN_RULES_CRATE.md §8.3). A row true by construction with no way to
+    fail is a claim, not a row (CHAIN_RULES_SLICE_4.md Q4).
     """
     rows = [e for e in entries if e.by_construction and e.proof]
     if not rows:
@@ -514,6 +558,21 @@ def check_by_construction(entries: list[Entry], crate_src: str | None, errors: l
                     f"`fn {item}` in the crate carrying a ```compile_fail doctest — a type-system "
                     "property is falsified by the program that must not compile"
                 )
+        elif falsifier.startswith("trybuild:"):
+            test = falsifier[len("trybuild:"):]
+            body = _test_body(stripped_src, test)
+            if body is None:
+                errors.append(
+                    f"by_construction entry {e.id} (line {e.line}): falsifier {falsifier!r} is not a "
+                    f"`#[test] fn {test}` defined in the crate (`src/` or `tests/`) — a trybuild "
+                    "falsifier is the test that compares the program's stderr to its snapshot"
+                )
+            elif not re.search(r"\.compile_fail\s*\(", body):
+                errors.append(
+                    f"by_construction entry {e.id} (line {e.line}): falsifier {falsifier!r} is a "
+                    f"`#[test] fn {test}` that runs no `compile_fail(…)` program — the property is "
+                    "falsified by the program that must not compile, snapshot and all"
+                )
         elif not _test_def_re(falsifier).search(stripped_src):
             errors.append(
                 f"by_construction entry {e.id} (line {e.line}): falsifier {falsifier!r} is not a "
@@ -528,7 +587,7 @@ def check_by_construction(entries: list[Entry], crate_src: str | None, errors: l
     # reads as compliant and is not; this refuses it.
     shared: dict[str, list[Entry]] = {}
     for e in rows:
-        if not (e.proof or "").startswith("doctest:"):
+        if not (e.proof or "").startswith(("doctest:", "trybuild:")):
             shared.setdefault(e.proof or "", []).append(e)
     for falsifier, served in shared.items():
         if len(served) < 2:
@@ -624,6 +683,46 @@ def check_held(entries: list[Entry], rows: list[Row], cxx: Callable[[str], str |
                 )
 
 
+def check_held_by_store(
+    entries: list[Entry], crate_sources: Callable[[str], str | None], errors: list[str]
+) -> None:
+    """Every `held_by_store` entry names a holder crate and the `#[test]` in it.
+
+    The holder is a Rust crate below the validator (DRS-D12 (i): the rules
+    crate imports no store, so the dependency runs store → rules and the
+    refusal is minted on the store's side). Nothing the compiler can pin
+    from this crate, so the gate holds the same two things it holds for a
+    C++ hold: the holder exists — a workspace crate other than this one —
+    and the named test is DEFINED in it (`#[test] fn <name>(` in its `src/`
+    or `tests/`), never merely mentioned (rule 47). A row this crate itself
+    holds is not `held_by_store`: that is `enforced_at` or `by_construction`,
+    and naming this crate here is refused.
+    """
+    for e in entries:
+        if not e.held_by_store or e.holder is None:
+            continue
+        krate, test = e.holder
+        if krate == THIS_CRATE:
+            errors.append(
+                f"held_by_store entry {e.id} (line {e.line}): holder crate {krate!r} is this "
+                "crate — a row this crate holds is enforced_at or by_construction, not held_by_store"
+            )
+            continue
+        src = crate_sources(krate)
+        if src is None:
+            errors.append(
+                f"held_by_store entry {e.id} (line {e.line}): holder crate {krate!r} is not a "
+                "workspace crate (`rust/<name>/src/`) — a store hold names the crate that refuses"
+            )
+            continue
+        if not _test_def_re(test).search(strip_comments(src, rust=True)):
+            errors.append(
+                f"held_by_store entry {e.id} (line {e.line}): holder test {test!r} is not a "
+                f"`#[test] fn` defined in {krate!r} — a store hold names the test that proves "
+                "the holder refuses"
+            )
+
+
 def check(inputs: Inputs) -> tuple[list[str], dict[str, Figures]]:
     """Mismatches between registry and census (empty when they agree), and
     the per-flag figures. Raises `Refused` when a subject is missing."""
@@ -681,6 +780,7 @@ def check(inputs: Inputs) -> tuple[list[str], dict[str, Figures]]:
     check_held(all_entries, rows, inputs.cxx, errors)
     check_at_open(all_entries, inputs.crate_src, errors)
     check_by_construction(all_entries, inputs.crate_src, errors)
+    check_held_by_store(all_entries, inputs.crate_sources, errors)
     return errors, {flag: figures(rows, reg) for flag, reg in registries.items()}
 
 
@@ -693,7 +793,7 @@ def summary(figs: dict[str, Figures]) -> str:
     w = max(
         len(str(n))
         for f in figs.values()
-        for n in (f.implemented, f.enforced, f.ratified, f.held, f.at_open, f.by_construction)
+        for n in (f.implemented, f.enforced, f.ratified, f.held, f.at_open, f.by_construction, f.held_by_store)
     )
     out = []
     for flag in sorted(figs, key=lambda f: list(FLAG_OF.values()).index(f)):
@@ -702,10 +802,11 @@ def summary(figs: dict[str, Figures]) -> str:
             f"{LABEL[flag] + ':':<11}"
             f"implemented {f.implemented:>{w}} / validator-enforced {f.validator_enforced:<{w}}   "
             f"held-by-cxx {f.held:>{w}}   at-open {f.at_open:>{w}}   by-construction {f.by_construction:>{w}}   "
+            f"held-by-store {f.held_by_store:>{w}}   "
             f"enforced {f.enforced:<{w}}   "
             f"ratified {f.ratified:>{w}} / enforced {f.enforced:<{w}}   "
             f"(E = {flag}-rows − bucket 3; validator-enforced = E − held; "
-            "per-block completeness over E − held − at-open − by-construction)"
+            "per-block completeness over E − held − at-open − by-construction − held-by-store)"
         )
     return "\n".join(out)
 
@@ -732,6 +833,10 @@ def describe(figs: dict[str, Figures]) -> str:
             out.append("  by construction (Rust-enforced by the type system / parser; falsifier named):")
             for rid, prop, falsifier in f.by_construction_rows:
                 out.append(f"    {rid}: {prop} :: {falsifier}")
+        if f.held_by_store_rows:
+            out.append("  held by store (Rust-enforced below the validator; holder crate and test named):")
+            for rid, krate, test in f.held_by_store_rows:
+                out.append(f"    {rid}: {krate} :: {test}")
     return "\n".join(out)
 
 
@@ -840,11 +945,27 @@ _CXX_UNREGISTERED = {
 }
 
 
-def _inputs(cxx: dict[str, str] | None = None, **over: str | None) -> Inputs:
+# The fake workspace a `held_by_store` entry is checked against: one crate
+# below the validator, its sources concatenated as `load` concatenates them.
+_STORE_OK = {
+    "shekyl-chain-store": (
+        "#[test]\nfn l1_held() {}\n"
+        "// l1_held_not_this in a comment\n"
+        "fn l1_mentioned_only() {}\n"
+    ),
+}
+
+
+def _inputs(
+    cxx: dict[str, str] | None = None,
+    crates: dict[str, str] | None = None,
+    **over: str | None,
+) -> Inputs:
     base = dict(census=_CENSUS_OK, registry=_REGISTRY_OK, lib=_LIB_OK, manifest=_MANIFEST_OK)
     base.update(over)
     tree = _CXX_OK if cxx is None else cxx
-    return Inputs(cxx=tree.get, **base)  # type: ignore[arg-type]
+    workspace = _STORE_OK if crates is None else crates
+    return Inputs(cxx=tree.get, crate_sources=workspace.get, **base)  # type: ignore[arg-type]
 
 
 def _expect_ok(inputs: Inputs, name: str) -> dict[str, Figures]:
@@ -891,9 +1012,9 @@ def selftest() -> None:
         raise SystemExit(f"selftest held rows: got {figs['C'].held_rows}")
     text = summary(figs)
     # E stays 5 on the line while validator-enforced reads 4: a subtraction, not a smaller denominator.
-    if "consensus: implemented 1 / validator-enforced 4   held-by-cxx 1   at-open 0   by-construction 0   enforced 5   ratified 4 / enforced 5" not in text:
+    if "consensus: implemented 1 / validator-enforced 4   held-by-cxx 1   at-open 0   by-construction 0   held-by-store 0   enforced 5   ratified 4 / enforced 5" not in text:
         raise SystemExit(f"selftest summary shape:\n{text}")
-    if "policy:    implemented 0 / validator-enforced 1   held-by-cxx 0   at-open 0   by-construction 0   enforced 1   ratified 1 / enforced 1" not in text:
+    if "policy:    implemented 0 / validator-enforced 1   held-by-cxx 0   at-open 0   by-construction 0   held-by-store 0   enforced 1   ratified 1 / enforced 1" not in text:
         raise SystemExit(f"selftest summary shape (policy):\n{text}")
     desc = describe(figs)
     if "4.A: implemented 1 / enforced 3 (held-by-cxx 1)" not in desc:
@@ -949,7 +1070,7 @@ def selftest() -> None:
         raise SystemExit(f"selftest at-open rows: {figs2['C'].at_open_rows}")
     if "CEN-L1: crate::anchors::E5 :: e5_refuses" not in describe(figs2):
         raise SystemExit("selftest describe lacks the at-open citation")
-    if "held-by-cxx 1   at-open 1   by-construction 0   enforced 5" not in summary(figs2):
+    if "held-by-cxx 1   at-open 1   by-construction 0   held-by-store 0   enforced 5" not in summary(figs2):
         raise SystemExit(f"selftest at-open summary:\n{summary(figs2)}")
     _expect_refusal(_inputs(registry=at_open_reg, crate_src="fn e5_refuses() {}\n"), "proof test 'e5_refuses' is not a `#[test] fn` defined in the crate", "at-open proof fn without #[test]")
     _expect_refusal(_inputs(registry=at_open_reg, crate_src="#[test]\nfn other() { e5_refuses(); }\n"), "proof test 'e5_refuses' is not a `#[test] fn`", "at-open proof only called, not defined")
@@ -969,7 +1090,7 @@ def selftest() -> None:
         raise SystemExit(f"selftest by-construction rows: {figs3['C'].by_construction_rows}")
     if "CEN-L1: crate::view::ChainView :: l1_falsifier" not in describe(figs3):
         raise SystemExit("selftest describe lacks the by-construction citation")
-    if "at-open 0   by-construction 1   enforced 5" not in summary(figs3):
+    if "at-open 0   by-construction 1   held-by-store 0   enforced 5" not in summary(figs3):
         raise SystemExit(f"selftest by-construction summary:\n{summary(figs3)}")
     _expect_refusal(_inputs(registry=bc_reg, crate_src="fn l1_falsifier() {}\n"), "falsifier 'l1_falsifier' is not a `#[test] fn`", "by-construction falsifier without #[test]")
     # a falsifier shared by two rows names both in its body (slice 5 Q6), or it is one test counted twice
@@ -989,8 +1110,56 @@ def selftest() -> None:
     _expect_ok(_inputs(registry=bc_doc_reg, crate_src=doc_src), "a by-construction row with a compile_fail doctest falsifier")
     _expect_refusal(_inputs(registry=bc_doc_reg, crate_src="/// ```\n/// let x = 1;\n/// ```\npub fn validate() {}\n"), "names no `fn validate` in the crate carrying a ```compile_fail doctest", "doctest falsifier whose doctest is not compile_fail")
     _expect_refusal(_inputs(registry=bc_doc_reg, crate_src="/// ```compile_fail\n/// x\n/// ```\npub fn other() {}\n\npub fn validate() {}\n"), "names no `fn validate` in the crate carrying a ```compile_fail doctest", "doctest falsifier on a different item")
+    # trybuild: — the `#[test]` that runs the compile_fail programs (CEN-F19 since 2026-10-10)
+    bc_try_reg = _REGISTRY_OK.replace("        L1 pending,\n", '        L1 by_construction(crate::view::ChainView, "trybuild:brand_holds"),\n')
+    try_src = "#[test]\nfn brand_holds() {\n    let t = trybuild::TestCases::new();\n    t.pass(\"tests/trybuild/ok.rs\");\n    t.compile_fail(\"tests/trybuild/escape.rs\");\n}\n"
+    _expect_ok(_inputs(registry=bc_try_reg, crate_src=try_src), "a by-construction row with a trybuild falsifier")
+    _expect_refusal(_inputs(registry=bc_try_reg, crate_src="fn brand_holds() {\n    t.compile_fail(\"x.rs\");\n}\n"), "is not a `#[test] fn brand_holds` defined in the crate", "trybuild falsifier without #[test]")
+    _expect_refusal(_inputs(registry=bc_try_reg, crate_src="#[test]\nfn brand_holds() {\n    let t = trybuild::TestCases::new();\n    t.pass(\"tests/trybuild/ok.rs\");\n}\n"), "runs no `compile_fail(…)` program", "trybuild falsifier that only passes")
+    _expect_refusal(_inputs(registry=bc_try_reg, crate_src="#[test]\nfn brand_holds() {\n    // t.compile_fail(\"x.rs\");\n}\n"), "runs no `compile_fail(…)` program", "trybuild compile_fail only in a comment")
     _expect_refusal(_reg("        L1 pending,\n", "        L1 by_construction(crate::view::ChainView),\n"), "unparseable entry at line 12", "by_construction without a falsifier")
     _expect_refusal(_reg("        L1 pending,\n", '        L1 enforced_at("crate::anchors::E5", "e5_refuses"),\n'), "unparseable entry at line 12", "enforced_at site quoted")
+
+    # held_by_store — the holder is a workspace crate below the validator, and
+    # the test is a definition in it (DRS_E5_POOL_ALT_PRUNE.md E5-18)
+    hs_reg = _REGISTRY_OK.replace("        L1 pending,\n", '        L1 held_by_store("shekyl-chain-store", "l1_held"),\n')
+    figs4 = _expect_ok(_inputs(registry=hs_reg), "a store-held row with its holder test")
+    if (figs4["C"].implemented, figs4["C"].held_by_store, figs4["C"].at_open, figs4["C"].by_construction, figs4["C"].validator_enforced, figs4["C"].per_block) != (2, 1, 0, 0, 4, 3):
+        raise SystemExit(f"selftest held-by-store figures: {figs4['C']}")
+    if figs4["C"].held_by_store_rows != (("CEN-L1", "shekyl-chain-store", "l1_held"),):
+        raise SystemExit(f"selftest held-by-store rows: {figs4['C'].held_by_store_rows}")
+    if "CEN-L1: shekyl-chain-store :: l1_held" not in describe(figs4):
+        raise SystemExit("selftest describe lacks the held-by-store citation")
+    if "implemented 2 / validator-enforced 4   held-by-cxx 1   at-open 0   by-construction 0   held-by-store 1   enforced 5" not in summary(figs4):
+        raise SystemExit(f"selftest held-by-store summary:\n{summary(figs4)}")
+    _expect_refusal(_inputs(registry=hs_reg, crates={}), "holder crate 'shekyl-chain-store' is not a workspace crate", "store holder crate missing")
+    _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "fn l1_held() {}\n"}), "holder test 'l1_held' is not a `#[test] fn` defined in 'shekyl-chain-store'", "store holder fn without #[test]")
+    _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "// #[test] fn l1_held() {}\n"}), "holder test 'l1_held' is not a `#[test] fn`", "store holder test only in a comment")
+    _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "#[test]\nfn other() { l1_held(); }\n"}), "holder test 'l1_held' is not a `#[test] fn`", "store holder test only called, not defined")
+    _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "#[test]\nfn l1_held_more() {}\n"}), "holder test 'l1_held' is not a `#[test] fn`", "store holder test only as a prefix of a longer name")
+    _expect_refusal(_inputs(registry=hs_reg.replace('"shekyl-chain-store"', '"shekyl-chain-rules"'), crates={"shekyl-chain-rules": "#[test]\nfn l1_held() {}\n"}), "holder crate 'shekyl-chain-rules' is this crate", "store holder is the rules crate itself")
+    _expect_refusal(_reg("        L1 pending,\n", '        L1 held_by_store("shekyl-chain-store"),\n'), "unparseable entry at line 12", "held_by_store without a test")
+    _expect_refusal(_reg("        L1 pending,\n", "        L1 held_by_store(shekyl-chain-store, l1_held),\n"), "unparseable entry at line 12", "held_by_store without quotes")
+    _expect_refusal(_reg("        L1 pending,\n", '        L1 held_by_store("rust/shekyl-chain-store", "l1_held"),\n'), "unparseable entry at line 12", "held_by_store holder is a path, not a crate name")
+    _expect_refusal(_reg("        L1 pending,\n", '        L1 held_by_store("../shekyl-chain-store", "l1_held"),\n'), "unparseable entry at line 12", "held_by_store holder escapes the workspace")
+    # the production reader: a crate name is a directory under `rust/` with
+    # a `src/`; what it reads is `src/` and `tests/`, as `load` reads this crate
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        (repo / "rust" / "a-crate" / "src").mkdir(parents=True)
+        (repo / "rust" / "a-crate" / "tests").mkdir()
+        (repo / "rust" / "a-crate" / "src" / "lib.rs").write_text("#[test]\nfn in_src() {}\n", encoding="utf-8")
+        (repo / "rust" / "a-crate" / "tests" / "it.rs").write_text("#[test]\nfn in_tests() {}\n", encoding="utf-8")
+        (repo / "rust" / "no-src").mkdir()
+        reader = crate_reader(repo)
+        text = reader("a-crate")
+        if text is None or "fn in_src" not in text or "fn in_tests" not in text:
+            raise SystemExit("selftest crate_reader: a crate's src/ and tests/ must both read")
+        if reader("no-src") is not None:
+            raise SystemExit("selftest crate_reader: a directory without src/ is not a crate")
+        if reader("absent") is not None:
+            raise SystemExit("selftest crate_reader: a missing crate is None")
+        _FIRED.append("crate_reader refusals (no src/, missing)")
 
     # a held row is still a registered row: the bijection sees it
     _expect_refusal(_reg('        A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),\n', ""), "census row CEN-A4 (flag C) missing from registry CenRow", "held row removed from the registry")
@@ -1060,16 +1229,46 @@ def load(census: Path, registry: Path, lib: Path, manifest: Path) -> Inputs:
         if not p.is_file():
             raise Refused(f"{label}: {p}")
     read = lambda p: p.read_text(encoding="utf-8")  # noqa: E731
-    src_dir = lib.parent
-    crate_src = "\n".join(read(f) for f in sorted(src_dir.rglob("*.rs"))) if src_dir.is_dir() else None
     return Inputs(
         census=read(census),
         registry=read(registry),
         lib=read(lib),
         manifest=read(manifest),
         cxx=repo_reader(REPO),
-        crate_src=crate_src,
+        crate_src=_crate_sources(lib.parent.parent),
+        crate_sources=crate_reader(REPO),
     )
+
+
+def _crate_sources(crate_dir: Path) -> str | None:
+    """A crate's Rust sources concatenated — `src/` and its integration
+    tests under `tests/` (a `trybuild:` falsifier lives there, where cargo
+    compiles it as its own target). `None` when there is no `src/`."""
+    src_dir = crate_dir / "src"
+    if not src_dir.is_dir():
+        return None
+    tests_dir = crate_dir / "tests"
+    return "\n".join(
+        f.read_text(encoding="utf-8")
+        for d in (src_dir, tests_dir)
+        if d.is_dir()
+        for f in sorted(d.rglob("*.rs"))
+    )
+
+
+def crate_reader(repo: Path) -> Callable[[str], str | None]:
+    """The production `crate_sources` reader: a workspace crate name → its
+    sources (`rust/<name>/src/` and `tests/`), or `None` when `rust/<name>/`
+    is not a crate. The name's grammar is the registry's (`_CRATE_NAME`:
+    no separator, no `..`), so the lookup cannot leave `rust/`.
+    """
+
+    def sources(name: str) -> str | None:
+        if not re.fullmatch(_CRATE_NAME, name):
+            return None
+        return _crate_sources(repo / "rust" / name)
+
+    return sources
 
 
 def repo_reader(repo: Path) -> Callable[[str], str | None]:

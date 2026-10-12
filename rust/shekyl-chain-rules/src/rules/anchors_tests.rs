@@ -120,8 +120,8 @@ fn five_blocks() -> MockChain {
 /// The identity the fixture chain recorded at `height`.
 fn hash_at(chain: &MockChain, height: u64) -> BlockHash {
     chain.with_view(
-        |view| match infallible(view.block_at(BlockHeight::from_raw(height))) {
-            AtHeight::Recorded(block) => block.hash,
+        |view| match infallible(view.header_at(BlockHeight::from_raw(height))) {
+            AtHeight::Recorded(record) => record.hash,
             AtHeight::AboveTip => panic!("fixture chain has a block at {height}"),
         },
     )
@@ -219,8 +219,8 @@ fn conflict_with_is_the_view_face_of_the_one_walk() {
         let via_view = infallible(anchors.conflict_with(&view));
         let tip = infallible(view.tip());
         let via_walk = infallible(anchors.conflict_over(tip, |height| {
-            Ok(match view.block_at(height)? {
-                AtHeight::Recorded(block) => Some(block.hash),
+            Ok(match view.header_at(height)? {
+                AtHeight::Recorded(record) => Some(record.hash),
                 AtHeight::AboveTip => None,
             })
         }));
