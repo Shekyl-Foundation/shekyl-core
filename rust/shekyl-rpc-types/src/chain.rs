@@ -44,7 +44,22 @@ use crate::nullable::Nullable;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.47: `get_info` gains `has_peers`, a boolean
+/// `CORE_RPC_VERSION_MINOR`. 3.50: `get_info`'s `tx_pool_size` is the pool
+/// entries this node has broadcast, for every caller; the entries it holds
+/// and has not yet broadcast are `tx_pool_unbroadcast_count`, a host-only
+/// part (RK-Q10). `tx_pool_size` was the broadcast set for a restricted
+/// caller and every entry for any other. `get_version` gains nothing.
+/// 3.49: `get_info`'s two connection counts are
+/// handshaken sessions on every connector, per direction, from one snapshot
+/// of the seam board (RK-Q3), so `has_peers` is true exactly when they are
+/// not both zero. They were clearnet-only, and the incoming one was a
+/// total from one store minus an outbound count from another. A shown
+/// Status with an empty `version` is refused. `get_version` gains nothing.
+/// 3.48: a `get_info` reply to a caller who is not
+/// shown Status or Peers omits those parts (RK-Q8). It carried them with
+/// stand-in values: zero counts, an empty `version`, `free_space` of
+/// `u64::MAX`, and `database_size` rounded up to 5 GiB. `get_version` gains
+/// nothing. 3.47: `get_info` gains `has_peers`, a boolean
 /// in Health that every caller is told (RK-D14): at least one handshaken
 /// session on any connector. `get_info` refuses when the p2p hub is not up,
 /// where it answered zero counts. `get_version` gains nothing. 3.46: `target_height` is the core's target, and
@@ -136,8 +151,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// chained after 3.33. 3.45 the `get_info.emission_era` deletion, written
 /// as 3.43 and chained twice, after each of those. 3.46 the nullable
 /// target on `get_info`, `get_version` and `sync_info`. 3.47
-/// `get_info.has_peers`.
-pub const CORE_RPC_VERSION_MINOR: u32 = 47;
+/// `get_info.has_peers`. 3.48 a restricted `get_info` omits Status and
+/// Peers. 3.49 its connection counts come from the seam board. 3.50 its pool
+/// count is split by broadcast state.
+pub const CORE_RPC_VERSION_MINOR: u32 = 50;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -527,11 +544,11 @@ mod tests {
         // number is not a lock.
         // 3.44 drops `hard_forks`. 3.43 was already the native shard view;
         // both branches had written 43, so the deletion took the next minor.
-        // 3.47 adds `get_info.has_peers`.
-        assert_eq!(CORE_RPC_VERSION, 196_655);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 47);
+        // 3.50 splits `get_info`'s pool count by broadcast state.
+        assert_eq!(CORE_RPC_VERSION, 196_658);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 50);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 47);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 50);
     }
 
     #[test]
