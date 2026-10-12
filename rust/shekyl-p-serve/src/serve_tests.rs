@@ -922,3 +922,65 @@ mod invariant;
 
 #[path = "serve_bench_seam_tests.rs"]
 mod bench_seam;
+
+// --- the write-stall bound measures the peer, not this task --------------
+
+/// A serving task that is not polled for longer than the stall bound — a
+/// starved task under the serving runtime's lowered priority — finds the
+/// peer has drained the socket and writes: no cut. The clock never started,
+/// because no poll ever found the socket without room.
+#[tokio::test(start_paused = true)]
+async fn a_starved_task_whose_peer_is_reading_is_not_cut() {
+    // A pipe with room for everything: writable throughout.
+    let (mut server, _client) = tokio::io::duplex(1 << 20);
+    let bytes = vec![0xabu8; 4096];
+    // Time passes before the write is ever polled.
+    tokio::time::advance(WRITE_STALL_TIMEOUT + Duration::from_secs(1)).await;
+    write_bounded(&mut server, &bytes)
+        .await
+        .expect("a writable socket is written, however late the task gets to it");
+}
+
+/// Progress clears the clock: a write that waited on the peer, then made
+/// progress, then waits again, is bounded from the second wait, not the
+/// first.
+#[tokio::test(start_paused = true)]
+async fn a_peer_that_drains_in_time_keeps_the_write_alive() {
+    let (mut server, mut client) = tokio::io::duplex(1024);
+    let bytes = vec![0xcdu8; 3 * 1024];
+    let writer = tokio::spawn(async move { write_bounded(&mut server, &bytes).await });
+    // Drain a kilobyte every twenty seconds: each wait is under the bound.
+    let mut got = Vec::new();
+    let mut buf = [0u8; 1024];
+    for _ in 0..3 {
+        tokio::time::advance(Duration::from_secs(20)).await;
+        let n = client.read(&mut buf).await.expect("read");
+        got.extend_from_slice(&buf[..n]);
+    }
+    tokio::time::advance(Duration::from_secs(20)).await;
+    while got.len() < 3 * 1024 {
+        let n = client.read(&mut buf).await.expect("read");
+        got.extend_from_slice(&buf[..n]);
+    }
+    writer
+        .await
+        .expect("join")
+        .expect("sixty seconds of draining, never thirty of waiting");
+    assert_eq!(got.len(), 3 * 1024);
+}
+
+/// A peer that stops reading is cut when the bound runs out: the clock
+/// starts at the first poll that finds no room, and the write is refused
+/// the next time it is polled after that.
+#[tokio::test(start_paused = true)]
+async fn a_peer_that_stops_reading_is_cut_at_the_stall_bound() {
+    let (mut server, _client_keeps_the_pipe_open_and_never_reads) = tokio::io::duplex(1024);
+    let bytes = vec![0xefu8; 4096];
+    let writer = tokio::spawn(async move { write_bounded(&mut server, &bytes).await });
+    tokio::time::advance(WRITE_STALL_TIMEOUT + Duration::from_millis(1)).await;
+    let err = writer
+        .await
+        .expect("join")
+        .expect_err("a peer that never drains is cut");
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+}

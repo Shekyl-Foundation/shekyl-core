@@ -169,16 +169,24 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// backstop against a peer that trickles forever, not a latency budget.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Bound on **one** write making progress into the socket.
+/// Bound on the **peer** keeping one write from making progress.
 ///
 /// [`WRITE_TIMEOUT`] alone would let a peer that simply stops reading hold
 /// its in-flight slot for ten minutes: 64 such connections, ~100 bytes
 /// each, deny every witness the persona is bonded to answer, renewed
 /// indefinitely for nothing. A peer that stalls blocks the very next chunk
 /// write, so this — not the total — is what a silent connection actually
-/// costs. It bounds *stalls*, not slowness: `write_all` returns when the
-/// kernel accepts the bytes, and the bound restarts per chunk, so a genuine
-/// slow circuit is served for as long as it keeps draining.
+/// costs. It bounds *stalls*, not slowness, and only waits the peer
+/// causes: the clock starts when a write finds the socket not writable
+/// and stops the moment a write makes progress, so a socket the peer is
+/// draining never starts it, however late this task is polled
+/// ([`write_bounded`]). The bound restarts per chunk, so a genuine slow
+/// circuit is served for as long as it keeps draining, and a serving task
+/// that is itself starved of CPU — the serving runtime runs below the
+/// daemon's priority (`SH-3`) — is not charged for its own lateness.
+/// `BA-T5` session 3 measured the earlier shape, which wrapped the whole
+/// write: two responses in 1,536 cut at 64 in flight, every one with a
+/// peer that was reading.
 const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Internal read/write granularity for the shard body.
@@ -959,12 +967,49 @@ pub fn read_and_fold_in_memory(
     }
 }
 
-/// One write, bounded by [`WRITE_STALL_TIMEOUT`] — see that constant for
-/// why the per-write bound, not the total, is what a stalled peer costs.
-async fn write_bounded<W: AsyncWrite + Unpin>(stream: &mut W, bytes: &[u8]) -> io::Result<()> {
-    tokio::time::timeout(WRITE_STALL_TIMEOUT, stream.write_all(bytes))
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write stalled"))?
+/// One whole write, with [`WRITE_STALL_TIMEOUT`] bounding only the waits
+/// the peer causes — see that constant for why the per-write bound, not
+/// the total, is what a stalled peer costs.
+///
+/// Every poll tries the write first. Progress clears the clock; a write
+/// that finds the socket not writable arms it, from that moment, and only
+/// a later poll that *again* finds no room with the clock run down is a
+/// stall. A task polled late — starved, or just scheduled late — that
+/// finds the socket writable writes and is never charged, which is what a
+/// timeout wrapped around the whole write could not promise.
+async fn write_bounded<W: AsyncWrite + Unpin>(stream: &mut W, mut bytes: &[u8]) -> io::Result<()> {
+    use std::future::{poll_fn, Future};
+    use std::pin::Pin;
+    use std::task::Poll;
+
+    // Armed by the first poll that finds no room; cleared by progress.
+    let mut stall: Option<Pin<Box<tokio::time::Sleep>>> = None;
+    while !bytes.is_empty() {
+        let written = poll_fn(|cx| match Pin::new(&mut *stream).poll_write(cx, bytes) {
+            Poll::Ready(Ok(n)) => {
+                stall = None;
+                Poll::Ready(Ok(n))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Pending => {
+                let sleep =
+                    stall.get_or_insert_with(|| Box::pin(tokio::time::sleep(WRITE_STALL_TIMEOUT)));
+                match sleep.as_mut().poll(cx) {
+                    Poll::Ready(()) => Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "response write stalled",
+                    ))),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        })
+        .await?;
+        if written == 0 {
+            return Err(io::Error::new(io::ErrorKind::WriteZero, "wrote nothing"));
+        }
+        bytes = &bytes[written..];
+    }
+    Ok(())
 }
 
 /// Read until the end of the request head (`\r\n\r\n`), bounded by

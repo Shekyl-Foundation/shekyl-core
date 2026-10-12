@@ -208,9 +208,14 @@ fn check_whole(shard_id: u64, out: &[u8]) {
         declared,
         "the body is not the length the head declares"
     );
-    assert!(
-        declared > size_of(shard_id).1 + SIGNATURE_ENVELOPE_LEN,
-        "the declared length does not cover the shard, its frame and the envelope"
+    // The body is the shard's bytes and the signature envelope, nothing
+    // more: the served frame was deleted with the unframed body (PR #1015,
+    // 2026-10-10). Sessions 1 and 2 measured the framed body, a header of a
+    // few bytes more per response.
+    assert_eq!(
+        declared,
+        size_of(shard_id).1 + SIGNATURE_ENVELOPE_LEN,
+        "the declared length is not the shard and its envelope"
     );
 }
 

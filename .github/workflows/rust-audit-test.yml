@@ -449,6 +449,21 @@ jobs:
         # bare-Rust environment passes; the differential harness asserts
         # under its own substrate-correct environment.
         run: cargo test --locked --workspace --exclude shekyl-randomx-differential
+      - name: "BA-T5 floor probe smoke: the ignored probe still serves whole responses"
+        working-directory: rust
+        # The floor probe (`shekyl-p-serve/tests/ba_t5_floor_probe.rs`) is
+        # `#[ignore]`d, so it ran nowhere and broke silently when #1015
+        # changed the body framing. One run of its smallest mode over
+        # loopback with a scratch store: two whole fetches per shard size
+        # and one isolated phase pass, a few seconds. It asserts only what
+        # the probe already asserts of itself — every response is whole and
+        # exactly the length its head declares. Not a benchmark: its numbers
+        # are a CI runner's and are discarded with the store.
+        run: |
+          store=$(mktemp -d)
+          BAT5_STORE="$store" BAT5_MODE=phase BAT5_N=2 BAT5_PHASE_N=1 BAT5_LABEL=ci \
+            cargo test --locked -p shekyl-p-serve --test ba_t5_floor_probe -- --ignored --nocapture
+          rm -rf "$store"
       - name: "shard-visual-x86-smoke"
         working-directory: rust
         # Option (c) of `docs/V3_SHARD_VISUALIZATION.md` "Where the bound is
