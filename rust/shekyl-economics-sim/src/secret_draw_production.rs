@@ -37,7 +37,7 @@
 use serde::Serialize;
 
 use shekyl_archival_retention::{
-    draw_count, draw_horizon, select_draw, CHALLENGE_RESPONSE_BLOCKS, DRAW_ATTEMPTS,
+    draw_count, draw_horizon, draw_target, select_draw, CHALLENGE_RESPONSE_BLOCKS, DRAW_ATTEMPTS,
     SETTLEMENT_EPOCH_BLOCKS,
 };
 
@@ -196,23 +196,33 @@ pub fn fate(h: u64, dropout_permille: u32, timing: &Timing, rolls: Rolls) -> Fat
     Fate::Admitted { at }
 }
 
+/// The count rule's two inputs that the run derives: `u`, the visible
+/// shortfall less what is in flight and never below zero, and the horizon.
+/// Production's functions take `u`, not the raw shortfall.
+fn rule_inputs(shortfall: u64, in_flight: u64, h: u64) -> (u64, u64) {
+    (
+        shortfall.saturating_sub(in_flight),
+        draw_horizon(h, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS),
+    )
+}
+
 /// `count(h)` and the carry it leaves, from production's rule.
-///
-/// `u` is the visible shortfall less what is in flight, never below zero;
-/// [`draw_count`] takes `u`, not the raw shortfall.
 #[must_use]
 pub fn count_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64, carry: u32) -> (u64, u32) {
-    let u = shortfall.saturating_sub(in_flight);
-    let horizon = draw_horizon(h, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS);
+    let (u, horizon) = rule_inputs(shortfall, in_flight, h);
     draw_count(u64::from(pairs), u, horizon, SETTLEMENT_EPOCH_BLOCKS, carry)
         .expect("the epoch length and the horizon are both nonzero")
 }
 
-/// Whether the count rule's target at these inputs is the capped one: the
-/// same target an unbounded shortfall gives. Asked of [`draw_count`] rather
-/// than restated.
-fn at_cap(pairs: u32, shortfall: u64, in_flight: u64, h: u64) -> bool {
-    count_at(pairs, shortfall, in_flight, h, 0) == count_at(pairs, u64::MAX, 0, h, 0)
+/// Whether the cap bound at these inputs: production's answer
+/// ([`draw_target`]), which is `D·H + SEB·u > 9·D·H`. A target that lands
+/// exactly on the cap is not capped. The sim keeps no copy of the cap.
+#[must_use]
+pub fn capped_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64) -> bool {
+    let (u, horizon) = rule_inputs(shortfall, in_flight, h);
+    draw_target(u64::from(pairs), u, horizon, SETTLEMENT_EPOCH_BLOCKS)
+        .expect("the epoch length and the horizon are both nonzero")
+        .capped
 }
 
 /// The issued counts every block can see.
@@ -291,7 +301,7 @@ pub struct ProductionRun {
     pub issued_hist: [u32; 4],
     /// Largest per-block draw count in the epoch.
     pub max_per_block: u64,
-    /// Blocks whose target was the capped one.
+    /// Blocks where the cap bound, by production's [`draw_target`].
     pub blocks_at_cap: u64,
     /// Issued draws answered by pairs that ended short.
     pub unpaid_reads: u64,
@@ -445,7 +455,7 @@ pub fn run_epoch_observed(
 
         let shortfall = visible.shortfall;
         let (count, carry_out) = count_at(pairs, shortfall, in_flight, h, carry);
-        run.blocks_at_cap += u64::from(at_cap(pairs, shortfall, in_flight, h));
+        run.blocks_at_cap += u64::from(capped_at(pairs, shortfall, in_flight, h));
 
         // ESR-11's rule on the same inputs, with its own carry.
         let (target, _) = secret_draw::block_target(pairs, shortfall, in_flight, h);
@@ -571,7 +581,7 @@ pub struct Cell {
     /// Draws per block: mean over seeds, and the largest single block.
     pub mean_per_block: f64,
     pub max_per_block: u64,
-    /// Blocks at the cap, summed over seeds.
+    /// Blocks where the cap bound, summed over seeds.
     pub blocks_at_cap: u64,
     /// Share of blocks by fate, per-mille, over all seeds:
     /// `[admitted, never filed, late, lost]`.
@@ -751,17 +761,19 @@ fn render_header(out: &mut impl std::fmt::Write) -> std::fmt::Result {
         out,
         "secret draw on production's count and selection (ESR-13): \
          SEB={SETTLEMENT_EPOCH_BLOCKS} W2={CHALLENGE_RESPONSE_BLOCKS} counted={COUNTED_DRAWS} \
-         attempts<={DRAW_ATTEMPTS} seeds={SEEDS} latency={}..={} R={DEFAULT_REORG_DEPTH}",
-        DEFAULT_LATENCY.0, DEFAULT_LATENCY.1
+         attempts<={DRAW_ATTEMPTS} seeds={SEEDS}; each row carries its own M, latency, R and \
+         p_reorg"
     )?;
     writeln!(
         out,
-        "{:>7} {:<19} {:>4} {:>3} {:>5} | {:>22} {:>4} | {:>6} {:>6} {:>9} {:>5} {:>7} | {:>6} {:>6} | \
+        "{:>7} {:<19} {:>4} {:>3} {:>6} {:>2} {:>5} | {:>22} {:>4} | {:>6} {:>6} {:>9} {:>5} {:>7} | {:>6} {:>6} | \
          {:>6} {:>6} {:>5} {:>5} | {:>6} {:>4} {:>5} | {:>6} {:>5}",
         "D",
         "arm",
         "drop",
         "M",
+        "lat",
+        "R",
         "p_re",
         "short % mean/min/max",
         ">bar",
@@ -769,7 +781,7 @@ fn render_header(out: &mut impl std::fmt::Write) -> std::fmt::Result {
         "iss/pr",
         "draws/blk",
         "max",
-        "at cap",
+        "capped",
         "obs",
         "epochs",
         "adm %",
@@ -791,11 +803,13 @@ fn render_reference_row(out: &mut impl std::fmt::Write, c: &secret_draw::Cell) -
         / (c.runs.len() as f64 * f64::from(c.pairs));
     writeln!(
         out,
-        "{:>7} {:<19} {:>3}% {:>3} {:>5} | {:>6.2} {:>6.2} {:>6.2}    {:>4} | {:>6.3} {:>6.3} {:>9.2} {:>5} {:>7} | {:>6.4} {:>6.2} | \
+        "{:>7} {:<19} {:>3}% {:>3} {:>6} {:>2} {:>5} | {:>6.2} {:>6.2} {:>6.2}    {:>4} | {:>6.3} {:>6.3} {:>9.2} {:>5} {:>7} | {:>6.4} {:>6.2} | \
          {:>6} {:>6} {:>5} {:>5} | {:>6} {:>4} {:>5} | {:>6} {:>5}",
         c.pairs,
         "ESR-11 f64",
         c.dropout_permille / 10,
+        "-",
+        "-",
         "-",
         "-",
         c.short_permille[0] / 10.0,
@@ -825,12 +839,14 @@ fn render_row(out: &mut impl std::fmt::Write, c: &Cell) -> std::fmt::Result {
     let w = secret_draw::window_check(c.short_permille[0]);
     writeln!(
         out,
-        "{:>7} {:<19} {:>3}% {:>3} {:>5.2} | {:>6.2} {:>6.2} {:>6.2}    {:>4} | {:>6.3} {:>6.3} {:>9.2} {:>5} {:>7} | {:>6.4} {:>6.2} | \
+        "{:>7} {:<19} {:>3}% {:>3} {:>6} {:>2} {:>5.2} | {:>6.2} {:>6.2} {:>6.2}    {:>4} | {:>6.3} {:>6.3} {:>9.2} {:>5} {:>7} | {:>6.4} {:>6.2} | \
          {:>6.2} {:>6.2} {:>5.2} {:>5.2} | {:>6.2} {:>4} {:>5} | {:>6} {:>5}",
         c.spec.pairs,
         c.spec.timing.label(),
         c.spec.dropout_permille / 10,
         c.spec.timing.margin,
+        format!("{}..={}", c.spec.timing.latency.0, c.spec.timing.latency.1),
+        c.spec.timing.reorg_depth,
         f64::from(c.spec.timing.reorg_permille) / 1000.0,
         c.short_permille[0] / 10.0,
         c.short_permille[1] / 10.0,
@@ -871,8 +887,15 @@ pub fn render_cell(out: &mut impl std::fmt::Write, c: &Cell) -> std::fmt::Result
 /// The sink's.
 pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::fmt::Result {
     render_header(out)?;
-    let mut pair_counts: Vec<u32> = report.cells.iter().map(|c| c.spec.pairs).collect();
-    pair_counts.dedup();
+    // One section per pair count, ascending, whatever order the cells are
+    // in. A reference cell with no cell of this arm at its pair count gets
+    // a section too.
+    let pair_counts: std::collections::BTreeSet<u32> = report
+        .cells
+        .iter()
+        .map(|c| c.spec.pairs)
+        .chain(report.reference.iter().map(|c| c.pairs))
+        .collect();
     for pairs in pair_counts {
         for c in report.reference.iter().filter(|c| c.pairs == pairs) {
             render_reference_row(out, c)?;
@@ -883,8 +906,9 @@ pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::f
     }
     writeln!(
         out,
-        "columns: drn/pr, iss/pr = draws per pair made, issued; at cap = blocks whose target was \
-         the capped one, over all seeds; obs = 1 - short; epochs = epochs to m misses for a pair \
+        "columns: M = margin in blocks; lat = inclusion latency, uniform on the range; R = reorg \
+         depth; p_re = p_reorg; drn/pr, iss/pr = draws per pair made, issued; capped = blocks \
+         where the cap bound (D*H + SEB*u > 9*D*H, production's draw_target), over all seeds; obs = 1 - short; epochs = epochs to m misses for a pair \
          that never serves; adm/never/late/lost = where the blocks' bundles went; att/dr, max, \
          last = select_draw attempts per draw, the most, and draws that reached attempt \
          {DRAW_ATTEMPTS}; f64blk, f64dr = blocks where ESR-11's f64 rule gives another count on \
@@ -994,8 +1018,18 @@ mod tests {
         assert_eq!(count_at(10_000, 1_750, 0, 0, 0), (1, 1 << 30));
         // u = 30,000 over H = 200 is 150 a block: capped at 9 x D/SEB.
         assert_eq!(count_at(10_000, 30_000, 0, 6_900, 0), (9, 0));
-        assert!(at_cap(10_000, 30_000, 0, 6_900));
-        assert!(!at_cap(10_000, 1_750, 0, 0));
+        assert!(capped_at(10_000, 30_000, 0, 6_900));
+        assert!(!capped_at(10_000, 1_750, 0, 0));
+        // At H = 200 the two sides of the cap meet at u = 1,600
+        // (2,000,000 + 10,000 u against 18,000,000). The count is nine on
+        // both sides of it; only above it was anything held down. In flight
+        // comes off first: 2,000 short with 400 in flight is u = 1,600.
+        assert_eq!(count_at(10_000, 1_600, 0, 6_900, 0), (9, 0));
+        assert_eq!(count_at(10_000, 1_601, 0, 6_900, 0), (9, 0));
+        assert!(!capped_at(10_000, 1_600, 0, 6_900));
+        assert!(capped_at(10_000, 1_601, 0, 6_900));
+        assert!(!capped_at(10_000, 2_000, 400, 6_900));
+        assert!(capped_at(10_000, 2_001, 400, 6_900));
         // The function is production's, argument for argument.
         assert_eq!(
             count_at(4_096, 9_000, 1_234, 4_321, 77),
@@ -1440,10 +1474,17 @@ mod tests {
         assert_eq!(bar_holds(&cells), Some(false));
     }
 
-    /// Bites against: a row or the reference dropped from the table.
+    /// Bites against: a row or the reference dropped from the table, a
+    /// row printed without its own latency and reorg depth, and a header
+    /// that states a timing some row does not have.
     /// Does NOT cover: any figure in it.
     #[test]
-    fn the_table_prints_the_reference_beside_each_arm() {
+    fn the_table_prints_the_reference_beside_each_arm_and_each_row_s_own_timing() {
+        let unusual = Timing {
+            latency: (2, 5),
+            reorg_depth: 7,
+            ..Timing::bundle(HONEST_MARGIN_BLOCKS, Lag::Honest, 100)
+        };
         let specs = [
             CellSpec {
                 group: Group::Esr11Timing,
@@ -1456,6 +1497,12 @@ mod tests {
                 pairs: D,
                 dropout_permille: 100,
                 timing: Timing::bundle(HONEST_MARGIN_BLOCKS, Lag::Lazy, 100),
+            },
+            CellSpec {
+                group: Group::Grid,
+                pairs: D,
+                dropout_permille: 100,
+                timing: unusual,
             },
         ];
         let report = Report {
@@ -1474,9 +1521,85 @@ mod tests {
         ] {
             assert!(out.contains(needle), "missing {needle:?} in:\n{out}");
         }
-        let mut row = String::new();
-        render_cell(&mut row, &report.cells[0]).expect("String sink is infallible");
-        assert!(out.contains(&row));
+        let row_of = |c: &Cell| {
+            let mut row = String::new();
+            render_cell(&mut row, c).expect("String sink is infallible");
+            row
+        };
+        // Columns after the dropout: M, latency, R, p_reorg.
+        let rows: Vec<String> = report.cells.iter().map(row_of).collect();
+        assert!(rows[0].contains("10%   0  0..=0  3  0.00 |"), "{}", rows[0]);
+        assert!(rows[1].contains("10%  30  1..=3  3  0.10 |"), "{}", rows[1]);
+        assert!(rows[2].contains("10%  30  2..=5  7  0.10 |"), "{}", rows[2]);
+        for row in &rows {
+            assert_eq!(out.matches(row.as_str()).count(), 1, "{row}");
+        }
+        // The first line says only what holds for every row.
+        let first = out.lines().next().expect("a header");
+        assert!(
+            !first.contains("latency=") && !first.contains("R="),
+            "{first}"
+        );
+        assert!(!first.contains("1..=3"), "{first}");
         assert!(evidence_json(&report).contains("\"f64_differing_blocks\""));
+    }
+
+    /// Bites against: sections found by `dedup` on the cells' order (the
+    /// interleaved report below would print each pair count's section
+    /// twice, with its reference rows twice), and a pair count dropped.
+    /// Does NOT cover: any figure in a row.
+    #[test]
+    fn each_pair_count_is_one_section_whatever_order_the_cells_are_in() {
+        let spec = |pairs, dropout_permille| CellSpec {
+            group: Group::Grid,
+            pairs,
+            dropout_permille,
+            timing: bar_timing(),
+        };
+        // 64, 16, 64, 16: no two neighbours share a pair count.
+        let report = Report {
+            reference: vec![
+                secret_draw::cell(64, 100, InFlight::Unrevealed),
+                secret_draw::cell(16, 100, InFlight::Unrevealed),
+            ],
+            cells: [spec(64, 0), spec(16, 0), spec(64, 300), spec(16, 300)]
+                .into_iter()
+                .map(cell)
+                .collect(),
+        };
+        let mut out = String::new();
+        render_summary(&mut out, &report).expect("String sink is infallible");
+        // The table's rows: after the two header lines, up to the legend.
+        let pairs_column: Vec<u32> = out
+            .lines()
+            .skip(2)
+            .take_while(|line| !line.starts_with("columns:"))
+            .map(|line| {
+                line.split_whitespace()
+                    .next()
+                    .and_then(|d| d.parse().ok())
+                    .unwrap_or_else(|| panic!("a row starts with its pair count: {line}"))
+            })
+            .collect();
+        // One section each, ascending: the reference row, then the cells.
+        assert_eq!(pairs_column, [16, 16, 16, 64, 64, 64], "{out}");
+        let rows: Vec<&str> = out.lines().skip(2).take(6).collect();
+        for (at, row) in rows.iter().enumerate() {
+            assert_eq!(
+                row.contains("ESR-11 f64"),
+                at % 3 == 0,
+                "the reference opens each section: {row}"
+            );
+            assert_eq!(out.matches(row).count(), 1, "printed once: {row}");
+        }
+        // Within a section the cells keep the order they were given in.
+        assert!(
+            rows[1].contains("  0%") && rows[2].contains(" 30%"),
+            "{out}"
+        );
+        assert!(
+            rows[4].contains("  0%") && rows[5].contains(" 30%"),
+            "{out}"
+        );
     }
 }
