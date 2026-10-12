@@ -13,11 +13,12 @@
 //! emits the **two-array** JSON schema (`records` + `neutral_milestones`)
 //! that `shekyl-engine-core`'s differential deserializes.
 //!
-//! The recorder and the engine both call the canonical primitives
-//! (`base_block_reward`, `calc_burn_pct_from_activity`,
-//! `calc_release_multiplier`, …); the differential's value is therefore
-//! **integration** coverage — that `LocalEconomics` wires the primitives
-//! together exactly as the reference loop does, and that the
+//! The recorder steps [`ChainCursor`] and records the block it priced.
+//! The differential recomputes that block's burn with
+//! `calc_burn_pct_from_activity` over the recorded window, and
+//! `base_block_reward` over the recorded already-generated supply, so
+//! its value is **integration** coverage: `LocalEconomics` wires the
+//! primitives together as the reference loop does, and the
 //! `params_digest` lineage round-trips. The independent-reference
 //! consensus 0h gate is **7-base** C2a′ (already landed); C4 is
 //! supplementary per §7.1.
@@ -39,8 +40,8 @@
 use serde::{Deserialize, Serialize};
 use shekyl_economics::params::SCALE;
 use shekyl_economics::{
-    base_block_reward, base_emission_at, calc_burn_pct_from_activity, calc_release_multiplier,
-    neutral_height_reaching, params_digest, ClosedShardCount, EconomicParams, TxVolume,
+    base_block_reward, base_emission_at, calc_release_multiplier, neutral_height_reaching,
+    params_digest, ClosedShardCount, EconomicParams,
 };
 
 use crate::burden::HonestOutputs;
@@ -59,9 +60,18 @@ pub struct RecordedRow {
     /// input the engine feeds `base_block_reward`.
     pub already_generated_coins: u64,
     pub base_block_reward: u64,
-    /// `calc_release_multiplier(...) / 1000` (SCALE → milli).
+    /// `calc_release_multiplier(...) / 1000` (SCALE → milli), at the
+    /// window below.
     pub release_multiplier_milli: u64,
+    /// Transactions this block listed. A count of the block, not the
+    /// volume the burn and the release multiplier read.
     pub tx_volume: u64,
+    /// Transactions in the CEN-F20 window the block was priced at.
+    pub volume_tx_count_sum: u64,
+    /// Blocks that window covers. Zero at the fold's first block. With
+    /// [`Self::volume_tx_count_sum`], the [`shekyl_economics::TxVolume`]
+    /// the differential replays.
+    pub volume_window_blocks: u64,
     pub circulating_supply: u64,
     pub total_staked: u64,
     /// `calc_burn_pct_from_activity(...) / 100` (SCALE → basis points).
@@ -149,12 +159,11 @@ fn half_emitted_height(params: &EconomicParams) -> u64 {
 /// schedule's whole demand, fifty transactions a block: more than twice
 /// the penalty-free zone, a block the fill rule does not build.
 ///
-/// A row is a vector at its block's operands. `tx_volume` is the count the
-/// block listed, and `burn_pct_bp` and `release_multiplier_milli` are
-/// taken at that count as a per-block volume, because that is the operand
-/// the differential feeds back in. The block itself was priced at CEN-F20's
-/// window, which is where `staker_emission`, `staker_fee_pool` and
-/// `actually_destroyed` come from; the differential does not read those.
+/// A row is that block. The burn, the release multiplier, the emission
+/// split and the fee split are all taken at the CEN-F20 window the cursor
+/// priced. `tx_volume` is the count the block listed, and it is not a
+/// volume operand. The differential replays the window
+/// (`volume_tx_count_sum` over `volume_window_blocks`).
 ///
 /// The recorded `circulating_supply` is the quantity the burn reads in
 /// consensus: `coins_generated − total_burned` at parent state (FL-R16c,
@@ -204,12 +213,10 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         outputs.accrue(priced.filled.included);
 
         if samples.contains(&block) {
-            // The row is a vector at this block's operands, not the block's
-            // own pricing: the differential replays the listed count as a
-            // per-block volume, so the two columns it recomputes are taken
-            // at that operand here.
+            // One block, one window. The burn the cursor priced and the
+            // multiplier at that same window are the row; the listed count
+            // is recorded beside them and is not an operand.
             let ag_start = priced.fee_point.already_generated;
-            let tx_volume = priced.filled.included;
             let circulating = priced.supply.to_raw();
             let stake_ratio = (config.stake.get_stake_ratio)(block, blocks_per_year, circulating);
             let total_staked = if stake_ratio > 0 && circulating > 0 {
@@ -218,16 +225,10 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
                 0
             };
             let multiplier = calc_release_multiplier(
-                TxVolume::per_block(tx_volume),
+                priced.volume,
                 sim.tx_volume_baseline,
                 sim.release_min,
                 sim.release_max,
-            );
-            let burn_pct = calc_burn_pct_from_activity(
-                TxVolume::per_block(tx_volume),
-                sim.tx_volume_baseline,
-                circulating,
-                &params,
             );
             // Pool-weighted total: at V3.0 the sim has no separate
             // weighted aggregate, so the principal `total_staked` stands
@@ -239,10 +240,12 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
                 base_block_reward: base_block_reward(ag_start, &params)
                     .expect("sim neutral trajectory stays within the arithmetic domain"),
                 release_multiplier_milli: multiplier / 1000,
-                tx_volume,
+                tx_volume: priced.filled.included,
+                volume_tx_count_sum: priced.volume.tx_count_sum(),
+                volume_window_blocks: priced.volume.blocks(),
                 circulating_supply: circulating,
                 total_staked,
-                burn_pct_bp: burn_pct / 100,
+                burn_pct_bp: priced.burn_pct / 100,
                 total_weighted_stake_lo: weighted as u64,
                 total_weighted_stake_hi: (weighted >> 64) as u64,
                 staker_emission: priced.paid.split.staker_emission,
@@ -251,7 +254,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             });
         }
 
-        already_generated += u128::from(priced.paid.paid.to_raw());
+        already_generated += u128::from(priced.paid_reward());
         total_burned += u128::from(priced.paid.burned().to_raw());
     }
 
