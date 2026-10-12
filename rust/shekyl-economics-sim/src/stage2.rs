@@ -619,10 +619,11 @@ fn a1_clearance_report(
 ) -> Result<Vec<A1ScenarioResult>, fmt::Error> {
     writeln!(out,
         "\nA1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.\n\
-         budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R{R} x n x rate.\n\
+         budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor {BOND} x R{R} x n x rate.\n\
          >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate {RATES:?} (10% binding).\n\
          Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).\n\
          Knee band {BAND:?} closed shards; the shipped middle is {KNEE_TB:.2} TB of archival at W = {W} B/shard.",
+        BOND = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
         R = REPLICAS_PER_SHARD,
         RATES = OPP_COST_RATE_BAND,
         BAND = KNEE_BAND,
@@ -1238,12 +1239,13 @@ fn a4_stuffing_report(
         "\nA4 — W9 output-stuffing ROI (§12.2, DQ-2C): SERVED-WORK capture (the D2 pool\n\
          is distributed by served work per bond, NOT by stake). Attacker serves the Δn\n\
          stuffed shards at r=1 and captures reward_share_floor(pool(n+Δn), their work,\n\
-         Σwork) each year; cost = stuffing fees + the §6.2 coupled bond (0.75 SKL/shard\n\
+         Σwork) each year; cost = stuffing fees + the §6.2 coupled bond ({BOND} SKL/shard\n\
          held forever). Best over [years x Δn{DELTAS:?} x horizon{H:?}yr], shown at BOTH\n\
          honest-holdings ends: hHold=4 (rational small bonds — the gate) and hHold=512\n\
          (pathological fully-capped — a curve-cap concern, not the escalation's).\n\
          Flat-25 has no share lever ⇒ 0. Attacker-favouring: min opp-rate {RATE}, storage\n\
          omitted, age-0. PASS iff realistic-end (hHold=4) ROI < 1 everywhere.",
+        BOND = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
         DELTAS = A4_DELTA_SWEEP,
         H = A4_HORIZON_BAND,
         RATE = A4_OPP_RATE,
@@ -1505,13 +1507,15 @@ fn a3_stranding_report(
          archivers paid.\n\
          RESIDUAL = a QUANTIZATION FLOOR, not a remaining defect: D1 does not abolish\n\
          structural zeros, it SCALES the cliff with holdings to r > ~1000 x shards_held\n\
-         (the micro sum must reach one milli). Unreachable for a bulk holder (4096 shards\n\
-         ⇒ r > 4M); a 16-shard hobbyist still zeroes at r > ~16k — the 70% column above.\n\
+         (the micro sum must reach one milli). Unreachable for a bulk holder ({CAP} shards\n\
+         ⇒ r > {CLIFF_M:.0}M); a 16-shard hobbyist still zeroes at r > ~16k — the 70% column above.\n\
          Sub-milli work is UNREPRESENTABLE under the frozen WORK_MILLI_SCALE, so the\n\
          honest name is a MINIMUM VIABLE HOLDING THRESHOLD, not a bug: eliminating it\n\
          would mean changing a frozen constant. The archiver's levers are holdings size\n\
          and replication depth. It is the third force in D3's holdings-size triangle.\n\
          Joint with A1: stranded budget is not burden-clearing.",
+        CAP = MAX_HOLDINGS_SHARDS,
+        CLIFF_M = MAX_HOLDINGS_SHARDS as f64 * 1_000.0 / 1.0e6,
     )?;
 
     Ok(())

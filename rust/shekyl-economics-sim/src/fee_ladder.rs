@@ -3001,7 +3001,7 @@ mod tests {
     /// covering one rung less than it claims.
     #[test]
     fn transliteration_matches_cpp_kat() {
-        let coin: u64 = 1_000_000_000;
+        let coin: u64 = crate::burden::COIN;
         let legacy =
             |r: u64, mnw: u64, mlw: u64| articmine_ladder_raw(r, mnw, mlw).map(round_money_up_2);
         assert_eq!(
@@ -3095,7 +3095,7 @@ mod tests {
     /// two cannot diverge again.
     #[test]
     fn served_ladder_is_the_owners_arithmetic() {
-        let coin: u64 = 1_000_000_000;
+        let coin: u64 = crate::burden::COIN;
         // The legacy transliteration still truncates its rung first —
         // that is what today's daemon does, and it is why the Current
         // column keeps it.

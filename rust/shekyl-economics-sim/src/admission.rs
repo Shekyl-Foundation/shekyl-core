@@ -152,7 +152,11 @@ pub fn oq2_report(
     writeln!(
         out,
         "{:<10} {:>9} {:>9} {:>14} {:>14}",
-        "archivers", "n", "mean_r", "min_viable_h", "split-loss@4096"
+        "archivers",
+        "n",
+        "mean_r",
+        "min_viable_h",
+        format!("split-loss@{MAX_HOLDINGS_SHARDS}")
     )?;
     let mut r_samples: Vec<u64> = Vec::new();
     for &n in n_samples {
