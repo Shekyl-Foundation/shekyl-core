@@ -4,7 +4,7 @@
 secret per-block draw, §13.1–§13.4) and **re-ruled 2026-10-11** (one bundle
 per block replaces the carrier transaction, §13.5). Six questions found
 while writing that in were ruled 2026-10-12 (§13.6). One raised on
-review is open (§13.7), and two defects found on review are amended
+review is ruled (§13.7), and two defects found on review are amended
 (§13.8). Built so far: the draw's functions, the
 settlement selection and fold, the issued-draw tables behind a test door,
 and the FN-DSA scheme with the receipt key's derivation (§2). No block path
@@ -476,6 +476,11 @@ The bond record carries two keys:
   `p_canonical_id` and authorizes JoinMarket and Reinstate;
 - a **receipt key**, Ed25519 + FN-DSA-1024, used for nothing but
   receipts. The identity key's signature on the JoinMarket post binds it.
+  **It is mandatory** (ruled on review of PR #1046, 2026-10-12): there is
+  one JoinMarket form and it carries the key, and the record's field is
+  typed and fixed-length. A pair whose record had no key would be in `D`
+  with no key for the `h_open(E)` snapshot to hold, and the snapshot could
+  not be built (§9.6), which would refuse every bundle of that epoch.
 
 The reason is algorithm isolation: persona identity stays on a finalized
 standard, and the pre-standard scheme touches only signatures whose value
@@ -724,16 +729,23 @@ producer's node broadcast block `h` with no origin protection
 
 - **The prunable part is archival content in the shard domain.** `SHT-Q1`
   defines the domain by "carries prunable data", so bundles join it.
-  Where a bundle sits in the domain's order, and how its length enters
-  the cumulative archival length that cuts shards, is not ruled: it is
-  posed as `SCS-P38` (§13.7).
+  **Its place in the domain** (`SCS-P38`, ruled 2026-10-12): after the
+  transactions of the including block `h_incl`, the block's bundles in
+  ascending `h`, which is the order the header root already covers. **Its
+  length** is its prunable bytes, `3,193 + 1,397 ·` (set bits): a function
+  of the kept bitmap, so a pruned node recomputes it with nothing new
+  stored, and the header root binds it. The cumulative-length fold reads
+  it at connect and undoes it at pop, as it does a transaction's. That
+  formula holds because records are a fixed width (§7.3): a scheme with
+  variable-width signatures would need the length stated, not derived.
 - **It is kept until past `D_max`**, because a reorg must be able to check
   the bundle again. It is then discarded and filled back from archivers
   like everything else.
 - **Sync** is skeleton forward, then backfill: kept bytes are checked
   against the header root, and prunable bytes against the per-bundle hash.
-- **For the shard-size derivation:** the largest bundle's prunable size is
-  a function of `D` (§7.4). `SHT-Q2`'s rule that no single object exceeds
+- **For the shard-size derivation:** the largest bundle's length, at the
+  count cap with every draw passed, is the maximum-object input `SHT-Q2`'s
+  rule needs from this mechanism; it is a function of `D` (§7.4). `SHT-Q2`'s rule that no single object exceeds
   the shard size now has an object that grows.
 
 ---
@@ -1599,13 +1611,11 @@ Found while writing the bundle into §7 and §9, and the contracts into
 | `SCS-P36` | What a backfill verifies | **Hash equality against the header root's term is the acceptance rule.** Re-verifying receipts is optional and bounded by the bond journals' horizon. This corrects `SCS-P22`'s "can be re-verified" (§8) |
 | `SCS-P37` | Whether the verifier returns the derived draws | **Yes.** `Admitted::draws` is part of the contract between the verifier and the writer, in §9.6 beside the view trait, and the settlement lane sees it before it builds its cutover increment |
 
-### 13.7 Posed 2026-10-12, and open
+### 13.7 Posed on review, ruled 2026-10-12
 
-Raised on review of this change.
-
-| # | Question | Recommendation |
+| # | Question | Ruling |
 | --- | --- | --- |
-| `SCS-P38` | `SCS-P22` puts a bundle's prunable part in the shard domain. `SHT-Q1` orders the domain by transactions in chain order and `SHT-Q2` cuts shards by cumulative archival length, bound through the txid. A bundle is not a transaction: its position in that order, its length, and what binds the length for a pruned node are not stated, and they decide shard boundaries | **Position:** after the transactions of the including block `h_incl`, the block's bundles in ascending `h`, which is the order the header root already covers. **Length:** the prunable bytes, `3,193 + 1,397 ·` (set bits). **Binding:** the kept bitmap. The length is a function of kept bytes, so a pruned node recomputes it with nothing new stored, and the header root binds it. The cumulative-length fold reads it at connect and undoes it at pop, as it does a transaction's |
+| `SCS-P38` | `SCS-P22` puts a bundle's prunable part in the shard domain, which `SHT-Q1` orders by transactions and `SHT-Q2` cuts by cumulative length bound through the txid. A bundle's position, its length and what binds the length were not stated, and they decide shard boundaries | **As recommended.** Position: after the including block's transactions, the block's bundles in ascending `h`, the header root's order. Length: `3,193 + 1,397 ·` (set bits), a function of the kept bitmap. **Two sentences added by the ruling:** the length formula depends on fixed-width records; and the largest bundle's length is the `SHT-Q2` maximum-object input for the shard-size lane (§7.6) |
 
 ### 13.8 Amended on review, 2026-10-12
 
@@ -1772,7 +1782,7 @@ One row at least for each item of §13.5 to §13.8.
 | `SCS-P36` | A node refuses to backfill an old bundle because it cannot rebuild the snapshot | Hash equality is the acceptance rule; nothing requires the snapshot |
 | `SCS-P31` | Two lanes each build their own reading of what the verifier needs, and the store's view answers a different question from the one the verifier asks | The view trait and the kept projection are fixed in §9.6 before either is built; the verifier is tested against a fixture view, so it cannot lean on a store type |
 | `SCS-P37` | The writer's own derivation of a draw's pair disagrees with the verifier's, so a receipt is checked against one pair and the pass is recorded for another | One derivation: the verifier returns the derived draws and the writer derives nothing |
-| `SCS-P38` | Two nodes place a bundle's bytes at different points in the shard domain, or count different lengths for it, and cut shards at different boundaries | Open. With the recommended rule the position is the header root's order and the length is a function of the kept bitmap, so both are consensus data already |
+| `SCS-P38` | Two nodes place a bundle's bytes at different points in the shard domain, or count different lengths for it, and cut shards at different boundaries | The position is the header root's order and the length is a function of the kept bitmap, so both are consensus data already |
 | `SCS-P39` | A block's references understate their counts so the section passes the budget at arrival | The stated count is held to `count(h)` at admission, so the block is invalid; the cost is the block's proof of work |
 | `SCS-P39` | Two sections with one root, by moving a byte between a bitmap and the hash beside it | Not constructible: each reference states its count, which fixes its bitmap's length |
 | `SCS-P40` | A miner fills its block's section with zero-draw bundles from the last `W₂` blocks, to make every node fetch and verify them | Each costs one unit, so the section holds at most `c · (⌊9·D / SEB⌋ + 1)` of them: 2 on a network small enough to have zero-draw blocks |
