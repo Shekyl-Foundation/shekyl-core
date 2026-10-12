@@ -587,11 +587,12 @@ with `count = count(h)`, the bitmap `⌈count / 8⌉` bytes, and each record
   the canonical hybrid encoding is fixed-length (§6.2). **A scheme whose
   signature is not fixed-width breaks this construction**, and needs
   frames or a different commitment along with its version bump.
-- **A new label.** `shekyl/archival-serve-credit-batch-v1`, its constant
-  and its registry row are deleted: one label never names two messages.
-  `serve_credit_batch_commitment`
-  (`rust/shekyl-archival-retention/src/secret_draw.rs`) and its vectors
-  are replaced with the bundle's (`SCS-P16`).
+- **A new label.** The bundle commitment does not take
+  `shekyl/archival-serve-credit-batch-v1`: one label never names two
+  messages. That label, `serve_credit_batch_commitment`
+  (`rust/shekyl-archival-retention/src/secret_draw.rs`), its vectors and
+  its registry row are superseded and stay in the tree beside the new
+  ones (§11.1, re-ruled 2026-10-12); nothing calls them.
 - **The header field is renamed** (`SCS-P34`): the block header's
   `attestation_root` becomes `bundle_root`, in the same rule-42 bump that
   changes what it commits to. The field keeps its place; it does not keep
@@ -1530,7 +1531,7 @@ Found while writing the bundle into §7 and §9, and the contracts into
 | `SCS-P32` | `SCS-P15` says a bundle's validity depends on nothing above `h`, but the receipt's anchor was held below `h` only by today's constants | **Admission checks `anchor_height < h`, and `W₂ + L ≤` anchor depth is asserted on every rule set**, as rule-set data. Recorded as an **amendment to `SCS-P7`**, not a reversal: P7's reason for no lower bound stands (§9.1) |
 | `SCS-P33` | The budget's integer form: `c · 9·D / SEB` floors to zero below about 555 pairs; a bundle from the previous epoch was counted against the new `D`; a block can have `count(h) = 0` | **Budget = `c · (⌊9·D / SEB⌋ + 1)`, with `D` the largest `D` among the epochs of the bundles in the section.** *Adjusted wording:* one rule, not a two-epoch exception. **A `count(h) = 0` bundle is admissible**, which keeps the rule uniform; not filing it is challenger policy (§7.1, §7.4) |
 | `SCS-P34` | Whether the header root is the existing `attestation_root` field, and CEN-B4's fate | **Reuse the field and rename it**, `bundle_root`, in the same rule-42 bump. *Adjusted:* the rename; a field does not keep a name for a value it no longer holds (rule 93). **B4 is retired by ruling for a new row**, through the census arm. `SCS-F19` is smaller than it read: DRS-E5 has nothing to reopen (§14) |
-| `SCS-P35` | The bundle's bytes | **The commitment of §7.3 under a new label; the bitmap least significant bit first with zero padding, checked.** *Stated outright:* records follow in ascending `j` over the set bits and their number equals the popcount, or the bundle is refused; and "no frame" rests on fixed-width records, which rests on FN-DSA-1024's padded signature and the fixed canonical encoding, written down where a scheme change will meet it (§7.2, §7.3). `…-batch-v1` and its registry row are deleted |
+| `SCS-P35` | The bundle's bytes | **The commitment of §7.3 under a new label; the bitmap least significant bit first with zero padding, checked.** *Stated outright:* records follow in ascending `j` over the set bits and their number equals the popcount, or the bundle is refused; and "no frame" rests on fixed-width records, which rests on FN-DSA-1024's padded signature and the fixed canonical encoding, written down where a scheme change will meet it (§7.2, §7.3). `…-batch-v1` and its registry row are superseded; *re-ruled 2026-10-12*, they are not deleted (§11.1) |
 | `SCS-P36` | What a backfill verifies | **Hash equality against the header root's term is the acceptance rule.** Re-verifying receipts is optional and bounded by the bond journals' horizon. This corrects `SCS-P22`'s "can be re-verified" (§8) |
 | `SCS-P37` | Whether the verifier returns the derived draws | **Yes.** `Admitted::draws` is part of the contract between the verifier and the writer, in §9.6 beside the view trait, and the settlement lane sees it before it builds its cutover increment |
 
@@ -1606,7 +1607,7 @@ constant or registry row yet.
 | `shekyl/archival-challenge-nonce-v1` | cSHAKE256 | Challenge nonce, over `(seed, block_hash(h), j, attempt)`, §5.2 |
 | `shekyl/archival-issued-index-v1` | cSHAKE256 | One issued draw's term in the epoch's running digest, §10 |
 | `shekyl/archival-settlement-select-v1` | cSHAKE256 | Counted-draw selection, §9.3 |
-| `shekyl/archival-serve-credit-batch-v1` | cSHAKE256 | The carrier's set commitment. Superseded; the constant and its registry row are deleted with the bundle commitment's arrival (`SCS-P35`) |
+| `shekyl/archival-serve-credit-batch-v1` | cSHAKE256 | The carrier's set commitment. Superseded by the bundle commitment (`SCS-P35`); the constant, its vectors and its registry row stay (§11.1) |
 | `shekyl/archival-serve-credit-bundle-v1` | cSHAKE256 | The bundle commitment, §7.3 |
 | `shekyl-archival-p-receipt-ed25519-v1` | HKDF info | The Ed25519 half of the persona's receipt key, from the master seed, §6.3 |
 | `shekyl-archival-p-receipt-fn-dsa-1024-v1` | HKDF info | The FN-DSA-1024 half of the same key, §6.3 |
