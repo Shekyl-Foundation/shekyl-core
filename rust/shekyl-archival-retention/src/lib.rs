@@ -137,11 +137,12 @@ pub use bond_wire::{
     VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use bundle::{
-    bundle_commitment, bundle_prunable_hash, bundle_root, section_budget, BundleBody, BundleKept,
-    BundleRecord, BundleRef, BundleWireError, PassBitmap, BUNDLE_COMMITMENT_CUSTOMIZATION,
-    BUNDLE_KEPT_FIXED_LEN, BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN,
-    BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_SEED_LEN,
-    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN,
+    bundle_charge, bundle_commitment, bundle_prunable_hash, bundle_root, section_budget,
+    BundleBody, BundleKept, BundleRecord, BundleRef, BundleWireError, PassBitmap,
+    BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_KEPT_FIXED_LEN, BUNDLE_PRUNABLE_CUSTOMIZATION,
+    BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN, BUNDLE_ROOT_CUSTOMIZATION,
+    BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_SEED_LEN, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+    BUNDLE_WITNESS_LEN,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,

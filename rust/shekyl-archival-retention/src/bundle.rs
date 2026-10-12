@@ -14,6 +14,7 @@
 //! | --- | --- | --- |
 //! | Kept | seed | 32 |
 //! | Kept | `h` | 8, little-endian |
+//! | Kept | `count` | 4, little-endian |
 //! | Kept | pass bitmap | `⌈count(h) / 8⌉` |
 //! | Prunable, once | witness public key | [`BUNDLE_WITNESS_KEY_LEN`] |
 //! | Prunable, once | witness signature | [`BUNDLE_SIGNATURE_LEN`] |
@@ -24,7 +25,8 @@
 //!
 //! # Nothing is framed, and that rests on one fact
 //!
-//! Every record is the same width, [`BUNDLE_RECORD_LEN`]. `count(h)` fixes
+//! Every record is the same width, [`BUNDLE_RECORD_LEN`]. The kept part
+//! states its own `count` (`SCS-P39`), which fixes
 //! the bitmap's length, the bitmap's set bits fix the number of records, and
 //! the width fixes where each ends. The width is fixed because FN-DSA-1024's
 //! signature is padded to a fixed length and the canonical hybrid encoding
@@ -95,8 +97,8 @@ pub const BUNDLE_RECORD_LEN: usize = 1 + 8 + 32 + BUNDLE_SIGNATURE_LEN;
 /// The prunable part before its records: the witness key and signature.
 pub const BUNDLE_WITNESS_LEN: usize = BUNDLE_WITNESS_KEY_LEN + BUNDLE_SIGNATURE_LEN;
 
-/// The kept part before its bitmap: the seed and `h`.
-pub const BUNDLE_KEPT_FIXED_LEN: usize = BUNDLE_SEED_LEN + 8;
+/// The kept part before its bitmap: the seed, `h` and `count` (`SCS-P39`).
+pub const BUNDLE_KEPT_FIXED_LEN: usize = BUNDLE_SEED_LEN + 8 + 4;
 
 /// A reference before its bitmap: the kept part's fixed bytes and the
 /// 32-byte hash of the prunable part.
@@ -117,8 +119,8 @@ const _: () = assert!(BUNDLE_WITNESS_KEY_LEN == 1_837);
 const _: () = assert!(BUNDLE_SIGNATURE_LEN == 1_356);
 const _: () = assert!(BUNDLE_RECORD_LEN == 1_397);
 const _: () = assert!(BUNDLE_WITNESS_LEN == 3_193);
-const _: () = assert!(BUNDLE_KEPT_FIXED_LEN == 40);
-const _: () = assert!(BUNDLE_REF_FIXED_LEN == 72);
+const _: () = assert!(BUNDLE_KEPT_FIXED_LEN == 44);
+const _: () = assert!(BUNDLE_REF_FIXED_LEN == 76);
 
 /// Bytes of a bundle that are not the bytes of a bundle.
 ///
@@ -150,17 +152,19 @@ pub enum BundleWireError {
         /// The block's draw count.
         count: u32,
     },
-    /// The kept part is the seed, `h`, and a bitmap of exactly `count` bits.
-    #[error("the kept part is {expected} bytes for this count, not {found}")]
+    /// The kept part is the seed, `h`, `count`, and a bitmap of exactly
+    /// `count` bits. `expected` is the length the stated count implies, or
+    /// the 44 fixed bytes when there are too few to state one.
+    #[error("the kept part is {expected} bytes for the count it states, not {found}")]
     KeptLength {
-        /// `40 + ⌈count / 8⌉`.
+        /// `44 + ⌈count / 8⌉`.
         expected: usize,
         /// The bytes offered.
         found: usize,
     },
-    /// A reference is at least its fixed bytes, and its bitmap is no longer
-    /// than a bitmap of `u32::MAX` bits.
-    #[error("a reference is 72 bytes and a bitmap, not {found} bytes")]
+    /// A reference is its kept part and a 32-byte hash: exactly
+    /// `76 + ⌈count / 8⌉` bytes for the count it states.
+    #[error("a reference is 76 bytes and the bitmap its count implies, not {found} bytes")]
     ReferenceLength {
         /// The bytes offered.
         found: usize,
@@ -276,177 +280,190 @@ impl PassBitmap {
 /// The kept part of a bundle and nothing more: what the header root covers,
 /// what a pruned node retains, and what settlement reads
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.2, §9.6).
+///
+/// It states its own `count` (`SCS-P39`): [`PassBitmap::count`]. A
+/// bitmap's bytes do not say how many bits it has — 13 bytes fit any count
+/// from 97 to 104 — so the count is on the wire beside them, and the kept
+/// part parses, and its padding is checked, with no chain. Admission holds
+/// the stated count to `count(h)`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BundleKept {
     /// The block whose producer drew.
     pub h: BlockHeight,
     /// The revealed draw seed.
     pub seed: [u8; BUNDLE_SEED_LEN],
-    /// Exactly `count(h)` bits.
+    /// The stated count and its bits.
     pub passes: PassBitmap,
 }
 
 impl BundleKept {
-    /// `seed[32] ‖ h_le[8] ‖ bitmap`.
+    /// The bytes [`Self::encode`] returns: `44 + ⌈count / 8⌉`.
+    #[must_use]
+    pub fn encoded_len(&self) -> usize {
+        BUNDLE_KEPT_FIXED_LEN + self.passes.as_bytes().len()
+    }
+
+    /// `seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉]`.
+    ///
+    /// The one encoding of the kept part. The reference opens with these
+    /// bytes, the header root hashes them inside each reference, and the
+    /// bundle commitment is the hash of these bytes followed by the
+    /// records: all three call this.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(BUNDLE_KEPT_FIXED_LEN + self.passes.as_bytes().len());
-        out.extend_from_slice(&self.seed);
-        out.extend_from_slice(&self.h.to_raw().to_le_bytes());
-        out.extend_from_slice(self.passes.as_bytes());
+        let mut out = Vec::with_capacity(self.encoded_len());
+        self.encode_into(&mut out);
         out
     }
 
-    /// The kept part these bytes are, for a block of `count` draws. The
-    /// count is not in the bytes: it is `count(h)`, which the chain holds.
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.seed);
+        out.extend_from_slice(&self.h.to_raw().to_le_bytes());
+        out.extend_from_slice(&self.passes.count().to_le_bytes());
+        out.extend_from_slice(self.passes.as_bytes());
+    }
+
+    /// The kept part these bytes are. The count is read from the bytes.
     ///
     /// # Errors
     ///
     /// [`BundleWireError::KeptLength`] unless `bytes` is exactly
-    /// `40 + ⌈count / 8⌉` long; [`BundleWireError::BitmapPadding`] for a
-    /// set padding bit.
-    pub fn decode(bytes: &[u8], count: u32) -> Result<Self, BundleWireError> {
-        let expected = BUNDLE_KEPT_FIXED_LEN + PassBitmap::byte_len(count);
-        if bytes.len() != expected {
+    /// `44 + ⌈count / 8⌉` long for the count it states;
+    /// [`BundleWireError::BitmapPadding`] for a set padding bit.
+    pub fn decode(bytes: &[u8]) -> Result<Self, BundleWireError> {
+        let Some((fixed, bitmap)) = bytes.split_at_checked(BUNDLE_KEPT_FIXED_LEN) else {
             return Err(BundleWireError::KeptLength {
-                expected,
+                expected: BUNDLE_KEPT_FIXED_LEN,
                 found: bytes.len(),
             });
-        }
-        let (seed, rest) = bytes.split_at(BUNDLE_SEED_LEN);
-        let (h, bitmap) = rest.split_at(8);
+        };
+        let (seed, rest) = fixed.split_at(BUNDLE_SEED_LEN);
+        let (h, count) = rest.split_at(8);
+        let count = u32::from_le_bytes(count.try_into().expect("4 bytes"));
+        let passes = PassBitmap::new(count, bitmap).map_err(|refusal| match refusal {
+            BundleWireError::BitmapLength { expected, .. } => BundleWireError::KeptLength {
+                expected: BUNDLE_KEPT_FIXED_LEN.saturating_add(expected),
+                found: bytes.len(),
+            },
+            other => other,
+        })?;
         Ok(Self {
             h: BlockHeight::from_raw(u64::from_le_bytes(h.try_into().expect("8 bytes"))),
             seed: seed.try_into().expect("32 bytes"),
-            passes: PassBitmap::new(count, bitmap)?,
+            passes,
         })
     }
 
-    /// The bundle commitment over this kept part and `records`, the
+    /// [`bundle_commitment`] over this kept part and `records`, the
     /// records' bytes in order ([`BundleBody::records_bytes`]).
     #[must_use]
     pub fn commitment(&self, records: &[u8]) -> [u8; 32] {
-        bundle_commitment(
-            &self.seed,
-            self.h,
-            self.passes.count(),
-            self.passes.as_bytes(),
-            records,
-        )
+        bundle_commitment(self, records)
+    }
+
+    /// [`bundle_charge`] of this bundle's stated count.
+    #[must_use]
+    pub const fn charge(&self) -> u64 {
+        bundle_charge(self.passes.count())
     }
 }
 
-/// What a block carries of a bundle: its kept bytes and the hash of its
+/// What a block carries of a bundle: its kept part and the hash of its
 /// prunable bytes (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5).
 ///
-/// The bitmap is held as bytes, not as a [`PassBitmap`]: a reference does
-/// not carry `count(h)`, and the stateless section check runs where the
-/// chain that holds it may not be known (`SCS-P23`). [`Self::kept`] reads
-/// the bitmap against the count once the chain supplies it.
+/// A decoded reference **is** its kept part and that hash. The kept part
+/// states its count (`SCS-P39`), so a reference is self-delimiting: it
+/// parses on its own, its bitmap's length and padding are checked at
+/// decode, and a section's draws are summed from its references with no
+/// chain.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BundleRef {
-    seed: [u8; BUNDLE_SEED_LEN],
-    h: BlockHeight,
-    bitmap: Vec<u8>,
+    kept: BundleKept,
     prunable_hash: [u8; 32],
 }
 
 impl BundleRef {
-    /// The longest bitmap a reference can carry: a bitmap of `u32::MAX`
-    /// bits. A draw index is 32 bits (§3), so no block has more.
-    pub const MAX_BITMAP_LEN: usize = PassBitmap::byte_len(u32::MAX);
-
     /// The reference to `body` under `kept`.
     #[must_use]
     pub fn of(kept: &BundleKept, body: &BundleBody) -> Self {
+        Self::new(kept.clone(), body.prunable_hash())
+    }
+
+    /// A reference from its kept part and the hash of its prunable part.
+    #[must_use]
+    pub const fn new(kept: BundleKept, prunable_hash: [u8; 32]) -> Self {
         Self {
-            seed: kept.seed,
-            h: kept.h,
-            bitmap: kept.passes.as_bytes().to_vec(),
-            prunable_hash: body.prunable_hash(),
-        }
-    }
-
-    /// A reference from its fields.
-    ///
-    /// # Errors
-    ///
-    /// [`BundleWireError::ReferenceLength`] for a bitmap longer than
-    /// [`Self::MAX_BITMAP_LEN`].
-    pub fn new(
-        seed: [u8; BUNDLE_SEED_LEN],
-        h: BlockHeight,
-        bitmap: &[u8],
-        prunable_hash: [u8; 32],
-    ) -> Result<Self, BundleWireError> {
-        if bitmap.len() > Self::MAX_BITMAP_LEN {
-            return Err(BundleWireError::ReferenceLength {
-                found: BUNDLE_REF_FIXED_LEN.saturating_add(bitmap.len()),
-            });
-        }
-        Ok(Self {
-            seed,
-            h,
-            bitmap: bitmap.to_vec(),
+            kept,
             prunable_hash,
-        })
+        }
     }
 
-    /// `seed[32] ‖ h_le[8] ‖ bitmap ‖ prunable_hash[32]`: the kept bytes,
-    /// then the hash.
+    /// `seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ prunable_hash[32]`: the
+    /// kept part ([`BundleKept::encode`]), then the hash. `76 + ⌈count /
+    /// 8⌉` bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(BUNDLE_REF_FIXED_LEN + self.bitmap.len());
-        out.extend_from_slice(&self.seed);
-        out.extend_from_slice(&self.h.to_raw().to_le_bytes());
-        out.extend_from_slice(&self.bitmap);
-        out.extend_from_slice(&self.prunable_hash);
+        let mut out = Vec::with_capacity(self.kept.encoded_len() + 32);
+        self.encode_into(&mut out);
         out
     }
 
-    /// The reference these bytes are. Whatever lies between the fixed
-    /// leading 40 bytes and the trailing 32 is the bitmap.
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.kept.encode_into(out);
+        out.extend_from_slice(&self.prunable_hash);
+    }
+
+    /// The reference these bytes are.
     ///
     /// # Errors
     ///
-    /// [`BundleWireError::ReferenceLength`] for fewer than
-    /// [`BUNDLE_REF_FIXED_LEN`] bytes or a bitmap longer than
-    /// [`Self::MAX_BITMAP_LEN`].
+    /// [`BundleWireError::ReferenceLength`] unless `bytes` is exactly
+    /// `76 + ⌈count / 8⌉` long for the count it states;
+    /// [`BundleWireError::BitmapPadding`] for a set padding bit.
     pub fn decode(bytes: &[u8]) -> Result<Self, BundleWireError> {
-        let short = BundleWireError::ReferenceLength { found: bytes.len() };
-        let Some(bitmap_len) = bytes.len().checked_sub(BUNDLE_REF_FIXED_LEN) else {
-            return Err(short);
+        let length = BundleWireError::ReferenceLength { found: bytes.len() };
+        let Some(kept_len) = bytes.len().checked_sub(32) else {
+            return Err(length);
         };
-        if bitmap_len > Self::MAX_BITMAP_LEN {
-            return Err(short);
-        }
-        let (seed, rest) = bytes.split_at(BUNDLE_SEED_LEN);
-        let (h, rest) = rest.split_at(8);
-        let (bitmap, prunable_hash) = rest.split_at(bitmap_len);
+        let (kept, prunable_hash) = bytes.split_at(kept_len);
+        let kept = BundleKept::decode(kept).map_err(|refusal| match refusal {
+            BundleWireError::KeptLength { .. } => length,
+            other => other,
+        })?;
         Ok(Self {
-            seed: seed.try_into().expect("32 bytes"),
-            h: BlockHeight::from_raw(u64::from_le_bytes(h.try_into().expect("8 bytes"))),
-            bitmap: bitmap.to_vec(),
+            kept,
             prunable_hash: prunable_hash.try_into().expect("32 bytes"),
         })
+    }
+
+    /// The kept part.
+    #[must_use]
+    pub const fn kept(&self) -> &BundleKept {
+        &self.kept
     }
 
     /// The block whose producer drew.
     #[must_use]
     pub const fn h(&self) -> BlockHeight {
-        self.h
+        self.kept.h
     }
 
     /// The revealed draw seed.
     #[must_use]
     pub const fn seed(&self) -> &[u8; BUNDLE_SEED_LEN] {
-        &self.seed
+        &self.kept.seed
     }
 
-    /// The bitmap's bytes, not yet read against a count.
+    /// The count the reference states. Admission holds it to `count(h)`.
     #[must_use]
-    pub fn bitmap_bytes(&self) -> &[u8] {
-        &self.bitmap
+    pub const fn count(&self) -> u32 {
+        self.kept.passes.count()
+    }
+
+    /// The pass bitmap.
+    #[must_use]
+    pub const fn passes(&self) -> &PassBitmap {
+        &self.kept.passes
     }
 
     /// The hash of the prunable part ([`bundle_prunable_hash`]).
@@ -455,19 +472,11 @@ impl BundleRef {
         &self.prunable_hash
     }
 
-    /// The kept part, read against `count(h)`.
-    ///
-    /// # Errors
-    ///
-    /// [`BundleWireError::BitmapLength`] unless the bitmap is exactly
-    /// `count` bits long; [`BundleWireError::BitmapPadding`] for a set
-    /// padding bit.
-    pub fn kept(&self, count: u32) -> Result<BundleKept, BundleWireError> {
-        Ok(BundleKept {
-            h: self.h,
-            seed: self.seed,
-            passes: PassBitmap::new(count, &self.bitmap)?,
-        })
+    /// [`bundle_charge`] of the count the reference states: what the
+    /// bundle costs its section.
+    #[must_use]
+    pub const fn charge(&self) -> u64 {
+        self.kept.charge()
     }
 
     /// The length of the body this reference names: the witness key and
@@ -475,13 +484,9 @@ impl BundleRef {
     /// longer fetch is refused before it completes (§7.5).
     #[must_use]
     pub fn body_len(&self) -> u64 {
-        let set: u64 = self
-            .bitmap
-            .iter()
-            .map(|byte| u64::from(byte.count_ones()))
-            .sum();
         // At most 2^32 set bits of 1,397 bytes each: no overflow in `u64`.
-        BUNDLE_WITNESS_LEN as u64 + set * BUNDLE_RECORD_LEN as u64
+        BUNDLE_WITNESS_LEN as u64
+            + u64::from(self.kept.passes.popcount()) * BUNDLE_RECORD_LEN as u64
     }
 }
 
@@ -650,24 +655,17 @@ impl BundleBody {
 ///              seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ r₁ ‖ … ‖ rₙ)
 /// ```
 ///
-/// `count` is `count(h)`, `bitmap` its `⌈count / 8⌉` bytes, and `records`
-/// the records' bytes in order, each [`BUNDLE_RECORD_LEN`] wide. The hash
-/// checks none of those lengths: it is a function of the bytes it is
-/// given, and the verifier establishes them before it signs or compares.
-/// Nothing is framed because nothing needs to be (module docs).
+/// That is **the kept part followed by the records**: the preimage opens
+/// with [`BundleKept::encode`], the same bytes a reference opens with, and
+/// `records` follows — the records' bytes in order, each
+/// [`BUNDLE_RECORD_LEN`] wide. The hash does not check the records'
+/// length: the verifier holds their number to the bitmap's set bits before
+/// it compares. Nothing is framed because nothing needs to be (module
+/// docs).
 #[must_use]
-pub fn bundle_commitment(
-    seed: &[u8; BUNDLE_SEED_LEN],
-    h: BlockHeight,
-    count: u32,
-    bitmap: &[u8],
-    records: &[u8],
-) -> [u8; 32] {
-    let mut input = Vec::with_capacity(BUNDLE_SEED_LEN + 8 + 4 + bitmap.len() + records.len());
-    input.extend_from_slice(seed);
-    input.extend_from_slice(&h.to_raw().to_le_bytes());
-    input.extend_from_slice(&count.to_le_bytes());
-    input.extend_from_slice(bitmap);
+pub fn bundle_commitment(kept: &BundleKept, records: &[u8]) -> [u8; 32] {
+    let mut input = Vec::with_capacity(kept.encoded_len() + records.len());
+    kept.encode_into(&mut input);
     input.extend_from_slice(records);
     cshake256_32(BUNDLE_COMMITMENT_CUSTOMIZATION, &input)
 }
@@ -691,45 +689,54 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3, §9.1).
 ///
 /// ```text
-/// cSHAKE256_32("shekyl/archival-bundle-root-v1",
-///              n_le[4] ‖ len₁_le[4] ‖ ref₁ ‖ … ‖ lenₙ_le[4] ‖ refₙ)
-/// refᵢ = seed[32] ‖ h_le[8] ‖ bitmap ‖ prunable_hash[32]
+/// cSHAKE256_32("shekyl/archival-bundle-root-v1", n_le[4] ‖ ref₁ ‖ … ‖ refₙ)
+/// refᵢ = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉] ‖ prunable_hash[32]
 /// ```
 ///
 /// Each bundle contributes its kept bytes and the hash of its prunable
-/// bytes, which is its reference ([`BundleRef::encode`]). `lenᵢ` is that
-/// reference's length in bytes. The frame is by **bytes, not by
-/// `count(h)`**: a reference does not carry the count, and the root must
-/// recompute from the references alone where the chain that holds the
-/// count is not known (`SCS-P23`). With `n` and each length in the
-/// preimage, two different sections cannot produce one preimage.
+/// bytes, which is its reference ([`BundleRef::encode`]). **No reference
+/// is length-framed**: each states its `count` (`SCS-P39`), which fixes
+/// where its bitmap ends and so where it ends. With `n` in front, two
+/// different sections cannot produce one preimage, and the root recomputes
+/// from the references alone, on an alternative block with no chain
+/// (`SCS-P23`).
 ///
 /// The caller supplies ascending `h`; the order is part of what is hashed,
 /// and the verifier's section check refuses any other.
 ///
 /// # Panics
 ///
-/// If the section holds 2³² references or more. A reference is at least
-/// 72 bytes and at most 2²⁹ + 72, so its own length always fits.
+/// If the section holds 2³² references or more.
 #[must_use]
 pub fn bundle_root(refs: &[BundleRef]) -> [u8; 32] {
-    let frame = |len: usize| -> [u8; 4] {
-        u32::try_from(len)
-            .expect("a section's reference count and each reference's length fit 32 bits")
-            .to_le_bytes()
-    };
+    let n = u32::try_from(refs.len()).expect("a section's reference count fits 32 bits");
     let mut input = Vec::new();
-    input.extend_from_slice(&frame(refs.len()));
+    input.extend_from_slice(&n.to_le_bytes());
     for reference in refs {
-        let bytes = reference.encode();
-        input.extend_from_slice(&frame(bytes.len()));
-        input.extend_from_slice(&bytes);
+        reference.encode_into(&mut input);
     }
     cshake256_32(BUNDLE_ROOT_CUSTOMIZATION, &input)
 }
 
-/// The section budget, in draws: the most the `count(h)` of the bundles
-/// one block admits may sum to (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.4,
+/// What one bundle costs its section, in draws: `max(count, 1)`
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.4, `SCS-P40`).
+///
+/// A bundle with draws is charged its draws. A zero-draw bundle is
+/// admissible (`SCS-P33`) and is charged one: charged nothing, a block
+/// could carry one for every zero-draw block of the last `W₂` under a
+/// budget meant to hold a section to `c` bundles at the count cap. This is
+/// the one place the charge is computed; the section check sums it.
+#[must_use]
+pub const fn bundle_charge(count: u32) -> u64 {
+    if count == 0 {
+        1
+    } else {
+        count as u64
+    }
+}
+
+/// The section budget, in draws: the most the charges ([`bundle_charge`],
+/// `max(count, 1)`) of the bundles one block admits may sum to (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.4,
 /// `SCS-P20`, `SCS-P33`).
 ///
 /// ```text

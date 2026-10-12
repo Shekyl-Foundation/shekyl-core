@@ -13,7 +13,10 @@
 //! was held to: SHAKE256 against a second implementation on four inputs,
 //! the SP 800-185 cSHAKE256 samples #3 and #4, the specification's §5.2
 //! nonce vectors and its §4.5 selection vectors. None is this module's own
-//! output pasted back. The inputs are built here by the same small
+//! output pasted back. The root's vectors were recomputed by that script
+//! on 2026-10-12, when the kept part gained its `count` and the root lost
+//! its per-reference frame (`SCS-P39`); the commitment's and the prunable
+//! hash's were re-derived then and did not move. The inputs are built here by the same small
 //! formulas that script used ([`record`], [`witness_key`],
 //! [`witness_signature`]); the hash is not.
 //!
@@ -65,6 +68,16 @@ fn witness_signature() -> [u8; BUNDLE_SIGNATURE_LEN] {
         *byte = u8::try_from((i * 5 + 9) % 256).expect("below 256");
     }
     out
+}
+
+/// A kept part at `h` under [`SEED`] with these bitmap bytes read as
+/// `count` bits.
+fn kept_at(h: BlockHeight, count: u32, bitmap: &[u8]) -> BundleKept {
+    BundleKept {
+        h,
+        seed: SEED,
+        passes: PassBitmap::new(count, bitmap).expect("the vector's bitmap"),
+    }
 }
 
 fn body(count: u8) -> BundleBody {
@@ -185,50 +198,82 @@ fn a_block_with_no_draws_has_an_empty_bitmap() {
 
 // ------------------------------------------------------------ wire forms
 
-/// The kept part round-trips, is exactly `40 + ⌈count / 8⌉` bytes, and
-/// reads only against its own count. Red edit: write `h` big-endian and
-/// the byte assertion fails; accept a longer input and the length cases do.
+/// The kept part states its own count (`SCS-P39`): it round-trips, is
+/// exactly `44 + ⌈count / 8⌉` bytes, and parses with nothing supplied
+/// from outside. Red edits: write `h` or `count` big-endian (the byte
+/// assertions fail); take the count from the bitmap's length (`8 · len`)
+/// instead of the stated field — twelve bits then read as sixteen and the
+/// round trip fails; accept a longer input.
 #[test]
-fn the_kept_part_round_trips_at_its_exact_length() {
-    let kept = BundleKept {
-        h: H,
-        seed: SEED,
-        passes: PassBitmap::from_passes(12, [0, 9, 11]).expect("in range"),
-    };
+fn the_kept_part_states_its_count_and_round_trips_at_its_exact_length() {
+    let kept = kept_at(H, 12, &[0x01, 0x0A]);
     let bytes = kept.encode();
-    assert_eq!(bytes.len(), 42);
+    assert_eq!(bytes.len(), 46);
+    assert_eq!(kept.encoded_len(), 46);
     assert_eq!(bytes[..32], SEED);
     assert_eq!(bytes[32..40], 1_000_000u64.to_le_bytes());
-    assert_eq!(bytes[40..], [0x01, 0x0A]);
-    assert_eq!(BundleKept::decode(&bytes, 12), Ok(kept.clone()));
+    assert_eq!(bytes[40..44], 12u32.to_le_bytes());
+    assert_eq!(bytes[44..], [0x01, 0x0A]);
+    assert_eq!(BundleKept::decode(&bytes), Ok(kept.clone()));
 
-    // Any count with the same byte length and no padding conflict reads;
-    // a count with another byte length does not.
-    assert!(BundleKept::decode(&bytes, 16).is_ok());
-    for count in [0u32, 8, 17] {
+    // The same two bitmap bytes under every count they could be read as
+    // are different kept parts: the bytes of the bitmap do not say which.
+    for count in 12u32..=16 {
+        let other = kept_at(H, count, &[0x01, 0x0A]);
+        let decoded = BundleKept::decode(&other.encode()).expect("its own count");
+        assert_eq!(decoded.passes.count(), count);
+        assert_eq!(decoded == kept, count == 12);
+    }
+
+    // The stated count fixes the length: one byte more or fewer refuses.
+    let mut long = bytes.clone();
+    long.push(0);
+    assert_eq!(
+        BundleKept::decode(&long),
+        Err(BundleWireError::KeptLength {
+            expected: 46,
+            found: 47
+        })
+    );
+    assert_eq!(
+        BundleKept::decode(&bytes[..45]),
+        Err(BundleWireError::KeptLength {
+            expected: 46,
+            found: 45
+        })
+    );
+    // Too few bytes to state a count at all.
+    for len in [0usize, 43] {
         assert_eq!(
-            BundleKept::decode(&bytes, count),
+            BundleKept::decode(&bytes[..len]),
             Err(BundleWireError::KeptLength {
-                expected: 40 + PassBitmap::byte_len(count),
-                found: 42
+                expected: 44,
+                found: len
             })
         );
     }
-    // Eleven bits: bit 11 is padding, and it is set.
+    // A stated count of eleven with bit 11 set: padding, checked with no
+    // chain.
+    let mut eleven = bytes.clone();
+    eleven[40..44].copy_from_slice(&11u32.to_le_bytes());
     assert_eq!(
-        BundleKept::decode(&bytes, 11),
+        BundleKept::decode(&eleven),
         Err(BundleWireError::BitmapPadding { count: 11 })
     );
-    let mut long = bytes.clone();
-    long.push(0);
-    assert!(matches!(
-        BundleKept::decode(&long, 12),
-        Err(BundleWireError::KeptLength { .. })
-    ));
-    assert!(matches!(
-        BundleKept::decode(&bytes[..41], 12),
-        Err(BundleWireError::KeptLength { .. })
-    ));
+    // A stated count the bytes cannot hold.
+    let mut huge = bytes;
+    huge[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(
+        BundleKept::decode(&huge),
+        Err(BundleWireError::KeptLength {
+            expected: 44 + 536_870_912,
+            found: 46
+        })
+    );
+    // A block of no draws: 44 bytes.
+    let empty = kept_at(H, 0, &[]);
+    assert_eq!(empty.encode().len(), 44);
+    assert_eq!(BundleKept::decode(&empty.encode()), Ok(empty));
 }
 
 /// A record round-trips through its 1,397 bytes with every field where
@@ -285,52 +330,104 @@ fn the_prunable_part_round_trips_at_its_exact_length() {
     }
 }
 
-/// A reference is the kept bytes and the prunable hash, round-trips, and
-/// refuses fewer than its 72 fixed bytes. Red edit: read the hash from the
-/// front and the field assertions fail.
+/// A reference is its kept part and the prunable hash: it round-trips,
+/// is exactly `76 + ⌈count / 8⌉` bytes for the count it states, and its
+/// encoding is pinned. **The hex is the standalone script's** (module
+/// docs; oracle tier: independent), so the kept layout with `count` after
+/// `h` is fixed by a value this code did not produce. Red edits: put
+/// `count` before `h`; drop it; read the hash from the front.
 #[test]
-fn a_reference_round_trips_and_is_the_kept_bytes_then_the_hash() {
-    let kept = BundleKept {
-        h: H,
-        seed: SEED,
-        passes: PassBitmap::from_passes(12, [0, 9, 11]).expect("in range"),
-    };
+fn kat_a_reference_is_its_kept_part_then_the_hash() {
+    let kept = kept_at(H, 12, &[0x01, 0x0A]);
     let three = body(3);
     let reference = BundleRef::of(&kept, &three);
     let bytes = reference.encode();
-    assert_eq!(bytes.len(), 74, "72 and a two-byte bitmap (§7.5, SCS-F17)");
-    assert_eq!(bytes[..42], kept.encode(), "the kept bytes, verbatim");
-    assert_eq!(bytes[42..], three.prunable_hash());
+    assert_eq!(
+        hex(&bytes),
+        "1111111111111111111111111111111111111111111111111111111111111111\
+         40420f0000000000\
+         0c000000\
+         010a\
+         55200abf66225b662f00844f3fc20d27f0dac951644a7f3e9c105893ee98795c"
+    );
+    assert_eq!(bytes.len(), 78, "76 and a two-byte bitmap (§7.5, SCS-F17)");
+    assert_eq!(bytes[..46], kept.encode(), "the kept bytes, verbatim");
+    assert_eq!(bytes[46..], three.prunable_hash());
     assert_eq!(BundleRef::decode(&bytes), Ok(reference.clone()));
+    assert_eq!(reference.kept(), &kept);
     assert_eq!(reference.h(), H);
     assert_eq!(reference.seed(), &SEED);
-    assert_eq!(reference.bitmap_bytes(), [0x01, 0x0A]);
-    assert_eq!(reference.kept(12), Ok(kept));
-    assert_eq!(
-        reference.kept(4),
-        Err(BundleWireError::BitmapLength {
-            count: 4,
-            expected: 1,
-            found: 2
-        })
-    );
+    assert_eq!(reference.count(), 12);
+    assert_eq!(reference.passes().as_bytes(), [0x01, 0x0A]);
     assert_eq!(
         reference.body_len(),
         three.as_bytes().len() as u64,
         "the reference fixes its body's length"
     );
 
-    for len in [0usize, 71] {
-        assert_eq!(
-            BundleRef::decode(&bytes[..len]),
-            Err(BundleWireError::ReferenceLength { found: len })
-        );
-    }
-    // 72 bytes is a reference to a bundle of no draws.
-    let empty = BundleRef::new(SEED, H, &[], [7; 32]).expect("no bitmap");
-    assert_eq!(empty.encode().len(), 72);
+    // A reference to a bundle of no draws is 76 bytes, and that one is
+    // pinned too.
+    let empty = BundleRef::new(
+        BundleKept {
+            h: BlockHeight::from_raw(1_000_007),
+            seed: [0x12; 32],
+            passes: PassBitmap::new(0, &[]).expect("no bits"),
+        },
+        body(0).prunable_hash(),
+    );
+    assert_eq!(
+        hex(&empty.encode()),
+        "1212121212121212121212121212121212121212121212121212121212121212\
+         47420f0000000000\
+         00000000\
+         dbe9e9c1bc25076eb62dea786a02651090551b7a918f7338a9e25ddc5fc91e0a"
+    );
     assert_eq!(BundleRef::decode(&empty.encode()), Ok(empty.clone()));
     assert_eq!(empty.body_len(), 3_193);
+}
+
+/// A reference is self-delimiting (`SCS-P39`): its stated count fixes its
+/// length, so every other length refuses, and so does a set padding bit —
+/// both with no chain. This is what lets the header root drop its
+/// per-reference frame. Red edit: accept `>=` the implied length; the
+/// long case then parses and a byte can move between a bitmap and the
+/// hash beside it.
+#[test]
+fn a_reference_of_any_length_but_its_own_refuses() {
+    let reference = BundleRef::of(&kept_at(H, 12, &[0x01, 0x0A]), &body(3));
+    let bytes = reference.encode();
+    for len in [0usize, 31, 75, 77] {
+        assert_eq!(
+            BundleRef::decode(&bytes[..len]),
+            Err(BundleWireError::ReferenceLength { found: len }),
+            "{len} bytes"
+        );
+    }
+    let mut long = bytes.clone();
+    long.push(0);
+    assert_eq!(
+        BundleRef::decode(&long),
+        Err(BundleWireError::ReferenceLength { found: 79 })
+    );
+    // The same 78 bytes with the count restated: nine to sixteen bits are
+    // two bytes, so the length holds and only the padding rule speaks.
+    let restated = |count: u32| {
+        let mut other = bytes.clone();
+        other[40..44].copy_from_slice(&count.to_le_bytes());
+        BundleRef::decode(&other)
+    };
+    assert_eq!(
+        restated(11),
+        Err(BundleWireError::BitmapPadding { count: 11 })
+    );
+    assert_eq!(restated(13).map(|r| r.count()), Ok(13));
+    for count in [0u32, 8, 17, 104] {
+        assert_eq!(
+            restated(count),
+            Err(BundleWireError::ReferenceLength { found: 78 }),
+            "a stated count of {count}"
+        );
+    }
 }
 
 // ------------------------------------------------------------ commitment
@@ -338,62 +435,65 @@ fn a_reference_round_trips_and_is_the_kept_bytes_then_the_hash() {
 /// The bundle commitment's vectors (§7.3, `SCS-P35`): no draws; eight
 /// draws and no pass; one record; three records with a bitmap that crosses
 /// a byte boundary; that case at `h + 1`; that case with one more bit set
-/// and the same records. Red edits: drop `count_le[4]`; write `h`
-/// big-endian; rename the label; put the records before the bitmap.
+/// and the same records. **Unchanged by `SCS-P39`**: the preimage was
+/// already `seed ‖ h ‖ count ‖ bitmap ‖ records`, which is now literally
+/// the kept part followed by the records, and the six values are the ones
+/// pinned before the kept part carried its count. Red edits: hash anything
+/// but `BundleKept::encode` in front of the records; write `h` or `count`
+/// big-endian; rename the label; put the records first.
 #[test]
 fn the_bundle_commitment_matches_its_vectors() {
     let three = records_bytes(3);
+    let commit = |h: BlockHeight, count: u32, bitmap: &[u8], records: &[u8]| {
+        hex(&bundle_commitment(&kept_at(h, count, bitmap), records))
+    };
     assert_eq!(
-        hex(&bundle_commitment(&SEED, H, 0, &[], &[])),
+        commit(H, 0, &[], &[]),
         "0095223a6b8da68f74cb3a7b4172de3535846465118aee794cd7cd23841db5e9"
     );
     assert_eq!(
-        hex(&bundle_commitment(&SEED, H, 8, &[0x00], &[])),
+        commit(H, 8, &[0x00], &[]),
         "c2754942eca20acb5ea172d6b9590c0998f8cdb2c2c055db56b9f7cd65394dac"
     );
     assert_eq!(
-        hex(&bundle_commitment(
-            &SEED,
-            H,
-            1,
-            &[0x01],
-            &record(0).encode()
-        )),
+        commit(H, 1, &[0x01], &record(0).encode()),
         "fe450e70bf107a130c82a2cf081a667470e58f24f7d6fa3db850ef455128a65b"
     );
     assert_eq!(
-        hex(&bundle_commitment(&SEED, H, 12, &[0x01, 0x0A], &three)),
+        commit(H, 12, &[0x01, 0x0A], &three),
         "63a50faab6ab3a97baa9f86e0ad3aa639e57a18c4f1dcbb9b9de75c1fd558796"
     );
     assert_eq!(
-        hex(&bundle_commitment(
-            &SEED,
-            BlockHeight::from_raw(1_000_001),
-            12,
-            &[0x01, 0x0A],
-            &three
-        )),
+        commit(BlockHeight::from_raw(1_000_001), 12, &[0x01, 0x0A], &three),
         "5fb66eec3dbc2df6e99be83f51b7112020417b1db1224422794ef4cdbf6793e3"
     );
     assert_eq!(
-        hex(&bundle_commitment(&SEED, H, 12, &[0x09, 0x0A], &three)),
+        commit(H, 12, &[0x09, 0x0A], &three),
         "2dacbfd26047a38e935d6cbb5ef99391b84492d3aa6d1bcf5120b38542ce1557"
     );
 }
 
-/// The typed path computes the same commitment as the byte path, so the
-/// vectors above pin what the verifier compares. Red edit: have
-/// `BundleKept::commitment` pass the bitmap's popcount for `count`.
+/// The commitment is the hash of the kept part's one encoding followed by
+/// the records — the same bytes a reference opens with. Red edit: give
+/// `bundle_commitment` its own serialisation of the kept fields; the two
+/// then agree only until one of them changes.
 #[test]
-fn the_kept_parts_commitment_is_the_vectors_commitment() {
-    let kept = BundleKept {
-        h: H,
-        seed: SEED,
-        passes: PassBitmap::from_passes(12, [0, 9, 11]).expect("in range"),
-    };
+fn the_commitment_is_over_the_kept_parts_encoding_then_the_records() {
+    let kept = kept_at(H, 12, &[0x01, 0x0A]);
+    let three = body(3);
+    let mut preimage = kept.encode();
+    preimage.extend_from_slice(three.records_bytes());
+    let expected = crate::hash::cshake256_32(BUNDLE_COMMITMENT_CUSTOMIZATION, &preimage);
+    assert_eq!(bundle_commitment(&kept, three.records_bytes()), expected);
+    assert_eq!(kept.commitment(three.records_bytes()), expected);
     assert_eq!(
-        hex(&kept.commitment(body(3).records_bytes())),
+        hex(&expected),
         "63a50faab6ab3a97baa9f86e0ad3aa639e57a18c4f1dcbb9b9de75c1fd558796"
+    );
+    assert_eq!(
+        BundleRef::of(&kept, &three).encode()[..46],
+        preimage[..46],
+        "a reference opens with the bytes the commitment opens with"
     );
 }
 
@@ -402,29 +502,26 @@ fn the_kept_parts_commitment_is_the_vectors_commitment() {
 #[test]
 fn the_commitment_moves_with_every_field() {
     let three = records_bytes(3);
-    let base = bundle_commitment(&SEED, H, 12, &[0x01, 0x0A], &three);
-    let mut seed = SEED;
-    seed[31] ^= 1;
-    assert_ne!(base, bundle_commitment(&seed, H, 12, &[0x01, 0x0A], &three));
+    let kept = kept_at(H, 12, &[0x01, 0x0A]);
+    let base = bundle_commitment(&kept, &three);
+    let mut other_seed = kept.clone();
+    other_seed.seed[31] ^= 1;
+    assert_ne!(base, bundle_commitment(&other_seed, &three));
     // Thirteen bits in the same two bytes: only the count differs.
-    assert_ne!(base, bundle_commitment(&SEED, H, 13, &[0x01, 0x0A], &three));
+    assert_ne!(
+        base,
+        bundle_commitment(&kept_at(H, 13, &[0x01, 0x0A]), &three)
+    );
     for at in [0, 1, 9, 41, 1_396, 1_397, 2 * 1_397 + 700, three.len() - 1] {
         let mut flipped = three.clone();
         flipped[at] ^= 0x01;
-        assert_ne!(
-            base,
-            bundle_commitment(&SEED, H, 12, &[0x01, 0x0A], &flipped),
-            "record byte {at}"
-        );
+        assert_ne!(base, bundle_commitment(&kept, &flipped), "record byte {at}");
     }
     // The records in another order are another bundle.
     let mut swapped = record(1).encode().to_vec();
     swapped.extend_from_slice(&record(0).encode());
     swapped.extend_from_slice(&record(2).encode());
-    assert_ne!(
-        base,
-        bundle_commitment(&SEED, H, 12, &[0x01, 0x0A], &swapped)
-    );
+    assert_ne!(base, bundle_commitment(&kept, &swapped));
 }
 
 /// The bundle commitment is not the carrier's set commitment over the same
@@ -468,20 +565,26 @@ fn the_prunable_hash_matches_its_vectors() {
 /// three passes at `h`, and a bundle of no draws at `h + 7` under seed
 /// `0x12 × 32`.
 fn vector_refs() -> (BundleRef, BundleRef) {
-    let first = BundleRef::new(SEED, H, &[0x01, 0x0A], body(3).prunable_hash()).expect("short");
+    let first = BundleRef::new(kept_at(H, 12, &[0x01, 0x0A]), body(3).prunable_hash());
     let second = BundleRef::new(
-        [0x12; 32],
-        BlockHeight::from_raw(1_000_007),
-        &[],
+        BundleKept {
+            h: BlockHeight::from_raw(1_000_007),
+            seed: [0x12; 32],
+            passes: PassBitmap::new(0, &[]).expect("no bits"),
+        },
         body(0).prunable_hash(),
-    )
-    .expect("short");
+    );
     (first, second)
 }
 
-/// The header root's vectors: over no reference, one, and two. Red edits:
-/// drop `n_le[4]`; drop the per-reference length; hash `h` before the
-/// seed; rename the label.
+/// The header root's vectors: over no reference, one, and two — `n_le[4]`
+/// and then each reference's own bytes, with no frame between them
+/// (`SCS-P39`). Recomputed 2026-10-12 by the standalone script; the values
+/// under the earlier, length-framed preimage were `28f79ede…c4b64586` and
+/// `d51fdf58…24a4c85e`, and the empty root, which has no reference to
+/// frame, did not move. Red edits: drop `n_le[4]`; frame a reference by
+/// its length; leave `count` out of a reference; hash `h` before the seed;
+/// rename the label.
 #[test]
 fn the_root_matches_its_vectors() {
     let (first, second) = vector_refs();
@@ -491,17 +594,11 @@ fn the_root_matches_its_vectors() {
     );
     assert_eq!(
         hex(&bundle_root(std::slice::from_ref(&first))),
-        "28f79edee4d4b9c73eb4502893f34cf62196ea7741e78d910da023d2c4b64586"
+        "e2888ebb63918165e0efa48e215e157ec8e255331fcf8b415390affb6e84836c"
     );
     assert_eq!(
         hex(&bundle_root(&[first.clone(), second.clone()])),
-        "d51fdf589f25e1fd2faf0f034041ab2ce20e6490831fac9b66efb5e524a4c85e"
-    );
-    // The control the standalone implementation also printed: one
-    // reference hashed without its length frame. The root is not that.
-    assert_ne!(
-        hex(&bundle_root(std::slice::from_ref(&first))),
-        "a0cd5a63ab59a2ad0579d327cdd65032ae129ebc48825d8f63483fa893a510c9"
+        "a64fe23abd6c2350d9fdf4fa0109ffc69701b3adad19e0e331858f966328de4b"
     );
     // Order is hashed: the section check refuses the swap, and the root
     // would not agree with it either.
@@ -511,36 +608,100 @@ fn the_root_matches_its_vectors() {
     );
 }
 
-/// The root covers each reference's seed, `h`, bitmap and prunable hash.
-/// Red edit: leave any one out of `BundleRef::encode`.
+/// Two different sections cannot share a root preimage. Two controls the
+/// standalone script also printed, each a preimage the root must not be:
+/// the two references' bytes under `n = 1`, and one reference with no
+/// `n`. And the structural reason, checked rather than argued: the
+/// concatenation of two references parses back into exactly those two,
+/// because each reference's own count says where it ends — no byte can
+/// move between one reference's bitmap, its hash and the next reference.
+/// Red edit: drop `count` from the reference's encoding; `split_first`
+/// below can no longer find the boundary.
+#[test]
+fn two_sections_cannot_share_a_root_preimage() {
+    let (first, second) = vector_refs();
+    let two = bundle_root(&[first.clone(), second.clone()]);
+    assert_ne!(
+        hex(&two),
+        "c4e0066605daec9bd4a8fac7ad935fb9881cd2ebc95546d2d7cc643dceb3720a",
+        "n counts references, not bytes"
+    );
+    assert_ne!(
+        hex(&bundle_root(std::slice::from_ref(&first))),
+        "c6bdd61d22246ea3b1a44fcafb5e28f8cd4259ca675a1db3b37c467cdac2ab6c",
+        "n is hashed"
+    );
+
+    /// The first reference of a concatenation and what follows it, read
+    /// from the bytes alone.
+    fn split_first(bytes: &[u8]) -> (BundleRef, &[u8]) {
+        let count = u32::from_le_bytes(bytes[40..44].try_into().expect("4 bytes"));
+        let len = BUNDLE_REF_FIXED_LEN + PassBitmap::byte_len(count);
+        let (head, tail) = bytes.split_at(len);
+        (BundleRef::decode(head).expect("a reference"), tail)
+    }
+    // Sections whose bitmaps differ in length, so a shifted boundary would
+    // show: 12 bits then 0 bits, 0 then 12, and 97 then 104 (13 bytes each,
+    // the pair a byte length cannot tell apart).
+    let wide = |count: u32, h: u64| {
+        BundleRef::new(
+            kept_at(
+                BlockHeight::from_raw(h),
+                count,
+                &vec![0u8; PassBitmap::byte_len(count)],
+            ),
+            [0xEE; 32],
+        )
+    };
+    for section in [
+        vec![first.clone(), second.clone()],
+        vec![second.clone(), first.clone()],
+        vec![wide(97, 5), wide(104, 6), wide(0, 7), wide(1, 8)],
+    ] {
+        let mut bytes: Vec<u8> = section.iter().flat_map(BundleRef::encode).collect();
+        let mut parsed = Vec::new();
+        while !bytes.is_empty() {
+            let (reference, rest) = split_first(&bytes);
+            parsed.push(reference);
+            bytes = rest.to_vec();
+        }
+        assert_eq!(parsed, section);
+    }
+    // 97 and 104 draws are both 13 bytes of bitmap and are different
+    // references, with different roots: the count is in the preimage.
+    assert_eq!(wide(97, 5).encode().len(), wide(104, 5).encode().len());
+    assert_ne!(bundle_root(&[wide(97, 5)]), bundle_root(&[wide(104, 5)]));
+}
+
+/// The root covers each reference's seed, `h`, count, bitmap and prunable
+/// hash. Red edit: leave any one out of `BundleRef::encode`.
 #[test]
 fn the_root_moves_with_every_field_of_a_reference() {
     let (first, second) = vector_refs();
     let base = bundle_root(&[first.clone(), second.clone()]);
     let with = |changed: BundleRef| bundle_root(&[changed, second.clone()]);
     let ph = *first.prunable_hash();
-    let mut seed = SEED;
-    seed[0] ^= 1;
+    let mut seed = first.kept().clone();
+    seed.seed[0] ^= 1;
+    assert_ne!(base, with(BundleRef::new(seed, ph)));
     assert_ne!(
         base,
-        with(BundleRef::new(seed, H, &[0x01, 0x0A], ph).expect("short"))
+        with(BundleRef::new(
+            kept_at(BlockHeight::from_raw(999_999), 12, &[0x01, 0x0A]),
+            ph
+        ))
     );
     assert_ne!(
         base,
-        with(
-            BundleRef::new(SEED, BlockHeight::from_raw(999_999), &[0x01, 0x0A], ph).expect("short")
-        )
+        with(BundleRef::new(kept_at(H, 13, &[0x01, 0x0A]), ph))
     );
     assert_ne!(
         base,
-        with(BundleRef::new(SEED, H, &[0x01, 0x08], ph).expect("short"))
+        with(BundleRef::new(kept_at(H, 12, &[0x01, 0x08]), ph))
     );
     let mut other = ph;
     other[31] ^= 1;
-    assert_ne!(
-        base,
-        with(BundleRef::new(SEED, H, &[0x01, 0x0A], other).expect("short"))
-    );
+    assert_ne!(base, with(BundleRef::new(first.kept().clone(), other)));
 }
 
 // ---------------------------------------------------------------- budget
@@ -579,4 +740,19 @@ fn the_section_budget_saturates() {
         section_budget(1, u64::MAX, seb),
         u64::try_from(u128::from(u64::MAX) * 9 / 10_000 + 1).expect("fits")
     );
+}
+
+/// A bundle is charged `max(count, 1)` (`SCS-P40`): its draws, and one if
+/// it has none. Red edit: return `count`; a zero-draw bundle is then free.
+#[test]
+fn a_bundle_is_charged_its_draws_and_never_nothing() {
+    assert_eq!(bundle_charge(0), 1);
+    assert_eq!(bundle_charge(1), 1);
+    assert_eq!(bundle_charge(2), 2);
+    assert_eq!(bundle_charge(292), 292);
+    assert_eq!(bundle_charge(u32::MAX), u64::from(u32::MAX));
+    let empty = kept_at(H, 0, &[]);
+    assert_eq!(empty.charge(), 1);
+    assert_eq!(BundleRef::new(empty, [0; 32]).charge(), 1);
+    assert_eq!(kept_at(H, 12, &[0x01, 0x0A]).charge(), 12);
 }
