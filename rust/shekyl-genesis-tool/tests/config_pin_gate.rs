@@ -17,8 +17,11 @@
 //! parser diagnostic rather than as a confusing byte-compare miss.
 
 use shekyl_address::Network;
+use shekyl_genesis_tool::builder::GENESIS_DRAW_COMMITMENT;
 use shekyl_genesis_tool::config_pin::{load_config_pins, verify_networks};
 use shekyl_genesis_tool::recipients::load_and_validate;
+use shekyl_wire::transaction::Transaction;
+use shekyl_wire::tx_extra::{self, TxExtraField, COINBASE_NONCE_BYTES};
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
@@ -115,6 +118,60 @@ fn genesis_hex_matches_config_pin() {
             o.built_len,
             o.pinned_len,
             o.first_mismatch
+        );
+    }
+}
+
+/// The coinbase writer and the genesis pins are one layout: read the five
+/// fields out of each network's pinned genesis extra, hand them to the
+/// grammar's one constructor, and require the bytes that come out to be
+/// the bytes that went in. A drift in either direction fails here, in the
+/// writer or in what was pinned, and so does a genesis the grammar would
+/// refuse at connect.
+///
+/// This is the proof the C++ `mining_parity` test carried through the FFI
+/// writer until the `0x0C` draw commitment (`SO-D12` increment 1). That
+/// writer now draws its own commitment and takes none from its caller, so
+/// it cannot reproduce a fixed extra; [`tx_extra::build_coinbase_extra`] is
+/// the pure function it wraps, and the one the daemon's coinbase is laid
+/// out by.
+#[test]
+fn the_pure_writer_reproduces_each_pinned_genesis_extra() {
+    let pins = load_config_pins(&repo_root().join("src/cryptonote_config.h")).expect("pins");
+    for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
+        let name = net.as_str();
+        let blob = hex::decode(&pins.for_network(net).genesis_tx_hex).expect("pinned hex");
+        let tx = Transaction::from_bytes(&blob).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let extra = &tx.prefix.extra;
+        let n_outputs = tx.prefix.outputs.len();
+        assert!(n_outputs > 0, "{name}: genesis pays at least one output");
+
+        let fields = tx_extra::parse(extra).unwrap_or_else(|e| panic!("{name}: {e}"));
+        tx_extra::check_coinbase_extra_shape(&fields, n_outputs)
+            .unwrap_or_else(|e| panic!("{name}: the pinned genesis fails the grammar: {e}"));
+        // Exactly the grammar's five fields, so nothing can survive the
+        // round trip below by being dropped.
+        let [TxExtraField::PubKey(pubkey), TxExtraField::Nonce(nonce), TxExtraField::DrawCommitment(commitment), TxExtraField::PqcKemCiphertext(kem), TxExtraField::PqcLeafEntries(leaf)] =
+            fields.as_slice()
+        else {
+            panic!("{name}: the pinned genesis extra is not the five-field layout")
+        };
+        // Genesis was not nonce-searched, and it commits to the ruled value.
+        // The commitment is read as a field that is present, like any other
+        // block's; this is the pin of its bytes, not a test for absence.
+        let nonce: [u8; COINBASE_NONCE_BYTES] = nonce
+            .as_slice()
+            .try_into()
+            .expect("the grammar fixed the width");
+        assert_eq!(nonce, [0; COINBASE_NONCE_BYTES], "{name}");
+        assert_eq!(*commitment, GENESIS_DRAW_COMMITMENT, "{name}");
+
+        let rebuilt =
+            tx_extra::build_coinbase_extra(*pubkey, &nonce, *commitment, n_outputs, kem, leaf)
+                .unwrap_or_else(|e| panic!("{name}: the writer refused the genesis fields: {e}"));
+        assert_eq!(
+            &rebuilt, extra,
+            "{name}: the writer does not reproduce the pinned genesis extra"
         );
     }
 }

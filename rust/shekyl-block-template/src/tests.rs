@@ -144,6 +144,7 @@ fn context<'a>(
         miner,
         tx_key_secret: Zeroizing::new([0x77; 32]),
         extra_nonce: [0; tx_extra::COINBASE_NONCE_BYTES],
+        draw_commitment: tx_extra::CONFORMING_DRAW_COMMITMENT,
         listed,
     }
 }
