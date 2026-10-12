@@ -823,12 +823,16 @@ extern "C" {
     pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
     /// `get_info`'s chain snapshot (RK-5c), read for every caller.
     pub fn shekyl_rpc_info_chain(h: *mut CoreRpcHandle, out: *mut InfoChainFactsFfi) -> i32;
-    /// The pool's population: the broadcast set, or with `include_unrelayed`
-    /// non-zero every entry. The second is host-only data.
-    pub fn shekyl_rpc_info_pool_count(
+    /// The pool's population as two counts of one pool state: the entries
+    /// this node has broadcast, and with `with_unbroadcast` non-zero the
+    /// entries it holds and has not yet broadcast. The second is host-only
+    /// data; when it is not asked for it is not counted and
+    /// `out_unbroadcast` is not written.
+    pub fn shekyl_rpc_info_pool_counts(
         h: *mut CoreRpcHandle,
-        include_unrelayed: u8,
-        out: *mut u64,
+        with_unbroadcast: u8,
+        out_broadcast: *mut u64,
+        out_unbroadcast: *mut u64,
     ) -> i32;
     /// `get_info`'s Status facts and the build's version string, which is
     /// written to `version_buf` without a terminator.
@@ -1120,10 +1124,11 @@ mod unit_test_link_stubs {
         SHEKYL_RPC_FACTS_ERR_NULL
     }
     #[no_mangle]
-    pub extern "C" fn shekyl_rpc_info_pool_count(
+    pub extern "C" fn shekyl_rpc_info_pool_counts(
         _h: *mut CoreRpcHandle,
-        _include_unrelayed: u8,
-        _out: *mut u64,
+        _with_unbroadcast: u8,
+        _out_broadcast: *mut u64,
+        _out_unbroadcast: *mut u64,
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
     }

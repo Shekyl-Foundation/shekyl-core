@@ -27,12 +27,13 @@
 //! 3.47), then the restricted stand-ins went (RK-Q8, 3.48): a caller who is
 //! not shown Status or Peers gets a reply without those parts, where it got
 //! zeros, an empty version, `u64::MAX` of free space and the store's size
-//! rounded up. It still writes what the design retires after that, each
-//! marked where it is written: a refused burn computation reported as
-//! zero, and a pool count whose meaning depends on the caller. The
-//! connection counts went to the board at 3.49 (RK-Q3): handshaken
-//! sessions on every connector, one snapshot with `has_peers`, and no
-//! subtraction.
+//! rounded up. The connection counts went to the board at 3.49 (RK-Q3):
+//! handshaken sessions on every connector, one snapshot with `has_peers`,
+//! and no subtraction. The pool count was split at 3.50 (RK-Q10):
+//! `tx_pool_size` is the entries this node has broadcast, for every
+//! caller, and the entries it has not yet broadcast are a host-only part.
+//! It still writes one thing the design retires after that, marked where
+//! it is written: a refused burn computation reported as zero.
 //!
 //! **The store's size is a Status member and is read with Status.** While
 //! a restricted reply carried it rounded, it was read for every caller, so
@@ -43,10 +44,11 @@
 
 use shekyl_economics::{project_at_tip, EconomicParams, TipOperands};
 use shekyl_rpc_types::{
-    GetInfoResponse, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
+    GetInfoResponse, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost, InfoIdentity,
     InfoPeers, InfoPool, InfoStatus, RpcStatus,
 };
 
+use crate::chain_facts::FactsFault;
 use crate::info_facts::{InfoFacts, PoolScope, SessionCounts};
 use crate::methods::RpcFault;
 
@@ -57,7 +59,7 @@ use crate::methods::RpcFault;
 /// the pool entries this node has not broadcast — is served to the host's
 /// administrator and to no grant, `admin` included (`RPC_CHANNEL.md` §6.1,
 /// RT-O9.3). Naming the axis here is what stops the channel's daemon slice
-/// from reading "`admin`" as "may see unrelayed entries".
+/// from reading "`admin`" as "may see entries not yet broadcast".
 ///
 /// Today both axes are mapped from the one listener flag
 /// ([`Self::from_listener`]). The RPC channel (RT-W10) maps a connection's
@@ -140,11 +142,24 @@ pub fn get_info(
         facts.sessions()?
     };
     let has_peers = sessions.has_peers();
-    let pool_count = facts.pool_count(if disclosure.host {
-        PoolScope::All
+    // The pool. Every caller is told how many entries this node has
+    // broadcast. How many it holds and has not yet broadcast is host-only,
+    // so it is counted only on the host axis; both are then one pool state.
+    let pool = facts.pool_counts(if disclosure.host {
+        PoolScope::WithUnbroadcast
     } else {
         PoolScope::Broadcast
     })?;
+    let host = match (disclosure.host, pool.unbroadcast) {
+        (true, Some(tx_pool_unbroadcast_count)) => Hidden::Shown(InfoHost {
+            tx_pool_unbroadcast_count,
+        }),
+        // Asked for on the host axis and not answered: the facts layer did
+        // not make the count it was asked to. Not zero, and not withheld.
+        (true, None) => return Err(RpcFault::Facts(FactsFault::Inconsistent)),
+        // Not host: withheld, whatever the facts layer returned.
+        (false, _) => Hidden::Withheld,
+    };
     // A part the caller is not shown is withheld: absent from the reply,
     // and none of its reads made (RK-D24, RK-Q8). No member is written with
     // a value that means "not this value".
@@ -240,13 +255,12 @@ pub fn get_info(
             total_burned: tip.total_burned.to_raw(),
             staker_emission_share_effective: tip.staker_emission_share,
         },
-        // Parity: one key, two quantities — the broadcast set for a caller
-        // who is not host, every entry for one who is. RK-Q10 splits it.
         pool: InfoPool {
-            tx_pool_size: pool_count,
+            tx_pool_size: pool.broadcast,
         },
         node,
         peers,
+        host,
         restricted: disclosure.listener_restricted,
     })
 }

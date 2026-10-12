@@ -161,10 +161,26 @@ pub struct InfoEconomics {
 /// The pool, as far as this reply goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoPool {
-    /// Entries in the pool. Today the count depends on who asks: the
-    /// broadcast set for a restricted caller, every entry for any other.
-    /// RK-Q10 splits it.
+    /// Pool entries this node has **broadcast**. One quantity, for every
+    /// caller.
+    ///
+    /// An entry this node holds and has not yet broadcast is not counted
+    /// here, whoever asks: it is in [`InfoHost`]. That includes a
+    /// transaction on its stem, which has been relayed to one peer and not
+    /// broadcast. Until 3.50 this member was the broadcast set for a
+    /// restricted caller and every entry for any other (RK-Q10).
     pub tx_pool_size: u64,
+}
+
+/// What only the host's own administrator is told (`RPC_CHANNEL.md` §6.1,
+/// RT-O9.3). It belongs to no grant, `admin` included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InfoHost {
+    /// Pool entries this node holds and has **not yet broadcast**: its own
+    /// transactions and the ones it is carrying on a stem. Whether such an
+    /// entry exists says where a transaction originated, which is what the
+    /// relay's stem phase hides, so it is told to nobody else.
+    pub tx_pool_unbroadcast_count: u64,
 }
 
 /// What describes this node and not the network: its build, its uptime, its
@@ -206,6 +222,9 @@ pub struct GetInfoResponse {
     /// [`RpcStatus`], as on every method.
     pub node: Hidden<InfoStatus>,
     pub peers: Hidden<InfoPeers>,
+    /// The host-only part: withheld from every caller but the host's
+    /// administrator.
+    pub host: Hidden<InfoHost>,
     /// Whether the caller was answered as a restricted one. Transitional:
     /// the RPC channel's handshake returns the grant instead (RT-W10).
     pub restricted: bool,
@@ -338,6 +357,10 @@ struct GetInfoWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grey_peerlist_size: Option<u64>,
 
+    // Host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tx_pool_unbroadcast_count: Option<u64>,
+
     restricted: bool,
 }
 
@@ -462,6 +485,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             tor_outgoing_socket_count,
             white_peerlist_size,
             grey_peerlist_size,
+            tx_pool_unbroadcast_count,
             restricted,
         } = wire;
 
@@ -525,6 +549,13 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 grey_peerlist_size,
             }
         );
+        let host = hidden_part!(
+            "host",
+            [tx_pool_unbroadcast_count],
+            InfoHost {
+                tx_pool_unbroadcast_count,
+            }
+        );
 
         Ok(Self {
             status,
@@ -579,6 +610,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             pool: InfoPool { tx_pool_size },
             node,
             peers,
+            host,
             restricted,
         })
     }
@@ -595,6 +627,7 @@ impl From<GetInfoResponse> for GetInfoWire {
             pool,
             node,
             peers,
+            host,
             restricted,
         } = reply;
         let (difficulty, wide_difficulty, difficulty_top64) = split_128(chain.difficulty);
@@ -650,6 +683,7 @@ impl From<GetInfoResponse> for GetInfoWire {
             tor_outgoing_socket_count: peers.as_ref().map(|p| p.tor_outgoing_socket_count),
             white_peerlist_size: peers.as_ref().map(|p| p.white_peerlist_size),
             grey_peerlist_size: peers.as_ref().map(|p| p.grey_peerlist_size),
+            tx_pool_unbroadcast_count: host.shown().map(|h| h.tx_pool_unbroadcast_count),
             restricted,
         }
     }

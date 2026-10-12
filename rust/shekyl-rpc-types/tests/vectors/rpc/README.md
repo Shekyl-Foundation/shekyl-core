@@ -145,3 +145,12 @@ four fixtures are full replies and have no successor.
 source (the seam board, every connector) and so meaning, which is why the
 version moved (RK-D8), but the fixtures hold 8 outbound and 12 inbound
 under either source. `get_version_synced_v26` is the chain's 3.49 link.
+
+**3.50 split the pool count, and the four host fixtures have a
+successor.** They held `tx_pool_size: 12`, every entry. Each successor
+holds `9`, the entries broadcast, and gains
+`tx_pool_unbroadcast_count: 3`
+(`the_3_50_vectors_split_the_same_pool_into_broadcast_and_not_yet_broadcast`).
+The restricted fixture already held `9` and does not move: that every
+caller now reads that number under that key is the change.
+`get_version_synced_v27` is the chain's 3.50 link.

@@ -118,22 +118,40 @@ pub struct InfoPeersFacts {
     pub grey_peerlist_size: u64,
 }
 
-/// Which pool entries a count covers.
+/// Which of the pool's two counts a caller is owed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolScope {
-    /// The broadcast set: what every caller may be told.
+    /// The entries this node has broadcast: what every caller may be told.
     Broadcast,
-    /// Every entry, including those this node has not broadcast. Host-only
-    /// data (`RPC_CHANNEL.md` §6.1, RT-O9.3).
-    All,
+    /// That, and the entries it holds and has not yet broadcast. The second
+    /// is host-only data (`RPC_CHANNEL.md` §6.1, RT-O9.3).
+    WithUnbroadcast,
+}
+
+/// The pool's population, as counts of one pool state.
+///
+/// The split is by **broadcast** state, which is what the pool's own filter
+/// and the origin guard go by. It is not "relayed": a transaction on its
+/// stem has been relayed, to one peer, and has not been broadcast, and it
+/// is exactly the entry the second count exists to keep from other callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolCounts {
+    /// Entries this node has broadcast.
+    pub broadcast: u64,
+    /// Entries it holds and has not yet broadcast. `None` when the read was
+    /// made with [`PoolScope::Broadcast`]: the count was then not made, so
+    /// there is no number here to leak or to mistake for zero.
+    pub unbroadcast: Option<u64>,
 }
 
 /// The reads behind `get_info`.
 pub trait InfoFacts: Send + Sync {
     /// The chain at its tip. One chain state: see the module docs.
     fn chain(&self) -> Result<InfoChainFacts, FactsFault>;
-    /// The pool's population over `scope`.
-    fn pool_count(&self, scope: PoolScope) -> Result<u64, FactsFault>;
+    /// The pool's population. With [`PoolScope::WithUnbroadcast`] both
+    /// counts are of one pool state, read under one hold of the pool's lock;
+    /// with [`PoolScope::Broadcast`] the second is not counted at all.
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault>;
     /// The chain store's size on disk, in bytes.
     ///
     /// # Errors
@@ -296,10 +314,15 @@ impl InfoFacts for FfiInfoFacts {
         })
     }
 
-    fn pool_count(&self, scope: PoolScope) -> Result<u64, FactsFault> {
-        self.core
-            .info_pool_count(scope == PoolScope::All)
-            .map_err(FactsFault::from_code)
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+        let (broadcast, unbroadcast) = self
+            .core
+            .info_pool_counts(scope == PoolScope::WithUnbroadcast)
+            .map_err(FactsFault::from_code)?;
+        Ok(PoolCounts {
+            broadcast,
+            unbroadcast,
+        })
     }
 
     fn store_size(&self) -> Result<u64, FactsFault> {

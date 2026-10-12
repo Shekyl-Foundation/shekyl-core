@@ -1225,6 +1225,9 @@ fn info_reply(height: u64) -> String {
             white_peerlist_size: 10,
             grey_peerlist_size: 20,
         }),
+        host: Hidden::Shown(shekyl_rpc_types::InfoHost {
+            tx_pool_unbroadcast_count: 0,
+        }),
         restricted: false,
     })
     .expect("a get_info reply serializes")

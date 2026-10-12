@@ -521,15 +521,34 @@ impl RegtestDaemon {
             .clone()
     }
 
-    /// Transactions currently in the daemon's pool — the drain loop's
-    /// condition and the pop legs' return-to-pool observable.
+    /// Every transaction this daemon holds in its pool, broadcast or not —
+    /// the drain loop's condition and the pop legs' return-to-pool
+    /// observable.
+    ///
+    /// `get_info` reports the pool as two counts: the entries the node has
+    /// broadcast, told to every caller, and the entries it has not yet
+    /// broadcast, told only to the host's administrator (RK-Q10). Both
+    /// callers of this mean "everything", and a transaction a wallet has
+    /// just submitted sits in the second count until its stem ends, so
+    /// this is their sum. The harness talks to the unrestricted listener,
+    /// which stands in for the host until the RPC channel exists; a reply
+    /// without the host part would mean it was answered as someone else,
+    /// and is a failure, never a zero.
     pub(super) async fn tx_pool_size(&self) -> u64 {
-        self.rpc
+        let info = self
+            .rpc
             .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
-            .expect("get_info")
-            .pool
+            .expect("get_info");
+        let unbroadcast = info
+            .host
+            .shown()
+            .expect("the harness's listener is the host's, and is told the host-only part")
+            .tx_pool_unbroadcast_count;
+        info.pool
             .tx_pool_size
+            .checked_add(unbroadcast)
+            .expect("two pool counts fit a u64")
     }
 
     /// The C++'s `(effective median, block-weight limit)` in force for the

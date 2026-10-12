@@ -18,8 +18,7 @@ use shekyl_types::{BlockHash, ChainCount};
 use shekyl_units::AtomicUnits;
 
 use super::*;
-use crate::chain_facts::FactsFault;
-use crate::info_facts::{InfoChainFacts, InfoPeersFacts, InfoStatusFacts};
+use crate::info_facts::{InfoChainFacts, InfoPeersFacts, InfoStatusFacts, PoolCounts};
 
 /// The emitter's `tagged_hash`: byte i = (i*7 + tag) & 0xff.
 fn tagged_hash(tag: u8) -> BlockHash {
@@ -36,8 +35,11 @@ fn tagged_hash(tag: u8) -> BlockHash {
 /// test say a read was **not** made.
 pub(crate) struct FakeInfoFacts {
     pub(crate) chain: InfoChainFacts,
-    pub(crate) pool_all: u64,
     pub(crate) pool_broadcast: u64,
+    pub(crate) pool_unbroadcast: u64,
+    /// When set, the double answers a host-axis read without the second
+    /// count: a facts layer that did not do what it was asked.
+    pub(crate) pool_drops_unbroadcast: bool,
     pub(crate) store_size: u64,
     pub(crate) status: InfoStatusFacts,
     pub(crate) peers: InfoPeersFacts,
@@ -83,8 +85,10 @@ pub(crate) fn synced_facts() -> FakeInfoFacts {
             nettype: DaemonNetwork::Mainnet,
             protocol_version: 3,
         },
-        pool_all: 12,
+        // Twelve entries held: nine broadcast, three not yet.
         pool_broadcast: 9,
+        pool_unbroadcast: 3,
+        pool_drops_unbroadcast: false,
         store_size: 7 * 1024 * 1024 * 1024 + 1,
         status: InfoStatusFacts {
             start_time: 1_699_990_000,
@@ -124,14 +128,16 @@ impl InfoFacts for FakeInfoFacts {
         self.chain_fault.map_or_else(|| Ok(self.chain.clone()), Err)
     }
 
-    fn pool_count(&self, scope: PoolScope) -> Result<u64, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
         self.pool_scopes.lock().expect("scopes").push(scope);
         if let Some(fault) = self.pool_fault {
             return Err(fault);
         }
-        Ok(match scope {
-            PoolScope::All => self.pool_all,
-            PoolScope::Broadcast => self.pool_broadcast,
+        Ok(PoolCounts {
+            broadcast: self.pool_broadcast,
+            // Counted only when asked for, as the real read does.
+            unbroadcast: (scope == PoolScope::WithUnbroadcast && !self.pool_drops_unbroadcast)
+                .then_some(self.pool_unbroadcast),
         })
     }
 
@@ -179,7 +185,7 @@ fn synced_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v3.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v4.json"
         ))
     );
 }
@@ -219,7 +225,7 @@ fn syncing_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v2.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v3.json"
         ))
     );
 }
@@ -238,7 +244,7 @@ fn peerless_startup_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v3.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v4.json"
         ))
     );
 }
@@ -263,7 +269,7 @@ fn burn_refusal_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_burn_refusal_v3.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_burn_refusal_v4.json"
         ))
     );
 }
@@ -497,7 +503,7 @@ fn a_view_caller_costs_no_status_or_peers_read() {
     assert_eq!(
         *facts.pool_scopes.lock().expect("scopes"),
         vec![PoolScope::Broadcast],
-        "the unrelayed count is host-only and is not read without the host axis"
+        "the not-yet-broadcast count is host-only and is not made without the host axis"
     );
 }
 
@@ -513,7 +519,7 @@ fn a_full_caller_reads_each_part_once() {
     assert_eq!(facts.sessions_reads.load(Ordering::Relaxed), 1);
     assert_eq!(
         *facts.pool_scopes.lock().expect("scopes"),
-        vec![PoolScope::All]
+        vec![PoolScope::WithUnbroadcast]
     );
 }
 
@@ -729,7 +735,7 @@ fn a_restricted_reply_withholds_status_and_peers() {
     );
 
     // Everything else is what a full caller is told, apart from the
-    // posture flag and the pool count (host-only entries are RK-Q10's).
+    // posture flag and the host-only part.
     let mut full = serde_json::to_value(
         get_info(&facts, Disclosure::FULL, 17).expect("a full caller is answered"),
     )
@@ -745,7 +751,95 @@ fn a_restricted_reply_withholds_status_and_peers() {
     for reply in [&mut full, &mut view_rest] {
         let members = reply.as_object_mut().expect("a reply is an object");
         members.remove("restricted");
-        members.remove("tx_pool_size");
+        members.remove("tx_pool_unbroadcast_count");
     }
     assert_eq!(view_rest, full);
+}
+
+// ── RK-Q10: the pool's two counts ────────────────────────────────────────
+
+/// **`tx_pool_size` is one quantity for every caller: the entries this node
+/// has broadcast** (RK-Q10). The host's administrator and a restricted
+/// caller read the same number from the same pool. Until 3.50 the first was
+/// told twelve and the second nine, under one key.
+#[test]
+fn tx_pool_size_is_the_broadcast_count_for_every_caller() {
+    let facts = synced_facts();
+    for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
+        assert_eq!(
+            get_info(&facts, disclosure, 0).unwrap().pool.tx_pool_size,
+            9,
+            "{disclosure:?}"
+        );
+    }
+
+    // And it does not move with the entries that are not yet broadcast.
+    let mut facts = synced_facts();
+    facts.pool_unbroadcast = 1_000;
+    assert_eq!(
+        get_info(&facts, Disclosure::FULL, 0)
+            .unwrap()
+            .pool
+            .tx_pool_size,
+        9
+    );
+}
+
+/// **The count of entries not yet broadcast is the host's alone.** The
+/// host's administrator is told it, in its own part. Any other caller's
+/// reply does not carry the key, and the count is not made on its behalf:
+/// the facts layer is asked for the broadcast count only.
+///
+/// A transaction on its stem is such an entry. That it exists says where a
+/// transaction originated, which is what the stem phase hides.
+#[test]
+fn the_unbroadcast_count_is_told_to_the_host_and_not_counted_for_anyone_else() {
+    let facts = synced_facts();
+    let full = get_info(&facts, Disclosure::FULL, 0).expect("the host is answered");
+    assert_eq!(
+        full.host,
+        Hidden::Shown(InfoHost {
+            tx_pool_unbroadcast_count: 3
+        })
+    );
+
+    let facts = synced_facts();
+    let view = get_info(&facts, Disclosure::VIEW, 0).expect("a view caller is answered");
+    assert_eq!(view.host, Hidden::Withheld);
+    let wire = serde_json::to_value(&view).expect("the reply serializes");
+    assert!(
+        !wire
+            .as_object()
+            .expect("a reply is an object")
+            .contains_key("tx_pool_unbroadcast_count"),
+        "a caller who is not the host is not told the key exists with a value"
+    );
+    assert_eq!(
+        *facts.pool_scopes.lock().expect("scopes"),
+        vec![PoolScope::Broadcast],
+        "and the count is not made for it"
+    );
+}
+
+/// A host with nothing unbroadcast is told `0`, which is a count. It is
+/// not the absent key a non-host caller gets.
+#[test]
+fn a_host_with_nothing_unbroadcast_is_told_zero_not_nothing() {
+    let mut facts = synced_facts();
+    facts.pool_unbroadcast = 0;
+    let wire = serde_json::to_value(get_info(&facts, Disclosure::FULL, 0).unwrap()).unwrap();
+    assert_eq!(wire["tx_pool_unbroadcast_count"], 0);
+}
+
+/// A facts layer that is asked on the host axis and returns no second
+/// count did not do what it was asked. That is a fault, and the host is
+/// not told `0` or left without the part.
+#[test]
+fn a_host_read_that_returns_no_unbroadcast_count_is_a_fault() {
+    let mut facts = synced_facts();
+    facts.pool_drops_unbroadcast = true;
+    assert_eq!(
+        get_info(&facts, Disclosure::FULL, 0),
+        Err(RpcFault::Facts(FactsFault::Inconsistent))
+    );
 }
