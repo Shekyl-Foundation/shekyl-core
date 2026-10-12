@@ -81,9 +81,8 @@ It was re-read whole at this pin on 2026-10-11. Four clauses were carried
 from the previous pin without re-reading the code behind them: the serving
 route's behaviour, that the coinbase secret is not retained, the 2-pass
 threshold inside `SettlementRow::settle`, and the body of the C++ accrual.
-The settlement lane's work changes rows here when it merges: PR #1043
-deletes the serve-credit input and record, and `SO-D12` increment 1
-(PR #1032) adds `0x0C` and the draw state.
+The settlement lane's `SO-D12` increment 1 (PR #1032) adds `0x0C` and the
+draw state when it merges. It deletes nothing here (§11.1).
 
 | Subject | Today | Where |
 | --- | --- | --- |
@@ -1316,21 +1315,28 @@ Carried with the implementation:
   a label without one.
 - **Deletions** (§11.1).
 
-### 11.1 Deleted with the implementation, and why
+### 11.1 Superseded surfaces, and when each goes
 
-[`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc): a
-surface this design replaces is deleted in the change that replaces it,
-with the reason recorded, and is not left inert.
+**Re-ruled 2026-10-12 (maintainer): landed Rust is not deleted to make
+room for this design, and C++ goes only when it is unreachable or fully
+replaced.** The table below is the list of surfaces the bundle
+supersedes. None is deleted by this slice's changes, which are additive
+(PR #1046, PR #1047). The fate of each is decided at the settlement
+lane's cutover, when the verifier is wired and its replacement is live;
+the C++ rows go at `DEL-008`. The change that had begun deleting the
+serve-credit input, PR #1043, was closed unmerged.
+
+The column headed "Deleted" reads "superseded" until then.
 
 | Deleted | Where it is today | Why |
 | --- | --- | --- |
 | The attestation path's pass records and witness | `rust/shekyl-archival-retention/src/attestation_wire.rs:138-146` and its witness types | The pass is carried by the bundle (`SCS-P16`). The attestation record is not reused for it: its parser, its record and its count ceiling are replaced. The header field survives, renamed `bundle_root` (`SCS-P34`) |
-| The serve-credit input, the `serve_credit_only` class, and the CEN-J rows that judge them | `rust/shekyl-wire/src/transaction.rs` (`ServeCredit`, `is_serve_credit_only`); `rust/shekyl-chain-rules/src/rules/tx.rs` (`TxClass::ServeCreditOnly`) | `SCS-P16`. **Not this slice's change:** the settlement lane deletes the serve-credit input and record in a PR of its own, #1043 (`chore/delete-serve-credit`, pre-flight `docs/design/SERVE_CREDIT_DELETION.md` on that branch, rows `SCD-1`…), which merges before #1032. This row names the deleting commit when it exists |
+| The serve-credit input, the `serve_credit_only` class, and the CEN-J rows that judge them | `rust/shekyl-wire/src/transaction.rs` (`ServeCredit`, `is_serve_credit_only`); `rust/shekyl-chain-rules/src/rules/tx.rs` (`TxClass::ServeCreditOnly`) | `SCS-P16`. Superseded, not deleted: its fate is decided at the cutover, beside the verifier |
 | The C++ sidecar path | `src/cryptonote_protocol/cryptonote_protocol_defs.h`; the demote and promote handling in `src/cryptonote_core/blockchain.cpp`; the witness table in `src/blockchain_db/lmdb/db_lmdb.cpp`; `rust/shekyl-ffi/src/archival_ffi/attestation.rs` | At `DEL-008`, with no reuse and no FFI for bundles (`SCS-P24`) |
 | CEN-B4's operand: the block's attestation witness, its root in the header and its verify path | `rust/shekyl-chain-rules/src/block.rs:118`; `src/cryptonote_core/blockchain.cpp:5057`; `rust/shekyl-ffi/src/archival_ffi/attestation.rs:161` | The attestation record is gone, so the rule as written has no operand. The bundle section's root takes the header field, renamed `bundle_root`. **CEN-B4 is retired by ruling for a new row** (`SCS-P34`), through the census arm of §11, so B4 points at its successor |
 | The anchor window | `rust/shekyl-archival-retention/src/pass_anchor.rs:113-131` | Admission checks no anchor bound (§9.1); the anchor hash is one lookup by height |
 | The public urn | deleted 2026-10-10; was `rust/shekyl-archival-retention/src/challenge_assignment.rs` | Replaced by the secret draw. `DrawablePair` moved to `drawable_pair.rs`. The other rows in this table stay until their implementations land |
-| The serve-credit input's leaf-path preimage, its segment path and its split signature legs | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379-402` | The receipt signs the delivery transcript and rides in the bundle (§7.2). Deleted by the settlement lane with the serve-credit record (PR #1043) |
+| The serve-credit input's leaf-path preimage, its segment path and its split signature legs | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379-402` | The receipt signs the delivery transcript and rides in the bundle (§7.2). Superseded with the serve-credit record; decided at the cutover |
 | The beacon's fire height and seal | `rust/shekyl-chain-rules/src/archival/slash.rs:10-11` and the C++ gate at `src/cryptonote_core/blockchain.cpp:4724` | One challenge per pair-epoch is replaced by per-block draws |
 
 Where a row's lines are not restated in §2 they are from the previous pin.
@@ -1497,7 +1503,7 @@ under rule 21 as a re-alignment.
 | --- | --- | --- |
 | `SCS-P14` | What carries a block's reveal and its records | **One bundle per block `h`**: the reveal and every pass record for `h`. A block admits it whole or not at all. A bundle with no passes is valid and, where the block has draws, required; it is what issues `h`'s misses (§7.1; the zero-draw block is `SCS-P33`) |
 | `SCS-P15` | Partial inclusion, refusal, and forced inclusion | **None of the three exists.** A valid bundle's validity depends only on the chain through `h`, its own bytes and the `h_open(E)` snapshot, so no node can refuse it. No rule acts on a bundle's absence. Non-inclusion through all of `W₂` is NonObservation for `h`, never misses (§9.1) |
-| `SCS-P16` | What `SCS-P14` reverses | **`SCS-P11` is reversed:** the pass is carried by the block-level bundle. The serve-credit input, the `serve_credit_only` class and the CEN-J rows are deleted, and the successors of J8–J10 are block rules. `SCV-4` (one record for one fact) and R-B (the producer is the witness) still hold. **Fail-whole is the bundle's** (proposal §7.6.2 (B)): a refused bundle is a producer defect, corrected and filed again; admitting records one at a time stays rejected. **`n ≥ 1` is dropped:** R7 holds by structure. The set commitment becomes the bundle commitment, and `serve_credit_batch_commitment` and the §7.3 vectors are regenerated |
+| `SCS-P16` | What `SCS-P14` reverses | **`SCS-P11` is reversed:** the pass is carried by the block-level bundle. The serve-credit input, the `serve_credit_only` class and the CEN-J rows are superseded, and the successors of J8–J10 are block rules (CEN-J29 to J37). *Re-ruled 2026-10-12:* superseded is not deleted; landed Rust stays until the cutover decides it (§11.1). `SCV-4` (one record for one fact) and R-B (the producer is the witness) still hold. **Fail-whole is the bundle's** (proposal §7.6.2 (B)): a refused bundle is a producer defect, corrected and filed again; admitting records one at a time stays rejected. **`n ≥ 1` is dropped:** R7 holds by structure. The set commitment becomes the bundle commitment, and `serve_credit_batch_commitment` and the §7.3 vectors are regenerated |
 | `SCS-P17` | Where the bundle sits and what commits to it | **Beside the block, not in the block blob.** The header root covers each bundle in `h` order: its kept bytes and a hash of its prunable bytes. Kept: the seed, `h`, and a pass bitmap of exactly `count(h)` bits, which replaces the list of `j`. Prunable: the witness key and signature, and per record the receipt, delivery digest, anchor and `attempt`. Settlement reads only kept data (§7.2, §7.3) |
 | `SCS-P18` | The admission window against reorgs | **`W₂` stays the only consensus window**; the miss deadline and the beacon do not move. **`W₂ + D_max` is REJECTED.** The challenger files by `h + W₂ − M`, `M = 30` blocks, PROVISIONAL and challenger policy. Reopen: testnet shows honest bundles lost at a meaningful rate |
 | `SCS-P19` | The height the receipt key is read at | **The `h_open(E)` bond snapshot, the one `D` is drawn from.** One snapshot type with two methods, taken as an argument by the draw and by the bundle rule. No setting. The settlement filter of `SCS-P12` keeps its own read at `h` (§9.1) |

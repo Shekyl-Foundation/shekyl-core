@@ -6529,6 +6529,14 @@ pairs could be chosen in advance (`SCS-F13`).
     builds transport. The contracts between them are the view trait and
     the kept projection type.
 
+**Re-ruled 2026-10-12: superseded is not deleted.** Item 1's reversal of
+`SCS-P11` stands, but nothing landed in Rust is deleted to make room for
+the bundle, and C++ goes only when it is unreachable or fully replaced.
+Slice C's changes are additive (the receipt key as a second JoinMarket
+form, the verifier staged beside the live path); the serve-credit input's
+fate is decided at the cutover. The PR that had begun deleting it was
+closed unmerged.
+
 **Ruled 2026-10-12, the six questions found while writing the bundle in**
 (specification §13.6, `SCS-P32`–`P37`):
 
