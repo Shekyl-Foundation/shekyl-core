@@ -450,7 +450,8 @@ fn every_rule_set_the_crate_builds_anchors_below_its_block() {
 #[test]
 #[should_panic(expected = "W2 + L > depth, SCS-P32")]
 fn a_fakechain_set_on_a_schedule_that_outruns_the_anchor_is_refused() {
-    let _ = RuleSet::fakechain(None, pair(14_340, 64));
+    let built = RuleSet::fakechain(None, pair(14_340, 64));
+    unreachable!("a rule set was built on a schedule past the boundary: {built:?}");
 }
 
 /// A valid `(SEB, cap)` pair for the tests above.
