@@ -1445,6 +1445,206 @@ inside its window, and any link between a producer's lag and its dropout.
 Dropout, lag, latency, reorg loss and the per-block seed and hash have no
 owner to call; §4 carries the row.
 
+### 5.18 ESR-13 — what the run said (2026-10-12, at `6b5e3169f4`)
+
+`cargo run --release -p shekyl-economics-sim -- --secret-draw-production`.
+The whole set of §5.17 ran at full size: 30 cells at `D = 324,000` and 30
+at `D = 4,096`, eight seeds each, and ESR-11's six reference cells beside
+them. **Nothing was reduced.** No cell was shrunk, no seed dropped, and
+the selection is `select_draw` on every draw.
+
+**Time.** 112 s of wall time for the whole set, measured twice (111.7 s
+and 112.5 s; the two JSON outputs are byte-identical). A full-size cell
+takes 3.2 to 4.0 s with its eight seeds on one thread each, on a 16-core
+machine that was carrying other work at a load average of 6 to 8. The set
+made 353.8 million draws in 711.1 million `select_draw` attempts.
+
+Maturity, `D = 324,000`. Cells that came out identical across `p_reorg`
+are printed once.
+
+| Arm | Dropout | `M` | `p_reorg` | Short of 3: mean (min – max) | Seeds over 3 % | Draws per pair, drawn / issued | Draws per block, mean / max | Blocks at the cap, per epoch | Observation rate | Bundles admitted / never filed / late / lost | Attempts per draw, mean / most |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ESR-11, `f64` | 0 % | – | – | 0.46 % (0.45 – 0.48) | 0 | 3.61 / 3.61 | 117.1 / 172 | 0 | 0.9954 | – | – |
+| ESR-11, `f64` | 10 % | – | – | 1.10 % (1.03 – 1.18) | 0 | 3.92 / 3.53 | 127.1 / 208 | 0 | 0.9890 | – | – |
+| ESR-11, `f64` | 30 % | – | – | 3.83 % (3.65 – 3.95) | 8 | 4.81 / 3.36 | 155.9 / 292 | 242 | 0.9617 | – | – |
+| ESR-11's timing | 0 % | 0 | 0 | 0.46 % (0.43 – 0.47) | 0 | 3.61 / 3.61 | 117.1 / 172 | 0 | 0.9954 | 100.00 / 0.00 / 0.00 / 0.00 % | 2.60 / 173 |
+| ESR-11's timing | 10 % | 0 | 0 | 1.07 % (1.00 – 1.13) | 0 | 3.91 / 3.53 | 126.8 / 208 | 0 | 0.9893 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.36 / 150 |
+| ESR-11's timing | 30 % | 0 | 0 | 3.70 % (3.48 – 3.82) | 8 | 4.78 / 3.37 | 154.8 / 292 | 234 | 0.9630 | 70.42 / 29.58 / 0.00 / 0.00 % | 1.99 / 148 |
+| Bundle, honest lag | 0 % | 0 | 0 | 0.48 % (0.45 – 0.50) | 0 | 3.63 / 3.61 | 117.5 / 172 | 0 | 0.9952 | 99.59 / 0.00 / 0.41 / 0.00 % | 2.59 / 150 |
+| Bundle, honest lag | 0 % | 0 | 0.01 | 0.48 % (0.45 – 0.50) | 0 | 3.63 / 3.61 | 117.5 / 172 | 0 | 0.9952 | 99.58 / 0.00 / 0.41 / 0.01 % | 2.59 / 150 |
+| Bundle, honest lag | 0 % | 0 | 0.1 | 0.48 % (0.45 – 0.50) | 0 | 3.63 / 3.61 | 117.5 / 172 | 0 | 0.9952 | 99.53 / 0.00 / 0.41 / 0.06 % | 2.59 / 150 |
+| Bundle, honest lag | 0 % | 30 | 0, 0.01, 0.1 (identical) | 0.43 % (0.40 – 0.44) | 0 | 3.61 / 3.61 | 117.0 / 172 | 0 | 0.9957 | 100.00 / 0.00 / 0.00 / 0.00 % | 2.62 / 190 |
+| Bundle, honest lag | 10 % | 0 | 0 | 1.10 % (1.03 – 1.16) | 0 | 3.93 / 3.53 | 127.2 / 211 | 0 | 0.9890 | 89.80 / 9.83 / 0.36 / 0.00 % | 2.35 / 150 |
+| Bundle, honest lag | 10 % | 0 | 0.01 | 1.10 % (1.03 – 1.16) | 0 | 3.93 / 3.53 | 127.2 / 211 | 0 | 0.9890 | 89.80 / 9.83 / 0.36 / 0.00 % | 2.35 / 150 |
+| Bundle, honest lag | 10 % | 0 | 0.1 | 1.10 % (1.04 – 1.16) | 0 | 3.93 / 3.53 | 127.2 / 211 | 0 | 0.9890 | 89.75 / 9.83 / 0.36 / 0.05 % | 2.35 / 150 |
+| Bundle, honest lag | 10 % | 30 | 0, 0.01, 0.1 (identical) | 1.02 % (0.98 – 1.09) | 0 | 3.91 / 3.53 | 126.6 / 208 | 0 | 0.9898 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.38 / 159 |
+| Bundle, honest lag | 30 % | 0 | 0 | 3.76 % (3.54 – 3.90) | 8 | 4.80 / 3.37 | 155.4 / 292 | 246 | 0.9624 | 70.14 / 29.58 / 0.28 / 0.00 % | 1.99 / 148 |
+| Bundle, honest lag | 30 % | 0 | 0.01 | 3.76 % (3.54 – 3.91) | 8 | 4.80 / 3.37 | 155.4 / 292 | 246 | 0.9624 | 70.14 / 29.58 / 0.28 / 0.00 % | 1.99 / 148 |
+| Bundle, honest lag | 30 % | 0 | 0.1 | 3.77 % (3.55 – 3.91) | 8 | 4.80 / 3.36 | 155.4 / 292 | 249 | 0.9623 | 70.10 / 29.58 / 0.28 / 0.05 % | 1.99 / 103 |
+| Bundle, honest lag | 30 % | 30 | 0, 0.01, 0.1 (identical) | 3.62 % (3.45 – 3.78) | 8 | 4.78 / 3.36 | 154.7 / 292 | 228 | 0.9638 | 70.42 / 29.58 / 0.00 / 0.00 % | 2.00 / 134 |
+| Bundle, lazy | 10 % | 0 | 0, 0.01, 0.1 (identical) | 100.00 % (100.00 – 100.00) | 8 | 8.06 / 0.00 | 261.2 / 292 | 6218 | 0.0000 | 0.00 / 9.83 / 90.16 / 0.00 % | 1.00 / 1 |
+| Bundle, lazy | 10 % | 3 | 0 | 2.34 % (2.27 – 2.40) | 0 | 4.00 / 3.61 | 129.6 / 216 | 0 | 0.9766 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.03 / 100 |
+| Bundle, lazy | 10 % | 3 | 0.01 | 2.44 % (2.38 – 2.53) | 0 | 4.03 / 3.60 | 130.7 / 221 | 0 | 0.9756 | 89.27 / 9.83 / 0.00 / 0.90 % | 2.01 / 112 |
+| Bundle, lazy | 10 % | 3 | 0.1 | 3.48 % (3.40 – 3.54) | 8 | 4.36 / 3.54 | 141.2 / 271 | 0 | 0.9652 | 81.25 / 9.83 / 0.00 / 8.92 % | 1.91 / 107 |
+| Bundle, lazy | 10 % | 30 | 0, 0.01, 0.1 (identical) | 2.17 % (2.11 – 2.24) | 0 | 3.99 / 3.60 | 129.4 / 216 | 0 | 0.9783 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.06 / 111 |
+
+The genesis set, `D = 4,096`:
+
+| Arm | Dropout | `M` | `p_reorg` | Short of 3: mean (min – max) | Seeds over 3 % | Draws per pair, drawn / issued | Draws per block, mean / max | Blocks at the cap, per epoch | Observation rate | Bundles admitted / never filed / late / lost | Attempts per draw, mean / most |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ESR-11, `f64` | 0 % | – | – | 0.49 % (0.44 – 0.61) | 0 | 3.61 / 3.61 | 1.5 / 3 | 0 | 0.9951 | – | – |
+| ESR-11, `f64` | 10 % | – | – | 1.18 % (0.93 – 1.39) | 0 | 3.91 / 3.52 | 1.6 / 3 | 0 | 0.9882 | – | – |
+| ESR-11, `f64` | 30 % | – | – | 3.75 % (3.49 – 4.13) | 8 | 4.80 / 3.37 | 2.0 / 4 | 256 | 0.9625 | – | – |
+| ESR-11's timing | 0 % | 0 | 0 | 0.45 % (0.29 – 0.54) | 0 | 3.61 / 3.61 | 1.5 / 3 | 0 | 0.9955 | 100.00 / 0.00 / 0.00 / 0.00 % | 2.61 / 102 |
+| ESR-11's timing | 10 % | 0 | 0 | 1.08 % (0.85 – 1.27) | 0 | 3.91 / 3.53 | 1.6 / 3 | 0 | 0.9892 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.35 / 126 |
+| ESR-11's timing | 30 % | 0 | 0 | 3.69 % (3.37 – 4.08) | 8 | 4.78 / 3.37 | 2.0 / 4 | 243 | 0.9631 | 70.42 / 29.58 / 0.00 / 0.00 % | 1.97 / 57 |
+| Bundle, honest lag | 0 % | 0 | 0 | 0.43 % (0.32 – 0.54) | 0 | 3.62 / 3.61 | 1.5 / 3 | 0 | 0.9957 | 99.59 / 0.00 / 0.41 / 0.00 % | 2.58 / 105 |
+| Bundle, honest lag | 0 % | 0 | 0.01 | 0.44 % (0.32 – 0.54) | 0 | 3.62 / 3.61 | 1.5 / 3 | 0 | 0.9956 | 99.58 / 0.00 / 0.41 / 0.01 % | 2.58 / 105 |
+| Bundle, honest lag | 0 % | 0 | 0.1 | 0.48 % (0.27 – 0.63) | 0 | 3.62 / 3.61 | 1.5 / 3 | 0 | 0.9952 | 99.53 / 0.00 / 0.41 / 0.06 % | 2.59 / 126 |
+| Bundle, honest lag | 0 % | 30 | 0, 0.01, 0.1 (identical) | 0.43 % (0.24 – 0.54) | 0 | 3.61 / 3.61 | 1.5 / 3 | 0 | 0.9957 | 100.00 / 0.00 / 0.00 / 0.00 % | 2.61 / 126 |
+| Bundle, honest lag | 10 % | 0 | 0 | 1.00 % (0.83 – 1.17) | 0 | 3.92 / 3.53 | 1.6 / 3 | 0 | 0.9900 | 89.80 / 9.83 / 0.36 / 0.00 % | 2.34 / 95 |
+| Bundle, honest lag | 10 % | 0 | 0.01 | 1.00 % (0.83 – 1.17) | 0 | 3.92 / 3.53 | 1.6 / 3 | 0 | 0.9900 | 89.80 / 9.83 / 0.36 / 0.00 % | 2.34 / 95 |
+| Bundle, honest lag | 10 % | 0 | 0.1 | 1.09 % (0.88 – 1.20) | 0 | 3.93 / 3.53 | 1.6 / 3 | 0 | 0.9891 | 89.75 / 9.83 / 0.36 / 0.05 % | 2.34 / 100 |
+| Bundle, honest lag | 10 % | 30 | 0, 0.01, 0.1 (identical) | 0.94 % (0.73 – 1.17) | 0 | 3.90 / 3.52 | 1.6 / 3 | 0 | 0.9906 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.38 / 102 |
+| Bundle, honest lag | 30 % | 0 | 0 | 3.78 % (3.47 – 4.00) | 8 | 4.80 / 3.37 | 2.0 / 4 | 253 | 0.9622 | 70.14 / 29.58 / 0.28 / 0.00 % | 1.97 / 91 |
+| Bundle, honest lag | 30 % | 0 | 0.01 | 3.78 % (3.47 – 4.00) | 8 | 4.80 / 3.37 | 2.0 / 4 | 253 | 0.9622 | 70.14 / 29.58 / 0.28 / 0.00 % | 1.97 / 91 |
+| Bundle, honest lag | 30 % | 0 | 0.1 | 3.79 % (3.32 – 4.20) | 8 | 4.80 / 3.37 | 2.0 / 4 | 254 | 0.9621 | 70.10 / 29.58 / 0.28 / 0.05 % | 1.97 / 67 |
+| Bundle, honest lag | 30 % | 30 | 0, 0.01, 0.1 (identical) | 3.53 % (3.03 – 3.98) | 8 | 4.77 / 3.36 | 2.0 / 4 | 223 | 0.9647 | 70.42 / 29.58 / 0.00 / 0.00 % | 1.99 / 83 |
+| Bundle, lazy | 10 % | 0 | 0, 0.01, 0.1 (identical) | 100.00 % (100.00 – 100.00) | 8 | 8.06 / 0.00 | 3.3 / 4 | 6218 | 0.0000 | 0.00 / 9.83 / 90.16 / 0.00 % | 1.00 / 1 |
+| Bundle, lazy | 10 % | 3 | 0 | 2.25 % (1.86 – 2.59) | 0 | 3.99 / 3.60 | 1.6 / 3 | 0 | 0.9775 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.02 / 91 |
+| Bundle, lazy | 10 % | 3 | 0.01 | 2.43 % (2.32 – 2.59) | 0 | 4.03 / 3.60 | 1.7 / 3 | 0 | 0.9757 | 89.27 / 9.83 / 0.00 / 0.90 % | 2.00 / 83 |
+| Bundle, lazy | 10 % | 3 | 0.1 | 3.50 % (3.27 – 3.71) | 8 | 4.35 / 3.54 | 1.8 / 4 | 0 | 0.9650 | 81.25 / 9.83 / 0.00 / 8.92 % | 1.90 / 63 |
+| Bundle, lazy | 10 % | 30 | 0, 0.01, 0.1 (identical) | 2.18 % (1.95 – 2.47) | 0 | 3.99 / 3.60 | 1.6 / 3 | 0 | 0.9782 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.05 / 70 |
+
+**The bar holds.** At 10 % dropout, `M = 30`, `p_reorg = 0`, honest lag,
+the largest short share over eight seeds is 1.09 %, against 3 %. No seed
+is over.
+
+**Against the predictions.**
+
+- *(a) The bar cell: held.* Mean 1.02 % (predicted 0.95 to 1.25 %),
+  maximum 1.09 % (predicted at most 1.40 %), no seed over 3 %.
+- *(a′) ESR-11's timing: held.* 0.46 % against ESR-11's 0.46 %, 1.07 %
+  against 1.10 %, 3.70 % against 3.83 %: differences of 0.01, 0.04 and
+  0.13 points, inside the predicted 0.08, 0.08 and 0.15. The 30 % cell is
+  close to its limit, and most of that is not the two functions. This
+  arm's eight seeds realise a dropout of 29.58 % (and 9.83 % at the
+  nominal 10 %); ESR-11's eight realise about 30.1 % and 10.1 %, read from
+  its issued share. Half a point of dropout is worth about 0.07 points of
+  short share near 30 %.
+- *(b) The `(m, n)` figures do not move: held.* Every cell prints
+  `q = 0.2160`, `2.85 × 10⁻⁴` per pair, `0.689` per archiver at the
+  maximum holdings (exceeding `10⁻³`), the six retry rows of §5.15 digit
+  for digit, the boundary `x ≤ 0.2076` and `ρ ≤ 0.6614`. They are ESR-11's
+  own lines: the mode takes them from ESR-11's renderer run on no cells.
+  In the bar cell the observation rate is 0.9898 (predicted 0.9875 to
+  0.9905) and a non-serving pair reaches 11 misses in 11.11 epochs
+  (predicted 11.10 to 11.14).
+- *(c) `M`: held.* 0.41 % of blocks are late at `M = 0` and 0 % dropout
+  (predicted 0.40 % of filed bundles). The short share at `M = 0` exceeds
+  the one at `M = 30` by 0.05, 0.07 and 0.14 points at 0, 10 and 30 %
+  dropout (predicted between 0 and 0.15). The sign resolved at every
+  dropout, including 0 %.
+- *(c) `p_reorg` at `M = 30`: held.* The three cells are identical in
+  every field of every seed's run, at both pair counts and for the lazy
+  producer as well.
+- *(c) `p_reorg` at `M = 0`: held.* 0.004 to 0.005 % and 0.05 to 0.06 %
+  of blocks are lost at 0.01 and 0.1 (predicted 0.006 % and 0.06 % of
+  filed bundles). The short share moves by at most 0.01 points (predicted
+  under 0.05).
+- *(c) Lazy, `M = 0`: held.* Every filed bundle is late, nothing is
+  issued, 100 % of pairs are short. 261.2 draws per block on average
+  (predicted 240 to 280), with the count at the cap in 6,218 of 10,000
+  blocks.
+- *(c) Lazy, `M = 30`: held.* 2.17 % short (2.11 – 2.24), predicted 1.3
+  to 2.5 %: about twice the bar cell, under the bar. `p_reorg` has no
+  effect.
+- *(c) Lazy, `M = 3`, `p_reorg = 0`: missed, narrowly.* 2.34 %, which is
+  0.16 points above lazy `M = 30`; I predicted within 0.15. Twenty-seven
+  more blocks of delay cost more than I allowed.
+- *(c) Lazy, `M = 3`, `p_reorg = 0.01`: held as written.* 2.44 %, 0.1
+  points above the `p_reorg = 0` cell (predicted 0.02 to 0.20 above
+  "that", meaning that cell). Against lazy `M = 30` it is 0.27 above.
+- *(c) Lazy, `M = 3`, `p_reorg = 0.1`: held.* 3.48 % (3.40 – 3.54),
+  predicted 2.5 to 4.5 %. I did not predict the side of 3 %: it is over,
+  on all eight seeds.
+- *(d) The integer rule against the `f64` rule: held.* On one trajectory
+  the two rules gave the same count in every block of every run: no block
+  differs and no epoch's total differs, over 480 epochs. Between the arms,
+  in ESR-11's timing, mean draws per block are 117.09 / 126.76 / 154.84
+  against ESR-11's 117.09 / 127.11 / 155.92: 0.0 %, 0.3 % and 0.7 % lower
+  (predicted within 1 %). The bar cell is 126.64, 0.4 % under 127.11
+  (predicted within 2 %).
+- *(e) The selection's cost: missed on the mean, held on the cap.* 2.38
+  attempts per draw in the bar cell; I predicted 3.5 to 7. No draw in the
+  set reached the 256th attempt; the most any draw took is 190. I weighted
+  the late epoch too heavily. Most draws are made while most pairs are
+  still visibly short, where one or two attempts select; the blocks where
+  a draw needs twelve are the ones that make only the base rate.
+
+**The integer rule and the `f64` rule are the same rule.** That is the
+finding on the difference: there is none to measure at this scale. The
+integer target is the `f64` target floored to `2⁻³²`, and over an epoch
+that never moved a count. What separates this arm's ESR-11-timing cells
+from ESR-11's own is sampling: the realised dropout above, and a
+selection that draws different pairs from the same weights. The
+rejection sampling reproduces the 16 : 1 weights; the cap that would
+bend them was never reached.
+
+**What the bundle adds to the picture.**
+
+- *The margin is worth having, and its size is not critical.* With
+  `M = 30` no honest bundle is late and none is exposed to a reorg in the
+  last three blocks. With `M = 0`, 0.4 % are late, and the short share
+  rises by 0.05 to 0.14 points. That is small against the bar.
+- *The reorg term is second-order for an honest producer and first-order
+  for a lazy one.* Honest lag with `M = 0` exposes 0.6 % of bundles, and
+  even `p_reorg = 0.1` moves nothing visible. A lazy producer at the
+  minimal margin exposes every bundle, and `p_reorg = 0.1` takes the short
+  share from 2.34 % to 3.48 %, over the bar.
+- *Lateness of the information costs more than 10 % dropout does.* Going
+  from 0 % to 10 % dropout adds 0.59 points of short share. A
+  lazy producer at `M = 30` loses nothing, and still doubles the short
+  share (1.02 % to 2.17 %), because the count rule sees each block's
+  draws a whole window late and spends top-up draws on pairs already
+  covered. It spends 2 % more draws per block doing so (129.4 against
+  126.6).
+- *A producer that files at the very end of the window, with no margin,
+  issues nothing.* That is the model's inclusion latency of at least one
+  block, not a property of the chain: the bundle must be in a block by
+  `h + W₂`, so it must be filed before then.
+
+**What this run does not say.** As in §5.14, the reads are not modelled,
+dropout is independent per block, and the previous epoch's last `W₂`
+blocks are not carried in. Further:
+
+- `p_reorg`, `R`, the inclusion latency and the lag distribution are
+  parameters. None is measured. The lazy cells are every producer lazy at
+  once, which is a bound, not a population.
+- A lost bundle is treated as never admitted. A bundle that is visible
+  for some blocks and then reorganised away would change the counts those
+  blocks' draws were made against; the model has no such state. Nor does
+  it model a reorg that removes block `h` itself, or a producer that
+  files a lost bundle again inside its window, which would lower every
+  loss figure here.
+- The eight seeds read the same rolls in every cell, by design: cells
+  compare with each other more tightly than with ESR-11 or with the
+  nominal dropout. Every cell at 10 % nominal dropout ran at 9.83 %.
+- The seed and the block hash are the generator's bytes. Nothing here
+  exercises the commitment, the nonce, or a verifier recomputing a draw.
+- The attempts per draw are the producer's and the verifier's hashing
+  cost per draw (1.9 to 2.6 cSHAKE calls on average, and 1 when every
+  pair is short). The run does not
+  time a verifier, and a block's verification cost is the count times
+  that, not measured here.
+- The `(m, n)` verdict is unchanged because nothing in this run can
+  change it: the window still exceeds the per-archiver budget at the
+  calibration (§5.14, §5.15).
+
+**Existing outputs.** ESR-11's reference rows above are its §5.14
+figures, reproduced by calling its `cell`: 0.46 / 1.10 / 3.83 % short,
+117.1 / 127.1 / 155.9 draws per block, 242 blocks at the cap at 30 %.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
