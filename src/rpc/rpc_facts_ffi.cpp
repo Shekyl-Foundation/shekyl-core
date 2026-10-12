@@ -31,6 +31,7 @@
 #include "p2p/seam_endpoint.h"
 #include "string_tools.h"
 #include "rpc_tx_json.h"
+#include "misc_language.h"
 #include "misc_log_ex.h"
 #include "shekyl/shekyl_ffi.h"
 #include "version.h"
@@ -1144,26 +1145,42 @@ int info_chain(cryptonote::Blockchain& bc, const info_chain_scalars& scalars,
   }
 }
 
-int info_pool_count(const cryptonote::tx_memory_pool& pool, uint8_t include_unrelayed,
-  uint64_t* out) noexcept
+int info_pool_counts(const cryptonote::tx_memory_pool& pool, uint8_t with_unbroadcast,
+  uint64_t* out_broadcast, uint64_t* out_unbroadcast) noexcept
 {
-  if (!out)
+  if (!out_broadcast || (with_unbroadcast && !out_unbroadcast))
     return SHEKYL_RPC_FACTS_ERR_NULL;
   try
   {
-    *out = pool.get_transactions_count(include_unrelayed != 0);
+    if (!with_unbroadcast)
+    {
+      *out_broadcast = pool.get_transactions_count(false);
+      return SHEKYL_RPC_FACTS_OK;
+    }
+    // One hold of the pool's lock for both counts, so they are counts of one
+    // pool. The pool's own getter takes the same (recursive) lock inside.
+    pool.lock();
+    const auto unlock = epee::misc_utils::create_scope_leave_handler([&pool]() { pool.unlock(); });
+    const uint64_t broadcast = pool.get_transactions_count(false);
+    const uint64_t all = pool.get_transactions_count(true);
+    if (all < broadcast)
+    {
+      MERROR("info pool counts: the pool holds " << all << " entries and " << broadcast
+        << " of them are broadcast");
+      return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+    }
+    *out_broadcast = broadcast;
+    *out_unbroadcast = all - broadcast;
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
   {
-    MERROR("info pool count: exception: " << e.what());
-    *out = 0;
+    MERROR("info pool counts: exception: " << e.what());
     return SHEKYL_RPC_FACTS_ERR_INTERNAL;
   }
   catch (...)
   {
-    MERROR("info pool count: unknown exception");
-    *out = 0;
+    MERROR("info pool counts: unknown exception");
     return SHEKYL_RPC_FACTS_ERR_INTERNAL;
   }
 }
@@ -1179,8 +1196,6 @@ int info_status(cryptonote::Blockchain& bc, const info_status_scalars& scalars,
     out->alt_blocks_count = bc.get_alternative_blocks_count();
     out->start_time = scalars.start_time;
     out->free_space = scalars.free_space;
-    out->public_connections = scalars.public_connections;
-    out->public_outgoing_connections = scalars.public_outgoing_connections;
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
@@ -1344,11 +1359,13 @@ int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out)
   }
 }
 
-int shekyl_rpc_info_pool_count(core_rpc_handle* h, uint8_t include_unrelayed, uint64_t* out)
+int shekyl_rpc_info_pool_counts(core_rpc_handle* h, uint8_t with_unbroadcast,
+  uint64_t* out_broadcast, uint64_t* out_unbroadcast)
 {
-  if (!h || !h->rpc || !out)
+  if (!h || !h->rpc)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  return daemon_rpc_facts::info_pool_count(h->rpc->get_core().get_pool(), include_unrelayed, out);
+  return daemon_rpc_facts::info_pool_counts(h->rpc->get_core().get_pool(), with_unbroadcast,
+    out_broadcast, out_unbroadcast);
 }
 
 int shekyl_rpc_info_status(core_rpc_handle* h, shekyl_rpc_info_status_facts* out,
@@ -1360,13 +1377,10 @@ int shekyl_rpc_info_status(core_rpc_handle* h, shekyl_rpc_info_status_facts* out
   try
   {
     cryptonote::core& core = h->rpc->get_core();
-    auto& p2p = h->rpc->get_p2p();
     daemon_rpc_facts::info_status_scalars scalars{};
     scalars.start_time = static_cast<uint64_t>(core.get_start_time());
     // Throws when the volume cannot be queried; the barrier below reports it.
     scalars.free_space = core.get_free_space();
-    scalars.public_connections = p2p.get_public_connections_count();
-    scalars.public_outgoing_connections = p2p.get_public_outgoing_connections_count();
     const int rc = daemon_rpc_facts::info_status(core.get_blockchain_storage(), scalars, out);
     if (rc != SHEKYL_RPC_FACTS_OK)
       return rc;
@@ -1966,8 +1980,6 @@ void shekyl_rpc_info_status_facts_test_fill(shekyl_rpc_info_status_facts* out, u
   out->start_time = field_value(seed, 0);
   out->free_space = field_value(seed, 1);
   out->alt_blocks_count = field_value(seed, 2);
-  out->public_connections = field_value(seed, 3);
-  out->public_outgoing_connections = field_value(seed, 4);
 }
 
 int shekyl_rpc_info_status_facts_test_check(const shekyl_rpc_info_status_facts* facts, uint64_t seed)

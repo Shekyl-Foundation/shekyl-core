@@ -914,7 +914,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 23] = [
+    let links: [(&str, &str); 26] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1007,6 +1007,18 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v23.json"),
             include_str!("vectors/rpc/get_version_synced_v24.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v24.json"),
+            include_str!("vectors/rpc/get_version_synced_v25.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v25.json"),
+            include_str!("vectors/rpc/get_version_synced_v26.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v26.json"),
+            include_str!("vectors/rpc/get_version_synced_v27.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1025,7 +1037,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 23] = [
+    const ADDED_AT_LINK: [&[&str]; 26] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1049,6 +1061,9 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.45 (get_info stops carrying emission_era, RK-D21; get_version gains nothing)
         &[], // 3.46 (no target is `null`, RK-Q7; this case has a target, so its members do not move)
         &[], // 3.47 (get_info gains has_peers, RK-D14; get_version gains nothing)
+        &[], // 3.48 (a restricted get_info omits Status and Peers, RK-Q8; get_version gains nothing)
+        &[], // 3.49 (get_info's connection counts come from the seam board, RK-Q3; get_version gains nothing)
+        &[], // 3.50 (get_info's pool count is split by broadcast state, RK-Q10; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1060,7 +1075,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 23] = [
+    const REMOVED_AT_LINK: [&[&str]; 26] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1084,6 +1099,9 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.45 (the emission_era deletion is get_info's; get_version retires nothing)
         &[], // 3.46 (nothing leaves; the side cases gain members, pinned by their own test)
         &[], // 3.47 (has_peers is get_info's; get_version retires nothing)
+        &[], // 3.48 (the withheld parts are get_info's; get_version retires nothing)
+        &[], // 3.49 (no member moves on either method; the counts' source and meaning do)
+        &[], // 3.50 (the host-only member is get_info's; get_version retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1342,6 +1360,119 @@ fn the_3_47_get_info_vectors_are_their_predecessors_plus_exactly_has_peers() {
     assert_eq!(restricted["has_peers"], json!(true));
     assert_eq!(restricted["outgoing_connections_count"], json!(0));
     assert_eq!(restricted["incoming_connections_count"], json!(0));
+}
+
+/// **3.48, by derivation.** A `get_info` reply to a caller who is not shown
+/// Status or Peers omits both parts (RK-Q8). One fixture is such a reply,
+/// and its successor is its predecessor minus exactly the fourteen keys of
+/// those two parts. The other four fixtures are full replies and do not
+/// move.
+///
+/// What the predecessor held in those keys is asserted too, because it is
+/// the reason they went: every one a value that meant "not this value".
+#[test]
+fn the_3_48_restricted_vector_is_its_predecessor_minus_exactly_status_and_peers() {
+    use serde_json::json;
+
+    let stand_ins = [
+        ("start_time", json!(0)),
+        ("free_space", json!(u64::MAX)),
+        ("database_size", json!(10u64 * 1024 * 1024 * 1024)),
+        ("version", json!("")),
+        ("outgoing_connections_count", json!(0)),
+        ("incoming_connections_count", json!(0)),
+        ("alt_blocks_count", json!(0)),
+        ("rpc_connections_count", json!(0)),
+        ("public_incoming_socket_count", json!(0)),
+        ("public_outgoing_socket_count", json!(0)),
+        ("tor_incoming_socket_count", json!(0)),
+        ("tor_outgoing_socket_count", json!(0)),
+        ("white_peerlist_size", json!(0)),
+        ("grey_peerlist_size", json!(0)),
+    ];
+
+    let mut derived = parsed(include_str!(
+        "vectors/rpc/get_info_synced_restricted_v3.json"
+    ));
+    let members = derived.as_object_mut().expect("vector is an object");
+    for (key, stand_in) in &stand_ins {
+        assert_eq!(
+            members.remove(*key).as_ref(),
+            Some(stand_in),
+            "`{key}` was the stand-in this derivation says it was"
+        );
+    }
+    assert_eq!(
+        derived,
+        parsed(include_str!(
+            "vectors/rpc/get_info_synced_restricted_v4.json"
+        )),
+        "the successor is its predecessor minus the two withheld parts and nothing else"
+    );
+}
+
+/// **3.50, by derivation.** `get_info`'s pool count is split by broadcast
+/// state (RK-Q10). The four fixtures answered to the host's administrator
+/// held `tx_pool_size: 12`, every entry. Each successor holds
+/// `tx_pool_size: 9`, the broadcast entries, and gains
+/// `tx_pool_unbroadcast_count: 3`: the same twelve, counted as two sets.
+///
+/// The restricted fixture does not move, and that is the point of the
+/// split: it already held `9`, and now every caller reads that number
+/// under that key. It carries no `tx_pool_unbroadcast_count`.
+#[test]
+fn the_3_50_vectors_split_the_same_pool_into_broadcast_and_not_yet_broadcast() {
+    use serde_json::json;
+
+    for (before_raw, after_raw) in [
+        (
+            include_str!("vectors/rpc/get_info_synced_v3.json"),
+            include_str!("vectors/rpc/get_info_synced_v4.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_syncing_v2.json"),
+            include_str!("vectors/rpc/get_info_syncing_v3.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_peerless_startup_v3.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v4.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_burn_refusal_v3.json"),
+            include_str!("vectors/rpc/get_info_burn_refusal_v4.json"),
+        ),
+    ] {
+        let mut derived = parsed(before_raw);
+        let members = derived.as_object_mut().expect("vector is an object");
+        assert_eq!(
+            members.insert("tx_pool_size".to_owned(), json!(9)),
+            Some(json!(12)),
+            "the predecessor counted every entry under this key"
+        );
+        assert!(
+            members
+                .insert("tx_pool_unbroadcast_count".to_owned(), json!(3))
+                .is_none(),
+            "the predecessor must not already carry the host-only member"
+        );
+        let after = parsed(after_raw);
+        assert_eq!(
+            derived, after,
+            "the successor is its predecessor with the one count split in two"
+        );
+        assert_eq!(
+            after["tx_pool_size"].as_u64().unwrap()
+                + after["tx_pool_unbroadcast_count"].as_u64().unwrap(),
+            12,
+            "the two counts are the pool the predecessor counted"
+        );
+    }
+
+    let restricted = parsed(include_str!(
+        "vectors/rpc/get_info_synced_restricted_v4.json"
+    ));
+    assert_eq!(restricted["tx_pool_size"], json!(9));
+    assert!(restricted.get("tx_pool_unbroadcast_count").is_none());
 }
 
 #[test]
@@ -1876,8 +2007,9 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
 // before that handler was deleted, and went with it (the README beside the
 // vectors says how to read one). Four of them have a `_v2` successor,
 // derived at 3.46 when the target stopped being a sentinel, and all five
-// have one derived at 3.47 when `has_peers` arrived; the tests below read
-// the newest of each.
+// have one derived at 3.47 when `has_peers` arrived, and the restricted one
+// another at 3.48 when it stopped carrying Status and Peers; the tests
+// below read the newest of each.
 // These tests pin the TYPE: that each vector is a `GetInfoResponse` and that
 // the response writes the vector back. The handler's parity is
 // `shekyl-daemon-rpc`'s.
@@ -1886,8 +2018,8 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
 mod get_info {
     use super::{assert_parity, parsed, tagged_hash};
     use shekyl_rpc_types::{
-        DaemonNetwork, GetInfoResponse, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
-        InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
+        DaemonNetwork, GetInfoResponse, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
+        InfoIdentity, InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
     };
 
     /// The reply the emitter's `synced_facts()` produces for an unrestricted
@@ -1927,7 +2059,8 @@ mod get_info {
                 total_burned: 4_200_000_000,
                 staker_emission_share_effective: 91_549,
             },
-            pool: InfoPool { tx_pool_size: 12 },
+            // Twelve entries held: nine broadcast, three not yet.
+            pool: InfoPool { tx_pool_size: 9 },
             node: Hidden::Shown(InfoStatus {
                 start_time: 1_699_990_000,
                 free_space: 123_456_789_012,
@@ -1946,6 +2079,9 @@ mod get_info {
                 white_peerlist_size: 500,
                 grey_peerlist_size: 2500,
             }),
+            host: Hidden::Shown(InfoHost {
+                tx_pool_unbroadcast_count: 3,
+            }),
             restricted: false,
         }
     }
@@ -1953,7 +2089,7 @@ mod get_info {
     #[test]
     fn synced_matches_the_oracle() {
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_v3.json"),
+            include_str!("vectors/rpc/get_info_synced_v4.json"),
             &synced(),
         );
     }
@@ -1965,7 +2101,7 @@ mod get_info {
         built.health.target_height = Nullable::value(1_300_000);
         built.health.busy_syncing = true;
         built.health.following_degraded = true;
-        assert_parity(include_str!("vectors/rpc/get_info_syncing_v2.json"), &built);
+        assert_parity(include_str!("vectors/rpc/get_info_syncing_v3.json"), &built);
     }
 
     #[test]
@@ -1989,40 +2125,23 @@ mod get_info {
         peers.tor_incoming_socket_count = 0;
         peers.tor_outgoing_socket_count = 0;
         assert_parity(
-            include_str!("vectors/rpc/get_info_peerless_startup_v3.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v4.json"),
             &built,
         );
     }
 
-    /// At parity a restricted reply carries every key, holding the
-    /// stand-ins. So the vector decodes as parts that are *shown*, with
-    /// stand-in values — not as withheld parts. RK-Q8 is where a restricted
-    /// reply stops carrying them.
+    /// A restricted reply withholds Status and Peers, so the vector decodes
+    /// as a reply with both parts withheld and writes back without their
+    /// keys (RK-Q8). Until 3.48 it carried every key, holding stand-ins.
     #[test]
     fn synced_restricted_matches_the_oracle() {
         let mut built = synced();
         built.restricted = true;
-        built.pool.tx_pool_size = 9;
-        built.node = Hidden::Shown(InfoStatus {
-            start_time: 0,
-            free_space: u64::MAX,
-            database_size: 10 * 1024 * 1024 * 1024,
-            version: String::new(),
-            outgoing_connections_count: 0,
-            incoming_connections_count: 0,
-            alt_blocks_count: 0,
-            rpc_connections_count: 0,
-        });
-        built.peers = Hidden::Shown(InfoPeers {
-            public_incoming_socket_count: 0,
-            public_outgoing_socket_count: 0,
-            tor_incoming_socket_count: 0,
-            tor_outgoing_socket_count: 0,
-            white_peerlist_size: 0,
-            grey_peerlist_size: 0,
-        });
+        built.node = Hidden::Withheld;
+        built.peers = Hidden::Withheld;
+        built.host = Hidden::Withheld;
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_restricted_v3.json"),
+            include_str!("vectors/rpc/get_info_synced_restricted_v4.json"),
             &built,
         );
     }
@@ -2033,7 +2152,7 @@ mod get_info {
         built.economics.total_burned = built.economics.already_generated_coins + 1;
         built.economics.burn_pct = 0;
         assert_parity(
-            include_str!("vectors/rpc/get_info_burn_refusal_v3.json"),
+            include_str!("vectors/rpc/get_info_burn_refusal_v4.json"),
             &built,
         );
     }
@@ -2066,7 +2185,7 @@ mod get_info {
     /// key, for every key of both parts — never a part read as withheld.
     #[test]
     fn a_hidden_part_missing_one_key_is_refused_not_read_as_withheld() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
         for (part, keys) in [("status", &STATUS_KEYS[..]), ("peers", &PEERS_KEYS[..])] {
             for key in keys {
                 let mut doc = full.clone();
@@ -2087,7 +2206,7 @@ mod get_info {
     /// part is unaffected, and the reply writes back without those keys.
     #[test]
     fn a_hidden_part_with_no_keys_is_withheld_and_writes_none() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
 
         let mut doc = full.clone();
         for key in STATUS_KEYS {
@@ -2112,11 +2231,64 @@ mod get_info {
         assert_eq!(serde_json::to_value(&reply).unwrap(), doc);
     }
 
+    /// **An empty `version` in a shown Status is refused, not read as
+    /// "undisclosed"** (RK-D23). Until 3.48 a restricted reply wrote the
+    /// empty string there to mean it; such a reply now withholds the part.
+    /// So a shown part with an empty version is contract drift, and it is
+    /// an error that says so. The same document with the part withheld
+    /// decodes.
+    #[test]
+    fn a_shown_status_with_an_empty_version_is_refused() {
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
+        doc["version"] = "".into();
+        let refusal = decode(&doc).expect_err("an empty version is not an answer");
+        assert!(refusal.contains("empty `version`"), "got {refusal:?}");
+
+        for key in STATUS_KEYS {
+            doc.as_object_mut().unwrap().remove(key);
+        }
+        assert_eq!(
+            decode(&doc).expect("a withheld Status decodes").node,
+            Hidden::Withheld
+        );
+    }
+
+    /// The host-only part is one key, withheld like any other hidden part:
+    /// without it the reply decodes with the part withheld and writes back
+    /// without the key, and `0` is a count, not an absence (RK-Q10).
+    #[test]
+    fn the_host_part_is_withheld_when_its_key_is_absent() {
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
+        let shown = decode(&doc).expect("the host's reply decodes");
+        assert_eq!(
+            shown.host,
+            Hidden::Shown(InfoHost {
+                tx_pool_unbroadcast_count: 3
+            })
+        );
+
+        doc["tx_pool_unbroadcast_count"] = 0.into();
+        assert_eq!(
+            decode(&doc).expect("zero decodes").host,
+            Hidden::Shown(InfoHost {
+                tx_pool_unbroadcast_count: 0
+            }),
+            "zero entries not yet broadcast is an answer"
+        );
+
+        doc.as_object_mut()
+            .unwrap()
+            .remove("tx_pool_unbroadcast_count");
+        let withheld = decode(&doc).expect("a reply without the host part decodes");
+        assert_eq!(withheld.host, Hidden::Withheld);
+        assert_eq!(serde_json::to_value(&withheld).unwrap(), doc);
+    }
+
     /// The crate's refusal of unknown keys holds for this reply too, though
     /// it cannot carry the attribute on a flattened type.
     #[test]
     fn an_unknown_key_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
         doc.as_object_mut()
             .unwrap()
             .insert("emission_era".to_owned(), "Founding".into());
@@ -2138,7 +2310,7 @@ mod get_info {
             "restricted",
             "burn_pct",
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
             doc.as_object_mut().unwrap().remove(key);
             let refusal = decode(&doc).expect_err("a missing required key must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -2149,7 +2321,7 @@ mod get_info {
     /// decode. Each case changes one name of a repeated value.
     #[test]
     fn two_names_for_one_value_must_agree() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v3.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
         let cases: [(&str, serde_json::Value); 7] = [
             ("block_size_limit", 600_001.into()),
             ("block_size_median", 300_001.into()),
