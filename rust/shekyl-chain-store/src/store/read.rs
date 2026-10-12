@@ -58,7 +58,8 @@ use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_reads::{
-    self, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+    self, BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
+    SettlementRow,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -1071,6 +1072,23 @@ impl ReadSnapshot<'_> {
         epochs: &BTreeSet<SettlementEpoch>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
         archival_reads::served_at(&self.txn, persona, epochs)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A18.** What the draw's count rule recorded for the block at
+    /// `height`, or `None` for a block no row was written for.
+    pub fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
+        archival_reads::block_draws(&self.txn, height).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A19.** The digest of `epoch`'s drawable set as written at its
+    /// open, or `None` for an epoch with no recorded set. An all-zero
+    /// digest is a digest.
+    pub fn drawable_digest(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<DrawableDigest>, StoreError> {
+        archival_reads::drawable_digest(&self.txn, epoch)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

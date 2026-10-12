@@ -30,7 +30,7 @@
 //!   tier that admits an alt block reads no executed-chain fact and
 //!   derives none, and promotion re-derives supply by executing the chain.
 //!   A field with no reader is not stored, so "nothing reads it" is the
-//!   type, not a grep. Deleted at `SCHEMA_VERSION` 23 (rule 42).
+//!   type, not a grep. Deleted at `SCHEMA_VERSION` 24 (rule 42).
 //!
 //! # The row is built from the verdict
 //!
