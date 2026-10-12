@@ -1,10 +1,10 @@
 # `TRC-1` step 2: what does an ordinary operator relay carry? Registration, 2026-10-12
 
-**State of this record: DRAFT registration, as of 2026-10-12. Nothing has
-been collected under it.** It becomes the registration when the questions
-in "Open before this is registered" are ruled and that section is replaced
-by the rulings. From then on "Registered before the run" is not edited, and
-results are added below it.
+**State of this record: REGISTERED 2026-10-12, Part A only. Nothing has
+been collected under it yet.** The four questions the draft posed were
+ruled on 2026-10-12 and are recorded under "Ruled before registration".
+"Registered before the run" is not edited from here on; an amendment is
+dated and says what had been read. Results are added below it.
 
 Step 1 is [`trc1_relay_posture_20261006.md`](trc1_relay_posture_20261006.md):
 the operator topology is running. This record is step 2 of the falsifier
@@ -77,58 +77,39 @@ bandwidth of 1,138,437 B/s.
   onset is about 18 hours after the process reached 96 hours of uptime.
 
 **This volume is recorded as a condition, not as ordinary operator load.**
-Whether it counts as cover is question 3 below.
+How it is treated is ruling 3 below.
 
-## Open before this is registered
+## Ruled before registration
 
-Each is a decision this lane does not make. The text under "Registered
-before the run" is written as it would stand if each is answered as
-proposed; a different answer changes that text before it is registered.
+Rick, 2026-10-12, on the four questions the draft posed: "as proposed".
 
-1. **Per-connection volume, and whether the lane may read the control
-   port.** A wire observer on the node's uplink sees each TCP connection
-   separately. Tor sends a client's circuits through a small set of entry
-   guards, so the daemon's originated cells leave on the OR connections to
-   those guards. Relayed cells share one of those connections only when a
-   relayed circuit happens to pass between this relay and that same guard.
-   The process's total volume is therefore an upper bound on the cover an
-   originated burst has, and the figure §1's "only when they share those
-   connections" asks for is the volume on the guard connections alone.
-   *This is reasoning from Tor's design. It has not been measured here, and
-   it may be wrong about how a relay that is also a client picks its first
-   hop.* The kernel shows bytes per connection without touching Tor. It
-   does not show which connections carry originated circuits; only Tor's
-   control port does (`GETINFO circuit-status`, `orconn-status`,
-   `entry-guards`). Reading it is a query, and it is also a second client
-   attached to a process whose unbroken run is the subject.
-   **Proposed:** Part A below (totals, kernel only) is registered and
-   started alone. Part B (the guard connections' share) is registered as a
-   second part only on a ruling that the control port may be read.
-2. **How long, and what "across consensus weights" means when the weight
-   has not moved.** The weight cannot be set from here. **Proposed:**
-   collect until 2026-11-10, five weeks after the relay's first start. The
-   results are reported per consensus weight as the directory published it.
-   If the weight is 1 throughout, the record says the run covers a weight
-   of 1 and nothing above it, and step 2 is not met on the weights axis.
-3. **Whether the volume that began on 2026-10-11 is cover.** It is at the
-   configured rate, on the same OR port, in cells of the same size. It is
-   also not what the directory's weight predicts, it arrives with
-   denial-of-service counters moving, and it can stop without notice.
-   **Proposed:** the record never pools the two. Every interval carries
-   the directory weight and the denial-of-service counters, and results
-   are given separately for intervals before the onset, after it, and after
-   it ends if it ends. Which of them describes "an ordinary operator" is
-   ruled when they are read, not now.
-4. **The sampling interval.** A stem is seventeen cells and leaves in well
-   under a second. A sample every 60 seconds gives a rate per minute and
-   cannot show whether one burst had company. **Proposed:** 60 seconds,
-   stated with that limit. A shorter interval is a load on a two-core host
-   that also runs the relay, and what resolution `PM-3` needs is that
-   protocol's to say.
+1. **Per-connection volume and the control port.** Part A (totals, kernel
+   only) is registered and runs alone. Part B (the share on the
+   connections that carry the process's own circuits) is **not
+   registered**. It needs a reading of Tor's control port, and that
+   reading is not ruled. The reason it is wanted stands as the draft gave
+   it: a wire observer sees each TCP connection separately, Tor sends a
+   client's circuits through a small set of entry guards, and so the
+   process's total volume is an upper bound on the cover one originated
+   burst has. *That is reasoning from Tor's design. It has not been
+   measured here, and it may be wrong about how a relay that is also a
+   client picks its first hop.* Part A does not answer it.
+2. **Horizon.** Collection runs to 2026-11-10, five weeks after the
+   relay's first start. Results are reported per consensus weight as the
+   directory published it. If the weight is 1 throughout, the record says
+   the run covers a weight of 1 and nothing above it, and step 2 is not
+   met on the weights axis.
+3. **The volume that began on 2026-10-11** is never pooled with what came
+   before it. Every interval carries the directory weight and the
+   denial-of-service counters, and results are given separately for
+   intervals before the onset, after it, and after it ends if it ends.
+   Which of them describes an ordinary operator is ruled when they are
+   read.
+4. **Interval.** One snapshot every 60 seconds. That gives a rate per
+   minute. A stem is seventeen cells and leaves in well under a second, so
+   this record cannot show whether one burst had company.
 
 ## Registered before the run
-
-*Draft. Not yet registered; see the state line at the top.*
 
 **Subject.** One Tor process, Tor Project `tor` 0.4.9.13, running as a
 non-exit relay at `RelayBandwidthRate` 1 MB/s and `RelayBandwidthBurst`
@@ -226,7 +207,7 @@ say it is.
   differ.
 - **Two earlier daemon restarts** fall before this registration, on
   2026-10-06 01:45Z and 2026-10-08 16:34Z. The data in hand spans both.
-- **The volume that began on 2026-10-11** is treated as question 3 rules.
+- **The volume that began on 2026-10-11** is treated as ruling 3 says.
 
 **Horizon.** Collection runs from the registered start to 2026-11-10
 00:00Z. It ends earlier only on line 1, and is not extended after any
@@ -237,14 +218,9 @@ into a scratch file that is then deleted, with its rows checked for shape
 only: every column present, the snapshot time under the limit, no address
 in the output. No figure from the dry run is read into this record.
 
-**Part B: the guard connections' share.** *Registered only if question 1
-is ruled that way.* Once per interval the lane reads from the control port
-which OR connections are the first hop of the process's own circuits. The
-row gains `guard_out` and `guard_in`, the part of `carried_*` on those
-connections, and `guard_conns`, how many there are. Nothing else is read
-from the control port, and the connections' addresses are not written.
-With Part B the report adds the same percentiles for the guard connections
-alone. This is the volume an originated burst shares a connection with.
+**Part B is not registered.** See ruling 1. If it is registered later it
+is an amendment to this record, dated, saying what of Part A had been read
+by then.
 
 ## Results
 
