@@ -244,12 +244,16 @@ impl Message<SignPassTranscript> for StakeEngine {
 /// The shape is [`SignPassTranscript`]'s for the same reason: the secret
 /// does not cross the actor boundary. The 112-byte transcript goes in, the
 /// signature comes out. The domain is fixed where the key is held
-/// ([`HeldReceiptKey::sign_transcript`]), so this handler cannot sign
+/// ([`HeldPersona::sign_receipt_transcript`]), so this handler cannot sign
 /// anything else with the key even if asked. The transcript is the one the
 /// identity key signs today, unchanged.
 ///
-/// The key was decoded when the persona entered the held set; the handler
-/// decodes nothing (`FND-4`).
+/// The first message for a persona decodes its receipt key and every later
+/// one signs from the held key ([`HeldReceiptKey`], `FND-4`). The first
+/// therefore needs the stack a decode needs, on the actor's task; the
+/// figures are on `the_first_receipt_pays_the_decode_and_later_ones_do_not`.
+/// A key that does not decode is [`StakeEngineError::ReceiptSign`] at that
+/// first message and at each one after it.
 ///
 /// An unheld slot is [`StakeEngineError::LookaheadExhausted`], and there is
 /// no gate on the [`HeldPersona::Bonded`] tag, both as in
@@ -273,9 +277,31 @@ impl Message<SignReceiptTranscript> for StakeEngine {
             .ok_or(StakeEngineError::LookaheadExhausted {
                 requested: msg.p_slot,
             })?;
-        held.receipt_key_mut()
-            .sign_transcript(&msg.message)
+        held.sign_receipt_transcript(&msg.message)
             .map_err(StakeEngineError::ReceiptSign)
+    }
+}
+
+/// Test-only: whether the persona at `p_slot` holds a decoded receipt key
+/// (`None` for an unheld slot). The lazy state is otherwise invisible from
+/// outside the actor, by design.
+#[cfg(test)]
+pub(crate) struct ReceiptKeyIsBuilt {
+    pub p_slot: PSlot,
+}
+
+#[cfg(test)]
+impl Message<ReceiptKeyIsBuilt> for StakeEngine {
+    type Reply = Option<bool>;
+
+    async fn handle(
+        &mut self,
+        msg: ReceiptKeyIsBuilt,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.held
+            .get(&msg.p_slot)
+            .map(|held| held.receipt_key().built().is_some())
     }
 }
 

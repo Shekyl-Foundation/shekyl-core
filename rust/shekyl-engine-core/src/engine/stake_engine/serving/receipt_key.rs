@@ -53,7 +53,9 @@
 //!
 //! The decoded receipt key — 118,640 bytes of secret basis and working
 //! buffers — lives in the actor beside the bundle it was decoded from, and
-//! is wiped with it. Nothing of it reaches this type.
+//! is wiped with it. Nothing of it reaches this type. It is decoded by the
+//! first signature this capability asks for and not before
+//! (`HeldReceiptKey`): while this module is staged, no persona decodes one.
 
 use std::sync::Arc;
 
@@ -145,8 +147,16 @@ mod tests {
     };
     use shekyl_p_host::PassKey;
 
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+
+    use crate::engine::stake_engine::persona::{ReceiptKeyIsBuilt, SignReceiptTranscript};
     use crate::engine::stake_engine::serving::pass_key::ResidentPassKey;
-    use crate::engine::stake_engine::test_fixtures::{derive_bundle, spawn_over};
+    use crate::engine::stake_engine::test_fixtures::{
+        derive_bundle, ephemeral_body_store, spawn_over,
+    };
+    use crate::engine::stake_engine::types::HeldPersona;
 
     const SLOT: u32 = 3;
     const OTHER_SLOT: u32 = 4;
@@ -296,7 +306,7 @@ mod tests {
     }
 
     /// One held key, many receipts: every signature verifies and no two are
-    /// alike. The actor decoded the key once, when it took the persona in.
+    /// alike. The actor decoded the key once, for the first of them.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn one_held_key_signs_many_receipts() {
         let stake = spawn_over(&[SLOT], &[SLOT], Some(SLOT));
@@ -400,16 +410,279 @@ mod tests {
         assert_eq!(sign_refused, refused);
     }
 
-    /// A receipt key that did not decode refuses each signature with the
-    /// scheme's error, and that is all it does: the persona stays held and
-    /// the actor is not asked to fail (`HeldReceiptKey`).
+    async fn is_built(stake: &StakeEngineHandle, raw: u32) -> Option<bool> {
+        stake
+            .actor
+            .ask(ReceiptKeyIsBuilt { p_slot: slot(raw) })
+            .await
+            .expect("actor alive")
+    }
+
+    /// Starting the actor decodes no receipt key, however many personas it
+    /// holds: the staged capability costs the live path nothing. The first
+    /// receipt asked of a persona decodes that persona's key and no other,
+    /// and the identity key signing does not decode one at all.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn starting_the_actor_decodes_no_receipt_key() {
+        const THIRD_SLOT: u32 = 5;
+        let stake = spawn_over(&[SLOT, OTHER_SLOT, THIRD_SLOT], &[SLOT], Some(SLOT));
+        for held in [SLOT, OTHER_SLOT, THIRD_SLOT] {
+            assert_eq!(is_built(&stake, held).await, Some(false), "slot {held}");
+        }
+        assert_eq!(is_built(&stake, SLOT + 1_000).await, None, "unheld");
+
+        // The live signer runs and the slot stays empty.
+        let identity_key = ResidentPassKey::new(&stake, slot(SLOT));
+        tokio::task::spawn_blocking(move || identity_key.sign_pass(&message()))
+            .await
+            .expect("blocking task")
+            .expect("identity key signs");
+        assert_eq!(is_built(&stake, SLOT).await, Some(false));
+
+        sign(ResidentReceiptKey::new(&stake, slot(SLOT)), message())
+            .await
+            .expect("signs");
+        assert_eq!(is_built(&stake, SLOT).await, Some(true));
+        assert_eq!(is_built(&stake, OTHER_SLOT).await, Some(false));
+        assert_eq!(is_built(&stake, THIRD_SLOT).await, Some(false));
+    }
+
+    /// The first receipt builds the held key and the second signs from that
+    /// same key: one decode, at one address, for the persona's life.
     #[test]
-    fn an_undecoded_receipt_key_refuses_to_sign() {
-        use crate::engine::stake_engine::types::HeldReceiptKey;
-        assert!(matches!(
-            HeldReceiptKey::undecoded().sign_transcript(&message()),
-            Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
-        ));
+    fn the_first_receipt_builds_the_key_and_the_second_reuses_it() {
+        let mut persona = HeldPersona::hold(derive_bundle(SLOT), true);
+        assert!(persona.receipt_key().built().is_none(), "nothing at hold");
+
+        let first = persona.sign_receipt_transcript(&message()).expect("signs");
+        let built = persona.receipt_key().built().expect("the first built it");
+        let second = persona.sign_receipt_transcript(&message()).expect("signs");
+        assert_eq!(
+            persona.receipt_key().built(),
+            Some(built),
+            "the second signature used the key the first decoded"
+        );
+
+        let public = receipt_pk(SLOT);
+        for signature in [&first, &second] {
+            HybridEd25519FnDsa
+                .verify(&public, SCHEME_DOMAIN_RECEIPT, &message(), signature)
+                .expect("verifies");
+        }
+        assert_ne!(first, second, "each receipt draws a fresh seed");
+    }
+
+    /// A bundle whose receipt secret does not decode. The corruption is the
+    /// scheme crate's test seam; this crate's tests reach it through the
+    /// `test-signer` edge the loopback tests already use.
+    fn bundle_with_a_corrupted_receipt_key(raw: u32) -> ArchivalPKeys {
+        let mut bundle = derive_bundle(raw);
+        bundle.receipt_sign_sk.corrupt_fn_dsa_half_for_tests();
+        bundle
+    }
+
+    /// A receipt secret that does not decode refuses at the first signature
+    /// with the scheme's typed error, and at the next one the same way: no
+    /// key is held, and no failure is remembered in its place.
+    #[test]
+    fn a_corrupted_receipt_key_refuses_at_the_first_signature() {
+        let mut persona = HeldPersona::hold(bundle_with_a_corrupted_receipt_key(SLOT), true);
+        for _ in 0..3 {
+            assert!(matches!(
+                persona.sign_receipt_transcript(&message()),
+                Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
+            ));
+            assert!(persona.receipt_key().built().is_none());
+        }
+    }
+
+    /// The same through the actor. Holding the corrupted key does not stop
+    /// the actor from starting; the capability's refusal is the actor's
+    /// `ReceiptSign` error, identical on every call; the persona's identity
+    /// key and the other persona's receipt key are unaffected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_corrupted_receipt_key_refuses_through_the_actor() {
+        let bundles = BTreeMap::from([
+            (slot(SLOT), bundle_with_a_corrupted_receipt_key(SLOT)),
+            (slot(OTHER_SLOT), derive_bundle(OTHER_SLOT)),
+        ]);
+        let stake = StakeEngineHandle::spawn(
+            bundles,
+            BTreeSet::from([slot(SLOT)]),
+            Some(slot(SLOT)),
+            ephemeral_body_store(),
+        );
+        let key = ResidentReceiptKey::new(&stake, slot(SLOT));
+        key.ready(SHARD, ANCHOR).expect("the actor started");
+
+        let first = sign(Arc::clone(&key), message())
+            .await
+            .expect_err("a key that does not decode refuses");
+        assert_eq!(
+            first,
+            SignRefused::new(
+                StakeEngineError::ReceiptSign(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
+                    .to_string()
+            )
+        );
+        let second = sign(key, message()).await.expect_err("and again");
+        assert_eq!(first, second, "a later call is refused the same way");
+        assert_eq!(is_built(&stake, SLOT).await, Some(false));
+
+        let identity_key = ResidentPassKey::new(&stake, slot(SLOT));
+        let identity = tokio::task::spawn_blocking(move || identity_key.sign_pass(&message()))
+            .await
+            .expect("blocking task")
+            .expect("the identity key still signs");
+        verify_pass_transcript(
+            derive_bundle(SLOT).hybrid_bond_id(),
+            &NONCE,
+            ANCHOR,
+            &ANCHOR_HASH,
+            SHARD,
+            &DIGEST,
+            &identity,
+        )
+        .expect("verifies under bond_id");
+
+        let other = sign(ResidentReceiptKey::new(&stake, slot(OTHER_SLOT)), message())
+            .await
+            .expect("the other persona's receipt key signs");
+        HybridEd25519FnDsa
+            .verify(
+                &receipt_pk(OTHER_SLOT),
+                SCHEME_DOMAIN_RECEIPT,
+                &message(),
+                &other,
+            )
+            .expect("verifies");
+    }
+
+    /// Run `work` against a freshly started actor on a current-thread
+    /// runtime whose one thread has `stack_bytes` of stack: the actor's task,
+    /// and so every handler, runs on that stack. The bundles are derived by
+    /// the caller, outside it — key generation has stack needs of its own
+    /// that are not the actor's.
+    fn on_an_actor_with_stack<W, F>(
+        stack_bytes: usize,
+        bundles: BTreeMap<PSlot, ArchivalPKeys>,
+        work: W,
+    ) where
+        W: FnOnce(StakeEngineHandle) -> F + Send + 'static,
+        F: std::future::Future<Output = ()>,
+    {
+        std::thread::Builder::new()
+            .stack_size(stack_bytes)
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                runtime.block_on(Box::pin(async move {
+                    let stake = StakeEngineHandle::spawn(
+                        bundles,
+                        BTreeSet::from([slot(SLOT)]),
+                        Some(slot(SLOT)),
+                        ephemeral_body_store(),
+                    );
+                    work(stake).await;
+                }));
+            })
+            .expect("spawn")
+            .join()
+            .expect("ran within the stack");
+    }
+
+    fn three_bundles() -> BTreeMap<PSlot, ArchivalPKeys> {
+        [SLOT, OTHER_SLOT, OTHER_SLOT + 1]
+            .into_iter()
+            .map(|raw| (slot(raw), derive_bundle(raw)))
+            .collect()
+    }
+
+    /// Where the decode's stack is paid, now that it is lazy. The smallest
+    /// stack each step ran on, x86_64 at this commit, by a ladder of 8 KiB
+    /// steps from 16 KiB (so each figure is an upper bound on the need):
+    ///
+    /// | | unoptimized | optimized |
+    /// | --- | --- | --- |
+    /// | start the actor and query it, no receipt | 152 KiB | 56 KiB |
+    /// | start the actor, first receipt, second receipt | 608 KiB | 376 KiB |
+    /// | a persona's first receipt, alone | 544 KiB | 360 KiB |
+    /// | a persona's later receipt, alone | 112 KiB | 16 KiB |
+    ///
+    /// The first receipt pays construction (`FnDsaHybridSigner::new`), on the
+    /// actor's task. A later receipt cannot be given a stack of its own
+    /// through the actor, whose task stays on the thread it started on, so
+    /// the last two rows are of the held persona directly.
+    ///
+    /// Three bounds, each about twice the figure it holds or less:
+    ///
+    /// - **Start decodes nothing.** An actor holding three personas starts
+    ///   and answers on a stack a single decode does not fit in. Were `hold`
+    ///   to decode again, this would overflow, not fail an assertion.
+    /// - **The first receipt** through the actor, and the second after it,
+    ///   run in half a default thread stack unoptimized and a quarter
+    ///   optimized — the bound the scheme as a whole is held to.
+    /// - **A later receipt** runs in an eighth of a default thread stack
+    ///   unoptimized and a thirty-second optimized.
+    #[test]
+    fn the_first_receipt_pays_the_decode_and_later_ones_do_not() {
+        const START_STACK: usize = if cfg!(debug_assertions) {
+            256 * 1024
+        } else {
+            128 * 1024
+        };
+        const FIRST_STACK: usize = if cfg!(debug_assertions) {
+            1024 * 1024
+        } else {
+            512 * 1024
+        };
+        const LATER_STACK: usize = if cfg!(debug_assertions) {
+            256 * 1024
+        } else {
+            64 * 1024
+        };
+
+        on_an_actor_with_stack(START_STACK, three_bundles(), |stake| async move {
+            for raw in [SLOT, OTHER_SLOT, OTHER_SLOT + 1] {
+                assert_eq!(is_built(&stake, raw).await, Some(false));
+            }
+        });
+
+        let public = receipt_pk(SLOT);
+        on_an_actor_with_stack(FIRST_STACK, three_bundles(), |stake| async move {
+            for _ in 0..2 {
+                let signature = stake
+                    .actor
+                    .ask(SignReceiptTranscript {
+                        p_slot: slot(SLOT),
+                        message: message(),
+                    })
+                    .await
+                    .expect("signs");
+                HybridEd25519FnDsa
+                    .verify(&public, SCHEME_DOMAIN_RECEIPT, &message(), &signature)
+                    .expect("verifies");
+            }
+            assert_eq!(is_built(&stake, SLOT).await, Some(true));
+        });
+
+        // Boxed so the persona is handed to the small thread as a pointer.
+        let mut persona = Box::new(HeldPersona::hold(derive_bundle(SLOT), true));
+        persona
+            .sign_receipt_transcript(&message())
+            .expect("the first receipt, on this thread, builds the key");
+        let later = std::thread::Builder::new()
+            .stack_size(LATER_STACK)
+            .spawn(move || persona.sign_receipt_transcript(&message()))
+            .expect("spawn")
+            .join()
+            .expect("a later receipt ran, and the persona dropped, within the stack")
+            .expect("signs");
+        HybridEd25519FnDsa
+            .verify(&receipt_pk(SLOT), SCHEME_DOMAIN_RECEIPT, &message(), &later)
+            .expect("verifies");
     }
 
     /// The staged surface (rule 23): the serving task is started with the

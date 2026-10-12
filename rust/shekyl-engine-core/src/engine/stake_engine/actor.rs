@@ -543,9 +543,8 @@ impl Actor for StakeEngine {
             .bundles
             .into_iter()
             .map(|(slot, keys)| {
-                // Tags the bundle, and decodes its receipt key beside it
-                // (`HeldPersona::hold`). The seed is not involved: the key
-                // bytes were derived at `assemble()` with the rest.
+                // Tags the bundle and leaves its receipt-key slot empty
+                // (`HeldPersona::hold`): no FN-DSA work happens at start.
                 let tagged = HeldPersona::hold(keys, args.bonded.contains(&slot));
                 (slot, tagged)
             })
