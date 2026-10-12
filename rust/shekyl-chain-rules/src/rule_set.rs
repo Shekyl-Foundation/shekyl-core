@@ -27,7 +27,10 @@
 use core::fmt;
 
 use shekyl_address::Network;
-use shekyl_archival_retention::anchor_depth_covers_response_window;
+use shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
+use shekyl_archival_retention::{
+    anchor_depth_covers_response_window, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
+};
 pub use shekyl_archival_retention::{SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -175,6 +178,71 @@ impl fmt::Display for ReorgCapNotInsideEpoch {
 
 impl std::error::Error for ReorgCapNotInsideEpoch {}
 
+/// A [`FakechainSchedule`] whose epoch is long enough that an honest
+/// challenge read could be anchored at or above the block it answers for:
+/// `W₂ + L >` anchor depth (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1,
+/// `SCS-P32`). `W₂` is a fraction of the epoch, so this is a ceiling on
+/// the epoch: [`Self::LONGEST_EPOCH_BLOCKS`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ResponseWindowOutrunsAnchor {
+    /// Blocks per epoch the pair named.
+    pub settlement_epoch: SettlementEpochBlocks,
+    /// `W₂` under that epoch.
+    pub response_window: BlockCount,
+}
+
+impl ResponseWindowOutrunsAnchor {
+    /// The longest settlement epoch a schedule may name: the last one
+    /// whose response window, `SEB / W2_EPOCH_DIVISOR`, still leaves the
+    /// anchor lag inside the anchor depth.
+    pub const LONGEST_EPOCH_BLOCKS: u64 = {
+        let widest_window = PASS_ANCHOR_DEPTH_BLOCKS.to_raw() - PASS_ANCHOR_LAG_BLOCKS.to_raw();
+        (widest_window + 1) * W2_EPOCH_DIVISOR - 1
+    };
+}
+
+impl fmt::Display for ResponseWindowOutrunsAnchor {
+    /// What was asked for, why it is refused, and the value that works.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a settlement epoch of {} blocks is too long: its challenge-response window is {} \
+             blocks, and with the {}-block anchor lag that reaches past the {}-block pass-anchor \
+             depth, so an honest archival read would be refused at admission. Use a settlement \
+             epoch of at most {} blocks",
+            self.settlement_epoch.get(),
+            self.response_window.to_raw(),
+            PASS_ANCHOR_LAG_BLOCKS.to_raw(),
+            PASS_ANCHOR_DEPTH_BLOCKS.to_raw(),
+            Self::LONGEST_EPOCH_BLOCKS
+        )
+    }
+}
+
+impl std::error::Error for ResponseWindowOutrunsAnchor {}
+
+/// Why a `(settlement_epoch, reorg_cap)` pair is not a
+/// [`FakechainSchedule`]. One arm per invariant the pair is held to, each
+/// carrying what the caller needs to say which value to change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FakechainScheduleRefused {
+    /// `0 < reorg_cap < SEB` fails.
+    ReorgCapNotInsideEpoch(ReorgCapNotInsideEpoch),
+    /// `W₂ + L ≤` anchor depth fails.
+    ResponseWindowOutrunsAnchor(ResponseWindowOutrunsAnchor),
+}
+
+impl fmt::Display for FakechainScheduleRefused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReorgCapNotInsideEpoch(refused) => refused.fmt(f),
+            Self::ResponseWindowOutrunsAnchor(refused) => refused.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for FakechainScheduleRefused {}
+
 impl FakechainSchedule {
     /// The genesis pair: `SETTLEMENT_EPOCH_BLOCKS` per epoch, `D_MAX` cap
     /// — the invariant on it is `reorg.rs`'s compile-time assertion.
@@ -183,24 +251,46 @@ impl FakechainSchedule {
         reorg_cap: D_MAX,
     };
 
-    /// The pair `(settlement_epoch, reorg_cap)`, if `0 < reorg_cap < SEB`.
+    /// The pair `(settlement_epoch, reorg_cap)`, if it satisfies both
+    /// invariants a rule set's schedule is held to: `0 < reorg_cap < SEB`,
+    /// and `W₂ + L ≤` anchor depth with `W₂` the epoch's own response
+    /// window (`SCS-P32`). They are checked in that order.
+    ///
+    /// A value of this type therefore satisfies both, and
+    /// [`RuleSet::fakechain`] checks neither.
     ///
     /// # Errors
     ///
-    /// [`ReorgCapNotInsideEpoch`] otherwise.
+    /// [`FakechainScheduleRefused`], naming the invariant that failed.
     pub const fn new(
         settlement_epoch: SettlementEpochBlocks,
         reorg_cap: BlockCount,
-    ) -> Result<Self, ReorgCapNotInsideEpoch> {
+    ) -> Result<Self, FakechainScheduleRefused> {
         let cap = reorg_cap.to_raw();
         if cap == 0 || cap >= settlement_epoch.get() {
-            return Err(ReorgCapNotInsideEpoch {
-                settlement_epoch,
-                reorg_cap,
-            });
+            return Err(FakechainScheduleRefused::ReorgCapNotInsideEpoch(
+                ReorgCapNotInsideEpoch {
+                    settlement_epoch,
+                    reorg_cap,
+                },
+            ));
+        }
+        let settlement = SettlementSchedule::new(settlement_epoch);
+        if !anchor_depth_covers_response_window(settlement) {
+            // The predicate is false only where a window exists.
+            let response_window = match settlement.challenge_response_blocks() {
+                Some(window) => BlockCount::from_raw(window.get()),
+                None => BlockCount::ZERO,
+            };
+            return Err(FakechainScheduleRefused::ResponseWindowOutrunsAnchor(
+                ResponseWindowOutrunsAnchor {
+                    settlement_epoch,
+                    response_window,
+                },
+            ));
         }
         Ok(Self {
-            settlement: SettlementSchedule::new(settlement_epoch),
+            settlement,
             reorg_cap,
         })
     }
@@ -221,8 +311,8 @@ impl FakechainSchedule {
     /// below the block it answers for: `W₂ + L ≤` anchor depth
     /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` `SCS-P32`;
     /// `shekyl_archival_retention::anchor_depth_covers_response_window`).
-    /// [`RuleSet::fakechain`] asserts it, so no rule set is built on a pair
-    /// for which it is false.
+    /// True of every value of this type: [`Self::new`] refuses a pair for
+    /// which it is false, and [`Self::PRODUCTION`] is asserted below.
     #[must_use]
     pub const fn anchor_covers_response_window(self) -> bool {
         anchor_depth_covers_response_window(self.settlement)
@@ -237,6 +327,13 @@ impl FakechainSchedule {
             && self.reorg_cap.to_raw() == Self::PRODUCTION.reorg_cap.to_raw()
     }
 }
+
+// The production pair is a literal, not a call to `new`, so the second
+// invariant `new` holds a pair to is asserted on it here.
+const _: () = assert!(
+    FakechainSchedule::PRODUCTION.anchor_covers_response_window(),
+    "the production schedule's W2 + L exceeds the pass-anchor depth (SCS-P32)"
+);
 
 // The genesis pair satisfies its own invariant — the same fact `reorg.rs`
 // asserts, restated on the type that carries it.
@@ -308,7 +405,10 @@ impl RuleSet {
     /// variant exists this takes it as a witness. `fixed` is non-zero by
     /// its type, so the target it fixes is a [`Target`] by construction
     /// (CEN-D6); `schedule` is a valid pair by its type, so the invariant
-    /// between the two fields it sets holds by construction.
+    /// between the two fields it sets holds by construction — and so does
+    /// `W₂ + L ≤` anchor depth (`SCS-P32`), which
+    /// [`FakechainSchedule::new`] refuses a pair for. This function checks
+    /// nothing and cannot fail.
     /// `fakechain(None, FakechainSchedule::PRODUCTION)` **is** `GENESIS`
     /// by value.
     #[must_use]
@@ -316,19 +416,6 @@ impl RuleSet {
         fixed: Option<core::num::NonZeroU128>,
         schedule: FakechainSchedule,
     ) -> Self {
-        // `SCS-P32`, at arm: the relation is rule-set data, so the one
-        // constructor of a non-issued set holds its schedule to it, as
-        // `ISSUED` is held to it at compile time below. A lever that
-        // lengthens the epoch until `W₂ + L` passes the anchor depth is
-        // refused here, loudly, and not at a bundle refusal on a running
-        // chain (rule 71: nettype selects data; the data satisfies the
-        // same invariant).
-        assert!(
-            schedule.anchor_covers_response_window(),
-            "shekyl-chain-rules: this Fakechain schedule's response window plus the anchor lag \
-             exceeds the pass-anchor depth (W2 + L > depth, SCS-P32): an honest challenge read \
-             would be refused at bundle admission. Shorten the settlement epoch."
-        );
         let difficulty = match fixed {
             Some(fixed) => DifficultyRule::Fixed(Target::fixed(fixed)),
             None => DifficultyRule::Lwma1,
@@ -376,7 +463,8 @@ impl RuleSet {
     ///
     /// **True of every rule set this crate can build**: of each issued set
     /// by the compile-time assertion beside [`Self::for_id`]'s table, and
-    /// of a Fakechain set by the assertion in [`Self::fakechain`]. It is
+    /// of a Fakechain set because [`FakechainSchedule::new`] refuses a pair
+    /// that breaks it. It is
     /// the precondition under which the bundle rule's `anchor_height < h`
     /// (CEN-J36) refuses no honest record; the rule itself does not read
     /// it.

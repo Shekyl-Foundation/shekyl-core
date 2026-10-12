@@ -173,8 +173,9 @@ pub use fault::{
 };
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
-    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule, ReorgCapNotInsideEpoch,
-    RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
+    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule,
+    FakechainScheduleRefused, ReorgCapNotInsideEpoch, ResponseWindowOutrunsAnchor, RuleSchedule,
+    RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{
