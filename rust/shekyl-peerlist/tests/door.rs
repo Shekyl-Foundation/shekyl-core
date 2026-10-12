@@ -10,11 +10,11 @@
 
 use std::net::Ipv4Addr;
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     ConnectionId, DialOutcome, ListName, NetworkAddress, NoBans, Peerlist, Refusal, Source, Tick,
     EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP,
 };
-use shekyl_relay_privacy::rng::SplitMix64;
 
 fn v4(n: u8) -> NetworkAddress {
     NetworkAddress::Ipv4 {

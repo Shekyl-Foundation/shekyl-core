@@ -44,7 +44,7 @@
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
-use crate::rng::{bounded_uniform, RelayRng};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 /// Slot 0 fills from the same live set as every other slot.
 ///

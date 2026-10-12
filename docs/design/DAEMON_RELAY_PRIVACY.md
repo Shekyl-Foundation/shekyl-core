@@ -295,7 +295,8 @@ none of this is genesis-blocking. It is being fixed before ship because it is
 > `tests/unit_tests/txpool_relay_timers.cpp` (`TEST(relay_deadline,
 > an_out_of_range_draw_saturates_forward_never_backward)`,
 > `is_monotonic_in_the_draw`, `zero_draw_still_never_lands_in_the_past`) and
-> across `rust/shekyl-relay-privacy/` (`poisson.rs`, `geometric.rs`, `rng.rs`).
+> across `rust/shekyl-relay-privacy/` (`poisson.rs`, `geometric.rs`) and
+> `rust/shekyl-draw-rng/` (the RNG seam, moved out of that crate 2026-10-12).
 >
 > Dating the section is the whole remedy, and deliberately so: no sentence below
 > is edited, because deciding which of §0's findings the port has since closed is
@@ -690,7 +691,7 @@ changes no daemon behaviour.
 | `derive.rs` | The exact survival equation and the bisection solve (D-2) |
 | `poisson.rs` | Frozen integer inverse-CDF replacing `std::poisson_distribution` |
 | `geometric.rs` | The memoryless draw (D-1, D-3) |
-| `rng.rs` | `RelayRng` seam; unbiased rejection sampler |
+| `shekyl-draw-rng` (its own crate since 2026-10-12; *records-was* `rng.rs`) | `RelayRng` seam; unbiased rejection sampler. The seeded `SplitMix64` compiles only under `cfg(any(test, feature = "conformance"))` |
 | `stem_map.rs` | Port of `connection_map`, `nil_uuid` sentinel replaced by `Option` in its three distinct roles |
 | `schedule.rs` | Epoch / fluff / embargo / noise state machines (D-7) |
 | `conformance.rs` | Feature-gated grades, the propagation simulator, the inversion instrument |

@@ -11,7 +11,7 @@
 // ^ Diagnostic-only float math; excluded from the default build.
 
 use crate::poisson::PoissonTable;
-use crate::rng::{bounded_uniform, RelayRng};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 /// How precisely an adversary can invert a relay delay.
 ///

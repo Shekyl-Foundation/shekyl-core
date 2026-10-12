@@ -208,6 +208,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "crate's [dev-dependencies] already carry for the rest of the driver. "
     "A driver that shipped would be a second producer (the crate's own "
     "docs); this row is what keeps it in tests",
+    (
+        "shekyl-draw-rng",
+        "conformance",
+    ): "compiles SplitMix64, the seeded reference generator the relay, "
+    "peerlist and relay-privacy tests and the golden vector draw from. It is "
+    "not a CSPRNG. The type is cfg(any(test, feature = \"conformance\")), so "
+    "with this feature held to dev edges no production build can name it: a "
+    "production draw from SplitMix64 is a compile error. The production "
+    "generator is shekyl-ffi's SecureRelayRng over OS entropy",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -254,7 +263,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # serving-task tests in `shekyl-engine-core`). `shekyl-chain-ingest`
 # joined 2026-10-06 in the commit that declared its own `harness`
 # (TEST_ONLY, one dev enabler); its three production features are the first
-# PERMANENT rows.
+# PERMANENT rows. `shekyl-draw-rng` joined 2026-10-12, the commit that created
+# it: `conformance` is its only feature and is enabled across a crate boundary
+# from its first day (three dev edges).
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -273,6 +284,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-chain-rules",
         "shekyl-p-host",
         "shekyl-chain-ingest",
+        "shekyl-draw-rng",
     }
 )
 

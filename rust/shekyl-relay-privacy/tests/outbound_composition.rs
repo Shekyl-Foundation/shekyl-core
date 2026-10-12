@@ -7,6 +7,7 @@
 //! They do not pin a fluff-return level: that reading is a result, and an
 //! unconverged one is a refusal.
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::composition::{
     build_node_maps, build_two_class, clearnet_arrival_is_relayed, graph_fluff_p90,
     hidden_inbound_load, simulate_own_edge_capture, walk_originated, LinkClass, LinkTransit, Mix,
@@ -19,7 +20,6 @@ use shekyl_relay_privacy::conformance::{
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
 use shekyl_relay_privacy::stem_map::ConnectionId;
-use shekyl_relay_privacy::SplitMix64;
 
 #[test]
 fn every_node_initiates_its_hidden_and_clearnet_degree() {

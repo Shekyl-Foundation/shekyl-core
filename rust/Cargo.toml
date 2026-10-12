@@ -84,6 +84,13 @@ members = [
     "shekyl-standoff",
     "shekyl-stats",
 
+    # The RNG seam (`RelayRng`) and the unbiased integer draws
+    # (`bounded_uniform`, `bernoulli`), cut out of `shekyl-relay-privacy` so
+    # the relay scheduler, the peerlist, the dialer and the FFI's CSPRNG do
+    # not reach into the relay-timing crate for one trait. The seeded
+    # `SplitMix64` is behind the `conformance` feature, on dev edges only.
+    "shekyl-draw-rng",
+
     # Daemon relay-privacy timing core (Dandelion++ epoch/stem/fluff/embargo
     # draws + the stem map), derived from the paper rather than inherited as
     # `#define`s. Standalone measurement instrument: links nothing, replaces

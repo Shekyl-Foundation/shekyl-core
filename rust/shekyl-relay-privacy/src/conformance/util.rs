@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-use crate::rng::RelayRng;
+use shekyl_draw_rng::RelayRng;
 
 /// Narrow a draw already bounded by a `usize`-derived range.
 pub(crate) fn usize_from(v: u64) -> usize {

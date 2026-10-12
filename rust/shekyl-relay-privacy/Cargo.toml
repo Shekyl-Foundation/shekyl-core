@@ -14,7 +14,8 @@ repository.workspace = true
 
 [features]
 # Default build is the derivation + draws + stem map: integer-only at draw
-# time, dependency-free, the path the daemon would eventually link. The
+# time, the path the daemon links. Its one dependency is `shekyl-draw-rng`
+# (the RNG seam and the integer draws), which has none of its own. The
 # `conformance` feature pulls the statistics utility and compiles the
 # goodness-of-fit grading + timeline measurement machinery, which is float-
 # bearing and test/diagnostic only. Same split as `shekyl-standoff`.
@@ -22,20 +23,23 @@ default = []
 conformance = ["dep:shekyl-stats"]
 
 [dependencies]
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 shekyl-stats = { path = "../shekyl-stats", optional = true }
 
 [dev-dependencies]
 # The conformance instruments are the point of this crate's test surface, so
 # the test build always enables them.
 shekyl-relay-privacy = { path = ".", features = ["conformance"] }
-# TEST-ONLY, and it does not touch the daemon-linked build (the default build
-# stays dependency-free). `spec_decision_matrix` claims its table is exhaustive
+# The seeded reference generator, for the tests, the golden vector and its
+# generator example. A dev edge: the default build cannot name `SplitMix64`.
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["conformance"] }
+# TEST-ONLY, and it does not touch the daemon-linked build. `spec_decision_matrix` claims its table is exhaustive
 # over the legal input domain; the only way that claim can FAIL when the cap
 # moves is to compare against the cap as the code enforces it. `MAX_INPUTS` is
 # checked by `proof::verify`, which is the call the surface times, so it is the
 # anchor with the shortest path to the number.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
-# TEST-ONLY, same rule: the default build stays dependency-free. These two are
+# TEST-ONLY, same rule. These two are
 # what let `carrier::WINDOW_BYTES` be ENFORCED rather than performed. The
 # window has to hold a real `NOTIFY_NEW_TRANSACTIONS` carrying a real
 # transaction, so the test asks the two crates that own those facts instead of

@@ -7,10 +7,25 @@
 //!
 //! One trait with one method keeps this crate dependency-free and lets the
 //! same draw code serve three consumers: the daemon's CSPRNG in production,
-//! a seeded [`SplitMix64`] in the measurement harness, and the frozen golden
+//! a seeded `SplitMix64` in the measurement harness, and the frozen golden
 //! vector. This mirrors `shekyl-standoff`'s `GapRng` deliberately — the two
 //! crates are the same shape (a privacy-load-bearing draw plus a conformance
 //! grade), and a reader who knows one should recognize the other.
+//!
+//! # Why its own crate
+//!
+//! The relay scheduler, the peerlist, the dialer and the FFI's CSPRNG all
+//! draw through [`RelayRng`]. It lived in `shekyl-relay-privacy`, so each of
+//! them depended on the relay-timing crate for one trait. No crate below all
+//! of them could hold it, so it has a crate of its own with no dependencies.
+//!
+//! # `SplitMix64` does not exist in a production build
+//!
+//! The seeded reference generator is not a CSPRNG. It compiles only under
+//! `cfg(any(test, feature = "conformance"))`, and the `conformance` feature
+//! is enabled from `[dev-dependencies]` edges only
+//! (`scripts/ci/check_test_only_features.py`). A production draw from it is
+//! a compile error, not a review finding.
 //!
 //! # Why not `rand`
 //!
@@ -24,12 +39,14 @@
 //! sequence would then be pinned to a crate version rather than a stdlib. The
 //! draws here are written out, so the distribution is the reviewable artifact.
 
-/// Minimal RNG abstraction the relay-privacy draws are generic over.
+#![deny(unsafe_code)]
+
+/// Minimal RNG abstraction the daemon's draws are generic over.
 ///
 /// Production supplies a CSPRNG; the measurement harness and golden vector
-/// supply a seeded [`SplitMix64`]. A single method is deliberate: it is the
-/// smallest surface that keeps the crate dependency-free, and every draw in
-/// this crate is built from it.
+/// supply a seeded `SplitMix64`. A single method is deliberate: it is the
+/// smallest surface that keeps the crate dependency-free, and every draw
+/// generic over it is built from it.
 pub trait RelayRng {
     /// Next uniformly-distributed 64-bit word.
     fn next_u64(&mut self) -> u64;
@@ -41,9 +58,14 @@ pub trait RelayRng {
 /// SplitMix64 is the same generator `shekyl-standoff`'s harness uses. It is
 /// **not** a CSPRNG and must never be used for a production draw; it exists so
 /// a measured timeline is replayable and a frozen vector is meaningful.
+///
+/// The `cfg` on this item is what enforces that sentence: without the
+/// `conformance` feature the type is not compiled.
+#[cfg(any(test, feature = "conformance"))]
 #[derive(Debug, Clone)]
 pub struct SplitMix64(u64);
 
+#[cfg(any(test, feature = "conformance"))]
 impl SplitMix64 {
     /// Seed the generator. Any seed is valid, including zero.
     #[must_use]
@@ -52,6 +74,7 @@ impl SplitMix64 {
     }
 }
 
+#[cfg(any(test, feature = "conformance"))]
 impl RelayRng for SplitMix64 {
     fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -120,7 +143,7 @@ pub fn bounded_uniform<R: RelayRng + ?Sized>(rng: &mut R, max: u64) -> u64 {
 /// # Panics
 ///
 /// Panics if `denominator` is zero — a zero-denominator probability has no
-/// meaning and every caller in this crate passes a compile-time constant.
+/// meaning and every caller passes a compile-time constant.
 pub fn bernoulli<R: RelayRng + ?Sized>(rng: &mut R, numerator: u64, denominator: u64) -> bool {
     assert!(denominator > 0, "bernoulli denominator must be non-zero");
     bounded_uniform(rng, denominator - 1) < numerator

@@ -26,9 +26,12 @@ shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 
 [dev-dependencies]
 shekyl-peerlist = { path = ".", features = ["conformance"] }
+# The seeded reference generator, for the tests only.
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["conformance"] }
 
 [lints]
 workspace = true
