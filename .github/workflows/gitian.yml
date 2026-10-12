@@ -42,6 +42,22 @@ jobs:
     - name: Refuse a genesis release on a pre-1.0 fn-dsa
       run: |
         gate=scripts/ci/check_fn_dsa_genesis_gate.py
+        # A dry run is dispatched with a full commit id, as
+        # RELEASE_PROMOTION.md §4 requires (gitian refuses a ref with a slash
+        # in it). A commit id is not a tag of any shape, so it is not a
+        # release and there is nothing to refuse: the gate runs with no tag,
+        # which still checks the lock and reports what a genesis build would
+        # be told. Read as a tag, the id fails the pre-release shape and the
+        # gate stopped every dry run before the build. Nothing is waved
+        # through by this: a dispatch cannot publish (the publish step runs
+        # on a tag ref only), and a tag push never takes this branch.
+        if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && grep -Eq '^[0-9a-f]{40}$' <<<"$GITIAN_TAG"; then
+          echo "::notice::dry run of commit $GITIAN_TAG: not a release tag, the genesis refusal does not apply"
+          if [ -f "$gate" ]; then
+            python3 "$gate"
+          fi
+          exit 0
+        fi
         if [ ! -f "$gate" ]; then
           # A tag cut before the gate existed. The same rule as the script,
           # in the same expression, which the script checks is here verbatim:
