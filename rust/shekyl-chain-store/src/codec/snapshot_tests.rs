@@ -114,12 +114,13 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockInfo, BlockRef, BondRecord, Canonical,
-    Coded, CoverageGaps, CurveTreeState, FirstPayingHeight, HeldShard, Holdings, IssuedDigest,
-    IssuedDraw, LayerHash, LeafCount, OriginatedPhase, OutKey, OutTx, PoolRecord, ProbeCell,
-    PropertyCell, RMarket, Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion,
-    SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth,
-    TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockDraws, BlockInfo, BlockRef, BondRecord,
+    Canonical, Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard,
+    Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OriginatedPhase, OutKey, OutTx,
+    PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness, RelayState, Responsibility,
+    RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow, SigmaWorkMilli,
+    SlashLogEntry, SlashedHolding, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
+    PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -732,6 +733,43 @@ impl Fixtures for IssuedDigest {
         ]
     }
 }
+impl Fixtures for BlockDraws {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        let row = |revealed| BlockDraws {
+            count: 0x0102_0304,
+            carry: 0x1112_1314,
+            shortfall: 0x2122_2324_2526_2728,
+            revealed,
+        };
+        vec![
+            (
+                "no_draws",
+                BlockDraws {
+                    count: 0,
+                    carry: 0,
+                    shortfall: 0,
+                    revealed: false,
+                },
+            ),
+            ("in_flight", row(false)),
+            ("revealed", row(true)),
+        ]
+    }
+}
+impl Fixtures for DrawableDigest {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            // Zero is a digest like any other, not an absent one.
+            ("all_zero", DrawableDigest::from_bytes([0; 32])),
+            (
+                "distinct",
+                DrawableDigest::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i + 1).expect("fits")
+                })),
+            ),
+        ]
+    }
+}
 impl Fixtures for SigmaWorkMilli {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
@@ -1328,6 +1366,8 @@ snapshotted_codecs! {
     SettlementRow => codec_snapshot_settlement_row,
     IssuedDraw => codec_snapshot_issued_draw,
     IssuedDigest => codec_snapshot_issued_digest,
+    BlockDraws => codec_snapshot_block_draws,
+    DrawableDigest => codec_snapshot_drawable_digest,
     SettlementEpoch => codec_snapshot_settlement_epoch,
     ShardId => codec_snapshot_shard_id,
     ArchivalLength => codec_snapshot_archival_length,

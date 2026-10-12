@@ -1111,8 +1111,14 @@ the watermark and the closed-not-settled cases.
 ## 16. `SO-D12` — admission and the draw — RULED 2026-10-10
 
 **Status:** RULED 2026-10-10 (§16.6). Ten questions (§16.4), posed with
-recommendations and ruled the same day. Nothing here is built;
-increment 1 is cleared to start. Grounded at `dev@e28979ff2`.
+recommendations and ruled the same day. Increment 1 is in progress
+(§16.8). Grounded at `dev@e28979ff2`.
+
+**Carriers were replaced on 2026-10-11** by one bundle per block (the
+Slice C round; §16.9). §16.1 to §16.5 are the pre-flight as posed and
+say "carrier" where the mechanism now has a bundle. The findings and the
+order of the increments do not depend on which carries the records; the
+serve-credit specification is the authority on the bundle.
 
 **The charge.** §14.4 step 5. The mechanism is ruled in
 [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4 to §10
@@ -1214,44 +1220,53 @@ the witness root is a header field. Deleting the attestation path's pass
 records while that rule still judges the witness would leave it judging
 a witness with nothing in it.
 
-### 16.3 The cut proposed
+### 16.3 The cut, as ruled 2026-10-11
 
-Four increments, each its own PR, in this order. Each leaves the tree
-with the Rust validator still slashing and paying nothing off Fakechain
-until the last one lands.
+The work is split by what is checked, not by who owns the tables
+(§16.9):
 
-1. **State and wire types.** The `0x0C` field and the coinbase grammar
-   that requires it (`SO-D12i`), with the smallest writer that can
-   satisfy it; the carrier and record layouts of the specification's
-   §7 with the rule-42 bump; the per-block draw table and the `D` digest
-   cell with their view reads; `SCHEMA_VERSION` 22 to 23. Types, codecs,
-   vectors and the store's write and undo. No rule reads any of it.
-2. **The drawable set as of `h_open(E)`.** Whatever `SO-D12b` rules,
-   with the `D` digest written at `h_open(E)` and checked by the
-   settlement pass (`SO-D10g`).
-3. **Issuance, staged.** The commitment check, the witness signature,
-   the per-block count, the derivation of each record's pair, the index
-   and digest writes at the first reveal, and dedup: checks 1 to 5 and 7
-   of the specification's §9.1, built and tested as functions and not
-   yet called from the connect path (`SO-D12c`).
-4. **The receipt, and the switch.** Check 6, after the FN-DSA
-   increments. Admission enters the connect path whole. The `passed` bit
-   is set by an admitted record and by nothing else, and the Fakechain
-   door is deleted: a test issues a draw by connecting a carrier. The
-   serve-credit table goes (`SO-D10c`), and with it the two reads that
-   still stand on it: the latest epoch a persona earned a pass in and
-   the shards it ever earned one for, which the Release's served anchor
-   reads (`SO-D12j`). The Rust CEN-B4 rule and the attestation path
-   retire here, with the census status for a row retired by ruling.
+- **The Slice C round** builds the bundle verifier as a pure rule in
+  `shekyl-chain-rules`, receipts included, and FN-DSA increments 3 and 4
+  (the receipt key in the bond record, and receipts signed under it). It
+  defines the view trait the verifier reads through and the type of the
+  `h_open(E)` snapshot.
+- **This lane** owns the state and the wiring.
+- **The E5 lane** owns the bundle queue and the body store, and
+  implements the view trait on its switch batch view.
 
-The producer side is not in this list: generating the seed and the
-witness key, the memory-only ring, writing `0x0C` into the template,
-scheduling the reads and filing carriers. It is its own lane's work and
-needs only increment 1's types.
+This lane's increments, each its own change:
 
-**No tree between these increments admits a carrier without checking
-its receipts.** Increment 3 is code with no caller on a block path;
-increment 4 is the one change that makes a carrier admissible.
+1. **State, and the coinbase commitment** (§16.8). The per-block draw
+   table and the drawable set's digest cell with their view reads,
+   layout 23; `0x0C` required in every coinbase and drawn inside Rust's
+   writer, with the genesis regenerated.
+2. **The Release journal, and the snapshot.**
+   - The journal stores the **full bond record** as a Release's
+     pre-image, not the holdings alone, so a pair released after
+     `h_open(E)` keeps its receipt key. Built now.
+   - The `h_open(E)` snapshot is built to the type the Slice C round
+     defines: one type, two methods, the drawable pairs and each pair's
+     receipt key. Built once that type is delivered. The `D` digest is
+     written at `h_open(E)` and checked by the settlement pass
+     (`SO-D10g`).
+3. **The merged increment** (the pre-flight's 3 and 4), after the Slice C
+   verifier lands:
+   - implement the view trait on this lane's store;
+   - call the verifier at block admission and write its kept projection
+     into this lane's tables;
+   - flip the switch as one rule-07 cutover. The `passed` bit is set by
+     an admitted record and by nothing else, and the Fakechain door is
+     deleted;
+   - the attestation-path deletions, with the Rust CEN-B4 rule and the
+     census status for a row retired by ruling; and the serve-credit
+     table with the two reads that stand on it (`SO-D10c`, `SO-D12j`).
+
+No tree before the merged increment admits a bundle. The verifier that
+checks receipts and the wiring that calls it arrive together.
+
+The producer side is not in this list: keeping the seed and the witness
+key, scheduling the reads and filing the bundle. It needs only increment
+1's types.
 
 ### 16.4 Posed, with the recommendation made
 
@@ -1278,16 +1293,16 @@ The settlement-timing question `ESR-12`.
 
 | # | Ruling |
 | --- | --- |
-| `SO-D12a` | **Agreed.** Four increments; the producer side is a separate lane |
+| `SO-D12a` | **Agreed.** Four increments; the producer side is a separate lane. *(Restated 2026-10-11 as three increments for this lane under the split by what is checked, §16.3)* |
 | `SO-D12b` | **Agreed: journal the Release pre-image.** It is not new design: Q3 (2026-09-16) already defines `D` as a pure function over the append-only bond journals, and the Rust store never got the unbond journal that function assumes. Building it completes Q3 and does not reopen the snapshot refusal. Two conditions. **Reinstate is a third event:** if a Reinstate connected after `h_open(E)` restores holdings the pair did not have at `h_open(E)`, the walk-back reverses it too (checked, §16.7). **Compute once per epoch, not per admission:** `D` is built at `h_open(E)` into an in-memory cache that is never persisted as consensus state, rebuilt deterministically from tip and journals on restart and after a reorg across `h_open(E)`, and guarded by the digest check |
-| `SO-D12c` | **Agreed.** Increment 3 is staged. No network-type branch |
-| `SO-D12d` | **This lane takes FN-DSA increments 2 to 4.** The receipt key lives in the bond record those increments already touch, and the receipt check is increment 4's gate. One owner for one validation surface (rule 19); a second lane would recreate the handoff circle `SCV-1` found. The scheme lane's work is done |
+| `SO-D12c` | **Agreed.** Increment 3 is staged. No network-type branch. *(Superseded 2026-10-11: there is no staged increment. The verifier is the Slice C round's and lands whole; this lane's merged increment wires it, §16.3)* |
+| `SO-D12d` | **The FN-DSA lane closed at increment 2** (maintainer, 2026-10-11): the scheme and the receipt key's derivation. **Increments 3 and 4, the receipt key in the bond record and receipts signed under it, belong to the Slice C round, and the receipt check moves with them.** The settlement lane builds none of the three and does not own the receipt check. This replaces the ruling of 2026-10-10, which gave increments 2 to 4 to the settlement lane |
 | `SO-D12e` | **Agreed.** Rust deletions in the increment that replaces each piece; C++ deletions at `DEL-008` |
 | `SO-D12f` | **Agreed.** The shortfall is stored, with undo |
 | `SO-D12g` | **Agreed** |
 | `SO-D12h` | **Agreed.** The same journal fixes the complete-tree flag |
 | `SO-D12i` | **Required from increment 1, with no height gate.** The testnet runs tagged releases and the next tag is a regenesis, so nothing on `dev` reaches a running chain and there is no compatibility window. One condition, on correctness: the grammar that requires `0x0C` lands for the validator that judges blocks in that release. The C++ daemon is that validator until `DEL-008` and must accept the tag in increment 1 itself. What the change touches is in §16.7 |
-| `SO-D12j` | **Deferred** to increment 4's design text |
+| `SO-D12j` | **Deferred** to the design text of the increment that deletes the table (the merged increment, §16.3) |
 
 What `SO-D12i` touches on the live chain, checked before it was ruled, is §16.7.
 
@@ -1319,10 +1334,10 @@ every network that already has a chain, and it changes genesis.**
   grammar. The Rust validator runs the same function
   (`rules/tx_extra.rs`).
 - **So there is one grammar and one writer, in Rust, and both
-  validators link it.** The C++ refuses `0x0C` today because the shared
-  grammar does. A change to `COINBASE_TAGS` changes the writer and both
-  validators in the same binary; the "both validators in one change"
-  condition is met by construction.
+  validators link it.** Before increment 1 the C++ refused `0x0C`
+  because the shared grammar did. A change to `COINBASE_TAGS` changes the
+  writer and both validators in the same binary; the "both validators in
+  one change" condition is met by construction.
 - **What is not met.** The grammar is an exact ordered list. Requiring
   `0x0C`:
   - refuses every block already on a chain, on a node that resyncs
@@ -1341,20 +1356,187 @@ every network that already has a chain, and it changes genesis.**
 Rust function both validators call, increment 1 meets the ruling's
 condition by changing that function and the writer together, with:
 
-- the C++ `construct_miner_tx` passing the commitment through to the
-  writer, and the daemon's own block tests connecting blocks that carry
-  the tag;
+- the writer drawing the commitment itself, so the C++
+  `construct_miner_tx` calls it as before and passes nothing for it;
 - the three `GENESIS_TX` constants regenerated. The genesis coinbase is
   judged by the grammar, at connect and at DB add, so it carries the tag
   too. Its commitment is 32 zero bytes: a value nobody can open, never
   read as absent;
-- a carrier's seed and `h` in a new transaction-extra field, `0x0D`,
-  required exactly once in a `serve_credit_only` transaction and refused
-  everywhere else;
-- the serve-credit record replaced. The C++ gate does not parse the new
-  record. It refuses a serve-credit input loudly, naming the retired
-  record and `DEL-008`, until the cutover; no production code produces
-  the old record, so no credit the daemon accepts today is lost.
+- the serve-credit input and its record left as they are, on both
+  sides (§16.9).
 
-The design of increment 1 and the rulings on it travel with that
-increment's change.
+The design of increment 1 is §16.8 and the rulings on it §16.9.
+
+### 16.8 Increment 1 as designed — a regenesis, not a type half
+
+**Status:** the first increment's design, written before its code.
+Decisions 1 to 6 are **LANDED**. Decision 7 is **retired** by the
+carrier rulings of 2026-10-11, and decision 8 **changes nothing in this
+increment** (§16.9). Decisions 3, 7 and 8 fix bytes or retire a
+live path; they were flagged and are ruled, with conditions, in §16.9.
+
+**What the increment is.** Genesis is judged by the coinbase grammar at
+connect (`prevalidate_miner_transaction`) and at DB add. Requiring `0x0C`
+therefore regenerates all three `GENESIS_TX` constants, and with them
+every genesis hash, the network-id vectors derived from the hash, the six
+captured chains the Rust rules replay, and the coinbase vectors in
+`shekyl-wire` and `shekyl-rpc-types`. It is the regenesis the next tag
+was going to be, landed as one rule-07 change.
+
+**Decisions.**
+
+1. **Position: third.** A coinbase's extra is
+   `0x01 pubkey · 0x02 nonce · 0x0C commitment · 0x06 kem · 0x07 leaf`,
+   and the first three fields when it has no outputs. After the nonce,
+   because the distance from the pubkey to the nonce payload is an
+   operand the daemon's RPC hands to miners
+   (`shekyl_coinbase_nonce_offset_from_pubkey`), and before the two
+   output-count fields so the no-output form stays a prefix of the full
+   one.
+2. **Encoding: tag and 32 bytes, no length.** As the pubkey is encoded.
+   Q13 ruled 32 bytes; a length prefix would say the length varies.
+   33 bytes per coinbase. The largest grammar-valid coinbase extra moves
+   from 18,994 to 19,027 bytes.
+3. **Genesis commits to 32 zero bytes.** The genesis tool is
+   deterministic and holds no seed or key, and the value is permanent.
+   Zero is a commitment nobody can open: no `witness_pk ‖ seed` is known
+   to hash to it, so no carrier can reveal height 0, which has no
+   producer. The value lives in one place, `GENESIS_DRAW_COMMITMENT` in
+   the genesis tool; `DrawCommitment` has no zero constant, no `Default`
+   and no emptiness test, so no reader can take a value for "absent".
+   Epoch 0 issues no draw because its drawable set is empty, which
+   `height_zero_and_all_of_epoch_zero_issue_no_draw` pins
+   (`rust/shekyl-chain-rules/src/archival/drawable.rs`).
+4. **The smallest writer: Rust's coinbase-extra writer draws the
+   commitment itself, and the C++ gains nothing** (ruled, §16.9). The
+   daemon builds a coinbase's extra by calling `shekyl_coinbase_extra`,
+   as before and with the same arguments. Inside that call Rust generates
+   a witness key and a seed, commits to them, wipes both and writes the
+   commitment (`commit_and_discard`,
+   `rust/shekyl-ffi/src/archival_ffi/draw.rs`). No commitment and no
+   secret is a C++ value: there is no C++ type for it, no parameter, and
+   no template call (rule 36, rule 20).
+   - Each pricing pass of a template builds a coinbase, so each pass
+     draws: usually two key generations per template, at most eleven. The
+     field is a fixed 32 bytes, so the passes agree on weight. The last
+     pass's coinbase is the block's.
+   - Until a producer keeps the secrets, every block commits to a seed
+     nobody can reveal, which issues nothing (the specification's §9.2).
+     The producer is Rust: it replaces the body of `commit_and_discard`
+     with a draw that also hands the pair to a Rust store, and which
+     pass's pair it keeps is its question.
+   - The FN-DSA-1024 key generation is new cost on the template path; it
+     gets a `BA-T` row and is measured, not gated.
+5. **The Rust template.** `TemplateContext` gains the commitment as a
+   field; the crate stays a pure function of its context, and so does
+   `build_coinbase_extra`, which the genesis tool calls with the zero
+   commitment. Only the FFI shim draws. The scenario
+   driver derives it from the counter it already derives the transaction
+   secret from. The parity test against the C++ template reads the C++
+   template's commitment back and supplies it.
+6. **Store state, shaped and unwritten.** The per-block draw row
+   (`count`, `carry`, visible shortfall, revealed) and the per-epoch `D`
+   digest cell get their types, codecs, snapshots, undo and view reads,
+   with `SCHEMA_VERSION` 22 to 23, and no block writer: `count` needs
+   `D`, which is increment 2's. The same shape as `SO-D10a`'s empty
+   index. **LANDED:** `archival_block_draws` (`u64 → BlockDraws`,
+   ordinal 40; its draw count is 32 bits, the width of a draw index) and
+   `archival_drawable_digest` (`u64 → DrawableDigest`, ordinal 41),
+   layout 23, read as `ChainView::block_draws` (A18) and
+   `ChainView::drawable_digest` (A19). Both reads answer `None` for a row
+   that is not there; an all-zero digest is returned as a digest
+   (`rust/shekyl-chain-store/src/schema.rs`; `store/archival_reads.rs`).
+7. **A carrier field `0x0D` for the seed and `h`: RETIRED 2026-10-11,
+   not built.** It was proposed as a transaction-extra field, required
+   once in a `serve_credit_only` transaction, and ruled on 2026-10-10
+   (§16.9). The Slice C round then replaced carriers: one bundle per
+   block carries the block's records, and the seed and `h` are the
+   bundle's kept bytes. With no carrier transaction there is nothing for
+   the field to ride in. The tag `0x0D` is unassigned.
+8. **The serve-credit record: not changed by this increment.** It was
+   first to be replaced here, then deleted here, then deleted in its own
+   change; on 2026-10-12 that was re-ruled (§16.9). The Rust input, its
+   rules and the tests that use it are landed code and stay. The C++
+   that serves the Rust wallet stays until the Rust daemon serves the
+   same method. Bundle admission is built beside the input, in the
+   merged increment, and the input's fate is decided there.
+
+**Commit order, as landed.** Design text and census; store tables,
+schema and view reads; the `0x0C` field, grammar and writer; genesis
+regeneration and every pin; vector recapture; the commitment drawn
+inside Rust's writer with the C++ threading deleted; a test-only writer
+for the C++ scaffolds that lay a coinbase by hand.
+
+### 16.9 Rulings on increment 1 (maintainer, relayed 2026-10-10)
+
+| Decision | Ruling |
+| --- | --- |
+| 3, genesis commits to 32 zero bytes | **Agreed, on two conditions.** **No code treats an all-zero commitment as absent or unset.** Zero is a valid value nobody can open; a reader that uses it as a sentinel makes genesis a special case. A test holds that the genesis block's `0x0C` parses and is carried like any other. **Height 0 issues nothing, pinned by a test:** `D` is empty at genesis, so `count(0) = 0`, and no reveal can name `h = 0`. A nothing-up-my-sleeve hash was considered and buys nothing: neither value can be opened, and zeros are obvious to a reader of the genesis block |
+| 7, seed and `h` in `0x0D` (superseded 2026-10-11, below) | **Agreed.** The transaction extra is the carrier-level slot and is in the kept prefix, which is what settlement needs. Three conditions. **Exactly once** in a `serve_credit_only` transaction and refused everywhere else, as part of that transaction's exact ordered tag grammar. **Canonical varint for `h`:** a non-minimal encoding is refused, so one carrier has one byte form. **The set commitment covers the field's content**, seed and `h` both, so the witness signature binds it; that input is in the commitment's vectors |
+| 8, the record is replaced in increment 1 (superseded: not changed by this increment, below) | **Agreed: increment 1, not 4. It is the more correct state.** The old record is the one the Rust validator admits today without checking anything, the hole the round started from; once replaced, the Rust validator admits no serve credit until increment 4 wires admission whole, which is fail-closed by construction. Nothing on the testnet gets worse: no production code signs the old record, so the C++ gate already accepts nothing real and its beacon-era fold behaves the same with or without credits. The C++ tests that drive the old record are deleted with the reason recorded (rule 15). **One condition: the C++ refusal is loud.** A typed refusal that names the retired serve-credit record and `DEL-008`, not a codec parse error that happens to fail. One line at the existing refusal site and nothing more (rule 20) |
+
+**Decision 4, ruled (b): the commitment is drawn inside Rust's
+coinbase-extra writer, with no new C++.** No header, no parameter on
+`construct_miner_tx`, no call from the template. The increment's first
+grammar commit built the other shape (a C++ struct threaded from
+`create_block_template` to the writer, and an export to draw it) and a
+later commit deleted it. With it went the C++ `mining_parity` test that
+re-emitted the genesis extra through the FFI writer: that writer no
+longer takes a commitment, so it cannot reproduce a fixed extra. The
+byte-identity proof is in Rust, over the pure writer and the same
+`GENESIS_TX` pins (`shekyl-genesis-tool`, `config_pin_gate`,
+`the_pure_writer_reproduces_each_pinned_genesis_extra`).
+
+**Carrier rulings (Slice C round, 2026-10-11), which replace the rows
+for decisions 7 and 8 in the table above:**
+
+- **There are no carriers.** One bundle per block replaces them. The
+  seed and `h` are the bundle's kept bytes.
+- **`0x0D` is dropped.** The field is not built; decision 7 is retired.
+- **The serve-credit input is not deleted by this lane's increment 1**
+  (re-ruled 2026-10-12). The rule for deleting C++ is that it is
+  unreachable, or that its Rust replacement serves everything that
+  consumed it. The C++ serve-credit path is still reachable and its
+  readers feed the landed Rust wallet through
+  `get_archival_emission_claim_source`, so it stays until the Rust
+  daemon serves that method (`DAEMON_RPC_KV_CUTOVER.md`, `RK-9`). Landed
+  Rust is not deleted: the input, its rules, the submit path and the
+  wallet all stay.
+- **No C++ refusal** is added for the input.
+
+**The slow C++ tests (ruled 2026-10-12).** Rust's writer generates a key
+on every call. The C++ unit scaffolds that lay a coinbase by hand build
+up to 180,000 blocks, so they call a test-only writer
+(`shekyl_test_coinbase_extra`; the precedent is
+`shekyl_test_conforming_pqc_leaf_entry`). It has the production writer's
+signature and writes the one fixture commitment every Rust fixture
+coinbase carries (`CONFORMING_DRAW_COMMITMENT`), so the C++ passes no
+bytes of its own. Production is unchanged, and the two writers share one
+body.
+
+**The split (ruled 2026-10-11), by what is checked:** the Slice C round
+builds the bundle verifier as a pure rule, receipts included, FN-DSA
+increments 3 and 4, the view trait and the snapshot type; this lane owns
+the state and the wiring; E5 owns the bundle queue and the body store.
+This lane's increments are restated to it in §16.3. Two of its terms are
+rulings on increment 2: **the Release journal's pre-image is the full
+bond record**, and **the snapshot is built to the Slice C round's
+type**, after that type is delivered.
+
+The `0x0C` field, the genesis and the six recaptured chains stand.
+
+**Added to the increment: a gate on the hand-maintained C header**
+(rule 40). The coinbase writer's C ABI gains a parameter on a header no
+check reads, with five C++ call sites changed by hand. The increment
+either generates the declaration or asserts the signature from both
+sides.
+
+**Order confirmed:** store tables, schema 23 and view reads first; then
+the grammar change and the genesis regeneration, with the six chains
+recaptured from a C++ daemon built with the new grammar.
+
+On the set commitment: the specification's §7.3 already leads the
+commitment with `seed[32] ‖ h_le[8]`, and every vector there carries
+both. The condition is met by construction; increment 1 adds the test
+that the bytes fed to the commitment are the `0x0D` field's own seed and
+`h`, so the field and the commitment cannot name different values.

@@ -66,8 +66,10 @@ namespace cryptonote
     tx.extra.clear();
 
     // The extra is built once, at the end, by shekyl_coinbase_extra: the
-    // codec lays out [0x01 pubkey, 0x02 nonce(8), 0x06 KEM, 0x07 leaf
-    // entries] and judges it by the coinbase grammar before handing the bytes
+    // codec lays out [0x01 pubkey, 0x02 nonce(8), 0x0C draw commitment,
+    // 0x06 KEM, 0x07 leaf entries], drawing the commitment itself (the
+    // commitment's secrets never reach C++; this function passes nothing
+    // for it), and judges it by the coinbase grammar before handing the bytes
     // back (TX_EXTRA_RUST_CUTOVER.md §3, TXE-Q2, TXE-Q6'). The nonce is a
     // fixed SHEKYL_COINBASE_NONCE_BYTES: a miner's shorter request is
     // zero-padded and a longer one refused here, not at connect.

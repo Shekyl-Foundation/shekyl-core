@@ -1888,7 +1888,7 @@ impl Transaction {
         }
         // tx_extra size bound on a non-coinbase transaction (the relay cap,
         // CEN-M4). A coinbase extra has no size cap here or in C++; it is
-        // bounded by the coinbase grammar below instead — exactly four fields
+        // bounded by the coinbase grammar below instead — exactly five fields
         // of fixed or `n`-proportional width, so its size is a function of
         // the output count, not a miner's choice.
         if !is_coinbase && self.prefix.extra.len() > MAX_TX_EXTRA {
@@ -1900,8 +1900,9 @@ impl Transaction {
         // The tx_extra shape rule: CEN-I19 (`GENESIS_TX_WIRE_FORMAT.md`
         // §9.6a — exactly one `0x06` of `1120·n` and one `0x07` of `64·n`
         // when the transaction has `n > 0` outputs, neither when `n == 0`)
-        // plus, on a coinbase, the closed grammar `[0x01, 0x02(8), 0x06,
-        // 0x07]` (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′), and no `0x02` off it.
+        // plus, on a coinbase, the closed grammar `[0x01, 0x02(8), 0x0C(32),
+        // 0x06, 0x07]` (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′, amended by
+        // `SO-D12i`), and no `0x02` and no `0x0C` off it.
         // The daemon enforces this at admission through the same
         // [`check_tx_extra_shape`]; enforcing it here is what makes that one
         // rule, rather than one rule and a claim.

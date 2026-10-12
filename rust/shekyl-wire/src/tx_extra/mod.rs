@@ -25,6 +25,8 @@
 use std::borrow::Cow;
 use std::io::{self, Read, Write};
 
+pub use shekyl_types::archival::{DrawCommitment, DRAW_COMMITMENT_LEN};
+
 use crate::bytes::{read_array, read_byte};
 use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
@@ -77,6 +79,11 @@ pub const TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS: u8 = 0x0A;
 /// reader's committed empty set is a successful parse with the tag **absent**;
 /// present-empty and absent both yield an empty blob at that API.
 pub const TX_EXTRA_TAG_ARCHIVAL_ATTESTATION: u8 = 0x0B;
+
+/// `0x0C` — the secret draw's commitment: 32 bytes, no length prefix, as
+/// the pubkey is encoded (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2; `SO-D12i`).
+/// Required in every coinbase and refused everywhere else.
+pub const TX_EXTRA_TAG_DRAW_COMMITMENT: u8 = 0x0C;
 
 /// X25519 ciphertext bytes per output.
 pub const X25519_CT_BYTES: usize = 32;
@@ -143,6 +150,8 @@ pub enum TxExtraField {
     PqcSpendAuthPubkeys(Vec<u8>),
     /// `0x0B` — archival attestation blob.
     ArchivalAttestation(Vec<u8>),
+    /// `0x0C` — the secret draw's commitment.
+    DrawCommitment(DrawCommitment),
 }
 
 impl TxExtraField {
@@ -159,6 +168,7 @@ impl TxExtraField {
             Self::PqcViewTagHints(_) => TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
             Self::PqcSpendAuthPubkeys(_) => TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS,
             Self::ArchivalAttestation(_) => TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
+            Self::DrawCommitment(_) => TX_EXTRA_TAG_DRAW_COMMITMENT,
         }
     }
 
@@ -172,6 +182,7 @@ impl TxExtraField {
         match self {
             Self::Padding(_) => None,
             Self::PubKey(key) => Some(Cow::Borrowed(key)),
+            Self::DrawCommitment(commitment) => Some(Cow::Borrowed(commitment.as_bytes())),
             Self::AdditionalPubKeys(keys) => {
                 let mut bytes = Vec::with_capacity(keys.len() * TX_EXTRA_PUBKEY_LEN);
                 for key in keys {
@@ -204,6 +215,7 @@ pub fn tag_carries_payload(tag: u8) -> bool {
             | TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS
             | TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS
             | TX_EXTRA_TAG_ARCHIVAL_ATTESTATION
+            | TX_EXTRA_TAG_DRAW_COMMITMENT
     )
 }
 
@@ -304,6 +316,9 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
             }
             TX_EXTRA_TAG_ARCHIVAL_ATTESTATION => {
                 TxExtraField::ArchivalAttestation(read_blob(&mut cur, "archival_attestation")?)
+            }
+            TX_EXTRA_TAG_DRAW_COMMITMENT => {
+                TxExtraField::DrawCommitment(DrawCommitment::from_bytes(read_array(&mut cur)?))
             }
             other => {
                 return Err(io::Error::other(format!(
@@ -419,6 +434,10 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
         }
         TxExtraField::ArchivalAttestation(blob) => {
             write_blob(w, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, blob)
+        }
+        TxExtraField::DrawCommitment(commitment) => {
+            w.write_all(&[TX_EXTRA_TAG_DRAW_COMMITMENT])?;
+            w.write_all(commitment.as_bytes())
         }
     }
 }
@@ -616,6 +635,9 @@ pub enum ExtraShapeError {
     /// A `0x02` nonce on a non-coinbase transaction. The nonce exists for
     /// template search, which only the coinbase does.
     NonceOutsideCoinbase,
+    /// A `0x0C` draw commitment on a non-coinbase transaction. A block
+    /// commits to one seed, in its coinbase.
+    DrawCommitmentOutsideCoinbase,
 }
 
 impl std::fmt::Display for ExtraShapeError {
@@ -626,6 +648,10 @@ impl std::fmt::Display for ExtraShapeError {
             Self::NonceOutsideCoinbase => write!(
                 f,
                 "tx_extra 0x02 nonce on a non-coinbase transaction; the nonce is coinbase-only"
+            ),
+            Self::DrawCommitmentOutsideCoinbase => write!(
+                f,
+                "tx_extra 0x0c draw commitment on a non-coinbase transaction; it is coinbase-only"
             ),
         }
     }
@@ -797,6 +823,15 @@ pub fn conforming_pqc_leaf_entry() -> [u8; PQC_LEAF_ENTRY_LEN] {
     );
     e
 }
+
+/// The `0x0C` draw commitment every fixture coinbase carries: a fixed value
+/// with no opening, so a fixture block commits to a seed nobody reveals and
+/// issues no draw. Not zero, so a fixture cannot pass for the genesis
+/// block's commitment by accident. One constant for every crate's fixtures
+/// and for the C++ test writer, as [`conforming_pqc_leaf_entry`] is for the
+/// leaf entry.
+pub const CONFORMING_DRAW_COMMITMENT: DrawCommitment =
+    DrawCommitment::from_bytes([0xDC; DRAW_COMMITMENT_LEN]);
 
 /// `n` conforming `0x07` entries, concatenated.
 #[must_use]

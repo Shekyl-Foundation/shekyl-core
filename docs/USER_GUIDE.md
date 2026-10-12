@@ -173,7 +173,6 @@ or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
 | `--out-peers <n>` | Maximum outbound peer connections |
 | `--in-peers <n>` | Maximum inbound peer connections |
 | `--add-peer <host:port>` | Manually add a peer |
-| `--add-priority-node <host:port>` | Peer that is always maintained |
 | `--ban-list <path>` | File of banned IP addresses |
 
 **Background operation**

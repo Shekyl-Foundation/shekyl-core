@@ -91,7 +91,9 @@ use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, SlashLogFloor, Tip,
     TreeFrontier,
 };
-use shekyl_types::archival::{IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow};
+use shekyl_types::archival::{
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
     ShardId, TxHash,
@@ -374,5 +376,16 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         epochs: &BTreeSet<SettlementEpoch>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
         archival_reads::served_at(self.batch.txn(), persona, epochs).map_err(|f| self.arm(f))
+    }
+
+    fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
+        archival_reads::block_draws(self.batch.txn(), height).map_err(|f| self.arm(f))
+    }
+
+    fn drawable_digest(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<DrawableDigest>, StoreError> {
+        archival_reads::drawable_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
     }
 }

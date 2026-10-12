@@ -75,7 +75,8 @@ namespace cryptonote
   /// exactly one 0x06 of 1120·n bytes and one 0x07 of 64·n bytes when n > 0,
   /// neither when n == 0, every 0x07 entry an admissible point — plus the
   /// closed coinbase grammar on a coinbase (TXE-Q6': exactly
-  /// [0x01, 0x02(8), 0x06, 0x07]) and no 0x02 off it; and tx_extra must
+  /// [0x01, 0x02(8), 0x0C(32), 0x06, 0x07]) and no 0x02 or 0x0C off it; and
+  /// tx_extra must
   /// parse. The rule lives in shekyl-wire (`check_tx_extra_shape`) and is
   /// applied over the codec's own parse through shekyl_tx_extra_shape_of —
   /// the daemon hands over bytes and is_coinbase, never a second reading of

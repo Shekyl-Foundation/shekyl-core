@@ -233,22 +233,33 @@ use super::{Canonical, CodecError};
 ///   it as a sealed file missing a table (SI-7); the bump refuses it at
 ///   open with the true reason. No snapshot family moves: none of the
 ///   three has a C++ counterpart to compare.
-/// - `23` — the bond record carries the persona's receipt key
+/// - `23` — the secret draw's per-block state and the drawable set's
+///   digest (`ARCHIVAL_SETTLEMENT_WRITER.md` §16, `SO-D12` increment 1).
+///   `archival_block_draws` (`u64 → block_draws`, 17 bytes) and
+///   `archival_drawable_digest` (`u64 → drawable_digest`) are born
+///   Rust-only, appended at ordinals 40 and 41 so no existing ordinal
+///   moves. No block writes either yet. A `22` file lacks both, and
+///   `header::verify` would refuse it as a sealed file missing a table
+///   (SI-7); the bump refuses it at open with the true reason. No snapshot
+///   family moves: neither has a C++ counterpart to compare.
+/// - `24` — the bond record carries the persona's receipt key
 ///   (`FN_DSA_HYBRID.md` §8, increment 3; `ARCHIVAL_SERVE_CREDIT_SPEC.md`
 ///   §6.3). `bond_record` gains `receipt_sign_pk` as a **trailing, optional**
 ///   field: nothing when the record commits no key, `u32 len ‖ bytes`
 ///   (`1 ≤ len ≤ MAX_BOND_KEY_BYTES`) after `first_paying_height` when it
 ///   does — the canonical Ed25519 + FN-DSA-1024 hybrid public key a
 ///   JoinMarket in its receipt form (bond-post `post_kind` 5) commits. A
-///   keyless record's bytes do not move, so every row a `22` store holds
+///   keyless record's bytes do not move, so every row a `23` store holds
 ///   decodes unchanged and every snapshot or captured trace taken over
 ///   keyless records still compares equal (the C++ daemon's are all
-///   keyless). The layout still gained a form: a `22` binary reading a
+///   keyless). The layout still gained a form: a `23` binary reading a
 ///   keyed row sees trailing bytes and calls the cell corrupt, so the bump
 ///   refuses the file at open with the true reason. `bond_record.snap`
 ///   moves in its keyed fixture only; no table, ordinal or property cell
-///   moves.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(23);
+///   moves. It is `24` and not `23` because the
+///   draw-state tables above landed first; this change is independent of
+///   them.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(24);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -305,10 +316,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(23));
-        assert_eq!(SCHEMA_VERSION.encode(), [23, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(24));
+        assert_eq!(SCHEMA_VERSION.encode(), [24, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[23, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[24, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

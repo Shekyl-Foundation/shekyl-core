@@ -23,10 +23,11 @@ pub enum Source {
         /// That session's connector.
         connector: ConnectorId,
     },
-    /// Named by the operator: `--add-peer`, `--add-exclusive-node`,
-    /// `--add-priority-node`. Not capped. When gray is full, some other
-    /// entry is evicted so the named one stays (brief §2) — the whole of
-    /// the operator privilege.
+    /// Named by the operator: `--add-peer`, `--add-exclusive-node`, and
+    /// the compiled seed addresses at each start (brief §3). No session, so
+    /// nothing for the per-session cap to count against. The insert rule is
+    /// the same as for every source (brief §2): the address just seated
+    /// stays and, over the cap, a random other drawable seat goes.
     Operator,
     /// Read back from the address file at start. Not capped.
     Reload,
@@ -36,20 +37,17 @@ pub enum Source {
 /// white, through [`crate::Peerlist::apply`], whose match is total.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialOutcome {
-    /// The dial was kept as a session. An outstanding gray draw promotes;
-    /// an address already white moves its clock; anything else leaves white
-    /// unchanged.
+    /// The dial was kept as a session. An outstanding gray draw moves to
+    /// white and `last_observed` is set to the report's time. An address
+    /// already white moves that clock, because the session stayed.
+    /// Anything else leaves the lists unchanged.
     SessionAccepted(NetworkAddress),
     /// The dial confirmed the address and closed: outbound was already at
-    /// target. The same white write as `SessionAccepted`; no session
-    /// remains.
+    /// target, and no session remains. An outstanding gray draw moves to
+    /// white, the same write as `SessionAccepted`. An address already white
+    /// keeps its clock: the session did not stay. Anything else leaves the
+    /// lists unchanged.
     Confirmed(NetworkAddress),
-    /// A harvest closed. A Foundation-fleet address writes white from any
-    /// seat (brief §3). Anyone else's harvest leaves white unchanged, and
-    /// an outstanding draw of that address returns to drawable gray: the
-    /// dial is over, and only [`crate::Peerlist::apply`] moves an
-    /// outstanding draw.
-    HarvestDone(NetworkAddress),
     /// The dial did not reach a handshake. An outstanding gray draw is
     /// dropped; a white address stays white.
     DialFailed(NetworkAddress),
@@ -67,12 +65,27 @@ impl DialOutcome {
         match self {
             Self::SessionAccepted(a)
             | Self::Confirmed(a)
-            | Self::HarvestDone(a)
             | Self::DialFailed(a)
             | Self::PeerlistRefused(a)
             | Self::PayloadRefused(a) => a,
         }
     }
+}
+
+/// What a confirmation does to `last_observed` on an address that is
+/// already white.
+///
+/// An outstanding draw does not consult this: both confirmations write
+/// white and stamp the report's time. The clock moves only when the
+/// session stayed. A later confirmation picks one of these at
+/// [`crate::Peerlist::apply`]; the seat match cannot forget it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WhiteClock {
+    /// `SessionAccepted`. The session stayed, so `last_observed` becomes
+    /// the report's time.
+    Move,
+    /// `Confirmed`. The session closed in that turn, so the clock stays.
+    Hold,
 }
 
 /// Why an address was not admitted to gray.

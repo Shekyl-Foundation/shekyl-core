@@ -66,9 +66,10 @@
 //! builds a `BondRecord` from each field set and asserts nothing is lost.
 
 use shekyl_types::archival::{
-    BadInterval, BondRecord, FirstPayingHeight, HeldShard, Holdings, HoldingsError, HoldingsKind,
-    IssuedDigest, IssuedDraw, RMarket, SettlementRow, SettlementRowError, SigmaWorkMilli,
-    SlashLogEntry, SlashedHolding, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
+    BadInterval, BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
+    HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket, SettlementRow,
+    SettlementRowError, SigmaWorkMilli, SlashLogEntry, SlashedHolding, BLOCK_DRAWS_LEN,
+    DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
     MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, SETTLEMENT_ROW_LEN,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -420,6 +421,71 @@ impl Canonical for IssuedDigest {
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut r = Reader::new(Self::NAME, bytes);
         let digest = r.array::<ISSUED_DIGEST_LEN>("buffer ends inside the digest")?;
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the digest"));
+        }
+        Ok(Self::from_bytes(digest))
+    }
+}
+
+/// `archival_block_draws`'s row (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §10).
+/// Layout:
+///
+/// ```text
+/// count       u32 LE   draws this block's producer made
+/// carry       u32 LE   the fraction carried to the next block's count
+/// shortfall   u64 LE   the visible shortfall the count was computed from
+/// revealed    u8       0 = seed not revealed, 1 = revealed
+/// ```
+///
+/// A third value of the flag, or trailing bytes, is refused.
+impl Canonical for BlockDraws {
+    const NAME: &'static str = "block_draws";
+    const FIXED_WIDTH: Option<usize> = Some(BLOCK_DRAWS_LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.count.to_le_bytes());
+        out.extend_from_slice(&self.carry.to_le_bytes());
+        out.extend_from_slice(&self.shortfall.to_le_bytes());
+        out.push(u8::from(self.revealed));
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let count = r.u32()?;
+        let carry = r.u32()?;
+        let shortfall = r.u64()?;
+        let revealed = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(r.invalid("revealed flag is neither 0 nor 1")),
+        };
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the block's draws"));
+        }
+        Ok(Self {
+            count,
+            carry,
+            shortfall,
+            revealed,
+        })
+    }
+}
+
+/// `archival_drawable_digest`'s row: the 32 bytes of the epoch's
+/// drawable-set digest (`SO-D10g`). Every 32-byte value is a digest; none
+/// stands for an absent one.
+impl Canonical for DrawableDigest {
+    const NAME: &'static str = "drawable_digest";
+    const FIXED_WIDTH: Option<usize> = Some(DRAWABLE_DIGEST_LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let digest = r.array::<DRAWABLE_DIGEST_LEN>("buffer ends inside the digest")?;
         if !r.is_empty() {
             return Err(r.invalid("trailing bytes after the digest"));
         }
