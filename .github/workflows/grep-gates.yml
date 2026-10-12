@@ -62,10 +62,12 @@ jobs:
       # tip on a pull request, the group's base in the merge queue, the
       # previous tip on a push. Empty is a failure below, not a skip.
       FREEZE_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-      # A release promotion: the pull request that carries `dev` to `main`.
-      # Its diff is every change since the last release at once, each of
-      # which already met the freeze when it entered `dev`.
-      FREEZE_PROMOTION: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'dev' }}
+      # A release promotion: the pull request that carries `dev` to `main`,
+      # either from `dev` itself or from a `release-v*` branch cut at the
+      # frozen commit so that `dev` can keep moving. Its diff is every change
+      # since the last release at once, each of which already met the freeze
+      # when it entered `dev`.
+      FREEZE_PROMOTION: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && (github.head_ref == 'dev' || startsWith(github.head_ref, 'release-v')) }}
     steps:
       - uses: actions/checkout@v5
 
@@ -188,11 +190,12 @@ jobs:
           # (the v3.1.0-alpha.10 promotion: 224 lines in net_node.inl, none
           # of them new to `dev`). Nothing on that pull request has not
           # already been judged, and `main` takes nothing but `dev`
-          # (06-branching), so the freeze has no subject there. Only that one
-          # shape is exempt: base `main`, head `dev`. Any other pull request
-          # into `main` is judged, and fails, as it should.
+          # (06-branching), so the freeze has no subject there. Only that
+          # shape is exempt: base `main`, head `dev` or a `release-v*` branch
+          # cut from it. Any other pull request into `main` is judged, and
+          # fails, as it should.
           if [ "${FREEZE_PROMOTION}" = "true" ]; then
-            echo "SKIP: Ruling A dial-path freeze: this is the dev -> main promotion; each change was judged entering dev"
+            echo "SKIP: Ruling A dial-path freeze: this is the release promotion to main; each change was judged entering dev"
           else
             run_one "Ruling A: the C++ dial path is frozen until its deletion" \
               python3 scripts/ci/check_dial_path_freeze.py --base "${FREEZE_BASE}"
