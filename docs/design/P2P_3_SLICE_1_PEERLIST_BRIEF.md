@@ -133,8 +133,11 @@ withdrawn.*
 The other direction is demotion. A white address with no additional contact
 for `EXPIRATION_PERIOD` (24 hours) returns to gray. Additional contact is a
 confirmed handshake, or a later successful exchange, on a connection this node
-opened to that address. It moves the clock forward. Contact that arrived
-inbound does not. One failed redial does not demote; the clock does.
+opened to that address and kept (`SessionAccepted`). It moves the clock
+forward. A confirm-and-close (`Confirmed`) is not additional contact: the
+session did not stay, and an address already white keeps its clock. Contact
+that arrived inbound does not. One failed redial does not demote; the clock
+does.
 
 **Address validity — RULED 2026-10-11 (Rick; formerly the dialer
 brief's D2a; scope settled the same day; R4 2026-10-12).** An address
@@ -150,15 +153,32 @@ evidence about the sender, not about one address (R4, Rick,
 - IPv4: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`,
   `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, the
   documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`,
-  `203.0.113.0/24`), multicast (`224.0.0.0/4`) and reserved
-  (`240.0.0.0/4`).
+  `203.0.113.0/24`), benchmarking (`198.18.0.0/15`), multicast
+  (`224.0.0.0/4`) and reserved (`240.0.0.0/4`).
 - IPv6: loopback, unspecified, link-local (`fe80::/10`), ULA
-  (`fc00::/7`), documentation (`2001:db8::/32`), multicast
-  (`ff00::/8`), and the IPv4-embedding prefixes 6to4 (`2002::/16`),
-  Teredo (`2001::/32`) and NAT64 (`64:ff9b::/96`).
+  (`fc00::/7`), documentation (`2001:db8::/32`), benchmarking
+  (`2001:2::/48`), multicast (`ff00::/8`), and the IPv4-embedding
+  prefixes 6to4 (`2002::/16`), Teredo (`2001::/32`) and NAT64
+  (`64:ff9b::/96`). The whole IPv4-mapped prefix (`::ffff:0:0/96`)
+  is refused.
 - Port 0, on every address type. `tor_address::unknown()` is port 0
   and never enters a list from the network (this closes PWD-B11's
   question; the row in `FOLLOWUPS.md` retires when the check lands).
+
+`198.18.0.0/15` and `2001:2::/48` are the benchmarking ranges (RFC
+2544, RFC 5180). A peer that names one is aiming a dial at a device
+on a lab network, the same class as a private LAN address.
+`::ffff:0:0/96` is refused as a prefix, not rewritten into the
+embedded IPv4. `NetworkAddress::Ipv6` stores the 16 bytes and
+`socket_of` (`rust/shekyl-clearnet/src/drive.rs`) dials them
+unchanged, so `::ffff:192.168.1.1` is a dial to `192.168.1.1`, and
+`::ffff:8.8.8.8` is a second spelling of an address the IPv4 variant
+already names. Honest nodes use that variant. Refusing the prefix
+closes the dial without a second seat for one host and without the
+transport rewriting an address a peer sent. The check does not call
+`Ipv4Addr::is_global` or `Ipv6Addr::is_global`: both are unstable,
+and a later std change would move a network rule. This table is the
+check.
 
 The attack this closes: a remote peer pushes `192.168.1.1:80` or
 `10.0.0.5:22` and the victim's node dials into its own LAN. The rule
@@ -296,10 +316,10 @@ caps move with the crate and are not re-derived
 (`src/cryptonote_config.h:176-177`). The insert rule is uniform across
 sources: `insert_gray` seats the address just admitted and, over the cap,
 evicts a uniformly random *other* drawable gray seat
-(`partition.rs:134-145`, `:471-482`), whatever the source was. There is
+(`partition.rs:131-142`, `:480-491`), whatever the source was. There is
 no `--add-peer` privilege. An operator-named address that is unreachable
 is drawn like any other, fails, and leaves gray with the draw
-(`drop_outstanding`, `:216-222`); it is re-supplied only by the
+(`drop_outstanding`, `:225-231`); it is re-supplied only by the
 operator's next start. *Records-was (to 2026-10-11): "an `admit` of an
 address the operator just named evicts some other gray address … that is
 the whole of the `--add-peer` privilege" — a special-case reading of the
@@ -751,8 +771,9 @@ They check different things. Neither stands for the other.
 3. **Model sequences (runtime).** An outstanding gray draw promotes on
    `SessionAccepted` and on `Confirmed`; either outcome on an undrawn
    address does not; incoming
-   and `--add-peer` stay gray; expiry returns white to gray; contact this node
-   opened moves the clock; inbound contact does not; reload is gray only and
+   and `--add-peer` stay gray; expiry returns white to gray;
+   `SessionAccepted` on an address already white moves the clock and
+   `Confirmed` on that address does not; inbound contact does not; reload is gray only and
    does not draw former white first; `disclose` is a sample of white and
    carries no clock; `DialFailed` and `PeerlistRefused` drop an outstanding
    gray draw; `PayloadRefused` returns that
@@ -779,9 +800,13 @@ They check different things. Neither stands for the other.
      recorded in §5a.
 6. **Address validity (Rick, 2026-10-11, R4 2026-10-12; lands with
    increment 3).** One address from each range §2 lists, and a port-0
-   address of each type, offered as `Source::Session` is refused by
-   `admit_gray`, and a received list that carries one is refused whole
-   (`PeerlistRefused`) with none of its global entries admitted (R4);
+   address of each type, a benchmarking address of each family
+   (`198.18.0.0/15`, `2001:2::/48`), and an IPv4-mapped address of a
+   private IPv4 and of a public IPv4, offered as `Source::Session` is
+   refused by `admit_gray`, and a received list that carries one is
+   refused whole (`PeerlistRefused`) with none of its global entries
+   admitted (R4); the mapped prefix is refused whole, not only when
+   the embedded IPv4 is private;
    the same address as `Source::Operator` is admitted; once in white it is
    absent from every `disclose` sample while a global address beside
    it is present. With `--allow-local-ip`, the `Source::Session` offer
@@ -808,6 +833,7 @@ Worked against the paths this brief already knows:
 | Uniform gray draw, kept dial, `SessionAccepted` | Yes. The session stays |
 | Uniform gray draw, confirm while outbound is at target, `Confirmed` | Yes. No session remains |
 | Same address, already white, `SessionAccepted` on a session this node opened | Clock moves. Already white |
+| Same address, already white, `Confirmed` | No. The clock stays |
 | Compiled seed, drawn and `Confirmed` | Yes, like any peer (§3, 2026-10-11). *Records-was: `HarvestDone`, Yes under the exception, then No* |
 | Addresses in a confirmed peer's reply | No. Gray only (`bootstrap_harvested`). *Records-was: "bootstrap harvest"* |
 | `--add-peer`, an exclusive list | No. Gray until drawn. *Records-was: priority, deleted 2026-10-11* |
