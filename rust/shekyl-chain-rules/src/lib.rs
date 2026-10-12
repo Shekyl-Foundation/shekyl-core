@@ -52,7 +52,7 @@
 //! (`CHAIN_RULES_SLICE_1.md`) landed 4.A/4.B's six predicate rows; slice 2
 //! (`CHAIN_RULES_SLICE_2.md`) landed 4.C and 4.D — the two-stage split,
 //! [`Substrate`], and ten rows (C1–C3, D1, D1b, D2, D3, D4, D6, D7; D5 is
-//! subsumed by D4 over an alt view and closes with slice 9); slice 3
+//! the alt window, recorded by the cheap tier beside D4 — slice 9); slice 3
 //! (`CHAIN_RULES_SLICE_3.md`) housed `PDM-Q5`'s anchor model — the
 //! release-carried [`ReleaseAnchors`], the [`Trust`] input to `validate`,
 //! CEN-E1 per block and CEN-E5 at writer open (the first `enforced_at` row;
@@ -118,6 +118,7 @@
 
 #![deny(unsafe_code)]
 
+mod alt;
 mod anchors;
 mod archival;
 mod block;
@@ -125,6 +126,7 @@ mod census;
 mod coverage;
 mod drain;
 mod fault;
+mod header_ladder;
 mod reorg;
 mod rule_set;
 mod rules;
@@ -149,6 +151,7 @@ mod view;
 #[cfg(any(test, feature = "harness"))]
 pub mod harness;
 
+pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
     closed_and_final, shard_close, shard_close_height, Accrual, ArchivalDelta, ClosedUniverse,
@@ -178,13 +181,13 @@ pub use rules::difficulty::Target;
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
 };
-pub use rules::recorded;
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
 pub use rules::tx_against::{
     newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE,
 };
+pub use rules::{recorded, recorded_header};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
 pub use tree_growth::{
@@ -194,5 +197,6 @@ pub use trust::Trust;
 pub use validate::{form, tx_against, tx_form, validate};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{
-    AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, RecordedWeights, Tip,
+    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, LeafSource, RecordedBlock,
+    RecordedWeights, Tip,
 };

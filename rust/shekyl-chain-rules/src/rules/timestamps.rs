@@ -65,9 +65,9 @@ use shekyl_types::{BlockHeight, Timestamp};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::ViewRead;
-use crate::rules::{recorded, BlockContext, BlockRule, Rule};
+use crate::rules::{recorded_header, BlockContext, HeaderRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::ChainView;
+use crate::view::HeaderView;
 
 /// The median-time-past window at a connecting height, as C3 defines it:
 /// the up-to-eleven preceding timestamps and the genesis timestamp the
@@ -128,11 +128,11 @@ impl Rule for C3 {
 impl C3 {
     /// The window at `connecting`, recorded in `coverage` as this row
     /// having been applied. `None` at genesis.
-    pub(crate) fn window<'id, V: ChainView<'id>>(
-        view: &V,
+    pub(crate) fn window<'id, H: HeaderView<'id>>(
+        view: &H,
         connecting: BlockHeight,
         coverage: &mut RuleCoverage,
-    ) -> Result<Option<MtpWindow>, ViewRead<V::Fault>> {
+    ) -> Result<Option<MtpWindow>, ViewRead<H::Fault>> {
         coverage.insert(Self::ROW);
         let c = connecting.to_raw();
         if c == 0 {
@@ -140,14 +140,16 @@ impl C3 {
         }
         // `connecting ≥ 1` means block 0 and every height below `c` are
         // recorded on a conforming view. The shared parent-side read
-        // (`recorded`) makes a hole there the halting fault, not a panic.
-        let genesis = Timestamp::from_raw(recorded(view, BlockHeight::ZERO)?.header.timestamp);
+        // (`recorded_header`) makes a hole there the halting fault, not a
+        // panic. Timestamps are header facts: a header view answers.
+        let genesis =
+            Timestamp::from_raw(recorded_header(view, BlockHeight::ZERO)?.header.timestamp);
         let window_len = u64::try_from(MTP_WINDOW_USIZE).expect("MTP_WINDOW fits u64");
         let oldest = c.saturating_sub(window_len);
         let mut preceding = Vec::with_capacity(MTP_WINDOW_USIZE);
         for h in oldest..c {
-            let block = recorded(view, BlockHeight::from_raw(h))?;
-            preceding.push(Timestamp::from_raw(block.header.timestamp));
+            let record = recorded_header(view, BlockHeight::from_raw(h))?;
+            preceding.push(Timestamp::from_raw(record.header.timestamp));
         }
         Ok(Some(MtpWindow { preceding, genesis }))
     }
@@ -168,10 +170,10 @@ impl C3 {
 /// # Errors
 ///
 /// [`ViewRead::View`] on a view fault; [`ViewRead::Corrupt`] on a hole.
-pub fn mtp_median_at<'id, V: ChainView<'id>>(
-    view: &V,
+pub fn mtp_median_at<'id, H: HeaderView<'id>>(
+    view: &H,
     connecting: BlockHeight,
-) -> Result<Option<Timestamp>, ViewRead<V::Fault>> {
+) -> Result<Option<Timestamp>, ViewRead<H::Fault>> {
     // The producer's read is not a rule evaluation; the coverage it would
     // record is discarded here rather than lying about a judgement.
     let mut unrecorded = RuleCoverage::EMPTY;
@@ -187,11 +189,11 @@ impl Rule for C1 {
     const ROW: CenRow = CenRow::C1;
 }
 
-impl BlockRule for C1 {
-    fn check<'id, V: ChainView<'id>>(
+impl HeaderRule for C1 {
+    fn check<'id, H: HeaderView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        _view: &H,
+    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
         if cx.connecting.is_zero() {
             return Ok(Ok(()));
         }
@@ -213,11 +215,11 @@ impl Rule for C2 {
     const ROW: CenRow = CenRow::C2;
 }
 
-impl BlockRule for C2 {
-    fn check<'id, V: ChainView<'id>>(
+impl HeaderRule for C2 {
+    fn check<'id, H: HeaderView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        _view: &H,
+    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
         if cx.connecting.is_zero() {
             return Ok(Ok(()));
         }
