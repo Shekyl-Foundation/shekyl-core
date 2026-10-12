@@ -95,9 +95,9 @@ pub use attestation_admission::{
 };
 pub use attestation_wire::{
     attestation_root, empty_attestation_root, pass_records_from_headers_and_witness,
-    verify_pass_countersignature, verify_pass_transcript, AttestationHeader,
-    AttestationHeaderError, BlockAttestationWitness, PassCountersignatureError, PassRecord,
-    PassWitness, WitnessError, WitnessPairingError, ATTESTATION_HEADER_LEN,
+    verify_pass_countersignature, verify_pass_transcript, verify_receipt_transcript,
+    AttestationHeader, AttestationHeaderError, BlockAttestationWitness, PassCountersignatureError,
+    PassRecord, PassWitness, WitnessError, WitnessPairingError, ATTESTATION_HEADER_LEN,
     ATTESTATION_ROOT_CUSTOMIZATION, MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
     WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
