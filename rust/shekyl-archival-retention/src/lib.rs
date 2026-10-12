@@ -28,6 +28,13 @@
 //! - [`secret_draw`] — the secret draw: selection, the `0x0C` commitment,
 //!   the challenge nonce, the serve-credit batch commitment, and the
 //!   count rule (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4, §5.2, §7.3).
+//! - [`bundle`] — the serve-credit bundle: the pass bitmap, the kept and
+//!   prunable parts, the reference a block carries, the bundle commitment,
+//!   the prunable hash, the header root, and the section budget
+//!   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7). STAGED: read by the pure
+//!   verifier in `shekyl-chain-rules`; no block path yet.
+//! - [`epoch_snapshot`] — the `h_open(E)` snapshot: the drawable pairs and
+//!   each pair's receipt key, as one value (§9.6). STAGED with [`bundle`].
 //! - [`settlement_select`] — settlement's fold: three counted draws by beacon, the pair's
 //!   row, and the issued-draw digest term.
 //! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
@@ -55,6 +62,7 @@ pub mod bond_duration;
 pub mod bond_floor;
 pub mod bond_post;
 pub mod bond_wire;
+pub mod bundle;
 pub mod challenge;
 pub mod claimed_epochs;
 pub mod consensus_state;
@@ -66,6 +74,7 @@ pub mod drawable_pair;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
+pub mod epoch_snapshot;
 pub mod error;
 pub mod failure_window;
 pub mod hash;
@@ -127,6 +136,13 @@ pub use bond_wire::{
     WireError as BondWireError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
     VIN_TYPE_ARCHIVAL_BOND_POST,
 };
+pub use bundle::{
+    bundle_commitment, bundle_prunable_hash, bundle_root, section_budget, BundleBody, BundleKept,
+    BundleRecord, BundleRef, BundleWireError, PassBitmap, BUNDLE_COMMITMENT_CUSTOMIZATION,
+    BUNDLE_KEPT_FIXED_LEN, BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN,
+    BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_SEED_LEN,
+    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN,
+};
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
@@ -169,6 +185,7 @@ pub use emission_verify::{
     ClaimantShareError, ClaimsVerified, EmissionEpochSource, EmissionVerified,
     EmissionVerifyContext, EmissionVerifyError,
 };
+pub use epoch_snapshot::{EpochSnapshot, EpochSnapshotError};
 pub use pass_anchor::{
     pass_countersignature_message, pass_delivery_digest, pass_request_header_bytes,
     PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader,

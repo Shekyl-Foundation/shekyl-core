@@ -320,7 +320,13 @@ count_pattern() {
 # Bundle verifier, the scheme domain (2026-10-12): 70 stays 70.
 # shekyl/archival-witness-bundle-scheme-v1 is a third byte string fed to the
 # nested combiner's one cSHAKE site, as the receipt's and the carrier's are.
-MECH1_EXPECTED=70
+# Bundle verifier, the hashes (2026-10-12): 70 -> 73. Three production sites
+# in rust/shekyl-archival-retention/src/bundle.rs -- `bundle_commitment`
+# (shekyl/archival-serve-credit-bundle-v1), `bundle_prunable_hash`
+# (shekyl/archival-bundle-prunable-v1) and `bundle_root`
+# (shekyl/archival-bundle-root-v1). Their vectors were computed outside the
+# tree and are pinned as hex, so the tests add no site.
+MECH1_EXPECTED=73
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2
