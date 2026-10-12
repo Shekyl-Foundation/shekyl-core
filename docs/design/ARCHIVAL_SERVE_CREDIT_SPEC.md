@@ -1075,10 +1075,14 @@ draw `j` that failed. Three outcomes are not verdicts on a block:
   The block committed to the reference, and a block whose body cannot be
   had is not connected. This is checked before anything else;
 - **the view could not answer** something it should hold: the snapshot of
-  `epoch(h)`, the hash at `h` or at an anchor, a drawn pair's key.
+  `epoch(h)`, the hash at `h` or at an anchor, a drawn pair's key, or the
+  `0x0C` of a block it holds. Every coinbase carries exactly one `0x0C`
+  (CEN-I20), so a known block with none is the view's failure, not the
+  block's.
 
-`draw_count(h)` answering "no such block" does refuse the bundle, and so
-does a block with no `0x0C`, as a failed opening.
+`draw_count(h)` answering "no such block" does refuse the bundle: it names
+a block this chain does not have. A `0x0C` that the bundle's seed and
+witness key do not open is the refusal of step 4.
 
 **Not in this tree.** The verifier is implemented on PR #1047, which is
 open: `check_section`, `verify_bundle`, `open_body`, the bundle's types
