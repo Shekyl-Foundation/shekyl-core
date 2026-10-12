@@ -197,7 +197,7 @@ open a second road to a release.
 | `FND-1` | The brief placed the workspace's seed→RNG pattern in `rng.rs`. `rng.rs` is the OS-entropy failure policy and has no seeded RNG; the pattern is `derivation::keygen_from_seed` (ChaCha20 over a 32-byte seed) | Followed the code. `rng.rs` owns both failure policies. `HedgedOsRng` is the signing adapter. `key_material32` is the fail-loud key draw, crate-private, so the public surface stays `hedged_fresh32` |
 | `FND-2` | The crate does not wipe the seeds it draws: `keygen_inner`'s 32-byte seed and `sign`'s 40-byte seed are stack arrays that are never zeroized. Its key and context structures are `ZeroizeOnDrop` | Recorded. Our own copies are `Zeroizing`. The ChaCha20 generator that fed key generation also held the seed unwiped, as it did for ML-DSA and ML-KEM. Callers of `SeededRng` now move a pointer; the constructor return `FND-14` names is the residue that is still not wiped |
 | `FND-3` | `SigningKey1024::decode` returns a ~114 kB context **by value**. Any move of it is another copy on the stack, unwiped, and in an unoptimized build each move costs its size in stack. The first draft moved it once and signing needed 1.25 MiB of stack; borrowing it in place halved that | Fixed in this increment; the measurements are on `the_scheme_runs_on_a_small_stack` |
-| `FND-4` | Signing needs up to 256 KiB of stack optimized and 640 KiB unoptimized; key generation 128 KiB and 512 KiB; verification 64 KiB and 128 KiB | Held by test at half a default thread stack (unoptimized) and a quarter (optimized). **Carried to increment 4:** the serve path's signing capability should hold a decoded key across signatures rather than decode per receipt — it removes the per-signature stack cost and the ~13% the crate's own figures give for decoding |
+| `FND-4` | Signing needs up to 256 KiB of stack optimized and 640 KiB unoptimized; key generation 128 KiB and 512 KiB; verification 64 KiB and 128 KiB | Held by test at half a default thread stack (unoptimized) and a quarter (optimized). **Carried to increment 4:** the serve path's signing capability should hold a decoded key across signatures rather than decode per receipt — it removes the per-signature stack cost and the ~13% the crate's own figures give for decoding. **Built 2026-10-12, STAGED:** `FnDsaHybridSigner`, measured in §9.1 |
 | `FND-5` | The registry gate passed with two unregistered scheme-domain constants in the tree: it pins cSHAKE call sites, and a domain constant with no call site of its own is invisible to it | Rows added by hand, census pin moved. The gate's header already says completeness for constants is a review duty; this is an instance |
 | `FND-6` | The x86_64 vectors run AVX2 code the floor device never runs | Recorded at the pin; the same vectors are run with AVX2 compiled out and under aarch64, each by its own CI step |
 | `FND-7` | No licence policy is enforced anywhere in the repository | Recorded. Not this lane's to add |
@@ -259,3 +259,79 @@ one derivation's key and verifies it under a second derivation's public
 half; `receipt_key_is_scoped_to_slot_and_network` and
 `receipt_key_shares_no_seed_with_its_siblings` hold the scoping and the
 isolation from the identity, bond-spend and onion keys.
+
+## 9. Increment 4 — the signing capability (STAGED 2026-10-12; the switch is not this change)
+
+**Status of this section: STAGED.** The capability that signs a receipt
+under the persona's receipt key is built and tested. Nothing on the live
+serve path selects it: the serving task still signs with the bond identity
+key under hybrid scheme 1, as before. Receipts do not move onto the receipt
+key here, so this section does not close the document and §2 stays where it
+is. The switch is the settlement lane's cutover, in the change that makes a
+verifier accept scheme-3 receipts (the bundle verifier).
+
+The number is 9 and the findings start at `FND-19` because another open
+change (#1046, increment 3) adds §8 and `FND-16`–`FND-18`. This section
+does not touch the banner, §5's table or §6, which that change edits; the
+banner's findings range is to be moved to cover `FND-19`–`FND-22` by
+whichever of the two merges second.
+
+| Piece | Where |
+| --- | --- |
+| The held key | `FnDsaHybridSigner` (`rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs`): decodes an `FnDsaHybridSecretKey` once into a heap slot, then `sign(&mut self, domain, message)`. Same nested body as the scheme (`hybrid_combiner::sign_nested`); the scheme's own sign path is unchanged |
+| Byte identity | `a_held_key_signs_the_bytes_the_scheme_signs`, and `the_held_key_reproduces_the_pinned_signatures` in `tests/kat_fn_dsa_hybrid_v1.rs`, which reads `FN_DSA_HYBRID_V1_KAT.json` and so runs on the AVX2, no-AVX2 and aarch64 lanes. No vector was added or changed |
+| The key in the actor | `HeldReceiptKey` (`rust/shekyl-engine-core/src/engine/stake_engine/types.rs`), a field of `BondedPersona` and `EphemeralPersona` beside the bundle, built by `HeldPersona::hold` when the actor takes the bundle in |
+| The actor message | `SignReceiptTranscript` (`stake_engine/persona.rs`): the 112-byte transcript in, an `FnDsaHybridSignature` out, the domain fixed to `SCHEME_DOMAIN_RECEIPT` where the key is held. `StakeEngineHandle::sign_receipt_transcript_blocking` is its blocking sender |
+| The capability | `ResidentReceiptKey` (`stake_engine/serving/receipt_key.rs`): a weak actor handle and a slot, `ready` and `sign_receipt`, the shape and refusals of `ResidentPassKey` |
+| The staging gate | `the_serving_task_is_not_started_with_the_receipt_key` reads `serving/start.rs`; the capability's methods carry `expect(dead_code)`, so a production caller fails the lint lane |
+| Benches | `crypto_bench_fn_dsa_hybrid_sign_held` (gated) and criterion `fn_dsa_hybrid_sign_held`, `fn_dsa_hybrid_hold_key`; manifest §13 |
+
+**Where the decoded key lives.** In the stake actor and nowhere else. It is
+decoded when a persona enters the held set, which is where the actor
+already holds `ArchivalPKeys::receipt_sign_sk`, and it is a field of the
+held persona, not a map beside the set: the activation wipe, the retire
+wipe and `on_stop` each drop the persona, and the decoded key is wiped with
+it (`a_wiped_persona_takes_its_receipt_key_with_it`). The serving role
+holds a weak handle and a slot.
+
+**A receipt key that does not decode does not stop the actor.** The persona
+stays held and each receipt signature asked of it is refused with the
+scheme's error (`an_undecoded_receipt_key_refuses_to_sign`). Derivation
+only yields keys the scheme generated, so the arm is for corrupted memory.
+It is shaped this way so that a staged key adds no way for the live actor
+to fail to start; the cutover can make it fatal if it wants that.
+
+**What every staker's wallet now pays at open**, although nothing signs
+with the key yet: one decode per held slot, 52 µs and 118,640 bytes of heap
+each on the x86_64 development host, on the stack `FND-4`'s row below gives
+for construction.
+
+### 9.1 `FND-4`'s disposition — measured
+
+x86_64 development host, 2026-10-12. Stack: the smallest thread stack each
+step ran on, by a ladder of 8 KiB steps from 16 KiB, so each figure is an
+upper bound on the need; `a_held_key_signs_on_a_small_stack` holds the
+bounds. Instructions: gungraun 0.19.3, the draw pinned, two runs identical.
+Time: criterion, the production entry.
+
+| | Per-call (`HybridEd25519FnDsa::sign`) | Held (`FnDsaHybridSigner::sign`) |
+| --- | --- | --- |
+| Stack, unoptimized | 568 KiB | 112 KiB |
+| Stack, optimized | 248 KiB | 16 KiB (the ladder's first step) |
+| Instructions | 6,675,435 | 6,010,472 (−9.96 %) |
+| Time | 442 µs | 411 µs (−7.0 %) |
+
+Building the held key once (`FnDsaHybridSigner::new`): 544 KiB unoptimized,
+360 KiB optimized, 52 µs. Dropping it: within 16 KiB.
+
+`FND-4`'s row gave 640 KiB and 256 KiB for per-call signing, from a ladder
+that doubled; the 8 KiB ladder puts the same path at 568 KiB and 248 KiB.
+
+### 9.2 Findings
+
+| # | Finding | Disposition |
+| --- | --- | --- |
+| `FND-19` | The serving route cannot take a scheme-3 signer as it stands, so the capability does not implement the route's signer trait. `PassKey::sign_pass` returns the scheme-1 `HybridSignature` by type (`rust/shekyl-p-serve/src/countersign.rs`), and the response envelope is that signature's canonical length, 3,385 bytes: `SIGNATURE_ENVELOPE_LEN` sizes the signed trailer, the content length and the refusal trailer in `shekyl-p-serve/src/serve.rs`, and the fetch side reads the same width into a fixed array and parses it as a `HybridSignature` (`rust/shekyl-p-fetch/src/body.rs`, `target.rs`). A receipt is another type and 1,356 bytes | Not changed: the envelope's width is on the wire and belongs to the cutover. `ResidentReceiptKey` has the trait's two methods as inherent methods with the same arguments and refusal type. The cutover is therefore not one line in `serving/start.rs`: it generalizes the trait's signature type, moves its implementors (`HostSigner`, `RefusingKey`, `TestKeySigner` and the test signers), and changes the envelope width on both ends with the verifier |
+| `FND-20` | `zeroize` wipes an `Option<T>` by taking the value out and writing a fresh `None`: two `T`-sized values on the stack of the caller. For a 118,640-byte decoded key that made dropping a held signer need more stack than a signature (360 KiB unoptimized and 128 KiB optimized for a signature followed by the drop, against 112 KiB and 16 KiB once fixed) | Drop runs the crate's `Zeroize` on the key in place, with the crate's own `ZeroizeOnDrop` after it. Construction keeps the `Option` wipe for the stack local the key was decoded into, because there the whole slot has to go and it is paid once: that is why building a held key needs 360 KiB optimized, more than a per-call signature |
+| `FND-21` | A decoded key still reaches the heap through the stack. `SigningKey1024::decode` returns the key by value, so the signer decodes into a local, exchanges it with the heap slot and wipes the local. The crate's own frame is out of reach: in a build that does not construct the return value in place, `decode` leaves the copy it built on its dead frame (`FND-3`'s residue). The decoded key itself is `Zeroize + ZeroizeOnDrop` in the crate, asserted at compile time beside the signer | Once per key, at construction, where the per-call signer leaves it on every signature. Closing it needs a decode into caller memory upstream; unsafe placement is refused, as in `FND-14` |
+| `FND-22` | The crate's own figures put decoding at about 13 % of a signature (`FND-4`). On this host holding the key removes 9.96 % of the instructions and 7.0 % of the time. The Ed25519 half is still expanded from its seed on every signature, inside the shared nested body | Recorded with the measurements (§9.1). The floor figure rides `BA-T33`'s floor arm, which now has the held-key arm to run beside the per-call one |
