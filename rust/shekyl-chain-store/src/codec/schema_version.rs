@@ -233,7 +233,16 @@ use super::{Canonical, CodecError};
 ///   it as a sealed file missing a table (SI-7); the bump refuses it at
 ///   open with the true reason. No snapshot family moves: none of the
 ///   three has a C++ counterpart to compare.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(22);
+/// - `23` — the secret draw's per-block state and the drawable set's
+///   digest (`ARCHIVAL_SETTLEMENT_WRITER.md` §16, `SO-D12` increment 1).
+///   `archival_block_draws` (`u64 → block_draws`, 17 bytes) and
+///   `archival_drawable_digest` (`u64 → drawable_digest`) are born
+///   Rust-only, appended at ordinals 40 and 41 so no existing ordinal
+///   moves. No block writes either yet. A `22` file lacks both, and
+///   `header::verify` would refuse it as a sealed file missing a table
+///   (SI-7); the bump refuses it at open with the true reason. No snapshot
+///   family moves: neither has a C++ counterpart to compare.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(23);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -290,10 +299,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(22));
-        assert_eq!(SCHEMA_VERSION.encode(), [22, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(23));
+        assert_eq!(SCHEMA_VERSION.encode(), [23, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[22, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[23, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

@@ -351,11 +351,11 @@ const fn hex32(s: &[u8; 64]) -> [u8; 32] {
 /// `docs/GENESIS_ALLOCATIONS.md`, `mining_parity`'s `frozen_id`, and
 /// `shekyl-wire`'s `MAINNET_GENESIS_BLOCK_ID`.
 const MAINNET_GENESIS: [u8; 32] =
-    hex32(b"16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3");
+    hex32(b"d7af382339b2cd0c4ee4b2ea0afe7426f34bc2971495d9873fd4cec2107ad8ed");
 const TESTNET_GENESIS: [u8; 32] =
-    hex32(b"b0ef992f179554ad2e9bb150296d49bc0da6e07f12b853b1901108c4c805bc76");
+    hex32(b"e895bf2baa4ea4ccb07620d354e544a4be243bf329925f6a8a51631da18033da");
 const STAGENET_GENESIS: [u8; 32] =
-    hex32(b"65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0");
+    hex32(b"371e8fa310afb0c6089e47398ebe02c4e2aa1820e8ccfd32e328558b99677c60");
 
 /// The genesis block hash this build expects on `network`.
 ///
@@ -605,15 +605,15 @@ mod tests {
         // not this file fails here.
         assert_eq!(
             HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Mainnet)).to_string(),
-            "16c616a504e5d33a78e2ec3a5dd7d87ffdd3edd46a351199cffcc7c30af770e3"
+            "d7af382339b2cd0c4ee4b2ea0afe7426f34bc2971495d9873fd4cec2107ad8ed"
         );
         assert_eq!(
             HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Testnet)).to_string(),
-            "b0ef992f179554ad2e9bb150296d49bc0da6e07f12b853b1901108c4c805bc76"
+            "e895bf2baa4ea4ccb07620d354e544a4be243bf329925f6a8a51631da18033da"
         );
         assert_eq!(
             HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Stagenet)).to_string(),
-            "65173901b049468133e5f821f668772f13936b1abdff0e2add80ff3b03ccf5f0"
+            "371e8fa310afb0c6089e47398ebe02c4e2aa1820e8ccfd32e328558b99677c60"
         );
         assert_eq!(
             genesis_hash_for(DaemonNetwork::Fakechain),
