@@ -350,6 +350,26 @@ group and nice orders every thread against every other. The registered
 reading of P2 drew its line at "nearer the control" and "within ten
 points of T1"; the measurement landed between the two lines.
 
+### What production prevents (ruled 2026-10-12)
+
+The syncing arms of this session — and of session 2 — are a **stress
+case that production prevents**. While the daemon is not synced and
+following the tip, the serving host clears its tip cache
+(`DaemonTipCache::stamp_not_following`,
+`rust/shekyl-p-host/src/daemon_tip.rs:135`), the signer's `own_height`
+is `None`, and the gate refuses every request before the store is read
+(`rust/shekyl-p-serve/src/serve.rs:588`, the first branch of the
+lookup). The probe served during the sync only because it signs with a
+test key that carries a fixed height
+(`TestKeySigner::ephemeral(OWN_HEIGHT)`,
+`rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs:473`), which no
+production persona has. The figures above stand as what they are: the
+cost of contention between serving and a daemon at full CPU, which is
+what the mechanism was measured against; not a scenario a staker will
+meet, because a staker whose daemon is syncing serves nothing. What a
+staker does meet is a synced daemon verifying blocks beside serving,
+which is the measurement the follow-up row now describes.
+
 ### Cut responses at N = 64
 
 Two of 1,536 responses in each topology's `mech64` cell were cut: the
@@ -359,7 +379,12 @@ beside the syncing daemon. None at N = 8, none in any control block. The
 first start, before the probe recorded a cut as data, lost three of its
 six `mech64` blocks to this. A witness fetching from a persona in that
 state would see a reset and retry under `SF-D6`; two in 1,536 is the
-measured rate at the floor's worst case.
+measured rate at the floor's worst case. *Ruled 2026-10-12:* the timer
+was counting the serving task's own starvation as a stall — it wrapped
+the whole write (`rust/shekyl-p-serve/src/serve.rs:965`) — where it is
+meant to bound waits the peer causes; it is restructured to wrap only
+the wait for the socket to become writable, in its own PR, and the next
+floor block should show zero cuts.
 
 ### The ledger row
 

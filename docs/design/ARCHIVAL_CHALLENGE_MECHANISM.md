@@ -2394,6 +2394,39 @@ syncing a 4,800-block chain, three passes per topology:
   N = 64 two responses in 1,536 per topology were cut by the 30 s
   write-stall timeout while the threads yielded.
 
+**What the syncing arms are, and are not (ruled 2026-10-12).** The
+syncing arms of sessions 2 and 3 are a stress case that production
+prevents: while the daemon is not synced and following the tip, the
+serving host clears its tip cache (`DaemonTipCache::stamp_not_following`,
+`rust/shekyl-p-host/src/daemon_tip.rs:135`), `own_height` is `None`, and
+the gate refuses every request before the store is read
+(`rust/shekyl-p-serve/src/serve.rs:588`). The probe served during the
+sync only because its test signer carries a fixed height
+(`rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs:473`). The figures
+stand as the cost of contention against a daemon at full CPU, not as a
+scenario a staker meets. The cut responses at N = 64 were the write-stall
+timer counting the serving task's own starvation as a stall; it is
+restructured to count only waits the peer causes, in its own PR.
+
+**Rulings of 2026-10-12 on co-residence** (recorded in the decision log):
+
+1. **A headless staker's daemon runs in its own top-level `shekyl.slice`
+   with a CPU weight above `user.slice`'s** (`CPUWeight=400`: under
+   contention the slice outweighs `user.slice` 4:1, so the daemon keeps
+   about 80 % of the CPU while the per-user wallet serves). The wallet
+   stays a per-user process. **A wallet as a system service is
+   rejected**: it breaks per-user custody, as `WP-D7` rules on Windows.
+   The slice ships with the `.deb` (its own PR); the weight is reasoned,
+   not measured, and has an estimated ledger row whose carrier is the
+   T2 measurement below.
+2. **Beyond the slice, the in-process nice 19 (this mechanism) and the
+   serving gate are the defence. No adaptive back-off.**
+3. **The T2 measurement is redefined.** It measures the time to verify a
+   block while the daemon is synced and following the tip, idle against
+   serving at N = 64, with and without the slice weight — not the sync
+   rate. Its result decides whether 400 stays, moves, or the slice goes.
+   `docs/FOLLOWUPS.md` carries it.
+
 **Ledger.** A constant row `serving_priority_nice` (the Linux nice
 value, 19) on a new path set `serving-runtime` covering the serving
 runtime's construction and the priority crate. The budget constants are
