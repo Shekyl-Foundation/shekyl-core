@@ -130,6 +130,11 @@ pub struct SimParams {
     pub emission_curve_asymptote: u64,
     pub emission_speed_factor_per_block: u64,
     pub final_subsidy_per_minute: u64,
+    /// The fold's year: where it draws a year boundary and reads a
+    /// schedule. The staker emission share does **not** follow it: the
+    /// share decays on production's `BLOCKS_PER_YEAR`
+    /// (`emission_share_at`), which is this field's default. A test that
+    /// shortens the year shortens the bookkeeping only.
     pub blocks_per_year: u64,
     pub tx_volume_baseline: u64,
     pub release_min: u64,

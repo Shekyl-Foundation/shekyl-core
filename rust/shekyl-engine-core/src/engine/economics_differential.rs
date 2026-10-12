@@ -65,8 +65,8 @@ struct Row {
     height: u64,
     already_generated_coins: u64,
     base_block_reward: u64,
-    /// Whole transactions per block along the recorded scenario; the
-    /// recorder writes an integer mean, so `TxVolume::per_block` is exact.
+    /// Whole transactions the recorded block listed; an integer, so
+    /// `TxVolume::per_block` is exact.
     tx_volume: u64,
     circulating_supply: u64,
     total_staked: u64,

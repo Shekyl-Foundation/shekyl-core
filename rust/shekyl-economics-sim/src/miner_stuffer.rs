@@ -51,8 +51,8 @@ use std::collections::HashSet;
 
 use shekyl_block_template::Fill;
 use shekyl_economics::{
-    penalty_free_weight, price_emission, CirculatingSupply, ClosedShardCount, EconomicParams,
-    EmissionInputs,
+    burn::calc_burn_pct_at, penalty_free_weight, price_emission, CirculatingSupply,
+    ClosedShardCount, EconomicParams, EmissionInputs,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
@@ -335,6 +335,11 @@ impl<'a> Block<'a> {
             chain_leaves: last.chain_leaves,
             params: economic,
         };
+        assert_eq!(
+            last.burn_pct_scaled,
+            calc_burn_pct_at(last.volume, last.supply, economic),
+            "the block's burn is production's at its volume and supply"
+        );
         let median = last.medians.effective_median.to_raw();
         let honest = Fill::listed(
             median,
@@ -389,6 +394,11 @@ impl<'a> Block<'a> {
         })
         .ok()?;
         let recovered = recovery.of(paid.fee_burn.staker_pool_amount, own_fees, total_fees);
+        debug_assert_eq!(
+            self.honest.reward_at(bodies_weight).ok(),
+            Some(paid.paid.to_raw()),
+            "the fill and the composition price one block"
+        );
         Some(i128::from(paid.owed.to_raw()) + i128::from(recovered) - i128::from(own_fees))
     }
 

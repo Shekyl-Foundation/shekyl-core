@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Economics sim: the recorded wallet vectors come from a chain the fill rule builds** (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, ESR-8). `docs/test_vectors/economics/baseline_steady_state.json` is regenerated: the recorder used to pay the unpenalised emission on fifty transactions a block, which is over the block-weight limit at the control fee, and now runs the same chain step as the scenario folds. `tx_volume` is the count a block listed. The wallet's differential passes unchanged. The sim's folds and its stuffer price each block through `price_emission`, and eight restated constants are imports. `shekyl-archival-retention` exports `SLASH_SETTLEMENT_TIP_LAG_EPOCHS` and `FAILURE_WINDOW_N_GATHER_BOUND`; no value changes.
+
 ## [3.1.0-alpha.10] - 2026-10-11
 
 - **Archival personas derive a receipt key.** Each persona slot now has a second signing key beside its identity key: Ed25519 + FN-DSA-1024, derived from the wallet seed under two new frozen labels (`shekyl-archival-p-receipt-ed25519-v1`, `shekyl-archival-p-receipt-fn-dsa-1024-v1`) and scoped to the network like every other persona key. A wallet restored from its seed re-derives it. Nothing signs with it yet and no wire format moves; serve-credit receipts move onto it when the bond record carries its public half (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.3). Stakers pay one more key generation per held persona slot when the wallet opens. The `ARCHIVAL_P_DERIVE_V1` vectors gain the new rows; no existing vector changed.

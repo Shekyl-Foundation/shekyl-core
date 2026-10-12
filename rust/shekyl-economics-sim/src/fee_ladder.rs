@@ -1483,8 +1483,10 @@ pub struct FeedbackResult {
     /// FL-R18 rejection-race (§4.5b): quotes issued along the trace, and
     /// how many would be REFUSED at admission `RACE_LAGS[i]` blocks later
     /// because the relay floor rose above the quoted (already
-    /// floor-clamped) economy rung. `check_fee`'s 2% buffer is applied,
-    /// so this counts real refusals, not near-misses.
+    /// floor-clamped) economy rung. The count applies the 2% acceptance
+    /// buffer admission had when FL-R18 was measured. FL-R23 has since
+    /// set the slack to zero and added a lookback
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, Appendix A2, D6).
     pub race_quotes: u64,
     pub race_refused: [u64; 4],
     /// The race's REAL governing quantity (§4.5b). With the median held,

@@ -380,9 +380,9 @@ horizon, and every arm reads that fold. The burden trajectory and the
 clearance arms read the scenario's own years; the onset table, the
 envelope and the admission map read the whole horizon. `burden_trajectory`
 and `a1_year_aggs` remain the one-scenario fold a caller asks for directly.
-The recorder (`record.rs`) does not step the
-cursor: its `tx_volume` column is the schedule's demand, the input the
-wallet-engine differential feeds back in.
+The recorder (`record.rs`) steps the cursor too, since ESR-8: its chain
+is the folds'. Its rows are vectors at a block's operands, and its
+`tx_volume` column is the count the block listed.
 
 ## 4. Declared divergences
 
@@ -398,7 +398,7 @@ defect.
 | Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Nothing in the chain charges it; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table |
 | The admission rate at a shard count (`AdmissionAtShards`) | Arms that sample the chain by shard count alone have no height, and the rate depends on emission, not on traffic. The pairing is fixed as the baseline scenario's: the rate at the year the baseline reaches that count, and its last year's rate beyond | Stated in the stuffer table's footer |
 | Admission rate sampled at the year's last block | A stuffer picks its moment, and on the production arm the floor falls through the year | Attacker-favouring; stated at the field |
-| The recorder's volume operand stays per-block | `record.rs` writes test vectors for the engine-core differential, which recomputes from a recorded per-block volume. That is the vectors' contract, not a model of the chain; the three model folds read the validator's window (ESR-4) | Stated at the recorder |
+| The recorder's burn and release columns are taken at a per-block volume | `record.rs` writes test vectors for the engine-core differential, which recomputes from a recorded per-block volume. That is the vectors' contract. The recorder's chain is the cursor's, priced at the validator's window (ESR-8); `burn_pct_bp` and `release_multiplier_milli` are recomputed for the row at the listed count as a per-block volume, and the row's split columns are the block's own | Stated at the recorder |
 | A scenario that starts mid-chain starts with an empty volume window and empty median windows | A fold's heights are its own; `genesis_height_offset` scenarios carry no history before their first block, so their medians start at the zone as a genesis chain's do | Stated in `volume_window.rs` and `median_window.rs` |
 | A block's weight is its bodies' | The coinbase's few hundred bytes are neither priced nor recorded in the median. The fill rule itself prices bodies only, as the C++ does; the template then prices the whole block | Stated at `BlockSpace` |
 | Waiting transactions pay the fee of the block they are offered to | They were built at an earlier block's fee. Every transaction is the same shape, so a refusal of one is a refusal of all, and the pool's order (fee, then age) is age | Stated at `BlockSpace` |
@@ -1563,11 +1563,11 @@ constant that no caller passes.
 
 | Status | Rows |
 | --- | --- |
-| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R13, R15, R16, R17, R18, R19, R23 |
+| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R10, R13, R15, R16, R17, R18, R19, R23, N2, N3 |
 | Closed by deletion | R2, R31, D8 |
 | Closed by a §4 declaration | 1, 2, 3, R29; R11 (the recorder; the three folds import); R26 (the nearest arm; the ceiling arm imports); R30 (the KAT zone; the bond imports) |
 | Staking-excepted (ruled 2026-10-03) | D4 |
-| **Open** | R10, R21, R22; D1, D3, D5, D6, D7, D9, D10, D11, D12, D13; N1, N2, N3, N4 |
+| **Open** | R21, R22; D1, D3, D5, D6, D7, D9, D10, D11, D12, D13; N1, N4 |
 
 Item 5 was a roll-up of R24–R26 and D6 and is open through D6 alone.
 
@@ -1579,7 +1579,7 @@ ESR-8 did.
 | # | What remained | Closes by | In ESR-8 |
 | --- | --- | --- | --- |
 | R3 | Two test literals, `let coin: u64 = 1_000_000_000` (`fee_ladder.rs:3004`, `:3098`). Every non-test `COIN` derives from `shekyl_units::ATOMIC_UNITS_PER_SKL` | `crate::burden::COIN` | Closed: both tests read `crate::burden::COIN` |
-| R10 | No fold restates the three differences Appendix A listed: the penalty, the net supply and the height-0 share are production's. What remains is that each fold composes the reward chain from production's parts (`split_block_emission`, `compute_burn_split_at`) and none calls `price_emission`, which owns the order they run in | A decision (below) | Open; direction below |
+| R10 | No fold restated the three differences Appendix A listed: the penalty, the net supply and the height-0 share are production's. What remains is that each fold composes the reward chain from production's parts (`split_block_emission`, `compute_burn_split_at`) and none calls `price_emission`, which owns the order they run in | A decision (below) | Closed: the cursor calls `price_emission` and the folds read its `PaidEmission`; the stuffer's payout calls it too. See the note under the direction |
 | R13 | `0.25` as the flat staker share in the fee-horizon report (`fee_horizon.rs:151`) and its test (`:203`). The literal moved here from `onset.rs` with the closed form | `escalation::floor_share()` | Closed: the share and its label come from `floor_share()` |
 | R15 | Report strings that spell a constant: "0.75" (`stage2.rs:622`, `:1241`; `scenarios.rs:430`, with "75 coins" and "7_500 coins" at `:437`, `:444`), "4096 shards" (`stage2.rs:1508`) | Interpolate `ARCHIVAL_BOND_FLOOR_ATOMIC` and `MAX_HOLDINGS_SHARDS` | Closed: every string interpolates the constant. Both narration fixtures match byte for byte |
 | R16 | One table header, "split-loss@4096" (`admission.rs:155`); the value beside it already reads the constant | Interpolate `MAX_HOLDINGS_SHARDS` | Closed |
@@ -1607,8 +1607,8 @@ ESR-8 did.
 | # | What was found | Closes by |
 | --- | --- | --- |
 | N1 | **The secret draw's count rule is restated.** §4's ESR-11 row says "no production function exists to call". It does now: `shekyl_archival_retention::{draw_horizon, draw_count, select_draw}`. The sim keeps its own `horizon()`, `block_target()` and three constants (`MIN_HORIZON_BLOCKS`, `CATCH_UP_BY_PERMILLE`, `CAP_MULTIPLE`); only `COUNTED_DRAWS` is pinned to its owner. Whether the sim's f64 `block_target` equals production's fixed-point `draw_count` was read, not run | An equivalence run on the same inputs, its result recorded here, then the calls switched. A disagreement goes to the challenge lane before the sim moves |
-| N2 | **The recorder pays no weight penalty** (`record.rs`, the `effective_emission` call). §4 declares its volume operand only | Fixed in ESR-8 |
-| N3 | `stage2.rs` splits the fee burn at the flat `staker_pool_share` where the engine and budget folds use `compute_burn_split_at` at `n = 0`. The two are equal at the shipped parameters and nothing fails if they stop being equal | A test that fails when the escalation asymptote and the flat share diverge |
+| N2 | **The recorder priced a block the chain does not build.** It paid `effective_emission` on the schedule's whole demand, fifty transactions a block. At the control arm's fee that is 630 to 765 kB against a 300 kB penalty-free zone: over the block-weight limit while the median sits at the zone, so the missing penalty was the smaller half of it. The loop's own comment declared the omission; §4 declared its volume operand only | **Fixed in ESR-8:** the recorder steps the cursor. The vectors were regenerated and every column that moved is accounted for below |
+| N3 | `stage2.rs` split the fee burn at the flat `staker_pool_share` where the engine and budget folds use `compute_burn_split_at` at `n = 0`. The two are equal at the shipped parameters and nothing failed if they stopped being equal | **Closed:** the stage-2 ledger advances by production's destroyed amount at the fold's closed-shard count, and `the_shipped_split_is_flat_at_every_count` fails when the shipped asymptote leaves the floor |
 | N4 | `Cargo.toml` justifies the `shekyl-chain-rules` dependency by `EMISSION_SPLIT_EPOCH`, which that crate no longer provides. The dependency is still used, for the medians, the volume span and the reference-block age | Text |
 
 A fifth observation, not a row: the bound R19 imports is the C++
@@ -1631,10 +1631,66 @@ recorded as direction, not as a signed ruling.
    design's §7.1 and §8.
 2. **R10.** The folds call `price_emission`. Where its signature does
    not fit a fold, that is a finding about `price_emission` and the fix
-   is there, not a third copy in the sim.
+   is there, not a third copy in the sim. Built; see below.
 3. **The secret draw (N1).** Equivalence first: the sim's rule and
    production's run on the same inputs, agreement or the delta recorded,
    and only then the calls switched.
+
+### R10 as built, and what it found about `price_emission`
+
+`price_emission` fits the folds with no change. The cursor calls it once
+the fill has decided what the block lists, at the bodies' weight, and
+asserts on every block that the fill's reward and the composition's paid
+reward are one number.
+
+One misfit was on the sim's side. `price_emission` splits at the shipped
+share, decay and year: they are free constants in `shekyl-economics`, not
+fields of `EconomicParams`, and the wallet's calibration stamp digests
+them beside the parameter set for the same reason. `SimParams` carried
+`staker_emission_share` and `staker_emission_decay` as if a run could
+vary them; no scenario did, and both fields are removed. The decay lever
+in `onset.rs` is a counterfactual on a year's totals and still calls the
+share kernel with its own decay. `SimParams::blocks_per_year` stays as
+the fold's bookkeeping year and its doc says the share does not follow
+it.
+
+Three composing sites remain by design: the budget fold's arm (b), which
+is the declared unmodulated counterfactual; the stuffer's tests, whose
+written-out arithmetic is the independent side of a comparison; and
+`the_shipped_split_is_flat_at_every_count`.
+
+### N2: the recorder's regenerated vectors
+
+`docs/test_vectors/economics/baseline_steady_state.json`, eleven rows.
+The metadata and the neutral milestones are unchanged. Every row moved,
+and each move follows from one fact: the fill lists 20 to 24 of the 50
+transactions offered, because ordinary transactions at the control fee
+fill the 300 kB zone at 24 in an empty tree and at 20 in a deep one, and
+the fee does not cover the penalty past it.
+
+| Column | Before → after (year 1, last block) | Why |
+| --- | --- | --- |
+| `tx_volume` | 50 → 21 | It is the listed count now, not the demand |
+| `release_multiplier_milli` | 1000 → 800 | `calc_release_multiplier` at 21 against a baseline of 50 is at `release_min` |
+| `already_generated_coins` | 2.608e17 → 2.100e17 | The chain released at 0.8 of the curve for a year |
+| `base_block_reward` | 9.618e11 → 9.739e11 | The curve at less emitted |
+| `circulating_supply`, `total_staked` | follow `already_generated_coins` | Net supply, and a fixed stake ratio of it |
+| `burn_pct_bp` | 303 → 158 | `calc_burn_pct_from_activity` at the lower volume and the lower supply |
+| `staker_emission` | 1.298e11 → 1.052e11 | The share of a reward paid at 0.8 |
+| `staker_fee_pool`, `actually_destroyed` | 3.80e7 → 8.32e6, 1.14e8 → 2.49e7 | 21 fees in place of 50, at the lower burn |
+
+The first row (height 1) keeps its burn at zero and moves only through
+block 0, which an empty window prices at `release_min`.
+
+`shekyl-engine-core`'s differential passes on the new vectors without a
+change: it recomputes `base_block_reward` and the burn from each row's
+own operands.
+
+A consequence for a reader of the control arm, not a defect: on the
+flat fee the baseline never fills past the zone, so it never reaches its
+own volume baseline and its release multiplier sits at the floor for
+the whole run. The scenario folds have shown this since ESR-6; the
+recorder now shows it too.
 
 ## Appendix B — census of `shekyl-staking-sim` (as reported, at `bb021f254`)
 
