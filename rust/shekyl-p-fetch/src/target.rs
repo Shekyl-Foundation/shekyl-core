@@ -9,13 +9,16 @@
 
 use std::fmt;
 
-use shekyl_archival_retention::PASS_DELIVERY_DIGEST_LEN;
+use shekyl_archival_retention::{
+    verify_pass_transcript, verify_receipt_transcript, PASS_DELIVERY_DIGEST_LEN,
+};
+use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
 use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
 use shekyl_types::{shard_of, shard_start, ArchivalLength, ShardId, ShardViewHash};
 use shekyl_wire::shard_frame::frame_len_ceiling;
 use shekyl_wire::{carries_archival_good, TxidParts};
 
-use crate::client::SIGNATURE_ENVELOPE_LEN;
+use crate::header::RequestHeader;
 
 /// The raw 32-byte Ed25519 public key of a persona's v3 onion service, as
 /// the bond record carries it (`EU-D3`: the `.onion` is display form; the
@@ -59,26 +62,189 @@ impl ServingEndpoint {
     }
 }
 
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// A key a pass response is verified under, and with it **the scheme of the
+/// whole exchange**: the envelope's width, the signature it parses as, and
+/// the check it is put to.
+///
+/// A [`FetchTarget`] is generic over this, so a target is one scheme,
+/// decided by the type of the key it carries. A fetch reads exactly
+/// [`Self::ENVELOPE_LEN`] bytes of envelope, parses exactly
+/// [`Self::Signature`], and verifies with this key's own scheme. There is
+/// no second attempt under another scheme, nothing reads the response to
+/// decide which scheme it is, and no type holds a key of either: a response
+/// of the other scheme's width fails this one's checks and that is the end
+/// of it (`client_scheme_tests.rs`).
+///
+/// Sealed. The two implementations are the two schemes:
+///
+/// | Key | Scheme | Envelope | Verified by | Status |
+/// | --- | --- | --- | --- | --- |
+/// | [`HybridPublicKey`] | 1, Ed25519 + ML-DSA-65 — the bond identity key | 3,385 | `verify_pass_transcript` | **live**: every target built today |
+/// | [`FnDsaHybridPublicKey`] | 3, Ed25519 + FN-DSA-1024 — the receipt key | 1,356 | `verify_receipt_transcript` | **STAGED**: no production target (`FN_DSA_HYBRID.md` §9) |
+///
+/// Each implementation takes its width from its signature type's own
+/// `CANONICAL_LEN` and parses with that type's canonical decoder, which
+/// accepts that length and no other, so the width and the type cannot
+/// disagree.
+pub trait PassVerifyingKey: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 'static {
+    /// The signature this key's scheme closes a response with.
+    type Signature: Clone + fmt::Debug + Send + Sync + 'static;
+
+    /// The envelope's width: the canonical length of [`Self::Signature`].
+    const ENVELOPE_LEN: usize;
+
+    /// Parse an envelope as this scheme's canonical signature. `None` for
+    /// anything else, another scheme's signature included.
+    fn parse_envelope(envelope: &[u8]) -> Option<Self::Signature>;
+
+    /// Whether `signature` is this key's over the transcript of `header`,
+    /// `shard_id` and `delivery_digest`, under this scheme's domain for it.
+    fn verifies(
+        &self,
+        header: &RequestHeader,
+        shard_id: u64,
+        delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
+        signature: &Self::Signature,
+    ) -> bool;
+}
+
+/// Width of the envelope an identity-key target reads: 3,385 bytes. The
+/// live width.
+pub const IDENTITY_ENVELOPE_LEN: usize = <HybridPublicKey as PassVerifyingKey>::ENVELOPE_LEN;
+
+/// Width of the envelope a receipt-key target reads: 1,356 bytes. STAGED.
+pub const RECEIPT_ENVELOPE_LEN: usize = <FnDsaHybridPublicKey as PassVerifyingKey>::ENVELOPE_LEN;
+
+/// The widest envelope any scheme has. [`ExpectedShard::new`] checks its
+/// ceilings against this one, so an expectation that was built can be read
+/// under either scheme without a second overflow check.
+const WIDEST_ENVELOPE_LEN: usize = if IDENTITY_ENVELOPE_LEN > RECEIPT_ENVELOPE_LEN {
+    IDENTITY_ENVELOPE_LEN
+} else {
+    RECEIPT_ENVELOPE_LEN
+};
+
+impl sealed::Sealed for HybridPublicKey {}
+impl PassVerifyingKey for HybridPublicKey {
+    type Signature = HybridSignature;
+    const ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
+
+    fn parse_envelope(envelope: &[u8]) -> Option<HybridSignature> {
+        HybridSignature::from_canonical_bytes(envelope).ok()
+    }
+
+    fn verifies(
+        &self,
+        header: &RequestHeader,
+        shard_id: u64,
+        delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
+        signature: &HybridSignature,
+    ) -> bool {
+        verify_pass_transcript(
+            self,
+            header.nonce(),
+            header.anchor_height(),
+            header.anchor_hash(),
+            shard_id,
+            delivery_digest,
+            signature,
+        )
+        .is_ok()
+    }
+}
+
+impl sealed::Sealed for FnDsaHybridPublicKey {}
+impl PassVerifyingKey for FnDsaHybridPublicKey {
+    type Signature = FnDsaHybridSignature;
+    const ENVELOPE_LEN: usize = FnDsaHybridSignature::CANONICAL_LEN;
+
+    fn parse_envelope(envelope: &[u8]) -> Option<FnDsaHybridSignature> {
+        FnDsaHybridSignature::from_canonical_bytes(envelope).ok()
+    }
+
+    fn verifies(
+        &self,
+        header: &RequestHeader,
+        shard_id: u64,
+        delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
+        signature: &FnDsaHybridSignature,
+    ) -> bool {
+        verify_receipt_transcript(
+            self,
+            header.nonce(),
+            header.anchor_height(),
+            header.anchor_hash(),
+            shard_id,
+            delivery_digest,
+            signature,
+        )
+        .is_ok()
+    }
+}
+
 /// Whom to dial and whose signature to accept.
 ///
 /// Both fields are read from **local chain state** — the bond record's
-/// endpoint column and identity key — and never from a response (`SF-D7`
-/// amendment). The types carry that obligation: a [`ServingEndpoint`] is
-/// minted from record bytes, a [`HybridPublicKey`] parses only its
-/// canonical encoding. A call site constructing either from wire or
-/// response bytes is the review's rule-19 catch, not this crate's.
+/// endpoint column and a key of the persona's — and never from a response
+/// (`SF-D7` amendment). The types carry that obligation: a
+/// [`ServingEndpoint`] is minted from record bytes, and a key type parses
+/// only its canonical encoding. A call site constructing either from wire
+/// or response bytes is the review's rule-19 catch, not this crate's.
+///
+/// **The key's type is the exchange's scheme** ([`PassVerifyingKey`]).
+/// `FetchTarget<HybridPublicKey>` is the live target: the bond identity
+/// key, hybrid scheme 1. A fetch against it reads that scheme's envelope
+/// and accepts that scheme's signature, and no other.
+///
+/// ```compile_fail
+/// // A target is one scheme. What a fetch against an identity-key target
+/// // returns holds an identity signature; it is not a receipt.
+/// use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
+/// use shekyl_crypto_pq::signature::HybridPublicKey;
+/// use shekyl_p_fetch::VerifiedShard;
+/// fn receipt_of(shard: &VerifiedShard<HybridPublicKey>) -> &FnDsaHybridSignature {
+///     shard.signature()
+/// }
+/// ```
+///
+/// ```compile_fail
+/// // And a target cannot be built over something that is not a scheme's
+/// // key: the trait is sealed.
+/// use shekyl_p_fetch::FetchTarget;
+/// fn of_bytes(_: FetchTarget<[u8; 32]>) {}
+/// ```
+///
+/// The control: the same shapes with the types that belong together.
+///
+/// ```
+/// use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
+/// use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
+/// use shekyl_p_fetch::{FetchTarget, VerifiedShard};
+/// fn identity_of(shard: &VerifiedShard<HybridPublicKey>) -> &HybridSignature {
+///     shard.signature()
+/// }
+/// fn receipt_of(shard: &VerifiedShard<FnDsaHybridPublicKey>) -> &FnDsaHybridSignature {
+///     shard.signature()
+/// }
+/// fn of_key(_: FetchTarget<HybridPublicKey>) {}
+/// ```
 ///
 /// *Which* shard is named, and what it must hold, is the
 /// [`ExpectedShard`] passed beside the target: one `P` serves many shards,
 /// and the expectation is the scheduler's per-need object while the target
 /// is the persona's.
 #[derive(Clone, Debug)]
-pub struct FetchTarget {
+pub struct FetchTarget<K: PassVerifyingKey> {
     /// The persona's onion, from the bond record.
     pub endpoint: ServingEndpoint,
-    /// The persona's stable hybrid identity key, from the bond record
-    /// (`SF-D13`). The envelope's countersignature must verify under it.
-    pub verifying_key: HybridPublicKey,
+    /// The key the envelope's signature must verify under, from the bond
+    /// record. For the live scheme, the persona's stable hybrid identity key
+    /// (`SF-D13`).
+    pub verifying_key: K,
 }
 
 /// The shard a fetch names and what the requester already knows it must
@@ -108,7 +274,9 @@ pub struct ExpectedShard {
     shard_id: ShardId,
     txs: Vec<TxidParts>,
     archival_len: ArchivalLength,
-    max_response_len: u64,
+    /// The body's ceiling, without an envelope: the envelope's width is the
+    /// target's scheme's, and an expectation has no scheme.
+    max_frame_len: u64,
 }
 
 impl ExpectedShard {
@@ -160,16 +328,20 @@ impl ExpectedShard {
             _ => return Err(ExpectationError::Open { cum_after: cum }),
         }
         let tx_count = u64::try_from(txs.len()).expect("a range length fits u64");
-        let max_response_len = frame_len_ceiling(tx_count, archival_len)
-            .and_then(|frame| {
-                frame.checked_add(u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits"))
+        // The frame's ceiling, and proof that the widest envelope fits
+        // behind it: `max_response_len` then cannot overflow for any scheme.
+        let max_frame_len = frame_len_ceiling(tx_count, archival_len)
+            .filter(|frame| {
+                frame
+                    .checked_add(u64::try_from(WIDEST_ENVELOPE_LEN).expect("envelope fits"))
+                    .is_some()
             })
             .ok_or(ExpectationError::Overflow)?;
         Ok(Self {
             shard_id,
             txs,
             archival_len,
-            max_response_len,
+            max_frame_len,
         })
     }
 
@@ -200,14 +372,16 @@ impl ExpectedShard {
     }
 
     /// The most bytes a conforming response to this expectation can declare
-    /// in `content-length`: the frame's ceiling over this range
-    /// ([`frame_len_ceiling`]) plus the countersignature envelope. The
+    /// in `content-length`, from a target whose key is a `K`: the frame's
+    /// ceiling over this range ([`frame_len_ceiling`]) plus that scheme's
+    /// countersignature envelope ([`PassVerifyingKey::ENVELOPE_LEN`]). The
     /// client refuses a larger declaration from the head, before a body
     /// byte is read (`SF-D6`); a declaration under it is read and the frame
     /// is held to end exactly where the envelope begins.
     #[must_use]
-    pub fn max_response_len(&self) -> u64 {
-        self.max_response_len
+    pub fn max_response_len<K: PassVerifyingKey>(&self) -> u64 {
+        // Cannot overflow: `new` checked the widest envelope.
+        self.max_frame_len + u64::try_from(K::ENVELOPE_LEN).expect("envelope fits")
     }
 }
 
@@ -325,20 +499,20 @@ impl TxSink for DiscardTxs {
 /// aggregate carries it. The body itself is not here — it went to the
 /// [`TxSink`] one transaction at a time.
 #[derive(Clone, Debug)]
-pub struct VerifiedShard {
+pub struct VerifiedShard<K: PassVerifyingKey> {
     shard_id: ShardId,
     delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
-    signature: HybridSignature,
+    signature: K::Signature,
     view_hash: ShardViewHash,
     tx_count: u64,
     archival_len: ArchivalLength,
 }
 
-impl VerifiedShard {
+impl<K: PassVerifyingKey> VerifiedShard<K> {
     pub(crate) fn new(
         shard_id: ShardId,
         delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
-        signature: HybridSignature,
+        signature: K::Signature,
         view_hash: ShardViewHash,
         tx_count: u64,
         archival_len: ArchivalLength,
@@ -371,7 +545,7 @@ impl VerifiedShard {
     /// `P`'s countersignature over the request transcript — the pass
     /// record's payload.
     #[must_use]
-    pub fn signature(&self) -> &HybridSignature {
+    pub fn signature(&self) -> &K::Signature {
         &self.signature
     }
 
@@ -448,8 +622,8 @@ mod tests {
         assert_eq!(shard.archival_len(), SHARD_LENGTH);
         let varint = u64::try_from(MAX_VARINT_LEN).unwrap();
         assert_eq!(
-            shard.max_response_len(),
-            1 + varint + 3 * 3 * varint + w() + u64::try_from(SIGNATURE_ENVELOPE_LEN).unwrap()
+            shard.max_response_len::<HybridPublicKey>(),
+            1 + varint + 3 * 3 * varint + w() + u64::try_from(IDENTITY_ENVELOPE_LEN).unwrap()
         );
     }
 

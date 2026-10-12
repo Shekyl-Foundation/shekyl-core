@@ -21,6 +21,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_fetch::{ExpectedShard, FetchTarget, ServingEndpoint};
 use shekyl_p_serve::{PServeEndpoint, PassSigner, TestKeySigner, IDENTITY_ENVELOPE_LEN};
 use shekyl_socks::accept_userpass;
@@ -90,7 +91,7 @@ async fn persona(signer: Arc<TestKeySigner>) -> (PServeEndpoint, SocketAddr) {
     (ep, proxy)
 }
 
-fn target_for(signer: &TestKeySigner) -> FetchTarget {
+fn target_for(signer: &TestKeySigner) -> FetchTarget<HybridPublicKey> {
     FetchTarget {
         endpoint: ServingEndpoint::from_record_bytes([0x42; 32]),
         verifying_key: signer.public_key().clone(),

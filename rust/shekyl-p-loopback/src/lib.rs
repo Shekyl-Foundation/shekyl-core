@@ -26,7 +26,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use shekyl_archival_retention::{PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN};
-use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_serve::{
     EnvelopeWidth, PassEnvelope, PassSigner, ProviderError, ShardBody, ShardProvider,
 };
@@ -38,8 +37,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 pub use shekyl_p_fetch::{
-    DiscardTxs, ExpectedShard, FetchError, FetchTarget, PFetchClient, RequestHeader,
-    ServingEndpoint, Timeouts, TxSink, VerifiedShard, VerifiedTx,
+    DiscardTxs, ExpectedShard, FetchError, FetchTarget, PFetchClient, PassVerifyingKey,
+    RequestHeader, ServingEndpoint, Timeouts, TxSink, VerifiedShard, VerifiedTx,
 };
 pub use shekyl_p_serve::PServeEndpoint;
 
@@ -148,7 +147,10 @@ pub fn request_header(anchor: BlockHeight) -> RequestHeader {
 /// `verifying_key` is the caller's: the bond identity, an ephemeral test
 /// key, or a key that must not verify.
 #[must_use]
-pub fn fetch_target(verifying_key: HybridPublicKey) -> FetchTarget {
+///
+/// Generic over the key's scheme, as the target is: an identity key gives
+/// an identity-scheme target, a receipt key a receipt-scheme one.
+pub fn fetch_target<K: PassVerifyingKey>(verifying_key: K) -> FetchTarget<K> {
     FetchTarget {
         endpoint: ServingEndpoint::from_record_bytes(UNRESOLVED_ENDPOINT),
         verifying_key,
