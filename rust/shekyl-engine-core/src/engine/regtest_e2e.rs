@@ -2006,6 +2006,16 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     };
     let params = EconomicParams::default();
     let rule_set = RuleSet::GENESIS;
+    // The daemon drew this template's commitment; the Rust producer is
+    // handed the same one, as it is handed the same header operands.
+    let draw_commitment = shekyl_wire::tx_extra::parse(&cxx_block.miner_transaction.prefix.extra)
+        .expect("the daemon's coinbase extra parses")
+        .into_iter()
+        .find_map(|field| match field {
+            shekyl_wire::tx_extra::TxExtraField::DrawCommitment(c) => Some(c),
+            _ => None,
+        })
+        .expect("the daemon's coinbase carries a 0x0C draw commitment");
     let build_with = |listed: &[Transaction]| {
         build(&TemplateContext {
             height: BlockHeight::from_raw(height),
@@ -2031,6 +2041,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             miner: &miner,
             tx_key_secret: Zeroizing::new([0x42; 32]),
             extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
+            draw_commitment,
             listed,
         })
     };

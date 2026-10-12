@@ -187,6 +187,58 @@ mod tests {
         }
     }
 
+    /// **Height 0 issues nothing** (`SO-D12` increment 1, ruled
+    /// 2026-10-10), and neither does any other block of epoch 0.
+    ///
+    /// The genesis block carries a `0x0C` commitment like every block, and
+    /// no reader treats it specially. It issues no draw for a reason that
+    /// has nothing to do with its commitment's value: the drawable set of
+    /// epoch 0 is empty. A bond is drawable from the epoch after it joins,
+    /// and no bond joins before epoch 0, so every record is excluded,
+    /// whatever it holds. With `D = 0` the count rule gives zero draws at
+    /// every block and the selection has no pair to pick, so no draw index
+    /// `j` exists at height 0 and no carrier's record can name one.
+    #[test]
+    fn height_zero_and_all_of_epoch_zero_issue_no_draw() {
+        use shekyl_archival_retention::{
+            draw_count, draw_horizon, select_draw, CHALLENGE_RESPONSE_BLOCKS,
+            SETTLEMENT_EPOCH_BLOCKS,
+        };
+        // The earliest bonds there can be: joined in epoch 0, compact and
+        // complete-tree, with every shard final.
+        let records = [compact(P1, &[0, 1], 0), complete(P2, 0)];
+        let set = emit_pairs(records, SettlementEpoch::from_raw(0), 4, &mut |_| {
+            Ok::<_, ()>(true)
+        })
+        .expect("no predicate fault");
+        assert!(set.is_empty(), "nothing is drawable in epoch 0");
+        let d = set.len() as u64;
+
+        // The shortfall is a sum over the set, so it is zero with it.
+        let shortfall = 0;
+        let mut carry = 0;
+        for r in [
+            0,
+            1,
+            SETTLEMENT_EPOCH_BLOCKS / 2,
+            SETTLEMENT_EPOCH_BLOCKS - 1,
+        ] {
+            let horizon = draw_horizon(r, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS);
+            let (count, next) = draw_count(d, shortfall, horizon, SETTLEMENT_EPOCH_BLOCKS, carry)
+                .expect("the schedule's epoch and horizon are non-zero");
+            assert_eq!(count, 0, "no draw at block {r} of epoch 0");
+            carry = next;
+        }
+        assert_eq!(carry, 0, "and no fraction accumulates toward one");
+
+        // Whatever seed a block committed to, and whatever it hashes to,
+        // there is no pair for a draw to select.
+        const BLOCK_HASH: [u8; 32] = [0x22; 32];
+        for seed in [[0u8; 32], [0x11; 32]] {
+            assert_eq!(select_draw(&seed, &BLOCK_HASH, 0, d, |_| true), None);
+        }
+    }
+
     #[test]
     fn empty_records_emit_nothing() {
         let pairs = emit_pairs(Vec::new(), SettlementEpoch::from_raw(1), 4, &mut |_| {

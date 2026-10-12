@@ -23,7 +23,9 @@ use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
-use shekyl_wire::tx_extra::{self, COINBASE_NONCE_BYTES, ML_KEM_768_CT_BYTES, PQC_LEAF_ENTRY_LEN};
+use shekyl_wire::tx_extra::{
+    self, DrawCommitment, COINBASE_NONCE_BYTES, ML_KEM_768_CT_BYTES, PQC_LEAF_ENTRY_LEN,
+};
 
 use crate::recipients::{Recipient, GENESIS_TOTAL_ATOMIC};
 use crate::txkey::{derive_genesis_tx_secret, tx_pubkey};
@@ -33,6 +35,17 @@ use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
 /// Genesis block major version (`CURRENT_BLOCK_MAJOR_VERSION`,
 /// `src/cryptonote_config.h`).
 pub const GENESIS_BLOCK_MAJOR_VERSION: u8 = 1;
+
+/// The genesis coinbase's `0x0C` commitment: 32 zero bytes
+/// (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.8 decision 3, ruled 2026-10-10).
+///
+/// Genesis has no producer, so there is no witness key and no seed to
+/// commit to, and this tool is deterministic and holds neither. Zero is a
+/// commitment nobody can open, and it is obvious to anyone reading the
+/// block. It is **not** a marker for "no commitment": every validator
+/// carries it as it carries any other block's, and height 0 issues no draw
+/// because no carrier can reveal a seed for it.
+pub const GENESIS_DRAW_COMMITMENT: DrawCommitment = DrawCommitment::from_bytes([0; 32]);
 
 /// A built genesis coinbase transaction.
 pub struct BuiltGenesis {
@@ -122,6 +135,7 @@ pub fn build_genesis_tx(
     let extra = tx_extra::build_coinbase_extra(
         tx_pub,
         &[0u8; COINBASE_NONCE_BYTES],
+        GENESIS_DRAW_COMMITMENT,
         outputs.len(),
         &kem_blob,
         &leaf_blob,

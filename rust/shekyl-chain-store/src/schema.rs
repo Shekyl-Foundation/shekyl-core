@@ -166,11 +166,11 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockInfo, BondRecord, Coded,
-    CurveTreeState, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, Present,
-    PropertyCellBytes, RMarket, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry,
-    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
-    Unshaped,
+    AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo, BondRecord, Coded,
+    CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx,
+    Present, PropertyCellBytes, RMarket, RuleSetInForce, SettlementRow, SigmaWorkMilli,
+    SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
+    UndoLog, Unshaped,
 };
 use crate::ids::IssuedDrawTuple;
 use crate::lmdb_order::LmdbHashKey;
@@ -423,6 +423,22 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          checked by the settlement walk over archival_issued_draw (spec §9.5 check 1): the \
          store's guard that the index settlement reads is the one admission wrote. A function \
          of the archival_issued_draw rows, and absent from LMDB for the same reason they are",
+    ),
+    (
+        "archival_block_draws",
+        "what the secret draw's count rule recorded for each block (ARCHIVAL_SERVE_CREDIT_SPEC.md \
+         §4.3, §10): the draw count, the fraction carried to the next block, the visible \
+         shortfall, and whether the block's seed has been revealed. Admission reads it to bound \
+         a record's draw index and the next block's count reads its carry. The C++ challenge \
+         path draws nothing per block and is deleted with its consensus role (DEL-008), so LMDB \
+         never holds it",
+    ),
+    (
+        "archival_drawable_digest",
+        "the digest of each epoch's drawable set, written when the epoch opens and compared \
+         with a re-walk when it settles (SO-D8d layer 2, SO-D10g): the store's guard that the \
+         set a draw's index was resolved against has not drifted. The set itself is never \
+         stored. Absent from LMDB for the reason archival_block_draws is",
     ),
 ];
 
@@ -741,6 +757,25 @@ tables! {
     /// [`IssuedDigest::ZERO`]. Appended last (ordinal 39).
     pub const ARCHIVAL_ISSUED_DIGEST: TableDefinition<u64, Coded<IssuedDigest>> =
         TableDefinition::new("archival_issued_digest");
+
+    /// `archival_block_draws` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// height → the [`BlockDraws`] the count rule recorded for that block
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10). Written when the block
+    /// connects; its `revealed` flag is set by the block that first admits
+    /// the seed. No block writes it until admission lands (`SO-D12`,
+    /// increment 3), so a height with no row is a block the rule has not
+    /// run for. Appended last but one (ordinal 40).
+    pub const ARCHIVAL_BLOCK_DRAWS: TableDefinition<u64, Coded<BlockDraws>> =
+        TableDefinition::new("archival_block_draws");
+
+    /// `archival_drawable_digest` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// epoch → the [`DrawableDigest`] of that epoch's drawable set, written
+    /// in the connect batch at the epoch's open and compared by the
+    /// settlement pass with a re-walk (`SO-D10g`). An epoch with no row
+    /// has no recorded set; no value stands for that. Appended last
+    /// (ordinal 41).
+    pub const ARCHIVAL_DRAWABLE_DIGEST: TableDefinition<u64, Coded<DrawableDigest>> =
+        TableDefinition::new("archival_drawable_digest");
 }
 
 #[cfg(test)]
@@ -811,6 +846,12 @@ mod tests {
             ("undo_log", 35),
             ("txs_pqc_auth_hash", 36),
             ("txs_archival_len", 37),
+            // Layout 22 (`SO-D10`) and layout 23 (`SO-D12`): four
+            // Rust-only tables appended, two at a time.
+            ("archival_issued_draw", 38),
+            ("archival_issued_digest", 39),
+            ("archival_block_draws", 40),
+            ("archival_drawable_digest", 41),
         ];
         for &(name, index) in pinned {
             assert_eq!(

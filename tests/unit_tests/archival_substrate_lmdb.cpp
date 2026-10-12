@@ -2063,8 +2063,12 @@ TEST(archival_substrate_lmdb, add_block_does_not_touch_the_alt_witness_table)
   fixture.db.batch_start();
   ASSERT_EQ(db.get_archival_alt_attestation_witness(blk), witness);
 
-  // Promote: the same block re-connects to main carrying its witness.
-  connect_block_with_txs(db, {}, witness);
+  // Promote: the same block re-connects to main carrying its witness. It
+  // is the popped block itself, not a second build: the coinbase writer
+  // draws a fresh 0x0C commitment on every call, so two builds are two
+  // blocks with two ids, and "the same block" has to be the same object.
+  db.add_block(std::make_pair(popped, cryptonote::block_to_blob(popped)), 100, 100,
+    h0 + 1, 0, 0, witness, {});
   fixture.db.batch_stop();
   fixture.db.batch_start();
   ASSERT_EQ(db.get_block_hash_from_height(h0), blk);
