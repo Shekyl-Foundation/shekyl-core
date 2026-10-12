@@ -398,6 +398,18 @@ The prologue (§4.4) is unchanged.
 - **Client authentication** is classical at message 3 (`se`) and hybrid
   when the client's first transport record decrypts. The daemon acts on
   nothing before then — that record *is* the first request (§6.2).
+  **This boundary is enforced by type, not by convention (RT-W9, ruled
+  2026-10-12).** Someone who breaks X25519 can produce a message 3 that
+  claims any enrolled client; they cannot read message 4 or produce a
+  first record. So at message 3 the daemon is given a *claimed* client:
+  the identity, for the enrolment lookup that decides whether message 4 is
+  sent, and nothing else. After message 4 it holds a *pending* session
+  whose only operation is opening the first transport record. On success
+  that yields, together, the record halves, the *authenticated* client and
+  message 3's payload. On failure the session is gone. Before that there
+  is no sending half to serve with and no way to read who the client is or
+  what it asked for; examples that try are checked not to compile
+  (`rust/shekyl-rpc-channel/src/handshake.rs`, `PendingSession`).
 - **Cost:** two round trips before the first request; three
   encapsulate/decapsulate pairs and two ephemeral ML-KEM key generations.
   On the wire: message 1 is 2,320 bytes (1,088 ciphertext, 32 + 1,184
@@ -909,6 +921,27 @@ outside the grant is refused with its own error — a dedicated JSON-RPC
 code and HTTP 403 on REST — never "method not found" or a 404. The default
 request is the `view` preset (§6.1). Nothing is served until the client's first
 transport record decrypts (§4.1).
+
+**Open, for RT-W10's pre-flight: what message 4 carries.** The paragraph
+above has the daemon clamp the *request* to the ceiling and return the
+result in message 4. The handshake's types (§4.1) withhold the request
+until the first record opens, on purpose, so when message 4 is written the
+daemon knows the claimed identity and nothing the client asked for. The
+two cannot both stand as written. Two ways through, neither chosen here:
+
+- **Message 4 carries the ceiling.** It depends on the identity alone,
+  which is all the daemon has. The effective grant is the request clamped
+  to it, computed by both sides once the first record opens. A clamped
+  client still knows at connect time, since it knows what it asked for.
+  Nothing computed from an unauthenticated request ever leaves the daemon.
+- **Message 4 carries the effective grant, as written above.** The
+  handshake would hand the request to one function whose only output is
+  message 4's payload. The request is then visible to daemon code before
+  authentication, inside that function, and keeping it from being logged
+  or counted there is a convention again.
+
+Under either, a sender who has broken X25519 learns nothing from message
+4: it is sealed to the client's ML-KEM key.
 
 The `restricted: bool` that today threads through `AppState`, the router,
 and the method handlers becomes the connection's grant; the two gate tests
@@ -1505,7 +1538,7 @@ rule-26 pre-flight before its first production commit.
 |---|---|---|---|
 | RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, vectors pinned from clatter 2.3.0 under seeded randomness, which RT-W9 compares our handshake against (RT-O11), each observed changing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; creates `shekyl-rpc-channel` with the constants and naming functions (RT-O13); deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
 | RT-W9 | Record layer extracted into a shared crate (pinned vectors untouched); handshake; the stream adapter under hyper/axum (RT-P5); padded records in size classes derived from RT-P5 and RT-P6, one framing shared with P2P (RT-O6); one exclusion row in the domain registry, with its reason, for Noise protocol names — the RPC channel's and the P2P handshake's — which are literals mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; deadline from RT-P6. **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | not authorized |
-| RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
+| RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view`. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client that the first transport record yields, never from message 3's claim (§4.1, ruled 2026-10-12).** Its pre-flight settles what message 4 carries (§6.2) | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 | not authorized |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9) | RT-W9 | not authorized |
 | RT-W13 | The check that §11.2 is empty: every row gone, no reader of a deleted flag or field left | lands with RT-W10; re-run after RT-W12 and RT-W14 | not authorized |

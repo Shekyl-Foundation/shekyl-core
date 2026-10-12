@@ -109,21 +109,20 @@ fn run() -> Run {
         .read_message2(&message2)
         .expect("client reads message 2");
     let (client, message3) = client.write_message3(&payloads[2]).expect("message 3");
-    let (daemon, hello) = daemon
+    let (daemon, claimed) = daemon
         .read_message3(&message3)
         .expect("daemon reads message 3");
-    assert_eq!(hello.payload, payloads[2], "message 3's payload");
     assert_eq!(
-        hello.client.x25519(),
+        claimed.claimed_static().x25519(),
         client_static.public().x25519(),
         "the daemon learns the client's X25519 static"
     );
     assert_eq!(
-        hello.client.mlkem_ek()[..],
+        claimed.claimed_static().mlkem_ek()[..],
         client_static.public().mlkem_ek()[..],
         "the daemon learns the client's ML-KEM static"
     );
-    let (daemon, message4) = daemon
+    let (pending, message4) = daemon
         .write_message4_with_rng(&payloads[3], &mut daemon_rng)
         .expect("message 4");
     let (client, grant) = client
@@ -131,18 +130,28 @@ fn run() -> Run {
         .expect("client reads message 4");
     assert_eq!(grant, payloads[3], "message 4's payload");
 
-    let handshake_hash = [client.handshake_hash(), daemon.handshake_hash()];
+    let handshake_hash = [client.handshake_hash(), pending.handshake_hash()];
+
+    // The daemon has no record halves until the client's first record
+    // opens. That record is in Shekyl's framing, which the vectors do not
+    // pin; what it yields is the daemon's halves and message 3's payload.
+    let request = hex_field(&vectors["transport"]["client_to_daemon_plaintext_hex"]);
+    let reply = hex_field(&vectors["transport"]["daemon_to_client_plaintext_hex"]);
+    let (mut client_send, _client_recv) = client.split();
+    let first_record = client_send.seal(&request).expect("first record");
+    let session = pending
+        .open_first_record(&first_record)
+        .expect("the client's first record opens");
+    assert_eq!(session.first_record, request);
+    assert_eq!(session.request, payloads[2], "message 3's payload");
 
     // The initiator's sending key is the first key `Split` yields; the
     // daemon's is the second. Seal as plain Noise does: nonce 0, no
-    // associated data.
-    let (client_send, _client_recv) = client.split();
-    let (daemon_send, _daemon_recv) = daemon.split();
-    let request = hex_field(&vectors["transport"]["client_to_daemon_plaintext_hex"]);
-    let reply = hex_field(&vectors["transport"]["daemon_to_client_plaintext_hex"]);
+    // associated data. One record has not reached the rekey, so each half
+    // still holds the key `Split` gave it.
     let transport = [
         aead::seal(&client_send.ck_and_k().1, 0, &[], &request).expect("seal"),
-        aead::seal(&daemon_send.ck_and_k().1, 0, &[], &reply).expect("seal"),
+        aead::seal(&session.send.ck_and_k().1, 0, &[], &reply).expect("seal"),
     ];
 
     Run {

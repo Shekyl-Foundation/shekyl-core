@@ -23,6 +23,15 @@
 //! The type at each step is the only thing that step can do, and transport
 //! keys exist only after message 4.
 //!
+//! # The client is not authenticated until its first record opens
+//!
+//! Message 3 proves the client's X25519 key and not its ML-KEM key. The
+//! daemon side therefore ends in [`PendingSession`], not in record halves:
+//! what message 3 claimed is a [`ClaimedClient`], good for the admission
+//! lookup and nothing more, and the record halves, the authenticated client
+//! and what it asked for all come out of
+//! [`PendingSession::open_first_record`] together or not at all.
+//!
 //! # What a stranger can make the daemon do (§4.3)
 //!
 //! Message 1 is read before anything has authenticated. Reading it runs the
@@ -58,7 +67,7 @@ use fips203::ml_kem_768;
 use fips203::traits::{Decaps, Encaps, KeyGen, SerDes};
 use rand_core::{CryptoRngCore, OsRng};
 use shekyl_noise::channel::halves;
-use shekyl_noise::{RecvHalf, SendHalf, SymmetricState};
+use shekyl_noise::{RecordError, RecvHalf, SendHalf, SymmetricState};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
@@ -551,13 +560,7 @@ impl ClientAwaitingMessage4<'_> {
             .sym
             .decrypt_and_hash(&message4[SKEM..])
             .map_err(|_| fail)?;
-        Ok((
-            Established {
-                sym: self.sym,
-                initiator: true,
-            },
-            payload,
-        ))
+        Ok((Established { sym: self.sym }, payload))
     }
 }
 
@@ -583,25 +586,44 @@ pub struct DaemonAwaitingMessage3 {
     ephemeral: StaticSecret,
 }
 
-/// What message 3 told the daemon: who the client says it is, and what it
-/// asked for.
+/// Who message 3 says the client is. **A claim, not yet an authenticated
+/// client.**
 ///
-/// The X25519 half is proven by `se` when this is returned. The ML-KEM half
-/// is proven only when the client's first transport record opens. The daemon
-/// decides admission on [`ClientHello::client`] and acts on nothing else
-/// until that record.
-pub struct ClientHello {
-    /// The client's static bundle.
-    pub client: StaticPublic,
-    /// Message 3's payload.
-    pub payload: Vec<u8>,
+/// When the daemon holds this, the client's X25519 key is proven and its
+/// ML-KEM key is not: client authentication is classical at message 3 and
+/// hybrid only when the client's first transport record opens (§4.1).
+/// Someone who can break X25519 can produce a message 3 that claims any
+/// enrolled client.
+///
+/// So this carries the identity and nothing else, for the one decision that
+/// has to be made now: whether this client is enrolled, and therefore
+/// whether to send message 4. It is not something to log a connection
+/// against, count, or stamp a last-seen time from. What the client asked
+/// for is not here at all; it comes with the authenticated client, from
+/// [`PendingSession::open_first_record`].
+pub struct ClaimedClient {
+    claimed: StaticPublic,
+}
+
+impl ClaimedClient {
+    /// The fingerprint to look up in the enrolment list.
+    pub fn fingerprint(&self) -> StaticFingerprint {
+        self.claimed.fingerprint()
+    }
+
+    /// The bundle the client claims.
+    pub fn claimed_static(&self) -> &StaticPublic {
+        &self.claimed
+    }
 }
 
 /// The daemon after message 3. The next call writes message 4, if the
 /// daemon admits the client; dropping this instead refuses it.
 pub struct DaemonReadyForMessage4 {
     sym: SymmetricState,
-    client_ek: ml_kem_768::EncapsKey,
+    client: StaticPublic,
+    /// Message 3's payload. Held, not handed out: see [`ClaimedClient`].
+    request: Vec<u8>,
 }
 
 impl<'a> Daemon<'a> {
@@ -757,7 +779,10 @@ impl DaemonReadyForMessage2 {
 }
 
 impl DaemonAwaitingMessage3 {
-    /// Read message 3: the client's static bundle and its payload.
+    /// Read message 3. Returns who the client claims to be, for the
+    /// admission decision, and the state that can write message 4. Message
+    /// 3's payload stays inside that state until the client is
+    /// authenticated against both primitives.
     ///
     /// # Errors
     ///
@@ -765,7 +790,7 @@ impl DaemonAwaitingMessage3 {
     pub fn read_message3(
         mut self,
         message3: &[u8],
-    ) -> Result<(DaemonReadyForMessage4, ClientHello), HandshakeError> {
+    ) -> Result<(DaemonReadyForMessage4, ClaimedClient), HandshakeError> {
         const S_KEM: usize = X25519_PUBLIC_LEN + TAG_LEN;
         const PAYLOAD: usize = S_KEM + MLKEM768_EK_LEN + TAG_LEN;
         let fail = HandshakeError::Message3;
@@ -799,9 +824,10 @@ impl DaemonAwaitingMessage3 {
         Ok((
             DaemonReadyForMessage4 {
                 sym: self.sym,
-                client_ek: client.mlkem_ek.clone(),
+                client: client.clone(),
+                request: payload,
             },
-            ClientHello { client, payload },
+            ClaimedClient { claimed: client },
         ))
     }
 }
@@ -813,7 +839,10 @@ impl DaemonReadyForMessage4 {
     /// # Errors
     ///
     /// [`HandshakeError::Local`] only.
-    pub fn write_message4(self, payload: &[u8]) -> Result<(Established, Vec<u8>), HandshakeError> {
+    pub fn write_message4(
+        self,
+        payload: &[u8],
+    ) -> Result<(PendingSession, Vec<u8>), HandshakeError> {
         self.write_from(payload, &mut OsRng)
     }
 
@@ -829,7 +858,7 @@ impl DaemonReadyForMessage4 {
         self,
         payload: &[u8],
         rng: &mut impl CryptoRngCore,
-    ) -> Result<(Established, Vec<u8>), HandshakeError> {
+    ) -> Result<(PendingSession, Vec<u8>), HandshakeError> {
         self.write_from(payload, rng)
     }
 
@@ -837,13 +866,17 @@ impl DaemonReadyForMessage4 {
         mut self,
         payload: &[u8],
         rng: &mut impl CryptoRngCore,
-    ) -> Result<(Established, Vec<u8>), HandshakeError> {
+    ) -> Result<(PendingSession, Vec<u8>), HandshakeError> {
         let fail = HandshakeError::Local;
         let mut message = Vec::with_capacity(MESSAGE4_OVERHEAD + payload.len());
 
         // skem: encapsulate to the client's static key; the ciphertext is
         // sealed.
-        let (shared, ciphertext) = self.client_ek.try_encaps_with_rng(rng).map_err(|_| fail)?;
+        let (shared, ciphertext) = self
+            .client
+            .mlkem_ek
+            .try_encaps_with_rng(rng)
+            .map_err(|_| fail)?;
         let sealed = self
             .sym
             .encrypt_and_hash(&ciphertext.into_bytes())
@@ -859,10 +892,7 @@ impl DaemonReadyForMessage4 {
             return Err(fail);
         }
         Ok((
-            Established {
-                sym: self.sym,
-                initiator: false,
-            },
+            PendingSession::new(self.sym, self.client, self.request),
             message,
         ))
     }
@@ -870,14 +900,10 @@ impl DaemonReadyForMessage4 {
 
 // ------------------------------------------------------------- established
 
-/// All four messages are done.
-///
-/// For the daemon this is not yet a hybrid-authenticated client: that comes
-/// when the client's first transport record opens (§4.1). Nothing is served
-/// before it does.
+/// The client after all four messages: the daemon is authenticated against
+/// both primitives and has admitted this client.
 pub struct Established {
     sym: SymmetricState,
-    initiator: bool,
 }
 
 impl Established {
@@ -888,13 +914,141 @@ impl Established {
     }
 
     /// Noise's `Split`: the two record halves. The client sends with the
-    /// first transport key and the daemon with the second.
+    /// first transport key.
     pub fn split(self) -> (SendHalf, RecvHalf) {
         let keys = self.sym.split();
-        if self.initiator {
-            halves(keys.chaining_key, keys.first, keys.second)
-        } else {
-            halves(keys.chaining_key, keys.second, keys.first)
+        halves(keys.chaining_key, keys.first, keys.second)
+    }
+}
+
+/// The daemon after all four messages, **before the client is authenticated
+/// against both primitives.**
+///
+/// Message 4 was sealed to the client's long-term ML-KEM key. Only the
+/// holder of that key can derive the transport keys, so only it can produce
+/// a first record that opens. Until one does, the client is the classical
+/// claim of message 3 (§4.1), and this type is how "nothing is served
+/// before then" (§6.2) is kept: its one operation is
+/// [`Self::open_first_record`]. It has no `split`, no sending half and no
+/// way to read who the client is or what it asked for. A daemon cannot
+/// serve, or even see the request, before the first record opens, because
+/// there is nothing to do either with.
+///
+/// ```compile_fail,E0599
+/// # use shekyl_rpc_channel::handshake::PendingSession;
+/// fn serve_early(pending: PendingSession) {
+///     let (_send, _recv) = pending.split();
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// # use shekyl_rpc_channel::handshake::PendingSession;
+/// fn send_early(pending: &mut PendingSession) {
+///     let _ = pending.send.seal(b"served before authentication");
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// # use shekyl_rpc_channel::handshake::PendingSession;
+/// fn read_the_request_early(pending: &PendingSession) -> &[u8] {
+///     &pending.request
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// # use shekyl_rpc_channel::handshake::PendingSession;
+/// fn name_the_client_early(pending: &PendingSession) {
+///     let _ = pending.client.fingerprint();
+/// }
+/// ```
+pub struct PendingSession {
+    send: SendHalf,
+    recv: RecvHalf,
+    handshake_hash: [u8; HANDSHAKE_HASH_LEN],
+    client: StaticPublic,
+    request: Vec<u8>,
+}
+
+/// What the client's first transport record proved, and everything that was
+/// withheld until it did.
+pub struct AuthenticatedSession {
+    /// The client, now authenticated against both X25519 and ML-KEM. This
+    /// is the identity to log, count and record against.
+    pub client: StaticPublic,
+    /// Message 3's payload: what the client asked for.
+    pub request: Vec<u8>,
+    /// The first record's plaintext. It is the first request (§6.2).
+    pub first_record: Vec<u8>,
+    /// How many bytes of the buffer the first record took.
+    pub consumed: usize,
+    /// The daemon's sending half.
+    pub send: SendHalf,
+    /// The daemon's receiving half, past the first record.
+    pub recv: RecvHalf,
+    /// The handshake hash.
+    pub handshake_hash: [u8; HANDSHAKE_HASH_LEN],
+}
+
+/// Why a first record did not authenticate the client.
+pub enum FirstRecord {
+    /// The buffer does not yet hold a whole record. Nothing was decided;
+    /// call again with more bytes. Boxed: the session carries the client's
+    /// bundle and is far larger than the refusal beside it.
+    Incomplete(Box<PendingSession>),
+    /// The record did not open. Whoever completed the handshake does not
+    /// hold the client's ML-KEM key. The session is gone.
+    Refused,
+}
+
+impl core::fmt::Debug for FirstRecord {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Incomplete(_) => "FirstRecord::Incomplete",
+            Self::Refused => "FirstRecord::Refused",
+        })
+    }
+}
+
+impl PendingSession {
+    fn new(sym: SymmetricState, client: StaticPublic, request: Vec<u8>) -> Self {
+        let handshake_hash = sym.handshake_hash();
+        let keys = sym.split();
+        // The daemon sends with the second transport key.
+        let (send, recv) = halves(keys.chaining_key, keys.second, keys.first);
+        Self {
+            send,
+            recv,
+            handshake_hash,
+            client,
+            request,
+        }
+    }
+
+    /// The handshake hash. Not a secret, and it names no client.
+    pub fn handshake_hash(&self) -> [u8; HANDSHAKE_HASH_LEN] {
+        self.handshake_hash
+    }
+
+    /// Open the client's first transport record from the front of `buffer`.
+    ///
+    /// # Errors
+    ///
+    /// [`FirstRecord::Incomplete`], handing this back, when `buffer` holds
+    /// less than one record. [`FirstRecord::Refused`] when the record does
+    /// not open; the session is consumed and cannot be tried again.
+    pub fn open_first_record(mut self, buffer: &[u8]) -> Result<AuthenticatedSession, FirstRecord> {
+        match self.recv.open_one(buffer) {
+            Ok((first_record, consumed)) => Ok(AuthenticatedSession {
+                client: self.client,
+                request: self.request,
+                first_record,
+                consumed,
+                send: self.send,
+                recv: self.recv,
+                handshake_hash: self.handshake_hash,
+            }),
+            Err(RecordError::Truncated) => Err(FirstRecord::Incomplete(Box::new(self))),
+            Err(_) => Err(FirstRecord::Refused),
         }
     }
 }
