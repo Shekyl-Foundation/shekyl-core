@@ -3,7 +3,8 @@
 **Status:** OPEN — Round 0 of SO-D8 Slice C. **RULED 2026-10-07** (the
 secret per-block draw, §13.1–§13.4) and **re-ruled 2026-10-11** (one bundle
 per block replaces the carrier transaction, §13.5). Six questions found
-while writing that in were ruled 2026-10-12 (§13.6). Built so far: the draw's functions, the
+while writing that in were ruled 2026-10-12 (§13.6), and one raised on
+review is open (§13.7). Built so far: the draw's functions, the
 settlement selection and fold, the issued-draw tables behind a test door,
 and the FN-DSA scheme with the receipt key's derivation (§2). No block path
 issues a draw or admits a pass.
@@ -446,9 +447,13 @@ not claim `P` stores them.
   the genesis gate.
 - **Signature domain.** A new scheme domain for the receipt under scheme
   3, `shekyl/archival-receipt-scheme-v1`; the witness's signature on the
-  bundle has its own, `shekyl/archival-witness-carrier-scheme-v1` (the
-  label was minted when the object was a carrier). One label
-  never names two messages or two schemes.
+  bundle has its own, `shekyl/archival-witness-bundle-scheme-v1`, minted
+  with its constant when the verifier is built. The bundle commitment is
+  a different message from the carrier's set commitment, so it does not
+  take the carrier's label, `shekyl/archival-witness-carrier-scheme-v1`;
+  that constant has no signer and is not used for the bundle. One label
+  never names two messages or two schemes
+  ([`30-cryptography`](../../.cursor/rules/30-cryptography.mdc)).
 - **Key generation.** The receipt key is seeded (§6.3). The witness's key
   is not: it is drawn from the OS for one block and is never derived from
   anything (§4.2).
@@ -507,8 +512,9 @@ Rules:
   does not admit it. There is no state in which `h`'s seed is revealed and
   some of its records are pending.
 - **One per `h`.** A chain admits at most one bundle for `h`.
-- **A bundle with no passes is valid, and is required of an honest
-  producer.** It is what issues `h`'s misses (§9.2).
+- **A bundle with no passes is valid, and where `count(h) > 0` it is
+  required of an honest producer.** It is what issues `h`'s misses
+  (§9.2).
 - **A block with `count(h) = 0`** has a bundle with an empty bitmap. It is
   valid, issues nothing, and marks `h` revealed. Accepting it keeps the
   rule uniform; a producer does not file it, which is challenger policy
@@ -679,6 +685,9 @@ producer's node broadcast block `h` with no origin protection
 
 - **The prunable part is archival content in the shard domain.** `SHT-Q1`
   defines the domain by "carries prunable data", so bundles join it.
+  Where a bundle sits in the domain's order, and how its length enters
+  the cumulative archival length that cuts shards, is not ruled: it is
+  posed as `SCS-P38` (§13.7).
 - **It is kept until past `D_max`**, because a reorg must be able to check
   the bundle again. It is then discarded and filled back from archivers
   like everything else.
@@ -760,9 +769,24 @@ observes. Each refusal is a typed verdict naming its census row.
    derived `shard_id`, and the carried `delivery_digest`.
    **`anchor_height < h`, or the bundle is refused** (`SCS-P32`).
 
-The commitment is checked before either signature. A bundle that opens
-`h`'s `0x0C` can only have come from `h`'s producer, so forging work for
-the verifier costs a mined block.
+**What a forged bundle can cost a node.** The commitment is checked before
+either signature, and until `h`'s producer releases its bundle nobody
+else can open `h`'s `0x0C`. After that the seed and the witness key are
+public, so anyone can build a body that opens the commitment. What stops
+it there:
+
+- **The witness signature is checked next, before any receipt.** A body
+  the producer did not sign costs the node one signature verification and
+  no receipt verification.
+- **A node that already holds a valid bundle for `h` drops any other
+  before that check**: the queue is one per `h`, first valid wins (§7.5).
+- **A body fetched for a block's reference is checked by hash first**, so
+  a mutated body is refused before it is parsed.
+
+So the exposure is one witness-signature verification per forged body, per
+node, for the blocks whose valid bundle that node has not yet received:
+at most `W₂` heights. It is bounded by the relay layer's ordinary
+per-peer limits, not by proof of work.
 
 **The receipt key is read from the `h_open(E)` bond snapshot, the same
 snapshot `D` is drawn from** (`SCS-P19`). It is one type with two methods:
@@ -1441,7 +1465,7 @@ under rule 21 as a re-alignment.
 
 | # | Question | Ruling |
 | --- | --- | --- |
-| `SCS-P14` | What carries a block's reveal and its records | **One bundle per block `h`**: the reveal and every pass record for `h`. A block admits it whole or not at all. A bundle with no passes is valid and required; it is what issues `h`'s misses (§7.1) |
+| `SCS-P14` | What carries a block's reveal and its records | **One bundle per block `h`**: the reveal and every pass record for `h`. A block admits it whole or not at all. A bundle with no passes is valid and, where the block has draws, required; it is what issues `h`'s misses (§7.1; the zero-draw block is `SCS-P33`) |
 | `SCS-P15` | Partial inclusion, refusal, and forced inclusion | **None of the three exists.** A valid bundle's validity depends only on the chain through `h`, its own bytes and the `h_open(E)` snapshot, so no node can refuse it. No rule acts on a bundle's absence. Non-inclusion through all of `W₂` is NonObservation for `h`, never misses (§9.1) |
 | `SCS-P16` | What `SCS-P14` reverses | **`SCS-P11` is reversed:** the pass is carried by the block-level bundle. The serve-credit input, the `serve_credit_only` class and the CEN-J rows are deleted, and the successors of J8–J10 are block rules. `SCV-4` (one record for one fact) and R-B (the producer is the witness) still hold. **Fail-whole is the bundle's** (proposal §7.6.2 (B)): a refused bundle is a producer defect, corrected and filed again; admitting records one at a time stays rejected. **`n ≥ 1` is dropped:** R7 holds by structure. The set commitment becomes the bundle commitment, and `serve_credit_batch_commitment` and the §7.3 vectors are regenerated |
 | `SCS-P17` | Where the bundle sits and what commits to it | **Beside the block, not in the block blob.** The header root covers each bundle in `h` order: its kept bytes and a hash of its prunable bytes. Kept: the seed, `h`, and a pass bitmap of exactly `count(h)` bits, which replaces the list of `j`. Prunable: the witness key and signature, and per record the receipt, delivery digest, anchor and `attempt`. Settlement reads only kept data (§7.2, §7.3) |
@@ -1474,6 +1498,14 @@ Found while writing the bundle into §7 and §9, and the contracts into
 | `SCS-P36` | What a backfill verifies | **Hash equality against the header root's term is the acceptance rule.** Re-verifying receipts is optional and bounded by the bond journals' horizon. This corrects `SCS-P22`'s "can be re-verified" (§8) |
 | `SCS-P37` | Whether the verifier returns the derived draws | **Yes.** `Admitted::draws` is part of the contract between the verifier and the writer, in §9.6 beside the view trait, and the settlement lane sees it before it builds its cutover increment |
 
+### 13.7 Posed 2026-10-12, and open
+
+Raised on review of this change.
+
+| # | Question | Recommendation |
+| --- | --- | --- |
+| `SCS-P38` | `SCS-P22` puts a bundle's prunable part in the shard domain. `SHT-Q1` orders the domain by transactions in chain order and `SHT-Q2` cuts shards by cumulative archival length, bound through the txid. A bundle is not a transaction: its position in that order, its length, and what binds the length for a pruned node are not stated, and they decide shard boundaries | **Position:** after the transactions of the including block `h_incl`, the block's bundles in ascending `h`, which is the order the header root already covers. **Length:** the prunable bytes, `3,193 + 1,397 ·` (set bits). **Binding:** the kept bitmap. The length is a function of kept bytes, so a pruned node recomputes it with nothing new stored, and the header root binds it. The cumulative-length fold reads it at connect and undoes it at pop, as it does a transaction's |
+
 ---
 
 ## 14. Defects found while grounding
@@ -1500,7 +1532,7 @@ change that carries this specification fixes it; the rest are open.
 | `SCS-F15` | `rust/shekyl-economics-sim/src/secret_draw.rs` carries its own count rule, in `f64`, and its own weighted selection, and calls no function of `rust/shekyl-archival-retention/src/secret_draw.rs`. Its module documentation says the draw has no production owner. §12's figures are from the sim's rule, not the consensus one. Open: owed with the sim's next run (§11) |
 | `SCS-F16` | This document's §2 was pinned at `dev@0e1d1d6126` and still said CEN-B4 had no Rust rule; its banner said nothing was built while §16 listed landed constants; §15 carried a second, older copy of its table. **Fixed** with this change |
 | `SCS-F17` | The bundle brief gives a reference as under 100 B. With a 32-byte prunable hash it is `72 + ⌈count(h) / 8⌉` B: 109 B at the count cap for `D` = 324,000, and 421 B at `D` = 3,100,000. §7.5 states the range. The brief also gives that cap as 291; with the carry it is 292 (§7.4) |
-| `SCS-F18` | `ARCHIVAL_SETTLEMENT_WRITER.md` §16.6 on PR #1032 records `SO-D12d` as "the FN-DSA lane builds increments 2 to 4". `SCS-P26` supersedes it for increments 3 and 4. The settlement lane's to correct |
+| `SCS-F18` | `ARCHIVAL_SETTLEMENT_WRITER.md` §16.6 on PR #1032 recorded `SO-D12d` as "the FN-DSA lane builds increments 2 to 4". `SCS-P26` supersedes it for increments 3 and 4. **Fixed** on that branch by the settlement lane, 2026-10-12 |
 | `SCS-F19` | DRS-E5 (PR #1026) dissolved its alternative-tier CEN-B4 work (`E5-Q4` δ, `E5-17`) because this slice deleted B4's operand, and under `SCS-P17` and `SCS-P23` a block again carries a root recomputed when an alternative block arrives. **Closed 2026-10-12, smaller than it read:** what δ did was a bond read at the alternative chain's cheap tier. What returns is a stateless recomputation from references, with no bond read, and DRS-E5's brief already asks for that arrival check. δ stays dissolved; DRS-E5 reopens nothing |
 
 ---
@@ -1543,10 +1575,12 @@ constant or registry row yet.
 | `shekyl-archival-p-receipt-ed25519-v1` | HKDF info | The Ed25519 half of the persona's receipt key, from the master seed, §6.3 |
 | `shekyl-archival-p-receipt-fn-dsa-1024-v1` | HKDF info | The FN-DSA-1024 half of the same key, §6.3 |
 | `shekyl/archival-receipt-scheme-v1` | signature domain | Receipts under scheme 3, §6.2 |
-| `shekyl/archival-witness-carrier-scheme-v1` | signature domain | The witness's signature on the bundle, under scheme 3, §7.3 |
+| `shekyl/archival-witness-carrier-scheme-v1` | signature domain | The witness's signature on a carrier. Landed as a constant with no signer; not used for the bundle (§6.2) |
+| `shekyl/archival-witness-bundle-scheme-v1` | signature domain | The witness's signature on the bundle, under scheme 3, §7.3. Minted with the verifier |
 
-Three are minted with their constants when the verifier is built (rule
-30): the bundle commitment, whose string is fixed above, and the header
+Four are minted with their constants when the verifier is built (rule
+30): the witness's bundle signature domain and the bundle commitment,
+whose strings are fixed above, and the header
 root's per-bundle term and the hash of a bundle's prunable bytes, whose
 strings are named then.
 The seed and the witness key have no label: they are fresh randomness.
@@ -1614,7 +1648,7 @@ One row at least for each item of §13.5 and §13.6.
 | `SCS-P26` | `P` starts signing receipts under the new key before a verifier for it is live | Prevented: the capability is built ahead, and the switch of key is part of the cutover that makes the verifier live |
 | `SCS-P27` | A relayer sends a block and refuses its bundle bodies | Attributable misbehaviour; the block is not connected, and an alternative chain is not switched to, until the bodies arrive from someone |
 | `SCS-P27` | Fill the body store with junk | A body is stored only if a block with valid proof of work references it or the queue admitted it; the reference's bitmap bounds its size; every stored body has a holder |
-| `SCS-P28` | Flood the queue with bundles | One per `h`, at most `W₂` entries, and each must open a mined block's `0x0C` before any signature is checked |
+| `SCS-P28` | Flood the queue with bundles | One per `h`, at most `W₂` entries. Before the producer releases a bundle nobody else can open that block's `0x0C`. After, a forged body costs a node one witness-signature verification and no receipt verification, only for heights whose valid bundle it does not yet hold (§9.1) |
 | `SCS-P28` | Send a second valid bundle for `h` to displace the first | The first valid one wins in a queue; the block's reference decides which body a node needs |
 | `SCS-P29` | Mine a zero-fee transaction, then orphan the block to get it into every pool | No fee-floor bypass by arrival path; the returned transaction meets the same policy as any other |
 | `SCS-P30` | "Retired by ruling" read as "dropped", so the `DEL-008` gate opens on rows nobody implemented | The retired status names successor rows, and the gate reads each as `Implemented` or `ByConstruction` |
@@ -1626,3 +1660,4 @@ One row at least for each item of §13.5 and §13.6.
 | `SCS-P36` | A node refuses to backfill an old bundle because it cannot rebuild the snapshot | Hash equality is the acceptance rule; nothing requires the snapshot |
 | `SCS-P31` | Two lanes each build their own reading of what the verifier needs, and the store's view answers a different question from the one the verifier asks | The view trait and the kept projection are fixed in §9.6 before either is built; the verifier is tested against a fixture view, so it cannot lean on a store type |
 | `SCS-P37` | The writer's own derivation of a draw's pair disagrees with the verifier's, so a receipt is checked against one pair and the pass is recorded for another | One derivation: the verifier returns the derived draws and the writer derives nothing |
+| `SCS-P38` | Two nodes place a bundle's bytes at different points in the shard domain, or count different lengths for it, and cut shards at different boundaries | Open. With the recommended rule the position is the header root's order and the length is a function of the kept bitmap, so both are consensus data already |
