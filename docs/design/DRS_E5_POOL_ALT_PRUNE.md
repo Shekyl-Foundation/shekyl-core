@@ -17,7 +17,7 @@ consumer; `E5-18` is a3's — the census registry could not name a
 store-homed property, ruled `held_by_store` in a4); questions `E5-Q1…E5-Q11` in §8, each with its ruling under its
 default. a4's census amendment (CEN-K4's row describes the C++ ladder in
 its landed order and names no attestation step for the Rust tier; CEN-B4's
-site pin re-pinned) is drafted for ruling before it lands. **The
+site pin re-pinned) landed in a4's census-arms commit, 2026-10-11. **The
 "prune" in this file's name is not an increment of this lane:** the
 retention prune is DRS-E1's and landed 2026-09-25 (S-PRUNE,
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §3's surface table;
