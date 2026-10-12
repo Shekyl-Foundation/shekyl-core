@@ -13,8 +13,6 @@
 //! The type at each step is the only thing that step can do. Transport keys
 //! exist only after message 2.
 
-use blake2::digest::Digest;
-use blake2::Blake2s256;
 use fips203::ml_kem_768;
 use fips203::traits::{Decaps, Encaps, KeyGen, SerDes};
 use rand_core::OsRng;
@@ -26,9 +24,13 @@ use std::cell::Cell;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-use crate::aead::{self, HASH_LEN, TAG_LEN};
-use crate::channel::{halves, RecvHalf, SendHalf};
+use shekyl_noise::symmetric::{SplitRole, SymmetricError, SymmetricState as Sym};
+use shekyl_noise::TAG_LEN;
+
+use crate::channel::{self, RecvHalf, SendHalf};
 use crate::prefix::NetworkId;
+#[cfg(test)]
+use shekyl_noise::HASH_LEN;
 
 pub const PROTOCOL_NAME: &[u8] = b"Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s";
 pub const MESSAGE1_LEN: usize = 32 + ML_KEM_768_EK_LEN;
@@ -55,78 +57,12 @@ pub enum HandshakeError {
     State,
 }
 
-struct Sym {
-    ck: Zeroizing<[u8; HASH_LEN]>,
-    h: [u8; HASH_LEN],
-    k: Option<Zeroizing<[u8; HASH_LEN]>>,
-    n: u64,
-}
-
-impl Sym {
-    fn new(name: &[u8], prologue: &[u8]) -> Self {
-        let hashed = if name.len() <= HASH_LEN {
-            let mut padded = [0u8; HASH_LEN];
-            padded[..name.len()].copy_from_slice(name);
-            padded
-        } else {
-            aead::hash(name)
-        };
-        let mut sym = Self {
-            ck: Zeroizing::new(hashed),
-            h: hashed,
-            k: None,
-            n: 0,
-        };
-        sym.mix_hash(prologue);
-        sym
-    }
-
-    fn mix_hash(&mut self, data: &[u8]) {
-        let mut hasher = Blake2s256::new();
-        hasher.update(self.h);
-        hasher.update(data);
-        self.h = hasher.finalize().into();
-    }
-
-    fn mix_key(&mut self, ikm: &[u8]) {
-        let (ck, k) = aead::hkdf(&self.ck, ikm);
-        self.ck = ck;
-        self.k = Some(k);
-        self.n = 0;
-    }
-
-    fn encrypt_and_hash(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, HandshakeError> {
-        if self.k.is_none() {
-            self.mix_hash(plaintext);
-            return Ok(plaintext.to_vec());
+impl From<SymmetricError> for HandshakeError {
+    fn from(error: SymmetricError) -> Self {
+        match error {
+            SymmetricError::Decrypt => Self::Decrypt,
+            SymmetricError::State => Self::State,
         }
-        let ct = self.encrypt(plaintext)?;
-        self.mix_hash(&ct);
-        Ok(ct)
-    }
-
-    fn decrypt_and_hash(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, HandshakeError> {
-        if self.k.is_none() {
-            self.mix_hash(ciphertext);
-            return Ok(ciphertext.to_vec());
-        }
-        let pt = self.decrypt(ciphertext)?;
-        self.mix_hash(ciphertext);
-        Ok(pt)
-    }
-
-    fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, HandshakeError> {
-        let key = self.k.as_ref().ok_or(HandshakeError::State)?;
-        let ct = aead::seal(key, self.n, &self.h, plaintext).ok_or(HandshakeError::Decrypt)?;
-        self.n = self.n.checked_add(1).ok_or(HandshakeError::State)?;
-        Ok(ct)
-    }
-
-    fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, HandshakeError> {
-        let key = self.k.as_ref().ok_or(HandshakeError::State)?;
-        let pt = aead::open(key, self.n, &self.h, ciphertext).ok_or(HandshakeError::Decrypt)?;
-        self.n = self.n.checked_add(1).ok_or(HandshakeError::State)?;
-        Ok(pt)
     }
 }
 
@@ -155,8 +91,6 @@ pub struct ResponderReady {
 /// Both messages are done. `INITIATOR` selects which `Split` half is send.
 pub struct Established<const INITIATOR: bool> {
     sym: Sym,
-    #[cfg(test)]
-    pub(crate) ck_after_ee: Zeroizing<[u8; HASH_LEN]>,
 }
 
 impl Initiator {
@@ -199,8 +133,6 @@ impl Initiator {
             return Err(HandshakeError::Decrypt);
         }
         self.sym.mix_key(shared.as_bytes());
-        #[cfg(test)]
-        let ck_after_ee = Zeroizing::new(*self.sym.ck);
         let ct_end = 32 + ML_KEM_768_CT_LEN + TAG_LEN;
         let ct_plain = self.sym.decrypt_and_hash(&message2[32..ct_end])?;
         if ct_plain.len() != ML_KEM_768_CT_LEN {
@@ -217,11 +149,7 @@ impl Initiator {
         if !payload.is_empty() {
             return Err(HandshakeError::State);
         }
-        Ok(Established {
-            sym: self.sym,
-            #[cfg(test)]
-            ck_after_ee,
-        })
+        Ok(Established { sym: self.sym })
     }
 
     #[cfg(test)]
@@ -277,11 +205,6 @@ impl Responder {
             remote_ek,
         })
     }
-
-    #[cfg(test)]
-    pub(crate) fn chaining_key(&self) -> [u8; HASH_LEN] {
-        *self.sym.ck
-    }
 }
 
 impl ResponderReady {
@@ -318,8 +241,6 @@ impl ResponderReady {
             return Err(HandshakeError::Decrypt);
         }
         self.sym.mix_key(shared.as_bytes());
-        #[cfg(test)]
-        let ck_after_ee = Zeroizing::new(*self.sym.ck);
         let (ss, ct) = self
             .remote_ek
             .try_encaps_with_rng(rng)
@@ -339,31 +260,21 @@ impl ResponderReady {
         if msg.len() != MESSAGE2_LEN {
             return Err(HandshakeError::Length);
         }
-        Ok((
-            Established {
-                sym: self.sym,
-                #[cfg(test)]
-                ck_after_ee,
-            },
-            msg,
-        ))
+        Ok((Established { sym: self.sym }, msg))
     }
 }
 
 impl<const INITIATOR: bool> Established<INITIATOR> {
-    pub fn split(mut self) -> (SendHalf, RecvHalf) {
-        let ck = std::mem::replace(&mut self.sym.ck, Zeroizing::new([0u8; HASH_LEN]));
-        let (first, second) = aead::hkdf(&ck, &[]);
-        if INITIATOR {
-            halves(ck, first, second)
+    /// The record halves for this role. Dropping them drops the session.
+    #[must_use = "the record halves are the session"]
+    pub fn split(self) -> (SendHalf, RecvHalf) {
+        let role = if INITIATOR {
+            SplitRole::Initiator
         } else {
-            halves(ck, second, first)
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn chaining_key(&self) -> [u8; HASH_LEN] {
-        *self.sym.ck
+            SplitRole::Responder
+        };
+        let (send, recv) = self.sym.into_directions(role);
+        channel::session(send, recv)
     }
 }
 
@@ -403,8 +314,7 @@ impl CryptoRng for FillRng {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aead::hash;
-    use crate::channel::REKEY_NONCES;
+    use shekyl_noise::REKEY_NONCES;
 
     fn hex_of(bytes: &[u8]) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -433,15 +343,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_name_is_the_initial_chaining_key() {
+    fn protocol_name_does_not_fit_in_the_hash() {
         assert!(PROTOCOL_NAME.len() > HASH_LEN);
-        let ck = Responder::new(&nid()).chaining_key();
-        // MixHash(prologue) moves `h` and not `ck`.
-        assert_eq!(ck, hash(PROTOCOL_NAME));
-        assert_eq!(
-            hex_of(&ck),
-            "c349a55a6b5c0428654e131abf703a8f9a223cb0512dabbca0187cd23c901bba"
-        );
     }
 
     #[test]
@@ -538,155 +441,23 @@ mod tests {
         let (ini, resp, m1, m2) = pinned_pair();
         assert_eq!(m1.len(), MESSAGE1_LEN);
         assert_eq!(m2.len(), MESSAGE2_LEN);
-        assert_eq!(ini.ck_after_ee, resp.ck_after_ee);
-        assert_eq!(ini.chaining_key(), resp.chaining_key());
-        assert_ne!(*ini.ck_after_ee, ini.chaining_key());
-        assert_eq!(
-            hex_of(&ini.ck_after_ee[..]),
-            "02f20a44382bf0d80ba404acaacdebcb82a931e6a0d09d81ecdb8aac201b9236"
-        );
-
         assert_eq!(hex_of(&m1), include_str!("kat_m1.hex").trim());
-        assert_eq!(
-            hex_of(&ini.chaining_key()),
-            "aa12aef4d4c33f500f4798ec3787281d0e236e5dbe3d2711902f635ab7019763"
-        );
         assert_eq!(hex_of(&m2), include_str!("kat_m2.hex").trim());
 
         let (mut a_send, mut a_recv) = ini.split();
         let (mut b_send, mut b_recv) = resp.split();
-        let (ck, k) = a_send.ck_and_k();
-        assert_eq!(ck, b_recv.ck_and_k().0);
-        assert_eq!(k, b_recv.ck_and_k().1);
-        assert_ne!(ck, k);
-        assert_eq!(
-            hex_of(&k),
-            "149dfa9c12e1b59a8dd22c9768a9ea3d4821ffb20aff0ddfde5680c886891370"
-        );
-
         for i in 0..REKEY_NONCES / 2 {
             let ct = a_send.seal(&[i as u8]).unwrap();
             assert_eq!(b_recv.open_one(&ct).unwrap().0, vec![i as u8]);
         }
-        let (ck_after, k_after) = a_send.ck_and_k();
-        assert_ne!(ck_after, ck);
-        assert_eq!(ck_after, b_recv.ck_and_k().0);
-        assert_eq!(k_after, b_recv.ck_and_k().1);
         for i in 0..REKEY_NONCES / 2 {
             let ct = b_send.seal(&[i as u8]).unwrap();
             assert_eq!(a_recv.open_one(&ct).unwrap().0, vec![i as u8]);
         }
-        let (ck_back, k_back) = b_send.ck_and_k();
-        assert_eq!(ck_back, a_recv.ck_and_k().0);
-        assert_eq!(k_back, a_recv.ck_and_k().1);
-        assert_eq!(
-            hex_of(&ck_after),
-            "65f18eb7ce1929333b118ed5a9d35a6f00857f80e49409598848f2438a4f52c4"
-        );
-        assert_eq!(
-            hex_of(&k_after),
-            "50c5ecd6feb1f40d4be1dce0309789c6c2e8a60f2188812090f7c2c56f0b2223"
-        );
-        assert_eq!(
-            hex_of(&ck_back),
-            "8f3c7d5c411c203dd55aa134d6a11b04a8a36ee50a0cb990915be4a082ca4655"
-        );
-        assert_eq!(
-            hex_of(&k_back),
-            "2ece957080019fedc1e7d21bf46dce09ac2619495194edd54c35ef0280d31e4a"
-        );
         let record = a_send.seal(&[0x42]).unwrap();
         assert_eq!(
             hex_of(&record),
             "ac9785f15ea6b2a4eac23e7c168e34ca3aa62f35a5d84cdbc01eb822264aed4d43016f"
-        );
-    }
-
-    fn unhex(s: &str) -> Vec<u8> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-            .collect()
-    }
-
-    /// Cacophony `Noise_NN_25519_ChaChaPoly_BLAKE2s`, the classical pattern NNhfs
-    /// shares. Source: snow `tests/vectors/cacophony.txt` at
-    /// `8ac60f51cfe3e010c84f0a454cc575ad9204fa12`
-    /// (https://github.com/mcginty/snow/blob/8ac60f51cfe3e010c84f0a454cc575ad9204fa12/tests/vectors/cacophony.txt).
-    #[test]
-    fn cacophony_nn_blake2s_matches_sym() {
-        let prologue = unhex("4a6f686e2047616c74");
-        let init_e: [u8; 32] =
-            unhex("893e28b9dc6ca8d611ab664754b8ceb7bac5117349a4439a6b0569da977c464a")
-                .try_into()
-                .unwrap();
-        let resp_e: [u8; 32] =
-            unhex("bbdb4cdbd309f1a1f2e1456967fe288cadd6f712d65dc7b7793d5e63da6b375b")
-                .try_into()
-                .unwrap();
-        let p0 = unhex("4c756477696720766f6e204d69736573");
-        let p1 = unhex("4d757272617920526f746862617264");
-        let p2 = unhex("462e20412e20486179656b");
-        let p3 = unhex("4361726c204d656e676572");
-        let name = b"Noise_NN_25519_ChaChaPoly_BLAKE2s";
-
-        let init_sec = StaticSecret::from(init_e);
-        let resp_sec = StaticSecret::from(resp_e);
-        let init_pub = PublicKey::from(&init_sec).to_bytes();
-        let resp_pub = PublicKey::from(&resp_sec).to_bytes();
-
-        let mut ini = Sym::new(name, &prologue);
-        ini.mix_hash(&init_pub);
-        let mut msg1 = init_pub.to_vec();
-        msg1.extend(ini.encrypt_and_hash(&p0).unwrap());
-        assert_eq!(
-            hex_of(&msg1),
-            "ca35def5ae56cec33dc2036731ab14896bc4c75dbb07a61f879f8e3afa4c79444c756477696720766f6e204d69736573"
-        );
-
-        let mut resp = Sym::new(name, &prologue);
-        resp.mix_hash(&init_pub);
-        assert_eq!(resp.decrypt_and_hash(&msg1[32..]).unwrap(), p0);
-        resp.mix_hash(&resp_pub);
-        let shared = resp_sec.diffie_hellman(&PublicKey::from(init_pub));
-        resp.mix_key(shared.as_bytes());
-        let mut msg2 = resp_pub.to_vec();
-        msg2.extend(resp.encrypt_and_hash(&p1).unwrap());
-        assert_eq!(
-            hex_of(&msg2),
-            "95ebc60d2b1fa672c1f46a8aa265ef51bfe38e7ccb39ec5be34069f144808843ff34a6759d06e7733c83aeb5556c15bc762b664b3ba0556b1e7eaea4168bb6"
-        );
-
-        ini.mix_hash(&resp_pub);
-        let shared = init_sec.diffie_hellman(&PublicKey::from(resp_pub));
-        ini.mix_key(shared.as_bytes());
-        assert_eq!(ini.decrypt_and_hash(&msg2[32..]).unwrap(), p1);
-        assert_eq!(
-            hex_of(&ini.h),
-            "a621e3943a29c1d984b43727697fbec096107d0b569031ac7e0f1131de19f4f4"
-        );
-
-        let ini_ck = *ini.ck;
-        let resp_ck = *resp.ck;
-        let (ini_send, _) = Established::<true> {
-            sym: ini,
-            ck_after_ee: Zeroizing::new(ini_ck),
-        }
-        .split();
-        let (resp_send, _) = Established::<false> {
-            sym: resp,
-            ck_after_ee: Zeroizing::new(resp_ck),
-        }
-        .split();
-        let t0 = crate::aead::seal(&ini_send.ck_and_k().1, 0, &[], &p2).unwrap();
-        let t1 = crate::aead::seal(&resp_send.ck_and_k().1, 0, &[], &p3).unwrap();
-        assert_eq!(
-            hex_of(&t0),
-            "79285da88da3535f52b07b70006c85706de7ddb1fd3dddac995b7e"
-        );
-        assert_eq!(
-            hex_of(&t1),
-            "ffdad3a7f0db4c39077f223659c5c1d107666405566ecdf4ab53bf"
         );
     }
 }

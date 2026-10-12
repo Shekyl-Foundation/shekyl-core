@@ -336,7 +336,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             // halt the writer against the wrong table.
             Corrupt::HoleBelowTip { at: _, record } => StoreInvariant::CellCorrupt {
                 key: match record {
-                    PerHeightRecord::Block => "block_info",
+                    // The header record is a projection of the same row
+                    // (DRS-E5 `E5-13`): a hole under `header_at` is a
+                    // hole in `block_info`.
+                    PerHeightRecord::Block | PerHeightRecord::Header => "block_info",
                     PerHeightRecord::CurveTreeRoot => "curve_tree_roots",
                     PerHeightRecord::LeafCount => "curve_tree_leaf_counts",
                     PerHeightRecord::Outputs => "blocks",
