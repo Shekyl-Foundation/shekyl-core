@@ -504,6 +504,7 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
 }
 
 mod assert;
+pub mod bundle;
 mod views;
 
 pub use assert::{

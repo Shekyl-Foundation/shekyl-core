@@ -325,8 +325,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // 2026-10-08: CEN-B7 (the one-time warning on a block version above
     // the last scheduled one) went to bucket 3 with the hard-fork
     // mechanism: a higher version is refused by B1, and there is nothing
-    // to warn about.
-    assert_eq!(CenRow::ALL.len(), 153);
+    // to warn about. 153 → 162 on 2026-10-12: CEN-J29–J37, the serve-credit
+    // bundle's nine admission rows, minted `pending` with the pure verifier
+    // that names them as refusals (`archival/bundle.rs`, STAGED — no rule
+    // type is bound until `SO-D12`'s cutover).
+    assert_eq!(CenRow::ALL.len(), 162);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

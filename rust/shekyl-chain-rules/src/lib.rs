@@ -155,6 +155,14 @@ pub use archival::{
     DrawableSet, EpochClose, EpochGather, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement,
     Slash,
 };
+// The serve-credit bundle rule (`archival/bundle.rs`): STAGED. The
+// verifier and its view trait are exported for the lanes that wire them
+// (`SO-D12`'s cutover, DRS-E5's queue); `form` and `validate` do not call
+// them.
+pub use archival::{
+    check_section, open_body, verify_bundle, Admitted, BundleInvalid, BundleRefused,
+    BundleUnanswered, BundleView, DerivedDraw, SectionRefused,
+};
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
