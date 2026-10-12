@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use shekyl_p_fetch::{ExpectedShard, FetchTarget, ServingEndpoint};
-use shekyl_p_serve::{PServeEndpoint, PassSigner, TestKeySigner};
+use shekyl_p_serve::{PServeEndpoint, PassSigner, TestKeySigner, IDENTITY_ENVELOPE_LEN};
 use shekyl_socks::accept_userpass;
 use shekyl_sp_t3_spike::fixture::{FixtureShardProvider, FramedObject, LEAF_BYTES};
 use shekyl_sp_t3_spike::harness::{ClientLeg, APPARATUS_OWN_HEIGHT};
@@ -82,7 +82,7 @@ fn payload() -> Arc<[u8]> {
 async fn persona(signer: Arc<TestKeySigner>) -> (PServeEndpoint, SocketAddr) {
     let ep = PServeEndpoint::bind(
         Arc::new(FixtureShardProvider::new(payload())),
-        signer as Arc<dyn PassSigner>,
+        signer as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
     )
     .await
     .expect("bind endpoint");

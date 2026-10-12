@@ -10,7 +10,7 @@
 //! reason.
 
 use super::*;
-use crate::countersign::{PassKey, SignRefused, TestKeySigner};
+use crate::countersign::{PassKey, SignRefused, TestKeySigner, IDENTITY_ENVELOPE_LEN};
 use crate::provider::{ProviderError, ShardBody};
 use shekyl_archival_retention::pass_anchor::{
     pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
@@ -47,9 +47,12 @@ fn header_line(bytes: &[u8; PASS_REQUEST_HEADER_LEN]) -> String {
 /// returned so a test can verify the countersignature or move the height.
 async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeySigner>) {
     let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
-        .await
-        .expect("bind");
+    let ep = PServeEndpoint::bind(
+        provider,
+        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+    )
+    .await
+    .expect("bind");
     (ep, signer)
 }
 
@@ -105,7 +108,7 @@ fn parse_served(response: &[u8]) -> Served {
         .expect("response has a head");
     let head = String::from_utf8_lossy(&response[..end]).to_string();
     let after_head = &response[end + 4..];
-    let (body, sig) = after_head.split_at(after_head.len() - SIGNATURE_ENVELOPE_LEN);
+    let (body, sig) = after_head.split_at(after_head.len() - IDENTITY_ENVELOPE_LEN);
     let signature =
         HybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature");
     Served {
@@ -162,7 +165,7 @@ fn good_get_shard_0() -> String {
 /// The `len` payload bytes a 200 response carries: the ones immediately
 /// ahead of the countersignature envelope that closes it.
 fn payload_tail(response: &[u8], len: usize) -> &[u8] {
-    let end = response.len() - SIGNATURE_ENVELOPE_LEN;
+    let end = response.len() - IDENTITY_ENVELOPE_LEN;
     &response[end - len..end]
 }
 
@@ -520,7 +523,7 @@ async fn a_multi_chunk_body_arrives_whole_and_in_order() {
     let (ep, _) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let r = fetch(ep.addr(), "/shard/0").await;
     let Served { head, body, .. } = parse_served(&r);
-    let expected_len = SIGNATURE_ENVELOPE_LEN + payload.len();
+    let expected_len = IDENTITY_ENVELOPE_LEN + payload.len();
     assert!(head.contains(&format!("content-length: {expected_len}")));
     assert_eq!(body, payload);
 }
@@ -602,7 +605,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     assert_eq!(body, payload);
     assert_eq!(
         r.len() - (head.len() + 4),
-        SIGNATURE_ENVELOPE_LEN + payload.len()
+        IDENTITY_ENVELOPE_LEN + payload.len()
     );
 }
 
@@ -651,7 +654,7 @@ async fn an_unreadable_height_renders_the_503_and_counts_a_lookup_failure() {
     // in `lookup_failure_count` (a store read that failed), not in
     // `sign_failure_count` and not silently in neither.
     struct Storeless(Arc<TestKeySigner>);
-    impl PassKey for Storeless {
+    impl PassKey<IDENTITY_ENVELOPE_LEN> for Storeless {
         fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
             self.0.ready(shard_id, anchor_height)
         }
@@ -662,13 +665,13 @@ async fn an_unreadable_height_renders_the_503_and_counts_a_lookup_failure() {
             self.0.sign_pass(m)
         }
     }
-    impl PassSigner for Storeless {
+    impl PassSigner<IDENTITY_ENVELOPE_LEN> for Storeless {
         fn own_height(&self) -> Option<BlockHeight> {
             None
         }
     }
     let key = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let signer: Arc<dyn PassSigner> = Arc::new(Storeless(Arc::clone(&key)));
+    let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> = Arc::new(Storeless(Arc::clone(&key)));
     let ep = PServeEndpoint::bind(FixtureProvider::new([(0, filler(128, 1))]), signer)
         .await
         .expect("bind");
@@ -925,3 +928,6 @@ mod bench_seam;
 
 #[path = "serve_wire_pin_tests.rs"]
 mod wire_pin;
+
+#[path = "serve_receipt_width_tests.rs"]
+mod receipt_width;

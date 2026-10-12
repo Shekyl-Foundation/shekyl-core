@@ -15,11 +15,98 @@
 //! values owned by `shekyl_archival_retention::pass_anchor`; this module
 //! only pairs them with a signer.
 //!
+//! ## The envelope has a width, and the width is the scheme
+//!
+//! The countersignature closes the response as a fixed-width envelope, and
+//! that width is the canonical length of one hybrid scheme's signature.
+//! [`PassKey`] and [`PassSigner`] are generic over it: `PassKey<W>` signs
+//! with the scheme whose signature is `W` bytes, and the serve loop it is
+//! handed to writes a `W`-byte envelope, declares it in the content length
+//! and fills `W` bytes of refusal trailer. Nothing in the loop names a
+//! width of its own.
+//!
+//! Two widths exist, and [`EnvelopeWidth`] is sealed over them:
+//!
+//! | Width | Scheme | Key | Status |
+//! | --- | --- | --- | --- |
+//! | [`IDENTITY_ENVELOPE_LEN`] (3,385) | 1, Ed25519 + ML-DSA-65 | the bond identity key | **live**: every production signer |
+//! | [`RECEIPT_ENVELOPE_LEN`] (1,356) | 3, Ed25519 + FN-DSA-1024 | the persona's receipt key | **STAGED**: no production endpoint is bound at it (`FN_DSA_HYBRID.md` §9) |
+//!
+//! The width decides the signature type, so the two cannot disagree: a key
+//! declared at one width cannot return the other scheme's signature, and a
+//! width that is neither can have no key and no endpoint.
+//!
+//! ```compile_fail
+//! // A width that is no scheme's signature length has no envelope: no
+//! // endpoint can be bound at it.
+//! use std::sync::Arc;
+//! use shekyl_p_serve::{PServeEndpoint, PassSigner, ShardProvider};
+//! async fn bind(provider: Arc<dyn ShardProvider>, signer: Arc<dyn PassSigner<64>>) {
+//!     let _ = PServeEndpoint::bind(provider, signer).await;
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! // …and nothing can implement a key at it.
+//! use shekyl_p_serve::{PassKey, SignRefused};
+//! use shekyl_types::BlockHeight;
+//! struct Odd;
+//! impl PassKey<64> for Odd {
+//!     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> { Ok(()) }
+//!     fn sign_pass(&self, _: &[u8; 112]) -> Result<[u8; 64], SignRefused> {
+//!         Err(SignRefused::new("never"))
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! // A key at the receipt width cannot return an identity signature.
+//! use shekyl_crypto_pq::signature::HybridSignature;
+//! use shekyl_p_serve::{PassKey, SignRefused, RECEIPT_ENVELOPE_LEN};
+//! use shekyl_types::BlockHeight;
+//! struct Mixed;
+//! impl PassKey<RECEIPT_ENVELOPE_LEN> for Mixed {
+//!     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> { Ok(()) }
+//!     fn sign_pass(&self, _: &[u8; 112]) -> Result<HybridSignature, SignRefused> {
+//!         Err(SignRefused::new("never"))
+//!     }
+//! }
+//! ```
+//!
+//! The control for the three refusals above: the same shapes at a real
+//! width, with its own signature type, compile. A refusal that came from a
+//! misspelt import and not from the width would fail this too.
+//!
+//! ```
+//! use std::sync::Arc;
+//! use shekyl_crypto_pq::signature::HybridSignature;
+//! use shekyl_p_serve::{
+//!     PServeEndpoint, PassKey, PassSigner, ShardProvider, SignRefused, IDENTITY_ENVELOPE_LEN,
+//! };
+//! use shekyl_types::BlockHeight;
+//! struct Plain;
+//! impl PassKey<IDENTITY_ENVELOPE_LEN> for Plain {
+//!     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> { Ok(()) }
+//!     fn sign_pass(&self, _: &[u8; 112]) -> Result<HybridSignature, SignRefused> {
+//!         Err(SignRefused::new("never"))
+//!     }
+//! }
+//! async fn bind(
+//!     provider: Arc<dyn ShardProvider>,
+//!     signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+//! ) {
+//!     let _ = PServeEndpoint::bind(provider, signer).await;
+//! }
+//! ```
+//!
+//! An endpoint is bound with one signer and so at one width. There is no
+//! endpoint that answers at either.
+//!
 //! ## Who holds the key
 //!
 //! This crate holds none. [`PassSigner`] is the seam: the host supplies an
 //! object that knows the persona's current height (for the anchor gate)
-//! and can produce a `HybridSignature` over the transcript. Where that
+//! and can produce its scheme's signature over the transcript. Where that
 //! object's secret lives is the host's design — SH-2 for the bonded
 //! persona, an ephemeral keypair for tests via `TestKeySigner` (armed by
 //! the `test-signer` feature) — and the serve loop never sees more than
@@ -44,6 +131,7 @@
 use shekyl_archival_retention::pass_anchor::{
     PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_ATTESTATION,
@@ -51,10 +139,75 @@ use shekyl_crypto_pq::signature::{
 use shekyl_crypto_pq::CryptoError;
 use shekyl_types::BlockHeight;
 
-/// Length of the countersignature envelope that closes the response, after
-/// the frame: the canonical `HybridSignature` encoding, and nothing else.
-/// It is last so that holding it means the whole frame was delivered.
-pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
+/// Width of the envelope the **bond identity key** closes a response with:
+/// the canonical encoding of a hybrid scheme-1 signature (Ed25519 +
+/// ML-DSA-65), and nothing else. 3,385 bytes. The live width.
+///
+/// The envelope is last so that holding it means the whole body was
+/// delivered.
+pub const IDENTITY_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
+
+/// Width of the envelope a persona's **receipt key** closes a response
+/// with: the canonical encoding of a hybrid scheme-3 signature (Ed25519 +
+/// FN-DSA-1024). 1,356 bytes. STAGED: no production endpoint is bound at
+/// this width (`FN_DSA_HYBRID.md` §9).
+pub const RECEIPT_ENVELOPE_LEN: usize = FnDsaHybridSignature::CANONICAL_LEN;
+
+mod sealed {
+    pub trait Sealed<const W: usize> {}
+}
+
+/// The countersignature envelope, as a type to hang its widths on. Never
+/// constructed.
+pub enum PassEnvelope {}
+
+/// "The pass envelope can be `W` bytes wide": `W` is the canonical length
+/// of one hybrid scheme's signature, and [`Self::Signature`] is that
+/// scheme's signature type.
+///
+/// Sealed, with one implementation per scheme, each written with the
+/// signature type's own `CANONICAL_LEN` as `W`. So a width is a scheme and
+/// a scheme is a width: there is no way to state a `W` with another
+/// scheme's signature type, and no `W` but these two. Were the two schemes'
+/// signatures ever the same length, the two implementations would overlap
+/// and this crate would not compile, which is the right outcome: the width
+/// alone could then no longer tell a reader which scheme it holds.
+pub trait EnvelopeWidth<const W: usize>: sealed::Sealed<W> {
+    /// The signature that fills a `W`-byte envelope.
+    type Signature: Send + 'static;
+
+    /// `signature`'s canonical encoding, as the envelope. `None` if the
+    /// encoding fails or is not exactly `W` bytes, so that a short or long
+    /// envelope cannot reach the wire.
+    fn envelope(signature: &Self::Signature) -> Option<[u8; W]>;
+}
+
+impl sealed::Sealed<IDENTITY_ENVELOPE_LEN> for PassEnvelope {}
+impl EnvelopeWidth<IDENTITY_ENVELOPE_LEN> for PassEnvelope {
+    type Signature = HybridSignature;
+
+    fn envelope(signature: &HybridSignature) -> Option<[u8; IDENTITY_ENVELOPE_LEN]> {
+        signature.to_canonical_bytes().ok()?.try_into().ok()
+    }
+}
+
+impl sealed::Sealed<RECEIPT_ENVELOPE_LEN> for PassEnvelope {}
+impl EnvelopeWidth<RECEIPT_ENVELOPE_LEN> for PassEnvelope {
+    type Signature = FnDsaHybridSignature;
+
+    fn envelope(signature: &FnDsaHybridSignature) -> Option<[u8; RECEIPT_ENVELOPE_LEN]> {
+        signature.to_canonical_bytes().try_into().ok()
+    }
+}
+
+/// The signature a `W`-byte envelope carries.
+pub type EnvelopeSignature<const W: usize> = <PassEnvelope as EnvelopeWidth<W>>::Signature;
+
+/// A [`PassKey`] of the live scheme: the bond identity key's.
+pub type IdentityPassKey = dyn PassKey<IDENTITY_ENVELOPE_LEN>;
+
+/// A [`PassSigner`] of the live scheme: the bond identity key's.
+pub type IdentityPassSigner = dyn PassSigner<IDENTITY_ENVELOPE_LEN>;
 
 /// Where the persona's attestation signing key lives.
 ///
@@ -66,7 +219,13 @@ pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 /// The host supplies this; the serve loop never sees the secret. Height
 /// for the pre-sign gate is [`PassSigner::own_height`] — a signer is a
 /// key plus a height source, not a second `sign_pass`.
-pub trait PassKey: Send + Sync {
+///
+/// `W` is the width of the envelope this key's signature fills, and so the
+/// scheme it signs with ([`EnvelopeWidth`]).
+pub trait PassKey<const W: usize>: Send + Sync
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
     /// Whether this key will sign a pass for `shard_id` at `anchor_height`.
     ///
     /// Asked once per request, after the shard is opened and before the
@@ -92,7 +251,9 @@ pub trait PassKey: Send + Sync {
     /// `sign_failure_count`.
     fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused>;
 
-    /// Sign the 112-byte SF-D8 transcript under the attestation domain.
+    /// Sign the 112-byte SF-D8 transcript with this key's scheme, under
+    /// that scheme's domain for it (the attestation domain for the identity
+    /// key, the receipt domain for the receipt key).
     ///
     /// # Errors
     ///
@@ -109,7 +270,7 @@ pub trait PassKey: Send + Sync {
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused>;
+    ) -> Result<EnvelopeSignature<W>, SignRefused>;
 }
 
 /// The persona's signing seam, supplied by the host at [`bind`]: a
@@ -121,7 +282,10 @@ pub trait PassKey: Send + Sync {
 /// `sign_pass` is one hybrid sign.
 ///
 /// [`bind`]: crate::PServeEndpoint::bind
-pub trait PassSigner: PassKey {
+pub trait PassSigner<const W: usize>: PassKey<W>
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
     /// The persona's current chain height, for the SF-D5 anchor gate. A
     /// value within `L` of true is sufficient.
     ///
@@ -241,7 +405,7 @@ impl TestKeySigner {
 }
 
 #[cfg(any(test, feature = "test-signer"))]
-impl PassKey for TestKeySigner {
+impl PassKey<IDENTITY_ENVELOPE_LEN> for TestKeySigner {
     /// The ephemeral key is always resident and signs for any shard.
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
@@ -256,7 +420,79 @@ impl PassKey for TestKeySigner {
 }
 
 #[cfg(any(test, feature = "test-signer"))]
-impl PassSigner for TestKeySigner {
+impl PassSigner<IDENTITY_ENVELOPE_LEN> for TestKeySigner {
+    fn own_height(&self) -> Option<BlockHeight> {
+        Some(BlockHeight::from_raw(
+            self.height.load(std::sync::atomic::Ordering::Relaxed),
+        ))
+    }
+}
+
+/// A `PassSigner` at the **receipt** width over an ephemeral scheme-3
+/// keypair, for tests: the staged scheme's counterpart of
+/// [`TestKeySigner`], under the same `test-signer` gate and the same rule —
+/// nothing here is derived from a wallet seed and nothing here may reach a
+/// bonded persona.
+///
+/// It exists so that the serve loop and the fetch client can be exercised
+/// at the second width, each against the other and against the first:
+/// that is how "a target is one scheme" is tested from both ends.
+#[cfg(any(test, feature = "test-signer"))]
+pub struct TestReceiptKeySigner {
+    secret: shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSecretKey,
+    public: shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey,
+    height: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(any(test, feature = "test-signer"))]
+impl TestReceiptKeySigner {
+    /// A fresh random scheme-3 keypair at `height`.
+    ///
+    /// # Panics
+    ///
+    /// Only if the OS RNG fails, which is a broken host, not a test
+    /// condition.
+    #[must_use]
+    pub fn ephemeral(height: BlockHeight) -> Self {
+        let (public, secret) =
+            shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa::generate_keypair()
+                .expect("ephemeral scheme-3 keygen");
+        Self {
+            secret,
+            public,
+            height: std::sync::atomic::AtomicU64::new(height.to_raw()),
+        }
+    }
+
+    #[must_use]
+    pub fn public_key(&self) -> &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey {
+        &self.public
+    }
+}
+
+#[cfg(any(test, feature = "test-signer"))]
+impl PassKey<RECEIPT_ENVELOPE_LEN> for TestReceiptKeySigner {
+    /// The ephemeral key is always resident and signs for any shard.
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+
+    fn sign_pass(
+        &self,
+        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<FnDsaHybridSignature, SignRefused> {
+        shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa
+            .sign(
+                &self.secret,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT,
+                message,
+            )
+            .map_err(|e| SignRefused::new(e.to_string()))
+    }
+}
+
+#[cfg(any(test, feature = "test-signer"))]
+impl PassSigner<RECEIPT_ENVELOPE_LEN> for TestReceiptKeySigner {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(
             self.height.load(std::sync::atomic::Ordering::Relaxed),
@@ -307,7 +543,7 @@ mod tests {
         let sig = signer.sign_pass(&f.transcript(7, &digest)).expect("sign");
         assert_eq!(
             sig.to_canonical_bytes().unwrap().len(),
-            SIGNATURE_ENVELOPE_LEN
+            IDENTITY_ENVELOPE_LEN
         );
         let ok = verify_pass_transcript(
             signer.public_key(),

@@ -47,7 +47,7 @@ use super::{
     FixtureProvider, InMemoryServe, PServeEndpoint, ANCHOR_HASH, IN_GATE_ANCHOR, NONCE, OWN_HEIGHT,
     REFUSAL_TRAILER_BYTE,
 };
-use crate::countersign::{PassKey, PassSigner, SignRefused};
+use crate::countersign::{PassKey, PassSigner, SignRefused, IDENTITY_ENVELOPE_LEN};
 
 /// Frozen with the fixtures.
 const KEY_SEED: [u8; MASTER_SEED_BYTES] = [0x33; MASTER_SEED_BYTES];
@@ -84,7 +84,7 @@ impl PinnedKeySigner {
     }
 }
 
-impl PassKey for PinnedKeySigner {
+impl PassKey<IDENTITY_ENVELOPE_LEN> for PinnedKeySigner {
     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
@@ -106,7 +106,7 @@ impl PassKey for PinnedKeySigner {
     }
 }
 
-impl PassSigner for PinnedKeySigner {
+impl PassSigner<IDENTITY_ENVELOPE_LEN> for PinnedKeySigner {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
@@ -148,7 +148,7 @@ fn read_fixture(name: &str) -> Vec<u8> {
 async fn over_the_wire(signer: Arc<PinnedKeySigner>) -> Vec<u8> {
     let endpoint = PServeEndpoint::bind(
         FixtureProvider::new([(0, body())]),
-        signer as Arc<dyn PassSigner>,
+        signer as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
     )
     .await
     .expect("bind");

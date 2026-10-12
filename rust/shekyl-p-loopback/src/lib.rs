@@ -27,7 +27,9 @@ use std::sync::Arc;
 
 use shekyl_archival_retention::{PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN};
 use shekyl_crypto_pq::signature::HybridPublicKey;
-use shekyl_p_serve::{PassSigner, ProviderError, ShardBody, ShardProvider};
+use shekyl_p_serve::{
+    EnvelopeWidth, PassEnvelope, PassSigner, ProviderError, ShardBody, ShardProvider,
+};
 use shekyl_socks::accept_userpass;
 use shekyl_types::{ArchivalLength, BlockHeight, ShardId, TxHash, SHARD_LENGTH};
 use shekyl_wire::shard_frame::{encode_frame, rows_of, FrameTx};
@@ -174,12 +176,18 @@ impl ShardProvider for OneShard {
 ///
 /// Panics if the endpoint or the shim cannot bind a loopback port. Both
 /// are local and free; a failure is a broken test host.
-pub async fn endpoint_and_client(
+///
+/// Generic over the signer's envelope width, as the endpoint is: the shim
+/// forwards bytes and has no scheme of its own.
+pub async fn endpoint_and_client<const W: usize>(
     shard_id: u64,
     body: Arc<[u8]>,
-    signer: Arc<dyn PassSigner>,
+    signer: Arc<dyn PassSigner<W>>,
     timeouts: Timeouts,
-) -> (PServeEndpoint, PFetchClient) {
+) -> (PServeEndpoint, PFetchClient)
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
     let provider = Arc::new(OneShard { shard_id, body });
     let endpoint = PServeEndpoint::bind(provider, signer)
         .await

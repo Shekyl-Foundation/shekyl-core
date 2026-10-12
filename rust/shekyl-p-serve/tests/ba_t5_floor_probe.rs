@@ -66,7 +66,7 @@ use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{leaves_per_segment, BlockHeight};
 use shekyl_p_serve::{
     PServeEndpoint, PassKey, PassSigner, ProviderError, ShardBody, ShardProvider,
-    StoreShardProvider, TestKeySigner, REQUEST_HEADER_NAME, SIGNATURE_ENVELOPE_LEN,
+    StoreShardProvider, TestKeySigner, IDENTITY_ENVELOPE_LEN, REQUEST_HEADER_NAME,
 };
 use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_types::ShardId;
@@ -209,7 +209,7 @@ fn check_whole(shard_id: u64, out: &[u8]) {
         "the body is not the length the head declares"
     );
     assert!(
-        declared > size_of(shard_id).1 + SIGNATURE_ENVELOPE_LEN,
+        declared > size_of(shard_id).1 + IDENTITY_ENVELOPE_LEN,
         "the declared length does not cover the shard, its frame and the envelope"
     );
 }
@@ -360,7 +360,7 @@ impl Served {
         let endpoint = runtime
             .block_on(PServeEndpoint::bind(
                 Arc::clone(&provider) as Arc<dyn ShardProvider>,
-                Arc::clone(&signer) as Arc<dyn PassSigner>,
+                Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
             ))
             .expect("bind");
 

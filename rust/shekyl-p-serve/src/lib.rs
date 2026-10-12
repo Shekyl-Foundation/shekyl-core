@@ -120,12 +120,13 @@ pub mod provider;
 pub mod serve;
 pub mod serve_counters;
 
-#[cfg(any(test, feature = "test-signer"))]
-pub use countersign::TestKeySigner;
 pub use countersign::{
-    anchor_within_gate, sign_pass_transcript, PassKey, PassSigner, SignRefused,
-    SIGNATURE_ENVELOPE_LEN,
+    anchor_within_gate, sign_pass_transcript, EnvelopeSignature, EnvelopeWidth, IdentityPassKey,
+    IdentityPassSigner, PassEnvelope, PassKey, PassSigner, SignRefused, IDENTITY_ENVELOPE_LEN,
+    RECEIPT_ENVELOPE_LEN,
 };
+#[cfg(any(test, feature = "test-signer"))]
+pub use countersign::{TestKeySigner, TestReceiptKeySigner};
 pub use provider::{ProviderError, ShardBody, ShardProvider, StoreShardProvider};
 #[cfg(any(test, feature = "bench-internals"))]
 pub use serve::{prehead_in_memory, read_and_fold_in_memory, serve_one_in_memory, InMemoryServe};
