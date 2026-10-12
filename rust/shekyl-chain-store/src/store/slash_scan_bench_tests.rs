@@ -326,14 +326,7 @@ fn listing(h: u64, personas: u64) -> Vec<Listed> {
         return Vec::new();
     };
     if k < personas {
-        // Keyless joins (wire `post_kind` 0): the records' `receipt_sign_pk`
-        // is empty, as it was when `SLASHED_SNAPSHOT_BODY_KECCAK` was taken,
-        // and a keyless record's stored bytes are what they were then. The
-        // wallet's builder commits a receipt key since FN-DSA increment 3,
-        // and a keyed join here would grow each bond row by the key and
-        // move that pin for a reason the slash scan has no part in. A slash
-        // over a keyed record is the ingest's live-lane slash chain.
-        return vec![Listed::JoinKeyless { slot: slot(k) }];
+        return vec![Listed::Join { slot: slot(k) }];
     }
     if k - personas < CREDIT_BLOCKS {
         return (0..CREDITS_PER_BLOCK)
@@ -832,7 +825,13 @@ impl SlashedChain {
 /// close, so the tip holds thirteen budget rows (epochs 0–12) and twelve
 /// Σwork rows (epochs 0–11) where it held thirteen of each — one row
 /// fewer, 4 + 16 = 20 bytes, the whole delta from 18 856. Nothing else
-/// moved. *Records-was:*
+/// moved. Re-pinned 2026-10-12 with the receipt key (FN-DSA increment 3,
+/// `FN_DSA_HYBRID.md` `FND-17`): every bond record carries its persona's
+/// receipt key, 1 837 bytes fixed-width with no length prefix, and the four
+/// personas' joins commit theirs — 4 × 1 837 = 7 348 bytes, the whole delta
+/// from 18 836, the row count unchanged at 60. Nothing else moved: the slash
+/// families are spelled and asserted above, and the credit, budget and
+/// Σwork rows do not read a bond's keys. *Records-was:*
 /// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`
 /// (ARW-Q18); `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
 /// (speed factor alone); `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
@@ -841,9 +840,11 @@ impl SlashedChain {
 /// `d765602075af61f158b360063e38595dfc967138fc4b83d8a3dbf499e75fc42b`
 /// (the I13 flip, 19 396 bytes, 70 rows, until CEN-J27);
 /// `4d44488217508fac2d48422da0312ef31fdbe958935d0903832e05edb3fcb0a4`
-/// (CEN-J27, 18 856 bytes, 61 rows, until `SO-D11`).
+/// (CEN-J27, 18 856 bytes, 61 rows, until `SO-D11`);
+/// `ec2d0b760803781c389d97d7e019933ca84e5b7e01c3f067e5c8510fd797f001`
+/// (`SO-D11`, 18 836 bytes, 60 rows, until the receipt key).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "ec2d0b760803781c389d97d7e019933ca84e5b7e01c3f067e5c8510fd797f001";
+    "937f578b349f5815e27b2a6f8228a7338478b39b1ecd7556122a4b732dcafb2f";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own

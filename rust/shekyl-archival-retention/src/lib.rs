@@ -177,6 +177,7 @@ pub use pass_anchor::{
     PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
     PASS_REQUEST_HEADER_LEN,
 };
+pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 // The emission error is re-exported under a disambiguated name: the bare
 // `WireError` at this root is wire.rs's (serve-credit) type, and bond_wire's is
 // deliberately not re-exported — a crate-root import must not silently resolve

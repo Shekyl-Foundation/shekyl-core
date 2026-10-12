@@ -31,6 +31,7 @@
 //! ```text
 //! hybrid_pubkey        u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES
 //! bond_spend_pk        u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES
+//! receipt_sign_pk      [u8; 1837]                  fixed width, no length prefix
 //! endpoint             [u8; 32]
 //! join_settlement_epoch u64
 //! bonded_total         u64                         atomic units
@@ -41,21 +42,16 @@
 //! claimed_epochs       u32 n ‖ u64 × n, strictly increasing,             n ≤ MAX_CLAIMED_EPOCH_ENTRIES,
 //!                      last − first ≤ MAX_CLAIM_AGE_W_EPOCHS
 //! first_paying_height  u8 present ‖ (u64 height if present)
-//! receipt_sign_pk      absent when empty; else u32 len ‖ bytes   1 ≤ len ≤ MAX_BOND_KEY_BYTES
 //! ```
 //!
-//! # The receipt key is trailing and optional (layout 24)
+//! # The receipt key is fixed-width (layout 24)
 //!
-//! `receipt_sign_pk` sits after `bond_spend_pk` in the struct and **last**
-//! in the bytes, and a record that commits none writes nothing for it. So
-//! a keyless record's encoding is exactly what it was before the field
-//! existed: every stored row, snapshot and captured trace taken over
-//! keyless records holds those bytes still (the C++ daemon's records are
-//! all keyless — it has no receipt-form JoinMarket). The price is a layout
-//! that depends on content, and it is paid in the decoder: bytes after
-//! `first_paying_height` are a present key or a refusal, and a present key
-//! of length zero is refused, because it would be a second encoding of the
-//! keyless record.
+//! `receipt_sign_pk` is exactly `RECEIPT_SIGN_PK_LEN` (1,837) bytes in every
+//! record, so it is stored with no length prefix: a fixed-width field needs
+//! none, and a prefix would be a second place for the length to be wrong.
+//! Every record has the key — a JoinMarket has one wire form and it commits
+//! one — so there is no absent case to encode. A buffer that ends inside
+//! the key is refused under the key's name.
 //!
 //! # The v7 cross-check (ruled on PR #840)
 //!
@@ -67,10 +63,11 @@
 
 use shekyl_types::archival::{
     BadInterval, BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
-    HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket, SettlementRow,
+    HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket, ReceiptSignPk, SettlementRow,
     SettlementRowError, SigmaWorkMilli, SlashLogEntry, SlashedHolding, BLOCK_DRAWS_LEN,
     DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
-    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, SETTLEMENT_ROW_LEN,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN,
+    SETTLEMENT_ROW_LEN,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -88,6 +85,7 @@ impl Canonical for BondRecord {
     fn encode_into(&self, out: &mut Vec<u8>) {
         put_bytes(out, &self.hybrid_pubkey);
         put_bytes(out, &self.bond_spend_pk);
+        out.extend_from_slice(self.receipt_sign_pk.as_bytes());
         out.extend_from_slice(&self.endpoint);
         out.extend_from_slice(&self.join_settlement_epoch.to_raw().to_le_bytes());
         out.extend_from_slice(&self.bonded_total.to_raw().to_le_bytes());
@@ -118,11 +116,6 @@ impl Canonical for BondRecord {
                 out.extend_from_slice(&h.to_raw().to_le_bytes());
             }
         }
-        // Trailing and optional: a keyless record ends here, byte for byte
-        // as it did before the field existed (module docs).
-        if !self.receipt_sign_pk.is_empty() {
-            put_bytes(out, &self.receipt_sign_pk);
-        }
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
@@ -139,6 +132,11 @@ impl Canonical for BondRecord {
                 "bond_spend_pk exceeds MAX_BOND_KEY_BYTES",
             )?
             .to_vec();
+        let receipt_sign_pk = ReceiptSignPk::from_slice(r.take(
+            RECEIPT_SIGN_PK_LEN,
+            "buffer ends inside the receipt_sign_pk",
+        )?)
+        .ok_or_else(|| r.invalid("unreachable: take yields the length asked for"))?;
         let endpoint = r.array::<32>("buffer ends inside the endpoint")?;
         let join_settlement_epoch = SettlementEpoch::from_raw(r.u64()?);
         let bonded_total = AtomicUnits::from_raw(r.u64()?);
@@ -213,25 +211,6 @@ impl Canonical for BondRecord {
                 Some(height)
             }
             _ => return Err(r.invalid("first-paying-height presence byte is neither 0 nor 1")),
-        };
-        // Nothing left: a keyless record. Fewer than a length prefix left:
-        // not a field, so trailing bytes. Otherwise a present receipt key,
-        // which is never empty — the empty key's one encoding is absence.
-        let receipt_sign_pk = if r.is_empty() {
-            Vec::new()
-        } else if r.remaining() < 4 {
-            return Err(r.invalid("trailing bytes after the record"));
-        } else {
-            let key = r.bytes_bounded(
-                MAX_BOND_KEY_BYTES,
-                "receipt_sign_pk exceeds MAX_BOND_KEY_BYTES",
-            )?;
-            if key.is_empty() {
-                return Err(r.invalid(
-                    "receipt_sign_pk is present and empty; an empty key is encoded by absence",
-                ));
-            }
-            key.to_vec()
         };
         if !r.is_empty() {
             return Err(r.invalid("trailing bytes after the record"));

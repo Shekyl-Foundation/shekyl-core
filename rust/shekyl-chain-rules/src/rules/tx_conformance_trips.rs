@@ -196,21 +196,9 @@ pub(super) fn j12_short_bond_spend_pk() -> Transaction {
         PQC_HYBRID_SINGLE_KEY_LEN,
         BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xC0; 5],
-            receipt_sign_pk: None,
-            endpoint: [0xE0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
-        },
-    ))
-}
-
-/// A JoinMarket whose receipt key is five bytes: canonical in its identity
-/// key, hint and `bond_spend_pk`, so J11 and J12 pass and the receipt key is
-/// the one thing wrong.
-pub(super) fn j28_short_receipt_sign_pk() -> Transaction {
-    spend2_plus(bond_post_input(
-        PQC_HYBRID_SINGLE_KEY_LEN,
-        BondPostKind::JoinMarket {
-            bond_spend_pk: vec![0xC0; PQC_HYBRID_SINGLE_KEY_LEN],
-            receipt_sign_pk: Some(vec![0xC1; 5]),
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xE0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
         },
     ))

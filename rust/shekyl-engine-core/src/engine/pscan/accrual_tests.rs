@@ -117,12 +117,12 @@ fn retire_persona_prunes_atomically_and_round_trips() {
     r1.bond_post_matches.push(BondPostMatch {
         height: BlockHeight::from_raw(4),
         p_canonical_id: id,
-        post_kind: 0,
+        post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
     });
     r1.bond_post_matches.push(BondPostMatch {
         height: BlockHeight::from_raw(6),
         p_canonical_id: other,
-        post_kind: 0,
+        post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
     });
     acc.ingest(&r1, &VerifiedBatch::for_test(0, 10, [0x01; 32]))
         .expect("ingest");
@@ -586,23 +586,23 @@ fn record_release_is_idempotent_and_durable() {
     assert_eq!(back.pending_releases().get(&id), Some(&epoch(5)));
 }
 
-/// The dispatch driver's confirmation set reads a JoinMarket in either wire
-/// form: a match recorded with `post_kind` 5 (the JoinMarket that commits a
-/// receipt key) confirms its persona exactly as `post_kind` 0 does, and a
-/// Release (2) or a refused byte (3, 4) confirms nobody.
+/// The dispatch driver's confirmation set reads a JoinMarket by its wire
+/// byte, 5: such a match confirms its persona, and a match recorded with
+/// the retired keyless byte (0), a Release (2) or a refused byte (3, 4)
+/// confirms nobody.
 ///
-/// Red edit: compare `m.post_kind` to `BOND_POST_KIND_JOINMARKET` alone in
-/// `confirmed_join_market_personas`, and the wallet never retires the
-/// pending post of a bond its own builder posted.
+/// Red edit: compare `m.post_kind` to `0` in
+/// `confirmed_join_market_personas` — the byte a JoinMarket had before the
+/// receipt key became mandatory — and the wallet never retires the pending
+/// post of a bond its own builder posted.
 #[test]
-fn a_receipt_form_join_market_match_confirms_its_persona() {
-    let keyless = PCanonicalId::from_bytes([0x10; 32]);
-    let receipt = PCanonicalId::from_bytes([0x15; 32]);
+fn a_join_market_match_confirms_its_persona_and_byte_0_does_not() {
+    let joined = PCanonicalId::from_bytes([0x15; 32]);
     let mut acc = PScanAccrual::genesis();
     let mut r1 = step(0, 10, &[]);
     for (height, id, post_kind) in [
-        (2u64, keyless, 0u8),
-        (3, receipt, 5),
+        (2u64, PCanonicalId::from_bytes([0x10; 32]), 0u8),
+        (3, joined, 5),
         (4, PCanonicalId::from_bytes([0x12; 32]), 2),
         (5, PCanonicalId::from_bytes([0x13; 32]), 3),
         (6, PCanonicalId::from_bytes([0x14; 32]), 4),
@@ -617,6 +617,6 @@ fn a_receipt_form_join_market_match_confirms_its_persona() {
         .expect("ingest");
     assert_eq!(
         acc.confirmed_join_market_personas(),
-        std::collections::BTreeSet::from([keyless, receipt])
+        std::collections::BTreeSet::from([joined])
     );
 }

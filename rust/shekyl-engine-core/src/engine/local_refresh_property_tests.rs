@@ -104,7 +104,9 @@ fn test_bond_tx(
         keys,
         shekyl_wire::transaction::BondPostKind::JoinMarket {
             bond_spend_pk: Vec::new(),
-            receipt_sign_pk: None,
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xEE; 32],
         },
     )

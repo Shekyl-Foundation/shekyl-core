@@ -102,11 +102,9 @@ pub fn debit_auth_pin(
 pub fn requires_cold_authority(post_kind: BondPostKind, _bond_debit: u64) -> bool {
     match post_kind {
         BondPostKind::Release => true,
-        // A JoinMarket authorizes with the identity key in either wire form;
-        // the receipt key it may carry is committed, never an authorizer.
-        BondPostKind::JoinMarket | BondPostKind::JoinMarketReceipt | BondPostKind::Reinstate => {
-            false
-        }
+        // A JoinMarket authorizes with the identity key; the receipt key it
+        // carries is committed, never an authorizer.
+        BondPostKind::JoinMarket | BondPostKind::Reinstate => false,
     }
 }
 
@@ -256,28 +254,5 @@ mod tests {
                 "{kind:?}/{debit}"
             );
         }
-    }
-
-    /// A JoinMarket that carries a receipt key is a JoinMarket to the
-    /// authorizer: no cold authority, whatever the debit argument, and the
-    /// composed gate refuses it before the keys are looked at.
-    #[test]
-    fn a_receipt_join_market_needs_no_cold_authority() {
-        let kind = BondPostKind::JoinMarketReceipt;
-        assert!(kind.is_join_market());
-        for debit in [0u64, 1, u64::MAX] {
-            assert_eq!(
-                requires_cold_authority(kind, debit),
-                requires_cold_authority(BondPostKind::JoinMarket, debit)
-            );
-            assert!(!requires_cold_authority(kind, debit));
-        }
-        assert_eq!(
-            cold_authority_pin(kind, 0, &canonical(7), &canonical(7)),
-            Err(ColdAuthorityError::NotAColdAuthorityPost {
-                post_kind: kind,
-                bond_debit: 0
-            })
-        );
     }
 }

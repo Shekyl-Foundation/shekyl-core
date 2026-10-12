@@ -282,7 +282,9 @@ fn emission_mixed_with_bond_post_rejected() {
         p_canonical_id: PCanonicalId::from_bytes([0x02; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0x03; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
-            receipt_sign_pk: None,
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,

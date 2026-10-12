@@ -959,13 +959,12 @@ fn i18_is_vacuous_on_a_serve_credit_and_does_not_reach_for_its_countersignature(
 /// §6.3, "the identity key's signature on the JoinMarket post binds it").
 /// No new signature and no new check: the existing one refuses.
 ///
-/// The fixture join commits a receipt key and is signed at anchoring, so
-/// the persona's identity signature is over the key. It verifies; then
+/// The fixture join commits its persona's receipt key and is signed at
+/// anchoring, so the identity signature is over the key. It verifies; then
 /// **one flipped bit of the receipt key**, in the Ed25519 half and in the
-/// FN-DSA half, with nothing re-signed, is refused under I18 at the post's
-/// input. The key bytes here are not a parseable key and need not be: this
-/// is the signature's coverage, on the sequence that verifies it — CEN-J28
-/// is `tx_form`'s, and a substituted key that *does* parse is exactly the
+/// FN-DSA half, with nothing re-signed, is refused under I18. This is the
+/// signature's coverage, on the sequence that verifies it — CEN-J28 is
+/// `tx_form`'s, and a substituted key that *does* parse is exactly the
 /// case this row, and only this row, refuses.
 ///
 /// Red edit: drop `receipt_sign_pk` from `BondPost::write` in
@@ -973,9 +972,10 @@ fn i18_is_vacuous_on_a_serve_credit_and_does_not_reach_for_its_countersignature(
 /// flipped posts verify.
 #[test]
 fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
-    use shekyl_wire::transaction::{BondPostKind, BOND_POST_RECEIPT_KEY_LEN};
+    use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
+    use shekyl_wire::transaction::BondPostKind;
 
-    fn receipt_key_of(tx: &mut Transaction) -> (usize, &mut Vec<u8>) {
+    fn receipt_key_of(tx: &mut Transaction) -> (usize, &mut ReceiptSignPk) {
         tx.prefix
             .inputs
             .iter_mut()
@@ -983,10 +983,9 @@ fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
             .find_map(|(index, item)| match item {
                 Input::BondPost(post) => match &mut post.kind {
                     BondPostKind::JoinMarket {
-                        receipt_sign_pk: Some(key),
-                        ..
-                    } => Some((index, key)),
-                    _ => None,
+                        receipt_sign_pk, ..
+                    } => Some((index, receipt_sign_pk)),
+                    BondPostKind::Other(_) => None,
                 },
                 _ => None,
             })
@@ -994,18 +993,7 @@ fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
     }
 
     let chain = spendable_chain();
-    let mut unsigned = join();
-    for item in &mut unsigned.prefix.inputs {
-        if let Input::BondPost(post) = item {
-            if let BondPostKind::JoinMarket {
-                receipt_sign_pk, ..
-            } = &mut post.kind
-            {
-                *receipt_sign_pk = Some(vec![0x5c; BOND_POST_RECEIPT_KEY_LEN]);
-            }
-        }
-    }
-    let signed = anchored_on(&chain, unsigned);
+    let signed = anchored_on(&chain, join());
 
     let mut coverage = RuleCoverage::EMPTY;
     let cx = TxContext::derive(&signed, TxSlot::Lone, &mut coverage).expect("a join classifies");
@@ -1015,10 +1003,10 @@ fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
 
     // Byte 8 is the first of the Ed25519 half, the last byte is in the
     // FN-DSA half (the canonical encoding's layout).
-    for at in [8usize, BOND_POST_RECEIPT_KEY_LEN - 1] {
+    for at in [8usize, RECEIPT_SIGN_PK_LEN - 1] {
         let mut tampered = signed.clone();
         let (post_input, key) = receipt_key_of(&mut tampered);
-        key[at] ^= 0x01;
+        key.as_bytes_mut()[at] ^= 0x01;
         assert_ne!(tampered, signed);
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(&tampered, TxSlot::Lone, &mut coverage)

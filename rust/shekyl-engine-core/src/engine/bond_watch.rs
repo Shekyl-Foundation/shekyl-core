@@ -41,11 +41,10 @@ pub(crate) struct BondPostObservation {
     /// The posting persona's canonical id, lifted from the wire `[u8; 32]`
     /// once, at the wire→domain boundary.
     pub(crate) p_canonical_id: PCanonicalId,
-    /// Wire post-kind byte (`0x00` = JoinMarket, `0x05` = JoinMarket with a
-    /// receipt key; otherwise the `Other` tag), via [`post_kind_byte`]. Ask
-    /// "is this a JoinMarket?" through
+    /// Wire post-kind byte (`0x05` = JoinMarket; otherwise the `Other`
+    /// tag), via [`post_kind_byte`]. Ask "is this a JoinMarket?" through
     /// [`is_join_market_post_kind`](shekyl_wire::transaction::is_join_market_post_kind),
-    /// never by comparing to one of the two bytes.
+    /// never by comparing to the byte.
     pub(crate) post_kind: u8,
 }
 
@@ -66,27 +65,16 @@ pub(crate) fn bond_post_observations(
     })
 }
 
-/// The wire post-kind byte (JoinMarket's dense tag is `0x00`, or `0x05` when
-/// the post carries a receipt key; `shekyl_wire::transaction` §9.11).
-/// Single-sourced from the wire crate's own
+/// The wire post-kind byte (JoinMarket's tag is `0x05`,
+/// `shekyl_wire::transaction` §9.11). Single-sourced from the wire crate's own
 /// [`BOND_POST_KIND_JOINMARKET`](shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET)
-/// and
-/// [`BOND_POST_KIND_JOINMARKET_RECEIPT`](shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET_RECEIPT)
 /// so the recorded byte and the confirmation filter in
 /// [`PScanAccrual`](super::pscan::accrual::PScanAccrual) cannot drift from the
-/// wire definition. The byte recorded is the byte on the wire; both are a
-/// JoinMarket to every filter
-/// ([`is_join_market_post_kind`](shekyl_wire::transaction::is_join_market_post_kind)).
+/// wire definition; every filter asks
+/// [`is_join_market_post_kind`](shekyl_wire::transaction::is_join_market_post_kind).
 pub(crate) fn post_kind_byte(kind: &BondPostKind) -> u8 {
     match kind {
-        BondPostKind::JoinMarket {
-            receipt_sign_pk: None,
-            ..
-        } => shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
-        BondPostKind::JoinMarket {
-            receipt_sign_pk: Some(_),
-            ..
-        } => shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET_RECEIPT,
+        BondPostKind::JoinMarket { .. } => shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
         BondPostKind::Other(b) => *b,
     }
 }
@@ -514,47 +502,42 @@ mod tests {
         }
     }
 
-    /// A JoinMarket is a sighting in **either** wire form: the keyless post
-    /// (`post_kind` 0) and the one that commits a receipt key (`post_kind`
-    /// 5, what the wallet's own builder emits). The recorded byte is the
-    /// wire's; the filter is the wire crate's JoinMarket predicate, so the
-    /// wallet cannot build a form it then fails to recognize. A Release and
-    /// the two refused bytes (3, 4) are not sightings.
+    /// A JoinMarket (`post_kind` 5, what the wallet's own builder emits) is
+    /// a sighting. The recorded byte is the wire's and the filter is the
+    /// wire crate's JoinMarket predicate, so the wallet cannot build a post
+    /// it then fails to recognize. A Release, the retired keyless byte (0)
+    /// and the two refused bytes (3, 4) are not sightings.
     ///
-    /// Red edit: compare `obs.post_kind` to `BOND_POST_KIND_JOINMARKET`
-    /// alone in `sightings_in`, and the receipt form stops sighting.
+    /// Red edit: compare `obs.post_kind` to `0` in `sightings_in` — the
+    /// byte a JoinMarket had before the receipt key became mandatory — and
+    /// the wallet's own bond stops sighting.
     #[test]
-    fn a_join_market_sights_in_both_wire_forms_and_nothing_else_does() {
-        use shekyl_wire::transaction::{
-            BondPostKind, BOND_POST_KIND_JOINMARKET, BOND_POST_KIND_JOINMARKET_RECEIPT,
-        };
+    fn a_join_market_sights_and_nothing_else_does() {
+        use shekyl_wire::transaction::{BondPostKind, BOND_POST_KIND_JOINMARKET};
         let id = shekyl_types::PCanonicalId::from_bytes([0x4B; 32]);
         let watch = std::collections::BTreeMap::from([(id, 7u32)]);
         let height = shekyl_types::BlockHeight::from_raw(42);
-        let join = |receipt_sign_pk| BondPostKind::JoinMarket {
+        let join = BondPostKind::JoinMarket {
             bond_spend_pk: Vec::new(),
-            receipt_sign_pk,
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5C; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xEE; 32],
         };
+        assert_eq!(BOND_POST_KIND_JOINMARKET, 5);
+        assert_eq!(super::post_kind_byte(&join), BOND_POST_KIND_JOINMARKET);
+        let tx = bond_tx(id, join);
+        let observed: Vec<_> = super::bond_post_observations(&tx).collect();
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].post_kind, 5, "the recorded byte is the wire's");
+        let sighted: Vec<_> = super::sightings_in(&tx, height, &watch).collect();
+        assert_eq!(sighted.len(), 1);
+        assert_eq!(sighted[0].slot, 7);
+        assert_eq!(sighted[0].block_height, height);
 
-        for (kind, byte) in [
-            (join(None), BOND_POST_KIND_JOINMARKET),
-            (join(Some(vec![0x5C; 4])), BOND_POST_KIND_JOINMARKET_RECEIPT),
-        ] {
-            assert_eq!(super::post_kind_byte(&kind), byte);
-            let tx = bond_tx(id, kind);
-            let observed: Vec<_> = super::bond_post_observations(&tx).collect();
-            assert_eq!(observed.len(), 1);
-            assert_eq!(
-                observed[0].post_kind, byte,
-                "the recorded byte is the wire's"
-            );
-            let sighted: Vec<_> = super::sightings_in(&tx, height, &watch).collect();
-            assert_eq!(sighted.len(), 1, "post_kind {byte} is a JoinMarket");
-            assert_eq!(sighted[0].slot, 7);
-            assert_eq!(sighted[0].block_height, height);
-        }
-        for tag in [1u8, 2, 3, 4, 6, 0x7F] {
+        // `Other(0)` is not a value the wire reads; it stands here for the
+        // byte, which no filter may take for a JoinMarket any more.
+        for tag in [0u8, 1, 2, 3, 4, 6, 0x7F] {
             let tx = bond_tx(id, BondPostKind::Other(tag));
             assert_eq!(super::post_kind_byte(&BondPostKind::Other(tag)), tag);
             assert_eq!(

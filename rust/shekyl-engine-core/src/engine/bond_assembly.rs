@@ -1122,7 +1122,9 @@ mod tests {
     fn the_wallet_produces_join_and_release_and_refuses_reinstate() {
         assert!(wire_bond_post_input(&producer_vin(BondKind::JoinMarket {
             bond_spend_pk: vec![3],
-            receipt_sign_pk: None,
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN]
+            ),
             endpoint: [4; 32],
         }))
         .is_ok());

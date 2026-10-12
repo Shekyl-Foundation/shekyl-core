@@ -7,6 +7,7 @@
 //! (DRS-E1 S-ARCH `SAR-Q3`, DRS-E4 `ARW-Q8`). Shapes only: the `Canonical`
 //! codec stays in `shekyl-store-codec`.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -23,8 +24,83 @@ use super::{
 // `ARW-Q8`) — shapes only. The `Canonical` codec is `shekyl-store-codec`'s.
 // ---------------------------------------------------------------------------
 
-/// Upper bound on the byte length of each of the bond record's key fields
-/// (`hybrid_pubkey`, `bond_spend_pk`, `receipt_sign_pk`) — the C++
+/// Canonical length of a persona's receipt key: the Ed25519 + FN-DSA-1024
+/// hybrid public key in its canonical encoding (four-byte header, two
+/// length-prefixed halves; `FN_DSA_HYBRID.md` §1). Twin of
+/// `shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey::CANONICAL_LEN`,
+/// restated because this crate holds words and depends on no cryptography;
+/// `shekyl-wire`'s `archival_arms_roundtrip` test, which sees both, holds
+/// the two equal.
+pub const RECEIPT_SIGN_PK_LEN: usize = 1837;
+
+/// A persona's receipt key as the chain carries it: exactly
+/// [`RECEIPT_SIGN_PK_LEN`] bytes, the canonical encoding of an Ed25519 +
+/// FN-DSA-1024 hybrid public key (`FN_DSA_HYBRID.md` §8).
+///
+/// The JoinMarket bond post commits it and the bond record keeps it, so the
+/// wire, the validator and both stores name the same bytes: the type lives
+/// here (rule 18, a type both stores need), and the computation over it —
+/// parsing it as a key, verifying under it — stays in `shekyl-crypto-pq`.
+///
+/// **The length is the type's; that the bytes are a key is not.** A value
+/// of this type is 1,837 bytes and nothing more is claimed. CEN-J28 is what
+/// judges a posted one a key, before it reaches a record.
+///
+/// The bytes are boxed: the key is larger than everything else in a bond
+/// post together, and inline it would make every enum and struct that
+/// carries one that much larger to move.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReceiptSignPk(Box<[u8; RECEIPT_SIGN_PK_LEN]>);
+
+impl ReceiptSignPk {
+    /// Wrap exactly [`RECEIPT_SIGN_PK_LEN`] bytes.
+    #[must_use]
+    pub fn from_bytes(bytes: [u8; RECEIPT_SIGN_PK_LEN]) -> Self {
+        Self(Box::new(bytes))
+    }
+
+    /// The key from a slice, or `None` when the slice is not exactly
+    /// [`RECEIPT_SIGN_PK_LEN`] bytes.
+    #[must_use]
+    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
+        let boxed: Box<[u8]> = bytes.into();
+        let exact: Box<[u8; RECEIPT_SIGN_PK_LEN]> = boxed.try_into().ok()?;
+        Some(Self(exact))
+    }
+
+    /// The canonical bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; RECEIPT_SIGN_PK_LEN] {
+        &self.0
+    }
+
+    /// The canonical bytes, mutably — for a fixture that needs a string
+    /// that is one edit away from a key.
+    pub fn as_bytes_mut(&mut self) -> &mut [u8; RECEIPT_SIGN_PK_LEN] {
+        &mut self.0
+    }
+}
+
+impl From<[u8; RECEIPT_SIGN_PK_LEN]> for ReceiptSignPk {
+    fn from(bytes: [u8; RECEIPT_SIGN_PK_LEN]) -> Self {
+        Self::from_bytes(bytes)
+    }
+}
+
+impl fmt::Debug for ReceiptSignPk {
+    /// The first eight bytes: enough to tell two keys apart in a failed
+    /// assertion without printing 1,837 of them.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ReceiptSignPk(")?;
+        for byte in self.0.iter().take(8) {
+            write!(f, "{byte:02x}")?;
+        }
+        f.write_str("…)")
+    }
+}
+
+/// Upper bound on the byte length of each of the bond record's two
+/// length-prefixed key fields (`hybrid_pubkey`, `bond_spend_pk`) — the C++
 /// codec's `kMaxPubkeyLen`. A **codec** cap, not the canonical length: every
 /// record is created by JoinMarket connect, whose vin serializer enforces the
 /// exact hybrid-key length; a store bounds what an untrusted decode will
@@ -268,18 +344,15 @@ pub struct BondRecord {
     /// immutable for the record's life; every later `bond_debit` verifies
     /// against this copy, never the identity key.
     pub bond_spend_pk: Vec<u8>,
-    /// The persona's receipt key: canonical `FnDsaHybridPublicKey` bytes
-    /// (Ed25519 + FN-DSA-1024, 1,837 bytes; `FN_DSA_HYBRID.md` §6), the key
-    /// every receipt this persona signs is verified under. **Empty** for a
-    /// record created by a keyless JoinMarket (wire `post_kind` `0`), which
-    /// committed none. Set once, at JoinMarket connect, from the post the
-    /// identity key signed, and never changed: Reinstate and Release do not
-    /// touch it, and no post kind exists that could (bond records are
-    /// immutable in this respect, as in `bond_spend_pk` and the endpoint).
-    /// That a non-empty value is a key is CEN-J28's, judged before connect.
-    /// At rest it is the record's trailing, optional field: an empty key is
-    /// stored as nothing (`shekyl-store-codec`'s layout notes).
-    pub receipt_sign_pk: Vec<u8>,
+    /// The persona's receipt key (`FN_DSA_HYBRID.md` §8): the key every
+    /// receipt this persona signs is verified under. Every record has one —
+    /// a JoinMarket has one wire form and it commits the key. Set once, at
+    /// JoinMarket connect, from the post the identity key signed, and never
+    /// changed: Reinstate and Release do not touch it, and no post kind
+    /// exists that could (bond records are immutable in this respect, as in
+    /// `bond_spend_pk` and the endpoint). That it is a key is CEN-J28's,
+    /// judged before connect. Stored fixed-width, with no length prefix.
+    pub receipt_sign_pk: ReceiptSignPk,
     /// The 32-byte serving endpoint, written once at JoinMarket connect. Any
     /// 32 bytes — zero is a value the vin carried, not an absence.
     pub endpoint: [u8; 32],

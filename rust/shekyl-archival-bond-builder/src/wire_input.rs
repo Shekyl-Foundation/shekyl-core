@@ -7,8 +7,8 @@
 //! [`Input::BondPost`](shekyl_wire::Input::BondPost).
 //!
 //! JoinMarket copies `bond_spend_pk` and the serving endpoint onto
-//! [`BondPostKind::JoinMarket`](shekyl_wire::BondPostKind::JoinMarket), in
-//! either wire form: the receipt key's `Option` is the same on both sides.
+//! [`BondPostKind::JoinMarket`](shekyl_wire::BondPostKind::JoinMarket); the
+//! receipt key is the same typed value on both sides.
 //! Reinstate and Release are [`BondPostKind::Other`](shekyl_wire::BondPostKind::Other)
 //! of [`BondKind::tag`]. A compact holdings descriptor copies its shard ids;
 //! a complete tree is [`Holdings::CompleteTree`](shekyl_wire::Holdings::CompleteTree).
@@ -111,7 +111,9 @@ mod tests {
         let join = post(&vin(
             BondKind::JoinMarket {
                 bond_spend_pk: vec![0xAB; 4],
-                receipt_sign_pk: None,
+                receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                    [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+                ),
                 endpoint: [0xE0; 32],
             },
             tree(),
@@ -120,7 +122,9 @@ mod tests {
             join.kind,
             BondPostKind::JoinMarket {
                 bond_spend_pk: vec![0xAB; 4],
-                receipt_sign_pk: None,
+                receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                    [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN]
+                ),
                 endpoint: [0xE0; 32],
             }
         );

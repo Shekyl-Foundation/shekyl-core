@@ -44,11 +44,6 @@ impl<'a> Reader<'a> {
         self.buf.is_empty()
     }
 
-    /// How many bytes have not been consumed.
-    pub const fn remaining(&self) -> usize {
-        self.buf.len()
-    }
-
     /// The next `n` bytes, or `Invalid(what)` if fewer remain.
     pub fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8], CodecError> {
         if self.buf.len() < n {

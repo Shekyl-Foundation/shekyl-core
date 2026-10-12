@@ -692,7 +692,7 @@ pub(crate) fn retention_vin(arm: &BondArm<'_>) -> Option<ArchivalBondPostVin> {
             ..
         } => BondKind::JoinMarket {
             bond_spend_pk: bond_spend_pk.to_vec(),
-            receipt_sign_pk: receipt_sign_pk.map(<[u8]>::to_vec),
+            receipt_sign_pk: (*receipt_sign_pk).clone(),
             endpoint: *endpoint,
         },
         BondArm::Release { .. } => BondKind::Release,

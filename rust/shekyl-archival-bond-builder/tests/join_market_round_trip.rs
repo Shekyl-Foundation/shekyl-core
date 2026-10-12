@@ -145,21 +145,16 @@ fn wrong_credit_amount_breaks_the_balance() {
     assert_eq!(built.vin().bond_credit, floor);
 }
 
-/// The constructor emits the JoinMarket's **receipt form** (wire `post_kind`
-/// 5): the post commits exactly the persona's derived receipt key
-/// (`ArchivalPKeys::receipt_sign_pk`, canonical bytes), beside the
-/// persona's own `bond_spend_pk`. The key is one CEN-J28 admits — it parses
-/// back, through the function admission calls, to the key the persona
-/// holds — and the post survives both wire representations byte for byte.
-///
-/// Red edit: build the vin with `receipt_sign_pk: None` and this is a
-/// kind-0 post with no key.
+/// The constructor emits the JoinMarket (wire `post_kind` 5): the post
+/// commits exactly the persona's derived receipt key
+/// (`ArchivalPKeys::receipt_sign_pk`), beside the persona's own
+/// `bond_spend_pk`. The key is one CEN-J28 admits — it parses back, through
+/// the function admission calls, to the key the persona holds — and the
+/// post survives both wire representations byte for byte.
 #[test]
 fn join_market_commits_the_personas_receipt_key() {
     use shekyl_archival_bond_builder::bond_post_input;
-    use shekyl_archival_retention::{
-        ArchivalBondPostVin, BondPostKind, RECEIPT_SIGN_PK_CANONICAL_BYTES,
-    };
+    use shekyl_archival_retention::{ArchivalBondPostVin, BondPostKind};
     use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 
     let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
@@ -168,16 +163,18 @@ fn join_market_commits_the_personas_receipt_key() {
         .expect("build JoinMarket vin");
     let vin = built.vin();
 
-    assert_eq!(vin.post_kind(), BondPostKind::JoinMarketReceipt);
+    assert_eq!(vin.post_kind(), BondPostKind::JoinMarket);
     assert_eq!(vin.post_kind() as u8, 5);
     assert!(vin.kind.is_join_market());
     let committed = vin
         .receipt_sign_pk()
         .expect("the post commits a receipt key");
-    assert_eq!(committed, keys.receipt_sign_pk.to_canonical_bytes());
-    assert_eq!(committed.len(), RECEIPT_SIGN_PK_CANONICAL_BYTES);
     assert_eq!(
-        FnDsaHybridPublicKey::from_canonical_bytes(committed).expect("admission's parse"),
+        committed.as_bytes()[..],
+        keys.receipt_sign_pk.to_canonical_bytes()[..]
+    );
+    assert_eq!(
+        FnDsaHybridPublicKey::from_receipt_sign_pk(committed).expect("admission's parse"),
         keys.receipt_sign_pk
     );
     assert_eq!(
@@ -189,9 +186,9 @@ fn join_market_commits_the_personas_receipt_key() {
     // Another slot's persona commits another key: the post's is this one's.
     let other = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 1)
         .expect("derive P keys");
-    assert_ne!(committed, other.receipt_sign_pk.to_canonical_bytes());
+    assert_ne!(*committed, other.receipt_sign_pk.to_receipt_sign_pk());
 
-    verify_join_market_bond_post(vin, false).expect("the receipt form verifies as a JoinMarket");
+    verify_join_market_bond_post(vin, false).expect("the post verifies as a JoinMarket");
 
     // Both wire representations, one encoding.
     let retention_bytes = vin.serialize().expect("serialize");
@@ -207,7 +204,7 @@ fn join_market_commits_the_personas_receipt_key() {
         shekyl_wire::Input::BondPost(post) => match &post.kind {
             shekyl_wire::BondPostKind::JoinMarket {
                 receipt_sign_pk, ..
-            } => assert_eq!(receipt_sign_pk.as_deref(), Some(committed)),
+            } => assert_eq!(receipt_sign_pk, committed),
             shekyl_wire::BondPostKind::Other(tag) => panic!("a join mapped to Other({tag})"),
         },
         other => panic!("a vin maps to a bond post, not {other:?}"),

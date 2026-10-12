@@ -18,7 +18,6 @@ use std::path::Path;
 
 use shekyl_archival_retention::{
     p_canonical_id_from_hybrid_pubkey, serve_credit_epoch_ok, BondPostKind as RetentionKind,
-    ARCHIVAL_BOND_FLOOR_ATOMIC,
 };
 use shekyl_chain_rules::{ArchivalKey, SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId};
@@ -85,8 +84,12 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
     let schedule = SettlementSchedule::new(SettlementEpochBlocks::new(seb).expect("non-zero"));
 
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let mut reader =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    // Read up to a retired keyless JoinMarket and no further
+    // (`vectors_tests::RETIRED_KEYLESS_JOINS`): the block that lists one
+    // does not parse, and the reader is sequential.
+    let mut reader = crate::vectors_tests::UntilRetiredJoin::new(
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
+    );
     let mut height = reader.first_height();
     let mut tip: Option<BlockHeight> = None;
     let mut found = Vec::new();
@@ -179,6 +182,11 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
             )),
         }
     }
+    reader.finish(
+        dir.file_name()
+            .and_then(|n| n.to_str())
+            .expect("a captured chain's directory is its shape"),
+    );
     (found, schedule)
 }
 
@@ -209,39 +217,17 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
 ///   (b)–(d) build theirs on the driver.
 fn expected(shape: &str) -> Vec<Archival> {
     match shape {
-        "bond-post" => vec![Archival::Post {
-            height: BlockHeight::from_raw(98),
-            slot: 0,
-            kind: "JoinMarket",
-            hint_recomputes: true,
-            holdings: WireHoldings::CompleteTree,
-            bonded_total: ARCHIVAL_BOND_FLOOR_ATOMIC,
-            credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-            debit: 0,
-        }],
-        "emission-claim" => vec![
-            Archival::Post {
-                height: BlockHeight::from_raw(98),
-                slot: 0,
-                kind: "JoinMarket",
-                hint_recomputes: true,
-                holdings: WireHoldings::ShardSetCompact(vec![0]),
-                bonded_total: ARCHIVAL_BOND_FLOOR_ATOMIC,
-                credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-                debit: 0,
-            },
-            Archival::Injected {
-                at_tip: BlockHeight::from_raw(115),
-                shard: 0,
-                epoch: 1,
-            },
-            Archival::Claim {
-                height: BlockHeight::from_raw(1025),
-                slot: 0,
-                epochs: vec![1],
-            },
-        ],
-        "limit-full" | "median-full" | "spend-1in-2out" | "spend-depth3" => Vec::new(),
+        // *Was* (until 2026-10-12): `bond-post` carried one JoinMarket at 98
+        // (complete tree, one floor), and `emission-claim` a compact
+        // JoinMarket at 98, an injected credit at tip 115 and a claim at
+        // 1025. Both joins are keyless (`post_kind` 0), which no longer
+        // parses, and every archival input these chains carry sits at or
+        // above that block — so none can be read from them any more
+        // (`vectors_tests::RETIRED_KEYLESS_JOINS`). The JoinMarket, the
+        // credit and the Release are witnessed on driven chains
+        // (`scenario_archival_tests`, `scenario_join_tests`).
+        "bond-post" | "emission-claim" | "limit-full" | "median-full" | "spend-1in-2out"
+        | "spend-depth3" => Vec::new(),
         other => panic!("a chain this table does not know: {other}"),
     }
 }

@@ -15,11 +15,10 @@
 //!
 //! ## What this crate produces
 //!
-//! 1. [`JoinMarketVin`]: a JoinMarket in its receipt form
-//!    ([`shekyl_archival_retention::BondPostKind::JoinMarketReceipt`], wire
-//!    `post_kind` `5`) — the
-//!    persona's receipt key committed beside `bond_spend_pk`
-//!    (`FN_DSA_HYBRID.md` §6) — with
+//! 1. [`JoinMarketVin`]: a JoinMarket
+//!    ([`shekyl_archival_retention::BondPostKind::JoinMarket`], wire
+//!    `post_kind` `5`) — the persona's receipt key committed beside
+//!    `bond_spend_pk` (`FN_DSA_HYBRID.md` §8) — with
 //!    `bonded_total_atomic == bond_credit == bond_floor(holdings)` and
 //!    `bond_debit == 0` (§7.1). The vin carries no signature: its on-chain
 //!    authorization is the transaction-level `pqc_auths` slot (surface A), not
@@ -155,8 +154,8 @@ impl ReleaseVin {
 /// un-transposable by construction. No secret is required — this constructor
 /// does not sign (surface-A signing is the assemble path).
 ///
-/// The post is the JoinMarket's **receipt form** (wire `post_kind` `5`): it
-/// commits the persona's receipt key (`FN_DSA_HYBRID.md` §6), which the
+/// The post (wire `post_kind` `5`, the JoinMarket's one form) commits the
+/// persona's receipt key (`FN_DSA_HYBRID.md` §8), which the
 /// connect copies into the bond record and CEN-J28 requires to parse as a
 /// canonical Ed25519 + FN-DSA-1024 public key. A derived key does, by
 /// construction of its type.
@@ -207,7 +206,7 @@ pub fn build_join_market_vin(
     // prefix too, so P's identity signature binds it: nobody can swap in
     // another key under a standing signature (CEN-I18). Its encoding is
     // total — the type holds only keys both verifiers decode.
-    let receipt_sign_pk = keys.receipt_pk().to_canonical_bytes();
+    let receipt_sign_pk = keys.receipt_pk().to_receipt_sign_pk();
 
     // JoinMarket is a pure credit path: bonded_total == bond_credit == floor,
     // bond_debit == 0 (the verify side pins this in verify_join_market_bond_post).
@@ -225,7 +224,7 @@ pub fn build_join_market_vin(
         p_canonical_id,
         kind: BondKind::JoinMarket {
             bond_spend_pk,
-            receipt_sign_pk: Some(receipt_sign_pk),
+            receipt_sign_pk,
             endpoint,
         },
         holdings,

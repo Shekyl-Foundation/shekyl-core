@@ -7,7 +7,7 @@
 //! the bytes alone (`CHAIN_RULES_SLICE_6.md` commit 2) — and the stateless
 //! rows of 4.J: CEN-J2 on the serve credit, CEN-J11 and CEN-J12 on the
 //! bond post (`CHAIN_RULES_SLICE_8.md` §5 row 4), and CEN-J28 on the
-//! JoinMarket's receipt key (`FN_DSA_HYBRID.md` §6, increment 3).
+//! JoinMarket's receipt key (`FN_DSA_HYBRID.md` §8, increment 3).
 //!
 //! These run in `tx_form` **after** the 4.H line, the archival shape arms
 //! (H20–H22) and H19's layout check. A transaction that fails its shape and
@@ -454,22 +454,23 @@ impl TxRule for J12 {
 
 /// CEN-J28: the `receipt_sign_pk` a JoinMarket commits **is a key** — it
 /// parses as a canonical [`FnDsaHybridPublicKey`]
-/// ([`FnDsaHybridPublicKey::from_canonical_bytes`]: version 1, scheme
-/// byte 3, a zero reserved field, both lengths exact, no trailing byte, an
-/// Ed25519 half that is a curve point and an FN-DSA-1024 half the verifier
-/// decodes). `FN_DSA_HYBRID.md` §6: admission's "parses" is that function.
+/// ([`FnDsaHybridPublicKey::from_receipt_sign_pk`]: version 1, scheme
+/// byte 3, a zero reserved field, both inner lengths exact, an Ed25519 half
+/// that is a curve point and an FN-DSA-1024 half the verifier decodes).
+/// `FN_DSA_HYBRID.md` §8: admission's "parses" is that function.
 ///
 /// The bytes are copied into the bond record at connect and are what every
 /// receipt the persona signs is verified under, for the record's life. A
 /// string that is not a key would be a record whose receipts nobody can
 /// verify, committed where no later post can change it.
 ///
-/// Only a JoinMarket in its receipt form (wire `post_kind` `5`) carries
-/// one; a keyless JoinMarket (`post_kind` `0`) and every other kind have
-/// none to judge, and the row passes them. The wire parser has already
-/// refused a key of another length, so from bytes this row judges content;
-/// on a hand-built value it refuses the length too, which is what the wire
-/// twin's in-memory arm is held to (`tx_conformance_tests`).
+/// **There is no JoinMarket without a receipt key for this row to refuse.**
+/// A JoinMarket has one wire form and the key is a field of it: the parser
+/// refuses the retired keyless byte (`post_kind` `0`) and a key of any
+/// length but 1,837, and the in-memory type cannot hold a join without one.
+/// "Has a key, of the right length" is therefore by construction on the
+/// wire and in the type; what this row judges is the key's content. Every
+/// other kind carries none and passes.
 ///
 /// It has no C++ counterpart: the C++ decoder has no `post_kind` `5` and
 /// refuses the post whole.
@@ -487,11 +488,10 @@ impl TxRule for J28 {
             return Ok(());
         };
         if let shekyl_wire::BondPostKind::JoinMarket {
-            receipt_sign_pk: Some(receipt_sign_pk),
-            ..
+            receipt_sign_pk, ..
         } = &post.kind
         {
-            if FnDsaHybridPublicKey::from_canonical_bytes(receipt_sign_pk).is_err() {
+            if FnDsaHybridPublicKey::from_receipt_sign_pk(receipt_sign_pk).is_err() {
                 return Err(InvalidBlock::new(Self::ROW, cx.locus()));
             }
         }

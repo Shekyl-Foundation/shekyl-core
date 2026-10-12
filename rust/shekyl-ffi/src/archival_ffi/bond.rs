@@ -7,10 +7,9 @@
 
 use shekyl_archival_retention::{
     cold_authority_pin, reinstate_connect, reinstate_pop, release_connect, release_pop,
-    verify_join_market_bond_post, verify_reinstate_bond_post, verify_release_bond_post,
-    whole_record_last_served, ArchivalBondPostVin, BadInterval, BondKind, BondPostKind,
-    ColdAuthorityError, DebitAuthError, HoldingsDescriptor, HoldingsKind, HoldingsKindScan,
-    LastServedScan, ShardSet, ShardSetError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES,
+    verify_reinstate_bond_post, verify_release_bond_post, whole_record_last_served,
+    ArchivalBondPostVin, BadInterval, BondKind, BondPostKind, ColdAuthorityError, DebitAuthError,
+    HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan, ShardSet, ShardSetError,
 };
 
 use super::codes::*;
@@ -142,25 +141,13 @@ fn refuse_stray_bond_spend_pk(pk: &[u8]) -> Result<(), u8> {
     }
 }
 
-/// JoinMarket serving endpoint: exactly [`ENDPOINT_BYTES`] at a non-null
-/// pointer. Null or any other length is `ERR_ENDPOINT_COUPLING`. The all-zero
-/// key is `verify_join_market_bond_post`'s rule (the bond record encodes "no
-/// endpoint" as zero), reported under the same code.
+/// **Refuses every call** with `ERR_POST_KIND` since the receipt key became
+/// mandatory (2026-10-12, PR #1046): a JoinMarket has one wire form, it
+/// commits a receipt key, and this C signature has no argument for one. The
+/// Rust validator judges a JoinMarket through `shekyl-chain-rules`; this
+/// export remains so the C header and its callers still link.
 ///
-/// # Safety
-/// `ptr` must be valid for `ENDPOINT_BYTES` bytes.
-unsafe fn endpoint_from_raw(ptr: *const u8, len: usize) -> Result<[u8; ENDPOINT_BYTES], u8> {
-    if ptr.is_null() || len != ENDPOINT_BYTES {
-        return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
-    }
-    let mut out = [0u8; ENDPOINT_BYTES];
-    unsafe {
-        std::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), ENDPOINT_BYTES);
-    }
-    Ok(out)
-}
-
-/// Verify JoinMarket bond-post semantics after C++ hybrid-pubkey and `P_id` checks.
+/// *Was:* verify JoinMarket bond-post semantics after C++ hybrid-pubkey and `P_id` checks.
 ///
 /// Hybrid pubkey bounds and `p_canonical_id` hint recompute stay in C++ consensus glue.
 /// `record_exists` is `1` when LMDB already has a bond record for this `P_id`.
@@ -187,47 +174,28 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     bond_debit: u64,
     record_exists: u8,
 ) -> u8 {
-    // Kind `0` only. The C side marshals no receipt key, so a kind-`5`
-    // JoinMarket (`BondPostKind::JoinMarketReceipt`) cannot be rebuilt from
-    // these arguments and is refused as it was before the byte was assigned
-    // — never verified as the keyless post it is not.
-    if !matches!(
-        BondPostKind::from_u8(post_kind),
-        Ok(BondPostKind::JoinMarket)
-    ) {
-        return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND;
-    }
-    let holdings = match unsafe { marshal_holdings(holdings_kind, shard_ids_ptr, shard_ids_len) } {
-        Ok(h) => h,
-        Err(code) => return code,
-    };
-    let endpoint = match unsafe { endpoint_from_raw(endpoint_ptr, endpoint_len) } {
-        Ok(e) => e,
-        Err(code) => return code,
-    };
-    let bond_spend_pk = match unsafe { marshal_bond_spend_pk(bond_spend_pk_ptr, bond_spend_pk_len) }
-    {
-        Ok(pk) => pk,
-        Err(code) => return code,
-    };
-    if bond_spend_pk.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
-        return SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING;
-    }
-    let vin = bond_post_vin(
-        BondKind::JoinMarket {
-            bond_spend_pk,
-            receipt_sign_pk: None,
-            endpoint,
-        },
-        holdings,
+    // A JoinMarket commits the persona's receipt key (`FN_DSA_HYBRID.md` §8)
+    // and this entry point's arguments carry none: the C side marshals the
+    // fields of the keyless form, `post_kind` 0, which is retired. No
+    // JoinMarket can be rebuilt from these arguments, so none is verified
+    // here — not the retired kind, and not kind 5 without its key. Every
+    // call is refused with the code a wrong kind has always had. The
+    // signature is unchanged; the arguments are read for nothing.
+    let _ = (
+        post_kind,
+        holdings_kind,
+        shard_ids_ptr,
+        shard_ids_len,
+        bond_spend_pk_ptr,
+        bond_spend_pk_len,
+        endpoint_ptr,
+        endpoint_len,
         bonded_total_atomic,
         bond_credit,
         bond_debit,
+        record_exists,
     );
-    match verify_join_market_bond_post(&vin, record_exists != 0) {
-        Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
-        Err(e) => map_bond_post_error(e),
-    }
+    SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
 }
 
 /// Verify `Release` bond-post semantics after C++ hybrid-pubkey and `P_id` checks

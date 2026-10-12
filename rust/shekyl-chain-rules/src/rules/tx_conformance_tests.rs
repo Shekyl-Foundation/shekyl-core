@@ -363,12 +363,10 @@ const SITES: &[Site] = &[
         j12_short_bond_spend_pk,
         "CEN-J12: JoinMarket commits a canonical-length `bond_spend_pk`",
     ),
-    rule(
-        "bond_post receipt_sign_pk {} != canonical",
-        Face::Memory,
-        CenRow::J28,
-        j28_short_receipt_sign_pk,
-        "CEN-J28: a JoinMarket's `receipt_sign_pk` parses as a canonical FN-DSA hybrid public key, so one of another length is not one; from bytes the length is `read_len_prefixed_exact`'s parse arm and the row judges content",
+    parse(
+        "bond_post post_kind 0 is the retired keyless JoinMarket",
+        Face::Read,
+        "the keyless JoinMarket's byte is retired (2026-10-12): read as `Other(0)` its coupled fields would be taken for the holdings, so the byte has no decoding. CEN-J28 has no arm in this table since the receipt key became a fixed-length typed field — a JoinMarket without a key, or with one of another length, is unrepresentable in memory and refused by `read_len_prefix_exact` on the wire; the row judges the key's content, which the twin does not read",
     ),
     invariant(
         "BondPostKind::Other must not use the JoinMarket tag\"",
@@ -860,10 +858,11 @@ fn every_refusal_arm_of_the_twin_is_classified() {
     let invariant = count(|a| matches!(a, Arm::Invariant));
     assert_eq!(
         (parse, rule, policy, invariant),
-        (16, 41, 1, 5),
+        (17, 40, 1, 5),
         "the four counts (parse, rule, policy, invariant) moved — re-derive them, do not re-pin \
          (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened; \
-         (16, 40, 1, 5) over 62 before CEN-J28's in-memory receipt-key arm, 2026-10-12)"
+         (16, 40, 1, 5) over 62 until 2026-10-12, when the retired keyless JoinMarket byte \
+         gained its parse refusal)"
     );
     assert_eq!(parse + rule + policy + invariant, 63);
 }

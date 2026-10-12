@@ -1133,8 +1133,8 @@ what the specification assumes.
 | The draw's hashes | Selection with its cap, the `0x0C` commitment, the challenge nonce, the set commitment, the count rule and its horizon, each with the specification's vectors. No caller on a block path | `rust/shekyl-archival-retention/src/secret_draw.rs` (`select_draw`, `draw_commit`, `challenge_nonce`, `serve_credit_batch_commitment`, `draw_count`, `draw_horizon`) |
 | The drawable set | `DrawableSet::at_epoch_open` enumerates the bond records **at the view's tip**, drops a bond that joined in `E` or later, expands a complete tree over the shards closed and final at `h_open(E)`, and sorts. Its module doc says the walk that recovers holdings a Release or a slash has cleared is left to this step | `rust/shekyl-chain-rules/src/archival/drawable.rs` |
 | The challenger's read | `challenge_read` derives the nonce and reads through the one fetch entry point. No producer calls it | `rust/shekyl-archival-fetch-sched/src/read.rs` |
-| Scheme 3 | Ed25519 + FN-DSA-1024 with its two signature domains, landed with no consumer. Receipts signed under the receipt key (increment 4 of [`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §6) are not built. *(Corrected 2026-10-12: this row also listed the receipt key's derivation and the JoinMarket post that carries it as not built. The derivation is increment 2, merged in #1031; the post is increment 3, `FN_DSA_HYBRID.md` §8, PR #1046 — the JoinMarket's receipt form, bond-post `post_kind` `5`, judged by CEN-J28.)* | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs` |
-| The bond record | The identity key, and `receipt_sign_pk`: the persona's receipt key, copied from a receipt-form JoinMarket at connect and never changed, empty for a record a keyless JoinMarket created. Nothing verifies under it yet. *(Corrected 2026-10-12, FN-DSA increment 3, PR #1046; was "One identity key. No receipt key".)* | `rust/shekyl-types/src/archival/bond.rs` (`BondRecord`) |
+| Scheme 3 | Ed25519 + FN-DSA-1024 with its two signature domains, landed with no consumer. Receipts signed under the receipt key (increment 4 of [`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §6) are not built. *(Corrected 2026-10-12: this row also listed the receipt key's derivation and the JoinMarket post that carries it as not built. The derivation is increment 2, merged in #1031; the post is increment 3, `FN_DSA_HYBRID.md` §8, PR #1046 — the JoinMarket, bond-post `post_kind` `5`, judged by CEN-J28.)* | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs` |
+| The bond record | The identity key, and `receipt_sign_pk`: the persona's receipt key, copied from the JoinMarket at connect and never changed; every record has one (the key is mandatory, `FN_DSA_HYBRID.md` `FND-17`). Nothing verifies under it yet. *(Corrected 2026-10-12, FN-DSA increment 3, PR #1046; was "One identity key. No receipt key".)* | `rust/shekyl-types/src/archival/bond.rs` (`BondRecord`) |
 | The coinbase grammar | Admits four tags. `0x0C` is not defined | `rust/shekyl-wire/src/tx_extra/coinbase.rs` (`COINBASE_TAGS`); `tx_extra/mod.rs` |
 | The serve-credit input | The leaf-path record of the retired mechanism: persona, shard and epoch named by the prover | `rust/shekyl-archival-retention/src/wire.rs`; `rust/shekyl-chain-rules/src/rules/body.rs` (`ArchivalKey::ServeCredit`) |
 | The index and its digest | Shaped, journaled and read by the settlement pass. Their one producer is the Fakechain door | §14.1 |
@@ -1202,8 +1202,8 @@ themselves (`shekyl-archival-fetch-sched`, `facts.rs`).
 **2. Admission's receipt check has no receipt to verify.** The
 specification's §9.1 check 6 verifies `P`'s receipt under the bond
 record's receipt key. The record carries that key since FN-DSA increment 3
-(2026-10-12, PR #1046, `FN_DSA_HYBRID.md` §8), for a persona whose
-JoinMarket committed one; what is unbuilt is increment 4, the receipt
+(2026-10-12, PR #1046, `FN_DSA_HYBRID.md` §8), for every persona — a
+JoinMarket cannot be posted without one; what is unbuilt is increment 4, the receipt
 signed under it. *(Corrected 2026-10-12; this read "The record has none,
 and the three FN-DSA increments that put it there are unbuilt", under the
 heading "…has no key to verify under".)* The witness-signature check

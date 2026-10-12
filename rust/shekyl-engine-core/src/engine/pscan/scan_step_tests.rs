@@ -60,7 +60,9 @@ fn bond_post_for(p: &ArchivalPKeys) -> BondPost {
         p_canonical_id: canonical_id(p),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: Vec::new(),
-            receipt_sign_pk: None,
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
@@ -424,7 +426,14 @@ fn bond_post_matches_only_known_canonical_ids() {
     );
     assert_eq!(res.bond_post_matches[0].p_canonical_id, canonical_id(&mine));
     assert_eq!(res.bond_post_matches[0].height, BlockHeight::from_raw(5));
-    assert_eq!(res.bond_post_matches[0].post_kind, 0, "JoinMarket tag");
+    // *Was* `0`: the JoinMarket's tag is 5 since the keyless form was
+    // retired (2026-10-12).
+    assert_eq!(
+        res.bond_post_matches[0].post_kind,
+        shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
+        "JoinMarket tag"
+    );
+    assert_eq!(shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET, 5);
     assert!(
         res.funding.is_empty(),
         "no outputs we own in a foreign block"

@@ -36,16 +36,13 @@ use shekyl_chain_ingest::snapshot_json;
 use shekyl_chain_ingest::trace::{Facts, TraceFault, TraceWriter};
 use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFault};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::archival::{
-    BadInterval, BondRecord, FirstPayingHeight, HeldShard, Holdings, RMarket, SigmaWorkMilli,
-    SlashLogEntry, SlashedHolding,
-};
+use shekyl_types::archival::{RMarket, SigmaWorkMilli, SlashLogEntry, SlashedHolding};
 use shekyl_types::{
     BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight, PCanonicalId, SettlementEpoch, ShardId,
 };
 use shekyl_units::AtomicUnits;
 
-use crate::legacy_util::{array_from_ptr, slice_from_ptr, slice_from_typed_ptr};
+use crate::legacy_util::{array_from_ptr, slice_from_ptr};
 
 /// Success.
 pub const SHEKYL_E2_TRACE_OK: i32 = 0;
@@ -270,7 +267,15 @@ pub unsafe extern "C" fn shekyl_e2_archival_snapshot_free(snapshot: *mut ShekylE
     }
 }
 
-/// One `archival_bond` row, from the C++ `ArchivalBondValue`'s decoded
+/// **Refuses every row** with `SHEKYL_E2_TRACE_ERR_ROW` since the receipt
+/// key became mandatory (2026-10-12, PR #1046): a bond record carries the
+/// persona's receipt key, the C++ `ArchivalBondValue` has no such field,
+/// and this signature has no argument for one. A row built here would hold
+/// a key nobody committed, so none is built: a C++ store that holds a bond
+/// record cannot export its archival snapshot through this handle. The
+/// signature is unchanged.
+///
+/// *Was:* one `archival_bond` row, from the C++ `ArchivalBondValue`'s decoded
 /// fields. `holdings_kind` is the record's kind byte (`0` compact, `1`
 /// complete tree); `held_shards` and `add_epochs` are the compact set's two
 /// index-parallel arrays of `holdings_count` each (ignored for a complete
@@ -309,87 +314,30 @@ pub unsafe extern "C" fn shekyl_e2_archival_snapshot_push_bond(
     if snapshot.is_null() {
         return SHEKYL_E2_TRACE_ERR_NULL_PTR;
     }
-    let (Some(persona), Some(endpoint)) = (unsafe { array_from_ptr::<32>(persona) }, unsafe {
-        array_from_ptr::<32>(endpoint)
-    }) else {
-        return SHEKYL_E2_TRACE_ERR_NULL_PTR;
-    };
-    let (Some(hybrid_pubkey), Some(bond_spend_pk)) = (
-        unsafe { slice_from_ptr(hybrid_pubkey, hybrid_pubkey_len) },
-        unsafe { slice_from_ptr(bond_spend_pk, bond_spend_pk_len) },
-    ) else {
-        return SHEKYL_E2_TRACE_ERR_NULL_PTR;
-    };
-    let Some(pairs) = bad_interval_count.checked_mul(2) else {
-        return SHEKYL_E2_TRACE_ERR_NULL_PTR;
-    };
-    let (Some(held), Some(adds), Some(intervals), Some(claimed)) = (
-        unsafe { slice_from_typed_ptr(held_shards, holdings_count) },
-        unsafe { slice_from_typed_ptr(add_epochs, holdings_count) },
-        unsafe { slice_from_typed_ptr(bad_intervals, pairs) },
-        unsafe { slice_from_typed_ptr(claimed_epochs, claimed_count) },
-    ) else {
-        return SHEKYL_E2_TRACE_ERR_NULL_PTR;
-    };
-    let holdings = match holdings_kind {
-        0 => {
-            let held = held
-                .iter()
-                .zip(adds)
-                .map(|(shard, add_epoch)| HeldShard {
-                    shard: ShardId::from_raw(*shard),
-                    add_epoch: SettlementEpoch::from_raw(*add_epoch),
-                })
-                .collect();
-            match Holdings::shard_set(held) {
-                Ok(h) => h,
-                Err(e) => {
-                    tracing::error!("e2 trace: archival bond holdings: {e}");
-                    return SHEKYL_E2_TRACE_ERR_ROW;
-                }
-            }
-        }
-        1 => Holdings::CompleteTree,
-        other => {
-            tracing::error!("e2 trace: archival bond holdings kind {other} names neither shape");
-            return SHEKYL_E2_TRACE_ERR_ROW;
-        }
-    };
-    let record = BondRecord {
-        hybrid_pubkey: hybrid_pubkey.to_vec(),
-        bond_spend_pk: bond_spend_pk.to_vec(),
-        // The C++ record has no receipt key and this export's signature
-        // carries none: a record the C++ store holds was created by a
-        // keyless JoinMarket (the C++ decoder has no `post_kind` 5).
-        receipt_sign_pk: Vec::new(),
+    let _ = (
+        persona,
+        hybrid_pubkey,
+        hybrid_pubkey_len,
+        bond_spend_pk,
+        bond_spend_pk_len,
         endpoint,
-        join_settlement_epoch: SettlementEpoch::from_raw(join_settlement_epoch),
-        bonded_total: AtomicUnits::from_raw(bonded_total),
-        holdings,
-        bad_intervals: intervals
-            .chunks_exact(2)
-            .map(|iv| BadInterval {
-                start_epoch: iv[0],
-                end_exclusive: iv[1],
-            })
-            .collect(),
-        claimed_settlement_epochs: claimed
-            .iter()
-            .map(|e| SettlementEpoch::from_raw(*e))
-            .collect(),
-        first_paying_emission_height: FirstPayingHeight::new(BlockHeight::from_raw(
-            first_paying_emission_height,
-        )),
-    };
-    // SAFETY: the caller's contract — a live handle from `new`.
-    let s = unsafe { &mut *snapshot };
-    match s
-        .inner
-        .push_bond(&PCanonicalId::from_bytes(persona), &record)
-    {
-        Ok(()) => SHEKYL_E2_TRACE_OK,
-        Err(e) => row_code(&e),
-    }
+        join_settlement_epoch,
+        bonded_total,
+        holdings_kind,
+        held_shards,
+        add_epochs,
+        holdings_count,
+        bad_intervals,
+        bad_interval_count,
+        claimed_epochs,
+        claimed_count,
+        first_paying_emission_height,
+    );
+    tracing::error!(
+        "e2 trace: an archival bond row cannot be exported — the bond record carries a \
+         receipt key and the C++ record has none"
+    );
+    SHEKYL_E2_TRACE_ERR_ROW
 }
 
 /// One `archival_serve_credit` pass bit.
