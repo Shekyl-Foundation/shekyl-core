@@ -61,10 +61,12 @@ use std::os::raw::c_char;
 
 use shekyl_wire::tx_extra::{
     admitted_leaf_blob, build_coinbase_extra, check_tx_extra_shape, parse, tag_carries_payload,
-    CoinbaseBuildError, ExtraShapeError, ExtraSubject, TxExtraField, COINBASE_NONCE_BYTES,
-    COINBASE_NONCE_OFFSET_FROM_PUBKEY, TX_EXTRA_PUBKEY_LEN,
+    CoinbaseBuildError, DrawCommitment, ExtraShapeError, ExtraSubject, TxExtraField,
+    COINBASE_NONCE_BYTES, COINBASE_NONCE_OFFSET_FROM_PUBKEY, CONFORMING_DRAW_COMMITMENT,
+    TX_EXTRA_PUBKEY_LEN,
 };
 
+use crate::archival_ffi::commit_and_discard;
 use crate::legacy_types::ShekylBuffer;
 use crate::tx_extra_ffi::{
     shape_code, write_msg, SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR, SHEKYL_TX_EXTRA_PQC_SHAPE_OK,
@@ -87,6 +89,15 @@ pub const SHEKYL_TX_EXTRA_UNKNOWN_TAG: i32 = 102;
 /// leaf blob exceeds the wire cap, or a `0x06`/`0x07` blob is not
 /// `n_outputs` entries wide (the I19 code says which).
 pub const SHEKYL_TX_EXTRA_UNSERIALIZABLE: i32 = 103;
+/// The coinbase writer could not draw its commitment: the OS random source
+/// or key generation failed. Nothing was built. There is no fallback
+/// value: a coinbase without a commitment is refused by the grammar, and a
+/// constant in its place would be a commitment every block shared.
+pub const SHEKYL_TX_EXTRA_ENTROPY: i32 = 104;
+
+/// The sentence for [`SHEKYL_TX_EXTRA_ENTROPY`].
+const ENTROPY_MSG: &str =
+    "coinbase tx_extra not built: the draw commitment's key or seed could not be drawn";
 
 /// The sentence for [`SHEKYL_TX_EXTRA_MALFORMED`] where a caller logs one.
 /// Owned here: the wire crate's `io::Error` text is a parse diagnostic, not
@@ -313,7 +324,14 @@ pub extern "C" fn shekyl_coinbase_nonce_offset_from_pubkey() -> usize {
 ///
 /// `nonce` is exactly [`COINBASE_NONCE_BYTES`] bytes, the miner's template
 /// search space beyond the 32-bit header nonce (`TXE-Q6′`); the daemon
-/// zero-fills it when no miner asked. The KEM blob is `1120 · n_outputs`
+/// zero-fills it when no miner asked. The `0x0C` draw commitment is not
+/// an input: each call draws a fresh witness key and seed
+/// ([`commit_and_discard`]), commits to them and writes the commitment, so
+/// the caller holds no secret and two calls with the same arguments return
+/// different bytes. [`build_coinbase_extra`] is the pure function this
+/// wraps; a caller that must reproduce an extra calls that, in Rust. A
+/// failed draw is [`SHEKYL_TX_EXTRA_ENTROPY`] and nothing is built. The
+/// KEM blob is `1120 · n_outputs`
 /// bytes and the leaf blob `64 · n_outputs`, exactly as
 /// `shekyl_construct_output` produced them; anything else is refused with
 /// the shape code that names the field (a template that cannot pass
@@ -339,9 +357,97 @@ pub unsafe extern "C" fn shekyl_coinbase_extra(
     out_msg: *mut c_char,
     out_msg_cap: usize,
 ) -> i32 {
+    let fields = CoinbaseFields {
+        tx_pubkey,
+        nonce,
+        kem,
+        kem_len,
+        leaf,
+        leaf_len,
+        n_outputs,
+    };
+    // SAFETY: the caller's contracts, passed through unchanged.
+    unsafe {
+        lay_coinbase_extra(&fields, out, out_msg, out_msg_cap, || {
+            commit_and_discard().ok()
+        })
+    }
+}
+
+/// [`shekyl_coinbase_extra`] without the key generation, for C++ **tests**
+/// that lay a coinbase by hand and build tens of thousands of blocks.
+///
+/// The production writer generates an FN-DSA-1024 key on every call, about
+/// 6 ms, which a test appending 130,000 blocks cannot pay. This writes
+/// [`CONFORMING_DRAW_COMMITMENT`], the fixture value every Rust fixture
+/// coinbase carries, and draws nothing. The signature is the production
+/// writer's, so a test helper differs from production by the function it
+/// names and by nothing it passes. Same grammar, same layout, same
+/// refusals: the two share [`lay_coinbase_extra`].
+///
+/// Test-support surface, not consensus, as
+/// `shekyl_test_conforming_pqc_leaf_entry` is. No production C++ calls it:
+/// the daemon's coinbase is built by [`shekyl_coinbase_extra`].
+///
+/// # Safety
+/// As [`shekyl_coinbase_extra`].
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_test_coinbase_extra(
+    tx_pubkey: *const u8,
+    nonce: *const u8,
+    kem: *const u8,
+    kem_len: usize,
+    leaf: *const u8,
+    leaf_len: usize,
+    n_outputs: usize,
+    out: *mut ShekylBuffer,
+    out_msg: *mut c_char,
+    out_msg_cap: usize,
+) -> i32 {
+    let fields = CoinbaseFields {
+        tx_pubkey,
+        nonce,
+        kem,
+        kem_len,
+        leaf,
+        leaf_len,
+        n_outputs,
+    };
+    // SAFETY: the caller's contracts, passed through unchanged.
+    unsafe {
+        lay_coinbase_extra(&fields, out, out_msg, out_msg_cap, || {
+            Some(CONFORMING_DRAW_COMMITMENT)
+        })
+    }
+}
+
+/// What both coinbase writers are handed besides the commitment.
+struct CoinbaseFields {
+    tx_pubkey: *const u8,
+    nonce: *const u8,
+    kem: *const u8,
+    kem_len: usize,
+    leaf: *const u8,
+    leaf_len: usize,
+    n_outputs: usize,
+}
+
+/// The one body of the two coinbase writers. `commitment` is asked for only
+/// after the inputs are read, so a refused call draws no key; `None` from it
+/// is a failed draw.
+///
+/// # Safety
+/// As [`shekyl_coinbase_extra`].
+unsafe fn lay_coinbase_extra(
+    fields: &CoinbaseFields,
+    out: *mut ShekylBuffer,
+    out_msg: *mut c_char,
+    out_msg_cap: usize,
+    commitment: impl FnOnce() -> Option<DrawCommitment>,
+) -> i32 {
     // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
     unsafe { write_msg(out_msg, out_msg_cap, "") };
-    if out.is_null() || tx_pubkey.is_null() || nonce.is_null() {
+    if out.is_null() || fields.tx_pubkey.is_null() || fields.nonce.is_null() {
         return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
     }
     // SAFETY: caller contract on `out`.
@@ -349,12 +455,15 @@ pub unsafe extern "C" fn shekyl_coinbase_extra(
     // SAFETY: caller contracts on the four inputs.
     let (key, nonce, kem, leaf) = unsafe {
         let (Some(key), Some(nonce)) = (
-            bytes(tx_pubkey, TX_EXTRA_PUBKEY_LEN),
-            bytes(nonce, COINBASE_NONCE_BYTES),
+            bytes(fields.tx_pubkey, TX_EXTRA_PUBKEY_LEN),
+            bytes(fields.nonce, COINBASE_NONCE_BYTES),
         ) else {
             return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
         };
-        let (Some(kem), Some(leaf)) = (bytes(kem, kem_len), bytes(leaf, leaf_len)) else {
+        let (Some(kem), Some(leaf)) = (
+            bytes(fields.kem, fields.kem_len),
+            bytes(fields.leaf, fields.leaf_len),
+        ) else {
             return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR;
         };
         (key, nonce, kem, leaf)
@@ -363,7 +472,19 @@ pub unsafe extern "C" fn shekyl_coinbase_extra(
     pubkey.copy_from_slice(key);
     let mut nonce_bytes = [0u8; COINBASE_NONCE_BYTES];
     nonce_bytes.copy_from_slice(nonce);
-    match build_coinbase_extra(pubkey, &nonce_bytes, n_outputs, kem, leaf) {
+    let Some(commitment) = commitment() else {
+        // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
+        unsafe { write_msg(out_msg, out_msg_cap, ENTROPY_MSG) };
+        return SHEKYL_TX_EXTRA_ENTROPY;
+    };
+    match build_coinbase_extra(
+        pubkey,
+        &nonce_bytes,
+        commitment,
+        fields.n_outputs,
+        kem,
+        leaf,
+    ) {
         Ok(blob) => {
             // SAFETY: `out` checked above.
             unsafe { give(out, blob) };
@@ -383,9 +504,9 @@ mod tests {
     use super::*;
     use crate::legacy_util::shekyl_buffer_free;
     use shekyl_wire::tx_extra::{
-        conforming_pqc_leaf_blob, serialize, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, TX_EXTRA_TAG_NONCE,
-        TX_EXTRA_TAG_PADDING, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
-        TX_EXTRA_TAG_PUBKEY,
+        conforming_pqc_leaf_blob, serialize, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
+        TX_EXTRA_TAG_DRAW_COMMITMENT, TX_EXTRA_TAG_NONCE, TX_EXTRA_TAG_PADDING,
+        TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, TX_EXTRA_TAG_PQC_LEAF_ENTRIES, TX_EXTRA_TAG_PUBKEY,
     };
 
     fn take(buf: &ShekylBuffer) -> Vec<u8> {
@@ -408,6 +529,21 @@ mod tests {
     }
 
     const NONCE: [u8; COINBASE_NONCE_BYTES] = [0xC0, 0x1D, 0xBE, 0xEF, 0, 0, 0, 1];
+    /// A commitment for extras these tests lay out by hand. The writer
+    /// under test takes none: it draws its own, read back with [`drawn`].
+    const COMMITMENT: DrawCommitment = CONFORMING_DRAW_COMMITMENT;
+
+    /// The commitment the writer drew into `extra`.
+    fn drawn(extra: &[u8]) -> DrawCommitment {
+        parse(extra)
+            .expect("the writer's bytes parse")
+            .into_iter()
+            .find_map(|f| match f {
+                TxExtraField::DrawCommitment(c) => Some(c),
+                _ => None,
+            })
+            .expect("the writer wrote a draw commitment")
+    }
 
     fn coinbase(key: [u8; 32], n: usize, kem: &[u8], leaf: &[u8]) -> (i32, Vec<u8>, String) {
         let mut out = ShekylBuffer::null();
@@ -448,15 +584,54 @@ mod tests {
         (extra, kem, leaf)
     }
 
+    /// The test writer lays the same extra as the pure writer for the
+    /// conforming commitment, and draws nothing: two calls agree byte for
+    /// byte, which two calls of the production writer never do.
     #[test]
-    fn the_coinbase_writer_lays_out_pubkey_nonce_kem_leaf_and_the_reads_find_each() {
+    fn the_test_writer_carries_the_conforming_commitment() {
+        let kem = vec![0x44u8; shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES];
+        let leaf = conforming_pqc_leaf_blob(1);
+        let call = || {
+            let mut out = ShekylBuffer::null();
+            let mut msg = [0 as c_char; 256];
+            let rc = unsafe {
+                shekyl_test_coinbase_extra(
+                    [0x11u8; 32].as_ptr(),
+                    NONCE.as_ptr(),
+                    kem.as_ptr(),
+                    kem.len(),
+                    leaf.as_ptr(),
+                    leaf.len(),
+                    1,
+                    &raw mut out,
+                    msg.as_mut_ptr(),
+                    msg.len(),
+                )
+            };
+            (rc, take(&out))
+        };
+        let (rc, extra) = call();
+        assert_eq!(rc, SHEKYL_TX_EXTRA_OK);
+        assert_eq!(drawn(&extra), COMMITMENT);
+        assert_eq!(
+            extra,
+            build_coinbase_extra([0x11; 32], &NONCE, COMMITMENT, 1, &kem, &leaf).expect("builds")
+        );
+        assert_eq!(call().1, extra);
+    }
+
+    #[test]
+    fn the_coinbase_writer_lays_out_pubkey_nonce_commitment_kem_leaf_and_the_reads_find_each() {
         let (extra, kem, leaf) = valid_extra(2);
-        // The grammar's one layout: 0x01, 0x02(8), 0x06, 0x07 — byte-identical
-        // to serializing the same four fields by hand, and admitted by the
+        // The grammar's one layout: 0x01, 0x02(8), 0x0C(32), 0x06, 0x07 —
+        // byte-identical to serializing the same five fields by hand, with
+        // the commitment the writer drew in its place, and admitted by the
         // rule a validator applies to a coinbase.
+        let commitment = drawn(&extra);
         let by_hand = serialize(&[
             TxExtraField::PubKey([0x11; 32]),
             TxExtraField::Nonce(NONCE.to_vec()),
+            TxExtraField::DrawCommitment(commitment),
             TxExtraField::PqcKemCiphertext(kem.clone()),
             TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
@@ -474,6 +649,13 @@ mod tests {
             field(&extra, TX_EXTRA_TAG_NONCE, 0),
             (SHEKYL_TX_EXTRA_OK, NONCE.to_vec())
         );
+        // The commitment reads back as a field, and the writer draws a new
+        // one on every call: the caller passes none and holds no secret.
+        assert_eq!(
+            field(&extra, TX_EXTRA_TAG_DRAW_COMMITMENT, 0),
+            (SHEKYL_TX_EXTRA_OK, commitment.as_bytes().to_vec())
+        );
+        assert_ne!(drawn(&valid_extra(2).0), commitment);
         assert_eq!(
             field(&extra, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0),
             (SHEKYL_TX_EXTRA_OK, kem)
@@ -627,15 +809,16 @@ mod tests {
             rc,
             crate::tx_extra_ffi::SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT
         );
-        // Leafless coinbase: pubkey and nonce only, and bytes handed in
-        // anyway are refused.
+        // Leafless coinbase: pubkey, nonce and commitment only, and bytes
+        // handed in anyway are refused.
         let (rc, blob, _) = coinbase([0x22; 32], 0, &[], &[]);
         assert_eq!(rc, SHEKYL_TX_EXTRA_OK);
         assert_eq!(
             parse(&blob).expect("parses"),
             vec![
                 TxExtraField::PubKey([0x22; 32]),
-                TxExtraField::Nonce(NONCE.to_vec())
+                TxExtraField::Nonce(NONCE.to_vec()),
+                TxExtraField::DrawCommitment(drawn(&blob)),
             ]
         );
         let (rc, _, _) = coinbase([0x22; 32], 0, &kem, &conforming_pqc_leaf_blob(1));
@@ -748,13 +931,41 @@ mod tests {
         let swapped = serialize(&[
             TxExtraField::Nonce(NONCE.to_vec()),
             TxExtraField::PubKey([0x11; 32]),
-            TxExtraField::PqcKemCiphertext(kem),
-            TxExtraField::PqcLeafEntries(leaf),
+            TxExtraField::DrawCommitment(COMMITMENT),
+            TxExtraField::PqcKemCiphertext(kem.clone()),
+            TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
         .unwrap();
         assert_eq!(
             shape(&swapped, 1, true).0,
             SHEKYL_TX_EXTRA_SHAPE_COINBASE_LAYOUT
+        );
+        // No commitment, and two: each has its own code.
+        let without = serialize(&[
+            TxExtraField::PubKey([0x11; 32]),
+            TxExtraField::Nonce(NONCE.to_vec()),
+            TxExtraField::PqcKemCiphertext(kem.clone()),
+            TxExtraField::PqcLeafEntries(leaf.clone()),
+        ])
+        .unwrap();
+        let (rc, msg) = shape(&without, 1, true);
+        assert_eq!(
+            rc,
+            crate::tx_extra_ffi::SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_MISSING
+        );
+        assert!(msg.contains("0x0c"), "{msg}");
+        let twice = serialize(&[
+            TxExtraField::PubKey([0x11; 32]),
+            TxExtraField::Nonce(NONCE.to_vec()),
+            TxExtraField::DrawCommitment(COMMITMENT),
+            TxExtraField::DrawCommitment(COMMITMENT),
+            TxExtraField::PqcKemCiphertext(kem),
+            TxExtraField::PqcLeafEntries(leaf),
+        ])
+        .unwrap();
+        assert_eq!(
+            shape(&twice, 1, true).0,
+            crate::tx_extra_ffi::SHEKYL_TX_EXTRA_SHAPE_COINBASE_DRAW_COMMITMENT_DUPLICATE
         );
         // The leaf read applies the same grammar.
         let mut out = ShekylBuffer::null();

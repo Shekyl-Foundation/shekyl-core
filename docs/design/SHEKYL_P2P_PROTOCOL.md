@@ -155,7 +155,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
 | **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
-| **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
+| **B11** `sanitize_peerlist` port-0 | **NOT IMPLEMENTED** | **RULED 2026-10-11 (Rick).** A network-learned address with port 0 is refused at `admit_gray` on every address type, so `tor_address::unknown()` never enters from the network. The check lands with slice 1 increment 3 in PR-3; `sanitize_peerlist` stays until slice 4. *Records-was:* deferred, named blocker the tor port-0 semantics were disputed | No — not an alpha.8 wire item; the check is in flight for PR-3 |
 | **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/graph/mod.rs:864` | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
 | **I2** peerlist acceptance restricted | **IMPLEMENTED** | #637 | done |
@@ -186,9 +186,9 @@ decision** (see the updates above) — **39** as of those mints:
 |---|---|
 | IMPLEMENTED | 14 *(B5 this PR; B3/B3a/B4 #675; B6 #677; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
 | PARTIAL | 2 *(B9 the outbound cap; I7 the inbound one — both are a shipped mechanism whose NUMBER is unruled)* |
-| NOT IMPLEMENTED | 11 |
+| NOT IMPLEMENTED | 12 *(the sweep's 11, plus B11 on 2026-10-11. Not a fresh recount of the rows)* |
 | NO BUILD REQUIRED | 2 |
-| DEFERRED | 3 |
+| DEFERRED | 2 *(the sweep's 3, minus B11. I4 and E8 remain. Not a fresh recount of the rows)* |
 | BLOCKED on another row | 1 |
 | RULED ELSEWHERE | 2 |
 | SUPERSEDED | 1 |
@@ -196,11 +196,11 @@ decision** (see the updates above) — **39** as of those mints:
 | never ruled / not ruled | 1 (A1) |
 | OPEN — routed to its own round | 1 *(I8 — minted with no implementation by design; rule 20 makes the eviction subsystem a planning activity)* |
 
-**13 of 39 are ruled and unbuilt** (11 NOT IMPLEMENTED + 2 PARTIAL). **I8 is
+**14 of 39 are ruled and unbuilt** on the sweep's formula (12 NOT IMPLEMENTED + 2 PARTIAL), which now includes B11 and is not a fresh recount. **I8 is
 not among them** — it is not yet ruled, so it is neither built nor unbuilt in
-this figure's sense; it changes the denominator only. Six of those thirteen are
+this figure's sense; it changes the denominator only. Six of those fourteen are
 the transport cluster, which Rick has ruled out of alpha.8.
-*(The label fits twelve of them. **I7 is the inverse case** — mechanism built,
+*(The label fits thirteen of them. **I7 is the inverse case** — mechanism built,
 number unruled — and is counted here only because this figure's stated formula
 is "NOT IMPLEMENTED + PARTIAL". Read it as "not finished", not as "unbuilt".)*
 *(This read 18 at the #665 ruling. E7 and E9 landed 2026-09-09; B7 landed in
@@ -3036,11 +3036,11 @@ Ten bucket-4 `PWC-D` rows. **Ruled / absorbed / deferred must sum to 10.**
 | PWC-D5 (anchor keys; `first_seen` ordering) | **Ruled** | PWD-I3 |
 | PWC-D6 (address-keyed continuity) | **Ruled** | PWD-I3 |
 | PWC-D8 (dual-stack field parity structurally tested only) | **Deferred — named blocker: LV-3.** It is a *test-coverage* gap on the Rust/C++ parity surface, not an identity commitment; it lands when the read side migrates | LV-3 |
-| PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Deferred — named blocker: tor port-0 semantics disputed** (`tor_address::unknown()` is port 0), named as such by #587 rather than invented here. **Owner: PWD-B11**, a row minted for it because "cluster B" is not an owner; target pre-genesis, queued in FOLLOWUPS | PWD-B11 |
+| PWC-D9 (`sanitize_peerlist` IPv4-only port-0) | **Ruled 2026-10-11 (Rick).** A network-learned address with port 0 is refused at `admit_gray` on every address type. `tor_address::unknown()` never enters from the network. The check is in flight until slice 1 increment 3 (PR-3); `sanitize_peerlist` stays until slice 4. *Records-was:* deferred, named blocker the tor port-0 semantics were disputed (named by #587). **Owner: PWD-B11**, minted because "cluster B" is not an owner | PWD-B11, slice 1 brief §2 |
 | PWC-D10 (cross-zone peerlist refusal) | **Ruled** — kept unchanged | PWD-I2 |
 | PWC-D11 (back-ping gate to white list) | **Ruled — and the mechanism is now deleted, which supersedes the split this row first recorded.** PWD-I2 ruled the gate's *destination* (gray, not white); PWD-I1's consumer inventory then showed the gate's only job was the whitelist promotion PWD-I2 had just forbidden, so **the back-ping and `COMMAND_PING` are deleted** rather than retained-and-redirected. **PWD-B10** carries the deletion. *An earlier version of this cell left retention "still cluster B's" beside the deletion, giving two verdicts at once; deletion is the single outcome.* | PWD-I1, PWD-I2 → PWD-B10 |
 
-**Sum check: 6 ruled + 2 absorbed + 2 deferred = 10.** ✅
+**Sum check: 7 ruled + 2 absorbed + 1 deferred = 10.** ✅ PWC-D9 moved deferred → ruled on 2026-10-11. PWC-D8 stays the one deferred row (LV-3).
 
 *Row-movement history, kept as history rather than as a second disposition:*
 PWC-D11 began **deferred**, moved to **ruled** when PWD-I2's white-list writer

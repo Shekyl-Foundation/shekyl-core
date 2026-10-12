@@ -76,8 +76,9 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # with #792/#800 (three pre-gate rows: two new, one re-titled); 317 on
 # 2026-10-01 when five grandfathered rows closed (the stub, the
 # target_height sentinel, the Ledger sources, the fcmp fuzz build, and
-# the false test-only-builder claim).
-GRANDFATHER_CEILING = 316
+# the false test-only-builder claim); 316 on 2026-10-10 (PWD-I2 gained an
+# owner); 315 on 2026-10-11 (the port-0 row gained an owner).
+GRANDFATHER_CEILING = 315
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5
