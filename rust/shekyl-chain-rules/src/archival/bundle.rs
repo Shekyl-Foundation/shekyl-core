@@ -10,9 +10,12 @@
 //! contracts). Two functions:
 //!
 //! - [`check_section`] — stateless: a block's references are in strictly
-//!   ascending `h`, the header root recomputes from them, and their draw
-//!   counts fit the section budget when the budget is known. It reads no
-//!   chain, so it runs on an alternative block at arrival (`SCS-P23`).
+//!   ascending `h`, the header root recomputes from them, and their
+//!   charges — `max(count, 1)` each, from the count each reference states
+//!   (`SCS-P39`, `SCS-P40`) — fit the section budget when the budget is
+//!   known. It reads no chain, so it runs on an alternative block at
+//!   arrival (`SCS-P23`), and it returns the section's charge either way,
+//!   for the caller that learns `D` only at the switch.
 //! - [`verify_bundle`] — everything else, for one bundle, against a
 //!   [`BundleView`]: the window, one bundle per `h`, the bitmap and the
 //!   record count, the `0x0C` opening, the witness signature, every draw's
@@ -29,9 +32,9 @@
 //! - **What is here:** the two functions, their refusal types, the view
 //!   trait, and their tests against a fixture view (`harness::bundle`).
 //! - **What is not:** `form` and `validate` do not call either function;
-//!   no `Rule` type binds them; [`crate::ChainView`] has none of
-//!   [`BundleView`]'s reads; no store implements the view. A block that
-//!   carries a bundle section is not judged by this module today.
+//!   no `Rule` type binds them; nothing implements [`BundleView`], on a
+//!   store or over [`crate::ChainView`]. A block that carries a bundle
+//!   section is not judged by this module today.
 //! - **Who calls it, and when:** `SO-D12`'s cutover increment
 //!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it implements [`BundleView`] on its store, calls
 //!   [`check_section`] and [`verify_bundle`] at admission from a block
@@ -47,6 +50,32 @@
 //!   `rules` tree and fails when any of them names this module's
 //!   functions. The cutover deletes that test in the change that wires
 //!   them.
+//!
+//! # What the cutover's view has to read, as `dev` stands
+//!
+//! `SO-D12`'s increment 1 landed the state two of the view's six reads
+//! come from; this module names it so the cutover's `BundleView` impl is
+//! a projection and not a design.
+//!
+//! - [`BundleView::draw_count`] and [`BundleView::revealed`] are one row:
+//!   `ChainView::block_draws(h)`, a `BlockDraws` whose `count` is already
+//!   the `u32` this trait asks for and whose `revealed` is the
+//!   one-per-`h` flag. A height with no row has no count, and the rule
+//!   refuses it as [`BundleInvalid::UnknownBlock`]. No block writes the
+//!   row before admission lands, so until the cutover every height reads
+//!   that way. `carry` and `shortfall` on the same row are the count
+//!   rule's, and this rule does not read them.
+//! - [`BundleView::draw_commitment`] is the coinbase's `0x0C` field. The
+//!   coinbase grammar (CEN-I20) now requires exactly one, so a block of
+//!   the chain always has it; this rule still answers a `None` with
+//!   [`BundleInvalid::Commitment`] and not a panic.
+//! - `ChainView::drawable_digest(E)` is **not** one of this rule's reads.
+//!   It is the settlement writer's check that `D` did not drift
+//!   (specification §9.5, check 2). What this rule reads of `D` is
+//!   [`BundleView::snapshot`], whose builder is `SO-D12`'s increment 2.
+//! - [`BundleView::block_hash`] is the recorded block's hash, and
+//!   [`BundleView::visibly_short`] is a count over the issued-draw index
+//!   with `h_reveal < h`; neither table read is new with this rule.
 //!
 //! # Why this module and not `rules/`
 //!
@@ -169,6 +198,15 @@ pub trait BundleView {
 /// Each arm is a verdict and names its census row ([`Self::row`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SectionRefused {
+    /// The bytes at `position` are not a reference: not `76 + ⌈count /
+    /// 8⌉` bytes for the count they state, or a padding bit is set
+    /// (§9.1 step 1, "each reference parses"). Raised by
+    /// [`open_reference`], where a section's references are decoded.
+    /// CEN-J29.
+    Malformed {
+        /// The offending reference's position in the section.
+        position: usize,
+    },
     /// The reference at `position` does not name a higher `h` than the one
     /// before it. Strictly ascending `h` is what makes "no `h` repeats" a
     /// property of the order. CEN-J29.
@@ -178,10 +216,10 @@ pub enum SectionRefused {
     },
     /// The header's root is not the root over these references. CEN-J29.
     Root,
-    /// The references' draw counts sum past the section budget. CEN-J30.
+    /// The references' charges sum past the section budget. CEN-J30.
     OverBudget {
-        /// The sum of `count(h)` over the section.
-        draws: u64,
+        /// The section's charge: the sum of `max(count, 1)`.
+        charge: SectionCharge,
         /// `c · (⌊9·D / SEB⌋ + 1)`, as the caller computed it.
         budget: u64,
     },
@@ -192,7 +230,7 @@ impl SectionRefused {
     #[must_use]
     pub const fn row(&self) -> CenRow {
         match self {
-            Self::OutOfOrder { .. } | Self::Root => CenRow::J29,
+            Self::Malformed { .. } | Self::OutOfOrder { .. } | Self::Root => CenRow::J29,
             Self::OverBudget { .. } => CenRow::J30,
         }
     }
@@ -202,6 +240,9 @@ impl fmt::Display for SectionRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} refused: ", self.row())?;
         match self {
+            Self::Malformed { position } => {
+                write!(f, "bundle reference #{position} does not parse")
+            }
             Self::OutOfOrder { position } => {
                 write!(
                     f,
@@ -209,10 +250,11 @@ impl fmt::Display for SectionRefused {
                 )
             }
             Self::Root => f.write_str("the header root is not the root over the references"),
-            Self::OverBudget { draws, budget } => {
+            Self::OverBudget { charge, budget } => {
                 write!(
                     f,
-                    "the section's {draws} draws exceed its budget of {budget}"
+                    "the section's charge of {} exceeds its budget of {budget}",
+                    charge.get()
                 )
             }
         }
@@ -221,24 +263,77 @@ impl fmt::Display for SectionRefused {
 
 impl std::error::Error for SectionRefused {}
 
+/// A section's charge against its budget: the sum, over its references, of
+/// `max(count, 1)` from the count each states (§7.4, `SCS-P40`).
+///
+/// What [`check_section`] returns. Where the budget was not known — an
+/// alternative block whose epoch's `D` lies above the fork point — the
+/// caller keeps this and asks [`Self::within`] at the switch. The counts
+/// it sums are the references' own; [`verify_bundle`] holds each to the
+/// chain's `count(h)`, so a reference that understates its count to shrink
+/// this sum is an invalid block (`SCS-P39`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SectionCharge(u64);
+
+impl SectionCharge {
+    /// The charge of `refs`: one addition per bundle
+    /// (`shekyl_archival_retention::bundle_charge`), saturating.
+    #[must_use]
+    pub fn of(refs: &[BundleRef]) -> Self {
+        Self(
+            refs.iter()
+                .fold(0u64, |sum, r| sum.saturating_add(r.charge())),
+        )
+    }
+
+    /// The charge, in draws.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Whether the charge fits `budget` (`section_budget(c, d_max, seb)`).
+    #[must_use]
+    pub const fn within(self, budget: u64) -> bool {
+        self.0 <= budget
+    }
+}
+
+/// One reference of a section, from the bytes the block carries for it.
+///
+/// The boundary where a section's references are decoded: a reference
+/// that does not parse — wrong length for the count it states, or a set
+/// padding bit — is §9.1 step 1's refusal, a verdict on the block under
+/// CEN-J29, and this is where it is given its type. How a block lays its
+/// references out is the block format's (`SO-D12`'s rule-42 bump); a
+/// reference is self-delimiting, so whatever that layout is, each is cut
+/// by its own stated count and handed here with its position.
+///
+/// # Errors
+///
+/// [`SectionRefused::Malformed`] at `position`.
+pub fn open_reference(position: usize, bytes: &[u8]) -> Result<BundleRef, SectionRefused> {
+    BundleRef::decode(bytes).map_err(|_: BundleWireError| SectionRefused::Malformed { position })
+}
+
 /// The stateless section check: §9.1 steps 1 and 2, in that order.
 ///
 /// 1. **Form.** `refs` is in strictly ascending `h`, so no `h` repeats,
-///    and `header_root` is [`bundle_root`] over it.
-/// 2. **Budget.** When `budget` is `Some`, the sum of `count_of` over
-///    `refs` is at most it. `None` means `D` is not known here — an
-///    alternative block whose epoch's set lies above the fork point — and
-///    the budget waits for the switch.
+///    and `header_root` is [`bundle_root`] over it. That each reference
+///    parses is already true of a [`BundleRef`]: its bitmap's length and
+///    padding were checked against its stated count when it was decoded
+///    ([`open_reference`]).
+/// 2. **Budget.** The section's charge — the sum of `max(count, 1)` over
+///    `refs` — is at most `budget` when one is given. `None` means `D` is
+///    not known here, and the comparison waits for the switch.
 ///
 /// `budget` is `section_budget(c, d_max, seb)` with `d_max` the largest
 /// `D` among the epochs of the bundles in the section
 /// (`shekyl_archival_retention::section_budget`; `SCS-P33`).
 ///
-/// `count_of` supplies `count(h)` for a reference: the bitmap's length in
-/// bits, which a reference's bytes do not carry. It is asked only when a
-/// budget is given. [`verify_bundle`] later holds each bitmap to exactly
-/// the chain's `count(h)`, so a count this sum was fed and the chain's
-/// count are one number by the time a section is admitted.
+/// Both steps are computed from the references and nothing else: a
+/// reference states its own count (`SCS-P39`). The charge is returned
+/// whether or not a budget was given.
 ///
 /// # Errors
 ///
@@ -247,8 +342,7 @@ pub fn check_section(
     refs: &[BundleRef],
     header_root: &[u8; 32],
     budget: Option<u64>,
-    count_of: impl Fn(&BundleRef) -> u32,
-) -> Result<(), SectionRefused> {
+) -> Result<SectionCharge, SectionRefused> {
     if let Some(offender) = refs.windows(2).position(|w| w[0].h() >= w[1].h()) {
         return Err(SectionRefused::OutOfOrder {
             position: offender + 1,
@@ -257,15 +351,13 @@ pub fn check_section(
     if bundle_root(refs) != *header_root {
         return Err(SectionRefused::Root);
     }
-    if let Some(budget) = budget {
-        let draws = refs
-            .iter()
-            .fold(0u64, |sum, r| sum.saturating_add(u64::from(count_of(r))));
-        if draws > budget {
-            return Err(SectionRefused::OverBudget { draws, budget });
+    let charge = SectionCharge::of(refs);
+    match budget {
+        Some(budget) if !charge.within(budget) => {
+            Err(SectionRefused::OverBudget { charge, budget })
         }
+        _ => Ok(charge),
     }
-    Ok(())
 }
 
 /// Why one bundle is refused: the verdict. Each arm names its census row
@@ -287,9 +379,12 @@ pub enum BundleInvalid {
     /// The chain has no block `h`: the view has no draw count for it.
     /// CEN-J31.
     UnknownBlock,
-    /// The bitmap is not exactly `count(h)` bits, or a padding bit is set.
-    /// CEN-J32.
-    Bitmap,
+    /// The count the reference states is not the chain's `count(h)`
+    /// (`SCS-P39`). The bitmap is exactly as long as its stated count by
+    /// construction, so this is the whole of "the bitmap is exactly
+    /// `count(h)` bits" — and it is what refuses a reference that
+    /// understated its count to pass the section budget. CEN-J32.
+    Count,
     /// The number of records is not the number of set bits. CEN-J32.
     RecordCount,
     /// `draw_commit(witness_pk, seed)` is not `h`'s `0x0C` — or `h` carries
@@ -322,7 +417,7 @@ impl BundleInvalid {
     pub const fn row(&self) -> CenRow {
         match self {
             Self::OutsideWindow | Self::AlreadyRevealed | Self::UnknownBlock => CenRow::J31,
-            Self::BodyMalformed | Self::Bitmap | Self::RecordCount => CenRow::J32,
+            Self::BodyMalformed | Self::Count | Self::RecordCount => CenRow::J32,
             Self::Commitment => CenRow::J33,
             Self::WitnessSignature => CenRow::J34,
             Self::Attempt { .. } => CenRow::J35,
@@ -351,7 +446,7 @@ impl fmt::Display for BundleInvalid {
             }
             Self::AlreadyRevealed => f.write_str("a bundle for this block is already admitted"),
             Self::UnknownBlock => f.write_str("the bundle names a block this chain does not have"),
-            Self::Bitmap => f.write_str("the pass bitmap is not exactly the block's draw count"),
+            Self::Count => f.write_str("the reference's count is not the block's draw count"),
             Self::RecordCount => f.write_str("the records are not one per set bit"),
             Self::Commitment => {
                 f.write_str("the witness key and seed do not open the block's 0x0C")
@@ -506,8 +601,9 @@ pub fn open_body<F>(reference: &BundleRef, bytes: &[u8]) -> Result<BundleBody, B
 /// ([`BundleRefused::BodyNotReferenced`]). Then:
 ///
 /// 3. **Structure.** `h < h_incl ≤ h + W₂`; no bundle for `h` is admitted;
-///    the bitmap is exactly `count(h)` bits with no padding bit set; the
-///    records are one per set bit.
+///    the count the reference states is `count(h)` (its bitmap is that
+///    many bits, padding clear, since it was decoded); the records are one
+///    per set bit.
 /// 4. **Commitment.** `draw_commit(witness_pk, seed)` is `h`'s `0x0C`.
 /// 5. **Witness signature.** It verifies under the witness key, scheme 3,
 ///    `SCHEME_DOMAIN_WITNESS_BUNDLE`, over the bundle commitment.
@@ -560,9 +656,10 @@ pub fn verify_bundle<V: BundleView>(
     let Some(count) = view.draw_count(h)? else {
         return invalid(BundleInvalid::UnknownBlock);
     };
-    let Ok(kept) = reference.kept(count) else {
-        return invalid(BundleInvalid::Bitmap);
-    };
+    if reference.count() != count {
+        return invalid(BundleInvalid::Count);
+    }
+    let kept = reference.kept().clone();
     if usize::try_from(kept.passes.popcount()).ok() != Some(body.record_count()) {
         return invalid(BundleInvalid::RecordCount);
     }

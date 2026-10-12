@@ -60,14 +60,27 @@ fn invalid(why: BundleInvalid) -> Judged {
 /// a block that committed to the mutated bytes would carry.
 fn rehashed(reference: &BundleRef, bytes: &[u8]) -> (BundleRef, BundleBody) {
     let body = BundleBody::decode(bytes).expect("a body of whole records");
-    let reference = BundleRef::new(
-        *reference.seed(),
-        reference.h(),
-        reference.bitmap_bytes(),
-        body.prunable_hash(),
-    )
-    .expect("a short bitmap");
-    (reference, body)
+    (with_hash(reference, body.prunable_hash()), body)
+}
+
+/// `reference` naming another prunable hash.
+fn with_hash(reference: &BundleRef, prunable_hash: [u8; 32]) -> BundleRef {
+    BundleRef::new(reference.kept().clone(), prunable_hash)
+}
+
+/// `reference` with another seed in its kept part.
+fn with_seed(reference: &BundleRef, seed: [u8; 32]) -> BundleRef {
+    let mut kept = reference.kept().clone();
+    kept.seed = seed;
+    BundleRef::new(kept, *reference.prunable_hash())
+}
+
+/// `reference` with another bitmap — and so, perhaps, another stated
+/// count — in its kept part.
+fn with_passes(reference: &BundleRef, passes: PassBitmap) -> BundleRef {
+    let mut kept = reference.kept().clone();
+    kept.passes = passes;
+    BundleRef::new(kept, *reference.prunable_hash())
 }
 
 fn unhex(hex: &str) -> [u8; 32] {
@@ -90,11 +103,16 @@ fn a_bundle_with_passes_and_misses_admits_with_every_draw_derived() {
     let world = BundleWorld::new(10);
     let passes = [1u32, 4, 9];
     let (reference, body) = world.bundle(&passes);
-    assert_eq!(reference.bitmap_bytes(), [0x12, 0x02], "draws 1, 4 and 9");
+    assert_eq!(reference.count(), 10);
+    assert_eq!(
+        reference.passes().as_bytes(),
+        [0x12, 0x02],
+        "draws 1, 4 and 9"
+    );
     assert_eq!(body.record_count(), 3);
 
     let admitted = judge(&world, &reference, &body).expect("an honest bundle admits");
-    assert_eq!(admitted.kept, reference.kept(10).expect("ten bits"));
+    assert_eq!(&admitted.kept, reference.kept());
     assert_eq!(admitted.kept.h, world.h);
     assert_eq!(admitted.kept.seed, world.seed);
     assert_eq!(admitted.draws.len(), 10);
@@ -135,7 +153,8 @@ fn an_all_miss_bundle_admits_and_issues_every_draw_as_a_miss() {
 fn a_bundle_for_a_block_with_no_draws_admits_and_returns_none() {
     let world = BundleWorld::new(0);
     let (reference, body) = world.bundle(&[]);
-    assert!(reference.bitmap_bytes().is_empty());
+    assert_eq!(reference.count(), 0);
+    assert!(reference.passes().as_bytes().is_empty());
     world.view.take_reads();
     let admitted = judge(&world, &reference, &body).expect("an empty bundle admits");
     assert!(admitted.draws.is_empty());
@@ -412,31 +431,83 @@ fn a_bundle_for_a_block_the_chain_does_not_have_refuses() {
 
 // --------------------------------------- step 3: bitmap and record count
 
-/// The bitmap is exactly `count(h)` bits: a count with another byte
-/// length refuses, and so does a count that leaves a set bit in the
-/// padding. Red edit: read the bitmap against its own length in bits
-/// (`8 · len`) instead of the chain's count.
+/// The count a reference states is the chain's `count(h)`, or the bundle
+/// is refused (`SCS-P39`). The bitmap is as long as its own stated count
+/// by construction, so this one comparison is "the bitmap is exactly
+/// `count(h)` bits". Red edit: drop the comparison — every case below
+/// then runs on to the commitment and the witness signature, and a
+/// reference is judged against a count the chain never had.
 #[test]
-fn a_bitmap_that_is_not_count_bits_refuses() {
+fn a_reference_whose_count_is_not_the_chains_refuses() {
     let mut world = BundleWorld::new(10);
-    // Draw 9 passes: with a count of 9 its bit is padding.
     let (reference, body) = world.bundle(&[1, 9]);
+    assert_eq!(reference.count(), 10);
     assert!(judge(&world, &reference, &body).is_ok());
-    for chain_count in [9u32, 8, 0, 17, 300] {
+    // The chain's count moves under the same reference: fewer, more,
+    // another byte length, and sixteen — the count the same two bitmap
+    // bytes would also fit.
+    for chain_count in [9u32, 8, 0, 11, 16, 17, 300] {
         world.view.counts.insert(world.h, chain_count);
         assert_eq!(
             judge(&world, &reference, &body),
-            invalid(BundleInvalid::Bitmap),
+            invalid(BundleInvalid::Count),
             "chain count {chain_count}"
         );
     }
-    // The same two bytes are a bitmap of 16 bits. The bundle then fails
-    // further on, at the witness signature: the commitment covers the
-    // count.
-    world.view.counts.insert(world.h, 16);
+}
+
+/// **A reference that understates its count to pass the section budget is
+/// an invalid block** (`SCS-P39`, §17.1). The section check sums the
+/// counts references state, with no chain; a miner restates a ten-draw
+/// bundle as nine draws, or as none, and the section's charge shrinks.
+/// The stateless check cannot see it and does not need to: admission
+/// holds the stated count to `count(h)`. Red edit: compare the bitmap's
+/// byte length to the chain's instead of the count — nine and ten draws
+/// are both two bytes, and the understated reference is admitted.
+#[test]
+fn a_reference_that_understates_its_count_is_refused_at_admission() {
+    let world = BundleWorld::new(10);
+    // No pass at draw 9, so the same two bytes are a valid bitmap of nine.
+    let (honest, body) = world.bundle(&[1, 4]);
+    assert_eq!(honest.charge(), 10);
+    let nine = with_passes(
+        &honest,
+        PassBitmap::new(9, honest.passes().as_bytes()).expect("no bit at 9"),
+    );
+    assert_eq!(nine.charge(), 9, "the section is charged one less");
+    assert_eq!(nine.encode().len(), honest.encode().len());
+    // The stateless check passes it at a budget the honest one exceeds...
+    let section = std::slice::from_ref(&nine);
     assert_eq!(
-        judge(&world, &reference, &body),
-        invalid(BundleInvalid::WitnessSignature)
+        check_section(section, &bundle_root(section), Some(9)).map(SectionCharge::get),
+        Ok(9)
+    );
+    assert!(check_section(
+        std::slice::from_ref(&honest),
+        &bundle_root(std::slice::from_ref(&honest)),
+        Some(9)
+    )
+    .is_err());
+    // ...and admission refuses it, before anything is opened.
+    world.view.take_reads();
+    assert_eq!(judge(&world, &nine, &body), invalid(BundleInvalid::Count));
+    assert_eq!(
+        world.view.take_reads(),
+        [BundleRead::Revealed, BundleRead::DrawCount]
+    );
+    // Overstating is refused the same way.
+    let eleven = with_passes(
+        &honest,
+        PassBitmap::new(11, honest.passes().as_bytes()).expect("two bytes"),
+    );
+    assert_eq!(judge(&world, &eleven, &body), invalid(BundleInvalid::Count));
+    // An all-miss bundle restated as a bundle of no draws.
+    let (all_miss, miss_body) = world.bundle(&[]);
+    let none = with_passes(&all_miss, PassBitmap::new(0, &[]).expect("no bits"));
+    assert_eq!(none.charge(), 1);
+    assert_eq!(
+        judge(&world, &none, &miss_body),
+        invalid(BundleInvalid::Count)
     );
 }
 
@@ -506,13 +577,7 @@ fn a_bundle_that_does_not_open_the_commitment_refuses() {
     // Another seed in the kept part.
     let mut seed = world.seed;
     seed[7] ^= 0x40;
-    let other_seed = BundleRef::new(
-        seed,
-        reference.h(),
-        reference.bitmap_bytes(),
-        *reference.prunable_hash(),
-    )
-    .expect("short");
+    let other_seed = with_seed(&reference, seed);
     assert_eq!(
         judge(&world, &other_seed, &body),
         invalid(BundleInvalid::Commitment)
@@ -566,15 +631,13 @@ fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
     // record and clears its bit: a pair's pass turned into a miss.
     let kept_records = &body.as_bytes()[..BUNDLE_WITNESS_LEN + 2 * BUNDLE_RECORD_LEN];
     let forged_body = BundleBody::decode(kept_records).expect("two records");
-    let forged_ref = BundleRef::new(
-        *reference.seed(),
-        reference.h(),
-        PassBitmap::from_passes(10, [1, 4])
-            .expect("in range")
-            .as_bytes(),
+    let forged_ref = with_hash(
+        &with_passes(
+            &reference,
+            PassBitmap::from_passes(10, [1, 4]).expect("in range"),
+        ),
         forged_body.prunable_hash(),
-    )
-    .expect("short");
+    );
     world.view.take_reads();
     assert_eq!(
         judge(&world, &forged_ref, &forged_body),
@@ -593,15 +656,10 @@ fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
     // A pass moved from draw 4 to draw 5 with the records untouched: the
     // popcount holds, the commitment opens, and the signature does not
     // cover this bitmap.
-    let moved = BundleRef::new(
-        *reference.seed(),
-        reference.h(),
-        PassBitmap::from_passes(10, [1, 5, 9])
-            .expect("in range")
-            .as_bytes(),
-        *reference.prunable_hash(),
-    )
-    .expect("short");
+    let moved = with_passes(
+        &reference,
+        PassBitmap::from_passes(10, [1, 5, 9]).expect("in range"),
+    );
     assert_eq!(
         judge(&world, &moved, &body),
         invalid(BundleInvalid::WitnessSignature)
@@ -699,13 +757,7 @@ fn a_flipped_byte_refuses_and_the_region_decides_which_check() {
     for at in [0usize, 13, 31] {
         let mut seed = *reference.seed();
         seed[at] ^= 0x01;
-        let flipped = BundleRef::new(
-            seed,
-            reference.h(),
-            reference.bitmap_bytes(),
-            *reference.prunable_hash(),
-        )
-        .expect("short");
+        let flipped = with_seed(&reference, seed);
         assert_eq!(
             judge(&world, &flipped, &body),
             invalid(BundleInvalid::Commitment),
@@ -923,15 +975,15 @@ fn of_two_defects_the_earlier_check_refuses() {
         judge_at(&world, &reference, &body_ok, h + 501),
         invalid(BundleInvalid::OutsideWindow)
     );
-    // One-per-`h` before the bitmap.
+    // One-per-`h` before the count.
     world.view.counts.insert(world.h, 300);
     assert_eq!(
         judge(&world, &reference, &body_ok),
         invalid(BundleInvalid::AlreadyRevealed)
     );
-    // The bitmap before the record count: a bundle one record short is
+    // The count before the record count: a bundle one record short is
     // refused for that against the count it was built for, and for its
-    // bitmap against a chain count of 3, which two bytes are not.
+    // stated count against a chain count of 3.
     world.view.revealed.clear();
     world.view.counts.insert(world.h, 10);
     let records = [world.record(1, 0)];
@@ -944,7 +996,7 @@ fn of_two_defects_the_earlier_check_refuses() {
     world.view.counts.insert(world.h, 3);
     assert_eq!(
         judge(&world, &short_ref, &short_body),
-        invalid(BundleInvalid::Bitmap)
+        invalid(BundleInvalid::Count)
     );
     // The record count before the commitment.
     world.view.counts.insert(world.h, 10);
@@ -1025,13 +1077,7 @@ fn a_body_that_is_not_the_references_is_refused_and_is_not_a_verdict() {
     let (reference, body) = world.bundle(&[1, 4]);
     let mut hash = *reference.prunable_hash();
     hash[0] ^= 1;
-    let wrong = BundleRef::new(
-        *reference.seed(),
-        reference.h(),
-        reference.bitmap_bytes(),
-        hash,
-    )
-    .expect("short");
+    let wrong = with_hash(&reference, hash);
     let refused = judge(&world, &wrong, &body).expect_err("another body's hash");
     assert_eq!(refused, BundleRefused::BodyNotReferenced);
     assert_eq!(refused.verdict(), None, "nothing was judged");
@@ -1065,13 +1111,10 @@ fn a_fetched_body_is_checked_by_hash_and_then_parsed() {
         Err(BundleRefused::BodyNotReferenced)
     );
     // The same bytes under a reference that commits to them.
-    let committed = BundleRef::new(
-        *reference.seed(),
-        reference.h(),
-        reference.bitmap_bytes(),
+    let committed = with_hash(
+        &reference,
         shekyl_archival_retention::bundle_prunable_hash(&long),
-    )
-    .expect("short");
+    );
     let refused = open(&committed, &long).expect_err("not whole records");
     assert_eq!(
         refused,
@@ -1177,29 +1220,44 @@ fn a_view_fault_surfaces_as_itself_from_every_read() {
 
 // ------------------------------------------------------------- the section
 
-fn reference_at(h: u64, bitmap: &[u8]) -> BundleRef {
-    BundleRef::new([0x5E; 32], BlockHeight::from_raw(h), bitmap, [0xAB; 32]).expect("short")
+/// A reference at `h` to a bundle of `count` draws, none passed.
+fn reference_at(h: u64, count: u32) -> BundleRef {
+    BundleRef::new(
+        shekyl_archival_retention::BundleKept {
+            h: BlockHeight::from_raw(h),
+            seed: [0x5E; 32],
+            passes: PassBitmap::from_passes(count, []).expect("no passes"),
+        },
+        [0xAB; 32],
+    )
 }
 
-/// The count a section test gives a reference: eight bits per bitmap
-/// byte. `check_section` takes the count from its caller; this stands in.
-fn bits_of(reference: &BundleRef) -> u32 {
-    u32::try_from(reference.bitmap_bytes().len() * 8).expect("short")
+/// A section of bundles with these counts, at ascending heights.
+fn section_of(counts: &[u32]) -> Vec<BundleRef> {
+    counts
+        .iter()
+        .zip(100u64..)
+        .map(|(count, h)| reference_at(h, *count))
+        .collect()
+}
+
+/// `check_section` on a section whose root is its own, as its charge.
+fn charged(refs: &[BundleRef], budget: Option<u64>) -> Result<u64, SectionRefused> {
+    check_section(refs, &bundle_root(refs), budget).map(SectionCharge::get)
 }
 
 /// References are in strictly ascending `h`, so none repeats. Red edit:
 /// `>` for `>=` admits two references to one `h`.
 #[test]
 fn a_section_out_of_order_or_repeating_an_h_refuses() {
-    let a = reference_at(100, &[0x01]);
-    let b = reference_at(101, &[0x02]);
-    let c = reference_at(250, &[]);
-    let root = |refs: &[BundleRef]| bundle_root(refs);
-    let check = |refs: &[BundleRef]| check_section(refs, &root(refs), None, bits_of);
+    let a = reference_at(100, 8);
+    let b = reference_at(101, 3);
+    let c = reference_at(250, 0);
+    let check = |refs: &[BundleRef]| charged(refs, None);
 
-    assert_eq!(check(&[]), Ok(()));
-    assert_eq!(check(std::slice::from_ref(&a)), Ok(()));
-    assert_eq!(check(&[a.clone(), b.clone(), c.clone()]), Ok(()));
+    assert_eq!(check(&[]), Ok(0));
+    assert_eq!(check(std::slice::from_ref(&a)), Ok(8));
+    assert_eq!(check(&[a.clone(), b.clone(), c.clone()]), Ok(8 + 3 + 1));
 
     assert_eq!(
         check(&[a.clone(), a.clone()]),
@@ -1207,7 +1265,7 @@ fn a_section_out_of_order_or_repeating_an_h_refuses() {
         "one h twice"
     );
     // Two different bundles for one `h` are still one `h` twice.
-    let a_other = reference_at(100, &[0x03]);
+    let a_other = reference_at(100, 9);
     assert_eq!(
         check(&[a.clone(), a_other]),
         Err(SectionRefused::OutOfOrder { position: 1 })
@@ -1222,153 +1280,216 @@ fn a_section_out_of_order_or_repeating_an_h_refuses() {
     );
 }
 
+/// §9.1 step 1, "each reference parses": bytes that are not a reference —
+/// the wrong length for the count they state, or a set padding bit — are
+/// a typed section refusal at the reference's position, raised where a
+/// section's references are decoded. Red edit: let `open_reference`
+/// return the wire error; the block that carried the bytes then has no
+/// verdict.
+#[test]
+fn a_reference_that_does_not_parse_is_a_section_refusal_at_its_position() {
+    let good = reference_at(100, 12).encode();
+    assert_eq!(open_reference(0, &good), Ok(reference_at(100, 12)));
+
+    let malformed = |bytes: &[u8]| {
+        let refused = open_reference(3, bytes).expect_err("not a reference");
+        assert_eq!(refused, SectionRefused::Malformed { position: 3 });
+        assert_eq!(refused.row(), CenRow::J29);
+    };
+    malformed(&[]);
+    malformed(&good[..good.len() - 1]);
+    let mut long = good.clone();
+    long.push(0);
+    malformed(&long);
+    // The stated count says thirteen bytes of bitmap; two are there.
+    let mut restated = good.clone();
+    restated[40..44].copy_from_slice(&97u32.to_le_bytes());
+    malformed(&restated);
+    // Twelve bits, and bit 12 of the bitmap set.
+    let mut padded = good.clone();
+    padded[45] |= 0x10;
+    malformed(&padded);
+}
+
 /// The header root recomputes from the references. Red edit: skip the
 /// comparison; or compare against the root of the references sorted.
 #[test]
 fn a_section_whose_root_does_not_recompute_refuses() {
-    let a = reference_at(100, &[0x01]);
-    let b = reference_at(101, &[0x02]);
+    let a = reference_at(100, 8);
+    let b = reference_at(101, 3);
     let refs = [a.clone(), b.clone()];
     let root = bundle_root(&refs);
-    assert_eq!(check_section(&refs, &root, None, bits_of), Ok(()));
+    assert_eq!(
+        check_section(&refs, &root, None).map(SectionCharge::get),
+        Ok(11)
+    );
 
     let mut wrong = root;
     wrong[5] ^= 1;
     assert_eq!(
-        check_section(&refs, &wrong, None, bits_of),
+        check_section(&refs, &wrong, None),
         Err(SectionRefused::Root)
     );
     // The root of a section that omits a reference, or adds one.
     assert_eq!(
-        check_section(&refs, &bundle_root(std::slice::from_ref(&a)), None, bits_of),
+        check_section(&refs, &bundle_root(std::slice::from_ref(&a)), None),
         Err(SectionRefused::Root)
     );
     assert_eq!(
-        check_section(std::slice::from_ref(&a), &root, None, bits_of),
+        check_section(std::slice::from_ref(&a), &root, None),
         Err(SectionRefused::Root)
     );
-    // One field of one reference: a different prunable hash.
-    let b_other = BundleRef::new(*b.seed(), b.h(), b.bitmap_bytes(), [0xAC; 32]).expect("short");
+    // One field of one reference: a different prunable hash, and a
+    // different stated count over the same bitmap bytes.
     assert_eq!(
-        check_section(&[a, b_other], &root, None, bits_of),
+        check_section(&[a.clone(), with_hash(&b, [0xAC; 32])], &root, None),
         Err(SectionRefused::Root)
+    );
+    assert_eq!(
+        check_section(&[a, reference_at(101, 4)], &root, None),
+        Err(SectionRefused::Root),
+        "three draws and four are one byte of bitmap and two roots"
     );
     // An empty section commits the empty root, and no other.
-    assert_eq!(check_section(&[], &bundle_root(&[]), None, bits_of), Ok(()));
+    assert_eq!(charged(&[], None), Ok(0));
     assert_eq!(
-        check_section(&[], &[0; 32], None, bits_of),
+        check_section(&[], &[0; 32], None),
         Err(SectionRefused::Root)
     );
 }
 
 /// Red edit 3 of the specification's §11: **a budget sum one over.** The
-/// counts of a section sum to at most `c · (⌊9·D / SEB⌋ + 1)`: exactly at
+/// charges of a section sum to at most `c · (⌊9·D / SEB⌋ + 1)`: exactly at
 /// the budget admits, one over refuses — at the count cap of a large `D`,
 /// and at a `D` so small that `⌊9·D / SEB⌋` is zero and the budget is the
-/// `+ 1` alone (`SCS-P33`). Red edits: `>=` for `>` refuses a section at
-/// its budget; drop the `+ 1` and the small network's budget is zero.
+/// `+ 1` alone (`SCS-P33`). A bundle with draws is charged its draws, so
+/// two bundles at the count cap are still what a section holds. Red
+/// edits: `>=` for `>` refuses a section at its budget; drop the `+ 1`
+/// and the small network's budget is zero.
 #[test]
 fn a_section_at_its_budget_admits_and_one_over_refuses() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
     let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
-    let section = |counts: &[u32]| -> (Vec<BundleRef>, Vec<u32>) {
-        let refs: Vec<BundleRef> = counts
-            .iter()
-            .enumerate()
-            .map(|(n, count)| {
-                reference_at(100 + n as u64, &vec![0u8; PassBitmap::byte_len(*count)])
-            })
-            .collect();
-        (refs, counts.to_vec())
-    };
-    let check = |counts: &[u32], budget: u64| {
-        let (refs, counts) = section(counts);
-        let count_of =
-            |r: &BundleRef| counts[usize::try_from(r.h().to_raw() - 100).expect("a short section")];
-        check_section(&refs, &bundle_root(&refs), Some(budget), count_of)
+    let check = |counts: &[u32], budget: u64| charged(&section_of(counts), Some(budget));
+    let over = |charge: u64, budget: u64| {
+        Err(SectionRefused::OverBudget {
+            charge: SectionCharge::of(&section_of(&[u32::try_from(charge).expect("small")])),
+            budget,
+        })
     };
 
     // `D` = 8: `⌊72 / 10,000⌋` is zero, the count cap is 1, the budget 2.
     let small = section_budget(c, 8, seb);
     assert_eq!(small, 2);
-    assert_eq!(check(&[1, 1], small), Ok(()));
-    assert_eq!(check(&[2], small), Ok(()));
-    assert_eq!(
-        check(&[0, 1, 0, 1, 0], small),
-        Ok(()),
-        "empty bundles are free"
-    );
-    assert_eq!(
-        check(&[1, 2], small),
-        Err(SectionRefused::OverBudget {
-            draws: 3,
-            budget: 2
-        })
-    );
-    assert_eq!(
-        check(&[1, 1, 1], small),
-        Err(SectionRefused::OverBudget {
-            draws: 3,
-            budget: 2
-        })
-    );
+    assert_eq!(check(&[1, 1], small), Ok(2));
+    assert_eq!(check(&[2], small), Ok(2));
+    assert_eq!(check(&[1, 2], small), over(3, small));
+    assert_eq!(check(&[1, 1, 1], small), over(3, small));
 
     // `D` = 324,000: the count cap is 292 and the budget two of them.
     let large = section_budget(c, 324_000, seb);
     assert_eq!(large, 584);
-    assert_eq!(check(&[292, 292], large), Ok(()));
-    assert_eq!(check(&[100, 192, 292], large), Ok(()));
-    assert_eq!(
-        check(&[292, 293], large),
-        Err(SectionRefused::OverBudget {
-            draws: 585,
-            budget: 584
-        })
-    );
+    assert_eq!(check(&[292, 292], large), Ok(584), "two bundles at the cap");
+    assert_eq!(check(&[100, 192, 292], large), Ok(584));
+    assert_eq!(check(&[292, 293], large), over(585, large));
 }
 
-/// With no budget the counts are not asked: `D` is not known where an
-/// alternative block arrives above the fork point, and the budget waits
-/// for the switch (`SCS-P23`). Red edit: sum unconditionally — the
-/// closure here panics.
+/// **A bundle is charged `max(count, 1)`** (`SCS-P40`): a zero-draw bundle
+/// is admissible and costs one, so it cannot be used to fill a section
+/// for free. A section of zero-draw bundles is admitted exactly at the
+/// budget and refused one over — on a small network, where the budget is
+/// 2 and zero-draw blocks are common, and on a large one. A mixed section
+/// pays for both kinds.
+///
+/// **Red edit: sum `count` instead of the charge** (`r.count()` for
+/// `r.charge()` in `SectionCharge::of`). Every zero-draw section below
+/// then charges nothing and is admitted whatever its length: the "one
+/// over" assertions fail, and so does the 500-bundle one.
 #[test]
-fn a_section_with_no_budget_asks_for_no_count() {
-    let refs = [
-        reference_at(100, &[0xFF; 40]),
-        reference_at(101, &[0xFF; 40]),
-    ];
-    let never = |_: &BundleRef| -> u32 { panic!("no budget, no count") };
-    assert_eq!(
-        check_section(&refs, &bundle_root(&refs), None, never),
-        Ok(())
-    );
+fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
+    let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
+    let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
+    let zeros = |n: usize| section_of(&vec![0u32; n]);
+    let over = |refs: &[BundleRef], budget: u64| {
+        Err(SectionRefused::OverBudget {
+            charge: SectionCharge::of(refs),
+            budget,
+        })
+    };
+
+    // The small network: budget 2, so two zero-draw bundles and no third.
+    let small = section_budget(c, 8, seb);
+    assert_eq!(small, 2);
+    assert_eq!(charged(&zeros(1), Some(small)), Ok(1));
+    assert_eq!(charged(&zeros(2), Some(small)), Ok(2));
+    assert_eq!(charged(&zeros(3), Some(small)), over(&zeros(3), small));
+    assert_eq!(SectionCharge::of(&zeros(3)).get(), 3);
+    // What `SCS-P40` closes: one for every zero-draw block of the last
+    // `W₂`, 500 of them, under a budget of 2.
+    assert_eq!(SectionCharge::of(&zeros(500)).get(), 500);
+    assert_eq!(charged(&zeros(500), Some(small)), over(&zeros(500), small));
+
+    // The large network: 584 zero-draw bundles and no more.
+    let large = section_budget(c, 324_000, seb);
+    assert_eq!(charged(&zeros(584), Some(large)), Ok(584));
+    assert_eq!(charged(&zeros(585), Some(large)), over(&zeros(585), large));
+
+    // Mixed: a zero-draw bundle beside bundles with draws costs its one.
+    let mixed = section_of(&[0, 1, 0]);
+    assert_eq!(charged(&mixed, Some(3)), Ok(3));
+    assert_eq!(charged(&mixed, Some(2)), over(&mixed, 2));
+    let at_cap = section_of(&[292, 0, 291]);
+    assert_eq!(charged(&at_cap, Some(large)), Ok(584));
+    let one_more = section_of(&[292, 0, 292]);
+    assert_eq!(charged(&one_more, Some(large)), over(&one_more, large));
+    // And a bundle with draws is charged exactly its draws: two at the
+    // count cap fit, as before the amendment.
+    assert_eq!(charged(&section_of(&[292, 292]), Some(large)), Ok(584));
+}
+
+/// With no budget the charge is still taken and returned: `D` is not
+/// known where an alternative block arrives above the fork point, so the
+/// comparison waits for the switch and is made on this value (`SCS-P23`,
+/// `SCS-P39`). Red edit: return a zero charge when no budget is given —
+/// the switch would then compare nothing.
+#[test]
+fn a_section_with_no_budget_still_returns_its_charge() {
+    let refs = section_of(&[292, 0, 293]);
+    let charge = check_section(&refs, &bundle_root(&refs), None).expect("form holds");
+    assert_eq!(charge.get(), 586);
+    assert_eq!(charge, SectionCharge::of(&refs));
+    // At the switch, with `D` known.
+    assert!(!charge.within(584));
+    assert!(charge.within(586));
+    assert!(charge.within(u64::MAX));
 }
 
 /// The section's checks in §9.1's order: form (order, then root) before
 /// budget. Red edit: check the budget first.
 #[test]
 fn of_two_section_defects_the_earlier_check_refuses() {
-    let a = reference_at(100, &[0x01]);
-    let b = reference_at(101, &[0x02]);
+    let a = reference_at(100, 8);
+    let b = reference_at(101, 8);
     let swapped = [b.clone(), a.clone()];
     // Out of order, a wrong root, and over budget at once.
     assert_eq!(
-        check_section(&swapped, &[0; 32], Some(0), bits_of),
+        check_section(&swapped, &[0; 32], Some(0)),
         Err(SectionRefused::OutOfOrder { position: 1 })
     );
     // In order, a wrong root, and over budget.
     assert_eq!(
-        check_section(&[a.clone(), b.clone()], &[0; 32], Some(0), bits_of),
+        check_section(&[a.clone(), b.clone()], &[0; 32], Some(0)),
         Err(SectionRefused::Root)
     );
     let refs = [a, b];
     assert_eq!(
-        check_section(&refs, &bundle_root(&refs), Some(15), bits_of),
+        check_section(&refs, &bundle_root(&refs), Some(15)),
         Err(SectionRefused::OverBudget {
-            draws: 16,
+            charge: SectionCharge::of(&refs),
             budget: 15
         })
     );
+    assert_eq!(SectionCharge::of(&refs).get(), 16);
 }
 
 // -------------------------------------------------------- rows and staging
@@ -1383,9 +1504,10 @@ fn every_refusal_names_its_census_row() {
         CenRow::J29
     );
     assert_eq!(SectionRefused::Root.row(), CenRow::J29);
+    assert_eq!(SectionRefused::Malformed { position: 0 }.row(), CenRow::J29);
     assert_eq!(
         SectionRefused::OverBudget {
-            draws: 3,
+            charge: SectionCharge::of(&section_of(&[3])),
             budget: 2
         }
         .row(),
@@ -1396,7 +1518,7 @@ fn every_refusal_names_its_census_row() {
         (B::AlreadyRevealed, CenRow::J31, None),
         (B::UnknownBlock, CenRow::J31, None),
         (B::BodyMalformed, CenRow::J32, None),
-        (B::Bitmap, CenRow::J32, None),
+        (B::Count, CenRow::J32, None),
         (B::RecordCount, CenRow::J32, None),
         (B::Commitment, CenRow::J33, None),
         (B::WitnessSignature, CenRow::J34, None),
@@ -1440,7 +1562,7 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 /// file on the connect path names the bundle verifier. It reads the
 /// sources of `form` / `validate`, the block types and every rule, and
 /// fails when one of them mentions `verify_bundle`, `check_section`,
-/// `open_body` or `BundleView`.
+/// `open_body`, `open_reference` or `BundleView`.
 ///
 /// Bites against the verifier being wired into a block path without the
 /// module's banner, the census rows' status and the specification's §2
@@ -1472,7 +1594,13 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
     );
     for file in files {
         let text = std::fs::read_to_string(&file).expect("a readable source file");
-        for name in ["verify_bundle", "check_section", "open_body", "BundleView"] {
+        for name in [
+            "verify_bundle",
+            "check_section",
+            "open_body",
+            "open_reference",
+            "BundleView",
+        ] {
             assert!(
                 !text.contains(name),
                 "{} names `{name}`: the bundle rule is no longer staged. Move the module \

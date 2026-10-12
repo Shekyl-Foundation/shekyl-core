@@ -160,8 +160,8 @@ pub use archival::{
 // (`SO-D12`'s cutover, DRS-E5's queue); `form` and `validate` do not call
 // them.
 pub use archival::{
-    check_section, open_body, verify_bundle, Admitted, BundleInvalid, BundleRefused,
-    BundleUnanswered, BundleView, DerivedDraw, SectionRefused,
+    check_section, open_body, open_reference, verify_bundle, Admitted, BundleInvalid,
+    BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge, SectionRefused,
 };
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
