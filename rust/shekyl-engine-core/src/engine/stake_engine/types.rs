@@ -169,8 +169,7 @@ impl HeldPersona {
             .sign(SCHEME_DOMAIN_RECEIPT, message)
     }
 
-    /// The persona's receipt-key slot, for tests that read its state.
-    #[cfg(test)]
+    /// The persona's receipt-key slot, read-only: its state, never its key.
     pub(crate) fn receipt_key(&self) -> &HeldReceiptKey {
         match self {
             HeldPersona::Bonded(b) => &b.1,
@@ -277,6 +276,14 @@ impl HeldReceiptKey {
                 Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
             }
         }
+    }
+
+    /// Whether a receipt asked of this slot now is already known to be
+    /// refused: the first signature found the key undecodable. Reads the
+    /// state and nothing else — no secret, no decode — so it is what a
+    /// pre-flight can ask (`ReceiptKeyReadiness`).
+    pub(crate) fn is_undecodable(&self) -> bool {
+        matches!(self, Self::Undecodable)
     }
 
     /// Where the decoded key is, or `None` in the two states that hold

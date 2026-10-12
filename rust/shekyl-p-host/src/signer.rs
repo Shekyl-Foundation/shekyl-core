@@ -143,13 +143,18 @@ where
 /// the host. A test about the key uses this so the serve loop still reads
 /// that cache. `max_age` is the caller's: past it the cache answers `None`,
 /// and the serve loop counts that as a lookup failure.
+///
+/// Generic over the key's envelope width, as the host signer is.
 #[cfg(any(test, feature = "test-signer"))]
 #[must_use]
-pub fn signer_at_synced_tip(
-    key: Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
+pub fn signer_at_synced_tip<const W: usize>(
+    key: Arc<dyn PassKey<W>>,
     top_block_height: BlockHeight,
     max_age: Duration,
-) -> Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> {
+) -> Arc<dyn PassSigner<W>>
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
     let tip = Arc::new(DaemonTipCache::new(max_age));
     tip.stamp_synced(top_block_height);
     Arc::new(HostSigner::new(tip, key))

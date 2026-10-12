@@ -283,6 +283,51 @@ impl Message<SignReceiptTranscript> for StakeEngine {
     }
 }
 
+/// The receipt capability's pre-flight: will a receipt asked of the persona
+/// at `p_slot` be refused for a reason the actor already knows?
+///
+/// STAGED with [`SignReceiptTranscript`]; its one sender is
+/// `ResidentReceiptKey::ready`.
+///
+/// Two answers are known without signing, and each is the error the
+/// signature itself would give: the slot is not held
+/// ([`StakeEngineError::LookaheadExhausted`]), or an earlier signature found
+/// the receipt key undecodable ([`StakeEngineError::ReceiptSign`], from the
+/// remembered state). Anything else is `Ok` — including a key that has not
+/// been decoded yet, which this does **not** decode: the pre-flight is asked
+/// once per request before the first response byte and must stay cheap, and
+/// a decode is not. So `Ok` is not a promise. A key found undecodable by the
+/// first signature costs that one response its countersignature (the
+/// refusal trailer) and every request after it the bare 503.
+///
+/// It reads the slot's state and no secret.
+pub(crate) struct ReceiptKeyReadiness {
+    pub p_slot: PSlot,
+}
+
+impl Message<ReceiptKeyReadiness> for StakeEngine {
+    type Reply = Result<(), StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: ReceiptKeyReadiness,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let held = self
+            .held
+            .get(&msg.p_slot)
+            .ok_or(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })?;
+        if held.receipt_key().is_undecodable() {
+            return Err(StakeEngineError::ReceiptSign(
+                shekyl_crypto_pq::CryptoError::InvalidKeyMaterial,
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Test-only: whether the persona at `p_slot` holds a decoded receipt key
 /// (`None` for an unheld slot). The lazy state is otherwise invisible from
 /// outside the actor, by design.

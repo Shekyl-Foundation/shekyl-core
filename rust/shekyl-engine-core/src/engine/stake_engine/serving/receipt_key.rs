@@ -3,44 +3,57 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! **STAGED** — the persona's resident **receipt key** as a signing
-//! capability: Ed25519 + FN-DSA-1024, hybrid scheme 3, under
-//! `SCHEME_DOMAIN_RECEIPT` (`FN_DSA_HYBRID.md` §6, increment 4).
+//! **STAGED** — the persona's resident **receipt key** as the serving
+//! route's signer: Ed25519 + FN-DSA-1024, hybrid scheme 3, under
+//! `SCHEME_DOMAIN_RECEIPT` (`FN_DSA_HYBRID.md` §9).
 //!
 //! # Disposition (rule 23)
 //!
 //! - **What is here.** [`ResidentReceiptKey`], the receipt-key counterpart of
 //!   [`ResidentPassKey`](super::pass_key::ResidentPassKey), with the actor
-//!   message behind it (`SignReceiptTranscript`) and the key the actor holds
-//!   decoded for it (`HeldReceiptKey`). Built and tested.
+//!   messages behind it (`SignReceiptTranscript`, `ReceiptKeyReadiness`) and
+//!   the slot the actor holds its decoded key in (`HeldReceiptKey`). It
+//!   **implements the serving route's signer trait**, `PassKey`, at the
+//!   receipt envelope's width (1,356 bytes): an endpoint bound with it
+//!   closes every response with a scheme-3 receipt. Built and tested,
+//!   end to end against the fetch client (`receipt_round_trip_tests.rs`).
 //! - **What selects it.** Nothing. The serving task is started with
 //!   [`ResidentPassKey`](super::pass_key::ResidentPassKey), which signs with
-//!   the bond identity key under hybrid scheme 1, exactly as before this
-//!   module existed. No production code constructs a [`ResidentReceiptKey`].
-//! - **Who switches.** The settlement lane's cutover: the change that makes
-//!   a verifier accept scheme-3 receipts (the bundle verifier) is the change
-//!   that hands this capability to the serving task. A persona that signed
-//!   with the receipt key before a verifier accepted it would be serving
-//!   shards whose countersignature every requester rejects.
+//!   the bond identity key under hybrid scheme 1 at the identity width,
+//!   exactly as before this module existed. No production code constructs a
+//!   [`ResidentReceiptKey`].
+//! - **Who switches, and what switching is.** The settlement lane's
+//!   cutover, in the change that makes a verifier accept scheme-3 receipts
+//!   (the bundle verifier). The trait, the envelope and both ends of the
+//!   wire are already generic over the scheme, so what is left is
+//!   *selection*: the host's key type declares the receipt width
+//!   (`shekyl_p_host::PersonaServing::key`), `serving/start.rs` constructs
+//!   this type in place of the identity capability, and the daemon builds
+//!   its fetch targets with the receipt key from the bond record. A persona
+//!   that signed with the receipt key before a verifier accepted it would
+//!   be serving shards whose countersignature every requester rejects.
 //! - **Falsifier.** `serving/start.rs` handing the serving task this
-//!   capability while no verifier accepts a scheme-3 receipt. Held by
-//!   `the_serving_task_is_not_started_with_the_receipt_key`, which reads
-//!   that file, and by the `expect(dead_code)` on this type's methods: a
-//!   production caller makes the expectation unfulfilled and the lint lane
-//!   fails.
+//!   capability while no verifier accepts a scheme-3 receipt. Held three
+//!   ways. `the_serving_task_is_not_started_with_the_receipt_key` reads that
+//!   file. The `expect(dead_code)` on [`ResidentReceiptKey::new`] fails the
+//!   lint lane the moment production code constructs one. And the types
+//!   refuse it on their own: the host's key field is the identity width's,
+//!   and this type is not a `PassKey` at that width.
 //!
-//! # Why it is not a `PassKey`
+//! # The cutover's obligation on an undecodable key
 //!
-//! The serving route's signer trait returns the scheme-1 signature by type
-//! (`shekyl_p_host::PassKey::sign_pass -> HybridSignature`), and the
-//! response envelope's width is that signature's canonical length
-//! (`shekyl_p_serve::SIGNATURE_ENVELOPE_LEN`, 3,385 bytes). A scheme-3
-//! signature is another type and 1,356 bytes. Fitting this capability to the
-//! trait means changing the trait, its implementors and the envelope on both
-//! ends of the wire, and that is the cutover. So this type has the trait's
-//! two methods as inherent methods — the same names' shape, the same
-//! arguments, the same refusal type — and no trait implementation. The
-//! cutover generalizes the trait and this becomes an implementor of it.
+//! The receipt key is decoded by the first signature asked of it, not when
+//! the actor starts (`HeldReceiptKey`), so a key that does not decode is
+//! found by the first reader. Once this capability is selected, one of two
+//! things must hold: the key is decoded when the serving task starts, so
+//! that an undecodable key is found before any reader; or `ready` refuses
+//! once a decode has failed. **This type does the second.** [`PassKey::ready`]
+//! asks the actor, and the actor answers from the slot's remembered state:
+//! after a failed decode every request gets the bare 503 before any shard
+//! byte. The cost of doing only the second is one response: the request
+//! that triggers the first decode has its body sent and closed with the
+//! refusal trailer. A cutover that wants no such response decodes at
+//! serving-task start as well.
 //!
 //! # What it is
 //!
@@ -50,6 +63,11 @@
 //! transcript goes in and the signature comes out. The handle is weak, so
 //! this role cannot keep the persona's secrets resident past the wallet
 //! close that wipes them, and a stopped actor is a refusal at pre-flight.
+//!
+//! It differs from the identity capability in one place. That one's
+//! pre-flight is actor liveness alone and costs no round-trip; this one's
+//! also asks the actor about the slot, because here the actor can know
+//! ahead of a signature that it will refuse.
 //!
 //! The decoded receipt key — 118,640 bytes of secret basis and working
 //! buffers — lives in the actor beside the bundle it was decoded from, and
@@ -61,7 +79,7 @@ use std::sync::Arc;
 
 use shekyl_archival_retention::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
-use shekyl_p_host::SignRefused;
+use shekyl_p_host::{PassKey, SignRefused, RECEIPT_ENVELOPE_LEN};
 use shekyl_types::BlockHeight;
 
 use crate::engine::stake_engine::handle::{StakeEngineHandle, WeakStakeEngineHandle};
@@ -76,9 +94,10 @@ pub(crate) struct ResidentReceiptKey {
 
 // The one marker for the whole staged chain. The compiler treats an item
 // under a dead-code expectation as a root, so the type above, the actor
-// message and the handle method these methods reach are not reported on
-// their own and carry no marker. When a production caller appears, this
-// expectation is unfulfilled and the lint lane fails until it is removed.
+// messages and the handle methods the trait impl below reaches are not
+// reported on their own and carry no marker. When production code
+// constructs a `ResidentReceiptKey`, this expectation is unfulfilled and
+// the lint lane fails until it is removed.
 #[cfg_attr(
     not(test),
     expect(
@@ -93,39 +112,38 @@ impl ResidentReceiptKey {
             p_slot,
         })
     }
+}
 
+impl ResidentReceiptKey {
     fn live_handle(&self) -> Result<StakeEngineHandle, SignRefused> {
         self.stake
             .upgrade()
             .ok_or_else(|| SignRefused::new(StakeEngineError::StakeActorUnavailable.to_string()))
     }
+}
 
-    /// Whether the actor that holds the key is alive — `PassKey::ready`'s
-    /// contract and [`ResidentPassKey`](super::pass_key::ResidentPassKey)'s
-    /// answer. The shard and anchor are not consulted, and a slot-level
-    /// refusal surfaces at sign time.
+/// The staged instantiation of the serving route's signer: the receipt key,
+/// hybrid scheme 3, a 1,356-byte envelope ([`RECEIPT_ENVELOPE_LEN`]). An
+/// endpoint bound with this key writes that envelope and no other, and it
+/// is not a `PassKey` at the identity width, so it cannot be handed where
+/// the live key is expected.
+impl PassKey<RECEIPT_ENVELOPE_LEN> for ResidentReceiptKey {
+    /// Refuses when the answer is already known: the actor that holds the
+    /// key has stopped, the slot is not held, or an earlier signature found
+    /// the receipt key undecodable (`ReceiptKeyReadiness`). The shard and
+    /// anchor are not consulted.
     ///
-    /// # Errors
-    ///
-    /// [`SignRefused`] when the stake actor has stopped.
-    pub(crate) fn ready(
-        &self,
-        _shard_id: u64,
-        _anchor_height: BlockHeight,
-    ) -> Result<(), SignRefused> {
-        self.live_handle().map(drop)
+    /// One actor round-trip, on the blocking pool the serve loop asks from.
+    /// It decodes nothing: a key not yet decoded answers `Ok`.
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        self.live_handle()?
+            .receipt_key_ready_blocking(self.p_slot)
+            .map_err(|e| SignRefused::new(e.to_string()))
     }
 
     /// Sign the 112-byte pass transcript with the persona's receipt key.
-    ///
-    /// Blocking, as `PassKey::sign_pass` is: it parks on the actor's reply
-    /// and belongs on the blocking pool.
-    ///
-    /// # Errors
-    ///
-    /// [`SignRefused`] when the actor has stopped, the slot is not held, or
-    /// the scheme refused the key material.
-    pub(crate) fn sign_receipt(
+    /// Runs on the blocking pool: it parks on the actor's reply.
+    fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
     ) -> Result<FnDsaHybridSignature, SignRefused> {
@@ -134,6 +152,25 @@ impl ResidentReceiptKey {
             .map_err(|e| SignRefused::new(e.to_string()))
     }
 }
+
+// The types' own refusal of the falsifier, as a compile-time fact: this
+// capability is not a `PassKey` at the identity width, which is the width
+// of the key the serving host takes (`PersonaServing::key`). If an impl at
+// that width were ever added, the resolution below becomes ambiguous and
+// this crate stops compiling.
+const _: fn() = || {
+    trait AmbiguousIfImpl<A> {
+        fn receipt_key_must_not_be_an_identity_width_key() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+    struct AtTheIdentityWidth;
+    impl<T: ?Sized + PassKey<{ shekyl_p_host::IDENTITY_ENVELOPE_LEN }>>
+        AmbiguousIfImpl<AtTheIdentityWidth> for T
+    {
+    }
+    let _ =
+        <ResidentReceiptKey as AmbiguousIfImpl<_>>::receipt_key_must_not_be_an_identity_width_key;
+};
 
 #[cfg(test)]
 mod tests {
@@ -145,7 +182,6 @@ mod tests {
         HybridSignature, SignatureScheme, SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_RECEIPT,
         SCHEME_DOMAIN_WITNESS_CARRIER,
     };
-    use shekyl_p_host::PassKey;
 
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -182,11 +218,20 @@ mod tests {
         PSlot::from_raw(raw)
     }
 
+    /// The pre-flight, asked where the serve loop asks it: on the blocking
+    /// pool. It parks on the actor's reply.
+    async fn ready(key: &Arc<ResidentReceiptKey>) -> Result<(), SignRefused> {
+        let key = Arc::clone(key);
+        tokio::task::spawn_blocking(move || key.ready(SHARD, ANCHOR))
+            .await
+            .expect("blocking task")
+    }
+
     async fn sign(
         key: Arc<ResidentReceiptKey>,
         message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
     ) -> Result<FnDsaHybridSignature, SignRefused> {
-        tokio::task::spawn_blocking(move || key.sign_receipt(&message))
+        tokio::task::spawn_blocking(move || key.sign_pass(&message))
             .await
             .expect("blocking task")
     }
@@ -199,7 +244,7 @@ mod tests {
     async fn signs_under_the_receipt_key_and_the_receipt_domain() {
         let stake = spawn_over(&[SLOT, OTHER_SLOT], &[SLOT], Some(SLOT));
         let key = ResidentReceiptKey::new(&stake, slot(SLOT));
-        key.ready(SHARD, ANCHOR).expect("actor alive → ready");
+        ready(&key).await.expect("actor alive, slot held → ready");
 
         let signature = sign(key, message()).await.expect("held slot signs");
         let public = receipt_pk(SLOT);
@@ -324,23 +369,33 @@ mod tests {
         }
     }
 
-    /// An unheld slot refuses at sign time with the slot-boundary error, as
-    /// the identity capability does — and with the same refusal.
+    /// An unheld slot refuses with the slot-boundary error the identity
+    /// capability gives — and here already at the pre-flight, because this
+    /// capability's pre-flight asks the actor: no shard is sent for a slot
+    /// that cannot sign for it. The identity capability's pre-flight is
+    /// liveness only, and it finds out at sign time.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unheld_slot_refuses_as_the_identity_key_does() {
         let stake = spawn_over(&[SLOT], &[SLOT], Some(SLOT));
         let unheld = slot(SLOT + 1_000);
         let key = ResidentReceiptKey::new(&stake, unheld);
-        // `ready` is liveness only — the slot question is asked at sign time.
-        key.ready(SHARD, ANCHOR).expect("actor alive → ready");
 
-        let refused = sign(key, message()).await.expect_err("unheld slot refuses");
+        let refused = sign(Arc::clone(&key), message())
+            .await
+            .expect_err("unheld slot refuses");
         assert!(
             refused.detail.contains("lookahead exhausted"),
             "refusal names the slot boundary: {refused}"
         );
+        assert_eq!(
+            ready(&key).await.expect_err("and at the pre-flight"),
+            refused
+        );
 
         let identity_key = ResidentPassKey::new(&stake, unheld);
+        identity_key
+            .ready(SHARD, ANCHOR)
+            .expect("the identity pre-flight is liveness only");
         let identity_refused =
             tokio::task::spawn_blocking(move || identity_key.sign_pass(&message()))
                 .await
@@ -377,22 +432,20 @@ mod tests {
         let stake = spawn_over(&[SLOT], &[SLOT], Some(SLOT));
         let key = ResidentReceiptKey::new(&stake, slot(SLOT));
         let identity_key = ResidentPassKey::new(&stake, slot(SLOT));
-        key.ready(SHARD, ANCHOR).expect("actor alive → ready");
+        ready(&key).await.expect("actor alive → ready");
 
         // The last strong owner. Both capabilities hold weak handles only.
         drop(stake);
         // Actor stop is asynchronous to the last drop; wait for the mailbox
         // to close rather than for a fixed interval.
         for _ in 0..500 {
-            if key.ready(SHARD, ANCHOR).is_err() {
+            if ready(&key).await.is_err() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
-        let refused = key
-            .ready(SHARD, ANCHOR)
-            .expect_err("stopped actor → refused");
+        let refused = ready(&key).await.expect_err("stopped actor → refused");
         assert!(
             refused.detail.contains("stake engine unavailable"),
             "refusal names the recovery action: {refused}"
@@ -582,7 +635,12 @@ mod tests {
             ephemeral_body_store(),
         );
         let key = ResidentReceiptKey::new(&stake, slot(SLOT));
-        key.ready(SHARD, ANCHOR).expect("the actor started");
+        // Not decoded yet, so the pre-flight has nothing to refuse on — and
+        // asking it decodes nothing.
+        ready(&key)
+            .await
+            .expect("the actor started; nothing known yet");
+        assert_eq!(is_built(&stake, SLOT).await, Some(false));
 
         let first = sign(Arc::clone(&key), message())
             .await
@@ -595,8 +653,23 @@ mod tests {
             )
         );
         // From the remembered state this time, not from a second decode.
-        let second = sign(key, message()).await.expect_err("and again");
+        let second = sign(Arc::clone(&key), message())
+            .await
+            .expect_err("and again");
         assert_eq!(first, second, "a later call is refused the same way");
+        // And the pre-flight now knows: after a failed decode `ready`
+        // refuses, with the same typed refusal, so the serve loop answers
+        // the bare 503 and sends no shard it cannot sign for.
+        assert_eq!(
+            ready(&key)
+                .await
+                .expect_err("ready refuses after a failed decode"),
+            first
+        );
+        // The neighbour's pre-flight is its own.
+        ready(&ResidentReceiptKey::new(&stake, slot(OTHER_SLOT)))
+            .await
+            .expect("the other persona is ready");
         assert_eq!(is_built(&stake, SLOT).await, Some(false));
 
         let identity_key = ResidentPassKey::new(&stake, slot(SLOT));
@@ -785,7 +858,12 @@ mod tests {
             "task.rs must still be where the serving task's inputs are defined"
         );
         for (name, source) in [("start.rs", start), ("task.rs", task)] {
-            for staged in ["ResidentReceiptKey", "receipt_key", "sign_receipt"] {
+            for staged in [
+                "ResidentReceiptKey",
+                "receipt_key",
+                "sign_receipt",
+                "RECEIPT_ENVELOPE_LEN",
+            ] {
                 assert!(
                     !source.contains(staged),
                     "{name} names `{staged}`: the receipt capability is STAGED \
