@@ -386,7 +386,7 @@ enum DialOutcome {
 
 | Variant | When the dialer emits it | List (`apply`) | Failed-address memory | Score |
 | --- | --- | --- | --- | --- |
-| `DialFailed` | The channel never reached a well-formed kept response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with | An outstanding gray draw is dropped. A white address stays white | Tor only (R2): written when `implicates_address` is set for that cause and reply, which on clearnet it never is. A `network_id` mismatch is `LevinHandshakeRejected`; on Tor it writes, on clearnet it does not. *Records-was: written on every connector* | No subscription. The mismatch does not call `add_host_fail` |
+| `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with | An outstanding gray draw is dropped. A white address stays white | Tor only (R2): written when `implicates_address` is set for that cause and reply, which on clearnet it never is. A `network_id` mismatch is `LevinHandshakeRejected`; on Tor it writes, on clearnet it does not. *Records-was: written on every connector* | No subscription. The mismatch does not call `add_host_fail` |
 | `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected` | Same as `DialFailed` | Same as `DialFailed` with `LevinHandshakeRejected`: Tor only (R2) | The score owner subscribes. A peerlist this node refuses is the event the score records |
 | `PayloadRefused` | Levin was well-formed and the strand refused the sync payload | No promotion, no demotion, no gray drop. An outstanding draw stays gray | Not written. The peer answered | None |
 | *`HarvestDone` — DELETED in PR-3 (Rick, 2026-10-11)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did, and the harvest's only difference (no white write) existed for the withdrawn seed exception. The crate's variant, its `address()` arm, its `apply` arm and its test go in PR-3 | — | — |
@@ -413,8 +413,10 @@ A peer whose payload we refuse is never a stem edge.
 
 `do_handshake_with_peer` (`net_node.inl:1329`) fills
 `COMMAND_HANDSHAKE` before the invoke. The sync payload is one field.
-The request also carries the address we announce, `network_id`, the
-support flags we send, and a self-connection nonce.
+The request also carries `network_id`, the support flags we send, and
+a self-connection nonce. *Records-was: "the address we announce" —
+struck 2026-10-12; the handshake carries no address field on any
+connector (the handshake-address ruling below).*
 
 **Sync payload.** `get_payload_sync_data`
 (`cryptonote_protocol_handler.inl:469`) reads the core on the caller:
@@ -885,16 +887,22 @@ from a peer.
 
 ## Tests
 
-Differential against the current C++ wherever the behaviour is kept:
-the windows, which causes forget an address, an exclusive list as the
-whole candidate population, white promotion only on
-`SessionAccepted` or `Confirmed` of an outstanding gray draw, and each
-kept row of the candidate filter. There is no subnet pass to assert (ruled 2026-10-11). Address
-validity is slice 1's falsifier §11.6: a network-learned address in
-each listed range, and port 0, is refused at `admit_gray`, an
-operator-named one is admitted, and `disclose` carries no non-global
-address. A hidden-connector handshake does not carry the clearnet
-port. A dial to our own listener is detected.
+Property tests against this brief's rules, not against the C++: the
+C++ dial path is deleted in the same PR, and Ruling B makes the model
+the reference (*records-was:* "differential against the current C++
+wherever the behaviour is kept", struck 2026-10-12). The properties:
+the Tor failed-address windows and which onion replies write the
+memory, and that no clearnet cause does (R2); an exclusive list as the
+whole candidate population; white promotion only on `SessionAccepted`
+or `Confirmed` of an outstanding gray draw; each kept row of the
+candidate filter. There is no subnet pass to assert (ruled
+2026-10-11). Address validity is slice 1's falsifier §11.6: a
+network-learned address in each listed range, and port 0, is refused
+at `admit_gray` and refuses its list whole (R4), an operator-named one
+is admitted, and `disclose` carries no non-global address. No
+handshake carries an address field, on any connector (*records-was:*
+"a hidden-connector handshake does not carry the clearnet port"). A
+dial to our own listener is detected.
 
 Property tests on draw uniformity, within one connector, including a
 full gray list.
