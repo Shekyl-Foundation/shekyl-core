@@ -363,7 +363,7 @@ fn health_gates_the_ladder() {
 /// `DaemonPeerless` alarm that suppressed the probe — the recovery.
 ///
 /// The same holds when the daemon withholds Status altogether, as a
-/// restricted reply will at RK-Q8. The control is the same reply from a
+/// restricted reply does since RK-Q8 (3.48). The control is the same reply from a
 /// node with no peers, which is still the alarm.
 #[test]
 fn a_restricted_daemon_with_peers_reaches_the_probe_not_the_peerless_alarm() {

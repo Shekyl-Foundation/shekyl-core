@@ -582,6 +582,8 @@ impl GetInfoDocument {
                 white_peerlist_size: 0,
                 grey_peerlist_size: 0,
             }),
+            // The wallet is never the daemon's host administrator.
+            host: Hidden::Withheld,
             restricted: false,
         }
     }

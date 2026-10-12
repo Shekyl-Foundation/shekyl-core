@@ -4375,12 +4375,19 @@ std::uint64_t shekyl_seam_board_count(std::uint32_t connector, std::uint32_t dir
 /// Rows in `direction` on every connector, handshake or not. A missing hub,
 /// or a direction index that is not one, is 0.
 std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
-/// Rows that have finished the Levin handshake, on every connector and in
-/// both directions, written through `out`. Returns 0 when it wrote a count,
-/// -1 when `out` is null, and -2 when no hub is bound: there is then no
-/// count, which is not a count of zero. Read by the daemon RPC (Rust) for
-/// `get_info`'s `has_peers`; no C++ calls it.
-std::int32_t shekyl_seam_established_count(std::uint64_t* out);
+/// The board's sessions per direction, over one snapshot: rows on every
+/// connector that have finished the Levin handshake. A row before its
+/// handshake is a socket, not a session, and is not counted here.
+struct shekyl_seam_session_counts_t {
+  std::uint64_t outbound;
+  std::uint64_t inbound;
+};
+static_assert(sizeof(shekyl_seam_session_counts_t) == 16, "seam session counts");
+/// Writes the counts through `out`. Returns 0 when it wrote them, -1 when
+/// `out` is null, and -2 when no hub is bound: there are then no counts,
+/// which is not counts of zero. Read by the daemon RPC (Rust) for
+/// `get_info`; no C++ calls it.
+std::int32_t shekyl_seam_session_counts(shekyl_seam_session_counts_t* out);
 
 /// 1 when the board row for `id` has finished the Levin handshake, 0 when
 /// the row is present and the handshake has not, -1 when there is no row.

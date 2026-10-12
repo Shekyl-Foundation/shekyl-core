@@ -108,7 +108,7 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     (SOK-Q3): red by construction on any tree that routes the method
 #     (dev at 8494f2a27 does); sabotage 2026-09-18 (expected message
 #     inverted, panicked there).
-#   restricted_listener_gets_stand_ins_and_caps_from_native_handlers — the
+#   restricted_listener_is_withheld_status_and_capped_by_native_handlers — the
 #     gate armed 2026-09-07 as restricted_listener_applies_request_caps_
 #     through_the_ffi_bridge, renamed in RK-5c commit 4 when its last leg
 #     (/get_info) went native and it stopped saying anything about the
@@ -140,7 +140,7 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
 #     that fixed the daemon's hard-fork table. Same pool cost as above.
 ARMED=(
-  engine::regtest_e2e::origin::restricted_listener_gets_stand_ins_and_caps_from_native_handlers
+  engine::regtest_e2e::origin::restricted_listener_is_withheld_status_and_capped_by_native_handlers
   engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::native_handlers_apply_their_own_request_caps

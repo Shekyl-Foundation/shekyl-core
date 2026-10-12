@@ -179,15 +179,20 @@ impl Board {
             .count()
     }
 
-    /// Rows that have finished the handshake, on every connector and in
-    /// both directions.
+    /// Rows in `direction` that have finished the handshake, on every
+    /// connector.
     ///
-    /// The count behind "does this node have a peer": a row before its
-    /// handshake cannot relay. It is not a dial cap; [`Self::count`] is, and
-    /// reads the rows this one leaves out.
+    /// The count of this node's sessions, as it reports them: a row before
+    /// its handshake cannot relay, and an inbound one costs whoever opened
+    /// it almost nothing, so a count that included them could be inflated
+    /// from outside. It is not a dial cap; [`Self::count`] is, and reads the
+    /// rows this one leaves out.
     #[must_use]
-    pub fn established_count(&self) -> usize {
-        self.rows.iter().filter(|row| row.established()).count()
+    pub fn established_count(&self, direction: Direction) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| row.established() && row.direction() == direction)
+            .count()
     }
 
     /// Rows in `direction` on every connector, handshake or not.

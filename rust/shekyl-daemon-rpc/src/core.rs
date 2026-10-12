@@ -390,23 +390,27 @@ impl CoreRpc {
         }
     }
 
-    /// The pool's population (`shekyl_rpc_info_pool_count`): the broadcast
-    /// set, or every entry when `include_unrelayed`.
-    pub fn info_pool_count(&self, include_unrelayed: bool) -> Result<u64, i32> {
+    /// The pool's population (`shekyl_rpc_info_pool_counts`): the broadcast
+    /// count, and with `with_unbroadcast` the count of entries held and not
+    /// yet broadcast, both of one pool state. `None` for the second when it
+    /// was not asked for: it was then not counted.
+    pub fn info_pool_counts(&self, with_unbroadcast: bool) -> Result<(u64, Option<u64>), i32> {
         if self.handle.is_null() {
             return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
         }
-        let mut count: u64 = 0;
-        // SAFETY: live handle; `count` is a valid out pointer for the call.
+        let mut broadcast: u64 = 0;
+        let mut unbroadcast: u64 = 0;
+        // SAFETY: live handle; both are valid out pointers for the call.
         let rc = unsafe {
-            ffi::shekyl_rpc_info_pool_count(
+            ffi::shekyl_rpc_info_pool_counts(
                 self.handle,
-                u8::from(include_unrelayed),
-                &raw mut count,
+                u8::from(with_unbroadcast),
+                &raw mut broadcast,
+                &raw mut unbroadcast,
             )
         };
         if rc == ffi::SHEKYL_RPC_FACTS_OK {
-            Ok(count)
+            Ok((broadcast, with_unbroadcast.then_some(unbroadcast)))
         } else {
             Err(rc)
         }
@@ -422,8 +426,6 @@ impl CoreRpc {
             start_time: 0,
             free_space: 0,
             alt_blocks_count: 0,
-            public_connections: 0,
-            public_outgoing_connections: 0,
         };
         let mut version = [0u8; INFO_VERSION_CAP];
         let mut version_len: usize = 0;
