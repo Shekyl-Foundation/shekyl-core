@@ -9,7 +9,6 @@
 use shekyl_chain_rules::RuleSet;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, BlockWeight};
-use shekyl_units::AtomicUnits;
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::Candidate;
@@ -38,7 +37,6 @@ pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -
             height,
             block_weight: Some(BlockWeight::from_raw(300 + raw)),
             cumulative_difficulty: CumulativeDifficulty::from_raw(1_000 + u128::from(raw)),
-            coins_generated: AtomicUnits::from_raw(50 * raw),
         },
         block,
         witness,

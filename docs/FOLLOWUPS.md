@@ -426,9 +426,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Block-height representation unification at the WI-2 anchoring seam** (surfaced 2026-07-11, WI-2 orchestrator review).
   - Target: pre-genesis
 
-- **Alt-chain supply accumulation advances by the coinbase, not the emission subsidy.**
-  - Target: pre-genesis
-
 - **Should the genesis block header carry a real mint timestamp instead of 0?** Surfaced by C2-R3-Q2 ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](completed/CONSENSUS_C2_R3_TIMESTAMPS.md) §5.1): with `timestamp: 0` (`rust/shekyl-genesis-tool/src/builder.rs:181`) the genesis-padded MTP window admits `ts = 1` at block 1; a real mint timestamp would make the chain unable to start "before" its own genesis time for free under the ratified padding rule. A genesis-mint decision (geblock + the pinned block ids across all three networks), explicitly ruled out of C2-R3's scope at ratification (2026-09-01).
   - Target: pre-genesis (any regenesis window)
 

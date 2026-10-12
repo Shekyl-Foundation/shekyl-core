@@ -3,20 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
+use super::alt::test_block_bytes;
+use super::{AltBlock, AltBlockError, AltBlockFacts};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_store_codec::{Canonical, CodecError};
 use shekyl_types::{BlockHeight, BlockWeight, MAX_ATTESTATION_WITNESS_BYTES};
-use shekyl_units::AtomicUnits;
-
-use super::alt::test_block_bytes;
-use super::{AltBlock, AltBlockError, AltBlockFacts};
 
 fn facts(weight: Option<u64>) -> AltBlockFacts {
     AltBlockFacts {
         height: BlockHeight::from_raw(41),
         block_weight: weight.map(BlockWeight::from_raw),
         cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4),
-        coins_generated: AtomicUnits::from_raw(1_234_567),
     }
 }
 
@@ -51,6 +48,39 @@ fn round_trips_with_and_without_the_optional_parts() {
         (5u128 << 64) | 4,
         "one u128, not two u64 halves"
     );
+}
+
+/// CEN-K8's falsifier (`DRS_E5_POOL_ALT_PRUNE.md` §2.1): the alt row has no
+/// supply word. The layout is pinned field by field, so a word re-minted
+/// anywhere in it — the C++ `already_generated_coins` or a successor —
+/// lengthens the record and fails here, not only in the snapshot.
+#[test]
+fn an_alt_row_has_no_supply_word() {
+    let record = AltBlock::checked(facts(Some(2_048)), &block(), Some(witness())).expect("full");
+    let bytes = record.encode();
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&41u64.to_le_bytes()); // height
+    expected.push(1); // weight present
+    expected.extend_from_slice(&2_048u64.to_le_bytes());
+    expected.extend_from_slice(&((5u128 << 64) | 4).to_le_bytes()); // one u128
+    expected.extend_from_slice(&u32::try_from(block().len()).unwrap().to_le_bytes());
+    expected.extend_from_slice(&block());
+    expected.push(1); // witness present
+    expected.extend_from_slice(&u32::try_from(witness().len()).unwrap().to_le_bytes());
+    expected.extend_from_slice(&witness());
+    assert_eq!(
+        bytes, expected,
+        "height, weight, difficulty, block, witness — nothing else"
+    );
+    // The facts half is the three scalars; a fourth would not build here.
+    let AltBlockFacts {
+        height,
+        block_weight,
+        cumulative_difficulty,
+    } = record.facts();
+    assert_eq!(height, BlockHeight::from_raw(41));
+    assert_eq!(block_weight, Some(BlockWeight::from_raw(2_048)));
+    assert_eq!(cumulative_difficulty.to_raw(), (5u128 << 64) | 4);
 }
 
 #[test]
@@ -98,7 +128,6 @@ fn forged(weight: Option<u64>, block: &[u8], witness: Option<&[u8]>) -> Vec<u8> 
         }
     }
     out.extend_from_slice(&((5u128 << 64) | 4).to_le_bytes());
-    out.extend_from_slice(&1_234_567u64.to_le_bytes());
     out.extend_from_slice(&u32::try_from(block.len()).unwrap().to_le_bytes());
     out.extend_from_slice(block);
     match witness {

@@ -67,7 +67,6 @@ Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing history s
 Phase 4b: build concurrency permit stays 1 — raising it is a rule-21 reopen gated on anonymized segment fetch.
 GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in` single-structured-output funding must land before genesis.
 Block-height representation unification at the WI-2 anchoring seam
-Alt-chain supply accumulation advances by the coinbase, not the emission subsidy.
 Should the genesis block header carry a real mint timestamp instead of 0?
 The pool admits duplicate archival unique-keys that only fail at connect.
 External cryptographic review of the `FcmpMembershipOnly` soundness [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md)

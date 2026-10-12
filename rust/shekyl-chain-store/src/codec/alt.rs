@@ -21,7 +21,14 @@
 //!   it holds — the block's own weight, not a cumulative one (SAL-11);
 //! - the block and the witness are **fields**, so an alt record without
 //!   its block, or a witness outliving its block, is not a value
-//!   (`SAL-Q2`; CW-2's lifetime clause made structural, SAL-6).
+//!   (`SAL-Q2`; CW-2's lifetime clause made structural, SAL-6);
+//! - there is **no supply word** (CEN-K8, `DRS_E5_POOL_ALT_PRUNE.md`
+//!   §2.1). The C++ carried `already_generated_coins` per alt block as a
+//!   coinbase-paid approximation nothing consensus-bearing read; the Rust
+//!   tier that admits an alt block reads no executed-chain fact and
+//!   derives none, and promotion re-derives supply by executing the chain.
+//!   A field with no reader is not stored, so "nothing reads it" is the
+//!   type, not a grep. Deleted at `SCHEMA_VERSION` 23 (rule 42).
 //!
 //! # Construction and decoding refuse the same things
 //!
@@ -57,7 +64,6 @@
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::{BlockHeight, BlockWeight};
-use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
 use super::archival::AttestationWitnessBytes;
@@ -100,7 +106,6 @@ pub struct AltBlock {
     height: BlockHeight,
     block_weight: Option<BlockWeight>,
     cumulative_difficulty: CumulativeDifficulty,
-    coins_generated: AtomicUnits,
     /// Parsed once, at construction or decode. The wire form is
     /// [`Block::serialize`] of this value.
     block: Block,
@@ -108,8 +113,9 @@ pub struct AltBlock {
 }
 
 /// The bookkeeping half of an [`AltBlock`] — what the C++ `alt_block_data_t`
-/// carried, typed. Passed to [`AltBlock::checked`] as one argument so the
-/// four scalars cannot be transposed at a call site.
+/// carried, typed — less its supply word (module doc). Passed to
+/// [`AltBlock::checked`] as one argument so the scalars cannot be
+/// transposed at a call site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AltBlockFacts {
     /// The block's height on its alternative chain.
@@ -118,8 +124,6 @@ pub struct AltBlockFacts {
     pub block_weight: Option<BlockWeight>,
     /// Cumulative difficulty at this block along its chain.
     pub cumulative_difficulty: CumulativeDifficulty,
-    /// Coins generated through this block along its chain.
-    pub coins_generated: AtomicUnits,
 }
 
 impl AltBlock {
@@ -153,7 +157,6 @@ impl AltBlock {
             height: facts.height,
             block_weight: facts.block_weight,
             cumulative_difficulty: facts.cumulative_difficulty,
-            coins_generated: facts.coins_generated,
             block,
             attestation_witness,
         })
@@ -166,7 +169,6 @@ impl AltBlock {
             height: self.height,
             block_weight: self.block_weight,
             cumulative_difficulty: self.cumulative_difficulty,
-            coins_generated: self.coins_generated,
         }
     }
 
@@ -186,12 +188,6 @@ impl AltBlock {
     #[must_use]
     pub const fn cumulative_difficulty(&self) -> CumulativeDifficulty {
         self.cumulative_difficulty
-    }
-
-    /// Coins generated through this block along its chain.
-    #[must_use]
-    pub const fn coins_generated(&self) -> AtomicUnits {
-        self.coins_generated
     }
 
     /// The block. Parsed once, at construction or decode
@@ -222,7 +218,6 @@ impl Canonical for AltBlock {
             }
         }
         out.extend_from_slice(&self.cumulative_difficulty.to_raw().to_le_bytes());
-        self.coins_generated.encode_into(out);
         put_bytes(out, &self.block.serialize());
         match &self.attestation_witness {
             None => out.push(Self::ABSENT),
@@ -244,7 +239,6 @@ impl Canonical for AltBlock {
         let cumulative_difficulty = CumulativeDifficulty::from_raw(u128::from_le_bytes(
             r.array::<16>("buffer ends inside the cumulative difficulty")?,
         ));
-        let coins_generated = AtomicUnits::from_raw(r.u64()?);
         // Copied out so the witness can be read before the parse. The
         // `Block` is what is kept.
         let block_bytes = r.bytes()?.to_vec();
@@ -272,7 +266,6 @@ impl Canonical for AltBlock {
             height,
             block_weight,
             cumulative_difficulty,
-            coins_generated,
             block,
             attestation_witness,
         })

@@ -233,7 +233,18 @@ use super::{Canonical, CodecError};
 ///   it as a sealed file missing a table (SI-7); the bump refuses it at
 ///   open with the true reason. No snapshot family moves: none of the
 ///   three has a C++ counterpart to compare.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(22);
+/// - `23` — DRS-E5 (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, CEN-K8): **the alt
+///   record loses its supply word.** `alt_block` drops `coins_generated`,
+///   the C++ `alt_block_data_t`'s coinbase-paid approximation that nothing
+///   consensus-bearing read; the Rust admission tier reads no executed
+///   fact and derives none, and promotion re-derives supply by executing
+///   the chain. The fixture `alt_block` re-pins eight bytes shorter; no
+///   table moves. A `22` file's alt rows would decode with their block
+///   bytes mis-framed, so the bump refuses the file at open rather than
+///   letting `decode` report a parse failure as corruption. Alt rows are
+///   the table AL3 drops at every init by default (`alt_reads.rs`, SAL-8),
+///   so the refusal costs nothing a restart does not already cost.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(23);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -290,10 +301,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(22));
-        assert_eq!(SCHEMA_VERSION.encode(), [22, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(23));
+        assert_eq!(SCHEMA_VERSION.encode(), [23, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[22, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[23, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

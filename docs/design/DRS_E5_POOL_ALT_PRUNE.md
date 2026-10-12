@@ -166,7 +166,9 @@ and `AlreadyHeld` (the latter is CEN-K3's belt); AL2 `remove_alt_block`
 `alt_table` asserts `!journal().is_recording()` — alt rows are **not
 journaled and not in the digest**. `AltBlock { block, witness, facts }`,
 `AltBlockFacts { height, block_weight: Option<BlockWeight>,
-cumulative_difficulty, coins_generated }` (`codec/alt.rs:99–139`). The
+cumulative_difficulty }` (`codec/alt.rs`; the supply word `coins_generated`
+the record carried at open was deleted at a4, `SCHEMA_VERSION` 23 — K8,
+§2.1). The
 module doc's switch sketch is one `store.write` closure: read the demoted
 tip → `pop()`×N → `insert_alt_block`×N → `connect`×M →
 `remove_alt_block`×M. The hand-offs this round binds itself to:
@@ -391,6 +393,9 @@ unknown; commit 1 owes it rule by rule"), read at `dev@ac95d6d04`.
   `header_at`; `miner.rs:469/:523/:668` and `close.rs:75` stay on
   `block_at`. K8 gains its type-level witness (§3's row corrected): the
   view an alt rule can be bound on has no `coins_generated` to read.
+  UPDATE 2026-10-11 (a4): and the record has none to offer — the field
+  is deleted (§2.1, "no supply figure"); K8's witness moves from the
+  view's type to the row's layout.
 - **E5-14 — `header.rs` is three form rows and one promotion row; the
   cheap tier re-bounds five rule files and `header.rs` is not one of
   them.** Rule by rule: **B1** (`:57`) and **B2** (`:76`) are `FormRule`s
@@ -566,7 +571,8 @@ chain's last entry. It carries no brand (its type is not `BatchView`), no
 `block_at` and no archival method, so a rule that needs an executed fact
 cannot be bound on it — the compiler, not a fault, is the belt
 (`05-system-thinking.mdc`, "a type defends the call"). K8 is the first
-beneficiary: `coins_generated` is not a field the alt-bound view has.
+beneficiary: no supply figure is a field the alt-bound view has, and since
+a4 none is a field the alt row has either (below).
 
 The alternative — `AltView` implementing the full `ChainView` with the
 executed-chain methods returning a fault — was Round 0's fallback. `E5-13`
@@ -644,6 +650,28 @@ derived height, cumulative difficulty and wire weight — no supply figure
 it, and no `covers_landed` is asked of it (the tier's completeness is the
 row-set pin, not the per-block gate).
 
+**K8: the alt row carries no supply word** (a4, 2026-10-11,
+`SCHEMA_VERSION` 22 → 23). The C++ `alt_block_data_t` carried
+`already_generated_coins` per alt block, advanced by the coinbase paid
+rather than the subsidy — an approximation C2-R1b ratified as *kept*
+because "deleting the field would change the persisted `alt_block_data_t`
+layout (rule 42 fence)". That reason was about the C++ store's layout,
+which is frozen (`DEL-009`); for the Rust store rule 42's fence **is** the
+version bump, not a prohibition on the change. The substrate the ruling
+stood on has shifted, so the disposition is re-anchored (rule 21), not
+inherited: the Rust tier that admits an alt block reads no executed-chain
+fact and derives none (above), promotion re-derives supply by executing
+the chain, and a field with no reader is not stored (rule 15). `AltBlock`
+and `AltBlockFacts` lose `coins_generated`; `alt_block.snap` re-pins eight
+bytes shorter; the FOLLOWUPS row *"Alt-chain supply accumulation advances
+by the coinbase, not the emission subsidy"* closes — nothing accumulates.
+The falsifier is a layout pin,
+`codec::alt_tests::an_alt_row_has_no_supply_word`: a re-minted word of any
+name lengthens the record and fails it. K8's registry form is therefore
+the store's (`held_by_store`, `E5-18`), not a rules-crate
+`by_construction`: the property is the row's layout, and the row is the
+store's.
+
 The promotion tier is `validate` over `BatchView` inside the switch closure
 after the pops, exactly as any block connects. There is no "promotion view".
 
@@ -695,9 +723,9 @@ owns `Rewind`: an alt block that wins the fork choice is a new
 `IngestEvent::Switch`-shaped event the actor executes as the closure above.
 K6 is the match on `ForkChoiceVerdict` (strictly greater switches, equal
 keeps, checkpoint-forced forces); K7's discard is the checkpoint-forced arm
-(`E5-12`); K8's `coins_generated` is `AltBlockFacts` bookkeeping that no
-rule and no `ChainView` reads (the row's disposition is an enumeration, as
-C2-R1 left it). K3 is AL1's `AlreadyHeld`, by construction.
+(`E5-12`); K8 has no field to read — the alt row carries no supply word
+since a4 (§2.1), so the switch carries none and promotion derives supply
+by executing. K3 is AL1's `AlreadyHeld`, by construction.
 
 ---
 
@@ -721,7 +749,7 @@ and site it lands in, and the witness. "slice 9" is the alt increment
 | CEN-K5b | each promoted block's attestation witness travels and is checked | sequencing — the witness is in `AltBlock`; `validate`'s attestation rule reads it | ingest switch + `AltBlock` (slice 9) | a tampered witness on an alt entry fails promotion |
 | CEN-K6 | switch iff alt cumulative difficulty strictly greater (checkpoint forces) | rule — `fork_choice`'s verdict matched; the crossing is Q1b's | `shekyl-difficulty` (landed) + ingest match (slice 9) | equal keeps; greater switches; checkpoint-forced promotes a lighter chain |
 | CEN-K7 | demoted blocks re-enter as alt blocks; discard on checkpoint-forced | sequencing — step 3 under the verdict's arm (`E5-12`) | ingest switch (slice 9) | after a switch AL7 lists the demoted blocks; after a forced switch it does not |
-| CEN-K8 | alt `already_generated_coins` is bookkeeping, not a consensus read | by construction — `AltBlockFacts.coins_generated` has no reader through the view an alt rule can be bound on: `HeaderRecord` has no such field (`E5-13`); the row is an enumeration | store `codec/alt.rs` (landed) + `view.rs` `HeaderRecord` (a2) | UPDATE 2026-10-10: Round 0's witness (`rg coins_generated rust/shekyl-chain-rules/` → 0) was wrong at the pin — `RecordedBlock.coins_generated` is F13's operand (`view.rs:177`, `miner.rs:469`). The witness is the type: `rg 'coins_generated' rust/shekyl-chain-rules/src/view.rs` names only `RecordedBlock`'s field, never `HeaderRecord`'s, and `AltView` implements `HeaderView` only |
+| CEN-K8 | alt `already_generated_coins` is bookkeeping, not a consensus read | held by store — the alt row carries no supply word (a4, `SCHEMA_VERSION` 23, §2.1); the row's layout is the witness, pinned by `codec::alt_tests::an_alt_row_has_no_supply_word` | store `codec/alt.rs` (landed a4) | UPDATE 2026-10-11: the field is deleted; the a2 witness below (the view's type) stands and is no longer the only one; the registry flips `pending` → `held_by_store` in the census-arms commit (`E5-18`). UPDATE 2026-10-10: Round 0's witness (`rg coins_generated rust/shekyl-chain-rules/` → 0) was wrong at the pin — `RecordedBlock.coins_generated` is F13's operand (`view.rs:177`, `miner.rs:469`). The witness is the type: `rg 'coins_generated' rust/shekyl-chain-rules/src/view.rs` names only `RecordedBlock`'s field, never `HeaderRecord`'s, and `AltView` implements `HeaderView` only |
 | CEN-K9 | supplement txs must pass NIC or the block is rejected | sequencing — the supplement goes through the pool door (§2.2) under `kept_by_block`; a refusal refuses the block | `shekyl-mempool` + ingest (slice 10) | a supplement tx failing `tx_form` refuses the alt block |
 | CEN-K10 | `kept_by_block` admission skips policy, keeps consensus | writer behaviour — `policy_form` skipped, `tx_form`/`tx_against` not; `fcmp_cache` consulted (`E5-11`) | `shekyl-mempool` (slice 10) | a zero-fee demoted tx is admitted and not relayed (M11). **Requirement (2026-10-11, subject-neutral):** a pop must not strand serve-credit evidence on the nodes that connected the popped block. What the evidence is, the mechanism that re-includes it, and which store holds it across the pop are Slice C's (under its direction the evidence may not be a pool transaction at all); K10 builds the pool's half of the pop's return path and no evidence-specific admission. The frozen C++'s behaviour — a popped zero-fee entry kept under `kept_by_block` past the ordinary lifetime, never relayed, re-mined only by a node that held it — is read in FOLLOWUPS ("A popped serve-credit carrier survives the C++ pool's pop path") as evidence for that round, not as a shape this row inherits |
 | CEN-D5 | alt-chain difficulty: the same LWMA-1 over the stitched window | rule — D4 over `AltView::header_at` (the subsumption `census.rs:353` wrote; `block_at` → `header_at` per `E5-13`) | rules `difficulty.rs` bound on `HeaderView` (slice 9) | a fixture drives D4 over a stitched view and over the main chain to the same target when the branches agree, different when they do not |
@@ -829,7 +857,7 @@ drops, with PR-b the caller.
 | a1 | this file on review; index rows; the §12 register rows (DEL-009, DEL-010). UPDATE 2026-10-10: Round 1's rulings recorded; the `header.rs` partition measured (`E5-13…E5-15`); `E5-Q4` priced | 1 | — |
 | a2 | `HeaderView { tip, header_at }` + `HeaderRecord` (`E5-13`); `HeaderRule` with the blanket `BlockRule` impl; `anchors.rs`, `timestamps.rs`, `pow.rs`, `difficulty.rs`, `attestation.rs` re-bounded (`E5-14` — not `header.rs`); `BatchView` and the eight test implementors gain `HeaderView`; `check_block_rule_corrupt_sites.py` reads both impl forms; the store's conformance suite split. UPDATE 2026-10-10: landed as measured — `HeaderRecord { hash, header, cumulative_difficulty }` embedded in `RecordedBlock` (`E5-13`, no `Deref`); `HeaderView { tip, header_at }` with `ChainView: HeaderView` (`E5-14`); D1, C1, C2, E1 are `HeaderRule`s under `impl<R: HeaderRule> BlockRule for R`, the window and seed helpers (`C3::window`, `mtp_median_at`, `D4::target`, `D3::expected_seed`, `E5::conflict_with`, `anchor_window`) bound on `HeaderView`; `recorded_header` lifts a hole to `Corrupt::HoleBelowTip { record: PerHeightRecord::Header }`; the gate **derives** the rule-trait set from the blanket impl and refuses a rule-shaped `check` under a trait it cannot reach (15 rules read: 11 + 4; the user's three probes red on D1). The falsifier did not fire: five rule files, the blanket impl composes with `run`. Beside it, a wrong-subject finding: `validate.rs`'s two brand `compile_fail` doctests had passed since `5fb2132fa` (2026-09-29) on E0046 — the stubs no longer implemented `ChainView` — not at `connect`; replaced by a `trybuild` suite with stderr snapshots and a positive control (`CHAIN_RULES_CRATE.md` §8.3) | 2 | yes — more than these five rule files, or the blanket impl not composing with `run`, is the fallback |
 | a3 | `AltChain::build` (K2), `AltView` over `ReadSnapshot` + chain (`HeaderView` only), K1a by construction, the stitched-view conformance test. UPDATE 2026-10-11: landed as specified — `store/alt_view.rs`: `AltChain::build(&ReadSnapshot, &prev_id)` walks `previous` from the parent (recorded hash → root, alt row → entry, neither → `AltCannot::Unlinked { at }`, the new refusal variant), then holds each entry's recorded height to `root + 1 + i` (the C++ rebuild's assertion; a disagreement is SI-7 under `alt_blocks`, reason `alt block's recorded height disagrees with its chain`); `AltView<'s>` implements `HeaderView` and nothing else — `header_at` is `chain_reads::block_body` at or below the root (one body with `BatchView`) and the entry's `{ hash, header, cumulative_difficulty }` above, `tip` the parent; `candidate_height() = parent + 1 ≥ 1` (K1a). Four tests in `store/alt_view_tests.rs`, including the stitched-view conformance test against `BatchView::header_at` below the fork with the negative control that the recorded reader still answers `main[2]` where the view answers `a`; the height check was mutation-tested (disabled → the SI-7 test fails). Finding `E5-18`: the census registry's `by_construction` form cannot name a store-homed property or credit a store-crate falsifier, so K1a/K2 stay `pending` in `census.rs` until a4's census-arms commit chooses the form | 2 | yes |
-| a4 | **first commit, ruled before it lands:** the census amendment (`CONSENSUS_RULE_CENSUS.md`; the registry entry is unchanged) — CEN-K4's row stops describing a ladder the Rust tier will not run: the C++ ladder is recorded in its landed order (version, timestamp, checkpoint, PoW, then attestation since `4932b769b`, 2026-09-13, then prevalidate) as the frozen path `DEL-009` retires, and the Rust tier's steps name no attestation step (`E5-Q4` β); CEN-B4's site pin re-pinned to `verify_block_attestation` 4979–5066 (signature to closing brace; `:4978` is the separator comment). **Then** `alt_against` (K1b, K4's tier, D5 via D4, E2's arm); `AltValid` → AL1; census arms. The `docs/FOLLOWUPS.md` rows *"Alt-chain attestation verify resolves bond pubkeys from main-chain state"* and *"Validate `prev_id` before attestation verify on the alt-chain path"* were closed with the ruling (2026-10-11), not by this commit. UPDATE 2026-10-11: `alt_against` landed (`alt.rs`, `rules/alt.rs`; §2.1 has the ladder): K1b a `FormRule` run before any header read; E2 a two-band function over `Fork { root, recorded_tip }`, the cap read from `RuleSet::reorg_cap` and binding only when anchored; D5 wrapping `D4::target`; F4/F5/F6 re-bound `HeaderRule` (`E5-14` amended: six files, 15 rules = 8 + 7); `AltValid` with no supply field; twelve tests, the row set pinned. Registry entries unchanged in this commit — K1b/E2/D5/K4 flip to `enforced_at` in the census-arms commit, with K1a/K2/K3 (`held_by_store`, `E5-18`) and K8 | 3 | yes |
+| a4 | **first commit, ruled before it lands:** the census amendment (`CONSENSUS_RULE_CENSUS.md`; the registry entry is unchanged) — CEN-K4's row stops describing a ladder the Rust tier will not run: the C++ ladder is recorded in its landed order (version, timestamp, checkpoint, PoW, then attestation since `4932b769b`, 2026-09-13, then prevalidate) as the frozen path `DEL-009` retires, and the Rust tier's steps name no attestation step (`E5-Q4` β); CEN-B4's site pin re-pinned to `verify_block_attestation` 4979–5066 (signature to closing brace; `:4978` is the separator comment). **Then** `alt_against` (K1b, K4's tier, D5 via D4, E2's arm); `AltValid` → AL1; census arms. The `docs/FOLLOWUPS.md` rows *"Alt-chain attestation verify resolves bond pubkeys from main-chain state"* and *"Validate `prev_id` before attestation verify on the alt-chain path"* were closed with the ruling (2026-10-11), not by this commit. UPDATE 2026-10-11: `alt_against` landed (`alt.rs`, `rules/alt.rs`; §2.1 has the ladder): K1b a `FormRule` run before any header read; E2 a two-band function over `Fork { root, recorded_tip }`, the cap read from `RuleSet::reorg_cap` and binding only when anchored; D5 wrapping `D4::target`; F4/F5/F6 re-bound `HeaderRule` (`E5-14` amended: six files, 15 rules = 8 + 7); `AltValid` with no supply field; twelve tests, the row set pinned. Registry entries unchanged in this commit — K1b/E2/D5/K4 flip to `enforced_at` in the census-arms commit, with K1a/K2/K3 (`held_by_store`, `E5-18`) and K8. UPDATE 2026-10-11 (second commit): the alt row loses its supply word — `coins_generated` deleted from `AltBlock`/`AltBlockFacts`, `SCHEMA_VERSION` 22 → 23, `alt_block.snap` re-pinned, layout pin `an_alt_row_has_no_supply_word`, the FOLLOWUPS supply-accumulation row closed (§2.1 "K8") | 3 | yes |
 | a5 | the switch closure in `shekyl-chain-ingest` (§2.3): cap check, SAL-13 reads, pops, K7 under the verdict arm, K5 promotion, removes; K6 on `ForkChoiceVerdict`; `Switched` | 3 | yes |
 | a6 | the three refusals distinguished (cap, floor, verdict) and the §4 fixtures for the boundary and the floor | 2 | yes |
 | a7 | a reorg capture for the corpus (`E5-Q9`): the C++ produces one switch, the trace gains the event, the grader compares | 2 | yes |

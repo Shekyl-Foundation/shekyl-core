@@ -19,8 +19,8 @@
 //!
 //! `AltView` implements no `ChainView`. An alt row carries what a header
 //! rule reads — the hash, the header, the cumulative difficulty
-//! (`HeaderRecord`) — and nothing an executed-chain rule reads: no
-//! `coins_generated` a rule may consult (CEN-K8), no tx count, no archival
+//! (`HeaderRecord`) — and nothing an executed-chain rule reads: no supply
+//! figure (CEN-K8; the alt record carries none), no tx count, no archival
 //! fold, no key-image set, no tree. A rule that needs an executed fact is
 //! a `BlockRule` bound on `ChainView`, and the compiler refuses to bind it
 //! on this type; the belt is the type, not a fault inside a returned

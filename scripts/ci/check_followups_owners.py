@@ -77,8 +77,10 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # 2026-10-01 when five grandfathered rows closed (the stub, the
 # target_height sentinel, the Ledger sources, the fcmp fuzz build, and
 # the false test-only-builder claim); 309 on 2026-10-11 when the two
-# alt-chain attestation rows closed by dissolution (DRS-E5 `E5-Q4`).
-GRANDFATHER_CEILING = 309
+# alt-chain attestation rows closed by dissolution (DRS-E5 `E5-Q4`); 308
+# the same day when the alt-chain supply-accumulation row closed with the
+# field it described deleted (DRS-E5 a4, CEN-K8).
+GRANDFATHER_CEILING = 308
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

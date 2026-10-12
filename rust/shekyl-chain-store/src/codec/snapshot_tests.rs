@@ -545,7 +545,6 @@ impl Fixtures for AltBlock {
             height: BlockHeight::from_raw(41),
             block_weight: weight.map(BlockWeight::from_raw),
             cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4), // lo = 4, hi = 5
-            coins_generated: AtomicUnits::from_raw(1_234_567),
         };
         let block = super::alt::test_block_bytes(41);
         vec![
