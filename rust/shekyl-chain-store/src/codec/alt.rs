@@ -15,24 +15,53 @@
 //! - `cumulative_difficulty` is **one** `u128`, the encoding the chain
 //!   codec already uses for `block_info` (`chain.rs`), not the two `u64`
 //!   halves the C++ splits by hand at three sites (SAL-5);
-//! - `block_weight` is `Option` — the C++ stores `0` for "could not be
-//!   determined at admission" (`blockchain.cpp:2345`), and no block weighs
-//!   zero, so the sentinel is `None` (`SAL-Q4`); the field is named for what
-//!   it holds — the block's own weight, not a cumulative one (SAL-11);
+//! - `block_weight` is a [`BlockWeight`] — the block's own weight, not a
+//!   cumulative one (SAL-11). The C++ stored `0` for "could not be
+//!   determined" (`blockchain.cpp:2345`). Nothing writes an undetermined
+//!   weight: the cheap tier measures one, and zero is a codec refusal
+//!   ([`AltBlockError::ZeroWeight`]), not an absence. This layout stores
+//!   the eight bytes with no presence byte;
 //! - the block and the witness are **fields**, so an alt record without
 //!   its block, or a witness outliving its block, is not a value
-//!   (`SAL-Q2`; CW-2's lifetime clause made structural, SAL-6).
+//!   (`SAL-Q2`; CW-2's lifetime clause made structural, SAL-6);
+//! - there is **no supply word** (CEN-K8, `DRS_E5_POOL_ALT_PRUNE.md`
+//!   §2.1). The C++ carried `already_generated_coins` per alt block as a
+//!   coinbase-paid approximation nothing consensus-bearing read; the Rust
+//!   tier that admits an alt block reads no executed-chain fact and
+//!   derives none, and promotion re-derives supply by executing the chain.
+//!   A field with no reader is not stored, so "nothing reads it" is the
+//!   type, not a grep. Deleted at `SCHEMA_VERSION` 24 (rule 42).
 //!
-//! # Construction and decoding refuse the same things
+//! # The row is built from the verdict
 //!
-//! [`AltBlock::checked`] is the constructor; the fields are private so it
-//! is the *only* constructor. It refuses block bytes that are not a block
+//! [`AltBlock::admitted`] is the constructor: it takes the cheap tier's
+//! verdict, [`AltValid`], and nothing else (DRS-E5 a4, `AltValid → AL1`).
+//! The verdict carries the block, its witness, and the three facts the tier
+//! derived over the stitched chain — the height, the cumulative difficulty,
+//! the measured weight — so there is no call site at which a fact is typed
+//! by hand, and no row the store holds that no tier admitted. The
+//! constructor is infallible: the block is a parsed [`Block`] already, the
+//! witness is a typed [`AttestationWitness`](shekyl_types::archival::AttestationWitness)
+//! (non-empty, within the bound the codec checks), and a measured weight is
+//! never zero (a block weighs at least its coinbase's bytes).
+//!
+//! [`AltBlock::checked`] builds a *value* from bare facts and bytes,
+//! refusing what the codec would refuse: block bytes that are not a block
 //! ([`BlockBody::parse`] — the `blocks` table's own rule), a witness that
 //! is present and empty or over its bound
 //! ([`AttestationWitnessBytes::well_formed`] — the height-keyed twin's own
-//! rule; "empty stores no row" is `None`), and a weight of zero (the
-//! sentinel re-minted). [`Canonical::decode`] refuses the same three, so a
-//! row that decodes is a row `checked` would have built (SI-14's shape).
+//! rule; "empty stores no row" is `None`), and a weight of zero. The
+//! codec's own tests, the schema snapshot and the store's planted-row
+//! fixtures build rows this way; AL1 does not take one — the write
+//! boundary is the verdict's type, not this constructor's visibility.
+//! [`Canonical::decode`] refuses the same three, so a row that decodes is
+//! a row `checked` would have built (SI-14's shape).
+//!
+//! The weight is mandatory in this layout. [`AltBlock::admitted`] always
+//! measured one, and no other writer produced an absence, so a presence
+//! byte is not a case the type can name. A later writer that needs an
+//! absent weight bumps the layout. The switch's demotion re-entry is a5's
+//! (`DRS_E5_POOL_ALT_PRUNE.md` §5); it does not inherit an absence arm.
 //!
 //! # The value is the block
 //!
@@ -47,17 +76,18 @@
 //! offered.
 //!
 //! What the record does not carry is its own hash: the key is the identity.
-//! AL1 refuses a caller-supplied key that is not `block.hash()`
-//! (`AltCannot::IdentityMismatch`). AL4 and AL7 refuse a row already on
-//! disk whose block does not hash to its key, as SI-7 — the belt
+//! AL1 takes the key from the verdict ([`AltValid::hash`], CEN-B6's one
+//! keccak over the block it stores), so no caller supplies one and there is
+//! no mismatch to refuse. AL4 and AL7 refuse a row already on disk whose
+//! block does not hash to its key, as SI-7 — the belt
 //! `chain_reads::block_body` applies to a blob against `block_info.hash`,
 //! verification of an identity rather than computation of a consensus
 //! value (C2-R8 Q4). The C++ trusted the caller (`blockchain.cpp:2359`).
 
+use shekyl_chain_rules::AltValid;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::{BlockHeight, BlockWeight};
-use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
 use super::archival::AttestationWitnessBytes;
@@ -72,8 +102,8 @@ pub enum AltBlockError {
     /// A witness was given and is not a well-formed witness — empty, or over
     /// its bound. Absence is `None`, never an empty `Some`.
     WitnessMalformed,
-    /// A weight of zero was given. Zero is the C++ sentinel for "not
-    /// determined"; here that is `None`.
+    /// A weight of zero was given. A block weighs at least its coinbase;
+    /// zero is not a weight this record stores.
     ZeroWeight,
 }
 
@@ -84,7 +114,7 @@ impl core::fmt::Display for AltBlockError {
             Self::WitnessMalformed => {
                 "attestation witness is present and empty or over its bound; absence is None"
             }
-            Self::ZeroWeight => "a block weight of zero is the sentinel; undetermined is None",
+            Self::ZeroWeight => "a block weight of zero is refused",
         })
     }
 }
@@ -94,13 +124,14 @@ impl core::error::Error for AltBlockError {}
 /// One alternative-chain block: its bookkeeping, its bytes, and the
 /// attestation witness it carries across a reorg.
 ///
-/// Built only through [`AltBlock::checked`]; read through the accessors.
+/// Built from the cheap tier's verdict through [`AltBlock::admitted`]
+/// (inside the crate, from bare facts through [`AltBlock::checked`]); read
+/// through the accessors.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AltBlock {
     height: BlockHeight,
-    block_weight: Option<BlockWeight>,
+    block_weight: BlockWeight,
     cumulative_difficulty: CumulativeDifficulty,
-    coins_generated: AtomicUnits,
     /// Parsed once, at construction or decode. The wire form is
     /// [`Block::serialize`] of this value.
     block: Block,
@@ -108,40 +139,69 @@ pub struct AltBlock {
 }
 
 /// The bookkeeping half of an [`AltBlock`] — what the C++ `alt_block_data_t`
-/// carried, typed. Passed to [`AltBlock::checked`] as one argument so the
-/// four scalars cannot be transposed at a call site.
+/// carried, typed — less its supply word (module doc). Passed to
+/// [`AltBlock::checked`] as one argument so the scalars cannot be
+/// transposed at a call site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AltBlockFacts {
     /// The block's height on its alternative chain.
     pub height: BlockHeight,
-    /// The block's own weight, `None` if admission could not determine it.
-    pub block_weight: Option<BlockWeight>,
+    /// The block's own weight. Zero is refused.
+    pub block_weight: BlockWeight,
     /// Cumulative difficulty at this block along its chain.
     pub cumulative_difficulty: CumulativeDifficulty,
-    /// Coins generated through this block along its chain.
-    pub coins_generated: AtomicUnits,
 }
 
 impl AltBlock {
-    /// Presence byte for an absent optional field.
+    /// Presence byte for an absent witness.
     const ABSENT: u8 = 0;
-    /// Presence byte for a present optional field.
+    /// Presence byte for a present witness.
     const PRESENT: u8 = 1;
 
-    /// Build a record, refusing what the codec would refuse.
+    /// **AL1's input.** The row for a block the cheap tier admitted: the
+    /// block and witness the verdict carries, under the height, cumulative
+    /// difficulty and weight it derived over the stitched chain
+    /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.1). Infallible — module docs, *The row
+    /// is built from the verdict*. `V` is the view the tier judged over;
+    /// the row does not keep it.
+    #[must_use]
+    pub fn admitted<V>(valid: AltValid<'_, V>) -> Self {
+        let height = valid.height();
+        let cumulative_difficulty = valid.cumulative_difficulty();
+        let block_weight = valid.block_weight();
+        debug_assert!(
+            block_weight.to_raw() != 0,
+            "a measured block weight is at least its coinbase's bytes"
+        );
+        let candidate = valid.into_candidate();
+        Self {
+            height,
+            block_weight,
+            cumulative_difficulty,
+            block: candidate.block,
+            attestation_witness: candidate
+                .attestation_witness
+                .map(|witness| witness.as_bytes().to_vec()),
+        }
+    }
+
+    /// Build a value from bare facts and bytes, refusing what the codec
+    /// would refuse. Not AL1's input — that is [`AltBlock::admitted`]; this
+    /// is how the codec's tests, the schema snapshot and the store's
+    /// planted-row fixtures build a row.
     ///
     /// # Errors
     ///
     /// [`AltBlockError::BlockMalformed`] if `block` does not parse;
     /// [`AltBlockError::WitnessMalformed`] if `attestation_witness` is
     /// `Some` and not a well-formed witness; [`AltBlockError::ZeroWeight`]
-    /// if `facts.block_weight` is `Some(0)`.
+    /// if `facts.block_weight` is zero.
     pub fn checked(
         facts: AltBlockFacts,
         block: &[u8],
         attestation_witness: Option<Vec<u8>>,
     ) -> Result<Self, AltBlockError> {
-        if facts.block_weight.is_some_and(|w| w.to_raw() == 0) {
+        if facts.block_weight.to_raw() == 0 {
             return Err(AltBlockError::ZeroWeight);
         }
         let block = BlockBody::parse(block).map_err(|_| AltBlockError::BlockMalformed)?;
@@ -153,7 +213,6 @@ impl AltBlock {
             height: facts.height,
             block_weight: facts.block_weight,
             cumulative_difficulty: facts.cumulative_difficulty,
-            coins_generated: facts.coins_generated,
             block,
             attestation_witness,
         })
@@ -166,7 +225,6 @@ impl AltBlock {
             height: self.height,
             block_weight: self.block_weight,
             cumulative_difficulty: self.cumulative_difficulty,
-            coins_generated: self.coins_generated,
         }
     }
 
@@ -176,9 +234,9 @@ impl AltBlock {
         self.height
     }
 
-    /// The block's own weight, `None` if admission could not determine it.
+    /// The block's own weight.
     #[must_use]
-    pub const fn block_weight(&self) -> Option<BlockWeight> {
+    pub const fn block_weight(&self) -> BlockWeight {
         self.block_weight
     }
 
@@ -186,12 +244,6 @@ impl AltBlock {
     #[must_use]
     pub const fn cumulative_difficulty(&self) -> CumulativeDifficulty {
         self.cumulative_difficulty
-    }
-
-    /// Coins generated through this block along its chain.
-    #[must_use]
-    pub const fn coins_generated(&self) -> AtomicUnits {
-        self.coins_generated
     }
 
     /// The block. Parsed once, at construction or decode
@@ -214,15 +266,8 @@ impl Canonical for AltBlock {
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.height.to_raw().to_le_bytes());
-        match self.block_weight {
-            None => out.push(Self::ABSENT),
-            Some(w) => {
-                out.push(Self::PRESENT);
-                out.extend_from_slice(&w.to_raw().to_le_bytes());
-            }
-        }
+        out.extend_from_slice(&self.block_weight.to_raw().to_le_bytes());
         out.extend_from_slice(&self.cumulative_difficulty.to_raw().to_le_bytes());
-        self.coins_generated.encode_into(out);
         put_bytes(out, &self.block.serialize());
         match &self.attestation_witness {
             None => out.push(Self::ABSENT),
@@ -236,15 +281,13 @@ impl Canonical for AltBlock {
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut r = Reader::new(Self::NAME, bytes);
         let height = BlockHeight::from_raw(r.u64()?);
-        let block_weight = match r.u8()? {
-            Self::ABSENT => None,
-            Self::PRESENT => Some(BlockWeight::from_raw(r.u64()?)),
-            _ => return Err(r.invalid("block_weight presence byte is not 0 or 1")),
-        };
+        let block_weight = BlockWeight::from_raw(r.u64()?);
+        if block_weight.to_raw() == 0 {
+            return Err(r.invalid("block weight is zero"));
+        }
         let cumulative_difficulty = CumulativeDifficulty::from_raw(u128::from_le_bytes(
             r.array::<16>("buffer ends inside the cumulative difficulty")?,
         ));
-        let coins_generated = AtomicUnits::from_raw(r.u64()?);
         // Copied out so the witness can be read before the parse. The
         // `Block` is what is kept.
         let block_bytes = r.bytes()?.to_vec();
@@ -255,9 +298,6 @@ impl Canonical for AltBlock {
         };
         if !r.is_empty() {
             return Err(r.invalid("trailing bytes after the alt block record"));
-        }
-        if block_weight.is_some_and(|w| w.to_raw() == 0) {
-            return Err(r.invalid("block weight is zero; undetermined is a missing option"));
         }
         let block = BlockBody::parse(&block_bytes)
             .map_err(|_| r.invalid("alt block bytes do not parse as a block"))?;
@@ -272,7 +312,6 @@ impl Canonical for AltBlock {
             height,
             block_weight,
             cumulative_difficulty,
-            coins_generated,
             block,
             attestation_witness,
         })

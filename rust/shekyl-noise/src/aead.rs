@@ -3,7 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Noise symmetric primitives shared by the handshake and the record layer.
+//! Noise symmetric primitives for the symmetric state and the record layer.
+//!
+//! A key and a nonce come from the caller. These functions stay in this
+//! crate. A handshake drives [`crate::SymmetricState`] and finishes in
+//! [`crate::SymmetricState::into_directions`].
 //!
 //! HMAC-BLAKE2s is RFC 2104 over BLAKE2s-256. `hkdf` is Noise's two-output
 //! HKDF: `HMAC(ck, ikm)` then `HMAC(temp, 0x01)` and `HMAC(temp, out1 || 0x02)`.
@@ -14,8 +18,8 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use zeroize::Zeroizing;
 
-pub(crate) const HASH_LEN: usize = 32;
-pub(crate) const TAG_LEN: usize = 16;
+pub const HASH_LEN: usize = 32;
+pub const TAG_LEN: usize = 16;
 
 pub(crate) fn hash(data: &[u8]) -> [u8; HASH_LEN] {
     let digest = Blake2s256::digest(data);
@@ -101,4 +105,18 @@ pub(crate) fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -
             },
         )
         .ok()
+}
+
+/// Run one rekey derivation, `HKDF(chaining_key, record_key)`, and discard it.
+///
+/// [`crate::Direction`] runs that same derivation when its nonce reaches the
+/// rekey boundary. This function exists so the C5 bench can time those three
+/// HMAC-BLAKE2s apart from a session. The derived keys do not leave this crate.
+#[cfg(feature = "rekey-timing")]
+pub fn rekey_hkdf(chaining_key: &[u8; HASH_LEN], record_key: &[u8; HASH_LEN]) {
+    let chaining_key = std::hint::black_box(*chaining_key);
+    let record_key = std::hint::black_box(*record_key);
+    let (ck, k) = hkdf(&chaining_key, &record_key);
+    std::hint::black_box(*ck);
+    std::hint::black_box(*k);
 }
