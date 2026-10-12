@@ -21,9 +21,7 @@ use serde::Serialize;
 use std::io::Write;
 
 use shekyl_chain_rules::EffectiveMedian;
-use shekyl_economics::{
-    burn::compute_burn_split, params::SCALE, split_block_emission, ScaledShare, TxVolume,
-};
+use shekyl_economics::{params::SCALE, ClosedShardCount, TxVolume};
 
 use crate::burden::{
     bond_opp_cost_skl, burden_cost_fiat_per_year, normal_tx_archival_bytes, ordinary_tx_fee,
@@ -391,6 +389,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 leaves: leaves_priced,
                 already_generated,
                 total_burned,
+                closed_shards: ClosedShardCount::new(closed_before),
             },
             params,
             &economic,
@@ -410,18 +409,11 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         let total_fees = priced.filled.fees;
         fold.add_block(priced.filled.included);
         let effective = priced.filled.paid_reward;
-        let emission_share = priced.emission_share;
-        let burn_pct = priced.burn_pct;
-        let (_miner, staker_emission) = split_block_emission(effective, emission_share);
-        // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
-        let whole_burn = compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE))
-            .staker_pool_amount;
-        // Flat-ledger advance: destroy at the shipped 25% split.
-        let flat = compute_burn_split(
-            total_fees,
-            burn_pct,
-            ScaledShare::from_raw(params.staker_pool_share),
-        );
+        let staker_emission = priced.paid.split.staker_emission;
+        // The whole burn, before its split: the candidate re-splits it. The
+        // two legs production returns sum to it exactly.
+        let shipped = priced.paid.fee_burn;
+        let whole_burn = shipped.staker_pool_amount + shipped.actually_destroyed;
 
         year_emission_atomic += u128::from(staker_emission);
         year_burn_atomic += u128::from(whole_burn);
@@ -431,7 +423,10 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         year_demand += u128::from(demand);
         year_expired += u128::from(priced.filled.expired);
         already_generated += u128::from(effective);
-        total_burned += u128::from(flat.actually_destroyed);
+        // The ledger advances by what production destroys at this block's
+        // closed-shard count. At the shipped parameters that is the flat
+        // split at every count (`the_shipped_split_is_flat_at_every_count`).
+        total_burned += u128::from(priced.paid.burned().to_raw());
 
         if (block + 1) % params.blocks_per_year == 0 {
             let year = (block + 1) / params.blocks_per_year;
@@ -1840,7 +1835,9 @@ pub struct Stage2Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_economics::burn::{compute_burn_split, compute_burn_split_at};
     use shekyl_economics::params::mul_scale;
+    use shekyl_economics::ScaledShare;
 
     use crate::burden::closed_shards;
 
@@ -1975,6 +1972,32 @@ mod tests {
             // `eprintln!` from a passing test, and this must be seen on one.
             use std::io::Write as _;
             let _ = writeln!(std::io::stderr(), "KNEE BAND: {reading}");
+        }
+    }
+
+    /// The fold's ledger is called the flat control: every candidate curve
+    /// is read against a chain that destroys at the floor share. The fold
+    /// advances it by production's split, which is flat only while the
+    /// shipped asymptote equals the floor. When the ceremony moves the
+    /// asymptote this goes red, and what must be re-read is which ledger
+    /// the candidates are measured against, and the `n = 0` the engine and
+    /// budget folds pass for want of a corpus.
+    #[test]
+    fn the_shipped_split_is_flat_at_every_count() {
+        let shipped = shekyl_economics::EconomicParams::default();
+        assert_eq!(
+            shipped.escalation_asymptote_share, shipped.staker_pool_share,
+            "the shipped burn split now escalates: the stage-2 ledger is no longer a flat control"
+        );
+        for n in [0, 1, shipped.escalation_knee_n, u64::MAX] {
+            let at_n =
+                compute_burn_split_at(1_000_000_007, 500_000, ClosedShardCount::new(n), &shipped);
+            let flat = compute_burn_split(
+                1_000_000_007,
+                500_000,
+                ScaledShare::from_raw(shipped.staker_pool_share),
+            );
+            assert_eq!(at_n, flat, "n = {n}");
         }
     }
 

@@ -10,12 +10,16 @@
 //! different after a block. They price the block the same way: CEN-F20's
 //! volume window and CEN-G6's medians are read before the block joins
 //! them, the burn reads the net supply, and the producer's fill rule
-//! decides how many of the offered transactions the block lists. That
-//! step lives here, so a later change to the operand order lands once.
+//! decides how many of the offered transactions the block lists. The
+//! block the fill made is then priced by production's own composition,
+//! [`price_emission`]: the paid reward, its split and the fee burn come
+//! back as one [`PaidEmission`], and no fold assembles them from parts.
+//! That step lives here, so a later change to the operand order lands once.
 
 use shekyl_chain_rules::EffectiveMedian;
 use shekyl_economics::{
-    burn::calc_burn_pct_at, emission_share, CirculatingSupply, EconomicParams, TxVolume,
+    burn::calc_burn_pct_at, emission_share_at, price_emission, CirculatingSupply, ClosedShardCount,
+    EconomicParams, EmissionInputs, PaidEmission, TxVolume,
 };
 
 use crate::block_space::{BlockSpace, Filled};
@@ -47,6 +51,10 @@ pub(crate) struct ChainStep {
     /// keep both in `u128`; the chain records them as `u64`.
     pub(crate) already_generated: u128,
     pub(crate) total_burned: u128,
+    /// Closed transaction shards through the parent block, the operand the
+    /// burn's staker share escalates on. A fold with no corpus trajectory
+    /// passes zero, where the share is its floor under any parameter set.
+    pub(crate) closed_shards: ClosedShardCount,
 }
 
 /// The block [`ChainCursor::price`] built, and the operands it was built at.
@@ -59,6 +67,10 @@ pub(crate) struct PricedBlock<'a> {
     pub(crate) fee_point: FeePoint<'a>,
     pub(crate) tx: OrdinaryTx,
     pub(crate) filled: Filled,
+    /// The block as production prices it, at the bodies' weight: the fill
+    /// lists no coinbase, so its bytes are not in the weight the penalty
+    /// reads (§4 of the design document).
+    pub(crate) paid: PaidEmission,
 }
 
 impl ChainCursor {
@@ -81,12 +93,7 @@ impl ChainCursor {
         let volume = self.window.operand();
         let medians = self.space.medians();
         let supply = net_supply(step.already_generated, step.total_burned);
-        let share = emission_share(
-            step.chain_height,
-            params.staker_emission_share,
-            params.staker_emission_decay,
-            params.blocks_per_year,
-        );
+        let share = emission_share_at(step.chain_height);
         let burn_pct = calc_burn_pct_at(volume, supply, economic);
         let generated = u64::try_from(step.already_generated.min(u128::from(u64::MAX)))
             .expect("clamped to the chain's u64 supply rail");
@@ -104,6 +111,23 @@ impl ChainCursor {
             .space
             .fill(step.fold_height, medians, step.demand, tx, &fee_point);
         self.window.push(filled.included);
+        let paid = price_emission(&EmissionInputs {
+            height: step.chain_height,
+            median_weight: medians.effective_median.to_raw(),
+            block_weight: filled.bodies_weight,
+            already_generated: generated,
+            tx_volume: volume,
+            total_fees: filled.fees,
+            supply,
+            closed_shards: step.closed_shards,
+            params: economic,
+        })
+        .expect("the fill priced this block at this weight");
+        assert_eq!(
+            paid.paid.to_raw(),
+            filled.paid_reward,
+            "the fill and the composition price one block"
+        );
         PricedBlock {
             volume,
             medians,
@@ -113,6 +137,7 @@ impl ChainCursor {
             fee_point,
             tx,
             filled,
+            paid,
         }
     }
 }
@@ -136,6 +161,7 @@ mod tests {
                 leaves: 0,
                 already_generated: 0,
                 total_burned: 0,
+                closed_shards: ClosedShardCount::ZERO,
             },
             &params,
             &economic,
@@ -150,6 +176,7 @@ mod tests {
                 leaves: 0,
                 already_generated: u128::from(first.filled.paid_reward),
                 total_burned: 0,
+                closed_shards: ClosedShardCount::ZERO,
             },
             &params,
             &economic,

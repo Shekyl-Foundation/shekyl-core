@@ -1,9 +1,8 @@
 use serde::Serialize;
 use shekyl_economics::{
-    burn::compute_burn_split_at,
     calc_release_multiplier,
     params::{calc_stake_ratio, EconomicParams, SCALE},
-    split_block_emission, CirculatingSupply, ClosedShardCount,
+    CirculatingSupply, ClosedShardCount,
 };
 use shekyl_units::AtomicUnits;
 
@@ -138,8 +137,6 @@ pub struct SimParams {
     pub burn_base_rate: u64,
     pub burn_cap: u64,
     pub staker_pool_share: u64,
-    pub staker_emission_share: u64,
-    pub staker_emission_decay: u64,
     /// The run's fee arm: what every scenario charges an ordinary
     /// transaction (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-1).
     pub fee: FeeModel,
@@ -161,8 +158,6 @@ impl Default for SimParams {
             burn_base_rate: shipped.burn_base_rate,
             burn_cap: shipped.burn_cap,
             staker_pool_share: shipped.staker_pool_share,
-            staker_emission_share: shekyl_economics::STAKER_EMISSION_SHARE,
-            staker_emission_decay: shekyl_economics::STAKER_EMISSION_DECAY,
             fee: FeeModel::PRODUCTION_DEFAULT,
         }
     }
@@ -254,6 +249,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 leaves: outputs.leaves(),
                 already_generated,
                 total_burned,
+                closed_shards: ClosedShardCount::ZERO,
             },
             params,
             &economic,
@@ -281,21 +277,18 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             params.release_min,
             params.release_max,
         );
-        let emission_share = priced.emission_share;
         let burn_pct = priced.burn_pct;
 
         outputs.accrue(priced.filled.included);
-        let total_fees = priced.filled.fees;
         let effective_reward = priced.filled.paid_reward;
-        let (miner_emission, staker_emission) =
-            split_block_emission(effective_reward, emission_share);
+        let miner_emission = priced.paid.split.miner_emission;
+        let staker_emission = priced.paid.split.staker_emission;
 
         // Canonical escalated split. This engine has no leaf/corpus trajectory, so
         // n = 0; under the shipped genesis-neutral asymptote that is bit-identical
         // to the flat floor at every n, and after the ceremony this is the honest
         // "no burden yet" baseline (stage2 threads real n via burden::closed_shards).
-        let fee_split =
-            compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &economic);
+        let fee_split = priced.paid.fee_burn;
 
         already_generated += u128::from(effective_reward);
         total_burned += fee_split.actually_destroyed as u128;
@@ -500,14 +493,6 @@ mod tests {
         assert_eq!(
             p.staker_pool_share,
             cfg_u64(&cfg, "shekyl_staker_pool_share")
-        );
-        assert_eq!(
-            p.staker_emission_share,
-            cfg_u64(&cfg, "shekyl_staker_emission_share")
-        );
-        assert_eq!(
-            p.staker_emission_decay,
-            cfg_u64(&cfg, "shekyl_staker_emission_decay")
         );
     }
 

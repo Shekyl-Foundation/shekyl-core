@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use shekyl_economics::params::SCALE;
 use shekyl_economics::{
     base_block_reward, base_emission_at, calc_burn_pct_from_activity, calc_release_multiplier,
-    compute_burn_split_at, effective_emission, emission_share, neutral_height_reaching,
+    compute_burn_split_at, effective_emission, emission_share_at, neutral_height_reaching,
     params_digest, split_block_emission, ClosedShardCount, EconomicParams, TxVolume,
 };
 
@@ -207,12 +207,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             effective_emission(ag_start, TxVolume::per_block(tx_volume), &params)
                 .expect("sim paid emission stays within the arithmetic domain");
 
-        let share = emission_share(
-            block + config.genesis_height_offset,
-            sim.staker_emission_share,
-            sim.staker_emission_decay,
-            blocks_per_year,
-        );
+        let share = emission_share_at(block + config.genesis_height_offset);
         let (_miner_emission, staker_emission) = split_block_emission(effective_reward, share);
 
         let total_staked = if stake_ratio > 0 && circulating > 0 {
