@@ -6529,10 +6529,20 @@ pairs could be chosen in advance (`SCS-F13`).
     builds transport. The contracts between them are the view trait and
     the kept projection type.
 
-**Open.** Six questions found while writing the bundle in, each with a
-recommendation (specification §13.6, `SCS-P32`–`P37`): a bound on the
-anchor, the budget's integer form, whether the header root is the existing
-`attestation_root`, the bundle's bytes, what a backfill verifies, and
-whether the verifier returns the derived draws.
+**Ruled 2026-10-12, the six questions found while writing the bundle in**
+(specification §13.6, `SCS-P32`–`P37`):
+
+- admission checks `anchor_height < h`, and every rule set asserts
+  `W₂ + L ≤` anchor depth; an amendment to `SCS-P7`;
+- the budget is `c · (⌊9·D / SEB⌋ + 1)`, with `D` the largest among the
+  epochs of the bundles in the section; a zero-draw bundle is admissible;
+- the header's `attestation_root` field is reused and renamed
+  `bundle_root`; CEN-B4 is retired by ruling for a new row;
+- the bundle commitment under a new label, fixed-width records with no
+  frame, and the dependency on FN-DSA-1024's padded signature written
+  down;
+- a backfilled bundle is accepted on hash equality; re-verifying receipts
+  is optional. *Corrects* item 7's "can be re-verified";
+- the verifier returns the derived draws with the kept projection.
 
 ---
