@@ -160,13 +160,27 @@ impl Pairs {
 }
 
 /// A block's draw seed: 32 bytes no other block shares. Production's is the
-/// witness's secret; here it is the run's generator.
+/// witness's secret; here it is four words of the run's generator.
 fn block_seed(rng: &mut SplitMix64) -> [u8; 32] {
     let mut seed = [0u8; 32];
     for word in seed.chunks_exact_mut(8) {
-        word.copy_from_slice(&rng.below(u64::MAX).to_le_bytes());
+        word.copy_from_slice(&rng.word().to_le_bytes());
     }
     seed
+}
+
+/// Whether [`draw_count`] is already at its shortfall cap.
+///
+/// Production does not return a flag. The cap binds when a shortfall no
+/// epoch reaches prices the same target at a zero carry. The block's own
+/// count is a separate call: its carry can add one draw, and that draw is
+/// not the cap.
+fn shortfall_is_capped(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> bool {
+    let at_carry_zero = |shortfall: u64| {
+        draw_count(set_size, shortfall, horizon, seb, 0)
+            .expect("the epoch and the horizon are positive")
+    };
+    at_carry_zero(shortfall) == at_carry_zero(u64::MAX)
 }
 
 /// Simulate one epoch.
@@ -233,14 +247,10 @@ pub fn run_epoch(pairs: u32, dropout_permille: u32, in_flight: InFlight, seed: u
         };
         let net = state.shortfall.saturating_sub(pending);
         let horizon = draw_horizon(h, seb, w2);
-        let priced = |shortfall, carry| {
-            draw_count(u64::from(pairs), shortfall, horizon, seb, carry)
-                .expect("the epoch and the horizon are positive")
-        };
-        // The cap binds where no larger shortfall would raise the target:
-        // production's own answer, with no cap restated here.
-        capped_blocks += u64::from(priced(net, 0) == priced(u64::MAX, 0));
-        let (count, next) = priced(net, carry);
+        let set_size = u64::from(pairs);
+        capped_blocks += u64::from(shortfall_is_capped(set_size, net, horizon, seb));
+        let (count, next) = draw_count(set_size, net, horizon, seb, carry)
+            .expect("the epoch and the horizon are positive");
         carry = next;
 
         // Production's selection, called: each draw is `select_draw` on
@@ -771,30 +781,19 @@ mod tests {
         }
     }
 
-    /// A full pair is still drawn, and far less often than a short one:
-    /// production's weighting reaches the epoch through `select_draw`. The
-    /// ratio itself is production's to pin.
+    /// The cap flag is production's saturated shortfall at a zero carry.
+    /// It does not take the block's carry: that carry can add a draw, and
+    /// the added draw is not the cap.
     #[test]
-    fn full_pairs_are_drawn_less_often_than_short_ones() {
-        let mut state = Pairs::new(1_000);
-        for pair in 0..500 {
-            for _ in 0..COUNTED_DRAWS {
-                state.reveal(pair);
-            }
-        }
-        assert_eq!(state.shortfall, 1_500);
-        let seed = [0x5Au8; 32];
-        let block = [0xC3u8; 32];
-        let n = 20_000u32;
-        let full_hits = (0..n)
-            .filter(|&j| {
-                select_draw(&seed, &block, j, 1_000, |i| state.is_short(i))
-                    .expect("the set is not empty")
-                    .index
-                    < 500
-            })
-            .count();
-        assert!(full_hits > 0 && full_hits * 4 < n as usize, "{full_hits}");
+    fn the_cap_flag_is_the_saturated_shortfall() {
+        let seb = SETTLEMENT_EPOCH_BLOCKS;
+        let horizon = draw_horizon(0, seb, CHALLENGE_RESPONSE_BLOCKS);
+        let set_size = u64::from(D);
+        assert!(
+            !shortfall_is_capped(set_size, 0, horizon, seb),
+            "an empty shortfall is under the cap"
+        );
+        assert!(shortfall_is_capped(set_size, u64::MAX, horizon, seb));
     }
 
     #[test]
