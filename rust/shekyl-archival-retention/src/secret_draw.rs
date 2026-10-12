@@ -617,7 +617,7 @@ mod tests {
                             "D = {set_size}, u = {shortfall}, H = {horizon}, carry = {carry}"
                         );
                         // The target never exceeds the cap, capped or not.
-                        assert!(target.fixed <= (9 * u128::from(set_size) << 32) / 10_000);
+                        assert!(target.fixed <= ((9 * u128::from(set_size)) << 32) / 10_000);
                     }
                 }
             }
