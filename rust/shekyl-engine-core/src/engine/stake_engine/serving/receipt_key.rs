@@ -156,7 +156,7 @@ mod tests {
     use crate::engine::stake_engine::test_fixtures::{
         derive_bundle, ephemeral_body_store, spawn_over,
     };
-    use crate::engine::stake_engine::types::HeldPersona;
+    use crate::engine::stake_engine::types::{HeldPersona, HeldReceiptKey};
 
     const SLOT: u32 = 3;
     const OTHER_SLOT: u32 = 4;
@@ -452,7 +452,10 @@ mod tests {
     #[test]
     fn the_first_receipt_builds_the_key_and_the_second_reuses_it() {
         let mut persona = HeldPersona::hold(derive_bundle(SLOT), true);
-        assert!(persona.receipt_key().built().is_none(), "nothing at hold");
+        assert!(
+            matches!(persona.receipt_key(), HeldReceiptKey::NotBuilt),
+            "nothing at hold"
+        );
 
         let first = persona.sign_receipt_transcript(&message()).expect("signs");
         let built = persona.receipt_key().built().expect("the first built it");
@@ -482,18 +485,84 @@ mod tests {
     }
 
     /// A receipt secret that does not decode refuses at the first signature
-    /// with the scheme's typed error, and at the next one the same way: no
-    /// key is held, and no failure is remembered in its place.
+    /// with the scheme's typed error, and the slot remembers it: later
+    /// requests get the same error and hold no key.
     #[test]
     fn a_corrupted_receipt_key_refuses_at_the_first_signature() {
         let mut persona = HeldPersona::hold(bundle_with_a_corrupted_receipt_key(SLOT), true);
+        assert!(matches!(persona.receipt_key(), HeldReceiptKey::NotBuilt));
         for _ in 0..3 {
             assert!(matches!(
                 persona.sign_receipt_transcript(&message()),
                 Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
             ));
-            assert!(persona.receipt_key().built().is_none());
+            assert!(matches!(persona.receipt_key(), HeldReceiptKey::Undecodable));
         }
+    }
+
+    /// After the first refusal, a request does not attempt the decode again.
+    /// Held by stack: the second and third requests run on a thread whose
+    /// stack is the bound a later receipt from a good key is held to, which
+    /// a decode attempt on this corrupted key does not fit in. A slot that
+    /// went back to `NotBuilt` on failure would retry there and overflow,
+    /// not fail an assertion; that edit was made and it aborts this test in
+    /// both profiles.
+    #[test]
+    fn an_undecodable_key_is_not_decoded_again() {
+        const NO_DECODE_STACK: usize = if cfg!(debug_assertions) {
+            256 * 1024
+        } else {
+            64 * 1024
+        };
+        // Boxed so the persona is handed to the small thread as a pointer.
+        let mut persona = Box::new(HeldPersona::hold(
+            bundle_with_a_corrupted_receipt_key(SLOT),
+            true,
+        ));
+        persona
+            .sign_receipt_transcript(&message())
+            .expect_err("the first request, on this thread, attempts the decode");
+
+        let persona = std::thread::Builder::new()
+            .stack_size(NO_DECODE_STACK)
+            .spawn(move || {
+                for _ in 0..2 {
+                    assert!(matches!(
+                        persona.sign_receipt_transcript(&message()),
+                        Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
+                    ));
+                }
+                persona
+            })
+            .expect("spawn")
+            .join()
+            .expect("later requests were refused without a decode");
+        assert!(matches!(persona.receipt_key(), HeldReceiptKey::Undecodable));
+    }
+
+    /// The state is the persona's own. One persona's undecodable key leaves
+    /// its neighbour's slot as it was, and the neighbour builds and signs.
+    #[test]
+    fn an_undecodable_key_is_one_personas_state() {
+        let mut broken = HeldPersona::hold(bundle_with_a_corrupted_receipt_key(SLOT), true);
+        let mut sound = HeldPersona::hold(derive_bundle(OTHER_SLOT), false);
+        broken
+            .sign_receipt_transcript(&message())
+            .expect_err("does not decode");
+        assert!(matches!(broken.receipt_key(), HeldReceiptKey::Undecodable));
+        assert!(matches!(sound.receipt_key(), HeldReceiptKey::NotBuilt));
+
+        let signature = sound.sign_receipt_transcript(&message()).expect("signs");
+        assert!(matches!(sound.receipt_key(), HeldReceiptKey::Built(_)));
+        HybridEd25519FnDsa
+            .verify(
+                &receipt_pk(OTHER_SLOT),
+                SCHEME_DOMAIN_RECEIPT,
+                &message(),
+                &signature,
+            )
+            .expect("verifies");
+        assert!(matches!(broken.receipt_key(), HeldReceiptKey::Undecodable));
     }
 
     /// The same through the actor. Holding the corrupted key does not stop
@@ -525,6 +594,7 @@ mod tests {
                     .to_string()
             )
         );
+        // From the remembered state this time, not from a second decode.
         let second = sign(key, message()).await.expect_err("and again");
         assert_eq!(first, second, "a later call is refused the same way");
         assert_eq!(is_built(&stake, SLOT).await, Some(false));

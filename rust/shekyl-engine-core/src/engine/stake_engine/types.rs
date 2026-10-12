@@ -124,9 +124,9 @@ impl HeldPersona {
     /// no FN-DSA work.
     pub(crate) fn hold(keys: ArchivalPKeys, bonded: bool) -> Self {
         if bonded {
-            HeldPersona::Bonded(BondedPersona(keys, HeldReceiptKey::unbuilt()))
+            HeldPersona::Bonded(BondedPersona(keys, HeldReceiptKey::NotBuilt))
         } else {
-            HeldPersona::Ephemeral(EphemeralPersona(keys, HeldReceiptKey::unbuilt()))
+            HeldPersona::Ephemeral(EphemeralPersona(keys, HeldReceiptKey::NotBuilt))
         }
     }
 
@@ -195,8 +195,10 @@ pub(crate) struct BondedPersona(pub(crate) ArchivalPKeys, pub(crate) HeldReceipt
 pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys, pub(crate) HeldReceiptKey);
 
 /// The slot for a persona's **decoded receipt key** — Ed25519 + FN-DSA-1024,
-/// hybrid scheme 3 (`FN_DSA_HYBRID.md` §9, `FND-4`). Empty until the first
-/// receipt signature is asked of the persona; the decoded key from then on.
+/// hybrid scheme 3 (`FN_DSA_HYBRID.md` §9, `FND-4`). Three states, entered
+/// in one direction: not yet built, then, at the first receipt signature
+/// asked of the persona, either built or undecodable, for the rest of the
+/// persona's life.
 ///
 /// **STAGED.** Nothing on the live serve path signs with this key: the
 /// serving task is handed the identity key's capability
@@ -208,48 +210,83 @@ pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys, pub(crate) HeldRece
 /// Decoding is the expensive step — up to 360 KiB of stack in an optimized
 /// build and 118,640 bytes of heap for the key — and until the cutover no
 /// persona is ever asked for a receipt. So the actor's start decodes nothing
-/// and the slot of a persona that never signs a receipt stays empty for its
-/// whole life. The first signature pays the decode; every later one signs
-/// from the held key (`FnDsaHybridSigner`).
+/// and the slot of a persona that never signs a receipt stays
+/// [`Self::NotBuilt`] for its whole life. The first signature pays the
+/// decode; every later one signs from the held key (`FnDsaHybridSigner`).
 ///
-/// **No second copy of the secret.** The slot holds no key bytes while
-/// empty. The key it decodes is `ArchivalPKeys::receipt_sign_sk`, in the
-/// bundle that is the other field of the same persona, borrowed at the
-/// moment of the first signature.
+/// **What secret material the slot holds.** While [`Self::NotBuilt`] or
+/// [`Self::Undecodable`], none: no key byte, and nothing derived from one.
+/// Once [`Self::Built`], it holds the receipt key a second time, in decoded
+/// form: the FN-DSA signing key expanded to its 118,640-byte context
+/// (x86_64), and the signer's own heap copy of the 32-byte Ed25519 seed.
+/// That is in addition to the encoded secret, which stays in
+/// `ArchivalPKeys::receipt_sign_sk` in the bundle that is the other field of
+/// the same persona and is what the slot decodes from, borrowed at the first
+/// signature. Both forms are wiped when the persona drops.
 ///
-/// **A key that does not decode** is refused at that first signature with
-/// the scheme's error, and at every later one the same way: the slot stays
-/// empty and the next call decodes again. There is no remembered failure.
+/// **A key that does not decode is remembered as such.** The first
+/// signature is refused with the scheme's error and the slot becomes
+/// [`Self::Undecodable`]; every later request is refused at once with the
+/// same error, without reading the secret or attempting a decode. The key
+/// bytes do not change while the persona is held, so a decode that failed
+/// once fails every time, and retrying would spend a decode's stack and
+/// time on each request — on a path that a remote reader drives once the
+/// capability is live. The state is a unit: it carries no error value and
+/// nothing computed from the key. A persona leaves it only by being dropped;
+/// reopening the wallet re-derives the bundle.
+///
 /// Nothing checks the key when the actor starts. The cutover, which makes
 /// receipt signing live, is where a start-time check belongs if one is
 /// wanted.
-///
-/// A decoded key is wiped in place when the persona drops.
-pub(crate) struct HeldReceiptKey(Option<FnDsaHybridSigner>);
+pub(crate) enum HeldReceiptKey {
+    /// No receipt signature has been asked of this persona. Holds nothing.
+    NotBuilt,
+    /// The decoded key, built by the first receipt signature and wiped in
+    /// place when the persona drops.
+    Built(FnDsaHybridSigner),
+    /// The first receipt signature found that the key does not decode.
+    /// Holds nothing; every request is refused without another attempt.
+    Undecodable,
+}
 
 impl HeldReceiptKey {
-    const fn unbuilt() -> Self {
-        Self(None)
-    }
-
-    /// The held signer, decoded from `secret` now if the slot is empty.
-    /// `secret` is always the receipt key of the bundle beside this slot
-    /// ([`HeldPersona::sign_receipt_transcript`] is the one caller).
+    /// The held signer, decoded from `secret` now if no signature has been
+    /// asked for yet. `secret` is always the receipt key of the bundle
+    /// beside this slot ([`HeldPersona::sign_receipt_transcript`] is the one
+    /// caller), and is read only in the [`Self::NotBuilt`] state.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidKeyMaterial` if the key does not decode: from the decode on
+    /// the first call, from the remembered state on every later one. It is
+    /// the one error `FnDsaHybridSigner::new` has, so the unit state loses
+    /// nothing by not storing it.
     fn signer_over(
         &mut self,
         secret: &FnDsaHybridSecretKey,
     ) -> Result<&mut FnDsaHybridSigner, shekyl_crypto_pq::CryptoError> {
-        match &mut self.0 {
-            Some(signer) => Ok(signer),
-            empty @ None => Ok(empty.insert(FnDsaHybridSigner::new(secret)?)),
+        if matches!(self, Self::NotBuilt) {
+            *self = match FnDsaHybridSigner::new(secret) {
+                Ok(signer) => Self::Built(signer),
+                Err(_) => Self::Undecodable,
+            };
+        }
+        match self {
+            Self::Built(signer) => Ok(signer),
+            Self::Undecodable | Self::NotBuilt => {
+                Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
+            }
         }
     }
 
-    /// Where the decoded key is, or `None` while the slot is empty. Two
-    /// calls that give the same address saw the same held key.
+    /// Where the decoded key is, or `None` in the two states that hold
+    /// none. Two calls that give the same address saw the same held key.
     #[cfg(test)]
     pub(crate) fn built(&self) -> Option<*const FnDsaHybridSigner> {
-        self.0.as_ref().map(std::ptr::from_ref)
+        match self {
+            Self::Built(signer) => Some(std::ptr::from_ref(signer)),
+            Self::NotBuilt | Self::Undecodable => None,
+        }
     }
 }
 

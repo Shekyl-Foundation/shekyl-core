@@ -253,7 +253,8 @@ impl Message<SignPassTranscript> for StakeEngine {
 /// therefore needs the stack a decode needs, on the actor's task; the
 /// figures are on `the_first_receipt_pays_the_decode_and_later_ones_do_not`.
 /// A key that does not decode is [`StakeEngineError::ReceiptSign`] at that
-/// first message and at each one after it.
+/// first message and at each one after it; the later ones are refused from
+/// the remembered state and decode nothing.
 ///
 /// An unheld slot is [`StakeEngineError::LookaheadExhausted`], and there is
 /// no gate on the [`HeldPersona::Bonded`] tag, both as in
