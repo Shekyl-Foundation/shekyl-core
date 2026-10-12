@@ -1013,46 +1013,6 @@ namespace cryptonote
       const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height,
       tx_verification_context *tvc = nullptr) const;
 
-    /**
-     * @brief FAKECHAIN-only: inject an archival serve-credit bit directly.
-     *
-     * Regtest stand-in for the Gate-6 serve-credit accrual path
-     * (ARCHIVAL_FIREWALL_GATE6.md): writes through the production setter
-     * (BlockchainDB::set_archival_serve_credit_bit — the same writer the
-     * txin_archival_serve_credit_response connect path drives at
-     * blockchain_db.cpp) so the WS-1 single-source shape holds: bits are
-     * the sole work_P source and the epoch close derives everything else.
-     * It deliberately bypasses check_archival_serve_credit_input
-     * (acceptance + segment-freeze substrate is Gate-6 scope, out of the
-     * E4 gate) — that coverage boundary is the point of the shim.
-     *
-     * NOT pop-symmetric: a bit injected here has no carrier transaction,
-     * so no block pop ever calls remove_archival_serve_credit_bit for it.
-     * Callers (the emission regtest e2e) must hard-bound any pop/reorg
-     * below the injection height, or the reverted-and-replayed close
-     * derives Σwork over a stranded bit. Deletion target: replaced by the
-     * production serve-credit response builder when Gate-6 R3–R5 land.
-     *
-     * @return false unless nettype is FAKECHAIN.
-     */
-    /// The injected row is attributed to the tip's block index (PC-D4), read
-    /// inside the method under `m_blockchain_lock` — the same critical
-    /// section as the write, so a concurrent mine/pop cannot move the tip
-    /// between attribution and write. There is deliberately no height
-    /// parameter: a caller-supplied snapshot is pre-lock by construction,
-    /// and the "not block-owned" warning stays literal — nothing pops the
-    /// bit, so a later pop below the attributed height strands a row that
-    /// claims a block it did not come from.
-    ///
-    /// `attributed_height` is the **receipt**: the tip index the row was
-    /// keyed at, written on success only. The caller cannot re-derive it
-    /// after the fact (a post-call tip read is the same stale snapshot the
-    /// missing parameter refuses, and it is a block count, not the index —
-    /// `DRS_E4_ARCHIVAL_WRITER.md` ARW-26), so the injector hands it back
-    /// and the RPC carries it to the capture that replays the injection
-    /// as a corpus event (DRS-E4 §3.8 item 3).
-    bool regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
-      uint64_t shard_id, uint64_t settlement_epoch, uint64_t& attributed_height);
 
 #ifndef IN_UNIT_TESTS
   private:

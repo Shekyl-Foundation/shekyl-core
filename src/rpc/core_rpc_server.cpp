@@ -824,47 +824,6 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_inject_archival_serve_credit(const COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT::request& req, COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(inject_archival_serve_credit);
-
-    CHECK_CORE_READY();
-
-    if(m_core.get_nettype() != FAKECHAIN)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_REGTEST_REQUIRED;
-      error_resp.message = "Regtest required when injecting archival serve credit";
-      return false;
-    }
-
-    crypto::hash p_canonical_id;
-    if (!epee::string_tools::hex_to_pod(req.p_canonical_id, p_canonical_id))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-      error_resp.message = "p_canonical_id is not a 32-byte hex hash";
-      return false;
-    }
-
-    // PC-D4: the tip index the row is attributed to is derived INSIDE the
-    // injector, under the blockchain lock — a snapshot taken here would be
-    // pre-lock and can go stale against a concurrent mine/pop. On refusal
-    // (wrong nettype, empty chain) the daemon log names the reason.
-    // The receipt: the tip index the row was keyed at, from inside the
-    // lock. The caller's only way to learn it (DRS-E4 §3.8 item 3 — the
-    // capture replays the injection as a corpus event at this height).
-    uint64_t attributed_height = 0;
-    if (!m_core.get_blockchain_storage().regtest_inject_archival_serve_credit(
-      p_canonical_id, req.shard_id, req.settlement_epoch, attributed_height))
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Serve-credit injection failed";
-      return false;
-    }
-
-    res.height = attributed_height;
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
   //------------------------------------------------------------------------------------------------------------------------------
   //------------------------------------------------------------------------------------------------------------------------------
   //------------------------------------------------------------------------------------------------------------------------------

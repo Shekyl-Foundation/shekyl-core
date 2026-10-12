@@ -91,8 +91,9 @@
 //! # The regtest injector (§3.8 item 3)
 //!
 //! [`ChainStore::regtest_inject_serve_credit`](super::ChainStore::regtest_inject_serve_credit)
-//! is the writer's own test hook — the door the C++'s
-//! `regtest_inject_archival_serve_credit` (`blockchain.cpp:4708`) opened,
+//! is the writer's own test hook — the door the C++ daemon had as
+//! `regtest_inject_archival_serve_credit` until its serve-credit path was
+//! deleted (`SERVE_CREDIT_DELETION.md`, `SCD-10`),
 //! writing a serve-credit bit the rules did not admit, attributed to the
 //! tip's height, refused off Fakechain. It lives beside the phase bodies
 //! because it writes their table and nothing else may. It is **not
@@ -517,10 +518,9 @@ impl<'id> WriteBatch<'_, 'id> {
 impl ChainStore {
     /// The regtest injector: `archival_serve_credit[(persona, shard, epoch,
     /// tip)] = Present`, a bit no block earned, attributed to the tip's
-    /// height — the C++'s `regtest_inject_archival_serve_credit`
-    /// (`blockchain.cpp:4708`), the Gate-6 stand-in that lets a regtest
-    /// reach a closed epoch with a credit in it. Refused off Fakechain as
-    /// the C++ refuses it: `trust` must be [`Trust::UNANCHORED`] — the one
+    /// height — the Gate-6 stand-in that lets a regtest reach a closed
+    /// epoch with a credit in it (the C++ daemon's twin is deleted,
+    /// `SCD-10`). Refused off Fakechain: `trust` must be [`Trust::UNANCHORED`] — the one
     /// posture no release vouches for, which is what a Fakechain node
     /// always is and a public-network node never is
     /// ([`ReleaseAnchors`] has no constructor from arbitrary entries, so
