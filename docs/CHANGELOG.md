@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- **Chain store: the alternative-block row carries no supply word (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, CEN-K8).** `alt_block` drops the per-alt-block `coins_generated` the C++ `alt_block_data_t` carried as a coinbase-paid approximation nothing consensus-bearing read; the Rust admission tier reads no executed-chain fact, and promotion derives supply by executing the chain. Chain-store layout is 23; a store written under 22 is refused at open (alt rows are the table dropped at every init by default, so a restart already pays this). The FOLLOWUPS row "Alt-chain supply accumulation advances by the coinbase, not the emission subsidy" closes: nothing accumulates.
+- **Chain store: the alternative-block row carries no supply word (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, CEN-K8).** `alt_block` drops the per-alt-block `coins_generated` the C++ `alt_block_data_t` carried as a coinbase-paid approximation nothing consensus-bearing read; the Rust admission tier reads no executed-chain fact, and promotion derives supply by executing the chain. Chain-store layout is 23; a store written under 22 is refused at open, before any table is read, and is rebuilt from the block corpus — no migration ladder exists, as for every layout bump before genesis. The FOLLOWUPS row "Alt-chain supply accumulation advances by the coinbase, not the emission subsidy" closes: nothing accumulates.
 
 ## [3.1.0-alpha.10] - 2026-10-11
 

@@ -241,9 +241,14 @@ use super::{Canonical, CodecError};
 ///   the chain. The fixture `alt_block` re-pins eight bytes shorter; no
 ///   table moves. A `22` file's alt rows would decode with their block
 ///   bytes mis-framed, so the bump refuses the file at open rather than
-///   letting `decode` report a parse failure as corruption. Alt rows are
-///   the table AL3 drops at every init by default (`alt_reads.rs`, SAL-8),
-///   so the refusal costs nothing a restart does not already cost.
+///   letting `decode` report a parse failure as corruption. The refusal
+///   is `header::verify`'s
+///   [`StoreCannot::SchemaVersionMismatch`](crate::store::StoreCannot::SchemaVersionMismatch),
+///   raised before any table is read — AL3's drop of the alt table at
+///   init never runs on a `22` file — and the operator path is the one
+///   every bump has: no migration ladder exists; rebuild the store from
+///   the block corpus (`15-deletion-and-debt.mdc`, the pre-genesis
+///   migration path).
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(23);
 
 /// A layout version as stored in the `schema_version` cell.
