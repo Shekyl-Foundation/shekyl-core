@@ -29,6 +29,12 @@
 //! sim leads the code. The epoch length, `W₂`, the shard length and the
 //! failure window are production's.
 //!
+//! Note 2026-10-12: the count and the selection now have production owners
+//! (`draw_count`, `draw_horizon` and `select_draw` in
+//! `shekyl-archival-retention`). This module is kept as it ran, as the `f64`
+//! reference; [`crate::secret_draw_production`] (ESR-13) runs the same epoch
+//! on the owners and prints this module's cells beside its own.
+//!
 //! The read itself is not modelled. Every revealed draw is issued whether or
 //! not it passed, which is the design's own rule; pass and miss enter only
 //! through the `(m, n)` re-check, analytically.
