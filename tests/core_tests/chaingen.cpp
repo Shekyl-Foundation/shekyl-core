@@ -504,7 +504,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
     // pinned in shekyl-ffi). A test that configures a non-neutral asymptote
     // must thread the real parent leaf-derived n here or its coinbase will be
     // refused at connect — which is the loud failure we want.
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, /*draw_commitment: fixed, nothing opens it*/shekyl::draw_commitment{{0xDC}}, blobdata(), /*max_outs=*/1,
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), /*max_outs=*/1,
         /*tx_volume=*/{}, shekyl::supply_facts{already_generated_coins, /*total_burned: the generator tracks no burn fold; see the frozen_segment_count note*/0}))
       return false;
 
@@ -599,7 +599,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   {
     size_t current_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
     // TODO: This will work, until size of constructed block is less then CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, /*draw_commitment: fixed, nothing opens it*/shekyl::draw_commitment{{0xDC}}, blobdata(), max_outs,
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), max_outs,
         /*tx_volume=*/{}, shekyl::supply_facts{already_generated_coins, /*total_burned: the generator tracks no burn fold; see the frozen_segment_count note*/0}))
       return false;
   }
@@ -669,7 +669,7 @@ static bool write_coinbase_extra(transaction& tx, const crypto::public_key& tx_p
   char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
   ShekylOwnedBuffer extra;
   const int32_t rc = shekyl_coinbase_extra(
-    reinterpret_cast<const uint8_t*>(&tx_pub), nonce, shekyl::draw_commitment{{0xDC}}.bytes,
+    reinterpret_cast<const uint8_t*>(&tx_pub), nonce,
     kem_blob.empty() ? nullptr : kem_blob.data(), kem_blob.size(),
     leaf_blob.empty() ? nullptr : leaf_blob.data(), leaf_blob.size(),
     tx.vout.size(), &extra.buf, msg, sizeof(msg));

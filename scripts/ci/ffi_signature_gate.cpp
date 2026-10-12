@@ -21,10 +21,10 @@
 // hand-written header and observed to fail): dropping a parameter from
 // shekyl_relay_zone_poll -> "conflicting declaration of C function";
 // changing now_ms from uint64_t to uint32_t -> same error class. And, when
-// the coinbase writer joined the gate (SO-D12 increment 1): the Rust
-// shekyl_coinbase_extra had gained its draw_commitment parameter and the
-// hand-written declaration had not -> the same error, before any C++ call
-// site was touched.
+// the tx_extra codec joined the gate (SO-D12 increment 1): a parameter added
+// to the Rust shekyl_coinbase_extra and not to the hand-written declaration
+// -> the same error, before any C++ call site was touched. That parameter
+// was then removed again; the control is what it showed about the gate.
 //
 // Order matters: the hand-written header comes first so its type
 // definitions (ShekylRelayBlob, the callback typedefs, the #define flag
@@ -34,7 +34,6 @@
 
 #include "shekyl_ffi_generated_relay.h"
 #include "shekyl_ffi_generated_tx_extra_codec.h"
-#include "shekyl_ffi_generated_archival_draw.h"
 
 int main()
 {

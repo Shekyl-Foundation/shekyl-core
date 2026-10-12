@@ -1710,14 +1710,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   // a second read there could price against a different n than the first pass
   // (criterion #1 — template and connect must agree by construction).
   const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
-  // The template's 0x0C draw commitment, drawn ONCE for the same reason: both
-  // pricing passes build the same block's coinbase. Rust draws the witness
-  // key and seed behind it and keeps neither, so this block commits to a
-  // seed nobody reveals and issues no draw (SO-D12 increment 1).
-  shekyl::draw_commitment draw_commitment;
-  const uint8_t draw_rc = shekyl_archival_draw_commitment(draw_commitment.bytes);
-  CHECK_AND_ASSERT_MES(draw_rc == 0, false, "Failed to draw the template's draw commitment (code " << static_cast<int>(draw_rc) << ")");
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, draw_commitment, ex_nonce, max_outs, tx_volume, supply);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, tx_volume, supply);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1726,7 +1719,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, draw_commitment, ex_nonce, max_outs, tx_volume, supply);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, tx_volume, supply);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     const size_t coinbase_weight = get_transaction_weight(b.miner_tx);

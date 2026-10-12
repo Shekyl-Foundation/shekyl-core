@@ -61,7 +61,6 @@ trap 'rm -rf "${workdir}"' EXIT
 SURFACES=(
   "relay:rust/shekyl-ffi/src/relay_zone_ffi/mod.rs"
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
-  "archival_draw:rust/shekyl-ffi/src/archival_ffi/draw.rs"
 )
 
 # The hand-written header with comment lines removed: rustdoc and header

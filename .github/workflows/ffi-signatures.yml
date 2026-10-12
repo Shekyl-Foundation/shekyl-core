@@ -13,8 +13,8 @@
 # conflicting-declaration compile error. Mechanism note and the negative
 # controls run at introduction: scripts/ci/ffi_signature_gate.cpp.
 #
-# Scope is the file list in the gate script (SURFACES): the relay surface,
-# the tx_extra codec with the coinbase writer, and the draw commitment.
+# Scope is the file list in the gate script (SURFACES): the relay surface
+# and the tx_extra codec with the coinbase writer.
 # Full-surface generation is blocked on a named cbindgen limitation
 # (cross-crate constant re-exports); docs/FOLLOWUPS.md tracks the extension.
 #
@@ -37,7 +37,6 @@ on:
     paths:
       - "rust/shekyl-ffi/src/relay_zone_ffi/**"
       - "rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
-      - "rust/shekyl-ffi/src/archival_ffi/draw.rs"
       - "src/shekyl/shekyl_ffi.h"
       - "scripts/ci/check_ffi_signatures.sh"
       - "scripts/ci/cbindgen-ffi-signatures.toml"
