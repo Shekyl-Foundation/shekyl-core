@@ -237,8 +237,8 @@ async fn a_reply_with_an_unknown_member_yields_no_facts() {
 
 /// **Whether the daemon has peers is Health's word, and Status cannot
 /// change it** (RK-D14). The reply's Status counts are zero here, as a
-/// restricted daemon writes them, and then the whole Status part is
-/// withheld, as RK-Q8 will have it: `has_peers` reads the same through
+/// restricted daemon wrote them until 3.48, and then the whole Status part
+/// is withheld, as a restricted daemon sends it now (RK-Q8): `has_peers` reads the same through
 /// both. Before this the projection summed those counts, read a withheld
 /// part as zero, and called a restricted daemon peerless.
 ///

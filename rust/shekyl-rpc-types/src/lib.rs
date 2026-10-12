@@ -106,8 +106,8 @@ pub use identity::{
     IdentityRefusal, VersionUnreadable,
 };
 pub use info::{
-    GetInfoResponse, GetInfoShapeError, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
-    InfoPeers, InfoPool, InfoStatus,
+    GetInfoResponse, GetInfoShapeError, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
+    InfoIdentity, InfoPeers, InfoPool, InfoStatus,
 };
 pub use nullable::Nullable;
 pub use p2p::{
