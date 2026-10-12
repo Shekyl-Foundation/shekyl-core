@@ -6,6 +6,7 @@
 //! Chain/daemon health and archival-shard commands.
 
 use serde_json::{json, Value};
+use shekyl_rpc_types::HexU128;
 use shekyl_shard_visual::{render_candidate_png, ShardAggregate};
 
 use super::require_open;
@@ -25,10 +26,11 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
                 // shown beside the flag, never read as the flag.
                 "synchronized": info.health.synchronized,
                 "target_height": info.health.target_height,
-                // The low 64 bits, which is what the wire's `difficulty`
-                // member carries and what this output has always shown.
-                "difficulty": u64::try_from(info.chain.difficulty & u128::from(u64::MAX))
-                    .unwrap_or(u64::MAX),
+                // The whole 128-bit value, in the wire's own encoding:
+                // `0x` hex under the wire's name. A JSON number cannot hold
+                // it, and this output used to write its low 64 bits as
+                // `difficulty`, which is a wrong number past 2^64.
+                "wide_difficulty": HexU128(info.chain.difficulty),
                 "tx_count": info.chain.tx_count,
             });
             // Status is wholly shown or wholly absent, and a restricted
@@ -70,6 +72,22 @@ fn sync_line(val: &Value) -> Option<String> {
     })
 }
 
+/// The difficulty line: the whole value, in decimal.
+///
+/// The value arrives as the wire's `0x` hex string and is read strictly. A
+/// value that is missing or is not that form is said to be unreadable; it
+/// is not printed as `0`, which is a difficulty.
+fn difficulty_line(val: &Value) -> String {
+    match val
+        .get("wide_difficulty")
+        .and_then(Value::as_str)
+        .map(HexU128::parse)
+    {
+        Some(Ok(difficulty)) => format!("  Difficulty:   {}", difficulty.get()),
+        _ => "  Difficulty:   unreadable".to_owned(),
+    }
+}
+
 /// The connections line.
 ///
 /// Both counts present, including a shown zero, print as counts. Either
@@ -98,10 +116,7 @@ pub(crate) fn show_chain(val: &Value) {
     if let Some(line) = sync_line(val) {
         println!("{line}");
     }
-    println!(
-        "  Difficulty:   {}",
-        val.get("difficulty").and_then(Value::as_u64).unwrap_or(0)
-    );
+    println!("{}", difficulty_line(val));
     println!(
         "  Tx count:     {}",
         val.get("tx_count").and_then(Value::as_u64).unwrap_or(0)
@@ -303,7 +318,7 @@ fn print_coverage_row(row: &Value, profit_available: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{connections_line, sync_line};
+    use super::{connections_line, difficulty_line, sync_line};
     use serde_json::json;
 
     /// Synchronized is the flag's word. A target above the height, which a
@@ -336,6 +351,41 @@ mod tests {
             sync_line(&json!({ "height": 10, "synchronized": false, "target_height": null })),
             Some("  Target:       none yet (syncing)".to_owned())
         );
+    }
+
+    /// The difficulty is shown whole. Past 2^64 the old output printed the
+    /// low 64 bits: for 2^64 + 5 it printed 5.
+    #[test]
+    fn the_difficulty_is_shown_whole_past_64_bits() {
+        assert_eq!(
+            difficulty_line(&json!({ "wide_difficulty": "0x1e240" })),
+            "  Difficulty:   123456"
+        );
+        assert_eq!(
+            difficulty_line(&json!({ "wide_difficulty": "0x10000000000000005" })),
+            "  Difficulty:   18446744073709551621"
+        );
+        assert_eq!(
+            difficulty_line(&json!({
+                "wide_difficulty": "0xffffffffffffffffffffffffffffffff"
+            })),
+            "  Difficulty:   340282366920938463463374607431768211455"
+        );
+    }
+
+    /// A difficulty that is absent, a number, or not strict hex is not a
+    /// difficulty of zero.
+    #[test]
+    fn an_unreadable_difficulty_is_not_shown_as_zero() {
+        for val in [
+            json!({}),
+            json!({ "difficulty": 123_456 }),
+            json!({ "wide_difficulty": 123_456 }),
+            json!({ "wide_difficulty": "0x+ff" }),
+            json!({ "wide_difficulty": "1e240" }),
+        ] {
+            assert_eq!(difficulty_line(&val), "  Difficulty:   unreadable", "{val}");
+        }
     }
 
     #[test]

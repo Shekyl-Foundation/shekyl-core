@@ -24,11 +24,17 @@
 //!
 //! # One field, one value
 //!
-//! The wire repeats values: `block_size_limit` beside `block_weight_limit`,
-//! a 128-bit difficulty as three members, a network as a string and three
-//! booleans. A part holds each value **once** and the repeats are produced
-//! on the way out and checked on the way in — a reply whose two names for
-//! one value disagree does not decode.
+//! The wire still repeats one value: the network, as a string and three
+//! booleans (RK-Q6 retires the booleans). A part holds it **once**, and the
+//! repeats are produced on the way out and checked on the way in — a reply
+//! whose names for it disagree does not decode.
+//!
+//! The other repeats went at 3.52 (RK-Q1). A difficulty was three members:
+//! its low 64 bits, a `0x` hex string, and its high 64 bits. It is the hex
+//! string alone, a [`HexU128`], whose parser is strict because nothing
+//! beside it checks it any more. The block weight limit and median were
+//! each under a `size` name too; the `weight` names are the ones kept, and
+//! they are always present: `0` is a value (RK-D23).
 //!
 //! # How the composition is written
 //!
@@ -57,6 +63,7 @@ use serde::{Deserialize, Serialize};
 use crate::chain::RpcStatus;
 use crate::consensus_digest::DaemonNetwork;
 use crate::hash::HashHex;
+use crate::hex128::HexU128;
 use crate::nullable::Nullable;
 
 /// A part of a reply that a caller may be refused: the part, or its absence.
@@ -127,18 +134,19 @@ pub struct InfoIdentity {
 /// The chain's own figures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoChain {
-    /// Difficulty of the next block. On the wire as `difficulty` (low 64
-    /// bits), `wide_difficulty` (`0x`-prefixed hex) and `difficulty_top64`.
+    /// Difficulty of the next block. On the wire as `wide_difficulty`, a
+    /// [`HexU128`].
     pub difficulty: u128,
-    /// Cumulative difficulty at the tip, on the wire as the same triple.
+    /// Cumulative difficulty at the tip. On the wire as
+    /// `wide_cumulative_difficulty`, a [`HexU128`].
     pub cumulative_difficulty: u128,
     /// The difficulty target, in seconds.
     pub target: u64,
     /// Transactions on the chain, coinbases excluded.
     pub tx_count: u64,
-    /// On the wire as `block_weight_limit` and `block_size_limit`.
+    /// On the wire as `block_weight_limit`. Always present.
     pub block_weight_limit: u64,
-    /// On the wire as `block_weight_median` and `block_size_median`.
+    /// On the wire as `block_weight_median`. Always present.
     pub block_weight_median: u64,
     pub adjusted_time: u64,
 }
@@ -238,7 +246,8 @@ pub enum GetInfoShapeError {
         part: &'static str,
         missing: &'static str,
     },
-    /// Two wire names for one value disagree.
+    /// Two wire names for one value disagree. Today that is the network:
+    /// `nettype` and the three booleans.
     Disagreement { value: &'static str, detail: String },
     /// The Status part is shown and its `version` is empty. An empty
     /// string was what a restricted reply wrote for "not disclosed" until
@@ -297,21 +306,13 @@ struct GetInfoWire {
     protocol_version: u64,
 
     // Chain.
-    difficulty: u64,
-    wide_difficulty: String,
-    difficulty_top64: u64,
-    cumulative_difficulty: u64,
-    wide_cumulative_difficulty: String,
-    cumulative_difficulty_top64: u64,
+    wide_difficulty: HexU128,
+    wide_cumulative_difficulty: HexU128,
     target: u64,
     tx_count: u64,
-    block_size_limit: u64,
-    /// `KV_SERIALIZE_OPT(block_weight_limit, 0)`.
-    #[serde(default, skip_serializing_if = "is_zero")]
+    // Required, and written at `0`: a limit or median of zero is a value.
+    // The C++ serializer omitted both at zero, and a reader defaulted them.
     block_weight_limit: u64,
-    block_size_median: u64,
-    /// `KV_SERIALIZE_OPT(block_weight_median, 0)`.
-    #[serde(default, skip_serializing_if = "is_zero")]
     block_weight_median: u64,
     adjusted_time: u64,
 
@@ -364,52 +365,6 @@ struct GetInfoWire {
     restricted: bool,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
-const fn is_zero(v: &u64) -> bool {
-    *v == 0
-}
-
-/// A 128-bit value as the wire's triple: low 64 bits, `0x`-prefixed minimal
-/// lowercase hex, high 64 bits.
-fn split_128(value: u128) -> (u64, String, u64) {
-    let low = u64::try_from(value & u128::from(u64::MAX)).expect("masked to 64 bits");
-    let top = u64::try_from(value >> 64).expect("shifted to 64 bits");
-    (low, format!("0x{value:x}"), top)
-}
-
-/// The triple back to its one value, refusing a triple that names two.
-fn join_128(
-    value: &'static str,
-    low: u64,
-    wide: &str,
-    top: u64,
-) -> Result<u128, GetInfoShapeError> {
-    let joined = (u128::from(top) << 64) | u128::from(low);
-    let parsed = wide
-        .strip_prefix("0x")
-        .and_then(|hex| u128::from_str_radix(hex, 16).ok());
-    if parsed == Some(joined) {
-        Ok(joined)
-    } else {
-        Err(GetInfoShapeError::Disagreement {
-            value,
-            detail: format!("low {low}, top {top}, wide {wide:?}"),
-        })
-    }
-}
-
-/// One value under a second wire name must equal the first.
-fn same(value: &'static str, first: u64, second: u64) -> Result<u64, GetInfoShapeError> {
-    if first == second {
-        Ok(first)
-    } else {
-        Err(GetInfoShapeError::Disagreement {
-            value,
-            detail: format!("{first} and {second}"),
-        })
-    }
-}
-
 /// Build a hidden part from its keys: all of them, or none.
 ///
 /// Each key is paired with its wire name. `build` is handed the keys only
@@ -452,17 +407,11 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             testnet,
             stagenet,
             protocol_version,
-            difficulty,
             wide_difficulty,
-            difficulty_top64,
-            cumulative_difficulty,
             wide_cumulative_difficulty,
-            cumulative_difficulty_top64,
             target,
             tx_count,
-            block_size_limit,
             block_weight_limit,
-            block_size_median,
             block_weight_median,
             adjusted_time,
             already_generated_coins,
@@ -574,30 +523,12 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 protocol_version,
             },
             chain: InfoChain {
-                difficulty: join_128(
-                    "the next difficulty",
-                    difficulty,
-                    &wide_difficulty,
-                    difficulty_top64,
-                )?,
-                cumulative_difficulty: join_128(
-                    "the cumulative difficulty",
-                    cumulative_difficulty,
-                    &wide_cumulative_difficulty,
-                    cumulative_difficulty_top64,
-                )?,
+                difficulty: wide_difficulty.get(),
+                cumulative_difficulty: wide_cumulative_difficulty.get(),
                 target,
                 tx_count,
-                block_weight_limit: same(
-                    "the block weight limit",
-                    block_weight_limit,
-                    block_size_limit,
-                )?,
-                block_weight_median: same(
-                    "the block weight median",
-                    block_weight_median,
-                    block_size_median,
-                )?,
+                block_weight_limit,
+                block_weight_median,
                 adjusted_time,
             },
             economics: InfoEconomics {
@@ -630,9 +561,6 @@ impl From<GetInfoResponse> for GetInfoWire {
             host,
             restricted,
         } = reply;
-        let (difficulty, wide_difficulty, difficulty_top64) = split_128(chain.difficulty);
-        let (cumulative_difficulty, wide_cumulative_difficulty, cumulative_difficulty_top64) =
-            split_128(chain.cumulative_difficulty);
         let node = node.shown().cloned();
         let peers = peers.shown().cloned();
         Self {
@@ -650,17 +578,11 @@ impl From<GetInfoResponse> for GetInfoWire {
             testnet: identity.nettype == DaemonNetwork::Testnet,
             stagenet: identity.nettype == DaemonNetwork::Stagenet,
             protocol_version: identity.protocol_version,
-            difficulty,
-            wide_difficulty,
-            difficulty_top64,
-            cumulative_difficulty,
-            wide_cumulative_difficulty,
-            cumulative_difficulty_top64,
+            wide_difficulty: HexU128(chain.difficulty),
+            wide_cumulative_difficulty: HexU128(chain.cumulative_difficulty),
             target: chain.target,
             tx_count: chain.tx_count,
-            block_size_limit: chain.block_weight_limit,
             block_weight_limit: chain.block_weight_limit,
-            block_size_median: chain.block_weight_median,
             block_weight_median: chain.block_weight_median,
             adjusted_time: chain.adjusted_time,
             already_generated_coins: economics.already_generated_coins,

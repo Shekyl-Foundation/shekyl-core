@@ -162,3 +162,12 @@ They stay, held to each other by the derivation tests, and no test decodes
 the newest as a current reply: the daemon does not send it. The refusal is
 tested in `shekyl-daemon-rpc`. `get_version_synced_v28` is the chain's
 3.51 link.
+
+**3.52 retired the duplicate names, and four fixtures have a successor.**
+Each is its predecessor minus exactly six keys: `difficulty`,
+`difficulty_top64`, `cumulative_difficulty`,
+`cumulative_difficulty_top64`, `block_size_limit` and `block_size_median`
+(`the_3_52_get_info_vectors_are_their_predecessors_minus_exactly_the_duplicate_names`,
+which first checks each retired key against the name that stays). The
+burn-refusal fixture has no successor: there is no current reply to
+derive. `get_version_synced_v29` is the chain's 3.52 link.

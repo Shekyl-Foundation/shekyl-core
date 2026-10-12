@@ -185,7 +185,7 @@ fn synced_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v4.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v5.json"
         ))
     );
 }
@@ -225,7 +225,7 @@ fn syncing_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v3.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v4.json"
         ))
     );
 }
@@ -244,7 +244,7 @@ fn peerless_startup_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v4.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v5.json"
         ))
     );
 }
@@ -256,7 +256,7 @@ fn synced_restricted_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::VIEW),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v4.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v5.json"
         ))
     );
 }

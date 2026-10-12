@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import statistics
 import sys
 import time
@@ -132,13 +133,31 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+_WIDE_HEX = re.compile(r"0x[0-9a-fA-F]{1,32}")
+
+
+def parse_wide_hex(text: object) -> int:
+    """Parse the daemon's 128-bit hex rendering: `0x`, then 1 to 32 hex digits.
+
+    Strict, as the daemon's own reader is: no sign, no missing prefix, nothing
+    but hex digits, and no more digits than a 128-bit value holds. `int(x, 16)`
+    alone would accept `+ff`, `0X1f`, underscores and surrounding whitespace.
+    """
+    if not isinstance(text, str) or _WIDE_HEX.fullmatch(text) is None:
+        raise ValueError(f"not a 0x-hex 128-bit value: {text!r}")
+    return int(text[2:], 16)
+
+
 def collect_node_metrics(daemon: DaemonRPC) -> NodeMetrics:
     """Poll a single node for current metrics."""
     m = NodeMetrics(url=daemon.url)
     try:
         info = daemon.get_info()
         m.height = info.get("height", 0)
-        m.difficulty = info.get("difficulty", 0)
+        # The whole 128-bit difficulty, from the one name get_info carries
+        # it under. Required, and read strictly: a missing key or a string
+        # that is not `0x` hex is an error, never a difficulty of 0.
+        m.difficulty = parse_wide_hex(info["wide_difficulty"])
         # The entries the node has broadcast: one quantity whoever asks, so
         # it compares across nodes. Required: a reply without it is not a
         # get_info reply, and reading that as an empty pool would hide it.

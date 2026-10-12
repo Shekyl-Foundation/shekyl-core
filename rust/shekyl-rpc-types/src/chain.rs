@@ -44,7 +44,14 @@ use crate::nullable::Nullable;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.51: `get_info` refuses when the chain store
+/// `CORE_RPC_VERSION_MINOR`. 3.52: `get_info` stops repeating values under
+/// second names (RK-Q1). `difficulty`, `difficulty_top64`,
+/// `cumulative_difficulty`, `cumulative_difficulty_top64`, `block_size_limit`
+/// and `block_size_median` are gone; `wide_difficulty`,
+/// `wide_cumulative_difficulty`, `block_weight_limit` and
+/// `block_weight_median` stay, the last two now always present. Block
+/// headers keep their triple. `get_version` gains nothing.
+/// 3.51: `get_info` refuses when the chain store
 /// holds more burned than generated, with an error that names the invariant
 /// and its operands (RK-Q9). It answered that state with `burn_pct: 0`.
 /// No member of any reply moves. `get_version` gains nothing.
@@ -158,8 +165,8 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `get_info.has_peers`. 3.48 a restricted `get_info` omits Status and
 /// Peers. 3.49 its connection counts come from the seam board. 3.50 its pool
 /// count is split by broadcast state. 3.51 it refuses on a broken supply
-/// invariant.
-pub const CORE_RPC_VERSION_MINOR: u32 = 51;
+/// invariant. 3.52 its duplicate wire names retire.
+pub const CORE_RPC_VERSION_MINOR: u32 = 52;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -549,11 +556,11 @@ mod tests {
         // number is not a lock.
         // 3.44 drops `hard_forks`. 3.43 was already the native shard view;
         // both branches had written 43, so the deletion took the next minor.
-        // 3.51 makes a self-contradicting store refuse `get_info`.
-        assert_eq!(CORE_RPC_VERSION, 196_659);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 51);
+        // 3.52 retires `get_info`'s duplicate wire names.
+        assert_eq!(CORE_RPC_VERSION, 196_660);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 52);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 51);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 52);
     }
 
     #[test]

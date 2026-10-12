@@ -22,7 +22,7 @@ use shekyl_rpc_types::{
     GetBlockHeaderByHashResponse, GetBlockHeaderByHeightResponse, GetBlockHeadersRangeResponse,
     GetBlockResponse, GetConnectionsResponse, GetHeightResponse, GetLastBlockHeaderResponse,
     GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
-    GetTransactionsResponse, GetVersionResponse, HashHex, IsKeyImageSpentRequest,
+    GetTransactionsResponse, GetVersionResponse, HashHex, HexU128, IsKeyImageSpentRequest,
     IsKeyImageSpentResponse, KeyImageStatus, Nullable, Peer, RpcStatus, SyncInfoPeer,
     SyncInfoResponse, SyncSpan, TxEntry, TxLocation, CORE_RPC_VERSION,
 };
@@ -914,7 +914,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 27] = [
+    let links: [(&str, &str); 28] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1023,6 +1023,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v27.json"),
             include_str!("vectors/rpc/get_version_synced_v28.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v28.json"),
+            include_str!("vectors/rpc/get_version_synced_v29.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1041,7 +1045,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 27] = [
+    const ADDED_AT_LINK: [&[&str]; 28] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1069,6 +1073,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.49 (get_info's connection counts come from the seam board, RK-Q3; get_version gains nothing)
         &[], // 3.50 (get_info's pool count is split by broadcast state, RK-Q10; get_version gains nothing)
         &[], // 3.51 (get_info refuses on a broken supply invariant, RK-Q9; get_version gains nothing)
+        &[], // 3.52 (get_info's duplicate wire names retire, RK-Q1; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1080,7 +1085,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 27] = [
+    const REMOVED_AT_LINK: [&[&str]; 28] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1108,6 +1113,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.49 (no member moves on either method; the counts' source and meaning do)
         &[], // 3.50 (the host-only member is get_info's; get_version retires nothing)
         &[], // 3.51 (no member moves on any reply; one state stops being answered)
+        &[], // 3.52 (the retired names are get_info's; get_version retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1479,6 +1485,100 @@ fn the_3_50_vectors_split_the_same_pool_into_broadcast_and_not_yet_broadcast() {
     ));
     assert_eq!(restricted["tx_pool_size"], json!(9));
     assert!(restricted.get("tx_pool_unbroadcast_count").is_none());
+}
+
+/// **3.52, by derivation.** `get_info` stops repeating values under second
+/// names (RK-Q1). Each fixture's successor is its predecessor minus exactly
+/// six keys, and before each is removed it is checked against the name
+/// that stays: the retired key held the same value, so nothing is lost.
+///
+/// - A difficulty was `difficulty` (low 64 bits), `wide_difficulty` (hex)
+///   and `difficulty_top64`. The hex stays. The cumulative triple the same.
+/// - `block_size_limit` and `block_size_median` repeated the `weight`
+///   names, which stay.
+///
+/// The burn-refusal fixture has no successor: the daemon has refused that
+/// state since 3.51, so there is no current reply to derive.
+#[test]
+fn the_3_52_get_info_vectors_are_their_predecessors_minus_exactly_the_duplicate_names() {
+    for (before_raw, after_raw) in [
+        (
+            include_str!("vectors/rpc/get_info_synced_v4.json"),
+            include_str!("vectors/rpc/get_info_synced_v5.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_syncing_v3.json"),
+            include_str!("vectors/rpc/get_info_syncing_v4.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_peerless_startup_v4.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v5.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_synced_restricted_v4.json"),
+            include_str!("vectors/rpc/get_info_synced_restricted_v5.json"),
+        ),
+    ] {
+        let mut derived = parsed(before_raw);
+        let u = |doc: &serde_json::Value, key: &str| -> u128 {
+            u128::from(
+                doc[key]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("`{key}` is a number")),
+            )
+        };
+        let wide = |doc: &serde_json::Value, key: &str| -> u128 {
+            HexU128::parse(
+                doc[key]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("`{key}` is a string")),
+            )
+            .unwrap_or_else(|e| panic!("`{key}` is strict hex: {e}"))
+            .get()
+        };
+
+        // Each retired key repeats a value a kept key carries.
+        for (low, top, kept) in [
+            ("difficulty", "difficulty_top64", "wide_difficulty"),
+            (
+                "cumulative_difficulty",
+                "cumulative_difficulty_top64",
+                "wide_cumulative_difficulty",
+            ),
+        ] {
+            assert_eq!(
+                (u(&derived, top) << 64) | u(&derived, low),
+                wide(&derived, kept),
+                "`{low}` and `{top}` are `{kept}`, said twice more"
+            );
+        }
+        for (size, weight) in [
+            ("block_size_limit", "block_weight_limit"),
+            ("block_size_median", "block_weight_median"),
+        ] {
+            assert_eq!(derived[size], derived[weight], "`{size}` is `{weight}`");
+        }
+
+        let members = derived.as_object_mut().expect("vector is an object");
+        for key in [
+            "difficulty",
+            "difficulty_top64",
+            "cumulative_difficulty",
+            "cumulative_difficulty_top64",
+            "block_size_limit",
+            "block_size_median",
+        ] {
+            assert!(
+                members.remove(key).is_some(),
+                "the predecessor carries `{key}`"
+            );
+        }
+        assert_eq!(
+            derived,
+            parsed(after_raw),
+            "the successor is its predecessor minus the six duplicate names and nothing else"
+        );
+    }
 }
 
 #[test]
@@ -2016,7 +2116,8 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
 // have one derived at 3.47 when `has_peers` arrived, and the restricted one
 // another at 3.48 when it stopped carrying Status and Peers; the tests
 // below read the newest of each. The burn-refusal fixture ends at `_v4`:
-// the daemon refuses that state since 3.51.
+// the daemon refuses that state since 3.51. The other four have one more
+// successor at 3.52, when the duplicate wire names retired.
 // These tests pin the TYPE: that each vector is a `GetInfoResponse` and that
 // the response writes the vector back. The handler's parity is
 // `shekyl-daemon-rpc`'s.
@@ -2096,7 +2197,7 @@ mod get_info {
     #[test]
     fn synced_matches_the_oracle() {
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_v4.json"),
+            include_str!("vectors/rpc/get_info_synced_v5.json"),
             &synced(),
         );
     }
@@ -2108,7 +2209,7 @@ mod get_info {
         built.health.target_height = Nullable::value(1_300_000);
         built.health.busy_syncing = true;
         built.health.following_degraded = true;
-        assert_parity(include_str!("vectors/rpc/get_info_syncing_v3.json"), &built);
+        assert_parity(include_str!("vectors/rpc/get_info_syncing_v4.json"), &built);
     }
 
     #[test]
@@ -2132,7 +2233,7 @@ mod get_info {
         peers.tor_incoming_socket_count = 0;
         peers.tor_outgoing_socket_count = 0;
         assert_parity(
-            include_str!("vectors/rpc/get_info_peerless_startup_v4.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v5.json"),
             &built,
         );
     }
@@ -2148,7 +2249,7 @@ mod get_info {
         built.peers = Hidden::Withheld;
         built.host = Hidden::Withheld;
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_restricted_v4.json"),
+            include_str!("vectors/rpc/get_info_synced_restricted_v5.json"),
             &built,
         );
     }
@@ -2188,7 +2289,7 @@ mod get_info {
     /// key, for every key of both parts — never a part read as withheld.
     #[test]
     fn a_hidden_part_missing_one_key_is_refused_not_read_as_withheld() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
         for (part, keys) in [("status", &STATUS_KEYS[..]), ("peers", &PEERS_KEYS[..])] {
             for key in keys {
                 let mut doc = full.clone();
@@ -2209,7 +2310,7 @@ mod get_info {
     /// part is unaffected, and the reply writes back without those keys.
     #[test]
     fn a_hidden_part_with_no_keys_is_withheld_and_writes_none() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
 
         let mut doc = full.clone();
         for key in STATUS_KEYS {
@@ -2242,7 +2343,7 @@ mod get_info {
     /// decodes.
     #[test]
     fn a_shown_status_with_an_empty_version_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
         doc["version"] = "".into();
         let refusal = decode(&doc).expect_err("an empty version is not an answer");
         assert!(refusal.contains("empty `version`"), "got {refusal:?}");
@@ -2261,7 +2362,7 @@ mod get_info {
     /// without the key, and `0` is a count, not an absence (RK-Q10).
     #[test]
     fn the_host_part_is_withheld_when_its_key_is_absent() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
         let shown = decode(&doc).expect("the host's reply decodes");
         assert_eq!(
             shown.host,
@@ -2291,7 +2392,7 @@ mod get_info {
     /// it cannot carry the attribute on a flattened type.
     #[test]
     fn an_unknown_key_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
         doc.as_object_mut()
             .unwrap()
             .insert("emission_era".to_owned(), "Founding".into());
@@ -2313,26 +2414,23 @@ mod get_info {
             "restricted",
             "burn_pct",
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
             doc.as_object_mut().unwrap().remove(key);
             let refusal = decode(&doc).expect_err("a missing required key must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
         }
     }
 
-    /// One value under two wire names: a reply whose names disagree does not
-    /// decode. Each case changes one name of a repeated value.
+    /// One value under several wire names: a reply whose names disagree
+    /// does not decode. Since 3.52 the network is the only repeated value;
+    /// each case changes one of its names.
     #[test]
     fn two_names_for_one_value_must_agree() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v4.json"));
-        let cases: [(&str, serde_json::Value); 7] = [
-            ("block_size_limit", 600_001.into()),
-            ("block_size_median", 300_001.into()),
-            ("difficulty", 123_456_788.into()),
-            ("difficulty_top64", 8.into()),
-            ("wide_cumulative_difficulty", "0x9000000003ade68b0".into()),
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
+        let cases: [(&str, serde_json::Value); 3] = [
             ("mainnet", false.into()),
             ("testnet", true.into()),
+            ("stagenet", true.into()),
         ];
         for (key, value) in cases {
             let mut doc = full.clone();
@@ -2345,20 +2443,84 @@ mod get_info {
         }
     }
 
-    /// `KV_SERIALIZE_OPT(block_weight_limit, 0)`: a zero weight limit is
-    /// omitted, its `block_size_limit` twin is not, and the pair still
-    /// decodes as one value.
+    /// **The six retired names are refused, not ignored** (RK-Q1). A reply
+    /// that still carries one is a reply from before 3.52, and this type
+    /// refuses unknown keys.
     #[test]
-    fn a_zero_weight_limit_is_omitted_and_its_twin_is_not() {
+    fn a_retired_duplicate_name_is_an_unknown_key() {
+        for (key, value) in [
+            ("difficulty", serde_json::json!(123_456_789)),
+            ("difficulty_top64", serde_json::json!(7)),
+            ("cumulative_difficulty", serde_json::json!(987_654_321)),
+            ("cumulative_difficulty_top64", serde_json::json!(9)),
+            ("block_size_limit", serde_json::json!(600_000)),
+            ("block_size_median", serde_json::json!(300_000)),
+        ] {
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
+            doc.as_object_mut().unwrap().insert(key.to_owned(), value);
+            let refusal = decode(&doc).expect_err("a retired name must not decode");
+            assert!(refusal.contains(key), "{key}: got {refusal:?}");
+        }
+    }
+
+    /// **The weight names are required, and written at zero** (RK-D23,
+    /// carried forward from #1017). A reply missing either does not decode;
+    /// a limit or median of `0` is written as `0` and reads back.
+    ///
+    /// Until 3.52 both were omitted at zero and defaulted on the way in,
+    /// which the C++ serializer's `KV_SERIALIZE_OPT` did and this type
+    /// mirrored. A reply with the key dropped by drift then read as a
+    /// limit of zero.
+    #[test]
+    fn the_weight_names_are_required_and_zero_is_written() {
+        for key in ["block_weight_limit", "block_weight_median"] {
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
+            doc.as_object_mut().unwrap().remove(key);
+            let refusal = decode(&doc).expect_err("a missing weight name must not decode");
+            assert!(refusal.contains(key), "{key}: got {refusal:?}");
+        }
+
         let mut built = synced();
         built.chain.block_weight_limit = 0;
         built.chain.block_weight_median = 0;
         let doc = serde_json::to_value(&built).unwrap();
-        let object = doc.as_object().unwrap();
-        assert!(!object.contains_key("block_weight_limit"));
-        assert!(!object.contains_key("block_weight_median"));
-        assert_eq!(object["block_size_limit"], 0);
-        assert_eq!(object["block_size_median"], 0);
+        assert_eq!(doc["block_weight_limit"], 0);
+        assert_eq!(doc["block_weight_median"], 0);
+        assert_eq!(decode(&doc).unwrap(), built);
+    }
+
+    /// **The hex string is the only copy of a difficulty, so it is read
+    /// strictly.** While the low and high halves stood beside it, a string
+    /// that parsed to something else was refused by the disagreement. Now
+    /// what the parser accepts is the value. `0x+ff` is the case: Rust's
+    /// radix parser reads it as 255.
+    #[test]
+    fn a_difficulty_that_is_not_strict_hex_is_refused() {
+        for key in ["wide_difficulty", "wide_cumulative_difficulty"] {
+            for wrong in [
+                serde_json::json!("0x+ff"),
+                serde_json::json!("ff"),
+                serde_json::json!("0x"),
+                serde_json::json!("0xfg"),
+                serde_json::json!(format!("0x1{}", "0".repeat(32))),
+                serde_json::json!(255),
+            ] {
+                let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v5.json"));
+                doc[key] = wrong.clone();
+                assert!(
+                    decode(&doc).is_err(),
+                    "`{key}`: {wrong} is not a difficulty"
+                );
+            }
+        }
+
+        // A value past 64 bits survives the round trip whole.
+        let mut built = synced();
+        built.chain.difficulty = u128::MAX;
+        built.chain.cumulative_difficulty = u128::from(u64::MAX) + 1;
+        let doc = serde_json::to_value(&built).unwrap();
+        assert_eq!(doc["wide_difficulty"], "0xffffffffffffffffffffffffffffffff");
+        assert_eq!(doc["wide_cumulative_difficulty"], "0x10000000000000000");
         assert_eq!(decode(&doc).unwrap(), built);
     }
 }
