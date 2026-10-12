@@ -9,7 +9,10 @@ were handed to SO-D8 Slice C on 2026-10-11**
 §11): the verifier of increment 4 is that slice's bundle rule, the signer
 and the verifier must switch in one change, and increment 3 lands in Rust
 only. `FND-4`'s carried item, one decoded key across signatures, goes with
-increment 4. This lane closes with increment 2; the dependency record (§2) then moves to
+increment 4. This lane's own work ended with increment 2. **The document
+stays OPEN as the record increments 3 and 4 are written into** when the
+Slice C lane lands them; it closes when increment 4's record is in, and
+the dependency record (§2) then moves to
 [`CRYPTOGRAPHIC_INVENTORY.md`](../CRYPTOGRAPHIC_INVENTORY.md), which already
 carries its summary row. **Increment 3 is recorded here, 2026-10-12 (§8),
 built by the Slice C lane:** the receipt key is mandatory, a JoinMarket has
