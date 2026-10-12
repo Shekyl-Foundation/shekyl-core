@@ -424,6 +424,22 @@ carrier = "BA-T5 (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8). One blocking thread per 
 path_set = "serving-runtime"
 
 [[path_set]]
+id = "daemon-packaging"
+spec = ["contrib/packaging/linux"]
+
+[[constant]]
+name = "shekyl_slice_cpu_weight"
+defined_in = "contrib/packaging/linux/shekyl.slice"
+needle = "CPUWeight=400"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = { low = 0.75, high = 0.90, unit = "share of the CPU the daemon keeps under contention with a serving wallet in user.slice" }
+basis = "Reasoned, not measured (ruled 2026-10-12). A top-level slice at CPUWeight=400 against user.slice's default 100 is weighed 4:1 by the kernel's fair-group scheduler, so under full contention the daemon's group is entitled to four fifths of the CPU. BA-T5 session 3 measured the other half of the picture: with the daemon and a serving wallet in different cpu cgroups at equal weight, the daemon kept 65 % of its no-serve sync rate against a wallet serving at nice 19 (the T2' topology, docs/benchmarks/ba_t5_serve_floor_device_20261012.md), which is the fair share at 1:1; 4:1 moves that toward 80 %, less whatever the wallet's own group takes when the daemon is not saturating its share."
+basis_captures = ["docs/benchmarks/ba_t5_serve_floor_device_20261012_t2p_obs.tsv"]
+carrier = "The redefined T2 measurement (docs/FOLLOWUPS.md, ruled 2026-10-12): the daemon as the installed system unit in shekyl.slice, synced and following the tip, the wallet probe in a user session serving at N = 64; block-verify time with and without the slice weight. Its result decides whether 400 stays, moves, or the slice goes."
+path_set = "daemon-packaging"
+
+[[path_set]]
 id = "p-serve"
 spec = [
   "rust/shekyl-p-serve/src",

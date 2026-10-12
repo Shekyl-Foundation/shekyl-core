@@ -1,0 +1,25 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The slice the shipped daemon unit runs in (ruled 2026-10-12; see
+# docs/design/ARCHIVAL_CHALLENGE_MECHANISM.md section 9.8 and the decision
+# log). Its name has no parent, so systemd places it under the root cgroup,
+# beside system.slice and user.slice, and the kernel weighs it against them
+# as a group: nice values inside a group decide nothing across that line.
+#
+# CPUWeight=400 against user.slice's default of 100 is 4:1 under
+# contention, so a headless staker's daemon keeps about 80 % of the CPU
+# while the per-user wallet beside it serves archival shards. The wallet is
+# not a system service (per-user custody, as WP-D7 rules on Windows); its
+# own defence is the serving runtime's nice 19 and the serving gate. The
+# weight is reasoned, not measured: the ledger row shekyl_slice_cpu_weight
+# is estimated until the T2 measurement in docs/FOLLOWUPS.md decides
+# whether 400 stays, moves, or the slice goes.
+[Unit]
+Description=Shekyl daemon slice: weighed against user.slice as a group, 4:1
+Documentation=https://github.com/Shekyl-Foundation/shekyl-core
+
+[Slice]
+CPUWeight=400
