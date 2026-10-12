@@ -58,7 +58,10 @@ dial path. The dialer is the only writer of a white promotion, and it
 writes through this slice's type contract. *Records-was: the dial and the
 socket stay in C++ until later slices, and they report an outcome.* They
 do not insert, replace, or erase list entries except through that contract.
-Gray admission refuses an address the failed-address memory holds, and
+Gray admission refuses an address the failed-address memory holds —
+an onion address only, since clearnet writes no memory (dialer brief
+R2, Rick 2026-10-12: a TCP RST and a forged `LevinHandshakeRejected`
+are a path attacker's to produce) — and
 a banned one (`handle_remote_peerlist`, `net_node.inl:2472`; D4, §5b:
 refused at admit during the ban, and a white entry under a ban is
 demoted to gray when white is next read). Until

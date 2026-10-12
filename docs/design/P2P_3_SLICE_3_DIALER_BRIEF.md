@@ -381,8 +381,8 @@ enum DialOutcome {
 
 | Variant | When the dialer emits it | List (`apply`) | Failed-address memory | Score |
 | --- | --- | --- | --- | --- |
-| `DialFailed` | The channel never reached a well-formed kept response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with | An outstanding gray draw is dropped. A white address stays white | Written when `implicates_address` is set for that cause and reply. A `network_id` mismatch is `LevinHandshakeRejected` and does write it | No subscription. The mismatch does not call `add_host_fail` |
-| `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected` | Same as `DialFailed` | Same as `DialFailed` with `LevinHandshakeRejected` | The score owner subscribes. A peerlist this node refuses is the event the score records |
+| `DialFailed` | The channel never reached a well-formed kept response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with | An outstanding gray draw is dropped. A white address stays white | Tor only (R2): written when `implicates_address` is set for that cause and reply, which on clearnet it never is. A `network_id` mismatch is `LevinHandshakeRejected`; on Tor it writes, on clearnet it does not. *Records-was: written on every connector* | No subscription. The mismatch does not call `add_host_fail` |
+| `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected` | Same as `DialFailed` | Same as `DialFailed` with `LevinHandshakeRejected`: Tor only (R2) | The score owner subscribes. A peerlist this node refuses is the event the score records |
 | `PayloadRefused` | Levin was well-formed and the strand refused the sync payload | No promotion, no demotion, no gray drop. An outstanding draw stays gray | Not written. The peer answered | None |
 | *`HarvestDone` — DELETED in PR-3 (Rick, 2026-10-11)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did, and the harvest's only difference (no white write) existed for the withdrawn seed exception. The crate's variant, its `address()` arm, its `apply` arm and its test go in PR-3 | — | — |
 | `Confirmed` | Aim `Confirm`. The strand accepted the sync payload. The owner closed in that turn. The relay was not flipped | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address | None |
@@ -510,7 +510,7 @@ under it, is dropped with the C++ dial path.
 | One outbound per host (`has_outbound_connection_to_host`) | Kept | One outbound session per host on that connector |
 | Peer already in use (`is_peer_used`) | Kept | A second session to an address we already have |
 | Banned (`is_remote_host_allowed`, `net_node.inl:243`) | Kept | Calls `shekyl_ban_remaining_ns` (`seam_ffi.rs:706`). A return of 2 is banned. The check is already Rust |
-| Recently failed (`is_addr_recently_failed`) | Kept | This slice's failed-address memory |
+| Recently failed (`is_addr_recently_failed`) | Kept, Tor only (R2, 2026-10-12) | This slice's failed-address memory, which clearnet never writes; on clearnet the row is vacuous and a candidate is never skipped for a past failure |
 | One candidate per host while the list is built | Kept | A host that advertises many ports is not drawn more often. The port kept for a host is chosen uniformly, not first in list order. The address that is dialed is still host and port |
 | White-list index weighted by `last_seen`, and the cap of the 20 most recent (`net_node.inl:1948`, weighted pick `:1970-1974`) | Dropped | The uniform draw already ruled. A last-seen weight is the eclipse lever in the wargame below |
 | Address validity (`sanitize_peerlist`, `net_node.inl:2417`; `peerlist_manager::is_host_allowed`, `net_peerlist.h:273`) | Kept, in slice 1, at admit (Rick, 2026-10-11) | A network-learned address — a received peerlist, an inbound advertisement — is refused at slice 1's `admit_gray` unless dialable on the public internet; `disclose` never includes a non-global address (slice 1 brief §2, "Address validity"). Not a dial-time filter: a gray or white address is global or operator-named, and operator-named addresses (`--add-peer`, an exclusive list) are dialed whatever the range; priority nodes are deleted. `--allow-local-ip` is the one override, for private test networks |
@@ -621,21 +621,44 @@ The memory is not kept across restarts. It is the process map
 `m_conn_fails_cache` (`net_node.h:788`). `store_config` writes the
 peerlist and does not write this map. A restart dials again.
 
+**Clearnet writes no failed-address memory (R2, Rick, 2026-10-12).**
+On clearnet a refused dial is a TCP RST, and NN being unauthenticated,
+an active path attacker can also forge `LevinHandshakeRejected`.
+Either would suppress an honest address for an hour and refuse it at
+gray admission — the forgeable-reset class D-S1 already keeps away
+from bans (`P2P_TRANSPORT_LAYER.md`, the reconnect throttle), and the
+memory's own doc names the lever: forgetting shrinks the dial set, and
+a shrunken set favours whoever is feeding us addresses
+(`shekyl-transport-layer/src/cause.rs:170`). So on clearnet
+`implicates_address` returns `false` for every cause. `apply` still
+drops the failed gray draw (slice 1 §5), and a dead white address is
+bounded by the 24-hour expiry. The memory remains for Tor's
+destination-naming replies — `0x04 0x05 0xF0 0xF1 0xF2` — which come
+from our own Tor process, not from the path.
+
+**PR-3 code change:** `implicates_address(self, connector)` returns
+`false` when `connector` is the clearnet connector, for every
+`CloseKind`; the Tor arms are unchanged. Its test: each clearnet cause
+that wrote the memory before (`DialFailed`, `LevinHandshakeRejected`)
+no longer does, and each Tor reply in the set still does.
+
 Windows come from `failed_addr_cache::window` (`net_node.h:263`).
-Clearnet is the hour. Tor starts at the short window and doubles,
-capped at the hour.
+Tor starts at the short window and doubles, capped at the hour.
+*Records-was: clearnet is the hour.*
 
 `implicates_address` decides the write, on `DialFailed` and on
-`PeerlistRefused`. Only a refused dial, a rejected handshake, and an
-onion reply in `0x04 0x05 0xF0 0xF1 0xF2` write the memory. A
-handshake timeout, a peer close, a local failure, and a clearnet
-proxy reply do not. `PayloadRefused` does not. `Confirmed` and
-`SessionAccepted` clear the address.
+`PeerlistRefused`. Only an onion reply in `0x04 0x05 0xF0 0xF1 0xF2`
+writes the memory. A handshake timeout, a peer close, a local failure,
+a clearnet proxy reply, and — since R2 — every clearnet cause do not.
+`PayloadRefused` does not. `Confirmed` and `SessionAccepted` clear the
+address. *Records-was: a refused dial and a rejected handshake wrote
+it on every connector.*
 
-Slice 1's gray admission refuses an address the memory holds, and a
-banned one (`handle_remote_peerlist`, `net_node.inl:2472`). Until
-this slice lands, slice 1 takes that predicate from the C++ cache.
-This slice replaces where the predicate comes from.
+Slice 1's gray admission refuses an address the memory holds (an onion
+address, after R2), and a banned one (`handle_remote_peerlist`,
+`net_node.inl:2472`). Until this slice lands, slice 1 takes that
+predicate from the C++ cache. This slice replaces where the predicate
+comes from.
 
 ---
 
@@ -803,15 +826,19 @@ clearnet variant measures.
 **The failed-address memory as something an attacker can drive.** A
 peer, or a directory, that can force a forgetting cause can suppress
 an address for the window. The answer is `implicates_address` on
-`DialFailed` and `PeerlistRefused`: only a refused dial, a rejected
-handshake, and an onion reply in `0x04 0x05 0xF0 0xF1 0xF2` write the
-memory. A handshake timeout, a peer close, a local failure, and a
-clearnet proxy reply do not. The window is the one
+`DialFailed` and `PeerlistRefused`: on clearnet nothing writes the
+memory (R2: a TCP RST and, NN being unauthenticated, a forged
+`LevinHandshakeRejected` are both a path attacker's to produce, and
+either would have suppressed an honest address for an hour); on Tor
+only a reply in `0x04 0x05 0xF0 0xF1 0xF2` writes it, and those come
+from our own Tor process. A handshake timeout, a peer close, a local
+failure, and a clearnet proxy reply never did. The window is the one
 `failed_addr_cache::window` already derived. An attacker who can force
 reply 4 still buys only the short Tor window. That residual is
 unchanged. The key is host and port, so a refused port does not
 suppress another port on the same host. The memory dies with the
-process.
+process. *Records-was: a refused dial and a rejected handshake wrote
+the memory on clearnet too.*
 
 **Dial concurrency.** Many simultaneous onion dials are a load the
 managed Tor process was not sized for, and a way to stall every other
