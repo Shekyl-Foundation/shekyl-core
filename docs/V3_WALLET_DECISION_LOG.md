@@ -6465,7 +6465,7 @@ verify also re-gathers on any pass, so it moves with the gather.
 
 ---
 
-## 2026-10-11 — Serve credit: one bundle per block replaces the carrier transaction (`SCS-P14`–`P30`)
+## 2026-10-11 — Serve credit: one bundle per block replaces the carrier transaction (`SCS-P14`–`P31`)
 
 **Decision (maintainer, 2026-10-11; the Slice C Round 0 reopen).** The
 specification is
@@ -6494,8 +6494,8 @@ pairs could be chosen in advance (`SCS-F13`).
    and a pass bitmap of `count(h)` bits, in place of the list of `j`.
 4. **`W₂` stays the only consensus window.** `W₂ + D_max` is rejected. The
    challenger files by `h + W₂ − M`, `M = 30` blocks, provisional and not
-   consensus. *Struck from the wargames:* a miner rewriting `M` blocks to
-   clear a friend's misses, which is majority-class hashrate.
+   consensus. A deliberate `M`-block reorg gets no wargame row:
+   it is majority hashrate, which the containment layer handles.
 5. **The receipt key is read from the `h_open(E)` bond snapshot**, the one
    the drawable set is drawn from: one type, two methods.
 6. **The section has a budget counted in draws**, `c · 9·D / SEB` with
@@ -6523,9 +6523,16 @@ pairs could be chosen in advance (`SCS-F13`).
     referential integrity; the sim is to call the production draw
     functions.
 
-**Open.** Five questions found while writing the bundle in, each with a
-recommendation (specification §13.6, `SCS-P31`–`P35`): a bound on the
+15. **Three lanes, split by what needs checking**: Slice C builds
+    validity (the specification, the verifier's view trait, the pure
+    verifier, FN-DSA increments 3 and 4), `SO-D12` builds state, DRS-E5
+    builds transport. The contracts between them are the view trait and
+    the kept projection type.
+
+**Open.** Six questions found while writing the bundle in, each with a
+recommendation (specification §13.6, `SCS-P32`–`P37`): a bound on the
 anchor, the budget's integer form, whether the header root is the existing
-`attestation_root`, the bundle's bytes, and what a backfill verifies.
+`attestation_root`, the bundle's bytes, what a backfill verifies, and
+whether the verifier returns the derived draws.
 
 ---

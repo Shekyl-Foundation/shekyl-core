@@ -167,8 +167,10 @@ The read itself (unchanged from the TJ round):
    landed verifier. The receipt the specification rules — a nonce bound to
    `(h, j)`, a separate receipt key, no anchor bound at admission — is its
    §5, §6 and §9.1, and is not built.*
-4. The producer of `h` files the pass record in a carrier it signs, within
-   the resolution window **W₂** (specification §7).
+4. The producer of `h` files the block's pass records in one bundle it
+   signs, within the resolution window **W₂** (specification §7; the
+   carrier transaction this step named was replaced 2026-10-11,
+   `SCS-P14`).
 
 **A miss is never asserted.** It is the expiry of a derived challenge with no
 pass recorded within W₂. No miss record exists on the wire; no party attests

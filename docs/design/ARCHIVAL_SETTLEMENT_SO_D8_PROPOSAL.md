@@ -19,7 +19,9 @@ urn + `W₂` ring, no checkpoints, one set live, digest carve-out — §7.2).
 ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)): the
 urn and ring of `SO-D8e`, Q8's derivation, Q12's bare hash, and the
 public-urn form of `SO-D8b`. Q9's set-commitment bytes are ruled there
-(`SCS-P6`); carrier semantics are (B), §7.6.2. **Q4
+(`SCS-P6`); carrier semantics were (B), §7.6.2. **The carrier itself is
+superseded 2026-10-11 by one bundle per block (specification §7,
+`SCS-P14`–`P30`); (B)'s fail-whole and resubmission are the bundle's.** **Q4
 RESOLVED 2026-09-17** (one production constructor reads the constant;
 `assign_epoch` feeds it; explicit λ is `#[cfg(test)]` —
 `fix/so-q4-pin-lambda`). **Slice C AUTHORIZED 2026-10-04** (maintainer;
@@ -603,7 +605,7 @@ disagrees with the enumeration the correction is marked.
    §3 is a wallet envelope). Restart loss is β, logged as dropped
    in-flight count. Re-derivability is **REJECTED** (`SCS-P3`). The
    secrets are the draw seed and the witness key (specification §4.2).
-8. **Block weight — batching RULED 2026-09-16, amended same day (§7.6): set-commitment carrier, fail-whole, resubmission within `W₂`.**
+8. **SUPERSEDED 2026-10-11 as mechanism** ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) `SCS-P14`–`P16`, `SCS-P21`): there is no carrier transaction; one bundle per block carries the reveal and every record, admitted whole, outside the fee median. Fail-whole with resubmission, and the rejection of per-record admission, stand as the bundle's. *The text of this item is the carrier form as ruled 2026-09-16.* **Block weight — batching RULED 2026-09-16, amended same day (§7.6): set-commitment carrier, fail-whole, resubmission within `W₂`.**
    One witness key reveal and one signature per carrier, over a set
    commitment; no per-record inclusion paths. **Why batch:** at maturity
    archival traffic sets the chain's median, and the fee ladder prices
@@ -677,7 +679,8 @@ the `W₂` ring *capacity* is 500, depth tracks fill-to-inclusion;
 persist-encrypted **REJECTED**. Q13 RULED (§7.8): one CEN row, five
 fixtures, genesis-unconditional; it does not re-open optionality.
 **Q9 RULED 2026-09-16, amended same day (§7.6): set-commitment
-batching, carrier fail-whole, resubmission within `W₂`.** One witness key
+batching, carrier fail-whole, resubmission within `W₂`** — superseded
+2026-10-11 as mechanism by the bundle (specification `SCS-P14`–`P16`). One witness key
 reveal, one signature over a set commitment; no inclusion paths. One bad
 member refuses the carrier naming it; the witness refiles without it.
 There is no fee. The 300 KB figure is a floor. Prunable bytes count
@@ -1391,164 +1394,35 @@ in-flight seeds surfaces as β (non-observation of those heights'
 draws), not as an error — same disposition the wargame already named;
 the cardinality is the inherited fact. Persist-encrypted is **REJECTED**.
 
-### 7.6 Q9 RULED 2026-09-16 — set-commitment batching, carrier fail-whole, resubmission within `W₂`; amended same day
+### 7.6 Q9 — batching and carrier semantics — SUPERSEDED 2026-10-11 as mechanism
 
-> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7 states the carrier, the reveal it carries, the set commitment with computed vectors, and the sizes. This section owns the carrier's form, the weight facts it rests on, and (§7.6.2) fail-whole and resubmission.
+> **Superseded 2026-10-11.** The carrier transaction, its set commitment, its split under the per-transaction weight cap and its weight facts are replaced by one bundle per block: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7, §9.1 and §13.5 (`SCS-P14`–`P30`). The text this section held is in the history of this file, and the decision is in the decision log under 2026-09-16 and 2026-10-11.
 
-The question was whether the witness files the records for issuing
-block `h` as one transaction sharing one pk reveal and one signature, or
-as separate records each carrying its own witness material.
+What Q9 ruled that still stands, now as properties of the bundle:
 
-**Form — as amended 2026-09-16.** One pk reveal and one signature per
-carrier, over a **set commitment** of the carrier's records (§7.6.1). The
-carrier is **fail-whole**: any member failing its own record predicate
-refuses the carrier (`InvalidBlock`, naming member `i`), and the witness
-refiles without it inside `W₂`. No per-record inclusion paths. Unbatched
-(witness material on every record) remains rejected.
+- **One witness key reveal and one signature** over a commitment to every
+  record. Witness material on each record stays rejected.
+- **Fail-whole, with resubmission inside `W₂`** (§7.6.2 (B), 2026-09-16).
+  One failing record refuses the whole object. The producer pre-verifies,
+  and its seed is still in the ring, so it can correct and file again.
+- **(A) per-record admission stays REJECTED**: a valid object whose
+  failing members are silently not credited is a free-weight channel.
+  Reopen only if a price for these bytes lands.
+- **Merkle-root batching with per-record inclusion paths stays REJECTED**:
+  the paths bought isolation at the signature while admission stayed
+  fail-whole.
+- **Dedup is per draw.** Under the bundle it is structural: one bundle per
+  `h`, one bit per `j`.
 
-**SUPERSEDED same day: Merkle-root batching with per-record inclusion
-paths.** It was chosen so that "a corrupt record can be excluded and the
-rest verify." That premise was false under the carrier contract
-(§7.6.2): all members are vins of one transaction, and one failing vin
-refuses the transaction whether the signature is over a root or a
-concatenation — so the paths bought isolation at the *signature* while
-admission stayed fail-whole regardless. Once that is seen, the paths are
-22 KB/block for nothing: resubmission — mandatory machinery anyway,
-since a record orphaned with its including block is re-submittable
-verbatim — already provides the isolation the paths were
-bought for. The malicious-witness case does not separate the two forms
-either: a witness that wants to deny a block's credits simply does not
-witness, at zero cost, under both. The original objection to fail-whole — one
-corrupt record costs the carrier's honest archivers their credit — priced a
-**loss**; with `W₂ = 500` it is a **round-trip**.
+What does not carry over:
 
-**A batch is a carrier, not a unit of credit.** Dedup is per draw.
-
-**Why batching is worth doing (restated).** Not penalty avoidance.
-`effective_median` is a 100k-block long-term median and a 100-block
-short-term median clamped to `[Mlw, S·Mlw]` (`block_weight.rs:36–39`);
-the fee ladder prices against the long-term effective median (`:10–17`).
-300,000 is `get_min_block_weight` (`cryptonote_basic_impl.cpp:81–85` =
-`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` at
-`cryptonote_config.h:58`), a floor, not a ceiling. Sustained archival
-load raises the median and the steady state is penalty-free. At
-maturity the archival traffic *sets* that median, so the bytes per block
-are the baseline every other participant's fees price against. The
-figures are the specification's §7.4.
-
-**There is no fee, and there cannot be one.**
-`txin_archival_serve_credit_response` is a `txin_v` variant
-(`cryptonote_basic.h:269,315`). The coinbase's `vin` must be exactly one
-`txin_gen` (`blockchain.cpp:1394–1395`), so records ride ordinary
-transactions — never the coinbase. `archival_tx_kind::serve_credit_only`
-is handled at `blockchain.cpp:3484–3488` as non-spending archival vins
-(empty body: no `txin_to_key`, no value inputs). Semantic gate:
-`txnFee != 0` is a refusal (`tx_verification_utils.cpp:117–119`).
-**SUPERSEDED:** item 8(a) / F3's surviving half, "who pays the fee."
-The tx-pool class (item 8(c)) is `serve_credit_only`.
-
-**Prunable bytes count toward `block_weight` — confirmed at the weight
-path, not inferred from a missing carve-out.** Admission (unpruned):
-`get_transaction_weight(tx, blob_size)` returns `blob_size` plus the
-Bp+ clawback (`cryptonote_format_utils.cpp:323–334`); it refuses pruned
-txs. Serve-credit is `CTTypeFcmpPlusPlusPqc` (`is_ct_bulletproof_plus`
-true, `ct_types.cpp:205–213`) with empty `bulletproofs_plus`
-(`tx_verification_utils.cpp:121`), so clawback is 0 and weight is the
-full-blob size. The blob is the parse of the entire wire
-(`cryptonote_format_utils.cpp:201–208` sets `blob_size` from
-`tx_blob.size()`), and RF-D1 put the pass records in the prunable
-region (`transaction.rs:1850–1873`: serve-credit now *carries* a
-prunable region). After prune:
-`get_pruned_transaction_weight` serializes the pruned tx then **adds**
-`ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES * count_serve_credit_inputs`
-(`cryptonote_format_utils.cpp:374–379`; constant 5,107 at
-`cryptonote_config.h:432–433`) so a pruned node reconstructs the same
-weight. Rust `Transaction::weight` is `serialized_len() +
-bp_plus_clawback()` (`transaction.rs:1457–1466`); `serialized_len` is
-`write` into a counting sink, and `write` includes prunable. There is
-no archival carve-out on this path; the reconstruction *is* the
-inclusion.
-
-**Inherited per-tx cap, not a Q9 reopening.** Rule 4 of
-`ver_non_input_consensus` applies `get_transaction_weight_limit` =
-`get_min_block_weight / 2 − 600` = 149,400
-(`tx_verification_utils.cpp:80–86, :203–207`;
-`CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE` at `cryptonote_config.h:60`;
-Rust `TX_WEIGHT_LIMIT` at `transaction.rs:144–149`) with no archival
-carve-out. A carrier above it is `m_too_big`; the witness
-splits into as many carriers as the limit requires. Split is subset
-filing — already granted. Raising the cap for archival is the same
-fee-and-weight round as a prunable-weight discount, not Q9.
-
-**The residual, held.** Nobody pays for these bytes anywhere in the
-pipeline: the witness is unpaid by ruling, and the record transaction
-is structurally fee-less. Inclusion rests on miners voluntarily
-carrying zero-fee data. A block below the median takes no penalty for
-extra weight, and `λ·D/SEB` grows smoothly enough for the median to
-track it, but the marginal calculation for a miner whose block is at
-the median is to omit. Whether that bites is a dynamics question for
-the economics sim. The lever if inclusion turns out to be
-under-incentivised is to weight prunable archival bytes differently —
-the same decision as the weight-path fact above, approached from the
-other side. Both belong to a fee-and-weight round, not Q9.
-
-**FOLLOWUPS row added 2026-09-16** (rule 22: a deferral names its
-carrier): *Serve-credit inclusion incentive and archival weight pricing
-(the fee-and-weight round)* — unpaid inclusion, prunable-weight
-discount, cap-raise; falsified by the economics sim's inclusion rate at
-median-bound blocks.
-
-#### 7.6.1 The set commitment — SUPERSEDED 2026-10-07
-
-> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7.3 holds the construction, its customization `shekyl/archival-serve-credit-batch-v1`, and the computed vectors (`SCS-P6`, ruled 2026-10-07). It covers the seed and `h` as well as the framed records.
-
-#### 7.6.2 Carrier semantics — RULED 2026-09-16: (B), carrier fail-whole + resubmission
-
-**Review finding (valid) that forced the amendment.** "Merkle inclusion
-lets a bad record be excluded and the rest verify" was not what the
-carrier does. All records of a batch are vins of **one** transaction; the
-inherited contract refuses the whole transaction when any serve-credit
-vin fails (`blockchain.cpp:3682–3691`, `return false` on input `i`), and
-a `shekyl-chain-rules` row returns `InvalidBlock` for the candidate. Two
-branches were recorded; **(B) is ruled.**
-
-- **(A) Per-vin admission — REJECTED.** A valid carrier whose failing
-  members are silently not credited. A new consensus semantics — *a
-  valid block may carry serve-credit vins that yield no credit* — and a
-  **free-weight channel**: the witness is the producer of `h` and can
-  author junk members under a commitment it signs; with no fee, junk
-  carriers consume block weight for nothing, and closing that needs yet
-  another rule. Reopen only if a fee or weight price for serve-credit
-  bytes lands (the fee-and-weight round), which would remove the
-  free-weight ground.
-- **(B) Carrier fail-whole + resubmission — RULED.** Structural checks
-  on the carrier: kind `serve_credit_only`, fee 0, weight under the cap,
-  pruned-record count equals vin count, **`n ≥ 1`** (the empty carrier is
-  refused here, not left to the construction), witness
-  signature over the set commitment, witness key and seed against `h`'s
-  `0x0C`. Then any
-  failing member refuses the carrier (`InvalidBlock`, naming member `i`'s
-  predicate, as today). Every node verifies the carrier once, at connect,
-  with the prunable part present (specification §8). The honest members are refiled in another carrier within
-  `W₂`. Isolation is by resubmission, not by admission. The witness's
-  incentive to pre-verify is intact (its carrier fails otherwise), and
-  its seed is still in the ring (Q10 evicts on inclusion, and a refused
-  carrier was not included), so re-signing is possible. Adds no
-  consensus semantics, opens no free-weight channel, and removes the
-  path rule and 22 KB/block.
-
-Neither branch touches dedup (per draw) or the
-kept-wire ceiling. Fixture 13 is written for (B) (§8).
-
-**SUPERSEDED** in this section: Merkle-root batching with inclusion
-paths (the ruled form, same day); "fail-whole refused" as a statement
-about the carrier (it was only ever true of the signature, and the
-signature is now over a set commitment, which is fail-whole too);
-"Merkle inclusion lets a bad record be excluded and the rest verify";
-"against a 300 KB penalty-free zone"; "prunable bytes still count toward
-block weight" as an unread claim (now confirmed); "who pays the fee";
-"a single-tx ~357 KB Merkle-batch" as the maturity headline; 39 / 39 /
-19; ≈ 365 KB/block; 39:1.
+- **`n ≥ 1`.** A bundle with no passes is valid and required
+  (`SCS-P14`).
+- **The weight facts and the per-transaction cap.** The bundle is not a
+  transaction, and its section is outside the fee median and the penalty
+  curve (`SCS-P21`).
+- **The unpaid-inclusion residual and the cap raise.** Both are dissolved
+  (`SCS-P21`); the FOLLOWUPS row keeps the prunable-weight discount alone.
 
 ### 7.7 Q10 RULED 2026-09-16 — accept loss
 
@@ -1752,7 +1626,11 @@ settlement writer's Rust call site, the two halves the serve-credit round
 found each waiting on the other (`SCV-1`).
 - **Slice C's surface:** the successors of CEN-J1–J3 and J7–J10, the
   writer's call site, the witness (Q8), the `0x0C` writer (Q13) and the
-  carrier (Q9; `SCV-Q4` confirmed `serve_credit_only`).
+  carrier (Q9; `SCV-Q4` confirmed `serve_credit_only`). *Amended
+  2026-10-11 (specification `SCS-P16`, `SCS-P26`, §11): the carrier is
+  replaced by the bundle and its block rules; the serve-credit record's
+  deletion and the `0x0C` writer are the settlement lane's (`SO-D12`);
+  FN-DSA increments 3 and 4 join this slice.*
 - **Not Slice C's:** E6 slice 8 keeps the rest of census 4.J and does not
   wait on Slice C.
 - **The genesis gate** (`SCV-Q5`, recorded on `DEL-008`): no genesis, and
@@ -1983,7 +1861,7 @@ about it.
 | Drawable set (Q3) | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` over `ChainView`; no snapshot table. A dropped pair stays in `D`; filter at settlement and witness. Construction §7.4. | **RULED 2026-09-16** |
 | `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row **discharged 2026-09-16** by `SO-D8a` RULED (first admission-path reader). | **RESOLVED by R-B**; referent **RULED 2026-09-16 (`SO-D8a`)** |
 | Witness key (Q8) | **Dedicated non-output key**, committed under **`0x0C`**, **mandatory-present** (commitment 2, not byte count). The coinbase output's own per-output key is **ruled out by `PL-D3`'s premise**; extending `0x0B` is refused. Key and seed are fresh randomness per block, one 32-byte commitment over both (specification §4.2). Construction §7.5. | **RULED 2026-09-16**; derivation **SUPERSEDED 2026-10-07** (`SCS-P1`, `SCS-P3`) |
-| Batching (Q9) | One witness key reveal and one signature per carrier over a set commitment; **no inclusion paths**. **Carrier fail-whole + resubmission within `W₂`** (§7.6.2 (B) RULED; (A) per-vin admission REJECTED — free-weight channel). Serve-credit is fee-less by construction. 300,000 is `get_min_block_weight` (a floor). Prunable bytes count toward weight. Each carrier obeys `TX_WEIGHT_LIMIT`. Unpaid inclusion and a prunable-weight discount → fee-and-weight round (FOLLOWUPS row). Merkle-root batching with per-record inclusion paths REJECTED. Construction §7.6; bytes, reveal and sizes: specification §7. | **RULED 2026-09-16 (amended same day)**; commitment bytes **RULED 2026-10-07** (`SCS-P6`) |
+| Batching (Q9) | **SUPERSEDED 2026-10-11 as mechanism** ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) `SCS-P14`–`P16`, `SCS-P21`): there is no carrier transaction; one bundle per block carries the reveal and every record, admitted whole, outside the fee median. Fail-whole with resubmission, and the rejection of per-record admission, stand as the bundle's. *As ruled:* One witness key reveal and one signature per carrier over a set commitment; **no inclusion paths**. **Carrier fail-whole + resubmission within `W₂`** (§7.6.2 (B) RULED; (A) per-vin admission REJECTED — free-weight channel). Serve-credit is fee-less by construction. 300,000 is `get_min_block_weight` (a floor). Prunable bytes count toward weight. Each carrier obeys `TX_WEIGHT_LIMIT`. Unpaid inclusion and a prunable-weight discount → fee-and-weight round (FOLLOWUPS row). Merkle-root batching with per-record inclusion paths REJECTED. Construction §7.6; bytes, reveal and sizes: specification §7. | **RULED 2026-09-16 (amended same day)**; commitment bytes **RULED 2026-10-07** (`SCS-P6`) |
 | Secret lifetime (Q10) | Accept loss. Memory-only `ZeroizeOnDrop` ring; persist-encrypted **REJECTED** (daemon has no passphrase; rule 36 §3 is a wallet envelope). File promptly; evict on inclusion; log dropped in-flight on restart. Re-derivability from a long-lived node secret **REJECTED 2026-10-07** (`SCS-P3`). Construction §7.7. | **RULED 2026-09-16** |
 | `0x0C` content (Q13) | One `CEN-` row (id at Slice C), one predicate, five fixtures. Exactly one entry, length `WITNESS_COMMITMENT_BYTES` (32, `SCS-P1`), coinbase only, **present**, from genesis. Dedicated parser must not copy `0x0B`'s empty-set. First-wins is the red edit for duplicates. Surface-free; E6-landable. Construction §7.8. **SUPERSEDED:** four rows; copying the `0x0B` parser; unread 600-byte extra ceiling. | **RULED 2026-09-16** |
 | Slice A1 (Q6) | **Keep**, per review, on grounds narrower than §12 gave. | **ANSWERED — keep** |
@@ -2010,7 +1888,7 @@ about it.
 | **Boundary-straddler** — draw at epoch-relative 9,999 of `E` | Answerable in blocks `[10,000, 10,499)` of the chain — epoch-relative `[0, 499)` of `E+1` — names `E` (`epoch(h) = E`), counted for `E`, present in the table by `h_close(E) + 500`, read by the writer and the emission gather at `h_close(E) + 10,000`. | `SO-D9` (i) at `h`; §5's move; `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`. |
 | **Reorg across `h_close(E)`, or across `h`** | Suffix property (§2.2): no connected record can reference a removed `h`. Alt branch's blocks carry their own records (leaf index bound to their own `h−1`); losing branch leaves no residue. Settlement rows for `E`, if written, are deleted by `revert_archival_slashes_at_height` and recomputed on reconnect (`SO-D6`); the issued-draw index reverts with the blocks that wrote it. | `SO-D6` + specification §10. **Unread, named:** the pop order in `blockchain_db.cpp:748–749` reverts slashes before epoch-close; confirm the index revert is sequenced before either. |
 | **Witness key loss** — producer of `h` restarts and loses the witness seed | Draws at those heights that have not yet been included fall to non-observation; nothing errors. Shows up as β, which MECHANISM §7 item 7 requires treating as **common-mode**. Always-present (Q8 P1) means ring *capacity* is 500; steady-state depth is fill-to-inclusion. | Q10 RULED: accept loss; log the dropped in-flight count. Persist-encrypted **REJECTED**; re-derivability **REJECTED** (`SCS-P3`). Not a consensus concern; an availability one. |
-| **Batch as single point of failure** (Q9 RULED, amended) | One carrier carries many credits and is fail-whole: one corrupt record refuses the carrier for its honest members — but with `W₂ = 500` that is a **round-trip**, not a loss; the witness refiles without the bad member. Underfunded is not the vector: there is no fee. Unrelayed / omitted at the median is the residual (miners voluntarily carrying zero-fee data); a dynamics question for the fee-and-weight round, not a Q9 ruling. **Inter-carrier:** carriers are independent inclusion decisions. | Resubmission within `W₂`. Dedup is per draw. A producer that reveals and withholds passes is the specification's §17. *SUPERSEDED: Merkle inclusion (exclude the mutant, verify the rest).* |
+| **Batch as single point of failure** (Q9 RULED, amended; the carrier is superseded 2026-10-11, and the bundle's rows are the specification's §17.1) | One carrier carries many credits and is fail-whole: one corrupt record refuses the carrier for its honest members — but with `W₂ = 500` that is a **round-trip**, not a loss; the witness refiles without the bad member. Underfunded is not the vector: there is no fee. Unrelayed / omitted at the median is the residual (miners voluntarily carrying zero-fee data); a dynamics question for the fee-and-weight round, not a Q9 ruling. **Inter-carrier:** carriers are independent inclusion decisions. | Resubmission within `W₂`. Dedup is per draw. A producer that reveals and withholds passes is the specification's §17. *SUPERSEDED: Merkle inclusion (exclude the mutant, verify the rest).* |
 | **`PL-D3` interaction** (was "F5 interaction") | `PL-D3` (#745) holds because the per-output key is published once, at spend. A witness scheme keyed on a spendable output's pk publishes it a second time, labelled with `h`; the later spend is linked by byte equality — `PL-D3` void on every witnessing coinbase. The witness key is fresh randomness, independent of every output key. | Q8 RULED: the non-output witness key under `0x0C`; Q13 RULED for the content rule; the commitment is the specification's §4.2 (`SCS-P1`). |
 
 ---
@@ -2072,7 +1950,8 @@ so where it applies.
    covers both (`SCS-P1`, `SCS-P3`; specification §4.2). The derivation
    from coinbase output 0's `combined_ss` is superseded and not built.
 
-9. **RULED 2026-09-16 — (Batching); amended same day.** One witness key
+9. **RULED 2026-09-16 — (Batching); amended same day; superseded
+   2026-10-11 as mechanism by the bundle (specification `SCS-P14`–`P16`).** One witness key
    reveal and one signature per carrier over a set commitment; **no
    inclusion paths**. **Carrier fail-whole + resubmission within `W₂`**
    (§7.6.2 (B)): one failing member refuses the carrier naming it; the
