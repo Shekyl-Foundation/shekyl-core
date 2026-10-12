@@ -281,7 +281,7 @@ does not. The banner's findings range is to be moved to cover
 | --- | --- |
 | The held key | `FnDsaHybridSigner` (`rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs`): decodes an `FnDsaHybridSecretKey` once into a heap slot, then `sign(&mut self, domain, message)`. Same nested body as the scheme (`hybrid_combiner::sign_nested`); the scheme's own sign path is unchanged |
 | Byte identity | `a_held_key_signs_the_bytes_the_scheme_signs`, and `the_held_key_reproduces_the_pinned_signatures` in `tests/kat_fn_dsa_hybrid_v1.rs`, which reads `FN_DSA_HYBRID_V1_KAT.json` and so runs on the AVX2, no-AVX2 and aarch64 lanes. No vector was added or changed |
-| The key in the actor | `HeldReceiptKey` (`rust/shekyl-engine-core/src/engine/stake_engine/types.rs`), a field of `BondedPersona` and `EphemeralPersona` beside the bundle: a slot that is empty until the persona's first receipt signature and holds the decoded key from then on (`HeldPersona::sign_receipt_transcript`) |
+| The key in the actor | `HeldReceiptKey` (`rust/shekyl-engine-core/src/engine/stake_engine/types.rs`), a field of `BondedPersona` and `EphemeralPersona` beside the bundle: a three-state slot — `NotBuilt` until the persona's first receipt signature, then `Built` (the decoded key) or `Undecodable` for the rest of the persona's life (`HeldPersona::sign_receipt_transcript`) |
 | The actor message | `SignReceiptTranscript` (`stake_engine/persona.rs`): the 112-byte transcript in, an `FnDsaHybridSignature` out, the domain fixed to `SCHEME_DOMAIN_RECEIPT` where the key is held. `StakeEngineHandle::sign_receipt_transcript_blocking` is its blocking sender |
 | The capability | `ResidentReceiptKey` (`stake_engine/serving/receipt_key.rs`): a weak actor handle and a slot, `ready` and `sign_receipt`, the shape and refusals of `ResidentPassKey` |
 | The staging gate | `the_serving_task_is_not_started_with_the_receipt_key` reads `serving/start.rs`; the capability's methods carry `expect(dead_code)`, so a production caller fails the lint lane |
@@ -300,19 +300,34 @@ an optimized build and leaves 118,640 bytes on the heap; done at start,
 every staker's wallet would pay that per held slot at open for a key
 nothing signs with. So the actor's start does no FN-DSA work
 (`starting_the_actor_decodes_no_receipt_key`), the slot of a persona that
-never signs a receipt stays empty for its life, the first signature builds
-the key and each later one signs from that same key
-(`the_first_receipt_builds_the_key_and_the_second_reuses_it`). The empty
-slot holds no key bytes: what it decodes is `ArchivalPKeys::receipt_sign_sk`
-in the bundle beside it, borrowed at the first signature.
+never signs a receipt stays `NotBuilt` for its life, the first signature
+builds the key and each later one signs from that same key
+(`the_first_receipt_builds_the_key_and_the_second_reuses_it`).
 
-**A receipt key that does not decode is refused at that first signature**,
-with the scheme's typed error, and at each later one the same way; the slot
-stays empty and no failure is remembered in its place
-(`a_corrupted_receipt_key_refuses_at_the_first_signature`, and
-`…_through_the_actor` for the identity key and the other personas being
-unaffected). Nothing checks the key at start. The cutover, which makes
-receipt signing live, is where a start-time check belongs if one is wanted.
+**What secret material the slot holds.** Before it is built, none: no key
+byte and nothing derived from one. Once built it holds the receipt key a
+second time, in decoded form — the FN-DSA signing key expanded to its
+118,640-byte context (x86_64) and the signer's heap copy of the 32-byte
+Ed25519 seed — in addition to the encoded secret, which stays in
+`ArchivalPKeys::receipt_sign_sk` in the bundle beside it and is what the
+slot decodes from. Both forms are wiped when the persona drops.
+
+**A receipt key that does not decode is refused at that first signature,
+and remembered.** The first request gets the scheme's typed error and the
+slot becomes `Undecodable`; each later request is refused at once with the
+same error, without reading the secret or attempting a decode
+(`an_undecodable_key_is_not_decoded_again`, which runs the later requests
+on a stack a decode attempt does not fit in). The key bytes do not change
+while the persona is held, so a decode that failed once fails every time;
+retrying would spend a decode's stack and time per request, on a path a
+remote reader drives once the capability is live. The state is a unit: no
+error value and nothing computed from the key is kept. It is per persona
+(`an_undecodable_key_is_one_personas_state`), the identity key and the
+other personas are unaffected
+(`a_corrupted_receipt_key_refuses_through_the_actor`), and a persona leaves
+it only by being dropped. Nothing checks the key at start. The cutover,
+which makes receipt signing live, is where a start-time check belongs if
+one is wanted.
 
 ### 9.1 `FND-4`'s disposition — measured
 
