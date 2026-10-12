@@ -587,6 +587,19 @@ impl Drop for FnDsaHybridSigner {
     }
 }
 
+// A marker, and it wipes nothing: `ZeroizeOnDrop` has no methods. The wipe
+// is the `Drop` impl above, which runs the crate's `Zeroize` on the decoded
+// key in place; the Ed25519 seed is wiped by its own buffer's drop. This
+// impl asserts that promise to the type system, so the signer meets a
+// `ZeroizeOnDrop` bound and reads as what it is, a type that wipes itself.
+//
+// Written by hand and not derived because the derive would call `zeroize` on
+// each field, and for the key's slot that is `Option::zeroize`, which takes
+// the value out: two copies of a 118,640-byte context on the stack of
+// whatever frame the signer is dropped in (`FN_DSA_HYBRID.md` `FND-20`).
+//
+// Held by `the_signer_is_wiped_on_drop` (the bound) and
+// `drop_wipes_the_held_key_in_place` (what the `Drop` impl's wipe does).
 impl ZeroizeOnDrop for FnDsaHybridSigner {}
 
 impl std::fmt::Debug for FnDsaHybridSigner {
@@ -1178,6 +1191,17 @@ mod tests {
         );
         // Idempotent: drop wipes again, and the crate's own drop after it.
         signer.wipe();
+    }
+
+    /// The promise the `ZeroizeOnDrop` marker makes, as a bound: the signer,
+    /// and both things it holds, are wiped on drop. `drop_wipes_the_held_key_in_place`
+    /// shows the wipe itself.
+    #[test]
+    fn the_signer_is_wiped_on_drop() {
+        fn wiped_on_drop<T: ZeroizeOnDrop>() {}
+        wiped_on_drop::<FnDsaHybridSigner>();
+        wiped_on_drop::<SigningKey1024>();
+        wiped_on_drop::<HeapSecret<ED25519_SECRET_KEY_LENGTH>>();
     }
 
     #[test]
