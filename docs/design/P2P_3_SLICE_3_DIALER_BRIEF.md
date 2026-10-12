@@ -1,7 +1,10 @@
 # P2P-3 slice 3 — discovery and the dialer
 
-**Status: OPEN.** Design before code. Rule 26 is cited. No
-implementation starts from this file until a review of it has closed.
+**Status: REVIEWED — closed 2026-10-12 (Rick), on #1037 (R1–R5 and the
+corrections); implementation is PR-3.** Design before code. Rule 26 is
+cited. Every PR-3 commit implements this file as it stands at that commit.
+*Records-was: OPEN — no implementation starts from this file until a
+review of it has closed.*
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol
