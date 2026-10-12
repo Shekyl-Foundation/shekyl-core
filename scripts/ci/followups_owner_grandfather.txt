@@ -28,7 +28,6 @@ LMDB unbond-journal naming excluded from the Unbond → Release rename — carri
 Collected-total earmark warning (§12.3 carve UX, ruled 2026-09-04 with the carve countersign).
 §12.3 carve UNMEASURED bound — rule-21 measurement obligation with a named expected resolution.
 Release-asset manifest signing owed before the first non-RC release tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring task, not an open decision).
-F-7 — structural gate for the test-only FFI exports that ship in the production archive; two leak shapes, two remedies, one `nm` gate seeded from a sweep
 GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) — [`design/WALLET_MESSAGE_SIGNING.md`](./design/WALLET_MESSAGE_SIGNING.md)
 FFI *signature* drift has no remedy, unlike FFI *constant* drift [`audit_trail/2026-05-ffi-constant-drift-audit.md`](./audit_trail/2026-05-ffi-constant-drift-audit.md)
 TJ-1 (was CRITICAL) — leaf-index beacon MITIGATED 2026-08-24 (`PC-D3`); still closes by TJ-B deleting the vin-carried opening.

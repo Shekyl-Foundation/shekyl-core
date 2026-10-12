@@ -43,8 +43,55 @@ routes — `shekyl-ffi`'s direct edge and `p-serve`'s forward — and remedy (a)
 must close both. `check_test_only_features.py` counts forwarded activations as
 enablements since that round, which is how this was seen.
 
-## 5. Decision log
+## 5. Seams that mutate key material (2026-10-12; priority raised by ruling)
+
+Ruled 2026-10-12 on PR #1049: *"Raise FOLLOWUPS F-7's priority (the seams
+that mutate key material ship with shekyl-ffi)."* The row is now
+`pre-genesis, priority 1`. What the ruling rests on, read at the tree at
+that PR:
+
+**The edge.** `shekyl-ffi` enables `shekyl-crypto-pq/test-utils` on a
+**normal** dependency edge (`rust/shekyl-ffi/Cargo.toml:32`, under
+`[dependencies]`, which opens at line 23; the crate is a `staticlib`,
+line 17). `cargo tree -p shekyl-ffi -e features,normal -i shekyl-crypto-pq`
+prints `shekyl-crypto-pq feature "test-utils"`. So every item behind
+`#[cfg(any(test, feature = "test-utils"))]` in `shekyl-crypto-pq` is
+compiled into the archive cmake links into every binary. This is shape (a)
+(§2.1): present in the archive, reachable from any Rust in that graph, not
+exported over C.
+
+**The instances.** Shape (a) was recorded for seams that *produce*
+signatures or keys. It now also holds a seam that *writes into a secret
+key*:
+
+| Seam | Where | What it does |
+| --- | --- | --- |
+| `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs:221` (added by PR #1049) | Overwrites the header byte of a receipt secret key's FN-DSA half in place, making the key undecodable. Reads no key byte out |
+| `HybridEd25519FnDsa::sign_with_rng_seed`, `FnDsaHybridSigner::sign_with_rng_seed` | same file, `:367`, `:572` | Sign with the FN-DSA half's draw taken from a caller-chosen seed: a deterministic Falcon signature, the thing two of which over one hashed point leak the key (`FN_DSA_HYBRID.md` §2) |
+| `HybridEd25519MlDsa::sign_with_ml_dsa_seed` | `rust/shekyl-crypto-pq/src/signature.rs:413` | Already §2.1's example |
+
+**What "ships" means here, exactly.** These are compiled into
+`libshekyl_ffi.a`. None is `extern "C"` and no export names one, so C++
+cannot call them, and no Rust in the shipped graph calls them. Whether
+their code survives into a final linked binary is the linker's
+section-collection, which nothing asserts — that is §2.3's `nm` gate, and
+these mangled symbols join its list.
+
+**What does not reach `shekyl-ffi`.** `shekyl-p-serve`'s `test-signer`
+feature (which forwards `test-utils`, §4) is not in `shekyl-ffi`'s
+dependency graph: `cargo tree -p shekyl-ffi -e normal` names neither
+`shekyl-p-serve` nor `shekyl-p-host`. PR #1049's `TestReceiptKeySigner`
+is behind `test-signer` and so rides §4's forwarded route into the crates
+that enable it on a normal edge, not this one.
+
+**Why the priority moved.** A deterministic-signing seam is misuse-prone.
+A seam that edits a secret key in place is a different kind of thing to
+have compiled beside the keys it could edit, and the only thing between it
+and a production caller is its name.
+
+## 6. Decision log
 
 | Date | Entry |
 |---|---|
 | 2026-09-19 | Record opened by PR #786 to hold the audit the FOLLOWUPS row had grown into (rule 95: a row is one sentence, a link and a target). Content moved verbatim from the row's 2026-09-19 UPDATE, restructured under headings; the forwarded path (§4) added the same day. |
+| 2026-10-12 | Priority raised to `pre-genesis, priority 1` by ruling on PR #1049; §5 added with the feature-edge evidence and the key-mutating instance that PR introduced (`corrupt_fn_dsa_half_for_tests`). The remedy (§2) is unchanged and is still not this PR's. |
