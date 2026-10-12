@@ -199,19 +199,23 @@ pub struct DrawTarget {
 /// **`capped` is exact, and is not read off the target's arithmetic.**
 /// `D·H + SEB·u > 9·D·H` is `SEB·u > 8·D·H`, with no division on either
 /// side. `SEB·u` and `D·H` are each a product of two `u64`s and fit a
-/// `u128`. `8·D·H` may not; when it does not it is above `2^128` and so
-/// above any `SEB·u`, and the block is not capped. The predicate is
+/// `u128`. `8·D·H` may not; when it does not it is at least `2^128` and so
+/// above any `SEB·u`, which is strictly below `2^128`, and the block is
+/// not capped. The predicate is
 /// computed from those operands before the target is, so the saturation
 /// below cannot reach it.
 ///
-/// **`t` is exact while `min(D·H + SEB·u, 9·D·H) < 2^96`.** At or above
-/// that the sum saturates or the shift drops high bits, and `t` is not the
-/// formula's value. The schedule cannot get there: with `SEB = 10,000` and
-/// `H ≤ SEB`, `9·D·H` is below `2^81` for every `u64` `D`. A caller with
-/// other parameters must hold that bound itself.
+/// **`t` is exact or absent.** The fixed-point numerator is
+/// `min(D·H + SEB·u, 9·D·H) · 2^32`, which fits a `u128` only while the
+/// minimum is below `2^96`. At or above that the function returns `None`
+/// and never a truncated value: a saturated sum or cap is itself at least
+/// `2^96`, so every inexact case lands there. The schedule cannot reach
+/// it: with `SEB = 10,000` and `H ≤ SEB`, `9·D·H` is below `2^81` for
+/// every `u64` `D`.
 ///
-/// `None` when `SEB` or `H` is zero — neither is in production; the
-/// genesis schedule pins both well above.
+/// `None` when `SEB` or `H` is zero, or when the target does not fit —
+/// none of which is in production; the genesis schedule pins `SEB` and
+/// `H` well above zero and the target well below the limit.
 #[must_use]
 pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Option<DrawTarget> {
     if seb == 0 || horizon == 0 {
@@ -224,15 +228,30 @@ pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Opt
     // Neither product can overflow: each is two `u64`s in a `u128`.
     let base = d * h;
     let top_up = epoch * u;
-    // SEB·u > 8·D·H, exactly. An `8·D·H` past `u128` is past any `SEB·u`.
-    let capped = base.checked_mul(8).is_some_and(|room| top_up > room);
+    let capped = cap_binds(base, top_up);
     let weighted = base.saturating_add(top_up);
     let cap = base.saturating_mul(9);
-    let numer = weighted.min(cap).checked_shl(32)?;
+    // `checked_shl` checks the shift amount, not the bits shifted out; a
+    // multiplication refuses a numerator that does not fit.
+    let numer = weighted.min(cap).checked_mul(1 << 32)?;
     Some(DrawTarget {
         fixed: numer / epoch.saturating_mul(h),
         capped,
     })
+}
+
+/// Whether the cap bound: `SEB·u > 8·D·H`, exactly, from `base = D·H` and
+/// `top_up = SEB·u`. An `8·D·H` that does not fit a `u128` is at least
+/// `2^128`, and every `SEB·u` is strictly below that, so it is not capped.
+///
+/// Its own function so the predicate is defined on every input, including
+/// those whose target does not fit and for which [`draw_target`] has no
+/// value to return.
+const fn cap_binds(base: u128, top_up: u128) -> bool {
+    match base.checked_mul(8) {
+        Some(room) => top_up > room,
+        None => false,
+    }
 }
 
 /// One block's draw count and the 32-bit fractional carry it leaves.
@@ -246,8 +265,8 @@ pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Opt
 ///
 /// `t` is [`draw_target`]'s.
 ///
-/// `None` when `SEB` or `H` is zero — neither is in production; the
-/// genesis schedule pins both well above.
+/// `None` when `SEB` or `H` is zero or the target does not fit — none of
+/// which is in production; see [`draw_target`].
 #[must_use]
 pub fn draw_count(
     set_size: u64,
@@ -622,14 +641,19 @@ mod tests {
     /// (the red edit; both sides are `u128::MAX` on the first input and
     /// the comparison is false where the inequality is true), and an
     /// overflowing `8·D·H` read as zero or as capped.
-    /// Does NOT cover: the target on these inputs. It is not exact there
-    /// (see `draw_target`'s doc), and this test pins only that
-    /// `draw_count` still returns what it returned before the predicate
-    /// was made exact.
+    /// Also holds: on these inputs the target does not fit, and both
+    /// `draw_target` and `draw_count` say so with `None`. Before, a shift
+    /// that dropped the high bits returned a truncated value. Red edit:
+    /// `checked_shl(32)` in place of the multiplication.
     #[test]
     fn the_cap_predicate_is_exact_where_the_target_s_arithmetic_saturates() {
         let m = u64::MAX;
-        let capped = |d, u, h, seb| draw_target(d, u, h, seb).expect("H and SEB").capped;
+        let capped = |d: u64, u: u64, h: u64, seb: u64| {
+            cap_binds(
+                u128::from(d) * u128::from(h),
+                u128::from(seb) * u128::from(u),
+            )
+        };
 
         // The review's input: D = (2^64 − 1) / 8 = 2^61 − 1, and
         // SEB = u = H = m. m·m > 8·D·m is m > 8·D, and 8·D = 2^64 − 8.
@@ -660,8 +684,19 @@ mod tests {
         assert!(!capped(m, m, m, m));
         assert!(!capped(m, m, m, 1));
 
-        // The count on the review's input is what it was before.
-        assert_eq!(draw_count(m / 8, m, m, m, 0), Some((0, 1)));
+        // The target does not fit on the review's input, and neither
+        // function invents one. `checked_shl` returned a truncated 1 here.
+        assert_eq!(draw_target(m / 8, m, m, m), None);
+        assert_eq!(draw_count(m / 8, m, m, m, 0), None);
+        // One below the limit fits; the limit does not. D = 2^95 / H with
+        // u = 0: the minimum is D·H itself.
+        let fits = draw_target(1 << 63, 0, 1 << 32, 1 << 20).expect("D·H = 2^95 fits");
+        assert_eq!(fits.fixed, (1u128 << 127) / (1u128 << 52));
+        assert_eq!(
+            draw_target(1 << 63, 0, 1 << 33, 1 << 20),
+            None,
+            "D·H = 2^96"
+        );
     }
 
     /// A large case the arithmetic holds exactly: powers of two, so every
