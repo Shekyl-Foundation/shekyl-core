@@ -287,14 +287,10 @@ impl Peerlist {
         };
         let partition = self.partition_mut(connector);
         match outcome {
+            // The one white write, or a clock move, or nothing: decided by
+            // the seat alone, inside `confirm` (brief §2, §11.1).
             DialOutcome::SessionAccepted(address) | DialOutcome::Confirmed(address) => {
-                if partition.is_outstanding(address) {
-                    partition.promote(address, now, rng);
-                } else {
-                    // Already white on a session this node opened: the clock
-                    // moves. An undrawn ordinary address: nothing.
-                    partition.touch(address, now);
-                }
+                partition.confirm(address, now, rng);
             }
             DialOutcome::DialFailed(address) | DialOutcome::PeerlistRefused(address) => {
                 partition.drop_outstanding(address);

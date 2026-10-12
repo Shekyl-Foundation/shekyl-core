@@ -43,7 +43,7 @@ struct Sample {
 /// `Outstanding` is a gray address the dialer has drawn and not yet
 /// reported. Readers outside this module still call it gray. The clock on
 /// `White` is `last_observed` (brief §4): not a sort key, not a rank.
-/// White is reached only from [`Partition::promote`], which only
+/// White is reached only from [`Partition::confirm`], which only
 /// [`crate::Peerlist::apply`] calls (brief §11.1). No `Deserialize`: the
 /// file cannot carry a white entry (§7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,10 +97,6 @@ impl Partition {
 
     pub(crate) fn is_white(&self, address: &NetworkAddress) -> bool {
         matches!(self.seat_of(address), Some(Seat::White(_)))
-    }
-
-    pub(crate) fn is_outstanding(&self, address: &NetworkAddress) -> bool {
-        matches!(self.seat_of(address), Some(Seat::Outstanding))
     }
 
     /// Whether the address already has a seat. A seated address is not a
@@ -166,31 +162,29 @@ impl Partition {
         Some(self.pick_accepted(rng, |_, seat| matches!(seat, Seat::White(_))))
     }
 
-    /// The one white write, from an outstanding draw. Stamps `now`. Over
-    /// [`WHITE_CAP`], a uniformly random *other* white seat is demoted to
-    /// gray. Any other seat does not write white.
-    pub(crate) fn promote<R: RelayRng + ?Sized>(
+    /// A dial this node opened was confirmed (`SessionAccepted` or
+    /// `Confirmed`). What that does depends only on where the address sits,
+    /// read once here; there is no precondition for the caller to hold.
+    ///
+    /// An outstanding draw is the one white write: it moves to white and
+    /// its clock is set to `now`; over [`WHITE_CAP`] a uniformly random
+    /// *other* white seat is demoted to gray. An address already white
+    /// moves its clock. Anything else — an undrawn gray address, an address
+    /// not listed — writes nothing (brief §2: a dial of an address that was
+    /// not the draw does not write white).
+    pub(crate) fn confirm<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
         now: Tick,
         rng: &mut R,
     ) {
-        assert!(
-            self.is_outstanding(address),
-            "white is written only from an outstanding draw"
-        );
-        self.move_seat(address, Seat::White(now));
-        self.evict_white_over_cap(address, rng);
-    }
-
-    /// Move the clock of an address that is already white.
-    pub(crate) fn touch(&mut self, address: &NetworkAddress, now: Tick) -> bool {
-        match self.seats.get_mut(address) {
-            Some(Seat::White(observed)) => {
-                *observed = now;
-                true
+        match self.seat_of(address) {
+            Some(Seat::Outstanding) => {
+                self.move_seat(address, Seat::White(now));
+                self.evict_white_over_cap(address, rng);
             }
-            _ => false,
+            Some(Seat::White(_)) => self.move_seat(address, Seat::White(now)),
+            Some(Seat::Gray) | None => {}
         }
     }
 
