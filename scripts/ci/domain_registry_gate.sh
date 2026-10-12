@@ -326,7 +326,13 @@ count_pattern() {
 # (shekyl/archival-bundle-prunable-v1) and `bundle_root`
 # (shekyl/archival-bundle-root-v1). Their vectors were computed outside the
 # tree and are pinned as hex, so the tests add no site.
-MECH1_EXPECTED=73
+# SCS-P39 (2026-10-12): 73 -> 74. One inline #[cfg(test)] site in
+# rust/shekyl-archival-retention/src/bundle_tests.rs: the test that the
+# bundle commitment is the hash of the kept part's one encoding followed by
+# the records rebuilds that preimage and hashes it under the registered
+# label (shekyl/archival-serve-credit-bundle-v1). No production site and no
+# new domain.
+MECH1_EXPECTED=74
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2
