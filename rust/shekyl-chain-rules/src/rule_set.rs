@@ -183,6 +183,27 @@ impl std::error::Error for ReorgCapNotInsideEpoch {}
 /// `W₂ + L >` anchor depth (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1,
 /// `SCS-P32`). `W₂` is a fraction of the epoch, so this is a ceiling on
 /// the epoch: [`Self::LONGEST_EPOCH_BLOCKS`].
+///
+/// # Which inputs reach this refusal today
+///
+/// One: the replay tool's `--settlement-epoch-blocks`
+/// (`shekyl-chain-replay`, `schedule_flags`), which builds its pair with
+/// [`FakechainSchedule::new`] and prints this error.
+///
+/// **The daemon's regtest epoch lever does not.**
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is read by the retention crate's
+/// process latch — armed by
+/// `shekyl_archival_retention::arm_settlement_epoch_override_for_regtest`,
+/// read through `effective_settlement_epoch_blocks` and
+/// `SettlementSchedule::effective` — and by the C++ daemon. Nothing in
+/// Rust builds a [`FakechainSchedule`] from it. That latch's own parser
+/// (`parse_settlement_epoch_override`) admits no epoch above the genesis
+/// `SETTLEMENT_EPOCH_BLOCKS`, which is below the ceiling here, so the
+/// lever cannot name an epoch this relation refuses; but that is a
+/// consequence of two constants, not a check of this relation. **When the
+/// Rust daemon wires the lever to a rule set, the pair must be built by
+/// [`FakechainSchedule::new`] and this error surfaced to the operator as
+/// it is written** — not a second constructor, and not a panic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ResponseWindowOutrunsAnchor {
     /// Blocks per epoch the pair named.
@@ -262,6 +283,9 @@ impl FakechainSchedule {
     /// # Errors
     ///
     /// [`FakechainScheduleRefused`], naming the invariant that failed.
+    /// [`ResponseWindowOutrunsAnchor`] says which inputs reach that arm
+    /// today, and what the daemon's regtest lever owes when it is wired
+    /// to a rule set.
     pub const fn new(
         settlement_epoch: SettlementEpochBlocks,
         reorg_cap: BlockCount,
