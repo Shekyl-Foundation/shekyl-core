@@ -164,6 +164,10 @@ memory, to one row:
   loopback sockets to the process's SOCKS port and from its onion-service
   target port. The daemon's clearnet sockets are not counted.
 - `originated_sockets`: how many such sockets there are.
+  `originated_*` is what the daemon handed to Tor and took from it, before
+  Tor's cell framing and circuit overhead. `carried_*` is bytes on the
+  wire. The two are not in the same unit, the framing between them is not
+  reconstructed here, and one divided by the other is not a share.
 - `uplink_tx`, `uplink_rx`: the change in the interface counters.
 - the snapshot's time, and how long taking it took.
 
