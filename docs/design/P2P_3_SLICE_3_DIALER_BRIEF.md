@@ -142,24 +142,29 @@ Each wake, for one connector, takes the first arm that applies.
    "sound good but essentially bypass all the identity protections we
    have built in and provide no actual value." `--add-peer` already
    jumpstarts a node; it enters gray and takes its chances in the draw.
-2. **Confirm-and-close while gray is thin (Rick, 2026-10-11).** The
-   aim is `Confirm`. While **both** hold on this connector — gray holds
+2. **Confirm-and-close while white is thin (Rick, 2026-10-11).** The
+   aim is `Confirm`. While **both** hold on this connector — white holds
    fewer addresses than the white diversity floor (the composition's
-   `white_diversity_floor`, 48; the exact floor is this brief's review
-   to settle), **and** the previous *completed* confirm-and-close on
-   this connector added at least one new gray address — a fill draw is
-   confirm-and-close: one address drawn uniformly from gray, the
-   handshake run, the peer's sample admitted to gray, `Confirmed`, the
-   session closed. Whatever the address is — a compiled seed, an
-   `--add-peer`, an address a peer sent. When either condition fails, a
-   free slot is arm 4's kept `SessionAccepted`. The first
-   confirm-and-close after start has no previous one and runs on the
-   floor alone. A dial that ends in `DialFailed` or `PeerlistRefused`
-   is neutral: it neither continues nor ends the phase, and the yield
-   condition still reads the last *completed* one. Termination holds
-   anyway, because a failed dial drops the drawn address from gray
-   (slice 1 §5), so a run of failures empties the thin list rather than
-   spinning on it. *Records-was, same day: "the previous fill dial".*
+   `white_diversity_floor`, 48, the same floor that gates disclosure;
+   the exact floor is this brief's review to settle), **and** gray
+   holds a drawable address — a fill draw is confirm-and-close: one
+   address drawn uniformly from gray, the handshake run, the peer's
+   sample admitted to gray, `Confirmed`, the session closed. Whatever
+   the address is — a compiled seed, an `--add-peer`, an address a peer
+   sent. When either condition fails, a free slot is arm 4's kept
+   `SessionAccepted`.
+
+   *Why it terminates, and what it resists.* `Confirmed` moves the drawn
+   address from gray to white, and `DialFailed` / `PeerlistRefused` drop
+   it (slice 1 §5), so gray holds only addresses this node has not yet
+   asked, and every draw is progress: toward white reaching the floor,
+   or toward gray emptying. No peer's answer ends the phase — a reply of
+   nothing new, a reply of only known addresses, a refused list, a dead
+   host: each removes one address from gray and changes nothing else.
+   A feeder of addresses can only extend the phase, and only within
+   D-S1's per-session cap on what one session may put into gray. On a
+   network smaller than the floor (genesis, a private testnet) the
+   phase ends when gray empties, and the next free slot is kept.
 
    *There is no harvest.* A handshake reply carries the peer's
    disclosure sample, so a confirm-and-close dial learns addresses
@@ -176,23 +181,24 @@ Each wake, for one connector, takes the first arm that applies.
    `get_ip_seed_nodes`, `:2084`, after every seed has failed; the
    `break` after `connect_to_seed`'s dial is `:2073`); (ii) a harvest
    keyed on gray below the floor; (iii) that, and the previous harvest
-   yielded. The seed walk leaves with the dial path; the compiled seeds
-   are gray entries from the start.*
+   yielded; (iv) confirm-and-close keyed on gray below the floor and
+   the previous completed confirm-and-close yielding a new gray
+   address, with a failed dial neutral. The seed walk leaves with the
+   dial path; the compiled seeds are gray entries from the start.*
 
-   *Wargame (a), the yield condition.* The floor alone never terminates
-   when the reachable network is smaller than the floor — at genesis,
-   or on a private testnet — and an attacker who can keep a victim's
-   gray small (few addresses, or addresses that fail validity or the
-   cap) would hold the victim in confirm-only, never keeping a session.
-   With the yield condition the phase ends when it stops yielding: a
-   completed dial that adds nothing new is the last confirm-and-close,
-   and the next free slot is kept. A feeder of unreachable addresses
-   can only prolong the phase, one wake per address that turns out to
-   be new. Failed dials have to be neutral, not "no yield": counting a
-   failure as no yield would let one unreachable address — a seed that
-   is down, or an attacker's entry — end a fresh node's phase after a
-   single dial, so its next draw would be kept from a gray list that is
-   still mostly seeds, which is the outcome the arm exists to prevent.
+   *Wargame (a), why (ii) and (iv) were struck.* The floor-on-gray
+   condition alone (ii) never terminates when the reachable network is
+   smaller than the floor, and an attacker who keeps a victim's gray
+   small holds it in confirm-only. The yield condition (iv) terminates,
+   but hands the ending to a peer: a completed handshake that returns
+   only already-known addresses ends a yield-keyed phase, so one
+   hostile peer drawn early — a seed that answers with a stale list, or
+   an attacker's entry answering with the seeds — ends a fresh node's
+   phase with gray still mostly seeds, and its next draw is kept from
+   that list. Making failed dials neutral did not close this: the
+   hostile peer completes the handshake. The condition above keys on
+   this node's own lists, which no peer's answer can move except by
+   adding to gray, and adding to gray extends the phase.
 
    *Wargame (b), seeds on white early.* Under confirm-and-close a
    fresh node's first `Confirmed` is likely a compiled seed, so seeds
@@ -549,11 +555,10 @@ addresses enter gray at each start as operator-named addresses do, and
 reach white only through a drawn dial's `SessionAccepted` or
 `Confirmed`. The peerlist a seed returns is network-learned, under
 slice 1's address-validity check and D-S1's cap. The harvest is
-absorbed into `Confirmed` (the fill, arm 2): while gray is below the
-floor and the previous completed confirm-and-close added a new gray
-address (a failed dial is neutral), every fill draw is
-confirm-and-close, whatever the address; when either fails,
-the draw is kept. The seed list is not an input to the dialer. The exception audit
+absorbed into `Confirmed` (the fill, arm 2): while white is below the
+diversity floor and gray holds a drawable address, every fill draw is
+confirm-and-close, whatever the address; when either fails, the draw
+is kept. The seed list is not an input to the dialer. The exception audit
 ([`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §8,
 row 7) records the arm as absorbed into `Confirmed`. *Records-was (same
 day): the arm was an open point for this brief's review, pending a
