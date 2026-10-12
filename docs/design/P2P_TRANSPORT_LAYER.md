@@ -120,8 +120,8 @@ through `shekyl-socks`. `shekyl-p-transport` still enables ureq's
 not fire: the timing-engine round opened 2026-09-25.
 
 **What is built, and what the first commit is.** The crypto core is
-`shekyl-p2p-transport` (`noise`, `prefix`) and the shared record layer in
-`shekyl-noise` (`aead`, `channel`, `symmetric`). HMAC is
+`shekyl-p2p-transport` (`noise`, `prefix`, `channel`) and the shared Noise
+state in `shekyl-noise` (`aead`, `direction`, `symmetric`). HMAC is
 `hmac_blake2s`. `read_message1` range-checks the encapsulation key and
 `ResponderReady` stores the parsed key. `OnionPow`'s default is
 `Enabled`. `InboundCeiling` is in `shekyl-peer-policy`. The timing
@@ -1386,9 +1386,9 @@ declaration, not a new set of branches.
 
 - **Clearnet is plain clearnet, plus the Noise layer.** The declaration is what
   clearnet provides natively. The stack includes Noise because clearnet
-  declares no native encryption. `noise.rs`, `channel.rs`, `prefix.rs` and
-  `aead.rs` are that layer (`channel.rs` and `aead.rs` live in
-  `shekyl-noise` since the RPC channel began sharing them). The option-off path is the exception in ruling 4;
+  declares no native encryption. `noise.rs`, `channel.rs` and `prefix.rs`
+  are that layer in `shekyl-p2p-transport`. `aead.rs`, `direction.rs` and
+  `symmetric.rs` are the shared state in `shekyl-noise`. The option-off path is the exception in ruling 4;
   the flip is "enforce the contract". `--proxy` is a D3 dial duty and changes
   no declared capability.
 - **Tor is a complete overlay, not a VPN.** The Tor connector speaks onion to

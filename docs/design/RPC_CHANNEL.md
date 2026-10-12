@@ -544,27 +544,27 @@ is needed is decided from RT-P6's measurement, not before it.
   constant and the second has a fixed length. A testnet
   client cannot complete a handshake with a mainnet daemon. Nettype selects
   data only (rule 71).
-- **Record layer:** the P2P transport's `aead.rs` and `channel.rs`
-  (64 KiB maximum record body, `MAX_BODY = u16::MAX`; rekey every 1,000
-  nonces, `channel.rs:18-19`), **extracted into a crate both transports
-  depend on**, not copied. The extraction must not move or regenerate the
-  pinned handshake vectors (`kat_m1.hex`, `kat_m2.hex`): they stay
-  byte-identical and keep passing in place.
-  **Done in RT-W9, step 1:** the crate is `shekyl-noise`
-  (`rust/shekyl-noise/`). It holds those two files and the handshake's
-  symmetric state, which both handshakes share and which takes the
-  protocol name as a parameter (RT-O17). `shekyl-p2p-transport` keeps its
-  handshake, its prefix and its two vector files; the test that asserts
-  them is unchanged and passes where it was. Its tests reach the record
-  layer's key schedule through a `test-support` feature that a gate keeps
-  out of every production build (RT-O16; a `TEST_ONLY` row of
-  `scripts/ci/check_test_only_features.py`, the workspace's existing gate
-  for features that must stay on dev-dependency edges).
-  `SymmetricState::into_halves` is the split: the initiator sends with the
-  first transport key and the responder with the second, and that choice
-  lives in this crate. The hash, HKDF and AEAD stay crate-private. The C5
-  bench times one rekey through `rekey-timing`, which only
-  `shekyl-p2p-transport`'s `c5-bench` feature enables.
+- **Record layer. Done in RT-W9, step 1, on the 2026-10-12 re-ruling
+  (RT-O16, RT-O17).** The shared crate is `shekyl-noise`. It holds the AEAD
+  primitives (`hash`, `hkdf`, `seal`, `open`), crate-private; the handshake
+  symmetric state (`SymmetricState`, the protocol name a parameter); and
+  `Direction`, one nonce stream whose caller never supplies the nonce.
+  Rekey is `REKEY_NONCES` = 1,000 uses of that nonce. A handshake ends in
+  `SymmetricState::into_directions`: two `Direction`s, and no raw key
+  crosses the public API. `Direction::seal` and `Direction::open` return
+  the bytes and the key epoch of the key that produced them. The epoch
+  advances only when rekey runs. The header-protection key is not a field
+  of `Direction`.
+  The interim framer stays in `shekyl-p2p-transport` (`channel.rs`). It is
+  today's `SendHalf` / `RecvHalf`: an encrypted 2-byte length and an
+  encrypted body, two nonce uses per record, bodies at most 65,535 bytes.
+  The clearnet seam and the fuzz targets call it, so it is live code, and
+  this step does not change its wire bytes. `kat_m1.hex` and `kat_m2.hex`
+  stay byte-identical and keep passing in `noise.rs`. The key-schedule pins
+  live with `Direction`, `#[cfg(test)]` inside `shekyl-noise`. There is no
+  feature that exports a traffic key. The C5 bench times one rekey through
+  `rekey-timing`, which only `shekyl-p2p-transport`'s `c5-bench` feature
+  enables, and that function does not return the derived keys.
 - **HTTP over records.** hyper and axum expect a byte stream; the channel
   delivers records of at most 64 KiB. A stream adapter — `AsyncRead` /
   `AsyncWrite` over seal/open, with backpressure, record splitting for
@@ -578,16 +578,13 @@ is needed is decided from RT-P6's measurement, not before it.
   record is padded up to one of a small set of size classes, inside the
   AEAD, so a submission is indistinguishable from a block-fetch response of
   the same class.
-  - **One framing, shared with P2P.** The P2P transport's record framing is
+  - **One nonce stream, two framers.** The P2P transport's record framing is
     ruled fixed-window (`P2P_TRANSPORT_LAYER.md`, D14 item 4): one window is
     one record, its plaintext starts with an authenticated 2-byte occupancy,
-    and the rest is padding. That is this mechanism with a single class. It
-    is **not built yet** — `shekyl-noise`'s `channel.rs` still carries the interim
-    length-prefixed framing, pending that round's size measurement — so
-    there is no module to reuse today. The extracted record-layer crate
-    (above) carries one implementation, parameterised by its class table:
-    one window for P2P, the RPC's classes for the channel. A second framing
-    is not built.
+    and the rest is padding. That end state is not built in this step. The
+    interim framer is `shekyl-p2p-transport`'s `channel.rs`, and it is not
+    the shared type. `Direction` is what a later framer sits on.
+    `FixedWindow` and the channel's classed records are not built here.
   - **The class sizes are not chosen here.** They are derived from the
     record-size distribution measured in RT-P5 and RT-P6 (§9).
   - **Timing stays visible** — when a connection opens and how long a burst
