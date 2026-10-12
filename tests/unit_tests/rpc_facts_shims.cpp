@@ -1674,15 +1674,11 @@ TEST(rpc_facts_shims, info_status_reads_the_alt_block_count_and_passes_its_scala
   daemon_rpc_facts::info_status_scalars scalars{};
   scalars.start_time = 1699990000;
   scalars.free_space = 123456789012ull;
-  scalars.public_connections = 20;
-  scalars.public_outgoing_connections = 8;
   shekyl_rpc_info_status_facts facts{};
   ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::info_status(bap.bc, scalars, &facts));
   EXPECT_EQ(3u, facts.alt_blocks_count);
   EXPECT_EQ(1699990000u, facts.start_time);
   EXPECT_EQ(123456789012ull, facts.free_space);
-  EXPECT_EQ(20u, facts.public_connections);
-  EXPECT_EQ(8u, facts.public_outgoing_connections);
 }
 
 // The store's data file is named first, and it is the name that crosses: the
@@ -1737,19 +1733,32 @@ TEST(rpc_facts_shims, info_store_file_refuses_what_it_cannot_name_whole)
   }
 }
 
-// An empty pool counts zero both ways; the flag selects which set is counted
-// and is not a filter over one answer.
-TEST(rpc_facts_shims, info_pool_count_of_an_empty_pool_is_zero_both_ways)
+// An empty pool counts zero in both sets. Without the flag only the broadcast
+// count is made, and the second slot is not written.
+TEST(rpc_facts_shims, info_pool_counts_of_an_empty_pool_are_zero_and_the_flag_gates_the_second)
 {
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, new InfoTestDB(CHAIN_HEIGHT)));
 
   uint64_t broadcast = 99;
-  uint64_t all = 99;
-  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::info_pool_count(bap.txpool, 0, &broadcast));
-  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::info_pool_count(bap.txpool, 1, &all));
+  uint64_t unbroadcast = 99;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 1, &broadcast, &unbroadcast));
   EXPECT_EQ(0u, broadcast);
-  EXPECT_EQ(0u, all);
+  EXPECT_EQ(0u, unbroadcast);
+
+  broadcast = 99;
+  unbroadcast = 77;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 0, &broadcast, &unbroadcast));
+  EXPECT_EQ(0u, broadcast);
+  EXPECT_EQ(77u, unbroadcast) << "the count that was not asked for is not written";
+
+  // A caller who is not told the second count need not give it a slot.
+  broadcast = 99;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 0, &broadcast, nullptr));
+  EXPECT_EQ(0u, broadcast);
 }
 
 TEST(rpc_facts_shims, info_null_out_pointers_refuse)
@@ -1760,7 +1769,13 @@ TEST(rpc_facts_shims, info_null_out_pointers_refuse)
     daemon_rpc_facts::info_chain(bap.bc, chain_scalars(), nullptr));
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
     daemon_rpc_facts::info_status(bap.bc, daemon_rpc_facts::info_status_scalars{}, nullptr));
-  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::info_pool_count(bap.txpool, 0, nullptr));
+  uint64_t slot = 0;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 0, nullptr, nullptr));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 1, &slot, nullptr));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 1, nullptr, &slot));
   char path[16];
   size_t len = 0;
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,

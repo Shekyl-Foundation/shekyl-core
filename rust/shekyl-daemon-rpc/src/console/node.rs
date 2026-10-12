@@ -62,9 +62,10 @@ const VERSION_UNAVAILABLE: &str = "The daemon software version is not available.
 /// - **The versions agree.** `get_info` is decoded as every other reader
 ///   decodes it, and the software version is printed.
 ///
-/// A daemon that does not disclose its version — a restricted listener
-/// writes an empty string today — is reported as such, and as a failure,
-/// as the C++ did.
+/// A daemon that does not disclose its version withholds the Status part,
+/// and that is reported as such, and as a failure, as the C++ did. An empty
+/// version is not that: the reply type refuses a shown Status whose version
+/// is empty, so one never reaches this function.
 pub(super) fn version(src: &Source) -> Result<String, String> {
     let info = match src {
         Source::Live(_) => fetch_get_info(src)?,
@@ -83,10 +84,10 @@ pub(super) fn version(src: &Source) -> Result<String, String> {
             decode_get_info_ok(&raw)?
         }
     };
-    match info.node.shown() {
-        Some(status) if !status.version.is_empty() => Ok(status.version.clone()),
-        _ => Err(VERSION_UNAVAILABLE.to_owned()),
-    }
+    info.node
+        .shown()
+        .map(|status| status.version.clone())
+        .ok_or_else(|| VERSION_UNAVAILABLE.to_owned())
 }
 
 /// What `version` says of a daemon on another RPC version.
