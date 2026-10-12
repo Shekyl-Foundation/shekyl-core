@@ -645,8 +645,6 @@ fn info_status_facts_filled(seed: u64) -> crate::ffi::InfoStatusFactsFfi {
         start_time: submit_facts_field_value(seed, 0),
         free_space: submit_facts_field_value(seed, 1),
         alt_blocks_count: submit_facts_field_value(seed, 2),
-        public_connections: submit_facts_field_value(seed, 3),
-        public_outgoing_connections: submit_facts_field_value(seed, 4),
     }
 }
 

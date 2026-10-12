@@ -44,7 +44,7 @@
 //! first_paying_height  u8 present ‖ (u64 height if present)
 //! ```
 //!
-//! # The receipt key is fixed-width (layout 24)
+//! # The receipt key is fixed-width (layout 25)
 //!
 //! `receipt_sign_pk` is exactly `RECEIPT_SIGN_PK_LEN` (1,837) bytes in every
 //! record, so it is stored with no length prefix: a fixed-width field needs

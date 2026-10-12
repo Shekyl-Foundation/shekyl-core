@@ -22,7 +22,7 @@ use crate::rules::{BlockContext, FormContext, FormRule};
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::{ChainValid, Locus, Verdict};
-use crate::view::{AtHeight, ChainView, Tip};
+use crate::view::{AtHeight, ChainView, HeaderRecord, HeaderView, Tip};
 use shekyl_types::{BlockHash, CurveTreeRoot};
 
 /// One bit off: the wrong-root fixtures, without indexing into a newtype.
@@ -195,8 +195,19 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
     // against one that has no state at the connecting height the arm is a
     // refusal, never a fall-through.
     struct NoRoots;
-    impl<'id> ChainView<'id> for NoRoots {
+    impl<'id> HeaderView<'id> for NoRoots {
         type Fault = core::convert::Infallible;
+        fn tip(&self) -> Result<Option<Tip>, Self::Fault> {
+            Ok(None)
+        }
+        fn header_at(
+            &self,
+            _: shekyl_types::BlockHeight,
+        ) -> Result<AtHeight<HeaderRecord>, Self::Fault> {
+            Ok(AtHeight::AboveTip)
+        }
+    }
+    impl<'id> ChainView<'id> for NoRoots {
         fn has_key_image(&self, _: &shekyl_types::KeyImage) -> Result<bool, Self::Fault> {
             Ok(false)
         }
@@ -227,9 +238,6 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
             _: shekyl_types::BlockHeight,
         ) -> Result<AtHeight<CurveTreeRoot>, Self::Fault> {
             Ok(AtHeight::AboveTip)
-        }
-        fn tip(&self) -> Result<Option<Tip>, Self::Fault> {
-            Ok(None)
         }
         fn tree_frontier(&self) -> Result<crate::TreeFrontier, Self::Fault> {
             Ok(crate::TreeFrontier::EMPTY)

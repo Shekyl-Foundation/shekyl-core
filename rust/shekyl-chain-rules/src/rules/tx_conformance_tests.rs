@@ -768,6 +768,9 @@ fn hold_to_registry(row: CenRow, verdict: Verdict<()>, tx: &Transaction, locus: 
         RowStatus::HeldByCxx => {
             panic!("{row} is held by the C++; a wire arm keyed to it is a classification error")
         }
+        RowStatus::HeldByStore => {
+            panic!("{row} is held by the store; a wire arm keyed to it is a classification error")
+        }
     }
 }
 

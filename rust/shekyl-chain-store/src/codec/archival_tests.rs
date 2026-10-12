@@ -526,7 +526,7 @@ fn the_v7_corpus_maps_onto_the_record_without_loss() {
     );
 }
 
-// ---- the receipt key (layout 24, FN-DSA increment 3) ------------------------
+// ---- the receipt key (layout 25, FN-DSA increment 3) ------------------------
 
 /// The receipt key is 1,837 bytes with **no length prefix**, directly after
 /// `bond_spend_pk` and before the endpoint: the record's bytes are the two
@@ -586,7 +586,7 @@ fn a_record_truncated_in_the_receipt_key_is_refused() {
         BondRecord::decode(&bytes[..key_at + RECEIPT_SIGN_PK_LEN]),
         Err(invalid("buffer ends inside the endpoint"))
     );
-    // A layout-23 record — no receipt key at all — is not a shorter valid
+    // A record of an earlier layout — no receipt key at all — is not a shorter valid
     // record: its endpoint and everything after are read as key bytes, and
     // the buffer ends inside the key.
     let mut keyless = bytes.clone();

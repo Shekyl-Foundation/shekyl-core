@@ -132,3 +132,25 @@ successor.** Each is its predecessor plus that member
 one to read: `has_peers: true` beside two connection counts of `0`, which
 is the case the member exists for. `get_version_synced_v24` is the
 chain's 3.47 link; its members do not move.
+
+**3.48 withheld Status and Peers from a restricted reply, and one fixture
+moves.** `get_info_synced_restricted_v4` is `_v3` minus exactly the
+fourteen keys of those two parts
+(`the_3_48_restricted_vector_is_its_predecessor_minus_exactly_status_and_peers`,
+which also asserts that each removed key held its stand-in). The other
+four fixtures are full replies and have no successor.
+`get_version_synced_v25` is the chain's 3.48 link.
+
+**3.49 moved no `get_info` vector.** The two connection counts changed
+source (the seam board, every connector) and so meaning, which is why the
+version moved (RK-D8), but the fixtures hold 8 outbound and 12 inbound
+under either source. `get_version_synced_v26` is the chain's 3.49 link.
+
+**3.50 split the pool count, and the four host fixtures have a
+successor.** They held `tx_pool_size: 12`, every entry. Each successor
+holds `9`, the entries broadcast, and gains
+`tx_pool_unbroadcast_count: 3`
+(`the_3_50_vectors_split_the_same_pool_into_broadcast_and_not_yet_broadcast`).
+The restricted fixture already held `9` and does not move: that every
+caller now reads that number under that key is the change.
+`get_version_synced_v27` is the chain's 3.50 link.

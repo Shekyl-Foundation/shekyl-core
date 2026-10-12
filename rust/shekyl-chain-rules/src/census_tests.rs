@@ -274,6 +274,30 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
          DRS-E4 commit 4: the accrual fold (L8) and the slash fold (L9) return the C++'s \
          aborts as `Corrupt` by type"
     );
+    let at_open: Vec<CenRow> = CenRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::EnforcedAt)
+        .collect();
+    assert_eq!(
+        at_open,
+        [CenRow::D5, CenRow::E2, CenRow::E5, CenRow::K1b, CenRow::K4],
+        "slice 3 Q4 (a): E5 at writer open; DRS-E5 slice 9: the alt tier's target over the \
+         stitched window (D5), the anchor floor and reorg cap over the fork (E2), the \
+         height-0 claim (K1b) and the tier as the set and order of its steps (K4)"
+    );
+    let held_by_store: Vec<CenRow> = CenRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::HeldByStore)
+        .collect();
+    assert_eq!(
+        held_by_store,
+        [CenRow::K1a, CenRow::K2, CenRow::K3, CenRow::K8],
+        "DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
+         insert (K3) and no supply word on an alt row (K8) are the store's structures, \
+         proved by the store's tests"
+    );
     assert!(PolicyRow::ALL
         .iter()
         .all(|r| r.status() == RowStatus::Pending));

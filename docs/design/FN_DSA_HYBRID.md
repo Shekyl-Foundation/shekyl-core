@@ -284,7 +284,7 @@ post.
 | "Is this a JoinMarket?" | `BondPostKind::is_join_market` (retention) and `is_join_market_post_kind` (wire), each one predicate over one byte |
 | Admission | **CEN-J28**: the key parses as a canonical `FnDsaHybridPublicKey`. `rules::tx_inputs::J28`, in `tx_form` after J11 and J12. A JoinMarket with no key, or with one of another length, is unrepresentable in the type and refused at parse, so the row judges the key's content |
 | The signature | Nothing new. The key rides the signed prefix, so the identity key's `pqc_auths` slot covers it: one flipped bit of it under a standing signature is CEN-I18's refusal |
-| The record | `BondRecord::receipt_sign_pk: ReceiptSignPk`, copied by the fold's `join` and by nothing else. Stored fixed-width, 1,837 bytes with no length prefix, directly after `bond_spend_pk` |
+| The record | `BondRecord::receipt_sign_pk: ReceiptSignPk`, copied by the fold's `join` and by nothing else. Stored fixed-width, 1,837 bytes with no length prefix, directly after `bond_spend_pk`; store layout 24 → 25 (one bump for the layout this increment ends on — `dev` took 23 for the draw-state tables and 24 for the alt record while it was open) |
 | The producer | `BondPostKeys::receipt_pk`, filled by `ArchivalPKeys::bond_post_keys`; `build_join_market_vin` has one output. Its callers did not change: the key arrives inside the value they already pass |
 
 **The bytes.** `0`, `3` and `4` are refused names; the table is Reinstate
