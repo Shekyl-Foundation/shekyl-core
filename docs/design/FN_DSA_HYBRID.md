@@ -2,16 +2,18 @@
 
 **Status:** OPEN — increment 1 (the scheme in `shekyl-crypto-pq`, no
 consumers) recorded 2026-10-09 and merged 2026-10-10; increment 2 (the
-receipt key derived per persona slot, §7) recorded 2026-10-10. Increments 3
-and 4 (the bond record carrying the receipt key, receipts moving onto it)
-each land as their own change and are recorded here as they do. Closes when increment 4
+receipt key derived per persona slot, §7) recorded 2026-10-10; increment 3
+(the JoinMarket post and the bond record carrying the receipt key, §8)
+recorded 2026-10-12, with one oracle left red for a ruling (`FND-17`).
+Increment 4 (receipts moving onto the key) lands as its own change and is
+recorded here when it does. Closes when increment 4
 lands; the dependency record (§2) then moves to
 [`CRYPTOGRAPHIC_INVENTORY.md`](../CRYPTOGRAPHIC_INVENTORY.md), which already
 carries its summary row.
 **Substrate verified at:** `origin/dev` = `6b23eab315`.
 **Authority:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)
 §6, §11 and §13.1 R2–R4 (ruled 2026-10-07).
-**Findings:** `FND-1…FND-15` (§5), registered in
+**Findings:** `FND-1…FND-18` (§5), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
 
 ---
@@ -209,6 +211,9 @@ open a second road to a release.
 | `FND-13` | Increment 1 held the FN-DSA secret key as a 2,369-byte array inline in `FnDsaHybridSecretKey`. Key generation returned it by value and every move of the key copied it; `Zeroizing` wipes only where a value last rested, so each earlier copy stayed on a stack nobody wipes. It went unnoticed while nothing held the key. Putting it in the persona bundle made the bundle large enough to trip clippy's stack-array lint in an engine test, which is how it was found | Fixed with increment 2: both secret halves are `HeapSecret<N>` (`rust/shekyl-crypto-pq/src/heap_secret.rs`), a fixed-length buffer at one heap address, wiped there on drop. Key generation writes the FN-DSA half in place and the Ed25519 half is copied from the caller's borrowed seed, so neither is a by-value array on the stack and moving the key moves two pointers (`a_secret_key_holds_neither_half_inline`). It is its own type because `zeroize` implements `Zeroize` for `Box<[Z]>` and not for `Box<[Z; N]>`, so `Zeroizing<Box<[u8; N]>>` does not compile. Callers borrow a half with `as_array`, or `as_array_mut` to write it in place. There is no `Deref`: `[u8; N]` is `Copy`, so `*secret` would be the unwiped stack copy the type exists to prevent. The type is crate-private. The public key and the signature stay inline; neither is secret |
 | `FND-14` | Three sites each built `rand_chacha::ChaCha20Rng::from_seed` to generate a re-derivable key: ML-DSA-65 (`derivation::keygen_from_seed`), ML-KEM-768 (`account::ml_kem_keypair_from_d_z`) and FN-DSA-1024. That generator takes the seed by value, keeps it as its key with up to 256 bytes of buffered output, and has no wipe: every seeded key generation left its seed on the stack | One owner, `seeded_rng::SeededRng`. The cipher is `Box<ChaCha20Legacy>`: `SeededRng` is pointer-sized (`it_is_a_pointer`), a move leaves the cipher at the address it was boxed into (`a_move_does_not_move_the_cipher`), and drop wipes that heap cipher (`the_stream_is_wiped_on_drop`; the cipher's `ZeroizeOnDrop`, which the `zeroize` feature of `chacha20` provides — `chacha20` was already in the lock with that feature). Same stream, held against `ChaCha20Rng` on every call shape by `matches_rand_chacha_on_every_call_shape` and against the frozen bytes by every pinned key vector; none moved. What stays open: `ChaCha20Legacy::new` returns the cipher by value and the crate has no constructor that writes into caller memory, so `from_seed` moves that one return into the box and the source slot is not wiped. Closing it needs that upstream constructor. Unsafe placement is refused (`#[deny(unsafe_code)]` on this crate). Named in FOLLOWUPS |
 | `FND-15` | `FND-13` is not peculiar to scheme 3. The persona bundle held its onion seed as an inline `Zeroizing<[u8; 32]>`, and the same shape is a field of moved structs across the workspace: about thirty fields in nine crates, with the three typed secret wrappers of `keys.rs` (one of them the 2,400-byte ML-KEM decapsulation key) held inline in the same bundle. Rule 35 prefers that shape and the by-value return that feeds it | `ArchivalPKeys::hs_id_seed` is a crate-private `HeapSecret<32>`. Other crates borrow it through `hs_id_seed() -> &[u8; 32]`; they do not name the buffer type, and a crate that does not already depend on this one does not gain a dependency to hold a secret this way. The rest are named, field by field, in a FOLLOWUPS row with the rule amendment it needs. Not fixed here: the wrappers are the wallet's principal key types and each field is a per-site judgment on whether its struct is moved |
+| `FND-16` | The increment-3 brief assigned the receipt form of the JoinMarket bond-post `post_kind` `4`, on the reading that `3` (`HoldingsUpdate`, REJECTED 2026-09-20) was the only refused byte. Byte `4` is refused too: it was `EndpointUpdate`, REJECTED 2026-09-13 ([`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md); decision log, same date), and `bond_wire_tests`' `post_kind_table_ends_at_release_and_rejects_the_deleted_holdings_update_byte` pins `from_u8(4)` as `InvalidPostKind` beside byte `3` | The receipt form is `post_kind` **`5`**, the next byte no ruling has refused (rule 23: a refused name is not a free one). The pinning test is untouched. **Owed: the maintainer's ratification of `5`** — it was chosen by the brief's own rule for `3`, not ruled. Moving it is two constants (`BOND_POST_KIND_JOINMARKET_RECEIPT`, `BondPostKind::JoinMarketReceipt`) and their comments |
+| `FND-17` | **OPEN — one existing oracle is red.** Any `bond_record` layout that changes a keyless record's bytes diverges from a trace captured before it. The E2 replay of the captured `bond-post` chain (`rust/shekyl-chain-ingest/tests/vectors/bond-post`, `vectors_tests::every_captured_chain_replays_and_matches_the_daemons_digest`) compares the store's archival snapshot with the C++ daemon's, row bytes against row bytes; the capture holds the daemon's one bond row in the layout-22 bytes (4,090; the endpoint directly after `bond_spend_pk`) and a layout-23 store writes 4,094 (the empty receipt key's four-byte length prefix). The logical-state digest at that tip still matches | Not fixed in the increment: every way to green it changes a corpus or an expectation, which the increment was told not to do. Three ways, none chosen: **(a)** re-capture the chain from a daemon built at the increment's tree (the corpus's own regeneration path; no C++ source moves, since `shekyl_e2_archival_snapshot_push_bond` pushes an empty key through an unchanged signature); **(b)** record the chain in `PREDATES`-style as captured under layout 22, so its snapshot is *not compared* until re-captured; **(c)** change the encoding so a keyless record's bytes do not move — the receipt key as a trailing field that is absent when empty — which keeps this oracle, the v7 offsets and (with a keyless join in that fixture) the slash-tip pin where they were, at the price of a record whose layout depends on its content |
+| `FND-18` | The wallet recognised its own bond by comparing the recorded `post_kind` byte to `0` in four places (`bond_watch::sightings_in`, `staking_read::live_bonded_personas`, `staking_read::staked_balance_from_records`, `PScanAccrual::confirmed_join_market_personas`). A builder emitting the receipt form would have produced a bond its own wallet never confirmed, never counted as staked and never sighted on restore. No type caught it: they are byte compares | Fixed with the wire change: `shekyl_wire::transaction::is_join_market_post_kind` is the one predicate, and each site has a test that a `post_kind` `5` match is a JoinMarket. The recorded byte stays the wire's (`5`), so the persisted P-scan state gains a value and no field |
 
 ## 6. What the later increments inherit
 
@@ -217,7 +222,7 @@ open a second road to a release.
   `HybridEd25519FnDsa::keypair_from_seeds`. Done: §7.
 - **Increment 3** puts `ArchivalPKeys::receipt_sign_pk`, as
   `FnDsaHybridPublicKey::to_canonical_bytes()`, in the JoinMarket post; admission's "parses" is
-  `FnDsaHybridPublicKey::from_canonical_bytes`, which checks both halves.
+  `FnDsaHybridPublicKey::from_canonical_bytes`, which checks both halves. Done: §8.
 - **Increment 4** signs the unchanged 112-byte transcript under
   `SCHEME_DOMAIN_RECEIPT`. The refusal trailer's `0xFF` fill is already
   shown not to parse (`an_all_ones_fill_is_not_a_signature`).
@@ -259,3 +264,47 @@ one derivation's key and verifies it under a second derivation's public
 half; `receipt_key_is_scoped_to_slot_and_network` and
 `receipt_key_shares_no_seed_with_its_siblings` hold the scoping and the
 isolation from the identity, bond-spend and onion keys.
+
+## 8. Increment 3 — the receipt key on the wire and in the record
+
+A JoinMarket now commits the persona's receipt key, admission checks that
+it is a key, and the bond record keeps it. Rust only: no file under `src/`
+moved, and the C++ daemon does not know the new post form.
+
+| Piece | Where |
+| --- | --- |
+| The wire form | Bond-post `post_kind` **`5`**: kind `0`'s coupled fields with `varint len ‖ receipt_sign_pk` (exactly 1,837 bytes) between `bond_spend_pk` and the endpoint. Kind `0` is unchanged. Both representations hold it as `receipt_sign_pk: Option<Vec<u8>>` on the JoinMarket variant (`shekyl_wire::BondPostKind`, `shekyl_archival_retention::BondKind`): `None` is kind `0`, `Some` is kind `5` |
+| "Is this a JoinMarket?" | `BondPostKind::is_join_market` (retention) and `is_join_market_post_kind` (wire). Both forms are one arm to the classifier (`BondArm::of`), so the floor, the coupling, the balance, uniqueness and the fold read them alike |
+| Admission | **CEN-J28**: the key parses as a canonical `FnDsaHybridPublicKey`. `rules::tx_inputs::J28`, in `tx_form` after J11 and J12 |
+| The signature | Nothing new. The key rides the signed prefix, so the identity key's `pqc_auths` slot covers it: one flipped bit of it under a standing signature is CEN-I18's refusal |
+| The record | `BondRecord::receipt_sign_pk`, copied by the fold's `join` and by nothing else; empty for a keyless join. Stored as `u32 len ‖ bytes` after `bond_spend_pk`; store layout 22 → 23 |
+| The producer | `BondPostKeys::receipt_pk`, filled by `ArchivalPKeys::bond_post_keys`; `build_join_market_vin` emits the receipt form. Its callers did not change: the key arrives inside the value they already pass |
+
+**The byte is 5.** `3` and `4` are both refused names (`FND-16`).
+
+**The length is the wire's refusal and the content is the rule's.** Both
+parsers refuse a receipt key of any length but 1,837 before a rule runs.
+What reaches CEN-J28 from bytes is a string of the right length, and the
+rule decides whether it is a key: version, scheme byte, reserved field,
+both inner lengths, an Ed25519 half that is a point and an FN-DSA half the
+verifier decodes.
+
+**Immutable.** The key is written once, at JoinMarket connect. A Release
+and a Reinstate update the record in place and do not name the field; no
+post kind exists that could change it. A new receipt key is a new persona,
+as a new endpoint is.
+
+**What the C++ sees.** Nothing. Its decoder refuses `post_kind` `5` as an
+unknown kind, so a C++ node refuses every block carrying a receipt-form
+JoinMarket and a Rust node admits it. The C JoinMarket verify
+(`shekyl_archival_verify_join_market_bond_post`) still takes kind `0` only,
+and the snapshot export pushes an empty key through an unchanged signature.
+CEN-J28 is recorded UNREVIEWED in the conformance register for that reason.
+
+**One oracle is red, and it is the increment's open question** (`FND-17`).
+The layout change is correct against everything the increment was asked to
+build and wrong against one byte-for-byte comparison with a trace captured
+before it. The three ways to settle it are in the finding.
+
+**Not in this increment.** Nothing signs with the receipt key: receipts
+still verify as they did, and move to this key in increment 4.
