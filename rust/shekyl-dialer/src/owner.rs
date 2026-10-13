@@ -289,6 +289,7 @@ impl Dialer {
     /// This node's own addresses on `connector`: never dial candidates,
     /// and the disclosure population's own member (slice 1 §5a).
     pub fn set_own_addresses(&self, connector: ConnectorId, addresses: Vec<NetworkAddress>) {
+        tracing::info!("{connector:?}: this node's own address(es) are {addresses:?}");
         let mut shared = self.shared();
         if let Some(first) = addresses.first() {
             // An address of another connector is refused there and kept here
