@@ -690,6 +690,15 @@ impl RegtestDaemon {
         log_tail(&self.data_dir.join("daemon.log"))
     }
 
+    /// The daemon's whole captured log, for an assertion on a line the
+    /// daemon wrote (as opposed to [`log_tail`](Self::log_tail), the last
+    /// 40 lines inlined into a panic). Read while the fixture is alive:
+    /// `Drop` removes the datadir.
+    pub(super) fn log_text(&self) -> String {
+        std::fs::read_to_string(self.data_dir.join("daemon.log"))
+            .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
+    }
+
     /// Panic with the daemon log inlined. Call on a submit/dispatch
     /// failure: `Drop` removes the datadir (log included) as the unwind
     /// proceeds, so a "see the log file" pointer would name a deleted file.
@@ -2898,6 +2907,34 @@ struct ConfirmedBondFixture {
     confirmed_tip_height: u64,
 }
 
+/// What `stake_persona_and_submit_bond` hands back: the staker wallet with
+/// its persona funded, discovered and bonded as far as the **submit**, plus
+/// the submit verdict itself, un-judged. `stake_persona_to_confirmed_bond`
+/// judges it (accepted, then confirmed on chain); the FND-20 tripwire
+/// judges it the other way (refused, at the C++ parser).
+struct SubmittedBondPost {
+    /// The staker wallet engine (persona funded; bond post sealed and sent).
+    arc: Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    /// The wallet's backing tempdir — an RAII guard, never read.
+    _tmp: tempfile::TempDir,
+    /// The principal's mining/funding address.
+    principal: String,
+    /// The bonded persona's canonical id (the bond post's identity).
+    persona_id: shekyl_types::PCanonicalId,
+    /// The sealed P-scan state path (for follow-on `pscan_until` calls).
+    pscan_seal: std::path::PathBuf,
+    /// The pre-post funding gindexes `first_stake` swept.
+    swept_gindexes: Vec<u64>,
+    /// How many pre-post funding records the discovery scan found.
+    pre_post_discovered: usize,
+    /// The daemon's answer to the wallet-built post, through the audited
+    /// posture→submitter choke point.
+    verdict: Result<
+        super::transaction_submitter::SubmitSuccess,
+        super::transaction_submitter::BroadcastSubmitError,
+    >,
+}
+
 /// How the confirmed-bond fixture enters the stake.
 enum FixtureStake {
     /// The production [`Engine::first_stake`] entry (SP-R0 arm-#1
@@ -2939,7 +2976,11 @@ enum FixtureStake {
 /// cannot parse that byte and its verify export refuses every JoinMarket
 /// (`FN_DSA_HYBRID.md` §8, FND-20), so each caller is `DECIDED_DARK` in
 /// `scripts/ci/run_live_daemon_gates.sh` until the daemon admits one
-/// (DEL-008). The bodies stay: they are the positive subject.
+/// (DEL-008). The bodies stay: they are the positive subject. The armed
+/// tripwire `e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser`
+/// drives the same path to the submit and pins the refusal, so the day the
+/// daemon admits one is a red, not a silence (FOLLOWUPS, "The five bonded
+/// regtest walks are decided dark").
 async fn stake_persona_to_confirmed_bond(
     daemon: &RegtestDaemon,
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
@@ -2947,6 +2988,96 @@ async fn stake_persona_to_confirmed_bond(
     funding_cushion: u64,
     stake_entry: FixtureStake,
 ) -> ConfirmedBondFixture {
+    use super::stake_engine::PSlot;
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
+
+    let slot = PSlot::from_raw(slot_raw);
+    let SubmittedBondPost {
+        arc,
+        _tmp: tmp,
+        principal,
+        persona_id,
+        pscan_seal,
+        swept_gindexes,
+        pre_post_discovered,
+        verdict,
+    } = stake_persona_and_submit_bond(daemon, seed, slot_raw, funding_cushion, stake_entry).await;
+
+    // Accepted-and-applied (the promoted PR-4a tripwire): the daemon's
+    // PR-4b bond-post Phase-C battery verifies the wallet-built post over
+    // real RPC. Any rejection — Phase A, Phase C, transport — fails loudly.
+    let receipt = verdict.unwrap_or_else(|e| {
+        daemon.panic_with_log(
+            "daemon must accept the wallet-built bond post (PR-4b battery landed)",
+            format!("{e:?}"),
+        )
+    });
+    eprintln!("bond post accepted by the daemon submit engine: {receipt:?}");
+
+    // Applied: mine the accepted post into a block, then past the scan
+    // horizon, and re-run the production P-scan — the sealed state must
+    // carry the persona's bond-post match (rung-2 substrate) and a
+    // `BondPostChange` change-funding output beyond the pre-post set (the
+    // outputs the emission-claim e2e, PR-4c, spends from).
+    //
+    mine_until_pool_drains(daemon, &principal, "accepted bond post", 5).await;
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
+        .await;
+    refresh(&arc).await;
+    let state = pscan_until(
+        &arc,
+        &pscan_seal,
+        "the bond-post match + BondPostChange change funding + swept-record prune",
+        |s| {
+            // The swept-prune leg makes the wait deterministic: the arm-1
+            // prune can land a seal batch AFTER the match does, and a
+            // fixture snapshot taken between the two would carry the swept
+            // pre-post record alongside the change — a phantom extra row
+            // that would flake any consumer counting the slot's records
+            // (the bond e2e's own prune assertion included). Wait for all
+            // three writes before snapshotting.
+            s.bond_post_matches()
+                .iter()
+                .any(|m| m.p_canonical_id == persona_id)
+                && s.funding_outputs()
+                    .iter()
+                    .any(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
+                && s.funding_outputs()
+                    .iter()
+                    .all(|r| !swept_gindexes.contains(&r.gindex.to_raw()))
+        },
+    )
+    .await;
+    let confirmed_tip_height = daemon.height().await;
+
+    ConfirmedBondFixture {
+        arc,
+        _tmp: tmp,
+        principal,
+        persona_id,
+        pscan_seal,
+        state,
+        swept_gindexes,
+        pre_post_discovered,
+        confirmed_tip_height,
+    }
+}
+
+/// The first half of [`stake_persona_to_confirmed_bond`], up to and
+/// including the submit: fund the principal, fund the persona, discover the
+/// funding through the production P-scan, enter the stake (the production
+/// `first_stake` entry or the market-bond assembly), re-lift the sealed
+/// pending post and dispatch it through the audited posture→submitter
+/// choke point. The verdict is returned, not judged, so one body serves
+/// the confirmed-bond fixture and the FND-20 tripwire.
+async fn stake_persona_and_submit_bond(
+    daemon: &RegtestDaemon,
+    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    slot_raw: u32,
+    funding_cushion: u64,
+    stake_entry: FixtureStake,
+) -> SubmittedBondPost {
     use super::bond_assembly::{BondAssemblyError, PBoundBytes, SpentRecordsDurablyPruned};
     use super::bond_orchestrator::p_lane_weight_ceiling_bytes;
     use super::bond_orchestrator::FirstStakeError;
@@ -2955,7 +3086,6 @@ async fn stake_persona_to_confirmed_bond(
     use super::traits::DaemonEngine;
     use super::transaction_submitter::BroadcastSubmitter;
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
-    use shekyl_engine_state::pscan_state::MintLineageOutput;
     use shekyl_units::AtomicUnits;
 
     const MINE_BATCH_BLOCKS: u64 = 10;
@@ -3192,64 +3322,15 @@ async fn stake_persona_to_confirmed_bond(
     let submitter = BroadcastSubmitter::local(persona_id, Arc::new(daemon_client));
     let verdict = submitter.submit_bound(bound).await;
 
-    // Accepted-and-applied (the promoted PR-4a tripwire): the daemon's
-    // PR-4b bond-post Phase-C battery verifies the wallet-built post over
-    // real RPC. Any rejection — Phase A, Phase C, transport — fails loudly.
-    let receipt = verdict.unwrap_or_else(|e| {
-        daemon.panic_with_log(
-            "daemon must accept the wallet-built bond post (PR-4b battery landed)",
-            format!("{e:?}"),
-        )
-    });
-    eprintln!("bond post accepted by the daemon submit engine: {receipt:?}");
-
-    // Applied: mine the accepted post into a block, then past the scan
-    // horizon, and re-run the production P-scan — the sealed state must
-    // carry the persona's bond-post match (rung-2 substrate) and a
-    // `BondPostChange` change-funding output beyond the pre-post set (the
-    // outputs the emission-claim e2e, PR-4c, spends from).
-    //
-    mine_until_pool_drains(daemon, &principal, "accepted bond post", 5).await;
-    daemon
-        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
-        .await;
-    refresh(&arc).await;
-    let state = pscan_until(
-        &arc,
-        &pscan_seal,
-        "the bond-post match + BondPostChange change funding + swept-record prune",
-        |s| {
-            // The swept-prune leg makes the wait deterministic: the arm-1
-            // prune can land a seal batch AFTER the match does, and a
-            // fixture snapshot taken between the two would carry the swept
-            // pre-post record alongside the change — a phantom extra row
-            // that would flake any consumer counting the slot's records
-            // (the bond e2e's own prune assertion included). Wait for all
-            // three writes before snapshotting.
-            s.bond_post_matches()
-                .iter()
-                .any(|m| m.p_canonical_id == persona_id)
-                && s.funding_outputs()
-                    .iter()
-                    .any(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
-                && s.funding_outputs()
-                    .iter()
-                    .all(|r| !swept_gindexes.contains(&r.gindex.to_raw()))
-        },
-    )
-    .await;
-    let confirmed_tip_height = daemon.height().await;
-
-    ConfirmedBondFixture {
+    SubmittedBondPost {
         arc,
         _tmp: tmp,
         principal,
         persona_id,
         pscan_seal,
-        state,
         swept_gindexes,
         pre_post_discovered,
-        confirmed_tip_height,
+        verdict,
     }
 }
 
@@ -3285,7 +3366,7 @@ async fn stake_persona_to_confirmed_bond(
 /// - A shallow P-scan finality horizon + tight cadence via the injectable
 ///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_staker_bond_post_accepted_and_applied() {
     use super::stake_engine::PSlot;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
@@ -3361,6 +3442,109 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
     .await;
 }
 
+/// FND-20 tripwire, **ARMED** while the five bonded walks are
+/// `DECIDED_DARK` (`scripts/ci/run_live_daemon_gates.sh`; FOLLOWUPS "The
+/// five bonded regtest walks are decided dark").
+///
+/// The walks (`e2e_staker_bond_post_accepted_and_applied`,
+/// `e2e_drain_wire_shape_matches_a_real_transfer`,
+/// `e2e_release_accepted_and_connected`,
+/// `e2e_unstake_collect_retire_composed_arc`,
+/// `e2e_emission_claim_accepted_and_applied`) each begin by bonding through
+/// `stake_persona_to_confirmed_bond`, whose post is the one JoinMarket wire
+/// form, `post_kind` `5` (`FN_DSA_HYBRID.md` §8). The C++ daemon under test
+/// does not admit it, so they cannot pass their first step and were decided
+/// dark with "returns when the daemon admits one" — a restated blocker, not
+/// a check. This test is the check: it drives the same bonding path to the
+/// submit and asserts the refusal, **named precisely**:
+///
+/// - the daemon's native submit route parses and verifies the post in Rust
+///   first (Phase A, Phase C — the wallet-built post is valid, so neither
+///   refuses), then the commit shim re-parses the exact bytes in C++
+///   (`daemon_submit_ffi.cpp`, `commit_tx`), where
+///   `txin_archival_bond_post`'s serializer refuses `post_kind` above
+///   Release (`cryptonote_basic.h`) before any C++ or Rust verify;
+/// - that is `SHEKYL_SUBMIT_INTERNAL_FAULT`, logged as `submit commit: C++
+///   reparse failed on engine-validated bytes`, answered as HTTP 500 (an
+///   engine fault is never a verdict, `handlers/submit.rs`), which the
+///   wallet's submitter maps to `SubmitterError::Ambiguous { DaemonUnavailable }`
+///   — not a `Rejected` verdict, which would mean a Rust rule refused it.
+///
+/// The day the daemon under test admits a kind-5 JoinMarket (the Rust
+/// daemon at the cutover, `DEL-008`), the submit succeeds and this test
+/// panics naming the five walks that are due back on ARMED / ARMED_SLOW. A
+/// refusal of any other shape is also red, with the daemon log inlined:
+/// the C++ parser is the one place this refusal is allowed to come from.
+///
+/// Cost: the first half of the bond walk that was ARMED per-PR before
+/// 2026-10-13 (mine, fund, discover, stake, submit), minus its confirm half.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "FND-20 tripwire: needs SHEKYLD_BIN + a built regtest daemon; red when the daemon admits a kind-5 JoinMarket"]
+async fn e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser() {
+    use super::error::AmbiguousErrorKind;
+    use super::transaction_submitter::{BroadcastSubmitError, SubmitterError};
+
+    const SLOT: u32 = 0;
+    /// The bond walk's cushion: a non-zero change output, nothing more.
+    const FUNDING_CUSHION: u64 = 200_000_000;
+    /// The commit shim's own words for the refusal this test pins.
+    const CXX_REPARSE_REFUSAL: &str = "submit commit: C++ reparse failed on engine-validated bytes";
+
+    let daemon = RegtestDaemon::start().await;
+    // Schedule guard (see the bond walk): wallet epoch arithmetic here must
+    // run on the genesis pin; a sibling-armed levered schedule fails loudly.
+    assert_eq!(
+        shekyl_archival_retention::effective_settlement_epoch_blocks(),
+        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS,
+        "another test latched a levered settlement-epoch schedule in this process; \
+         run the regtest e2es in separate processes"
+    );
+    let seed = [0x4Au8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let submitted = stake_persona_and_submit_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::FirstStake,
+    )
+    .await;
+    // Read before any panic: the unwind drops the daemon and its log.
+    let log = daemon.log_text();
+
+    match submitted.verdict {
+        Err(BroadcastSubmitError::Submit(SubmitterError::Ambiguous {
+            kind: AmbiguousErrorKind::DaemonUnavailable,
+        })) => {}
+        Ok(receipt) => panic!(
+            "THE DAEMON ADMITTED A KIND-5 JOINMARKET ({receipt:?}). FND-20's blocker has \
+             lifted: move e2e_staker_bond_post_accepted_and_applied, \
+             e2e_drain_wire_shape_matches_a_real_transfer, \
+             e2e_release_accepted_and_connected, e2e_unstake_collect_retire_composed_arc \
+             and e2e_emission_claim_accepted_and_applied off DECIDED_DARK in \
+             scripts/ci/run_live_daemon_gates.sh (observe each red first), close the \
+             FOLLOWUPS row \"The five bonded regtest walks are decided dark\", and retire \
+             this tripwire"
+        ),
+        Err(other) => panic!(
+            "the kind-5 JoinMarket was refused, but not as the C++ parser refuses it \
+             ({other:?}); a Rust-side rejection or a transport fault is a different \
+             finding; daemon log tail:\n{}",
+            daemon.log_tail()
+        ),
+    }
+    assert!(
+        log.contains(CXX_REPARSE_REFUSAL),
+        "the refusal was ambiguous to the wallet, but the daemon did not log the C++ reparse \
+         refusal ({CXX_REPARSE_REFUSAL:?}); something else made the submit fail; daemon log \
+         tail:\n{}",
+        daemon.log_tail()
+    );
+    eprintln!(
+        "FND-20 tripwire: the C++ daemon refused the wallet-built kind-5 JoinMarket at its \
+         parser ({CXX_REPARSE_REFUSAL}); the five bonded walks stay DECIDED_DARK"
+    );
+}
+
 /// PR-4c emission-claim harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4c): the
 /// full staker reward loop over real RPC — serve credit injected under the
 /// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever, the epoch closed by mining, the
@@ -3409,7 +3593,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;
@@ -4060,7 +4244,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
 ///
 /// [`EXIT_FEE_RESERVE_ATOMIC`]: shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use super::drain_dispatch::DrainRequestError;
     use super::drain_orchestrator::DrainOrchestrationError;
@@ -4352,7 +4536,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 /// façades end-to-end. This walk keeps the seam-level byte proposition:
 /// it exists so a façade-layer regression can never mask a wire one.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_release_accepted_and_connected() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::emission_source::fetch_claim_source_for;
@@ -4520,7 +4704,7 @@ async fn e2e_release_accepted_and_connected() {
 /// 7. The daemon row is STILL present with `bonded_total == 0`:
 ///    retirement is a wallet-side act; the chain record outlives it.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_unstake_collect_retire_composed_arc() {
     use super::emission_source::fetch_claim_source_for;
     use super::prpc::LocalNodeRpc;
