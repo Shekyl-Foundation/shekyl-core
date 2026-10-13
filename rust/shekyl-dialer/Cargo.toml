@@ -26,6 +26,8 @@ shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 # The two outbound targets of the composition table.
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+# A failed address-file write is logged, not lost.
+tracing = "0.1"
 # The RNG seam the draws are generic over.
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 
@@ -35,6 +37,8 @@ shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 # The owner's test rig: a hub over the loopback dialer, with a manual clock.
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+# A directory of its own for each address-file test.
+tempfile = "3"
 
 [lints]
 workspace = true

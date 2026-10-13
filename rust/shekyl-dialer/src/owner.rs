@@ -24,7 +24,9 @@
 //! owner's outcome carries the cause it saw.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -48,6 +50,7 @@ use crate::fill::{plan, Census, DialAim, DrawList};
 use crate::memory::FailedAddresses;
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 use crate::pace::next_wake_nanos;
+use crate::store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
 
 /// This node's sync payload, read at each handshake. `None` when the core
 /// has not published a tip yet: the dialer then dials nothing, because a
@@ -79,6 +82,9 @@ pub struct Shared {
     /// A closed network (`--add-exclusive-node`): the candidate
     /// population, when set. Not a dialer arm.
     exclusive: Option<BTreeSet<NetworkAddress>>,
+    /// When the address file was last written or read; `None` until
+    /// then, so the first due store is one interval after the open.
+    last_store: Option<Tick>,
 }
 
 impl Shared {
@@ -97,6 +103,8 @@ pub struct Dialer {
     network_id: Mutex<Option<[u8; 16]>>,
     support_flags: u32,
     snapshot: SnapshotSource,
+    /// The address file, once [`Self::open_address_file`] named it.
+    store: Mutex<Option<AddressStore>>,
 }
 
 /// The transport layer's bans, asked through the hub.
@@ -199,12 +207,14 @@ impl Dialer {
                 pending: BTreeMap::new(),
                 kept: BTreeMap::new(),
                 exclusive: None,
+                last_store: None,
             })),
             nonces: HandshakeNonceSet::new(),
             stop: Arc::new(AtomicBool::new(false)),
             network_id: Mutex::new(None),
             support_flags,
             snapshot,
+            store: Mutex::new(None),
         }
     }
 
@@ -371,11 +381,61 @@ impl Dialer {
         }
     }
 
-    /// Stop every owner loop at its next wake. A loop blocked in the
-    /// engine's wait returns when its owner is deregistered or the engine
-    /// closes, which zone shutdown does.
+    /// Stop every owner loop at its next wake, and write the address file
+    /// once more. A loop blocked in the engine's wait returns when its
+    /// owner is deregistered or the engine closes, which zone shutdown
+    /// does.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
+        if let Err(err) = self.store_addresses() {
+            tracing::warn!("the address file was not written at stop: {err}");
+        }
+    }
+
+    /// Name the address file and load it: every address it holds enters
+    /// gray (slice 1 brief §7). No file is a first start. A file this
+    /// build cannot read is dropped whole and the lists are left as they
+    /// were; the path is kept either way, so the next store replaces it.
+    /// Returns how many addresses entered gray.
+    pub fn open_address_file<R: RelayRng + ?Sized>(
+        &self,
+        path: PathBuf,
+        rng: &mut R,
+    ) -> Result<usize, LoadError> {
+        let store = AddressStore::new(path);
+        let loaded = store.load();
+        *self.store.lock().expect("address store") = Some(store);
+        let addresses = loaded?;
+        let mut shared = self.shared();
+        shared.last_store = Some(self.hub.now());
+        Ok(shared.lists.restore(addresses, rng))
+    }
+
+    /// Write the address file now: every list address, by range only.
+    /// `Ok(false)` when no file was named.
+    pub fn store_addresses(&self) -> io::Result<bool> {
+        let store = self.store.lock().expect("address store");
+        let Some(store) = store.as_ref() else {
+            return Ok(false);
+        };
+        let addresses = self.shared().lists.persistable();
+        store.write(&addresses)?;
+        self.shared().last_store = Some(self.hub.now());
+        Ok(true)
+    }
+
+    /// Write the address file when [`STORE_INTERVAL_NANOS`] has passed
+    /// since it was last written or read. `Ok(false)` when it is not due
+    /// or no file was named.
+    pub fn store_if_due(&self, now: Tick) -> io::Result<bool> {
+        let due = self
+            .shared()
+            .last_store
+            .is_none_or(|last| now.get().saturating_sub(last.get()) >= STORE_INTERVAL_NANOS);
+        if !due {
+            return Ok(false);
+        }
+        self.store_addresses()
     }
 
     fn record<R: RelayRng + ?Sized>(
@@ -415,6 +475,9 @@ impl Dialer {
             }
             if self.stop.load(Ordering::Acquire) {
                 break;
+            }
+            if let Err(err) = self.store_if_due(self.hub.now()) {
+                tracing::warn!("the address file was not written: {err}");
             }
             let Some((address, aim, nonce)) = self.choose(connector, rng) else {
                 continue;

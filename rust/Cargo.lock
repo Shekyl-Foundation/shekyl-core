@@ -4265,6 +4265,8 @@ dependencies = [
  "shekyl-seam",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

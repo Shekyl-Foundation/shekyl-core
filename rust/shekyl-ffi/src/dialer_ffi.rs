@@ -21,9 +21,11 @@
 //! ([`shekyl_peerlist_admit_operator`]); this node's own address on a
 //! connector ([`shekyl_peerlist_set_own_address`]).
 
+use std::ffi::{c_char, CStr};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use shekyl_dialer::{seeds, Dialer, SeedNetwork, Shared};
+use shekyl_dialer::{seeds, Dialer, LoadError, SeedNetwork, Shared};
 use shekyl_levin::SupportFlags;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
 use shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS;
@@ -49,6 +51,30 @@ static NETWORK: Mutex<SeedNetwork> = Mutex::new(SeedNetwork::None);
 /// The outbound caps the C++ set before the dialer existed: the command
 /// line is parsed before the seam binds. Applied when the dialer is built.
 static CAPS: Mutex<[Option<u32>; ConnectorId::COUNT]> = Mutex::new([None; ConnectorId::COUNT]);
+
+/// What else the C++ pushes before the dialer exists. On a clearnet-only
+/// start the first listen, which binds the seam and builds the dialer,
+/// comes after the command line is parsed and `--add-peer` admitted, so
+/// each push is held here and applied when the dialer is built, in this
+/// order: the address file, the operator addresses, the closed network,
+/// the own addresses.
+struct Deferred {
+    address_file: Option<PathBuf>,
+    operator: Vec<NetworkAddress>,
+    exclusive: Option<Vec<NetworkAddress>>,
+    own: Vec<(ConnectorId, Vec<NetworkAddress>)>,
+}
+
+static DEFERRED: Mutex<Deferred> = Mutex::new(Deferred {
+    address_file: None,
+    operator: Vec::new(),
+    exclusive: None,
+    own: Vec::new(),
+});
+
+/// Recorded for the dialer's build: the entry's effect follows when the
+/// seam binds.
+pub const SHEKYL_DIALER_DEFERRED: i32 = 2;
 
 pub(crate) fn dialer() -> Option<Arc<Dialer>> {
     DIALER.lock().expect("dialer").clone()
@@ -79,8 +105,63 @@ pub(crate) fn ensure_dialer(hub: &Hub) -> Arc<Dialer> {
             let _closed = dialer.set_target(*connector, *cap as usize, &mut SecureRelayRng);
         }
     }
+    let deferred = {
+        let mut held = DEFERRED.lock().expect("deferred");
+        std::mem::replace(
+            &mut *held,
+            Deferred {
+                address_file: None,
+                operator: Vec::new(),
+                exclusive: None,
+                own: Vec::new(),
+            },
+        )
+    };
+    let now = hub.now();
+    if let Some(path) = deferred.address_file {
+        open_file(&dialer, &path);
+    }
+    for address in &deferred.operator {
+        match dialer.admit_operator(address, now, &mut SecureRelayRng) {
+            Ok(_) | Err(_) => {}
+        }
+    }
+    if let Some(list) = deferred.exclusive {
+        dialer.set_exclusive(list, now, &mut SecureRelayRng);
+    }
+    for (connector, own) in deferred.own {
+        dialer.set_own_addresses(connector, own);
+    }
     *slot = Some(Arc::clone(&dialer));
     dialer
+}
+
+/// Name and load the address file, logging what happened to it.
+fn open_file(dialer: &Dialer, path: &Path) {
+    match dialer.open_address_file(path.to_path_buf(), &mut SecureRelayRng) {
+        Ok(count) => tracing::info!("{count} address(es) from {} entered gray", path.display()),
+        Err(LoadError::Dropped(why)) => tracing::warn!(
+            "{} is not an address file this build reads ({why:?}); dropped whole, replaced at the next store",
+            path.display()
+        ),
+        Err(LoadError::Io(err)) => tracing::warn!(
+            "{} could not be read ({err}); the lists start empty",
+            path.display()
+        ),
+    }
+}
+
+/// This node's own addresses on `connector`, now or when the dialer is
+/// built.
+fn set_own(connector: ConnectorId, own: Vec<NetworkAddress>) {
+    match dialer() {
+        Some(dialer) => dialer.set_own_addresses(connector, own),
+        None => DEFERRED
+            .lock()
+            .expect("deferred")
+            .own
+            .push((connector, own)),
+    }
 }
 
 /// The zone host started: the dialer learns the network it dials.
@@ -146,14 +227,11 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
 /// The per-boot onion `shekyl-tor` published, as this node's own address
 /// on the Tor connector. `service_id` is the 56-character id, no suffix.
 pub(crate) fn note_own_onion(service_id: &str, virtual_port: u16) {
-    let Some(dialer) = dialer() else {
-        return;
-    };
     let own = NetworkAddress::Tor {
         host: format!("{service_id}.onion"),
         port: virtual_port,
     };
-    dialer.set_own_addresses(ConnectorId::Tor, vec![own]);
+    set_own(ConnectorId::Tor, vec![own]);
 }
 
 /// Stop every owner loop. Called at zone shutdown.
@@ -298,10 +376,11 @@ pub unsafe extern "C" fn shekyl_core_published_tip(
     1
 }
 
-/// An operator-named address (`--add-peer`): into gray, whatever its
-/// range. Returns 1 when it newly entered gray, 0 when it already sat or
-/// was refused, -1 when the entry is not an address or there is no
-/// dialer yet.
+/// An operator-named address (`--add-peer`, `--seed-node`): into gray,
+/// whatever its range. Returns 1 when it newly entered gray, 0 when it
+/// already sat or was refused, [`SHEKYL_DIALER_DEFERRED`] when the dialer
+/// is not built yet and the address is held for its build, -1 when the
+/// entry is not an address.
 ///
 /// # Safety
 ///
@@ -315,7 +394,8 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_operator(entry: *const ShekylSeam
         return -1;
     };
     let Some(dialer) = dialer() else {
-        return -1;
+        DEFERRED.lock().expect("deferred").operator.push(address);
+        return SHEKYL_DIALER_DEFERRED;
     };
     let now = dialer.hub().now();
     match dialer.admit_operator(&address, now, &mut SecureRelayRng) {
@@ -326,8 +406,9 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_operator(entry: *const ShekylSeam
 
 /// A closed network (`--add-exclusive-node`): the candidate population is
 /// exactly these entries, admitted as operator-named. An entry that is
-/// not an address is left out. Returns 0, or -1 with no dialer or a null
-/// pointer with a non-zero count.
+/// not an address is left out. Returns 0, [`SHEKYL_DIALER_DEFERRED`] when
+/// the list is held for the dialer's build, or -1 for a null pointer with
+/// a non-zero count.
 ///
 /// # Safety
 ///
@@ -341,19 +422,46 @@ pub unsafe extern "C" fn shekyl_dialer_set_exclusive(
     let Some(entries) = (unsafe { slice_from_typed_ptr(entries, count) }) else {
         return -1;
     };
-    let Some(dialer) = dialer() else {
-        return -1;
-    };
     let addresses: Vec<NetworkAddress> = entries.iter().filter_map(address_of).collect();
+    let Some(dialer) = dialer() else {
+        DEFERRED.lock().expect("deferred").exclusive = Some(addresses);
+        return SHEKYL_DIALER_DEFERRED;
+    };
     let now = dialer.hub().now();
     dialer.set_exclusive(addresses, now, &mut SecureRelayRng);
     0
 }
 
+/// The address file (`<data dir>/p2pstate.bin`): named once, at start.
+/// Its addresses enter gray when the dialer is built, or now if it is;
+/// the dialer writes it every thirty minutes and at stop. Returns 0, or
+/// [`SHEKYL_DIALER_DEFERRED`] when held for the build, or -1 for a null
+/// or non-UTF-8 path.
+///
+/// # Safety
+///
+/// `path` points to a NUL-terminated string, or is null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_dialer_open_address_file(path: *const c_char) -> i32 {
+    if path.is_null() {
+        return -1;
+    }
+    let Ok(path) = (unsafe { CStr::from_ptr(path) }).to_str() else {
+        return -1;
+    };
+    let path = PathBuf::from(path);
+    let Some(dialer) = dialer() else {
+        DEFERRED.lock().expect("deferred").address_file = Some(path);
+        return SHEKYL_DIALER_DEFERRED;
+    };
+    open_file(&dialer, &path);
+    0
+}
+
 /// This node's own dialable address on `connector`: never a dial
 /// candidate, and one uniform member of the disclosure population. An
-/// entry that is not an address clears it. Returns 0, or -1 with no
-/// dialer.
+/// entry that is not an address clears it. Returns 0, or -1 for an
+/// unknown connector; held for the dialer's build when it is not built.
 ///
 /// # Safety
 ///
@@ -366,15 +474,12 @@ pub unsafe extern "C" fn shekyl_peerlist_set_own_address(
     let Some(connector) = connector_from_index(connector) else {
         return -1;
     };
-    let Some(dialer) = dialer() else {
-        return -1;
-    };
     let own = if entry.is_null() {
         Vec::new()
     } else {
         address_of(unsafe { &*entry }).into_iter().collect()
     };
-    dialer.set_own_addresses(connector, own);
+    set_own(connector, own);
     0
 }
 
@@ -472,4 +577,169 @@ fn entry_of(address: &NetworkAddress) -> Option<ShekylSeamAddress> {
         }
     }
     Some(entry)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::{c_void, CString};
+    use std::net::Ipv4Addr;
+    use std::sync::PoisonError;
+
+    use shekyl_seam::CloseCause;
+
+    use super::*;
+    use crate::inbound_ceiling_ffi::{ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_UNLIMITED};
+    use crate::seam_ffi::{seam_bind_lock, shekyl_seam_bind, ShekylSeamObserved, ADDR_IPV4};
+
+    /// A hub whose posts go nowhere: these tests never open a session.
+    unsafe extern "C" fn no_post(
+        _ctx: *mut c_void,
+        _id: u64,
+        _kind: u32,
+        _observed: *const ShekylSeamObserved,
+        _bytes: *const u8,
+        _len: usize,
+        _cause: *const CloseCause,
+    ) {
+    }
+
+    fn v4(n: u8) -> ShekylSeamAddress {
+        let mut entry = ShekylSeamAddress {
+            connector: 0,
+            address_type: ADDR_IPV4,
+            zone_only: 0,
+            _pad: 0,
+            port: 18080,
+            len: 4,
+            bytes: [0; TOR_HOST_MAX],
+        };
+        entry.bytes[..4].copy_from_slice(&[11, 16, 0, n]);
+        entry
+    }
+
+    fn address(n: u8) -> NetworkAddress {
+        NetworkAddress::Ipv4 {
+            ip: Ipv4Addr::new(11, 16, 0, n),
+            port: 18080,
+        }
+    }
+
+    /// Unbind the seam: the dialer, if any, is stopped and dropped.
+    fn unbind() {
+        unsafe { shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null()) };
+        assert!(dialer().is_none());
+    }
+
+    /// Bind a hub, which builds the dialer and applies what was held.
+    fn bind() {
+        let ceiling = ShekylInboundCeiling {
+            kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+            ceiling: 0,
+            soft_limit: 0,
+            held: 0,
+        };
+        let mut ctx = 0u8;
+        let bound = unsafe {
+            shekyl_seam_bind(
+                (&raw mut ctx).cast::<c_void>(),
+                Some(no_post),
+                &raw const ceiling,
+            )
+        };
+        assert_eq!(bound, 0);
+    }
+
+    /// On a clearnet-only start the command line is parsed before the
+    /// seam binds, so the file, `--add-peer` and the own address arrive
+    /// before the dialer exists. Each is held and applied at the build.
+    #[test]
+    fn pushes_before_the_dialer_exists_are_applied_when_it_is_built() {
+        let _bind = seam_bind_lock()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        unbind();
+        let dir = tempfile::tempdir().expect("a directory");
+        let file = dir.path().join("p2pstate.bin");
+        std::fs::write(&file, shekyl_peerlist::address_file::encode(&[address(1)]))
+            .expect("written");
+        let path = CString::new(file.to_str().expect("utf-8")).expect("no NUL");
+        assert_eq!(
+            unsafe { shekyl_dialer_open_address_file(path.as_ptr()) },
+            SHEKYL_DIALER_DEFERRED
+        );
+        let named = v4(2);
+        assert_eq!(
+            unsafe { shekyl_peerlist_admit_operator(&raw const named) },
+            SHEKYL_DIALER_DEFERRED
+        );
+        bind();
+        let dialer = dialer().expect("built at the bind");
+        {
+            let shared = dialer.shared();
+            assert!(shared.lists.is_gray(&address(1)), "from the file");
+            assert!(shared.lists.is_gray(&address(2)), "from --add-peer");
+            assert!(!shared.lists.is_white(&address(1)));
+            assert!(!shared.lists.is_white(&address(2)));
+        }
+        // The dialer exists now: a push applies at once.
+        let later = v4(3);
+        assert_eq!(
+            unsafe { shekyl_peerlist_admit_operator(&raw const later) },
+            1
+        );
+        assert!(dialer.shared().lists.is_gray(&address(3)));
+        unbind();
+    }
+
+    #[test]
+    fn an_own_address_held_for_the_build_is_never_a_candidate() {
+        let _bind = seam_bind_lock()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        unbind();
+        let own = v4(4);
+        assert_eq!(
+            unsafe { shekyl_peerlist_set_own_address(0, &raw const own) },
+            0
+        );
+        assert_eq!(
+            unsafe { shekyl_peerlist_admit_operator(&raw const own) },
+            SHEKYL_DIALER_DEFERRED
+        );
+        bind();
+        let dialer = dialer().expect("built at the bind");
+        assert!(dialer.shared().lists.is_gray(&address(4)));
+        assert!(
+            dialer
+                .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
+                .is_none(),
+            "the one gray address is our own, so nothing is drawn"
+        );
+        unbind();
+    }
+
+    #[test]
+    fn a_closed_network_held_for_the_build_is_the_population() {
+        let _bind = seam_bind_lock()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        unbind();
+        let other = v4(5);
+        assert_eq!(
+            unsafe { shekyl_peerlist_admit_operator(&raw const other) },
+            SHEKYL_DIALER_DEFERRED
+        );
+        let declared = [v4(6)];
+        assert_eq!(
+            unsafe { shekyl_dialer_set_exclusive(declared.as_ptr(), declared.len()) },
+            SHEKYL_DIALER_DEFERRED
+        );
+        bind();
+        let dialer = dialer().expect("built at the bind");
+        let drawn = dialer
+            .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
+            .map(|(address, _aim, _nonce)| address);
+        assert_eq!(drawn, Some(address(6)));
+        unbind();
+    }
 }
