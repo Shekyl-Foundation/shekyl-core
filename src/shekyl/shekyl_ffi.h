@@ -4449,6 +4449,11 @@ int shekyl_dialer_set_out_peers(std::uint32_t connector, std::uint32_t cap);
 /// the tip changes, and once at start.
 void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
     std::uint64_t cumulative_difficulty_top64, const std::uint8_t* top_id);
+/// The tip the core last published (see shekyl_core_publish_tip): 1 and the
+/// fields written, 0 and nothing written before the first publish. A null
+/// out pointer is skipped.
+int shekyl_core_published_tip(std::uint64_t* out_height, std::uint64_t* out_cumulative_difficulty,
+    std::uint64_t* out_cumulative_difficulty_top64, std::uint8_t* out_top_id);
 /// An operator-named address (`--add-peer`), into gray whatever its range:
 /// 1 newly entered, 0 already sat or refused, -1 not an address or no dialer.
 int shekyl_peerlist_admit_operator(const shekyl_seam_address* entry);

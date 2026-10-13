@@ -262,6 +262,42 @@ pub unsafe extern "C" fn shekyl_core_publish_tip(
     });
 }
 
+/// The tip the core last published: 1 and the fields written, or 0 and
+/// nothing written when no tip has been published yet. What the dialer's
+/// next handshake carries, so a test of the publish reads it here.
+///
+/// # Safety
+///
+/// Each out pointer is writable, or null (then not written).
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_core_published_tip(
+    out_height: *mut u64,
+    out_cumulative_difficulty: *mut u64,
+    out_cumulative_difficulty_top64: *mut u64,
+    out_top_id: *mut u8,
+) -> i32 {
+    let Some(tip) = *TIP.lock().expect("tip") else {
+        return 0;
+    };
+    unsafe {
+        if !out_height.is_null() {
+            out_height.write(tip.current_height);
+        }
+        if !out_cumulative_difficulty.is_null() {
+            out_cumulative_difficulty.write(tip.cumulative_difficulty);
+        }
+        if !out_cumulative_difficulty_top64.is_null() {
+            out_cumulative_difficulty_top64.write(tip.cumulative_difficulty_top64);
+        }
+        if !out_top_id.is_null() {
+            for (i, byte) in tip.top_id.iter().enumerate() {
+                out_top_id.add(i).write(*byte);
+            }
+        }
+    }
+    1
+}
+
 /// An operator-named address (`--add-peer`): into gray, whatever its
 /// range. Returns 1 when it newly entered gray, 0 when it already sat or
 /// was refused, -1 when the entry is not an address or there is no

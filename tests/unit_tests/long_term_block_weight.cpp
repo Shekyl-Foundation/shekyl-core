@@ -197,3 +197,42 @@ TEST(long_term_block_weight, a_block_contribution_is_bounded_to_the_17_10_band)
   EXPECT_EQ(zone * 10 / 17, bc->get_next_long_term_block_weight(zone / 10));
   EXPECT_EQ(zone + zone * 7 / 10, bc->get_next_long_term_block_weight(zone * 10));
 }
+
+// The Rust dialer's handshake carries the tip the core last published. The
+// publish sits in update_next_cumulative_weight_limit, which init, a block
+// added to the main chain, a pop, a rollback and a chain switch each call
+// (blockchain.cpp: the six call sites). This pins the publish at that
+// function, through the two of those entries this fixture can run: init,
+// and pop_blocks; a block added is the fixture's push plus the recompute
+// those callers make. The height published is the block count, as
+// get_payload_sync_data reports it, and the id is the top block's.
+TEST(long_term_block_weight, every_tip_change_publishes_the_tip_the_dialer_announces)
+{
+  PREFIX();
+  const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+
+  const auto published = [](uint64_t& height, crypto::hash& top) {
+    uint64_t lo = 0, hi = 0;
+    return shekyl_core_published_tip(&height, &lo, &hi, reinterpret_cast<std::uint8_t*>(top.data)) == 1;
+  };
+  uint64_t height = 0;
+  crypto::hash top{};
+
+  // init: the genesis is the tip.
+  ASSERT_TRUE(published(height, top));
+  EXPECT_EQ(db->height(), height);
+  EXPECT_EQ(db->top_block_hash(), top);
+
+  // add: three blocks on the main chain, then the recompute every add makes.
+  push_blocks(db, 3, zone, zone);
+  ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
+  ASSERT_TRUE(published(height, top));
+  EXPECT_EQ(db->height(), height);
+  EXPECT_EQ(db->top_block_hash(), top);
+
+  // pop: through the entry a reorg and a rollback use.
+  ASSERT_TRUE(bc->pop_blocks(1));
+  ASSERT_TRUE(published(height, top));
+  EXPECT_EQ(db->height(), height);
+  EXPECT_EQ(db->top_block_hash(), top);
+}

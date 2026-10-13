@@ -5920,6 +5920,7 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
   // Every tip change passes here (init, add, pop, switch): the Rust dialer's
   // next handshake carries this snapshot. The height is the block count, as
   // get_payload_sync_data reports it.
+  if (db_height > 0)
   {
     const crypto::hash top = m_db->top_block_hash();
     const difficulty_type wide = m_db->get_block_cumulative_difficulty(db_height - 1);
