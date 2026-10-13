@@ -1794,6 +1794,50 @@ loop and ESR-13's "ESR-11 timing" arm model the same epoch. Whether
 ESR-11's loop is then deleted, with §5.14 as its record, is a question
 for the maintainer; this step does not answer it.
 
+### 5.21 ESR-14 — what the run said (2026-10-13, at `5cc8930dec`)
+
+Each item of §5.20 against its prediction. The baselines were captured
+from the tree at `05e922c4c4`, before the first code change, on one
+binary; the comparisons are byte-for-byte on each arm's JSON and table.
+
+| # | Prediction | Result |
+| --- | --- | --- |
+| 1 | `converged` unchanged in every feedback row | **Falsified in part.** *Exact arm*, production's reading since FL-R24: 4 of 600 not converged before and after, worst amplitude 88 → 87 bp; no verdict moved. *Integer arm*, the truncating `sum/720` the chain no longer runs: 92 → 116 not converged (36 cells to not-converged, 12 the other way), worst amplitude 194 → 281 bp. The slew and lookback sections are byte-identical; they already used integer windows. Reading: whole-transaction demand feeds the integer arm's one-tick toggles more coarsely. A dated note sits under the FL-E1 record in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §11.7; its 2026-09-10 figures are not edited. The change stands as specified; the maintainer reads the finding |
+| 2 | ≤ 1 atomic unit per operand; fixtures byte-identical | Held. Both narration fixtures, the default, gate-7 and budget arms are byte-identical |
+| 3 | Byte-identical | Held |
+| 4 | Red on one violation, green on its revert | Held. The bundled grep gates failed on `bbe94ddef6` with the gate's own line after its selftest passed ([run](https://github.com/Shekyl-Foundation/shekyl-core/actions/runs/38407093967/job/115329439231)); `5cc8930dec` reverts it. That head was red on rustfmt too, for the probe's attribute layout. The exception list is empty |
+| 5 | Text | Done |
+| 6 | Byte-identical | Held |
+| 7 | ESR-13 byte-identical bar the removed columns and rows; ESR-11 within seed noise, bar holds, no verdict column moves | Held. ESR-13's JSON is identical to the baseline's once the two removed fields per cell and per run and the reference rows are dropped from it; its table differs by those rows and columns only. ESR-11's figures are below |
+
+**ESR-11 on production's rule and selection, at maturity `D = 324,000`,
+eight seeds.** The sim's rule and sampler → `draw_count` with its 32-bit
+carry and `select_draw`:
+
+| Reading | Dropout | Short of 3, max over seeds | Seeds over 3 % |
+| --- | --- | --- | --- |
+| A | 0 % | 0.48 % → 0.48 % | 0 → 0 |
+| A | 10 % (the bar) | 1.18 % → 1.13 % | 0 → 0 |
+| A | 30 % | 3.95 % → 4.15 % | 8 → 8 |
+| B | 0 % | 1.44 % → 1.42 % | 0 → 0 |
+| B | 10 % (the bar) | 2.67 % → 2.65 % | 0 → 0 |
+| B | 30 % | 6.46 % → 6.58 % | 8 → 8 |
+
+The genesis set (`D = 4,096`) moves the same way. The bar holds under
+both readings. The cap column moved more (B, 30 %: 177 → 284 blocks
+over eight seeds), because its definition changed with the rule: it was
+the sim's `wanted > cap` and is `draw_target`'s own flag, as in ESR-13.
+It is a report column.
+
+**Time.** The ESR-11 run takes 361 s where it took one second, since
+every draw is a `select_draw`; the ESR-13 run took 615 s against 408 s
+for its baseline, both on a machine carrying a concurrent workspace
+clippy. The nightly lane's job has three hours.
+
+**Not decided here**, as §5.20 said: ESR-11's epoch loop and ESR-13's
+"ESR-11 timing" arm now model one epoch on one rule. Which stays is the
+maintainer's.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
