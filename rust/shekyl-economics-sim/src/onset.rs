@@ -754,7 +754,7 @@ mod tests {
     /// the emission era to its last year. A test of a tail-era fact starts
     /// here and holds its run to the premise with [`assert_tail_era`].
     fn in_the_tail_era(mut config: ScenarioConfig) -> ScenarioConfig {
-        config.initial_emitted_fraction = 1.0;
+        config.initial_emitted_ppm = crate::engine::PPM;
         at_horizon(config)
     }
 
