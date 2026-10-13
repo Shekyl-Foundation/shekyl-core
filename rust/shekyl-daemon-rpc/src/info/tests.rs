@@ -185,7 +185,7 @@ fn synced_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v5.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v6.json"
         ))
     );
 }
@@ -225,7 +225,7 @@ fn syncing_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v4.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v5.json"
         ))
     );
 }
@@ -244,7 +244,7 @@ fn peerless_startup_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v5.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v6.json"
         ))
     );
 }
@@ -256,7 +256,7 @@ fn synced_restricted_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::VIEW),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v5.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v6.json"
         ))
     );
 }
@@ -732,9 +732,12 @@ fn already_generated_coins_is_the_snapshots_and_is_not_netted() {
     let reply = get_info(&facts, Disclosure::VIEW, 0).unwrap();
     assert_eq!(
         reply.economics.already_generated_coins,
-        1_444_065_674_085_133
+        AtomicUnits::from_raw(1_444_065_674_085_133)
     );
-    assert_eq!(reply.economics.total_burned, 4_200_000_000);
+    assert_eq!(
+        reply.economics.total_burned,
+        AtomicUnits::from_raw(4_200_000_000)
+    );
 }
 
 /// The listener's posture is what `restricted` reports.

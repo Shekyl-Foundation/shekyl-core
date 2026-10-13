@@ -171,3 +171,10 @@ Each is its predecessor minus exactly six keys: `difficulty`,
 which first checks each retired key against the name that stays). The
 burn-refusal fixture has no successor: there is no current reply to
 derive. `get_version_synced_v29` is the chain's 3.52 link.
+
+**3.53 re-encoded two amounts, and four fixtures have a successor.**
+`already_generated_coins` and `total_burned` are decimal strings; each
+successor is its predecessor with those two numbers written as strings and
+nothing else
+(`the_3_53_get_info_vectors_are_their_predecessors_with_the_two_amounts_as_strings`).
+`get_version_synced_v30` is the chain's 3.53 link.

@@ -59,6 +59,7 @@
 //! when there is nothing to read.
 
 use serde::{Deserialize, Serialize};
+use shekyl_units::{AtomicUnits, AtomicUnitsString};
 
 use crate::chain::RpcStatus;
 use crate::consensus_digest::DaemonNetwork;
@@ -155,14 +156,18 @@ pub struct InfoChain {
 /// mean (RK-D16); this is how they are carried.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoEconomics {
-    /// Gross coins emitted through the tip, in atomic units. Net circulating
-    /// supply is this minus [`Self::total_burned`].
-    pub already_generated_coins: u64,
+    /// Gross coins emitted through the tip. Net circulating supply is this
+    /// minus [`Self::total_burned`]. On the wire as a decimal string of
+    /// atomic units (RK-Q2).
+    pub already_generated_coins: AtomicUnits,
     pub release_multiplier: u64,
-    /// The percentage the next coinbase burns. `0` when the computation
-    /// refused; RK-Q9 turns that refusal into a fault.
+    /// The percentage the next coinbase burns, fixed-point. `0` is a burn
+    /// of nothing; a computation that refuses is a fault, not a value
+    /// (RK-Q9).
     pub burn_pct: u64,
-    pub total_burned: u64,
+    /// Cumulative coins destroyed through the tip. On the wire as a decimal
+    /// string of atomic units (RK-Q2).
+    pub total_burned: AtomicUnits,
     pub staker_emission_share_effective: u64,
 }
 
@@ -317,10 +322,14 @@ struct GetInfoWire {
     adjusted_time: u64,
 
     // Economics.
-    already_generated_coins: u64,
+    // Amounts of coin: decimal strings, the wallet contract's encoding. A
+    // JSON number loses integers above 2^53 in a JavaScript reader, and the
+    // emission asymptote is far past that. Required: no default, since the
+    // type's own default is zero and a missing key must not read as it.
+    already_generated_coins: AtomicUnitsString,
     release_multiplier: u64,
     burn_pct: u64,
-    total_burned: u64,
+    total_burned: AtomicUnitsString,
     staker_emission_share_effective: u64,
 
     // Pool.
@@ -532,10 +541,10 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 adjusted_time,
             },
             economics: InfoEconomics {
-                already_generated_coins,
+                already_generated_coins: already_generated_coins.to_atomic_units(),
                 release_multiplier,
                 burn_pct,
-                total_burned,
+                total_burned: total_burned.to_atomic_units(),
                 staker_emission_share_effective,
             },
             pool: InfoPool { tx_pool_size },
@@ -585,10 +594,10 @@ impl From<GetInfoResponse> for GetInfoWire {
             block_weight_limit: chain.block_weight_limit,
             block_weight_median: chain.block_weight_median,
             adjusted_time: chain.adjusted_time,
-            already_generated_coins: economics.already_generated_coins,
+            already_generated_coins: economics.already_generated_coins.into(),
             release_multiplier: economics.release_multiplier,
             burn_pct: economics.burn_pct,
-            total_burned: economics.total_burned,
+            total_burned: economics.total_burned.into(),
             staker_emission_share_effective: economics.staker_emission_share_effective,
             tx_pool_size: pool.tx_pool_size,
             start_time: node.as_ref().map(|n| n.start_time),

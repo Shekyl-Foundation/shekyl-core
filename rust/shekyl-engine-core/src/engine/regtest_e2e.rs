@@ -621,7 +621,7 @@ impl RegtestDaemon {
     /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
     /// partition. The emission e2e samples it once, at epoch close, and
     /// pins it to 0 (A6 pool-half disposition).
-    pub(super) async fn total_burned(&self) -> u64 {
+    pub(super) async fn total_burned(&self) -> shekyl_units::AtomicUnits {
         self.rpc
             .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
@@ -1962,6 +1962,12 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         Some(median),
         "get_miner_data's median is get_info's"
     );
+    // Two encodings of an amount meet here, on purpose for now.
+    // `get_miner_data` still writes this one as a JSON number; `get_info`
+    // writes its amounts as decimal strings since 3.53 (RK-Q2), and the
+    // `total_burned` read below comes through the shared type as
+    // `AtomicUnits`. `get_miner_data` moves when its own method migrates
+    // (FOLLOWUPS: "two encodings across methods").
     let already_generated = miner_data["already_generated_coins"]
         .as_u64()
         .expect("already_generated_coins");
@@ -2051,7 +2057,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             unlock_window: BlockCount::from_raw(rule_set.mined_money_unlock_window().to_raw()),
             emission: EmissionOperands {
                 already_generated_coins: shekyl_units::AtomicUnits::from_raw(already_generated),
-                total_burned: shekyl_units::AtomicUnits::from_raw(total_burned),
+                total_burned,
                 median_weight: median,
                 tx_volume,
                 closed_shards: ClosedShardCount::ZERO,
@@ -3598,7 +3604,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
         epoch_row.budget_atomic,
         epoch_row.sigma_work_milli,
         epoch_row.credit_pairs.len(),
-        total_burned_at_close,
+        total_burned_at_close.to_raw(),
     );
     assert!(
         !epoch_row.credit_pairs.is_empty(),
@@ -3623,7 +3629,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // is the tied observable, pinned here so an operand-law change
     // re-surfaces this disposition instead of silently shifting the budget.
     assert_eq!(
-        total_burned_at_close, 0,
+        total_burned_at_close,
+        shekyl_units::AtomicUnits::ZERO,
         "regtest e2e activity must floor the volume mean to 0 ⇒ zero fee burn \
          (pool-half disposition, §9.5 item 8; positive-pool coverage is the B5 KATs)"
     );

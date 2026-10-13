@@ -259,10 +259,10 @@ pub fn get_info(
             adjusted_time: chain.adjusted_time,
         },
         economics: InfoEconomics {
-            already_generated_coins: tip.coins_generated.to_raw(),
+            already_generated_coins: tip.coins_generated,
             release_multiplier: tip.release_multiplier,
             burn_pct,
-            total_burned: tip.total_burned.to_raw(),
+            total_burned: tip.total_burned,
             staker_emission_share_effective: tip.staker_emission_share,
         },
         pool: InfoPool {

@@ -1200,10 +1200,10 @@ fn info_reply(height: u64) -> String {
             adjusted_time: 1_700_000_000,
         },
         economics: InfoEconomics {
-            already_generated_coins: 0,
+            already_generated_coins: shekyl_units::AtomicUnits::ZERO,
             release_multiplier: 1_000_000,
             burn_pct: 0,
-            total_burned: 0,
+            total_burned: shekyl_units::AtomicUnits::ZERO,
             staker_emission_share_effective: 0,
         },
         pool: InfoPool { tx_pool_size: 4 },
