@@ -4252,6 +4252,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-dialer"
+version = "3.1.0"
+dependencies = [
+ "shekyl-peerlist",
+ "shekyl-relay-privacy",
+]
+
+[[package]]
 name = "shekyl-difficulty"
 version = "3.1.0"
 dependencies = [
