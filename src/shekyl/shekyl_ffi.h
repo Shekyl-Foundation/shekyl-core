@@ -4270,6 +4270,7 @@ struct ShekylOwnedBuffer {
 constexpr std::uint32_t SHEKYL_SEAM_ESTABLISHED = 1;
 constexpr std::uint32_t SHEKYL_SEAM_DELIVER = 2;
 constexpr std::uint32_t SHEKYL_SEAM_CLOSED = 3;
+constexpr std::uint32_t SHEKYL_SEAM_HANDSHAKE = 4;
 constexpr std::uint32_t SHEKYL_CONNECTOR_CLEARNET = 0;
 constexpr std::uint32_t SHEKYL_CONNECTOR_TOR = 1;
 constexpr std::uint32_t SHEKYL_DIRECTION_INBOUND = 0;
@@ -4419,6 +4420,45 @@ constexpr int SHEKYL_PEERLIST_NO_SESSION = 3;
 constexpr int SHEKYL_PEERLIST_NO_HUB = 4;
 /// BAD_ARGUMENT: a null pointer with a non-zero count; nothing was admitted.
 constexpr int SHEKYL_PEERLIST_BAD_ARGUMENT = 5;
+/// The outbound handshake's result, posted by the Rust dialer as kind
+/// SHEKYL_SEAM_HANDSHAKE after `established` and ahead of any frame. The
+/// strand reads these fields and accepts or refuses the sync payload in
+/// that turn; it does not parse a Levin response.
+struct shekyl_seam_handshake_result {
+  std::uint8_t keep;
+  std::uint8_t _pad[3];
+  std::uint32_t support_flags;
+  std::uint64_t current_height;
+  std::uint64_t cumulative_difficulty;
+  std::uint64_t cumulative_difficulty_top64;
+  std::uint8_t top_id[32];
+};
+/// The strand's verdict on the handshake posted for `id`: 1 accepted the
+/// sync payload, 0 refused it. The dialer closes a confirm dial and a
+/// refused dial; a kept and accepted dial stays.
+void shekyl_dialer_handshake_verdict(std::uint64_t id, int accepted);
+/// The inbound handshake's self-connection check: 1 when `nonce` (32 bytes)
+/// is one this node put in flight on `connector`, erasing it; 0 otherwise.
+int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t* nonce);
+/// `--out-peers` and the anonymity zones' cap: the connector's outbound
+/// target. 0 on success; -1 for a positive cap below the F-8b floor, which
+/// is refused, or an unknown connector. Lowering a cap closes kept
+/// sessions only.
+int shekyl_dialer_set_out_peers(std::uint32_t connector, std::uint32_t cap);
+/// The core's tip: the dialer's next handshake carries it. Called wherever
+/// the tip changes, and once at start.
+void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
+    std::uint64_t cumulative_difficulty_top64, const std::uint8_t* top_id);
+/// An operator-named address (`--add-peer`), into gray whatever its range:
+/// 1 newly entered, 0 already sat or refused, -1 not an address or no dialer.
+int shekyl_peerlist_admit_operator(const shekyl_seam_address* entry);
+/// This node's own dialable address on `connector`; null clears it. 0, or
+/// -1 with no dialer or an unknown connector.
+int shekyl_peerlist_set_own_address(std::uint32_t connector, const shekyl_seam_address* entry);
+/// The disclosure sample for a response on `session` (the socket id): up to
+/// `cap` entries written to `out`, returning how many. Zero below the white
+/// diversity floor, for an unknown session, or with no dialer.
+std::size_t shekyl_peerlist_disclose(std::uint64_t session, shekyl_seam_address* out, std::size_t cap);
 /// `--allow-local-ip`, as the Rust peer lists' constructor input. Returns
 /// `allow`, so the line that read the flag reads it through this call.
 bool shekyl_peerlist_allow_local_ip(bool allow);

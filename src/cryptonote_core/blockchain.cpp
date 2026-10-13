@@ -5917,6 +5917,18 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
   if (long_term_effective_median_block_weight)
     *long_term_effective_median_block_weight = m_long_term_effective_median_block_weight;
 
+  // Every tip change passes here (init, add, pop, switch): the Rust dialer's
+  // next handshake carries this snapshot. The height is the block count, as
+  // get_payload_sync_data reports it.
+  {
+    const crypto::hash top = m_db->top_block_hash();
+    const difficulty_type wide = m_db->get_block_cumulative_difficulty(db_height - 1);
+    shekyl_core_publish_tip(db_height,
+        (wide & 0xffffffffffffffff).convert_to<uint64_t>(),
+        ((wide >> 64) & 0xffffffffffffffff).convert_to<uint64_t>(),
+        reinterpret_cast<const std::uint8_t*>(top.data));
+  }
+
   return true;
 }
 //------------------------------------------------------------------

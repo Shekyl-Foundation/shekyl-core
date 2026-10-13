@@ -262,7 +262,7 @@ store, don't patch blind.
 
 Durable state lives in C++ LMDB (**47** declared tables, 46 at runtime —
 DRS-W5). Orchestration tangle is
-**`blockchain.cpp`** (252 store call sites, 91 store methods), not the
+**`blockchain.cpp`** (254 store call sites, 91 store methods), not the
 storage class alone.
 Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
 **boundary-thickness and type-safety** problem under

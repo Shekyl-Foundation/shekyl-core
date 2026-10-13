@@ -47,16 +47,14 @@ pub const SHEKYL_PEERLIST_NO_HUB: i32 = 4;
 /// caller's fault, not the peer's. Nothing was admitted.
 pub const SHEKYL_PEERLIST_BAD_ARGUMENT: i32 = 5;
 
-/// The process's peer lists and the set they were built with.
-struct State {
-    refused: RefusedSet,
-    list: Option<Peerlist>,
-}
+/// The refused set the lists are built with, from `--allow-local-ip`.
+/// The lists themselves are the dialer's (`crate::dialer_ffi`).
+static REFUSED: Mutex<RefusedSet> = Mutex::new(RefusedSet::NON_GLOBAL);
 
-static STATE: Mutex<State> = Mutex::new(State {
-    refused: RefusedSet::NON_GLOBAL,
-    list: None,
-});
+/// The set the lists are built with.
+pub(crate) fn refused_set() -> RefusedSet {
+    *REFUSED.lock().expect("refused set")
+}
 
 /// `--allow-local-ip`, as the peer lists' constructor input. Returns
 /// `allow`, so the C++ line that read the flag reads it through this call.
@@ -72,11 +70,12 @@ pub extern "C" fn shekyl_peerlist_allow_local_ip(allow: bool) -> bool {
     } else {
         RefusedSet::NON_GLOBAL
     };
-    let mut state = STATE.lock().expect("peerlist state");
-    if state.list.is_some() && state.refused != wanted {
+    let built = crate::dialer_ffi::shared().is_some();
+    let mut refused = REFUSED.lock().expect("refused set");
+    if built && *refused != wanted {
         tracing::error!("allow-local-ip changed after the peer lists were built; ignored");
     } else {
-        state.refused = wanted;
+        *refused = wanted;
     }
     allow
 }
@@ -93,16 +92,14 @@ impl BanQuery for HubBans {
 /// The peerlist's name for a seam session. The board's id is the socket
 /// id; the lists key a session's intake by it.
 fn session_of(id: SocketId) -> ConnectionId {
-    let mut bytes = [0u8; 16];
-    bytes[..8].copy_from_slice(&id.get().to_le_bytes());
-    ConnectionId(bytes)
+    shekyl_dialer::session_of(id)
 }
 
 /// One entry as the C++ encoded it, or `None` for an entry that is not an
 /// address: an unknown type, a length that does not fit its type, or a
 /// host that is not UTF-8. The adapter writes an empty entry for an
 /// address it cannot encode, and that is `None` here too.
-fn address_of(entry: &ShekylSeamAddress) -> Option<NetworkAddress> {
+pub(crate) fn address_of(entry: &ShekylSeamAddress) -> Option<NetworkAddress> {
     let len = usize::from(entry.len);
     match entry.address_type {
         ADDR_IPV4 if len == 4 => Some(NetworkAddress::Ipv4 {
@@ -211,10 +208,18 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_received(
         .get(id)
         .map(|row| (row.connector(), row.direction()));
     let now = hub.now();
-    let mut state = STATE.lock().expect("peerlist state");
-    let refused = state.refused;
-    let list = state.list.get_or_insert_with(|| Peerlist::new(refused));
-    receive(list, row, session_of(id), entries, now, &mut HubBans(hub))
+    let Some(dialer) = crate::dialer_ffi::shared() else {
+        return SHEKYL_PEERLIST_NO_HUB;
+    };
+    let mut shared = dialer.shared();
+    receive(
+        &mut shared.lists,
+        row,
+        session_of(id),
+        entries,
+        now,
+        &mut HubBans(hub),
+    )
 }
 
 #[cfg(test)]
@@ -405,9 +410,8 @@ mod tests {
     #[test]
     fn allow_local_ip_returns_what_it_was_given() {
         // The process statics are shared; this test only reads the return.
-        let before = STATE.lock().expect("state").refused;
+        let before = refused_set();
         assert!(!shekyl_peerlist_allow_local_ip(false));
-        let mut state = STATE.lock().expect("state");
-        state.refused = before;
+        *REFUSED.lock().expect("refused set") = before;
     }
 }

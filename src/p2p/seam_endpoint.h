@@ -150,6 +150,7 @@ namespace shekyl
     }
 
     const t_context& context() const { return m_context; }
+    t_context& context_mut() { return m_context; }
 
     bool arm()
     {

@@ -516,7 +516,7 @@ namespace nodetool
     //! `m_inflight_handshake_nonces`, which is attempt-scoped by
     //! construction. Erase-on-match is not a second size bound; it pins
     //! single-fire/anti-replay and shortens residency. Pinned by
-    //! `node_server.handshake_nonce_is_recorded_before_it_can_be_written`,
+    //! `shekyl-dialer` `a_nonce_is_recorded_before_it_is_handed_out_and_erased_on_every_end_path` (records-was the C++ test of the same name here, deleted with the C++ set's reader 2026-10-13),
     //! which reds if the recording moves out of this function.
     std::array<uint8_t, 32> mint_recorded_handshake_nonce(epee::net_utils::connector_id zone);
     //! Record / erase the self-detection nonce of an outbound handshake
@@ -596,6 +596,7 @@ namespace nodetool
     virtual void on_connection_new(p2p_connection_context& context);
     virtual void on_connection_close(p2p_connection_context& context);
     virtual void callback(p2p_connection_context& context);
+    bool on_outbound_handshake(p2p_connection_context& context, const shekyl_seam_handshake_result& result) override;
     //----------------- i_p2p_endpoint -------------------------------------------------------------
     virtual bool relay_notify_to_list(int command, epee::levin::message_writer message, std::vector<std::pair<epee::net_utils::connector_id, boost::uuids::uuid>> connections) final;
     virtual bool send_txs(std::vector<cryptonote::blobdata> txs, const boost::uuids::uuid& source, cryptonote::relay_method tx_relay);

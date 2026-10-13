@@ -1095,7 +1095,7 @@ namespace nodetool
     // a transient local outage would discard reachable peers, which is what
     // the recently-failed retry window exists to avoid.
     for(const auto& p: m_command_line_peers)
-      m_network_zones.at(epee::net_utils::require_address_connector(p.adr)).m_peerlist.append_operator_candidate(p);
+      shekyl::admit_operator_peer(p.adr);
 
     //only in case if we really sure that we have external visible ip
     m_have_address = true;
@@ -1531,8 +1531,7 @@ namespace nodetool
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
       return false;
-    CRITICAL_REGION_LOCAL(found->second.m_nonce_lock);
-    return found->second.m_inflight_handshake_nonces.erase(nonce) > 0;
+    return shekyl_dial_take_handshake_nonce(static_cast<std::uint32_t>(zone), nonce.data()) != 0;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -2540,6 +2539,24 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::on_outbound_handshake(p2p_connection_context& context, const shekyl_seam_handshake_result& result)
+  {
+    cryptonote::CORE_SYNC_DATA payload{};
+    payload.current_height = result.current_height;
+    payload.cumulative_difficulty = result.cumulative_difficulty;
+    payload.cumulative_difficulty_top64 = result.cumulative_difficulty_top64;
+    std::memcpy(payload.top_id.data, result.top_id, sizeof(payload.top_id.data));
+    if(!m_payload_handler.process_payload_sync_data(payload, context, true))
+      return false;
+    if (result.keep == 0)
+      return true;
+    shekyl_zone_session_established(shekyl::seam_socket_id(context.m_connection_id));
+    m_notifier.on_session_established(context.m_connection_id, context.m_is_income, context.m_connector);
+    context.support_flags = result.support_flags;
+    return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::invoke_notify_to_peer(const int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context)
   {
     network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector));
@@ -2596,17 +2613,7 @@ namespace nodetool
     const epee::net_utils::connector_id zone_type = epee::net_utils::require_session_connector(context.m_connector);
     network_zone& zone = m_network_zones.at(zone_type);
 
-    std::vector<peerlist_entry> local_peerlist_new;
-    zone.m_peerlist.get_peerlist_head(local_peerlist_new, true);
-
-    //only include out peers we did not already send
-    rsp.local_peerlist_new.reserve(local_peerlist_new.size());
-    for (auto &pe: local_peerlist_new)
-    {
-      if (!context.sent_addresses.insert(pe.adr).second)
-        continue;
-      rsp.local_peerlist_new.push_back(std::move(pe));
-    }
+    rsp.local_peerlist_new = shekyl::disclose(context.m_connection_id);
     m_payload_handler.get_payload_sync_data(rsp.payload_data);
 
     LOG_DEBUG_CC(context, "COMMAND_TIMED_SYNC");
@@ -2682,9 +2689,7 @@ namespace nodetool
       });
 
     //fill response
-    zone.m_peerlist.get_peerlist_head(rsp.local_peerlist_new, true);
-    for (const auto &e: rsp.local_peerlist_new)
-      context.sent_addresses.insert(e.adr);
+    rsp.local_peerlist_new = shekyl::disclose(context.m_connection_id);
     get_local_node_data(azone, rsp.node_data, zone);
     m_payload_handler.get_payload_sync_data(rsp.payload_data);
     LOG_DEBUG_CC(context, "COMMAND_HANDSHAKE");
@@ -2822,7 +2827,7 @@ namespace nodetool
       return false;
     }
     zone.m_config.m_net_config.max_out_connection_count = max;
-    return true;
+    return shekyl_dialer_set_out_peers(static_cast<std::uint32_t>(&zone == &m_network_zones.at(epee::net_utils::connector_id::clearnet) ? epee::net_utils::connector_id::clearnet : epee::net_utils::connector_id::tor), static_cast<std::uint32_t>(max)) == 0;
   }
 
   template<class t_payload_net_handler>

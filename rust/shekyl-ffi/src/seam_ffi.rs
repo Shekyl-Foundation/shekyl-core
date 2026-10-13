@@ -44,6 +44,8 @@ pub(crate) const POST_ESTABLISHED: u32 = 1;
 const POST_DELIVER: u32 = 2;
 /// `closed`.
 const POST_CLOSED: u32 = 3;
+/// The outbound handshake's result: `bytes` is one [`ShekylSeamHandshakeResult`].
+pub(crate) const POST_HANDSHAKE: u32 = 4;
 
 /// Clearnet. Matches [`ConnectorId::Clearnet`].
 pub const SHEKYL_CONNECTOR_CLEARNET: u32 = 0;
@@ -68,7 +70,7 @@ const _: () = {
     assert!(Direction::Outbound.index() == SHEKYL_DIRECTION_OUTBOUND as usize);
     assert!(ADDR_IPV4 == 1 && ADDR_IPV6 == 2 && ADDR_TOR == 4);
     assert!(TOR_HOST_MAX == 62);
-    assert!(POST_ESTABLISHED == 1 && POST_DELIVER == 2 && POST_CLOSED == 3);
+    assert!(POST_ESTABLISHED == 1 && POST_DELIVER == 2 && POST_CLOSED == 3 && POST_HANDSHAKE == 4);
 };
 
 /// One peer address, encoded for the adapter.
@@ -83,6 +85,45 @@ pub struct ShekylSeamAddress {
     pub len: u16,
     pub bytes: [u8; TOR_HOST_MAX],
 }
+
+/// What the outbound handshake's result post carries: the strand reads
+/// these fields and accepts or refuses the sync payload in that turn.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ShekylSeamHandshakeResult {
+    /// 1 for a kept dial, 0 for a confirm-and-close dial.
+    pub keep: u8,
+    pub _pad: [u8; 3],
+    /// The peer's support flags, zero included.
+    pub support_flags: u32,
+    /// The peer's `CORE_SYNC_DATA`.
+    pub current_height: u64,
+    pub cumulative_difficulty: u64,
+    pub cumulative_difficulty_top64: u64,
+    pub top_id: [u8; 32],
+}
+
+impl ShekylSeamHandshakeResult {
+    /// The struct's bytes in its C layout, written field by field so the
+    /// post carries no padding read from the stack.
+    fn to_bytes(self) -> [u8; 64] {
+        let mut out = [0u8; 64];
+        out[0] = self.keep;
+        out[4..8].copy_from_slice(&self.support_flags.to_ne_bytes());
+        out[8..16].copy_from_slice(&self.current_height.to_ne_bytes());
+        out[16..24].copy_from_slice(&self.cumulative_difficulty.to_ne_bytes());
+        out[24..32].copy_from_slice(&self.cumulative_difficulty_top64.to_ne_bytes());
+        out[32..64].copy_from_slice(&self.top_id);
+        out
+    }
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<ShekylSeamHandshakeResult>() == 64);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, support_flags) == 4);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, current_height) == 8);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, top_id) == 32);
+};
 
 /// What `established` carries upward.
 #[repr(C)]
@@ -180,6 +221,7 @@ fn ban_now() -> Tick {
 /// only after that returns.
 fn store(next: Option<Hub>) {
     if let Some(current) = hub() {
+        crate::dialer_ffi::stop();
         current.shutdown();
     }
     *STATE.lock().expect("seam state") = next;
@@ -249,12 +291,15 @@ pub unsafe extern "C" fn shekyl_seam_bind(
         post,
     };
     let clock: Arc<dyn Clock + Send + Sync> = process_clock();
-    store(Some(Hub::new(
+    let hub = Hub::new(
         process_sockets(),
         ceiling,
         Arc::new(move |item: Post| post_one(&bound, item)),
         clock,
-    )));
+    );
+    // `store` stops the previous hub's dialer; this hub's is built after.
+    store(Some(hub.clone()));
+    crate::dialer_ffi::ensure_dialer(&hub);
     0
 }
 
@@ -933,11 +978,44 @@ fn post_one(bound: &Bound, item: Post) {
                 );
             }
         }
+        Post::HandshakeResult {
+            id,
+            connector,
+            keep,
+            support_flags,
+            sync,
+        } => {
+            let observed = routing_c(connector);
+            let result = ShekylSeamHandshakeResult {
+                keep: u8::from(keep),
+                _pad: [0; 3],
+                support_flags,
+                current_height: sync.current_height,
+                cumulative_difficulty: sync.cumulative_difficulty,
+                cumulative_difficulty_top64: sync.cumulative_difficulty_top64,
+                top_id: sync.top_id,
+            };
+            let bytes = result.to_bytes();
+            unsafe {
+                (bound.post)(
+                    bound.ctx.get(),
+                    id.get(),
+                    POST_HANDSHAKE,
+                    &raw const observed,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    std::ptr::null(),
+                );
+            }
+        }
         Post::Closed {
             id,
             connector,
             cause,
         } => {
+            // The dialer hears every close: a kept session leaves its
+            // count, a dial awaiting its verdict fails.
+            crate::dialer_ffi::on_closed(id);
             let observed = routing_c(connector);
             unsafe {
                 (bound.post)(

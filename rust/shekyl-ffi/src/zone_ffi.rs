@@ -320,6 +320,7 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
     hub.install_dial(Arc::new(ZoneDial {
         host: Arc::clone(&host),
     }));
+    crate::dialer_ffi::set_network_id(network_id);
     handle.spawn(pump(hub, clearnet_rx, tor_rx));
     *slot = Some(Arc::clone(&host));
     Ok(host)
@@ -503,6 +504,7 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
         proxy,
     });
     spawn_clearnet(&host, bound_v4, kind, Arc::clone(&tally));
+    crate::dialer_ffi::start_connector(ConnectorId::Clearnet);
     if let Some(listener) = bound_v6 {
         spawn_clearnet(&host, listener, kind, tally);
     }
@@ -574,6 +576,7 @@ pub unsafe extern "C" fn shekyl_zone_listen_tor(
         return -1;
     };
     *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
+    crate::dialer_ffi::start_connector(ConnectorId::Tor);
     let extra = match c_str(extra) {
         Some(text) => {
             let Ok(ip) = text.parse::<IpAddr>() else {
@@ -659,6 +662,7 @@ pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
         return -1;
     };
     *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
+    crate::dialer_ffi::start_connector(ConnectorId::Tor);
     0
 }
 
@@ -734,6 +738,7 @@ pub extern "C" fn shekyl_zone_session_established(id: u64) {
 /// the daemon reads it.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_shutdown() {
+    crate::dialer_ffi::stop();
     let host = HOST.lock().expect("zone host").take();
     if let Some(host) = host {
         let engine = host.engine_service.lock().expect("engine").take();

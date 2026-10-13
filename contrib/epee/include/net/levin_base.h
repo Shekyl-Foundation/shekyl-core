@@ -33,6 +33,7 @@
 #include <cstdint>
 
 #include "byte_stream.h"
+#include "shekyl/shekyl_ffi.h"
 #include "net_utils_base.h"
 #include "span.h"
 
@@ -113,6 +114,10 @@ constexpr const std::chrono::milliseconds LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED{0}
     virtual int invoke(int command, const epee::span<const uint8_t> in_buff, byte_stream& buff_out, t_connection_context& context)=0;
     virtual int notify(int command, const epee::span<const uint8_t> in_buff, t_connection_context& context)=0;
     virtual void callback(t_connection_context& context){};
+    /// The Rust dialer's outbound handshake finished on this session: the
+    /// handler reads the peer's sync payload and flags and accepts or
+    /// refuses in this turn. Default: refuse.
+    virtual bool on_outbound_handshake(t_connection_context& context, const shekyl_seam_handshake_result& result){ (void)context; (void)result; return false; };
 
     virtual void on_connection_new(t_connection_context& context){};
     virtual void on_connection_close(t_connection_context& context){};

@@ -27,6 +27,7 @@ pub extern "C" fn shekyl_network_id(nettype: u8, out: *mut u8) -> i32 {
     let Some(net) = DaemonNetwork::from_cryptonote(nettype) else {
         return -1;
     };
+    crate::dialer_ffi::note_network(net);
     let id = network_id_from_genesis(&genesis_hash_for(net));
     // The caller asked for 16 bytes and `id` is `[u8; 16]`.
     unsafe { std::ptr::copy_nonoverlapping(id.as_ptr(), out, id.len()) };

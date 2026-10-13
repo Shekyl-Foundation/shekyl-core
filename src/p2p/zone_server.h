@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -195,6 +196,36 @@ inline bool received_peerlist(const boost::uuids::uuid& session, const Entries& 
   for (std::size_t i = 0; i < entries.size(); ++i)
     detail::address_from(entries[i].adr, raw[i]);
   return shekyl_peerlist_admit_received(seam_socket_id(session), raw.data(), raw.size()) != SHEKYL_PEERLIST_REFUSE;
+}
+
+/// The disclosure sample for a response on `session`, from the Rust peer
+/// lists: empty below the white diversity floor. Entries carry no clock.
+inline std::vector<nodetool::peerlist_entry> disclose(const boost::uuids::uuid& session)
+{
+  std::array<shekyl_seam_address, 32> raw{};
+  const std::size_t count = shekyl_peerlist_disclose(seam_socket_id(session), raw.data(), raw.size());
+  std::vector<nodetool::peerlist_entry> out;
+  out.reserve(count);
+  for (std::size_t i = 0; i < count; ++i)
+  {
+    shekyl_seam_observed observed{};
+    observed.connector = raw[i].connector;
+    observed.direction = SHEKYL_DIRECTION_OUTBOUND;
+    observed.address_type = raw[i].address_type;
+    observed.port = raw[i].port;
+    observed.len = raw[i].len;
+    std::memcpy(observed.bytes, raw[i].bytes, sizeof(observed.bytes));
+    out.push_back(nodetool::peerlist_entry{seam_network_address(observed), 0});
+  }
+  return out;
+}
+
+/// An operator-named address (`--add-peer`), into the Rust gray list.
+inline void admit_operator_peer(const epee::net_utils::network_address& addr)
+{
+  shekyl_seam_address raw{};
+  if (detail::address_from(addr, raw))
+    shekyl_peerlist_admit_operator(&raw);
 }
 
 template <class t_protocol_handler>
@@ -498,6 +529,17 @@ private:
     {
       const bool accepted = link->take_bytes(bytes.data(), bytes.size());
       shekyl_seam_delivery_finished(id, accepted ? 1 : 0);
+    }
+    else if (kind == SHEKYL_SEAM_HANDSHAKE && link)
+    {
+      // The Rust dialer adopted the channel and posted the response's
+      // fields. One strand turn, before any frame: accept or refuse.
+      shekyl_seam_handshake_result result{};
+      const bool well_formed = bytes.size() == sizeof(result) && m_config->commands_handler();
+      if (well_formed)
+        std::memcpy(&result, bytes.data(), sizeof(result));
+      const bool accepted = well_formed && m_config->commands_handler()->on_outbound_handshake(link->context_mut(), result);
+      shekyl_dialer_handshake_verdict(id, accepted ? 1 : 0);
     }
     else if (kind == SHEKYL_SEAM_CLOSED && link)
     {
