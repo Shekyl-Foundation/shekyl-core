@@ -505,7 +505,6 @@ namespace nodetool
     size_t get_public_gray_peers_count();
     void get_public_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
     void get_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
-    bool sanitize_peerlist(std::vector<peerlist_entry>& local_peerlist);
 
     uint32_t get_announced_port(epee::net_utils::connector_id zone) const;
     //! \return The address `get_local_node_data` would announce for `zone` —

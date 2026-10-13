@@ -246,40 +246,6 @@ TEST(cryptonote_protocol_handler, block_propagation_has_exactly_one_command)
   }
 }
 
-TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
-{
-  // The ipv4 `ip == 0 || port == 0` drop is the sole surviving behavior of
-  // the deleted `port == rpc_port` comparison (PR #587): every honest peer
-  // advertised rpc_port 0, so undialable port-0 entries were what it
-  // actually removed. The tor port-0 entry is asserted KEPT on purpose —
-  // the check is deliberately ipv4-scoped (tor port-0 semantics are
-  // disputed; named for the P2P-1 wire census), so this test goes red on
-  // either deleting the ipv4 drop or silently widening it.
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-  cprotocol.set_p2p_endpoint(&server);
-
-  std::vector<nodetool::peerlist_entry> peers;
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 100});   // kept
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100});   // ip 0: dropped
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100});       // port 0: dropped
-  peers.push_back({net::tor_address::unknown(), 100});                 // tor port 0: kept
-
-  ASSERT_TRUE(server.sanitize_peerlist(peers));
-
-  std::set<std::string> kept;
-  for (const auto &pe : peers)
-  {
-    kept.insert(pe.adr.str());
-    EXPECT_EQ(0, pe.last_seen); // remote-supplied timestamps are discarded
-  }
-  EXPECT_EQ((std::set<std::string>{
-              MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080).str(),
-              net::tor_address::unknown().str()}),
-            kept);
-}
-
 TEST(ban, add)
 {
   [[maybe_unused]] ban_isolate isolate;
@@ -2002,6 +1968,115 @@ namespace
           cprotocol, arg, ctx());
     }
   };
+}
+
+namespace
+{
+  // One loopback session on the harness hub, in the direction asked for.
+  // The peer lists read that direction from the board by this id.
+  struct PeerlistSession
+  {
+    std::uint64_t socket_id = 0;
+
+    explicit PeerlistSession(bool inbound)
+    {
+      bind_harness_hub();
+      shekyl_seam_address addr{};
+      addr.connector = SHEKYL_CONNECTOR_CLEARNET;
+      addr.address_type = SHEKYL_ADDR_IPV4;
+      addr.port = 18080;
+      addr.len = 4;
+      addr.bytes[0] = 127;
+      addr.bytes[3] = 1;
+      const shekyl_seam_open_result opened = shekyl_seam_open(&addr, inbound ? 1 : 0);
+      socket_id = opened.id;
+      EXPECT_NE(socket_id, 0u) << "loopback open cause " << static_cast<unsigned>(opened.cause_kind);
+    }
+
+    ~PeerlistSession()
+    {
+      if (socket_id != 0)
+      {
+        shekyl_seam_close(socket_id);
+        shekyl_seam_reap(socket_id);
+      }
+      shekyl_seam_bind(nullptr, nullptr, nullptr);
+    }
+
+    bool receive(const std::vector<nodetool::peerlist_entry>& peers) const
+    {
+      return shekyl::received_peerlist(shekyl::seam_connection_id(socket_id), peers);
+    }
+  };
+
+  // `count` distinct global addresses. `block` keeps one test's addresses
+  // apart from another's: the Rust lists are one per process.
+  std::vector<nodetool::peerlist_entry> global_peers(std::uint8_t block, std::size_t count)
+  {
+    std::vector<nodetool::peerlist_entry> peers;
+    for (std::size_t i = 0; i < count; ++i)
+      peers.push_back({MAKE_IPV4_ADDRESS_PORT(11, 7, block, static_cast<std::uint8_t>(i + 1), 18080), 100});
+    return peers;
+  }
+}
+
+// The C++ no longer judges a received peerlist. It hands the list to Rust
+// as it arrived and closes only on Rust's refusal. A list of exactly the
+// receiver limit is accepted and one more entry is refused, so no entry
+// was dropped on the way; a bad entry refuses the list wherever it sits,
+// so none was reordered away or filtered. `sanitize_peerlist` dropped the
+// ip-0 and port-0 entries and kept the rest; under R4 one such entry is
+// evidence about the sender and refuses the whole list.
+TEST(node_server, a_received_peerlist_reaches_rust_unaltered_and_only_a_refusal_closes)
+{
+  PeerlistSession session(false);
+  ASSERT_NE(session.socket_id, 0u);
+
+  EXPECT_TRUE(session.receive({}));
+  EXPECT_TRUE(session.receive(global_peers(1, 12)));
+  EXPECT_FALSE(session.receive(global_peers(2, 13)));
+
+  const std::vector<nodetool::peerlist_entry> bad = {
+      {MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100},      // ip 0
+      {MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100},          // port 0
+      {MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080), 100},  // private
+      {MAKE_IPV4_ADDRESS_PORT(127, 0, 0, 1, 18080), 100},    // loopback
+      {net::tor_address::unknown(), 100},                    // not this session's connector
+  };
+  for (const auto& entry : bad)
+  {
+    for (const std::size_t at : {std::size_t{0}, std::size_t{1}, std::size_t{2}})
+    {
+      std::vector<nodetool::peerlist_entry> peers = global_peers(3, 2);
+      peers.insert(peers.begin() + at, entry);
+      EXPECT_FALSE(session.receive(peers)) << entry.adr.str() << " at " << at;
+    }
+  }
+}
+
+// PWD-I2: a list on an inbound session admits nothing and is not a
+// refusal, whatever it holds. The same lists are refused on the outbound
+// session above, so the answer here is the direction's, read in Rust from
+// the board: this call passes no direction.
+TEST(node_server, a_peerlist_on_an_inbound_session_never_closes_it)
+{
+  PeerlistSession session(true);
+  ASSERT_NE(session.socket_id, 0u);
+
+  EXPECT_TRUE(session.receive(global_peers(4, 12)));
+  EXPECT_TRUE(session.receive(global_peers(5, 13)));
+  EXPECT_TRUE(session.receive({{MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080), 100}}));
+  EXPECT_TRUE(session.receive({{net::tor_address::unknown(), 100}}));
+}
+
+// A session the board does not hold has no known direction. Its list
+// admits nothing and does not close anything.
+TEST(node_server, a_peerlist_on_an_unknown_session_never_closes_it)
+{
+  PeerlistSession session(false);
+  ASSERT_NE(session.socket_id, 0u);
+  const boost::uuids::uuid stranger = shekyl::seam_connection_id(session.socket_id + 1000);
+  EXPECT_TRUE(shekyl::received_peerlist(stranger, global_peers(6, 13)));
 }
 
 TEST(node_server, handshake_close_cause_reads_the_recorded_seam_cause)

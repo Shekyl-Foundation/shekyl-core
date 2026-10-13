@@ -184,6 +184,19 @@ namespace detail
   }
 }
 
+/// A peerlist a peer sent, handed to Rust as it arrived: every entry's
+/// address, in order, none dropped or rewritten. An address this adapter
+/// cannot encode goes over as an empty entry, which Rust refuses. False
+/// is Rust's refusal and the only answer on which the caller closes.
+template<class Entries>
+inline bool received_peerlist(const boost::uuids::uuid& session, const Entries& entries)
+{
+  std::vector<shekyl_seam_address> raw(entries.size());
+  for (std::size_t i = 0; i < entries.size(); ++i)
+    detail::address_from(entries[i].adr, raw[i]);
+  return shekyl_peerlist_admit_received(seam_socket_id(session), raw.data(), raw.size()) != SHEKYL_PEERLIST_REFUSE;
+}
+
 template <class t_protocol_handler>
 class zone_server final : public zone_binding
 {

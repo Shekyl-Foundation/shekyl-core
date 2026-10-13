@@ -1,0 +1,388 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The peer lists, as the C++ reaches them.
+//!
+//! The C++ receives a peerlist in a handshake or timed-sync response and
+//! hands it here as it arrived, with the session it arrived on.
+//! [`shekyl_peerlist_admit_received`] answers accept or refuse, and the
+//! C++ closes the session only on refuse. Every rule is on this side:
+//! the receiver limit (D3), the per-session intake cap (D-S1), address
+//! validity and its whole-list refusal (R4), the foreign-connector rule,
+//! and outbound-only acceptance (PWD-I2).
+//!
+//! The session's connector and direction are read from the seam board by
+//! the session id. The C++ passes neither.
+
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Mutex;
+
+use shekyl_peerlist::{
+    BanQuery, ConnectionId, ConnectorId, Direction, NetworkAddress, Peerlist, RefusedSet,
+    SessionRow, Tick,
+};
+use shekyl_seam::{Hub, SocketId};
+
+use crate::legacy_util::slice_from_typed_ptr;
+use crate::seam_ffi::{hub, ShekylSeamAddress, ADDR_IPV4, ADDR_IPV6, ADDR_TOR};
+use crate::secure_relay_rng::SecureRelayRng;
+
+/// The list is accepted. The session stays.
+pub const SHEKYL_PEERLIST_ACCEPT: i32 = 1;
+/// The list is refused. The C++ closes the session. Nothing else closes it.
+pub const SHEKYL_PEERLIST_REFUSE: i32 = 0;
+
+/// The process's peer lists and the set they were built with.
+struct State {
+    refused: RefusedSet,
+    list: Option<Peerlist>,
+}
+
+static STATE: Mutex<State> = Mutex::new(State {
+    refused: RefusedSet::NON_GLOBAL,
+    list: None,
+});
+
+/// `--allow-local-ip`, as the peer lists' constructor input. Returns
+/// `allow`, so the C++ line that read the flag reads it through this call.
+///
+/// `true` builds the lists over [`RefusedSet::EMPTY`]: a private test
+/// network whose nodes find each other by peerlist exchange. The set is
+/// fixed for the life of the lists, so a call after they exist that would
+/// change it is logged and ignored.
+#[no_mangle]
+pub extern "C" fn shekyl_peerlist_allow_local_ip(allow: bool) -> bool {
+    let wanted = if allow {
+        RefusedSet::EMPTY
+    } else {
+        RefusedSet::NON_GLOBAL
+    };
+    let mut state = STATE.lock().expect("peerlist state");
+    if state.list.is_some() && state.refused != wanted {
+        tracing::error!("allow-local-ip changed after the peer lists were built; ignored");
+    } else {
+        state.refused = wanted;
+    }
+    allow
+}
+
+/// The bans the transport layer holds, asked through the hub.
+struct HubBans(Hub);
+
+impl BanQuery for HubBans {
+    fn is_banned(&mut self, host: IpAddr, _now: Tick) -> bool {
+        self.0.is_banned(host)
+    }
+}
+
+/// The peerlist's name for a seam session. The board's id is the socket
+/// id; the lists key a session's intake by it.
+fn session_of(id: SocketId) -> ConnectionId {
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&id.get().to_le_bytes());
+    ConnectionId(bytes)
+}
+
+/// One entry as the C++ encoded it, or `None` for an entry that is not an
+/// address: an unknown type, a length that does not fit its type, or a
+/// host that is not UTF-8. The adapter writes an empty entry for an
+/// address it cannot encode, and that is `None` here too.
+fn address_of(entry: &ShekylSeamAddress) -> Option<NetworkAddress> {
+    let len = usize::from(entry.len);
+    match entry.address_type {
+        ADDR_IPV4 if len == 4 => Some(NetworkAddress::Ipv4 {
+            ip: Ipv4Addr::new(
+                entry.bytes[0],
+                entry.bytes[1],
+                entry.bytes[2],
+                entry.bytes[3],
+            ),
+            port: entry.port,
+        }),
+        ADDR_IPV6 if len == 16 => {
+            let mut octets = [0u8; 16];
+            octets.copy_from_slice(&entry.bytes[..16]);
+            Some(NetworkAddress::Ipv6 {
+                ip: Ipv6Addr::from(octets),
+                port: entry.port,
+            })
+        }
+        ADDR_TOR if len > 0 && len <= entry.bytes.len() => {
+            let host = std::str::from_utf8(&entry.bytes[..len]).ok()?;
+            Some(NetworkAddress::Tor {
+                host: host.to_owned(),
+                port: entry.port,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Decide one received list. Everything the FFI entry does, without the
+/// process statics.
+///
+/// `row` is the session's board row, or `None` when the board has none.
+/// A session the board does not hold has no known direction, so its list
+/// admits nothing and is not refused, like an inbound one. An inbound
+/// session's entries are not decoded: nothing it sends is evidence.
+fn receive(
+    list: &mut Peerlist,
+    row: Option<(ConnectorId, Direction)>,
+    session: ConnectionId,
+    entries: &[ShekylSeamAddress],
+    now: Tick,
+    bans: &mut dyn BanQuery,
+) -> i32 {
+    let Some((connector, direction)) = row else {
+        return SHEKYL_PEERLIST_ACCEPT;
+    };
+    if matches!(direction, Direction::Inbound) {
+        return SHEKYL_PEERLIST_ACCEPT;
+    }
+    let Some(addresses) = entries
+        .iter()
+        .map(address_of)
+        .collect::<Option<Vec<NetworkAddress>>>()
+    else {
+        return SHEKYL_PEERLIST_REFUSE;
+    };
+    let session = SessionRow {
+        id: session,
+        connector,
+        direction,
+    };
+    match list.admit_received_list(&addresses, session, now, bans, &mut SecureRelayRng) {
+        Ok(_) => SHEKYL_PEERLIST_ACCEPT,
+        Err(refusal) => {
+            tracing::debug!(?refusal, "received peerlist refused");
+            SHEKYL_PEERLIST_REFUSE
+        }
+    }
+}
+
+/// A peerlist a peer sent over session `session`, as it arrived.
+///
+/// Returns [`SHEKYL_PEERLIST_ACCEPT`] or [`SHEKYL_PEERLIST_REFUSE`]. The
+/// caller closes the session on refuse and does nothing else with either
+/// answer. With no hub bound there is no session and nothing is admitted.
+///
+/// # Safety
+///
+/// `entries` points to `count` initialized [`ShekylSeamAddress`] values,
+/// or `count` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_peerlist_admit_received(
+    session: u64,
+    entries: *const ShekylSeamAddress,
+    count: usize,
+) -> i32 {
+    // SAFETY: the caller's contract, stated above. A null pointer with a
+    // non-zero count is not a list; it is accepted and admits nothing, so a
+    // caller's bug never closes a peer's session.
+    let Some(entries) = (unsafe { slice_from_typed_ptr(entries, count) }) else {
+        return SHEKYL_PEERLIST_ACCEPT;
+    };
+    let Some(hub) = hub() else {
+        return SHEKYL_PEERLIST_ACCEPT;
+    };
+    let Some(id) = SocketId::from_ffi(session) else {
+        return SHEKYL_PEERLIST_ACCEPT;
+    };
+    let row = hub
+        .board()
+        .get(id)
+        .map(|row| (row.connector(), row.direction()));
+    let now = hub.now();
+    let mut state = STATE.lock().expect("peerlist state");
+    let refused = state.refused;
+    let list = state.list.get_or_insert_with(|| Peerlist::new(refused));
+    receive(list, row, session_of(id), entries, now, &mut HubBans(hub))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shekyl_peerlist::NoBans;
+
+    fn v4(n: u8) -> ShekylSeamAddress {
+        let mut entry = empty();
+        entry.address_type = ADDR_IPV4;
+        entry.port = 18080;
+        entry.len = 4;
+        entry.bytes[..4].copy_from_slice(&[11, 6, 0, n]);
+        entry
+    }
+
+    fn empty() -> ShekylSeamAddress {
+        ShekylSeamAddress {
+            connector: 0,
+            address_type: 0,
+            zone_only: 0,
+            _pad: 0,
+            port: 0,
+            len: 0,
+            bytes: [0; shekyl_seam::TOR_HOST_MAX],
+        }
+    }
+
+    fn session() -> ConnectionId {
+        ConnectionId([9; 16])
+    }
+
+    fn decide(
+        list: &mut Peerlist,
+        row: Option<(ConnectorId, Direction)>,
+        entries: &[ShekylSeamAddress],
+    ) -> i32 {
+        receive(list, row, session(), entries, Tick::new(0), &mut NoBans)
+    }
+
+    const OUTBOUND: Option<(ConnectorId, Direction)> =
+        Some((ConnectorId::Clearnet, Direction::Outbound));
+    const INBOUND: Option<(ConnectorId, Direction)> =
+        Some((ConnectorId::Clearnet, Direction::Inbound));
+
+    #[test]
+    fn an_outbound_list_is_accepted_and_admitted() {
+        let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+        let entries: Vec<_> = (1..=5).map(v4).collect();
+        assert_eq!(
+            decide(&mut list, OUTBOUND, &entries),
+            SHEKYL_PEERLIST_ACCEPT
+        );
+        assert_eq!(list.gray_count(ConnectorId::Clearnet), 5);
+    }
+
+    /// PWD-I2 at the boundary the C++ calls: accepted, so nothing closes,
+    /// and nothing admitted. A list that would be refused on an outbound
+    /// session is still accepted here.
+    #[test]
+    fn an_inbound_list_is_accepted_and_admits_nothing() {
+        let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+        let entries: Vec<_> = (1..=5).map(v4).collect();
+        assert_eq!(decide(&mut list, INBOUND, &entries), SHEKYL_PEERLIST_ACCEPT);
+        assert_eq!(list.gray_count(ConnectorId::Clearnet), 0);
+
+        let too_many: Vec<_> = (0..40).map(v4).collect();
+        assert_eq!(
+            decide(&mut list, OUTBOUND, &too_many),
+            SHEKYL_PEERLIST_REFUSE
+        );
+        assert_eq!(
+            decide(&mut list, INBOUND, &too_many),
+            SHEKYL_PEERLIST_ACCEPT
+        );
+        assert_eq!(
+            decide(&mut list, INBOUND, &[empty()]),
+            SHEKYL_PEERLIST_ACCEPT
+        );
+        assert_eq!(list.gray_count(ConnectorId::Clearnet), 0);
+    }
+
+    #[test]
+    fn a_session_the_board_does_not_hold_admits_nothing_and_is_not_refused() {
+        let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+        let entries: Vec<_> = (1..=5).map(v4).collect();
+        assert_eq!(decide(&mut list, None, &entries), SHEKYL_PEERLIST_ACCEPT);
+        assert_eq!(list.gray_count(ConnectorId::Clearnet), 0);
+    }
+
+    /// Each rule the C++ used to hold, refused from here: the count (D3),
+    /// a non-global entry (address validity, R4), a foreign-connector
+    /// entry, and an entry that is not an address.
+    #[test]
+    fn each_refusal_reaches_the_caller_and_admits_nothing() {
+        let mut private = v4(1);
+        private.bytes[..4].copy_from_slice(&[192, 168, 1, 1]);
+        let mut port_zero = v4(2);
+        port_zero.port = 0;
+        let mut onion = empty();
+        onion.address_type = ADDR_TOR;
+        onion.port = 18080;
+        let host = format!("{:0>56}.onion", 1);
+        onion.len = u16::try_from(host.len()).expect("fits");
+        onion.bytes[..host.len()].copy_from_slice(host.as_bytes());
+        let mut short_v4 = v4(3);
+        short_v4.len = 3;
+
+        for (bad, why) in [
+            (private, "private address"),
+            (port_zero, "port 0"),
+            (onion, "onion entry on a clearnet session"),
+            (empty(), "an entry the adapter could not encode"),
+            (short_v4, "an IPv4 entry of the wrong length"),
+        ] {
+            let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+            assert_eq!(
+                decide(&mut list, OUTBOUND, &[v4(10), bad, v4(11)]),
+                SHEKYL_PEERLIST_REFUSE,
+                "{why}"
+            );
+            assert_eq!(list.gray_count(ConnectorId::Clearnet), 0, "{why}");
+        }
+        let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+        let too_many: Vec<_> = (0..13).map(v4).collect();
+        assert_eq!(
+            decide(&mut list, OUTBOUND, &too_many),
+            SHEKYL_PEERLIST_REFUSE
+        );
+        let exact: Vec<_> = (0..12).map(v4).collect();
+        assert_eq!(decide(&mut list, OUTBOUND, &exact), SHEKYL_PEERLIST_ACCEPT);
+    }
+
+    #[test]
+    fn the_empty_set_admits_a_private_address_from_a_session() {
+        let mut private = v4(1);
+        private.bytes[..4].copy_from_slice(&[192, 168, 1, 1]);
+        let mut list = Peerlist::new(RefusedSet::EMPTY);
+        assert_eq!(
+            decide(&mut list, OUTBOUND, &[private]),
+            SHEKYL_PEERLIST_ACCEPT
+        );
+        assert_eq!(list.gray_count(ConnectorId::Clearnet), 1);
+    }
+
+    /// The entries reach the lists unaltered and in full: every address
+    /// the C++ encoded is the address admitted, all three types.
+    #[test]
+    fn every_encoded_address_is_the_address_admitted() {
+        let mut v6 = empty();
+        v6.address_type = ADDR_IPV6;
+        v6.port = 28080;
+        v6.len = 16;
+        let octets = "2a00:1450::7".parse::<Ipv6Addr>().expect("v6").octets();
+        v6.bytes[..16].copy_from_slice(&octets);
+        assert_eq!(
+            address_of(&v6),
+            Some(NetworkAddress::Ipv6 {
+                ip: Ipv6Addr::from(octets),
+                port: 28080
+            })
+        );
+        assert_eq!(
+            address_of(&v4(7)),
+            Some(NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::new(11, 6, 0, 7),
+                port: 18080
+            })
+        );
+        let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
+        assert_eq!(
+            decide(&mut list, OUTBOUND, &[v4(7), v6]),
+            SHEKYL_PEERLIST_ACCEPT
+        );
+        assert!(list.is_gray(&address_of(&v4(7)).expect("v4")));
+        assert!(list.is_gray(&address_of(&v6).expect("v6")));
+    }
+
+    #[test]
+    fn allow_local_ip_returns_what_it_was_given() {
+        // The process statics are shared; this test only reads the return.
+        let before = STATE.lock().expect("state").refused;
+        assert!(!shekyl_peerlist_allow_local_ip(false));
+        let mut state = STATE.lock().expect("state");
+        state.refused = before;
+    }
+}

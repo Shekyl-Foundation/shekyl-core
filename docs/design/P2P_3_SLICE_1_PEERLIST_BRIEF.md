@@ -226,18 +226,14 @@ fates. `peerlist_manager::is_host_allowed` (`net_peerlist.h:273`)
 drops loopback always and `is_local` unless `--allow-local-ip`, at
 every list insert; it is the only reader of the flag today, and it
 leaves at the cutover with the C++ peerlist (§11.4).
-`sanitize_peerlist` (`net_node.inl:2417`, called at `:2456`) drops
-loopback, `is_local`, `0.0.0.0` and IPv4 port 0 from a received list,
-with no regard for the flag; it **stays** with `handle_remote_peerlist`
-until slice 4, in front of the call into `admit_gray`. Between the
-cutover and slice 4 a received list therefore passes two filters, and
-the Rust rule is the one that governs: an address the C++ copy lets
-through and Rust refuses is refused, and the C++ copy's narrower
-IPv6 reading (loopback and link-local only, `net_utils_base.cpp:45-46`)
-adds nothing. Slice 4 deletes the C++ copy with the handler. *Records-was,
-same day: "without this ruling the cutover would delete the only
-filter"; the cutover deletes `is_host_allowed`, not `sanitize_peerlist`,
-and `Peerlist::admit_gray` on `dev` has no validity check of its own.*
+`sanitize_peerlist` dropped loopback, `is_local`, `0.0.0.0` and IPv4
+port 0 from a received list, with no regard for the flag. **It is
+deleted in PR-3 (Rick, 2026-10-13):** `handle_remote_peerlist` hands the
+list to Rust as it arrived, and the rule above is the only filter. An
+entry the C++ used to drop quietly now refuses the whole list (R4).
+*Records-was (2026-10-11): it stays with `handle_remote_peerlist` until
+slice 4, in front of the call into `admit_gray`, so a received list
+passes two filters between the cutover and slice 4.*
 
 **White's target is draw diversity (ruled 2026-09-25).** Outbound
 connections are drawn uniformly from white, so a small white list is a

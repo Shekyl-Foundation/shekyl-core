@@ -483,7 +483,7 @@ namespace nodetool
     public_zone.m_port_ipv6 = command_line::get_arg(vm, arg_p2p_bind_port_ipv6);
     public_zone.m_can_announce = true;
     m_external_port = command_line::get_arg(vm, arg_p2p_external_port);
-    m_allow_local_ip = command_line::get_arg(vm, arg_p2p_allow_local_ip);
+    m_allow_local_ip = shekyl_peerlist_allow_local_ip(command_line::get_arg(vm, arg_p2p_allow_local_ip));
     const bool has_no_igd = command_line::get_arg(vm, arg_no_igd);
     const std::string sigd = command_line::get_arg(vm, arg_igd);
     if (sigd == "enabled")
@@ -2396,63 +2396,9 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::sanitize_peerlist(std::vector<peerlist_entry>& local_peerlist)
-  {
-    for (size_t i = 0; i < local_peerlist.size(); ++i)
-    {
-      bool ignore = false;
-      peerlist_entry &be = local_peerlist[i];
-      epee::net_utils::network_address &na = be.adr;
-      if (na.is_loopback() || na.is_local())
-      {
-        ignore = true;
-      }
-      else if (be.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-      {
-        const epee::net_utils::ipv4_network_address &ipv4 = na.as<const epee::net_utils::ipv4_network_address>();
-        if (ipv4.ip() == 0 || ipv4.port() == 0) // 0.0.0.0 or not dialable
-          ignore = true;
-      }
-      if (ignore)
-      {
-        MDEBUG("Ignoring " << be.adr.str());
-        std::swap(local_peerlist[i], local_peerlist[local_peerlist.size() - 1]);
-        local_peerlist.resize(local_peerlist.size() - 1);
-        --i;
-        continue;
-      }
-      local_peerlist[i].last_seen = 0;
-    }
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context)
   {
-    if (peerlist.size() > P2P_MAX_PEERS_IN_HANDSHAKE)
-    {
-      MWARNING(context << "peer sent " << peerlist.size() << " peers, considered spamming");
-      return false;
-    }
-    std::vector<peerlist_entry> peerlist_ = peerlist;
-    if(!sanitize_peerlist(peerlist_))
-      return false;
-
-    const epee::net_utils::connector_id zone = epee::net_utils::require_session_connector(context.m_connector);
-    for(const auto& peer : peerlist_)
-    {
-      if(epee::net_utils::require_address_connector(peer.adr) != zone)
-      {
-        MWARNING(context << " sent peerlist from another zone, dropping");
-        return false;
-      }
-    }
-
-    LOG_DEBUG_CC(context, "REMOTE PEERLIST: remote peerlist size=" << peerlist_.size());
-    LOG_TRACE_CC(context, "REMOTE PEERLIST: " << ENDL << print_peerlist_to_string(peerlist_));
-    return m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_peerlist.merge_peerlist(peerlist_, [this](const peerlist_entry &pe) {
-      return !is_addr_recently_failed(pe.adr) && is_remote_host_allowed(pe.adr);
-    });
+    return shekyl::received_peerlist(context.m_connection_id, peerlist);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>

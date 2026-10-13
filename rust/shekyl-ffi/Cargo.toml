@@ -125,6 +125,7 @@ shekyl-runtime = { path = "../shekyl-runtime" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-net-address = { path = "../shekyl-net-address" }
+shekyl-peerlist = { path = "../shekyl-peerlist" }
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }

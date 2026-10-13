@@ -259,7 +259,10 @@ impl Hub {
         self.wake();
     }
 
-    fn now(&self) -> Tick {
+    /// This hub's clock. The peer lists read it for a received list, so
+    /// one process has one notion of when.
+    #[must_use]
+    pub fn now(&self) -> Tick {
         self.clock.now()
     }
 
