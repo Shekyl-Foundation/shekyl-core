@@ -215,7 +215,7 @@ inline std::vector<nodetool::peerlist_entry> disclose(const boost::uuids::uuid& 
     observed.port = raw[i].port;
     observed.len = raw[i].len;
     std::memcpy(observed.bytes, raw[i].bytes, sizeof(observed.bytes));
-    out.push_back(nodetool::peerlist_entry{seam_network_address(observed), 0});
+    out.push_back(nodetool::peerlist_entry{seam_network_address(observed)});
   }
   return out;
 }

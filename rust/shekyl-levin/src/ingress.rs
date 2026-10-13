@@ -65,11 +65,12 @@ pub const FLAGS_DEFINED: Flags = Flags::from_bits(
 /// What the largest `peerlist_entry` this codec writes adds to a message
 /// that already carries one — its bytes inside the array, without the
 /// array's own envelope: a Tor v3 address (the 62-byte `.onion` host and a
-/// port) and a stored `last_seen`, with the KV tags. No stripe seed: the
-/// field is gone from the wire (`PDM-Q7`). Pinned by
-/// `tests/handshake_bounds.rs`, which encodes the messages and asserts
-/// this number, so the bound and the encoding cannot drift apart.
-pub const PEERLIST_ENTRY_MAX_ENCODED_BYTES: u64 = 117;
+/// port) with its KV tags, and nothing else. No stripe seed (`PDM-Q7`)
+/// and no `last_seen` (PR-3, Rick, 2026-10-13: a field always sent as 0
+/// and ignored on receipt is a sentinel and a peer-controlled slot).
+/// Pinned by `tests/handshake_bounds.rs`, which encodes the messages and
+/// asserts this number, so the bound and the encoding cannot drift apart.
+pub const PEERLIST_ENTRY_MAX_ENCODED_BYTES: u64 = 98;
 
 /// The largest handshake or timed-sync message with its entries taken
 /// off: the storage header, `basic_node_data`, `CORE_SYNC_DATA` with every

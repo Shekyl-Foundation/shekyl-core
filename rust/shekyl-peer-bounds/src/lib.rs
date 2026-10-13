@@ -3,7 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The peer-list protocol constants two layers read.
+//! The peer-list protocol constants two layers read. A separate crate so
+//! that the frame layer reads the protocol bound without depending on the
+//! peerlist.
 //!
 //! `shekyl-peerlist` sends [`DISCLOSE_COUNT`] entries in a disclosure
 //! sample and refuses a received list above it; `shekyl-levin` bounds a

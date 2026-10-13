@@ -1774,9 +1774,19 @@ fn get_peer_list_matches_the_oracle() {
     // _v3 is the earliest vector kept: the C++ oracle for this method is
     // gone (RK-5a), and the _v1 and _v2 captures, which carried the
     // identifier (3.28, PWD-I1) and the stripe seed (3.35, PDM-Q7), went
-    // with the stripe-seed sweep (2026-10-13). _v4 = _v3 minus `last_seen`
-    // (3.55): the Rust peer lists carry no clock, and the listing reads
-    // them; held to its delta below.
+    // with the stripe-seed sweep (2026-10-13). Two delta tests went with
+    // them: `every_v2_sibling_is_its_v1_capture_minus_only_the_identifier`
+    // held _v2 to _v1 minus exactly the identifier fields of 3.28
+    // (PWD-I1) on get_peer_list, get_connections and sync_info, and
+    // `every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields` held
+    // _v3 to _v2 minus exactly `pruning_seed` and
+    // `next_needed_pruning_seed` of 3.35 (PDM-Q7). The _v4 delta below
+    // covers neither: it holds get_peer_list's _v4 to its _v3 only. The
+    // gap: the 3.28 and 3.35 deltas are no longer asserted, and the _v3
+    // vectors of the three methods rest on their parity tests against the
+    // emitter alone. _v4 = _v3 minus `last_seen` (3.55): the Rust peer
+    // lists carry no clock, and the listing reads them; held to its delta
+    // below.
     assert_parity(include_str!("vectors/rpc/get_peer_list_v4.json"), &built);
 
     // `ip` is a JSON *number* here. `get_connections` carries a field of the

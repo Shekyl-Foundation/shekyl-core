@@ -1582,7 +1582,7 @@ namespace
   {
     std::vector<nodetool::peerlist_entry> peers;
     for (std::size_t i = 0; i < count; ++i)
-      peers.push_back({MAKE_IPV4_ADDRESS_PORT(11, 7, block, static_cast<std::uint8_t>(i + 1), 18080), 100});
+      peers.push_back({MAKE_IPV4_ADDRESS_PORT(11, 7, block, static_cast<std::uint8_t>(i + 1), 18080)});
     return peers;
   }
 }
@@ -1604,11 +1604,11 @@ TEST(node_server, a_received_peerlist_reaches_rust_unaltered_and_only_a_refusal_
   EXPECT_FALSE(session.receive(global_peers(2, 13)));
 
   const std::vector<nodetool::peerlist_entry> bad = {
-      {MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100},      // ip 0
-      {MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100},          // port 0
-      {MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080), 100},  // private
-      {MAKE_IPV4_ADDRESS_PORT(127, 0, 0, 1, 18080), 100},    // loopback
-      {net::tor_address::unknown(), 100},                    // not this session's connector
+      {MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080)},      // ip 0
+      {MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0)},          // port 0
+      {MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080)},  // private
+      {MAKE_IPV4_ADDRESS_PORT(127, 0, 0, 1, 18080)},    // loopback
+      {net::tor_address::unknown()},                    // not this session's connector
   };
   for (const auto& entry : bad)
   {
@@ -1648,8 +1648,8 @@ TEST(node_server, a_peerlist_on_an_inbound_session_is_admitted_under_the_same_li
   EXPECT_EQ(admitted, 12u) << "the twelve entered gray from the inbound session";
 
   EXPECT_FALSE(session.receive(global_peers(5, 13))) << "one over the receiver limit refuses";
-  EXPECT_FALSE(session.receive({{MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080), 100}})) << "a non-global entry refuses (R4)";
-  EXPECT_FALSE(session.receive({{net::tor_address::unknown(), 100}})) << "a foreign-connector entry refuses";
+  EXPECT_FALSE(session.receive({{MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080)}})) << "a non-global entry refuses (R4)";
+  EXPECT_FALSE(session.receive({{net::tor_address::unknown()}})) << "a foreign-connector entry refuses";
 }
 
 // A session the board does not hold has no known direction. Its list

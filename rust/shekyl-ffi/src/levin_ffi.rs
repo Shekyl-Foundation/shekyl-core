@@ -637,7 +637,7 @@ mod tests {
         let mut cap = 0u64;
         // Handshake (1001) + REQUEST: admitted at the envelope derived from
         // the disclosure count (PR-3: `DISCLOSE_COUNT` largest entries beside
-        // the largest fixed part, 1662 bytes; `shekyl-levin` pins the parts).
+        // the largest fixed part; `shekyl-levin` pins the parts).
         let rc = unsafe { shekyl_levin_ingress_admit(1001, 0x1, &raw mut cap) };
         assert_eq!(rc, SHEKYL_LEVIN_OK);
         assert_eq!(

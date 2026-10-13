@@ -192,4 +192,11 @@ network. `get_version_synced_v31` is the chain's 3.54 link.
 (`the_v4_peer_list_is_its_v3_minus_only_last_seen`): the listing is read
 from the Rust peer lists, which carry no clock
 (`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4), so there is no value to report.
-`get_version_synced_v32` is the chain's 3.55 link.
+`get_version_synced_v32` is the chain's 3.55 link. The `_v1`/`_v2`
+vectors of `get_peer_list`, `get_connections` and `sync_info` went with
+the stripe-seed sweep the same day, and with them the two delta tests
+that held them: `_v2` to `_v1` minus exactly the identifier fields of
+3.28 (PWD-I1), and `_v3` to `_v2` minus exactly the stripe fields of 3.35
+(PDM-Q7). The `_v4` delta covers neither (it is `get_peer_list` only), so
+those two deltas are no longer asserted and the three `_v3` vectors rest
+on their parity tests alone.

@@ -25,15 +25,15 @@ use shekyl_levin::{
 };
 use shekyl_peer_bounds::DISCLOSE_COUNT;
 
-/// The largest entry: a v3 onion host (56 base32 characters and `.onion`),
-/// the largest port, and a `last_seen` that is stored, not elided.
+/// The largest entry: a v3 onion host (56 base32 characters and `.onion`)
+/// and the largest port. The entry is its address (PR-3: `last_seen` is
+/// gone from the wire).
 fn largest_entry() -> PeerlistEntry {
     PeerlistEntry {
         adr: NetworkAddress::Tor {
             host: format!("{}.onion", "a".repeat(56)),
             port: u16::MAX,
         },
-        last_seen: i64::MAX,
     }
 }
 
@@ -89,10 +89,7 @@ fn the_largest_peerlist_entry_adds_the_pinned_size_to_a_message() {
     // The other arms are smaller: the pin is the maximum, not one arm's size.
     let added_by = |adr: NetworkAddress| {
         let mut with = response_with(1);
-        with.local_peerlist_new.push(PeerlistEntry {
-            adr,
-            last_seen: i64::MAX,
-        });
+        with.local_peerlist_new.push(PeerlistEntry { adr });
         encoded_len(&with) - encoded_len(&response_with(1))
     };
     assert!(

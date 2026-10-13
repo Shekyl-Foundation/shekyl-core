@@ -106,10 +106,7 @@ fn reply(network_id: [u8; 16], peers: Vec<NetworkAddress>) -> Vec<u8> {
             cumulative_difficulty_top64: 0,
             top_id: [2; 32],
         },
-        local_peerlist_new: peers
-            .into_iter()
-            .map(|adr| PeerlistEntry { adr, last_seen: 0 })
-            .collect(),
+        local_peerlist_new: peers.into_iter().map(|adr| PeerlistEntry { adr }).collect(),
     };
     response(COMMAND_HANDSHAKE, &body.store().expect("encode"))
 }

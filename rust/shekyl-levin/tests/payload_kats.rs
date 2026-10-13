@@ -117,8 +117,29 @@ fn deleted_rpc_advert_fields_never_written_still_readable() {
             ip: Ipv4Addr::new(10, 0, 0, 1),
             port: 18_080,
         },
-        last_seen: 0,
     });
+}
+
+/// `last_seen` left the wire entry in PR-3 (Rick, 2026-10-13: a field
+/// always sent as 0 and ignored on receipt is a sentinel and a
+/// peer-controlled slot). This build never writes it, and an entry that
+/// carries one, at any value, is read as its address with the key ignored.
+#[test]
+fn a_last_seen_key_on_a_received_entry_is_read_with_the_key_ignored() {
+    let entry = PeerlistEntry {
+        adr: NetworkAddress::Ipv4 {
+            ip: Ipv4Addr::new(10, 0, 0, 1),
+            port: 18_080,
+        },
+    };
+    let mut section = entry.to_section().expect("section");
+    assert!(section.get("last_seen").is_none(), "never written");
+    section.insert(
+        "last_seen",
+        shekyl_portable_storage::Value::Int64(1_750_000_000),
+    );
+    let bytes = store_to_binary(&section).expect("encode");
+    assert_eq!(PeerlistEntry::load(&bytes).expect("load"), entry);
 }
 
 /// Neither `CORE_SYNC_DATA` nor `peerlist_entry` carries a key this build
@@ -145,7 +166,6 @@ fn a_key_this_build_never_wrote_is_read_with_the_key_ignored() {
             ip: Ipv4Addr::new(10, 0, 0, 1),
             port: 18_080,
         },
-        last_seen: 0,
     });
 }
 
@@ -256,7 +276,6 @@ fn handshake_with_ipv4_peerlist_round_trip() {
                 ip: Ipv4Addr::new(10, 0, 0, 1),
                 port: 18_080,
             },
-            last_seen: 0,
         }],
     };
     round_trip(&rsp);

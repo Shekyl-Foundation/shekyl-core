@@ -58,20 +58,22 @@ namespace nodetool
   // eight accepted non-zero values against a uniformly-zero honest fleet,
   // i.e. free markers for topology tracing. A received entry carrying a key
   // this build does not define is decoded with the key ignored.
+  //
+  // It carries no `last_seen` either (PR-3, Rick, 2026-10-13): the Rust
+  // lists carry no clock, so the field was always sent as 0 and ignored on
+  // receipt, which makes it a sentinel and a peer-controlled slot. The
+  // Rust codec (`shekyl-levin`, `PeerlistEntry`) is the same shape.
   template<typename AddressType>
   struct peerlist_entry_base
   {
     AddressType adr;
-    int64_t last_seen;
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE(adr)
-      KV_SERIALIZE_OPT(last_seen, (int64_t)0)
     END_KV_SERIALIZE_MAP()
 
     BEGIN_SERIALIZE()
       FIELD(adr)
-      VARINT_FIELD(last_seen)
     END_SERIALIZE()
   };
   typedef peerlist_entry_base<epee::net_utils::network_address> peerlist_entry;
