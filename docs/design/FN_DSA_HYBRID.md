@@ -10,11 +10,13 @@ were handed to SO-D8 Slice C on 2026-10-11**
 and the verifier must switch in one change, and increment 3 lands in Rust
 only. `FND-4`'s carried item, one decoded key across signatures, goes with
 increment 4. This lane's own work ended with increment 2. **The document
-stays OPEN as the record increments 3 and 4 are written into** when the
-Slice C lane lands them; it closes when increment 4's record is in, and
-the dependency record (§2) then moves to
+stays OPEN until the settlement lane's cutover selects the receipt
+capability and receipts move onto the key** (§9.4); it closes when that
+is recorded here, and the dependency record (§2) then moves to
 [`CRYPTOGRAPHIC_INVENTORY.md`](../CRYPTOGRAPHIC_INVENTORY.md), which already
-carries its summary row. **Increment 3 is recorded here, 2026-10-12 (§8),
+carries its summary row. *(Until 2026-10-13 this read "closes when
+increment 4's record is in"; increment 4 landed STAGED, so the record is
+in and the key is not yet live.)* **Increment 3 is recorded here, 2026-10-12 (§8),
 built by the Slice C lane:** the receipt key is mandatory, a JoinMarket has
 one wire form that commits it, and the bond record keeps it, typed and
 fixed-length; merged 2026-10-13 (PR #1046). **Increment 4 is recorded here,
