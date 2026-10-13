@@ -10,7 +10,7 @@
 //! that choice. A flag beside an untyped map can name a merge the map does
 //! not have.
 
-use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::stem_map::{
     ConnectionId, ReservedSlot, SlotIndex, SourceId, StemMap, UniformSlots,
 };

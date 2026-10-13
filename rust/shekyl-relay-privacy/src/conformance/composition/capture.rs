@@ -19,8 +19,8 @@
 )]
 
 use crate::params::StemGraph;
-use crate::rng::RelayRng;
 use crate::stem_map::StemMap;
+use shekyl_draw_rng::RelayRng;
 
 use super::super::util::{bernoulli_unit, usize_from};
 use super::{bounded_uniform_len, node_of, peer_id};

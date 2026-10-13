@@ -11,11 +11,11 @@
 //! because the shape decision reads the numbers; the assertions are what make
 //! it a test.
 #![allow(clippy::cast_precision_loss)]
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::linkage::{
     simulate_cadence_linkage, CadenceShape, MatcherStrength,
 };
 use shekyl_relay_privacy::params::carrier;
-use shekyl_relay_privacy::SplitMix64;
 
 const M: usize = 20;
 const CHANCE: f64 = 1.0 / M as f64;

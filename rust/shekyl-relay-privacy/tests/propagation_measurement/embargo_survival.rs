@@ -9,6 +9,7 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::conformance::{
     simulate_fluff_return, simulate_propagation, solve_embargo_secs_for_target, FloodParams,
@@ -16,7 +17,7 @@ use shekyl_relay_privacy::conformance::{
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
 use shekyl_relay_privacy::{derive_embargo, full_travel_probability};
-use shekyl_relay_privacy::{DelayFamily, EmbargoTimer, SplitMix64};
+use shekyl_relay_privacy::{DelayFamily, EmbargoTimer};
 
 use crate::common::{header, row, row_ticked, TRIALS};
 
@@ -262,7 +263,7 @@ fn derived_embargo_replaces_the_closed_form() {
         EMBARGO_FULL_TRAVEL_PROBABILITY,
         DelayFamily::Geometric,
         40_000,
-        0xC0FF_EE00,
+        &SplitMix64::new(0xC0FF_EE00),
     )
     .expect("target is reachable");
 

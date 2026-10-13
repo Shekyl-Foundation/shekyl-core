@@ -6,6 +6,7 @@
 //! The §95 calibration. Ignored: a level from this file is a result, and an
 //! unconverged cell is a refusal.
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::composition::{
     converged_composition_fluff, hidden_inbound_load, shipped_fluff_reference, shipped_graph_p90,
     simulate_class_aware_first_spy, CompositionFluff, LinkTransit, Mix, Routing, SpyArm,
@@ -18,7 +19,6 @@ use shekyl_relay_privacy::params::inherited::FLUFF_AVERAGE_IN_QUARTER_SECS;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::DelayFamily;
 use shekyl_relay_privacy::MeasuredConnector;
-use shekyl_relay_privacy::SplitMix64;
 
 #[test]
 #[ignore = "the §95 512-node calibration; run locally, do not put a level into CI"]

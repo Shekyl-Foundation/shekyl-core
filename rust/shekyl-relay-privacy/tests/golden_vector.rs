@@ -29,10 +29,8 @@
 //!
 //! Regenerate with `cargo run -p shekyl-relay-privacy --example gen_golden`.
 
-use shekyl_relay_privacy::{
-    bounded_uniform, DandelionParams, EpochScheduler, GeometricTable, PoissonTable, RelayRng,
-    SplitMix64,
-};
+use shekyl_draw_rng::{bounded_uniform, RelayRng, SplitMix64};
+use shekyl_relay_privacy::{DandelionParams, EpochScheduler, GeometricTable, PoissonTable};
 
 /// The reference generator itself. If SplitMix64 drifts, every other vector in
 /// this file moves with it, so it is pinned first and separately — a failure

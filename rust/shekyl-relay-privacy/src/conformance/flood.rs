@@ -11,8 +11,8 @@
 // ^ Goodness-of-fit grading / simulation is float math over sample counts.
 //   Diagnostic-only and excluded from the default build.
 
-use crate::rng::{bounded_uniform, RelayRng};
 use crate::schedule::{DelayFamily, DelayTable};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 use super::util::usize_from;
 
