@@ -22,7 +22,7 @@ use crate::verdict::TxSlot;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
-use shekyl_wire::{BondPost, BondPostKind, Ct, Input, Transaction};
+use shekyl_wire::{BondPost, BondPostKind, Ct, Input, RetiredKeylessJoinMarket, Transaction};
 
 /// The fixture spend's key image, the same point `tx_tests` pins.
 const KI: [u8; 32] = point(9);
@@ -715,9 +715,11 @@ fn j28_no_join_market_without_a_key_parses_and_older_rows_name_first() {
     let mut retired = bytes.clone();
     retired[kind_at] = 0;
     let err = Transaction::from_bytes(&retired).expect_err("post_kind 0 does not parse");
+    // The typed cause, not its sentence: `RetiredKeylessJoinMarket` is what
+    // `BondPost::read` puts inside the `io::Error`.
     assert!(
-        err.to_string()
-            .contains("post_kind 0 is the retired keyless JoinMarket"),
+        err.get_ref()
+            .is_some_and(RetiredKeylessJoinMarket::downcast_is),
         "{err}"
     );
     // The keyless layout under the live byte: cut `varint(1837) ‖ key`.

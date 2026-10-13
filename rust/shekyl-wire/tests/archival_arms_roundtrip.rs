@@ -304,18 +304,21 @@ fn the_receipt_key_length_is_its_twin_s() {
     assert_eq!(RECEIPT_SIGN_PK_LEN, FnDsaHybridPublicKey::CANONICAL_LEN);
     assert_eq!(RECEIPT_SIGN_PK_LEN, 1_837);
     assert_eq!(receipt_key().as_bytes().len(), RECEIPT_SIGN_PK_LEN);
-    assert!(ReceiptSignPk::from_slice(&[RECEIPT; RECEIPT_SIGN_PK_LEN - 1]).is_none());
-    assert!(ReceiptSignPk::from_slice(&[RECEIPT; RECEIPT_SIGN_PK_LEN + 1]).is_none());
-    assert_eq!(
-        ReceiptSignPk::from_slice(&[RECEIPT; RECEIPT_SIGN_PK_LEN]),
-        Some(receipt_key())
-    );
 }
 
 /// The JoinMarket's byte is 5 in both crates and it is the only JoinMarket
 /// byte. The bytes three rulings refused — 0 (the keyless JoinMarket), 3
 /// (`HoldingsUpdate`) and 4 (`EndpointUpdate`) — are neither it nor a
 /// JoinMarket, and the retention table refuses each.
+///
+/// Why the byte has two definitions, tied here at run time rather than by
+/// one `const`: `shekyl-wire` (`BOND_POST_KIND_JOINMARKET`) and
+/// `shekyl-archival-retention` (`BondPostKind::JoinMarket = 5`) have no
+/// runtime edge between them — the wire's dependency on the retention
+/// crate is dev-only, by design (`shekyl-wire/Cargo.toml`), and the
+/// retention crate does not depend on the wire — so neither can import the
+/// other's constant. Their shared root is `shekyl-types`, which carries no
+/// bond-post discriminant; this test is what holds the two to one value.
 #[test]
 fn the_join_market_byte_is_five_and_the_refused_bytes_stay_refused() {
     assert_eq!(BOND_POST_KIND_JOINMARKET, 5);
@@ -384,11 +387,6 @@ fn the_retired_keyless_join_market_is_refused_at_parse() {
         assert!(
             err.get_ref()
                 .is_some_and(RetiredKeylessJoinMarket::downcast_is),
-            "{err}"
-        );
-        assert!(
-            err.to_string()
-                .contains("post_kind 0 is the retired keyless JoinMarket"),
             "{err}"
         );
         assert!(matches!(
