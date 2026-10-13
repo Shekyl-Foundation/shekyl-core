@@ -651,28 +651,40 @@ a shrunken set favours whoever is feeding us addresses
 `implicates_address` returns `false` for every cause. `apply` still
 drops the failed gray draw (slice 1 §5), and a dead white address is
 bounded by the 24-hour expiry. The memory remains for Tor's
-destination-naming replies — `0x04 0x05 0xF0 0xF1 0xF2` — which come
-from our own Tor process, not from the path.
+destination-naming causes: the replies `0x04 0x05 0xF0 0xF1 0xF2`,
+which come from our own Tor process, not from the path, and a rejected
+handshake, which on Tor comes from the service the onion address names
+(2026-10-13, below).
 
-**PR-3 code change:** `implicates_address(self, connector)` returns
-`false` when `connector` is the clearnet connector, for every
-`CloseKind`. On Tor it returns `true` only for `ProxyRefused` with a
-reply in the set; `DialFailed` and `LevinHandshakeRejected` no longer
-write on Tor either, which is what "only an onion reply writes the
-memory" below already said. *Records-was: "the Tor arms are
-unchanged", which kept those two kinds writing on Tor and contradicted
-the paragraph after next.* Its tests: no clearnet cause writes the
-memory, the two that wrote it before (`DialFailed`,
-`LevinHandshakeRejected`) by name; and on Tor exactly the five replies
-do.
+**PR-3 code change (Rick, 2026-10-13):** `implicates_address(self,
+connector)` counts a destination-naming cause on a connector whose
+declaration says the destination is authenticated. It reads the
+`destination_authenticated` cell of the connector declaration (Tor:
+one-way; clearnet: no, NNhfs authenticates no one) and does not match
+the connector by name. The destination-naming causes are
+`LevinHandshakeRejected`, and `ProxyRefused` with a reply in `0x04 0x05
+0xF0 0xF1 0xF2`. `DialFailed` is not one: on Tor it is this node's
+SOCKS port. So on clearnet no cause counts, and on Tor exactly six do:
+the rejection and the five replies. The cell already existed in
+`shekyl-transport-layer/src/declaration.rs`; nothing was added to the
+table. Its tests: clearnet, no cause counts; Tor, exactly those six and
+no other kind; and the answer follows the cell for every connector.
+*Records-was (2026-10-12, PR-3's first reading): on Tor only the five
+replies counted, with `LevinHandshakeRejected` left out. That came from
+the PR-3 brief's "the Tor memory is written only for the five replies",
+which was the reviewer's imprecision, not a ruling. Records-was before
+that: "the Tor arms are unchanged", which also kept `DialFailed`
+writing on Tor.*
 
 Windows come from `failed_addr_cache::window` (`net_node.h:263`).
 Tor starts at the short window and doubles, capped at the hour.
 *Records-was: clearnet is the hour.*
 
 `implicates_address` decides the write, on `DialFailed` and on
-`PeerlistRefused`. Only an onion reply in `0x04 0x05 0xF0 0xF1 0xF2`
-writes the memory. A handshake timeout, a peer close, a local failure,
+`PeerlistRefused`. On Tor a rejected handshake and an onion reply in
+`0x04 0x05 0xF0 0xF1 0xF2` write the memory. *Records-was: only the
+onion replies.* A refused connect, a handshake timeout, a peer close, a
+local failure,
 a clearnet proxy reply, and — since R2 — every clearnet cause do not.
 `PayloadRefused` does not. `Confirmed` and `SessionAccepted` clear the
 address. *Records-was: a refused dial and a rejected handshake wrote

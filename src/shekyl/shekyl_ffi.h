@@ -4399,9 +4399,11 @@ int shekyl_seam_session_connector(std::uint64_t id);
 /// 1 when a hub is bound.
 int shekyl_seam_is_bound(void);
 /// 1 when `(kind, reply)` on `connector` should stop dials to that address:
-/// an onion dial and one of the five destination-naming proxy replies.
-/// 0 otherwise, including every clearnet cause, an unknown kind and an
-/// unknown connector.
+/// the connector authenticates the destination (Tor does, clearnet does
+/// not) and the cause names it (a rejected Levin handshake, or one of the
+/// five destination-naming proxy replies). 0 otherwise, including every
+/// clearnet cause, a refused connect, an unknown kind and an unknown
+/// connector.
 int shekyl_close_implicates_address(std::uint8_t kind, std::uint16_t reply, std::uint8_t connector);
 /// 1 when `id`'s row holds a cause, and writes it. 0 when it does not.
 int shekyl_seam_session_cause(std::uint64_t id, std::uint8_t* kind_out, std::uint16_t* reply_out);
