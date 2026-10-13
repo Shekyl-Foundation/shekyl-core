@@ -11,9 +11,9 @@ use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_peerlist::{
-    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, NetworkAddress, NoBans, Peerlist,
-    Refusal, RefusedSet, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, GRAY_CAP,
-    SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
+    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, Direction, NetworkAddress, NoBans,
+    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
+    GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
 };
 use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_transport_layer::BanList;
@@ -214,8 +214,11 @@ fn a_received_list_longer_than_disclose_count_is_refused_whole() {
     assert_eq!(
         list.admit_received_list(
             &long,
-            session(1),
-            connector,
+            SessionRow {
+                id: session(1),
+                connector,
+                direction: Direction::Outbound
+            },
             at_hours(0),
             &mut NoBans,
             &mut rng
@@ -227,8 +230,11 @@ fn a_received_list_longer_than_disclose_count_is_refused_whole() {
     assert_eq!(
         list.admit_received_list(
             &exact,
-            session(1),
-            connector,
+            SessionRow {
+                id: session(1),
+                connector,
+                direction: Direction::Outbound
+            },
             at_hours(0),
             &mut NoBans,
             &mut rng
@@ -315,7 +321,8 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
             &banned,
             Source::Session {
                 id: session(1),
-                connector
+                connector,
+                direction: Direction::Outbound
             },
             at_hours(2),
             &mut bans,
@@ -431,17 +438,47 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     let first: Vec<NetworkAddress> = (1..=12).map(v4).collect();
     let second: Vec<NetworkAddress> = (13..=24).map(v4).collect();
     assert_eq!(
-        list.admit_received_list(&first, s, connector, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_received_list(
+            &first,
+            SessionRow {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
+            at_hours(0),
+            &mut NoBans,
+            &mut rng
+        ),
         Ok(12)
     );
     // The same sample again within the window counts once.
     assert_eq!(
-        list.admit_received_list(&first, s, connector, at_hours(1), &mut NoBans, &mut rng),
+        list.admit_received_list(
+            &first,
+            SessionRow {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
+            at_hours(1),
+            &mut NoBans,
+            &mut rng
+        ),
         Ok(0)
     );
     assert_eq!(list.intake_count(connector, s, at_hours(1)), 12);
     assert_eq!(
-        list.admit_received_list(&second, s, connector, at_hours(12), &mut NoBans, &mut rng),
+        list.admit_received_list(
+            &second,
+            SessionRow {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
+            at_hours(12),
+            &mut NoBans,
+            &mut rng
+        ),
         Ok(12)
     );
     assert_eq!(
@@ -452,7 +489,11 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     assert_eq!(
         list.admit_gray(
             &v4(25),
-            Source::Session { id: s, connector },
+            Source::Session {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
             at_hours(13),
             &mut NoBans,
             &mut rng
@@ -466,7 +507,8 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
             &v4(25),
             Source::Session {
                 id: session(2),
-                connector
+                connector,
+                direction: Direction::Outbound
             },
             at_hours(13),
             &mut NoBans,
@@ -478,7 +520,17 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     // They are still gray, so offering them again is not a new charge.
     assert_eq!(list.intake_count(connector, s, at_hours(25)), 12);
     assert_eq!(
-        list.admit_received_list(&first, s, connector, at_hours(25), &mut NoBans, &mut rng),
+        list.admit_received_list(
+            &first,
+            SessionRow {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
+            at_hours(25),
+            &mut NoBans,
+            &mut rng
+        ),
         Ok(0),
         "still seated: a re-offer after the span is not a new gray entry"
     );
@@ -486,7 +538,11 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     assert_eq!(
         list.admit_gray(
             &v4(26),
-            Source::Session { id: s, connector },
+            Source::Session {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
             at_hours(25),
             &mut NoBans,
             &mut rng
@@ -523,7 +579,8 @@ fn a_seated_address_is_not_a_new_intake_charge() {
             &white[0],
             Source::Session {
                 id: session_id,
-                connector
+                connector,
+                direction: Direction::Outbound
             },
             at_hours(1),
             &mut NoBans,
@@ -544,8 +601,11 @@ fn a_seated_address_is_not_a_new_intake_charge() {
     assert_eq!(
         list.admit_received_list(
             &first,
-            session_id,
-            connector,
+            SessionRow {
+                id: session_id,
+                connector,
+                direction: Direction::Outbound
+            },
             at_hours(1),
             &mut NoBans,
             &mut rng
@@ -555,8 +615,11 @@ fn a_seated_address_is_not_a_new_intake_charge() {
     assert_eq!(
         list.admit_received_list(
             &second,
-            session_id,
-            connector,
+            SessionRow {
+                id: session_id,
+                connector,
+                direction: Direction::Outbound
+            },
             at_hours(1),
             &mut NoBans,
             &mut rng
@@ -566,8 +629,11 @@ fn a_seated_address_is_not_a_new_intake_charge() {
     assert_eq!(
         list.admit_received_list(
             &white,
-            session_id,
-            connector,
+            SessionRow {
+                id: session_id,
+                connector,
+                direction: Direction::Outbound
+            },
             at_hours(2),
             &mut NoBans,
             &mut rng
@@ -594,7 +660,8 @@ fn the_intake_cap_is_the_same_on_every_connector() {
                 &onion(n),
                 Source::Session {
                     id: s,
-                    connector: hidden
+                    connector: hidden,
+                    direction: Direction::Outbound
                 },
                 at_hours(0),
                 &mut NoBans,
@@ -608,7 +675,8 @@ fn the_intake_cap_is_the_same_on_every_connector() {
             &onion(25),
             Source::Session {
                 id: s,
-                connector: hidden
+                connector: hidden,
+                direction: Direction::Outbound
             },
             at_hours(0),
             &mut NoBans,
@@ -686,11 +754,31 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     let first: Vec<NetworkAddress> = (1..=12).map(v4).collect();
     let second: Vec<NetworkAddress> = (13..=20).map(v4).collect();
     assert_eq!(
-        list.admit_received_list(&first, s, connector, at_hours(0), &mut NoBans, &mut rng),
+        list.admit_received_list(
+            &first,
+            SessionRow {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
+            at_hours(0),
+            &mut NoBans,
+            &mut rng
+        ),
         Ok(12)
     );
     assert_eq!(
-        list.admit_received_list(&second, s, connector, at_hours(1), &mut NoBans, &mut rng),
+        list.admit_received_list(
+            &second,
+            SessionRow {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
+            at_hours(1),
+            &mut NoBans,
+            &mut rng
+        ),
         Ok(8)
     );
     assert_eq!(list.intake_count(connector, s, at_hours(1)), 20);
@@ -698,7 +786,17 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     // Twelve fresh addresses would take the session to 32: refused whole.
     let crossing: Vec<NetworkAddress> = (100..=111).map(v4).collect();
     assert_eq!(
-        list.admit_received_list(&crossing, s, connector, at_hours(2), &mut NoBans, &mut rng),
+        list.admit_received_list(
+            &crossing,
+            SessionRow {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
+            at_hours(2),
+            &mut NoBans,
+            &mut rng
+        ),
         Err(Refusal::PeerlistRefused)
     );
     assert_eq!(list.gray_count(connector), before, "nothing was admitted");
@@ -712,7 +810,17 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     let mut exact: Vec<NetworkAddress> = (200..=203).map(v4).collect();
     exact.extend(second.iter().cloned());
     assert_eq!(
-        list.admit_received_list(&exact, s, connector, at_hours(2), &mut NoBans, &mut rng),
+        list.admit_received_list(
+            &exact,
+            SessionRow {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
+            at_hours(2),
+            &mut NoBans,
+            &mut rng
+        ),
         Ok(4)
     );
     assert_eq!(
@@ -724,7 +832,17 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     let banned = v4(300);
     assert!(bans.ban_host(ip_of(&banned), at_hours(10), at_hours(2)));
     assert_eq!(
-        list.admit_received_list(&[banned], s, connector, at_hours(3), &mut bans, &mut rng),
+        list.admit_received_list(
+            &[banned],
+            SessionRow {
+                id: s,
+                connector,
+                direction: Direction::Outbound
+            },
+            at_hours(3),
+            &mut bans,
+            &mut rng
+        ),
         Ok(0),
         "a banned entry is skipped, not a refusal of the list, and not charged"
     );

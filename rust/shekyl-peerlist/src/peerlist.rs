@@ -10,10 +10,10 @@ use std::net::IpAddr;
 use shekyl_net_address::NetworkAddress;
 use shekyl_relay_privacy::{rng::RelayRng, ConnectionId};
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{connector_for, BanList, ConnectorId};
+use shekyl_transport_layer::{connector_for, BanList, ConnectorId, Direction};
 
 use crate::address_file::{self, AddressFileError};
-use crate::outcome::{DialOutcome, ListName, Refusal, Source, WhiteClock};
+use crate::outcome::{DialOutcome, ListName, Refusal, SessionRow, Source, WhiteClock};
 use crate::partition::Partition;
 use crate::validity::RefusedSet;
 use crate::{white_diversity_floor, DISCLOSE_COUNT, WHITE_REFILL_LINE};
@@ -112,9 +112,14 @@ impl Peerlist {
     ) -> Result<bool, Refusal> {
         let connector = Self::connector_of(address).ok_or(Refusal::NoConnector)?;
         if let Source::Session {
-            connector: session, ..
+            connector: session,
+            direction,
+            ..
         } = source
         {
+            if matches!(direction, Direction::Inbound) {
+                return Err(Refusal::InboundSession);
+            }
             if session != connector {
                 return Err(Refusal::ForeignConnector);
             }
@@ -138,7 +143,7 @@ impl Peerlist {
         Ok(partition.insert_gray(address, rng))
     }
 
-    /// Admit a list a peer sent over `session` on `connector` (brief §2).
+    /// Admit a list a peer sent over `session` (brief §2).
     /// More than [`DISCLOSE_COUNT`] addresses is `PeerlistRefused` (D3's
     /// receiver limit): the message is not trimmed and kept. One entry
     /// whose type no connector serves, or whose connector is not the
@@ -148,15 +153,30 @@ impl Peerlist {
     /// because [`Self::disclose`] filters them, so the entry is evidence
     /// about the sender. A banned entry is skipped, not a
     /// rejection of the list (D4). Returns how many were new.
+    ///
+    /// A list received over an inbound session admits nothing and is not a
+    /// refusal (PWD-I2): `Ok(0)`, whatever the list holds. Peerlist
+    /// records are accepted only on sessions this node initiated; that
+    /// closes the channel by which a peer that connects to us fills our
+    /// gray list (Shi et al. §III-A).
     pub fn admit_received_list<R: RelayRng + ?Sized>(
         &mut self,
         addresses: &[NetworkAddress],
-        session: ConnectionId,
-        connector: ConnectorId,
+        session: SessionRow,
         now: Tick,
         bans: &mut dyn BanQuery,
         rng: &mut R,
     ) -> Result<usize, Refusal> {
+        let SessionRow {
+            id: session,
+            connector,
+            direction,
+        } = session;
+        // PWD-I2: before every other check. Nothing an inbound peer sends
+        // is read as evidence, so nothing in its list can refuse it.
+        if matches!(direction, Direction::Inbound) {
+            return Ok(0);
+        }
         if addresses.len() > DISCLOSE_COUNT {
             return Err(Refusal::PeerlistRefused);
         }
@@ -193,6 +213,7 @@ impl Peerlist {
                 Source::Session {
                     id: session,
                     connector,
+                    direction,
                 },
                 now,
                 bans,

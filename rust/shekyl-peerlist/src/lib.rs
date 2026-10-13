@@ -60,7 +60,7 @@ mod validity;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
-pub use outcome::{DialOutcome, ListName, Refusal, Source};
+pub use outcome::{DialOutcome, ListName, Refusal, SessionRow, Source};
 
 pub use peerlist::{BanQuery, NoBans, Peerlist, Snapshot};
 pub use shekyl_net_address::NetworkAddress;
@@ -69,7 +69,7 @@ pub use shekyl_net_address::NetworkAddress;
 /// that vocabulary; this re-export does not.
 pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
-pub use shekyl_transport_layer::{connector_for, ConnectorId};
+pub use shekyl_transport_layer::{connector_for, ConnectorId, Direction};
 pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 
 /// `DISCLOSE_COUNT`: how many white addresses one disclosure sample

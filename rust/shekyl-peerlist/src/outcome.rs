@@ -8,7 +8,7 @@
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_relay_privacy::ConnectionId;
-use shekyl_transport_layer::ConnectorId;
+use shekyl_transport_layer::{ConnectorId, Direction};
 
 /// Where an address offered to gray came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +22,12 @@ pub enum Source {
         id: ConnectionId,
         /// That session's connector.
         connector: ConnectorId,
+        /// Which way the session was opened. Peerlist records are
+        /// accepted only on sessions this node initiated (PWD-I2): an
+        /// inbound session is [`Refusal::InboundSession`] at
+        /// [`crate::Peerlist::admit_gray`], and a list received over one
+        /// admits nothing.
+        direction: Direction,
     },
     /// Named by the operator: `--add-peer`, `--add-exclusive-node`, and
     /// the compiled seed addresses at each start (brief §3). No session, so
@@ -35,6 +41,19 @@ pub enum Source {
     /// set applies, as a backstop: a file written under `--allow-local-ip`
     /// does not seed a node started without it.
     Reload,
+}
+
+/// The session a peerlist arrived over, as the registry holds it: its id,
+/// its connector, and which way it was opened. The caller copies the three
+/// from the session's row and does not choose them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionRow {
+    /// The daemon's connection id.
+    pub id: ConnectionId,
+    /// The session's connector.
+    pub connector: ConnectorId,
+    /// Which way the session was opened.
+    pub direction: Direction,
 }
 
 /// What the dialer reports about one dial. The only input that writes
@@ -106,6 +125,11 @@ pub enum Refusal {
     /// The address is under an active ban (D4): refused at admit while the
     /// ban lasts.
     Banned,
+    /// The address arrived over a session the peer opened (PWD-I2). An
+    /// inbound peer chooses to connect and chooses what it says, so its
+    /// addresses do not enter gray. This is not a judgment of the peer:
+    /// the caller does not score it, close it, or remember the address.
+    InboundSession,
     /// The address is in the refused set and the operator did not name it
     /// (brief §2, address validity): a private, reserved or otherwise
     /// non-global range, or port 0. In a received list, one such entry is

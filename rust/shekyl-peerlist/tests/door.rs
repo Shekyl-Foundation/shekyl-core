@@ -11,8 +11,8 @@
 use std::net::Ipv4Addr;
 
 use shekyl_peerlist::{
-    ConnectionId, DialOutcome, ListName, NetworkAddress, NoBans, Peerlist, Refusal, RefusedSet,
-    Source, Tick, EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP,
+    ConnectionId, DialOutcome, Direction, ListName, NetworkAddress, NoBans, Peerlist, Refusal,
+    RefusedSet, SessionRow, Source, Tick, EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP,
 };
 use shekyl_relay_privacy::rng::SplitMix64;
 
@@ -242,7 +242,8 @@ fn incoming_and_add_peer_stay_gray() {
             &v4(4),
             Source::Session {
                 id: session(1),
-                connector
+                connector,
+                direction: Direction::Outbound
             },
             at_hours(0),
             &mut NoBans,
@@ -479,8 +480,11 @@ fn no_entry_crosses_connectors() {
     assert_eq!(
         list.admit_received_list(
             &mixed,
-            session(2),
-            clear,
+            SessionRow {
+                id: session(2),
+                connector: clear,
+                direction: Direction::Outbound
+            },
             at_hours(0),
             &mut NoBans,
             &mut rng
@@ -494,8 +498,11 @@ fn no_entry_crosses_connectors() {
     assert_eq!(
         list.admit_received_list(
             &[v4(9), v4(10)],
-            session(2),
-            clear,
+            SessionRow {
+                id: session(2),
+                connector: clear,
+                direction: Direction::Outbound
+            },
             at_hours(0),
             &mut NoBans,
             &mut rng
@@ -505,8 +512,11 @@ fn no_entry_crosses_connectors() {
     assert_eq!(
         list.admit_received_list(
             &[onion(9)],
-            session(3),
-            hidden,
+            SessionRow {
+                id: session(3),
+                connector: hidden,
+                direction: Direction::Outbound
+            },
             at_hours(0),
             &mut NoBans,
             &mut rng
@@ -526,7 +536,8 @@ fn no_entry_crosses_connectors() {
             &onion(10),
             Source::Session {
                 id: session(2),
-                connector: clear
+                connector: clear,
+                direction: Direction::Outbound
             },
             at_hours(0),
             &mut NoBans,

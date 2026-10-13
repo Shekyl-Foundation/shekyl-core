@@ -17,9 +17,9 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, NetworkAddress, NoBans,
-    Peerlist, RangeV4, RangeV6, Refusal, RefusedSet, Source, Tick, DISCLOSE_COUNT, REFUSED_V4,
-    REFUSED_V6,
+    white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, Direction, NetworkAddress,
+    NoBans, Peerlist, RangeV4, RangeV6, Refusal, RefusedSet, SessionRow, Source, Tick,
+    DISCLOSE_COUNT, REFUSED_V4, REFUSED_V6,
 };
 use shekyl_relay_privacy::rng::SplitMix64;
 
@@ -37,6 +37,7 @@ fn clearnet_session() -> Source {
     Source::Session {
         id: session(),
         connector: ConnectorId::Clearnet,
+        direction: Direction::Outbound,
     }
 }
 
@@ -44,6 +45,7 @@ fn tor_session() -> Source {
     Source::Session {
         id: session(),
         connector: ConnectorId::Tor,
+        direction: Direction::Outbound,
     }
 }
 
@@ -235,6 +237,7 @@ fn the_address_beside_each_private_range_is_admitted() {
                 ip[0], ip[1], ip[2], ip[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             ]),
             connector: ConnectorId::Clearnet,
+            direction: Direction::Outbound,
         };
         assert_eq!(
             list.admit_gray(&address, source, now(), &mut NoBans, &mut rng),
@@ -261,8 +264,11 @@ fn one_refused_entry_refuses_the_whole_received_list() {
         assert_eq!(
             list.admit_received_list(
                 &received,
-                session(),
-                ConnectorId::Clearnet,
+                SessionRow {
+                    id: session(),
+                    connector: ConnectorId::Clearnet,
+                    direction: Direction::Outbound
+                },
                 now(),
                 &mut NoBans,
                 &mut rng
@@ -353,8 +359,11 @@ fn allow_local_ip_admits_the_session_offer_and_discloses_it() {
     assert_eq!(
         list.admit_received_list(
             &[global(1), private.clone()],
-            session(),
-            ConnectorId::Clearnet,
+            SessionRow {
+                id: session(),
+                connector: ConnectorId::Clearnet,
+                direction: Direction::Outbound
+            },
             now(),
             &mut NoBans,
             &mut rng
