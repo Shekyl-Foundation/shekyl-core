@@ -2954,6 +2954,10 @@ async fn stake_persona_to_confirmed_bond(
 
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
+    // A correct RNG refuses one entry-gap draw in 601; three in a row is
+    // about 1 in 217 million, so two retries separate chance from a stuck
+    // source.
+    const MAX_CONSECUTIVE_DEGENERATE_DRAWS: u32 = 2;
 
     let slot = PSlot::from_raw(slot_raw);
     let (arc, tmp, principal) = staker_wallet(daemon.rpc_port, seed, slot).await;
@@ -3099,6 +3103,7 @@ async fn stake_persona_to_confirmed_bond(
         FixtureStake::MarketBond(holdings) => {
             let fee = AtomicUnits::from_raw(bond_fee);
             let mut sealed = false;
+            let mut degenerate_draws = 0_u32;
             for _ in 0..MAX_MINE_BATCHES {
                 let (handle, ticket) = {
                     let g = arc.read().await;
@@ -3155,8 +3160,28 @@ async fn stake_persona_to_confirmed_bond(
                         daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
                         refresh(&arc).await;
                     }
+                    // The entry-gap guard draws twice and refuses when the
+                    // two spreads are equal. On a correct RNG that is one
+                    // bond request in 601 (`draw_entry_gap_guarded`), and
+                    // the documented answer is to ask again. Nothing was
+                    // sealed and no chain state is missing, so the retry
+                    // does not mine. A second refusal in a row is 1 in
+                    // 361 201 and a third is not chance: past
+                    // `MAX_CONSECUTIVE_DEGENERATE_DRAWS` the fixture
+                    // fails, so a stuck RNG still reds the test.
+                    Err(StakeEngineError::RngDegeneracy)
+                        if degenerate_draws < MAX_CONSECUTIVE_DEGENERATE_DRAWS =>
+                    {
+                        degenerate_draws += 1;
+                        eprintln!(
+                            "entry-gap draw refused as degenerate \
+                             ({degenerate_draws} in a row); asking again"
+                        );
+                        continue;
+                    }
                     Err(e) => daemon.panic_with_log("assemble market bond post", format!("{e:?}")),
                 }
+                degenerate_draws = 0;
             }
             assert!(
                 sealed,
