@@ -461,9 +461,24 @@ jobs:
         # are a CI runner's and are discarded with the store. The trap
         # removes that store when the probe fails: the job's shell runs
         # with `-e`, so a later `rm` would not.
+        #
+        # `--ignored` on a binary whose test lost `#[ignore]` or `#[test]`
+        # reports `running 0 tests` and exits 0. The harness's own list is
+        # the subject (rule 47). The list is captured, not piped (rule 46).
         run: |
           store=$(mktemp -d)
           trap 'rm -rf "$store"' EXIT
+          listed=$(cargo test --locked -p shekyl-p-serve --test ba_t5_floor_probe -- --list --ignored)
+          case "
+          $listed
+          " in
+            *$'\n'"ba_t5_floor_probe: test"$'\n'*) ;;
+            *)
+              echo "the floor probe is not among the ignored tests" >&2
+              printf '%s\n' "$listed" >&2
+              exit 1
+              ;;
+          esac
           BAT5_STORE="$store" BAT5_MODE=phase BAT5_N=2 BAT5_PHASE_N=1 BAT5_LABEL=ci \
             cargo test --locked -p shekyl-p-serve --test ba_t5_floor_probe -- --ignored --nocapture
       - name: "shard-visual-x86-smoke"

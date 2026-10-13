@@ -949,6 +949,14 @@ const _: () = assert!(
     "the late poll accepts one fill and still leaves bytes waiting"
 );
 
+/// Pipe-fulls offered to a peer that never reads. One fills the pipe; the
+/// next write finds no room and is the one the clock times.
+const STALL_NEVER_READS_FILLS: usize = 2;
+const _: () = assert!(
+    STALL_NEVER_READS_FILLS > 1,
+    "one fill leaves the pipe full, so the next write is the one that stalls"
+);
+
 /// Drains that fit inside one stall bound. Two or more, so one gap is
 /// strictly inside the bound.
 const STALL_DRAINS_PER_BOUND: u32 = 3;
@@ -1091,13 +1099,28 @@ async fn a_late_poll_of_a_writable_socket_is_not_a_stall() {
 
 /// A peer that stops reading is cut when the bound runs out. The clock
 /// starts at the first poll that finds no room.
+///
+/// The edit that makes this red is a longer stall bound. Waiting on the
+/// handle first lets the paused clock run on to whatever deadline the
+/// write armed, so the cut would still arrive.
 #[tokio::test(start_paused = true)]
 async fn a_peer_that_stops_reading_is_cut_at_the_stall_bound() {
     let (mut server, _client_keeps_the_pipe_open_and_never_reads) =
         tokio::io::duplex(STALL_PIPE_BYTES);
-    let bytes = vec![0xefu8; STALL_PIPE_BYTES * 2];
+    let bytes = vec![0xefu8; STALL_PIPE_BYTES * STALL_NEVER_READS_FILLS];
     let writer = tokio::spawn(async move { write_bounded(&mut server, &bytes).await });
+    // The writer fills the pipe and arms the clock before any advance.
+    // Without this yield the later `is_finished` is false, and an await
+    // would auto-advance to a deadline that was never pinned.
+    tokio::task::yield_now().await;
     tokio::time::advance(past_the_stall_bound()).await;
+    // The advance wakes the writer; this yield polls it, so the cut is
+    // observed here rather than by an await that moves the clock.
+    tokio::task::yield_now().await;
+    assert!(
+        writer.is_finished(),
+        "the stall bound has already cut a peer that never reads"
+    );
     let err = writer
         .await
         .expect("join")
