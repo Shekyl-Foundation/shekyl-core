@@ -5,10 +5,21 @@ secret per-block draw, §13.1–§13.4) and **re-ruled 2026-10-11** (one bundle
 per block replaces the carrier transaction, §13.5). Six questions found
 while writing that in were ruled 2026-10-12 (§13.6). One raised on
 review is ruled (§13.7), and two defects found on review are amended
-(§13.8). Built so far: the draw's functions, the
-settlement selection and fold, the issued-draw tables behind a test door,
-and the FN-DSA scheme with the receipt key's derivation (§2). No block path
-issues a draw or admits a pass.
+(§13.8). Built so far, all merged on `dev` (§2): the draw's functions,
+the settlement selection and fold, the issued-draw tables behind a test
+door, the FN-DSA scheme with the receipt key's derivation, the `0x0C`
+commitment drawn in every coinbase with the draw-state tables (`SO-D12`
+increment 1, PR #1032, 2026-10-12); the receipt key mandatory on the
+JoinMarket wire and in the bond record, CEN-J28 `implemented` (FN-DSA
+increment 3, PR #1046, 2026-10-13); the bundle verifier, STAGED, with
+CEN-J29–J37 `pending` and the `h_open(E)` type `DrawableEpoch` (PR #1047,
+2026-10-13; its name in §9.6, PR #1061, 2026-10-13); and the held receipt
+signer with the receipt capability, STAGED, over a serving envelope and a
+fetch target generic over the scheme (FN-DSA increment 4, PR #1049,
+2026-10-13). No block path issues a draw or admits a bundle, and no
+production path signs or accepts a scheme-3 receipt: the cutover that
+wires the verifier, builds `DrawableEpoch` from the chain and selects the
+receipt capability is the settlement lane's (`SO-D12`, `SCS-P31`).
 
 **Authority.** This is the single specification of the serve-credit
 mechanism: draw, request, receipt, bundle, admission, miss derivation and
@@ -19,7 +30,7 @@ history stays where it is: the decision log
 records in the round documents listed in §15.
 
 **Pin.** Every statement about what the code does today is cited
-`file:line` at `dev@834471689` and is collected in §2. Everything else is
+`file:line` at `dev@b74187b806` and is collected in §2. Everything else is
 specification.
 
 **Identifiers.** Family `SCS-`: `SCS-P#` for a question this round posed
@@ -620,7 +631,7 @@ part's, the bitmap `⌈count / 8⌉` bytes, and each record
   changes what it commits to. The field keeps its place; it does not keep
   a name for a value it no longer holds.
 - **The prunable hash and the header root**, fixed with the verifier's
-  implementation (PR #1047, open):
+  implementation (PR #1047, merged 2026-10-13):
 
   ```text
   prunable_hash = cSHAKE256_32("shekyl/archival-bundle-prunable-v1",
@@ -635,8 +646,10 @@ part's, the bitmap `⌈count / 8⌉` bytes, and each record
   (`SCS-P39`), so the root needs no length frame and is recomputable on
   an alternative block with no chain (§9.1). The verifier on PR #1047
   was first built with each reference framed by its byte length, before
-  the count was in the kept part; it moves to this form with that PR.
-  The vectors for all three hashes are pinned in the verifier's tests.
+  the count was in the kept part; it moved to this form on review, before
+  that PR merged. The vectors for all three hashes are pinned beside the
+  hashes (`rust/shekyl-archival-retention/src/bundle_tests.rs:445`,
+  `:549`, `:589`).
 
 ### 7.4 Size and the section budget
 
@@ -818,7 +831,12 @@ this sum is refused at step 3.
 3. **Structure.** `h < h_incl ≤ h + W₂`. No bundle for `h` is already
    admitted on this chain. The reference's stated `count` equals
    `count(h)`. The number of records equals the number of set bits. `W₂` is the only
-   window; there is no separate read window.
+   window; there is no separate read window. `W₂` is read off the rule
+   set's settlement schedule, never off a constant, and a rule set whose
+   schedule has no response window (`challenge_response_blocks()` is
+   `None`: an epoch too short to hold one) refuses every bundle as
+   outside the window (CEN-J31;
+   `rust/shekyl-chain-rules/src/archival/bundle.rs:688-690`).
 4. **Commitment.**
    `cSHAKE256_32("shekyl/archival-draw-commit-v1", witness_pk ‖ seed)`
    equals `h`'s `0x0C`.
@@ -897,7 +915,9 @@ chain's proof of work. No bond state is rebuilt at the fork point.
   relation is asserted on every rule set, as rule-set data (rule 71), so
   a set that shortens the epoch or the depth cannot break it silently.
   A Fakechain schedule that breaks it is refused where it is built, as a
-  typed error (PR #1047). The daemon's regtest epoch lever does not reach
+  typed error (PR #1047, merged 2026-10-13;
+  `rust/shekyl-chain-rules/src/rule_set.rs:289`, `:717`). The daemon's
+  regtest epoch lever does not reach
   that constructor in Rust today; the replay tool's epoch flag is the one
   input that does.
 
@@ -1105,11 +1125,16 @@ draw `j` that failed. Three outcomes are not verdicts on a block:
 a block this chain does not have. A `0x0C` that the bundle's seed and
 witness key do not open is the refusal of step 4.
 
-**Not in this tree.** The verifier is implemented on PR #1047, which is
-open: `check_section`, `verify_bundle`, `open_body`, the bundle's types
-and hashes, and census rows CEN-J29 to J37, registered `pending` because
-the cutover is what wires it. This section is the contract that PR is
-built to; §2 says what the tree itself holds.
+**In this tree, STAGED.** The verifier merged on 2026-10-13 (PR #1047):
+`check_section`, `verify_bundle`, `open_body`, `open_reference`, the
+bundle's types and hashes, and census rows CEN-J29 to J37, registered
+`pending` because the cutover is what wires it — no `Rule` type binds
+them, nothing implements `BundleView` on a store, and a test walks the
+crate's connect-path sources to hold that
+(`rust/shekyl-chain-rules/src/archival/bundle.rs:28-65`;
+`bundle_staging_tests.rs:129`). This section is the contract it is built
+to; §2 says what the tree holds, row by row. The cutover that calls it is
+the settlement lane's (`SO-D12`, `SCS-P31`).
 
 **The view.** One method for each thing §9.1 reads, and nothing else.
 
@@ -1161,8 +1186,12 @@ epoch-close code, and one name must not mean two things in one crate
 It lives in `shekyl-archival-retention`
 beside `secret_draw.rs`: that crate already holds `DrawablePair` and the
 draw's functions and depends on `shekyl-crypto-pq` for the key type, so
-the draw and the verifier reach it without a new edge. `SO-D12`'s
-increment 2 builds it.
+the draw and the verifier reach it without a new edge. The type, its one
+constructor and its two reads landed with the verifier (PR #1047;
+`rust/shekyl-archival-retention/src/drawable_epoch.rs:82`, `:110`); the
+value, built from the bond journals as of `h_open(E)`, is `SO-D12`'s
+increment 2, and until then nothing outside tests and the verifier's
+fixture constructs one.
 
 ```rust
 pub struct DrawableEpoch { /* private */ }
@@ -1402,7 +1431,8 @@ Carried with the implementation:
 room for this design, and C++ goes only when it is unreachable or fully
 replaced.** The table below is the list of surfaces the bundle
 supersedes. None is deleted by this slice's changes, which are additive
-(PR #1046, PR #1047). The fate of each is decided at the settlement
+(PR #1046, PR #1047 and PR #1049, all merged 2026-10-13). The fate of each
+is decided at the settlement
 lane's cutover, when the verifier is wired and its replacement is live;
 the C++ rows go at `DEL-008`. The change that had begun deleting the
 serve-credit input, PR #1043, was closed unmerged.
@@ -1743,10 +1773,12 @@ constant or registry row yet.
 | `shekyl/archival-witness-carrier-scheme-v1` | signature domain | The witness's signature on a carrier. Landed as a constant with no signer; not used for the bundle (§6.2) |
 | `shekyl/archival-witness-bundle-scheme-v1` | signature domain | The witness's signature on the bundle, under scheme 3, §7.3. Minted with the verifier |
 
-Four are minted with their constants on the verifier's PR (#1047, open;
-rule 30), and have no constant in this tree until it merges: the witness's bundle signature domain, the bundle
-commitment, `shekyl/archival-bundle-prunable-v1` and
-`shekyl/archival-bundle-root-v1` (§7.3).
+Four were minted with their constants on the verifier's PR (#1047, merged
+2026-10-13; rule 30) and are in this tree with their registry rows: the
+witness's bundle signature domain
+(`rust/shekyl-crypto-pq/src/signature.rs:139`), the bundle commitment,
+`shekyl/archival-bundle-prunable-v1` and `shekyl/archival-bundle-root-v1`
+(`rust/shekyl-archival-retention/src/bundle.rs:73`, `:76`, `:79`; §7.3).
 The seed and the witness key have no label: they are fresh randomness.
 
 ---

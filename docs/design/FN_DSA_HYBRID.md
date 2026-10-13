@@ -10,14 +10,21 @@ were handed to SO-D8 Slice C on 2026-10-11**
 and the verifier must switch in one change, and increment 3 lands in Rust
 only. `FND-4`'s carried item, one decoded key across signatures, goes with
 increment 4. This lane's own work ended with increment 2. **The document
-stays OPEN as the record increments 3 and 4 are written into** when the
-Slice C lane lands them; it closes when increment 4's record is in, and
-the dependency record (§2) then moves to
+stays OPEN until the settlement lane's cutover selects the receipt
+capability and receipts move onto the key** (§9.4); it closes when that
+is recorded here, and the dependency record (§2) then moves to
 [`CRYPTOGRAPHIC_INVENTORY.md`](../CRYPTOGRAPHIC_INVENTORY.md), which already
-carries its summary row. **Increment 3 is recorded here, 2026-10-12 (§8),
+carries its summary row. *(Until 2026-10-13 this read "closes when
+increment 4's record is in"; increment 4 landed STAGED, so the record is
+in and the key is not yet live.)* **Increment 3 is recorded here, 2026-10-12 (§8),
 built by the Slice C lane:** the receipt key is mandatory, a JoinMarket has
 one wire form that commits it, and the bond record keeps it, typed and
-fixed-length.
+fixed-length; merged 2026-10-13 (PR #1046). **Increment 4 is recorded here,
+2026-10-12 (§9), built STAGED by the Slice C lane and merged 2026-10-13
+(PR #1049):** the held signer, the receipt capability `ResidentReceiptKey`,
+and a serving envelope and fetch target generic over the scheme. Nothing on
+the live path selects it; the switch is the settlement lane's cutover
+(§9.4), so the document stays OPEN and §2 stays where it is.
 **Substrate verified at:** `origin/dev` = `6b23eab315`.
 **Authority:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)
 §6, §11 and §13.1 R2–R4 (ruled 2026-10-07).
@@ -260,12 +267,18 @@ computation, and the Tier-2 matrix pins the key on three networks.
 **Where it is derived.** `derive_archival_p_keys` is what engine assembly
 calls for each slot it will hold (`rust/shekyl-engine-core/src/engine/lifecycle/assemble.rs`).
 The stake-engine actor receives the bundles and no seed, so it holds the
-receipt key exactly as it holds the identity key. Nothing else changed in
-the engine: there is no receipt-signing message and no serving capability
-for this key yet, because nothing signs with it until the bond record
-carries its public half. Both land with their caller in increment 4.
-*(2026-10-12: the record carries the public half since increment 3, §8.
-Still nothing signs with the key; that is increment 4.)*
+receipt key exactly as it holds the identity key. At increment 2 nothing
+else changed in the engine: there was no receipt-signing message and no
+serving capability for this key, because nothing signs with it until the
+bond record carries its public half. *(2026-10-12: the record carries the
+public half since increment 3, §8.)* Both exist since increment 4 (§9),
+STAGED: the actor message `SignReceiptTranscript`
+(`rust/shekyl-engine-core/src/engine/stake_engine/persona.rs:268-291`) and
+the capability `ResidentReceiptKey`
+(`rust/shekyl-engine-core/src/engine/stake_engine/serving/receipt_key.rs:130`).
+Neither is selected: the serving task is started with the identity
+capability (`serving/start.rs:257`), so nothing on the live path signs with
+the receipt key.
 
 **The secret half is pinned through its seeds.** `FnDsaHybridSecretKey` has
 no encoding by design, so the corpus holds the two seeds and the public key,
@@ -531,8 +544,11 @@ its expectations as they were; what changed in them is type plumbing.
 **Crates touched:** `shekyl-p-serve`, `shekyl-p-fetch`,
 `shekyl-archival-retention` (the added check), `shekyl-p-host`,
 `shekyl-p-loopback`, `shekyl-engine-core`, `shekyl-archival-fetch-sched`,
-`shekyl-sp-t3-spike`. `shekyl-daemon-image` builds its target from the bond
-record's identity key and needed no edit.
+`shekyl-sp-t3-spike`. `shekyl-daemon-image` needed no edit for the
+generalization: its target is the live scheme's, `FetchTarget<HybridPublicKey>`
+over `record.hybrid_pubkey`
+(`rust/shekyl-daemon-image/src/shard_view.rs:95-103`). It is edited by the
+cutover, which builds that target over `record.receipt_sign_pk` (§9.4).
 
 ### 9.4 What the cutover does (requirements, ruled 2026-10-12)
 
@@ -547,6 +563,21 @@ carries (`shekyl-archival-fetch-sched`'s `Holder::target` and the
 today). Each of those is a type the compiler follows; the staged-surface
 test and the `expect(dead_code)` on the capability are removed by the same
 change, deliberately.
+
+**The sites, read at `dev@b74187b806` (2026-10-13).** What the cutover
+edits, and what it must not have to:
+
+| Site | Today | The cutover |
+| --- | --- | --- |
+| `rust/shekyl-p-host/src/host.rs:59` (`PersonaServing::key`), `:81`, `:429` | The host's key field is `Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>`, its `Debug` prints that type, and the bind hard-codes `PassSigner<IDENTITY_ENVELOPE_LEN>` for the `HostSigner` it wraps the key in | Declares the receipt width at all three; the one place the host's scheme is chosen |
+| `rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:257` | `key: ResidentPassKey::new(&stake, active.p_slot)` | Constructs `ResidentReceiptKey` there |
+| `rust/shekyl-daemon-image/src/shard_view.rs:95-103` | The production `FetchTarget`: `HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)` into `Holder::target` | Builds the target over `record.receipt_sign_pk` (`FnDsaHybridPublicKey::from_receipt_sign_pk`) |
+| `rust/shekyl-archival-fetch-sched/src/facts.rs:55`; `read.rs:91`, `:460` | `Holder::target` is `FetchTarget<HybridPublicKey>`; `Read::shard` and `HolderOutcome::Served` carry `VerifiedShard<HybridPublicKey>` | The key type follows the target's; the compiler names each |
+| `rust/shekyl-sp-t3-spike/src/harness.rs:354` | The rig's `target()` returns `FetchTarget<HybridPublicKey>` | Follows the same change, or the rig stops measuring the live route |
+| `rust/shekyl-p-loopback/src/lib.rs:153` | `fetch_target<K: PassVerifyingKey>` is already generic; every caller is a test (`shekyl-p-fetch`'s `tests/scheme_separation.rs` passes it both schemes) | No edit; its tests choose a key |
+| `rust/shekyl-chain-rules/src/archival/bundle.rs:777-810` (step 8) | The bundle verifier checks scheme-3 receipts under `SCHEME_DOMAIN_RECEIPT`, STAGED; CEN-J29–J37 are `pending` (`rust/shekyl-chain-rules/src/census.rs:584-592`) and no connect path calls it | Wires it from a block rule; the verifier that accepts a receipt is what makes selecting the capability safe |
+| `rust/shekyl-engine-core/src/engine/stake_engine/serving/receipt_key.rs:148-154`, `:645` | `expect(dead_code)` on `ResidentReceiptKey::new`; `the_serving_task_is_not_started_with_the_receipt_key` reads `start.rs` and `task.rs` for the capability's names | Both removed in the same change |
+| The decision below | `ready()` refuses after a failed decode; the first signature through a capability instance still costs one response | Decode at serving-task start as well, or accept that one response per capability instance |
 
 **An undecodable receipt key: decode at serving-task start, or `ready()`
 refuses after a failed decode.** The key is decoded by the first signature
