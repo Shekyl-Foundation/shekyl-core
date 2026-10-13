@@ -606,6 +606,69 @@ fn reap_forgets_the_row() {
     assert!(!rig.hub.send(opened.id, b"late".to_vec()));
 }
 
+/// The split the outbound dialer needs: a dialed channel is not a session
+/// until it is adopted. Between the two the handshake runs, and a channel
+/// that fails it must leave nothing behind.
+#[test]
+fn a_dialed_channel_has_no_row_and_no_post_until_it_is_adopted() {
+    let rig = rig();
+    rig.hub.install_loopback(32);
+    let target = endpoint(doc_ip(), Direction::Outbound);
+
+    let channel = rig.hub.dial_channel(&target).expect("loopback dials");
+    let id = channel.open.id();
+    assert!(rig.hub.board().get(id).is_none(), "no row before adopt");
+    assert!(
+        rig.posts.lock().expect("posts").is_empty(),
+        "no post before adopt"
+    );
+    assert_eq!(
+        rig.hub
+            .board()
+            .count(ConnectorId::Clearnet, Direction::Outbound),
+        0
+    );
+
+    let attached = rig
+        .hub
+        .adopt(channel.open, channel.session, channel.endpoint, channel.gap)
+        .expect("adopt");
+    assert_eq!(attached.id, id, "the row is the dialed channel's");
+    let row = rig.hub.board().get(id).copied().expect("row after adopt");
+    assert!(!row.established(), "adopted, not yet established");
+    assert_eq!(row.direction(), Direction::Outbound);
+    let posts = rig.posts.lock().expect("posts");
+    assert_eq!(posts.len(), 1);
+    assert!(matches!(posts.front(), Some(Post::Established { id: posted, .. }) if *posted == id));
+}
+
+/// A dialed channel that is dropped, as after a failed handshake, leaves
+/// the registry as it was and posts nothing.
+#[test]
+fn a_dialed_channel_that_is_never_adopted_leaves_no_trace() {
+    let rig = rig();
+    rig.hub.install_loopback(32);
+    let channel = rig
+        .hub
+        .dial_channel(&endpoint(doc_ip(), Direction::Outbound))
+        .expect("loopback dials");
+    drop(channel);
+    assert!(rig.hub.board().is_empty());
+    assert!(rig.posts.lock().expect("posts").is_empty());
+}
+
+#[test]
+fn dial_channel_without_a_dialer_is_local() {
+    let rig = rig();
+    let Err(err) = rig
+        .hub
+        .dial_channel(&endpoint(doc_ip(), Direction::Outbound))
+    else {
+        panic!("dial_channel without a dialer admitted a channel");
+    };
+    assert_eq!(err.kind(), CloseKind::LocalClose);
+}
+
 #[test]
 fn connect_without_a_dialer_is_local() {
     let rig = rig();

@@ -29,7 +29,7 @@ use shekyl_transport_layer::{
 use crate::connection::{
     AdvertisedEndpoint, ChainLength, Connection, HeightMessage, RedialRefusal,
 };
-use crate::dial::Dial;
+use crate::dial::{Channel, Dial};
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
 use crate::registry::{Board, Row};
@@ -270,17 +270,33 @@ impl Hub {
         self.dial.read().expect("seam dial").clone()
     }
 
-    /// Ask the installed dialer for a channel and post `established`.
+    /// Ask the installed dialer for a channel. No row, no post.
     ///
-    /// No dialer is [`CloseKind::LocalClose`]. The caller drives
-    /// [`crate::drive_inbound`] on the returned session.
-    pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
+    /// The channel is admitted and built, and its gap deadline, when it
+    /// has one, is already armed by the connector. Nothing here writes
+    /// the board or tells the adapter: the outbound dialer holds the
+    /// channel through the handshake and calls [`Self::adopt`] only on a
+    /// well-formed response. A channel that is never adopted leaves no
+    /// trace in the registry.
+    ///
+    /// No dialer is [`CloseKind::LocalClose`].
+    pub fn dial_channel(&self, endpoint: &Endpoint) -> Result<Channel, CloseCause> {
         let dial = self
             .current_dial()
             .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let ceiling = self.lock().ceiling;
         let now = self.now();
-        let channel = dial.connect(endpoint, ceiling, now)?;
+        dial.connect(endpoint, ceiling, now)
+    }
+
+    /// [`Self::dial_channel`], then [`Self::adopt`]: a channel and its
+    /// `established` post in one call.
+    ///
+    /// The seam tests and the harness use this. The outbound dialer does
+    /// not: it runs the handshake between the two. The caller drives
+    /// [`crate::drive_inbound`] on the returned session.
+    pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
+        let channel = self.dial_channel(endpoint)?;
         self.adopt(channel.open, channel.session, channel.endpoint, channel.gap)
     }
 
