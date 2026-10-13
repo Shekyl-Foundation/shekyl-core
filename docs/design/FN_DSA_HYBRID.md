@@ -339,12 +339,11 @@ the settlement lane's cutover, in the change that makes a verifier accept
 scheme-3 receipts (the bundle verifier), and what is left for it is
 selection (§9.4).
 
-The number is 9 and the findings start at `FND-21` because another open
-change (#1046, increment 3) adds §8 and `FND-16`–`FND-18`. This change
-leaves alone what that one edits — the banner, the end of §5's table and
-§6 — and touches §5 in one cell, `FND-4`'s disposition, which that change
-does not. The banner's findings range is to be moved to cover
-`FND-21`–`FND-24` by whichever of the two merges second.
+This section's findings are `FND-21`–`FND-24` (§9.2). They were written
+as `FND-19`–`FND-22` while increment 3 (#1046, §8) was still open, and
+were renumbered when it merged into this branch on 2026-10-12, because §8
+took `FND-16`–`FND-20`. A reference to `FND-19` or `FND-20` anywhere is
+§8's. In §5 this increment touches one cell, `FND-4`'s disposition.
 
 | Piece | Where |
 | --- | --- |
@@ -352,7 +351,7 @@ does not. The banner's findings range is to be moved to cover
 | Byte identity | `a_held_key_signs_the_bytes_the_scheme_signs`, and `the_held_key_reproduces_the_pinned_signatures` in `tests/kat_fn_dsa_hybrid_v1.rs`, which reads `FN_DSA_HYBRID_V1_KAT.json` and so runs on the AVX2, no-AVX2 and aarch64 lanes. No vector was added or changed |
 | The key in the actor | `HeldReceiptKey` (`rust/shekyl-engine-core/src/engine/stake_engine/types.rs`), a field of `BondedPersona` and `EphemeralPersona` beside the bundle: a three-state slot — `NotBuilt` until the persona's first receipt signature, then `Built` (the decoded key) or `Undecodable` for the rest of the persona's life (`HeldPersona::sign_receipt_transcript`) |
 | The actor message | `SignReceiptTranscript` (`stake_engine/persona.rs`): the 112-byte transcript in, an `FnDsaHybridSignature` out. The domain is fixed by `sign_receipt_transcript` (`shekyl-p-serve`), which `HeldPersona::sign_receipt_transcript` calls. `StakeEngineHandle::sign_receipt_transcript_blocking` is its blocking sender |
-| The capability | `ResidentReceiptKey` (`stake_engine/serving/receipt_key.rs`): a weak actor handle, a slot, and a sticky bit set when a signature finds the key undecodable. A `PassKey` at the receipt envelope's width, 1,356 bytes. Pre-flight is actor liveness plus that bit. It does not ask the actor, and an unheld slot is found at sign time, as the identity key finds it |
+| The capability | `ResidentReceiptKey` (`stake_engine/serving/receipt_key.rs`): a weak actor handle, a slot, and the refusal it remembers once the actor has refused a signature with `StakeEngineError::ReceiptKeyUndecodable` — that variant only, never a decoded key's failed signature (`ReceiptSign`). A `PassKey` at the receipt envelope's width, 1,356 bytes. Pre-flight is actor liveness plus that remembered refusal; it does not ask the actor, and an unheld slot is found at sign time, as the identity key finds it (§9.4) |
 | The signer trait | `PassKey<const W>` / `PassSigner<const W>` (`rust/shekyl-p-serve/src/countersign.rs`), sealed over the two schemes by `EnvelopeWidth<W>`; the serve loop takes every width from the signer it is bound with (§9.3) |
 | The fetch target | `FetchTarget<K>` / `VerifiedShard<K>` over the sealed `PassVerifyingKey` (`rust/shekyl-p-fetch/src/target.rs`); `PFetchClient::fetch::<K>` (§9.3) |
 | The receipt check | `verify_receipt_transcript` (`rust/shekyl-archival-retention/src/attestation_wire.rs`), beside `verify_pass_transcript`: the same 112-byte transcript under `SCHEME_DOMAIN_RECEIPT` |
@@ -385,17 +384,21 @@ Ed25519 seed — in addition to the encoded secret, which stays in
 slot decodes from. Both forms are wiped when the persona drops.
 
 **A receipt key that does not decode is refused at that first signature,
-and remembered.** The first request gets the scheme's typed error and the
-slot becomes `Undecodable`; each later request is refused at once with the
-same error, without reading the secret or attempting a decode
+and remembered.** The first request gets
+`StakeEngineError::ReceiptKeyUndecodable` and the slot becomes
+`Undecodable`; each later request is refused at once with the same error,
+without reading the secret or attempting a decode
 (`an_undecodable_key_is_not_decoded_again`, which runs the later requests
 on a stack a decode attempt does not fit in). The key bytes do not change
 while the persona is held, so a decode that failed once fails every time;
 retrying would spend a decode's stack and time per request, on a path a
-remote reader drives once the capability is live. The capability
-remembers the same refusal on itself, so a later pre-flight returns it
-without another question to the actor; the slot stays the authority that
-refuses a second decode. The state is a unit: no
+remote reader drives once the capability is live. The error is its own
+variant: the scheme returns the same `InvalidKeyMaterial` value for a
+decoded key whose signer gives up, which is `ReceiptSign` and says nothing
+about the next signature. The capability remembers the undecodable
+refusal on itself, so a later pre-flight returns it without another
+question to the actor (§9.4); the slot stays the authority that refuses a
+second decode. The slot's state is a unit: no
 error value and nothing computed from the key is kept. It is per persona
 (`an_undecodable_key_is_one_personas_state`), the identity key and the
 other personas are unaffected
@@ -414,7 +417,7 @@ Time: criterion, the production entry.
 
 | | Per-call (`HybridEd25519FnDsa::sign`) | Held (`FnDsaHybridSigner::sign`) |
 | --- | --- | --- |
-| Stack, unoptimized | 568 KiB | 112 KiB |
+| Stack, unoptimized | 568 KiB (560 KiB re-measured 2026-10-13, after the two paths came to share one decoded-key sign) | 112 KiB |
 | Stack, optimized | 248 KiB | 16 KiB (the ladder's first step) |
 | Instructions | 6,675,435 | 6,010,472 (−9.96 %) |
 | Time | 442 µs | 411 µs (−7.0 %) |
@@ -553,14 +556,35 @@ decoded when the serving task starts, so that it is found before any
 reader; or the capability's `ready()` refuses once a decode has failed, so
 that no later reader is sent a shard that will not be signed.
 
-The three-state slot makes the second natural, and it is built:
-`ResidentReceiptKey::ready` asks the actor, which answers from the slot's
-remembered state without touching the secret, and after a failed decode
-every request gets the bare 503 before any shard byte. Its cost is one
-response: the request that triggers the first decode has its body sent and
-closed with the refusal trailer
+The second is built, in two parts. The actor's three-state slot remembers
+an undecodable key and refuses every later signature without decoding
+again, with `StakeEngineError::ReceiptKeyUndecodable`, a variant nothing
+else produces. `ResidentReceiptKey` remembers that refusal on itself the
+first time the actor gives it, and from then on its `ready()` returns it
+without asking the actor: every request through that capability gets the
+bare 503 before any shard byte. Nothing else latches it — not a decoded
+key's failed signature (`ReceiptSign`, though the scheme's error value is
+the same), not an unheld slot, not a stopped actor
+(`only_an_undecodable_key_latches_the_pre_flight`, and the unheld-slot and
+wiped-persona tests).
+
+*Why a latch on the capability and not a question to the actor.* Asking
+the actor on every pre-flight is always current and costs a round-trip per
+request, before the first response byte. The latch costs nothing per
+request, and it cannot refuse a request the actor would sign: it is set
+only by the error that proves the key undecodable, the slot never leaves
+`Undecodable` while the persona is held, the actor's held set is never
+re-populated in its life, and a capability is bound to one actor. The
+actor stays the authority for signing.
+
+*Its cost* is one response **per capability instance**, not per persona:
+the memory is on each `ResidentReceiptKey` value, so each one over an
+undecodable persona sends one shard body closed with the refusal trailer
+before its pre-flight refuses
 (`an_undecodable_receipt_key_costs_one_response_then_refuses_at_pre_flight`
-shows both on the wire). A cutover that wants no such response decodes at
+shows it on the wire; `a_corrupted_receipt_key_refuses_through_the_actor`
+shows a second capability learning for itself). The serving task makes one
+capability per start. A cutover that wants no such response decodes at
 serving-task start as well; that is one receipt-key decode per serving
 start, on the stack §9.1 gives, and it is the cutover's to add because it
 is the cutover that makes the cost one the live path should pay.
