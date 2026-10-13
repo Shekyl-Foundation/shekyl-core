@@ -36,6 +36,8 @@
 //! not it passed, which is the design's own rule; pass and miss enter only
 //! through the `(m, n)` re-check, analytically.
 
+use core::convert::Infallible;
+
 use serde::Serialize;
 
 use shekyl_archival_retention::{
@@ -262,10 +264,12 @@ pub fn run_epoch(pairs: u32, dropout_permille: u32, in_flight: InFlight, seed: u
         let block_draws: Vec<u32> = (0..count)
             .map(|j| {
                 let draw = u32::try_from(j).expect("a block's draws fit the wire's u32");
-                let picked = select_draw(&seed, &block_hash, draw, u64::from(pairs), |i| {
-                    state.is_short(i)
-                })
-                .expect("the set is not empty");
+                // The short read cannot fail here, and the type says so: the
+                // `Err` arm is uninhabited, so the `let` is irrefutable.
+                let Ok(picked) = select_draw(&seed, &block_hash, draw, u64::from(pairs), |i| {
+                    Ok::<_, Infallible>(state.is_short(i))
+                });
+                let picked = picked.expect("the set is not empty");
                 picked.index as u32
             })
             .collect();
