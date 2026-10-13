@@ -34,7 +34,7 @@ use crate::calibration::{
     PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
 };
 use crate::chain_cursor::{ChainCursor, ChainStep};
-use crate::engine::{ScenarioConfig, SimParams};
+use crate::engine::{emitted_at_start, ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
 use crate::fee_model::OrdinaryTx;
 use crate::population::{
@@ -363,8 +363,8 @@ pub fn year_share_atomic(pool_atomic: u128, share_milli: u64) -> u128 {
 pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAgg> {
     let economic = params.economic();
     let total_blocks = params.blocks_per_year * config.sim_years;
-    let mut already_generated: u128 =
-        (config.initial_emitted_fraction * params.emission_curve_asymptote as f64) as u128;
+    let mut already_generated =
+        emitted_at_start(params.emission_curve_asymptote, config.initial_emitted_ppm);
     let mut total_burned: u128 = 0;
     let mut fold = HonestFold::default();
     // Integer atomic accumulators (DQ-2G: the budget quantities never touch f64).
