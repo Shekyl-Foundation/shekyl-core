@@ -509,10 +509,15 @@ pub fn verify_pass_transcript(
 /// and neither can be handed the other's. There is no function that accepts
 /// either. A caller verifies under the one scheme its key is of.
 ///
-/// **STAGED.** No admission path and no live fetch calls this: receipts are
-/// not accepted anywhere yet. Its one caller is the fetch client's scheme-3
-/// instantiation, which no live target selects. The settlement lane's
-/// cutover is what makes a verifier accept a receipt.
+/// **STAGED.** No connect path and no live fetch calls this: receipts are
+/// not accepted anywhere yet. It has two callers, both staged: the fetch
+/// client's scheme-3 target (`shekyl-p-fetch`, `target.rs`), which no live
+/// target selects, and the bundle verifier's step 8
+/// (`shekyl-chain-rules`, `archival::bundle::verify_bundle`), which nothing
+/// on the connect path runs. Both call this and neither builds the
+/// transcript or names the domain itself, so the receipt a persona signs at
+/// serve time and the receipt admission verifies cannot drift. The
+/// settlement lane's cutover is what makes a verifier accept a receipt.
 ///
 /// `delivery_digest` is the caller's, recomputed from the body it received,
 /// as for [`verify_pass_transcript`].

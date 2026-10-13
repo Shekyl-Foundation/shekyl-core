@@ -162,16 +162,13 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use shekyl_archival_retention::{
-    bundle_root, challenge_nonce, draw_commit, pass_countersignature_message, select_draw,
-    BundleBody, BundleKept, BundleRef, BundleWireError, DrawableEpoch, DrawablePair,
-    CHALLENGE_READS,
+    bundle_root, challenge_nonce, draw_commit, select_draw, verify_receipt_transcript, BundleBody,
+    BundleKept, BundleRef, BundleWireError, DrawableEpoch, DrawablePair, CHALLENGE_READS,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
-use shekyl_crypto_pq::signature::{
-    SignatureScheme as _, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
-};
+use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_WITNESS_BUNDLE};
 use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
 
 use crate::census::CenRow;
@@ -659,7 +656,9 @@ pub fn open_body<F>(reference: &BundleRef, bytes: &[u8]) -> Result<BundleBody, B
 ///    block_hash(anchor_height) ‖ shard_id_le ‖ delivery_digest` verifies
 ///    under the derived pair's receipt key, scheme 3,
 ///    `SCHEME_DOMAIN_RECEIPT`, with the nonce recomputed from `(seed,
-///    block_hash(h), j, attempt)`.
+///    block_hash(h), j, attempt)`. The transcript and the domain are
+///    [`verify_receipt_transcript`]'s, the one body the fetch client's
+///    scheme-3 target also calls; this module builds neither.
 ///
 /// Step 7 runs over every record before step 8 runs over any: a bundle
 /// with an inadmissible `attempt` is refused for it whatever its receipts
@@ -791,19 +790,22 @@ pub fn verify_bundle<V: BundleView>(
             return Err(BundleRefused::Unanswered(BundleUnanswered::Draw { draw }));
         };
         let nonce = challenge_nonce(&kept.seed, hash_at_h.as_bytes(), draw, record.attempt);
-        let transcript = pass_countersignature_message(
+        let Ok(receipt) = FnDsaHybridSignature::from_canonical_bytes(&record.receipt) else {
+            return invalid(BundleInvalid::Receipt { draw });
+        };
+        // The one construction of the receipt's transcript and domain,
+        // shared with the fetch client's scheme-3 target: admission and
+        // fetch cannot drift from each other because neither has its own.
+        if verify_receipt_transcript(
+            receipt_key,
             &nonce,
             record.anchor_height,
             anchor_hash.as_bytes(),
             derived.pair.shard_id,
             &record.delivery_digest,
-        );
-        let Ok(receipt) = FnDsaHybridSignature::from_canonical_bytes(&record.receipt) else {
-            return invalid(BundleInvalid::Receipt { draw });
-        };
-        if scheme
-            .verify(receipt_key, SCHEME_DOMAIN_RECEIPT, &transcript, &receipt)
-            .is_err()
+            &receipt,
+        )
+        .is_err()
         {
             return invalid(BundleInvalid::Receipt { draw });
         }
