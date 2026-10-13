@@ -72,17 +72,11 @@ pub use shekyl_timing_engine::Tick;
 pub use shekyl_transport_layer::{connector_for, CloseCause, CloseKind, ConnectorId, Direction};
 pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 
-/// `DISCLOSE_COUNT`: how many white addresses one disclosure sample
-/// carries, and the most a received message may carry (D3, Rick,
-/// 2026-10-09). A protocol constant: the same on every node and every
-/// connector, not tied to the outbound target. Replaces
-/// `P2P_DEFAULT_PEERS_IN_HANDSHAKE` and `P2P_MAX_PEERS_IN_HANDSHAKE`
-/// (both 250, `cryptonote_config.h:193` to `:194`).
-///
-/// **Assumption** (`DAEMON_RELAY_PRIVACY.md` §97): the interim outbound
-/// target carried over, derived on the Rust path after PR-3 from intake
-/// diversity, honest fill and per-reply exposure.
-pub const DISCLOSE_COUNT: usize = 12;
+/// The disclosure count (D3): how many white addresses one disclosure
+/// sample carries, and the most a received message may carry. Shared
+/// with the frame layer through `shekyl-peer-bounds`, which holds its
+/// derivation note.
+pub use shekyl_peer_bounds::DISCLOSE_COUNT;
 
 /// The most distinct addresses one session may put into gray in any
 /// 24-hour span (D-S1, Rick, 2026-10-09): twice the sample, so an honest

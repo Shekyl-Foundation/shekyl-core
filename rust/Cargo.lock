@@ -4637,6 +4637,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-net-address",
  "shekyl-p2p-transport",
+ "shekyl-peer-bounds",
  "shekyl-portable-storage",
  "shekyl-rpc-types",
  "thiserror",
@@ -4826,6 +4827,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-peer-bounds"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-peer-policy"
 version = "3.1.0"
 
@@ -4835,6 +4840,7 @@ version = "3.1.0"
 dependencies = [
  "shekyl-draw-rng",
  "shekyl-net-address",
+ "shekyl-peer-bounds",
  "shekyl-peerlist",
  "shekyl-relay-privacy",
  "shekyl-timing-engine",

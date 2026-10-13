@@ -10,18 +10,18 @@
 //! [`shekyl_peerlist_admit_received`] answers accept or refuse, and the
 //! C++ closes the session only on refuse. Every rule is on this side:
 //! the receiver limit (D3), the per-session intake cap (D-S1), address
-//! validity and its whole-list refusal (R4), the foreign-connector rule,
-//! and outbound-only acceptance (PWD-I2).
+//! validity and its whole-list refusal (R4) and the foreign-connector
+//! rule, on inbound and outbound sessions alike (every exchange is an
+//! exchange, Rick 2026-10-13; *records-was* PWD-I2's direction rule).
 //!
-//! The session's connector and direction are read from the seam board by
-//! the session id. The C++ passes neither.
+//! The session's connector is read from the seam board by the session id.
+//! The C++ passes neither it nor the direction.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 
 use shekyl_peerlist::{
-    BanQuery, ConnectionId, ConnectorId, Direction, NetworkAddress, Peerlist, RefusedSet,
-    SessionRow, Tick,
+    BanQuery, ConnectionId, ConnectorId, NetworkAddress, Peerlist, RefusedSet, SessionRow, Tick,
 };
 use shekyl_seam::{Hub, SocketId};
 
@@ -35,9 +35,9 @@ pub const SHEKYL_PEERLIST_REFUSE: i32 = 0;
 /// The list arrived on a session this node opened and passed every rule.
 /// Its new addresses are in gray.
 pub const SHEKYL_PEERLIST_ADMITTED: i32 = 1;
-/// The list arrived on a session the peer opened. Nothing was read from
-/// it and nothing was admitted (PWD-I2).
-pub const SHEKYL_PEERLIST_INBOUND: i32 = 2;
+// 2 was SHEKYL_PEERLIST_INBOUND, retired 2026-10-13 with the direction
+// rule (§2.5): an inbound list is admitted or refused like any other. The
+// number is not reused.
 /// The board holds no session with this id, so its direction is not
 /// known. Nothing was admitted.
 pub const SHEKYL_PEERLIST_NO_SESSION: i32 = 3;
@@ -133,28 +133,24 @@ pub(crate) fn address_of(entry: &ShekylSeamAddress) -> Option<NetworkAddress> {
 /// Decide one received list. Everything the FFI entry does, without the
 /// process statics.
 ///
-/// `row` is the session's board row, or `None` when the board has none.
-/// A session the board does not hold has no known direction, so its list
-/// admits nothing and is not refused, like an inbound one. An inbound
-/// session's entries are not decoded: nothing it sends is evidence.
+/// `row` is the session's connector from the board, or `None` when the
+/// board has none. A session the board does not hold has no known
+/// connector, so its list admits nothing and is not refused.
 ///
 /// Each situation has its own code (rule 43): "nothing was admitted
 /// because there is no such session" is not the same answer as "the list
 /// was admitted", and neither is a refusal.
 fn receive(
     list: &mut Peerlist,
-    row: Option<(ConnectorId, Direction)>,
+    row: Option<ConnectorId>,
     session: ConnectionId,
     entries: &[ShekylSeamAddress],
     now: Tick,
     bans: &mut dyn BanQuery,
 ) -> i32 {
-    let Some((connector, direction)) = row else {
+    let Some(connector) = row else {
         return SHEKYL_PEERLIST_NO_SESSION;
     };
-    if matches!(direction, Direction::Inbound) {
-        return SHEKYL_PEERLIST_INBOUND;
-    }
     let Some(addresses) = entries
         .iter()
         .map(address_of)
@@ -165,7 +161,6 @@ fn receive(
     let session = SessionRow {
         id: session,
         connector,
-        direction,
     };
     match list.admit_received_list(&addresses, session, now, bans, &mut SecureRelayRng) {
         Ok(_) => SHEKYL_PEERLIST_ADMITTED,
@@ -203,10 +198,7 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_received(
     let Some(id) = SocketId::from_ffi(session) else {
         return SHEKYL_PEERLIST_NO_SESSION;
     };
-    let row = hub
-        .board()
-        .get(id)
-        .map(|row| (row.connector(), row.direction()));
+    let row = hub.board().get(id).map(|row| row.connector());
     let now = hub.now();
     let Some(dialer) = crate::dialer_ffi::shared() else {
         return SHEKYL_PEERLIST_NO_HUB;
@@ -252,18 +244,11 @@ mod tests {
         ConnectionId([9; 16])
     }
 
-    fn decide(
-        list: &mut Peerlist,
-        row: Option<(ConnectorId, Direction)>,
-        entries: &[ShekylSeamAddress],
-    ) -> i32 {
+    fn decide(list: &mut Peerlist, row: Option<ConnectorId>, entries: &[ShekylSeamAddress]) -> i32 {
         receive(list, row, session(), entries, Tick::new(0), &mut NoBans)
     }
 
-    const OUTBOUND: Option<(ConnectorId, Direction)> =
-        Some((ConnectorId::Clearnet, Direction::Outbound));
-    const INBOUND: Option<(ConnectorId, Direction)> =
-        Some((ConnectorId::Clearnet, Direction::Inbound));
+    const OUTBOUND: Option<ConnectorId> = Some(ConnectorId::Clearnet);
 
     #[test]
     fn an_outbound_list_is_admitted() {
@@ -276,33 +261,29 @@ mod tests {
         assert_eq!(list.gray_count(ConnectorId::Clearnet), 5);
     }
 
-    /// PWD-I2 at the boundary the C++ calls: accepted, so nothing closes,
-    /// and nothing admitted. A list that would be refused on an outbound
-    /// session is still not refused here.
+    /// Every exchange is an exchange (§2.5): the boundary reads the
+    /// session's connector and not its direction, so an inbound list is
+    /// admitted or refused by the same rules as an outbound one. There is
+    /// no inbound answer code any more.
     #[test]
-    fn an_inbound_list_is_not_refused_and_admits_nothing() {
+    fn the_boundary_reads_no_direction() {
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         let entries: Vec<_> = (1..=5).map(v4).collect();
         assert_eq!(
-            decide(&mut list, INBOUND, &entries),
-            SHEKYL_PEERLIST_INBOUND
+            decide(&mut list, OUTBOUND, &entries),
+            SHEKYL_PEERLIST_ADMITTED
         );
-        assert_eq!(list.gray_count(ConnectorId::Clearnet), 0);
-
+        assert_eq!(list.gray_count(ConnectorId::Clearnet), 5);
         let too_many: Vec<_> = (0..40).map(v4).collect();
         assert_eq!(
             decide(&mut list, OUTBOUND, &too_many),
             SHEKYL_PEERLIST_REFUSE
         );
         assert_eq!(
-            decide(&mut list, INBOUND, &too_many),
-            SHEKYL_PEERLIST_INBOUND
+            decide(&mut list, OUTBOUND, &[empty()]),
+            SHEKYL_PEERLIST_REFUSE
         );
-        assert_eq!(
-            decide(&mut list, INBOUND, &[empty()]),
-            SHEKYL_PEERLIST_INBOUND
-        );
-        assert_eq!(list.gray_count(ConnectorId::Clearnet), 0);
+        assert_eq!(list.gray_count(ConnectorId::Clearnet), 5);
     }
 
     #[test]

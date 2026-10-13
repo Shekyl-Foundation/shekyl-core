@@ -52,12 +52,21 @@ static NETWORK: Mutex<SeedNetwork> = Mutex::new(SeedNetwork::None);
 /// line is parsed before the seam binds. Applied when the dialer is built.
 static CAPS: Mutex<[Option<u32>; ConnectorId::COUNT]> = Mutex::new([None; ConnectorId::COUNT]);
 
-/// What else the C++ pushes before the dialer exists. On a clearnet-only
-/// start the first listen, which binds the seam and builds the dialer,
-/// comes after the command line is parsed and `--add-peer` admitted, so
-/// each push is held here and applied when the dialer is built, in this
-/// order: the address file, the operator addresses, the closed network,
-/// the own addresses.
+/// Pushes made before the dialer exists, held for its build. What that
+/// means, plainly: the daemon's `init()` parses the command line and names
+/// the address file (`shekyl_dialer_open_address_file`, `--add-peer` through
+/// `shekyl_peerlist_admit_operator`, `--add-exclusive-node` through
+/// `shekyl_dialer_set_exclusive`, `--anonymous-inbound` through
+/// `shekyl_peerlist_set_own_address`) before its first listen binds the
+/// seam, and the dialer is built at that bind (and again with every zone
+/// host, [`ensure_dialer`]). On a start where the managed Tor does not
+/// listen first, every one of those calls therefore arrives with no dialer
+/// to act on. Each such call records its argument here and answers
+/// [`SHEKYL_DIALER_DEFERRED`]; the build drains this slot into the new
+/// dialer in the order below (the file first, so an operator address
+/// already in it is not re-seated; then the operator addresses, the closed
+/// network, the own addresses), and the call has the same effect it would
+/// have had after the build. A call after the build acts at once.
 struct Deferred {
     address_file: Option<PathBuf>,
     operator: Vec<NetworkAddress>,

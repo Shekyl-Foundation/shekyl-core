@@ -23,6 +23,8 @@ conformance = []
 
 [dependencies]
 shekyl-net-address = { path = "../shekyl-net-address" }
+# The disclosure count, shared with the frame layer.
+shekyl-peer-bounds = { path = "../shekyl-peer-bounds" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }

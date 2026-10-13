@@ -116,8 +116,10 @@ namespace nodetool
     const command_line::arg_descriptor<uint32_t>    arg_p2p_external_port  = {"p2p-external-port", "External port for p2p network protocol (if port forwarding used with NAT)", 0};
     const command_line::arg_descriptor<bool>        arg_p2p_allow_local_ip = {"allow-local-ip", "Allow local ip add to peer list, mostly in debug purposes"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_peer   = {"add-peer", "Manually add peer to local peerlist"};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_exclusive_node   = {"add-exclusive-node", "Specify list of peers to connect to only."
-                                                                                                  " If this option is given, no other address is dialled, seed-node included"};
+    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_exclusive_node   = {"add-exclusive-node", "Declare a closed network: this node dials these peers and no other"
+                                                                                                  " address, the compiled seeds and every address learned from a peer included."
+                                                                                                  " Name only peers you control; the option is for a private network, not for"
+                                                                                                  " joining the public one"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node   = {"seed-node", "Name a peer as a dial candidate, like add-peer; the compiled seeds are candidates already"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy = {"tx-proxy", "Send local txes through proxy: <network-type>,[socks5://[user:pass@]]<socks-ip:port>[,max_connections] i.e. \"tor,127.0.0.1:9050,100\""};
     // PWD-E7 (P2P_2_ENDPOINT_ROUND.md): the durable-address warning is stated

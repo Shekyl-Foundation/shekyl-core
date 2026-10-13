@@ -20,6 +20,8 @@ zstd = ["dep:zstd"]
 [dependencies]
 thiserror = { workspace = true }
 shekyl-net-address = { path = "../shekyl-net-address" }
+# The disclosure count the handshake and timed-sync frames are bounded by.
+shekyl-peer-bounds = { path = "../shekyl-peer-bounds" }
 shekyl-portable-storage = { path = "../shekyl-portable-storage" }
 # This vendored, pinned libzstd (zstd-sys `cc`-compiles the copy in the
 # crate; the non-default `pkg-config` feature is NOT enabled) is the

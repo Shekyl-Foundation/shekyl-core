@@ -712,7 +712,6 @@ impl Dialer {
             SessionRow {
                 id: session_of(id),
                 connector,
-                direction: Direction::Outbound,
             },
             now,
             &mut HubBans(&self.hub),

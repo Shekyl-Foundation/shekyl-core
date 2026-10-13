@@ -11,7 +11,7 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_net_address::NetworkAddress;
 use shekyl_relay_privacy::ConnectionId;
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{connector_for, BanList, ConnectorId, Direction};
+use shekyl_transport_layer::{connector_for, BanList, ConnectorId};
 
 use crate::address_file::{self, AddressFileError};
 use crate::outcome::{DialOutcome, ListName, Refusal, SessionRow, Source, WhiteClock};
@@ -113,14 +113,9 @@ impl Peerlist {
     ) -> Result<bool, Refusal> {
         let connector = Self::connector_of(address).ok_or(Refusal::NoConnector)?;
         if let Source::Session {
-            connector: session,
-            direction,
-            ..
+            connector: session, ..
         } = source
         {
-            if matches!(direction, Direction::Inbound) {
-                return Err(Refusal::InboundSession);
-            }
             if session != connector {
                 return Err(Refusal::ForeignConnector);
             }
@@ -155,11 +150,17 @@ impl Peerlist {
     /// about the sender. A banned entry is skipped, not a
     /// rejection of the list (D4). Returns how many were new.
     ///
-    /// A list received over an inbound session admits nothing and is not a
-    /// refusal (PWD-I2): `Ok(0)`, whatever the list holds. Peerlist
-    /// records are accepted only on sessions this node initiated; that
-    /// closes the channel by which a peer that connects to us fills our
-    /// gray list (Shi et al. §III-A).
+    /// Every exchange is an exchange (Rick, 2026-10-13, PR-3 brief §2.5):
+    /// a list is admitted on an inbound session as on an outbound one,
+    /// under these same limits. *Records-was* PWD-I2's direction rule, an
+    /// inbound list admitting nothing: it made discovery circular, since a
+    /// node's own address travels only in its own sample and that sample
+    /// was accepted only by peers that had already dialled it. What that
+    /// rule was against — 250 entries per message, FIFO eviction, no
+    /// per-session cap (Shi et al. §III-A) — is gone; what remains, an
+    /// attacker holding many inbound sessions, is bounded by D-S1 and the
+    /// inbound ceiling. Reopen: if §99 PM-2a shows gray or outbound
+    /// occupation beyond the attacker's share of honest addresses.
     pub fn admit_received_list<R: RelayRng + ?Sized>(
         &mut self,
         addresses: &[NetworkAddress],
@@ -171,13 +172,11 @@ impl Peerlist {
         let SessionRow {
             id: session,
             connector,
-            direction,
         } = session;
-        // PWD-I2: before every other check. Nothing an inbound peer sends
-        // is read as evidence, so nothing in its list can refuse it.
-        if matches!(direction, Direction::Inbound) {
-            return Ok(0);
-        }
+        // Every exchange is an exchange (§2.5, Rick 2026-10-13): the list is
+        // admitted whichever way the session was opened, under the limits
+        // that bind every session. *Records-was:* PWD-I2's direction rule
+        // returned Ok(0) for an inbound session here.
         if addresses.len() > DISCLOSE_COUNT {
             return Err(Refusal::PeerlistRefused);
         }
@@ -214,7 +213,6 @@ impl Peerlist {
                 Source::Session {
                     id: session,
                     connector,
-                    direction,
                 },
                 now,
                 bans,

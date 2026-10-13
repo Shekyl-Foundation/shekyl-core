@@ -4406,7 +4406,9 @@ constexpr int SHEKYL_PEERLIST_REFUSE = 0;
 /// ADMITTED: an outbound session's list passed every rule.
 constexpr int SHEKYL_PEERLIST_ADMITTED = 1;
 /// INBOUND: the peer opened the session; nothing was read or admitted.
-constexpr int SHEKYL_PEERLIST_INBOUND = 2;
+// 2 was SHEKYL_PEERLIST_INBOUND, retired 2026-10-13: every exchange is an
+// exchange (PR-3 brief §2.5); an inbound list is admitted or refused like
+// any other. The number is not reused.
 /// NO_SESSION: the board holds no such session; nothing was admitted.
 constexpr int SHEKYL_PEERLIST_NO_SESSION = 3;
 /// NO_HUB: no hub is bound; nothing was admitted.

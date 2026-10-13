@@ -12,9 +12,9 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, Direction, NetworkAddress, NoBans,
-    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
-    GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
+    white_diversity_floor, BanQuery, ConnectionId, DialOutcome, NetworkAddress, NoBans, Peerlist,
+    Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, GRAY_CAP,
+    SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
 };
 use shekyl_transport_layer::BanList;
 
@@ -216,8 +216,7 @@ fn a_received_list_longer_than_disclose_count_is_refused_whole() {
             &long,
             SessionRow {
                 id: session(1),
-                connector,
-                direction: Direction::Outbound
+                connector
             },
             at_hours(0),
             &mut NoBans,
@@ -232,8 +231,7 @@ fn a_received_list_longer_than_disclose_count_is_refused_whole() {
             &exact,
             SessionRow {
                 id: session(1),
-                connector,
-                direction: Direction::Outbound
+                connector
             },
             at_hours(0),
             &mut NoBans,
@@ -321,8 +319,7 @@ fn a_demoted_entry_is_ordinary_gray_evictable_skipped_at_dial_and_refused_at_adm
             &banned,
             Source::Session {
                 id: session(1),
-                connector,
-                direction: Direction::Outbound
+                connector
             },
             at_hours(2),
             &mut bans,
@@ -440,11 +437,7 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     assert_eq!(
         list.admit_received_list(
             &first,
-            SessionRow {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            SessionRow { id: s, connector },
             at_hours(0),
             &mut NoBans,
             &mut rng
@@ -455,11 +448,7 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     assert_eq!(
         list.admit_received_list(
             &first,
-            SessionRow {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            SessionRow { id: s, connector },
             at_hours(1),
             &mut NoBans,
             &mut rng
@@ -470,11 +459,7 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     assert_eq!(
         list.admit_received_list(
             &second,
-            SessionRow {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            SessionRow { id: s, connector },
             at_hours(12),
             &mut NoBans,
             &mut rng
@@ -489,11 +474,7 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     assert_eq!(
         list.admit_gray(
             &v4(25),
-            Source::Session {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            Source::Session { id: s, connector },
             at_hours(13),
             &mut NoBans,
             &mut rng
@@ -507,8 +488,7 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
             &v4(25),
             Source::Session {
                 id: session(2),
-                connector,
-                direction: Direction::Outbound
+                connector
             },
             at_hours(13),
             &mut NoBans,
@@ -522,11 +502,7 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     assert_eq!(
         list.admit_received_list(
             &first,
-            SessionRow {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            SessionRow { id: s, connector },
             at_hours(25),
             &mut NoBans,
             &mut rng
@@ -538,11 +514,7 @@ fn the_twenty_fifth_distinct_address_from_one_session_in_a_day_is_a_violation() 
     assert_eq!(
         list.admit_gray(
             &v4(26),
-            Source::Session {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            Source::Session { id: s, connector },
             at_hours(25),
             &mut NoBans,
             &mut rng
@@ -579,8 +551,7 @@ fn a_seated_address_is_not_a_new_intake_charge() {
             &white[0],
             Source::Session {
                 id: session_id,
-                connector,
-                direction: Direction::Outbound
+                connector
             },
             at_hours(1),
             &mut NoBans,
@@ -603,8 +574,7 @@ fn a_seated_address_is_not_a_new_intake_charge() {
             &first,
             SessionRow {
                 id: session_id,
-                connector,
-                direction: Direction::Outbound
+                connector
             },
             at_hours(1),
             &mut NoBans,
@@ -617,8 +587,7 @@ fn a_seated_address_is_not_a_new_intake_charge() {
             &second,
             SessionRow {
                 id: session_id,
-                connector,
-                direction: Direction::Outbound
+                connector
             },
             at_hours(1),
             &mut NoBans,
@@ -631,8 +600,7 @@ fn a_seated_address_is_not_a_new_intake_charge() {
             &white,
             SessionRow {
                 id: session_id,
-                connector,
-                direction: Direction::Outbound
+                connector
             },
             at_hours(2),
             &mut NoBans,
@@ -660,8 +628,7 @@ fn the_intake_cap_is_the_same_on_every_connector() {
                 &onion(n),
                 Source::Session {
                     id: s,
-                    connector: hidden,
-                    direction: Direction::Outbound
+                    connector: hidden
                 },
                 at_hours(0),
                 &mut NoBans,
@@ -675,8 +642,7 @@ fn the_intake_cap_is_the_same_on_every_connector() {
             &onion(25),
             Source::Session {
                 id: s,
-                connector: hidden,
-                direction: Direction::Outbound
+                connector: hidden
             },
             at_hours(0),
             &mut NoBans,
@@ -756,11 +722,7 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     assert_eq!(
         list.admit_received_list(
             &first,
-            SessionRow {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            SessionRow { id: s, connector },
             at_hours(0),
             &mut NoBans,
             &mut rng
@@ -770,11 +732,7 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     assert_eq!(
         list.admit_received_list(
             &second,
-            SessionRow {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            SessionRow { id: s, connector },
             at_hours(1),
             &mut NoBans,
             &mut rng
@@ -788,11 +746,7 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     assert_eq!(
         list.admit_received_list(
             &crossing,
-            SessionRow {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            SessionRow { id: s, connector },
             at_hours(2),
             &mut NoBans,
             &mut rng
@@ -812,11 +766,7 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     assert_eq!(
         list.admit_received_list(
             &exact,
-            SessionRow {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            SessionRow { id: s, connector },
             at_hours(2),
             &mut NoBans,
             &mut rng
@@ -834,11 +784,7 @@ fn a_list_that_would_cross_the_session_cap_admits_nothing() {
     assert_eq!(
         list.admit_received_list(
             &[banned],
-            SessionRow {
-                id: s,
-                connector,
-                direction: Direction::Outbound
-            },
+            SessionRow { id: s, connector },
             at_hours(3),
             &mut bans,
             &mut rng

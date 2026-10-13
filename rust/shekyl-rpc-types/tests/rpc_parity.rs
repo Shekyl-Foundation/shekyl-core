@@ -786,118 +786,6 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
     );
 }
 
-/// Every `_v2` sibling is its `_v1` capture MINUS exactly the identifier
-/// fields 3.28 removed — nothing else moved.
-///
-/// A derived sibling is not an oracle capture (the C++ emitter for these
-/// methods is gone since RK-5a), so the thing that keeps it honest is the
-/// delta: without this, unrelated fixture drift would ride into `_v2` and be
-/// accepted by the parity tests as if the oracle had said so. Asserted as a
-/// subtraction rather than by eyeballing the files.
-#[test]
-fn every_v2_sibling_is_its_v1_capture_minus_only_the_identifier() {
-    fn strip(value: &Value, field: &str) -> Value {
-        match value {
-            Value::Object(map) => Value::Object(
-                map.iter()
-                    .filter(|(k, _)| k.as_str() != field)
-                    .map(|(k, v)| (k.clone(), strip(v, field)))
-                    .collect(),
-            ),
-            Value::Array(items) => Value::Array(items.iter().map(|v| strip(v, field)).collect()),
-            other => other.clone(),
-        }
-    }
-
-    // (v1 capture, derived v2 sibling, the field 3.28 removed)
-    let deltas: [(&str, &str, &str); 3] = [
-        (
-            include_str!("vectors/rpc/get_peer_list_v1.json"),
-            include_str!("vectors/rpc/get_peer_list_v2.json"),
-            "id",
-        ),
-        (
-            include_str!("vectors/rpc/get_connections_v1.json"),
-            include_str!("vectors/rpc/get_connections_v2.json"),
-            "peer_id",
-        ),
-        (
-            include_str!("vectors/rpc/sync_info_v1.json"),
-            include_str!("vectors/rpc/sync_info_v2.json"),
-            "peer_id",
-        ),
-    ];
-
-    for (v1_raw, v2_raw, field) in deltas {
-        let v1 = parsed(v1_raw);
-        let v2 = parsed(v2_raw);
-        assert_eq!(
-            strip(&v1, field),
-            v2,
-            "the _v2 sibling is not its _v1 capture minus only `{field}`"
-        );
-        // The subtraction must have had something to subtract, or this test
-        // would pass on a pair that never carried the field at all.
-        assert_ne!(
-            v1, v2,
-            "`{field}` was not present in the _v1 capture: the delta is vacuous"
-        );
-    }
-}
-
-/// Every `_v3` p2p sibling is its `_v2` minus exactly the stripe-engine
-/// fields 3.35 removed (`PDM-Q7`): `pruning_seed` on peers and connections,
-/// `next_needed_pruning_seed` on `sync_info` — nothing else moved. Same
-/// discipline as the `_v2` delta above: a derived vector is kept honest by
-/// its subtraction, not by eyeballing.
-#[test]
-fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
-    fn strip(value: &Value, fields: &[&str]) -> Value {
-        match value {
-            Value::Object(map) => Value::Object(
-                map.iter()
-                    .filter(|(k, _)| !fields.contains(&k.as_str()))
-                    .map(|(k, v)| (k.clone(), strip(v, fields)))
-                    .collect(),
-            ),
-            Value::Array(items) => Value::Array(items.iter().map(|v| strip(v, fields)).collect()),
-            other => other.clone(),
-        }
-    }
-    const FIELDS: &[&str] = &["pruning_seed", "next_needed_pruning_seed"];
-    let deltas: [(&str, &str); 4] = [
-        (
-            include_str!("vectors/rpc/get_peer_list_v2.json"),
-            include_str!("vectors/rpc/get_peer_list_v3.json"),
-        ),
-        (
-            include_str!("vectors/rpc/get_connections_v2.json"),
-            include_str!("vectors/rpc/get_connections_v3.json"),
-        ),
-        (
-            include_str!("vectors/rpc/sync_info_v2.json"),
-            include_str!("vectors/rpc/sync_info_v3.json"),
-        ),
-        (
-            include_str!("vectors/rpc/sync_info_empty_v1.json"),
-            include_str!("vectors/rpc/sync_info_empty_v2.json"),
-        ),
-    ];
-    for (before_raw, after_raw) in deltas {
-        let before = parsed(before_raw);
-        let after = parsed(after_raw);
-        assert_eq!(
-            strip(&before, FIELDS),
-            after,
-            "the derived sibling is not its predecessor minus only the stripe fields"
-        );
-        assert_ne!(
-            before, after,
-            "the delta is vacuous: no stripe field to subtract"
-        );
-    }
-}
-
 /// The whole `get_version` vector chain, not just its newest pair.
 ///
 /// **This used to pin one pair and was renamed at each bump**, on the
@@ -1052,7 +940,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.32 (calc_pow drops leftover major_version; get_version gains nothing)
         &[], // 3.33 (get_output_histogram deleted; get_version gains nothing)
         &[], // 3.34 (get_curve_tree_path removed, SOK-10 Q7 → A; get_version gains nothing)
-        &[], // 3.35 (pruning_seed deleted from the p2p readouts, PDM-Q7; get_version gains nothing)
+        &[], // 3.35 (the stripe seed deleted from the p2p readouts, PDM-Q7; get_version gains nothing)
         &[], // 3.36 (get_info drops tx_prune_height with the C++ tx-data prune; get_version gains nothing)
         &[], // 3.37 (get_block_template bounds reserve_size / extra_nonce to the fixed 8-byte coinbase nonce, TXE-Q6′; get_version gains nothing)
         &[], // 3.38 (get_info socket counts and the permanent-ban flag; get_version gains nothing)
@@ -1674,12 +1562,12 @@ fn get_peer_list_matches_the_oracle() {
             port: 0,
         }],
     };
-    // _v2 = _v1 minus the identifier fields 3.28 removed (PWD-I1) — derived,
-    // not recaptured: the C++ oracle for this method is gone (RK-5a), so the
-    // chain's memory continues from the Rust emitter's own prior contract.
-    // _v3 = _v2 minus `pruning_seed` (3.35, `PDM-Q7`) — derived the same way,
-    // and held to its delta below. _v4 = _v3 minus `last_seen` (3.51): the
-    // Rust peer lists carry no clock, and the listing reads them.
+    // _v3 is the earliest vector kept: the C++ oracle for this method is
+    // gone (RK-5a), and the _v1 and _v2 captures, which carried the
+    // identifier (3.28, PWD-I1) and the stripe seed (3.35, PDM-Q7), went
+    // with the stripe-seed sweep (2026-10-13). _v4 = _v3 minus `last_seen`
+    // (3.51): the Rust peer lists carry no clock, and the listing reads
+    // them; held to its delta below.
     assert_parity(include_str!("vectors/rpc/get_peer_list_v4.json"), &built);
 
     // `ip` is a JSON *number* here. `get_connections` carries a field of the

@@ -120,7 +120,7 @@ pub struct Peer {
     /// **number**, unlike [`ConnectionInfo::ip`], which carries the same
     /// address as a dotted string. `10.32.0.7` is `117448714`
     /// (`0x0700_200a`); the pair appears together in
-    /// `tests/vectors/rpc/get_peer_list_v1.json`. Zero for every non-ipv4
+    /// `tests/vectors/rpc/get_peer_list_v4.json`. Zero for every non-ipv4
     /// arm.
     pub ip: u32,
     pub port: u16,
@@ -250,7 +250,7 @@ pub struct GetConnectionsResponse {
 ///
 /// The nesting is the wire's, not a modelling choice — `sync_info` carries a
 /// one-member wrapper struct where `get_connections` carries the object
-/// directly, and `sync_info_v1.json` pins both in one capture.
+/// directly, and `sync_info_v3.json` pins both in one capture.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SyncInfoPeer {

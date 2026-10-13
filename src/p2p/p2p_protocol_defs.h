@@ -99,7 +99,6 @@ namespace nodetool
     uint32_t handshake_interval;
     uint32_t packet_max_size;
     uint32_t config_id;
-    uint32_t send_peerlist_sz;
   };
 
   /*! What a node announces about itself at handshake.

@@ -102,8 +102,8 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.36: `get_info` drops `tx_prune_height` — the
 /// C++ tx-data prune whose watermark it reported is deleted (LMDB v15; the
 /// uniform discard is S-PRUNE, which will report its own frontier when it
-/// exists). 3.35: `pruning_seed` leaves `get_peer_list`,
-/// `get_connections` and `sync_info.peers`, and `next_needed_pruning_seed`
+/// exists). 3.35: the stripe seed leaves `get_peer_list`,
+/// `get_connections` and `sync_info.peers`, and the next-needed stripe
 /// leaves `sync_info`; the `prune_blockchain` method is deleted (REJECTED in
 /// the registry, `PDM-Q7`) — the stripe engine is gone, so every value was
 /// 0 and the field was a gossiped self-asserted attribute (`PWD-I1`'s shape).
@@ -136,7 +136,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `= 26` is textually identical whoever writes it. 3.33 is the
 /// `get_output_histogram` deletion on this branch; 3.34 the
 /// `get_curve_tree_path` removal, chained after it on merge; 3.35 the
-/// `pruning_seed` deletion; 3.36 the `tx_prune_height` deletion; 3.37 the
+/// stripe-seed deletion; 3.36 the `tx_prune_height` deletion; 3.37 the
 /// coinbase-nonce bound; 3.38 the per-connector socket counts and the
 /// permanent-ban flag; 3.39 `get_transactions`' `archival_len`; 3.40
 /// `get_version` and `sync_info` stop encoding synchronization as

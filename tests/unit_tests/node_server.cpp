@@ -1625,17 +1625,31 @@ TEST(node_server, a_received_peerlist_reaches_rust_unaltered_and_only_a_refusal_
 // refusal, whatever it holds. The same lists are refused on the outbound
 // session above, so the answer here is the direction's, read in Rust from
 // the board: this call passes no direction.
-TEST(node_server, a_peerlist_on_an_inbound_session_never_closes_it)
+// Every exchange is an exchange (Rick, 2026-10-13, §2.5): a list on a
+// session the peer opened is admitted under the same limits as one on a
+// session this node opened, and refused by the same rules. Records-was
+// PWD-I2's direction rule, under which this session's lists admitted
+// nothing and nothing closed it.
+TEST(node_server, a_peerlist_on_an_inbound_session_is_admitted_under_the_same_limits)
 {
   PeerlistSession session(true);
   ASSERT_NE(session.socket_id, 0u);
 
   EXPECT_TRUE(session.receive(global_peers(4, 12)));
-  EXPECT_TRUE(session.receive(global_peers(5, 13)));
-  EXPECT_TRUE(session.receive({{MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080), 100}}));
-  EXPECT_TRUE(session.receive({{net::tor_address::unknown(), 100}}));
-  // The answer names the reason: not "admitted", and not a refusal.
-  EXPECT_EQ(shekyl_peerlist_admit_received(session.socket_id, nullptr, 0), SHEKYL_PEERLIST_INBOUND);
+  const shekyl_rpc_peer_facts* rows = nullptr;
+  std::size_t len = 0;
+  void* owner = nullptr;
+  ASSERT_EQ(shekyl_rpc_peer_list(0, &rows, &len, &owner), 0);
+  std::size_t admitted = 0;
+  for (std::size_t i = 0; i < len; ++i)
+    if (std::string(rows[i].host, rows[i].host_len).rfind("11.7.4.", 0) == 0 && rows[i].white == 0)
+      ++admitted;
+  shekyl_rpc_peer_list_free(owner);
+  EXPECT_EQ(admitted, 12u) << "the twelve entered gray from the inbound session";
+
+  EXPECT_FALSE(session.receive(global_peers(5, 13))) << "one over the receiver limit refuses";
+  EXPECT_FALSE(session.receive({{MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080), 100}})) << "a non-global entry refuses (R4)";
+  EXPECT_FALSE(session.receive({{net::tor_address::unknown(), 100}})) << "a foreign-connector entry refuses";
 }
 
 // A session the board does not hold has no known direction. Its list
