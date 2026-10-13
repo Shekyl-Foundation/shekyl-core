@@ -1676,7 +1676,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     writeln!(
         out,
         "Stage-2 archival burden trajectory (§12.1 checkpoint 1)\n\
-         outputs = carried txs x {OUTPUTS_PER_TX_NORMAL:.0} (1in/2out normal traffic, drives tree depth); \
+         outputs = carried txs x {OUTPUTS_PER_TX_NORMAL} (1in/2out normal traffic, drives tree depth); \
          archival bytes = Σ carried txs x archival_len(1in/2out @ depth) ({AB0}..{AB1} B/tx shallow..deep);\n\
          carried = what the producer's fill rule admits at the effective median (ESR-6), not the schedule's demand;\n\
          n = shard_of(cumulative archival bytes), W = {SHARD:.1} MB/shard (SHT-Q2)\n\
