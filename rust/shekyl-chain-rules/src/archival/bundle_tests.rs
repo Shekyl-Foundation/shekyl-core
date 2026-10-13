@@ -33,7 +33,9 @@ use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use super::*;
-use crate::harness::bundle::{fixture_block_hash, BundleRead, BundleReadFaulted, BundleWorld};
+use crate::harness::bundle::{
+    fixture_block_hash, with_hash, BundleRead, BundleReadFaulted, BundleWorld,
+};
 use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
 
 type Judged = Result<Admitted, BundleRefused<BundleReadFaulted>>;
@@ -62,11 +64,6 @@ fn invalid(why: BundleInvalid) -> Judged {
 fn rehashed(reference: &BundleRef, bytes: &[u8]) -> (BundleRef, BundleBody) {
     let body = BundleBody::decode(bytes).expect("a body of whole records");
     (with_hash(reference, body.prunable_hash()), body)
-}
-
-/// `reference` naming another prunable hash.
-fn with_hash(reference: &BundleRef, prunable_hash: [u8; 32]) -> BundleRef {
-    BundleRef::new(reference.kept().clone(), prunable_hash)
 }
 
 /// `reference` with another seed in its kept part.

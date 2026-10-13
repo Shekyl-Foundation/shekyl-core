@@ -16,12 +16,8 @@ use shekyl_archival_retention::{
 use shekyl_types::BlockHeight;
 
 use super::*;
+use crate::harness::bundle::with_hash;
 use crate::rule_set::SettlementEpochBlocks;
-
-/// `reference` naming another prunable hash.
-fn with_hash(reference: &BundleRef, prunable_hash: [u8; 32]) -> BundleRef {
-    BundleRef::new(reference.kept().clone(), prunable_hash)
-}
 
 /// A reference at `h` to a bundle of `count` draws, none passed.
 fn reference_at(h: u64, count: u32) -> BundleRef {

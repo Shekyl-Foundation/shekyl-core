@@ -110,6 +110,15 @@ pub fn fixture_block_hash(height: BlockHeight) -> BlockHash {
     BlockHash::from_bytes(bytes)
 }
 
+/// `reference` naming another prunable hash: the kept part as it was, the
+/// hash replaced. What a block that committed to other prunable bytes
+/// carries, and what a reference to bytes nobody holds looks like. Shared
+/// by the verifier and section tests.
+#[must_use]
+pub fn with_hash(reference: &BundleRef, prunable_hash: [u8; 32]) -> BundleRef {
+    BundleRef::new(reference.kept().clone(), prunable_hash)
+}
+
 impl FixtureBundleView {
     fn read(&self, read: BundleRead) -> Result<(), BundleReadFaulted> {
         self.reads.borrow_mut().push(read);
