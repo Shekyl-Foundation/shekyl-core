@@ -154,18 +154,29 @@ impl HeldPersona {
     ///
     /// # Errors
     ///
-    /// `InvalidKeyMaterial` if the receipt key does not decode, or if the
-    /// scheme's signer gives up.
+    /// Two, kept apart by where they arise, not by the scheme's error value
+    /// (which is `InvalidKeyMaterial` for both):
+    ///
+    /// - [`StakeEngineError::ReceiptKeyUndecodable`] — the key does not
+    ///   decode: from the decode on the first call, from the slot's
+    ///   remembered [`HeldReceiptKey::Undecodable`] on every later one.
+    ///   Only this means "this persona's receipt key does not decode".
+    /// - [`StakeEngineError::ReceiptSign`] — a decoded key's signature
+    ///   failed (the scheme's signer gave up). The key stays held, and the
+    ///   next request signs from it.
     pub(crate) fn sign_receipt_transcript(
         &mut self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<FnDsaHybridSignature, shekyl_crypto_pq::CryptoError> {
+    ) -> Result<FnDsaHybridSignature, StakeEngineError> {
         let (keys, receipt) = match self {
             HeldPersona::Bonded(b) => (&b.0, &mut b.1),
             HeldPersona::Ephemeral(e) => (&e.0, &mut e.1),
         };
-        let signer = receipt.signer_over(&keys.receipt_sign_sk)?;
+        let signer = receipt
+            .signer_over(&keys.receipt_sign_sk)
+            .map_err(|ReceiptKeyUndecodable| StakeEngineError::ReceiptKeyUndecodable)?;
         shekyl_p_host::sign_receipt_transcript(signer, message)
+            .map_err(StakeEngineError::ReceiptSign)
     }
 
     /// The persona's receipt-key slot, read-only: its state, never its key.
@@ -225,9 +236,13 @@ pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys, pub(crate) HeldRece
 /// signature. Both forms are wiped when the persona drops.
 ///
 /// **A key that does not decode is remembered as such.** The first
-/// signature is refused with the scheme's error and the slot becomes
-/// [`Self::Undecodable`]; every later request is refused at once with the
-/// same error, without reading the secret or attempting a decode. The key
+/// signature is refused and the slot becomes [`Self::Undecodable`]; every
+/// later request is refused at once, without reading the secret or
+/// attempting a decode. The refusal is its own error,
+/// [`ReceiptKeyUndecodable`], and not the scheme's `InvalidKeyMaterial`,
+/// which a decoded key's give-up also returns: a holder that acts on "this
+/// key does not decode" must be able to tell it from "this signature
+/// failed". The key
 /// bytes do not change while the persona is held, so a decode that failed
 /// once fails every time, and retrying would spend a decode's stack and
 /// time on each request — on a path that a remote reader drives once the
@@ -257,14 +272,14 @@ impl HeldReceiptKey {
     ///
     /// # Errors
     ///
-    /// `InvalidKeyMaterial` if the key does not decode: from the decode on
-    /// the first call, from the remembered state on every later one. It is
-    /// the one error `FnDsaHybridSigner::new` has, so the unit state loses
-    /// nothing by not storing it.
+    /// [`ReceiptKeyUndecodable`] if the key does not decode: from the decode
+    /// on the first call, from the remembered state on every later one.
+    /// `FnDsaHybridSigner::new` has one error and it means exactly this, so
+    /// the unit state loses nothing by not storing it.
     fn signer_over(
         &mut self,
         secret: &FnDsaHybridSecretKey,
-    ) -> Result<&mut FnDsaHybridSigner, shekyl_crypto_pq::CryptoError> {
+    ) -> Result<&mut FnDsaHybridSigner, ReceiptKeyUndecodable> {
         if matches!(self, Self::NotBuilt) {
             *self = match FnDsaHybridSigner::new(secret) {
                 Ok(signer) => Self::Built(signer),
@@ -273,9 +288,9 @@ impl HeldReceiptKey {
         }
         match self {
             Self::Built(signer) => Ok(signer),
-            Self::Undecodable | Self::NotBuilt => {
-                Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
-            }
+            // `NotBuilt` is not reachable here: the branch above left it.
+            // It is refused, not trusted, and refused as what it would be.
+            Self::Undecodable | Self::NotBuilt => Err(ReceiptKeyUndecodable),
         }
     }
 
@@ -289,6 +304,14 @@ impl HeldReceiptKey {
         }
     }
 }
+
+/// A persona's receipt key does not decode. The one error
+/// [`HeldReceiptKey`] gives, and a type of its own so that it cannot be
+/// confused with a decoded key's failed signature, whose scheme error has
+/// the same value. Carries nothing: no error from the scheme and nothing
+/// computed from the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReceiptKeyUndecodable;
 
 /// Wipe a retired ephemeral persona.
 ///
@@ -767,13 +790,28 @@ pub(crate) enum StakeEngineError {
     PassCountersign(#[source] shekyl_crypto_pq::CryptoError),
 
     /// Signing a pass transcript with the held persona's **receipt key**
-    /// (hybrid scheme 3) failed inside the scheme — malformed resident key
-    /// material, the same class as [`Self::PassCountersign`], kept apart from
-    /// it so an operator can tell which of the persona's two signing keys
-    /// failed. STAGED with the receipt capability (`serving::receipt_key`):
-    /// no live path constructs it.
+    /// (hybrid scheme 3) failed inside the scheme, **with a key that
+    /// decoded**: the scheme's signer gave up, or the domain was refused.
+    /// The same class as [`Self::PassCountersign`], kept apart from it so an
+    /// operator can tell which of the persona's two signing keys failed.
+    /// Says nothing about the next signature: the key stays held. A key
+    /// that does not decode is [`Self::ReceiptKeyUndecodable`], never this.
+    /// STAGED with the receipt capability (`serving::receipt_key`): no live
+    /// path constructs it.
     #[error("receipt signature failed: {0}")]
     ReceiptSign(#[source] shekyl_crypto_pq::CryptoError),
+
+    /// The held persona's **receipt key does not decode** — its own variant,
+    /// and the only error that means it. Refused from the decode on the
+    /// first receipt and from the slot's remembered state on every later
+    /// one (`HeldReceiptKey::Undecodable`); no later request can succeed
+    /// while this persona is held. The receipt capability latches its
+    /// pre-flight on this variant and on no other. STAGED with it.
+    #[error(
+        "receipt key does not decode: this persona cannot sign receipts; \
+         its identity key and its other keys are unaffected"
+    )]
+    ReceiptKeyUndecodable,
 }
 
 /// The bonded union's transient scan inputs (SP-3 dual extractor): one

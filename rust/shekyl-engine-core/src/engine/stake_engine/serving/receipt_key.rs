@@ -48,13 +48,51 @@
 //! things must hold: the key is decoded when the serving task starts, so
 //! that an undecodable key is found before any reader; or `ready` refuses
 //! once a decode has failed. **This type does the second.** The first
-//! signature that finds the key undecodable is remembered here, and every
-//! later [`PassKey::ready`] returns that refusal without asking the actor.
-//! The cost of doing only the second is one response: the request that
-//! triggers the first decode has its body sent and closed with the refusal
-//! trailer. A cutover that wants no such response decodes at serving-task
-//! start as well. The actor's slot stays the authority that refuses a
-//! second decode.
+//! signature through *this capability* that the actor refuses with
+//! [`StakeEngineError::ReceiptKeyUndecodable`] is remembered on the
+//! capability, and every later [`PassKey::ready`] returns that same refusal
+//! without asking the actor.
+//!
+//! The cost of doing only the second is **one response per capability
+//! instance**, not one per persona: the memory is on the
+//! [`ResidentReceiptKey`] value, so each [`ResidentReceiptKey::new`] over a
+//! persona whose key does not decode sends one shard body that it closes
+//! with the refusal trailer before its pre-flight starts refusing. The
+//! actor's slot refuses that request without decoding again; only the
+//! capability's pre-flight is new to it. The serving task makes one
+//! capability per start, so in production that is one response per
+//! serving start. A cutover that wants no such response decodes at
+//! serving-task start as well.
+//!
+//! # Why the pre-flight latches here, and does not ask the actor
+//!
+//! The alternative is a pre-flight that asks the actor for the slot's state
+//! on every request: always current, and one actor round-trip per request,
+//! paid before the first response byte. The latch costs nothing per
+//! request. It is sound because of what may set it and what it then
+//! claims:
+//!
+//! - **Only one error sets it**, [`StakeEngineError::ReceiptKeyUndecodable`]
+//!   ([`latches_preflight`]). That variant is produced only from the actor
+//!   slot's `Undecodable` state, so it proves the key does not decode. A
+//!   decoded key whose signature fails is `ReceiptSign` — the scheme's
+//!   error value for that is the same `InvalidKeyMaterial` an undecodable
+//!   key gets, which is why the decision is on the variant and never on the
+//!   value. An unheld slot, a stopped actor and a failed signature leave the
+//!   latch as it was.
+//! - **What it then claims is that every signature this capability could
+//!   ask for is refused.** The slot never leaves `Undecodable` while the
+//!   persona is held; the actor's held set is built once, at its start, and
+//!   never re-populated (the watch upkeep moves the same map out and back);
+//!   and this capability is bound to that one actor by its handle. So once
+//!   the latch is set the actor would refuse every request this capability
+//!   could send, and the two cannot disagree in the direction that matters:
+//!   the latch never refuses a request the actor would sign. In the other
+//!   direction — the actor knows, the latch does not yet — the cost is the
+//!   one response above.
+//!
+//! The actor stays the authority for signing: the latch only lets the
+//! pre-flight say early what the actor would say late.
 //!
 //! # What it is
 //!
@@ -68,8 +106,8 @@
 //! Pre-flight matches the identity capability: actor liveness, and no
 //! round-trip. It differs afterwards. A signature that finds the receipt
 //! key undecodable is remembered on this capability, and later pre-flights
-//! refuse from that bit. An unheld slot is still found at sign time, as the
-//! identity key finds it.
+//! refuse with that refusal. An unheld slot is still found at sign time, as
+//! the identity key finds it.
 //!
 //! The decoded receipt key — 118,640 bytes of secret basis and working
 //! buffers — lives in the actor beside the bundle it was decoded from, and
@@ -77,12 +115,10 @@
 //! first signature this capability asks for and not before
 //! (`HeldReceiptKey`): while this module is staged, no persona decodes one.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use shekyl_archival_retention::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
-use shekyl_crypto_pq::CryptoError;
 use shekyl_p_host::{PassKey, SignRefused, RECEIPT_ENVELOPE_LEN};
 use shekyl_types::BlockHeight;
 
@@ -94,10 +130,13 @@ use crate::engine::stake_engine::types::{PSlot, StakeEngineError};
 pub(crate) struct ResidentReceiptKey {
     stake: WeakStakeEngineHandle,
     p_slot: PSlot,
-    /// Set when a signature finds the receipt key undecodable. Later
-    /// pre-flights read it and do not ask the actor. The actor's
-    /// `HeldReceiptKey::Undecodable` slot is what refuses another decode.
-    undecodable: AtomicBool,
+    /// The refusal the actor gave when it found this persona's receipt key
+    /// undecodable, once it has; empty until then. Later pre-flights return
+    /// it and do not ask the actor (module docs: why a latch, and why it is
+    /// sound). Set only from [`StakeEngineError::ReceiptKeyUndecodable`]
+    /// ([`latches_preflight`]). The actor's `HeldReceiptKey::Undecodable`
+    /// slot is what refuses another decode.
+    undecodable: OnceLock<SignRefused>,
 }
 
 // The one marker for the whole staged chain. The compiler treats an item
@@ -118,7 +157,7 @@ impl ResidentReceiptKey {
         Arc::new(Self {
             stake: stake.downgrade(),
             p_slot,
-            undecodable: AtomicBool::new(false),
+            undecodable: OnceLock::new(),
         })
     }
 }
@@ -138,48 +177,49 @@ impl ResidentReceiptKey {
 /// the live key is expected.
 impl PassKey<RECEIPT_ENVELOPE_LEN> for ResidentReceiptKey {
     /// Refuses when the actor that holds the key has stopped, or when an
-    /// earlier signature found the receipt key undecodable. The shard, the
+    /// earlier signature through this capability found the receipt key
+    /// undecodable. The shard, the
     /// anchor and whether the slot is held are not consulted: an unheld slot
     /// is the signer's answer, as it is for the identity key.
     ///
     /// No actor round-trip. A key not yet decoded answers `Ok`.
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
-        if self.undecodable.load(Ordering::Acquire) {
-            return Err(refused_undecodable());
+        if let Some(refused) = self.undecodable.get() {
+            return Err(refused.clone());
         }
         self.live_handle()?;
         Ok(())
     }
 
     /// Sign the 112-byte pass transcript with the persona's receipt key.
-    /// Runs on the blocking pool: it parks on the actor's reply. A key that
-    /// does not decode is remembered, so the next pre-flight refuses it.
+    /// Runs on the blocking pool: it parks on the actor's reply. A refusal
+    /// that proves the key undecodable is remembered, so the next pre-flight
+    /// refuses with it.
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
     ) -> Result<FnDsaHybridSignature, SignRefused> {
-        match self
-            .live_handle()?
+        self.live_handle()?
             .sign_receipt_transcript_blocking(self.p_slot, *message)
-        {
-            Ok(signature) => Ok(signature),
-            Err(error) => {
-                if matches!(
-                    error,
-                    StakeEngineError::ReceiptSign(CryptoError::InvalidKeyMaterial)
-                ) {
-                    self.undecodable.store(true, Ordering::Release);
+            .map_err(|error| {
+                let refused = SignRefused::new(error.to_string());
+                if latches_preflight(&error) {
+                    // First writer wins; every writer has the same words.
+                    self.undecodable.get_or_init(|| refused.clone());
                 }
-                Err(SignRefused::new(error.to_string()))
-            }
-        }
+                refused
+            })
     }
 }
 
-/// The refusal a pre-flight gives once a signature has found the key
-/// undecodable: the same words the signature's own error stringifies to.
-fn refused_undecodable() -> SignRefused {
-    SignRefused::new(StakeEngineError::ReceiptSign(CryptoError::InvalidKeyMaterial).to_string())
+/// Whether a refused signature proves this persona's receipt key does not
+/// decode, and so latches the capability's pre-flight. True for
+/// [`StakeEngineError::ReceiptKeyUndecodable`] and nothing else: not for a
+/// decoded key's failed signature (`ReceiptSign`, whatever the scheme's
+/// error value), not for an unheld slot, not for a stopped actor. A free
+/// function so the decision is tested on every error value directly.
+fn latches_preflight(error: &StakeEngineError) -> bool {
+    matches!(error, StakeEngineError::ReceiptKeyUndecodable)
 }
 
 // The types' own refusal of the falsifier, as a compile-time fact: this
@@ -224,7 +264,8 @@ mod tests {
     };
 
     /// The pre-flight, asked where the serve loop asks it: on the blocking
-    /// pool. It is liveness plus the sticky bit, not an actor round-trip.
+    /// pool. It is liveness plus the capability's remembered refusal, not an
+    /// actor round-trip.
     async fn ready(key: &Arc<ResidentReceiptKey>) -> Result<(), SignRefused> {
         let key = Arc::clone(key);
         tokio::task::spawn_blocking(move || key.ready(SHARD, ANCHOR))
@@ -382,6 +423,11 @@ mod tests {
             refused.detail.contains("lookahead exhausted"),
             "refusal names the slot boundary: {refused}"
         );
+        // The refusal did not latch the pre-flight: an unheld slot does not
+        // prove the key undecodable.
+        ready(&key)
+            .await
+            .expect("an unheld slot's refusal leaves the pre-flight as it was");
 
         let identity_key = ResidentPassKey::new(&stake, unheld);
         identity_key
@@ -409,10 +455,39 @@ mod tests {
         let handle = stake.mint_handle(slot(OTHER_SLOT)).await.expect("mint");
         stake.activate_persona(handle).await.expect("activate");
 
-        let refused = sign(key, message())
+        let refused = sign(Arc::clone(&key), message())
             .await
             .expect_err("the retired ephemeral slot was wiped");
         assert!(refused.detail.contains("lookahead exhausted"), "{refused}");
+        // Nor did a wiped persona's refusal latch it.
+        ready(&key)
+            .await
+            .expect("a wiped persona's refusal leaves the pre-flight as it was");
+    }
+
+    /// The latch decision, on every refusal a receipt signature can come
+    /// back with. Only the error that proves the key undecodable latches.
+    /// In particular a decoded key's failed signature does not, though the
+    /// scheme's error value for it is the `InvalidKeyMaterial` an
+    /// undecodable key gets: the decision is on the variant. That give-up
+    /// cannot be provoked through the actor without a production seam (it
+    /// takes 27 rejected samples in a row from a valid key), so it is held
+    /// here, on the value the actor would return for it.
+    #[test]
+    fn only_an_undecodable_key_latches_the_pre_flight() {
+        use shekyl_crypto_pq::CryptoError;
+        assert!(latches_preflight(&StakeEngineError::ReceiptKeyUndecodable));
+        for error in [
+            StakeEngineError::ReceiptSign(CryptoError::InvalidKeyMaterial),
+            StakeEngineError::ReceiptSign(CryptoError::InvalidInput("domain".into())),
+            StakeEngineError::LookaheadExhausted {
+                requested: slot(SLOT),
+            },
+            StakeEngineError::StakeActorUnavailable,
+            StakeEngineError::PassCountersign(CryptoError::InvalidKeyMaterial),
+        ] {
+            assert!(!latches_preflight(&error), "{error} latched the pre-flight");
+        }
     }
 
     /// Once the actor is gone the capability reports it at the pre-flight
@@ -472,8 +547,8 @@ mod tests {
         );
         let key = ResidentReceiptKey::new(&stake, slot(SLOT));
         // Not decoded yet, so the pre-flight has nothing to refuse on.
-        // Pre-flight is liveness plus the capability's sticky bit: it does
-        // not ask the actor, and it decodes nothing.
+        // Pre-flight is liveness plus the capability's remembered refusal:
+        // it does not ask the actor, and it decodes nothing.
         ready(&key)
             .await
             .expect("the actor started; nothing known yet");
@@ -484,15 +559,12 @@ mod tests {
             .expect_err("a key that does not decode refuses");
         assert_eq!(
             first,
-            SignRefused::new(
-                StakeEngineError::ReceiptSign(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
-                    .to_string()
-            )
+            SignRefused::new(StakeEngineError::ReceiptKeyUndecodable.to_string())
         );
         // The second sign is the actor's remembered `Undecodable`, not a
-        // second decode. `ready` is the capability's sticky bit, set from
-        // the first refusal, not an actor ask. The serve loop then answers
-        // the bare 503 and sends no shard it cannot sign for.
+        // second decode. `ready` is the capability's remembered refusal, set
+        // from the first refusal, not an actor ask. The serve loop then
+        // answers the bare 503 and sends no shard it cannot sign for.
         let second = sign(Arc::clone(&key), message())
             .await
             .expect_err("and again");
@@ -503,6 +575,24 @@ mod tests {
                 .expect_err("ready refuses after a failed decode"),
             first
         );
+        // The memory is the capability's, not the persona's: a second
+        // capability over the same slot starts ready, learns from its own
+        // first refusal (which the actor gives from its remembered state,
+        // decoding nothing), and refuses from then on. One response per
+        // capability instance, not one per persona.
+        let again = ResidentReceiptKey::new(&stake, slot(SLOT));
+        ready(&again)
+            .await
+            .expect("a new capability has not been refused yet");
+        assert_eq!(
+            sign(Arc::clone(&again), message())
+                .await
+                .expect_err("its first request is refused by the actor"),
+            first
+        );
+        assert_eq!(ready(&again).await.expect_err("and then it knows"), first);
+        assert_eq!(is_built(&stake, SLOT).await, Some(false));
+
         // The neighbour's pre-flight is its own.
         ready(&ResidentReceiptKey::new(&stake, slot(OTHER_SLOT)))
             .await

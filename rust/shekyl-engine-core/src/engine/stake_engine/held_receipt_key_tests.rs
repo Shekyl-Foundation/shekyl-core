@@ -18,7 +18,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
 use shekyl_p_host::PassKey;
 
-use super::{HeldPersona, HeldReceiptKey, PSlot};
+use super::{HeldPersona, HeldReceiptKey, PSlot, StakeEngineError};
 use crate::engine::stake_engine::handle::StakeEngineHandle;
 use crate::engine::stake_engine::persona::SignReceiptTranscript;
 use crate::engine::stake_engine::receipt_test_fixtures::{
@@ -96,7 +96,7 @@ fn a_corrupted_receipt_key_refuses_at_the_first_signature() {
     for _ in 0..3 {
         assert!(matches!(
             persona.sign_receipt_transcript(&message()),
-            Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
+            Err(StakeEngineError::ReceiptKeyUndecodable)
         ));
         assert!(matches!(persona.receipt_key(), HeldReceiptKey::Undecodable));
     }
@@ -131,7 +131,7 @@ fn an_undecodable_key_is_not_decoded_again() {
             for _ in 0..2 {
                 assert!(matches!(
                     persona.sign_receipt_transcript(&message()),
-                    Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
+                    Err(StakeEngineError::ReceiptKeyUndecodable)
                 ));
             }
             persona

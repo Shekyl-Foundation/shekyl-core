@@ -16,8 +16,9 @@
 //!
 //! It also holds the two properties the staging rests on from the outside:
 //! the two schemes do not accept each other's responses in either
-//! direction, and a receipt key that does not decode costs one response its
-//! signature and every later request a bare 503.
+//! direction, and a receipt key that does not decode costs one response per
+//! capability its signature and every later request through that capability
+//! a bare 503.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -140,8 +141,9 @@ async fn the_two_schemes_do_not_accept_each_others_endpoints() {
 /// The obligation the cutover inherits, seen from the wire. The receipt key
 /// is decoded by the first signature, so an undecodable key is found by the
 /// first reader: that response goes out whole and is closed with the
-/// refusal trailer. From then on the capability's pre-flight refuses, and
-/// every reader gets the bare 503 before any shard byte.
+/// refusal trailer. From then on this capability's pre-flight refuses, and
+/// every reader gets the bare 503 before any shard byte. (The memory is the
+/// capability's: one endpoint, one capability, one such response.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_undecodable_receipt_key_costs_one_response_then_refuses_at_pre_flight() {
     let mut bundle = derive_bundle(SLOT);
