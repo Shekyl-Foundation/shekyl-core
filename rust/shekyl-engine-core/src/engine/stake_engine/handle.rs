@@ -316,7 +316,7 @@ impl StakeEngineHandle {
     ///   error; construction only validates an already-minted handle.
     /// - [`StakeEngineError::SlotMismatch`] — `handle.p_slot != ticket.p_slot`.
     /// - [`StakeEngineError::RngSourceFailed`] — OS entropy source unavailable.
-    /// - [`StakeEngineError::RngDegeneracy`] — timing draw degenerate; retry.
+    /// - [`StakeEngineError::RngDegeneracy`] — the entry-gap run collided; the source is stuck.
     /// - [`StakeEngineError::BondBuild`] — bond construction failed (see inner).
     #[allow(dead_code)] // 2c-2b: the production caller lands with the request path; today's callers are all `cfg(test)`.
     pub(crate) async fn plan_bond_post(

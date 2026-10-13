@@ -152,10 +152,9 @@ impl StakeEngine {
             let _ = probe; // consumed; used only to exercise the source
         }
 
-        // 4. Entry-gap draw + per-draw degeneracy guard (S4/S5, Round 2/3).
-        //    `draw_entry_gap_guarded` draws twice (spread_draw, spread_probe) and
-        //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
-        //    The actual timing draw result is returned on success.
+        // 4. Entry-gap draw (S4/S5). The helper absorbs an equal pair and
+        //    returns `DegenerateDraw` only when the whole run collided.
+        //    The spread it returns is the placement.
         let mut rng = OsRngGapAdapter;
         let spread = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
             .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;

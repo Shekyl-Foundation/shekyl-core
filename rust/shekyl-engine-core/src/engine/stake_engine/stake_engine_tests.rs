@@ -42,7 +42,9 @@ use super::*;
 // out-of-module boundary. Names a feature-gated test needs are imported by that
 // test, not hoisted here behind a `cfg(any(…))` list that grows a term per
 // feature.
-use super::helpers::draw_entry_gap_guarded;
+use super::helpers::{
+    draw_entry_gap_guarded, entry_gap_degeneracy_run, entry_gap_degeneracy_run_is_minimal,
+};
 use super::persona::{
     ActivatePersona, ActivePersona, EraseReleasedShards, MintPersonaHandle, ServingBodies,
 };
@@ -51,7 +53,6 @@ use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::emission_claim::self_check_claims;
 use crate::engine::error::KeyEngineError;
 use crate::engine::pscan::scan_step::BlockRange;
-#[cfg(feature = "gf7-hooks")]
 use crate::engine::stake_timing::DEFAULT_ENTRY_GAP;
 use crate::engine::{Network, ShekylAddress};
 #[cfg(feature = "gf7-hooks")]
@@ -619,11 +620,12 @@ async fn panic_fail_stops_and_calls_are_terminally_unavailable() {
 // -----------------------------------------------------------------------
 //
 // S7(a): `verify_credit_funding` reject on wrong funding.
-// S7(b): degeneracy guard fires on degenerate draw (double-jitter-trap RNG).
+// S7(b): the degeneracy guard refuses a constant source and accepts a source
+// that produces one unequal pair inside the run.
 //
-// The `draw_entry_gap_guarded` helper is extracted and tested directly so the
-// degeneracy logic is exercised with injectable RNGs without going through the
-// actor (which uses `OsRngGapAdapter` in production).
+// The `draw_entry_gap_guarded` helper is tested directly so the run is
+// exercised with injectable RNGs. The actor's production draw uses
+// `OsRngGapAdapter` and is not the injection point.
 //
 // S7(c) unrepresentability ("sign without ticket", "unheld-handle sign") is
 // NOT covered by trybuild: that path was retired (plan §4.1 R0-D1) because the
@@ -633,11 +635,10 @@ async fn panic_fail_stops_and_calls_are_terminally_unavailable() {
 // by-value consumption), with the `!Clone` half pinned by the always-on
 // `AmbiguousIfImpl` `const _` guard above (near `PersonaHandle`).
 
-/// S7(b) — degeneracy guard fires on a stuck-RNG (double-jitter-trap pattern).
+/// S7(b) — a constant source refuses inside the request.
 ///
-/// A `ConstRng` that always returns the same `u64` produces identical spread
-/// values on every call to `draw_entry_gap`, so `draw_entry_gap_guarded`
-/// must fire the degeneracy guard for any window > 0.
+/// A `ConstRng` produces the same spread on every `draw_entry_gap`, so every
+/// pair in the run is equal and the guard refuses.
 #[test]
 fn degeneracy_guard_fires_on_stuck_rng() {
     struct ConstRng(u64);
@@ -660,11 +661,7 @@ fn degeneracy_guard_fires_on_stuck_rng() {
     }
 }
 
-/// S7(b) — degeneracy guard passes a correct RNG.
-///
-/// A deterministic counter RNG produces distinct consecutive spreads (except
-/// in pathological cases the guard's false-positive rate handles via retry),
-/// so the guard should pass for the common case.
+/// S7(b) — a source whose first pair differs is accepted on that pair.
 #[test]
 fn degeneracy_guard_passes_correct_rng() {
     struct CounterRng(u64);
@@ -682,6 +679,91 @@ fn degeneracy_guard_passes_correct_rng() {
         result.is_ok(),
         "counter RNG should not trigger the degeneracy guard: {result:?}"
     );
+}
+
+/// Scripted spreads. A word in `0..=window` is the spread `bounded_uniform`
+/// returns for it: the word sits in the sampler's accepted range and is
+/// unchanged by the reduction.
+struct SpreadWords {
+    words: Vec<u64>,
+    at: usize,
+}
+
+impl GapRng for SpreadWords {
+    fn next_u64(&mut self) -> u64 {
+        let word = self
+            .words
+            .get(self.at)
+            .copied()
+            .expect("the guard drew past the scripted spreads");
+        self.at += 1;
+        word
+    }
+}
+
+/// One equal pair, then a distinct pair. The guard accepts that pair's
+/// first spread and does not draw the rest of the run.
+#[test]
+fn degeneracy_guard_accepts_after_one_equal_pair() {
+    let window = DEFAULT_ENTRY_GAP.as_blocks();
+    let run = entry_gap_degeneracy_run(window);
+    assert!(run > 1, "a single pair is the collision, not the refusal");
+    let mut rng = SpreadWords {
+        words: vec![0, 0, 4, 11, 99],
+        at: 0,
+    };
+    let spread = draw_entry_gap_guarded(window, &mut rng)
+        .expect("one equal pair inside the run is not a refusal");
+    assert_eq!(spread, 4);
+    assert_eq!(rng.at, 4);
+}
+
+/// The last pair of the run is the first unequal pair. Its first spread
+/// is the placement, and the guard draws no further pair.
+#[test]
+fn degeneracy_guard_accepts_on_the_last_pair() {
+    let window = DEFAULT_ENTRY_GAP.as_blocks();
+    let run = entry_gap_degeneracy_run(window);
+    let mut words = vec![0_u64; (run as usize - 1) * 2];
+    words.extend([4, 11]);
+    let drawn = words.len();
+    words.push(99);
+    let mut rng = SpreadWords { words, at: 0 };
+    let spread =
+        draw_entry_gap_guarded(window, &mut rng).expect("the last pair of the run is accepted");
+    assert_eq!(spread, 4);
+    assert_eq!(rng.at, drawn);
+}
+
+/// Every pair in the run is equal. The guard refuses and does not draw
+/// the distinct continuation.
+#[test]
+fn degeneracy_guard_refuses_a_full_run_of_equal_pairs() {
+    let window = DEFAULT_ENTRY_GAP.as_blocks();
+    let run = entry_gap_degeneracy_run(window);
+    let drawn = run as usize * 2;
+    let mut words = vec![7_u64; drawn];
+    words.extend([1, 2]);
+    let mut rng = SpreadWords { words, at: 0 };
+    let result = draw_entry_gap_guarded(window, &mut rng);
+    assert!(
+        result.is_err(),
+        "a full run of equal pairs is the refusal, got {result:?}"
+    );
+    assert_eq!(rng.at, drawn);
+}
+
+/// The operational window's run is the shortest one that meets the bound,
+/// and it is longer than a single pair.
+#[test]
+fn entry_gap_degeneracy_run_is_minimal_at_the_operational_window() {
+    let window = DEFAULT_ENTRY_GAP.as_blocks();
+    assert!(
+        entry_gap_degeneracy_run_is_minimal(window),
+        "run {} at window {window} is not the minimal run for the bound",
+        entry_gap_degeneracy_run(window)
+    );
+    assert!(entry_gap_degeneracy_run(window) > 1);
 }
 
 /// S7(a) — `verify_credit_funding` rejects incorrect funding totals.

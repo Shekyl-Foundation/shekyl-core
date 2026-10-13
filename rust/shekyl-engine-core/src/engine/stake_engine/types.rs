@@ -492,16 +492,18 @@ pub(crate) enum StakeEngineError {
     )]
     RngSourceFailed(#[source] rand_core::Error),
 
-    /// The entry-gap timing draw was statistically degenerate (`PlanBondPost`, S5 /
-    /// Round 3 — double-jitter-trap detection). Two consecutive draws from the
-    /// same RNG produced identical spreads, which is the signature of a stuck
-    /// or non-random source. The draw is rejected; a correct CSPRNG produces
-    /// consecutive equal spreads with probability ≈ 1/601 — a single retry
-    /// resolves an unlucky-but-correct draw. Multiple consecutive `RngDegeneracy`
-    /// errors indicate a broken entropy source.
+    /// The entry-gap guard refused the draw (`PlanBondPost`, S5).
+    ///
+    /// [`super::helpers::draw_entry_gap_guarded`] compared a full
+    /// [`super::helpers::entry_gap_degeneracy_run`] of pairs and every pair
+    /// had equal spreads. A correct source reaches that run at most once per
+    /// [`super::helpers::ENTRY_GAP_DEGENERACY_BOUND`] draws. A stuck source
+    /// reaches it on every request. Retrying the bond request does not help
+    /// while the source keeps producing equal spreads.
     #[error(
-        "entry-gap draw degenerate: consecutive spreads were equal (stuck-RNG guard); \
-         retry the bond request"
+        "entry-gap draw degenerate: a run of equal spreads (stuck-RNG guard); \
+         the entropy source is not producing distinct draws, and retrying the \
+         bond request will not help until it does"
     )]
     RngDegeneracy,
 
@@ -701,14 +703,12 @@ pub(crate) enum TestSelfCert {
     Degenerate,
 }
 
-/// The entry-gap degeneracy guard fired: two consecutive draws produced equal
-/// spreads (the double-jitter-trap signature).
+/// The entry-gap guard refused: every pair in the run had equal spreads.
 ///
 /// A named zero-sized type rather than `()` so the failure reads at the
-/// signature and the single call site maps it explicitly. It is deliberately
-/// **not** an enum: there is exactly one way this guard fails, and a multi-variant
-/// "in case we add more later" error would be pre-provisioned flexibility
-/// (`21-reversion-clause-discipline.mdc`) — add a variant (or a new error type)
-/// when a second failure mode actually exists.
+/// signature and the call site maps it explicitly. There is one way this
+/// guard fails, so this stays a struct. A second failure mode would be a
+/// new type, not a variant added in advance
+/// (`21-reversion-clause-discipline.mdc`).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct DegenerateDraw;

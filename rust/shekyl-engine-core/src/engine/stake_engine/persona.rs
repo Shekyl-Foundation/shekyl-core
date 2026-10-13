@@ -328,10 +328,9 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 ///
 /// The entry-gap timing draw runs inside the handler (S4/S5): the OS entropy
 /// source is preflighted via `try_fill_bytes` (fail-loud on source failure —
-/// no silent fallback to a weaker source), then the draw is taken and checked
-/// for the double-jitter degeneracy pattern. A degenerate draw is rejected;
-/// a correct CSPRNG produces consecutive equal spreads with probability ≈ 1/601,
-/// so a single retry resolves an unlucky-but-correct draw.
+/// no silent fallback to a weaker source), then [`super::helpers::draw_entry_gap_guarded`]
+/// draws a run of pairs. An equal pair is drawn again inside the guard. The
+/// handler rejects only when the whole run collided, which is a stuck source.
 ///
 /// The `ArchivalPKeys` bundle is borrowed inside the actor and never crosses
 /// the actor boundary (rule 36-secret-locality). `build_join_market_vin` is
