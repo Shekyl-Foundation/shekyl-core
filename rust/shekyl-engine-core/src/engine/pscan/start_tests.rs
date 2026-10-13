@@ -365,13 +365,16 @@ async fn run_blocking_io_runs_on_a_multi_thread_runtime() {
 /// it is a source-text pin, not a reachability proof.
 #[test]
 fn the_bond_broadcast_seam_stays_on_the_local_choke_point() {
-    // `split_once`, not `split().next()`: the latter always yields a first
-    // piece, so a drifted marker would silently make the "production half"
-    // the whole file and let this test module's own text satisfy the
-    // positive needles below. Marker drift must be red.
-    let (production, _) = include_str!("start.rs")
-        .split_once("\n#[cfg(test)]\nmod tests {")
-        .expect("start.rs carries the tests-module marker this split relies on");
+    // Since this suite moved to a `#[path]` sibling, `start.rs` is
+    // production text end to end and the whole file is the subject. Hold
+    // that: an inline test module re-growing there would let test text
+    // satisfy the positive needles below, so its marker must stay absent.
+    let production = include_str!("start.rs");
+    assert!(
+        !production.contains("\nmod tests {"),
+        "start.rs grew an inline tests module; this suite lives in start_tests.rs, and an \
+         inline one would put test text inside this pin's subject"
+    );
     // Code-only view: drop comment-only lines (`//`, `///`, `//!`) so the
     // module docs' references to forbidden tokens cannot satisfy the guards.
     let code: String = production
