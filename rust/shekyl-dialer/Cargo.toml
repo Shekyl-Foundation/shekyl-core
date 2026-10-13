@@ -22,6 +22,8 @@ shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 # The handshake's codec and the Levin bucket reader.
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+# The wake is an owner of the daemon's one timing engine.
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 # The two outbound targets of the composition table.
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 # The RNG seam the draws are generic over.
@@ -32,7 +34,6 @@ shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 # The owner's test rig: a hub over the loopback dialer, with a manual clock.
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
-shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 
 [lints]

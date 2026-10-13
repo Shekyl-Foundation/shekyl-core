@@ -7,9 +7,12 @@
 //! dials, runs the Levin handshake, adopts the channel and reports the
 //! outcome (dialer brief, "The fill", "The dial", "`DialOutcome`").
 //!
-//! The loop runs on a thread of its own. `Hub::dial_channel` blocks that
-//! thread while the connector opens the channel, and the handshake reads
-//! the channel's frames on it. No p2p io worker is held.
+//! The loop runs on a thread of its own. Its wake is a timing-engine owner
+//! (Rick, 2026-10-13): each gap is armed on the engine and the thread
+//! waits for the wake; the daemon has one scheduler and the dialer brings
+//! no second one. `Hub::dial_channel` blocks that thread while the
+//! connector opens the channel, and the handshake reads the channel's
+//! frames on it. No p2p io worker is held.
 //!
 //! The handshake owner holds the close cause itself: a channel that ends
 //! before a well-formed response reports the cause the connector stored on
@@ -24,7 +27,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
@@ -38,6 +40,7 @@ use shekyl_peerlist::{
 };
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_seam::{drive_inbound, Endpoint, Hub, SocketId, SyncPayload};
+use shekyl_timing_engine::{Clock, OwnerHandle};
 
 use crate::attempts::Attempts;
 use crate::candidate::CandidateFilter;
@@ -368,7 +371,9 @@ impl Dialer {
         }
     }
 
-    /// Stop every owner loop at its next wake.
+    /// Stop every owner loop at its next wake. A loop blocked in the
+    /// engine's wait returns when its owner is deregistered or the engine
+    /// closes, which zone shutdown does.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
     }
@@ -386,10 +391,28 @@ impl Dialer {
     }
 
     /// Run the owner loop for `connector` on the calling thread, until
-    /// [`Self::stop`]. `rng` is the daemon's CSPRNG.
-    pub fn run<R: RelayRng + ?Sized>(&self, connector: ConnectorId, rng: &mut R) {
+    /// [`Self::stop`], the owner's deregistration, or the engine's close.
+    ///
+    /// `owner` is this loop's registration on the timing engine. Each
+    /// wake is armed at the engine's clock plus the gap of
+    /// [`next_wake_nanos`], drawn per dial from `rng`, the daemon's CSPRNG.
+    pub fn run<C: Clock, R: RelayRng + ?Sized>(
+        &self,
+        connector: ConnectorId,
+        owner: &OwnerHandle<C>,
+        rng: &mut R,
+    ) {
         while !self.stop.load(Ordering::Acquire) {
-            self.sleep(Duration::from_nanos(next_wake_nanos(rng)));
+            let deadline = Tick::new(
+                owner
+                    .clock()
+                    .now()
+                    .get()
+                    .saturating_add(next_wake_nanos(rng)),
+            );
+            if owner.arm(deadline).is_err() || owner.wait_wake().is_err() {
+                break;
+            }
             if self.stop.load(Ordering::Acquire) {
                 break;
             }
@@ -466,17 +489,6 @@ impl Dialer {
                 );
                 Some(id)
             }
-        }
-    }
-
-    fn sleep(&self, gap: Duration) {
-        let until = Instant::now() + gap;
-        while !self.stop.load(Ordering::Acquire) {
-            let now = Instant::now();
-            if now >= until {
-                return;
-            }
-            std::thread::sleep((until - now).min(Duration::from_millis(100)));
         }
     }
 

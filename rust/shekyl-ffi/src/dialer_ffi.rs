@@ -29,6 +29,7 @@ use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
 use shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS;
 use shekyl_rpc_types::DaemonNetwork;
 use shekyl_seam::{connector_from_index, Hub, SocketId, SyncPayload};
+use shekyl_timing_engine::{Handle, MonotonicClock, OwnerClass};
 
 use crate::legacy_util::slice_from_typed_ptr;
 use crate::peerlist_ffi::{address_of, refused_set};
@@ -99,12 +100,20 @@ pub(crate) fn note_network(network: DaemonNetwork) {
     *NETWORK.lock().expect("network") = seeds_of;
 }
 
-/// Start the owner loop for `connector` on a thread of its own. The
-/// compiled seeds enter gray first, as operator-named addresses (slice 1
-/// brief §3). Called once per connector, when it is ready to dial.
-pub(crate) fn start_connector(connector: ConnectorId) {
+/// Start the owner loop for `connector` on a thread of its own, as an
+/// owner of the daemon's timing engine. The compiled seeds enter gray
+/// first, as operator-named addresses (slice 1 brief §3). Called once per
+/// connector, when it is ready to dial.
+pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicClock>) {
     let Some(dialer) = dialer() else {
         return;
+    };
+    let owner = match engine.register(OwnerClass::Discovery) {
+        Ok(owner) => owner,
+        Err(err) => {
+            tracing::error!("the dialer's wake for {connector:?} could not register: {err:?}");
+            return;
+        }
     };
     if connector == ConnectorId::Clearnet {
         let network = *NETWORK.lock().expect("network");
@@ -117,7 +126,10 @@ pub(crate) fn start_connector(connector: ConnectorId) {
     }
     let name = format!("p2p-dial-{connector:?}").to_lowercase();
     let spawned = std::thread::Builder::new().name(name).spawn(move || {
-        dialer.run(connector, &mut SecureRelayRng);
+        dialer.run(connector, &owner, &mut SecureRelayRng);
+        match owner.deregister() {
+            Ok(()) | Err(_) => {}
+        }
     });
     if spawned.is_err() {
         tracing::error!("the dialer's thread for {connector:?} could not start");

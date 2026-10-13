@@ -504,7 +504,7 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
         proxy,
     });
     spawn_clearnet(&host, bound_v4, kind, Arc::clone(&tally));
-    crate::dialer_ffi::start_connector(ConnectorId::Clearnet);
+    crate::dialer_ffi::start_connector(ConnectorId::Clearnet, &host.engine);
     if let Some(listener) = bound_v6 {
         spawn_clearnet(&host, listener, kind, tally);
     }
@@ -576,7 +576,7 @@ pub unsafe extern "C" fn shekyl_zone_listen_tor(
         return -1;
     };
     *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
-    crate::dialer_ffi::start_connector(ConnectorId::Tor);
+    crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     let extra = match c_str(extra) {
         Some(text) => {
             let Ok(ip) = text.parse::<IpAddr>() else {
@@ -662,7 +662,7 @@ pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
         return -1;
     };
     *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
-    crate::dialer_ffi::start_connector(ConnectorId::Tor);
+    crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     0
 }
 
