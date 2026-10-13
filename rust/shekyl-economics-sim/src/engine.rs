@@ -1,9 +1,8 @@
 use serde::Serialize;
 use shekyl_economics::{
-    burn::compute_burn_split_at,
     calc_release_multiplier,
     params::{calc_stake_ratio, EconomicParams, SCALE},
-    split_block_emission, CirculatingSupply, ClosedShardCount,
+    CirculatingSupply, ClosedShardCount,
 };
 use shekyl_units::AtomicUnits;
 
@@ -38,7 +37,6 @@ pub struct ScenarioResult {
     pub years: Vec<YearSnapshot>,
     pub final_supply_emitted_pct: f64,
     pub final_total_burned: f64,
-    pub stuffing_profitable: Option<bool>,
 }
 
 pub struct VolumeSchedule {
@@ -80,6 +78,11 @@ pub struct ArchivalLockModel {
     /// cadence), with a denser sensitivity arm. Must be **> 0** — zero has
     /// no model meaning and `locked_atomic` panics on it rather than
     /// silently reporting zero locked supply.
+    ///
+    /// The default is far sparser than the chain: the stage-2 byte fold
+    /// closes a shard about every eleven blocks. A gate-7 lock figure is
+    /// therefore a floor, not an estimate
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4).
     pub blocks_per_shard: u64,
     /// Bonded archiver population `N_P` (enters the admission arm only;
     /// L11 attractor envelope: lean ≈ 79, thick ≈ 154, fee-era-thin band
@@ -131,6 +134,11 @@ pub struct SimParams {
     pub emission_curve_asymptote: u64,
     pub emission_speed_factor_per_block: u64,
     pub final_subsidy_per_minute: u64,
+    /// The fold's year: where it draws a year boundary and reads a
+    /// schedule. The staker emission share does **not** follow it: the
+    /// share decays on production's `BLOCKS_PER_YEAR`
+    /// (`emission_share_at`), which is this field's default. A test that
+    /// shortens the year shortens the bookkeeping only.
     pub blocks_per_year: u64,
     pub tx_volume_baseline: u64,
     pub release_min: u64,
@@ -138,8 +146,6 @@ pub struct SimParams {
     pub burn_base_rate: u64,
     pub burn_cap: u64,
     pub staker_pool_share: u64,
-    pub staker_emission_share: u64,
-    pub staker_emission_decay: u64,
     /// The run's fee arm: what every scenario charges an ordinary
     /// transaction (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-1).
     pub fee: FeeModel,
@@ -161,8 +167,6 @@ impl Default for SimParams {
             burn_base_rate: shipped.burn_base_rate,
             burn_cap: shipped.burn_cap,
             staker_pool_share: shipped.staker_pool_share,
-            staker_emission_share: shekyl_economics::STAKER_EMISSION_SHARE,
-            staker_emission_decay: shekyl_economics::STAKER_EMISSION_DECAY,
             fee: FeeModel::PRODUCTION_DEFAULT,
         }
     }
@@ -254,6 +258,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 leaves: outputs.leaves(),
                 already_generated,
                 total_burned,
+                closed_shards: ClosedShardCount::ZERO,
             },
             params,
             &economic,
@@ -281,23 +286,20 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             params.release_min,
             params.release_max,
         );
-        let emission_share = priced.emission_share;
         let burn_pct = priced.burn_pct;
 
         outputs.accrue(priced.filled.included);
-        let total_fees = priced.filled.fees;
-        let effective_reward = priced.filled.paid_reward;
-        let (miner_emission, staker_emission) =
-            split_block_emission(effective_reward, emission_share);
+        let paid_reward = priced.paid_reward();
+        let miner_emission = priced.paid.split.miner_emission;
+        let staker_emission = priced.paid.split.staker_emission;
 
         // Canonical escalated split. This engine has no leaf/corpus trajectory, so
         // n = 0; under the shipped genesis-neutral asymptote that is bit-identical
         // to the flat floor at every n, and after the ceremony this is the honest
         // "no burden yet" baseline (stage2 threads real n via burden::closed_shards).
-        let fee_split =
-            compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &economic);
+        let fee_split = priced.paid.fee_burn;
 
-        already_generated += u128::from(effective_reward);
+        already_generated += u128::from(paid_reward);
         total_burned += fee_split.actually_destroyed as u128;
 
         staker_emission_earned_year += staker_emission as u128;
@@ -308,7 +310,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             let supply_emitted_pct =
                 already_generated as f64 / emission_curve_asymptote as f64 * 100.0;
 
-            let avg_block_reward = effective_reward as f64 / COIN;
+            let avg_block_reward = paid_reward as f64 / COIN;
 
             let staked_amount = match staked_atomic {
                 Some(locked) => locked as f64 / COIN,
@@ -325,7 +327,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 0.0
             };
 
-            let miner_no_share = effective_reward as f64;
+            let miner_no_share = paid_reward as f64;
             let miner_pct = if miner_no_share > 0.0 {
                 miner_emission as f64 / miner_no_share * 100.0
             } else {
@@ -367,7 +369,6 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         final_supply_emitted_pct: already_generated as f64 / emission_curve_asymptote as f64
             * 100.0,
         final_total_burned: total_burned as f64 / COIN,
-        stuffing_profitable: None,
         years: snapshots,
     }
 }
@@ -500,14 +501,6 @@ mod tests {
         assert_eq!(
             p.staker_pool_share,
             cfg_u64(&cfg, "shekyl_staker_pool_share")
-        );
-        assert_eq!(
-            p.staker_emission_share,
-            cfg_u64(&cfg, "shekyl_staker_emission_share")
-        );
-        assert_eq!(
-            p.staker_emission_decay,
-            cfg_u64(&cfg, "shekyl_staker_emission_decay")
         );
     }
 

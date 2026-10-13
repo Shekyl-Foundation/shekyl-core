@@ -51,8 +51,8 @@ use std::collections::HashSet;
 
 use shekyl_block_template::Fill;
 use shekyl_economics::{
-    compute_burn_split_at, penalty_free_weight, split_block_emission, ClosedShardCount,
-    EconomicParams,
+    burn::calc_burn_pct_at, penalty_free_weight, price_emission, CirculatingSupply,
+    ClosedShardCount, EconomicParams, EmissionInputs, PaidEmission,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
@@ -307,6 +307,44 @@ impl Envelope {
     }
 }
 
+/// The miner's payout for one priced block: what the composition owes him,
+/// less the fees he paid to list his own bodies, plus `recovery` of the
+/// staker pool those fees funded. The pool share is taken from his own fees
+/// only, on the block's one burn split. `total_fees` is the fee sum `paid`
+/// was priced at.
+fn miner_net(paid: &PaidEmission, total_fees: u64, own_fees: u64, recovery: PoolShare) -> i128 {
+    let recovered = recovery.of(paid.fee_burn.staker_pool_amount, own_fees, total_fees);
+    i128::from(paid.owed.to_raw()) + i128::from(recovered) - i128::from(own_fees)
+}
+
+/// One weight at this block's site, as production prices it.
+///
+/// A weight inside the fill's bound is a block the composition accepts.
+/// A refusal is the invariant breaking, the same way the cursor's
+/// `expect` treats the block the fill just listed.
+fn price_weight(
+    height: u64,
+    median_weight: u64,
+    point: &FeePoint<'_>,
+    supply: CirculatingSupply,
+    closed_shards: ClosedShardCount,
+    block_weight: u64,
+    total_fees: u64,
+) -> PaidEmission {
+    price_emission(&EmissionInputs {
+        height,
+        median_weight,
+        block_weight,
+        already_generated: point.already_generated,
+        tx_volume: point.volume,
+        total_fees,
+        supply,
+        closed_shards,
+        params: point.params,
+    })
+    .expect("the search only offers a weight the fill's bound admits")
+}
+
 /// The block the honest fold built, and the operands an attacker prices it
 /// at.
 struct Block<'a> {
@@ -317,10 +355,14 @@ struct Block<'a> {
     honest: Fill<'a>,
     /// Weight the honest bodies leave under the emission's full weight.
     room: u64,
-    burn_pct: u64,
+    height: u64,
+    supply: CirculatingSupply,
     closed_shards: ClosedShardCount,
     honest_weight: u64,
     honest_fee: u64,
+    /// The block as the fold listed it, priced once. A packing prices only
+    /// the block it would list, against this.
+    honest_paid: PaidEmission,
 }
 
 impl<'a> Block<'a> {
@@ -334,6 +376,11 @@ impl<'a> Block<'a> {
             chain_leaves: last.chain_leaves,
             params: economic,
         };
+        assert_eq!(
+            last.burn_pct_scaled,
+            calc_burn_pct_at(last.volume, last.supply, economic),
+            "the block's burn is production's at its volume and supply"
+        );
         let median = last.medians.effective_median.to_raw();
         let honest = Fill::listed(
             median,
@@ -347,6 +394,17 @@ impl<'a> Block<'a> {
         let room = penalty_free_weight(median, economic)
             .min(honest.bodies_weight_bound())
             .saturating_sub(honest.bodies_weight());
+        let supply = last.supply;
+        let closed_shards = ClosedShardCount::new(last.closed_shards);
+        let honest_paid = price_weight(
+            last.chain_height,
+            median,
+            &at,
+            supply,
+            closed_shards,
+            honest.bodies_weight(),
+            honest.fees(),
+        );
         Self {
             at,
             economic,
@@ -354,24 +412,27 @@ impl<'a> Block<'a> {
             median,
             honest,
             room,
-            burn_pct: last.burn_pct_scaled,
-            closed_shards: ClosedShardCount::new(last.closed_shards),
+            height: last.chain_height,
+            supply,
+            closed_shards,
             honest_weight: last.honest_tx.weight,
             honest_fee: last.honest_tx.fee_atomic,
+            honest_paid,
         }
     }
 
-    /// The miner's payout for one block: his emission leg, his fee income,
-    /// less the fees he paid to list his own bodies, plus `recovery` of the
-    /// staker pool those fees funded. The pool share is taken from his own
-    /// fees only, on the block's one burn split.
-    fn net(&self, reward: u64, total_fees: u64, own_fees: u64, recovery: PoolShare) -> i128 {
-        let (miner_emission, _) = split_block_emission(reward, self.at.sigma_scaled);
-        let split =
-            compute_burn_split_at(total_fees, self.burn_pct, self.closed_shards, self.economic);
-        let recovered = recovery.of(split.staker_pool_amount, own_fees, total_fees);
-        i128::from(miner_emission) + i128::from(split.miner_fee_income) + i128::from(recovered)
-            - i128::from(own_fees)
+    /// The block at `bodies_weight` listing `total_fees`, as production
+    /// prices it.
+    fn priced_at(&self, bodies_weight: u64, total_fees: u64) -> PaidEmission {
+        price_weight(
+            self.height,
+            self.median,
+            &self.at,
+            self.supply,
+            self.closed_shards,
+            bodies_weight,
+            total_fees,
+        )
     }
 
     /// The relay stuffer: the rate that gets his bodies listed, and his
@@ -517,10 +578,9 @@ impl<'a> Block<'a> {
             return None;
         }
         let total_fees = kept_fees.checked_add(own_fees)?;
-        let reward_before = self.honest.reward();
-        let reward_after = self.honest.reward_at(total_weight).ok()?;
-        let net_before = self.net(reward_before, self.honest.fees(), 0, recovery);
-        let net_after = self.net(reward_after, total_fees, own_fees, recovery);
+        let after = self.priced_at(total_weight, total_fees);
+        let net_before = miner_net(&self.honest_paid, self.honest.fees(), 0, recovery);
+        let net_after = miner_net(&after, total_fees, own_fees, recovery);
         let block_cost = u128::try_from((net_before - net_after).max(0)).unwrap_or(u128::MAX);
         Some(PricedPacking {
             block_cost,
@@ -528,8 +588,8 @@ impl<'a> Block<'a> {
             dropped,
             stuffed,
             weight: body.weight,
-            reward_before,
-            reward_after,
+            reward_before: self.honest_paid.paid.to_raw(),
+            reward_after: after.paid.to_raw(),
             archival: body.archival,
         })
     }
@@ -820,8 +880,10 @@ mod tests {
     use shekyl_block_template::Fill;
     use shekyl_chain_rules::medians_from;
     use shekyl_economics::{
-        compute_burn_split_at, paid_block_reward, split_block_emission, TxVolume,
+        burn::calc_burn_pct_at, compute_burn_split_at, emission_share_at, paid_block_reward,
+        split_block_emission, TxVolume, BLOCKS_PER_YEAR,
     };
+    use shekyl_units::AtomicUnits;
 
     use crate::fee_model::OrdinaryTx;
 
@@ -831,12 +893,21 @@ mod tests {
         let economic = params.economic();
         let zone = economic.full_reward_zone;
         let volume = TxVolume::per_block(params.tx_volume_baseline);
+        // The share and the burn are production's at these operands, as
+        // the cursor's are: the payout reprices the block from them.
+        let chain_height = 2 * BLOCKS_PER_YEAR;
+        let already_generated = economic.emission_curve_asymptote / 3;
+        let supply = CirculatingSupply::derive(
+            AtomicUnits::from_raw(already_generated),
+            AtomicUnits::from_raw(0),
+        )
+        .expect("nothing burned");
         let at = FeePoint {
-            already_generated: economic.emission_curve_asymptote / 3,
+            already_generated,
             volume,
             long_term_median: zone,
-            sigma_scaled: 100_000,
-            burn_pct_scaled: 200_000,
+            sigma_scaled: emission_share_at(chain_height),
+            burn_pct_scaled: calc_burn_pct_at(volume, supply, &economic),
             chain_leaves: 50_000_000,
             params: &economic,
         };
@@ -851,6 +922,8 @@ mod tests {
         .expect("priced");
         fill.admit_up_to(honest_tx.weight, honest_tx.fee_atomic, offered);
         LastBlock {
+            chain_height,
+            supply,
             already_generated: at.already_generated,
             volume,
             sigma_scaled: at.sigma_scaled,
