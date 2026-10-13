@@ -59,7 +59,7 @@ use shekyl_economics::{
 
 use crate::burden::HonestOutputs;
 use crate::chain_cursor::{ChainCursor, ChainStep};
-use crate::engine::SimParams;
+use crate::engine::{emitted_at_start, SimParams};
 
 const COIN: f64 = crate::burden::COIN as f64;
 
@@ -70,7 +70,8 @@ pub struct BudgetScenario {
     pub description: String,
     pub sim_years: u64,
     pub get_volume: Box<dyn Fn(u64, u64) -> u64>,
-    pub initial_emitted_fraction: f64,
+    /// As [`ScenarioConfig::initial_emitted_ppm`](crate::engine::ScenarioConfig).
+    pub initial_emitted_ppm: u32,
     pub genesis_height_offset: u64,
 }
 
@@ -140,8 +141,10 @@ pub struct BudgetScenarioResult {
 pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> BudgetScenarioResult {
     let economic = params.economic();
 
-    let mut already_generated: u128 =
-        (params.emission_curve_asymptote as f64 * scenario.initial_emitted_fraction) as u128;
+    let mut already_generated = emitted_at_start(
+        params.emission_curve_asymptote,
+        scenario.initial_emitted_ppm,
+    );
     let mut total_burned: u128 = 0;
 
     let total_blocks = params.blocks_per_year * scenario.sim_years;

@@ -64,6 +64,16 @@ impl SplitMix64 {
         z ^ (z >> 31)
     }
 
+    /// 32 bytes of the stream, one [`Self::below`]`(256)` each: a seed or
+    /// a hash for a block that is never built.
+    pub(crate) fn bytes32(&mut self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for byte in &mut out {
+            *byte = u8::try_from(self.below(256)).expect("below 256 fits a byte");
+        }
+        out
+    }
+
     /// Uniform draw in `[0, n)` by rejection (no modulo bias).
     /// `n` must be nonzero — an empty range has no uniform draw.
     pub(crate) fn below(&mut self, n: u64) -> u64 {

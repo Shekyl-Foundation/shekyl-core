@@ -67,10 +67,10 @@ pub const SHARD_BYTES: f64 = SHARD_LENGTH.to_raw() as f64;
 /// FCMP proof size in every transaction's archival length. The **stuffer**
 /// uses the archival-per-fee shape instead (`calibration.rs`, DQ-2C directive
 /// 2), not this value.
-pub const OUTPUTS_PER_TX_NORMAL: f64 = 2.0;
+pub const OUTPUTS_PER_TX_NORMAL: u64 = 2;
 
-/// The ordinary transaction's shape: 1-in / 2-out, the pair
-/// [`OUTPUTS_PER_TX_NORMAL`] states as a mean.
+/// The ordinary transaction's shape: 1-in / 2-out, the pair whose output
+/// count [`OUTPUTS_PER_TX_NORMAL`] is.
 #[must_use]
 pub fn normal_tx_shape() -> (InputCount, OutputCount) {
     (InputCount::clamped(1), OutputCount::clamped(2))
@@ -114,20 +114,20 @@ pub(crate) fn ordinary_tx_weight(chain_leaves: u64, fee_atomic: u64) -> u64 {
 /// growing three.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct HonestOutputs {
-    cumulative: f64,
+    cumulative: u64,
 }
 
 impl HonestOutputs {
     /// Outputs in the curve tree at this point of the fold.
     #[must_use]
     pub(crate) fn leaves(self) -> u64 {
-        self.cumulative as u64
+        self.cumulative
     }
 
     /// Record `txs` ordinary transactions. Callers price the fee at
     /// [`leaves`](Self::leaves) before this.
     pub(crate) fn accrue(&mut self, txs: u64) {
-        self.cumulative += txs as f64 * OUTPUTS_PER_TX_NORMAL;
+        self.cumulative += txs * OUTPUTS_PER_TX_NORMAL;
     }
 }
 
@@ -188,7 +188,7 @@ pub fn honest_leaves_at_closed_shards(closed_shard_count: u64) -> u64 {
     let mut leaves: u64 = 0;
     for _ in 0..=MAX_TREE_DEPTH {
         let per_tx = normal_tx_archival_bytes(leaves).max(1);
-        let next = ((bytes / per_tx) as f64 * OUTPUTS_PER_TX_NORMAL) as u64;
+        let next = bytes / per_tx * OUTPUTS_PER_TX_NORMAL;
         if next == leaves {
             return leaves;
         }
@@ -354,9 +354,9 @@ mod tests {
         // directions share one per-tx length, so they must agree.
         for n in [1u64, 100, 10_000, 1_000_000] {
             let leaves = honest_leaves_at_closed_shards(n);
-            let txs = leaves as f64 / OUTPUTS_PER_TX_NORMAL;
-            let bytes = txs * normal_tx_archival_bytes(leaves) as f64;
-            let back = closed_shards(bytes as u64);
+            let txs = leaves / OUTPUTS_PER_TX_NORMAL;
+            let bytes = txs * normal_tx_archival_bytes(leaves);
+            let back = closed_shards(bytes);
             assert!(
                 back.abs_diff(n) <= 1,
                 "n={n}: inverse gave {leaves} leaves, folding back gives n={back}"

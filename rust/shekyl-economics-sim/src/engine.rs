@@ -114,7 +114,10 @@ pub struct ScenarioConfig {
     pub sim_years: u64,
     pub volume: VolumeSchedule,
     pub stake: StakeSchedule,
-    pub initial_emitted_fraction: f64,
+    /// Of the asymptote already emitted when the fold starts, in parts
+    /// per million. The scenario's one input boundary into the ledger:
+    /// [`emitted_at_start`] crosses it in integers.
+    pub initial_emitted_ppm: u32,
     pub genesis_height_offset: u64,
     /// Gate-7 derived-lock model. `None` (all legacy scenarios) leaves the
     /// asserted `StakeSchedule` path byte-identical.
@@ -214,6 +217,25 @@ const COIN: f64 = crate::burden::COIN as f64;
 /// owner. The folds keep both accumulators in `u128`, and the chain records
 /// them as `u64`, so both are read at the `u64` rail as the folds' other
 /// chain operands are.
+/// One million parts: the scale of a scenario's `initial_emitted_ppm`.
+pub const PPM: u32 = 1_000_000;
+
+/// Coins emitted before a fold's first block: `ppm` millionths of the
+/// asymptote, in the ledger's `u128`. The scenario layer's fraction crosses
+/// into integers here and nowhere else (DQ-2G).
+///
+/// # Panics
+///
+/// A fraction above one is not a point on the curve.
+#[must_use]
+pub(crate) fn emitted_at_start(asymptote: u64, ppm: u32) -> u128 {
+    assert!(
+        ppm <= PPM,
+        "a scenario cannot start past the asymptote: {ppm} ppm"
+    );
+    u128::from(asymptote) * u128::from(ppm) / u128::from(PPM)
+}
+
 pub(crate) fn net_supply(already_generated: u128, total_burned: u128) -> CirculatingSupply {
     let rail = |amount: u128| AtomicUnits::from_raw(amount.min(u128::from(u64::MAX)) as u64);
     CirculatingSupply::derive(rail(already_generated), rail(total_burned))
@@ -225,8 +247,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
     let total_blocks = params.blocks_per_year * config.sim_years;
 
-    let mut already_generated: u128 =
-        (params.emission_curve_asymptote as f64 * config.initial_emitted_fraction) as u128;
+    let mut already_generated =
+        emitted_at_start(params.emission_curve_asymptote, config.initial_emitted_ppm);
     let mut total_burned: u128 = 0;
     let mut staker_emission_earned_year: u128 = 0;
     let mut staker_fee_earned_year: u128 = 0;
@@ -434,7 +456,7 @@ mod tests {
             stake: StakeSchedule {
                 get_stake_ratio: Box::new(|_b, _bpy, _c| 250_000),
             },
-            initial_emitted_fraction: 0.0,
+            initial_emitted_ppm: 0,
             genesis_height_offset: 0,
             archival_lock,
         }
