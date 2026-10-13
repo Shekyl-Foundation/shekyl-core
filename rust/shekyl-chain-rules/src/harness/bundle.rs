@@ -41,7 +41,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
     challenge_nonce, draw_commit, pass_countersignature_message, select_draw, BundleBody,
-    BundleKept, BundleRecord, BundleRef, DrawablePair, EpochSnapshot, PassBitmap,
+    BundleKept, BundleRecord, BundleRef, DrawableEpoch, DrawablePair, PassBitmap,
     BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
@@ -93,7 +93,7 @@ pub struct FixtureBundleView {
     /// The blocks whose bundle is already admitted.
     pub revealed: BTreeSet<BlockHeight>,
     /// The `h_open(E)` snapshots, by the epoch asked for.
-    pub snapshots: BTreeMap<SettlementEpoch, EpochSnapshot>,
+    pub snapshots: BTreeMap<SettlementEpoch, DrawableEpoch>,
     /// The one read that faults, if any.
     pub fault: Option<BundleRead>,
     /// Every read made, in order.
@@ -163,7 +163,7 @@ impl BundleView for FixtureBundleView {
     fn snapshot(
         &self,
         epoch: SettlementEpoch,
-    ) -> Result<Option<&EpochSnapshot>, BundleReadFaulted> {
+    ) -> Result<Option<&DrawableEpoch>, BundleReadFaulted> {
         self.read(BundleRead::Snapshot)?;
         Ok(self.snapshots.get(&epoch))
     }
@@ -261,7 +261,7 @@ impl BundleWorld {
             .expect("the canonical key length");
 
         let epoch = rule_set.settlement_schedule().epoch_at(h);
-        let snapshot = EpochSnapshot::new(
+        let snapshot = DrawableEpoch::new(
             epoch,
             personas
                 .iter()
@@ -307,7 +307,7 @@ impl BundleWorld {
     ///
     /// If a test removed it.
     #[must_use]
-    pub fn snapshot(&self) -> &EpochSnapshot {
+    pub fn snapshot(&self) -> &DrawableEpoch {
         self.view
             .snapshots
             .values()
@@ -334,8 +334,9 @@ impl BundleWorld {
             hash.as_bytes(),
             draw,
             self.snapshot().len(),
-            |index| self.view.short.contains(&(self.h, index)),
+            |index| Ok::<_, ()>(self.view.short.contains(&(self.h, index))),
         )
+        .expect("the fixture's short read does not fault")
         .expect("a non-empty set selects")
         .index
     }

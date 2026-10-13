@@ -24,7 +24,7 @@
 use std::path::Path;
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, BundleBody, BundleRecord, BundleRef, DrawablePair, EpochSnapshot,
+    bundle_root, section_budget, BundleBody, BundleRecord, BundleRef, DrawableEpoch, DrawablePair,
     PassBitmap, BUNDLE_RECORD_LEN, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_WITNESS_KEY_LEN,
     BUNDLE_WITNESS_LEN, CHALLENGE_READS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
@@ -1022,7 +1022,7 @@ fn a_receipt_under_a_key_the_snapshot_does_not_hold_refuses() {
         .collect();
     world.view.snapshots.insert(
         epoch,
-        EpochSnapshot::new(epoch, keys, pairs).expect("every pair has a key"),
+        DrawableEpoch::new(epoch, keys, pairs).expect("every pair has a key"),
     );
     assert!(judge(&world, &reference, &body).is_ok());
     // And the honest bundle, signed by key A, is now the one refused.
@@ -1271,7 +1271,7 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let other_epoch = shekyl_types::SettlementEpoch::from_raw(epoch.to_raw() + 1);
     world.view.snapshots.insert(
         epoch,
-        EpochSnapshot::new(other_epoch, keys, pairs).expect("keyed"),
+        DrawableEpoch::new(other_epoch, keys, pairs).expect("keyed"),
     );
     assert_eq!(
         unanswered(&world, &bundle),
@@ -1288,7 +1288,7 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let (mut world, bundle) = fresh();
     world.view.snapshots.insert(
         epoch,
-        EpochSnapshot::new(epoch, Vec::<([u8; 32], Vec<u8>)>::new(), []).expect("empty"),
+        DrawableEpoch::new(epoch, Vec::<([u8; 32], Vec<u8>)>::new(), []).expect("empty"),
     );
     assert_eq!(
         unanswered(&world, &bundle),
@@ -1297,10 +1297,11 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
 }
 
 /// A view fault is the fault, whichever read raised it — never a verdict,
-/// and never an admission. The `VisiblyShort` case is the one a plain
-/// predicate could swallow: the selection asks through `Fn(u64) -> bool`.
-/// Red edit: answer `false` on a faulted `visibly_short` and carry on —
-/// the bundle then admits over a selection the chain never made.
+/// and never an admission. The `VisiblyShort` case is the one the
+/// selection returns: `select_draw` propagates the short-read's error and
+/// yields no index. Red edit: map that error to `Ok(false)` inside
+/// `select_draw` and carry on — the bundle then admits over a selection
+/// the chain never made.
 #[test]
 fn a_view_fault_surfaces_as_itself_from_every_read() {
     for read in [

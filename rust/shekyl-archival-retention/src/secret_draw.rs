@@ -58,9 +58,14 @@ pub struct SelectedDraw {
 /// Draw `j` at `h`: one pair, with replacement, weight 16 : 1 for a
 /// visibly-short index.
 ///
-/// `None` when the set is empty — a producer issues no draws then, and
-/// no record names a `j`. `short(i)` is whether index `i` is visibly
-/// short at `h`.
+/// `Ok(None)` when the set is empty — a producer issues no draws then,
+/// and no record names a `j`. `short` is not called.
+///
+/// `short(i)` is whether index `i` is visibly short at `h`. `Err` is
+/// that read failing: the draw selects nothing, and the error is the
+/// return. A short answer is never invented in its place. The 256th
+/// attempt selects without asking, as the specification has it, so a
+/// fault cannot arise on the attempt that would have selected anyway.
 ///
 /// ```text
 /// zone = (2^64 − 1) − ((2^64 − 1) mod D)
@@ -75,16 +80,15 @@ pub struct SelectedDraw {
 ///     if x[8] & 0x0F = 0:              select i
 ///     otherwise continue
 /// ```
-#[must_use]
-pub fn select_draw(
+pub fn select_draw<E>(
     seed: &[u8; 32],
     block_hash: &[u8; 32],
     draw: u32,
     set_size: u64,
-    short: impl Fn(u64) -> bool,
-) -> Option<SelectedDraw> {
+    mut short: impl FnMut(u64) -> Result<bool, E>,
+) -> Result<Option<SelectedDraw>, E> {
     if set_size == 0 {
-        return None;
+        return Ok(None);
     }
     let zone = u64::MAX - (u64::MAX % set_size);
     for attempt in 0..DRAW_ATTEMPTS {
@@ -94,12 +98,20 @@ pub fn select_draw(
             continue;
         }
         let index = value % set_size;
-        let accept = attempt + 1 == DRAW_ATTEMPTS || short(index) || x[8] & 0x0F == 0;
+        // The last attempt selects without asking. `short` is not in that
+        // arm, so a fault cannot refuse the attempt the specification
+        // accepts outright, and reordering a boolean cannot put the read
+        // back on it.
+        let accept = if attempt + 1 == DRAW_ATTEMPTS {
+            true
+        } else {
+            short(index)? || x[8] & 0x0F == 0
+        };
         if accept {
-            return Some(SelectedDraw {
+            return Ok(Some(SelectedDraw {
                 index,
                 attempts: attempt + 1,
-            });
+            }));
         }
     }
     unreachable!("the last attempt always selects");
@@ -261,13 +273,16 @@ mod tests {
 
     fn pick(set_size: u64, short_through: Option<u64>, draw: u32) -> SelectedDraw {
         select_draw(&SEED, &HASH, draw, set_size, |i| {
-            short_through.is_some_and(|end| i <= end)
+            Ok::<_, ()>(short_through.is_some_and(|end| i <= end))
         })
+        .expect("the short predicate does not fail")
         .expect("a non-empty set selects")
     }
 
     fn none_short(set_size: u64, draw: u32) -> SelectedDraw {
-        select_draw(&SEED, &HASH, draw, set_size, |_| false).expect("a non-empty set selects")
+        select_draw(&SEED, &HASH, draw, set_size, |_| Ok::<_, ()>(false))
+            .expect("the short predicate does not fail")
+            .expect("a non-empty set selects")
     }
 
     /// The vectors of the specification's §4.5.
@@ -423,8 +438,61 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_set_selects_nothing() {
-        assert_eq!(select_draw(&SEED, &HASH, 0, 0, |_| true), None);
+    fn an_empty_set_selects_nothing_and_does_not_ask() {
+        let mut asked = false;
+        assert_eq!(
+            select_draw(&SEED, &HASH, 0, 0, |_| {
+                asked = true;
+                Ok::<_, &str>(true)
+            }),
+            Ok(None)
+        );
+        assert!(!asked, "an empty set has no index to read");
+    }
+
+    /// A short-read fault on an attempt that consults it is the return,
+    /// not an index. The attempt the cap selects does not consult it:
+    /// once every earlier read has answered, one more faulting read is
+    /// never made. Red edit: map `Err` to `Ok(false)` and continue, or
+    /// call `short` on the 256th attempt.
+    #[test]
+    fn a_short_fault_is_not_a_selection_and_the_cap_does_not_ask() {
+        let err = select_draw(&SEED, &HASH, 0, 8, |_| Err("unreadable")).expect_err("asked");
+        assert_eq!(err, "unreadable");
+
+        // `j = 28_409_462`, D = 8, none short: the in-zone attempts before
+        // the cap refuse, and the 256th selects index 1. Count those
+        // reads, then fault on any read past them.
+        let mut asked = 0u32;
+        let selected = select_draw(&SEED, &HASH, 28_409_462, 8, |_| {
+            asked += 1;
+            Ok::<_, &str>(false)
+        })
+        .expect("a false answer is not a fault")
+        .expect("a non-empty set selects");
+        assert_eq!(
+            selected,
+            SelectedDraw {
+                index: 1,
+                attempts: DRAW_ATTEMPTS
+            }
+        );
+        let consulted = asked;
+        assert!(consulted < DRAW_ATTEMPTS, "the cap is not one of the reads");
+
+        let mut asked = 0u32;
+        let selected = select_draw(&SEED, &HASH, 28_409_462, 8, |_| {
+            asked += 1;
+            if asked > consulted {
+                Err("the cap asked")
+            } else {
+                Ok(false)
+            }
+        })
+        .expect("the cap does not ask")
+        .expect("a non-empty set selects");
+        assert_eq!(selected.attempts, DRAW_ATTEMPTS);
+        assert_eq!(asked, consulted);
     }
 
     /// The vectors of the specification's §5.2.

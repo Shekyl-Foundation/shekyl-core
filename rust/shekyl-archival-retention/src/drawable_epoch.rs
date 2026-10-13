@@ -3,19 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The `h_open(E)` snapshot: an epoch's drawable set `D` and each pair's
-//! receipt key, as one value.
+//! [`DrawableEpoch`]: an epoch's drawable set `D` and each pair's receipt
+//! key, as one value.
+//!
+//! The spec calls this the `h_open(E)` snapshot. The type is not named
+//! that: `shekyl-chain-rules`' emission gather is already `EpochSnapshot`
+//! (`archival/close.rs`), and a second type of that name in the same
+//! judgement would be the wrong one at the cutover.
 //!
 //! Design: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
 //! §9.1, §9.6 (`SCS-P19`). The draw selects an index into `D`; the bundle
 //! rule verifies that pair's receipt under that pair's receipt key. If the
 //! two read different heights, a pair in `D` can lack a key, and one such
-//! pair refuses a whole bundle. So they read one value: [`EpochSnapshot`]
+//! pair refuses a whole bundle. So they read one value: [`DrawableEpoch`]
 //! has no height parameter and no second source for either answer.
 //!
 //! # A pair without a key cannot be built
 //!
-//! [`EpochSnapshot::new`] is the only constructor. It fails on a pair
+//! [`DrawableEpoch::new`] is the only constructor. It fails on a pair
 //! whose persona has no receipt key and on a key that does not parse, so
 //! "a pair in `D` lacks a key" is not a state the verifier meets.
 //!
@@ -32,10 +37,10 @@ use shekyl_types::{PCanonicalId, SettlementEpoch};
 
 use crate::drawable_pair::DrawablePair;
 
-/// Why a snapshot could not be built. Each is a defect of the state the
-/// caller read, never a verdict on a block.
+/// Why a [`DrawableEpoch`] could not be built. Each is a defect of the
+/// state the caller read, never a verdict on a block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum EpochSnapshotError {
+pub enum DrawableEpochError {
     /// A pair's persona has no receipt key among those supplied.
     #[error("persona {persona:?} holds shard {shard_id} and has no receipt key")]
     MissingReceiptKey {
@@ -74,7 +79,7 @@ pub enum EpochSnapshotError {
 /// numerically (§4.1) — [`DrawablePair`]'s `Ord`. `index(P, s)` is a
 /// pair's position in it and is constant through the epoch.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EpochSnapshot {
+pub struct DrawableEpoch {
     epoch: SettlementEpoch,
     /// Canonical order, no pair twice.
     pairs: Vec<DrawablePair>,
@@ -83,8 +88,8 @@ pub struct EpochSnapshot {
     receipt_keys: Vec<([u8; 32], FnDsaHybridPublicKey)>,
 }
 
-impl EpochSnapshot {
-    /// The snapshot of `epoch` with these receipt keys and these pairs.
+impl DrawableEpoch {
+    /// The drawable epoch of `epoch` with these receipt keys and these pairs.
     ///
     /// `receipt_keys` is one entry per persona: its canonical id and its
     /// receipt key's canonical bytes, as its bond record carries them at
@@ -95,22 +100,22 @@ impl EpochSnapshot {
     ///
     /// # Errors
     ///
-    /// - [`EpochSnapshotError::DuplicateReceiptKey`]: a persona appears
+    /// - [`DrawableEpochError::DuplicateReceiptKey`]: a persona appears
     ///   twice in `receipt_keys`.
-    /// - [`EpochSnapshotError::DuplicatePair`]: a pair appears twice.
-    /// - [`EpochSnapshotError::MissingReceiptKey`]: a pair's persona is
+    /// - [`DrawableEpochError::DuplicatePair`]: a pair appears twice.
+    /// - [`DrawableEpochError::MissingReceiptKey`]: a pair's persona is
     ///   not in `receipt_keys`.
-    /// - [`EpochSnapshotError::ReceiptKeyMalformed`]: the key of a persona
+    /// - [`DrawableEpochError::ReceiptKeyMalformed`]: the key of a persona
     ///   that holds a pair does not parse.
     pub fn new<K: AsRef<[u8]>>(
         epoch: SettlementEpoch,
         receipt_keys: impl IntoIterator<Item = ([u8; 32], K)>,
         pairs: impl IntoIterator<Item = DrawablePair>,
-    ) -> Result<Self, EpochSnapshotError> {
+    ) -> Result<Self, DrawableEpochError> {
         let mut pairs: Vec<DrawablePair> = pairs.into_iter().collect();
         pairs.sort_unstable();
         if let Some(twice) = pairs.windows(2).find(|w| w[0] == w[1]) {
-            return Err(EpochSnapshotError::DuplicatePair {
+            return Err(DrawableEpochError::DuplicatePair {
                 persona: PCanonicalId::from_bytes(twice[0].p_id),
                 shard_id: twice[0].shard_id,
             });
@@ -119,7 +124,7 @@ impl EpochSnapshot {
         let mut offered: Vec<([u8; 32], K)> = receipt_keys.into_iter().collect();
         offered.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         if let Some(twice) = offered.windows(2).find(|w| w[0].0 == w[1].0) {
-            return Err(EpochSnapshotError::DuplicateReceiptKey {
+            return Err(DrawableEpochError::DuplicateReceiptKey {
                 persona: PCanonicalId::from_bytes(twice[0].0),
             });
         }
@@ -133,13 +138,13 @@ impl EpochSnapshot {
             }
             let persona = PCanonicalId::from_bytes(pair.p_id);
             let Ok(at) = offered.binary_search_by(|(p_id, _)| p_id.cmp(&pair.p_id)) else {
-                return Err(EpochSnapshotError::MissingReceiptKey {
+                return Err(DrawableEpochError::MissingReceiptKey {
                     persona,
                     shard_id: pair.shard_id,
                 });
             };
             let key = FnDsaHybridPublicKey::from_canonical_bytes(offered[at].1.as_ref())
-                .map_err(|_| EpochSnapshotError::ReceiptKeyMalformed { persona })?;
+                .map_err(|_| DrawableEpochError::ReceiptKeyMalformed { persona })?;
             parsed.push((pair.p_id, key));
         }
 
@@ -189,5 +194,5 @@ impl EpochSnapshot {
 }
 
 #[cfg(test)]
-#[path = "epoch_snapshot_tests.rs"]
-mod epoch_snapshot_tests;
+#[path = "drawable_epoch_tests.rs"]
+mod drawable_epoch_tests;

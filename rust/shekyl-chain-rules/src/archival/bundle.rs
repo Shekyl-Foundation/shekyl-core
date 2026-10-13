@@ -142,13 +142,13 @@
 //! producer did not sign costs one witness-signature verification and no
 //! receipt verification (§9.1, "What a forged bundle can cost a node").
 
-use core::cell::RefCell;
 use core::fmt;
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use shekyl_archival_retention::{
     bundle_root, challenge_nonce, draw_commit, pass_countersignature_message, select_draw,
-    BundleBody, BundleKept, BundleRef, BundleWireError, DrawablePair, EpochSnapshot,
+    BundleBody, BundleKept, BundleRef, BundleWireError, DrawableEpoch, DrawablePair,
     CHALLENGE_READS,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{
@@ -204,8 +204,8 @@ pub trait BundleView {
     /// Whether a bundle for `h` is already admitted on this chain.
     fn revealed(&self, h: BlockHeight) -> Result<bool, Self::Fault>;
 
-    /// The `h_open(E)` snapshot: `D`, and each pair's receipt key.
-    fn snapshot(&self, epoch: SettlementEpoch) -> Result<Option<&EpochSnapshot>, Self::Fault>;
+    /// The [`DrawableEpoch`] at `h_open(E)`: `D`, and each pair's receipt key.
+    fn snapshot(&self, epoch: SettlementEpoch) -> Result<Option<&DrawableEpoch>, Self::Fault>;
 }
 
 /// Why a block's bundle section is refused before any bundle is opened.
@@ -798,47 +798,32 @@ pub fn verify_bundle<V: BundleView>(
 /// Step 6: draw `j`'s pair for every `j < count`, by the production
 /// selection over the snapshot's length.
 ///
-/// `select_draw` asks whether an index is visibly short through a plain
-/// predicate, and the view's answer can fault. The first fault is kept
-/// and the predicate answers `true` from then on, which ends the
-/// selection at once; the draw it returns is discarded and the fault is
-/// what this function returns. A faulted read is never a selection.
-/// Answers are remembered for the bundle, so an index asked twice is read
-/// once.
+/// `select_draw` asks whether an index is visibly short and returns that
+/// read's fault as its own error, so a fault is not a selection. Answers
+/// are remembered for the bundle: an index asked twice is read once.
 fn derive_draws<V: BundleView>(
     view: &V,
-    snapshot: &EpochSnapshot,
+    snapshot: &DrawableEpoch,
     kept: &BundleKept,
     hash_at_h: &[u8; 32],
     count: u32,
 ) -> Result<Vec<DerivedDraw>, BundleRefused<V::Fault>> {
-    let fault: RefCell<Option<V::Fault>> = RefCell::new(None);
-    let asked: RefCell<BTreeMap<u64, bool>> = RefCell::new(BTreeMap::new());
-    let short = |index: u64| -> bool {
-        if fault.borrow().is_some() {
-            return true;
-        }
-        if let Some(known) = asked.borrow().get(&index) {
-            return *known;
-        }
-        match view.visibly_short(kept.h, index) {
-            Ok(answer) => {
-                asked.borrow_mut().insert(index, answer);
-                answer
-            }
-            Err(raised) => {
-                *fault.borrow_mut() = Some(raised);
-                true
+    let mut asked: BTreeMap<u64, bool> = BTreeMap::new();
+    let mut short = |index: u64| -> Result<bool, V::Fault> {
+        match asked.entry(index) {
+            Entry::Occupied(known) => Ok(*known.get()),
+            Entry::Vacant(slot) => {
+                let answer = view.visibly_short(kept.h, index)?;
+                slot.insert(answer);
+                Ok(answer)
             }
         }
     };
 
     let mut draws = Vec::with_capacity(count as usize);
     for draw in 0..count {
-        let selected = select_draw(&kept.seed, hash_at_h, draw, snapshot.len(), short);
-        if let Some(raised) = fault.borrow_mut().take() {
-            return Err(BundleRefused::View(raised));
-        }
+        let selected = select_draw(&kept.seed, hash_at_h, draw, snapshot.len(), &mut short)
+            .map_err(BundleRefused::View)?;
         let unanswered = BundleRefused::Unanswered(BundleUnanswered::Draw { draw });
         let Some(selected) = selected else {
             return Err(unanswered);

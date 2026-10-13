@@ -46,7 +46,7 @@ fn all_keys() -> Vec<([u8; 32], Vec<u8>)> {
 
 /// Canonical order is persona id bytes, then shard id numerically — not
 /// the order supplied, and not the shard id's little-endian bytes. Red
-/// edit: drop the sort in `EpochSnapshot::new`; or sort shards by their
+/// edit: drop the sort in `DrawableEpoch::new`; or sort shards by their
 /// LE bytes, which puts 256 (`00 01 …`) before 2 (`02 00 …`).
 #[test]
 fn pairs_are_held_in_canonical_order() {
@@ -58,7 +58,7 @@ fn pairs_are_held_in_canonical_order() {
         pair(P2, 0),
         pair(P1, 300),
     ];
-    let snapshot = EpochSnapshot::new(EPOCH, all_keys(), supplied).expect("every pair has a key");
+    let snapshot = DrawableEpoch::new(EPOCH, all_keys(), supplied).expect("every pair has a key");
     assert_eq!(snapshot.epoch(), EPOCH);
     assert_eq!(snapshot.len(), 6);
     assert!(!snapshot.is_empty());
@@ -90,7 +90,7 @@ fn a_pairs_receipt_key_is_its_personas() {
     let k = keys();
     // Keys supplied in an order that is not the personas' order.
     let supplied_keys = vec![(P3, k[2].clone()), (P1, k[0].clone()), (P2, k[1].clone())];
-    let snapshot = EpochSnapshot::new(
+    let snapshot = DrawableEpoch::new(
         EPOCH,
         supplied_keys,
         [
@@ -120,16 +120,16 @@ fn a_pair_without_a_receipt_key_fails_construction() {
     let k = keys();
     let two_keys = vec![(P1, k[0].clone()), (P3, k[2].clone())];
     assert_eq!(
-        EpochSnapshot::new(EPOCH, two_keys, [pair(P1, 2), pair(P2, 9), pair(P3, 1)]),
-        Err(EpochSnapshotError::MissingReceiptKey {
+        DrawableEpoch::new(EPOCH, two_keys, [pair(P1, 2), pair(P2, 9), pair(P3, 1)]),
+        Err(DrawableEpochError::MissingReceiptKey {
             persona: PCanonicalId::from_bytes(P2),
             shard_id: 9,
         })
     );
     // No keys at all.
     assert_eq!(
-        EpochSnapshot::new(EPOCH, Vec::<([u8; 32], Vec<u8>)>::new(), [pair(P1, 2)]),
-        Err(EpochSnapshotError::MissingReceiptKey {
+        DrawableEpoch::new(EPOCH, Vec::<([u8; 32], Vec<u8>)>::new(), [pair(P1, 2)]),
+        Err(DrawableEpochError::MissingReceiptKey {
             persona: PCanonicalId::from_bytes(P1),
             shard_id: 2,
         })
@@ -142,11 +142,11 @@ fn a_pair_without_a_receipt_key_fails_construction() {
 #[test]
 fn a_receipt_key_that_does_not_parse_fails_construction() {
     let k = keys();
-    let malformed = EpochSnapshotError::ReceiptKeyMalformed {
+    let malformed = DrawableEpochError::ReceiptKeyMalformed {
         persona: PCanonicalId::from_bytes(P2),
     };
     let build = |bad: Vec<u8>| {
-        EpochSnapshot::new(
+        DrawableEpoch::new(
             EPOCH,
             vec![(P1, k[0].clone()), (P2, bad)],
             [pair(P1, 2), pair(P2, 9)],
@@ -176,19 +176,19 @@ fn a_receipt_key_that_does_not_parse_fails_construction() {
 fn duplicates_are_refused() {
     let k = keys();
     assert_eq!(
-        EpochSnapshot::new(EPOCH, all_keys(), [pair(P1, 2), pair(P2, 9), pair(P1, 2)]),
-        Err(EpochSnapshotError::DuplicatePair {
+        DrawableEpoch::new(EPOCH, all_keys(), [pair(P1, 2), pair(P2, 9), pair(P1, 2)]),
+        Err(DrawableEpochError::DuplicatePair {
             persona: PCanonicalId::from_bytes(P1),
             shard_id: 2,
         })
     );
     assert_eq!(
-        EpochSnapshot::new(
+        DrawableEpoch::new(
             EPOCH,
             vec![(P1, k[0].clone()), (P2, k[1].clone()), (P1, k[2].clone())],
             [pair(P1, 2)],
         ),
-        Err(EpochSnapshotError::DuplicateReceiptKey {
+        Err(DrawableEpochError::DuplicateReceiptKey {
             persona: PCanonicalId::from_bytes(P1),
         })
     );
@@ -198,7 +198,7 @@ fn duplicates_are_refused() {
 /// for a persona that holds no pair is not kept and is not parsed.
 #[test]
 fn an_epoch_with_no_pairs_is_an_empty_snapshot() {
-    let empty = EpochSnapshot::new(EPOCH, vec![(P1, vec![0u8; 3])], []).expect("no pair to key");
+    let empty = DrawableEpoch::new(EPOCH, vec![(P1, vec![0u8; 3])], []).expect("no pair to key");
     assert_eq!(empty.len(), 0);
     assert!(empty.is_empty());
     assert_eq!(empty.pair(0), None);

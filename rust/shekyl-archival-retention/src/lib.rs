@@ -33,8 +33,10 @@
 //!   the prunable hash, the header root, and the section budget
 //!   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7). STAGED: read by the pure
 //!   verifier in `shekyl-chain-rules`; no block path yet.
-//! - [`epoch_snapshot`] — the `h_open(E)` snapshot: the drawable pairs and
-//!   each pair's receipt key, as one value (§9.6). STAGED with [`bundle`].
+//! - [`drawable_epoch`] — one epoch's drawable pairs and each persona's
+//!   receipt key, as one value (§9.6). STAGED with [`bundle`]. The name is
+//!   [`DrawableEpoch`], not a snapshot: `shekyl-chain-rules` already calls
+//!   its emission gather `EpochSnapshot`.
 //! - [`settlement_select`] — settlement's fold: three counted draws by beacon, the pair's
 //!   row, and the issued-draw digest term.
 //! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
@@ -70,11 +72,11 @@ pub mod conservation;
 pub mod constants;
 pub mod debit_auth;
 pub mod distinct;
+pub mod drawable_epoch;
 pub mod drawable_pair;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
-pub mod epoch_snapshot;
 pub mod error;
 pub mod failure_window;
 pub mod hash;
@@ -177,6 +179,7 @@ pub use constants::{
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
 };
+pub use drawable_epoch::{DrawableEpoch, DrawableEpochError};
 pub use drawable_pair::DrawablePair;
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
@@ -186,7 +189,6 @@ pub use emission_verify::{
     ClaimantShareError, ClaimsVerified, EmissionEpochSource, EmissionVerified,
     EmissionVerifyContext, EmissionVerifyError,
 };
-pub use epoch_snapshot::{EpochSnapshot, EpochSnapshotError};
 pub use pass_anchor::{
     anchor_depth_covers_response_window, pass_countersignature_message, pass_delivery_digest,
     pass_request_header_bytes, PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher,

@@ -498,8 +498,9 @@ pub fn run_epoch_observed(
         for j in 0..count {
             let j = u32::try_from(j).expect("a block's draw count fits the record's index");
             let selected = select_draw(&block_seed, &block_hash, j, u64::from(pairs), |i| {
-                visible.short(i)
+                Ok::<_, ()>(visible.short(i))
             })
+            .expect("the short read is this process's own count")
             .expect("the set is not empty");
             block_draws.push(selected.index as u32);
             run.attempts += u64::from(selected.attempts);
@@ -1145,8 +1146,9 @@ mod tests {
                     &block.block_hash,
                     j as u32,
                     u64::from(D),
-                    |i| block.visible[i as usize] < u16::from(COUNTED_DRAWS),
+                    |i| Ok::<_, ()>(block.visible[i as usize] < u16::from(COUNTED_DRAWS)),
                 )
+                .expect("the short read is this process's own count")
                 .expect("the set is not empty");
                 assert_eq!(u64::from(pair), direct.index, "draw {j} at {h}");
                 selected += 1;
