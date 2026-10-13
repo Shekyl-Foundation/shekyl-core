@@ -48,9 +48,9 @@ test-signer = ["shekyl-crypto-pq/test-utils"]
 bench-internals = []
 
 [dev-dependencies]
-# `test-util`: the write-stall tests pause time and advance it past the
-# bound without polling the write, which is the case the bound must not
-# cut.
+# `test-util`: the write-stall tests pause time. A drain is spaced across
+# the stall bound, and a late poll finds the socket writable after the
+# bound has already run out.
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "test-util"] }
 # `BA-T3`: the serve-one-response drift gate (`benches/serve_response_iai.rs`),
 # hardware-independent instruction counts gated per PR by `ci/benchmarks`.

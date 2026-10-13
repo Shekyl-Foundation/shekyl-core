@@ -458,12 +458,14 @@ jobs:
         # and one isolated phase pass, a few seconds. It asserts only what
         # the probe already asserts of itself — every response is whole and
         # exactly the length its head declares. Not a benchmark: its numbers
-        # are a CI runner's and are discarded with the store.
+        # are a CI runner's and are discarded with the store. The trap
+        # removes that store when the probe fails: the job's shell runs
+        # with `-e`, so a later `rm` would not.
         run: |
           store=$(mktemp -d)
+          trap 'rm -rf "$store"' EXIT
           BAT5_STORE="$store" BAT5_MODE=phase BAT5_N=2 BAT5_PHASE_N=1 BAT5_LABEL=ci \
             cargo test --locked -p shekyl-p-serve --test ba_t5_floor_probe -- --ignored --nocapture
-          rm -rf "$store"
       - name: "shard-visual-x86-smoke"
         working-directory: rust
         # Option (c) of `docs/V3_SHARD_VISUALIZATION.md` "Where the bound is
