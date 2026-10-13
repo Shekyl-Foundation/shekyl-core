@@ -12,64 +12,22 @@
 //! itself carry the tests.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
-use shekyl_archival_retention::{pass_countersignature_message, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_crypto_pq::fn_dsa_hybrid::{
-    FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
-};
+use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
-use shekyl_p_host::{PassKey, SignRefused};
-use shekyl_types::BlockHeight;
+use shekyl_p_host::PassKey;
 
 use super::{HeldPersona, HeldReceiptKey, PSlot};
 use crate::engine::stake_engine::handle::StakeEngineHandle;
-use crate::engine::stake_engine::persona::{ReceiptKeyIsBuilt, SignReceiptTranscript};
+use crate::engine::stake_engine::persona::SignReceiptTranscript;
+use crate::engine::stake_engine::receipt_test_fixtures::{
+    bundle_with_a_corrupted_receipt_key, is_built, message, receipt_pk, sign, slot, OTHER_SLOT,
+    SLOT,
+};
 use crate::engine::stake_engine::serving::pass_key::ResidentPassKey;
 use crate::engine::stake_engine::serving::receipt_key::ResidentReceiptKey;
 use crate::engine::stake_engine::test_fixtures::{derive_bundle, ephemeral_body_store, spawn_over};
-
-const SLOT: u32 = 3;
-const OTHER_SLOT: u32 = 4;
-const SHARD: u64 = 7;
-const ANCHOR: BlockHeight = BlockHeight::from_raw(1_000);
-const NONCE: [u8; 32] = [0x11; 32];
-const ANCHOR_HASH: [u8; 32] = [0x22; 32];
-const DIGEST: [u8; 32] = [0x5a; 32];
-
-/// A real transcript, from the consensus builder both ends agree on.
-fn message() -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-    pass_countersignature_message(&NONCE, ANCHOR, &ANCHOR_HASH, SHARD, &DIGEST)
-}
-
-/// The persona's public receipt key, from the derivation oracle the
-/// actor's bundles came from. The actor is not asked: it has no message
-/// that gives the key out, and none is added for a test.
-fn receipt_pk(slot: u32) -> FnDsaHybridPublicKey {
-    derive_bundle(slot).receipt_sign_pk.clone()
-}
-
-fn slot(raw: u32) -> PSlot {
-    PSlot::from_raw(raw)
-}
-
-async fn sign(
-    key: Arc<ResidentReceiptKey>,
-    message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-) -> Result<FnDsaHybridSignature, SignRefused> {
-    tokio::task::spawn_blocking(move || key.sign_pass(&message))
-        .await
-        .expect("blocking task")
-}
-
-async fn is_built(stake: &StakeEngineHandle, raw: u32) -> Option<bool> {
-    stake
-        .actor
-        .ask(ReceiptKeyIsBuilt { p_slot: slot(raw) })
-        .await
-        .expect("actor alive")
-}
 
 /// Starting the actor decodes no receipt key, however many personas it
 /// holds: the staged capability costs the live path nothing. The first
@@ -126,15 +84,6 @@ fn the_first_receipt_builds_the_key_and_the_second_reuses_it() {
             .expect("verifies");
     }
     assert_ne!(first, second, "each receipt draws a fresh seed");
-}
-
-/// A bundle whose receipt secret does not decode. The corruption is the
-/// scheme crate's test seam; this crate's tests reach it through the
-/// `test-signer` edge the loopback tests already use.
-fn bundle_with_a_corrupted_receipt_key(raw: u32) -> ArchivalPKeys {
-    let mut bundle = derive_bundle(raw);
-    bundle.receipt_sign_sk.corrupt_fn_dsa_half_for_tests();
-    bundle
 }
 
 /// A receipt secret that does not decode refuses at the first signature

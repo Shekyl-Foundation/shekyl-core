@@ -35,18 +35,12 @@ use shekyl_types::BlockHeight;
 use super::pass_key::ResidentPassKey;
 use super::receipt_key::ResidentReceiptKey;
 use crate::engine::stake_engine::handle::StakeEngineHandle;
+use crate::engine::stake_engine::receipt_test_fixtures::{slot, OTHER_SLOT, SLOT};
 use crate::engine::stake_engine::test_fixtures::{derive_bundle, ephemeral_body_store, spawn_over};
-use crate::engine::stake_engine::types::PSlot;
 
-const SLOT: u32 = 3;
-const OTHER_SLOT: u32 = 4;
 const OWN_HEIGHT: u64 = 10_000;
 const ANCHOR: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
 const TIP_MAX_AGE: Duration = Duration::from_secs(120);
-
-fn slot(raw: u32) -> PSlot {
-    PSlot::from_raw(raw)
-}
 
 /// As [`super::round_trip_tests`]' bounds: one hybrid sign and a mailbox
 /// round-trip on a slow host — and here the first receipt also decodes the
