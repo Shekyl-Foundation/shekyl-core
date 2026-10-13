@@ -91,30 +91,33 @@ pub fn select_draw<E>(
         return Ok(None);
     }
     let zone = u64::MAX - (u64::MAX % set_size);
-    for attempt in 0..DRAW_ATTEMPTS {
+    // Attempts 0 to 254 may refuse: a value outside the zone, or a full
+    // pair the fifth nibble does not accept.
+    for attempt in 0..DRAW_ATTEMPTS - 1 {
         let x = stream(seed, block_hash, draw, attempt);
         let value = u64::from_le_bytes(x[..8].try_into().expect("8 bytes"));
-        if attempt + 1 < DRAW_ATTEMPTS && value >= zone {
+        if value >= zone {
             continue;
         }
         let index = value % set_size;
-        // The last attempt selects without asking. `short` is not in that
-        // arm, so a fault cannot refuse the attempt the specification
-        // accepts outright, and reordering a boolean cannot put the read
-        // back on it.
-        let accept = if attempt + 1 == DRAW_ATTEMPTS {
-            true
-        } else {
-            short(index)? || x[8] & 0x0F == 0
-        };
-        if accept {
+        if short(index)? || x[8] & 0x0F == 0 {
             return Ok(Some(SelectedDraw {
                 index,
                 attempts: attempt + 1,
             }));
         }
     }
-    unreachable!("the last attempt always selects");
+    // The 256th attempt selects its candidate whatever the zone and
+    // whatever its weight (§4.4). It is its own arm, after the loop, so
+    // the loop has no fall-through: the cap is this return, and `short`
+    // is not in it — a fault cannot refuse the attempt the specification
+    // accepts outright.
+    let x = stream(seed, block_hash, draw, DRAW_ATTEMPTS - 1);
+    let value = u64::from_le_bytes(x[..8].try_into().expect("8 bytes"));
+    Ok(Some(SelectedDraw {
+        index: value % set_size,
+        attempts: DRAW_ATTEMPTS,
+    }))
 }
 
 /// The `0x0C` commitment: `cSHAKE256_32` over the witness public key
