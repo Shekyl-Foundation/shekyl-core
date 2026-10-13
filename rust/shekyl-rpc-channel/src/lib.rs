@@ -16,14 +16,19 @@
 //!   name never becomes a filesystem path component or an IPC object name.
 //! - [`static_fingerprint`]: the identity a daemon enrols a client under.
 //!
-//! This crate holds no handshake yet. It is the home the handshake lands in
-//! (slice RT-W9); slice RT-W8 fixes the bytes first, against vectors in
+//! The handshake itself is [`handshake`]: Shekyl's own
+//! `Noise_hybridXK_25519+MLKEM768_ChaChaPoly_BLAKE2s`, built on
+//! `shekyl-noise`, which it shares with the P2P handshake. Slice RT-W8 fixed
+//! the bytes of the three derivations first, against vectors in
 //! `docs/test_vectors/RPC_CHANNEL_NAMES_V1/` that an independent generator
-//! produced.
+//! produced, and pinned the handshake's vectors from an independent
+//! implementation; slice RT-W9 built the handshake against those.
 
 use std::fmt;
 
 use shekyl_crypto_hash::cshake256_32;
+
+pub mod handshake;
 
 /// First part of the handshake prologue. Not a hash customization: the bytes
 /// themselves are mixed into the handshake transcript, followed by the

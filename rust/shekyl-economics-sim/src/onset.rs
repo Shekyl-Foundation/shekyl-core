@@ -67,7 +67,7 @@
 use std::fmt;
 
 use serde::Serialize;
-use shekyl_economics::{emission_share, params::SCALE};
+use shekyl_economics::{emission_share, params::SCALE, STAKER_EMISSION_SHARE};
 
 use crate::burden::{KryderRate, OPP_COST_RATE_BAND, REPLICAS_PER_SHARD, SKL_FIAT_PRICE_BAND};
 use crate::engine::{ScenarioConfig, SimParams};
@@ -210,7 +210,7 @@ pub fn emission_leg_at_decay(a: &A1YearAgg, params: &SimParams, annual_decay: u6
     let mid_height = a.start_height + params.blocks_per_year / 2;
     let share = emission_share(
         mid_height,
-        params.staker_emission_share,
+        STAKER_EMISSION_SHARE,
         annual_decay,
         params.blocks_per_year,
     );
@@ -720,7 +720,8 @@ mod tests {
         let config = at_horizon(all_scenarios(&params).remove(0));
         let aggs = a1_year_aggs(&params, &config);
         for a in aggs.iter().filter(|a| a.emission_leg_atomic > 0) {
-            let alt = emission_leg_at_decay(a, &params, params.staker_emission_decay) as f64;
+            let alt =
+                emission_leg_at_decay(a, &params, shekyl_economics::STAKER_EMISSION_DECAY) as f64;
             let shipped = a.emission_leg_atomic as f64;
             let rel = (alt - shipped).abs() / shipped;
             assert!(rel < 0.01, "y{}: {rel:.4} relative", a.year);

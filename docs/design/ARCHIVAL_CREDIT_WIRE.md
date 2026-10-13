@@ -105,7 +105,7 @@ leaf parameterisation).
 
 ## 3. THE GATING DECISION — record format + field residence
 
-> **Specification:** the record, its kept and prunable parts and the carrier are [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7 and §8. This section describes the attestation path, which is live code. Its pass records and witness are deleted with the implementation, with the reason, in the specification's §11.1 (`SCS-P11`).
+> **Specification:** the record, its kept and prunable parts and the bundle that carries it are [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7 and §8. This section describes the attestation path, which is live code. Its pass records and witness are replaced by the bundle, with the reason, in the specification's §11.1 (`SCS-P16`, 2026-10-11, which reverses `SCS-P11`).
 
 The scan (§4) and the deletion (§5) both key off *what the record is*, so this
 is decided first. **Two standing principles drive the shape to its floor

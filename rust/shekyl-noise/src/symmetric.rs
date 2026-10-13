@@ -74,9 +74,20 @@ impl SymmetricState {
     }
 
     pub fn mix_key(&mut self, ikm: &[u8]) {
-        let (ck, k) = aead::hkdf(&self.ck, ikm);
+        let [ck, k] = aead::hkdf(&self.ck, ikm);
         self.ck = ck;
         self.k = Some(k);
+        self.n = 0;
+    }
+
+    /// Noise's `MixKeyAndHash`: one input moves the chaining key, the
+    /// handshake hash and the cipher key together. The hybrid patterns use
+    /// it for a static KEM's shared secret.
+    pub fn mix_key_and_hash(&mut self, ikm: &[u8]) {
+        let [ck, temp_h, temp_k] = aead::hkdf(&self.ck, ikm);
+        self.ck = ck;
+        self.mix_hash(&temp_h[..]);
+        self.k = Some(temp_k);
         self.n = 0;
     }
 
@@ -126,7 +137,7 @@ impl SymmetricState {
     /// directions independently. No key leaves this function.
     #[must_use = "the directions are the session"]
     pub fn into_directions(self, role: SplitRole) -> (Direction, Direction) {
-        let (first, second) = aead::hkdf(&self.ck, &[]);
+        let [first, second] = aead::hkdf(&self.ck, &[]);
         let (send_key, recv_key) = match role {
             SplitRole::Initiator => (first, second),
             SplitRole::Responder => (second, first),
@@ -211,7 +222,7 @@ mod tests {
         let initiator = SymmetricState::new(name, prologue);
         let responder = SymmetricState::new(name, prologue);
         let chaining_key = initiator.chaining_key();
-        let (first, second) = aead::hkdf(&chaining_key, &[]);
+        let [first, second] = aead::hkdf(&chaining_key, &[]);
         let (initiator_send, initiator_recv) = initiator.into_directions(SplitRole::Initiator);
         let (responder_send, responder_recv) = responder.into_directions(SplitRole::Responder);
         assert_eq!(initiator_send.ck_and_k().1, *first);
