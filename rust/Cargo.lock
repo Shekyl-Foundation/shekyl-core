@@ -4740,6 +4740,8 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-p-serve",
  "shekyl-p-store",
+ "shekyl-runtime",
+ "shekyl-thread-priority",
  "shekyl-types",
  "tokio",
 ]
