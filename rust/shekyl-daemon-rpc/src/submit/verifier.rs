@@ -869,8 +869,8 @@ fn retention_vin(
             ..
         } => shekyl_archival_retention::BondKind::JoinMarket {
             bond_spend_pk: bond_spend_pk.to_vec(),
-            // Either wire form of a JoinMarket: the receipt key rides
-            // through so the retention view is the post that was sent.
+            // The one JoinMarket form. The receipt key the post committed
+            // rides through, so the retention view is the post that was sent.
             receipt_sign_pk: receipt_sign_pk.clone(),
             endpoint: *endpoint,
         },

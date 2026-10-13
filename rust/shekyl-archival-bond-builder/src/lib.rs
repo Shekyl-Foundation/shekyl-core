@@ -62,8 +62,8 @@ pub use error::BondBuildError;
 pub use wire_input::bond_post_input;
 
 use shekyl_archival_retention::{
-    bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, BondKind,
-    HoldingsDescriptor, HoldingsKind, ShardSet, ENDPOINT_BYTES,
+    bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, HoldingsDescriptor,
+    HoldingsKind, ShardSet, ENDPOINT_BYTES,
 };
 use shekyl_crypto_pq::archival_p::BondPostKeys;
 use shekyl_ct_balance::{InputTerm, OutputTerm};
@@ -208,8 +208,9 @@ pub fn build_join_market_vin(
     // total — the type holds only keys both verifiers decode.
     let receipt_sign_pk = keys.receipt_pk().to_receipt_sign_pk();
 
-    // JoinMarket is a pure credit path: bonded_total == bond_credit == floor,
-    // bond_debit == 0 (the verify side pins this in verify_join_market_bond_post).
+    // JoinMarket is a pure credit path. `join_market` is that shape:
+    // bonded_total == bond_credit == floor, bond_debit == 0 (the verify side
+    // pins the same equality in verify_join_market_bond_post).
     //
     // The bond vin carries no signature. Its on-chain authorization is the
     // transaction-level `pqc_auths` slot aligned with this vin, signed by P's
@@ -219,19 +220,15 @@ pub fn build_join_market_vin(
     // prefix), and the vin type tag distinguishes it from every other P-auth
     // context. See ARCHIVAL_BOND_GATE4.md §3.4.1 ("not an on-vin signature blob")
     // and the SA-2b reconciliation ruling (SIGNATURE_ALIGNMENT.md §2.2).
-    let vin = ArchivalBondPostVin {
+    let vin = ArchivalBondPostVin::join_market(
         hybrid_public_key,
         p_canonical_id,
-        kind: BondKind::JoinMarket {
-            bond_spend_pk,
-            receipt_sign_pk,
-            endpoint,
-        },
+        bond_spend_pk,
+        receipt_sign_pk,
+        endpoint,
         holdings,
-        bonded_total_atomic: floor,
-        bond_credit: floor,
-        bond_debit: 0,
-    };
+        floor,
+    );
 
     Ok(JoinMarketVin { vin })
 }
