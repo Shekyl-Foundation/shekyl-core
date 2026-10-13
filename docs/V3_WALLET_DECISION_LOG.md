@@ -6512,3 +6512,131 @@ changing the mechanism.
 
 ---
 
+## 2026-10-11 — Serve credit: one bundle per block replaces the carrier transaction (`SCS-P14`–`P31`)
+
+**Decision (maintainer, 2026-10-11; the Slice C Round 0 reopen).** The
+specification is
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
+§7, §9 and §13.5. This entry records what was decided and what it
+replaces. Nothing of it is built.
+
+**Why it was reopened.** The reopen asked whether a carrier survives a
+reorg. Grounding found that a carrier could not travel at all: a zero-fee
+transaction is never relayed and cannot be admitted from a peer
+(`SCS-F12`). Under that sat one defect. A block could need two carriers,
+and the first one admitted issued every draw of the block, so the miner of
+a late block could include one and leave out the other. The pairs whose
+records were in the second took misses, at no cost to the miner, and the
+pairs could be chosen in advance (`SCS-F13`).
+
+1. **One bundle per block `h`**: the reveal and every pass record,
+   admitted whole or not at all. A bundle with no passes is valid and
+   required. *Replaces* the `serve_credit_only` carrier transaction; it
+   reverses `SCS-P11` (the serve-credit input carries the pass) and drops
+   `n ≥ 1`.
+2. **No node can refuse a valid bundle, and no rule acts on its absence.**
+   Non-inclusion through all of `W₂` is NonObservation, never misses.
+3. **The bundle sits beside the block**; the header root covers each
+   bundle's kept bytes and a hash of its prunable bytes. Kept: seed, `h`,
+   and a pass bitmap of `count(h)` bits, in place of the list of `j`.
+4. **`W₂` stays the only consensus window.** `W₂ + D_max` is rejected. The
+   challenger files by `h + W₂ − M`, `M = 30` blocks, provisional and not
+   consensus. A deliberate `M`-block reorg gets no wargame row:
+   it is majority hashrate, which the containment layer handles.
+5. **The receipt key is read from the `h_open(E)` bond snapshot**, the one
+   the drawable set is drawn from: one type, two methods.
+6. **The section has a budget counted in draws**, `c · 9·D / SEB` with
+   `c = 2` provisional, and is outside the fee median and the penalty
+   curve. This dissolves the unpaid-inclusion and cap-raise items of the
+   fee-and-weight row in FOLLOWUPS.
+7. **The prunable part is archival content in the shard domain**, kept
+   past `D_max`, then discarded and backfilled. "Never after the prune" is
+   withdrawn. `SHT-Q1`'s wording is amended to admit bundles.
+8. **Alternative chains:** stateless checks on arrival, everything else at
+   the switch.
+9. **No C++.** Bundles exist only in Rust; the C++ sidecar path goes at
+   `DEL-008`.
+10. **Dandelion++ for bundles is withdrawn**; reopen when
+    block-origination privacy is designed.
+11. **FN-DSA increments 3 and 4 are Slice C's.** *Supersedes* `SO-D12d`'s
+    "the FN-DSA lane builds increments 2 to 4" for those two.
+12. **Transport is by reference**: blocks carry references, bodies live in
+    one store keyed by hash, and the pool gains a separate bundle queue.
+    DRS-E5 builds both; Slice C supplies the rule.
+13. **No fee-floor bypass by how a transaction arrived** (`E5-Q1`, partly
+    reopened): the ruling of 2026-10-02 applied to DRS-E5.
+14. **Housekeeping:** `SCV-Q5`'s gate accepts `ByConstruction`; the
+    specification's §2 is re-pinned; the proposal's §2.2 is restated as
+    referential integrity; the sim is to call the production draw
+    functions.
+
+15. **Three lanes, split by what needs checking**: Slice C builds
+    validity (the specification, the verifier's view trait, the pure
+    verifier, FN-DSA increments 3 and 4), `SO-D12` builds state, DRS-E5
+    builds transport. The contracts between them are the view trait and
+    the kept projection type.
+
+**Re-ruled 2026-10-12: superseded is not deleted.** Item 1's reversal of
+`SCS-P11` stands, but nothing landed in Rust is deleted to make room for
+the bundle, and C++ goes only when it is unreachable or fully replaced.
+Slice C's changes are additive (the receipt key as a second JoinMarket
+form, the verifier staged beside the live path); the serve-credit input's
+fate is decided at the cutover. The PR that had begun deleting it was
+closed unmerged.
+
+**Ruled 2026-10-12, the six questions found while writing the bundle in**
+(specification §13.6, `SCS-P32`–`P37`):
+
+- admission checks `anchor_height < h`, and every rule set asserts
+  `W₂ + L ≤` anchor depth; an amendment to `SCS-P7`;
+- the budget is `c · (⌊9·D / SEB⌋ + 1)`, with `D` the largest among the
+  epochs of the bundles in the section; a zero-draw bundle is admissible;
+- the header's `attestation_root` field is reused and renamed
+  `bundle_root`; CEN-B4 is retired by ruling for a new row;
+- the bundle commitment under a new label, fixed-width records with no
+  frame, and the dependency on FN-DSA-1024's padded signature written
+  down;
+- a backfilled bundle is accepted on hash equality; re-verifying receipts
+  is optional. *Corrects* item 7's "can be re-verified";
+- the verifier returns the derived draws with the kept projection.
+
+---
+
+## 2026-10-12 — Serving co-residence: the daemon's slice, no adaptive back-off, and the T2 measurement redefined
+
+**Decision (maintainer, 2026-10-12; brief relayed to the serving lane).**
+On the `BA-T5` session 3 finding that the per-thread nice (`SH-3`) gives a
+daemon in a different cpu cgroup only part of its CPU back
+([`ba_t5_serve_floor_device_20261012.md`](benchmarks/ba_t5_serve_floor_device_20261012.md);
+[`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
+§9.8):
+
+1. **A headless staker's daemon runs in its own top-level `shekyl.slice`
+   with a CPU weight above `user.slice`'s** (`CPUWeight=400`, reasoned,
+   not measured: 4:1 against `user.slice` under contention, about 80 %
+   of the CPU to the daemon while the per-user wallet serves). The slice
+   ships with the `.deb`, and `shekyld.service` joins it. The wallet
+   stays a per-user process. **A wallet as a system service is
+   rejected**: it breaks per-user custody, the same ruling `WP-D7` makes
+   on Windows.
+2. **Beyond that, the in-process nice-19 mechanism plus the serving gate
+   are the defence. No adaptive back-off.**
+3. **The T2 measurement is redefined**: the time to verify a block while
+   the daemon is synced and following the tip, idle against serving at
+   N = 64, with and without the slice weight — not the sync rate. The
+   syncing arms of sessions 2 and 3 are a stress case production
+   prevents: a daemon that is not following the tip serves nothing
+   (`DaemonTipCache::stamp_not_following`, the gate's `own_height`
+   refusal); the probe served through a sync only because its test
+   signer carries a fixed height. Their figures stand as the cost of
+   contention, cited as such.
+4. **The write-stall timer measures the peer.** `WRITE_STALL_TIMEOUT`
+   wrapped the whole write and so counted a starved serving task's own
+   lateness as a stall (two cut responses in 1,536 at N = 64 in session
+   3, every one with a client that was reading). It is restructured to
+   wrap only the wait for the socket to become writable; a socket the
+   peer is draining never starts the clock. `WRITE_TIMEOUT` is
+   unchanged. Its own PR, with a probe smoke run in CI so the floor probe
+   cannot break silently again.
+
+---

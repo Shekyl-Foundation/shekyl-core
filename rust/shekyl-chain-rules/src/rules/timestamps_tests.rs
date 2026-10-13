@@ -296,17 +296,27 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
     // argued from SI-7. A view that breaks SI-7 now yields
     // `Corrupt::HoleBelowTip` at the height that was not recorded — the
     // class the connector halts the writer on — and the candidate is
-    // neither refused nor admitted.
+    // neither refused nor admitted. The window is a header read (DRS-E5
+    // `E5-14`), so the hole is the header record's, and withholding the
+    // block record alone leaves the window answerable.
     let chain = chain_with(&[100, 220, 340, 460]);
     let hole = BlockHeight::from_raw(2);
     chain.with_view(|inner| {
         let view = inner.withholding(WithheldRead::BlockAt(hole));
         let mut coverage = RuleCoverage::EMPTY;
+        assert!(
+            C3::window(&view, BlockHeight::from_raw(4), &mut coverage).is_ok(),
+            "C3 reads header facts; a withheld block record is not its hole"
+        );
+    });
+    chain.with_view(|inner| {
+        let view = inner.withholding(WithheldRead::HeaderAt(hole));
+        let mut coverage = RuleCoverage::EMPTY;
         assert_eq!(
             C3::window(&view, BlockHeight::from_raw(4), &mut coverage),
             Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
                 at: hole,
-                record: crate::fault::PerHeightRecord::Block,
+                record: crate::fault::PerHeightRecord::Header,
             }))
         );
         // Through the stage: the same fault, in `Fault`'s clothing.
@@ -317,7 +327,7 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
                 outcome,
                 Err(crate::fault::Fault::Corrupt(Corrupt::HoleBelowTip {
                     at,
-                    record: crate::fault::PerHeightRecord::Block,
+                    record: crate::fault::PerHeightRecord::Header,
                 })) if at == hole
             ),
             "{outcome:?}"
@@ -325,12 +335,12 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
     });
     // The producer's read of the same operand reports the same fault.
     chain.with_view(|inner| {
-        let view = inner.withholding(WithheldRead::BlockAt(hole));
+        let view = inner.withholding(WithheldRead::HeaderAt(hole));
         assert_eq!(
             mtp_median_at(&view, BlockHeight::from_raw(4)),
             Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
                 at: hole,
-                record: crate::fault::PerHeightRecord::Block,
+                record: crate::fault::PerHeightRecord::Header,
             }))
         );
     });

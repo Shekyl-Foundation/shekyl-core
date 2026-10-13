@@ -202,6 +202,14 @@ so the two cannot disagree on a verdict without saying why.
   first drafted (`e, es, skem`) is refused at pattern construction.
 - **Still not shown, by design (RT-O11):** that Shekyl's handshake
   reproduces these vectors. That is RT-W9.
+  **Shown since, in RT-W9 step 2:** Shekyl's handshake, drawing from the
+  same seeded streams through the private constructors production calls
+  with the operating system's generator (RT-O18; one generator source),
+  reproduces all four messages, the handshake hash and both transport
+  messages byte for byte. Those transport bytes are `Direction::seal`
+  under empty `TRANSPORT_AD`
+  (`rust/shekyl-rpc-channel/src/pinned_handshake.rs`). Anchor 2 is
+  complete.
 
 ## 4.2 What the model found by running (commit 7, RT-P7)
 
