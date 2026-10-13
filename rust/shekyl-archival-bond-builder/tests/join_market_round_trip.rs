@@ -165,7 +165,6 @@ fn join_market_commits_the_personas_receipt_key() {
 
     assert_eq!(vin.post_kind(), BondPostKind::JoinMarket);
     assert_eq!(vin.post_kind() as u8, 5);
-    assert!(vin.kind.is_join_market());
     let committed = vin
         .receipt_sign_pk()
         .expect("the post commits a receipt key");

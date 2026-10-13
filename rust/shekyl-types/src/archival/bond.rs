@@ -60,12 +60,12 @@ impl ReceiptSignPk {
     }
 
     /// The key from a slice, or `None` when the slice is not exactly
-    /// [`RECEIPT_SIGN_PK_LEN`] bytes.
+    /// [`RECEIPT_SIGN_PK_LEN`] bytes. A slice of the wrong length
+    /// allocates nothing.
     #[must_use]
     pub fn from_slice(bytes: &[u8]) -> Option<Self> {
-        let boxed: Box<[u8]> = bytes.into();
-        let exact: Box<[u8; RECEIPT_SIGN_PK_LEN]> = boxed.try_into().ok()?;
-        Some(Self(exact))
+        let array: &[u8; RECEIPT_SIGN_PK_LEN] = bytes.try_into().ok()?;
+        Some(Self::from_bytes(*array))
     }
 
     /// The canonical bytes.

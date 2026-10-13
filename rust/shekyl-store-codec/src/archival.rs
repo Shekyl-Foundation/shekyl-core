@@ -132,11 +132,9 @@ impl Canonical for BondRecord {
                 "bond_spend_pk exceeds MAX_BOND_KEY_BYTES",
             )?
             .to_vec();
-        let receipt_sign_pk = ReceiptSignPk::from_slice(r.take(
-            RECEIPT_SIGN_PK_LEN,
-            "buffer ends inside the receipt_sign_pk",
-        )?)
-        .ok_or_else(|| r.invalid("unreachable: take yields the length asked for"))?;
+        let receipt_sign_pk = ReceiptSignPk::from_bytes(
+            r.array::<RECEIPT_SIGN_PK_LEN>("buffer ends inside the receipt_sign_pk")?,
+        );
         let endpoint = r.array::<32>("buffer ends inside the endpoint")?;
         let join_settlement_epoch = SettlementEpoch::from_raw(r.u64()?);
         let bonded_total = AtomicUnits::from_raw(r.u64()?);

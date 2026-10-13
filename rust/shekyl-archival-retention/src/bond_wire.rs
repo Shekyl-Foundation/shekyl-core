@@ -28,13 +28,6 @@ pub const VIN_TYPE_ARCHIVAL_BOND_POST: u8 = 0x03;
 /// also true — PR #229 — and incidental to that load-bearing reason.)
 pub const HYBRID_PUBKEY_CANONICAL_BYTES: usize = SINGLE_KEY_CANONICAL_LEN;
 
-/// Exact canonical length of the receipt key a JoinMarket carries:
-/// [`RECEIPT_SIGN_PK_LEN`], the type's own length (Ed25519 + FN-DSA-1024,
-/// `FN_DSA_HYBRID.md` §8). Uniform for the reason `bond_spend_pk` is: every
-/// receipt key is the same shape, so none marks its persona. The length is
-/// the wire's refusal; that the bytes are a key is CEN-J28's.
-pub const RECEIPT_SIGN_PK_CANONICAL_BYTES: usize = RECEIPT_SIGN_PK_LEN;
-
 // The holdings vocabulary the daemon store also persists moved to
 // `shekyl-types` (`DRS_E1_SARCH.md` `SAR-Q2`, 2026-09-23); re-exported at the
 // paths this crate's callers already use. The folds over it stay here.
@@ -91,8 +84,9 @@ impl BondPostKind {
         }
     }
 
-    /// Whether this byte is a JoinMarket. The one predicate for the
-    /// question, so no caller compares discriminants by hand.
+    /// Whether this kind is the JoinMarket (`FN_DSA_HYBRID.md` §8). The
+    /// one predicate over this enum, so no caller compares its discriminant
+    /// by hand. A recorded wire byte asks `is_join_market_post_kind`.
     #[must_use]
     pub const fn is_join_market(self) -> bool {
         matches!(self, Self::JoinMarket)
@@ -133,12 +127,6 @@ impl BondKind {
             Self::Reinstate => BondPostKind::Reinstate,
             Self::Release => BondPostKind::Release,
         }
-    }
-
-    /// Whether this is a JoinMarket.
-    #[must_use]
-    pub const fn is_join_market(&self) -> bool {
-        matches!(self, Self::JoinMarket { .. })
     }
 
     pub fn bond_spend_pk(&self) -> Option<&[u8]> {

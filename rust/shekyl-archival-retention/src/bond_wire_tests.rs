@@ -315,10 +315,10 @@ fn a_join_market_carries_its_receipt_key_between_bond_spend_pk_and_the_endpoint(
     let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
     let vin = join_market_vin(&hybrid_pk);
     assert_eq!(vin.post_kind(), BondPostKind::JoinMarket);
-    assert!(vin.kind.is_join_market());
+    assert!(vin.post_kind().is_join_market());
     assert_eq!(vin.receipt_sign_pk(), Some(&receipt_key()));
     assert_eq!(release_vin(&hybrid_pk).receipt_sign_pk(), None);
-    assert!(!release_vin(&hybrid_pk).kind.is_join_market());
+    assert!(!release_vin(&hybrid_pk).post_kind().is_join_market());
 
     let wire = vin.serialize().unwrap();
     let kind_at = 1 + 2 + HYBRID_PUBKEY_CANONICAL_BYTES + 32;
