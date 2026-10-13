@@ -11,8 +11,9 @@
 use std::net::Ipv4Addr;
 
 use shekyl_peerlist::{
-    ConnectionId, DialOutcome, Direction, ListName, NetworkAddress, NoBans, Peerlist, Refusal,
-    RefusedSet, SessionRow, Source, Tick, EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP,
+    CloseCause, CloseKind, ConnectionId, DialOutcome, Direction, ListName, NetworkAddress, NoBans,
+    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, EXPIRATION_PERIOD_NANOS, GRAY_CAP,
+    WHITE_CAP,
 };
 use shekyl_relay_privacy::rng::SplitMix64;
 
@@ -425,7 +426,8 @@ fn first_octet(address: &NetworkAddress) -> u8 {
 fn failed_and_refused_dials_drop_the_draw_and_a_refused_payload_leaves_it_gray() {
     for (make, drops) in [
         (
-            DialOutcome::DialFailed as fn(NetworkAddress) -> DialOutcome,
+            (|a| DialOutcome::DialFailed(a, CloseCause::new(CloseKind::DialFailed)))
+                as fn(NetworkAddress) -> DialOutcome,
             true,
         ),
         (DialOutcome::PeerlistRefused, true),
@@ -457,7 +459,10 @@ fn a_failed_redial_leaves_white() {
     draw_until(&mut list, &peer, &mut rng);
     list.apply(&DialOutcome::Confirmed(peer.clone()), at_hours(0), &mut rng);
     list.apply(
-        &DialOutcome::DialFailed(peer.clone()),
+        &DialOutcome::DialFailed(
+            peer.clone(),
+            CloseCause::new(CloseKind::LevinHandshakeTimeout),
+        ),
         at_hours(1),
         &mut rng,
     );

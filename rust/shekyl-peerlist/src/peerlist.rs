@@ -339,7 +339,7 @@ impl Peerlist {
             DialOutcome::Confirmed(address) => {
                 partition.confirm(address, now, rng, WhiteClock::Hold);
             }
-            DialOutcome::DialFailed(address) | DialOutcome::PeerlistRefused(address) => {
+            DialOutcome::DialFailed(address, _) | DialOutcome::PeerlistRefused(address) => {
                 partition.drop_outstanding(address);
             }
             // The strand refused the payload. White is unchanged. An
