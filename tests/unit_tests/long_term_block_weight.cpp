@@ -204,8 +204,13 @@ TEST(long_term_block_weight, a_block_contribution_is_bounded_to_the_17_10_band)
 // (blockchain.cpp: the six call sites). This pins the publish at that
 // function, through the two of those entries this fixture can run: init,
 // and pop_blocks; a block added is the fixture's push plus the recompute
-// those callers make. The height published is the block count, as
-// get_payload_sync_data reports it, and the id is the top block's.
+// those callers make. The chain switch is pinned by reading, not run
+// (Rick, 2026-10-13): switch_to_alternative_blockchain reaches
+// update_next_cumulative_weight_limit at blockchain.cpp:1070, and
+// rollback_blockchain_switching at :1003, so both publish through the one
+// function this test exercises; no reorg fixture is needed. The height
+// published is the block count, as get_payload_sync_data reports it, and
+// the id is the top block's.
 TEST(long_term_block_weight, every_tip_change_publishes_the_tip_the_dialer_announces)
 {
   PREFIX();

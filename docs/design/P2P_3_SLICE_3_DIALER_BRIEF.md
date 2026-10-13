@@ -774,8 +774,22 @@ table.*
 | `shekyl::note_own_address` (the operator onion of `--anonymous-inbound`) | the `m_our_address` assignment in `init` | the daemon-config slice |
 
 The per-boot onion does not cross: `shekyl_daemon_tor_publish` hands
-it to the lists on the Rust side. *Records-was (2026-10-13, step 2):
+it to the lists on the Rust side. The operator onion does cross:
+`shekyl::note_own_address` is the adapter of the
+`shekyl_peerlist_set_own_address` config push (the §3.4 row below;
+Rick, 2026-10-13). *Records-was (2026-10-13, step 2):
 `shekyl_peerlist_set_own_address` existed with no caller.*
+
+**The dial blocks its owner's thread — ACCEPTED for PR-3 (Rick,
+2026-10-13).** The timing engine owns the wake (R3): the owner loop
+arms its next deadline and blocks on `wait_wake`. Once woken, the
+thread blocks on the TCP dial and on the handshake read until the
+connector's gap deadline ends them; the dial itself is not an engine
+event. With the in-flight bound at one dial per connector that thread
+is the bound, so nothing waits behind it. Reopen criterion: if the
+post-cutover in-flight bound is raised above one, the dial moves into
+the connector as an event-driven step, and the owner loop stops
+holding a thread across it.
 
 ## Measured after the cutover, on the Rust path
 
@@ -900,6 +914,7 @@ keep the callers named below.
 | **C++ this PR adds: the `disclose` adapter** | `zone_server.h` | slice 4, with the two senders |
 | **C++ this PR adds: the `admit_operator_peer` and `note_own_address` adapters** | `zone_server.h` | the daemon-config slice |
 | **C++ this PR adds: `shekyl_core_publish_tip` in `blockchain.cpp`** | `Blockchain::update_next_cumulative_weight_limit`, one call | the DRS store cutover, or the chain-sync slice |
+| **Config push this PR adds (Rick, 2026-10-13, §3.1 review): `shekyl_peerlist_set_own_address`, through the `note_own_address` adapter** | the `m_our_address` assignment in `init`: the operator onion of `--anonymous-inbound` is parsed only in C++, so it reaches the lists as a config push. The per-boot onion does not cross (`daemon_tor_ffi.rs` hands it to the lists) | the daemon-config slice, which parses the option in Rust |
 | **Config pushes this PR adds: `shekyl_dialer_set_out_peers`, `shekyl_peerlist_allow_local_ip`** | `set_max_out_peers`; the `--allow-local-ip` read in `init` | the daemon-config slice, which creates the options in Rust |
 | `sanitize_peerlist`, the `P2P_MAX_PEERS_IN_HANDSHAKE` check and the per-entry connector loop in `handle_remote_peerlist` (Rick, 2026-10-13) | *Records-was* definition `net_node.inl:2417`, declaration `net_node.h:510`, the check and the loop in `handle_remote_peerlist`. Rust holds every rule; the handler is one call | `rg -n -e sanitize_peerlist src/p2p` returns nothing. `rg -n -e P2P_MAX_PEERS_IN_HANDSHAKE src/p2p` returns nothing; the define stays in `cryptonote_config.h` as an input of the Levin ingress byte bound (`shekyl-levin/src/ingress.rs`, `check_levin_constant_parity.sh`). `rg -n -e handle_remote_peerlist src/p2p` still matches the declaration, the definition and its two callers until slice 4 |
 | Priority nodes (Rick, 2026-10-11) | `arg_p2p_add_priority_node` (`net_node.cpp:125`, declared `net_node.h:820`, added `net_node.inl:118`); `m_priority_peers` (`net_node.h:767`); the parse (`net_node.inl:556-558`); the clearnet arm (`:2132`); `is_priority_node` (`:2906`, declared `net_node.h:679`), whose callers (`:1670`, `:1681`, `:1727`, `:1737`) only choose a log level. The live flag rows: `docs/EXECUTABLES.md` and `docs/proxies.md`. `docs/USER_GUIDE.md` already has none. The Q12 run record is historical and is not in this gate | `rg -n -e priority_node -e m_priority_peers -e priority-node src/p2p` returns nothing. Before deletion it hits the argument, its registration, the parse, the arm, the predicate and its four callers. `rg -n -e add-priority-node src/common/removed_flags.cpp` hits the retired-flag row; zero hits fails, because the flag is refused by name, not forgotten. When the deletion has landed, `rg -n add-priority-node docs/EXECUTABLES.md docs/proxies.md docs/USER_GUIDE.md` returns nothing. Today the first two still document the live flag |
