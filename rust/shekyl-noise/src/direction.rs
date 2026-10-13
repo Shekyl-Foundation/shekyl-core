@@ -55,6 +55,8 @@ pub struct Direction {
     k: Zeroizing<[u8; HASH_LEN]>,
     n: u64,
     epoch: KeyEpoch,
+    /// Ciphertexts this direction has opened, over its whole life.
+    opened: u64,
 }
 
 impl Direction {
@@ -64,7 +66,20 @@ impl Direction {
             k,
             n: 0,
             epoch: KeyEpoch::INITIAL,
+            opened: 0,
         }
+    }
+
+    /// How many ciphertexts this direction has opened. A failed tag is not
+    /// counted, and a rekey does not reset the count.
+    ///
+    /// A direction that has opened at least one ciphertext has heard from a
+    /// peer that holds the session's keys. A caller that must not act until
+    /// then reads this, and not the word of whatever code it lent the
+    /// direction to.
+    #[must_use]
+    pub fn opened(&self) -> u64 {
+        self.opened
     }
 
     /// Seal `plaintext` under this direction's next nonce.
@@ -93,6 +108,7 @@ impl Direction {
         let epoch = self.epoch;
         let pt = aead::open(&self.k, self.n, ad, ciphertext).ok_or(DirectionError::Decrypt)?;
         self.advance()?;
+        self.opened = self.opened.saturating_add(1);
         Ok((pt, epoch))
     }
 
@@ -100,7 +116,7 @@ impl Direction {
         let n = self.n.checked_add(1).ok_or(DirectionError::State)?;
         if n == REKEY_NONCES {
             let epoch = self.epoch.next().ok_or(DirectionError::State)?;
-            let (ck, k) = aead::hkdf(&self.ck, &self.k[..]);
+            let [ck, k] = aead::hkdf(&self.ck, &self.k[..]);
             self.ck = ck;
             self.k = k;
             self.n = 0;
@@ -133,6 +149,40 @@ mod tests {
             Zeroizing::new([0x11; HASH_LEN]),
             Zeroizing::new([0x22; HASH_LEN]),
         )
+    }
+
+    /// The count the RPC handshake's pending session gates on: an opened
+    /// ciphertext moves it, a failed tag does not, and a rekey leaves it.
+    #[test]
+    fn only_an_opened_ciphertext_is_counted() {
+        let mut send = keyed();
+        let mut recv = keyed();
+        assert_eq!(recv.opened(), 0);
+
+        assert!(recv.open(&[0xa5; 48], b"ad").is_err());
+        let (mut tampered, _) = keyed().seal(b"body", b"ad").unwrap();
+        tampered[0] ^= 1;
+        assert!(recv.open(&tampered, b"ad").is_err());
+        assert_eq!(recv.opened(), 0, "a failed tag is not an open");
+
+        let (ct, _) = send.seal(b"body", b"ad").unwrap();
+        assert!(recv.open(&ct, b"other ad").is_err());
+        assert_eq!(
+            recv.opened(),
+            0,
+            "nor is the right bytes under the wrong ad"
+        );
+        recv.open(&ct, b"ad").unwrap();
+        assert_eq!(recv.opened(), 1);
+        assert_eq!(send.opened(), 0, "sealing is not opening");
+
+        send.force_nonce(REKEY_NONCES - 1);
+        recv.force_nonce(REKEY_NONCES - 1);
+        let (ct, _) = send.seal(b"boundary", b"ad").unwrap();
+        recv.open(&ct, b"ad").unwrap();
+        let (ct, _) = send.seal(b"after", b"ad").unwrap();
+        recv.open(&ct, b"ad").unwrap();
+        assert_eq!(recv.opened(), 3, "a rekey does not reset the count");
     }
 
     #[test]
