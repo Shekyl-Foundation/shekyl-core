@@ -31,6 +31,12 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// [`bundle_root`] over a section every test here can hold: far fewer than
+/// 2³² references, so the one refusal is not this helper's.
+fn root(refs: &[BundleRef]) -> [u8; 32] {
+    bundle_root(refs).expect("a test section's count fits 32 bits")
+}
+
 /// Record `k` of the vectors: `attempt = k mod 3`, `anchor_height =
 /// 999_000 + k`, `delivery_digest = (0xD0 + k) × 32`, and a receipt whose
 /// byte `i` is `(7·i + 13·k + 1) mod 251`.
@@ -589,22 +595,22 @@ fn vector_refs() -> (BundleRef, BundleRef) {
 fn the_root_matches_its_vectors() {
     let (first, second) = vector_refs();
     assert_eq!(
-        hex(&bundle_root(&[])),
+        hex(&root(&[])),
         "1d271689c2934e75f2b8a25f57a686a75744d5f254ce014341eeba7b56845226"
     );
     assert_eq!(
-        hex(&bundle_root(std::slice::from_ref(&first))),
+        hex(&root(std::slice::from_ref(&first))),
         "e2888ebb63918165e0efa48e215e157ec8e255331fcf8b415390affb6e84836c"
     );
     assert_eq!(
-        hex(&bundle_root(&[first.clone(), second.clone()])),
+        hex(&root(&[first.clone(), second.clone()])),
         "a64fe23abd6c2350d9fdf4fa0109ffc69701b3adad19e0e331858f966328de4b"
     );
     // Order is hashed: the section check refuses the swap, and the root
     // would not agree with it either.
     assert_ne!(
-        bundle_root(&[first.clone(), second.clone()]),
-        bundle_root(&[second, first])
+        root(&[first.clone(), second.clone()]),
+        root(&[second, first])
     );
 }
 
@@ -620,14 +626,14 @@ fn the_root_matches_its_vectors() {
 #[test]
 fn two_sections_cannot_share_a_root_preimage() {
     let (first, second) = vector_refs();
-    let two = bundle_root(&[first.clone(), second.clone()]);
+    let two = root(&[first.clone(), second.clone()]);
     assert_ne!(
         hex(&two),
         "c4e0066605daec9bd4a8fac7ad935fb9881cd2ebc95546d2d7cc643dceb3720a",
         "n counts references, not bytes"
     );
     assert_ne!(
-        hex(&bundle_root(std::slice::from_ref(&first))),
+        hex(&root(std::slice::from_ref(&first))),
         "c6bdd61d22246ea3b1a44fcafb5e28f8cd4259ca675a1db3b37c467cdac2ab6c",
         "n is hashed"
     );
@@ -670,7 +676,7 @@ fn two_sections_cannot_share_a_root_preimage() {
     // 97 and 104 draws are both 13 bytes of bitmap and are different
     // references, with different roots: the count is in the preimage.
     assert_eq!(wide(97, 5).encode().len(), wide(104, 5).encode().len());
-    assert_ne!(bundle_root(&[wide(97, 5)]), bundle_root(&[wide(104, 5)]));
+    assert_ne!(root(&[wide(97, 5)]), root(&[wide(104, 5)]));
 }
 
 /// The root covers each reference's seed, `h`, count, bitmap and prunable
@@ -678,8 +684,8 @@ fn two_sections_cannot_share_a_root_preimage() {
 #[test]
 fn the_root_moves_with_every_field_of_a_reference() {
     let (first, second) = vector_refs();
-    let base = bundle_root(&[first.clone(), second.clone()]);
-    let with = |changed: BundleRef| bundle_root(&[changed, second.clone()]);
+    let base = root(&[first.clone(), second.clone()]);
+    let with = |changed: BundleRef| root(&[changed, second.clone()]);
     let ph = *first.prunable_hash();
     let mut seed = first.kept().clone();
     seed.seed[0] ^= 1;
@@ -702,6 +708,42 @@ fn the_root_moves_with_every_field_of_a_reference() {
     let mut other = ph;
     other[31] ^= 1;
     assert_ne!(base, with(BundleRef::new(first.kept().clone(), other)));
+}
+
+/// The root counts its references in four bytes, and a section the count
+/// cannot hold has no root rather than a panic: the conversion is checked
+/// where a section's length becomes `n`. Tested on the conversion, which is
+/// the one place the bound lives, because a section of 2³² references is
+/// not something a test allocates. Red edit: `len as u32` (the count
+/// wraps to 0 and the section hashes as empty), or `unwrap_or(u32::MAX)`.
+#[test]
+fn a_section_the_root_cannot_count_has_no_root() {
+    assert_eq!(section_reference_count(0), Ok(0));
+    assert_eq!(section_reference_count(1), Ok(1));
+    let (first, second) = vector_refs();
+    assert_eq!(
+        bundle_root(&[first, second]).map(|root| hex(&root)),
+        Ok("a64fe23abd6c2350d9fdf4fa0109ffc69701b3adad19e0e331858f966328de4b".to_string())
+    );
+    // The boundary itself needs a `usize` wider than 32 bits to state.
+    #[cfg(target_pointer_width = "64")]
+    {
+        let last = usize::try_from(u32::MAX).expect("fits");
+        assert_eq!(section_reference_count(last), Ok(u32::MAX));
+        let first_past = last + 1;
+        assert_eq!(
+            section_reference_count(first_past),
+            Err(TooManyReferences { found: first_past })
+        );
+        assert_eq!(
+            section_reference_count(usize::MAX),
+            Err(TooManyReferences { found: usize::MAX })
+        );
+        assert_eq!(
+            TooManyReferences { found: first_past }.to_string(),
+            "a section of 4294967296 references has no root: the root counts them in 32 bits"
+        );
+    }
 }
 
 // ---------------------------------------------------------------- budget

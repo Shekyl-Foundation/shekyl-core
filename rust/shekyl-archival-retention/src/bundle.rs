@@ -704,18 +704,46 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
 /// The caller supplies ascending `h`; the order is part of what is hashed,
 /// and the verifier's section check refuses any other.
 ///
-/// # Panics
+/// # Errors
 ///
-/// If the section holds 2³² references or more.
-#[must_use]
-pub fn bundle_root(refs: &[BundleRef]) -> [u8; 32] {
-    let n = u32::try_from(refs.len()).expect("a section's reference count fits 32 bits");
+/// [`TooManyReferences`] if the section holds 2³² references or more: the
+/// root's preimage counts them in four bytes, so such a section has no
+/// root ([`section_reference_count`]). A consensus caller refuses the
+/// section for it; nothing here panics.
+pub fn bundle_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
+    let n = section_reference_count(refs.len())?;
     let mut input = Vec::new();
     input.extend_from_slice(&n.to_le_bytes());
     for reference in refs {
         reference.encode_into(&mut input);
     }
-    cshake256_32(BUNDLE_ROOT_CUSTOMIZATION, &input)
+    Ok(cshake256_32(BUNDLE_ROOT_CUSTOMIZATION, &input))
+}
+
+/// A section holds more references than the root's `n_le[4]` can count.
+///
+/// The wire's condition, owned here: §7.3 fixes the count's width at four
+/// bytes, so a section of 2³² or more references has no root preimage at
+/// all — it is not a section the format can commit to. The verifier's
+/// section check turns it into its own refusal of the block (CEN-J29).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, thiserror::Error)]
+#[error("a section of {found} references has no root: the root counts them in 32 bits")]
+pub struct TooManyReferences {
+    /// The references offered.
+    pub found: usize,
+}
+
+/// `n` as the root's preimage carries it: the section's reference count in
+/// 32 bits, checked, never truncated.
+///
+/// The one conversion of a section's length to the root's `n`, so the
+/// boundary is testable without a section of 2³² references.
+///
+/// # Errors
+///
+/// [`TooManyReferences`] if `len` is 2³² or more.
+pub fn section_reference_count(len: usize) -> Result<u32, TooManyReferences> {
+    u32::try_from(len).map_err(|_| TooManyReferences { found: len })
 }
 
 /// What one bundle costs its section, in draws: `max(count, 1)`

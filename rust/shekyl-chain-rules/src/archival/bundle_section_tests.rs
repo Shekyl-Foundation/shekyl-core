@@ -40,9 +40,15 @@ fn section_of(counts: &[u32]) -> Vec<BundleRef> {
         .collect()
 }
 
+/// [`bundle_root`] over a section a test holds: far fewer than 2³²
+/// references, so its one refusal is not this helper's.
+fn root_of(refs: &[BundleRef]) -> [u8; 32] {
+    bundle_root(refs).expect("a test section's count fits 32 bits")
+}
+
 /// `check_section` on a section whose root is its own, as its charge.
 fn charged(refs: &[BundleRef], budget: Option<u64>) -> Result<u64, SectionRefused> {
-    check_section(refs, &bundle_root(refs), budget).map(SectionCharge::get)
+    check_section(refs, &root_of(refs), budget).map(SectionCharge::get)
 }
 
 /// References are in strictly ascending `h`, so none repeats. Red edit:
@@ -110,6 +116,35 @@ fn a_reference_that_does_not_parse_is_a_section_refusal_at_its_position() {
     malformed(&padded);
 }
 
+/// A section the root cannot count — 2³² references or more — is a form
+/// refusal under J29, carrying the count, and not a panic in a consensus
+/// function. This test bites against the arm's row and message; it does
+/// NOT drive `check_section` to the arm, which would take a section of 2³²
+/// references — the bound itself is tested on the conversion in
+/// `shekyl-archival-retention` (`a_section_the_root_cannot_count_has_no_root`),
+/// and the mapping line in `check_section` is one `map_err` by name. Red
+/// edit: file the arm under J30.
+#[test]
+fn a_section_the_root_cannot_count_is_a_j29_refusal() {
+    // `usize::MAX` rather than 2³²: the arm is data, and the literal has to
+    // exist on a 32-bit target too.
+    let found = usize::MAX;
+    let refused = SectionRefused::TooManyReferences { found };
+    assert_eq!(refused.row(), CenRow::J29);
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "CEN-J29 refused: the section's {found} references are more than the header root can \
+             count"
+        )
+    );
+    let wire = shekyl_archival_retention::TooManyReferences { found };
+    assert_eq!(
+        SectionRefused::TooManyReferences { found: wire.found },
+        refused
+    );
+}
+
 /// The header root recomputes from the references. Red edit: skip the
 /// comparison; or compare against the root of the references sorted.
 #[test]
@@ -117,7 +152,7 @@ fn a_section_whose_root_does_not_recompute_refuses() {
     let a = reference_at(100, 8);
     let b = reference_at(101, 3);
     let refs = [a.clone(), b.clone()];
-    let root = bundle_root(&refs);
+    let root = root_of(&refs);
     assert_eq!(
         check_section(&refs, &root, None).map(SectionCharge::get),
         Ok(11)
@@ -131,7 +166,7 @@ fn a_section_whose_root_does_not_recompute_refuses() {
     );
     // The root of a section that omits a reference, or adds one.
     assert_eq!(
-        check_section(&refs, &bundle_root(std::slice::from_ref(&a)), None),
+        check_section(&refs, &root_of(std::slice::from_ref(&a)), None),
         Err(SectionRefused::Root)
     );
     assert_eq!(
@@ -254,7 +289,7 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
 #[test]
 fn a_section_with_no_budget_still_returns_its_charge() {
     let refs = section_of(&[292, 0, 293]);
-    let charge = check_section(&refs, &bundle_root(&refs), None).expect("form holds");
+    let charge = check_section(&refs, &root_of(&refs), None).expect("form holds");
     assert_eq!(charge.get(), 586);
     assert_eq!(charge, SectionCharge::of(&refs));
     // At the switch, with `D` known.
@@ -282,7 +317,7 @@ fn of_two_section_defects_the_earlier_check_refuses() {
     );
     let refs = [a, b];
     assert_eq!(
-        check_section(&refs, &bundle_root(&refs), Some(15)),
+        check_section(&refs, &root_of(&refs), Some(15)),
         Err(SectionRefused::OverBudget {
             charge: SectionCharge::of(&refs),
             budget: 15

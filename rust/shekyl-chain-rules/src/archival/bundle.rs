@@ -163,7 +163,8 @@ use std::collections::BTreeMap;
 
 use shekyl_archival_retention::{
     bundle_root, challenge_nonce, draw_commit, select_draw, verify_receipt_transcript, BundleBody,
-    BundleKept, BundleRef, BundleWireError, DrawableEpoch, DrawablePair, CHALLENGE_READS,
+    BundleKept, BundleRef, BundleWireError, DrawableEpoch, DrawablePair, TooManyReferences,
+    CHALLENGE_READS,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
@@ -242,6 +243,14 @@ pub enum SectionRefused {
         /// The offending reference's position in the section.
         position: usize,
     },
+    /// The section holds 2³² references or more: the root counts them in
+    /// four bytes (§7.3), so no root exists for it to recompute to. A
+    /// verdict, not a panic (`shekyl_archival_retention::TooManyReferences`
+    /// is where the wire states the bound). CEN-J29.
+    TooManyReferences {
+        /// The references in the section.
+        found: usize,
+    },
     /// The header's root is not the root over these references. CEN-J29.
     Root,
     /// The references' charges sum past the section budget. CEN-J30.
@@ -258,7 +267,10 @@ impl SectionRefused {
     #[must_use]
     pub const fn row(&self) -> CenRow {
         match self {
-            Self::Malformed { .. } | Self::OutOfOrder { .. } | Self::Root => CenRow::J29,
+            Self::Malformed { .. }
+            | Self::OutOfOrder { .. }
+            | Self::TooManyReferences { .. }
+            | Self::Root => CenRow::J29,
             Self::OverBudget { .. } => CenRow::J30,
         }
     }
@@ -275,6 +287,12 @@ impl fmt::Display for SectionRefused {
                 write!(
                     f,
                     "bundle reference #{position} is not above its predecessor's h"
+                )
+            }
+            Self::TooManyReferences { found } => {
+                write!(
+                    f,
+                    "the section's {found} references are more than the header root can count"
                 )
             }
             Self::Root => f.write_str("the header root is not the root over the references"),
@@ -346,11 +364,12 @@ pub fn open_reference(position: usize, bytes: &[u8]) -> Result<BundleRef, Sectio
 
 /// The stateless section check: §9.1 steps 1 and 2, in that order.
 ///
-/// 1. **Form.** `refs` is in strictly ascending `h`, so no `h` repeats,
-///    and `header_root` is [`bundle_root`] over it. That each reference
-///    parses is already true of a [`BundleRef`]: its bitmap's length and
-///    padding were checked against its stated count when it was decoded
-///    ([`open_reference`]).
+/// 1. **Form.** `refs` is in strictly ascending `h`, so no `h` repeats;
+///    the section has a root at all — fewer than 2³² references, the
+///    width the root counts them in — and `header_root` is [`bundle_root`]
+///    over it. That each reference parses is already true of a
+///    [`BundleRef`]: its bitmap's length and padding were checked against
+///    its stated count when it was decoded ([`open_reference`]).
 /// 2. **Budget.** The section's charge — the sum of `max(count, 1)` over
 ///    `refs` — is at most `budget` when one is given. `None` means `D` is
 ///    not known here, and the comparison waits for the switch.
@@ -376,7 +395,11 @@ pub fn check_section(
             position: offender + 1,
         });
     }
-    if bundle_root(refs) != *header_root {
+    // The one refusal `bundle_root` has, mapped by name: a section the
+    // root cannot count is a verdict here, never a panic.
+    let root = bundle_root(refs)
+        .map_err(|TooManyReferences { found }| SectionRefused::TooManyReferences { found })?;
+    if root != *header_root {
         return Err(SectionRefused::Root);
     }
     let charge = SectionCharge::of(refs);
