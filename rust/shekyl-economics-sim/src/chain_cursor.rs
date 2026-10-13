@@ -102,6 +102,9 @@ impl ChainCursor {
     ) -> PricedBlock<'a> {
         let volume = self.window.operand();
         let medians = self.space.medians();
+        // ESR-14 gate proof: a float reaching a chain quantity. Reverted next.
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let _float_probe = (step.demand as f64 / 2.5) as u64;
         let supply = net_supply(step.already_generated, step.total_burned);
         let share = emission_share_at(step.chain_height);
         let burn_pct = calc_burn_pct_at(volume, supply, economic);
