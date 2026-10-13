@@ -220,6 +220,18 @@ inline std::vector<nodetool::peerlist_entry> disclose(const boost::uuids::uuid& 
   return out;
 }
 
+/// This node's own address on a connector (an operator onion from
+/// `--anonymous-inbound`), told to the Rust lists as one member of that
+/// connector's disclosure population. Returns the address, so the line
+/// that stores it for the operator log keeps its value.
+inline epee::net_utils::network_address note_own_address(epee::net_utils::network_address addr)
+{
+  shekyl_seam_address raw{};
+  if (detail::address_from(addr, raw))
+    shekyl_peerlist_set_own_address(raw.connector, &raw);
+  return addr;
+}
+
 /// An operator-named address (`--add-peer`), into the Rust gray list.
 inline void admit_operator_peer(const epee::net_utils::network_address& addr)
 {

@@ -116,6 +116,13 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
         }
     };
     if connector == ConnectorId::Clearnet {
+        // The node does not know its own public host, and a host-0 address
+        // is non-global, so nothing about this node is disclosed on
+        // clearnet. The option that names a public address comes with the
+        // daemon-config slice (Rick, 2026-10-13); no C++ option is added.
+        tracing::info!(
+            "clearnet is dial-only: this node discloses no address of its own until a public address is configured"
+        );
         let network = *NETWORK.lock().expect("network");
         let now = dialer.hub().now();
         for seed in seeds(network) {
@@ -134,6 +141,19 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
     if spawned.is_err() {
         tracing::error!("the dialer's thread for {connector:?} could not start");
     }
+}
+
+/// The per-boot onion `shekyl-tor` published, as this node's own address
+/// on the Tor connector. `service_id` is the 56-character id, no suffix.
+pub(crate) fn note_own_onion(service_id: &str, virtual_port: u16) {
+    let Some(dialer) = dialer() else {
+        return;
+    };
+    let own = NetworkAddress::Tor {
+        host: format!("{service_id}.onion"),
+        port: virtual_port,
+    };
+    dialer.set_own_addresses(ConnectorId::Tor, vec![own]);
 }
 
 /// Stop every owner loop. Called at zone shutdown.

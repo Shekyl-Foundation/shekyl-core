@@ -718,7 +718,7 @@ namespace nodetool
       zone.m_port = std::move(inbound.local_port);
       // The operator runs this onion and hands us its address. That is
       // configuration, not a publish result, and it is what peers are told.
-      zone.m_our_address = std::move(inbound.our_address);
+      zone.m_our_address = shekyl::note_own_address(std::move(inbound.our_address));
 
       if (!set_max_in_peers(zone, inbound.max_connections))
         return false;
