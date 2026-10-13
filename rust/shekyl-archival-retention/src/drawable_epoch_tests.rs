@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The `h_open(E)` snapshot's constructor: what it refuses, the order it
+//! The `h_open(E)` drawable epoch's constructor: what it refuses, the order it
 //! keeps, and that a key is read by the pair's persona. Real scheme-3
 //! keys throughout — the constructor parses them.
 //!
@@ -58,12 +58,12 @@ fn pairs_are_held_in_canonical_order() {
         pair(P2, 0),
         pair(P1, 300),
     ];
-    let snapshot = DrawableEpoch::new(EPOCH, all_keys(), supplied).expect("every pair has a key");
-    assert_eq!(snapshot.epoch(), EPOCH);
-    assert_eq!(snapshot.len(), 6);
-    assert!(!snapshot.is_empty());
+    let drawable = DrawableEpoch::new(EPOCH, all_keys(), supplied).expect("every pair has a key");
+    assert_eq!(drawable.epoch(), EPOCH);
+    assert_eq!(drawable.len(), 6);
+    assert!(!drawable.is_empty());
     let held: Vec<DrawablePair> = (0..6)
-        .map(|i| snapshot.pair(i).expect("below len"))
+        .map(|i| drawable.pair(i).expect("below len"))
         .collect();
     assert_eq!(
         held,
@@ -76,9 +76,9 @@ fn pairs_are_held_in_canonical_order() {
             pair(P3, 1),
         ]
     );
-    assert_eq!(snapshot.pair(6), None);
-    assert_eq!(snapshot.pair(u64::MAX), None);
-    assert!(snapshot.receipt_key(6).is_none());
+    assert_eq!(drawable.pair(6), None);
+    assert_eq!(drawable.pair(u64::MAX), None);
+    assert!(drawable.receipt_key(6).is_none());
 }
 
 /// Each pair's key is its own persona's, whichever shard it is and
@@ -90,7 +90,7 @@ fn a_pairs_receipt_key_is_its_personas() {
     let k = keys();
     // Keys supplied in an order that is not the personas' order.
     let supplied_keys = vec![(P3, k[2].clone()), (P1, k[0].clone()), (P2, k[1].clone())];
-    let snapshot = DrawableEpoch::new(
+    let drawable = DrawableEpoch::new(
         EPOCH,
         supplied_keys,
         [
@@ -104,15 +104,15 @@ fn a_pairs_receipt_key_is_its_personas() {
     .expect("every pair has a key");
     let expect = [&k[0], &k[0], &k[1], &k[2], &k[2]];
     for (index, expected) in expect.iter().enumerate() {
-        let key = snapshot
+        let key = drawable
             .receipt_key(index as u64)
             .expect("a pair in D has a key");
         assert_eq!(&key.to_canonical_bytes(), *expected, "index {index}");
     }
 }
 
-/// A snapshot with a keyless pair cannot be built (`SCS-P19`). Red edit:
-/// skip a pair whose persona has no key instead of failing; the snapshot
+/// A drawable epoch with a keyless pair cannot be built (`SCS-P19`). Red edit:
+/// skip a pair whose persona has no key instead of failing; the drawable epoch
 /// then builds with `D` one short and every later index names another
 /// pair.
 #[test]
@@ -194,10 +194,10 @@ fn duplicates_are_refused() {
     );
 }
 
-/// An epoch with no drawable pair is a snapshot: `D` = 0. A key supplied
+/// An epoch with no drawable pair is a drawable epoch: `D` = 0. A key supplied
 /// for a persona that holds no pair is not kept and is not parsed.
 #[test]
-fn an_epoch_with_no_pairs_is_an_empty_snapshot() {
+fn an_epoch_with_no_pairs_is_an_empty_drawable_epoch() {
     let empty = DrawableEpoch::new(EPOCH, vec![(P1, vec![0u8; 3])], []).expect("no pair to key");
     assert_eq!(empty.len(), 0);
     assert!(empty.is_empty());

@@ -17,7 +17,7 @@
 //! made by the production signer.
 //!
 //! They do **not** cover the facts the view serves. A draw count, a
-//! commitment, a visibly-short flag and a snapshot are whatever a test
+//! commitment, a visibly-short flag and a drawable epoch are whatever a test
 //! wrote into `FixtureBundleView`; that a store derives them correctly
 //! is `SO-D12`'s to witness with real blocks. The rule is tested for its
 //! logic and untested for parity until then (`50-testing.mdc`).
@@ -119,8 +119,8 @@ fn a_bundle_with_passes_and_misses_admits_with_every_draw_derived() {
         assert_eq!(draw.index, world.selected(j), "draw {j}'s index");
         assert_eq!(
             Some(draw.pair),
-            world.snapshot().pair(draw.index),
-            "draw {j}'s pair is the snapshot's at that index"
+            world.drawable_epoch().pair(draw.index),
+            "draw {j}'s pair is the drawable epoch's at that index"
         );
         assert_eq!(draw.passed, passes.contains(&j), "draw {j}'s bit");
     }
@@ -144,9 +144,9 @@ fn an_all_miss_bundle_admits_and_issues_every_draw_as_a_miss() {
 }
 
 /// A block with no draws has a bundle with an empty bitmap: valid, issues
-/// nothing (`SCS-P33`), and reads neither a snapshot nor a block hash.
-/// Red edit: refuse `count(h) = 0`, or read the snapshot before the
-/// early return — the read log then holds `Snapshot`.
+/// nothing (`SCS-P33`), and reads neither a drawable epoch nor a block hash.
+/// Red edit: refuse `count(h) = 0`, or read the drawable epoch before the
+/// early return — the read log then holds `DrawableEpoch`.
 #[test]
 fn a_bundle_for_a_block_with_no_draws_admits_and_returns_none() {
     let world = BundleWorld::new(0);
@@ -168,7 +168,7 @@ fn a_bundle_for_a_block_with_no_draws_admits_and_returns_none() {
 }
 
 /// The reads of an admitted bundle, in §9.1's order: the one-per-`h` rule
-/// and the count (step 3), the commitment (4), then the snapshot, `h`'s
+/// and the count (step 3), the commitment (4), then the drawable epoch, `h`'s
 /// hash and the issued counts (6), then each record's anchor hash (8).
 /// Red edit: hoist any later read above an earlier step.
 #[test]
@@ -184,7 +184,7 @@ fn the_view_is_read_in_the_order_of_the_checks() {
             BundleRead::Revealed,
             BundleRead::DrawCount,
             BundleRead::DrawCommitment,
-            BundleRead::Snapshot,
+            BundleRead::DrawableEpoch,
             BundleRead::BlockHash,
         ]
     );
@@ -218,7 +218,7 @@ fn the_view_is_read_in_the_order_of_the_checks() {
 ///
 /// Red edits: pass `h_incl`'s hash, or the anchor's, to the selection;
 /// ask `visibly_short` at `h_incl` instead of `h`; pass a `D` other than
-/// the snapshot's length.
+/// the drawable epoch's length.
 #[test]
 fn kat_the_verifier_derives_the_specifications_selection() {
     type State = (&'static str, fn(u64) -> bool, [u64; 6]);
@@ -702,9 +702,9 @@ fn a_bundle_that_does_not_open_the_commitment_refuses() {
 /// After the reveal the seed and the witness key are public, so anyone can
 /// build a body that opens the commitment. What stops it is the witness
 /// signature, checked next and before any receipt: a body the producer did
-/// not sign costs one signature verification, no snapshot read and no
+/// not sign costs one signature verification, no drawable epoch read and no
 /// receipt verification (§9.1). Red edits: verify receipts first (the read
-/// log gains `Snapshot`); verify under `SCHEME_DOMAIN_WITNESS_CARRIER`.
+/// log gains `DrawableEpoch`); verify under `SCHEME_DOMAIN_WITNESS_CARRIER`.
 #[test]
 fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
     let world = BundleWorld::new(10);
@@ -733,7 +733,7 @@ fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
             BundleRead::DrawCount,
             BundleRead::DrawCommitment
         ],
-        "no snapshot, no block hash, no issued count: nothing of steps 6 to 8"
+        "no drawable epoch, no block hash, no issued count: nothing of steps 6 to 8"
     );
 
     // A pass moved from draw 4 to draw 5 with the records untouched: the
@@ -964,21 +964,21 @@ fn a_receipt_that_does_not_cover_its_record_refuses() {
 }
 
 /// Red edit 2 of the specification's §11: **a receipt key read from
-/// anywhere other than the snapshot.** The view's snapshot holds key A
+/// anywhere other than the drawable epoch.** The view's drawable epoch holds key A
 /// for a persona; the receipt is signed by key B for the same pair, the
 /// same transcript. The bundle is refused — and admitted once the
-/// snapshot holds B — so the key the verifier used is the snapshot's and
+/// drawable epoch holds B — so the key the verifier used is the drawable epoch's and
 /// no other. Red edit to the code: take the key from any second source
 /// (the record, a tip read); this test cannot then tell A from B.
 #[test]
-fn a_receipt_under_a_key_the_snapshot_does_not_hold_refuses() {
+fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
     let mut world = BundleWorld::new(16);
     // A draw whose pair is the first persona's (indices 0 to 2).
     let draw = (0..16)
         .find(|j| world.selected(*j) <= 2)
         .expect("sixteen draws over eight pairs reach the first persona");
     let index = world.selected(draw);
-    let pair = world.snapshot().pair(index).expect("in D");
+    let pair = world.drawable_epoch().pair(index).expect("in D");
     assert_eq!(pair.p_id, world.personas[0].p_id);
 
     let (key_b_public, key_b_secret) =
@@ -994,16 +994,16 @@ fn a_receipt_under_a_key_the_snapshot_does_not_hold_refuses() {
     let passes = PassBitmap::from_passes(16, [draw]).expect("in range");
     let (reference, body) = world.assemble(passes, &[signed_by_b]);
 
-    // The snapshot holds key A.
+    // The drawable epoch holds key A.
     assert_eq!(
         judge(&world, &reference, &body),
         invalid(BundleInvalid::Receipt { draw })
     );
 
-    // The same bundle against a snapshot that holds key B for the persona.
-    let epoch = world.snapshot().epoch();
-    let pairs: Vec<DrawablePair> = (0..world.snapshot().len())
-        .map(|i| world.snapshot().pair(i).expect("in D"))
+    // The same bundle against a drawable epoch that holds key B for the persona.
+    let epoch = world.drawable_epoch().epoch();
+    let pairs: Vec<DrawablePair> = (0..world.drawable_epoch().len())
+        .map(|i| world.drawable_epoch().pair(i).expect("in D"))
         .collect();
     let keys: Vec<([u8; 32], Vec<u8>)> = world
         .personas
@@ -1018,7 +1018,7 @@ fn a_receipt_under_a_key_the_snapshot_does_not_hold_refuses() {
             (p.p_id, key)
         })
         .collect();
-    world.view.snapshots.insert(
+    world.view.drawable_epochs.insert(
         epoch,
         DrawableEpoch::new(epoch, keys, pairs).expect("every pair has a key"),
     );
@@ -1206,8 +1206,8 @@ fn a_fetched_body_is_checked_by_hash_and_then_parsed() {
     assert_eq!(refused.verdict().map(BundleInvalid::row), Some(CenRow::J32));
 }
 
-/// A view that answered for `h` and then has no snapshot, the wrong
-/// epoch's snapshot, no hash for `h`, or an empty drawable set under a
+/// A view that answered for `h` and then has no drawable epoch, the wrong
+/// epoch's drawable epoch, no hash for `h`, or an empty drawable set under a
 /// block that has draws: none is a verdict. A conforming view presents
 /// none of these, and a refusal here would make a store's hole into a
 /// consensus rule. The first case is a view with no `0x0C` for a block it
@@ -1250,16 +1250,16 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     );
 
     let (mut world, bundle) = fresh();
-    world.view.snapshots.clear();
+    world.view.drawable_epochs.clear();
     assert_eq!(
         unanswered(&world, &bundle),
-        BundleRefused::Unanswered(BundleUnanswered::Snapshot { epoch })
+        BundleRefused::Unanswered(BundleUnanswered::DrawableEpoch { epoch })
     );
 
-    // Another epoch's snapshot under this epoch's key.
+    // Another epoch's drawable epoch under this epoch's key.
     let (mut world, bundle) = fresh();
     let pairs: Vec<DrawablePair> = (0..8)
-        .map(|i| world.snapshot().pair(i).expect("in D"))
+        .map(|i| world.drawable_epoch().pair(i).expect("in D"))
         .collect();
     let keys: Vec<([u8; 32], Vec<u8>)> = world
         .personas
@@ -1267,13 +1267,13 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
         .map(|p| (p.p_id, p.receipt_public_key.clone()))
         .collect();
     let other_epoch = shekyl_types::SettlementEpoch::from_raw(epoch.to_raw() + 1);
-    world.view.snapshots.insert(
+    world.view.drawable_epochs.insert(
         epoch,
         DrawableEpoch::new(other_epoch, keys, pairs).expect("keyed"),
     );
     assert_eq!(
         unanswered(&world, &bundle),
-        BundleRefused::Unanswered(BundleUnanswered::Snapshot { epoch })
+        BundleRefused::Unanswered(BundleUnanswered::DrawableEpoch { epoch })
     );
 
     let (mut world, bundle) = fresh();
@@ -1284,7 +1284,7 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     );
 
     let (mut world, bundle) = fresh();
-    world.view.snapshots.insert(
+    world.view.drawable_epochs.insert(
         epoch,
         DrawableEpoch::new(epoch, Vec::<([u8; 32], Vec<u8>)>::new(), []).expect("empty"),
     );
@@ -1306,7 +1306,7 @@ fn a_view_fault_surfaces_as_itself_from_every_read() {
         BundleRead::Revealed,
         BundleRead::DrawCount,
         BundleRead::DrawCommitment,
-        BundleRead::Snapshot,
+        BundleRead::DrawableEpoch,
         BundleRead::BlockHash,
         BundleRead::VisiblyShort,
     ] {

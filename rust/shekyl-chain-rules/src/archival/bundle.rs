@@ -62,6 +62,18 @@
 //!   apart from the `pub use` that exports them. The cutover deletes that
 //!   test in the change that wires them.
 //!
+//! # One name: `DrawableEpoch`, not the specification's `EpochSnapshot`
+//!
+//! §9.6 names the `h_open(E)` value `EpochSnapshot` and the view's read
+//! of it `snapshot`. This crate already has an `EpochSnapshot`: the
+//! emission gather in `archival/close.rs`, a different value the same
+//! judgement reaches at the cutover. So the type is
+//! `shekyl_archival_retention::DrawableEpoch`, the read is
+//! [`BundleView::drawable_epoch`], the hole is
+//! [`BundleUnanswered::DrawableEpoch`], and the fixture's read log and map
+//! carry the same word — one name throughout. The specification's two
+//! code blocks in §9.6 are amended to it in a docs change.
+//!
 //! # What the cutover's view has to read, as `dev` stands
 //!
 //! `SO-D12`'s increment 1 landed the state two of the view's six reads
@@ -86,7 +98,7 @@
 //! - `ChainView::drawable_digest(E)` is **not** one of this rule's reads.
 //!   It is the settlement writer's check that `D` did not drift
 //!   (specification §9.5, check 2). What this rule reads of `D` is
-//!   [`BundleView::snapshot`], whose builder is `SO-D12`'s increment 2.
+//!   [`BundleView::drawable_epoch`], whose builder is `SO-D12`'s increment 2.
 //! - [`BundleView::block_hash`] is the recorded block's hash, and
 //!   [`BundleView::visibly_short`] is a count over the issued-draw index
 //!   with `h_reveal < h`; neither table read is new with this rule.
@@ -172,7 +184,7 @@ use crate::rule_set::RuleSet;
 /// in a popped block is valid again on any chain that keeps `h`, while its
 /// window lasts.
 ///
-/// `D`, as a number, is the snapshot's length. The view has no second
+/// `D`, as a number, is the drawable epoch's length. The view has no second
 /// source for it.
 ///
 /// The store's view, the switch's batch view and the test fixture each
@@ -205,8 +217,10 @@ pub trait BundleView {
     /// Whether a bundle for `h` is already admitted on this chain.
     fn revealed(&self, h: BlockHeight) -> Result<bool, Self::Fault>;
 
-    /// The [`DrawableEpoch`] at `h_open(E)`: `D`, and each pair's receipt key.
-    fn snapshot(&self, epoch: SettlementEpoch) -> Result<Option<&DrawableEpoch>, Self::Fault>;
+    /// The [`DrawableEpoch`] at `h_open(E)`: `D`, and each pair's receipt key,
+    /// as one value (`SCS-P19`).
+    fn drawable_epoch(&self, epoch: SettlementEpoch)
+        -> Result<Option<&DrawableEpoch>, Self::Fault>;
 }
 
 /// Why a block's bundle section is refused before any bundle is opened.
@@ -481,9 +495,9 @@ impl std::error::Error for BundleInvalid {}
 /// answer for. Not a verdict ([`BundleRefused::Unanswered`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BundleUnanswered {
-    /// No snapshot for the epoch of a block that has draws — or a snapshot
-    /// of another epoch.
-    Snapshot {
+    /// No drawable epoch for the epoch of a block that has draws — or
+    /// one of another epoch.
+    DrawableEpoch {
         /// `epoch(h)`.
         epoch: SettlementEpoch,
     },
@@ -500,7 +514,7 @@ pub enum BundleUnanswered {
         height: BlockHeight,
     },
     /// A block has draws and its epoch's drawable set is empty, or the
-    /// selection named an index the snapshot does not hold.
+    /// selection named an index the drawable epoch does not hold.
     Draw {
         /// The draw that could not be derived.
         draw: u32,
@@ -552,8 +566,8 @@ impl<F: fmt::Display> fmt::Display for BundleRefused<F> {
         match self {
             Self::Invalid(invalid) => write!(f, "{invalid}"),
             Self::BodyNotReferenced => f.write_str("the body is not the one the reference names"),
-            Self::Unanswered(BundleUnanswered::Snapshot { epoch }) => {
-                write!(f, "the view has no snapshot of epoch {epoch}")
+            Self::Unanswered(BundleUnanswered::DrawableEpoch { epoch }) => {
+                write!(f, "the view has no drawable epoch for epoch {epoch}")
             }
             Self::Unanswered(BundleUnanswered::DrawCommitment { height }) => {
                 write!(f, "the view has no 0x0C commitment at height {height}")
@@ -562,7 +576,7 @@ impl<F: fmt::Display> fmt::Display for BundleRefused<F> {
                 write!(f, "the view has no block hash at height {height}")
             }
             Self::Unanswered(BundleUnanswered::Draw { draw }) => {
-                write!(f, "draw {draw} has no pair in the view's snapshot")
+                write!(f, "draw {draw} has no pair in the view's drawable epoch")
             }
             Self::View(fault) => write!(f, "view fault: {fault}"),
         }
@@ -576,7 +590,7 @@ impl<F: fmt::Debug + fmt::Display> std::error::Error for BundleRefused<F> {}
 pub struct DerivedDraw {
     /// The pair's position in `D`.
     pub index: u64,
-    /// The pair, as the snapshot holds it at that position.
+    /// The pair, as the drawable epoch holds it at that position.
     pub pair: DrawablePair,
     /// The draw's bit in the bundle's bitmap.
     pub passed: bool,
@@ -635,7 +649,7 @@ pub fn open_body<F>(reference: &BundleRef, bytes: &[u8]) -> Result<BundleBody, B
 ///    `SCHEME_DOMAIN_WITNESS_BUNDLE`, over the bundle commitment.
 /// 6. **Every draw's pair** — for all `j < count(h)`, not only the set
 ///    bits, because [`Admitted::draws`] carries every draw — by
-///    `select_draw` over the snapshot's length and the view's
+///    `select_draw` over the drawable epoch's length and the view's
 ///    `visibly_short`.
 /// 7. **Each record's `attempt`** is below `K`.
 /// 8. **Each record's receipt**, ascending `j`: `anchor_height < h`, then
@@ -736,10 +750,10 @@ pub fn verify_bundle<V: BundleView>(
 
     // 6. Every draw's pair, at the issued counts visible at `h`.
     let epoch = schedule.epoch_at(h);
-    let snapshot = match view.snapshot(epoch)? {
-        Some(snapshot) if snapshot.epoch() == epoch => snapshot,
+    let drawable = match view.drawable_epoch(epoch)? {
+        Some(drawable) if drawable.epoch() == epoch => drawable,
         _ => {
-            return Err(BundleRefused::Unanswered(BundleUnanswered::Snapshot {
+            return Err(BundleRefused::Unanswered(BundleUnanswered::DrawableEpoch {
                 epoch,
             }))
         }
@@ -749,7 +763,7 @@ pub fn verify_bundle<V: BundleView>(
             height: h,
         }));
     };
-    let draws = derive_draws(view, snapshot, &kept, hash_at_h.as_bytes(), count)?;
+    let draws = derive_draws(view, drawable, &kept, hash_at_h.as_bytes(), count)?;
 
     // 7. `attempt < K`, for every record, before any receipt is verified.
     for (draw, record) in kept.passes.iter_set().zip(body.records()) {
@@ -771,7 +785,7 @@ pub fn verify_bundle<V: BundleView>(
             }));
         };
         let derived = draws[draw as usize];
-        let Some(receipt_key) = snapshot.receipt_key(derived.index) else {
+        let Some(receipt_key) = drawable.receipt_key(derived.index) else {
             return Err(BundleRefused::Unanswered(BundleUnanswered::Draw { draw }));
         };
         let nonce = challenge_nonce(&kept.seed, hash_at_h.as_bytes(), draw, record.attempt);
@@ -797,14 +811,14 @@ pub fn verify_bundle<V: BundleView>(
 }
 
 /// Step 6: draw `j`'s pair for every `j < count`, by the production
-/// selection over the snapshot's length.
+/// selection over the drawable epoch's length.
 ///
 /// `select_draw` asks whether an index is visibly short and returns that
 /// read's fault as its own error, so a fault is not a selection. Answers
 /// are remembered for the bundle: an index asked twice is read once.
 fn derive_draws<V: BundleView>(
     view: &V,
-    snapshot: &DrawableEpoch,
+    drawable: &DrawableEpoch,
     kept: &BundleKept,
     hash_at_h: &[u8; 32],
     count: u32,
@@ -823,13 +837,13 @@ fn derive_draws<V: BundleView>(
 
     let mut draws = Vec::with_capacity(count as usize);
     for draw in 0..count {
-        let selected = select_draw(&kept.seed, hash_at_h, draw, snapshot.len(), &mut short)
+        let selected = select_draw(&kept.seed, hash_at_h, draw, drawable.len(), &mut short)
             .map_err(BundleRefused::View)?;
         let unanswered = BundleRefused::Unanswered(BundleUnanswered::Draw { draw });
         let Some(selected) = selected else {
             return Err(unanswered);
         };
-        let Some(pair) = snapshot.pair(selected.index) else {
+        let Some(pair) = drawable.pair(selected.index) else {
             return Err(unanswered);
         };
         draws.push(DerivedDraw {

@@ -10,7 +10,7 @@
 //!
 //! [`FixtureBundleView`] is a struct of maps with a `BundleView` impl. It
 //! computes nothing: a draw count, a `0x0C` commitment, a block hash, a
-//! visibly-short flag and a snapshot are values a test put there. It
+//! visibly-short flag and a drawable epoch are values a test put there. It
 //! earns its keep in the charter's first two jobs and claims no third:
 //!
 //! 1. **Predicate logic and verification over plain values.** The window,
@@ -24,7 +24,7 @@
 //!    verdict.
 //!
 //! **What it cannot witness:** that a store's `count(h)`, its `0x0C`, its
-//! issued counts or its `h_open(E)` snapshot are what the chain derived.
+//! issued counts or its `h_open(E)` drawable epoch are what the chain derived.
 //! Those are facts about a chain, and a constructed view answering them
 //! tests the construction. Their witness is `SO-D12`'s view on its store,
 //! driven by real blocks, when the cutover lands. Until then the bundle
@@ -68,8 +68,8 @@ pub enum BundleRead {
     VisiblyShort,
     /// [`BundleView::revealed`].
     Revealed,
-    /// [`BundleView::snapshot`].
-    Snapshot,
+    /// [`BundleView::drawable_epoch`].
+    DrawableEpoch,
 }
 
 /// The fault a [`FixtureBundleView`] raises, naming the read that failed.
@@ -93,8 +93,8 @@ pub struct FixtureBundleView {
     pub short: BTreeSet<(BlockHeight, u64)>,
     /// The blocks whose bundle is already admitted.
     pub revealed: BTreeSet<BlockHeight>,
-    /// The `h_open(E)` snapshots, by the epoch asked for.
-    pub snapshots: BTreeMap<SettlementEpoch, DrawableEpoch>,
+    /// The `h_open(E)` drawable epochs, by the epoch asked for.
+    pub drawable_epochs: BTreeMap<SettlementEpoch, DrawableEpoch>,
     /// The one read that faults, if any.
     pub fault: Option<BundleRead>,
     /// Every read made, in order.
@@ -170,12 +170,12 @@ impl BundleView for FixtureBundleView {
         Ok(self.revealed.contains(&h))
     }
 
-    fn snapshot(
+    fn drawable_epoch(
         &self,
         epoch: SettlementEpoch,
     ) -> Result<Option<&DrawableEpoch>, BundleReadFaulted> {
-        self.read(BundleRead::Snapshot)?;
-        Ok(self.snapshots.get(&epoch))
+        self.read(BundleRead::DrawableEpoch)?;
+        Ok(self.drawable_epochs.get(&epoch))
     }
 }
 
@@ -238,11 +238,11 @@ impl BundleWorld {
     }
 
     /// A world for block `h` with `count` draws under `seed`, with its
-    /// snapshot filed under `epoch(h)` of `rule_set`.
+    /// drawable epoch filed under `epoch(h)` of `rule_set`.
     ///
     /// # Panics
     ///
-    /// If key generation or the snapshot's construction fails — a defect
+    /// If key generation or the drawable epoch's construction fails — a defect
     /// of the fixture, not a state a test asked for.
     #[must_use]
     pub fn with(h: BlockHeight, seed: [u8; 32], count: u32, rule_set: &RuleSet) -> Self {
@@ -271,7 +271,7 @@ impl BundleWorld {
             .expect("the canonical key length");
 
         let epoch = rule_set.settlement_schedule().epoch_at(h);
-        let snapshot = DrawableEpoch::new(
+        let drawable = DrawableEpoch::new(
             epoch,
             personas
                 .iter()
@@ -292,7 +292,7 @@ impl BundleWorld {
         view.counts.insert(h, count);
         view.commitments
             .insert(h, draw_commit(&witness_public_key, &seed));
-        view.snapshots.insert(epoch, snapshot);
+        view.drawable_epochs.insert(epoch, drawable);
 
         Self {
             view,
@@ -311,18 +311,18 @@ impl BundleWorld {
         BlockHeight::from_raw(self.h.to_raw() - 721)
     }
 
-    /// The snapshot the world filed for `epoch(h)`.
+    /// The drawable epoch the world filed for `epoch(h)`.
     ///
     /// # Panics
     ///
     /// If a test removed it.
     #[must_use]
-    pub fn snapshot(&self) -> &DrawableEpoch {
+    pub fn drawable_epoch(&self) -> &DrawableEpoch {
         self.view
-            .snapshots
+            .drawable_epochs
             .values()
             .next()
-            .expect("the world's snapshot")
+            .expect("the world's drawable epoch")
     }
 
     /// The index draw `j` selects on this chain, by the production
@@ -345,7 +345,7 @@ impl BundleWorld {
             &self.seed,
             hash.as_bytes(),
             draw,
-            self.snapshot().len(),
+            self.drawable_epoch().len(),
             |index| Ok::<_, Infallible>(self.view.short.contains(&(self.h, index))),
         );
         selected.expect("a non-empty set selects").index
@@ -380,7 +380,7 @@ impl BundleWorld {
     ///
     /// # Panics
     ///
-    /// If `index` is outside the world's snapshot or signing fails.
+    /// If `index` is outside the world's drawable epoch or signing fails.
     #[must_use]
     pub fn record_signed_over(
         &self,
@@ -389,7 +389,7 @@ impl BundleWorld {
         anchor: BlockHeight,
         nonce: &[u8; 32],
     ) -> BundleRecord {
-        let pair = self.snapshot().pair(index).expect("an index in D");
+        let pair = self.drawable_epoch().pair(index).expect("an index in D");
         let signer = self
             .personas
             .iter()
