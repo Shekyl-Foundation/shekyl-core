@@ -94,6 +94,8 @@ pub(crate) mod serving;
 mod types;
 
 #[cfg(test)]
+pub(crate) mod receipt_test_fixtures;
+#[cfg(test)]
 pub(crate) mod test_fixtures;
 
 #[cfg(test)]

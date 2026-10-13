@@ -36,7 +36,7 @@
 
 use serde_json::{json, Value};
 use shekyl_crypto_pq::fn_dsa_hybrid::{
-    FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
+    FnDsaHybridPublicKey, FnDsaHybridSignature, FnDsaHybridSigner, HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{
     HybridSignature, SignatureScheme, HYBRID_SCHEME_ID_ED25519_FN_DSA_1024, SCHEME_DOMAIN_RECEIPT,
@@ -161,6 +161,38 @@ fn pinned_vectors_reproduce_and_verify() {
                     .verify(&parsed_key, other_domain, KAT_MESSAGE, &parsed)
                     .is_err(),
                 "vector {i} ({surface}): must not verify under {other_surface}"
+            );
+        }
+    }
+}
+
+/// The held key (`FnDsaHybridSigner`, the serve path's signing capability)
+/// against the same pinned signatures. It decodes the key once and signs
+/// every surface from that one decode, so this holds two things the
+/// per-call signer above cannot: that a decoded key reused across
+/// signatures gives the pinned bytes each time, and that it does so on
+/// every architecture this binary is run on. The fixture is read, not
+/// written: the held key has no vectors of its own because it must have
+/// none.
+#[test]
+fn the_held_key_reproduces_the_pinned_signatures() {
+    let kat = read_fixture();
+    let (_, secret_key) =
+        HybridEd25519FnDsa::keypair_from_seeds(&ED25519_SEED, &FN_DSA_SEED).expect("keygen");
+    let mut signer = FnDsaHybridSigner::new(&secret_key).expect("the pinned key decodes");
+    let vectors = kat["vectors"].as_array().expect("vectors array");
+    assert_eq!(vectors.len(), SURFACES.len());
+    // Twice over the surfaces: the second pass signs from buffers the first
+    // pass has already used.
+    for pass in 0..2 {
+        for ((surface, domain), vector) in SURFACES.iter().zip(vectors) {
+            let signature = signer
+                .sign_with_rng_seed(domain, KAT_MESSAGE, &RNG_SEED)
+                .expect("sign");
+            assert_eq!(
+                signature.to_canonical_bytes(),
+                hex_field(vector, "hybrid_signature_hex"),
+                "{surface}, pass {pass}: the held key moved off the pinned signature"
             );
         }
     }

@@ -350,7 +350,7 @@ impl Persona {
     /// The typed fetch target, as a scheduler would build it from a bond
     /// record. The shard is named by the expectation, not the target.
     #[must_use]
-    pub fn target(&self) -> FetchTarget {
+    pub fn target(&self) -> FetchTarget<HybridPublicKey> {
         FetchTarget {
             endpoint: self.serving,
             verifying_key: self.verifying_key.clone(),
@@ -390,7 +390,7 @@ impl ClientLeg {
     pub async fn fetch_once(
         &self,
         lane: usize,
-        target: &FetchTarget,
+        target: &FetchTarget<HybridPublicKey>,
         expected: &ExpectedShard,
     ) -> Result<usize, FailureKind> {
         fetch_via(&self.lanes[lane % self.lanes.len()], target, expected)
@@ -450,7 +450,7 @@ impl std::fmt::Display for FetchFault {
 /// the failure under a class Tor would be blamed for.
 pub async fn fetch_via(
     client: &PFetchClient,
-    target: &FetchTarget,
+    target: &FetchTarget<HybridPublicKey>,
     expected: &ExpectedShard,
 ) -> Result<usize, FetchFault> {
     let header = RequestHeader::fresh(
@@ -1163,7 +1163,7 @@ fn classify(e: &FetchError) -> FailureKind {
 async fn probe_once(
     client: Arc<PFetchClient>,
     index: usize,
-    target: FetchTarget,
+    target: FetchTarget<HybridPublicKey>,
     expected: ExpectedShard,
     deadline: Instant,
 ) -> Result<bool, ApparatusError> {

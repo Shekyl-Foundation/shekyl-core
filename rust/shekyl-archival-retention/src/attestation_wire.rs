@@ -9,6 +9,9 @@
 //! §3, amended by [`ARCHIVAL_SHARD_FETCH.md`](../../../docs/design/ARCHIVAL_SHARD_FETCH.md)
 //! `SF-D8`. Window arithmetic and the signed transcript live in [`crate::pass_anchor`].
 
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
+};
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
 };
@@ -493,6 +496,55 @@ pub fn verify_pass_transcript(
         )
         .map_err(|_| PassCountersignatureError::InvalidSignature)
 }
+
+/// Verify a **receipt** over the pass transcript: the same 112-byte
+/// transcript [`verify_pass_transcript`] checks, signed by the persona's
+/// receipt key — Ed25519 + FN-DSA-1024, hybrid scheme 3 — under
+/// [`SCHEME_DOMAIN_RECEIPT`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT)
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6; `FN_DSA_HYBRID.md` §9).
+///
+/// The scheme-3 counterpart of [`verify_pass_transcript`], and separate
+/// from it by type as well as by domain: this takes a receipt key and a
+/// receipt signature, that takes an identity key and an identity signature,
+/// and neither can be handed the other's. There is no function that accepts
+/// either. A caller verifies under the one scheme its key is of.
+///
+/// **STAGED.** No admission path and no live fetch calls this: receipts are
+/// not accepted anywhere yet. Its one caller is the fetch client's scheme-3
+/// instantiation, which no live target selects. The settlement lane's
+/// cutover is what makes a verifier accept a receipt.
+///
+/// `delivery_digest` is the caller's, recomputed from the body it received,
+/// as for [`verify_pass_transcript`].
+///
+/// # Errors
+///
+/// [`PassCountersignatureError::InvalidSignature`] if the signature does not
+/// verify under `receipt_pubkey`, the receipt domain and this transcript.
+pub fn verify_receipt_transcript(
+    receipt_pubkey: &FnDsaHybridPublicKey,
+    nonce: &[u8; PASS_NONCE_LEN],
+    anchor_height: BlockHeight,
+    anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
+    shard_id: u64,
+    delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
+    signature: &FnDsaHybridSignature,
+) -> Result<(), PassCountersignatureError> {
+    let message =
+        pass_countersignature_message(nonce, anchor_height, anchor_hash, shard_id, delivery_digest);
+    HybridEd25519FnDsa
+        .verify(
+            receipt_pubkey,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT,
+            &message,
+            signature,
+        )
+        .map_err(|_| PassCountersignatureError::InvalidSignature)
+}
+
+#[cfg(test)]
+#[path = "receipt_transcript_tests.rs"]
+mod receipt_transcript_tests;
 
 #[cfg(test)]
 #[path = "attestation_wire_tests.rs"]

@@ -51,7 +51,7 @@ use std::sync::Arc;
 
 use shekyl_archival_retention::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::signature::HybridSignature;
-use shekyl_p_host::{PassKey, SignRefused};
+use shekyl_p_host::{PassKey, SignRefused, IDENTITY_ENVELOPE_LEN};
 use shekyl_types::BlockHeight;
 
 use crate::engine::stake_engine::handle::{StakeEngineHandle, WeakStakeEngineHandle};
@@ -87,7 +87,11 @@ impl ResidentPassKey {
     }
 }
 
-impl PassKey for ResidentPassKey {
+/// The live instantiation of the serving route's signer: the bond identity
+/// key, hybrid scheme 1, a 3,385-byte envelope ([`IDENTITY_ENVELOPE_LEN`]).
+/// The width is part of the trait this implements, so the endpoint the
+/// serving task binds with this key writes that envelope and no other.
+impl PassKey<IDENTITY_ENVELOPE_LEN> for ResidentPassKey {
     /// The anchor gate is the host's (`HostSigner`, over the daemon tip); this
     /// key's pre-flight is only whether the actor that holds the secret is
     /// alive. The shard and anchor are not consulted: the persona's key does

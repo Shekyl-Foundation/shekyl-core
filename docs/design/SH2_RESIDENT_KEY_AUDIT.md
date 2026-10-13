@@ -173,9 +173,12 @@ ruling's text of record is `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 3
 - **B5** — each commit builds and passes `cargo clippy --all-targets
   -D warnings` on its own.
 - **B6** — `PASS_COUNTERSIGNATURE_MESSAGE_LEN = 112` read at
-  `shekyl-archival-retention/src/pass_anchor.rs`; `SIGNATURE_ENVELOPE_LEN =
-  HybridSignature::CANONICAL_LEN` at `countersign.rs`. No new constant is
-  minted.
+  `shekyl-archival-retention/src/pass_anchor.rs`; `IDENTITY_ENVELOPE_LEN =
+  HybridSignature::CANONICAL_LEN` at `countersign.rs` — the envelope width of
+  the identity key, the scheme every live endpoint is bound at. (Read on
+  2026-10-06 as `SIGNATURE_ENVELOPE_LEN`, then the one global width; it was
+  replaced when the width became the bound scheme's, `FN_DSA_HYBRID.md`
+  §9.3, `FND-21`.) No new constant is minted.
 - **B9** — the budget the sign has to fit is the client's 30 s `body_stall`;
   the hybrid sign is sub-second on the floor and the only other term is one
   scan-step mailbox wait. No new bench is prescribed; `BA-T5` owns per-phase

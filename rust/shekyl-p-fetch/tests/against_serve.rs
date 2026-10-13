@@ -21,7 +21,8 @@ use shekyl_p_loopback::{
     request_header, DiscardTxs, PServeEndpoint, TxSink, VerifiedTx, FIXTURE_SHARD_ID, FIXTURE_TXID,
 };
 use shekyl_p_serve::{
-    PassKey, PassSigner, SignRefused, TestKeySigner, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PassKey, PassSigner, SignRefused, TestKeySigner, IDENTITY_ENVELOPE_LEN,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
 use shekyl_types::BlockHeight;
 
@@ -42,7 +43,9 @@ fn ephemeral_timeouts() -> Timeouts {
 
 /// A real endpoint holding [`FIXTURE_SHARD_ID`] behind `signer`, and a
 /// client aimed at it through the shim.
-async fn stacks(signer: Arc<dyn PassSigner>) -> (PServeEndpoint, PFetchClient) {
+async fn stacks(
+    signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+) -> (PServeEndpoint, PFetchClient) {
     endpoint_and_client(
         FIXTURE_SHARD_ID,
         fixture_body(),
@@ -69,7 +72,8 @@ impl TxSink for Recorder {
 async fn fetch_client_accepts_a_real_served_body() {
     let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
     let public: HybridPublicKey = signer.public_key().clone();
-    let (_ep, client) = stacks(Arc::clone(&signer) as Arc<dyn PassSigner>).await;
+    let (_ep, client) =
+        stacks(Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>).await;
     let seen = Arc::new(Recorder::default());
     let shard = client
         .fetch(
@@ -99,7 +103,8 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
     // the read.
     let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
     let public: HybridPublicKey = signer.public_key().clone();
-    let (ep, client) = stacks(Arc::clone(&signer) as Arc<dyn PassSigner>).await;
+    let (ep, client) =
+        stacks(Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>).await;
 
     for shard in [FIXTURE_SHARD_ID, FIXTURE_SHARD_ID + 1] {
         let err = client
@@ -145,7 +150,7 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
 /// A signer with a height and no key: it knows before the first byte.
 struct Keyless;
 
-impl PassKey for Keyless {
+impl PassKey<IDENTITY_ENVELOPE_LEN> for Keyless {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Err(SignRefused::new("no key"))
     }
@@ -158,7 +163,7 @@ impl PassKey for Keyless {
     }
 }
 
-impl PassSigner for Keyless {
+impl PassSigner<IDENTITY_ENVELOPE_LEN> for Keyless {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
@@ -167,7 +172,7 @@ impl PassSigner for Keyless {
 /// A signer that says it can sign and then fails: found out after the body.
 struct RefusesLate;
 
-impl PassKey for RefusesLate {
+impl PassKey<IDENTITY_ENVELOPE_LEN> for RefusesLate {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
@@ -180,7 +185,7 @@ impl PassKey for RefusesLate {
     }
 }
 
-impl PassSigner for RefusesLate {
+impl PassSigner<IDENTITY_ENVELOPE_LEN> for RefusesLate {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }

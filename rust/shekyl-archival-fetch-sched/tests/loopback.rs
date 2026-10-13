@@ -24,7 +24,7 @@ use shekyl_archival_retention::{challenge_nonce, CHALLENGE_READS, PASS_ANCHOR_DE
 use shekyl_p_loopback::{
     endpoint_and_client, fetch_target, fixture_body, fixture_expectation, FIXTURE_SHARD_ID,
 };
-use shekyl_p_serve::{PassSigner, TestKeySigner};
+use shekyl_p_serve::{PassSigner, TestKeySigner, IDENTITY_ENVELOPE_LEN};
 use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use tokio::net::TcpListener;
 
@@ -181,7 +181,7 @@ async fn stack(served_shard: u64, n: u8) -> Stack {
     let (endpoint, client) = endpoint_and_client(
         served_shard,
         fixture_body(),
-        Arc::clone(&signer) as Arc<dyn PassSigner>,
+        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
         ephemeral_timeouts(),
     )
     .await;

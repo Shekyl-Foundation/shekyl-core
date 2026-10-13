@@ -88,6 +88,12 @@
 //! task should sign from a shallower frame, or hold a decoded key across
 //! signatures rather than decoding per signature — the choice belongs to
 //! the first consumer, the serve path's signing capability.
+//!
+//! [`FnDsaHybridSigner`] is that held key. It decodes once, into a heap
+//! slot, and signs through the same private call `fn_dsa_sign` makes after
+//! its own decode. The context and its working buffers leave the signing
+//! stack, and the decode is paid once per key.
+//! Its measurements are on `a_held_key_signs_on_a_small_stack`.
 
 use crate::heap_secret::HeapSecret;
 use crate::hybrid_combiner::{self, decode_canonical, encode_canonical, CANONICAL_OVERHEAD};
@@ -231,6 +237,18 @@ impl std::fmt::Debug for FnDsaHybridSecretKey {
     }
 }
 
+// Test-support surface, behind `test-utils`.
+#[cfg(any(test, feature = "test-utils"))]
+impl FnDsaHybridSecretKey {
+    /// Make the FN-DSA half undecodable, in place: its header byte, which
+    /// names the degree, is moved off 1024. For tests of what a holder of
+    /// this key does when the key does not decode. No key byte is read out.
+    pub fn corrupt_fn_dsa_half_for_tests(&mut self) {
+        let header = &mut self.fn_dsa.as_array_mut()[0];
+        *header = header.wrapping_sub(1);
+    }
+}
+
 /// A canonical Ed25519 + FN-DSA-1024 signature.
 #[derive(Clone, PartialEq, Eq)]
 pub struct FnDsaHybridSignature {
@@ -346,23 +364,18 @@ impl HybridEd25519FnDsa {
         Self::keypair_from_seeds(&ed25519_seed, &fn_dsa_seed)
     }
 
-    /// The nested sign with this scheme's post-quantum half
-    /// ([`hybrid_combiner::sign_nested`]); the free parameter is where
-    /// FN-DSA's signer draws its seed.
+    /// The nested sign with this scheme's post-quantum half. The free
+    /// parameter is where FN-DSA's signer draws its seed. The body is
+    /// [`nest_fn_dsa_signature`], which the held signer signs through too.
     fn sign_with_rng(
         secret_key: &FnDsaHybridSecretKey,
         domain: &[u8],
         message: &[u8],
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<FnDsaHybridSignature, CryptoError> {
-        let (ed25519, fn_dsa) = hybrid_combiner::sign_nested(
-            HYBRID_SCHEME_ID_ED25519_FN_DSA_1024,
-            secret_key.ed25519.as_array(),
-            domain,
-            message,
-            |inner| fn_dsa_sign(secret_key.fn_dsa.as_array(), rng, inner),
-        )?;
-        Ok(FnDsaHybridSignature { ed25519, fn_dsa })
+        nest_fn_dsa_signature(secret_key.ed25519.as_array(), domain, message, |inner| {
+            fn_dsa_sign(secret_key.fn_dsa.as_array(), rng, inner)
+        })
     }
 }
 
@@ -425,6 +438,9 @@ impl SignatureScheme for HybridEd25519FnDsa {
     }
 }
 
+mod signer;
+pub use signer::FnDsaHybridSigner;
+
 /// FN-DSA-1024 key generation from `seed`.
 ///
 /// Returns the encoded public key and the encoded secret. The secret is
@@ -458,6 +474,41 @@ fn fn_dsa_keygen(
     (public, secret)
 }
 
+/// The nested sign both scheme-3 signers share: the per-call path and the
+/// held key. `sign_fn_dsa` produces the FN-DSA half over the 64-byte
+/// preimage; the classical half wraps it.
+fn nest_fn_dsa_signature(
+    ed25519_seed: &[u8; ED25519_SECRET_KEY_LENGTH],
+    domain: &[u8],
+    message: &[u8],
+    sign_fn_dsa: impl FnOnce(&[u8; 64]) -> Result<[u8; FN_DSA_1024_SIGNATURE_LENGTH], CryptoError>,
+) -> Result<FnDsaHybridSignature, CryptoError> {
+    let (ed25519, fn_dsa) = hybrid_combiner::sign_nested(
+        HYBRID_SCHEME_ID_ED25519_FN_DSA_1024,
+        ed25519_seed,
+        domain,
+        message,
+        sign_fn_dsa,
+    )?;
+    Ok(FnDsaHybridSignature { ed25519, fn_dsa })
+}
+
+/// One signature from an already-decoded FN-DSA-1024 key.
+///
+/// Empty FN-DSA context, raw message: the 64-byte preimage is already
+/// domain-separated. `InvalidKeyMaterial` is the crate giving up after a
+/// long run of rejected samples.
+fn sign_decoded_key(
+    key: &mut SigningKey1024,
+    rng: &mut (impl RngCore + CryptoRng),
+    inner: &[u8; 64],
+) -> Result<[u8; FN_DSA_1024_SIGNATURE_LENGTH], CryptoError> {
+    let mut signature = [0u8; FN_DSA_1024_SIGNATURE_LENGTH];
+    key.sign(rng, &DOMAIN_NONE, &HASH_ID_RAW, inner, &mut signature)
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    Ok(signature)
+}
+
 /// One FN-DSA-1024 signature over `inner`, drawn from `rng`.
 ///
 /// Returns the fixed-length signature. `InvalidKeyMaterial` means `secret`
@@ -468,7 +519,8 @@ fn fn_dsa_keygen(
 ///
 /// `#[inline(never)]` keeps that key in this frame. Inlining it stacks the
 /// key on the caller, and `the_scheme_runs_on_a_small_stack` fails when
-/// that happens.
+/// that happens. The signature itself is [`sign_decoded_key`], which the
+/// held signer calls on the key it already decoded.
 #[inline(never)]
 fn fn_dsa_sign(
     secret: &[u8; FN_DSA_1024_SECRET_KEY_LENGTH],
@@ -480,12 +532,7 @@ fn fn_dsa_sign(
     // copy of the key for the crate's wipe-on-drop to miss.
     let mut decoded = SigningKey1024::decode(secret);
     let signing_key = decoded.as_mut().ok_or(CryptoError::InvalidKeyMaterial)?;
-    let mut signature = [0u8; FN_DSA_1024_SIGNATURE_LENGTH];
-    // `None` means the key is invalid; the buffer has the exact length.
-    signing_key
-        .sign(rng, &DOMAIN_NONE, &HASH_ID_RAW, inner, &mut signature)
-        .ok_or(CryptoError::InvalidKeyMaterial)?;
-    Ok(signature)
+    sign_decoded_key(signing_key, rng, inner)
 }
 
 #[cfg(test)]
