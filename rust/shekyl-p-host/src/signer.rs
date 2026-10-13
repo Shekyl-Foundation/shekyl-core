@@ -43,7 +43,7 @@
 //!
 //! The key is the persona's bonded attestation key, and its custody is the
 //! wallet's design (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7.2; `SF-D13`). This
-//! crate holds an `Arc<dyn PassKey>` and calls it once per served shard from
+//! crate holds an `Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>` and calls it once per served shard from
 //! the blocking pool; it never sees the secret. The production key is
 //! `shekyl-engine-core`'s resident pass key, which answers each call with a
 //! round-trip into the stake actor that holds the secret. A key that answers
@@ -61,8 +61,14 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-signer"))]
 use std::time::Duration;
 
+#[cfg(any(test, feature = "test-signer"))]
 use shekyl_crypto_pq::signature::HybridSignature;
-use shekyl_p_serve::{PassKey, PassSigner, SignRefused, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
+#[cfg(any(test, feature = "test-signer"))]
+use shekyl_p_serve::IDENTITY_ENVELOPE_LEN;
+use shekyl_p_serve::{
+    EnvelopeSignature, EnvelopeWidth, PassEnvelope, PassKey, PassSigner, SignRefused,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+};
 use shekyl_types::BlockHeight;
 
 use crate::daemon_tip::DaemonTipCache;
@@ -88,7 +94,7 @@ impl RefusingKey {
 }
 
 #[cfg(any(test, feature = "test-signer"))]
-impl PassKey for RefusingKey {
+impl PassKey<IDENTITY_ENVELOPE_LEN> for RefusingKey {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Err(SignRefused::new(Self::REASON))
     }
@@ -109,13 +115,24 @@ impl PassKey for RefusingKey {
 /// this wallet was opened rather than about serving, so neither is decided
 /// here. What is decided here is that the gate reads *that* cache and
 /// nothing else, and that a `None` from it refuses.
-pub(crate) struct HostSigner {
+///
+/// Generic over the envelope's width `W`, as the key it wraps is: it adds a
+/// height to a key and has no scheme of its own. Which width a host serves
+/// at is decided where the key is supplied
+/// ([`PersonaServing::key`](crate::PersonaServing)), not here.
+pub(crate) struct HostSigner<const W: usize>
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
     tip: Arc<DaemonTipCache>,
-    key: Arc<dyn PassKey>,
+    key: Arc<dyn PassKey<W>>,
 }
 
-impl HostSigner {
-    pub(crate) fn new(tip: Arc<DaemonTipCache>, key: Arc<dyn PassKey>) -> Self {
+impl<const W: usize> HostSigner<W>
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
+    pub(crate) fn new(tip: Arc<DaemonTipCache>, key: Arc<dyn PassKey<W>>) -> Self {
         Self { tip, key }
     }
 }
@@ -126,19 +143,27 @@ impl HostSigner {
 /// the host. A test about the key uses this so the serve loop still reads
 /// that cache. `max_age` is the caller's: past it the cache answers `None`,
 /// and the serve loop counts that as a lookup failure.
+///
+/// Generic over the key's envelope width, as the host signer is.
 #[cfg(any(test, feature = "test-signer"))]
 #[must_use]
-pub fn signer_at_synced_tip(
-    key: Arc<dyn PassKey>,
+pub fn signer_at_synced_tip<const W: usize>(
+    key: Arc<dyn PassKey<W>>,
     top_block_height: BlockHeight,
     max_age: Duration,
-) -> Arc<dyn PassSigner> {
+) -> Arc<dyn PassSigner<W>>
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
     let tip = Arc::new(DaemonTipCache::new(max_age));
     tip.stamp_synced(top_block_height);
     Arc::new(HostSigner::new(tip, key))
 }
 
-impl PassKey for HostSigner {
+impl<const W: usize> PassKey<W> for HostSigner<W>
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
     /// The wrapped key's answer, forwarded: a keyless host must not send
     /// shards it cannot countersign.
     fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
@@ -148,12 +173,15 @@ impl PassKey for HostSigner {
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
+    ) -> Result<EnvelopeSignature<W>, SignRefused> {
         self.key.sign_pass(message)
     }
 }
 
-impl PassSigner for HostSigner {
+impl<const W: usize> PassSigner<W> for HostSigner<W>
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
     /// The daemon's top block height as of the last stamp within the
     /// cache's age bound.
     ///
@@ -175,7 +203,7 @@ mod tests {
 
     const MAX_AGE: Duration = Duration::from_secs(120);
 
-    fn signer() -> (Arc<DaemonTipCache>, HostSigner) {
+    fn signer() -> (Arc<DaemonTipCache>, HostSigner<IDENTITY_ENVELOPE_LEN>) {
         let tip = Arc::new(DaemonTipCache::new(MAX_AGE));
         let signer = HostSigner::new(Arc::clone(&tip), Arc::new(RefusingKey));
         (tip, signer)

@@ -355,8 +355,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // to warn about. 153 → 154 on 2026-10-12: CEN-J28 (a JoinMarket's
     // `receipt_sign_pk` parses as a canonical FN-DSA hybrid public key)
     // minted with its implementation, FN-DSA increment 3
-    // (`FN_DSA_HYBRID.md` §6).
-    assert_eq!(CenRow::ALL.len(), 154);
+    // (`FN_DSA_HYBRID.md` §6). 154 → 163 the same day: CEN-J29–J37, the
+    // serve-credit bundle's nine admission rows, minted `pending` with the
+    // pure verifier that names them as refusals (`archival/bundle.rs`,
+    // STAGED — no rule type is bound until `SO-D12`'s cutover).
+    assert_eq!(CenRow::ALL.len(), 163);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

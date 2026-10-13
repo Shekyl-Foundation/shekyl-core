@@ -118,8 +118,8 @@ use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{leaves_per_segment, LEAF_BYTES};
 use shekyl_p_serve::{
     prehead_in_memory, read_and_fold_in_memory, serve_one_in_memory, InMemoryServe, PassKey,
-    PassSigner, ProviderError, ShardBody, ShardProvider, SignRefused,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN, REQUEST_HEADER_NAME, SIGNATURE_ENVELOPE_LEN,
+    PassSigner, ProviderError, ShardBody, ShardProvider, SignRefused, IDENTITY_ENVELOPE_LEN,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN, REQUEST_HEADER_NAME,
 };
 use shekyl_types::BlockHeight;
 
@@ -160,7 +160,7 @@ impl SeededSigner {
     }
 }
 
-impl PassKey for SeededSigner {
+impl PassKey<IDENTITY_ENVELOPE_LEN> for SeededSigner {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
@@ -180,7 +180,7 @@ impl PassKey for SeededSigner {
     }
 }
 
-impl PassSigner for SeededSigner {
+impl PassSigner<IDENTITY_ENVELOPE_LEN> for SeededSigner {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
@@ -212,7 +212,7 @@ impl PinnedEnvelopeSigner {
     }
 }
 
-impl PassKey for PinnedEnvelopeSigner {
+impl PassKey<IDENTITY_ENVELOPE_LEN> for PinnedEnvelopeSigner {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
@@ -225,7 +225,7 @@ impl PassKey for PinnedEnvelopeSigner {
     }
 }
 
-impl PassSigner for PinnedEnvelopeSigner {
+impl PassSigner<IDENTITY_ENVELOPE_LEN> for PinnedEnvelopeSigner {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
@@ -251,7 +251,7 @@ impl ShardProvider for OneShard {
 struct Fixture {
     provider: Arc<dyn ShardProvider>,
     /// The pinned-envelope signer the serve cells are handed.
-    signer: Arc<dyn PassSigner>,
+    signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
     /// The seeded key itself, for `crypto_bench_serve_sign`.
     key: SeededSigner,
     head: Vec<u8>,
@@ -271,7 +271,8 @@ fn fixture(leaf_count: usize) -> Fixture {
         bytes: Arc::from(body.into_boxed_slice()),
     });
     let key = SeededSigner::new();
-    let signer: Arc<dyn PassSigner> = Arc::new(PinnedEnvelopeSigner::new(&key));
+    let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> =
+        Arc::new(PinnedEnvelopeSigner::new(&key));
     let anchor = BlockHeight::from_raw(OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw());
     let header = pass_request_header_bytes(&NONCE, anchor, &ANCHOR_HASH);
     let head = format!(
@@ -301,8 +302,8 @@ fn fixture(leaf_count: usize) -> Fixture {
     );
     assert_eq!(pinned.len(), witness.len(), "one envelope length");
     assert_eq!(
-        pinned[..pinned.len() - SIGNATURE_ENVELOPE_LEN],
-        witness[..witness.len() - SIGNATURE_ENVELOPE_LEN],
+        pinned[..pinned.len() - IDENTITY_ENVELOPE_LEN],
+        witness[..witness.len() - IDENTITY_ENVELOPE_LEN],
         "the pinned signer changes the envelope and nothing before it"
     );
     let body_at = witness
@@ -312,10 +313,10 @@ fn fixture(leaf_count: usize) -> Fixture {
         + 4;
     assert!(
         witness.starts_with(b"HTTP/1.1 200 OK\r\n")
-            && witness.len() == body_at + leaf_count * LEAF_BYTES + SIGNATURE_ENVELOPE_LEN,
+            && witness.len() == body_at + leaf_count * LEAF_BYTES + IDENTITY_ENVELOPE_LEN,
         "a served response is a 200 carrying the body and the envelope, nothing else"
     );
-    let body = witness[body_at..witness.len() - SIGNATURE_ENVELOPE_LEN].to_vec();
+    let body = witness[body_at..witness.len() - IDENTITY_ENVELOPE_LEN].to_vec();
     // The three digest paths agree before any of them is measured, so the
     // cells compare the cost of one result and not of three.
     let digest = pass_delivery_digest(&NONCE, &body);
@@ -385,7 +386,7 @@ fn crypto_bench_serve_sign(fx: Fixture) -> Fixture {
             .to_canonical_bytes()
             .expect("canonical envelope")
             .len(),
-        SIGNATURE_ENVELOPE_LEN
+        IDENTITY_ENVELOPE_LEN
     );
     fx
 }
@@ -402,7 +403,7 @@ fn crypto_bench_serve_prehead(mut fx: Fixture) -> Fixture {
     );
     assert!(black_box(ready), "the request must be admitted");
     assert!(
-        fx.out.len() == fx.expected_len - fx.body.len() - SIGNATURE_ENVELOPE_LEN,
+        fx.out.len() == fx.expected_len - fx.body.len() - IDENTITY_ENVELOPE_LEN,
         "only the head is rendered"
     );
     fx

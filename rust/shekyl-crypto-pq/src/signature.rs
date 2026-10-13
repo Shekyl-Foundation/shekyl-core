@@ -126,6 +126,17 @@ pub const SCHEME_DOMAIN_RECEIPT: &[u8] = b"shekyl/archival-receipt-scheme-v1";
 /// with a key generated fresh for the block (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
 /// §7.3).
 pub const SCHEME_DOMAIN_WITNESS_CARRIER: &[u8] = b"shekyl/archival-witness-carrier-scheme-v1";
+/// The witness's signature over a bundle's commitment, under scheme 3 with
+/// the key generated fresh for the block and committed in its `0x0C`
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.2, §7.3). The message is the 32-byte
+/// `shekyl/archival-serve-credit-bundle-v1` commitment
+/// (`shekyl_archival_retention::bundle_commitment`).
+///
+/// Distinct from [`SCHEME_DOMAIN_WITNESS_CARRIER`]: the bundle commitment
+/// is a different message from the carrier's set commitment, and one label
+/// never names two messages. The carrier's label stays beside this one
+/// with no signer.
+pub const SCHEME_DOMAIN_WITNESS_BUNDLE: &[u8] = b"shekyl/archival-witness-bundle-scheme-v1";
 // Surface B (bond-post vin) has no scheme domain: the SA-2b reconciliation
 // (SIGNATURE_ALIGNMENT.md §2.2) ruled the bond vin's on-chain auth rides the
 // generic surface-A `pqc_auths` slot (SCHEME_DOMAIN_PQC_AUTH_TX), which binds a

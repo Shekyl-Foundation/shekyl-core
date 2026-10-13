@@ -34,7 +34,7 @@ use shekyl_p_host::{
     PinnedServeSet, PriorityFailures, RefusingKey, ReportedSet, ServeCounters, ServeObligation,
     ServeSetPinner, Staleness, StalenessBound,
 };
-use shekyl_p_serve::{TestKeySigner, SIGNATURE_ENVELOPE_LEN};
+use shekyl_p_serve::{TestKeySigner, IDENTITY_ENVELOPE_LEN};
 use shekyl_p_store::{BodyStore, BodyStoreReader, StoreKey};
 use shekyl_tor_control_wallet::service::{
     EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
@@ -322,10 +322,10 @@ fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
         .expect("response has a head");
     let body = &response[end + 4..];
     assert!(
-        body.len() >= SIGNATURE_ENVELOPE_LEN,
+        body.len() >= IDENTITY_ENVELOPE_LEN,
         "a served body ends with the countersignature envelope"
     );
-    let (rest, sig) = body.split_at(body.len() - SIGNATURE_ENVELOPE_LEN);
+    let (rest, sig) = body.split_at(body.len() - IDENTITY_ENVELOPE_LEN);
     let sig = HybridSignature::from_canonical_bytes(sig).expect("canonical hybrid signature");
     (sig, rest)
 }
@@ -538,7 +538,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
             identity: id,
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::clone(&key) as Arc<dyn PassKey>,
+            key: Arc::clone(&key) as Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
             tip: tip_at(10_000),
             bodies: bodies_holding(&[0]),
         },
@@ -1763,7 +1763,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::clone(&key) as Arc<dyn PassKey>,
+            key: Arc::clone(&key) as Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
             tip: Arc::clone(&tip),
             bodies: bodies_holding(&[0]),
         },

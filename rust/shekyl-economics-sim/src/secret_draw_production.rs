@@ -52,6 +52,8 @@
 //!   sharp. The cells are therefore not independent samples, and they all
 //!   share one realised dropout.
 
+use core::convert::Infallible;
+
 use serde::Serialize;
 
 use shekyl_archival_retention::{
@@ -497,10 +499,12 @@ pub fn run_epoch_observed(
         let mut block_draws: Vec<u32> = Vec::with_capacity(count as usize);
         for j in 0..count {
             let j = u32::try_from(j).expect("a block's draw count fits the record's index");
-            let selected = select_draw(&block_seed, &block_hash, j, u64::from(pairs), |i| {
-                visible.short(i)
-            })
-            .expect("the set is not empty");
+            // The short read is this process's own count and cannot fail;
+            // `Infallible` says so, and the `let` is irrefutable.
+            let Ok(selected) = select_draw(&block_seed, &block_hash, j, u64::from(pairs), |i| {
+                Ok::<_, Infallible>(visible.short(i))
+            });
+            let selected = selected.expect("the set is not empty");
             block_draws.push(selected.index as u32);
             run.attempts += u64::from(selected.attempts);
             run.max_attempts = run.max_attempts.max(selected.attempts);
@@ -1140,14 +1144,14 @@ mod tests {
             carry = next;
 
             for (j, &pair) in block.draws.iter().enumerate() {
-                let direct = select_draw(
+                let Ok(direct) = select_draw(
                     &block.seed,
                     &block.block_hash,
                     j as u32,
                     u64::from(D),
-                    |i| block.visible[i as usize] < u16::from(COUNTED_DRAWS),
-                )
-                .expect("the set is not empty");
+                    |i| Ok::<_, Infallible>(block.visible[i as usize] < u16::from(COUNTED_DRAWS)),
+                );
+                let direct = direct.expect("the set is not empty");
                 assert_eq!(u64::from(pair), direct.index, "draw {j} at {h}");
                 selected += 1;
             }

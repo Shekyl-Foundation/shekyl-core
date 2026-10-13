@@ -11,8 +11,9 @@ use shekyl_address::Network;
 use shekyl_types::{BlockCount, BlockHeight};
 
 use super::{
-    well_formed, AdmissionPolicy, AdmissionPolicyId, FakechainSchedule, ReorgCapNotInsideEpoch,
-    RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
+    well_formed, AdmissionPolicy, AdmissionPolicyId, FakechainSchedule, FakechainScheduleRefused,
+    ReorgCapNotInsideEpoch, ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId,
+    SettlementEpochBlocks, SettlementSchedule,
 };
 use crate::census::{CenRow, RowStatus};
 
@@ -321,10 +322,12 @@ fn a_fakechain_schedule_refuses_a_cap_not_inside_its_epoch() {
     for cap in [0u64, 512, 513, u64::MAX] {
         assert_eq!(
             FakechainSchedule::new(seb, BlockCount::from_raw(cap)),
-            Err(ReorgCapNotInsideEpoch {
-                settlement_epoch: seb,
-                reorg_cap: BlockCount::from_raw(cap),
-            }),
+            Err(FakechainScheduleRefused::ReorgCapNotInsideEpoch(
+                ReorgCapNotInsideEpoch {
+                    settlement_epoch: seb,
+                    reorg_cap: BlockCount::from_raw(cap),
+                }
+            )),
             "cap {cap} against SEB 512"
         );
     }
@@ -350,6 +353,174 @@ fn a_fakechain_schedule_refuses_a_cap_not_inside_its_epoch() {
         .to_string(),
         "reorg cap 512 is not strictly inside the settlement epoch (512 blocks/epoch): 0 < cap < SEB is required"
     );
+}
+
+/// The three epochs the anchor relation turns on, derived from the
+/// constants it is stated over and not written as numbers: the first and
+/// last epoch whose response window is the widest that fits
+/// (`depth − L`), and the first epoch past it.
+struct AnchorBoundary {
+    widest_window: u64,
+    first_at: u64,
+    last_at: u64,
+    first_past: u64,
+}
+
+fn anchor_boundary() -> AnchorBoundary {
+    use shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
+    use shekyl_archival_retention::{PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS};
+    let widest_window = PASS_ANCHOR_DEPTH_BLOCKS.to_raw() - PASS_ANCHOR_LAG_BLOCKS.to_raw();
+    AnchorBoundary {
+        widest_window,
+        first_at: widest_window * W2_EPOCH_DIVISOR,
+        last_at: (widest_window + 1) * W2_EPOCH_DIVISOR - 1,
+        first_past: (widest_window + 1) * W2_EPOCH_DIVISOR,
+    }
+}
+
+/// `SCS-P32`'s rule-set relation, `W₂ + L ≤` anchor depth, at its exact
+/// boundary and one past it, as `FakechainSchedule::new`'s typed refusal.
+/// Every epoch here is computed from `PASS_ANCHOR_DEPTH_BLOCKS`,
+/// `PASS_ANCHOR_LAG_BLOCKS` and `W2_EPOCH_DIVISOR`, so a re-pin of any of
+/// them moves the test with it and cannot leave it asserting about a
+/// boundary that is no longer the boundary.
+///
+/// Bites against `<` for `≤` (the boundary epochs are refused), against a
+/// relation that ignores `L` (the epochs just past the boundary build),
+/// against a `None` window read as a violation, and against the refusal
+/// going back to a panic or to the cap's arm. Does not cover whether the
+/// persona's gate and the requester agree on `L`; that is `SF-D8`'s.
+#[test]
+fn a_schedule_whose_window_outruns_the_anchor_is_refused_at_its_boundary() {
+    use shekyl_archival_retention::anchor_depth_covers_response_window;
+    let boundary = anchor_boundary();
+    let schedule =
+        |seb: u64| SettlementSchedule::new(SettlementEpochBlocks::new(seb).expect("non-zero"));
+    let window = |seb: u64| {
+        schedule(seb)
+            .challenge_response_blocks()
+            .map(core::num::NonZeroU64::get)
+    };
+    let build = |seb: u64| {
+        FakechainSchedule::new(
+            SettlementEpochBlocks::new(seb).expect("non-zero"),
+            BlockCount::from_raw(1),
+        )
+    };
+    assert_eq!(
+        ResponseWindowOutrunsAnchor::LONGEST_EPOCH_BLOCKS,
+        boundary.last_at,
+        "the ceiling the refusal names is the boundary"
+    );
+
+    // At the boundary: the widest window that fits, at both ends of the
+    // run of epochs that have it.
+    for seb in [boundary.first_at, boundary.last_at] {
+        assert_eq!(window(seb), Some(boundary.widest_window), "SEB {seb}");
+        assert!(anchor_depth_covers_response_window(schedule(seb)));
+        let pair = build(seb).unwrap_or_else(|e| panic!("SEB {seb} is at the boundary: {e}"));
+        assert!(pair.anchor_covers_response_window());
+        assert!(RuleSet::fakechain(None, pair).anchor_covers_response_window());
+    }
+    // One block of window past it, and far past it.
+    for seb in [
+        boundary.first_past,
+        boundary.first_past + 1,
+        boundary.first_past * 2,
+        u64::MAX,
+    ] {
+        let wide = window(seb).expect("an epoch this long has a window");
+        assert!(wide > boundary.widest_window, "SEB {seb}");
+        assert!(!anchor_depth_covers_response_window(schedule(seb)));
+        assert_eq!(
+            build(seb),
+            Err(FakechainScheduleRefused::ResponseWindowOutrunsAnchor(
+                ResponseWindowOutrunsAnchor {
+                    settlement_epoch: SettlementEpochBlocks::new(seb).expect("non-zero"),
+                    response_window: BlockCount::from_raw(wide),
+                }
+            )),
+            "SEB {seb}"
+        );
+    }
+    // An epoch too short to have a window has nothing to cover.
+    let windowless = shekyl_archival_retention::constants::W2_EPOCH_DIVISOR - 1;
+    assert_eq!(window(windowless), None);
+    assert!(build(windowless).is_ok());
+
+    // The cap is asked first, so a pair that breaks both is refused for
+    // the cap: each existing refusal keeps its meaning.
+    assert!(matches!(
+        FakechainSchedule::new(
+            SettlementEpochBlocks::new(boundary.first_past).expect("non-zero"),
+            BlockCount::ZERO,
+        ),
+        Err(FakechainScheduleRefused::ReorgCapNotInsideEpoch(_))
+    ));
+}
+
+/// The refusal tells an operator what they asked for, why it is refused
+/// and the value that works (`82-failure-mode-ux`): the epoch, the window
+/// it implies, the lag and the depth, and the longest epoch a schedule may
+/// name. Bites if the message stops naming the ceiling, or names a
+/// number that is not the one `new` enforces.
+#[test]
+fn the_anchor_refusal_says_which_epoch_would_work() {
+    let boundary = anchor_boundary();
+    let refused = FakechainSchedule::new(
+        SettlementEpochBlocks::new(boundary.first_past).expect("non-zero"),
+        BlockCount::from_raw(1),
+    )
+    .expect_err("one past the boundary");
+    let message = refused.to_string();
+    for needed in [
+        format!(
+            "settlement epoch of {} blocks is too long",
+            boundary.first_past
+        ),
+        format!("window is {} blocks", boundary.widest_window + 1),
+        format!("at most {} blocks", boundary.last_at),
+    ] {
+        assert!(message.contains(&needed), "{message:?} lacks {needed:?}");
+    }
+    // The ceiling it names is admitted, and the next epoch is not.
+    let at = |seb: u64| {
+        FakechainSchedule::new(
+            SettlementEpochBlocks::new(seb).expect("non-zero"),
+            BlockCount::from_raw(1),
+        )
+    };
+    assert!(at(ResponseWindowOutrunsAnchor::LONGEST_EPOCH_BLOCKS).is_ok());
+    assert!(at(ResponseWindowOutrunsAnchor::LONGEST_EPOCH_BLOCKS + 1).is_err());
+}
+
+/// Every rule set the crate can build satisfies the relation: each issued
+/// set, the set every network's schedule names at any height, and the
+/// production pair. A Fakechain set needs no list of epochs here: a
+/// `FakechainSchedule` exists only if `new` admitted it, so each fixture
+/// that builds one — in this crate, the store's or the ingest's — is
+/// checked where it is built, with the epoch it actually uses. Bites if
+/// the compile-time assertion over `ISSUED` is dropped and a set with a
+/// longer epoch is issued.
+#[test]
+fn every_rule_set_the_crate_builds_anchors_below_its_block() {
+    assert!(RuleSet::GENESIS.anchor_covers_response_window());
+    assert!(FakechainSchedule::PRODUCTION.anchor_covers_response_window());
+    assert!(RuleSet::fakechain(None, FakechainSchedule::PRODUCTION).anchor_covers_response_window());
+    for set in RuleSet::ISSUED {
+        assert!(set.anchor_covers_response_window(), "{:?}", set.id());
+    }
+    for network in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
+        let schedule = RuleSchedule::for_network(network);
+        for height in [0u64, 1, 10_000, u64::MAX] {
+            let id = schedule.rules_at(BlockHeight::from_raw(height));
+            let set = RuleSet::for_id(id).expect("a schedule names issued sets");
+            assert!(
+                set.anchor_covers_response_window(),
+                "{network:?} at {height}"
+            );
+        }
+    }
 }
 
 /// A valid `(SEB, cap)` pair for the tests above.

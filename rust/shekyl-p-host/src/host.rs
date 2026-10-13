@@ -10,7 +10,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_p_serve::{PServeEndpoint, ServeCounterReader, StoreShardProvider};
+use shekyl_p_serve::{PServeEndpoint, PassSigner, ServeCounterReader, StoreShardProvider};
 use shekyl_p_store::BodyStoreReader;
 use shekyl_tor_control_wallet::service::{
     OnionIdentity, OnionServiceSpec, ServiceId, ServingPosture, TorPosture, WalletTorControl,
@@ -22,7 +22,7 @@ use crate::daemon_tip::DaemonTipCache;
 use crate::runtime::{PriorityFailures, ServingPool};
 use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};
 use crate::signer::HostSigner;
-use crate::PassKey;
+use crate::{PassKey, IDENTITY_ENVELOPE_LEN};
 
 /// The serving identity and the shape of its published port.
 ///
@@ -49,7 +49,14 @@ pub struct PersonaServing {
     /// countersignature. In production this is the engine's resident pass
     /// key: a round-trip into the stake actor that holds the secret, which
     /// never crosses into this crate (`SF-D13`).
-    pub key: Arc<dyn PassKey>,
+    ///
+    /// **This field is where the host's scheme is chosen.** Its width is
+    /// the envelope's: the bond identity key's (hybrid scheme 1), 3,385
+    /// bytes. The signer the host builds over it and the endpoint it binds
+    /// take their width from this type and name none of their own. A host
+    /// that served receipts would declare the receipt width here, in the
+    /// change that makes a verifier accept them (`FN_DSA_HYBRID.md` §9).
+    pub key: Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
     /// The `SF-D5` gate's height source: the configured daemon's tip,
     /// stamped by a producer the caller owns (see [`crate::signer`] for why
     /// the daemon and not the served store — `WSS-24`).
@@ -71,7 +78,7 @@ impl fmt::Debug for PersonaServing {
             .field("identity", &self.identity)
             .field("virtual_port", &self.virtual_port)
             .field("max_streams", &self.max_streams)
-            .field("key", &"<dyn PassKey>")
+            .field("key", &"<dyn PassKey<IDENTITY_ENVELOPE_LEN>>")
             .field("tip", &self.tip)
             .field("bodies", &"<BodyStoreReader>")
             .finish()
@@ -418,7 +425,9 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         // it names live in `serving.bodies` (`WSS-Q1`(a)). The signer's
         // gate height is the daemon's tip on `serving.tip` (`WSS-24`).
         let provider = StoreShardProvider::new(serving.bodies);
-        let signer = HostSigner::new(serving.tip, serving.key);
+        // The width is `serving.key`'s; the endpoint is bound at it.
+        let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> =
+            Arc::new(HostSigner::new(serving.tip, serving.key));
         // The serving runtime first, then the bind *on* it: `tokio::spawn`
         // inside `bind` lands the accept loop on the runtime the bind future
         // runs on, and every connection task and blocking hop follows the
@@ -429,7 +438,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         })?;
         let endpoint = pool
             .handle()
-            .spawn(PServeEndpoint::bind(Arc::new(provider), Arc::new(signer)))
+            .spawn(PServeEndpoint::bind(Arc::new(provider), signer))
             .await
             .map_err(|join| HostError::Bind {
                 detail: join.to_string(),
