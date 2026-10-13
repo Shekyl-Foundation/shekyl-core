@@ -30,8 +30,9 @@ shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 
 [dev-dependencies]
 shekyl-peerlist = { path = ".", features = ["conformance"] }
-# The seeded reference generator, for the tests only.
-shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["conformance"] }
+# `SplitMix64`, for the tests only. The `conformance` feature on the line
+# above is this crate's disclosure instrument, not the generator.
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 
 [lints]
 workspace = true

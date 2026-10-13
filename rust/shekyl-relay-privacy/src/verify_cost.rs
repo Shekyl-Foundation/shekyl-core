@@ -478,8 +478,9 @@ const _: () = assert!(ADOPTED_TRANSIT_ASSUMPTION_MS == 50.0);
 
 /// Row names for the flood instrument.
 ///
-/// Not a connector identity. The privacy crate stays dependency-free, so it
-/// does not import `ConnectorId`. These variants name flood-instrument rows.
+/// Not a connector identity. This crate's dependency is `shekyl-draw-rng`,
+/// which has no connector type, so `ConnectorId` is not in scope. These
+/// variants name flood-instrument rows.
 /// Production transit is the D7 declaration's `transit_ms` cell, which is
 /// these constants with their basis. Neither row is a measurement: both are
 /// assumptions (§97). A new reading is a variant here; it does not by itself

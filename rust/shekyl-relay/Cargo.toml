@@ -33,8 +33,8 @@ shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 tracing = "0.1"
 
 [dev-dependencies]
-# The seeded reference generator, for the unit tests only.
-shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["conformance"] }
+# `SplitMix64`, for the unit tests only. Not a grader feature.
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 
 [lints]
 workspace = true

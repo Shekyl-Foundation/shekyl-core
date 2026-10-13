@@ -213,13 +213,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "docs); this row is what keeps it in tests",
     (
         "shekyl-draw-rng",
-        "conformance",
+        "splitmix",
     ): "compiles SplitMix64, the seeded reference generator the relay, "
     "peerlist and relay-privacy tests and the golden vector draw from. It is "
-    "not a CSPRNG. The type is cfg(any(test, feature = \"conformance\")), so "
-    "with this feature held to dev edges no production build can name it: a "
-    "production draw from SplitMix64 is a compile error. The production "
-    "generator is shekyl-ffi's SecureRelayRng over OS entropy",
+    "not a CSPRNG, and it is not a conformance grade: those crates' own "
+    "conformance features are the float graders. The type is "
+    "cfg(any(test, feature = \"splitmix\")), so with this feature held to "
+    "dev edges no production build can name it: a production draw from "
+    "SplitMix64 is a compile error. The production generator is shekyl-ffi's "
+    "SecureRelayRng over OS entropy",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -277,8 +279,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # joined 2026-10-06 in the commit that declared its own `harness`
 # (TEST_ONLY, one dev enabler); its three production features are the first
 # PERMANENT rows. `shekyl-draw-rng` joined 2026-10-12, the commit that created
-# it: `conformance` is its only feature and is enabled across a crate boundary
-# from its first day (three dev edges).
+# it: `splitmix` is its only feature and is enabled across a crate boundary
+# from its first day (three dev edges). The name is the generator. It is not
+# the `conformance` grader feature those consumers also carry.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate

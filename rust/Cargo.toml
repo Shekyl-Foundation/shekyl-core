@@ -88,15 +88,14 @@ members = [
     # (`bounded_uniform`, `bernoulli`), cut out of `shekyl-relay-privacy` so
     # the relay scheduler, the peerlist, the dialer and the FFI's CSPRNG do
     # not reach into the relay-timing crate for one trait. The seeded
-    # `SplitMix64` is behind the `conformance` feature, on dev edges only.
+    # `SplitMix64` is behind the `splitmix` feature, on dev edges only.
     "shekyl-draw-rng",
 
     # Daemon relay-privacy timing core (Dandelion++ epoch/stem/fluff/embargo
     # draws + the stem map), derived from the paper rather than inherited as
-    # `#define`s. Standalone measurement instrument: links nothing, replaces
-    # nothing, and precedes any decision to move the C++ relay path. Shares
-    # `shekyl-stats` with `shekyl-standoff` under the same `conformance`
-    # feature split.
+    # `#define`s. The default build's one dependency is `shekyl-draw-rng`.
+    # Its `conformance` feature pulls `shekyl-stats`, the same grader split
+    # as `shekyl-standoff`. The C++ relay path is still the daemon's.
     "shekyl-relay-privacy",
 
     # Live daemon relay scheduler (RP-3a): owns the Dandelion++ zone state and

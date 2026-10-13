@@ -682,8 +682,11 @@ loops for no gain.
 ## 2. What lands where
 
 **RP-1 (landed, this PR).** `rust/shekyl-relay-privacy` — the measurement
-instrument and the corrected primitives. Links nothing, replaces nothing,
-changes no daemon behaviour.
+instrument and the corrected primitives. At landing it linked nothing,
+replaced nothing, and changed no daemon behaviour. Since 2026-10-12 the
+default build's one dependency is `shekyl-draw-rng`, which itself links
+nothing. The `conformance` feature on this crate is still the float grader
+and still pulls `shekyl-stats`.
 
 | module | contents |
 | --- | --- |
@@ -691,7 +694,7 @@ changes no daemon behaviour.
 | `derive.rs` | The exact survival equation and the bisection solve (D-2) |
 | `poisson.rs` | Frozen integer inverse-CDF replacing `std::poisson_distribution` |
 | `geometric.rs` | The memoryless draw (D-1, D-3) |
-| `shekyl-draw-rng` (its own crate since 2026-10-12; *records-was* `rng.rs`) | `RelayRng` seam; unbiased rejection sampler. The seeded `SplitMix64` compiles only under `cfg(any(test, feature = "conformance"))` |
+| `shekyl-draw-rng` (its own crate since 2026-10-12; *records-was* `rng.rs`) | `RelayRng` seam; unbiased rejection sampler. The seeded `SplitMix64` compiles only under `cfg(any(test, feature = "splitmix"))` |
 | `stem_map.rs` | Port of `connection_map`, `nil_uuid` sentinel replaced by `Option` in its three distinct roles |
 | `schedule.rs` | Epoch / fluff / embargo / noise state machines (D-7) |
 | `conformance.rs` | Feature-gated grades, the propagation simulator, the inversion instrument |
