@@ -16,12 +16,12 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, Direction, NetworkAddress,
     NoBans, Peerlist, RangeV4, RangeV6, Refusal, RefusedSet, SessionRow, Source, Tick,
     DISCLOSE_COUNT, REFUSED_V4, REFUSED_V6,
 };
-use shekyl_relay_privacy::rng::SplitMix64;
 
 const PORT: u16 = 18080;
 

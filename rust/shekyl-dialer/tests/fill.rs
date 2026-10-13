@@ -13,11 +13,11 @@
 use std::net::Ipv4Addr;
 
 use shekyl_dialer::{plan, Census, DialAim, DrawList, FillRule, Plan, IN_FLIGHT_BOUND};
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     white_diversity_floor, ConnectorId, DialOutcome, NetworkAddress, NoBans, Peerlist, RefusedSet,
     Source, Tick, WHITE_REFILL_LINE,
 };
-use shekyl_relay_privacy::rng::SplitMix64;
 
 /// A small floor and refill line, so the grid crosses both.
 const FLOOR: usize = 3;

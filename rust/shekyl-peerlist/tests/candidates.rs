@@ -10,10 +10,10 @@
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     ConnectorId, DialOutcome, NetworkAddress, NoBans, Peerlist, RefusedSet, Source, Tick, GRAY_CAP,
 };
-use shekyl_relay_privacy::rng::SplitMix64;
 
 const C: ConnectorId = ConnectorId::Clearnet;
 

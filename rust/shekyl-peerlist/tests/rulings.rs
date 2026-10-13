@@ -10,12 +10,12 @@
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     white_diversity_floor, BanQuery, ConnectionId, DialOutcome, Direction, NetworkAddress, NoBans,
     Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
     GRAY_CAP, SESSION_INTAKE_CAP, WHITE_REFILL_LINE,
 };
-use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_transport_layer::BanList;
 
 fn v4(n: u16) -> NetworkAddress {

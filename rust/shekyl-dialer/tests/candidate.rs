@@ -11,10 +11,10 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_dialer::memory::FIRST_WINDOW_NANOS;
 use shekyl_dialer::{Attempts, CandidateFilter, DialAim, FailedAddresses, Skip};
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     BanQuery, CloseCause, CloseKind, DialOutcome, Host, NetworkAddress, NoBans, Tick,
 };
-use shekyl_relay_privacy::rng::SplitMix64;
 
 fn peer(n: u8, port: u16) -> NetworkAddress {
     NetworkAddress::Ipv4 {

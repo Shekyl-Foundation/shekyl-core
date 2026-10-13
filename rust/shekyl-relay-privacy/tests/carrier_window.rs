@@ -4,9 +4,12 @@
 
 //! The carrier's two derived sizes, checked against the facts they derive from.
 //!
-//! [`carrier::WINDOW_BYTES`] and [`carrier::MAX_FRAGMENTS`] are constants in a
-//! crate whose default build is deliberately dependency-free, so neither can be
-//! *computed* where it lives. This file is where they are **enforced** instead,
+//! [`carrier::WINDOW_BYTES`] and [`carrier::MAX_FRAGMENTS`] are constants in
+//! `shekyl-relay-privacy`, whose default build depends only on
+//! `shekyl-draw-rng`. The size facts live in `shekyl-tx-weight`,
+//! `shekyl-levin`, and `shekyl-fcmp`, which that default build does not link,
+//! so neither constant can be *computed* where it lives. This file is where
+//! they are **enforced** instead,
 //! and enforcement is the stronger form: a proof-size change reds a test that
 //! names the constant, where a computed value would absorb the change and
 //! silently move the window.

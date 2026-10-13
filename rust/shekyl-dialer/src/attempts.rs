@@ -17,8 +17,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 use shekyl_peerlist::{DialOutcome, Host, NetworkAddress};
-use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
 
 use crate::fill::DialAim;
 

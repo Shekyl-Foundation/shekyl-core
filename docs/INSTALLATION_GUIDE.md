@@ -229,9 +229,14 @@ Start daemon in foreground:
 
 Run the daemon in the background via your platform's service manager
 (systemd on Linux, launchd on macOS, Task Scheduler on Windows). An
-example systemd unit lives at `contrib/packaging/linux/shekyld.service`;
-copy it to `/etc/systemd/system/shekyld.service` and `systemctl enable
---now shekyld`. `--detach`, `--pidfile`, and the Windows `--*-service`
+shipped systemd unit lives at `contrib/packaging/linux/shekyld.service`,
+with `shekyl.slice` beside it; the `.deb` installs both, or copy both to
+`/etc/systemd/system/` and `systemctl enable --now shekyld`. The slice is
+the daemon's own top-level control group, weighed 4:1 against
+`user.slice` under contention, so a daemon that is syncing or verifying
+keeps about 80 % of the CPU while a wallet in a user session serves
+archival shards beside it (the wallet itself is never a system service).
+A daemon started by hand runs in your session and has no slice. `--detach`, `--pidfile`, and the Windows `--*-service`
 flags were removed in V3.1; the daemon now only runs in the foreground
 and is supervised externally. The GUI wallet embeds `shekyld` as a
 Tauri sidecar and does not require a separate service unit.

@@ -9,7 +9,7 @@
 //! mean 1 s, drawn per dial. The shape is the same on every connector:
 //! the connector changes which list is drawn, not the clock.
 
-use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 /// The fixed part of the gap, in nanoseconds.
 ///

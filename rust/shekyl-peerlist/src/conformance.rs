@@ -34,7 +34,7 @@
 // Counts become ratios here; the counts are list sizes, far below 2^52.
 #![allow(clippy::cast_precision_loss)]
 
-use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_draw_rng::RelayRng;
 
 use crate::sample::sample_prefix;
 use crate::DISCLOSE_COUNT;

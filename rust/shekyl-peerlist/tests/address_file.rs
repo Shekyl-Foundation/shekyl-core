@@ -11,13 +11,13 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::address_file::{
     decode, encode, AddressFileError, ADDRESS_FILE_MAGIC, ADDRESS_FILE_VERSION, MAX_ENTRIES,
 };
 use shekyl_peerlist::{
     ConnectorId, DialOutcome, NetworkAddress, NoBans, Peerlist, RefusedSet, Source, Tick,
 };
-use shekyl_relay_privacy::rng::SplitMix64;
 
 fn now() -> Tick {
     Tick::new(0)

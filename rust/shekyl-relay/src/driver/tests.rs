@@ -6,8 +6,8 @@
 use super::*;
 use crate::stem_watch::TxId;
 use crate::ConnectorId;
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::params::DandelionParams;
-use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
 
 fn id(byte: u8) -> ConnectionId {

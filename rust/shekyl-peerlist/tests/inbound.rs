@@ -14,11 +14,11 @@
 
 use std::net::Ipv4Addr;
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     ConnectionId, ConnectorId, Direction, NetworkAddress, NoBans, Peerlist, Refusal, RefusedSet,
     SessionRow, Source, Tick, DISCLOSE_COUNT,
 };
-use shekyl_relay_privacy::rng::SplitMix64;
 
 fn now() -> Tick {
     Tick::new(0)

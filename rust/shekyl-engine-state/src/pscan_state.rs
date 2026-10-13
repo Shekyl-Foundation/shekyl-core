@@ -40,7 +40,15 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v10** renames the v9
+/// Schema version of the durable P-scan state. **v11** records that a
+/// JoinMarket's `post_kind` is `5`
+/// (`shekyl_wire::transaction::is_join_market_post_kind`). A version-10
+/// file holds its joins as `0`, the retired keyless byte, and loading it
+/// would treat every join as no bond (`FN_DSA_HYBRID.md` §5, `FND-18`).
+/// The load refuses; nothing rewrites `0` into `5`. The postcard type is
+/// unchanged, so the schema snapshot does not move: the version word is
+/// what refuses the file (rules 15 and 42).
+/// **v10** renames the v9
 /// `pending_unbonds` map and the `unbond_epoch` field to `pending_releases` /
 /// `release_epoch` (the internal Unbond → Release vocabulary rename; wire
 /// `BondPostKind` discriminant `2` unchanged).
@@ -69,12 +77,13 @@ use crate::pscan_cursor::PScanCursor;
 /// — the per-output funding-discovery records bond assembly selects from); **v3**
 /// added the durable `bond_post_matches` (SP-6 reconcile evidence); **v2** tracked
 /// the nested [`PScanCursor`] gaining its verified-frontier `frontier_hash`. Any
-/// field addition / removal / renaming bumps this; loads that see a different
+/// field addition / removal / renaming, and any change in what a persisted
+/// byte means, bumps this; loads that see a different
 /// version **refuse rather than migrate** (the `StakingBlock` precedent). No
 /// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
 /// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
 /// ledger over its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 10;
+pub const PSCAN_STATE_VERSION: u32 = 11;
 
 /// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
 /// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
@@ -154,7 +163,9 @@ pub struct BondPostRecord {
     pub height: BlockHeight,
     /// The matched persona's canonical id (a public on-chain pseudonym handle).
     pub p_canonical_id: PCanonicalId,
-    /// Wire post-kind byte (`0` = JoinMarket; otherwise the `Other` tag).
+    /// Wire `post_kind`. A JoinMarket is `5`
+    /// (`shekyl_wire::transaction::is_join_market_post_kind`); `0` is the
+    /// retired keyless byte, not a bond. Reinstate is `1`, Release is `2`.
     pub post_kind: u8,
 }
 

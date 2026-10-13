@@ -631,11 +631,12 @@ impl ArchivalPKeys {
         &self.hybrid_sign_pk
     }
 
-    /// The public key pair a JoinMarket bond post carries, as one value:
-    /// `P`'s identity key and the GF-1 bond-debit authorizer, same-persona by
-    /// construction. This is the **only** producer of [`BondPostKeys`], so the
-    /// two same-typed roles can be neither transposed nor mixed across
-    /// personas by a caller — the pairing the pre-SA-2b `&ArchivalPKeys`
+    /// The public keys a JoinMarket bond post carries, as one value:
+    /// `P`'s identity key, the GF-1 bond-debit authorizer and the receipt
+    /// key, same-persona by construction. This is the **only** producer of
+    /// [`BondPostKeys`], so the two same-typed roles can be neither
+    /// transposed nor mixed across personas by a caller, and the receipt
+    /// key a post commits is this persona's — the pairing the pre-SA-2b `&ArchivalPKeys`
     /// builder parameter made structural, kept without handing the secret
     /// bundle to a public-only constructor (rule 36).
     #[must_use]
@@ -643,6 +644,7 @@ impl ArchivalPKeys {
         BondPostKeys {
             identity_pk: self.hybrid_bond_id(),
             bond_spend_pk: &self.bond_spend_pk,
+            receipt_pk: &self.receipt_sign_pk,
         }
     }
 
@@ -671,12 +673,12 @@ impl ArchivalPKeys {
     }
 }
 
-/// Public-only key pair for constructing a JoinMarket bond post.
+/// Public-only keys for constructing a JoinMarket bond post.
 ///
 /// Fields are private and the sole producer is
 /// [`ArchivalPKeys::bond_post_keys`]: holding one is a structural witness that
-/// `identity_pk` and `bond_spend_pk` are the *same persona's* keys in the
-/// *right roles* — two free `&HybridPublicKey` parameters would let a
+/// `identity_pk`, `bond_spend_pk` and `receipt_pk` are the *same persona's*
+/// keys in the *right roles* — two free `&HybridPublicKey` parameters would let a
 /// transposed or cross-persona call compile and produce a self-consistent vin
 /// whose mistake surfaces only at daemon-side authorization (or worse, as a
 /// committed record whose GF-1 debit key can never unlock the bond).
@@ -684,6 +686,7 @@ impl ArchivalPKeys {
 pub struct BondPostKeys<'a> {
     identity_pk: &'a HybridPublicKey,
     bond_spend_pk: &'a HybridPublicKey,
+    receipt_pk: &'a FnDsaHybridPublicKey,
 }
 
 impl BondPostKeys<'_> {
@@ -699,6 +702,17 @@ impl BondPostKeys<'_> {
     #[must_use]
     pub fn bond_spend_pk(&self) -> &HybridPublicKey {
         self.bond_spend_pk
+    }
+
+    /// The persona's receipt key (Ed25519 + FN-DSA-1024,
+    /// [`ArchivalPKeys::receipt_sign_pk`]): what a JoinMarket commits into
+    /// the bond record so that receipts the persona signs can be verified
+    /// under it. Committed once and immutable for the record's life, as
+    /// `bond_spend_pk` is. Its type keeps it from being passed where either
+    /// ML-DSA key belongs.
+    #[must_use]
+    pub fn receipt_pk(&self) -> &FnDsaHybridPublicKey {
+        self.receipt_pk
     }
 }
 

@@ -18,8 +18,8 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::ConnectorId;
-use shekyl_relay_privacy::rng::RelayRng;
 
 /// One attempt's nonce: 32 bytes, as `COMMAND_HANDSHAKE` carries it.
 pub type HandshakeNonce = [u8; 32];

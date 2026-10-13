@@ -96,6 +96,7 @@ shekyl-logging = { path = "../shekyl-logging" }
 # Stem-map exports retired at RP-3a. The FFI owns the CSPRNG (`OsRng`); the
 # measurement crate stays deterministic.
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 # Live relay zone (RP-3a). The scheduling logic; this crate only marshals.
 shekyl-relay = { path = "../shekyl-relay" }
 # Peer-attribution policy (PWD-B7): owns the drop rule. This crate only

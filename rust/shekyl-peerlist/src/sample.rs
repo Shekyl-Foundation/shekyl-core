@@ -10,7 +10,7 @@
 //! the list cannot drift: the same inclusive `bounded_uniform` at each
 //! index, the same swap.
 
-use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 /// Place a uniform sample of `count` members in the prefix, in random
 /// order. Returns how many were placed (`count` capped by the population).
@@ -36,7 +36,7 @@ pub(crate) fn sample_prefix<T, R: RelayRng + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    use shekyl_relay_privacy::rng::SplitMix64;
+    use shekyl_draw_rng::SplitMix64;
 
     use super::*;
 

@@ -15,10 +15,12 @@ publish = false
 
 [dependencies]
 shekyl-peerlist = { path = "../shekyl-peerlist" }
-# The RNG seam the draws are generic over, and the two outbound targets
-# (`MIN_PROVISIONED_OUT_PEERS`, `P2P_DEFAULT_OUT_PEERS`). The seam moves to
-# `shekyl-draw-rng` when that crate lands on `dev`.
-shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+# The RNG seam the draws are generic over.
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+
+[dev-dependencies]
+# The seeded reference generator, for the tests only.
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 
 [lints]
 workspace = true

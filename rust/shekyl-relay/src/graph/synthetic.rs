@@ -11,9 +11,9 @@
 
 use super::*;
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::params::DandelionParams;
-use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::verify_cost::{ADOPTED_TRANSIT, ANON_ZONE_TRANSIT};
 use shekyl_transport_layer::YesNo;
 

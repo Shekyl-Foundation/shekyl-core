@@ -6,8 +6,8 @@
 //! The self-connection nonces and the wake spacing.
 
 use shekyl_dialer::{next_wake_nanos, HandshakeNonceSet, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::ConnectorId;
-use shekyl_relay_privacy::rng::SplitMix64;
 
 /// A dial to our own listener: the listener reads the request while the
 /// attempt is still in flight, and finds the nonce in the set.
