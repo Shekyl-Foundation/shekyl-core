@@ -44,7 +44,11 @@ use crate::nullable::Nullable;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.53: `get_info`'s two amounts of coin,
+/// `CORE_RPC_VERSION_MINOR`. 3.54: `get_info` stops repeating the daemon's
+/// network (RK-Q6). `nettype` and the booleans `mainnet`, `testnet` and
+/// `stagenet` are gone from it; `get_version.nettype` is the one place a
+/// daemon names its network. `get_version` gains nothing.
+/// 3.53: `get_info`'s two amounts of coin,
 /// `already_generated_coins` and `total_burned`, are decimal strings of
 /// atomic units (RK-Q2): the wallet RPC's encoding, since a JSON number
 /// loses integers above 2^53 in a JavaScript reader. Both stay required.
@@ -172,8 +176,8 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// Peers. 3.49 its connection counts come from the seam board. 3.50 its pool
 /// count is split by broadcast state. 3.51 it refuses on a broken supply
 /// invariant. 3.52 its duplicate wire names retire. 3.53 its
-/// amounts are decimal strings.
-pub const CORE_RPC_VERSION_MINOR: u32 = 53;
+/// amounts are decimal strings. 3.54 it stops repeating the network.
+pub const CORE_RPC_VERSION_MINOR: u32 = 54;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -564,10 +568,11 @@ mod tests {
         // 3.44 drops `hard_forks`. 3.43 was already the native shard view;
         // both branches had written 43, so the deletion took the next minor.
         // 3.53 writes `get_info`'s amounts as decimal strings.
-        assert_eq!(CORE_RPC_VERSION, 196_661);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 53);
+        // 3.54 retires the network's four names from `get_info`.
+        assert_eq!(CORE_RPC_VERSION, 196_662);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 54);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 53);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 54);
     }
 
     #[test]

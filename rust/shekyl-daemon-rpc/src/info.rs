@@ -244,7 +244,6 @@ pub fn get_info(
             has_peers,
         },
         identity: InfoIdentity {
-            nettype: chain.nettype,
             protocol_version: chain.protocol_version,
         },
         chain: InfoChain {

@@ -914,7 +914,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 29] = [
+    let links: [(&str, &str); 30] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1031,6 +1031,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v29.json"),
             include_str!("vectors/rpc/get_version_synced_v30.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v30.json"),
+            include_str!("vectors/rpc/get_version_synced_v31.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1049,7 +1053,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 29] = [
+    const ADDED_AT_LINK: [&[&str]; 30] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1079,6 +1083,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.51 (get_info refuses on a broken supply invariant, RK-Q9; get_version gains nothing)
         &[], // 3.52 (get_info's duplicate wire names retire, RK-Q1; get_version gains nothing)
         &[], // 3.53 (get_info's amounts become decimal strings, RK-Q2; get_version gains nothing)
+        &[], // 3.54 (get_info stops repeating the network, RK-Q6; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1090,7 +1095,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 29] = [
+    const REMOVED_AT_LINK: [&[&str]; 30] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1120,6 +1125,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.51 (no member moves on any reply; one state stops being answered)
         &[], // 3.52 (the retired names are get_info's; get_version retires nothing)
         &[], // 3.53 (no member comes or goes; two of get_info's change encoding)
+        &[], // 3.54 (the four network names are get_info's; get_version keeps its `nettype`)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1622,6 +1628,58 @@ fn the_3_53_get_info_vectors_are_their_predecessors_with_the_two_amounts_as_stri
             derived,
             parsed(after_raw),
             "the successor is its predecessor with the two amounts written as strings"
+        );
+    }
+}
+
+/// **3.54, by derivation.** `get_info` stops repeating the daemon's network
+/// (RK-Q6). Each fixture's successor is its predecessor minus exactly
+/// `nettype`, `mainnet`, `testnet` and `stagenet`. Before a key is removed,
+/// the three booleans are checked against the string they repeated, so the
+/// derivation retires four names for one value and nothing that differed.
+#[test]
+fn the_3_54_get_info_vectors_are_their_predecessors_minus_exactly_the_network_names() {
+    for (before_raw, after_raw) in [
+        (
+            include_str!("vectors/rpc/get_info_synced_v6.json"),
+            include_str!("vectors/rpc/get_info_synced_v7.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_syncing_v5.json"),
+            include_str!("vectors/rpc/get_info_syncing_v6.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_peerless_startup_v6.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v7.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_synced_restricted_v6.json"),
+            include_str!("vectors/rpc/get_info_synced_restricted_v7.json"),
+        ),
+    ] {
+        let mut derived = parsed(before_raw);
+        let network = derived["nettype"]
+            .as_str()
+            .expect("the predecessor names its network")
+            .to_owned();
+        for boolean in ["mainnet", "testnet", "stagenet"] {
+            assert_eq!(
+                derived[boolean].as_bool(),
+                Some(network == boolean),
+                "the predecessor's `{boolean}` repeats its `nettype` ({network})"
+            );
+        }
+        let object = derived.as_object_mut().expect("a fixture is an object");
+        for key in ["nettype", "mainnet", "testnet", "stagenet"] {
+            assert!(
+                object.remove(key).is_some(),
+                "the predecessor carries `{key}`"
+            );
+        }
+        assert_eq!(
+            derived,
+            parsed(after_raw),
+            "the successor is its predecessor minus exactly the four network names"
         );
     }
 }
@@ -2171,8 +2229,8 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
 mod get_info {
     use super::{assert_parity, parsed, tagged_hash};
     use shekyl_rpc_types::{
-        DaemonNetwork, GetInfoResponse, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
-        InfoIdentity, InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
+        GetInfoResponse, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost, InfoIdentity,
+        InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
     };
     use shekyl_units::AtomicUnits;
 
@@ -2194,7 +2252,6 @@ mod get_info {
                 has_peers: true,
             },
             identity: InfoIdentity {
-                nettype: DaemonNetwork::Mainnet,
                 protocol_version: 3,
             },
             chain: InfoChain {
@@ -2243,7 +2300,7 @@ mod get_info {
     #[test]
     fn synced_matches_the_oracle() {
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_v6.json"),
+            include_str!("vectors/rpc/get_info_synced_v7.json"),
             &synced(),
         );
     }
@@ -2255,13 +2312,12 @@ mod get_info {
         built.health.target_height = Nullable::value(1_300_000);
         built.health.busy_syncing = true;
         built.health.following_degraded = true;
-        assert_parity(include_str!("vectors/rpc/get_info_syncing_v5.json"), &built);
+        assert_parity(include_str!("vectors/rpc/get_info_syncing_v6.json"), &built);
     }
 
     #[test]
     fn peerless_startup_matches_the_oracle() {
         let mut built = synced();
-        built.identity.nettype = DaemonNetwork::Fakechain;
         built.health.synchronized = false;
         // Nobody to learn a target from, and nobody to relay through.
         built.health.target_height = Nullable::NULL;
@@ -2279,7 +2335,7 @@ mod get_info {
         peers.tor_incoming_socket_count = 0;
         peers.tor_outgoing_socket_count = 0;
         assert_parity(
-            include_str!("vectors/rpc/get_info_peerless_startup_v6.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v7.json"),
             &built,
         );
     }
@@ -2295,7 +2351,7 @@ mod get_info {
         built.peers = Hidden::Withheld;
         built.host = Hidden::Withheld;
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_restricted_v6.json"),
+            include_str!("vectors/rpc/get_info_synced_restricted_v7.json"),
             &built,
         );
     }
@@ -2335,7 +2391,7 @@ mod get_info {
     /// key, for every key of both parts — never a part read as withheld.
     #[test]
     fn a_hidden_part_missing_one_key_is_refused_not_read_as_withheld() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
         for (part, keys) in [("status", &STATUS_KEYS[..]), ("peers", &PEERS_KEYS[..])] {
             for key in keys {
                 let mut doc = full.clone();
@@ -2356,7 +2412,7 @@ mod get_info {
     /// part is unaffected, and the reply writes back without those keys.
     #[test]
     fn a_hidden_part_with_no_keys_is_withheld_and_writes_none() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
 
         let mut doc = full.clone();
         for key in STATUS_KEYS {
@@ -2389,7 +2445,7 @@ mod get_info {
     /// decodes.
     #[test]
     fn a_shown_status_with_an_empty_version_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
         doc["version"] = "".into();
         let refusal = decode(&doc).expect_err("an empty version is not an answer");
         assert!(refusal.contains("empty `version`"), "got {refusal:?}");
@@ -2408,7 +2464,7 @@ mod get_info {
     /// without the key, and `0` is a count, not an absence (RK-Q10).
     #[test]
     fn the_host_part_is_withheld_when_its_key_is_absent() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
         let shown = decode(&doc).expect("the host's reply decodes");
         assert_eq!(
             shown.host,
@@ -2438,7 +2494,7 @@ mod get_info {
     /// it cannot carry the attribute on a flattened type.
     #[test]
     fn an_unknown_key_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
         doc.as_object_mut()
             .unwrap()
             .insert("emission_era".to_owned(), "Founding".into());
@@ -2460,7 +2516,7 @@ mod get_info {
             "restricted",
             "burn_pct",
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
             doc.as_object_mut().unwrap().remove(key);
             let refusal = decode(&doc).expect_err("a missing required key must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -2480,7 +2536,7 @@ mod get_info {
     #[test]
     fn the_two_amounts_are_required_decimal_strings() {
         for key in ["already_generated_coins", "total_burned"] {
-            let full = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+            let full = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
 
             let mut missing = full.clone();
             missing.as_object_mut().unwrap().remove(key);
@@ -2536,24 +2592,24 @@ mod get_info {
         assert_eq!(decode(&doc).unwrap(), built);
     }
 
-    /// One value under several wire names: a reply whose names disagree
-    /// does not decode. Since 3.52 the network is the only repeated value;
-    /// each case changes one of its names.
+    /// **The network's four names are refused, not ignored** (RK-Q6). A
+    /// reply that still carries one is a reply from before 3.54, and this
+    /// type refuses unknown keys. `get_version` is where a daemon names its
+    /// network.
     #[test]
-    fn two_names_for_one_value_must_agree() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
-        let cases: [(&str, serde_json::Value); 3] = [
-            ("mainnet", false.into()),
-            ("testnet", true.into()),
-            ("stagenet", true.into()),
-        ];
-        for (key, value) in cases {
-            let mut doc = full.clone();
+    fn a_retired_network_name_is_an_unknown_key() {
+        for (key, value) in [
+            ("nettype", serde_json::json!("mainnet")),
+            ("mainnet", serde_json::json!(true)),
+            ("testnet", serde_json::json!(false)),
+            ("stagenet", serde_json::json!(false)),
+        ] {
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
             doc.as_object_mut().unwrap().insert(key.to_owned(), value);
-            let refusal = decode(&doc).expect_err("disagreeing names must not decode");
+            let refusal = decode(&doc).expect_err("a retired name must not decode");
             assert!(
-                refusal.contains("disagree"),
-                "{key}: the refusal must say the names disagree; got {refusal:?}"
+                refusal.contains("unknown field") && refusal.contains(key),
+                "{key}: the refusal must name the unknown key; got {refusal:?}"
             );
         }
     }
@@ -2571,7 +2627,7 @@ mod get_info {
             ("block_size_limit", serde_json::json!(600_000)),
             ("block_size_median", serde_json::json!(300_000)),
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
             doc.as_object_mut().unwrap().insert(key.to_owned(), value);
             let refusal = decode(&doc).expect_err("a retired name must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -2589,7 +2645,7 @@ mod get_info {
     #[test]
     fn the_weight_names_are_required_and_zero_is_written() {
         for key in ["block_weight_limit", "block_weight_median"] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
             doc.as_object_mut().unwrap().remove(key);
             let refusal = decode(&doc).expect_err("a missing weight name must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -2620,7 +2676,7 @@ mod get_info {
                 serde_json::json!(format!("0x1{}", "0".repeat(32))),
                 serde_json::json!(255),
             ] {
-                let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v6.json"));
+                let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
                 doc[key] = wrong.clone();
                 assert!(
                     decode(&doc).is_err(),

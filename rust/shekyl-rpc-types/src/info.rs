@@ -24,10 +24,10 @@
 //!
 //! # One field, one value
 //!
-//! The wire still repeats one value: the network, as a string and three
-//! booleans (RK-Q6 retires the booleans). A part holds it **once**, and the
-//! repeats are produced on the way out and checked on the way in — a reply
-//! whose names for it disagree does not decode.
+//! The wire says each value once, and so does a part. The last repeat was
+//! the network, a string and three booleans, which went at 3.54 (RK-Q6):
+//! `get_version` is where a daemon names its network, and this reply no
+//! longer carries it under any name.
 //!
 //! The other repeats went at 3.52 (RK-Q1). A difficulty was three members:
 //! its low 64 bits, a `0x` hex string, and its high 64 bits. It is the hex
@@ -62,7 +62,6 @@ use serde::{Deserialize, Serialize};
 use shekyl_units::{AtomicUnits, AtomicUnitsString};
 
 use crate::chain::RpcStatus;
-use crate::consensus_digest::DaemonNetwork;
 use crate::hash::HashHex;
 use crate::hex128::HexU128;
 use crate::nullable::Nullable;
@@ -122,13 +121,15 @@ pub struct InfoHealth {
     pub has_peers: bool,
 }
 
-/// Which network and protocol this daemon speaks. `get_version` is the
-/// identity source; these repeat it.
+/// Which protocol this daemon speaks.
+///
+/// The network is not here. `get_version` is the identity source, and until
+/// 3.54 this reply repeated its `nettype` four times over: as a string and
+/// as the booleans `mainnet`, `testnet`, `stagenet` (RK-Q6). A reader that
+/// wants the daemon's network reads `get_version`, through
+/// [`crate::IdentityExpectation::read`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoIdentity {
-    /// On the wire as `nettype` and as the three booleans `mainnet`,
-    /// `testnet`, `stagenet` (all false on a fakechain).
-    pub nettype: DaemonNetwork,
     pub protocol_version: u64,
 }
 
@@ -251,9 +252,6 @@ pub enum GetInfoShapeError {
         part: &'static str,
         missing: &'static str,
     },
-    /// Two wire names for one value disagree. Today that is the network:
-    /// `nettype` and the three booleans.
-    Disagreement { value: &'static str, detail: String },
     /// The Status part is shown and its `version` is empty. An empty
     /// string was what a restricted reply wrote for "not disclosed" until
     /// 3.48; a reply that does not disclose the version now withholds the
@@ -270,9 +268,6 @@ impl core::fmt::Display for GetInfoShapeError {
                 "the {part} part arrived without `{missing}`: a part is wholly present or \
                  wholly absent"
             ),
-            Self::Disagreement { value, detail } => {
-                write!(f, "the reply's names for {value} disagree: {detail}")
-            }
             Self::EmptyVersion => f.write_str(
                 "the status part carries an empty `version`: a shown part names the build, \
                  and a reply that does not disclose it withholds the part",
@@ -304,10 +299,6 @@ struct GetInfoWire {
     has_peers: bool,
 
     // Identity.
-    nettype: DaemonNetwork,
-    mainnet: bool,
-    testnet: bool,
-    stagenet: bool,
     protocol_version: u64,
 
     // Chain.
@@ -411,10 +402,6 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             offline,
             following_degraded,
             has_peers,
-            nettype,
-            mainnet,
-            testnet,
-            stagenet,
             protocol_version,
             wide_difficulty,
             wide_cumulative_difficulty,
@@ -446,21 +433,6 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             tx_pool_unbroadcast_count,
             restricted,
         } = wire;
-
-        let booleans = (
-            nettype == DaemonNetwork::Mainnet,
-            nettype == DaemonNetwork::Testnet,
-            nettype == DaemonNetwork::Stagenet,
-        );
-        if (mainnet, testnet, stagenet) != booleans {
-            return Err(GetInfoShapeError::Disagreement {
-                value: "the network",
-                detail: format!(
-                    "nettype {:?}, mainnet {mainnet}, testnet {testnet}, stagenet {stagenet}",
-                    nettype.as_str()
-                ),
-            });
-        }
 
         let node = hidden_part!(
             "status",
@@ -527,10 +499,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 following_degraded,
                 has_peers,
             },
-            identity: InfoIdentity {
-                nettype,
-                protocol_version,
-            },
+            identity: InfoIdentity { protocol_version },
             chain: InfoChain {
                 difficulty: wide_difficulty.get(),
                 cumulative_difficulty: wide_cumulative_difficulty.get(),
@@ -582,10 +551,6 @@ impl From<GetInfoResponse> for GetInfoWire {
             offline: health.offline,
             following_degraded: health.following_degraded,
             has_peers: health.has_peers,
-            nettype: identity.nettype,
-            mainnet: identity.nettype == DaemonNetwork::Mainnet,
-            testnet: identity.nettype == DaemonNetwork::Testnet,
-            stagenet: identity.nettype == DaemonNetwork::Stagenet,
             protocol_version: identity.protocol_version,
             wide_difficulty: HexU128(chain.difficulty),
             wide_cumulative_difficulty: HexU128(chain.cumulative_difficulty),

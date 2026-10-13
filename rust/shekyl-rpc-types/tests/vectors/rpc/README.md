@@ -178,3 +178,11 @@ successor is its predecessor with those two numbers written as strings and
 nothing else
 (`the_3_53_get_info_vectors_are_their_predecessors_with_the_two_amounts_as_strings`).
 `get_version_synced_v30` is the chain's 3.53 link.
+
+**3.54 retired the network's names from `get_info`, and four fixtures have a
+successor.** Each is its predecessor minus exactly `nettype`, `mainnet`,
+`testnet` and `stagenet`
+(`the_3_54_get_info_vectors_are_their_predecessors_minus_exactly_the_network_names`,
+which first checks the three booleans against the string they repeated).
+`get_version` keeps its `nettype`: it is the one place a daemon names its
+network. `get_version_synced_v31` is the chain's 3.54 link.

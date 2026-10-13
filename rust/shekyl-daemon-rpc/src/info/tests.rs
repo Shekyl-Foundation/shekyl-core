@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use shekyl_economics::TxVolume;
-use shekyl_rpc_types::DaemonNetwork;
 use shekyl_types::{BlockHash, ChainCount};
 use shekyl_units::AtomicUnits;
 
@@ -82,7 +81,6 @@ pub(crate) fn synced_facts() -> FakeInfoFacts {
             busy_syncing: false,
             offline: false,
             following_degraded: false,
-            nettype: DaemonNetwork::Mainnet,
             protocol_version: 3,
         },
         // Twelve entries held: nine broadcast, three not yet.
@@ -185,7 +183,7 @@ fn synced_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v6.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v7.json"
         ))
     );
 }
@@ -225,7 +223,7 @@ fn syncing_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v5.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v6.json"
         ))
     );
 }
@@ -233,7 +231,6 @@ fn syncing_reproduces_the_oracle_vector() {
 #[test]
 fn peerless_startup_reproduces_the_oracle_vector() {
     let mut facts = synced_facts();
-    facts.chain.nettype = DaemonNetwork::Fakechain;
     facts.chain.synchronized = false;
     facts.chain.core_target_height = None;
     facts.sessions = SessionCounts::NONE;
@@ -244,7 +241,7 @@ fn peerless_startup_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v6.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v7.json"
         ))
     );
 }
@@ -256,7 +253,7 @@ fn synced_restricted_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::VIEW),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v6.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v7.json"
         ))
     );
 }

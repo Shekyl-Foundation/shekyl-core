@@ -528,8 +528,8 @@ impl GetInfoDocument {
     /// choose holds a fixed, unremarkable value.
     pub(crate) fn to_reply(&self) -> GetInfoResponse {
         use shekyl_rpc_types::{
-            DaemonNetwork, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
-            InfoPeers, InfoPool, InfoStatus, RpcStatus,
+            HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity, InfoPeers,
+            InfoPool, InfoStatus, RpcStatus,
         };
         GetInfoResponse {
             status: RpcStatus::ok(),
@@ -544,7 +544,6 @@ impl GetInfoDocument {
                 has_peers: self.has_peers,
             },
             identity: InfoIdentity {
-                nettype: DaemonNetwork::Fakechain,
                 protocol_version: 3,
             },
             chain: InfoChain {
