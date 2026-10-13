@@ -322,6 +322,67 @@ impl Peerlist {
         partition.draw_white(rng)
     }
 
+    /// One gray dial candidate of `connector`, remembered as an
+    /// outstanding draw until [`Self::apply`] resolves it.
+    ///
+    /// The draw is uniform over the hosts that have a drawable gray
+    /// address `eligible` admits, then uniform over that host's eligible
+    /// ports: a host that advertises many ports is drawn no more often.
+    /// `eligible` is the dialer's candidate filter. `None` when nothing
+    /// is eligible.
+    pub fn draw_gray_where<R: RelayRng + ?Sized>(
+        &mut self,
+        connector: ConnectorId,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+        rng: &mut R,
+    ) -> Option<NetworkAddress> {
+        self.partition_mut(connector)
+            .draw_gray_candidate(eligible, rng)
+    }
+
+    /// One white dial candidate of `connector`, after demotion (D4) and
+    /// expiry at `now`, drawn as [`Self::draw_gray_where`] draws. A
+    /// re-contact draw: not a promotion.
+    pub fn draw_white_where<R: RelayRng + ?Sized>(
+        &mut self,
+        connector: ConnectorId,
+        now: Tick,
+        bans: &mut dyn BanQuery,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+        rng: &mut R,
+    ) -> Option<NetworkAddress> {
+        let partition = self.partition_mut(connector);
+        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
+        partition.expire(now, rng);
+        partition.draw_white_candidate(eligible, rng)
+    }
+
+    /// How many hosts [`Self::draw_gray_where`] could return.
+    #[must_use]
+    pub fn gray_candidates(
+        &self,
+        connector: ConnectorId,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+    ) -> usize {
+        self.partition(connector).candidate_hosts(false, eligible)
+    }
+
+    /// How many hosts [`Self::draw_white_where`] could return, after
+    /// demotion (D4) and expiry at `now`.
+    pub fn white_candidates<R: RelayRng + ?Sized>(
+        &mut self,
+        connector: ConnectorId,
+        now: Tick,
+        bans: &mut dyn BanQuery,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+        rng: &mut R,
+    ) -> usize {
+        let partition = self.partition_mut(connector);
+        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
+        partition.expire(now, rng);
+        partition.candidate_hosts(true, eligible)
+    }
+
     /// The only writer of white and the only drop of an outstanding gray
     /// draw (brief §5). The match is total: the seat, and, for a
     /// confirmation, whether the session stayed.

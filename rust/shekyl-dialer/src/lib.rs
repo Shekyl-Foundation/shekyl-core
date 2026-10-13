@@ -18,11 +18,15 @@
 
 #![deny(unsafe_code)]
 
+pub mod attempts;
+pub mod candidate;
 pub mod fill;
 pub mod memory;
 pub mod nonce;
 pub mod pace;
 
+pub use attempts::Attempts;
+pub use candidate::{CandidateFilter, Skip};
 pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan, IN_FLIGHT_BOUND};
 pub use memory::FailedAddresses;
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};

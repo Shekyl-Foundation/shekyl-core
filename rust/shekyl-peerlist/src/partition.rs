@@ -19,8 +19,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
-use shekyl_net_address::NetworkAddress;
-use shekyl_relay_privacy::{rng::RelayRng, ConnectionId};
+use shekyl_net_address::{Host, NetworkAddress};
+use shekyl_relay_privacy::{
+    rng::{bounded_uniform, RelayRng},
+    ConnectionId,
+};
 use shekyl_timing_engine::Tick;
 
 use crate::index::Index;
@@ -154,6 +157,79 @@ impl Partition {
         let chosen = self.pick_accepted(rng, |_, seat| matches!(seat, Seat::Gray));
         self.move_seat(&chosen, Seat::Outstanding);
         Some(chosen)
+    }
+
+    /// The dial candidates of one list, grouped by host: every address
+    /// `eligible` admits, under the host it names.
+    ///
+    /// A host that advertises many ports is one candidate (dialer brief,
+    /// "The candidate filter"), so the draw below is uniform over hosts
+    /// and then uniform over that host's eligible ports. It is not "the
+    /// first port in list order".
+    fn candidates_by_host(
+        &self,
+        white: bool,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+    ) -> BTreeMap<Host, Vec<&NetworkAddress>> {
+        let mut hosts: BTreeMap<Host, Vec<&NetworkAddress>> = BTreeMap::new();
+        for (address, seat) in self.seats.iter() {
+            let of_list = match seat {
+                Seat::Gray => !white,
+                Seat::White(_) => white,
+                Seat::Outstanding => false,
+            };
+            if of_list && eligible(address) {
+                hosts.entry(address.host()).or_default().push(address);
+            }
+        }
+        hosts
+    }
+
+    /// How many hosts the candidate draw could return from one list.
+    pub(crate) fn candidate_hosts(
+        &self,
+        white: bool,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+    ) -> usize {
+        self.candidates_by_host(white, eligible).len()
+    }
+
+    /// One candidate: a host uniform over the hosts with an eligible
+    /// address, then that host's port uniform over its eligible ports.
+    fn pick_candidate<R: RelayRng + ?Sized>(
+        &self,
+        white: bool,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+        rng: &mut R,
+    ) -> Option<NetworkAddress> {
+        let hosts = self.candidates_by_host(white, eligible);
+        let last = u64::try_from(hosts.len().checked_sub(1)?).ok()?;
+        let at = usize::try_from(bounded_uniform(rng, last)).ok()?;
+        let ports = hosts.values().nth(at)?;
+        let last = u64::try_from(ports.len().checked_sub(1)?).ok()?;
+        let at = usize::try_from(bounded_uniform(rng, last)).ok()?;
+        ports.get(at).map(|address| (*address).clone())
+    }
+
+    /// One gray candidate, remembered as an outstanding draw. `None` when
+    /// no drawable gray address is eligible.
+    pub(crate) fn draw_gray_candidate<R: RelayRng + ?Sized>(
+        &mut self,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+        rng: &mut R,
+    ) -> Option<NetworkAddress> {
+        let chosen = self.pick_candidate(false, eligible, rng)?;
+        self.move_seat(&chosen, Seat::Outstanding);
+        Some(chosen)
+    }
+
+    /// One white candidate. A re-contact draw, not a promotion.
+    pub(crate) fn draw_white_candidate<R: RelayRng + ?Sized>(
+        &self,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+        rng: &mut R,
+    ) -> Option<NetworkAddress> {
+        self.pick_candidate(true, eligible, rng)
     }
 
     /// One uniform white address. A re-contact draw, not a promotion.
