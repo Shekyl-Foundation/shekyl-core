@@ -879,10 +879,26 @@ difficulty_type Blockchain::get_difficulty_for_next_block()
   crypto::hash top_hash = get_tail_id();
   {
     CRITICAL_REGION_LOCAL(m_difficulty_lock);
-    // we can call this without the blockchain lock, it might just give us
-    // something a bit out of date, but that's fine since anything which
-    // requires the blockchain lock will have acquired it in the first place,
-    // and it will be unlocked only when called from the getinfo RPC
+    // Locking contract (verified at source 2026-10-13). The fast path takes
+    // only m_difficulty_lock; the slow path below takes m_blockchain_lock
+    // and then m_difficulty_lock to refill the cache, so the order is
+    // always chain lock, then difficulty lock, or the difficulty lock
+    // alone: no cycle. A caller that holds the chain lock reads a cache
+    // that cannot change under it, because every block add refills it
+    // under that lock: init, create_block_template,
+    // handle_block_to_main_chain, send_miner_notifications (both callers
+    // hold it) and get_info's chain snapshot, shekyl_rpc_info_chain
+    // (RK-5c, RK-D20), which takes the lock around every read it makes.
+    // A caller without the chain lock gets a value that may be one block
+    // out of date: the tail id above was read without it. Today those
+    // callers are the two C++ mining RPCs, mining_status and
+    // get_miner_data (RK-7). For mining_status that is an informational
+    // line and the staleness is fine, which is the reasoning this comment
+    // carried when get_info was the one unlocked caller. get_miner_data
+    // reads its tip, this difficulty and the coins generated without the
+    // lock, so one reply can pair one tip with another's difficulty across
+    // a block add; that is RK-7's to close by reading under one lock, and
+    // is not changed here.
     if (top_hash == m_difficulty_for_next_block_top_hash)
       return m_difficulty_for_next_block;
   }
