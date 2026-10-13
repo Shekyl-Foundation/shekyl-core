@@ -36,6 +36,8 @@
 //! not it passed, which is the design's own rule; pass and miss enter only
 //! through the `(m, n)` re-check, analytically.
 
+use core::convert::Infallible;
+
 use serde::Serialize;
 
 use shekyl_archival_retention::{
@@ -254,19 +256,20 @@ pub fn run_epoch(pairs: u32, dropout_permille: u32, in_flight: InFlight, seed: u
         capped_blocks += u64::from(capped_at(pairs, state.shortfall, pending, h));
         carry = next;
 
-        // Production's selection, called: each draw is `select_draw` on
-        // this block's seed, over which pairs are visibly short now.
+        // Production's selection. The short answer is this run's own
+        // count, so the read cannot fail: `Infallible` says so, and the
+        // `let` is irrefutable. `pairs > 0`, so the set is not empty.
         let seed = rng.bytes32();
         let mut block_hash = [0u8; 32];
         block_hash[..8].copy_from_slice(&h.to_le_bytes());
         let block_draws: Vec<u32> = (0..count)
             .map(|j| {
                 let draw = u32::try_from(j).expect("a block's draws fit the wire's u32");
-                let picked = select_draw(&seed, &block_hash, draw, u64::from(pairs), |i| {
-                    state.is_short(i)
-                })
-                .expect("the set is not empty");
-                picked.index as u32
+                let Ok(selected) = select_draw(&seed, &block_hash, draw, u64::from(pairs), |i| {
+                    Ok::<_, Infallible>(state.is_short(i))
+                });
+                let selected = selected.expect("the set is not empty");
+                selected.index as u32
             })
             .collect();
         drawn += count;
