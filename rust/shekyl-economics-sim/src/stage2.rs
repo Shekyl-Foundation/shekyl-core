@@ -2198,8 +2198,14 @@ mod tests {
     /// `cargo test --release -p shekyl-economics-sim -- --ignored
     /// matches_the_committed_fixture` (both arms). The nightly
     /// `economics-sim-ignored` job runs both.
+    ///
+    /// The committed fixtures are generated and checked on Linux x86-64.
+    /// The scenario layer calls `powf`, `exp` and `ln` (`burden.rs`,
+    /// `fee_floor.rs`, `fee_ladder.rs`, `mn_feasibility.rs`), whose last
+    /// bit can differ between C runtimes, and a last bit can move a printed
+    /// digit. The chain quantities are integers and do not (DQ-2G).
     #[test]
-    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored; nightly economics-sim-ignored"]
+    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored; nightly economics-sim-ignored; fixture generated and checked on Linux x86-64"]
     fn stage2_narration_matches_the_committed_fixture() {
         assert_narration_matches(&PRODUCTION_ARM);
     }
@@ -2210,7 +2216,7 @@ mod tests {
     /// and print its fee, and it moves only when a fold operand shared by
     /// both arms does.
     #[test]
-    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored; nightly economics-sim-ignored"]
+    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored; nightly economics-sim-ignored; fixture generated and checked on Linux x86-64"]
     fn stage2_narration_flat_control_matches_the_committed_fixture() {
         assert_narration_matches(&FLAT_CONTROL_ARM);
     }
