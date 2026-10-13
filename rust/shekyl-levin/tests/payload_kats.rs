@@ -23,12 +23,6 @@ use shekyl_portable_storage::{store_to_binary, Section, HEADER};
 fn node() -> BasicNodeData {
     BasicNodeData {
         network_id: [0x11; 16],
-        // The public-zone port-only advert: host zeroed, only the port is
-        // the claim.
-        address: NetworkAddress::Ipv4 {
-            ip: Ipv4Addr::new(0, 0, 0, 0),
-            port: 18_080,
-        },
         support_flags: SupportFlags::default(),
     }
 }
@@ -309,4 +303,27 @@ fn handshake_invoke_survives_bucket_reader() {
         other => panic!("unexpected {other:?}"),
     }
     assert_eq!(reader.next_message().expect("drain"), None);
+}
+
+/// The handshake carries no address on any connector (ruled 2026-10-09).
+/// `basic_node_data` never emits the key, and a peer that still sends it,
+/// as every node before the cutover does, is decoded with the key ignored.
+#[test]
+fn node_data_emits_no_address_and_ignores_one_a_peer_sends() {
+    let ours = node().to_section().expect("encode");
+    assert!(ours.get("address").is_none(), "no address key is emitted");
+
+    let mut theirs = node().to_section().expect("encode");
+    let old_advert = NetworkAddress::Ipv4 {
+        ip: Ipv4Addr::new(0, 0, 0, 0),
+        port: 18_080,
+    };
+    theirs.insert(
+        "address",
+        shekyl_portable_storage::Value::Object(old_advert.to_section().expect("address")),
+    );
+    assert_eq!(
+        BasicNodeData::from_section(&theirs).expect("decodes with the key ignored"),
+        node()
+    );
 }

@@ -128,28 +128,18 @@ namespace nodetool
     it holds. What a handshake can honestly establish is that THERE IS A
     PEER AT THIS ADDRESS.
 
-    `address` is that announcement — a hypothesis about WHERE this node can
-    be dialed, never a claim about WHO is there:
-    - public zone: a port-only advert (host zeroed). The receiver never
-      reads the advertised host half; it combines the advertised port with
-      the host it OBSERVED on the socket — an announcement proves nothing,
-      a dial proves reachability. The derived entry lands in gray and earns
-      white only by being dialed (PWD-I2).
-    - anonymity zones, serving: the zone's own self-address
-      (`zone.m_our_address`), dialable — the only verification an overlay
-      address admits.
-    - dialer-only / hidden: the zone's unknown-address sentinel, recorded
-      nowhere (undialable). The address's type tag reveals only the zone,
-      which the acceptor already knows from its own listener. */
+    The handshake carries no address on any connector (ruled 2026-10-09).
+    A node's own dialable address reaches peers only as one uniform member
+    of its disclosure sample, so a handshake has no field that could join
+    a hidden identity to a clearnet one. A peer that still sends `address`
+    is read with the key ignored. */
   struct basic_node_data
   {
     uuid network_id;
-    epee::net_utils::network_address address;
     uint32_t support_flags;
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE_VAL_POD_AS_BLOB(network_id)
-      KV_SERIALIZE(address)
       KV_SERIALIZE_OPT(support_flags, (uint32_t)0)
     END_KV_SERIALIZE_MAP()
   };

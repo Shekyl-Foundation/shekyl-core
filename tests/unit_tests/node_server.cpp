@@ -762,37 +762,6 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   EXPECT_EQ(-1, omitted->front().max_connections);
 }
 
-TEST(node_server, an_advert_contributes_its_port_and_never_its_host)
-{
-  // The receive-side discipline, at the seam that owns it. An announcement
-  // is a claim about WHERE a peer can be dialed and only its PORT is
-  // admissible; the host is the one this node OBSERVED on the socket.
-  // `derive_advertised_endpoint` takes the two as separate inputs, so a
-  // caller cannot pass the advertised host where the observed one belongs --
-  // there is nowhere to put it. This is the POSITIVE limb; the live
-  // `dual_stack` run carries the negative one (a lying host never appears in
-  // a readout) but cannot carry this one, because a loopback-bound test
-  // daemon's derived entry is refused by `is_host_allowed` before it can be
-  // observed.
-  const epee::net_utils::network_address observed{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 44444)};
-  const epee::net_utils::network_address expected{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 28099)};
-
-  const auto derived = nodetool::derive_advertised_endpoint(observed, 28099);
-  ASSERT_TRUE(bool(derived));
-  EXPECT_EQ(expected.str(), derived->str())
-    << "the endpoint must be the OBSERVED host with the ADVERTISED port";
-  // The socket's own ephemeral port is not the claim either.
-  EXPECT_NE(observed.str(), derived->str());
-
-  // A zero port is not dialable, so there is nothing to record.
-  EXPECT_FALSE(bool(nodetool::derive_advertised_endpoint(observed, 0)));
-
-  // An anonymity-zone remote carries no host to re-port: those self-addresses
-  // travel as timed-sync peerlist entries, never through this path.
-  EXPECT_FALSE(bool(nodetool::derive_advertised_endpoint(
-    epee::net_utils::network_address{net::tor_address::unknown()}, 28099)));
-}
-
 TEST(node_server, same_host_outbound_cap_matches_host_and_only_outbound)
 {
   // The cap is the load-bearing replacement for peer_id's duplicate-detection
@@ -1021,11 +990,13 @@ TEST(node_server, anonymity_zone_announces_the_constant_unknown_address)
 {
   // Successor of the Q12-R-W3 sentinel-peer_id pin, for the identifier-free
   // handshake (PWD-I1): nothing announced on an anonymity zone may carry
-  // entropy. `basic_node_data.address` is now the ONLY announced value, and
-  // a dialer-only tor zone must announce the zone's CONSTANT unknown
-  // sentinel — equal for every node, linking nothing. A per-node value here
-  // (an onion, a random address) would correlate this node's hidden-service
-  // activity with its clearnet identity exactly as a random peer_id did.
+  // entropy. The handshake carries no address since 2026-10-09; what this
+  // node would announce is `get_announced_address`, which reaches peers only
+  // as one member of the disclosure sample. A dialer-only tor zone's value
+  // there must be the zone's CONSTANT unknown sentinel — equal for every
+  // node, linking nothing. A per-node value (an onion, a random address)
+  // would correlate this node's hidden-service activity with its clearnet
+  // identity exactly as a random peer_id did.
   struct test_data_t
   {
     test_core pr_core;

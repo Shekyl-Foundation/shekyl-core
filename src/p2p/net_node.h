@@ -107,22 +107,6 @@ namespace nodetool
   std::optional<std::vector<proxy>> get_proxies(const boost::program_options::variables_map& vm);
   std::optional<std::vector<anonymous_inbound>> get_anonymous_inbounds(const boost::program_options::variables_map& vm);
 
-  /*! Combine the host this node OBSERVED on the socket with the port a peer
-    ADVERTISED, or nothing if no endpoint can be derived.
-
-    The advertised host is not a parameter, which is the point: a peer's
-    announcement is a claim about WHERE it can be dialed, and only the port
-    half of that claim is admissible — the host is the one we observed. A
-    caller cannot pass the advertised host where the observed one belongs
-    because there is nowhere to put it. `handle_handshake` reads
-    `node_data.address.port()` and this `observed` from the connection.
-
-    \return nothing for a zero port (undialable) or an `observed` address
-      whose type carries no host we can re-port (the anonymity zones, whose
-      self-addresses travel as peerlist entries instead). */
-  std::optional<epee::net_utils::network_address> derive_advertised_endpoint(
-    const epee::net_utils::network_address& observed, uint16_t advertised_port);
-
   /*! Does an existing connection consume `candidate`'s host for outbound use?
 
     The same-host outbound cap's per-connection test, named so it can be
@@ -507,7 +491,7 @@ namespace nodetool
     void get_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
 
     uint32_t get_announced_port(epee::net_utils::connector_id zone) const;
-    //! \return The address `get_local_node_data` would announce for `zone` —
+    //! \return This node's own dialable address on `zone`, or its placeholder —
     //! the derived advertisement's observable (there is no dedicated flag,
     //! and no identifier, so the announced value is the only witness). On an
     //! anonymity zone run dialer-only it is the zone's CONSTANT unknown

@@ -331,20 +331,6 @@ namespace nodetool
         return inbounds;
     }
 
-    std::optional<epee::net_utils::network_address> derive_advertised_endpoint(
-    const epee::net_utils::network_address& observed, const uint16_t advertised_port)
-  {
-    if (advertised_port == 0)
-      return std::nullopt; // not dialable
-    if (observed.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-      return epee::net_utils::network_address{epee::net_utils::ipv4_network_address(
-        observed.as<epee::net_utils::ipv4_network_address>().ip(), advertised_port)};
-    if (observed.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
-      return epee::net_utils::network_address{epee::net_utils::ipv6_network_address(
-        observed.as<epee::net_utils::ipv6_network_address>().ip(), advertised_port)};
-    return std::nullopt;
-  }
-
   std::set<std::string> local_interface_hosts()
   {
     std::set<std::string> hosts;

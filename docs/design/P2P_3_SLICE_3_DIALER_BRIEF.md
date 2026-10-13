@@ -482,6 +482,19 @@ whether the onion stays per-boot (PWD-E7). This ruling replaces the
 section that follows, kept as records-was of what `get_local_node_data`
 does on `dev`.
 
+**Mixed versions on the running testnet (checked 2026-10-13, PR-3).**
+epee's `serialize_map<false>` discards each field's load result and
+`END_KV_SERIALIZE_MAP` returns true, so an alpha node that receives a
+handshake with no `address` reads it as the default address (type
+invalid, port 0): `derive_advertised_endpoint(observed, 0)` is
+nothing, and nothing is recorded. A PR-3 node reading an alpha
+handshake ignores the key: `find_storage_entry` looks up only the
+names asked for, and the Rust codec's `from_section` does the same.
+The handshake interoperates both ways. What does not is the peerlist
+count: an alpha node sends up to 250 entries and a PR-3 node refuses a
+list over `DISCLOSE_COUNT` (12), so the release notes must ask testnet
+operators to upgrade together.
+
 **The address we announce — SUPERSEDED 2026-10-09 (records-was).**
 `get_local_node_data`
 (`net_node.inl:2477`) writes it. The address is this node's own
@@ -730,9 +743,11 @@ and nothing else. Each is a call into Rust. None returns list state for
 the C++ to hold.
 
 - `admit_gray`, called on a received peerlist (`handle_remote_peerlist`,
-  `net_node.inl:2448`), on an inbound advertisement (`:2831`, today
-  `append_with_peer_gray`), and for `--add-peer` (`:1098`, today
-  `append_operator_candidate`).
+  one call into `shekyl_peerlist_admit_received` since 2026-10-13) and
+  for `--add-peer` (today `append_operator_candidate`). *Records-was:
+  also on an inbound advertisement; the handshake carries no address
+  since 2026-10-09, and that read is deleted (2026-10-13), so the call
+  has no input.*
 - `disclose`, called for the inbound handshake response and the
   timed-sync response.
 - `shekyl_dial_take_handshake_nonce`, the inbound `detect_self_handshake`
@@ -854,6 +869,7 @@ keep the callers named below.
 | `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:303` | The function remains and returns the channel without waiting for the handler to arm. `rg -n -e shekyl_seam_open rust/shekyl-ffi/src/seam_ffi.rs` still hits the definition. Zero hits fails |
 | `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |
+| `node_data.address` (handshake-address ruling, 2026-10-09; deleted 2026-10-13) | The field in `basic_node_data` (`p2p_protocol_defs.h`), written by `get_local_node_data`, read by `handle_handshake` through `derive_advertised_endpoint` (`net_node.cpp`, declared `net_node.h`) and by `get_announced_address` / `get_announced_port`. The Rust codec's `BasicNodeData.address` and its fixtures go with it; the two announce getters compute the address directly and stay, for the operator log line and the tests | `rg -n -e derive_advertised_endpoint -e 'node_data.address' src tests rust` returns nothing. `rg -n -e get_announced_address src/p2p` still hits the declaration, the definition and `get_announced_port`; zero hits fails, because the getter was kept. The harness goldens are re-recorded from the seam in the same commit, 44 bytes shorter per handshake |
 | The timed-sync self-insertion (handshake-address ruling, 2026-10-09) | `net_node.inl:2717` to `:2735`: `outgoing_to_same_zone`, the `max_peerlist_size` subtraction, and the `local_peerlist_new.insert` of `zone.m_our_address` | `rg -n -e outgoing_to_same_zone src/p2p` returns nothing. Before deletion it hits `:2717`, `:2718` and `:2730` |
 | `peerlist_manager::is_host_allowed` and `m_allow_local_ip` (address-validity ruling, 2026-10-11) | `net_peerlist.h:273` and `:201`; they go with the C++ peerlist (slice 1 §11.4). The flag stays: `arg_p2p_allow_local_ip` (`net_node.cpp:123`) is read at `net_node.inl:486` through `shekyl_peerlist_allow_local_ip`, which makes it the Rust peer lists' constructor input (2026-10-13); `peerlist_manager::init` (`:1078`) stops reading it when the C++ peerlist goes. *Records-was: `sanitize_peerlist` was named here as not in this table, staying until slice 4; it has its own row below (2026-10-13).* | `rg -n -e is_host_allowed -e m_allow_local_ip src/p2p` returns nothing. `rg -n -e allow_local_ip src/p2p` still hits the argument and its read; zero hits fails, because the override was kept |
 | `sanitize_peerlist`, the `P2P_MAX_PEERS_IN_HANDSHAKE` check and the per-entry connector loop in `handle_remote_peerlist` (Rick, 2026-10-13) | *Records-was* definition `net_node.inl:2417`, declaration `net_node.h:510`, the check and the loop in `handle_remote_peerlist`. Rust holds every rule; the handler is one call | `rg -n -e sanitize_peerlist src/p2p` returns nothing. `rg -n -e P2P_MAX_PEERS_IN_HANDSHAKE src/p2p` returns nothing; the define stays in `cryptonote_config.h` as an input of the Levin ingress byte bound (`shekyl-levin/src/ingress.rs`, `check_levin_constant_parity.sh`). `rg -n -e handle_remote_peerlist src/p2p` still matches the declaration, the definition and its two callers until slice 4 |

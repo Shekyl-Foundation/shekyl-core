@@ -51,17 +51,15 @@ impl SupportFlags {
 /// `nodetool::basic_node_data` (`p2p_protocol_defs.h`).
 ///
 /// There is deliberately no node identifier here (the PWD-I1 amendment,
-/// `SHEKYL_P2P_PROTOCOL.md`): the handshake announces WHERE — an address
-/// that absorbs the old `my_port` — never WHO.
+/// `SHEKYL_P2P_PROTOCOL.md`), and no address either (ruled 2026-10-09):
+/// the handshake carries no address field on any connector. A node's own
+/// dialable address reaches peers only as one uniform member of its
+/// disclosure sample. A peer that still sends `address` is decoded with
+/// the key ignored; nothing is ever emitted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BasicNodeData {
     /// `network_id` POD-as-blob (`boost::uuids::uuid`, 16 bytes).
     pub network_id: [u8; 16],
-    /// The announced address: port-only on the public zone (host zeroed —
-    /// the receiver never reads it, combining the port with the host it
-    /// observed on the socket), the zone self-address on serving anonymity
-    /// zones, the zone's unknown sentinel for dialer-only nodes.
-    pub address: NetworkAddress,
     /// `KV_SERIALIZE_OPT` default 0.
     pub support_flags: SupportFlags,
 }
@@ -70,7 +68,6 @@ impl PortableMap for BasicNodeData {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
         section.insert("network_id", Value::Bytes(self.network_id.to_vec()));
-        section.insert("address", Value::Object(self.address.to_section()?));
         get::insert_opt_u32(&mut section, "support_flags", self.support_flags.bits(), 0);
         Ok(section)
     }
@@ -78,7 +75,6 @@ impl PortableMap for BasicNodeData {
     fn from_section(section: &Section) -> Result<Self, Error> {
         Ok(Self {
             network_id: get::blob(section, "network_id")?,
-            address: NetworkAddress::from_section(get::object(section, "address")?)?,
             support_flags: SupportFlags::from_bits(get::opt_u32(section, "support_flags", 0)?),
         })
     }

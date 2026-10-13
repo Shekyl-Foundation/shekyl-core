@@ -246,6 +246,11 @@ round. What follows is where each of the three categories comes from.
 
 ### 2.6.1 The claim already travels, and the acceptor already parses it
 
+*Records-was (2026-10-13): the handshake carries no address since the
+2026-10-09 ruling, and PR-3 deleted the field, `derive_advertised_endpoint`
+and the inbound advertisement's gray write. The analysis below is kept as
+the record of what the acceptor parsed at the time.*
+
 A node announces one of two things about itself in `basic_node_data.address`
 (`p2p_protocol_defs.h`), and **which one is already the category signal**:
 

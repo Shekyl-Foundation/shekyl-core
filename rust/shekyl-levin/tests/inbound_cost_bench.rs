@@ -79,9 +79,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_levin::{
-    invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, NetworkAddress,
-    PortableMap, Received, SupportFlags, SupportFlagsRequest, SupportFlagsResponse,
-    COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS,
+    invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, PortableMap,
+    Received, SupportFlags, SupportFlagsRequest, SupportFlagsResponse, COMMAND_HANDSHAKE,
+    COMMAND_REQUEST_SUPPORT_FLAGS,
 };
 
 /// Inbound counts to sample. The first is the baseline; every later row's
@@ -261,11 +261,7 @@ fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
 /// The servicing thread is not incidental: an unanswered `COMMAND_TIMED_SYNC`
 /// gets the peer dropped, and a dropped peer costs nothing — it would measure
 /// as a free connection and understate every figure in the table.
-fn spawn_peer(
-    p2p_port: u16,
-    advertised_port: u16,
-    stop: Arc<AtomicBool>,
-) -> std::thread::JoinHandle<bool> {
+fn spawn_peer(p2p_port: u16, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<bool> {
     std::thread::spawn(move || {
         let Ok(stream) = TcpStream::connect(("127.0.0.1", p2p_port)) else {
             return false;
@@ -279,10 +275,6 @@ fn spawn_peer(
         let req = HandshakeRequest {
             node_data: BasicNodeData {
                 network_id: regtest_network_id(),
-                address: NetworkAddress::Ipv4 {
-                    ip: Ipv4Addr::new(9, 9, 9, 9),
-                    port: advertised_port,
-                },
                 support_flags: SupportFlags::ADVERTISED,
             },
             payload_data: CoreSyncData {
@@ -375,8 +367,7 @@ fn inbound_connection_cost_table() {
 
     for &n in STEPS {
         while handles.len() < n {
-            let port = 30_000u16.wrapping_add(u16::try_from(handles.len()).unwrap_or(0));
-            handles.push(spawn_peer(daemon.p2p_port, port, Arc::clone(&stop)));
+            handles.push(spawn_peer(daemon.p2p_port, Arc::clone(&stop)));
             std::thread::sleep(Duration::from_millis(25));
         }
         // Settle: buffers allocate on use, not on accept.

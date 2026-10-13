@@ -2404,51 +2404,6 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::get_local_node_data(const epee::net_utils::connector_id zone_type, basic_node_data& node_data, const network_zone& zone) const
   {
-    // The announcement is an ADDRESS -- a hypothesis about WHERE this node
-    // can be dialed, never a claim about who it is (see basic_node_data).
-    //
-    // Announce only where a peer could actually reach us. There is no
-    // dedicated advertisement flag; operator influence is the supported,
-    // derived kind: `--in-peers 0` sets `max_in_connection_count` to zero
-    // and thereby suppresses the announcement -- the decision follows from
-    // the node's reachability, and an operator changes it by changing that
-    // reachability, not by asserting a different answer.
-    // `m_can_announce` is the PUBLIC zone's reachability flag (it is what the
-    // deleted back-ping's pingback capability became). An anonymity zone's
-    // reachability is its configured self-address instead: a serving zone has
-    // one because `--anonymous-inbound` gave it one, so gating it on the
-    // public flag would silently announce the unknown sentinel from a node
-    // that is in fact reachable.
-    const bool zone_is_reachable = (zone_type == epee::net_utils::connector_id::clearnet)
-      ? zone.m_can_announce
-      : (zone.m_our_address.get_type_id() != epee::net_utils::address_type::invalid);
-    if (zone_is_reachable && zone.m_config.m_net_config.max_in_connection_count > 0)
-    {
-      if (zone_type == epee::net_utils::connector_id::clearnet)
-      {
-        // Port-only advert: the host half is zeroed and carries no meaning
-        // -- the receiver never reads it, combining this port with the host
-        // it observed on its own socket. Only the port is the claim.
-        const uint32_t port = m_external_port ? m_external_port : m_listening_port;
-        node_data.address = epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, port)};
-      }
-      else
-        node_data.address = zone.m_our_address;
-    }
-    else
-    {
-      // Dialer-only on this zone: announce the zone's unknown-address
-      // sentinel. Undialable, and never recorded by any receiver.
-      switch (zone_type)
-      {
-        case epee::net_utils::connector_id::tor:
-          node_data.address = net::tor_address::unknown();
-          break;
-        default:
-          node_data.address = epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, 0)};
-          break;
-      }
-    }
     node_data.network_id = m_network_id;
     node_data.support_flags = zone.m_config.m_support_flags;
     return true;
@@ -2641,26 +2596,8 @@ namespace nodetool
     const epee::net_utils::connector_id zone_type = epee::net_utils::require_session_connector(context.m_connector);
     network_zone& zone = m_network_zones.at(zone_type);
 
-    //will add self to peerlist if in same zone as outgoing later in this function
-    const bool outgoing_to_same_zone = !context.m_is_income && zone.m_our_address.connector() == zone_type;
-    const uint32_t max_peerlist_size = P2P_DEFAULT_PEERS_IN_HANDSHAKE - (outgoing_to_same_zone ? 1 : 0);
-
     std::vector<peerlist_entry> local_peerlist_new;
-    zone.m_peerlist.get_peerlist_head(local_peerlist_new, true, max_peerlist_size);
-
-    /* Tor nodes receiving connections via forwarding (from Tor daemon)
-    do not know the address of the connecting peer. This is relayed to them,
-    iff the node has setup an inbound hidden service.
-
-    \note Insert into `local_peerlist_new` so that it is only sent once like
-      the other peers. */
-    if(outgoing_to_same_zone)
-    {
-      local_peerlist_new.insert(
-        local_peerlist_new.begin() + crypto::rand_range(std::size_t(0), local_peerlist_new.size()),
-        peerlist_entry{zone.m_our_address, 0}
-      );
-    }
+    zone.m_peerlist.get_peerlist_head(local_peerlist_new, true);
 
     //only include out peers we did not already send
     rsp.local_peerlist_new.reserve(local_peerlist_new.size());
@@ -2738,29 +2675,6 @@ namespace nodetool
     context.m_in_timedsync = false;
     context.support_flags = arg.node_data.support_flags;
 
-    // An advert is a claim about WHERE this peer can be dialed, and only its
-    // PORT is admissible: the host is the one this node OBSERVED on the
-    // socket, which is why `derive_advertised_endpoint` takes the two as
-    // separate inputs -- the advertised host has nowhere to go. The derived
-    // entry enters GRAY (white is earned by an actual outbound dial), and a
-    // wrong port costs that later dial nothing but the failure that evicts
-    // the entry. Gray is never disclosed to peers, so an unverified entry
-    // poisons no view but our own, for one dial. Anonymity-zone
-    // self-addresses are not derivable from a socket and travel as
-    // timed-sync peerlist self-announcements instead.
-    {
-      const auto derived = derive_advertised_endpoint(
-        context.m_remote_address, arg.node_data.address.port());
-      if (derived)
-      {
-        peerlist_entry pe{};
-        pe.adr = *derived;
-        pe.last_seen = 0; // an unverified claim has never been "seen"
-        zone.m_peerlist.append_with_peer_gray(pe);
-      }
-    }
-
-    
     if (context.support_flags == 0)
       try_get_support_flags(context, [](p2p_connection_context& flags_context, const uint32_t& support_flags) 
       {
@@ -3126,7 +3040,10 @@ namespace nodetool
   template<class t_payload_net_handler>
   epee::net_utils::network_address node_server<t_payload_net_handler>::get_announced_address(const epee::net_utils::connector_id zone) const
   {
-    /* The address `get_local_node_data` puts on the wire for this zone.
+    /* This node's own dialable address on this zone, or the zone's
+       undialable placeholder when it is not reachable there. No handshake
+       carries it (ruled 2026-10-09): it reaches peers only as one uniform
+       member of this node's disclosure sample.
        On an anonymity zone run dialer-only this is the zone's CONSTANT
        unknown sentinel — equal for every node, carrying no entropy and
        linking nothing, which is the property the deleted per-zone
@@ -3134,24 +3051,58 @@ namespace nodetool
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
       return {};
-    basic_node_data node_data{};
-    get_local_node_data(zone, node_data, found->second);
-    return node_data.address;
+    // Announce only where a peer could actually reach us. There is no
+    // dedicated advertisement flag; operator influence is the supported,
+    // derived kind: `--in-peers 0` sets `max_in_connection_count` to zero
+    // and thereby suppresses the announcement -- the decision follows from
+    // the node's reachability, and an operator changes it by changing that
+    // reachability, not by asserting a different answer.
+    // `m_can_announce` is the PUBLIC zone's reachability flag (it is what the
+    // deleted back-ping's pingback capability became). An anonymity zone's
+    // reachability is its configured self-address instead: a serving zone has
+    // one because `--anonymous-inbound` gave it one, so gating it on the
+    // public flag would silently announce the unknown sentinel from a node
+    // that is in fact reachable.
+    const bool zone_is_reachable = (zone == epee::net_utils::connector_id::clearnet)
+      ? found->second.m_can_announce
+      : (found->second.m_our_address.get_type_id() != epee::net_utils::address_type::invalid);
+    if (zone_is_reachable && found->second.m_config.m_net_config.max_in_connection_count > 0)
+    {
+      if (zone == epee::net_utils::connector_id::clearnet)
+      {
+        // The port this node listens on, with the host half zeroed: this
+        // node does not know the host its peers see it at.
+        const uint32_t port = m_external_port ? m_external_port : m_listening_port;
+        return epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, port)};
+      }
+      else
+        return found->second.m_our_address;
+    }
+    else
+    {
+      // Dialer-only on this zone: announce the zone's unknown-address
+      // sentinel. Undialable, and never recorded by any receiver.
+      switch (zone)
+      {
+        case epee::net_utils::connector_id::tor:
+          return net::tor_address::unknown();
+        default:
+          return epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, 0)};
+      }
+    }
   }
 
   template<class t_payload_net_handler>
   uint32_t node_server<t_payload_net_handler>::get_announced_port(const epee::net_utils::connector_id zone) const
   {
-    /* The port `get_local_node_data` would put on the wire for this zone.
+    /* The port of `get_announced_address` for this zone.
        Named so the derived advertisement has something a test can observe:
        the decision has no dedicated flag any more, so there is nothing to
        assert on but the announced value itself. */
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
       return 0;
-    basic_node_data node_data{};
-    get_local_node_data(zone, node_data, found->second);
-    return node_data.address.port();
+    return get_announced_address(zone).port();
   }
 
   template<class t_payload_net_handler>
