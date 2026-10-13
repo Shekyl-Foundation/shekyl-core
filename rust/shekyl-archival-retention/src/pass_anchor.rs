@@ -29,6 +29,8 @@
 //! let _ = PassRequestHeader::from_parts([0u8; 32], ChainCount::from_raw(1), [0u8; 32]);
 //! ```
 
+use core::num::NonZeroU64;
+
 use shekyl_types::{BlockCount, BlockHeight};
 
 use sha3::digest::core_api::CoreWrapper;
@@ -106,13 +108,7 @@ pub const PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT: BlockHeight = {
 /// have a window satisfies it: no bundle is admissible under it at all.
 #[must_use]
 pub const fn anchor_depth_covers_response_window(schedule: crate::SettlementSchedule) -> bool {
-    match schedule.challenge_response_blocks() {
-        None => true,
-        Some(window) => match window.get().checked_add(PASS_ANCHOR_LAG_BLOCKS.to_raw()) {
-            Some(reach) => reach <= PASS_ANCHOR_DEPTH_BLOCKS.to_raw(),
-            None => false,
-        },
-    }
+    response_window_outrunning_anchor(schedule).is_none()
 }
 
 // The production triple, asserted where the anchor's constants are. A
@@ -125,6 +121,32 @@ const _: () = assert!(
      carry an anchor at or above the block it answers for, and bundle admission refuses \
      anchor_height >= h (ARCHIVAL_SERVE_CREDIT_SPEC.md SCS-P32); re-pin one with the others"
 );
+
+/// The response window that outruns the anchor depth under `schedule`,
+/// when one does: `Some(W₂)` where `W₂ + L >` anchor depth, `None` where
+/// the relation holds. The one body behind
+/// [`anchor_depth_covers_response_window`]; a caller that must *name* the
+/// offending window — a rule set's typed refusal of an epoch — reads it
+/// here, so the window it reports is the window that failed and never a
+/// stand-in.
+///
+/// A schedule too short to have a window is `None`: the relation holds
+/// vacuously (no bundle is admissible under it), and there is no window to
+/// name. Absence is `None`, not a zero (rule 43).
+#[must_use]
+pub const fn response_window_outrunning_anchor(
+    schedule: crate::SettlementSchedule,
+) -> Option<NonZeroU64> {
+    match schedule.challenge_response_blocks() {
+        None => None,
+        Some(window) => match window.get().checked_add(PASS_ANCHOR_LAG_BLOCKS.to_raw()) {
+            Some(reach) if reach <= PASS_ANCHOR_DEPTH_BLOCKS.to_raw() => None,
+            // Past the depth, or `W₂ + L` does not fit a `u64`: either way
+            // the window reaches past the anchor.
+            Some(_) | None => Some(window),
+        },
+    }
+}
 
 /// Heights (and hashes) in one window: `L + 1`.
 pub const PASS_ANCHOR_WINDOW_LEN: usize = {
@@ -624,5 +646,58 @@ mod tests {
                 got: 6
             }
         );
+    }
+
+    /// The window a refusal names is the window that outran the anchor,
+    /// and nothing else: `None` where the relation holds, including the
+    /// epoch too short to have a window, and `Some(W₂)` — the schedule's
+    /// own window — from the first epoch whose `W₂ + L` passes the depth.
+    /// The boolean predicate is this read's `is_none`. Red edits: `<` for
+    /// `<=` names the boundary window; `None` for the overflow arm
+    /// accepts a `W₂ + L` that does not fit a `u64`.
+    #[test]
+    fn the_outrunning_window_is_the_schedules_own_or_none() {
+        use crate::constants::W2_EPOCH_DIVISOR;
+        use crate::SettlementSchedule;
+        use shekyl_types::archival::SettlementEpochBlocks;
+
+        let schedule =
+            |seb: u64| SettlementSchedule::new(SettlementEpochBlocks::new(seb).expect("non-zero"));
+        let depth = PASS_ANCHOR_DEPTH_BLOCKS.to_raw();
+        let lag = PASS_ANCHOR_LAG_BLOCKS.to_raw();
+        // The widest window the depth covers, and the last epoch that has it.
+        let widest = depth - lag;
+        let last_covered = (widest + 1) * W2_EPOCH_DIVISOR - 1;
+        let first_past = last_covered + 1;
+
+        assert_eq!(
+            response_window_outrunning_anchor(SettlementSchedule::GENESIS),
+            None
+        );
+        assert!(anchor_depth_covers_response_window(
+            SettlementSchedule::GENESIS
+        ));
+
+        let windowless = schedule(W2_EPOCH_DIVISOR - 1);
+        assert_eq!(windowless.challenge_response_blocks(), None);
+        assert_eq!(response_window_outrunning_anchor(windowless), None);
+        assert!(anchor_depth_covers_response_window(windowless));
+
+        assert_eq!(
+            schedule(last_covered).challenge_response_blocks(),
+            NonZeroU64::new(widest)
+        );
+        assert_eq!(
+            response_window_outrunning_anchor(schedule(last_covered)),
+            None
+        );
+
+        for seb in [first_past, first_past * 3, u64::MAX] {
+            let named = response_window_outrunning_anchor(schedule(seb))
+                .expect("an epoch this long outruns the anchor");
+            assert_eq!(Some(named), schedule(seb).challenge_response_blocks());
+            assert!(named.get() > widest, "SEB {seb}");
+            assert!(!anchor_depth_covers_response_window(schedule(seb)));
+        }
     }
 }
