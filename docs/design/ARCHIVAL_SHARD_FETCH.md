@@ -52,8 +52,11 @@ decoded 72-byte header ‖ `shard_id_le[8]` ‖ a nonce-salted digest of the
 delivered response (the digest term AMENDED 2026-10-04); admission looks
 the anchor hash up on the connecting chain inside `[h−720−L, h−720]`; the
 challenge tuple and `cb_out_key` are not in the fetch signature; the
-response body is the unchanged `RF-D4` frame followed by an outer binary
-envelope carrying the canonical `HybridSignature`) — the
+response body is the shard body (`shekyl_wire::shard_frame` since the
+2026-10-08 amendment) followed by an outer binary envelope of the bound
+scheme's width — the live binding carries the canonical `HybridSignature`
+at `IDENTITY_ENVELOPE_LEN` (3,385), and the receipt width is staged and
+not selected (AMENDED 2026-10-13)) — the
 things an implementer would otherwise have decided silently at the
 keyboard. Crate home is `SF-D4` (RULED). Virt-port is `SF-D5` (RULED:
 80, home `shekyl-curve-tree`). Outbound SOCKS reuse is `SF-D2`. SOCKS
@@ -191,7 +194,7 @@ inherited as "the client waits."
 | **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret (LANDED 2026-10-06, `SH2_RESIDENT_KEY_AUDIT.md`: in-actor sign, weak handle). The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
 | **The signed message is the decoded header ‖ `shard_id_le[8]` ‖ the delivery digest: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ D[32]`** (112 bytes) — requester-random, the requester's chain anchor at `tip − 720`, the `u64` `P` parsed from `/shard/{id}`, then `D = cSHAKE256("shekyl/archival-pass-delivery-digest-v1", nonce ‖ framed)[..32]` over the exact response body ahead of the signature, under `shekyl/archival-attestation-scheme-v3` (the v1 nonce-only and v2 digest-less domains are retired). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard; `D` commits the signature to the bytes delivered under this nonce. The pass record **carries** `nonce`, `anchor_height` and `D` (none is recomputable at admission); admission rebuilds the transcript with the connecting chain's hash at `anchor_height`, requires `anchor_height ∈ [h − 720 − L, h − 720]` with `h` the validated predecessor, and refuses every pass record while `h < 720 + L` (724). Domain string, fixture, and boundary KATs (723/724) LANDED 2026-09-13 by (a0); the `D` term and the v3 domain RULED and LANDED 2026-10-04 | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 (×2), 2026-10-04; LANDED |
 | **Inner frame — RETIRED 2026-10-08:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding), codec owned by `shekyl-curve-tree`, is deleted; the body ahead of the envelope is the `SHT-Q2` tx-range body framed per transaction in `shekyl_wire::shard_frame`, and the serve loop writes the provider's bytes unframed (`SF-D8` amendment 2026-10-08) | `RF-D4` (retired), `SF-D8` |
-| **Response carrier:** the HTTP body is the shard body (`shekyl_wire::shard_frame` since the 2026-10-08 amendment; ~~the unchanged `RF-D4` frame~~), then an outer binary envelope carrying the canonical `HybridSignature` (both legs, fixed length) as the response's **last** bytes: the signature covers a digest of everything ahead of it. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers envelope plus frame. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13; AMENDED 2026-10-04 |
+| **Response carrier:** the HTTP body is the shard body (`shekyl_wire::shard_frame` since the 2026-10-08 amendment; ~~the unchanged `RF-D4` frame~~), then an outer binary envelope of the bound scheme's canonical width as the response's **last** bytes. The live binding carries the canonical `HybridSignature` (both legs, `IDENTITY_ENVELOPE_LEN` = 3,385). The receipt scheme's width (1,356) is staged and not selected (AMENDED 2026-10-13). The signature covers a digest of everything ahead of it. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers the body plus that envelope. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13; AMENDED 2026-10-04; AMENDED 2026-10-13 |
 | Padding field reserved, no scheme; TJ-H mitigation at the Tor layer (vanguards on the **wallet** serve path) | TJ-H (ruled 2026-08-08) |
 | Server bind `127.0.0.1:0`; reachability is `ADD_ONION` | `RF-R1`, `shekyl-p-host` |
 | SP-T3's numbers measured persona→persona and must re-base daemon→wallet before promotion | `EU-D1` consequence 4 |
@@ -1401,8 +1404,9 @@ regenerator with the decision-log entry of 2026-10-04. The digest has
 its own independent pins (computed outside the crate) in
 `tests/attestation_wire_kat.rs`. The `P`-side gate and header parse are (a)'s.
 
-**Response carrier — RULED 2026-09-13; AMENDED 2026-10-04; LANDED
-(`SIGNATURE_ENVELOPE_LEN` on both ends).** `RF-D4`'s
+**Response carrier — RULED 2026-09-13; AMENDED 2026-10-04 (the digest)
+and 2026-10-13 (the envelope's width is the bound scheme's); LANDED.**
+`RF-D4`'s
 `ServedFrameHeader` contains only `leaf_count` and `padding_len` and
 the pre-(a) HTTP response carried no countersignature, so the signature
 needed a home that is neither the inner frame nor a header:
@@ -1410,8 +1414,17 @@ needed a home that is neither the inner frame nor a header:
 - **Carrier:** the HTTP body is the shard body (since 2026-10-08
   `shekyl_wire::shard_frame`; ~~the existing `ServedFrameHeader` and
   segment bytes~~), followed by an outer binary response envelope carrying
-  the canonical `HybridSignature` (both legs, the fixed canonical length
-  from `shekyl-crypto-pq`) as the response's **last** bytes.
+  the canonical signature of the scheme the target is bound to, at that
+  scheme's canonical length, as the response's **last** bytes. The width
+  is `PassVerifyingKey::ENVELOPE_LEN` on the fetch side and `W` on
+  `PassSigner<W>` on the serve side. **AMENDED 2026-10-13:** the live
+  binding, on both ends, is the identity scheme — `HybridSignature`,
+  `IDENTITY_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN` (3,385). The
+  receipt scheme's width (`RECEIPT_ENVELOPE_LEN`, 1,356,
+  `FnDsaHybridSignature`) is built and **STAGED**; no production target
+  or endpoint is bound at it ([`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §9).
+  The single global `SIGNATURE_ENVELOPE_LEN` is gone. A response is one
+  scheme, decided by the key's type; nothing reads the bytes to choose.
 - **The envelope closes the body because the signature covers it.**
   `D` is a digest of every byte ahead of the envelope, so the signature
   is the last thing `P` can send. `P` reads the shard **once**: it
@@ -1440,15 +1453,19 @@ needed a home that is neither the inner frame nor a header:
   The HTTP response headers stay
   exactly `content-type` and `content-length`; no signature leg is
   text-encoded into a header — a 3,309-byte ML-DSA leg does not belong
-  in one. The inner `RF-D4` frame is byte-for-byte unchanged, and
-  `content-length` covers envelope plus frame (this is the
-  `signature_envelope_len + framed_len()` equality `SF-D6` already
-  checks). Because the signature length is fixed, the envelope adds no
-  length field and its offset is `content-length −
-  signature_envelope_len`. The client **reads exactly `content-length`
-  bytes and takes the last `signature_envelope_len` as the envelope**.
-  It does not stream-parse `HybridSignature` by trusting the inner `u32`
-  length fields. The serve crate obtains the signature from the `SF-D13`
+  in one. ~~The inner `RF-D4` frame is byte-for-byte unchanged~~
+  (retired 2026-10-08; the body is `shekyl_wire::shard_frame`), and
+  `content-length` covers the body plus the bound scheme's envelope.
+  Because that length is fixed by the scheme, the envelope adds no
+  length field and its offset is `content-length` minus the scheme's
+  envelope width. The client **reads exactly `content-length` bytes and
+  takes the last `K::ENVELOPE_LEN` bytes as the envelope**
+  (`PassVerifyingKey`). On the live binding that width is
+  `IDENTITY_ENVELOPE_LEN` (3,385) and the bytes parse as a
+  `HybridSignature`. It does not stream-parse the signature by trusting
+  inner length fields, and it does not try a second scheme: a response
+  of the other width fails this key's checks. The serve crate obtains
+  the signature from the `SF-D13`
   callback; it does not load the secret.
 - **Verify placement:** inside the fetch call. The client returns only
   verified-or-refused, never raw bytes — a raw-bytes return invites a
@@ -1542,11 +1559,18 @@ by not sending them.
   sent them; the signature decides `P`'s credit, not the bytes' truth.
   The refusal trailer is still read before any verification
   (`Unsigned`).
-- **Ceiling.** `ExpectedShard::max_response_len()` = `1 + 10 +
-  Σ (archival_len_i + 3·10) + SIGNATURE_ENVELOPE_LEN`; exactness is
-  still enforced by the read (a frame that does not end at
-  `content-length − envelope` is `Malformed`). `SF-D7`'s memory leg is
-  as the 2026-10-03 amendment states it: `N` times one entry's peak.
+- **Ceiling.** `ExpectedShard::max_response_len::<K>()` is the frame
+  ceiling (`frame_len_ceiling`: `1 + 10 + Σ (archival_len_i + 3·10)`)
+  plus that target's scheme's envelope width
+  (`PassVerifyingKey::ENVELOPE_LEN`). The constructor checks the frame
+  ceiling against the wider of the two schemes, so either scheme's
+  `max_response_len` fits. The live width is `IDENTITY_ENVELOPE_LEN`
+  (3,385). The receipt width (`RECEIPT_ENVELOPE_LEN`, 1,356) is staged
+  and not what a production target asks for (AMENDED 2026-10-13).
+  Exactness is still enforced by the read (a frame that does not end at
+  `content-length` minus the envelope is `Malformed`). `SF-D7`'s memory
+  leg is as the 2026-10-03 amendment states it: `N` times one entry's
+  peak.
 - **Result.** `VerifiedShard { shard_id, delivery_digest, signature,
   view_hash, tx_count, archival_len }` — no body. The pass record reads
   the first three; the view reads the next three; the organic caller
