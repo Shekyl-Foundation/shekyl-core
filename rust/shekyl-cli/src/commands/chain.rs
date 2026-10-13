@@ -107,20 +107,31 @@ fn connections_line(val: &Value) -> String {
     }
 }
 
+/// A line for one of the chain's counts: the label, then the number.
+///
+/// A count that is missing or is not a number is said to be unreadable. It
+/// is not printed as `0`: a height of zero is an empty chain and a
+/// transaction count of zero is a chain with no transactions, and neither
+/// is "this value did not arrive" (RK-D23).
+fn count_line(label: &str, val: &Value, key: &str) -> String {
+    // The label and its colon are padded to the column the other lines use.
+    let label = format!("{label}:");
+    match val.get(key).and_then(Value::as_u64) {
+        Some(count) => format!("  {label:<14}{count}"),
+        None => format!("  {label:<14}unreadable"),
+    }
+}
+
 pub(crate) fn show_chain(val: &Value) {
     let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-    let height = val.get("height").and_then(Value::as_u64).unwrap_or(0);
     println!("Chain health:");
     println!("  Status:       {status}");
-    println!("  Height:       {height}");
+    println!("{}", count_line("Height", val, "height"));
     if let Some(line) = sync_line(val) {
         println!("{line}");
     }
     println!("{}", difficulty_line(val));
-    println!(
-        "  Tx count:     {}",
-        val.get("tx_count").and_then(Value::as_u64).unwrap_or(0)
-    );
+    println!("{}", count_line("Tx count", val, "tx_count"));
     println!("{}", connections_line(val));
 }
 
@@ -318,8 +329,45 @@ fn print_coverage_row(row: &Value, profit_available: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{connections_line, difficulty_line, sync_line};
+    use super::{connections_line, count_line, difficulty_line, sync_line};
     use serde_json::json;
+
+    /// A count prints in the column it always has, zero included.
+    #[test]
+    fn a_count_is_shown_as_it_arrived_and_zero_is_a_count() {
+        let val = json!({ "height": 1_234_567, "tx_count": 0 });
+        assert_eq!(
+            count_line("Height", &val, "height"),
+            "  Height:       1234567"
+        );
+        assert_eq!(
+            count_line("Tx count", &val, "tx_count"),
+            "  Tx count:     0"
+        );
+    }
+
+    /// A count that did not arrive, or is not a number, is unreadable. It
+    /// was printed as `0`, which reads as an empty chain.
+    #[test]
+    fn a_count_that_is_missing_or_not_a_number_is_unreadable_never_zero() {
+        for val in [
+            json!({}),
+            json!({ "height": null, "tx_count": null }),
+            json!({ "height": "12", "tx_count": "3" }),
+            json!({ "height": -1, "tx_count": 1.5 }),
+        ] {
+            assert_eq!(
+                count_line("Height", &val, "height"),
+                "  Height:       unreadable",
+                "{val}"
+            );
+            assert_eq!(
+                count_line("Tx count", &val, "tx_count"),
+                "  Tx count:     unreadable",
+                "{val}"
+            );
+        }
+    }
 
     /// Synchronized is the flag's word. A target above the height, which a
     /// synchronized daemon can now report, does not make it "syncing".

@@ -153,7 +153,9 @@ def collect_node_metrics(daemon: DaemonRPC) -> NodeMetrics:
     m = NodeMetrics(url=daemon.url)
     try:
         info = daemon.get_info()
-        m.height = info.get("height", 0)
+        # Required: a reply without a height is not a get_info reply, and
+        # reading that as height 0 would report a node at an empty chain.
+        m.height = info["height"]
         # The whole 128-bit difficulty, from the one name get_info carries
         # it under. Required, and read strictly: a missing key or a string
         # that is not `0x` hex is an error, never a difficulty of 0.
