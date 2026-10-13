@@ -1015,7 +1015,7 @@ pub fn read_and_fold_in_memory(
 /// room completes even when the wait has already run out. A timeout around
 /// [`AsyncWriteExt::write_all`] would stay pending until the whole slice
 /// was accepted and would charge that lateness to the peer.
-async fn write_bounded<W: AsyncWrite + Unpin>(stream: &mut W, mut bytes: &[u8]) -> io::Result<()> {
+async fn write_bounded<S: AsyncWrite + Unpin>(stream: &mut S, mut bytes: &[u8]) -> io::Result<()> {
     while !bytes.is_empty() {
         let accepted = tokio::time::timeout(WRITE_STALL_TIMEOUT, stream.write(bytes))
             .await
