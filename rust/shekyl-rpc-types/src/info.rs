@@ -24,11 +24,17 @@
 //!
 //! # One field, one value
 //!
-//! The wire repeats values: `block_size_limit` beside `block_weight_limit`,
-//! a 128-bit difficulty as three members, a network as a string and three
-//! booleans. A part holds each value **once** and the repeats are produced
-//! on the way out and checked on the way in — a reply whose two names for
-//! one value disagree does not decode.
+//! The wire says each value once, and so does a part. The last repeat was
+//! the network, a string and three booleans, which went at 3.54 (RK-Q6):
+//! `get_version` is where a daemon names its network, and this reply no
+//! longer carries it under any name.
+//!
+//! The other repeats went at 3.52 (RK-Q1). A difficulty was three members:
+//! its low 64 bits, a `0x` hex string, and its high 64 bits. It is the hex
+//! string alone, a [`HexU128`], whose parser is strict because nothing
+//! beside it checks it any more. The block weight limit and median were
+//! each under a `size` name too; the `weight` names are the ones kept, and
+//! they are always present: `0` is a value (RK-D23).
 //!
 //! # How the composition is written
 //!
@@ -53,10 +59,11 @@
 //! when there is nothing to read.
 
 use serde::{Deserialize, Serialize};
+use shekyl_units::{AtomicUnits, AtomicUnitsString};
 
 use crate::chain::RpcStatus;
-use crate::consensus_digest::DaemonNetwork;
 use crate::hash::HashHex;
+use crate::hex128::HexU128;
 use crate::nullable::Nullable;
 
 /// A part of a reply that a caller may be refused: the part, or its absence.
@@ -114,31 +121,34 @@ pub struct InfoHealth {
     pub has_peers: bool,
 }
 
-/// Which network and protocol this daemon speaks. `get_version` is the
-/// identity source; these repeat it.
+/// Which protocol this daemon speaks.
+///
+/// The network is not here. `get_version` is the identity source, and until
+/// 3.54 this reply repeated its `nettype` four times over: as a string and
+/// as the booleans `mainnet`, `testnet`, `stagenet` (RK-Q6). A reader that
+/// wants the daemon's network reads `get_version`, through
+/// [`crate::IdentityExpectation::read`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoIdentity {
-    /// On the wire as `nettype` and as the three booleans `mainnet`,
-    /// `testnet`, `stagenet` (all false on a fakechain).
-    pub nettype: DaemonNetwork,
     pub protocol_version: u64,
 }
 
 /// The chain's own figures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoChain {
-    /// Difficulty of the next block. On the wire as `difficulty` (low 64
-    /// bits), `wide_difficulty` (`0x`-prefixed hex) and `difficulty_top64`.
+    /// Difficulty of the next block. On the wire as `wide_difficulty`, a
+    /// [`HexU128`].
     pub difficulty: u128,
-    /// Cumulative difficulty at the tip, on the wire as the same triple.
+    /// Cumulative difficulty at the tip. On the wire as
+    /// `wide_cumulative_difficulty`, a [`HexU128`].
     pub cumulative_difficulty: u128,
     /// The difficulty target, in seconds.
     pub target: u64,
     /// Transactions on the chain, coinbases excluded.
     pub tx_count: u64,
-    /// On the wire as `block_weight_limit` and `block_size_limit`.
+    /// On the wire as `block_weight_limit`. Always present.
     pub block_weight_limit: u64,
-    /// On the wire as `block_weight_median` and `block_size_median`.
+    /// On the wire as `block_weight_median`. Always present.
     pub block_weight_median: u64,
     pub adjusted_time: u64,
 }
@@ -147,14 +157,18 @@ pub struct InfoChain {
 /// mean (RK-D16); this is how they are carried.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoEconomics {
-    /// Gross coins emitted through the tip, in atomic units. Net circulating
-    /// supply is this minus [`Self::total_burned`].
-    pub already_generated_coins: u64,
+    /// Gross coins emitted through the tip. Net circulating supply is this
+    /// minus [`Self::total_burned`]. On the wire as a decimal string of
+    /// atomic units (RK-Q2).
+    pub already_generated_coins: AtomicUnits,
     pub release_multiplier: u64,
-    /// The percentage the next coinbase burns. `0` when the computation
-    /// refused; RK-Q9 turns that refusal into a fault.
+    /// The percentage the next coinbase burns, fixed-point. `0` is a burn
+    /// of nothing; a computation that refuses is a fault, not a value
+    /// (RK-Q9).
     pub burn_pct: u64,
-    pub total_burned: u64,
+    /// Cumulative coins destroyed through the tip. On the wire as a decimal
+    /// string of atomic units (RK-Q2).
+    pub total_burned: AtomicUnits,
     pub staker_emission_share_effective: u64,
 }
 
@@ -238,8 +252,6 @@ pub enum GetInfoShapeError {
         part: &'static str,
         missing: &'static str,
     },
-    /// Two wire names for one value disagree.
-    Disagreement { value: &'static str, detail: String },
     /// The Status part is shown and its `version` is empty. An empty
     /// string was what a restricted reply wrote for "not disclosed" until
     /// 3.48; a reply that does not disclose the version now withholds the
@@ -256,9 +268,6 @@ impl core::fmt::Display for GetInfoShapeError {
                 "the {part} part arrived without `{missing}`: a part is wholly present or \
                  wholly absent"
             ),
-            Self::Disagreement { value, detail } => {
-                write!(f, "the reply's names for {value} disagree: {detail}")
-            }
             Self::EmptyVersion => f.write_str(
                 "the status part carries an empty `version`: a shown part names the build, \
                  and a reply that does not disclose it withholds the part",
@@ -290,36 +299,28 @@ struct GetInfoWire {
     has_peers: bool,
 
     // Identity.
-    nettype: DaemonNetwork,
-    mainnet: bool,
-    testnet: bool,
-    stagenet: bool,
     protocol_version: u64,
 
     // Chain.
-    difficulty: u64,
-    wide_difficulty: String,
-    difficulty_top64: u64,
-    cumulative_difficulty: u64,
-    wide_cumulative_difficulty: String,
-    cumulative_difficulty_top64: u64,
+    wide_difficulty: HexU128,
+    wide_cumulative_difficulty: HexU128,
     target: u64,
     tx_count: u64,
-    block_size_limit: u64,
-    /// `KV_SERIALIZE_OPT(block_weight_limit, 0)`.
-    #[serde(default, skip_serializing_if = "is_zero")]
+    // Required, and written at `0`: a limit or median of zero is a value.
+    // The C++ serializer omitted both at zero, and a reader defaulted them.
     block_weight_limit: u64,
-    block_size_median: u64,
-    /// `KV_SERIALIZE_OPT(block_weight_median, 0)`.
-    #[serde(default, skip_serializing_if = "is_zero")]
     block_weight_median: u64,
     adjusted_time: u64,
 
     // Economics.
-    already_generated_coins: u64,
+    // Amounts of coin: decimal strings, the wallet contract's encoding. A
+    // JSON number loses integers above 2^53 in a JavaScript reader, and the
+    // emission asymptote is far past that. Required: no default, since the
+    // type's own default is zero and a missing key must not read as it.
+    already_generated_coins: AtomicUnitsString,
     release_multiplier: u64,
     burn_pct: u64,
-    total_burned: u64,
+    total_burned: AtomicUnitsString,
     staker_emission_share_effective: u64,
 
     // Pool.
@@ -364,52 +365,6 @@ struct GetInfoWire {
     restricted: bool,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
-const fn is_zero(v: &u64) -> bool {
-    *v == 0
-}
-
-/// A 128-bit value as the wire's triple: low 64 bits, `0x`-prefixed minimal
-/// lowercase hex, high 64 bits.
-fn split_128(value: u128) -> (u64, String, u64) {
-    let low = u64::try_from(value & u128::from(u64::MAX)).expect("masked to 64 bits");
-    let top = u64::try_from(value >> 64).expect("shifted to 64 bits");
-    (low, format!("0x{value:x}"), top)
-}
-
-/// The triple back to its one value, refusing a triple that names two.
-fn join_128(
-    value: &'static str,
-    low: u64,
-    wide: &str,
-    top: u64,
-) -> Result<u128, GetInfoShapeError> {
-    let joined = (u128::from(top) << 64) | u128::from(low);
-    let parsed = wide
-        .strip_prefix("0x")
-        .and_then(|hex| u128::from_str_radix(hex, 16).ok());
-    if parsed == Some(joined) {
-        Ok(joined)
-    } else {
-        Err(GetInfoShapeError::Disagreement {
-            value,
-            detail: format!("low {low}, top {top}, wide {wide:?}"),
-        })
-    }
-}
-
-/// One value under a second wire name must equal the first.
-fn same(value: &'static str, first: u64, second: u64) -> Result<u64, GetInfoShapeError> {
-    if first == second {
-        Ok(first)
-    } else {
-        Err(GetInfoShapeError::Disagreement {
-            value,
-            detail: format!("{first} and {second}"),
-        })
-    }
-}
-
 /// Build a hidden part from its keys: all of them, or none.
 ///
 /// Each key is paired with its wire name. `build` is handed the keys only
@@ -447,22 +402,12 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             offline,
             following_degraded,
             has_peers,
-            nettype,
-            mainnet,
-            testnet,
-            stagenet,
             protocol_version,
-            difficulty,
             wide_difficulty,
-            difficulty_top64,
-            cumulative_difficulty,
             wide_cumulative_difficulty,
-            cumulative_difficulty_top64,
             target,
             tx_count,
-            block_size_limit,
             block_weight_limit,
-            block_size_median,
             block_weight_median,
             adjusted_time,
             already_generated_coins,
@@ -488,21 +433,6 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             tx_pool_unbroadcast_count,
             restricted,
         } = wire;
-
-        let booleans = (
-            nettype == DaemonNetwork::Mainnet,
-            nettype == DaemonNetwork::Testnet,
-            nettype == DaemonNetwork::Stagenet,
-        );
-        if (mainnet, testnet, stagenet) != booleans {
-            return Err(GetInfoShapeError::Disagreement {
-                value: "the network",
-                detail: format!(
-                    "nettype {:?}, mainnet {mainnet}, testnet {testnet}, stagenet {stagenet}",
-                    nettype.as_str()
-                ),
-            });
-        }
 
         let node = hidden_part!(
             "status",
@@ -569,42 +499,21 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 following_degraded,
                 has_peers,
             },
-            identity: InfoIdentity {
-                nettype,
-                protocol_version,
-            },
+            identity: InfoIdentity { protocol_version },
             chain: InfoChain {
-                difficulty: join_128(
-                    "the next difficulty",
-                    difficulty,
-                    &wide_difficulty,
-                    difficulty_top64,
-                )?,
-                cumulative_difficulty: join_128(
-                    "the cumulative difficulty",
-                    cumulative_difficulty,
-                    &wide_cumulative_difficulty,
-                    cumulative_difficulty_top64,
-                )?,
+                difficulty: wide_difficulty.get(),
+                cumulative_difficulty: wide_cumulative_difficulty.get(),
                 target,
                 tx_count,
-                block_weight_limit: same(
-                    "the block weight limit",
-                    block_weight_limit,
-                    block_size_limit,
-                )?,
-                block_weight_median: same(
-                    "the block weight median",
-                    block_weight_median,
-                    block_size_median,
-                )?,
+                block_weight_limit,
+                block_weight_median,
                 adjusted_time,
             },
             economics: InfoEconomics {
-                already_generated_coins,
+                already_generated_coins: already_generated_coins.to_atomic_units(),
                 release_multiplier,
                 burn_pct,
-                total_burned,
+                total_burned: total_burned.to_atomic_units(),
                 staker_emission_share_effective,
             },
             pool: InfoPool { tx_pool_size },
@@ -630,9 +539,6 @@ impl From<GetInfoResponse> for GetInfoWire {
             host,
             restricted,
         } = reply;
-        let (difficulty, wide_difficulty, difficulty_top64) = split_128(chain.difficulty);
-        let (cumulative_difficulty, wide_cumulative_difficulty, cumulative_difficulty_top64) =
-            split_128(chain.cumulative_difficulty);
         let node = node.shown().cloned();
         let peers = peers.shown().cloned();
         Self {
@@ -645,28 +551,18 @@ impl From<GetInfoResponse> for GetInfoWire {
             offline: health.offline,
             following_degraded: health.following_degraded,
             has_peers: health.has_peers,
-            nettype: identity.nettype,
-            mainnet: identity.nettype == DaemonNetwork::Mainnet,
-            testnet: identity.nettype == DaemonNetwork::Testnet,
-            stagenet: identity.nettype == DaemonNetwork::Stagenet,
             protocol_version: identity.protocol_version,
-            difficulty,
-            wide_difficulty,
-            difficulty_top64,
-            cumulative_difficulty,
-            wide_cumulative_difficulty,
-            cumulative_difficulty_top64,
+            wide_difficulty: HexU128(chain.difficulty),
+            wide_cumulative_difficulty: HexU128(chain.cumulative_difficulty),
             target: chain.target,
             tx_count: chain.tx_count,
-            block_size_limit: chain.block_weight_limit,
             block_weight_limit: chain.block_weight_limit,
-            block_size_median: chain.block_weight_median,
             block_weight_median: chain.block_weight_median,
             adjusted_time: chain.adjusted_time,
-            already_generated_coins: economics.already_generated_coins,
+            already_generated_coins: economics.already_generated_coins.into(),
             release_multiplier: economics.release_multiplier,
             burn_pct: economics.burn_pct,
-            total_burned: economics.total_burned,
+            total_burned: economics.total_burned.into(),
             staker_emission_share_effective: economics.staker_emission_share_effective,
             tx_pool_size: pool.tx_pool_size,
             start_time: node.as_ref().map(|n| n.start_time),
