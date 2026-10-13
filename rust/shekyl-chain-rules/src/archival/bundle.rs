@@ -56,11 +56,13 @@
 //!   registered `pending` for the same reason: a `pending` row is in the
 //!   denominator and no rule type is bound to it. The cutover flips them.
 //! - **The falsifier of "staged":** `nothing_on_the_connect_path_calls_the_bundle_verifier`
-//!   reads `validate.rs`, `block.rs`, the `rules` tree, and the archival
-//!   connect path (`archival/mod.rs`'s `transition` and the modules it
-//!   calls). It fails when any of them names this module's functions,
-//!   apart from the `pub use` that exports them. The cutover deletes that
-//!   test in the change that wires them.
+//!   reads every non-test source of this crate but the fixture, the
+//!   registry and this module, and fails when any of them names this
+//!   module's functions, apart from the one `pub use` in `archival/mod.rs`
+//!   and `lib.rs` that exports them. It requires `validate.rs`,
+//!   `block.rs`, `alt.rs`, `header_ladder.rs`, `drain.rs`, `archival/mod.rs`
+//!   and `rules/mod.rs` by name, so the walk cannot shrink silently. The
+//!   cutover deletes that test in the change that wires them.
 //!
 //! # One name: `DrawableEpoch`, not the specification's `EpochSnapshot`
 //!

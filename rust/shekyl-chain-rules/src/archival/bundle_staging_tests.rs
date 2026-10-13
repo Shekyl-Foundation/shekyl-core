@@ -93,13 +93,31 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 }
 
 /// **The falsifier of this module's STAGED disposition** (rule 23): no
-/// file on the connect path names the bundle verifier.
+/// source of this crate on the connect path names the bundle verifier.
 ///
-/// The connect path is `validate`, the block types, the alternative tier,
-/// every rule, and the archival transition `validate` calls
-/// (`archival::transition` and the modules beside it). `archival/mod.rs`
-/// re-exports this surface; that re-export is removed before the scan, and
-/// the rest of the file — including `transition` — must not name it.
+/// The walk is every `src/**/*.rs` of the crate, so a file added to the
+/// connect path tomorrow — a segment beside `header_ladder.rs`, a rule —
+/// is judged by default; a list of files would judge yesterday's. What is
+/// exempt, and why:
+///
+/// - `*_tests.rs`: `cfg(test)`, and the bundle's own tests name the
+///   subject.
+/// - `harness.rs` and `harness/`: the fixture that implements
+///   `BundleView` for these tests — `cfg(test)` or the `harness` feature,
+///   never on the production surface.
+/// - `archival/bundle.rs`: the module under test.
+/// - `census.rs`: the registry's comment on the nine `pending` rows names
+///   the functions as the rows' refusals. It is held to a narrower check
+///   instead: no `implemented`, `enforced_at` or `by_construction` entry
+///   names the bundle module, which is what wiring would look like there.
+///
+/// Two files export the surface and are judged with that one `pub use`
+/// removed: `archival/mod.rs` and `lib.rs`. The rest of each — including
+/// `transition` — must not name it.
+///
+/// The subject is asserted, not counted: each file the connect path runs
+/// through today is required by name, with the identifier it is read for,
+/// so the walk cannot shrink or move without this test saying so.
 ///
 /// Bites against the verifier being wired into a block path without the
 /// module's banner, the census rows' status and the specification's §2
@@ -110,16 +128,7 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 #[test]
 fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = vec![
-        src.join("validate.rs"),
-        src.join("block.rs"),
-        src.join("alt.rs"),
-    ];
-    // `alt.rs` is the alternative tier (DRS-E5): the other entry a block
-    // is judged through, and where the section check will be called.
-    files.extend(rule_sources(&src.join("rules")));
-    files.extend(archival_sources(&src.join("archival")));
-
+    let files = connect_path_sources(&src);
     let names: &[&str] = &[
         "verify_bundle",
         "check_section",
@@ -127,36 +136,38 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         "open_reference",
         "BundleView",
     ];
-    let transition = src.join("archival").join("mod.rs");
-    assert!(
-        files.iter().any(|path| path == &transition),
-        "the archival transition is not in the walk: {files:?}"
-    );
-    let transition_src = std::fs::read_to_string(&transition).expect("archival/mod.rs");
-    let (body, reexport) = without_bundle_reexport(&transition_src);
-    assert!(
-        body.contains("fn transition"),
-        "archival/mod.rs no longer holds `transition`; repoint this test"
-    );
-    for name in names {
+
+    // Rule 47: the connect path's files, by name, each with the identifier
+    // it is read for. A move or a rename is a red test, not a shorter walk.
+    let required: &[(&str, &str)] = &[
+        ("validate.rs", "pub fn validate"),
+        ("block.rs", "pub struct Candidate"),
+        ("alt.rs", "pub fn alt_against"),
+        ("header_ladder.rs", "fn judge_header_ladder"),
+        ("drain.rs", "fn drain"),
+        ("archival/mod.rs", "fn transition"),
+        ("rules/mod.rs", "trait BlockRule"),
+    ];
+    for (name, identifier) in required {
+        let path = src.join(name);
         assert!(
-            reexport.contains(name),
-            "the staged re-export no longer names `{name}`"
+            files.contains(&path),
+            "{name} is not in the walk; the connect path moved, repoint this test: {files:?}"
+        );
+        let text = std::fs::read_to_string(&path).expect(name);
+        assert!(
+            text.contains(identifier),
+            "{name} no longer holds `{identifier}`; repoint this test"
         );
     }
-    let validate = std::fs::read_to_string(src.join("validate.rs")).expect("validate.rs");
-    assert!(
-        validate.contains("pub fn validate"),
-        "validate.rs is not where `validate` lives any more; repoint this test"
-    );
-    assert!(files.len() > 15, "the rules tree was not found: {files:?}");
 
-    for file in files {
-        let text = std::fs::read_to_string(&file).expect("a readable source file");
-        let judged = if file == transition {
-            body.as_str()
+    let exporting = [src.join("archival").join("mod.rs"), src.join("lib.rs")];
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("a readable source file");
+        let judged = if exporting.contains(file) {
+            without_staged_export(&text, names)
         } else {
-            &text
+            text
         };
         for name in names {
             assert!(
@@ -167,38 +178,53 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
             );
         }
     }
+
+    // The registry, exempt from the scan and held to what wiring would be.
+    let census = std::fs::read_to_string(src.join("census.rs")).expect("census.rs");
+    let binds = |line: &&str| {
+        ["implemented(", "enforced_at(", "by_construction("]
+            .iter()
+            .any(|entry| line.contains(entry))
+    };
+    for line in census.lines().filter(binds) {
+        assert!(
+            !line.contains("bundle"),
+            "a census entry binds the bundle module; the rows are no longer staged: {line}"
+        );
+    }
 }
 
-/// Rust sources of a directory, tests excluded. The directory is the
-/// subject: an empty one is a missing tree, not an empty connect path.
-fn rule_sources(dir: &Path) -> Vec<PathBuf> {
-    sources_in(dir)
-        .into_iter()
-        .filter(|path| !is_test_source(path))
-        .collect()
-}
-
-/// The archival connect path. The verifier module defines the names, and
-/// its tests name them as the subject, so both stay out of the walk.
-fn archival_sources(dir: &Path) -> Vec<PathBuf> {
-    sources_in(dir)
-        .into_iter()
-        .filter(|path| {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            name != "bundle.rs" && !is_test_source(path)
-        })
-        .collect()
-}
-
-fn sources_in(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap_or_else(|_| panic!("{} is a directory", dir.display()))
-        .map(|entry| entry.expect("a directory entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
-        .collect();
-    assert!(!files.is_empty(), "{} has no Rust sources", dir.display());
+/// Every non-test Rust source the connect path can run through:
+/// `src/**/*.rs` less the exemptions the test's doc names.
+fn connect_path_sources(src: &Path) -> Vec<PathBuf> {
+    let exempt_files = [
+        src.join("harness.rs"),
+        src.join("census.rs"),
+        src.join("archival").join("bundle.rs"),
+    ];
+    let exempt_dir = src.join("harness");
+    let mut files = Vec::new();
+    rust_sources(src, &mut files);
+    assert!(!files.is_empty(), "{} has no Rust sources", src.display());
+    files.retain(|path| {
+        !is_test_source(path) && !exempt_files.contains(path) && !path.starts_with(&exempt_dir)
+    });
     files.sort();
     files
+}
+
+/// Every `.rs` under `dir`, recursively.
+fn rust_sources(dir: &Path, into: &mut Vec<PathBuf>) {
+    for entry in
+        std::fs::read_dir(dir).unwrap_or_else(|_| panic!("{} is a directory", dir.display()))
+    {
+        let path = entry.expect("a directory entry").path();
+        if path.is_dir() {
+            rust_sources(&path, into);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            into.push(path);
+        }
+    }
 }
 
 fn is_test_source(path: &Path) -> bool {
@@ -207,25 +233,29 @@ fn is_test_source(path: &Path) -> bool {
         .is_some_and(|name| name.ends_with("_tests.rs"))
 }
 
-/// The staged surface's re-export, and the file with that item removed.
-/// A call inside `transition` survives the removal; the export does not.
-fn without_bundle_reexport(source: &str) -> (String, String) {
-    let marker = "pub use bundle::";
-    let start = source
-        .find(marker)
-        .expect("archival/mod.rs re-exports the staged bundle surface");
+/// `source` with the one `pub use` that exports the staged surface
+/// removed. The export is found by the names it carries, not by its path,
+/// so `archival/mod.rs`'s `pub use bundle::{..}` and `lib.rs`'s
+/// `pub use archival::{..}` are one case. Exactly one such `pub use` is
+/// required: none means the export moved, two means the second is a call
+/// site to judge.
+fn without_staged_export(source: &str, names: &[&str]) -> String {
+    let mut spans = Vec::new();
+    let mut from = 0;
+    while let Some(at) = source[from..].find("pub use ") {
+        let start = from + at;
+        let end = start + source[start..].find(';').expect("a `pub use` ends in `;`") + 1;
+        if names.iter().all(|name| source[start..end].contains(name)) {
+            spans.push((start, end));
+        }
+        from = end;
+    }
     assert_eq!(
-        source.matches(marker).count(),
+        spans.len(),
         1,
-        "one re-export is the staged surface; a second is a call site to judge"
+        "one `pub use` exports the staged surface: none means it moved, two means the second \
+         is a call site to judge"
     );
-    let close = source[start..]
-        .find("};")
-        .expect("the bundle re-export closes");
-    let end = start + close + 2;
-    let reexport = source[start..end].to_string();
-    let mut body = String::new();
-    body.push_str(&source[..start]);
-    body.push_str(&source[end..]);
-    (body, reexport)
+    let (start, end) = spans[0];
+    format!("{}{}", &source[..start], &source[end..])
 }
