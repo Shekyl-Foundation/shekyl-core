@@ -131,6 +131,7 @@ mod tests {
     /// including zero for the serve-credit form.
     #[test]
     fn hands_back_the_kats_hashes_for_every_shape() {
+        let mut retired = 0;
         for entry in fixture()["transactions"].as_array().expect("array") {
             let name = entry["name"].as_str().expect("name");
             let tx = hex_bytes(entry["tx_hex"].as_str().expect("tx_hex"));
@@ -155,6 +156,19 @@ mod tests {
                     msg.len(),
                 )
             };
+            // The fixture's two bond posts are keyless JoinMarkets
+            // (`post_kind` 0), captured from the C++ daemon. That kind is
+            // retired (2026-10-12, ruling on PR #1046; `FN_DSA_HYBRID.md`
+            // `FND-19`) and refused at parse, so the seam derives nothing
+            // for them: *was* `OK` with the KAT's hashes for every shape.
+            if matches!(
+                name,
+                "bond-post-to_key-bond_post" | "emission-bond-post-to_key-bond_post"
+            ) {
+                assert_eq!(rc, SHEKYL_TX_SIGNING_MALFORMED, "{name}");
+                retired += 1;
+                continue;
+            }
             assert_eq!(rc, SHEKYL_TX_SIGNING_OK, "{name}");
             assert_eq!(count, expected.len(), "{name}: count");
             for (i, want) in expected.iter().enumerate() {
@@ -165,6 +179,7 @@ mod tests {
                 );
             }
         }
+        assert_eq!(retired, 2, "both retired bond posts are in the fixture");
     }
 
     /// Bytes that are not a transaction derive nothing; a caller whose

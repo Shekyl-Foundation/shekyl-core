@@ -17,9 +17,9 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::conformance::simulate_disclosure_exception;
 use shekyl_peerlist::{white_diversity_floor, DISCLOSE_COUNT};
-use shekyl_relay_privacy::rng::SplitMix64;
 
 #[test]
 fn leaving_outbound_sessions_out_hands_them_to_the_absence_observer() {

@@ -2940,6 +2940,12 @@ enum FixtureStake {
 /// Every step retries-until-ready (funding maturity, reference
 /// spendability, the Dandelion++ embargo), so the block geography is a
 /// *result*, not an input — read it from the returned fixture.
+///
+/// The post this builds is a kind-5 JoinMarket. The C++ daemon under test
+/// cannot parse that byte and its verify export refuses every JoinMarket
+/// (`FN_DSA_HYBRID.md` §8, FND-20), so each caller is `DECIDED_DARK` in
+/// `scripts/ci/run_live_daemon_gates.sh` until the daemon admits one
+/// (DEL-008). The bodies stay: they are the positive subject.
 async fn stake_persona_to_confirmed_bond(
     daemon: &RegtestDaemon,
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
@@ -3285,7 +3291,7 @@ async fn stake_persona_to_confirmed_bond(
 /// - A shallow P-scan finality horizon + tight cadence via the injectable
 ///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_staker_bond_post_accepted_and_applied() {
     use super::stake_engine::PSlot;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
@@ -3409,7 +3415,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;
@@ -4061,7 +4067,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
 ///
 /// [`EXIT_FEE_RESERVE_ATOMIC`]: shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use super::drain_dispatch::DrainRequestError;
     use super::drain_orchestrator::DrainOrchestrationError;
@@ -4353,7 +4359,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 /// façades end-to-end. This walk keeps the seam-level byte proposition:
 /// it exists so a façade-layer regression can never mask a wire one.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-B daemon walk; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_release_accepted_and_connected() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::emission_source::fetch_claim_source_for;
@@ -4521,7 +4527,7 @@ async fn e2e_release_accepted_and_connected() {
 /// 7. The daemon row is STILL present with `bonded_total == 0`:
 ///    retirement is a wallet-side act; the chain record outlives it.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-C composed-arc walk; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_unstake_collect_retire_composed_arc() {
     use super::emission_source::fetch_claim_source_for;
     use super::prpc::LocalNodeRpc;

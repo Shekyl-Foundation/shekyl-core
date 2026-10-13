@@ -18,14 +18,14 @@
 
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
+use shekyl_draw_rng::{bernoulli, RelayRng, SplitMix64};
 use shekyl_relay_privacy::conformance::{
     grade_bernoulli, grade_poisson, grade_stem_balance, grade_uniform, sample_poisson,
     sample_uniform,
 };
 use shekyl_relay_privacy::params::{carrier, inherited};
 use shekyl_relay_privacy::{
-    bernoulli, ConnectionId, DandelionParams, EpochScheduler, NoiseCadence, PoissonTable, RelayRng,
-    SplitMix64, StemMap,
+    ConnectionId, DandelionParams, EpochScheduler, NoiseCadence, PoissonTable, StemMap,
 };
 
 const N: usize = 200_000;

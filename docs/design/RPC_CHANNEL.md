@@ -256,6 +256,16 @@ type and the minimal required-privilege list (RT-P8 confirms both).
 
 *Consequences.*
 
+- **The service-mode unit inherits `Slice=shekyl.slice`** from the shipped
+  packaging (ruled 2026-10-12, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8):
+  the daemon's own top-level slice at `CPUWeight=400`, weighed 4:1
+  against `user.slice`, so a per-user wallet serving beside the service
+  cannot take the daemon's CPU. The slice is the packaging's; the
+  service-mode switch this round adds changes nothing about it. *Open
+  for this round:* whether the service unit reads a config file at
+  `/etc/shekyl/shekyld.conf` (the deleted Monero-heritage example unit
+  under `utils/systemd/` did; the shipped unit passes flags) is RT-16's
+  to decide with the switch, not the packaging's.
 - **The mode is declared, never inferred.** On Unix a unit
   running the daemon under its dedicated user and that same user starting
   it by hand are indistinguishable from inside the process, so the daemon

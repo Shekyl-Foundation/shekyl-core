@@ -283,6 +283,9 @@ impl<'a, 'id> MockView<'a, 'id> {
             record: BondRecord {
                 hybrid_pubkey: key.0,
                 bond_spend_pk: Vec::new(),
+                receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                    [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+                ),
                 endpoint: [0; 32],
                 join_settlement_epoch: SettlementEpoch::ZERO,
                 bonded_total: AtomicUnits::ZERO,

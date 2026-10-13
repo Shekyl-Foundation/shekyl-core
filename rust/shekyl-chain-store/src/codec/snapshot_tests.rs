@@ -486,6 +486,11 @@ impl Fixtures for BondRecord {
         let base = BondRecord {
             hybrid_pubkey: vec![0x11; 4],
             bond_spend_pk: vec![0x22; 3],
+            // 1,837 bytes of one fill: the field is fixed-width, so the
+            // fixture pins where it sits and that no length precedes it.
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x44; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0x33; 32],
             join_settlement_epoch: SettlementEpoch::from_raw(3),
             bonded_total: AtomicUnits::from_raw(1_000_000),

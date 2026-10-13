@@ -34,8 +34,10 @@
 #   pr    — ARMED, per-PR in build.yml (each gate <= ~3.5 min, measured
 #           2026-09-08 local Release; sum ~20 min).
 #   slow  — ARMED_SLOW, the nightly live-daemon workflow (depth-3 spend
-#           780 s + emission claim 1122 s measured 2026-09-08 local
-#           Release — too heavy per-PR, still consensus gates).
+#           780 s measured 2026-09-08 local Release, and the two slice-7
+#           gates — too heavy per-PR, still consensus gates). The emission
+#           claim left this lane: it submits a kind-5 JoinMarket, which
+#           this daemon does not admit (DECIDED_DARK, FND-20).
 # Both lanes name-check ALL lists, so a rename is caught in every run.
 #
 # PR #660 ruled against a cost tier on the grounds that a nightly tier
@@ -94,13 +96,8 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #   e2e_refresh_scans_coinbase_balance — historical red: RpcError::
 #     InvalidNode("invalid block") before the shekyl-wire parse migration.
 #   e2e_trim_curve_tree_restores_grow_root — sabotage 2026-09-08.
-#   e2e_staker_bond_post_accepted_and_applied — historical red: the PR-4a
-#     daemon-gap tripwire pinned the unimplemented-arm Malformed refusal.
-#   e2e_drain_wire_shape_matches_a_real_transfer — sabotage 2026-09-08.
-#   e2e_release_accepted_and_connected — sabotage 2026-09-08 (as
-#     e2e_unbond_accepted_and_connected, pre Unbond→Release rename).
-#   e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
 #   e2e_arm3_phantom_slot_collected_at_open — sabotage 2026-09-08.
+#     Stays armed: it persists a bond locally and never broadcasts one.
 #   jsonrpc_we_carries_handler_status_through_the_result_envelope — the
 #     result-envelope leg split out of restricted_listener_* by PR #782;
 #     sabotage 2026-09-18 (envelope pointer inverted, panicked there).
@@ -129,7 +126,6 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     that route alone. ~77 s measured, local Release daemon.
 #   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
 #     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
-#   e2e_emission_claim_accepted_and_applied (slow) — sabotage 2026-09-08.
 #   e2e_cxx_template_fills_to_its_median (slow) — historical red
 #     2026-09-28: its premise (a C++-built block at the limit) failed its
 #     own assertions on the first run; the C++ producer stops at its
@@ -149,10 +145,6 @@ ARMED=(
   engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
-  engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
-  engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
-  engine::regtest_e2e::e2e_release_accepted_and_connected
-  engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
   engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
   engine::regtest_e2e::get_output_histogram_stays_unrouted
@@ -160,12 +152,12 @@ ARMED=(
   engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
 )
 
-# Consensus gates too heavy for the per-PR lane (13 + 19 min measured; the
-# two slice-7 gates ~5 min each in a debug build, fifty spends apiece): the
-# nightly live-daemon workflow runs these with GATE_LANE=slow.
+# Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
+# measured 2026-09-08; the two slice-7 gates ~5 min each in a debug build,
+# fifty spends apiece). The emission claim (19 min) left with the kind-5
+# walks. The nightly live-daemon workflow runs these with GATE_LANE=slow.
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
-  engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
   engine::regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx
 )
@@ -175,8 +167,36 @@ ARMED_SLOW=(
 # name-check below, so the decision cannot rot silently.
 #   generate_ct2_tier_b_fixture — fixture regenerator, not a pass/fail
 #     proposition; run manually when the CT-2 Tier-B scenarios change.
+#   The five walks below each call `stake_persona_to_confirmed_bond`, which
+#     submits a `post_kind` 5 JoinMarket. The C++ daemon cannot parse that
+#     byte, and the frozen verify export refuses every JoinMarket
+#     (`FN_DSA_HYBRID.md` §8, FND-20). Observed red 2026-10-13 on
+#     `e2e_staker_bond_post_accepted_and_applied`: submit returned
+#     DaemonUnavailable after "C++ reparse failed on engine-validated
+#     bytes". The lane exits on the first red, so the other four were not
+#     reached; they share the helper and fail the same way. Teaching the
+#     C++ decoder the receipt key is the departure this increment refuses
+#     (no file under `src/` moved). A Rust reparse inside the submit shim
+#     would not apply the post either: pool, mine, connect and relay all
+#     parse the blob in C++. The walks stay in the tree — the positive
+#     subject returns when the daemon under test admits a kind-5 JoinMarket
+#     (DEL-008) — and move back to ARMED or ARMED_SLOW then.
+#     Prior reds, so the original subject is not lost:
+#       e2e_staker_bond_post_accepted_and_applied — PR-4a daemon-gap
+#         tripwire (unimplemented-arm Malformed).
+#       e2e_drain_wire_shape_matches_a_real_transfer — sabotage 2026-09-08.
+#       e2e_release_accepted_and_connected — sabotage 2026-09-08 (as
+#         e2e_unbond_accepted_and_connected, pre Unbond→Release rename).
+#       e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
+#       e2e_emission_claim_accepted_and_applied — sabotage 2026-09-08;
+#         was ARMED_SLOW.
 DECIDED_DARK=(
   engine::regtest_e2e::generate_ct2_tier_b_fixture
+  engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
+  engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
+  engine::regtest_e2e::e2e_release_accepted_and_connected
+  engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
+  engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
 
 for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}"; do

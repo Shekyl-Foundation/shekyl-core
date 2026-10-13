@@ -19,8 +19,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
+use shekyl_draw_rng::RelayRng;
 use shekyl_net_address::NetworkAddress;
-use shekyl_relay_privacy::{rng::RelayRng, ConnectionId};
+use shekyl_relay_privacy::ConnectionId;
 use shekyl_timing_engine::Tick;
 
 use crate::index::Index;

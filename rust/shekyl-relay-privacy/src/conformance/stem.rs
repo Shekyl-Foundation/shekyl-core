@@ -12,8 +12,8 @@
 //   Diagnostic-only and excluded from the default build.
 
 use crate::params::DandelionParams;
-use crate::rng::{bernoulli, RelayRng};
 use crate::schedule::EmbargoTimer;
+use shekyl_draw_rng::{bernoulli, RelayRng};
 
 use super::util::MAX_SIMULATED_HOPS;
 
@@ -201,8 +201,9 @@ fn summarize(outcomes: &[Propagation]) -> PropagationSummary {
 /// Search for the smallest embargo mean, in seconds, whose measured
 /// full-travel rate reaches `target`.
 ///
-/// Bisects over the integer second. Re-seeds per probe so the search is
-/// deterministic. See module docs in the design record for why measuring is
+/// Bisects over the integer second. Every probe draws from its own clone of
+/// `rng`, so each starts from the same state and the search is deterministic
+/// for a seeded generator. See module docs in the design record for why measuring is
 /// the only honest route past the closed form.
 ///
 /// # Panics
@@ -214,7 +215,7 @@ pub fn solve_embargo_secs_for_target(
     target: f64,
     family: crate::schedule::DelayFamily,
     trials: usize,
-    seed: u64,
+    rng: &(impl RelayRng + Clone),
 ) -> Option<u32> {
     assert!(
         target > 0.0 && target < 1.0,
@@ -224,7 +225,7 @@ pub fn solve_embargo_secs_for_target(
 
     let measure = |secs: u32| -> f64 {
         let embargo = EmbargoTimer::new(secs, family);
-        let mut rng = crate::rng::SplitMix64::new(seed);
+        let mut rng = rng.clone();
         simulate_propagation(params, &embargo, trials, &mut rng).full_travel_rate
     };
 

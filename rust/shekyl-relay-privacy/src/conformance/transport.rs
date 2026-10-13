@@ -11,7 +11,7 @@
 // ^ Diagnostic-only float math; excluded from the default build.
 
 use super::flood::FloodReach;
-use crate::rng::{bounded_uniform, RelayRng};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 /// What a supernode observer learns from the diffusion phase, for one
 /// [`FloodReach`].

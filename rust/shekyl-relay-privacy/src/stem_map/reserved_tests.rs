@@ -8,7 +8,7 @@
 //! sessions as the reserved class; here the class is just `hidden`.
 
 use super::*;
-use crate::rng::{RelayRng, SplitMix64};
+use shekyl_draw_rng::{RelayRng, SplitMix64};
 
 fn id(tag: u8) -> ConnectionId {
     let mut b = [0_u8; 16];

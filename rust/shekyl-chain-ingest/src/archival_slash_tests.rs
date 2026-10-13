@@ -457,6 +457,19 @@ impl LeveredChain {
             slashed.record.bonded_total,
             "zero money"
         );
+        // FN-DSA increment 3: the record carries the receipt key its join
+        // committed — through the slash that opened the interval, and
+        // through this Reinstate, which closes it in place.
+        assert_eq!(
+            slashed.record.receipt_sign_pk,
+            join.persona.receipt_key(),
+            "a slash does not touch the receipt key"
+        );
+        assert_eq!(
+            write.record().receipt_sign_pk,
+            join.persona.receipt_key(),
+            "a Reinstate does not touch the receipt key"
+        );
         let written = write.record().clone();
         self.chain.push(reinstated);
         let stored = record_of(&self.scenario, &join.persona).await;

@@ -20,6 +20,7 @@ use shekyl_types::archival::{
     BadInterval, HoldingsKind, MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS,
     MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
 };
+use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -39,6 +40,7 @@ fn base() -> BondRecord {
     BondRecord {
         hybrid_pubkey: vec![0x11; 64],
         bond_spend_pk: vec![0x22; 32],
+        receipt_sign_pk: ReceiptSignPk::from_bytes([0x44; RECEIPT_SIGN_PK_LEN]),
         endpoint: [0x33; 32],
         join_settlement_epoch: SettlementEpoch::from_raw(3),
         bonded_total: AtomicUnits::from_raw(5_000_000_000),
@@ -140,7 +142,7 @@ fn every_cap_is_a_refusal_one_past_it_before_any_allocation() {
     let mut bytes = base().encode();
     // base() is a complete tree: its holdings byte is the last of the
     // fixed prefix. Rewrite it to compact + an over-cap count.
-    let kind_at = 4 + 64 + 4 + 32 + 32 + 8 + 8;
+    let kind_at = 4 + 64 + 4 + 32 + RECEIPT_SIGN_PK_LEN + 32 + 8 + 8;
     assert_eq!(bytes[kind_at], HoldingsKind::CompleteTree as u8);
     bytes.truncate(kind_at);
     bytes.push(HoldingsKind::ShardSetCompact as u8);
@@ -178,7 +180,7 @@ fn the_decode_refuses_what_the_type_makes_unrepresentable() {
     // A duplicate shard inside a compact holding — the row a desynced C++
     // writer could have produced — is SI-14's decode-side refusal.
     let mut bytes = base().encode();
-    let kind_at = 4 + 64 + 4 + 32 + 32 + 8 + 8;
+    let kind_at = 4 + 64 + 4 + 32 + RECEIPT_SIGN_PK_LEN + 32 + 8 + 8;
     bytes.truncate(kind_at);
     bytes.push(HoldingsKind::ShardSetCompact as u8);
     bytes.extend_from_slice(&2u32.to_le_bytes());
@@ -387,6 +389,12 @@ fn record_from_v7_fields(f: &serde_json::Value) -> BondRecord {
     BondRecord {
         hybrid_pubkey: hex_bytes(&f["hybrid_pubkey_hex"]),
         bond_spend_pk: hex_bytes(&f["bond_spend_pk_hex"]),
+        // The C++ `ArchivalBondValue` v7 has no receipt key, so the corpus
+        // has no field to read one from and the test supplies it. It is
+        // outside the comparison: every assertion below is about a field the
+        // C++ decoder read. The check still earns its place — a v7 field
+        // the record or its codec loses fails it exactly as before.
+        receipt_sign_pk: ReceiptSignPk::from_bytes([0x44; RECEIPT_SIGN_PK_LEN]),
         endpoint: hex_bytes(&f["endpoint_hex"])
             .try_into()
             .expect("32-byte endpoint"),
@@ -515,5 +523,76 @@ fn the_v7_corpus_maps_onto_the_record_without_loss() {
     assert!(
         seen_complete && seen_compact && seen_open && seen_clean_close && seen_paid && seen_unpaid,
         "the corpus exercises both holdings kinds, both interval entry kinds and both paid states"
+    );
+}
+
+// ---- the receipt key (layout 25, FN-DSA increment 3) ------------------------
+
+/// The receipt key is 1,837 bytes with **no length prefix**, directly after
+/// `bond_spend_pk` and before the endpoint: the record's bytes are the two
+/// length-prefixed keys, then the key itself, then the endpoint. Two keys
+/// that differ in one byte encode to records that differ in that byte.
+#[test]
+fn the_receipt_key_is_fixed_width_between_bond_spend_pk_and_the_endpoint() {
+    let record = base();
+    let bytes = round_trips(&record);
+    let key_at = 4 + 64 + 4 + 32;
+    assert_eq!(
+        &bytes[key_at..key_at + RECEIPT_SIGN_PK_LEN],
+        &[0x44; RECEIPT_SIGN_PK_LEN][..],
+        "the key follows bond_spend_pk with nothing between"
+    );
+    let endpoint_at = key_at + RECEIPT_SIGN_PK_LEN;
+    assert_eq!(&bytes[endpoint_at..endpoint_at + 32], &[0x33; 32]);
+    // hybrid (4 + 64) ‖ spend (4 + 32) ‖ key ‖ endpoint ‖ epoch ‖ total ‖
+    // kind ‖ two empty counts ‖ the unpaid byte.
+    assert_eq!(
+        bytes.len(),
+        4 + 64 + 4 + 32 + RECEIPT_SIGN_PK_LEN + 32 + 8 + 8 + 1 + 4 + 4 + 1
+    );
+
+    let mut other_key = [0x44; RECEIPT_SIGN_PK_LEN];
+    other_key[RECEIPT_SIGN_PK_LEN - 1] = 0x45;
+    let other = BondRecord {
+        receipt_sign_pk: ReceiptSignPk::from_bytes(other_key),
+        ..base()
+    };
+    let other_bytes = round_trips(&other);
+    let differing: Vec<usize> = (0..bytes.len())
+        .filter(|&i| bytes[i] != other_bytes[i])
+        .collect();
+    assert_eq!(differing, vec![endpoint_at - 1]);
+    assert_eq!(
+        BondRecord::decode(&other_bytes).unwrap().receipt_sign_pk,
+        other.receipt_sign_pk
+    );
+}
+
+/// A record cut anywhere inside the receipt key is refused under the key's
+/// name, and one cut right after it under the endpoint's: the key is
+/// mandatory and exactly its length, so there is no shorter record.
+#[test]
+fn a_record_truncated_in_the_receipt_key_is_refused() {
+    let bytes = base().encode();
+    let key_at = 4 + 64 + 4 + 32;
+    for cut in [key_at, key_at + 1, key_at + RECEIPT_SIGN_PK_LEN - 1] {
+        assert_eq!(
+            BondRecord::decode(&bytes[..cut]),
+            Err(invalid("buffer ends inside the receipt_sign_pk")),
+            "cut at {cut}"
+        );
+    }
+    assert_eq!(
+        BondRecord::decode(&bytes[..key_at + RECEIPT_SIGN_PK_LEN]),
+        Err(invalid("buffer ends inside the endpoint"))
+    );
+    // A record of an earlier layout — no receipt key at all — is not a shorter valid
+    // record: its endpoint and everything after are read as key bytes, and
+    // the buffer ends inside the key.
+    let mut keyless = bytes.clone();
+    keyless.drain(key_at..key_at + RECEIPT_SIGN_PK_LEN);
+    assert_eq!(
+        BondRecord::decode(&keyless),
+        Err(invalid("buffer ends inside the receipt_sign_pk"))
     );
 }

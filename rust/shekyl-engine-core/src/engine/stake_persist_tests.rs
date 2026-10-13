@@ -49,7 +49,7 @@ fn match_for(persona: PCanonicalId, height: u64) -> BondPostMatch {
     BondPostMatch {
         height: BlockHeight::from_raw(height),
         p_canonical_id: persona,
-        post_kind: 0,
+        post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
     }
 }
 

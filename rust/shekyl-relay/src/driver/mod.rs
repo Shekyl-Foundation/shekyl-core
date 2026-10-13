@@ -34,7 +34,7 @@
 //! (§20.3). Commands (`update_stems`, connection events) mutate and return
 //! nothing; every effect leaves through [`Driver::poll`] or a force hook.
 
-use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 

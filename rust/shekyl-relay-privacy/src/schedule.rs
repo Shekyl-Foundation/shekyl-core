@@ -34,8 +34,8 @@ use std::collections::BTreeMap;
 use crate::geometric::GeometricTable;
 use crate::params::{carrier, inherited, DandelionParams};
 use crate::poisson::PoissonTable;
-use crate::rng::{bernoulli, bounded_uniform, RelayRng};
 use crate::stem_map::ConnectionId;
+use shekyl_draw_rng::{bernoulli, bounded_uniform, RelayRng};
 
 /// Monotonic milliseconds. Not a wall-clock time and not comparable across
 /// processes.
@@ -769,7 +769,7 @@ impl NoiseCadence {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rng::SplitMix64;
+    use shekyl_draw_rng::SplitMix64;
 
     fn peer(i: u8) -> ConnectionId {
         let mut b = [0_u8; 16];
