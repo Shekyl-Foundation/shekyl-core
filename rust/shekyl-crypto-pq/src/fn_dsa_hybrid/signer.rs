@@ -73,19 +73,37 @@ pub struct FnDsaHybridSigner {
 
 /// The decoded FN-DSA key, in the heap slot it occupies for the signer's life.
 ///
-/// `Option` is only how the crate's `decode` returns the key, which is what
-/// lets the bytes reach the heap without one more stack move
-/// ([`fn_dsa_decode_held`]). After [`FnDsaHybridSigner::new`] the slot is
-/// occupied. [`Self::key_mut`] is that fact; a missing key is a broken
-/// signer, not bad key material.
+/// **The `Option` is load-bearing, and only for placement.** The crate's
+/// `decode` returns `Option<SigningKey1024>` by value. Holding that same
+/// `Option` on the heap is what lets [`fn_dsa_decode_held`] exchange the
+/// decoded bytes into the slot and wipe the local they came from, with no
+/// further copy of the context on a stack. A `Box<SigningKey1024>` would
+/// make the empty state unrepresentable, and it cannot be had without
+/// moving the key out of the `Option` — one more 118,640-byte stack copy,
+/// which nothing wipes (`FN_DSA_HYBRID.md` `FND-3`, `FND-23`). So the type
+/// keeps a state it never occupies after [`FnDsaHybridSigner::new`]: the
+/// decode refuses a `None`, and the wipe zeroizes the key in place and
+/// leaves it `Some`.
+///
+/// [`Self::key_mut`] therefore answers with an error for the empty slot and
+/// does not panic. The workspace aborts on panic, and a signing path that
+/// can take the process down on a broken invariant is worse than one that
+/// refuses a signature.
 struct DecodedFnDsaKey(Box<Option<SigningKey1024>>);
 
 impl DecodedFnDsaKey {
-    fn key_mut(&mut self) -> &mut SigningKey1024 {
+    /// The decoded key.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::InvalidKeyMaterial`] if the slot is empty, which no
+    /// path reaches today: a signer with no decoded key has no key material
+    /// to sign with, and says so with the error an undecodable key gets.
+    fn key_mut(&mut self) -> Result<&mut SigningKey1024, CryptoError> {
         self.0
             .as_mut()
             .as_mut()
-            .expect("a built signer holds its decoded key")
+            .ok_or(CryptoError::InvalidKeyMaterial)
     }
 
     /// The heap slot, for tests that watch the key stay at one address and
@@ -138,7 +156,10 @@ impl FnDsaHybridSigner {
     /// [`CryptoError::InvalidInput`] for an empty domain;
     /// [`CryptoError::InvalidKeyMaterial`] if the crate's signer gives up,
     /// which it does only after treating a long run of rejected samples as
-    /// a bad key.
+    /// a bad key. That is the error an undecodable key gets from
+    /// [`Self::new`] too: the value does not tell the two apart, the call
+    /// it came from does. A holder that must know which happened keeps
+    /// them apart by where it asked.
     pub fn sign(
         &mut self,
         domain: &[u8],
@@ -157,7 +178,7 @@ impl FnDsaHybridSigner {
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<FnDsaHybridSignature, CryptoError> {
         let ed25519 = self.ed25519.as_array();
-        let key = self.fn_dsa.key_mut();
+        let key = self.fn_dsa.key_mut()?;
         nest_fn_dsa_signature(ed25519, domain, message, |inner| {
             sign_decoded_key(key, rng, inner)
         })
@@ -457,6 +478,25 @@ mod tests {
         signer.wipe();
     }
 
+    /// The slot's empty state is not reachable through the signer, so it is
+    /// made here: a signer whose slot is empty refuses to sign with an
+    /// error. It does not panic, which under `panic = "abort"` would end the
+    /// process from a signing path.
+    #[test]
+    fn an_empty_key_slot_refuses_and_does_not_panic() {
+        let (_, sk) = keypair();
+        let mut signer = FnDsaHybridSigner::new(&sk).expect("decodes");
+        signer.sign(D, b"message").expect("control: it signs");
+        // Wiped first, so that taking the key out leaves no key bytes in
+        // the value this test drops on its own stack.
+        signer.wipe();
+        drop(Box::new(signer.fn_dsa.0.take()));
+        assert!(matches!(
+            signer.sign(D, b"message"),
+            Err(CryptoError::InvalidKeyMaterial)
+        ));
+    }
+
     /// The promise the `ZeroizeOnDrop` marker makes, as a bound: the signer,
     /// and both things it holds, are wiped on drop. `drop_wipes_the_held_key_in_place`
     /// shows the wipe itself.
@@ -476,12 +516,16 @@ mod tests {
     }
 
     /// What holding the key buys on the stack (`FND-4`). The smallest stack
-    /// each step ran on, x86_64 at this commit, by a ladder of 8 KiB steps
-    /// (so each figure is an upper bound on the need):
+    /// each step ran on, x86_64, by a ladder of 8 KiB steps from 16 KiB (so
+    /// each figure is an upper bound on the need). Re-measured 2026-10-13,
+    /// after the per-call path and the held key came to share one
+    /// decoded-key sign and the empty slot came to refuse with an error:
+    /// the per-call figure moved by one step, from 568 KiB, and the other
+    /// seven are as first measured.
     ///
     /// | | unoptimized | optimized |
     /// | --- | --- | --- |
-    /// | `HybridEd25519FnDsa::sign` (decodes per call) | 568 KiB | 248 KiB |
+    /// | `HybridEd25519FnDsa::sign` (decodes per call) | 560 KiB | 248 KiB |
     /// | `FnDsaHybridSigner::sign` (held key) | 112 KiB | 16 KiB |
     /// | `FnDsaHybridSigner::new` (the one decode) | 544 KiB | 360 KiB |
     /// | dropping a `FnDsaHybridSigner` | 16 KiB | 16 KiB |
