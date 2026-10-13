@@ -518,7 +518,10 @@ mod tests {
         );
     }
     use crate::error::PqcVerifyError;
-    use crate::signature::{verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_CARRIER};
+    use crate::signature::{
+        verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
+        SCHEME_DOMAIN_WITNESS_CARRIER,
+    };
 
     const D: &[u8] = SCHEME_DOMAIN_RECEIPT;
 
@@ -588,6 +591,30 @@ mod tests {
             .verify(&pk, SCHEME_DOMAIN_WITNESS_CARRIER, b"message", &sig)
             .is_err());
         assert!(scheme.verify(&pk, D, b"massage", &sig).is_err());
+    }
+
+    /// The witness's bundle signature is its own surface: one key, one
+    /// message, and the signature is dead under the carrier's domain and
+    /// under the receipt's. Red edit: give `SCHEME_DOMAIN_WITNESS_BUNDLE`
+    /// the carrier's bytes (or the receipt's) and the matching `is_err`
+    /// fails.
+    #[test]
+    fn the_bundle_domain_is_neither_the_carriers_nor_the_receipts() {
+        let (pk, sk) = keypair();
+        let scheme = HybridEd25519FnDsa;
+        let commitment = [0xB7u8; 32];
+        let sig = scheme
+            .sign(&sk, SCHEME_DOMAIN_WITNESS_BUNDLE, &commitment)
+            .expect("sign");
+        scheme
+            .verify(&pk, SCHEME_DOMAIN_WITNESS_BUNDLE, &commitment, &sig)
+            .expect("verifies under its own domain");
+        assert!(scheme
+            .verify(&pk, SCHEME_DOMAIN_WITNESS_CARRIER, &commitment, &sig)
+            .is_err());
+        assert!(scheme
+            .verify(&pk, SCHEME_DOMAIN_RECEIPT, &commitment, &sig)
+            .is_err());
     }
 
     /// SA-R-2 holds for this scheme as for the other: no bare-message path,

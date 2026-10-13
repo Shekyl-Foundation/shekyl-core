@@ -572,6 +572,24 @@ census_rows! {
         J24 implemented(crate::rules::tx_emission::J24),
         J25 implemented(crate::rules::tx_emission_against::J25),
         J26 implemented(crate::rules::tx_emission_against::J26),
+        // J29–J37 (minted 2026-10-12, STAGED): the serve-credit bundle's
+        // admission checks, a block-level section (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+        // §9.1). The pure verifier that names them as refusals is built
+        // (`crate::archival::check_section`, `crate::archival::verify_bundle`)
+        // and nothing on the connect path calls it, so no rule type is
+        // bound and each row is `pending`: in the denominator, in no
+        // coverage. `SO-D12`'s cutover increment binds them. J28 is filed
+        // with the bond-post key-shape rows above, where increment 3
+        // minted it. J17 stays unregistered (bucket 3).
+        J29 pending,
+        J30 pending,
+        J31 pending,
+        J32 pending,
+        J33 pending,
+        J34 pending,
+        J35 pending,
+        J36 pending,
+        J37 pending,
         // 4.K Reorg / alternative chains (DRS-E5 slice 9, the alt tier).
         // The store holds what its structures make true — the chain's root
         // and linkage (K1a, K2), a held hash refused at insert (K3), no

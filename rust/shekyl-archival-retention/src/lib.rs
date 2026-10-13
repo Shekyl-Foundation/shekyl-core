@@ -28,6 +28,15 @@
 //! - [`secret_draw`] — the secret draw: selection, the `0x0C` commitment,
 //!   the challenge nonce, the serve-credit batch commitment, and the
 //!   count rule (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4, §5.2, §7.3).
+//! - [`bundle`] — the serve-credit bundle: the pass bitmap, the kept and
+//!   prunable parts, the reference a block carries, the bundle commitment,
+//!   the prunable hash, the header root, and the section budget
+//!   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7). STAGED: read by the pure
+//!   verifier in `shekyl-chain-rules`; no block path yet.
+//! - [`drawable_epoch`] — one epoch's drawable pairs and each persona's
+//!   receipt key, as one value (§9.6). STAGED with [`bundle`]. The name is
+//!   [`DrawableEpoch`], not a snapshot: `shekyl-chain-rules` already calls
+//!   its emission gather `EpochSnapshot`.
 //! - [`settlement_select`] — settlement's fold: three counted draws by beacon, the pair's
 //!   row, and the issued-draw digest term.
 //! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
@@ -55,6 +64,7 @@ pub mod bond_duration;
 pub mod bond_floor;
 pub mod bond_post;
 pub mod bond_wire;
+pub mod bundle;
 pub mod challenge;
 pub mod claimed_epochs;
 pub mod consensus_state;
@@ -62,6 +72,7 @@ pub mod conservation;
 pub mod constants;
 pub mod debit_auth;
 pub mod distinct;
+pub mod drawable_epoch;
 pub mod drawable_pair;
 pub mod emission_kat_shape;
 pub mod emission_verify;
@@ -127,6 +138,14 @@ pub use bond_wire::{
     WireError as BondWireError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
     VIN_TYPE_ARCHIVAL_BOND_POST,
 };
+pub use bundle::{
+    bundle_charge, bundle_commitment, bundle_prunable_hash, bundle_root, section_budget,
+    BundleBody, BundleKept, BundleRecord, BundleRef, BundleWireError, PassBitmap,
+    BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_KEPT_FIXED_LEN, BUNDLE_PRUNABLE_CUSTOMIZATION,
+    BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN, BUNDLE_ROOT_CUSTOMIZATION,
+    BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_SEED_LEN, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+    BUNDLE_WITNESS_LEN,
+};
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
@@ -160,6 +179,7 @@ pub use constants::{
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
 };
+pub use drawable_epoch::{DrawableEpoch, DrawableEpochError};
 pub use drawable_pair::DrawablePair;
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
@@ -170,12 +190,12 @@ pub use emission_verify::{
     EmissionVerifyContext, EmissionVerifyError,
 };
 pub use pass_anchor::{
-    pass_countersignature_message, pass_delivery_digest, pass_request_header_bytes,
-    PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader,
-    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
-    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
-    PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
-    PASS_REQUEST_HEADER_LEN,
+    anchor_depth_covers_response_window, pass_countersignature_message, pass_delivery_digest,
+    pass_request_header_bytes, PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher,
+    PassRequestHeader, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN,
+    PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_CUSTOMIZATION,
+    PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 // The emission error is re-exported under a disambiguated name: the bare

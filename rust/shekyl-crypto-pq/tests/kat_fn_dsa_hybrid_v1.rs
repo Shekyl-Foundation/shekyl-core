@@ -40,15 +40,19 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{
 };
 use shekyl_crypto_pq::signature::{
     HybridSignature, SignatureScheme, HYBRID_SCHEME_ID_ED25519_FN_DSA_1024, SCHEME_DOMAIN_RECEIPT,
-    SCHEME_DOMAIN_WITNESS_CARRIER,
+    SCHEME_DOMAIN_WITNESS_BUNDLE, SCHEME_DOMAIN_WITNESS_CARRIER,
 };
 use std::path::{Path, PathBuf};
 
 /// Every surface that signs under scheme 3. A new one is added here; the
 /// pinned test counts the fixture's vectors against this table.
-const SURFACES: [(&str, &[u8]); 2] = [
+const SURFACES: [(&str, &[u8]); 3] = [
     ("receipt", SCHEME_DOMAIN_RECEIPT),
     ("witness_carrier", SCHEME_DOMAIN_WITNESS_CARRIER),
+    // Appended 2026-10-12 with the bundle verifier. The two vectors above
+    // are byte-for-byte what they were: every vector is derived from the
+    // frozen seeds, so a surface added at the end moves none before it.
+    ("witness_bundle", SCHEME_DOMAIN_WITNESS_BUNDLE),
 ];
 
 /// Frozen with the pinned signatures.
