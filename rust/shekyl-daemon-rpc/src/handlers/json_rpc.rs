@@ -95,20 +95,7 @@ pub async fn handle(
     if let Some(native) = native_method(&state, &method, &request.params).await {
         return match native {
             Ok(value) => (StatusCode::OK, Json(JsonRpcResponse::success(id, value))),
-            // A refusal is the method answering — a bad request, or a height
-            // the chain does not hold. Normal traffic: it carries its own
-            // code and message and is not logged as a daemon problem.
-            Err(RpcFault::Refused(refusal)) => (
-                StatusCode::OK,
-                Json(JsonRpcResponse::error(id, refusal.code, refusal.message)),
-            ),
-            Err(fault) => {
-                warn!(method = %method, ?fault, "native JSON-RPC method failed");
-                (
-                    StatusCode::OK,
-                    Json(JsonRpcResponse::error(id, -32603, "Internal error".into())),
-                )
-            }
+            Err(fault) => (StatusCode::OK, Json(native_fault(id, &method, fault))),
         };
     }
 
@@ -435,6 +422,29 @@ where
     join_fault(tokio::task::spawn_blocking(move || f(core)).await)?
 }
 
+/// What a JSON-RPC caller is told when a native method does not answer.
+fn native_fault(id: serde_json::Value, method: &str, fault: RpcFault) -> JsonRpcResponse {
+    match fault {
+        // A refusal is the method answering — a bad request, or a height
+        // the chain does not hold. Normal traffic: it carries its own code
+        // and message and is not logged as a daemon problem.
+        RpcFault::Refused(refusal) => JsonRpcResponse::error(id, refusal.code, refusal.message),
+        // The store contradicted itself. The caller is told what
+        // contradicted what: every operand is a public chain fact, and a
+        // bare "Internal error" would send an operator to the wrong place.
+        // The handler has already logged the same text.
+        RpcFault::Store(store) => JsonRpcResponse::error(
+            id,
+            shekyl_rpc_types::CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+            store.to_string(),
+        ),
+        fault => {
+            warn!(method = %method, ?fault, "native JSON-RPC method failed");
+            JsonRpcResponse::error(id, -32603, "Internal error".into())
+        }
+    }
+}
+
 fn join_fault<T>(out: Result<T, tokio::task::JoinError>) -> Result<T, RpcFault> {
     out.map_err(|_| RpcFault::Internal(InternalFault::Join))
 }
@@ -468,6 +478,49 @@ mod tests {
             frame_native::<u64>(Err(RpcFault::Facts(FactsFault::NotReady))).unwrap_err(),
             RpcFault::Facts(FactsFault::NotReady)
         );
+    }
+
+    /// **A store fault reaches the caller in its own words** (RK-Q9): the
+    /// daemon-side error code, and a message carrying the invariant and
+    /// every operand. A facts code, beside it, is still the bare internal
+    /// error: it has no detail to give.
+    #[test]
+    fn a_store_fault_tells_the_caller_what_contradicted_what() {
+        use crate::methods::StoreFault;
+        use shekyl_types::ChainCount;
+        use shekyl_units::AtomicUnits;
+
+        let store = StoreFault::SupplyInvariant {
+            coins_generated: AtomicUnits::from_raw(1_000),
+            total_burned: AtomicUnits::from_raw(1_001),
+            chain_height: ChainCount::from_raw(77),
+        };
+        let reply = serde_json::to_value(native_fault(
+            serde_json::json!(7),
+            "get_info",
+            RpcFault::Store(store),
+        ))
+        .unwrap();
+        assert_eq!(reply["id"], 7);
+        assert!(reply.get("result").is_none(), "no partial reply: {reply}");
+        assert_eq!(
+            reply["error"]["code"],
+            shekyl_rpc_types::CORE_RPC_ERROR_CODE_INTERNAL_ERROR
+        );
+        let message = reply["error"]["message"].as_str().expect("a message");
+        assert_eq!(message, store.to_string());
+        for operand in ["1001", "1000", "77", "total_burned <= coins_generated"] {
+            assert!(message.contains(operand), "`{operand}` in {message}");
+        }
+
+        let bare = serde_json::to_value(native_fault(
+            serde_json::json!(7),
+            "get_info",
+            RpcFault::Facts(FactsFault::Inconsistent),
+        ))
+        .unwrap();
+        assert_eq!(bare["error"]["code"], -32603);
+        assert_eq!(bare["error"]["message"], "Internal error");
     }
 
     /// A worker that panics is an internal join fault, never a facts code.

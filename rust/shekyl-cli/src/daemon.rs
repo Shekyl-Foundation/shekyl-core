@@ -281,6 +281,16 @@ impl DaemonClient {
             .map_err(|e| DaemonError::MalformedResponse(format!("get_info: {e}")))
     }
 
+    /// `get_version`'s `result`, undecoded. Used by the mining gates.
+    ///
+    /// Undecoded because reading it is `shekyl_rpc_types`' (`RK-D25`): the
+    /// caller hands it to [`shekyl_rpc_types::IdentityExpectation::read`],
+    /// which reads the version before anything else. It is where a daemon
+    /// names its network; `get_info` stopped repeating it at 3.54 (RK-Q6).
+    pub fn get_version_result(&self) -> Result<Value, DaemonError> {
+        self.json_rpc("get_version", &serde_json::json!({}))
+    }
+
     /// Operator coverage list. Empty params; the daemon orders the rows.
     pub fn archival_shard_coverage(&self) -> Result<ArchivalShardCoverage, DaemonError> {
         let value = self.json_rpc("get_archival_shard_coverage", &serde_json::json!({}))?;
@@ -447,8 +457,8 @@ mod tests {
     /// A complete `get_info` reply, as the daemon serializes it.
     fn get_info_reply() -> serde_json::Value {
         use shekyl_rpc_types::{
-            DaemonNetwork, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
-            InfoPeers, InfoPool, InfoStatus, RpcStatus,
+            HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity, InfoPeers,
+            InfoPool, InfoStatus, RpcStatus,
         };
         serde_json::to_value(GetInfoResponse {
             status: RpcStatus::ok(),
@@ -463,7 +473,6 @@ mod tests {
                 has_peers: true,
             },
             identity: InfoIdentity {
-                nettype: DaemonNetwork::Testnet,
                 protocol_version: 3,
             },
             chain: InfoChain {
@@ -476,10 +485,10 @@ mod tests {
                 adjusted_time: 0,
             },
             economics: InfoEconomics {
-                already_generated_coins: 0,
+                already_generated_coins: shekyl_units::AtomicUnits::ZERO,
                 release_multiplier: 1_000_000,
                 burn_pct: 0,
-                total_burned: 0,
+                total_burned: shekyl_units::AtomicUnits::ZERO,
                 staker_emission_share_effective: 0,
             },
             pool: InfoPool { tx_pool_size: 0 },
@@ -507,12 +516,13 @@ mod tests {
         .expect("a get_info reply serializes")
     }
 
-    /// The mining gates read `restricted`, `nettype` and `synchronized`. A
-    /// reply missing any of them does not decode — above all a missing
-    /// `restricted` must not read as unrestricted.
+    /// The mining gates read `restricted` and `synchronized` from this
+    /// reply. One missing either does not decode — above all a missing
+    /// `restricted` must not read as unrestricted. The network gate reads
+    /// `get_version` (RK-Q6); its tests are beside it in `commands/mine.rs`.
     #[test]
     fn get_info_refuses_a_missing_gate_field() {
-        for gate in ["restricted", "nettype", "synchronized", "height"] {
+        for gate in ["restricted", "synchronized", "height"] {
             let mut reply = get_info_reply();
             reply.as_object_mut().expect("object").remove(gate);
             assert!(
@@ -524,7 +534,6 @@ mod tests {
         let info: GetInfoResponse =
             serde_json::from_value(get_info_reply()).expect("complete get_info");
         assert!(!info.restricted);
-        assert_eq!(info.identity.nettype.as_str(), "testnet");
         assert!(info.health.synchronized);
     }
 }

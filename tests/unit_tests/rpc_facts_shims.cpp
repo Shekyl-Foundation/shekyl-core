@@ -1593,7 +1593,6 @@ namespace
     s.synchronized = 1;
     s.busy_syncing = 0;
     s.offline = 0;
-    s.nettype = static_cast<uint8_t>(cryptonote::FAKECHAIN);
     return s;
   }
 }
@@ -1646,21 +1645,18 @@ TEST(rpc_facts_shims, info_chain_passes_its_scalars_through)
   EXPECT_EQ(0, facts.busy_syncing);
   EXPECT_EQ(0, facts.offline);
   EXPECT_EQ(0, facts.following_degraded);
-  EXPECT_EQ(static_cast<uint8_t>(cryptonote::FAKECHAIN), facts.nettype);
 
   daemon_rpc_facts::info_chain_scalars other = chain_scalars();
   other.core_target_height = 0;
   other.synchronized = 0;
   other.busy_syncing = 200;
   other.offline = 7;
-  other.nettype = static_cast<uint8_t>(cryptonote::TESTNET);
   shekyl_rpc_info_chain_facts second{};
   ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::info_chain(bap.bc, other, &second));
   EXPECT_EQ(0u, second.core_target_height);
   EXPECT_EQ(0, second.synchronized);
   EXPECT_EQ(1, second.busy_syncing);
   EXPECT_EQ(1, second.offline);
-  EXPECT_EQ(static_cast<uint8_t>(cryptonote::TESTNET), second.nettype);
 }
 
 // Status reads the alt-block count from the store and takes the rest as the

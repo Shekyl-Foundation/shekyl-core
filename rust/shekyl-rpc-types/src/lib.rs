@@ -70,6 +70,7 @@ pub mod chain;
 pub mod consensus_digest;
 pub mod hash;
 pub mod headers;
+pub mod hex128;
 pub mod identity;
 pub mod info;
 pub mod nullable;
@@ -101,6 +102,7 @@ pub use headers::{
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
 };
+pub use hex128::{HexU128, HexU128Error};
 pub use identity::{
     daemon_rpc_version, genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch,
     IdentityRefusal, VersionUnreadable,

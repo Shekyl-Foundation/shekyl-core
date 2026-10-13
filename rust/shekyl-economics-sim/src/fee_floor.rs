@@ -73,6 +73,7 @@ use crate::fee_ladder::{
     advance_traced_state, age_state, correction_factor_ratio, AgeState, Rng, FULL_REWARD_ZONE,
     REF_TX_WEIGHT,
 };
+use crate::volume_window::VolumeWindow;
 
 const VOLUME_WINDOW: usize = TX_VOLUME_WINDOW as usize;
 
@@ -361,14 +362,19 @@ pub struct FloorFeedbackResult {
     pub grace_bp_mean: [u64; 3],
 }
 
+/// The scenario layer's demand, a float, crossing into the chain's
+/// integers: whole transactions for one block, rounded to nearest. The one
+/// boundary in the feedback loop (DQ-2G).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn whole_transactions(demand: f64) -> u64 {
+    demand.max(0.0).round() as u64
+}
+
 /// FL-C7's loop under the FL-R20 served map. Deterministic demand
-/// `D·(fee/f_ref)^−ε` through the real 720-block window; `f_ref` is the
-/// paid fee at the trace's start state.
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
+/// `D·(fee/f_ref)^−ε` through the real 720-block window, read as the
+/// validator reads it ([`VolumeWindow`]); `f_ref` is the paid fee at the
+/// trace's start state.
+#[allow(clippy::cast_precision_loss)]
 fn floor_feedback_scenario(
     eps_milli: u64,
     demand_scale: u64,
@@ -378,45 +384,43 @@ fn floor_feedback_scenario(
     sma: Sma,
     params: &EconomicParams,
 ) -> FloorFeedbackResult {
-    const MILLI: u64 = 1_000;
-    let paid_at = |sum_milli: u64, ag: u64, height: u64| -> (u128, u128) {
+    let paid_at = |sum: u64, ag: u64, height: u64| -> (u128, u128) {
         let base = base_block_reward(ag, params).expect("base along trace");
-        let c = c_for(sum_milli, MILLI, sma, ag, height, params);
+        let c = c_for(sum, 1, sma, ag, height, params);
         let f = floor_rate(base, median, c);
         // Standard rung = 4·F, paid exactly (FL-R22).
         (4 * f, f)
     };
-    let f_ref = paid_at(
-        start_volume * MILLI * VOLUME_WINDOW as u64,
-        st.ag,
-        st.height,
-    )
-    .0;
+    // The window production reads (CEN-F20), warmed with one full W of the
+    // start volume, so the trace's first operand is `start_volume · W`
+    // over W blocks.
+    let mut window = VolumeWindow::default();
+    for _ in 0..VOLUME_WINDOW {
+        window.push(start_volume);
+    }
+    let warm = window.operand();
+    assert_eq!(
+        warm,
+        TxVolume::window(start_volume * VOLUME_WINDOW as u64, VOLUME_WINDOW as u64),
+        "the warmed window is one full W"
+    );
+    let f_ref = paid_at(warm.tx_count_sum(), st.ag, st.height).0;
 
     let eps = eps_milli as f64 / 1000.0;
     let blocks: u64 = 30_000;
     let tail: u64 = 3_000;
-    let mut window: VecDeque<f64> = VecDeque::with_capacity(VOLUME_WINDOW);
-    let mut sum = 0.0f64;
-    for _ in 0..VOLUME_WINDOW {
-        sum += start_volume as f64;
-        window.push_back(start_volume as f64);
-    }
     let mut floors: Vec<u128> = Vec::with_capacity(blocks as usize);
     let (mut fee_min, mut fee_max) = (u128::MAX, 0u128);
     let mut tail_transitions = 0u64;
     let mut last_tail_fee: Option<u128> = None;
     let mut ag = st.ag;
     for t in 0..blocks {
-        let sum_milli = (sum.max(0.0) * MILLI as f64) as u64;
-        let (fee, f) = paid_at(sum_milli, ag, st.height + t);
+        let volume = window.operand();
+        let (fee, f) = paid_at(volume.tx_count_sum(), ag, st.height + t);
         floors.push(f);
-        ag = advance_traced_state(ag, sum_milli / (MILLI * VOLUME_WINDOW as u64), params);
+        ag = advance_traced_state(ag, volume.tx_count_sum() / volume.blocks(), params);
         let demand = (demand_scale as f64) * (fee as f64 / f_ref.max(1) as f64).powf(-eps);
-        let demand = demand.max(0.0);
-        sum += demand;
-        window.push_back(demand);
-        sum -= window.pop_front().expect("window warm");
+        window.push(whole_transactions(demand));
         if t >= blocks - tail {
             fee_min = fee_min.min(fee);
             fee_max = fee_max.max(fee);

@@ -16,24 +16,21 @@
 //!   unrevealed block issues nothing: no passes and no misses.
 //! - **Reveal lag.** A revealed block's seed lands a uniform `0..=W₂`
 //!   blocks after it. Its draws are visible to every later block.
-//! - **Weighting.** A draw picks a pair with replacement, weight 1 if the
-//!   pair is visibly short of [`COUNTED_DRAWS`] issued draws and
-//!   `1 / FULL_WEIGHT_DIVISOR` otherwise.
-//! - **Count per block.** A base rate of one draw per pair per epoch plus a
-//!   top-up that spreads the visible shortfall over a horizon, capped at
-//!   [`CAP_MULTIPLE`] times nominal. Every input is an issued count; no
-//!   outcome is read.
+//! - **Selection.** Production's, called: each draw is `select_draw` of
+//!   `shekyl-archival-retention` over which pairs are visibly short of
+//!   [`COUNTED_DRAWS`] issued draws, on a per-block seed from the run's
+//!   generator. Its weighting and its 256-attempt cap are whatever
+//!   production's are.
+//! - **Count per block.** Production's rule, called: `draw_horizon` and
+//!   `draw_count` of `shekyl-archival-retention`, with their 32-bit carry.
+//!   A base rate of one draw per pair per epoch plus a top-up that spreads
+//!   the visible shortfall over a horizon, capped. Every input is an
+//!   issued count; no outcome is read. The shortfall passed in is net of
+//!   the draws in flight, under the reading the run was asked for.
 //!
-//! The draw, the weighting and the count rule have no production owner yet,
-//! so this module is a declared divergence (§4 of the same document): the
-//! sim leads the code. The epoch length, `W₂`, the shard length and the
-//! failure window are production's.
-//!
-//! Note 2026-10-12: the count and the selection now have production owners
-//! (`draw_count`, `draw_horizon` and `select_draw` in
-//! `shekyl-archival-retention`). This module is kept as it ran, as the `f64`
-//! reference; [`crate::secret_draw_production`] (ESR-13) runs the same epoch
-//! on the owners and prints this module's cells beside its own.
+//! The epoch length, `W₂`, the shard length and the failure window are
+//! production's too. What the module models is what production cannot
+//! know: who reveals, and when (§4 of the same document).
 //!
 //! The read itself is not modelled. Every revealed draw is issued whether or
 //! not it passed, which is the design's own rule; pass and miss enter only
@@ -42,7 +39,8 @@
 use serde::Serialize;
 
 use shekyl_archival_retention::{
-    CHALLENGE_RESPONSE_BLOCKS, FAILURE_WINDOW_M, FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS,
+    draw_count, draw_horizon, draw_target, select_draw, CHALLENGE_RESPONSE_BLOCKS,
+    FAILURE_WINDOW_M, FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_types::SHARD_LENGTH;
 
@@ -56,20 +54,6 @@ use crate::mn_feasibility::{
 /// per-pair counts use.
 pub const COUNTED_DRAWS: u8 = 3;
 const _: () = assert!(COUNTED_DRAWS as usize == shekyl_types::archival::COUNTED_DRAWS);
-
-/// A pair that is not visibly short is drawn at `1 / FULL_WEIGHT_DIVISOR`
-/// the weight of one that is. PROVISIONAL (the brief's §2 item 3).
-pub const FULL_WEIGHT_DIVISOR: u64 = 16;
-
-/// The per-block count is capped at this multiple of nominal
-/// (`COUNTED_DRAWS · D / SEB`). PROVISIONAL (§2 item 4).
-pub const CAP_MULTIPLE: f64 = 3.0;
-
-/// The top-up horizon never falls below this many blocks.
-pub const MIN_HORIZON_BLOCKS: u64 = 200;
-
-/// The top-up aims to finish by this share of the epoch, in per-mille.
-pub const CATCH_UP_BY_PERMILLE: u64 = 700;
 
 /// The bar, in per-mille of pairs short of [`COUNTED_DRAWS`] at 10 %
 /// dropout. PROVISIONAL (the brief's ruling 6); graded on the maximum over
@@ -145,14 +129,9 @@ impl DrawRun {
     }
 }
 
-/// The pairs, split by whether each is visibly short, with O(1) uniform
-/// pick from either side and O(1) move from short to full.
+/// The pairs' visible issued counts, and how far they are from full.
 struct Pairs {
     visible: Vec<u8>,
-    short: Vec<u32>,
-    full: Vec<u32>,
-    /// Index of each pair in whichever list holds it.
-    slot: Vec<u32>,
     /// `Σ max(0, COUNTED_DRAWS − visible)`.
     shortfall: u64,
 }
@@ -161,25 +140,13 @@ impl Pairs {
     fn new(pairs: u32) -> Self {
         Self {
             visible: vec![0; pairs as usize],
-            short: (0..pairs).collect(),
-            full: Vec::new(),
-            slot: (0..pairs).collect(),
             shortfall: u64::from(pairs) * u64::from(COUNTED_DRAWS),
         }
     }
 
-    /// One weighted draw with replacement.
-    fn draw(&self, rng: &mut SplitMix64) -> u32 {
-        let short = self.short.len() as u64;
-        let full = self.full.len() as u64;
-        // Integer weights: a short pair weighs FULL_WEIGHT_DIVISOR, a full
-        // pair weighs 1.
-        let r = rng.below(short * FULL_WEIGHT_DIVISOR + full);
-        if r < short * FULL_WEIGHT_DIVISOR {
-            self.short[(r / FULL_WEIGHT_DIVISOR) as usize]
-        } else {
-            self.full[(r - short * FULL_WEIGHT_DIVISOR) as usize]
-        }
+    /// Whether the pair at `index` is visibly short.
+    fn is_short(&self, index: u64) -> bool {
+        self.visible[index as usize] < COUNTED_DRAWS
     }
 
     /// A draw of `pair` becomes visible.
@@ -189,42 +156,36 @@ impl Pairs {
             self.shortfall -= 1;
         }
         self.visible[p] = self.visible[p].saturating_add(1);
-        if self.visible[p] == COUNTED_DRAWS {
-            let at = self.slot[p] as usize;
-            let last = *self.short.last().expect("the pair is in the short list");
-            self.short.swap_remove(at);
-            if last != pair {
-                self.slot[last as usize] = at as u32;
-            }
-            self.slot[p] = self.full.len() as u32;
-            self.full.push(pair);
-        }
     }
 }
 
-/// The top-up horizon at epoch-relative block `h`, in blocks.
-#[must_use]
-pub fn horizon(h: u64) -> u64 {
-    let seb = SETTLEMENT_EPOCH_BLOCKS;
-    let catch_up = seb * CATCH_UP_BY_PERMILLE / 1000;
-    let end = if h < catch_up {
-        catch_up
-    } else {
-        seb - CHALLENGE_RESPONSE_BLOCKS
-    };
-    end.saturating_sub(h).max(MIN_HORIZON_BLOCKS)
+/// The count rule's two inputs that the run derives: `u`, the visible
+/// shortfall less what is in flight and never below zero, and the horizon.
+/// Production's functions take `u`, not the raw shortfall.
+fn rule_inputs(shortfall: u64, in_flight: u64, h: u64) -> (u64, u64) {
+    (
+        shortfall.saturating_sub(in_flight),
+        draw_horizon(h, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS),
+    )
 }
 
-/// The per-block draw target before the fractional carry: base plus top-up,
-/// capped. Returns the target and whether the cap held it down.
+/// `count(h)` and the carry it leaves, from production's rule.
 #[must_use]
-pub fn block_target(pairs: u32, shortfall: u64, in_flight: u64, h: u64) -> (f64, bool) {
-    let seb = SETTLEMENT_EPOCH_BLOCKS as f64;
-    let base = f64::from(pairs) / seb;
-    let top_up = shortfall.saturating_sub(in_flight) as f64 / horizon(h) as f64;
-    let cap = CAP_MULTIPLE * f64::from(COUNTED_DRAWS) * f64::from(pairs) / seb;
-    let wanted = base + top_up;
-    (wanted.min(cap), wanted > cap)
+pub fn count_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64, carry: u32) -> (u64, u32) {
+    let (u, horizon) = rule_inputs(shortfall, in_flight, h);
+    draw_count(u64::from(pairs), u, horizon, SETTLEMENT_EPOCH_BLOCKS, carry)
+        .expect("the epoch length and the horizon are both nonzero")
+}
+
+/// Whether the cap bound at these inputs: production's answer
+/// ([`draw_target`]), which is `D·H + SEB·u > 9·D·H`. A target that lands
+/// exactly on the cap is not capped. The sim keeps no copy of the cap.
+#[must_use]
+pub fn capped_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64) -> bool {
+    let (u, horizon) = rule_inputs(shortfall, in_flight, h);
+    draw_target(u64::from(pairs), u, horizon, SETTLEMENT_EPOCH_BLOCKS)
+        .expect("the epoch length and the horizon are both nonzero")
+        .capped
 }
 
 /// Simulate one epoch.
@@ -251,7 +212,7 @@ pub fn run_epoch(pairs: u32, dropout_permille: u32, in_flight: InFlight, seed: u
 
     let mut unrevealed_recent: u64 = 0;
     let mut all_recent: u64 = 0;
-    let mut carry = 0.0f64;
+    let mut carry = 0u32;
     let (mut drawn, mut issued, mut max_per_block, mut capped_blocks) = (0u64, 0u64, 0u64, 0u64);
 
     for h in 0..seb + w2 + 1 {
@@ -289,14 +250,25 @@ pub fn run_epoch(pairs: u32, dropout_permille: u32, in_flight: InFlight, seed: u
             InFlight::Unrevealed => unrevealed_recent,
             InFlight::AllRecent => all_recent,
         };
-        let (target, capped) = block_target(pairs, state.shortfall, pending, h);
-        capped_blocks += u64::from(capped);
-        carry += target;
-        let count = carry.floor();
-        carry -= count;
-        let count = count as u64;
+        let (count, next) = count_at(pairs, state.shortfall, pending, h, carry);
+        capped_blocks += u64::from(capped_at(pairs, state.shortfall, pending, h));
+        carry = next;
 
-        let block_draws: Vec<u32> = (0..count).map(|_| state.draw(&mut rng)).collect();
+        // Production's selection, called: each draw is `select_draw` on
+        // this block's seed, over which pairs are visibly short now.
+        let seed = rng.bytes32();
+        let mut block_hash = [0u8; 32];
+        block_hash[..8].copy_from_slice(&h.to_le_bytes());
+        let block_draws: Vec<u32> = (0..count)
+            .map(|j| {
+                let draw = u32::try_from(j).expect("a block's draws fit the wire's u32");
+                let picked = select_draw(&seed, &block_hash, draw, u64::from(pairs), |i| {
+                    state.is_short(i)
+                })
+                .expect("the set is not empty");
+                picked.index as u32
+            })
+            .collect();
         drawn += count;
         max_per_block = max_per_block.max(count);
         unrevealed_recent += count;
@@ -604,7 +576,7 @@ pub fn render_summary(out: &mut impl std::fmt::Write, cells: &[Cell]) -> std::fm
     writeln!(
         out,
         "secret draw (ESR-11): SEB={SETTLEMENT_EPOCH_BLOCKS} W2={CHALLENGE_RESPONSE_BLOCKS} \
-         counted={COUNTED_DRAWS} full-weight=1/{FULL_WEIGHT_DIVISOR} cap={CAP_MULTIPLE}x nominal \
+         counted={COUNTED_DRAWS} selection=select_draw count rule=draw_count \
          seeds={SEEDS} shard={} B",
         SHARD_LENGTH.to_raw()
     )?;
@@ -789,67 +761,37 @@ mod tests {
     }
 
     #[test]
-    fn the_count_is_base_plus_top_up_under_the_cap() {
-        // Nothing short and nothing in flight: the base rate alone, one
-        // draw per pair per epoch.
-        let (t, capped) = block_target(10_000, 0, 0, 0);
-        assert!((t - 1.0).abs() < 1e-12 && !capped);
-        // A shortfall spreads over the horizon to 70 % of the epoch.
-        let (t, _) = block_target(10_000, 7_000, 0, 0);
-        assert!((t - 2.0).abs() < 1e-12, "base 1 + 7000/7000");
-        // In-flight draws are not asked for twice.
-        let (t, _) = block_target(10_000, 7_000, 7_000, 0);
-        assert!((t - 1.0).abs() < 1e-12);
-        // The cap is 3 x nominal = 9 draws per block at 10,000 pairs.
-        let (t, capped) = block_target(10_000, 30_000, 0, 6_900);
-        assert!((t - 9.0).abs() < 1e-12 && capped);
-    }
-
-    #[test]
-    fn the_horizon_runs_to_seventy_percent_then_to_the_close_less_w2() {
-        let seb = SETTLEMENT_EPOCH_BLOCKS;
-        let w2 = CHALLENGE_RESPONSE_BLOCKS;
-        assert_eq!(horizon(0), seb * 7 / 10);
-        assert_eq!(horizon(seb * 7 / 10 - 1), MIN_HORIZON_BLOCKS, "the floor");
-        assert_eq!(horizon(seb * 7 / 10), seb - w2 - seb * 7 / 10);
-        assert_eq!(horizon(seb - 1), MIN_HORIZON_BLOCKS);
-    }
-
-    #[test]
     fn no_block_draws_more_than_the_cap_allows() {
-        // The carry can add at most one draw to a block's capped target.
+        // The cap is production's: its count at a shortfall no epoch
+        // reaches. The carry can add at most one draw to it.
+        let (cap, _) = draw_count(
+            u64::from(D),
+            u64::MAX,
+            draw_horizon(0, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS),
+            SETTLEMENT_EPOCH_BLOCKS,
+            0,
+        )
+        .expect("positive operands");
         for dropout in [0, 300, 1000] {
             let r = run_epoch(D, dropout, InFlight::Unrevealed, 5);
-            let cap = CAP_MULTIPLE * f64::from(COUNTED_DRAWS) * f64::from(D)
-                / SETTLEMENT_EPOCH_BLOCKS as f64;
             assert!(
-                (r.max_per_block as f64) <= cap + 1.0,
+                r.max_per_block <= cap + 1,
                 "dropout {dropout}: {} over a cap of {cap}",
                 r.max_per_block
             );
         }
     }
 
+    /// The cap flag is production's own answer at the run's inputs. It
+    /// does not take the block's carry: that carry can add a draw, and the
+    /// added draw is not the cap.
     #[test]
-    fn a_short_pair_is_drawn_sixteen_times_as_often_as_a_full_one() {
-        // Half the pairs made full by hand; count where 200,000 draws land.
-        let mut state = Pairs::new(1_000);
-        for pair in 0..500 {
-            for _ in 0..COUNTED_DRAWS {
-                state.reveal(pair);
-            }
-        }
-        assert_eq!((state.short.len(), state.full.len()), (500, 500));
-        assert_eq!(state.shortfall, 1_500);
-        let mut rng = SplitMix64::seeded(9);
-        let n = 200_000u32;
-        let full_hits = (0..n).filter(|_| state.draw(&mut rng) < 500).count();
-        let share = full_hits as f64 / f64::from(n);
-        let expected = 1.0 / 17.0;
+    fn the_cap_flag_is_productions() {
         assert!(
-            (share - expected).abs() < 0.004,
-            "full pairs took {share:.4} of draws, expected {expected:.4}"
+            !capped_at(D, 0, 0, 0),
+            "an empty shortfall is under the cap"
         );
+        assert!(capped_at(D, u64::MAX, 0, 0));
     }
 
     #[test]
@@ -966,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the full evidence set: 12 cells x 8 seeds, ~1.3M draws per maturity run; run with --release --ignored; nightly economics-sim-ignored"]
+    #[ignore = "the full evidence set: 12 cells x 8 seeds, ~1.3M draws per maturity run, each a production select_draw, about 3 minutes; run with --release --ignored; nightly economics-sim-ignored"]
     fn the_evidence_set_runs_and_the_table_renders() {
         let cells = evidence_cells();
         assert_eq!(cells.len(), 12);

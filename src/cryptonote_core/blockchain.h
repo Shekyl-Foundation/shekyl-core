@@ -747,8 +747,10 @@ namespace cryptonote
      * it has seen. Process-lifetime sticky, re-armed on recurrence; never
      * cleared (alt blocks drop at restart, so a restarted node re-degrades
      * only if peers re-send the heavier chain — self-correcting, not a
-     * clear-on-restart bug). Surfaced on get_info; migrates into RK-5c's
-     * node-state hub when that lands.
+     * clear-on-restart bug). Surfaced on `get_info` as the Health part's
+     * `following_degraded`: read by `shekyl_rpc_info_chain` (`info_chain`,
+     * src/rpc/rpc_facts_ffi.cpp) under the chain lock, with the rest of
+     * the one chain snapshot that reply is built from (RK-5c, RK-D20).
      */
     bool is_following_degraded() const { return m_following_degraded.load(std::memory_order_relaxed); }
 
