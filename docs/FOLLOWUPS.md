@@ -11,6 +11,22 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **A non-empty chain store is opened without checking its block 0 against this network's genesis.** `Blockchain::init` (`src/cryptonote_core/blockchain.cpp:356-369`) generates genesis only when the store is empty and its non-empty arm is empty, so a store from another network opens and syncs; the per-network data subdirectory is today the only thing keeping two networks out of one store, which is why the daemon-configuration cutover keeps that subdirectory as row data (DC-Q5, DC-F1). Blocked on the Rust store's open path owning the check — falsify by a test that opens a store written under another network's genesis and reads a refusal naming both networks.
+  - Owner: [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)
+  - Target: pre-genesis
+- **The daemon's positional commands and interactive console move to `shekyl-cli` when RT-15's local leg exists (R8, DC-N2).** `shekyl-cli` becomes the command-line interface; until the owner-only socket of RT-15 is built, `main.cpp`'s positional branch, `t_command_server` and `--non-interactive` stay in C++ and read the configuration snapshot. Blocked on RT-15 — falsify by `rg -n -e 'daemon_command' src/daemon` returning nothing once the console has moved.
+  - Owner: `RT-15` — [`RPC_CHANNEL.md`](design/RPC_CHANNEL.md) §RT-15; the cutover side is [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §10
+  - Target: pre-genesis
+- **The blockchain utilities keep their own C++ option sets until IG Part B rules keep-or-delete per tool (DC-Q12).** `cryptonote::arg_data_dir`, `arg_testnet_on`, `arg_stagenet_on` and `arg_db_sync_mode` are re-homed from `cryptonote_core.cpp` to a header the utilities own at the cutover, so `boost::program_options` leaves `shekyld` but not the repository. Blocked on IG Part B — falsify by `rg -n -e 'program_options' src/blockchain_utilities` returning nothing, or by a ruling that deletes the tools.
+  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §9
+  - Target: pre-genesis
+- **The GUI sidecar's daemon argument list follows the cutover's spellings (DC-Q8).** `shekyl-gui-wallet/src-tauri/src/daemon_manager.rs` passes five daemon flags whose spellings IG Part A fixes; the cross-repo change lands with the cutover under its own authorisation. Blocked on the cutover landing — falsify by the GUI spawning a cutover daemon that starts.
+  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §5.1
+  - Target: pre-genesis
+- **The background miner's thread and the `start_mining` arguments it served.** The five `--bg-mining-*` options and the `do_background_mining` and `ignore_battery` arguments of `start_mining` are deleted by the daemon-configuration cutover (DC-Q6, IG-12: a runtime lever with no startup twin shares no constructor); whether the background-mining thread in `src/cryptonote_basic/miner.cpp` goes with them is the mining lane's ruling, not the cutover's. Blocked on that ruling — falsify by `rg -n -i -e 'background' src/cryptonote_basic/miner.cpp` returning nothing.
+  - Owner: [`CLI_USABILITY.md`](design/CLI_USABILITY.md) §1 (the doing-vs-controlling-mining correction; the mining lane's live document)
+  - Target: pre-genesis
+
 - **The T2 measurement, redefined (ruled 2026-10-12): block-verify time beside serving, with and without the daemon's slice weight.** Set-up: the daemon as the installed system unit in `shekyl.slice` (`CPUWeight=400`; needs root, after the packaging PR lands), synced and following the tip; the wallet probe in a user session serving at N = 64 with the shipped per-thread nice. Measure: the time to verify a block, idle against serving, with and without the slice weight. Its result decides whether 400 stays, moves, or the slice goes; the ledger row for the weight is estimated until it lands. Not the sync rate: `BA-T5` session 3 measured the per-thread nice against a *syncing* daemon in two scheduler topologies (one cgroup 91 to 93 %, split cpu cgroups 65 %), a stress case production prevents — a daemon that is not following the tip serves nothing (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8, "What the syncing arms are"). A wallet-as-system-service is rejected (per-user custody, as `WP-D7`); the wallet stays per-user and the defence beyond the slice is the nice-19 mechanism plus the serving gate, with no adaptive back-off. Falsify by a measurement in that set-up showing block-verify time unmoved by the weight.
   - Owner: [`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
   - Target: pre-genesis
@@ -1125,7 +1141,8 @@ Default. Lands before genesis if it should exist at launch.
 - **Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw ().**
   - Target: pre-genesis
 
-- **`removed_flags` shim sunset.**
+- **`removed_flags` shim sunset.** Deleted, not ported, by the daemon-configuration cutover (DC-Q4: no backward compatibility pre-genesis); this row goes with the files. Blocked on the cutover landing — falsify by `rg -n -e 'removed_flags' src tests` returning nothing.
+  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §4
   - Target: pre-genesis
 
 - **`shekyl-daemon-rpc` staticlib: `tracing::*` calls silently dropped.** [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
