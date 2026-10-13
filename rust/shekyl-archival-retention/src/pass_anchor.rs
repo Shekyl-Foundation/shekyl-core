@@ -411,8 +411,22 @@ impl PassDeliveryHasher {
 
 /// Transcript `P` signs: [`pass_request_header_bytes`] ‖ `shard_id_le[8]` ‖
 /// [`pass_delivery_digest`]. Plain concatenation of fixed-width fields.
-/// Domain is
-/// [`SCHEME_DOMAIN_ATTESTATION`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION).
+///
+/// One transcript, two signing domains, by key:
+///
+/// - the identity key (hybrid scheme 1) signs it under
+///   [`SCHEME_DOMAIN_ATTESTATION`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION)
+///   — the live pass countersignature, verified by
+///   [`verify_pass_transcript`](crate::verify_pass_transcript) on the fetch
+///   client and by `verify_pass_countersignature` at attestation admission;
+/// - the receipt key (hybrid scheme 3) signs it under
+///   [`SCHEME_DOMAIN_RECEIPT`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT)
+///   — the serve-credit receipt, verified by
+///   [`verify_receipt_transcript`](crate::verify_receipt_transcript) in the
+///   bundle verifier's step 8 and on the fetch client's scheme-3 target;
+///   both staged (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6, `FN_DSA_HYBRID.md` §9).
+///
+/// A signature under one domain is not a signature under the other.
 #[must_use]
 pub fn pass_countersignature_message(
     nonce: &[u8; PASS_NONCE_LEN],

@@ -72,17 +72,19 @@
 //!   and `rules/mod.rs` by name, so the walk cannot shrink silently. The
 //!   cutover deletes that test in the change that wires them.
 //!
-//! # One name: `DrawableEpoch`, not the specification's `EpochSnapshot`
+//! # One name: `DrawableEpoch`
 //!
-//! §9.6 names the `h_open(E)` value `EpochSnapshot` and the view's read
-//! of it `snapshot`. This crate already has an `EpochSnapshot`: the
-//! emission gather in `archival/close.rs`, a different value the same
-//! judgement reaches at the cutover. So the type is
-//! `shekyl_archival_retention::DrawableEpoch`, the read is
-//! [`BundleView::drawable_epoch`], the hole is
+//! The `h_open(E)` value is `shekyl_archival_retention::DrawableEpoch`,
+//! the read is [`BundleView::drawable_epoch`], the hole is
 //! [`BundleUnanswered::DrawableEpoch`], and the fixture's read log and map
-//! carry the same word — one name throughout. The specification's two
-//! code blocks in §9.6 are amended to it in a docs change.
+//! carry the same word — one name throughout. A record of how it got that
+//! name: the specification's §9.6 first called the value `EpochSnapshot`
+//! and the view's read `snapshot`; this crate already had an
+//! `EpochSnapshot` — the emission gather in `archival/close.rs`, a
+//! different value the same judgement reaches at the cutover — so the
+//! verifier landed with the type renamed, and the specification's two §9.6
+//! code blocks were amended to `DrawableEpoch` on 2026-10-13 (#1061). Code
+//! and specification now agree.
 //!
 //! # What the cutover's view has to read, as `dev` stands
 //!
