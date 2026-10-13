@@ -1294,6 +1294,31 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     );
 }
 
+/// The signer and the view share one tip bound. An anchor above the tip
+/// has no hash for the view to return, so the fixture will not sign a
+/// transcript the verifier cannot be shown. Red edit: synthesize
+/// `fixture_block_hash` above the tip and sign over it — this no longer
+/// panics, and the receipt is over a hash `block_hash` will not answer.
+#[test]
+fn a_receipt_is_not_signed_above_the_fixture_tip() {
+    let mut world = BundleWorld::new(4);
+    let anchor = BlockHeight::from_raw(world.h.to_raw() + 1);
+    world.view.tip = world.h;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        world.record_anchored(0, 0, anchor)
+    }));
+    let message = outcome.expect_err("an anchor above the tip is not signed");
+    let text = message
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| message.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        text.contains("anchor is at or below the fixture chain's tip"),
+        "{text}"
+    );
+}
+
 /// A view fault is the fault, whichever read raised it — never a verdict,
 /// and never an admission. The `VisiblyShort` case is the one the
 /// selection returns: `select_draw` propagates the short-read's error and

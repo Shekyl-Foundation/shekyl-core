@@ -132,6 +132,24 @@ impl FixtureBundleView {
     pub fn take_reads(&self) -> Vec<BundleRead> {
         core::mem::take(&mut *self.reads.borrow_mut())
     }
+
+    /// The hash the chain has at `height`: a test's override, or
+    /// [`fixture_block_hash`]. `None` above the tip — the answer
+    /// [`BundleView::block_hash`] gives, without recording a read. The
+    /// receipt signer uses this, so a transcript is over a hash the
+    /// verifier can be shown.
+    fn chain_block_hash(&self, height: BlockHeight) -> Option<BlockHash> {
+        if height > self.tip {
+            None
+        } else {
+            Some(
+                self.hashes
+                    .get(&height)
+                    .copied()
+                    .unwrap_or_else(|| fixture_block_hash(height)),
+            )
+        }
+    }
 }
 
 impl BundleView for FixtureBundleView {
@@ -149,15 +167,7 @@ impl BundleView for FixtureBundleView {
 
     fn block_hash(&self, height: BlockHeight) -> Result<Option<BlockHash>, BundleReadFaulted> {
         self.read(BundleRead::BlockHash)?;
-        if height > self.tip {
-            return Ok(None);
-        }
-        Ok(Some(
-            self.hashes
-                .get(&height)
-                .copied()
-                .unwrap_or_else(|| fixture_block_hash(height)),
-        ))
+        Ok(self.chain_block_hash(height))
     }
 
     fn visibly_short(&self, h: BlockHeight, index: u64) -> Result<bool, BundleReadFaulted> {
@@ -330,15 +340,13 @@ impl BundleWorld {
     ///
     /// # Panics
     ///
-    /// If the drawable set is empty.
+    /// If `h` is above the fixture chain's tip, or the drawable set is empty.
     #[must_use]
     pub fn selected(&self, draw: u32) -> u64 {
         let hash = self
             .view
-            .hashes
-            .get(&self.h)
-            .copied()
-            .unwrap_or_else(|| fixture_block_hash(self.h));
+            .chain_block_hash(self.h)
+            .expect("the block is at or below the fixture chain's tip");
         // The fixture's short read cannot fail, and the type says so: the
         // `Err` arm is uninhabited, so the `let` is irrefutable.
         let Ok(selected) = select_draw(
@@ -360,14 +368,16 @@ impl BundleWorld {
     }
 
     /// [`Self::record`] with the anchor named.
+    ///
+    /// # Panics
+    ///
+    /// If `h` or `anchor` is above the fixture chain's tip.
     #[must_use]
     pub fn record_anchored(&self, draw: u32, attempt: u8, anchor: BlockHeight) -> BundleRecord {
         let hash = self
             .view
-            .hashes
-            .get(&self.h)
-            .copied()
-            .unwrap_or_else(|| fixture_block_hash(self.h));
+            .chain_block_hash(self.h)
+            .expect("the block is at or below the fixture chain's tip");
         let nonce = challenge_nonce(&self.seed, hash.as_bytes(), draw, attempt);
         let index = self.selected(draw);
         self.record_signed_over(index, attempt, anchor, &nonce)
@@ -409,7 +419,9 @@ impl BundleWorld {
     ///
     /// # Panics
     ///
-    /// If `anchor` is above the fixture chain's tip or signing fails.
+    /// If `anchor` is above the fixture chain's tip — the view would
+    /// answer no hash, so there is no transcript to sign — or if signing
+    /// fails.
     #[must_use]
     pub fn record_signed_by(
         &self,
@@ -422,10 +434,8 @@ impl BundleWorld {
         let delivery_digest = [0xDD; 32];
         let anchor_hash = self
             .view
-            .hashes
-            .get(&anchor)
-            .copied()
-            .unwrap_or_else(|| fixture_block_hash(anchor));
+            .chain_block_hash(anchor)
+            .expect("anchor is at or below the fixture chain's tip");
         let transcript = pass_countersignature_message(
             nonce,
             anchor,
