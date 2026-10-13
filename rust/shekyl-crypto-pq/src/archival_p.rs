@@ -595,8 +595,9 @@ pub struct ArchivalPKeys {
     /// neither can be handed where this one is wanted.
     pub receipt_sign_pk: FnDsaHybridPublicKey,
     /// The receipt key's secret half. The bond record carries the public
-    /// half (`ReceiptSignPk`, the JoinMarket post's fourth key field;
-    /// `FN_DSA_HYBRID.md` §9 increment 3), and the serving route's receipt
+    /// half (`ReceiptSignPk`, the JoinMarket post's receipt-key field, beside
+    /// the identity and bond-spend keys; `FN_DSA_HYBRID.md` §8, increment
+    /// 3), and the serving route's receipt
     /// signer signs with this one (`ResidentReceiptKey` in
     /// `shekyl-engine-core`, increment 4) — **staged**: no production path
     /// selects that signer until a verifier accepts a scheme-3 receipt, so
