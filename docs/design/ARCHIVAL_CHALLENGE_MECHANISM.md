@@ -167,13 +167,21 @@ The read itself (unchanged from the TJ round):
    landed verifier. The receipt the specification rules — a nonce bound to
    `(h, j)`, a separate receipt key, no anchor bound at admission — is its
    §5, §6 and §9.1, and is not built.*
-4. The producer of `h` files the pass record in a carrier it signs, within
-   the resolution window **W₂** (specification §7).
+4. The producer of `h` files the block's pass records in one bundle it
+   signs, within the resolution window **W₂** (specification §7; the
+   carrier transaction this step named was replaced 2026-10-11,
+   `SCS-P14`).
 
-**A miss is never asserted.** It is the expiry of a derived challenge with no
-pass recorded within W₂. No miss record exists on the wire; no party attests
-failure; there is no 49-byte fabrication path. To manufacture a miss you must
-suppress a pass for W₂ blocks — a censorship capability, not a write.
+**A miss is never asserted.** It is a draw of an admitted bundle with no
+receipt in it: a clear bit in the bundle's pass bitmap. A block whose
+bundle is not admitted within W₂ issues nothing, so its draws are neither
+passes nor misses, and a pair left short of three issued draws settles
+NonObservation (specification §9.2, §9.3). No party attests failure; there
+is no 49-byte fabrication path. The producer of `h` can leave a pass out of
+its own bundle, which is contained by 2-of-3; nobody else can make a miss,
+and suppressing a bundle for W₂ blocks suppresses observations, not passes.
+*Restated 2026-10-12 (`SCS-P14`): under the carrier this paragraph read "the
+expiry of a derived challenge with no pass recorded within W₂".*
 
 **Satisfaction does not drain the pool, and the redraw floor (both
 ratified):** a pair whose epoch requirement is already met (two passes)
