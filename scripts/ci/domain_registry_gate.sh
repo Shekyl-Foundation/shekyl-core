@@ -332,7 +332,13 @@ count_pattern() {
 # the records rebuilds that preimage and hashes it under the registered
 # label (shekyl/archival-serve-credit-bundle-v1). No production site and no
 # new domain.
-MECH1_EXPECTED=74
+# Slice C post-merge review (2026-10-13): 74 -> 75. One inline #[cfg(test)]
+# site in rust/shekyl-archival-retention/src/secret_draw.rs: the
+# specification's §5.2 negative control hashes the 68-byte preimage WITHOUT
+# the attempt byte under the registered nonce label
+# (shekyl/archival-challenge-nonce-v1) and asserts it matches no row. No
+# production site and no new domain.
+MECH1_EXPECTED=75
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2
