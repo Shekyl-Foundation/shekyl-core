@@ -5,13 +5,12 @@
 
 //! The secret per-block draw on production's count and selection (ESR-13).
 //!
-//! [`crate::secret_draw`] (ESR-11) ran when the draw had no production
-//! owner: it carries its own count rule in `f64` and its own weighted pick.
-//! This module runs the same one-epoch experiment and calls the owners in
-//! `shekyl-archival-retention` instead: [`draw_count`] and [`draw_horizon`]
-//! for the count and its 32-bit carry, [`select_draw`] for every draw.
-//! ESR-11 is not changed and is printed beside this arm as the `f64`
-//! reference.
+//! [`crate::secret_draw`] (ESR-11) runs the same one-epoch experiment.
+//! Both call the owners in `shekyl-archival-retention`: `draw_count` and
+//! `draw_horizon` for the count and its 32-bit carry, `select_draw` for
+//! every draw (ESR-11 had its own `f64` rule and sampler until ESR-14).
+//! The rule's two callers, [`count_at`] and [`capped_at`], live in ESR-11's
+//! module and are shared.
 //!
 //! The model, its cells, its bar and its predictions were fixed before this
 //! file existed (`docs/design/ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.17).
@@ -52,17 +51,18 @@
 //!   sharp. The cells are therefore not independent samples, and they all
 //!   share one realised dropout.
 
+use core::convert::Infallible;
+
 use serde::Serialize;
 
 use shekyl_archival_retention::{
-    draw_count, draw_horizon, draw_target, select_draw, CHALLENGE_RESPONSE_BLOCKS, DRAW_ATTEMPTS,
-    SETTLEMENT_EPOCH_BLOCKS,
+    select_draw, CHALLENGE_RESPONSE_BLOCKS, DRAW_ATTEMPTS, SETTLEMENT_EPOCH_BLOCKS,
 };
 
 use crate::challenge_coverage::SplitMix64;
 use crate::secret_draw::{
-    self, InFlight, BAR_DROPOUT_PERMILLE, COUNTED_DRAWS, EVIDENCE_DROPOUT_PERMILLE, EVIDENCE_PAIRS,
-    SEEDS, SHORT_BAR_PERMILLE,
+    self, capped_at, count_at, BAR_DROPOUT_PERMILLE, COUNTED_DRAWS, EVIDENCE_DROPOUT_PERMILLE,
+    EVIDENCE_PAIRS, SEEDS, SHORT_BAR_PERMILLE,
 };
 
 /// The challenger's margin `M`: an honest producer files by
@@ -216,35 +216,6 @@ pub fn fate(h: u64, dropout_permille: u32, timing: &Timing, rolls: Rolls) -> Fat
     Fate::Admitted { at }
 }
 
-/// The count rule's two inputs that the run derives: `u`, the visible
-/// shortfall less what is in flight and never below zero, and the horizon.
-/// Production's functions take `u`, not the raw shortfall.
-fn rule_inputs(shortfall: u64, in_flight: u64, h: u64) -> (u64, u64) {
-    (
-        shortfall.saturating_sub(in_flight),
-        draw_horizon(h, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS),
-    )
-}
-
-/// `count(h)` and the carry it leaves, from production's rule.
-#[must_use]
-pub fn count_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64, carry: u32) -> (u64, u32) {
-    let (u, horizon) = rule_inputs(shortfall, in_flight, h);
-    draw_count(u64::from(pairs), u, horizon, SETTLEMENT_EPOCH_BLOCKS, carry)
-        .expect("the epoch length and the horizon are both nonzero")
-}
-
-/// Whether the cap bound at these inputs: production's answer
-/// ([`draw_target`]), which is `D·H + SEB·u > 9·D·H`. A target that lands
-/// exactly on the cap is not capped. The sim keeps no copy of the cap.
-#[must_use]
-pub fn capped_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64) -> bool {
-    let (u, horizon) = rule_inputs(shortfall, in_flight, h);
-    draw_target(u64::from(pairs), u, horizon, SETTLEMENT_EPOCH_BLOCKS)
-        .expect("the epoch length and the horizon are both nonzero")
-        .capped
-}
-
 /// The issued counts every block can see.
 struct Visible {
     count: Vec<u16>,
@@ -321,7 +292,8 @@ pub struct ProductionRun {
     pub issued_hist: [u32; 4],
     /// Largest per-block draw count in the epoch.
     pub max_per_block: u64,
-    /// Blocks where the cap bound, by production's [`draw_target`].
+    /// Blocks where the cap bound, by production's
+    /// [`draw_target`](shekyl_archival_retention::draw_target).
     pub blocks_at_cap: u64,
     /// Issued draws answered by pairs that ended short.
     pub unpaid_reads: u64,
@@ -336,10 +308,6 @@ pub struct ProductionRun {
     /// Draws that reached the last attempt, which selects whatever its
     /// weight.
     pub last_attempt_draws: u64,
-    /// Total draws ESR-11's `f64` rule gives on this run's own inputs.
-    pub f64_drawn: u64,
-    /// Blocks where the `f64` rule's count is not production's.
-    pub f64_differing_blocks: u64,
 }
 
 impl ProductionRun {
@@ -372,14 +340,6 @@ impl ProductionRun {
     pub fn issued_per_pair(&self) -> f64 {
         self.issued as f64 / f64::from(self.pairs)
     }
-}
-
-fn bytes32(rng: &mut SplitMix64) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    for byte in &mut out {
-        *byte = rng.below(256) as u8;
-    }
-    out
 }
 
 /// Simulate one epoch.
@@ -429,7 +389,6 @@ pub fn run_epoch_observed(
 
     let mut in_flight: u64 = 0;
     let mut carry: u32 = 0;
-    let mut f64_carry = 0.0f64;
     let mut run = ProductionRun {
         pairs,
         dropout_permille,
@@ -446,8 +405,6 @@ pub fn run_epoch_observed(
         attempts: 0,
         max_attempts: 0,
         last_attempt_draws: 0,
-        f64_drawn: 0,
-        f64_differing_blocks: 0,
     };
 
     for h in 0..=seb + w2 {
@@ -477,16 +434,8 @@ pub fn run_epoch_observed(
         let (count, carry_out) = count_at(pairs, shortfall, in_flight, h, carry);
         run.blocks_at_cap += u64::from(capped_at(pairs, shortfall, in_flight, h));
 
-        // ESR-11's rule on the same inputs, with its own carry.
-        let (target, _) = secret_draw::block_target(pairs, shortfall, in_flight, h);
-        f64_carry += target;
-        let f64_count = f64_carry.floor();
-        f64_carry -= f64_count;
-        run.f64_drawn += f64_count as u64;
-        run.f64_differing_blocks += u64::from(f64_count as u64 != count);
-
-        let block_seed = bytes32(&mut rng);
-        let block_hash = bytes32(&mut rng);
+        let block_seed = rng.bytes32();
+        let block_hash = rng.bytes32();
         let rolls = Rolls {
             dropout: rng.below(1000) as u32,
             lag: rng.below(w2 - timing.margin + 1),
@@ -497,10 +446,12 @@ pub fn run_epoch_observed(
         let mut block_draws: Vec<u32> = Vec::with_capacity(count as usize);
         for j in 0..count {
             let j = u32::try_from(j).expect("a block's draw count fits the record's index");
-            let selected = select_draw(&block_seed, &block_hash, j, u64::from(pairs), |i| {
-                visible.short(i)
-            })
-            .expect("the set is not empty");
+            // The short read is this process's own count and cannot fail;
+            // `Infallible` says so, and the `let` is irrefutable.
+            let Ok(selected) = select_draw(&block_seed, &block_hash, j, u64::from(pairs), |i| {
+                Ok::<_, Infallible>(visible.short(i))
+            });
+            let selected = selected.expect("the set is not empty");
             block_draws.push(selected.index as u32);
             run.attempts += u64::from(selected.attempts);
             run.max_attempts = run.max_attempts.max(selected.attempts);
@@ -612,12 +563,6 @@ pub struct Cell {
     pub max_attempts: u32,
     /// Draws that reached the last attempt, summed over seeds.
     pub last_attempt_draws: u64,
-    /// Blocks where ESR-11's `f64` rule gives another count on the run's
-    /// own inputs, summed over seeds.
-    pub f64_differing_blocks: u64,
-    /// The largest difference in an epoch's total draws between the two
-    /// rules, over seeds.
-    pub f64_max_total_difference: u64,
     /// The per-seed runs the cell summarises.
     pub runs: Vec<ProductionRun>,
 }
@@ -670,12 +615,6 @@ pub fn cell(spec: CellSpec) -> Cell {
         },
         max_attempts: runs.iter().map(|r| r.max_attempts).max().unwrap_or(0),
         last_attempt_draws: runs.iter().map(|r| r.last_attempt_draws).sum(),
-        f64_differing_blocks: runs.iter().map(|r| r.f64_differing_blocks).sum(),
-        f64_max_total_difference: runs
-            .iter()
-            .map(|r| r.drawn.abs_diff(r.f64_drawn))
-            .max()
-            .unwrap_or(0),
         runs,
     }
 }
@@ -717,20 +656,9 @@ pub fn evidence_specs(pairs: u32) -> Vec<CellSpec> {
     specs
 }
 
-/// ESR-11's own cells at one pair count, under the reading the
-/// specification states: the `f64` reference. Called, not copied.
-#[must_use]
-pub fn f64_reference(pairs: u32) -> Vec<secret_draw::Cell> {
-    EVIDENCE_DROPOUT_PERMILLE
-        .into_iter()
-        .map(|dropout| secret_draw::cell(pairs, dropout, InFlight::Unrevealed))
-        .collect()
-}
-
-/// The evidence set: ESR-11's reference cells and this arm's.
+/// The evidence set: this arm's cells.
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
-    pub reference: Vec<secret_draw::Cell>,
     pub cells: Vec<Cell>,
 }
 
@@ -787,7 +715,7 @@ fn render_header(out: &mut impl std::fmt::Write) -> std::fmt::Result {
     writeln!(
         out,
         "{:>7} {:<19} {:>4} {:>3} {:>6} {:>2} {:>5} | {:>22} {:>4} | {:>6} {:>6} {:>9} {:>5} {:>7} | {:>6} {:>6} | \
-         {:>6} {:>6} {:>5} {:>5} | {:>6} {:>4} {:>5} | {:>6} {:>5}",
+         {:>6} {:>6} {:>5} {:>5} | {:>6} {:>4} {:>5}",
         "D",
         "arm",
         "drop",
@@ -810,48 +738,7 @@ fn render_header(out: &mut impl std::fmt::Write) -> std::fmt::Result {
         "lost%",
         "att/dr",
         "max",
-        "last",
-        "f64blk",
-        "f64dr"
-    )
-}
-
-/// One of ESR-11's cells, in this table's columns.
-fn render_reference_row(out: &mut impl std::fmt::Write, c: &secret_draw::Cell) -> std::fmt::Result {
-    let w = secret_draw::window_check(c.short_permille[0]);
-    let drawn_per_pair = c.runs.iter().map(|r| r.drawn as f64).sum::<f64>()
-        / (c.runs.len() as f64 * f64::from(c.pairs));
-    writeln!(
-        out,
-        "{:>7} {:<19} {:>3}% {:>3} {:>6} {:>2} {:>5} | {:>6.2} {:>6.2} {:>6.2}    {:>4} | {:>6.3} {:>6.3} {:>9.2} {:>5} {:>7} | {:>6.4} {:>6.2} | \
-         {:>6} {:>6} {:>5} {:>5} | {:>6} {:>4} {:>5} | {:>6} {:>5}",
-        c.pairs,
-        "ESR-11 f64",
-        c.dropout_permille / 10,
-        "-",
-        "-",
-        "-",
-        "-",
-        c.short_permille[0] / 10.0,
-        c.short_permille[1] / 10.0,
-        c.short_permille[2] / 10.0,
-        c.seeds_over_bar,
-        drawn_per_pair,
-        c.issued_per_pair,
-        c.mean_per_block,
-        c.max_per_block,
-        c.capped_blocks,
-        w.observation_rate,
-        w.epochs_to_m_misses,
-        "-",
-        "-",
-        "-",
-        "-",
-        "-",
-        "-",
-        "-",
-        "-",
-        "-"
+        "last"
     )
 }
 
@@ -860,7 +747,7 @@ fn render_row(out: &mut impl std::fmt::Write, c: &Cell) -> std::fmt::Result {
     writeln!(
         out,
         "{:>7} {:<19} {:>3}% {:>3} {:>6} {:>2} {:>5.2} | {:>6.2} {:>6.2} {:>6.2}    {:>4} | {:>6.3} {:>6.3} {:>9.2} {:>5} {:>7} | {:>6.4} {:>6.2} | \
-         {:>6.2} {:>6.2} {:>5.2} {:>5.2} | {:>6.2} {:>4} {:>5} | {:>6} {:>5}",
+         {:>6.2} {:>6.2} {:>5.2} {:>5.2} | {:>6.2} {:>4} {:>5}",
         c.spec.pairs,
         c.spec.timing.label(),
         c.spec.dropout_permille / 10,
@@ -886,8 +773,6 @@ fn render_row(out: &mut impl std::fmt::Write, c: &Cell) -> std::fmt::Result {
         c.attempts_per_draw,
         c.max_attempts,
         c.last_attempt_draws,
-        c.f64_differing_blocks,
-        c.f64_max_total_difference,
     )
 }
 
@@ -908,18 +793,10 @@ pub fn render_cell(out: &mut impl std::fmt::Write, c: &Cell) -> std::fmt::Result
 pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::fmt::Result {
     render_header(out)?;
     // One section per pair count, ascending, whatever order the cells are
-    // in. A reference cell with no cell of this arm at its pair count gets
-    // a section too.
-    let pair_counts: std::collections::BTreeSet<u32> = report
-        .cells
-        .iter()
-        .map(|c| c.spec.pairs)
-        .chain(report.reference.iter().map(|c| c.pairs))
-        .collect();
+    // in.
+    let pair_counts: std::collections::BTreeSet<u32> =
+        report.cells.iter().map(|c| c.spec.pairs).collect();
     for pairs in pair_counts {
-        for c in report.reference.iter().filter(|c| c.pairs == pairs) {
-            render_reference_row(out, c)?;
-        }
         for c in report.cells.iter().filter(|c| c.spec.pairs == pairs) {
             render_row(out, c)?;
         }
@@ -932,8 +809,7 @@ pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::f
          cell's {SEEDS} seeds: divide by {SEEDS} for blocks per epoch; obs = 1 - short; epochs = epochs to m misses for a pair \
          that never serves; adm/never/late/lost = where the blocks' bundles went; att/dr, max, \
          last = select_draw attempts per draw, the most, and draws that reached attempt \
-         {DRAW_ATTEMPTS}; f64blk, f64dr = blocks where ESR-11's f64 rule gives another count on \
-         the same inputs (all seeds), and the largest difference in an epoch's total draws"
+         {DRAW_ATTEMPTS}"
     )?;
     writeln!(
         out,
@@ -971,6 +847,8 @@ pub fn evidence_json(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secret_draw::InFlight;
+    use shekyl_archival_retention::{draw_count, draw_horizon};
 
     use crate::secret_draw::clearing_read_failure;
 
@@ -1140,14 +1018,14 @@ mod tests {
             carry = next;
 
             for (j, &pair) in block.draws.iter().enumerate() {
-                let direct = select_draw(
+                let Ok(direct) = select_draw(
                     &block.seed,
                     &block.block_hash,
                     j as u32,
                     u64::from(D),
-                    |i| block.visible[i as usize] < u16::from(COUNTED_DRAWS),
-                )
-                .expect("the set is not empty");
+                    |i| Ok::<_, Infallible>(block.visible[i as usize] < u16::from(COUNTED_DRAWS)),
+                );
+                let direct = direct.expect("the set is not empty");
                 assert_eq!(u64::from(pair), direct.index, "draw {j} at {h}");
                 selected += 1;
             }
@@ -1390,41 +1268,6 @@ mod tests {
         assert!(run.blocks_at_cap > 0);
     }
 
-    /// The premise of the `f64` comparison: the two rules are fed the same
-    /// horizon.
-    ///
-    /// Bites against: either horizon moving without the other.
-    #[test]
-    fn the_two_arms_read_one_horizon() {
-        for h in 0..SEB {
-            assert_eq!(secret_draw::horizon(h), draw_horizon(h, SEB, W2), "h = {h}");
-        }
-    }
-
-    /// Bites against: a shadow fed inputs other than the run's own (the
-    /// totals would part by far more than one), or an integer rule that
-    /// loses more than its last bit.
-    /// Does NOT cover: how the two arms compare between runs with
-    /// different selections; that is the evidence table.
-    #[test]
-    fn the_f64_rule_on_the_same_inputs_stays_within_one_draw() {
-        for (dropout, timing) in [
-            (0, Timing::esr11()),
-            (100, bar_timing()),
-            (300, Timing::bundle(0, Lag::Lazy, 0)),
-        ] {
-            let run = run_epoch(1_024, dropout, timing, 6);
-            assert!(run.drawn > 1_024);
-            assert!(
-                run.drawn.abs_diff(run.f64_drawn) <= 1,
-                "{} integer, {} f64",
-                run.drawn,
-                run.f64_drawn
-            );
-            assert!(run.f64_differing_blocks <= 20, "{run:?}");
-        }
-    }
-
     /// Bites against: restating any `(m, n)` line here, with any number in
     /// it, and against a figure that reads a cell.
     /// Does NOT cover: the figures' values; ESR-11's tests do.
@@ -1505,12 +1348,12 @@ mod tests {
         assert_eq!(bar_holds(&cells), Some(false));
     }
 
-    /// Bites against: a row or the reference dropped from the table, a
-    /// row printed without its own latency and reorg depth, and a header
-    /// that states a timing some row does not have.
+    /// Bites against: a row dropped from the table, a row printed without
+    /// its own latency and reorg depth, and a header that states a timing
+    /// some row does not have.
     /// Does NOT cover: any figure in it.
     #[test]
-    fn the_table_prints_the_reference_beside_each_arm_and_each_row_s_own_timing() {
+    fn the_table_prints_each_arm_with_its_own_timing() {
         let unusual = Timing {
             latency: (2, 5),
             reorg_depth: 7,
@@ -1537,14 +1380,12 @@ mod tests {
             },
         ];
         let report = Report {
-            reference: vec![secret_draw::cell(D, 100, InFlight::Unrevealed)],
             cells: specs.into_iter().map(cell).collect(),
         };
         let mut out = String::new();
         render_summary(&mut out, &report).expect("String sink is infallible");
         for needle in [
             "ESR-13",
-            "ESR-11 f64",
             "ESR-11 timing",
             "bundle, lazy",
             "(m, n) = (",
@@ -1591,12 +1432,11 @@ mod tests {
             "{first}"
         );
         assert!(!first.contains("1..=3"), "{first}");
-        assert!(evidence_json(&report).contains("\"f64_differing_blocks\""));
     }
 
     /// Bites against: sections found by `dedup` on the cells' order (the
     /// interleaved report below would print each pair count's section
-    /// twice, with its reference rows twice), and a pair count dropped.
+    /// twice), and a pair count dropped.
     /// Does NOT cover: any figure in a row.
     #[test]
     fn each_pair_count_is_one_section_whatever_order_the_cells_are_in() {
@@ -1608,10 +1448,6 @@ mod tests {
         };
         // 64, 16, 64, 16: no two neighbours share a pair count.
         let report = Report {
-            reference: vec![
-                secret_draw::cell(64, 100, InFlight::Unrevealed),
-                secret_draw::cell(16, 100, InFlight::Unrevealed),
-            ],
             cells: [spec(64, 0), spec(16, 0), spec(64, 300), spec(16, 300)]
                 .into_iter()
                 .map(cell)
@@ -1631,24 +1467,19 @@ mod tests {
                     .unwrap_or_else(|| panic!("a row starts with its pair count: {line}"))
             })
             .collect();
-        // One section each, ascending: the reference row, then the cells.
-        assert_eq!(pairs_column, [16, 16, 16, 64, 64, 64], "{out}");
-        let rows: Vec<&str> = out.lines().skip(2).take(6).collect();
-        for (at, row) in rows.iter().enumerate() {
-            assert_eq!(
-                row.contains("ESR-11 f64"),
-                at % 3 == 0,
-                "the reference opens each section: {row}"
-            );
+        // One section each, ascending.
+        assert_eq!(pairs_column, [16, 16, 64, 64], "{out}");
+        let rows: Vec<&str> = out.lines().skip(2).take(4).collect();
+        for row in &rows {
             assert_eq!(out.matches(row).count(), 1, "printed once: {row}");
         }
         // Within a section the cells keep the order they were given in.
         assert!(
-            rows[1].contains("  0%") && rows[2].contains(" 30%"),
+            rows[0].contains("  0%") && rows[1].contains(" 30%"),
             "{out}"
         );
         assert!(
-            rows[4].contains("  0%") && rows[5].contains(" 30%"),
+            rows[2].contains("  0%") && rows[3].contains(" 30%"),
             "{out}"
         );
     }

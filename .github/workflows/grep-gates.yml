@@ -319,6 +319,16 @@ jobs:
           run_one "Frozen-tuple gate self-test" \
             python3 scripts/ci/test_check_frozen_tuple.py
 
+          # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
+          # sim's fold files form chain quantities in production's integers
+          # (DQ-2G); a float-to-integer cast in one of them is a float that
+          # reached a chain quantity. `--selftest` first, so a reader that
+          # misses a pattern cannot pass as nothing found (rule 47).
+          run_one "Economics sim: no float reaches an integer in a fold file (selftest)" \
+            python3 scripts/ci/check_sim_integer_seams.py --selftest
+          run_one "Economics sim: no float reaches an integer in a fold file" \
+            python3 scripts/ci/check_sim_integer_seams.py
+
           grep_absent "C++ residue: no shekyl_y" \
             grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'
           grep_absent "C++ residue: no derivation_to_y_scalar" \

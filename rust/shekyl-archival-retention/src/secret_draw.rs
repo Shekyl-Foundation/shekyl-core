@@ -58,9 +58,14 @@ pub struct SelectedDraw {
 /// Draw `j` at `h`: one pair, with replacement, weight 16 : 1 for a
 /// visibly-short index.
 ///
-/// `None` when the set is empty — a producer issues no draws then, and
-/// no record names a `j`. `short(i)` is whether index `i` is visibly
-/// short at `h`.
+/// `Ok(None)` when the set is empty — a producer issues no draws then,
+/// and no record names a `j`. `short` is not called.
+///
+/// `short(i)` is whether index `i` is visibly short at `h`. `Err` is
+/// that read failing: the draw selects nothing, and the error is the
+/// return. A short answer is never invented in its place. The 256th
+/// attempt selects without asking, as the specification has it, so a
+/// fault cannot arise on the attempt that would have selected anyway.
 ///
 /// ```text
 /// zone = (2^64 − 1) − ((2^64 − 1) mod D)
@@ -75,34 +80,44 @@ pub struct SelectedDraw {
 ///     if x[8] & 0x0F = 0:              select i
 ///     otherwise continue
 /// ```
-#[must_use]
-pub fn select_draw(
+pub fn select_draw<E>(
     seed: &[u8; 32],
     block_hash: &[u8; 32],
     draw: u32,
     set_size: u64,
-    short: impl Fn(u64) -> bool,
-) -> Option<SelectedDraw> {
+    mut short: impl FnMut(u64) -> Result<bool, E>,
+) -> Result<Option<SelectedDraw>, E> {
     if set_size == 0 {
-        return None;
+        return Ok(None);
     }
     let zone = u64::MAX - (u64::MAX % set_size);
-    for attempt in 0..DRAW_ATTEMPTS {
+    // Attempts 0 to 254 may refuse: a value outside the zone, or a full
+    // pair the fifth nibble does not accept.
+    for attempt in 0..DRAW_ATTEMPTS - 1 {
         let x = stream(seed, block_hash, draw, attempt);
         let value = u64::from_le_bytes(x[..8].try_into().expect("8 bytes"));
-        if attempt + 1 < DRAW_ATTEMPTS && value >= zone {
+        if value >= zone {
             continue;
         }
         let index = value % set_size;
-        let accept = attempt + 1 == DRAW_ATTEMPTS || short(index) || x[8] & 0x0F == 0;
-        if accept {
-            return Some(SelectedDraw {
+        if short(index)? || x[8] & 0x0F == 0 {
+            return Ok(Some(SelectedDraw {
                 index,
                 attempts: attempt + 1,
-            });
+            }));
         }
     }
-    unreachable!("the last attempt always selects");
+    // The 256th attempt selects its candidate whatever the zone and
+    // whatever its weight (§4.4). It is its own arm, after the loop, so
+    // the loop has no fall-through: the cap is this return, and `short`
+    // is not in it — a fault cannot refuse the attempt the specification
+    // accepts outright.
+    let x = stream(seed, block_hash, draw, DRAW_ATTEMPTS - 1);
+    let value = u64::from_le_bytes(x[..8].try_into().expect("8 bytes"));
+    Ok(Some(SelectedDraw {
+        index: value % set_size,
+        attempts: DRAW_ATTEMPTS,
+    }))
 }
 
 /// The `0x0C` commitment: `cSHAKE256_32` over the witness public key
@@ -179,6 +194,7 @@ pub struct DrawTarget {
     pub fixed: u128,
     /// Whether the cap bound: `D·H + SEB·u > 9·D·H`, strictly. A target
     /// that lands exactly on the cap is not capped; nothing was held down.
+    /// Exact for every input: see [`draw_target`].
     pub capped: bool,
 }
 
@@ -195,8 +211,26 @@ pub struct DrawTarget {
 /// caller that reports on the cap asks the rule, and does not keep a second
 /// copy of it.
 ///
-/// `None` when `SEB` or `H` is zero — neither is in production; the
-/// genesis schedule pins both well above.
+/// **`capped` is exact, and is not read off the target's arithmetic.**
+/// `D·H + SEB·u > 9·D·H` is `SEB·u > 8·D·H`, with no division on either
+/// side. `SEB·u` and `D·H` are each a product of two `u64`s and fit a
+/// `u128`. `8·D·H` may not; when it does not it is at least `2^128` and so
+/// above any `SEB·u`, which is strictly below `2^128`, and the block is
+/// not capped. The predicate is
+/// computed from those operands before the target is, so the saturation
+/// below cannot reach it.
+///
+/// **`t` is exact or absent.** The fixed-point numerator is
+/// `min(D·H + SEB·u, 9·D·H) · 2^32`, which fits a `u128` only while the
+/// minimum is below `2^96`. At or above that the function returns `None`
+/// and never a truncated value: a saturated sum or cap is itself at least
+/// `2^96`, so every inexact case lands there. The schedule cannot reach
+/// it: with `SEB = 10,000` and `H ≤ SEB`, `9·D·H` is below `2^81` for
+/// every `u64` `D`.
+///
+/// `None` when `SEB` or `H` is zero, or when the target does not fit —
+/// none of which is in production; the genesis schedule pins `SEB` and
+/// `H` well above zero and the target well below the limit.
 #[must_use]
 pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Option<DrawTarget> {
     if seb == 0 || horizon == 0 {
@@ -206,13 +240,33 @@ pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Opt
     let h = u128::from(horizon);
     let epoch = u128::from(seb);
     let u = u128::from(shortfall);
-    let weighted = d.saturating_mul(h).saturating_add(epoch.saturating_mul(u));
-    let cap = d.saturating_mul(h).saturating_mul(9);
-    let numer = weighted.min(cap).checked_shl(32)?;
+    // Neither product can overflow: each is two `u64`s in a `u128`.
+    let base = d * h;
+    let top_up = epoch * u;
+    let capped = cap_binds(base, top_up);
+    let weighted = base.saturating_add(top_up);
+    let cap = base.saturating_mul(9);
+    // `checked_shl` checks the shift amount, not the bits shifted out; a
+    // multiplication refuses a numerator that does not fit.
+    let numer = weighted.min(cap).checked_mul(1 << 32)?;
     Some(DrawTarget {
         fixed: numer / epoch.saturating_mul(h),
-        capped: weighted > cap,
+        capped,
     })
+}
+
+/// Whether the cap bound: `SEB·u > 8·D·H`, exactly, from `base = D·H` and
+/// `top_up = SEB·u`. An `8·D·H` that does not fit a `u128` is at least
+/// `2^128`, and every `SEB·u` is strictly below that, so it is not capped.
+///
+/// Its own function so the predicate is defined on every input, including
+/// those whose target does not fit and for which [`draw_target`] has no
+/// value to return.
+const fn cap_binds(base: u128, top_up: u128) -> bool {
+    match base.checked_mul(8) {
+        Some(room) => top_up > room,
+        None => false,
+    }
 }
 
 /// One block's draw count and the 32-bit fractional carry it leaves.
@@ -226,8 +280,8 @@ pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Opt
 ///
 /// `t` is [`draw_target`]'s.
 ///
-/// `None` when `SEB` or `H` is zero — neither is in production; the
-/// genesis schedule pins both well above.
+/// `None` when `SEB` or `H` is zero or the target does not fit — none of
+/// which is in production; see [`draw_target`].
 #[must_use]
 pub fn draw_count(
     set_size: u64,
@@ -261,13 +315,16 @@ mod tests {
 
     fn pick(set_size: u64, short_through: Option<u64>, draw: u32) -> SelectedDraw {
         select_draw(&SEED, &HASH, draw, set_size, |i| {
-            short_through.is_some_and(|end| i <= end)
+            Ok::<_, ()>(short_through.is_some_and(|end| i <= end))
         })
+        .expect("the short predicate does not fail")
         .expect("a non-empty set selects")
     }
 
     fn none_short(set_size: u64, draw: u32) -> SelectedDraw {
-        select_draw(&SEED, &HASH, draw, set_size, |_| false).expect("a non-empty set selects")
+        select_draw(&SEED, &HASH, draw, set_size, |_| Ok::<_, ()>(false))
+            .expect("the short predicate does not fail")
+            .expect("a non-empty set selects")
     }
 
     /// The vectors of the specification's §4.5.
@@ -423,8 +480,61 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_set_selects_nothing() {
-        assert_eq!(select_draw(&SEED, &HASH, 0, 0, |_| true), None);
+    fn an_empty_set_selects_nothing_and_does_not_ask() {
+        let mut asked = false;
+        assert_eq!(
+            select_draw(&SEED, &HASH, 0, 0, |_| {
+                asked = true;
+                Ok::<_, &str>(true)
+            }),
+            Ok(None)
+        );
+        assert!(!asked, "an empty set has no index to read");
+    }
+
+    /// A short-read fault on an attempt that consults it is the return,
+    /// not an index. The attempt the cap selects does not consult it:
+    /// once every earlier read has answered, one more faulting read is
+    /// never made. Red edit: map `Err` to `Ok(false)` and continue, or
+    /// call `short` on the 256th attempt.
+    #[test]
+    fn a_short_fault_is_not_a_selection_and_the_cap_does_not_ask() {
+        let err = select_draw(&SEED, &HASH, 0, 8, |_| Err("unreadable")).expect_err("asked");
+        assert_eq!(err, "unreadable");
+
+        // `j = 28_409_462`, D = 8, none short: the in-zone attempts before
+        // the cap refuse, and the 256th selects index 1. Count those
+        // reads, then fault on any read past them.
+        let mut asked = 0u32;
+        let selected = select_draw(&SEED, &HASH, 28_409_462, 8, |_| {
+            asked += 1;
+            Ok::<_, &str>(false)
+        })
+        .expect("a false answer is not a fault")
+        .expect("a non-empty set selects");
+        assert_eq!(
+            selected,
+            SelectedDraw {
+                index: 1,
+                attempts: DRAW_ATTEMPTS
+            }
+        );
+        let consulted = asked;
+        assert!(consulted < DRAW_ATTEMPTS, "the cap is not one of the reads");
+
+        let mut asked = 0u32;
+        let selected = select_draw(&SEED, &HASH, 28_409_462, 8, |_| {
+            asked += 1;
+            if asked > consulted {
+                Err("the cap asked")
+            } else {
+                Ok(false)
+            }
+        })
+        .expect("the cap does not ask")
+        .expect("a non-empty set selects");
+        assert_eq!(selected.attempts, DRAW_ATTEMPTS);
+        assert_eq!(asked, consulted);
     }
 
     /// The vectors of the specification's §5.2.
@@ -590,6 +700,117 @@ mod tests {
         );
         assert_eq!(draw_target(10_000, 0, 0, 10_000), None);
         assert_eq!(draw_target(10_000, 0, 200, 0), None);
+    }
+
+    /// The predicate where the target's own arithmetic saturates. Each
+    /// expected value is reasoned from the inequality `SEB·u > 8·D·H` by a
+    /// route that shares nothing with the function: with
+    /// `SEB = u = H = m` it divides by `m` to `m > 8·D`, which is `u64`
+    /// arithmetic.
+    ///
+    /// Bites against: `capped: weighted > cap` on the saturated operands
+    /// (the red edit; both sides are `u128::MAX` on the first input and
+    /// the comparison is false where the inequality is true), and an
+    /// overflowing `8·D·H` read as zero or as capped.
+    /// Also holds: on these inputs the target does not fit, and both
+    /// `draw_target` and `draw_count` say so with `None`. Before, a shift
+    /// that dropped the high bits returned a truncated value. Red edit:
+    /// `checked_shl(32)` in place of the multiplication.
+    #[test]
+    fn the_cap_predicate_is_exact_where_the_target_s_arithmetic_saturates() {
+        let m = u64::MAX;
+        let capped = |d: u64, u: u64, h: u64, seb: u64| {
+            cap_binds(
+                u128::from(d) * u128::from(h),
+                u128::from(seb) * u128::from(u),
+            )
+        };
+
+        // The review's input: D = (2^64 − 1) / 8 = 2^61 − 1, and
+        // SEB = u = H = m. m·m > 8·D·m is m > 8·D, and 8·D = 2^64 − 8.
+        let d = m / 8;
+        assert_eq!(d, (1 << 61) - 1);
+        assert!(m > 8 * d, "the inequality holds, in u64");
+        assert!(capped(d, m, m, m));
+        // D·H + SEB·u and 9·D·H are both past u128 here: the comparison
+        // this replaces saw two saturated values and said "not capped".
+        let (d128, m128) = (u128::from(d), u128::from(m));
+        assert_eq!((d128 * m128).checked_add(m128 * m128), None);
+        assert_eq!((d128 * m128).checked_mul(9), None);
+        assert_eq!((d128 * m128).checked_mul(8), Some(8 * d128 * m128));
+
+        // One more pair: 8·D = 2^64 > m, so not capped. 8·D·H still fits.
+        let d = 1u64 << 61;
+        assert_eq!(8 * u128::from(d), u128::from(m) + 1);
+        assert!(!capped(d, m, m, m));
+        // And the edge between them moves with u alone: at D = 2^61 − 1,
+        // m·u > (2^64 − 8)·m is u > 2^64 − 8.
+        let d = m / 8;
+        assert!(!capped(d, m - 7, m, m), "u = 8·D is equality");
+        assert!(capped(d, m - 6, m, m), "u = 8·D + 1");
+
+        // 8·D·H past u128: D = H = m gives 8·m·m, and SEB·u is at most
+        // m·m, so the inequality is false whatever u is.
+        assert_eq!((m128 * m128).checked_mul(8), None);
+        assert!(!capped(m, m, m, m));
+        assert!(!capped(m, m, m, 1));
+
+        // The target does not fit on the review's input, and neither
+        // function invents one. `checked_shl` returned a truncated 1 here.
+        assert_eq!(draw_target(m / 8, m, m, m), None);
+        assert_eq!(draw_count(m / 8, m, m, m, 0), None);
+        // One below the limit fits; the limit does not. D = 2^95 / H with
+        // u = 0: the minimum is D·H itself.
+        let fits = draw_target(1 << 63, 0, 1 << 32, 1 << 20).expect("D·H = 2^95 fits");
+        assert_eq!(fits.fixed, (1u128 << 127) / (1u128 << 52));
+        assert_eq!(
+            draw_target(1 << 63, 0, 1 << 33, 1 << 20),
+            None,
+            "D·H = 2^96"
+        );
+    }
+
+    /// A large case the arithmetic holds exactly: powers of two, so every
+    /// value is read off the exponents. D = 2^40, H = 2^20, SEB = 2^30:
+    /// D·H = 2^60, 8·D·H = 2^63, and SEB·u reaches 2^63 at u = 2^33.
+    ///
+    /// Bites against: a predicate or a target that is right only at small
+    /// operands, and `>=` at a second boundary.
+    #[test]
+    fn the_cap_and_the_target_hold_at_a_large_unsaturated_input() {
+        let at = |u| draw_target(1 << 40, u, 1 << 20, 1 << 30).expect("H and SEB");
+        // The cap is 9·D/SEB = 9·2^10 draws: 9·2^42 with 32 fractional bits.
+        let cap = 9u128 << 42;
+        assert_eq!(
+            at(1 << 33),
+            DrawTarget {
+                fixed: cap,
+                capped: false
+            }
+        );
+        assert_eq!(
+            at((1 << 33) + 1),
+            DrawTarget {
+                fixed: cap,
+                capped: true
+            }
+        );
+        // One below: (2^60 + 2^63 − 2^30) · 2^32 / 2^50 = 9·2^42 − 2^12.
+        assert_eq!(
+            at((1 << 33) - 1),
+            DrawTarget {
+                fixed: cap - (1 << 12),
+                capped: false
+            }
+        );
+        // No shortfall: the base, D/SEB = 2^10 draws.
+        assert_eq!(
+            at(0),
+            DrawTarget {
+                fixed: 1 << 42,
+                capped: false
+            }
+        );
     }
 
     /// Bites against: a `draw_count` whose target is not `draw_target`'s,

@@ -165,7 +165,6 @@ pub mod derive;
 pub mod geometric;
 pub mod params;
 pub mod poisson;
-pub mod rng;
 pub mod schedule;
 pub mod stem_map;
 pub mod verify_cost;
@@ -183,7 +182,6 @@ pub use params::{
     MIXED_ELIGIBILITY_PCT_HUNDREDTHS,
 };
 pub use poisson::PoissonTable;
-pub use rng::{bernoulli, bounded_uniform, RelayRng, SplitMix64};
 #[allow(deprecated)]
 pub use schedule::EmbargoDistribution;
 pub use schedule::{

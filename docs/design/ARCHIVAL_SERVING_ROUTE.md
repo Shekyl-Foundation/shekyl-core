@@ -35,13 +35,21 @@ The body after `\r\n\r\n` is the shard body then the
 serve loop (the `SHT-Q2` tx-range body in `shekyl_wire::shard_frame`,
 `SF-D8` as amended 2026-10-08; ~~the `RF-D4`
 `shekyl_curve_tree::served_frame::ServedFrameHeader` ‖ payload~~, retired
-the same day) ‖ `HybridSignature` canonical bytes
-(`SIGNATURE_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN`, 3385)
-(`SF-D8`). The envelope is the response's last bytes: the signed
-transcript includes a digest of every body byte ahead of it, salted with
-the request's nonce. This document owns the envelope's *position and
-width*; the signature's transcript is `SF-D8`'s and the frame is
-`RF-D4`'s.
+the same day) ‖ the canonical bytes of the scheme the endpoint is
+bound with (`SF-D8`). The width is that scheme's canonical length, taken
+from the bound signer (`PassSigner<W>`), not one global constant.
+**AMENDED 2026-10-13:** the live binding is the identity scheme,
+`HybridSignature`,
+`IDENTITY_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN` (3,385), on
+every production endpoint. The receipt scheme's width
+(`RECEIPT_ENVELOPE_LEN`, 1,356, `FnDsaHybridSignature`) is built and
+**STAGED**; no production endpoint is bound at it
+([`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §9). The single global
+`SIGNATURE_ENVELOPE_LEN` is gone. The envelope is the response's last
+bytes: the signed transcript includes a digest of every body byte ahead
+of it, salted with the request's nonce. This document owns the
+envelope's *position and width*; the signature's transcript is `SF-D8`'s
+and the body ahead of the envelope is the provider's shard bytes.
 
 ---
 
@@ -141,16 +149,20 @@ would say "not held" of a shard the chain says is held.
   tip the gate needs could not be read, the store failed to open the
   shard, or no key is resident. The keyless case is decided before the
   body, so no shard is sent only to go uncountersigned.
-- On 200, `content-length` is `framed_len + SIGNATURE_ENVELOPE_LEN`,
-  and a 200 that completes is exactly that long. The body is the
-  `RF-D4` frame, then an envelope of the signature's width. `P` reads
-  the shard once, hashes each chunk as it sends it, then finishes the
-  digest, signs, and writes the signature as the envelope.
+- On 200, `content-length` is the body's opened length plus the bound
+  scheme's envelope width, and a 200 that completes is exactly that
+  long. On the live binding that width is `IDENTITY_ENVELOPE_LEN`
+  (3,385). The body is the provider's shard bytes, then an envelope of
+  that width. `P` reads the shard once, hashes each chunk as it sends
+  it, then finishes the digest, signs, and writes the signature as the
+  envelope.
 - **The refusal trailer.** If the signer fails after the body, the
   envelope is `REFUSAL_TRAILER_BYTE` (`0xFF`) repeated across its width
   (`serving_route::is_refusal_trailer`). It cannot parse as a canonical
-  `HybridSignature`. `P` says in its own bytes that it served and did not
-  sign.
+  signature of either scheme: both open with a four-byte header and a
+  little-endian length, and `0xFFFF_FFFF` is not a length any envelope
+  holds. On the live binding the scheme is `HybridSignature`. `P` says
+  in its own bytes that it served and did not sign.
 - **A 200 that stops short is transport, at every offset.** A relay can
   cut a stream where it likes, the frame's end included, and guard
   pinning puts the same relay on every retry; it cannot write into an

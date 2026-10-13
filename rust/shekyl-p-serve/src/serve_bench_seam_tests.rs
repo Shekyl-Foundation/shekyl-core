@@ -32,8 +32,8 @@ use super::invariant::{CountingProvider, CountingSigner, Signs};
 use super::{
     filler, good_get_shard_0, good_header, header_at, header_line, is_refusal_trailer,
     parse_served, prehead_in_memory, read_and_fold_in_memory, request_raw, serve_one_in_memory,
-    InMemoryServe, PServeEndpoint, ANCHOR_HASH, IN_GATE_ANCHOR, NONCE, OWN_HEIGHT,
-    SIGNATURE_ENVELOPE_LEN, WRITE_CHUNK_BYTES,
+    InMemoryServe, PServeEndpoint, ANCHOR_HASH, IDENTITY_ENVELOPE_LEN, IN_GATE_ANCHOR, NONCE,
+    OWN_HEIGHT, WRITE_CHUNK_BYTES,
 };
 use crate::countersign::PassSigner;
 use crate::provider::ShardProvider;
@@ -56,7 +56,7 @@ async fn over_the_wire(
     let signer = CountingSigner::that(signs);
     let ep = PServeEndpoint::bind(
         Arc::clone(&provider) as Arc<dyn ShardProvider>,
-        Arc::clone(&signer) as Arc<dyn PassSigner>,
+        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
     )
     .await
     .expect("bind");
@@ -122,7 +122,7 @@ async fn a_served_response_is_the_same_bytes_for_the_same_work() {
     // The signature is hedged, so the two envelopes differ; everything
     // ahead of them is identical, and each envelope verifies.
     assert_eq!(wire.len(), memory.len());
-    let cut = wire.len() - SIGNATURE_ENVELOPE_LEN;
+    let cut = wire.len() - IDENTITY_ENVELOPE_LEN;
     assert_eq!(wire[..cut], memory[..cut], "head and body are identical");
     for (response, signer) in [(&wire, &wire_signer), (&memory, &memory_signer)] {
         let served = parse_served(response);
@@ -230,7 +230,7 @@ async fn a_late_refusal_is_the_same_trailer_for_the_same_work() {
     assert_eq!(memory_cost, wire_cost);
     assert_eq!(memory, wire, "no hedged bytes here: identical to the last");
     assert!(is_refusal_trailer(
-        &wire[wire.len() - SIGNATURE_ENVELOPE_LEN..]
+        &wire[wire.len() - IDENTITY_ENVELOPE_LEN..]
     ));
 }
 
@@ -268,7 +268,7 @@ async fn the_pre_head_arm_is_the_head_of_the_response_and_reads_no_body() {
         );
         assert_eq!(
             wire.len(),
-            ahead.len() + body.len() + SIGNATURE_ENVELOPE_LEN,
+            ahead.len() + body.len() + IDENTITY_ENVELOPE_LEN,
             "{body_bytes} bytes: and the body and envelope are all that follow"
         );
     }

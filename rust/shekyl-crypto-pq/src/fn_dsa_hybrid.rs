@@ -88,6 +88,12 @@
 //! task should sign from a shallower frame, or hold a decoded key across
 //! signatures rather than decoding per signature — the choice belongs to
 //! the first consumer, the serve path's signing capability.
+//!
+//! [`FnDsaHybridSigner`] is that held key. It decodes once, into a heap
+//! slot, and signs through the same private call `fn_dsa_sign` makes after
+//! its own decode. The context and its working buffers leave the signing
+//! stack, and the decode is paid once per key.
+//! Its measurements are on `a_held_key_signs_on_a_small_stack`.
 
 use crate::heap_secret::HeapSecret;
 use crate::hybrid_combiner::{self, decode_canonical, encode_canonical, CANONICAL_OVERHEAD};
@@ -108,6 +114,7 @@ use fn_dsa::{
     FN_DSA_LOGN_1024, HASH_ID_RAW,
 };
 use rand::{CryptoRng, RngCore};
+use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 
 /// FN-DSA-1024 verifying-key length, from the crate.
 pub const FN_DSA_1024_PUBLIC_KEY_LENGTH: usize = vrfy_key_size(FN_DSA_LOGN_1024);
@@ -153,6 +160,26 @@ impl FnDsaHybridPublicKey {
         )
     }
 
+    /// The canonical encoding as the chain's word for a receipt key
+    /// ([`ReceiptSignPk`]): what a JoinMarket commits and a bond record
+    /// keeps. Total — the two lengths are one, held at compile time below.
+    #[must_use]
+    pub fn to_receipt_sign_pk(&self) -> ReceiptSignPk {
+        let mut bytes = [0u8; RECEIPT_SIGN_PK_LEN];
+        bytes.copy_from_slice(&self.to_canonical_bytes());
+        ReceiptSignPk::from_bytes(bytes)
+    }
+
+    /// Parse a chain-carried receipt key: [`Self::from_canonical_bytes`]
+    /// over its bytes. This is admission's "parses" (CEN-J28).
+    ///
+    /// # Errors
+    ///
+    /// [`Self::from_canonical_bytes`]'s.
+    pub fn from_receipt_sign_pk(key: &ReceiptSignPk) -> Result<Self, CryptoError> {
+        Self::from_canonical_bytes(key.as_bytes())
+    }
+
     /// Parse the canonical encoding.
     ///
     /// # Errors
@@ -183,6 +210,11 @@ impl FnDsaHybridPublicKey {
     }
 }
 
+// `shekyl-types` restates the canonical length for the crates that carry
+// the key and depend on no cryptography; the two are one number or this
+// crate does not build.
+const _: () = assert!(FnDsaHybridPublicKey::CANONICAL_LEN == RECEIPT_SIGN_PK_LEN);
+
 /// An Ed25519 + FN-DSA-1024 secret key. Wiped on drop; never serialized.
 ///
 /// There is no canonical encoding for it and no `Clone`: the receipt key is
@@ -202,6 +234,18 @@ pub struct FnDsaHybridSecretKey {
 impl std::fmt::Debug for FnDsaHybridSecretKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("FnDsaHybridSecretKey([REDACTED])")
+    }
+}
+
+// Test-support surface, behind `test-utils`.
+#[cfg(any(test, feature = "test-utils"))]
+impl FnDsaHybridSecretKey {
+    /// Make the FN-DSA half undecodable, in place: its header byte, which
+    /// names the degree, is moved off 1024. For tests of what a holder of
+    /// this key does when the key does not decode. No key byte is read out.
+    pub fn corrupt_fn_dsa_half_for_tests(&mut self) {
+        let header = &mut self.fn_dsa.as_array_mut()[0];
+        *header = header.wrapping_sub(1);
     }
 }
 
@@ -320,23 +364,18 @@ impl HybridEd25519FnDsa {
         Self::keypair_from_seeds(&ed25519_seed, &fn_dsa_seed)
     }
 
-    /// The nested sign with this scheme's post-quantum half
-    /// ([`hybrid_combiner::sign_nested`]); the free parameter is where
-    /// FN-DSA's signer draws its seed.
+    /// The nested sign with this scheme's post-quantum half. The free
+    /// parameter is where FN-DSA's signer draws its seed. The body is
+    /// [`nest_fn_dsa_signature`], which the held signer signs through too.
     fn sign_with_rng(
         secret_key: &FnDsaHybridSecretKey,
         domain: &[u8],
         message: &[u8],
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<FnDsaHybridSignature, CryptoError> {
-        let (ed25519, fn_dsa) = hybrid_combiner::sign_nested(
-            HYBRID_SCHEME_ID_ED25519_FN_DSA_1024,
-            secret_key.ed25519.as_array(),
-            domain,
-            message,
-            |inner| fn_dsa_sign(secret_key.fn_dsa.as_array(), rng, inner),
-        )?;
-        Ok(FnDsaHybridSignature { ed25519, fn_dsa })
+        nest_fn_dsa_signature(secret_key.ed25519.as_array(), domain, message, |inner| {
+            fn_dsa_sign(secret_key.fn_dsa.as_array(), rng, inner)
+        })
     }
 }
 
@@ -399,6 +438,9 @@ impl SignatureScheme for HybridEd25519FnDsa {
     }
 }
 
+mod signer;
+pub use signer::FnDsaHybridSigner;
+
 /// FN-DSA-1024 key generation from `seed`.
 ///
 /// Returns the encoded public key and the encoded secret. The secret is
@@ -432,6 +474,41 @@ fn fn_dsa_keygen(
     (public, secret)
 }
 
+/// The nested sign both scheme-3 signers share: the per-call path and the
+/// held key. `sign_fn_dsa` produces the FN-DSA half over the 64-byte
+/// preimage; the classical half wraps it.
+fn nest_fn_dsa_signature(
+    ed25519_seed: &[u8; ED25519_SECRET_KEY_LENGTH],
+    domain: &[u8],
+    message: &[u8],
+    sign_fn_dsa: impl FnOnce(&[u8; 64]) -> Result<[u8; FN_DSA_1024_SIGNATURE_LENGTH], CryptoError>,
+) -> Result<FnDsaHybridSignature, CryptoError> {
+    let (ed25519, fn_dsa) = hybrid_combiner::sign_nested(
+        HYBRID_SCHEME_ID_ED25519_FN_DSA_1024,
+        ed25519_seed,
+        domain,
+        message,
+        sign_fn_dsa,
+    )?;
+    Ok(FnDsaHybridSignature { ed25519, fn_dsa })
+}
+
+/// One signature from an already-decoded FN-DSA-1024 key.
+///
+/// Empty FN-DSA context, raw message: the 64-byte preimage is already
+/// domain-separated. `InvalidKeyMaterial` is the crate giving up after a
+/// long run of rejected samples.
+fn sign_decoded_key(
+    key: &mut SigningKey1024,
+    rng: &mut (impl RngCore + CryptoRng),
+    inner: &[u8; 64],
+) -> Result<[u8; FN_DSA_1024_SIGNATURE_LENGTH], CryptoError> {
+    let mut signature = [0u8; FN_DSA_1024_SIGNATURE_LENGTH];
+    key.sign(rng, &DOMAIN_NONE, &HASH_ID_RAW, inner, &mut signature)
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    Ok(signature)
+}
+
 /// One FN-DSA-1024 signature over `inner`, drawn from `rng`.
 ///
 /// Returns the fixed-length signature. `InvalidKeyMaterial` means `secret`
@@ -442,7 +519,8 @@ fn fn_dsa_keygen(
 ///
 /// `#[inline(never)]` keeps that key in this frame. Inlining it stacks the
 /// key on the caller, and `the_scheme_runs_on_a_small_stack` fails when
-/// that happens.
+/// that happens. The signature itself is [`sign_decoded_key`], which the
+/// held signer calls on the key it already decoded.
 #[inline(never)]
 fn fn_dsa_sign(
     secret: &[u8; FN_DSA_1024_SECRET_KEY_LENGTH],
@@ -454,12 +532,7 @@ fn fn_dsa_sign(
     // copy of the key for the crate's wipe-on-drop to miss.
     let mut decoded = SigningKey1024::decode(secret);
     let signing_key = decoded.as_mut().ok_or(CryptoError::InvalidKeyMaterial)?;
-    let mut signature = [0u8; FN_DSA_1024_SIGNATURE_LENGTH];
-    // `None` means the key is invalid; the buffer has the exact length.
-    signing_key
-        .sign(rng, &DOMAIN_NONE, &HASH_ID_RAW, inner, &mut signature)
-        .ok_or(CryptoError::InvalidKeyMaterial)?;
-    Ok(signature)
+    sign_decoded_key(signing_key, rng, inner)
 }
 
 #[cfg(test)]
@@ -492,7 +565,10 @@ mod tests {
         );
     }
     use crate::error::PqcVerifyError;
-    use crate::signature::{verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_CARRIER};
+    use crate::signature::{
+        verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
+        SCHEME_DOMAIN_WITNESS_CARRIER,
+    };
 
     const D: &[u8] = SCHEME_DOMAIN_RECEIPT;
 
@@ -562,6 +638,30 @@ mod tests {
             .verify(&pk, SCHEME_DOMAIN_WITNESS_CARRIER, b"message", &sig)
             .is_err());
         assert!(scheme.verify(&pk, D, b"massage", &sig).is_err());
+    }
+
+    /// The witness's bundle signature is its own surface: one key, one
+    /// message, and the signature is dead under the carrier's domain and
+    /// under the receipt's. Red edit: give `SCHEME_DOMAIN_WITNESS_BUNDLE`
+    /// the carrier's bytes (or the receipt's) and the matching `is_err`
+    /// fails.
+    #[test]
+    fn the_bundle_domain_is_neither_the_carriers_nor_the_receipts() {
+        let (pk, sk) = keypair();
+        let scheme = HybridEd25519FnDsa;
+        let commitment = [0xB7u8; 32];
+        let sig = scheme
+            .sign(&sk, SCHEME_DOMAIN_WITNESS_BUNDLE, &commitment)
+            .expect("sign");
+        scheme
+            .verify(&pk, SCHEME_DOMAIN_WITNESS_BUNDLE, &commitment, &sig)
+            .expect("verifies under its own domain");
+        assert!(scheme
+            .verify(&pk, SCHEME_DOMAIN_WITNESS_CARRIER, &commitment, &sig)
+            .is_err());
+        assert!(scheme
+            .verify(&pk, SCHEME_DOMAIN_RECEIPT, &commitment, &sig)
+            .is_err());
     }
 
     /// SA-R-2 holds for this scheme as for the other: no bare-message path,

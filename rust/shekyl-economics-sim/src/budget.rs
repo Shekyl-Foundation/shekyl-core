@@ -21,17 +21,17 @@
 //! per-block difference is the emission-leg operand:
 //!
 //! ```text
-//! (a) emission leg = split_block_emission(effective_reward, share).staker   // release-modulated
-//! (b) emission leg = split_block_emission(base_reward,       share).staker   // unmodulated subsidy
+//! (a) emission leg = price_emission(...).split.staker_emission   // the paid reward
+//! (b) emission leg = split_block_emission(base_reward, share).staker   // unmodulated subsidy
 //! ```
 //!
-//! The fee leg (`compute_burn_split(...).staker_pool_amount`) is **identical**
+//! The fee leg (`PaidEmission::fee_burn.staker_pool_amount`) is **identical**
 //! under both — (b) only insulates the *emission* leg, not fees. The chain
-//! itself is one real trajectory: `already_generated` advances by the modulated
-//! `effective_reward` in both arms (the emission curve does not change; only the
-//! staker-leg destination/quantity question is (a)-vs-(b)). So the funding delta
-//! (b) would buy over (a) is, block for block, exactly the release multiplier
-//! applied to the emission share of `base_reward`.
+//! itself is one real trajectory: `already_generated` advances by the
+//! composition's paid reward in both arms (the emission curve does not change;
+//! only the staker-leg destination/quantity question is (a)-vs-(b)). So the
+//! funding delta (b) would buy over (a) is, block for block, exactly the
+//! release multiplier applied to the emission share of `base_reward`.
 //!
 //! **Bounded by construction.** `calc_release_multiplier` clamps to
 //! `[release_min, release_max]` (0.8×–1.3×; `release.rs`). At the *lowest* tx
@@ -41,8 +41,9 @@
 //! regimes actually land, and how the emission-share decay (0.90/yr) shrinks the
 //! (a)-vs-(b) gap toward zero as the chain enters the fee era.
 //!
-//! **The weight penalty.** Both arms advance `already_generated` by the fill
-//! rule's penalised reward ([`crate::chain_cursor::ChainCursor`]). Disposition
+//! **The weight penalty.** Both arms advance `already_generated` by the
+//! composition's paid reward ([`crate::chain_cursor::PricedBlock::paid_reward`]).
+//! The cursor asserts that figure equals the fill's. Disposition
 //! (b)'s emission leg stays the unpenalised base reward: the fill admits a
 //! body past the median only when its fee covers the reward it costs, so the
 //! penalty in (a) is bounded by those fees, and (b) does not model it
@@ -52,13 +53,13 @@
 use serde::Serialize;
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_economics::{
-    base_block_reward, burn::compute_burn_split_at, calc_release_multiplier, emission_share,
-    params::SCALE, split_block_emission, ClosedShardCount,
+    base_block_reward, calc_release_multiplier, emission_share_at, params::SCALE,
+    split_block_emission, ClosedShardCount,
 };
 
 use crate::burden::HonestOutputs;
 use crate::chain_cursor::{ChainCursor, ChainStep};
-use crate::engine::SimParams;
+use crate::engine::{emitted_at_start, SimParams};
 
 const COIN: f64 = crate::burden::COIN as f64;
 
@@ -69,7 +70,8 @@ pub struct BudgetScenario {
     pub description: String,
     pub sim_years: u64,
     pub get_volume: Box<dyn Fn(u64, u64) -> u64>,
-    pub initial_emitted_fraction: f64,
+    /// As [`ScenarioConfig::initial_emitted_ppm`](crate::engine::ScenarioConfig).
+    pub initial_emitted_ppm: u32,
     pub genesis_height_offset: u64,
 }
 
@@ -139,8 +141,10 @@ pub struct BudgetScenarioResult {
 pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> BudgetScenarioResult {
     let economic = params.economic();
 
-    let mut already_generated: u128 =
-        (params.emission_curve_asymptote as f64 * scenario.initial_emitted_fraction) as u128;
+    let mut already_generated = emitted_at_start(
+        params.emission_curve_asymptote,
+        scenario.initial_emitted_ppm,
+    );
     let mut total_burned: u128 = 0;
 
     let total_blocks = params.blocks_per_year * scenario.sim_years;
@@ -179,7 +183,6 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
                 mult_min,
                 blocks_in_epoch,
                 mid_height,
-                params,
             ));
             emission_a_acc = 0;
             emission_b_acc = 0;
@@ -199,6 +202,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
                 leaves: outputs.leaves(),
                 already_generated,
                 total_burned,
+                closed_shards: ClosedShardCount::ZERO,
             },
             params,
             &economic,
@@ -216,13 +220,11 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         // Fee leg — identical under both dispositions. The burn read the net
         // supply inside the cursor.
         outputs.accrue(priced.filled.included);
-        let total_fees = priced.filled.fees;
-        let burn_pct = priced.burn_pct;
 
-        // Real ledger advance uses the paid emission (both arms share it).
-        let effective_reward = priced.filled.paid_reward;
+        // Real ledger advance uses the composition's paid reward (both arms share it).
+        let paid_reward = priced.paid_reward();
         // (a): staker emission leg from the MODULATED, penalised reward (shipped).
-        let (_miner_a, staker_emission_a) = split_block_emission(effective_reward, emission_share);
+        let staker_emission_a = priced.paid.split.staker_emission;
         // (b): staker emission leg from the UNMODULATED subsidy
         // (counterfactual). Unpenalised: the fill rule admits a body past
         // the median only when its fee covers the reward it costs, so the
@@ -231,8 +233,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         let (_miner_b, staker_emission_b) = split_block_emission(base_reward, emission_share);
         // Canonical escalated entry; n = 0 (no corpus trajectory in this arm —
         // see engine.rs). Genesis-neutral asymptote ⇒ bit-identical to flat.
-        let fee_split =
-            compute_burn_split_at(total_fees, burn_pct, ClosedShardCount::ZERO, &economic);
+        let fee_split = priced.paid.fee_burn;
 
         // Accumulate.
         emission_a_acc += staker_emission_a as u128;
@@ -244,7 +245,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         blocks_in_epoch += 1;
 
         // Advance the real ledger (modulated, both arms share it).
-        already_generated += u128::from(effective_reward);
+        already_generated += u128::from(paid_reward);
         total_burned += fee_split.actually_destroyed as u128;
     }
 
@@ -261,7 +262,6 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             mult_min,
             blocks_in_epoch,
             mid_height,
-            params,
         ));
     }
 
@@ -322,7 +322,6 @@ fn build_epoch_record(
     mult_min: u64,
     blocks: u64,
     abs_height_mid: u64,
-    params: &SimParams,
 ) -> EpochRecord {
     let budget_a = emission_a + fee;
     let budget_b = emission_b + fee;
@@ -336,12 +335,7 @@ fn build_epoch_record(
     } else {
         0.0
     };
-    let share = emission_share(
-        abs_height_mid,
-        params.staker_emission_share,
-        params.staker_emission_decay,
-        params.blocks_per_year,
-    );
+    let share = emission_share_at(abs_height_mid);
     EpochRecord {
         epoch,
         mean_tx_volume: vol_sum as f64 / blocks as f64,

@@ -21,9 +21,7 @@ use serde::Serialize;
 use std::io::Write;
 
 use shekyl_chain_rules::EffectiveMedian;
-use shekyl_economics::{
-    burn::compute_burn_split, params::SCALE, split_block_emission, ScaledShare, TxVolume,
-};
+use shekyl_economics::{params::SCALE, CirculatingSupply, ClosedShardCount, TxVolume};
 
 use crate::burden::{
     bond_opp_cost_skl, burden_cost_fiat_per_year, normal_tx_archival_bytes, ordinary_tx_fee,
@@ -36,7 +34,7 @@ use crate::calibration::{
     PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
 };
 use crate::chain_cursor::{ChainCursor, ChainStep};
-use crate::engine::{ScenarioConfig, SimParams};
+use crate::engine::{emitted_at_start, ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
 use crate::fee_model::OrdinaryTx;
 use crate::population::{
@@ -251,6 +249,11 @@ pub struct A1YearAgg {
 /// attacker rebuilds that fill instead of offering the transactions again.
 #[derive(Debug, Clone, Copy)]
 pub struct LastBlock {
+    /// The consensus height the block was priced at, and the net supply
+    /// its burn read: with the volume, the operands production's
+    /// composition takes.
+    pub chain_height: u64,
+    pub supply: CirculatingSupply,
     pub already_generated: u64,
     pub volume: TxVolume,
     pub sigma_scaled: u64,
@@ -360,8 +363,8 @@ pub fn year_share_atomic(pool_atomic: u128, share_milli: u64) -> u128 {
 pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAgg> {
     let economic = params.economic();
     let total_blocks = params.blocks_per_year * config.sim_years;
-    let mut already_generated: u128 =
-        (config.initial_emitted_fraction * params.emission_curve_asymptote as f64) as u128;
+    let mut already_generated =
+        emitted_at_start(params.emission_curve_asymptote, config.initial_emitted_ppm);
     let mut total_burned: u128 = 0;
     let mut fold = HonestFold::default();
     // Integer atomic accumulators (DQ-2G: the budget quantities never touch f64).
@@ -391,11 +394,14 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 leaves: leaves_priced,
                 already_generated,
                 total_burned,
+                closed_shards: ClosedShardCount::new(closed_before),
             },
             params,
             &economic,
         );
         let last_block = LastBlock {
+            chain_height: abs_height,
+            supply: priced.supply,
             already_generated: priced.fee_point.already_generated,
             volume: priced.volume,
             sigma_scaled: priced.emission_share,
@@ -409,29 +415,25 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         };
         let total_fees = priced.filled.fees;
         fold.add_block(priced.filled.included);
-        let effective = priced.filled.paid_reward;
-        let emission_share = priced.emission_share;
-        let burn_pct = priced.burn_pct;
-        let (_miner, staker_emission) = split_block_emission(effective, emission_share);
-        // share = SCALE → the whole burn (pre-split); the candidate re-splits it.
-        let whole_burn = compute_burn_split(total_fees, burn_pct, ScaledShare::from_raw(SCALE))
-            .staker_pool_amount;
-        // Flat-ledger advance: destroy at the shipped 25% split.
-        let flat = compute_burn_split(
-            total_fees,
-            burn_pct,
-            ScaledShare::from_raw(params.staker_pool_share),
-        );
+        let paid_reward = priced.paid_reward();
+        let staker_emission = priced.paid.split.staker_emission;
+        // The whole burn, before its split: the candidate re-splits it. The
+        // two legs production returns sum to it exactly.
+        let shipped = priced.paid.fee_burn;
+        let whole_burn = shipped.staker_pool_amount + shipped.actually_destroyed;
 
         year_emission_atomic += u128::from(staker_emission);
         year_burn_atomic += u128::from(whole_burn);
         year_fees_atomic += u128::from(total_fees);
-        year_total_emission_atomic += u128::from(effective);
+        year_total_emission_atomic += u128::from(paid_reward);
         year_carried += u128::from(priced.filled.included);
         year_demand += u128::from(demand);
         year_expired += u128::from(priced.filled.expired);
-        already_generated += u128::from(effective);
-        total_burned += u128::from(flat.actually_destroyed);
+        already_generated += u128::from(paid_reward);
+        // The ledger advances by what production destroys at this block's
+        // closed-shard count. At the shipped parameters that is the flat
+        // split at every count (`the_shipped_split_is_flat_at_every_count`).
+        total_burned += u128::from(priced.paid.burned().to_raw());
 
         if (block + 1) % params.blocks_per_year == 0 {
             let year = (block + 1) / params.blocks_per_year;
@@ -500,6 +502,16 @@ pub fn a1_min_clearance_ratio(
 /// The years A1 judges: past the ramp, with a non-empty corpus.
 pub fn a1_sustained_years(aggs: &[A1YearAgg]) -> impl Iterator<Item = &A1YearAgg> {
     aggs.iter().filter(|a| a.year > A1_RAMP_YEARS && a.n > 0)
+}
+
+/// A year's pool prorated to one settlement epoch, in atomic units:
+/// `per_year * SETTLEMENT_EPOCH_BLOCKS / BLOCKS_PER_YEAR`, floored, in the
+/// integers the arms that take an epoch's budget run in (DQ-2G).
+#[must_use]
+pub fn per_epoch_atomic(per_year: u128) -> u64 {
+    let per_epoch = per_year * u128::from(shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS)
+        / u128::from(shekyl_economics::BLOCKS_PER_YEAR);
+    u64::try_from(per_epoch).expect("a year's pool, prorated to an epoch, fits the atomic u64")
 }
 
 /// The shipped budget for one year under a candidate, **atomic**: the decaying
@@ -619,10 +631,11 @@ fn a1_clearance_report(
 ) -> Result<Vec<A1ScenarioResult>, fmt::Error> {
     writeln!(out,
         "\nA1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.\n\
-         budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor 0.75 x R{R} x n x rate.\n\
+         budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor {BOND} x R{R} x n x rate.\n\
          >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate {RATES:?} (10% binding).\n\
          Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).\n\
          Knee band {BAND:?} closed shards; the shipped middle is {KNEE_TB:.2} TB of archival at W = {W} B/shard.",
+        BOND = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
         R = REPLICAS_PER_SHARD,
         RATES = OPP_COST_RATE_BAND,
         BAND = KNEE_BAND,
@@ -1238,12 +1251,13 @@ fn a4_stuffing_report(
         "\nA4 — W9 output-stuffing ROI (§12.2, DQ-2C): SERVED-WORK capture (the D2 pool\n\
          is distributed by served work per bond, NOT by stake). Attacker serves the Δn\n\
          stuffed shards at r=1 and captures reward_share_floor(pool(n+Δn), their work,\n\
-         Σwork) each year; cost = stuffing fees + the §6.2 coupled bond (0.75 SKL/shard\n\
+         Σwork) each year; cost = stuffing fees + the §6.2 coupled bond ({BOND} SKL/shard\n\
          held forever). Best over [years x Δn{DELTAS:?} x horizon{H:?}yr], shown at BOTH\n\
          honest-holdings ends: hHold=4 (rational small bonds — the gate) and hHold=512\n\
          (pathological fully-capped — a curve-cap concern, not the escalation's).\n\
          Flat-25 has no share lever ⇒ 0. Attacker-favouring: min opp-rate {RATE}, storage\n\
          omitted, age-0. PASS iff realistic-end (hHold=4) ROI < 1 everywhere.",
+        BOND = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
         DELTAS = A4_DELTA_SWEEP,
         H = A4_HORIZON_BAND,
         RATE = A4_OPP_RATE,
@@ -1456,11 +1470,9 @@ fn a3_stranding_report(
         "post noclm%"
     )?;
     let picks = [0usize, years.len() / 2, years.len() - 1];
-    let epy = crate::proxy::epochs_per_year();
     for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
         let a = years[yi];
-        let budget_atomic = a1_shipped_budget_atomic(a, &flat_25());
-        let budget_per_epoch = (budget_atomic as f64 / epy) as u64;
+        let budget_per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25()));
         let claim_cost = ordinary_tx_fee(a.cumulative_outputs, a.admission_rate);
         for &archivers in &A3_ARCHIVER_BAND {
             let pre = crate::stranding::measure(
@@ -1505,13 +1517,15 @@ fn a3_stranding_report(
          archivers paid.\n\
          RESIDUAL = a QUANTIZATION FLOOR, not a remaining defect: D1 does not abolish\n\
          structural zeros, it SCALES the cliff with holdings to r > ~1000 x shards_held\n\
-         (the micro sum must reach one milli). Unreachable for a bulk holder (4096 shards\n\
-         ⇒ r > 4M); a 16-shard hobbyist still zeroes at r > ~16k — the 70% column above.\n\
+         (the micro sum must reach one milli). Unreachable for a bulk holder ({CAP} shards\n\
+         ⇒ r > {CLIFF_M:.0}M); a 16-shard hobbyist still zeroes at r > ~16k — the 70% column above.\n\
          Sub-milli work is UNREPRESENTABLE under the frozen WORK_MILLI_SCALE, so the\n\
          honest name is a MINIMUM VIABLE HOLDING THRESHOLD, not a bug: eliminating it\n\
          would mean changing a frozen constant. The archiver's levers are holdings size\n\
          and replication depth. It is the third force in D3's holdings-size triangle.\n\
          Joint with A1: stranded budget is not burden-clearing.",
+        CAP = MAX_HOLDINGS_SHARDS,
+        CLIFF_M = MAX_HOLDINGS_SHARDS as f64 * 1_000.0 / 1.0e6,
     )?;
 
     Ok(())
@@ -1611,7 +1625,6 @@ struct ShardRewardOperands {
 }
 
 fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
-    let epy = crate::proxy::epochs_per_year();
     let mut rewards: Vec<f64> = Vec::new();
     let mut max_per_epoch_skl = 0.0_f64;
     for scenario in folded {
@@ -1620,8 +1633,9 @@ fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
             .iter()
             .filter(|a| a.n >= MAX_HOLDINGS_SHARDS as u64)
         {
-            let pool_atomic = a1_shipped_budget_atomic(a, &flat_25());
-            let pool_per_epoch_skl = (pool_atomic as f64 / COIN) / epy;
+            // The epoch's pool in atomic units; SKL is the report's unit.
+            let pool_per_epoch_skl =
+                per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25())) as f64 / COIN;
             let per_shard = pool_per_epoch_skl / a.n as f64;
             rewards.push(per_shard);
             max_per_epoch_skl = max_per_epoch_skl.max(per_shard);
@@ -1670,7 +1684,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     writeln!(
         out,
         "Stage-2 archival burden trajectory (§12.1 checkpoint 1)\n\
-         outputs = carried txs x {OUTPUTS_PER_TX_NORMAL:.0} (1in/2out normal traffic, drives tree depth); \
+         outputs = carried txs x {OUTPUTS_PER_TX_NORMAL} (1in/2out normal traffic, drives tree depth); \
          archival bytes = Σ carried txs x archival_len(1in/2out @ depth) ({AB0}..{AB1} B/tx shallow..deep);\n\
          carried = what the producer's fill rule admits at the effective median (ESR-6), not the schedule's demand;\n\
          n = shard_of(cumulative archival bytes), W = {SHARD:.1} MB/shard (SHT-Q2)\n\
@@ -1759,8 +1773,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
                 .max_by_key(|c| c.asymptote)
                 .copied()
                 .unwrap_or_else(flat_25);
-            let pool = a1_shipped_budget_atomic(a, &best);
-            let per_epoch = (pool as f64 / crate::proxy::epochs_per_year()) as u64;
+            let per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &best));
             crate::redistribution::a2_report(
                 out,
                 per_epoch,
@@ -1836,7 +1849,9 @@ pub struct Stage2Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_economics::burn::{compute_burn_split, compute_burn_split_at};
     use shekyl_economics::params::mul_scale;
+    use shekyl_economics::ScaledShare;
 
     use crate::burden::closed_shards;
 
@@ -1971,6 +1986,36 @@ mod tests {
             // `eprintln!` from a passing test, and this must be seen on one.
             use std::io::Write as _;
             let _ = writeln!(std::io::stderr(), "KNEE BAND: {reading}");
+        }
+    }
+
+    /// The fold's ledger is called the flat control: every candidate curve
+    /// is read against a chain that destroys at the floor share. The fold
+    /// advances it by production's split, which is flat only while the
+    /// shipped asymptote equals the floor. When the ceremony moves the
+    /// asymptote this goes red, and what must be re-read is which ledger
+    /// the candidates are measured against, and the `n = 0` the engine and
+    /// budget folds pass for want of a corpus.
+    ///
+    /// Do not loosen it to make it pass. Once the escalation is live this
+    /// test has no subject: delete it, and regenerate the stage-2 fixtures
+    /// with the escalation in them.
+    #[test]
+    fn the_shipped_split_is_flat_at_every_count() {
+        let shipped = shekyl_economics::EconomicParams::default();
+        assert_eq!(
+            shipped.escalation_asymptote_share, shipped.staker_pool_share,
+            "the shipped burn split now escalates: the stage-2 ledger is no longer a flat control"
+        );
+        for n in [0, 1, shipped.escalation_knee_n, u64::MAX] {
+            let at_n =
+                compute_burn_split_at(1_000_000_007, 500_000, ClosedShardCount::new(n), &shipped);
+            let flat = compute_burn_split(
+                1_000_000_007,
+                500_000,
+                ScaledShare::from_raw(shipped.staker_pool_share),
+            );
+            assert_eq!(at_n, flat, "n = {n}");
         }
     }
 
@@ -2153,8 +2198,14 @@ mod tests {
     /// `cargo test --release -p shekyl-economics-sim -- --ignored
     /// matches_the_committed_fixture` (both arms). The nightly
     /// `economics-sim-ignored` job runs both.
+    ///
+    /// The committed fixtures are generated and checked on Linux x86-64.
+    /// The scenario layer calls `powf`, `exp` and `ln` (`burden.rs`,
+    /// `fee_floor.rs`, `fee_ladder.rs`, `mn_feasibility.rs`), whose last
+    /// bit can differ between C runtimes, and a last bit can move a printed
+    /// digit. The chain quantities are integers and do not (DQ-2G).
     #[test]
-    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored; nightly economics-sim-ignored"]
+    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored; nightly economics-sim-ignored; fixture generated and checked on Linux x86-64"]
     fn stage2_narration_matches_the_committed_fixture() {
         assert_narration_matches(&PRODUCTION_ARM);
     }
@@ -2165,7 +2216,7 @@ mod tests {
     /// and print its fee, and it moves only when a fold operand shared by
     /// both arms does.
     #[test]
-    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored; nightly economics-sim-ignored"]
+    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored; nightly economics-sim-ignored; fixture generated and checked on Linux x86-64"]
     fn stage2_narration_flat_control_matches_the_committed_fixture() {
         assert_narration_matches(&FLAT_CONTROL_ARM);
     }

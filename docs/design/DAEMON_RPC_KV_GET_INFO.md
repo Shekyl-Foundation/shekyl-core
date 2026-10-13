@@ -1,7 +1,8 @@
 # RK-5c — `get_info`, the hub: rule-26 pre-flight
 
-**Status:** OPEN — R0, **RATIFIED 2026-10-09** (Rick); implementation open.
-**Commits 1–7 of §5 have landed** (1 and 2 on 2026-10-09, 3 to 7 on 2026-10-10; merged as #1017, 2026-10-11). The 8+ commits are a follow-up PR, and **RK-Q8's, RK-Q3's and RK-Q10's have landed** (2026-10-11, 2026-10-12); RK-Q1, Q2, Q6 and Q9 remain. Drafted 2026-10-08. §1's rulings
+**Status:** LIVING CONTRACT — last verified 2026-10-13 at `667b07d81` (#1057). **Implementation COMPLETE.** Commits 1–7 of §5 landed 2026-10-09 and 2026-10-10 (#1017); the seven 8+ commits landed 2026-10-11 to 2026-10-13 (RK-Q8, RK-Q3, RK-Q10 in #1035; RK-Q9, RK-Q1, RK-Q2, RK-Q6 and the reader sweep in #1057); `CORE_RPC_VERSION` 3.45 → 3.54. Ratified 2026-10-09 (Rick) as a rule-26 pre-flight, drafted 2026-10-08.
+
+**Class (rule 95).** This document stays in `docs/design/` as the **contract of record for `get_info`'s wire**, because it owns two things a future reader needs and no other document holds: the typed parts and their rules (§1 RK-D13…RK-D25, §4.1 — the three wire states, `Nullable`, whole-part `Hidden`, the frozen `version` key, difficulty hex and amounts decimal), and the GUI lane's open list (§5.1, the one residue this slice still owns; `docs/FOLLOWUPS.md` names §3.3). The executable form of the contract is `rust/shekyl-rpc-types/src/info.rs` (the type and its module doc) with the oracle vectors under `rust/shekyl-rpc-types/tests/vectors/rpc/` (`get_info_*`, README); rule 43 carries the three-state table generally. **The pre-flight sections are records**, each marked in its own heading: §0, §2 (a census at a ground commit), §3 (defects, all fixed on the daemon's side), §4.2–§4.4, §5, §6 and §7. Do not re-implement from them; the code is the state. §1's rulings
 are recorded as ruled; **RK-Q1…RK-Q9 were ruled 2026-10-09** and RK-Q10
 2026-10-08, confirmed 2026-10-09 (§8). **RK-Q11 was ruled 2026-10-10**, with
 two additions; the first is minted as RK-D25 (§1).
@@ -34,7 +35,7 @@ commits of it name them.
 
 ---
 
-## 0. Why this slice is not a plain port
+## 0. Why this slice is not a plain port — RECORD (pre-flight reasoning, 2026-10-08)
 
 RK-1…RK-5b each moved a method whose C++ handler was a thin reader. `get_info`
 is not. Its handler (`src/rpc/core_rpc_server.cpp:199-305`) holds policy:
@@ -89,7 +90,7 @@ and unmaintainable. Every decision below is that principle applied.
 | **RK-D14** | **`has_peers: bool` belongs to health.** The number of peers is node status and stays out of health. |
 | **RK-D15** | **The `target_height` sentinel is retired.** `0` stops meaning "synchronized" on `get_info`, as 3.40 already did on `get_version` and `sync_info` (`rust/shekyl-rpc-types/src/chain.rs:53-55`). Synchronization is `synchronized`; the target is the core's target or absent. |
 | **RK-D16** | **Economics fields are ported, not redesigned**, into a flexible typed Rust structure the economics lane evolves on its own (EUP is in assessment; no parameter or field-meaning changes are authorized here). |
-| **RK-D17** | **RK-5c lands before RT-W10.** Recorded in `RPC_CHANNEL.md` §6.1, "Prerequisite: `get_info` moves to Rust first (RK-5c)". |
+| **RK-D17** | **RK-5c lands before RT-W10.** Recorded in `RPC_CHANNEL.md` §6.1, "Prerequisite: `get_info` moves to Rust first (RK-5c)". **Met 2026-10-13:** RK-5c landed in full before RT-W10 started; §6.1's three asks are answered (fields attributable to one grant through `Disclosure`; withheld parts absent, not zeroed; the handler takes a `Disclosure` value, not the boolean). |
 | **RK-D21** | **`emission_era` is removed, not ported.** There never was an emission era: the chain is pre-genesis and the idea was retired. The field, its four labels and its thresholds are deleted from the C++ reply **before** the oracle capture, so nothing in Rust — no type, no enum, no function, no fixture — ever carries it. |
 | **RK-D23** | **`0` is a value; "no result" is `None` / `null`.** Zero is a valid answer for most quantities, so using it to mean "there is no answer" is ambiguous. In Rust the absence is `Option`; on the JSON wire it is `null`. This is RK-D15's principle stated generally, and it decides how every absence in this slice is written (§4.1, RK-Q7). RK-Q9 is the case it does not cover: a refused computation is a fault, not an absence. A standing rule for it is being drafted separately; this document cites RK-D23 either way. |
 | **RK-D24** | **(RULED 2026-10-10.) The native handler gathers by part: a part the caller will not receive is not read.** Status and Peers are not read for a restricted caller, and the count of pool entries not yet broadcast is not read without the host axis. Commit 3's C++ gather makes every read for every caller. That costs a public caller reads it never sees, and it lets a failure in one of them — `boost::filesystem::space` throwing inside `core::get_free_space`, for one — refuse a caller who would not have received that fact. The native handler carries a test of exactly that: with the Status facts set to fail, a `View` caller gets a full reply and a `Full` caller gets the refusal (§4.2). |
@@ -101,7 +102,7 @@ is left off the reply.
 
 ---
 
-## 2. Census at source
+## 2. Census at source — RECORD, read at the ground commit; the code has moved since
 
 ### 2.1 Fields, by part, with their one source
 
@@ -117,7 +118,7 @@ its response base (`src/rpc/core_rpc_server_commands_defs.h:274-320`).
 | | `synchronized` | protocol `is_synchronized()`, read **once** | read twice `:208`, `:253` |
 | | `busy_syncing`, `offline`, `following_degraded` | node facts | `:257`, `:247`, `:256` |
 | | `has_peers` (**new**, RK-D14) | the seam board, every connector | — |
-| **Identity** → `health` (duplicates of `get_version`) | `nettype`, `mainnet`, `testnet`, `stagenet` | `shekyl_rpc_identity` (`src/rpc/rpc_facts_ffi.h:56-62`) — RK-Q6 | `:234-238` |
+| **Identity** → `health` (duplicates of `get_version`) | `nettype`, `mainnet`, `testnet`, `stagenet` — **retired at 3.54 (RK-Q6)**; the part now holds `protocol_version` alone | `shekyl_rpc_identity` (`src/rpc/rpc_facts_ffi.h:56-62`) — RK-Q6 | `:234-238` |
 | | `protocol_version` | constant | `:252` |
 | **Chain** → `chain` | `difficulty` / `wide_difficulty` / `difficulty_top64` | one `u128`, three renderings (RK-Q1) | `:209` |
 | | `cumulative_difficulty` / `wide_…` / `…_top64` | one `u128`, three renderings (RK-Q1) | `:239-240` |
@@ -187,9 +188,9 @@ incident's consumer gets").
 
 ---
 
-## 3. Defects the census found (live on `dev` at the ground commit)
+## 3. Defects the census found at the ground commit — RECORD; all four fixed on the daemon's side (§3.3's GUI half is §5.1's)
 
-### 3.1 The wallet derives "has peers" from fields a restricted daemon zeroes
+### 3.1 The wallet derives "has peers" from fields a restricted daemon zeroes — FIXED by commit 7 (`has_peers`, 3.47, 2026-10-10)
 
 `health_from_get_info` sums `outgoing_connections_count` and
 `incoming_connections_count` (`synced_chain_facts.rs:695-708`). A restricted
@@ -206,7 +207,7 @@ listener writes `0` for both (`core_rpc_server.cpp:214-216`).
   RK-D14, every `view`-grant connection would read `NotFollowing::NoPeers`
   and P would stop serving.
 
-### 3.2 Peer counts are clearnet-only and fed by two stores
+### 3.2 Peer counts are clearnet-only and fed by two stores — FIXED by RK-Q3's commit (every connector, one seam-board snapshot, 3.49, 2026-10-12)
 
 §0's third and fourth bullets. A node whose sessions are all on Tor reports
 `0` connections through `get_info`, and so the §3.1 consequences follow for
@@ -214,7 +215,12 @@ it on the **unrestricted** listener too. `has_peers` must therefore be read
 from the seam board over every connector (§4.2), not derived from these
 counts.
 
-### 3.3 The GUI cannot decode a 3.42 reply
+### 3.3 The GUI cannot decode a 3.42 reply — daemon half FIXED by RK-Q2 (3.53); GUI half OPEN in §5.1
+
+*Status, 2026-10-13: RK-Q2's commit has landed (3.53). Both amounts are
+decimal strings, so this section's defect is closed on the daemon's side.
+The GUI still needs its own changes for the other wire changes since 3.42
+(§5.1), when its lane resumes.*
 
 `GetInfoResponse.already_generated_coins` is `Option<String>`
 (gui `daemon_rpc.rs:109`); #1005 emits a JSON number
@@ -242,7 +248,7 @@ The GUI also reads `stake_ratio` and `staker_pool_balance` under
 `#[serde(default)]` (gui `daemon_rpc.rs:114-119`). The daemon sends neither;
 both render as a confident `0` (rule 82). Recorded for the GUI lane.
 
-### 3.4 The GUI shows "daemon height 0" on every synchronized node
+### 3.4 The GUI shows "daemon height 0" on every synchronized node — FIXED on the daemon by commit 6 (RK-D15, 3.46); the GUI's `Option<u64>` is in §5.1
 
 `daemon_height: info.target_height` (gui `commands.rs:119`). With the
 sentinel, a synchronized daemon reports `0`. RK-D15 makes a synchronized
@@ -260,7 +266,7 @@ target.
 
 ## 4. Design — RATIFIED 2026-10-09
 
-### 4.1 Types (`shekyl-rpc-types`) — RK-D18
+### 4.1 Types (`shekyl-rpc-types`) — RK-D18 — the wire contract (LIVING; the code is `rust/shekyl-rpc-types/src/info.rs`)
 
 **RK-D18: one response type composed of named parts, flattened onto today's
 wire.**
@@ -377,6 +383,16 @@ an unused type in commit 4. It decodes through `deserialize_any` and not
 stand-in that says "none" to an option and "missing field" to anything
 else, which is the whole difference between this type and `Option`.
 
+#### Two kinds of quantity, one encoding each
+
+A **difficulty** is a `0x`-prefixed hex string (`HexU128`,
+`rust/shekyl-rpc-types/src/hex128.rs`). An **amount of coin** is a decimal
+string (RK-Q2). They are different quantities and keep different encodings
+on purpose: hex is what the block headers and the mining RPCs already
+write for difficulty, and decimal is what the wallet RPC writes for
+amounts. Nobody should later "unify" them; that would change one of two
+conventions that each already has readers. (Rick, 2026-10-12.)
+
 #### The three wire states — RK-D23
 
 A field on this reply is in exactly one of three states, and each means one
@@ -397,7 +413,7 @@ stand-ins. Each later commit that changes the wire moves fields onto this
 table, and none moves a field off it. Commit 6 moved `target_height`, on
 all three methods that carry it, and `get_version.current_height`.
 
-### 4.2 Facts — RK-D3 / RK-D7, one snapshot per family
+### 4.2 Facts — RK-D3 / RK-D7, one snapshot per family — LANDED (the shim's layout is pinned in `rpc_facts_ffi_roundtrip.cpp` and `ffi.rs`)
 
 **RK-D20: the chain part is read in one snapshot that carries its own tip.**
 One coarse export, `shekyl_rpc_info_chain_facts`, reads under one chain lock:
@@ -586,7 +602,7 @@ is **not read**. It is a read avoided in the gather, on what the node was
 configured to be; the fault code is never mapped to `false`. When
 `offline` is not set, a missing hub is still the `HubAbsent` refusal.
 
-### 4.3 Economics — RK-D19
+### 4.3 Economics — RK-D19 — LANDED (amounts decimal since RK-Q2; the supply invariant refuses since RK-Q9)
 
 **RK-D19: one projection function in `shekyl-economics` produces the
 economics part from typed inputs.** The handler calls it and does nothing
@@ -614,7 +630,7 @@ else with economics.
   it to the fault, and `get_info` refuses with an error that names the
   invariant and its operands. `burn_pct` is never `null`.
 
-### 4.4 Oracle capture for a handler that computes
+### 4.4 Oracle capture for a handler that computes — RECORD (the emitter was deleted in commit 5; the vectors it captured are held by derivation tests)
 
 Prior slices captured vectors by serializing a response built from fixed
 facts (`tests/vectors/rpc/README.md`). For `get_info` that pins only the
@@ -654,7 +670,7 @@ handler tests, one on each side of the behaviour change (§4.2):
 
 ---
 
-## 5. Commit plan — RATIFIED 2026-10-09 (one PR; each commit bisects)
+## 5. Commit plan — LANDED in full, 2026-10-09 to 2026-10-13 (1–7 in #1017; 8+ in #1035 and #1057)
 
 | # | Commit | Gate |
 | --- | --- | --- |
@@ -666,14 +682,14 @@ handler tests, one on each side of the behaviour change (§4.2):
 | 5 | **Delete C++.** **LANDED 2026-10-10.** Gone: `on_get_info`, `on_get_info_json`, `COMMAND_RPC_GET_INFO`, the three dispatch rows, `build_get_info` and `get_info_facts` with their header, the handler-only `round_up`, the oracle emitter, and the two `get_info` cases in `rpc_target_wire_contract.cpp`. `check_core_ready` stays: two other handlers call it. Comments that cited lines of the handler are rewritten to say what the daemon does, and the bridge's header comment names its current guard | `git grep` for `COMMAND_RPC_GET_INFO`, `on_get_info` and `build_get_info` outside `docs/` → only the vectors' README, which records how the capture was made |
 | 6 | **RK-D15.** **LANDED 2026-10-10** at `CORE_RPC_VERSION` 3.46, in two pieces: the version-first read, then the wire change. Sentinel retired on `get_info`; under RK-Q7, `target_height` becomes nullable on `get_info`, `get_version` and `sync_info` together, and `get_version.current_height` stops being omitted when zero; wallet predicate simplified; CLI `show_chain` reads `synchronized`; the "`get_info` still writes `0`" statements corrected (§6); under RK-Q11 as ruled, the version is read before the full decode through one function, which lands first in this commit; both handshakes and the console's `version` command call it (RK-D25). **Notes on what was built.** (a) The reader is `daemon_rpc_version` and the single decode-and-compare entry is `IdentityExpectation::read` (`rust/shekyl-rpc-types/src/identity.rs`); `check` is gone, so the version cannot be compared in two places. The reader is written by hand: a derived struct would also accept a JSON array positionally, and the key is part of what is frozen. (b) `version`, against a daemon of another RPC version, prints the two RPC versions and fails; it printed the daemon's software version from a lenient decode of `get_info`, which is deleted. (c) **The wallet's predicate is the `synchronized` flag alone.** The height comparison is deleted, with the persona poller's `BehindItsTarget` arm and the `target_height` member of the wallet's two health types. A synchronized daemon now reports its real target, which is the tallest chain a peer has claimed, so comparing against it would let one peer stop the submit watchdog and the persona's serving. No behaviour changes: under the sentinel the comparison never decided anything (Rick, 2026-10-10). (d) The wire type keeps `u64` for the target, as for every height in `shekyl-rpc-types`, which does not depend on the unit types; it is `Option<ChainCount>` inland. (e) The console's `status` and `sync_info` lines show the core's target on a synchronized node too, where `status` showed the node's own height. (f) Vectors: `get_version_synced_v23` (the chain's link, members unchanged), `get_version_absent_target_v2`, `get_version_all_defaults_v3`, `sync_info_empty_v3`, and a `_v2` of four `get_info` fixtures; `get_version_syncing_v3`, `sync_info_v3` and `get_info_syncing_v1` carried a target already and have no successor | one `CORE_RPC_VERSION` bump; a `_vN` vector for each of the three methods, derived from its predecessor (README rule); `Nullable` and its missing-key test (§4.1); RK-D25's test that `{"version": N}` alone reads through the function; the derivation test that each new vector is its predecessor with only the target (and `current_height`) restated; a test that a target above the height neither withholds nor grants the wallet's facts, and one that it does not stop the persona's poller |
 | 7 | **RK-D14.** **LANDED 2026-10-10** at `CORE_RPC_VERSION` 3.47, in two pieces: the board's handshaken count with a missing hub as a fault, then the wire, the readers and the carry-forward. `has_peers` in health; watchdog and P's poller switch to it; `daemon_tip` stops reading `restricted`; fixes §3.1; a missing hub refuses (§4.2; there was no parity arm to delete, as that section's correction records). **Carry-forward, ruled 2026-10-10 (Rick):** this commit deletes `DaemonHealth.connections` and the `map_or(0, …)` that fills it in `health_from_get_info` (`rust/shekyl-engine-core/src/engine/daemon/synced_chain_facts.rs`), outright, in favour of `has_peers` from health. That projection reads a withheld Status part as zero connections, which is `0` standing for "not told" (RK-D23). It is harmless at parity, where Status is always shown. **This commit must land before RK-Q8's:** once a restricted reply withholds Status, the `map_or(0)` would read every restricted daemon as peerless and bring back §3.1's false `DaemonPeerless` **Notes on what was built.** (a) The wallet's test document (`GetInfoDocument`) writes zero for every Status and Peers count whatever `has_peers` says, so a reader that went back to the counts would see a peerless daemon in every test built on it. (b) P's poller no longer reads `restricted`; the peer check now holds on a restricted daemon too, where it was skipped. (c) The fixtures' values: every one says `true` except the peerless one. (d) **An offline node answers `has_peers: false` without the board being read** (§4.2): as first pushed, this commit refused `get_info` on every `--offline` daemon, which binds no hub; found in review before the live lane ran, and fixed in a following commit | bump; a test that a restricted reply with peers yields no `DaemonPeerless` and no `NoPeers` (**landed** as three: the handler's reply, the watchdog reaching its probe, and the poller following; each also with Status withheld, and each with a no-peers control; and, for the offline case, that offline facts give `has_peers: false` with zero board reads while an online node with no hub refuses), observed red by putting the count sum back in the projection and the `restricted` skip back in the poller; a live assertion on the two-daemon rig that the restricted listener says `has_peers` beside zero counts; the hub-absent refusal test of §4.4 |
-| 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8, Q9, Q10 as ruled, one commit each. **Order: RK-Q8's commit comes after commit 7**, which removes the wallet's last reading of a withheld Status part as zero connections (row 7's carry-forward). **Two carry-forwards, ruled 2026-10-10.** *RK-Q1's commit:* the weight names it keeps (`block_weight_limit`, `block_weight_median`) lose their inherited omit-at-zero — the `default` and `skip_serializing_if = "is_zero"` that mirror `KV_SERIALIZE_OPT` — so they are always present; `0` is a value (RK-D23). *RK-Q3's commit:* the parity `wrapping_sub` on `incoming_connections_count` is deleted and replaced by per-direction counts from the board, not by a checked subtraction: there is no subtraction left to check. **RK-Q8 LANDED 2026-10-11 at `CORE_RPC_VERSION` 3.48**, first in the follow-up PR to #1017 because it is the only one with an ordering constraint. A caller who is not shown Status or Peers gets a reply without those parts: none of the fourteen keys is written, and the handler returns `Hidden::Withheld`. The store's size is read with Status, which ends the `database_size` exception (§4.2). Readers: the console's `status` line says "connections not disclosed" and omits the uptime clause for a withheld part, where it printed `0(out)+0(in)`; the CLI's `chain_health` already omitted withheld counts. The live gate `restricted_listener_gets_stand_ins_and_caps_from_native_handlers` is renamed `restricted_listener_is_withheld_status_and_capped_by_native_handlers` and asserts both parts withheld. One vector moves: `get_info_synced_restricted_v4` is `_v3` minus exactly the fourteen keys, each of which is asserted to have held its stand-in. **RK-Q3 LANDED 2026-10-12 at `CORE_RPC_VERSION` 3.49.** The two connection counts are handshaken sessions on every connector, per direction, from the board (§4.2's `PeerFacts` row has the mechanism). The parity `wrapping_sub` is deleted with nothing in its place, as carried forward: there is no subtraction left. In C++, `public_connections` and `public_outgoing_connections` leave the Status facts POD (40 to 24 bytes) and the shim, and `node_server::get_public_connections_count` and `get_public_outgoing_connections_count` are deleted with their interface declaration and stub: the RPC was their only caller. **With it, the review leftover from RK-Q8:** the console's `version` no longer treats an empty version as "not disclosed". The reply type refuses a shown Status whose `version` is empty (`GetInfoShapeError::EmptyVersion`), and the facts read refuses to produce one, so the console's guard is deleted and not replaced. No `get_info` vector moves: the fixtures' counts were 8 out and 12 in under either source, so the change is in the counts' source and meaning and the bump records it (RK-D8); `get_version_synced_v26` is the chain's link. **RK-Q10 LANDED 2026-10-12 at `CORE_RPC_VERSION` 3.50.** `tx_pool_size` is the entries this node has broadcast, one quantity for every caller. The entries it holds and has not yet broadcast are `tx_pool_unbroadcast_count`, in a one-field host-only `Hidden` part (`InfoHost`). The facts read is `InfoFacts::pool_counts`: for a host caller the shim counts both sets under one hold of the pool's lock, so they are one pool state, and a pool whose broadcast set is larger than the whole is a store fault; for anyone else it counts the broadcast set alone and the second count is not made. That one lock is why there is no all-minus-broadcast across two reads, the race RK-Q3 removed elsewhere. Readers as ruled: the regtest harness reads the sum and fails, not zeroes, if the host part is absent; `monitor.py` reads the broadcast count and no longer defaults a missing key. Vectors: the four host fixtures split `12` into `9` and `3`; the restricted fixture already held `9` and does not move. | bump each |
+| 8+ | Each of RK-Q1, Q2, Q3, Q6, Q8, Q9, Q10 as ruled, one commit each. **Order: RK-Q8's commit comes after commit 7**, which removes the wallet's last reading of a withheld Status part as zero connections (row 7's carry-forward). **Two carry-forwards, ruled 2026-10-10.** *RK-Q1's commit:* the weight names it keeps (`block_weight_limit`, `block_weight_median`) lose their inherited omit-at-zero — the `default` and `skip_serializing_if = "is_zero"` that mirror `KV_SERIALIZE_OPT` — so they are always present; `0` is a value (RK-D23). *RK-Q3's commit:* the parity `wrapping_sub` on `incoming_connections_count` is deleted and replaced by per-direction counts from the board, not by a checked subtraction: there is no subtraction left to check. **RK-Q8 LANDED 2026-10-11 at `CORE_RPC_VERSION` 3.48**, first in the follow-up PR to #1017 because it is the only one with an ordering constraint. A caller who is not shown Status or Peers gets a reply without those parts: none of the fourteen keys is written, and the handler returns `Hidden::Withheld`. The store's size is read with Status, which ends the `database_size` exception (§4.2). Readers: the console's `status` line says "connections not disclosed" and omits the uptime clause for a withheld part, where it printed `0(out)+0(in)`; the CLI's `chain_health` already omitted withheld counts. The live gate `restricted_listener_gets_stand_ins_and_caps_from_native_handlers` is renamed `restricted_listener_is_withheld_status_and_capped_by_native_handlers` and asserts both parts withheld. One vector moves: `get_info_synced_restricted_v4` is `_v3` minus exactly the fourteen keys, each of which is asserted to have held its stand-in. **RK-Q3 LANDED 2026-10-12 at `CORE_RPC_VERSION` 3.49.** The two connection counts are handshaken sessions on every connector, per direction, from the board (§4.2's `PeerFacts` row has the mechanism). The parity `wrapping_sub` is deleted with nothing in its place, as carried forward: there is no subtraction left. In C++, `public_connections` and `public_outgoing_connections` leave the Status facts POD (40 to 24 bytes) and the shim, and `node_server::get_public_connections_count` and `get_public_outgoing_connections_count` are deleted with their interface declaration and stub: the RPC was their only caller. **With it, the review leftover from RK-Q8:** the console's `version` no longer treats an empty version as "not disclosed". The reply type refuses a shown Status whose `version` is empty (`GetInfoShapeError::EmptyVersion`), and the facts read refuses to produce one, so the console's guard is deleted and not replaced. No `get_info` vector moves: the fixtures' counts were 8 out and 12 in under either source, so the change is in the counts' source and meaning and the bump records it (RK-D8); `get_version_synced_v26` is the chain's link. **RK-Q10 LANDED 2026-10-12 at `CORE_RPC_VERSION` 3.50.** `tx_pool_size` is the entries this node has broadcast, one quantity for every caller. The entries it holds and has not yet broadcast are `tx_pool_unbroadcast_count`, in a one-field host-only `Hidden` part (`InfoHost`). The facts read is `InfoFacts::pool_counts`: for a host caller the shim counts both sets under one hold of the pool's lock, so they are one pool state, and a pool whose broadcast set is larger than the whole is a store fault; for anyone else it counts the broadcast set alone and the second count is not made. That one lock is why there is no all-minus-broadcast across two reads, the race RK-Q3 removed elsewhere. Readers as ruled: the regtest harness reads the sum and fails, not zeroes, if the host part is absent; `monitor.py` reads the broadcast count and no longer defaults a missing key. Vectors: the four host fixtures split `12` into `9` and `3`; the restricted fixture already held `9` and does not move. **RK-Q9 LANDED 2026-10-12 at `CORE_RPC_VERSION` 3.51.** More burned than generated refuses `get_info`, for every caller, with no partial reply. The detail rides a dedicated variant, `RpcFault::Store(StoreFault::SupplyInvariant { coins_generated, total_burned, chain_height })`, and `FactsFault` stays `Copy` and payload-free. The error names the invariant (`total_burned <= coins_generated`) and carries the three operands as numbers; the handler logs the same text once, where it finds the contradiction. On JSON-RPC it is the daemon-side error code (`CORE_RPC_ERROR_CODE_INTERNAL_ERROR`, -5) with that text as the message, where any other fault is the bare -32603; on REST it is the error envelope's `error`; on the console's in-process arm it is printed in full. `burn_pct` stays a plain number: equal burned and generated is answered, and a burn of zero is `0`. The parity test over the burn-refusal fixture is replaced by Rust-side tests of the refusal; `get_info_burn_refusal_v1` to `_v4` stay as the record of the old reply and no test decodes the newest as current. No vector moves. **RK-Q1 LANDED 2026-10-12 at `CORE_RPC_VERSION` 3.52.** `get_info` no longer carries `difficulty`, `difficulty_top64`, `cumulative_difficulty`, `cumulative_difficulty_top64`, `block_size_limit` or `block_size_median`. It keeps `wide_difficulty`, `wide_cumulative_difficulty`, `block_weight_limit` and `block_weight_median`. The carry-forward is done: the two weight names are required on decode and written at zero. The hex string is now the only copy of a difficulty, so it has one strict parser, the newtype `HexU128`: it refuses a missing `0x`, an empty digit string, a sign, any character outside the hex digits, and more than 32 digits (which is also every value over `u128::MAX`). `u128::from_str_radix` read `0x+ff` as 255, and until now the comparison with the low and top members hid that. `join_128`, `same`, `split_128` and `is_zero` are deleted from the reply type; `GetInfoShapeError::Disagreement` stays, because the network is still a string and three booleans until RK-Q6. Block headers keep their triple and adopt `HexU128` under RK-W. Readers: the CLI's `chain_health` JSON carries `wide_difficulty` in the wire's hex encoding where it carried `difficulty` masked to 64 bits, and its display prints the whole value in decimal, or says "unreadable", never `0`; `monitor.py` reads `wide_difficulty` with the same strict rules and fails on a missing key. No other in-tree reader decodes the retired names from `get_info`. Vectors: four fixtures have a successor minus exactly the six keys, each checked against the name that stays before it is removed; the burn-refusal fixture has none. **RK-Q2 LANDED 2026-10-13 at `CORE_RPC_VERSION` 3.53.** `already_generated_coins` and `total_burned` are decimal strings of atomic units. The wire type is the wallet contract's `shekyl_units::wire::AtomicUnitsString`, reused as a field type: no second decimal parser and no `serde(with)` helper was needed. `shekyl-rpc-types` gains a dependency on `shekyl-units` for it. Neither field has a `serde(default)`: the type's own default is zero, so a default would read a dropped key as an amount of nothing. The typed reply (`InfoEconomics`) holds `AtomicUnits`, where it held `u64`; the string exists only in the private wire struct. Readers: the regtest harness's `total_burned()` returns `AtomicUnits`, and its cross-check against `get_miner_data` is commented as the place the two encodings meet. The CLI, the console and `monitor.py` do not read either amount; `scripts/check_testnet_genesis_consensus.py` only checks that `total_burned` is present, which holds for a string. Nothing reads either key with a fallback to `0`. **Census of the other methods' amounts**, which stay JSON numbers until each method's RK-W slice, is in `docs/FOLLOWUPS.md` ("two encodings across methods"). Vectors: four fixtures have a successor with the two numbers written as strings and nothing else. **RK-Q6 LANDED 2026-10-13 at 3.54**, the last of the seven. `nettype`, `mainnet`, `testnet` and `stagenet` are gone from `get_info`; `get_version.nettype` is the one place a daemon names its network. With the last repeated value gone, `GetInfoShapeError::Disagreement` has no case left and is deleted. The network member of `get_info`'s chain-facts struct had no reader left and is removed on both sides of the shim (`shekyl_rpc_info_chain_facts`, still 160 bytes; `protocol_version` moves to offset 156). `protocol_version` stays on the reply: the ruling names four keys. **Readers, same diff.** *The console's `status` line:* on the remote arm the identity handshake already reads `get_version`, and its verdict now keeps the network the daemon reported, so the line costs no second request; in-process it reads the identity facts `get_version` is built from. *The CLI mining gate:* it asks `get_version` before `get_info` and reads it through `IdentityExpectation::exact(network).read`, the one reader of that reply (RK-D25). **That widens the gate:** it now refuses on an RPC-version, rules-digest or genesis mismatch as well as a network mismatch, as the console and the wallet already do; a network-only read would have been a second reader. **Stays as pushed (RULED 2026-10-13, Rick):** RK-D25 requires the one reader, and the genesis axis is what refuses mining with this wallet's address onto a regenesised chain of the same network name, which the network-only gate let through. A `--regtest` daemon reports `fakechain` and is refused by the gate, as before. No script, test or GUI code read the four keys. Vectors: four fixtures have a successor minus exactly the four keys, after the three booleans are checked against the string. **Reader sweep LANDED 2026-10-13** (no bump; no daemon change): `shekyl-cli chain_health` prints `unreadable` for a missing height or transaction count where it printed `0`, and `tests/stressnet/monitor.py` requires `height`. The same reads in the CLI's shard commands are not `get_info` readers and are the archival CLI lane's (`docs/FOLLOWUPS.md`). | bump each |
 
 Commit 2 changes the wire before parity and commits 6–8 change it after,
 each deliberately and each in its own diff — the RK-4c / RK-5b precedent
 (parent RK-D8). Commit 2 goes first because the alternative is to capture,
 port and parity-test a field whose ruling is deletion.
 
-### 5.1 What each wire change will require of the GUI — RK-D22, REVISED 2026-10-09 (Rick)
+### 5.1 What each wire change will require of the GUI — RK-D22, REVISED 2026-10-09 (Rick) — OPEN: the GUI lane's list, the one residue this document still owns
 
 **RK-D22: a commit that changes a field the GUI decodes records, in the
 table below, the GUI change it will require. Nothing is owed in the GUI
@@ -693,7 +709,7 @@ The GUI's fields are read at `447908f` (`src-tauri/src/daemon_rpc.rs:97-123`).
 | 7 (RK-D14) | `has_peers` added, required | not read. Its `GetInfoResponse` does not refuse unknown keys, so the new member does not stop it decoding, and it reads neither connection count (read at the GUI's `d08692e`) | none to keep decoding; `has_peers: bool` when it wants to show whether the node has peers |
 | 8+ (RK-Q1) | `difficulty` and `difficulty_top64` retired, `wide_difficulty` kept | required `difficulty: u64` | reads `wide_difficulty` (decimal string) |
 | 8+ (RK-Q2) | `already_generated_coins`, `total_burned` become decimal strings | `Option<String>` and `u64` | `total_burned` becomes a string; the first already is |
-| 8+ (RK-Q6) | `nettype` and the three booleans retired | not read | none |
+| 8+ (RK-Q6) | `nettype` and the three booleans retired | not read. Its `GetInfoResponse` does not refuse unknown keys and declares none of the four | none |
 | 8+ (RK-Q10) | `tx_pool_size` is broadcast entries only; `tx_pool_unbroadcast_count` added, host-only | required `tx_pool_size: u64`, shown as the pool size (read at the GUI's `d08692e`) | none to keep decoding. Against its own daemon's unrestricted listener the number it shows drops by the entries not yet broadcast, and that reply now carries `tx_pool_unbroadcast_count`, which its decoder ignores; add the two if it means everything the node holds |
 | 8+ (RK-Q8) | a restricted reply omits Status and Peers | required `database_size: u64` and `version: String` | both optional; a remote node that withholds them renders as withheld, not as an empty version and a rounded size |
 
@@ -702,7 +718,7 @@ round's (`RPC_CHANNEL.md` §6.1).
 
 ---
 
-## 6. Obligations RK-5c discharges (owed from elsewhere)
+## 6. Obligations RK-5c discharges (owed from elsewhere) — all DISCHARGED (every commit named below has landed)
 
 | Obligation | Owed by | Commit |
 | --- | --- | --- |
@@ -719,7 +735,7 @@ round's (`RPC_CHANNEL.md` §6.1).
 
 ---
 
-## 7. What this slice does not do
+## 7. What this slice does not do — the handoff to RT-W10 and RK-W
 
 - **Grants.** RT-W10 maps the connection's grant set and its host flag
   onto `Disclosure`, in place of today's listener flag. RK-5c makes that a selection of parts and threads no
@@ -730,7 +746,8 @@ round's (`RPC_CHANNEL.md` §6.1).
   not an exception: it deletes a field whose idea was already retired, and
   changes no parameter and no surviving field.
 - **An interim fix for §3.3.** The GUI stays unable to read a post-#1005
-  daemon until RK-Q2's commit; ruled acceptable (§3.3).
+  daemon until RK-Q2's commit; ruled acceptable (§3.3). *RK-Q2's commit
+  landed 2026-10-13; what is left is the GUI's own list (§5.1).*
 
 ---
 
@@ -748,7 +765,7 @@ separately, against the first recommendation.
 | **RK-Q3** | **Peer counts** — the per-direction counts become sums over every connector from the board, or stay clearnet-only? | **RULED 2026-10-09 (Rick).** **Every connector.** Today's clearnet-only value is not a decision anyone made; it is `get_public_*` surviving the zone deletion. Per-connector detail stays in the socket counts. |
 | **RK-Q4** | **`has_peers` = a handshaken session, or any board row?** | **RULED 2026-10-09 (Rick).** **Handshaken.** A row before handshake cannot relay, which is what every reader asks. |
 | **RK-Q5** | `restricted` stays until RT-W10? | **RULED 2026-10-09 (Rick).** **Yes.** It is RT-W10's to retire; P's poller stops depending on it in commit 7. |
-| **RK-Q6** | **`nettype`, `mainnet`, `testnet`, `stagenet`** duplicate `get_version.nettype`, the identity source (VC-2). Retire all four from `get_info`? | **RULED 2026-10-09 (Rick).** **Retire.** Readers move to `get_version`: the CLI mining gate (`mine.rs`, network match), the console (`testnet`/`stagenet`). |
+| **RK-Q6** | **`nettype`, `mainnet`, `testnet`, `stagenet`** duplicate `get_version.nettype`, the identity source (VC-2). Retire all four from `get_info`? | **RULED 2026-10-09 (Rick).** **Retire.** Readers move to `get_version`: the CLI mining gate (`mine.rs`, network match), the console (`testnet`/`stagenet`). **LANDED 2026-10-13 (3.54).** **Reader ruling, 2026-10-13 (Rick):** the CLI gate reads `get_version` through `IdentityExpectation::exact(network).read` and so refuses on all four axes, not the network alone — RK-D25 requires the one reader, and the genesis axis is what stops mining with this wallet's address onto a regenesised chain under the same network name, which a network-only gate let through. |
 | **RK-Q7** | **How is an absent target written?** RK-D15 says the target is the core's target or absent, and does not say what absent looks like on the wire. The fact already has two encodings: `get_version` omits it when the core reports none and every Rust reader decodes the omission back to `0` (`rust/shekyl-rpc-types/src/chain.rs:390-393`), and `sync_info` writes a bare `0` (`rust/shekyl-rpc-types/src/p2p.rs:280-283`). Both are the sentinel, relocated. | **RULED 2026-10-09 (Rick).** **`null`, on all three methods** (RK-D23). `target_height` is `Option<ChainCount>` in Rust and `null` on the wire when the core reports none, on `get_info`, `get_version` and `sync_info`, all in commit 6. One fact, one encoding — and not the encoding either method has today. `get_version.current_height` (`chain.rs:386-389`, the same omit-when-zero) is folded into that commit so `get_version` carries no zero sentinel. The cost is the GUI's required `target_height` (§3.4, §5.1). **`get_version` is the compatibility endpoint**: a client reads it to learn whether it can talk to this daemon at all, so its shape change ships whole — one commit, one bump, every in-tree decoder with it — never piecemeal. The GUI's decoder is the exception RK-D22 records: it is parked, and moves when its lane resumes. A client older than the bump fails to decode the reply instead of reading a version it could report as too new; that failure mode is RK-Q11, ruled 2026-10-10: the version is read first, so such a client reports the version difference. |
 | **RK-Q8** | **When do the restricted stand-ins become absence?** The sibling round asks that a part the caller may not see is absent from the reply, not zeroed. Parity keeps the stand-ins; the type already distinguishes the two (§4.1). | **RULED 2026-10-09 (Rick).** **In RK-5c, after RK-D14** (commit 8+). The stand-ins are the defect §3.1 traces — `0` peers that means "not told" — and once `has_peers` exists no in-tree reader depends on them. Leaving the flip to RT-W10 would have that slice change a wire it otherwise only re-keys. Costs the GUI two required fields (§5.1). |
 | **RK-Q9** | **How is a refused burn computation written?** `shekyl_calc_burn_pct_at` refuses when `total_burned` exceeds `already_generated_coins`; the reply then carries `burn_pct = 0` and the refusal is logged (`core_rpc_server.cpp:280-287`). `0` % is a legitimate burn. | **RULED 2026-10-09 (Rick). A refused burn computation is a store fault, and the refusal is verbose.** Not as first recommended (`null`), and not part of the batch ruling: this question was held back. The only reachable refusal is the supply invariant, `total_burned > coins_generated` (`rust/shekyl-ffi/src/economics_ffi.rs:204-226`; the null-out arm is a caller bug). That is the store contradicting itself — the class `FactsFault::Inconsistent` exists for (`rust/shekyl-daemon-rpc/src/chain_facts.rs:205-217`: a contradiction with a plausible-looking fallback that must not reach the caller as a fact). It is not "no answer". **(1)** The economics projection checks the invariant on the RK-D20 snapshot and returns the violation; the handler maps it to the store fault and `get_info` refuses. No partial reply. **(2)** Verbose: the refusal the caller receives names the violated invariant and carries its operands — coins generated, total burned, and the tip the snapshot was read at. All three are public chain facts the reply already carries, so nothing is disclosed that a successful reply would not show. The same text is logged. `FactsFault` is `Copy` with a payload-free `Inconsistent` today; whether the detail rides a payload on that variant or a dedicated variant is the implementation's call — the requirement is that the caller's error says what contradicted what. **(3)** `burn_pct` stays a plain number, never `null`. **(4)** Its own commit after parity (8+). The capture keeps its "burn refusal → logged zero" fixture so parity matches; this commit replaces that behaviour, and its test is Rust-side: a snapshot with `total_burned > coins_generated` makes `get_info` refuse with an error naming the invariant and all three operands. |

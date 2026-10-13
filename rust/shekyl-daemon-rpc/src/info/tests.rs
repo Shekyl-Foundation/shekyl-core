@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use shekyl_economics::TxVolume;
-use shekyl_rpc_types::DaemonNetwork;
 use shekyl_types::{BlockHash, ChainCount};
 use shekyl_units::AtomicUnits;
 
@@ -82,7 +81,6 @@ pub(crate) fn synced_facts() -> FakeInfoFacts {
             busy_syncing: false,
             offline: false,
             following_degraded: false,
-            nettype: DaemonNetwork::Mainnet,
             protocol_version: 3,
         },
         // Twelve entries held: nine broadcast, three not yet.
@@ -185,7 +183,7 @@ fn synced_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v4.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v7.json"
         ))
     );
 }
@@ -225,7 +223,7 @@ fn syncing_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v3.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v6.json"
         ))
     );
 }
@@ -233,7 +231,6 @@ fn syncing_reproduces_the_oracle_vector() {
 #[test]
 fn peerless_startup_reproduces_the_oracle_vector() {
     let mut facts = synced_facts();
-    facts.chain.nettype = DaemonNetwork::Fakechain;
     facts.chain.synchronized = false;
     facts.chain.core_target_height = None;
     facts.sessions = SessionCounts::NONE;
@@ -244,7 +241,7 @@ fn peerless_startup_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v4.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v7.json"
         ))
     );
 }
@@ -256,21 +253,91 @@ fn synced_restricted_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::VIEW),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v4.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_restricted_v7.json"
         ))
     );
 }
 
+// ── RK-Q9: a store that contradicts itself ───────────────────────────────
+
+/// **More burned than generated refuses `get_info`, and the refusal says
+/// what contradicted what** (RK-Q9). The fault names the invariant and
+/// carries its three operands: coins generated, total burned, and the chain
+/// height of the snapshot they were read at. Every caller is refused.
+///
+/// Until 3.51 this state was answered with `burn_pct: 0` and a log line.
+/// `0` % is a legitimate burn, so the reply said something true-looking
+/// about a store that could not be trusted. The oracle vectors
+/// `get_info_burn_refusal_v1`…`_v4` record that reply; no daemon sends it
+/// now, and this test is what stands where their parity test stood.
 #[test]
-fn burn_refusal_reproduces_the_oracle_vector() {
+fn more_burned_than_generated_refuses_with_the_invariant_and_its_operands() {
     let mut facts = synced_facts();
+    let generated = facts.chain.already_generated_coins;
+    let burned = AtomicUnits::from_raw(generated.to_raw() + 1);
+    facts.chain.total_burned = burned;
+
+    for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
+        let fault = get_info(&facts, disclosure, 0).expect_err("a contradiction is not answered");
+        assert_eq!(
+            fault,
+            RpcFault::Store(StoreFault::SupplyInvariant {
+                coins_generated: generated,
+                total_burned: burned,
+                chain_height: ChainCount::from_raw(1_234_567),
+            }),
+            "{disclosure:?}"
+        );
+    }
+
+    // What the caller reads: the invariant, and each operand as a number.
+    let text = StoreFault::SupplyInvariant {
+        coins_generated: generated,
+        total_burned: burned,
+        chain_height: ChainCount::from_raw(1_234_567),
+    }
+    .to_string();
+    assert!(text.contains("total_burned <= coins_generated"), "{text}");
+    assert!(text.contains("1444065674085134"), "total burned: {text}");
+    assert!(text.contains("1444065674085133"), "coins generated: {text}");
+    assert!(
+        text.contains("1234567"),
+        "the snapshot's chain height: {text}"
+    );
+}
+
+/// The boundary: burned equal to generated is a legitimate state (nothing
+/// circulating), and is answered. One unit more is the refusal above.
+#[test]
+fn everything_burned_is_answered_and_one_unit_more_is_not() {
+    let mut facts = synced_facts();
+    facts.chain.total_burned = facts.chain.already_generated_coins;
+    let reply = get_info(&facts, Disclosure::FULL, 0).expect("equal is not a contradiction");
+    assert_eq!(
+        reply.economics.total_burned,
+        reply.economics.already_generated_coins
+    );
+
     facts.chain.total_burned =
         AtomicUnits::from_raw(facts.chain.already_generated_coins.to_raw() + 1);
-    assert_eq!(
-        ours(&facts, Disclosure::FULL),
-        oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_burn_refusal_v4.json"
-        ))
+    assert!(matches!(
+        get_info(&facts, Disclosure::FULL, 0),
+        Err(RpcFault::Store(StoreFault::SupplyInvariant { .. }))
+    ));
+}
+
+/// A burn of zero is an answer and is written as `0`, a plain number. It
+/// is never `null`, and it no longer doubles as "the computation refused".
+#[test]
+fn a_burn_of_zero_is_a_number_on_the_wire() {
+    let mut facts = synced_facts();
+    facts.chain.total_burned = AtomicUnits::from_raw(0);
+    facts.chain.tx_volume = TxVolume::ZERO;
+    let wire = ours(&facts, Disclosure::FULL);
+    assert!(
+        wire["burn_pct"].is_u64(),
+        "burn_pct is a number: {}",
+        wire["burn_pct"]
     );
 }
 
@@ -662,9 +729,12 @@ fn already_generated_coins_is_the_snapshots_and_is_not_netted() {
     let reply = get_info(&facts, Disclosure::VIEW, 0).unwrap();
     assert_eq!(
         reply.economics.already_generated_coins,
-        1_444_065_674_085_133
+        AtomicUnits::from_raw(1_444_065_674_085_133)
     );
-    assert_eq!(reply.economics.total_burned, 4_200_000_000);
+    assert_eq!(
+        reply.economics.total_burned,
+        AtomicUnits::from_raw(4_200_000_000)
+    );
 }
 
 /// The listener's posture is what `restricted` reports.

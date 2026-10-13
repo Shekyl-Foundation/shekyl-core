@@ -256,6 +256,16 @@ type and the minimal required-privilege list (RT-P8 confirms both).
 
 *Consequences.*
 
+- **The service-mode unit inherits `Slice=shekyl.slice`** from the shipped
+  packaging (ruled 2026-10-12, `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8):
+  the daemon's own top-level slice at `CPUWeight=400`, weighed 4:1
+  against `user.slice`, so a per-user wallet serving beside the service
+  cannot take the daemon's CPU. The slice is the packaging's; the
+  service-mode switch this round adds changes nothing about it. *Open
+  for this round:* whether the service unit reads a config file at
+  `/etc/shekyl/shekyld.conf` (the deleted Monero-heritage example unit
+  under `utils/systemd/` did; the shipped unit passes flags) is RT-16's
+  to decide with the switch, not the packaging's.
 - **The mode is declared, never inferred.** On Unix a unit
   running the daemon under its dedicated user and that same user starting
   it by hand are indistinguishable from inside the process, so the daemon
@@ -980,6 +990,12 @@ round asks three things of it and nothing more:
 Until the channel exists, RK-5c serves today's two listeners; how it maps
 them onto these fields is that slice's decision. No grant is threaded
 through C++ for `get_info` in any slice of this round.
+
+*Prerequisite met, 2026-10-13: RK-5c landed in full (`CORE_RPC_VERSION`
+3.54; #1017, #1035, #1057). The handler takes a `Disclosure` value with
+status, peers and host axes; a withheld part is absent from the reply
+(RK-Q8, 3.48); `restricted` is still written, as the transitional flag
+this round retires (RK-Q5 there).*
 
 *What the incident's consumer gets.* The web host at `view` reads height,
 difficulty and hash rate from `chain`, sync state from `health`, and pool

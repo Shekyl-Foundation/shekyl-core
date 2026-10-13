@@ -9,8 +9,8 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS;
-use shekyl_relay_privacy::SplitMix64;
 
 /// **§12 W3 residual — the δ a `ρ` decision is actually taken against (Round-3
 /// build 1).** The one exposure reshape cannot route around: an adversary holding

@@ -621,7 +621,7 @@ impl RegtestDaemon {
     /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
     /// partition. The emission e2e samples it once, at epoch close, and
     /// pins it to 0 (A6 pool-half disposition).
-    pub(super) async fn total_burned(&self) -> u64 {
+    pub(super) async fn total_burned(&self) -> shekyl_units::AtomicUnits {
         self.rpc
             .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
@@ -1962,6 +1962,12 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         Some(median),
         "get_miner_data's median is get_info's"
     );
+    // Two encodings of an amount meet here, on purpose for now.
+    // `get_miner_data` still writes this one as a JSON number; `get_info`
+    // writes its amounts as decimal strings since 3.53 (RK-Q2), and the
+    // `total_burned` read below comes through the shared type as
+    // `AtomicUnits`. `get_miner_data` moves when its own method migrates
+    // (FOLLOWUPS: "two encodings across methods").
     let already_generated = miner_data["already_generated_coins"]
         .as_u64()
         .expect("already_generated_coins");
@@ -2051,7 +2057,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             unlock_window: BlockCount::from_raw(rule_set.mined_money_unlock_window().to_raw()),
             emission: EmissionOperands {
                 already_generated_coins: shekyl_units::AtomicUnits::from_raw(already_generated),
-                total_burned: shekyl_units::AtomicUnits::from_raw(total_burned),
+                total_burned,
                 median_weight: median,
                 tx_volume,
                 closed_shards: ClosedShardCount::ZERO,
@@ -2934,6 +2940,12 @@ enum FixtureStake {
 /// Every step retries-until-ready (funding maturity, reference
 /// spendability, the Dandelion++ embargo), so the block geography is a
 /// *result*, not an input — read it from the returned fixture.
+///
+/// The post this builds is a kind-5 JoinMarket. The C++ daemon under test
+/// cannot parse that byte and its verify export refuses every JoinMarket
+/// (`FN_DSA_HYBRID.md` §8, FND-20), so each caller is `DECIDED_DARK` in
+/// `scripts/ci/run_live_daemon_gates.sh` until the daemon admits one
+/// (DEL-008). The bodies stay: they are the positive subject.
 async fn stake_persona_to_confirmed_bond(
     daemon: &RegtestDaemon,
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
@@ -3279,7 +3291,7 @@ async fn stake_persona_to_confirmed_bond(
 /// - A shallow P-scan finality horizon + tight cadence via the injectable
 ///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_staker_bond_post_accepted_and_applied() {
     use super::stake_engine::PSlot;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
@@ -3403,7 +3415,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;
@@ -3598,7 +3610,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
         epoch_row.budget_atomic,
         epoch_row.sigma_work_milli,
         epoch_row.credit_pairs.len(),
-        total_burned_at_close,
+        total_burned_at_close.to_raw(),
     );
     assert!(
         !epoch_row.credit_pairs.is_empty(),
@@ -3623,7 +3635,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // is the tied observable, pinned here so an operand-law change
     // re-surfaces this disposition instead of silently shifting the budget.
     assert_eq!(
-        total_burned_at_close, 0,
+        total_burned_at_close,
+        shekyl_units::AtomicUnits::ZERO,
         "regtest e2e activity must floor the volume mean to 0 ⇒ zero fee burn \
          (pool-half disposition, §9.5 item 8; positive-pool coverage is the B5 KATs)"
     );
@@ -4054,7 +4067,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
 ///
 /// [`EXIT_FEE_RESERVE_ATOMIC`]: shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use super::drain_dispatch::DrainRequestError;
     use super::drain_orchestrator::DrainOrchestrationError;
@@ -4346,7 +4359,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 /// façades end-to-end. This walk keeps the seam-level byte proposition:
 /// it exists so a façade-layer regression can never mask a wire one.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-B daemon walk; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_release_accepted_and_connected() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::emission_source::fetch_claim_source_for;
@@ -4514,7 +4527,7 @@ async fn e2e_release_accepted_and_connected() {
 /// 7. The daemon row is STILL present with `bonded_total == 0`:
 ///    retirement is a wallet-side act; the chain record outlives it.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-C composed-arc walk; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns at DEL-008"]
 async fn e2e_unstake_collect_retire_composed_arc() {
     use super::emission_source::fetch_claim_source_for;
     use super::prpc::LocalNodeRpc;

@@ -27,6 +27,7 @@ use shekyl_rpc_types::{
 };
 use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
 use shekyl_types::{ArchivalLength, BlockHeight, ChainCount};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
 
 use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
@@ -47,6 +48,10 @@ use shekyl_rpc_types::{
 pub enum RpcFault {
     /// The facts source refused (a C return code, or no core).
     Facts(FactsFault),
+    /// The facts were read and they contradict each other. Unlike
+    /// [`FactsFault::Inconsistent`], which is a bare code from a shim, this
+    /// carries what contradicted what, and the transport tells the caller.
+    Store(StoreFault),
     /// The handler answered but the transport could not deliver it.
     Internal(InternalFault),
     /// The method itself refused: the request was malformed, or the chain
@@ -55,6 +60,54 @@ pub enum RpcFault {
     /// the transport answers with it rather than a generic internal error.
     Refused(RpcRefusal),
 }
+
+/// The chain store's own figures contradict each other, found on this side
+/// of the facts seam and reported with its operands.
+///
+/// **Verbose on purpose** (RK-Q9). A contradiction has a plausible-looking
+/// fallback — here, a burn percentage of zero — and a fallback reaches the
+/// caller as a fact. So the method refuses, and the refusal says which
+/// invariant broke and with what numbers. Every operand is a public chain
+/// fact a successful reply would have carried, so the error discloses
+/// nothing the reply does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreFault {
+    /// More has been burned than was ever generated. Every burned unit was
+    /// first emitted, so no conforming chain holds this pair.
+    SupplyInvariant {
+        /// Gross coins emitted through the tip, in atomic units.
+        coins_generated: AtomicUnits,
+        /// Cumulative coins destroyed through the tip, in atomic units.
+        total_burned: AtomicUnits,
+        /// The chain count of the snapshot the two were read at: the top
+        /// block's height plus one.
+        chain_height: ChainCount,
+    },
+}
+
+impl std::fmt::Display for StoreFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SupplyInvariant {
+                coins_generated,
+                total_burned,
+                chain_height,
+            } => write!(
+                f,
+                "the chain store contradicts itself: supply invariant violated \
+                 (total_burned <= coins_generated). total_burned is {} atomic units and \
+                 coins_generated is {} atomic units, at chain height {} (the top block's \
+                 height plus one). Every burned unit was first emitted, so no burn \
+                 percentage can be computed from this store.",
+                total_burned.to_raw(),
+                coins_generated.to_raw(),
+                chain_height.to_raw(),
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StoreFault {}
 
 /// A method-level refusal: the JSON-RPC `code` (see
 /// `shekyl_rpc_types::CORE_RPC_ERROR_CODE_*`) and its `message`.
@@ -2008,10 +2061,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v27` = 3.50). A bump that
+        // Head of the `get_version` chain (`_v31` = 3.54). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v27.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v31.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {

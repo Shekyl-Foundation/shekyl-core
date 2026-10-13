@@ -147,7 +147,9 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
         .target_height
         .into_option()
         .map_or(height, |target| target.max(height));
-    let network = network_label(info.identity.nettype);
+    // `get_info` does not name the network (RK-Q6). Remote, this is what
+    // the handshake before the request above already read; no second call.
+    let network = network_label(src.network()?);
     // Status is a part a daemon may withhold, and a restricted one does.
     // A withheld part is not a node with no connections and no uptime: the
     // line says the counts were not disclosed and leaves the uptime off.

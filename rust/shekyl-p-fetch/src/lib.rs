@@ -45,8 +45,10 @@
 //!    holding it means the whole body arrived; an envelope that is the
 //!    refusal trailer is [`FetchError::Unsigned`]. A body that stops short
 //!    of its declared length is a stall, wherever it stops.
-//! 6. Verify `P`'s
+//! 6. Verify `P`'s signature — of the one scheme the target's key is of
+//!    ([`PassVerifyingKey`]; live:
 //!    [`HybridSignature`](shekyl_crypto_pq::signature::HybridSignature)
+//!    under the bond identity key) —
 //!    over `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id_le ‖ delivery_digest`
 //!    under the bond-record key the caller supplied (`SF-D8`, `SF-D13`),
 //!    the digest recomputed over every body byte under this request's own
@@ -88,15 +90,15 @@ pub mod error;
 pub mod header;
 pub mod target;
 
-pub use client::{PFetchClient, Timeouts, MAX_INFLIGHT, SIGNATURE_ENVELOPE_LEN};
+pub use client::{PFetchClient, Timeouts, MAX_INFLIGHT};
 pub use error::{FetchError, Malformed, NextMove, Stall};
 pub use header::RequestHeader;
 /// The content and grammar verdicts a fetch carries, re-exported so a
 /// scheduler can match on them without naming the codec crate.
 pub use shekyl_wire::shard_frame::{ContentMismatch, FrameError};
 pub use target::{
-    DiscardTxs, ExpectationError, ExpectedShard, FetchTarget, ServingEndpoint, TxSink,
-    VerifiedShard, VerifiedTx,
+    DiscardTxs, ExpectationError, ExpectedShard, FetchTarget, PassVerifyingKey, ServingEndpoint,
+    TxSink, VerifiedShard, VerifiedTx, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
 };
 
 #[cfg(test)]

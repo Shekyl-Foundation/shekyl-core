@@ -14,8 +14,8 @@
 
 use std::collections::BTreeMap;
 
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 use shekyl_net_address::NetworkAddress;
-use shekyl_relay_privacy::rng::{bounded_uniform, RelayRng};
 
 /// `members[i]` sits at `position[address] == i`. The two agree after
 /// every insert and remove.
@@ -102,7 +102,7 @@ impl<T> Index<T> {
 mod tests {
     use std::net::Ipv4Addr;
 
-    use shekyl_relay_privacy::rng::SplitMix64;
+    use shekyl_draw_rng::SplitMix64;
 
     use super::*;
 

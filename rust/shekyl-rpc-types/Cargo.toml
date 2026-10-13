@@ -19,6 +19,11 @@ serde = { workspace = true }
 # first method that speaks the second. The earlier claim that this crate's
 # production surface stays serde alone (RK-D10) predates it and is superseded.
 shekyl-portable-storage = { path = "../shekyl-portable-storage" }
+# `AtomicUnits`, and its wire form `AtomicUnitsString`: the one definition of
+# how an amount of coin crosses a JSON edge, shared with the wallet RPC
+# (RK-Q2). Foundational and `no_std`; it brings serde and zeroize, both
+# already in this crate's graph through every consumer.
+shekyl-units = { path = "../shekyl-units" }
 
 [build-dependencies]
 # VC-1 (CLIENT_VERSION_CONSTANTS_VALIDATION.md §3.4): `build.rs` canonicalises

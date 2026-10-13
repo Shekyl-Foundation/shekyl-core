@@ -19,6 +19,9 @@ repository.workspace = true
 # points — and therefore the 33-test oracle — available (DAEMON_RELAY_PRIVACY.md
 # §18.1).
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+# The RNG seam the zone's draws are generic over. The daemon supplies its
+# CSPRNG through `shekyl-ffi`.
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 # The seam's byte-pinned vocabulary (`RelayMethod`, `NetZone`) lives below both
 # this crate and the daemon store (rule 18; DRS-E1 S-POOL `SPL-Q6`).
 shekyl-types = { path = "../shekyl-types" }
@@ -28,6 +31,10 @@ shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 # The daemon installs one process-wide subscriber (`shekyl-logging`). An
 # `error` here is the hop-0 pool report; it is not a second logger.
 tracing = "0.1"
+
+[dev-dependencies]
+# `SplitMix64`, for the unit tests only. Not a grader feature.
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 
 [lints]
 workspace = true

@@ -113,12 +113,14 @@ fn post_kind_is_load_bearing() {
         v.hybrid_public_key.clone(),
         v.p_canonical_id,
         vec![0xE5; shekyl_archival_retention::HYBRID_PUBKEY_CANONICAL_BYTES],
+        shekyl_archival_retention::ReceiptSignPk::from_bytes(
+            [0x5C; shekyl_archival_retention::RECEIPT_SIGN_PK_LEN],
+        ),
         [0xEE; shekyl_archival_retention::ENDPOINT_BYTES],
         shekyl_archival_retention::HoldingsDescriptor {
             kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
             shard_ids: shekyl_archival_retention::ShardSet::empty(),
         },
-        0,
         0,
     );
     assert!(matches!(verify(&v), Err(BondPostError::PostKindNotRelease)));

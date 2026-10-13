@@ -53,13 +53,13 @@
 //! whoever hits it — the `noise_stem` hazard, where a green test defends the
 //! behaviour a ruling contradicts.
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::{
     simulate_fluff_return, transit_for, FloodParams, FloodReach,
 };
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::DelayFamily;
 use shekyl_relay_privacy::MeasuredConnector;
-use shekyl_relay_privacy::SplitMix64;
 
 /// The graph the shipped 3250 ms was measured on: retired D7, degree 12.
 /// Production reach is `EveryPeer`; this directed graph is the longer one.

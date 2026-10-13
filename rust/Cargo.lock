@@ -4261,6 +4261,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-draw-rng"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-economics"
 version = "3.1.0"
 dependencies = [
@@ -4282,6 +4286,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-curve-tree",
  "shekyl-economics",
+ "shekyl-fcmp",
  "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
@@ -4519,6 +4524,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
  "shekyl-difficulty",
+ "shekyl-draw-rng",
  "shekyl-economics",
  "shekyl-encoding",
  "shekyl-fcmp",
@@ -4805,6 +4811,7 @@ version = "3.1.0"
 name = "shekyl-peerlist"
 version = "3.1.0"
 dependencies = [
+ "shekyl-draw-rng",
  "shekyl-net-address",
  "shekyl-peerlist",
  "shekyl-relay-privacy",
@@ -4864,6 +4871,7 @@ dependencies = [
 name = "shekyl-relay"
 version = "3.1.0"
 dependencies = [
+ "shekyl-draw-rng",
  "shekyl-relay-privacy",
  "shekyl-transport-layer",
  "shekyl-types",
@@ -4874,6 +4882,7 @@ dependencies = [
 name = "shekyl-relay-privacy"
 version = "3.1.0"
 dependencies = [
+ "shekyl-draw-rng",
  "shekyl-fcmp",
  "shekyl-levin",
  "shekyl-relay-privacy",
@@ -4953,6 +4962,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-portable-storage",
+ "shekyl-units",
  "shekyl-wire",
 ]
 

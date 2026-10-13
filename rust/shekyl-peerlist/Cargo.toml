@@ -26,9 +26,13 @@ shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 
 [dev-dependencies]
 shekyl-peerlist = { path = ".", features = ["conformance"] }
+# `SplitMix64`, for the tests only. The `conformance` feature on the line
+# above is this crate's disclosure instrument, not the generator.
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 
 [lints]
 workspace = true

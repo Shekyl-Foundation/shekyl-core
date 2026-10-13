@@ -38,9 +38,9 @@
 
 use crate::params::inherited::FLUFF_AVERAGE_IN_QUARTER_SECS;
 use crate::params::{DandelionParams, StemGraph, P2P_DEFAULT_OUT_PEERS};
-use crate::rng::{bounded_uniform, RelayRng};
 use crate::schedule::{DelayFamily, EmbargoTimer};
 use crate::stem_map::{ConnectionId, StemMap};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 use super::flood::{
     converged_fluff_return_classed, simulate_fluff_return, simulate_fluff_return_classed,

@@ -194,7 +194,7 @@ Enumerated here before code (rule 82); each path says what to run next.
 | # | Failure | Where caught | Copy says |
 |---|---|---|---|
 | F1 | Daemon down / connection refused | `mine`, `chain_health`, `status`, startup disclosure | The network-matched daemon invocation: `shekyld` / `shekyld --testnet` / `shekyld --stagenet` and the port it would answer on |
-| F2 | Wrong network vs daemon (wallet testnet, daemon mainnet) | `mine start` preflight (`get_info` nettype vs `--network`) | Name both networks and the flag to fix (restart CLI or daemon with the matching flag) |
+| F2 | Wrong network vs daemon (wallet testnet, daemon mainnet) | `mine start` preflight: `get_version`'s identity vs `--network`, read before `get_info` (RK-Q6; the same read refuses a daemon on another RPC version, rule set or genesis) | Name both networks and the flag to fix (restart CLI or daemon with the matching flag) |
 | F3 | Restricted RPC | `mine *` | "The daemon's RPC listener is restricted (view-only); mining control needs the unrestricted RPC listener" |
 | F4 | Remote (non-loopback) daemon | `mine start` | Reminder that the recommended posture is a local daemon; **does not refuse**. A named remote endpoint (own-network node, etc.) is a valid advanced configuration. Startup already discloses non-loopback (RT-W7). |
 | F5 | No wallet open | `mine *` (and existing `require_open` sites) | `open <name>` / `create <name>` |

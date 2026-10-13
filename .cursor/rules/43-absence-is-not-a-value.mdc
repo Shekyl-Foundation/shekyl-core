@@ -1,0 +1,124 @@
+---
+description: Zero is a value; "no result" is None / null. Never encode the absence of a result as an in-range value (0, u64::MAX, "", -1), in a Rust type, across the FFI, on an RPC wire, or in a persisted format. Apply when adding or reviewing any field, return value, FFI export, serde attribute, or wire schema.
+globs:
+  - "**/*.rs"
+  - src/**
+  - docs/api/**
+  - docs/design/**
+---
+
+# Absence is not a value
+
+**`0` is an answer. "There is no answer" is `None` in Rust and `null` on a
+JSON wire.** A value from a field's own domain must never also mean "no
+value": a reader cannot tell the two apart, so every reader either guesses
+or carries a second field to disambiguate — and the second field drifts.
+
+This is the general form of rulings already made one at a time:
+`HEIGHT_SEMANTICS.md` C5 (a reported target of `0` is an absence, not a
+count), `SAL-Q4` (the alt block's zero weight is `Option<BlockWeight>`,
+ruled even though zero was impossible), `RK-D15` (the `target_height`
+sentinel retired), `RK-D23` (this rule's ruling, Rick 2026-10-08), `RK-Q9` (a refused
+computation is a fault, not a value: Rick 2026-10-09).
+
+## The rule
+
+1. **No in-band sentinels at a boundary.** A type, FFI export, RPC field or
+   persisted field never uses a member of its value domain to mean
+   "absent", "unknown", "not applicable", "refused" or "hidden". That
+   includes `0`, `u64::MAX`, `-1`, `""`, an all-zero hash, and an empty
+   collection where empty is a legitimate answer.
+2. **Absence has its own representation.**
+   - Rust: `Option<T>`. Not a newtype with a magic constant, not a
+     `bool` beside a value.
+   - JSON wire: `null`.
+   - C ABI (no `Option`): an explicit discriminant — a `has_<field>` byte
+     in the POD, or a distinct return code — never an in-band value
+     ([`40-ffi-discipline`](40-ffi-discipline.mdc): distinct return codes).
+   - Persisted (postcard / redb codecs): `Option<T>`, versioned per
+     [`42-serialization-policy`](42-serialization-policy.mdc).
+3. **A refusal is not a result.** A computation that refuses (overflow,
+   invariant violated, input out of range) returns an error, or `None` /
+   `null` where the caller must still be answered. It never returns a
+   plausible value — a `0 %` burn written for a refused burn calculation is
+   indistinguishable from a real one.
+4. **"No answer" and "not told" are different facts.** On a JSON reply the
+   three states are:
+
+   | On the wire | Meaning |
+   | --- | --- |
+   | a value, including `0` | the answer |
+   | `null` | there is no answer |
+   | field absent | not disclosed to this caller (a withheld part), or not part of this contract version |
+
+   A field is never omitted to mean "no answer", and never `null` to mean
+   "withheld".
+5. **Readers keep the three states apart.** serde collapses them by default:
+   an `Option<T>` field decodes both `null` and a missing key as `None`, and
+   a flattened `Option<Part>` decodes a part with a missing field as `None`.
+   Therefore:
+   - a reply field whose absence differs from its nullness uses the
+     required-nullable wrapper in `shekyl-rpc-types` (missing key →
+     error; `null` → `None`), never bare `Option<T>`;
+   - a withholdable part is wholly present or wholly absent; a partial part
+     is a decode error, not "withheld";
+   - `#[serde(default)]` on a reply field is allowed only when the omitted
+     form and the default **mean the same thing** (below).
+6. **Convert inherited sentinels at the boundary, once.** C++ that still
+   writes a sentinel is not patched in place
+   ([`20-rust-vs-cpp-policy`](20-rust-vs-cpp-policy.mdc)); the facts shim
+   that reads it maps it to `Option` and holds no other policy (C5's shape:
+   the core's `0` target decodes as `None` and never reaches a `ChainCount`).
+   The sentinel does not survive into any Rust type.
+
+## What this does not forbid
+
+- **A default that is a real value.** An omitted request field that means
+  the same as its default is a default, not an absence:
+  `GetFeeEstimateRequest.grace_blocks` omitted means zero grace blocks, and
+  zero grace blocks is a real request. The test: would a reader ever need to
+  know whether the field was sent? If not, it is a default.
+- **Zero as a legitimate answer.** A node with no pool transactions reports
+  `0`; that is the point of this rule.
+- **Inherited wire quirks frozen for parity.** A migration slice that pins
+  an inherited reply with oracle vectors may carry its sentinels in the
+  parity commit (`DAEMON_RPC_KV_CUTOVER.md` RK-D8); the same slice retires
+  them in their own commits after parity, as RK-5c does. New fields and
+  new methods get no such allowance.
+
+## Review checklist
+
+- Does any field, return value or POD member use a value from its own
+  domain to mean something other than that value?
+- Does any `skip_serializing_if = "is_zero"` (or similar) pair with a
+  `#[serde(default)]` such that a reader decodes the omission back into the
+  sentinel?
+- Does a computation that can refuse return something a caller could mistake
+  for an answer?
+- Is a reply field `Option<T>` where a missing key should be an error?
+- Is a flattened optional part allowed to arrive partially?
+- Does an FFI export return `0` for "the subsystem is not there"?
+
+## Known instances (checked at source 2026-10-13, `feat/rk5c-get-info-wire-cleanup@473c447d9`)
+
+Retired:
+
+| Where | Sentinel | Retired by |
+| --- | --- | --- |
+| `get_info.target_height` | `0` = synchronized | RK-D15, `CORE_RPC_VERSION` 3.46 |
+| `get_version.target_height`, `current_height`; `sync_info.target_height` | omitted / written at `0`, decoded back to `0` | RK-Q7, with RK-D15's commit (3.46) |
+| `get_info` restricted stand-ins | `0` counts, `u64::MAX` free space, rounded size, `""` version | RK-Q8, 3.48 (withheld parts are absent) |
+| `get_info.burn_pct` on refusal | `0` | RK-Q9, 3.51 (a refusal is a store fault) |
+| `get_info.block_weight_limit`, `block_weight_median` | omitted at `0`, decoded back to `0` | RK-Q1, 3.52 (always present) |
+| `get_info` connection counts / `has_peers` | no hub read as zero peers | RK-5c `PeerFacts` (`FactsFault::HubAbsent`) |
+| `shekyl-cli` `show_chain` (`height`, `tx_count`) and `tests/stressnet/monitor.py` `height` | a missing key printed or read as `0` | RK-5c reader sweep, 2026-10-13 ("unreadable" in the CLI; an error in the monitor) |
+
+Still open:
+
+| Where | Sentinel | Owner |
+| --- | --- | --- |
+| `shekyl_seam_board_count` (`rust/shekyl-ffi/src/seam_board_ffi.rs:76-87`) | `0` for no hub or a bad index; `u64::MAX` on overflow. `get_info` no longer reads it; the dial cap does (`cryptonote_protocol_handler.inl:2547`, `net_node.inl:2204-2211`) | P2P lane |
+| `shekyl_seam_socket_count` (`seam_ffi.rs`; read at `src/rpc/rpc_facts_ffi.cpp:1421-1424`) | same three-way `0` | P2P lane / RK-W |
+| block header `block_weight`, `long_term_weight` (`rust/shekyl-rpc-types/src/chain.rs:336`, `:344`) | omitted at `0` | RK-W |
+| block header difficulty triple | three copies of one value; adopts `HexU128` | RK-W |
+| `shekyl-cli` shard commands, `show_fetch` and `print_coverage_row` (`commands/chain.rs`) | a missing key printed as `0` | archival CLI lane (`docs/FOLLOWUPS.md`) |

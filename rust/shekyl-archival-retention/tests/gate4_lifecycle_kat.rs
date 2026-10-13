@@ -73,13 +73,15 @@ fn build_gate4_document() -> Value {
         hybrid_pk_bytes,
         p_id,
         bond_spend_pk.clone(),
+        shekyl_archival_retention::ReceiptSignPk::from_bytes(
+            [0x5C; shekyl_archival_retention::RECEIPT_SIGN_PK_LEN],
+        ),
         [0x0Eu8; ENDPOINT_BYTES],
         HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![integration["shard_id"].as_u64().expect("shard")])
                 .unwrap(),
         },
-        ARCHIVAL_BOND_FLOOR_ATOMIC,
         ARCHIVAL_BOND_FLOOR_ATOMIC,
     );
     verify_join_market_bond_post(&join_vin, false).expect("join vin valid");
@@ -204,6 +206,48 @@ fn gate4_emission_phase2_vectors(emission: &Value) {
     );
 }
 
+/// The JoinMarket this KAT judges, and why it is not the fixture's.
+///
+/// `gate4_lifecycle_kat_v1.json`'s `join.wire_hex` is a **keyless**
+/// JoinMarket (`post_kind` 0). That kind is retired (2026-10-12, ruling on
+/// PR #1046; `FN_DSA_HYBRID.md` `FND-19`): the receipt key is mandatory and
+/// the byte is refused at parse. The fixture is not regenerated here,
+/// because `tests/unit_tests/archival_bond_post_integration.cpp` parses the
+/// same `join` object with the C++ decoder, which knows kind 0 and cannot
+/// read kind 5 — a regenerated fixture would fail that file at its loader.
+/// So the pinned bytes are held to one thing, that they are refused as the
+/// retired kind, and the join the rest of this KAT judges is the one
+/// [`build_gate4_document`] builds today: the same persona, bond-spend key,
+/// endpoint, shard and floor, with a receipt key. Everything else in the
+/// fixture — the conservation, the negative epoch, the emission — is still
+/// read from the pinned file.
+fn join_wire_of_record(kat: &Value) -> Vec<u8> {
+    let pinned = decode_hex(kat["join"]["wire_hex"].as_str().expect("join wire"));
+    assert_eq!(
+        pinned[0],
+        shekyl_archival_retention::VIN_TYPE_ARCHIVAL_BOND_POST
+    );
+    assert!(
+        matches!(
+            ArchivalBondPostVin::read_payload_exact(&mut Cursor::new(&pinned[1..])),
+            Err(shekyl_archival_retention::BondWireError::InvalidPostKind(0))
+        ),
+        "the pinned join is the retired keyless JoinMarket and is refused as that"
+    );
+    let rebuilt = build_gate4_document();
+    // The rebuilt join is the pinned one in everything the fixture states
+    // beside its wire bytes.
+    for field in [
+        "p_canonical_id_hex",
+        "bond_spend_pk_hex",
+        "bond_credit",
+        "join_settlement_epoch",
+    ] {
+        assert_eq!(rebuilt["join"][field], kat["join"][field], "join.{field}");
+    }
+    decode_hex(rebuilt["join"]["wire_hex"].as_str().expect("join wire"))
+}
+
 #[test]
 #[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
 fn regenerate_gate4_lifecycle_fixture() {
@@ -228,7 +272,7 @@ fn gate4_lifecycle_kat_vectors() {
     gate4_emission_phase2_vectors(emission);
 
     let join = &kat["join"];
-    let join_wire = decode_hex(join["wire_hex"].as_str().expect("join wire"));
+    let join_wire = join_wire_of_record(&kat);
     assert_eq!(
         join_wire[0],
         shekyl_archival_retention::VIN_TYPE_ARCHIVAL_BOND_POST
@@ -389,7 +433,7 @@ fn gate4_lifecycle_kat_vectors() {
 #[test]
 fn gate4_join_rejects_both_bond_terms() {
     let kat: Value = serde_json::from_str(GATE4_KAT).expect("gate4 json");
-    let join_wire = decode_hex(kat["join"]["wire_hex"].as_str().expect("join wire"));
+    let join_wire = join_wire_of_record(&kat);
     let mut cursor = Cursor::new(&join_wire[1..]);
     let mut join_vin =
         ArchivalBondPostVin::read_payload_exact(&mut cursor).expect("parse join bond-post");

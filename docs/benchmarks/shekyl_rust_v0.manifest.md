@@ -925,7 +925,7 @@ response against the live endpoint, and that is the gate for it.
 **Crate.** `shekyl-crypto-pq`.
 **Binary.** `benches/fn_dsa_hybrid_iai.rs` (gungraun), with the criterion
 sibling `benches/fn_dsa_hybrid.rs`.
-**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%), both functions.
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%), every function.
 
 **What it measures.** One nested sign and one nested verify under
 Ed25519 + FN-DSA-1024 (`docs/design/FN_DSA_HYBRID.md`), over a 128-byte
@@ -934,6 +934,7 @@ message and the receipt scheme domain:
 | Function | What is inside the count |
 | --- | --- |
 | `crypto_bench_fn_dsa_hybrid_sign` | The combiner's preimage, decoding the FN-DSA signing key, one FN-DSA-1024 signature, one Ed25519 signature |
+| `crypto_bench_fn_dsa_hybrid_sign_held` (added 2026-10-12) | The same signature through `FnDsaHybridSigner`, which decoded the FN-DSA signing key in its setup: the preimage, one FN-DSA-1024 signature, one Ed25519 signature. No decode, and the key's wipe on drop is outside the count. Same message, domain and draw as the arm above, so the two emit the same bytes and their difference is the per-signature decode (`FN_DSA_HYBRID.md` `FND-4`) |
 | `crypto_bench_fn_dsa_hybrid_verify` | The preimage, decoding the FN-DSA verifying key, one FN-DSA-1024 verification, one Ed25519 verification |
 
 **Determinism.** FN-DSA signing is rejection sampling. The pinned signer
@@ -955,6 +956,12 @@ else; `BA-T33`'s T3 arm is the floor figure.
 **First counts** (x86_64 development host, gungraun-runner 0.19.3, two
 runs identical): sign 6,675,212 instructions; verify 891,246. Criterion on
 the same host: sign 457 µs, verify 58 µs, seeded key generation 6.2 ms.
+
+**Counts with the held-key arm** (2026-10-12, x86_64 development host,
+gungraun-runner 0.19.3, two runs identical): sign 6,675,435 instructions;
+sign through the held key 6,010,472 (−9.96 %); verify 891,438. Criterion
+on the same host: sign 442 µs, sign through the held key 411 µs (−7.0 %),
+decoding and holding a key once 52 µs.
 
 ---
 
@@ -1159,3 +1166,11 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   `added` cell, absorbed by the rolling baseline on the next `dev`
   rotation. Schema version unchanged (`shekyl_rust_v0`): same class, same
   counter, same envelope.
+- FN-DSA increment 4 (`docs/design/FN_DSA_HYBRID.md`, the signing
+  capability): §13 gains `crypto_bench_fn_dsa_hybrid_sign_held`, the
+  scheme-3 signature through a key decoded once and held
+  (`FnDsaHybridSigner`), and the criterion sibling gains
+  `fn_dsa_hybrid_sign_held` and `fn_dsa_hybrid_hold_key`. One `added`
+  cell, absorbed by the rolling baseline on the next `dev` rotation; the
+  two existing cells are untouched. Schema version unchanged
+  (`shekyl_rust_v0`): same class, same counter.

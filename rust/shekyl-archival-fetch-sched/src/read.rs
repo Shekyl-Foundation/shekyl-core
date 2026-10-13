@@ -31,6 +31,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use shekyl_archival_retention::{challenge_nonce, CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS};
+use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_fetch::{
     ExpectedShard, FetchError, NextMove, PFetchClient, RequestHeader, TxSink, VerifiedShard,
 };
@@ -87,7 +88,7 @@ impl Default for NeedBudget {
 #[derive(Clone, Debug)]
 pub struct Read {
     /// The verified shard: view hash, delivery digest, `P`'s signature.
-    pub shard: VerifiedShard,
+    pub shard: VerifiedShard<HybridPublicKey>,
     /// Who served it.
     pub holder: PCanonicalId,
     /// The header `P` signed over — the pass record's anchor and nonce.
@@ -456,7 +457,7 @@ pub async fn challenge_read<F: ShardFacts, H: HolderSource>(
 /// moves the need on, and a requester fault ends it.
 enum HolderOutcome {
     /// The body verified. The header is the one `P` signed over.
-    Served(VerifiedShard, RequestHeader),
+    Served(VerifiedShard<HybridPublicKey>, RequestHeader),
     /// This holder is done with. The attempts are in dial order.
     Spent(Vec<Attempt>),
 }

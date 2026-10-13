@@ -6,8 +6,8 @@
 use super::*;
 use std::sync::Arc;
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
-use shekyl_relay_privacy::rng::SplitMix64;
 
 /// Frozen draws from seed `0xF1FF` for the wired fluff path. Not chosen —
 /// observed, then pinned. Note the shape is memoryless: a 0 ms draw sits

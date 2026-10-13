@@ -363,6 +363,11 @@ const SITES: &[Site] = &[
         j12_short_bond_spend_pk,
         "CEN-J12: JoinMarket commits a canonical-length `bond_spend_pk`",
     ),
+    parse(
+        "bond_post post_kind 0 is the retired keyless JoinMarket",
+        Face::Read,
+        "the keyless JoinMarket's byte is retired (2026-10-12): read as `Other(0)` its coupled fields would be taken for the holdings, so the byte has no decoding. CEN-J28 has no arm in this table since the receipt key became a fixed-length typed field — a JoinMarket without a key, or with one of another length, is unrepresentable in memory and refused by `read_len_prefix_exact` on the wire; the row judges the key's content, which the twin does not read",
+    ),
     invariant(
         "BondPostKind::Other must not use the JoinMarket tag\"",
         Face::Memory,
@@ -856,11 +861,13 @@ fn every_refusal_arm_of_the_twin_is_classified() {
     let invariant = count(|a| matches!(a, Arm::Invariant));
     assert_eq!(
         (parse, rule, policy, invariant),
-        (16, 40, 1, 5),
+        (17, 40, 1, 5),
         "the four counts (parse, rule, policy, invariant) moved — re-derive them, do not re-pin \
-         (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened)"
+         (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened; \
+         (16, 40, 1, 5) over 62 until 2026-10-12, when the retired keyless JoinMarket byte \
+         gained its parse refusal)"
     );
-    assert_eq!(parse + rule + policy + invariant, 62);
+    assert_eq!(parse + rule + policy + invariant, 63);
 }
 
 /// Shape: a trip is a rule or a policy arm's; a rule arm without one is a

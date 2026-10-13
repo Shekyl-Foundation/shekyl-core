@@ -23,6 +23,7 @@
 //! facts, and so the production adapter is one file whose job is reading
 //! rows, not deciding anything.
 
+use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_fetch::{ExpectedShard, FetchTarget};
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, PCanonicalId, ShardId};
 
@@ -51,7 +52,7 @@ pub struct Holder {
     /// The persona's canonical id — what a pass record and a log line name.
     pub id: PCanonicalId,
     /// Where to dial it and whose signature to accept.
-    pub target: FetchTarget,
+    pub target: FetchTarget<HybridPublicKey>,
 }
 
 /// Where a closed shard's transactions sit on the chain, read from the

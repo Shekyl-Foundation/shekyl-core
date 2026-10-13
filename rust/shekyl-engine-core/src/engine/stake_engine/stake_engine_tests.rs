@@ -989,6 +989,9 @@ fn with_bond_post(mut block: ScannableBlock, slot: u32) -> ScannableBlock {
         p_canonical_id: canonical_id(slot),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: Vec::new(),
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,

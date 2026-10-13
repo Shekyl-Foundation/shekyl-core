@@ -12,6 +12,7 @@ use kameo::actor::{ActorRef, Spawn, WeakActorRef};
 use kameo::error::SendError;
 use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_scanner::ScannableBlock;
 #[cfg(feature = "gf7-hooks")]
@@ -26,7 +27,7 @@ use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
     MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, ServingBodies,
-    SignPassTranscript,
+    SignPassTranscript, SignReceiptTranscript,
 };
 use super::release::{AssembleRelease, AssembledReleasePost};
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
@@ -289,6 +290,26 @@ impl StakeEngineHandle {
     ) -> Result<HybridSignature, StakeEngineError> {
         self.actor
             .ask(SignPassTranscript { p_slot, message })
+            .blocking_send()
+            .map_err(collapse_send_error)
+    }
+
+    /// Sign one pass transcript with the **receipt key** of the held persona
+    /// at `p_slot`, from a **blocking** context — the receipt-key counterpart
+    /// of [`Self::sign_pass_transcript_blocking`], and STAGED with it
+    /// (`serving::receipt_key`): no live path calls this.
+    ///
+    /// The same contract: it parks the calling thread on the actor's reply,
+    /// so it runs on the blocking pool and never on an async executor
+    /// thread, and the signature is the only thing that crosses the
+    /// boundary ([`SignReceiptTranscript`]).
+    pub(crate) fn sign_receipt_transcript_blocking(
+        &self,
+        p_slot: PSlot,
+        message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<FnDsaHybridSignature, StakeEngineError> {
+        self.actor
+            .ask(SignReceiptTranscript { p_slot, message })
             .blocking_send()
             .map_err(collapse_send_error)
     }

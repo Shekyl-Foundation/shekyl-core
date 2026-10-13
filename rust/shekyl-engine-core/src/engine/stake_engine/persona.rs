@@ -9,6 +9,7 @@ use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
 use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_p_host::sign_pass_transcript;
 use shekyl_tor_control_wallet::service::OnionIdentity;
@@ -194,9 +195,11 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
 /// 112-byte transcript in and receives the signature out, per served shard
 /// (`SF-D13`, "injection, not custody"; `SH2_RESIDENT_KEY_AUDIT.md` §3 Q1).
 ///
-/// The domain is fixed by [`sign_pass_transcript`] itself, which is the only
-/// signing call the serving stack has; this handler cannot sign anything
-/// else with the key even if asked.
+/// The domain is fixed by [`sign_pass_transcript`] itself, the only signing
+/// call for the identity key. This handler cannot sign anything else with
+/// that key even if asked. The receipt key has its own call,
+/// [`shekyl_p_host::sign_receipt_transcript`], reached through
+/// [`SignReceiptTranscript`].
 ///
 /// An unheld slot is [`StakeEngineError::LookaheadExhausted`], as at every
 /// other slot boundary. The handler does **not** also gate on the
@@ -223,10 +226,90 @@ impl Message<SignPassTranscript> for StakeEngine {
             .ok_or(StakeEngineError::LookaheadExhausted {
                 requested: msg.p_slot,
             })?;
-        // Identity key, live scheme. The receipt key replaces this argument
-        // once that re-key is staged (SH2_RESIDENT_KEY_AUDIT.md §6).
+        // Identity key, live scheme. The receipt key is a second message
+        // ([`SignReceiptTranscript`]). The cutover selects
+        // `ResidentReceiptKey`; it does not replace this argument.
         sign_pass_transcript(&held.keys().hybrid_sign_sk, &msg.message)
             .map_err(StakeEngineError::PassCountersign)
+    }
+}
+
+/// Sign one pass transcript with the held persona's **receipt key** —
+/// Ed25519 + FN-DSA-1024, hybrid scheme 3, under `SCHEME_DOMAIN_RECEIPT`
+/// (`FN_DSA_HYBRID.md` §6, increment 4).
+///
+/// **STAGED.** The receipt-key counterpart of [`SignPassTranscript`], with
+/// one production sender, `serving::receipt_key::ResidentReceiptKey`, which
+/// the serving task is not started with. [`SignPassTranscript`] stays the
+/// live signer until the settlement lane's cutover switches the serve path
+/// in the change that makes a verifier accept scheme-3 receipts.
+///
+/// The shape is [`SignPassTranscript`]'s for the same reason: the secret
+/// does not cross the actor boundary. The 112-byte transcript goes in, the
+/// signature comes out. The domain is fixed by
+/// [`shekyl_p_host::sign_receipt_transcript`], which
+/// [`HeldPersona::sign_receipt_transcript`] calls, so this handler cannot
+/// sign anything else with the key even if asked. The transcript is the one
+/// the identity key signs today, unchanged.
+///
+/// The first message for a persona decodes its receipt key and every later
+/// one signs from the held key ([`HeldReceiptKey`], `FND-4`). The first
+/// therefore needs the stack a decode needs, on the actor's task; the
+/// figures are on `the_first_receipt_pays_the_decode_and_later_ones_do_not`.
+/// A key that does not decode is [`StakeEngineError::ReceiptKeyUndecodable`]
+/// at that first message and at each one after it; the later ones are
+/// refused from the remembered state and decode nothing. A decoded key whose
+/// signature fails is [`StakeEngineError::ReceiptSign`], a different variant
+/// (`HeldPersona::sign_receipt_transcript`).
+///
+/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], and there is
+/// no gate on the [`HeldPersona::Bonded`] tag, both as in
+/// [`SignPassTranscript`] and for its reasons.
+pub(crate) struct SignReceiptTranscript {
+    pub p_slot: PSlot,
+    pub message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+}
+
+impl Message<SignReceiptTranscript> for StakeEngine {
+    type Reply = Result<FnDsaHybridSignature, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: SignReceiptTranscript,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let held = self
+            .held
+            .get_mut(&msg.p_slot)
+            .ok_or(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })?;
+        // Undecodable and a failed signature come back as two variants;
+        // the capability's pre-flight latches on the first only.
+        held.sign_receipt_transcript(&msg.message)
+    }
+}
+
+/// Test-only: whether the persona at `p_slot` holds a decoded receipt key
+/// (`None` for an unheld slot). The lazy state is otherwise invisible from
+/// outside the actor, by design.
+#[cfg(test)]
+pub(crate) struct ReceiptKeyIsBuilt {
+    pub p_slot: PSlot,
+}
+
+#[cfg(test)]
+impl Message<ReceiptKeyIsBuilt> for StakeEngine {
+    type Reply = Option<bool>;
+
+    async fn handle(
+        &mut self,
+        msg: ReceiptKeyIsBuilt,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.held
+            .get(&msg.p_slot)
+            .map(|held| held.receipt_key().built().is_some())
     }
 }
 
