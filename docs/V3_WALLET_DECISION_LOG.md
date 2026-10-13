@@ -6600,6 +6600,8 @@ closed unmerged.
   is optional. *Corrects* item 7's "can be re-verified";
 - the verifier returns the derived draws with the kept projection.
 
+---
+
 ## 2026-10-12 — Serving co-residence: the daemon's slice, no adaptive back-off, and the T2 measurement redefined
 
 **Decision (maintainer, 2026-10-12; brief relayed to the serving lane).**
