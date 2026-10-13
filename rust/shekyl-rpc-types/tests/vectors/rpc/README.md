@@ -155,9 +155,41 @@ The restricted fixture already held `9` and does not move: that every
 caller now reads that number under that key is the change.
 `get_version_synced_v27` is the chain's 3.50 link.
 
-**3.51 — `get_peer_list` entries lose `last_seen`.** `get_peer_list_v4` is
+**3.51 retired a fixture and moved no vector.** `get_info` refuses when
+the store holds more burned than generated (RK-Q9), where it answered
+`burn_pct: 0`. `get_info_burn_refusal_v1` to `_v4` record that old reply.
+They stay, held to each other by the derivation tests, and no test decodes
+the newest as a current reply: the daemon does not send it. The refusal is
+tested in `shekyl-daemon-rpc`. `get_version_synced_v28` is the chain's
+3.51 link.
+
+**3.52 retired the duplicate names, and four fixtures have a successor.**
+Each is its predecessor minus exactly six keys: `difficulty`,
+`difficulty_top64`, `cumulative_difficulty`,
+`cumulative_difficulty_top64`, `block_size_limit` and `block_size_median`
+(`the_3_52_get_info_vectors_are_their_predecessors_minus_exactly_the_duplicate_names`,
+which first checks each retired key against the name that stays). The
+burn-refusal fixture has no successor: there is no current reply to
+derive. `get_version_synced_v29` is the chain's 3.52 link.
+
+**3.53 re-encoded two amounts, and four fixtures have a successor.**
+`already_generated_coins` and `total_burned` are decimal strings; each
+successor is its predecessor with those two numbers written as strings and
+nothing else
+(`the_3_53_get_info_vectors_are_their_predecessors_with_the_two_amounts_as_strings`).
+`get_version_synced_v30` is the chain's 3.53 link.
+
+**3.54 retired the network's names from `get_info`, and four fixtures have a
+successor.** Each is its predecessor minus exactly `nettype`, `mainnet`,
+`testnet` and `stagenet`
+(`the_3_54_get_info_vectors_are_their_predecessors_minus_exactly_the_network_names`,
+which first checks the three booleans against the string they repeated).
+`get_version` keeps its `nettype`: it is the one place a daemon names its
+network. `get_version_synced_v31` is the chain's 3.54 link.
+
+**3.55 — `get_peer_list` entries lose `last_seen`.** `get_peer_list_v4` is
 `_v3` minus that one member, held to its delta
 (`the_v4_peer_list_is_its_v3_minus_only_last_seen`): the listing is read
 from the Rust peer lists, which carry no clock
 (`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4), so there is no value to report.
-`get_version_synced_v28` is the chain's 3.51 link.
+`get_version_synced_v32` is the chain's 3.55 link.

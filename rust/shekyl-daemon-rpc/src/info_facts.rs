@@ -50,7 +50,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use shekyl_economics::TxVolume;
-use shekyl_rpc_types::DaemonNetwork;
 use shekyl_types::{BlockHash, ChainCount};
 use shekyl_units::AtomicUnits;
 
@@ -87,7 +86,6 @@ pub struct InfoChainFacts {
     pub busy_syncing: bool,
     pub offline: bool,
     pub following_degraded: bool,
-    pub nettype: DaemonNetwork,
     pub protocol_version: u64,
 }
 
@@ -287,9 +285,6 @@ impl FfiInfoFacts {
 impl InfoFacts for FfiInfoFacts {
     fn chain(&self) -> Result<InfoChainFacts, FactsFault> {
         let pod = self.core.info_chain().map_err(FactsFault::from_code)?;
-        // An unknown discriminant is a fault, never a default (VC-D14).
-        let nettype =
-            DaemonNetwork::from_cryptonote(pod.nettype).ok_or(FactsFault::Inconsistent)?;
         Ok(InfoChainFacts {
             chain_height: ChainCount::from_raw(pod.chain_height),
             top_hash: BlockHash::from_bytes(pod.top_hash),
@@ -309,7 +304,6 @@ impl InfoFacts for FfiInfoFacts {
             busy_syncing: pod.busy_syncing != 0,
             offline: pod.offline != 0,
             following_degraded: pod.following_degraded != 0,
-            nettype,
             protocol_version: u64::from(pod.protocol_version),
         })
     }

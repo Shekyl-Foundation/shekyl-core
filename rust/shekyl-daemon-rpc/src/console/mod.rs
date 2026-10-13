@@ -63,14 +63,15 @@ enum Source {
         /// This process's network, for the identity handshake.
         nettype: u8,
         /// The handshake verdict, computed on the **first** request to this
-        /// daemon and reused for the rest of the command.
+        /// daemon and reused for the rest of the command. A passed handshake
+        /// keeps the network the daemon reported (RK-Q6).
         ///
         /// Placed here rather than before dispatch so an unrecognised
         /// command still refuses as unknown without opening a socket: a typo
         /// must not produce a connection error. It is also the honest
         /// meaning of the check — "before the first request to this daemon"
         /// — rather than "before the console does anything".
-        checked: std::sync::OnceLock<Result<(), String>>,
+        checked: std::sync::OnceLock<Result<shekyl_rpc_types::DaemonNetwork, String>>,
     },
 }
 

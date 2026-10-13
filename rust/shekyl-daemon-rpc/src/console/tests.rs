@@ -17,6 +17,17 @@ use shekyl_rpc_types::{HashHex, RpcStatus};
 use shekyl_types::{ArchivalLength, BlockHash, PrunableHash, TxHash};
 
 fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
+    // Mainnet: these harnesses drive the dispatch, not the handshake, and
+    // their fake daemons answer mainnet.
+    run_on(shekyl_rpc_types::DaemonNetwork::Mainnet, args, address)
+}
+
+/// [`run`], as a console started for `network`.
+fn run_on(
+    network: shekyl_rpc_types::DaemonNetwork,
+    args: &[&str],
+    address: Option<&str>,
+) -> (i32, String) {
     let cstrs: Vec<CString> = args.iter().map(|a| CString::new(*a).unwrap()).collect();
     let ptrs: Vec<*const c_char> = cstrs.iter().map(|c| c.as_ptr()).collect();
     let addr = address.map(|a| CString::new(a).unwrap());
@@ -30,9 +41,7 @@ fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
             std::ptr::null_mut(),
             addr.as_ref().map_or(std::ptr::null(), |a| a.as_ptr()),
             5,
-            // Mainnet: these harnesses drive the dispatch, not the handshake,
-            // and their fake daemons answer mainnet.
-            0,
+            network.to_cryptonote(),
             &raw mut ptr,
             &raw mut len,
         )
@@ -1132,8 +1141,8 @@ fn a_get_limit_reply_missing_a_field_is_refused_rather_than_defaulted() {
 /// reply and a test alters the members it is about.
 fn info_reply(height: u64) -> String {
     use shekyl_rpc_types::{
-        DaemonNetwork, GetInfoResponse, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth,
-        InfoIdentity, InfoPeers, InfoPool, InfoStatus, RpcStatus,
+        GetInfoResponse, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
+        InfoPeers, InfoPool, InfoStatus, RpcStatus,
     };
     serde_json::to_string(&GetInfoResponse {
         status: RpcStatus::ok(),
@@ -1148,7 +1157,6 @@ fn info_reply(height: u64) -> String {
             has_peers: true,
         },
         identity: InfoIdentity {
-            nettype: DaemonNetwork::Mainnet,
             protocol_version: 3,
         },
         chain: InfoChain {
@@ -1161,10 +1169,10 @@ fn info_reply(height: u64) -> String {
             adjusted_time: 1_700_000_000,
         },
         economics: InfoEconomics {
-            already_generated_coins: 0,
+            already_generated_coins: shekyl_units::AtomicUnits::ZERO,
             release_multiplier: 1_000_000,
             burn_pct: 0,
-            total_burned: 0,
+            total_burned: shekyl_units::AtomicUnits::ZERO,
             staker_emission_share_effective: 0,
         },
         pool: InfoPool { tx_pool_size: 4 },
@@ -1921,6 +1929,35 @@ fn the_sync_percentage_never_rounds_up_to_a_hundred() {
     assert!((sync_percentage(99_999, 100_000) - 99.9).abs() < f64::EPSILON);
     // And an empty chain divides by one, not by zero.
     assert!((sync_percentage(0, 0) - 0.0).abs() < f64::EPSILON);
+}
+
+/// **The status line's network is the one `get_version` named** (RK-Q6).
+/// `get_info` carries no network, so there is nothing else for the line to
+/// read: a testnet console against a testnet daemon says testnet, and the
+/// handshake's reply is reused — `get_version` is asked once.
+#[test]
+fn the_status_line_names_the_network_get_version_reported() {
+    use shekyl_rpc_types::DaemonNetwork::Testnet;
+    let (address, log) = route_server_recording(vec![
+        ("/get_info", info_reply(100)),
+        ("/mining_status", mining_reply(false, 0, false)),
+        (
+            "json_rpc:get_version",
+            get_version_but(|r| {
+                r.nettype = Testnet;
+                r.genesis_hash = HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(Testnet));
+            }),
+        ),
+    ]);
+    let (code, out) = run_on(Testnet, &["status"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("Height: 100/100 (100.0%) on testnet"), "{out}");
+    let asked = log.lock().unwrap();
+    let version_requests = asked
+        .iter()
+        .filter(|(_, body)| body.contains("\"get_version\""))
+        .count();
+    assert_eq!(version_requests, 1, "one handshake, reused: {asked:?}");
 }
 
 /// The whole status line, on the remote arm, with both legs.

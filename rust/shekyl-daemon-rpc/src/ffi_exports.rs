@@ -597,9 +597,8 @@ fn info_chain_facts_filled(seed: u64) -> crate::ffi::InfoChainFactsFfi {
         busy_syncing: submit_facts_field_value(seed, 17) as u8,
         offline: submit_facts_field_value(seed, 18) as u8,
         following_degraded: submit_facts_field_value(seed, 19) as u8,
-        nettype: submit_facts_field_value(seed, 20) as u8,
-        protocol_version: submit_facts_field_value(seed, 21) as u8,
-        reserved: [0; 2],
+        protocol_version: submit_facts_field_value(seed, 20) as u8,
+        reserved: [0; 3],
     }
 }
 

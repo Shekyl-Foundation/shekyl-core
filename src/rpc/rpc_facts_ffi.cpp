@@ -1121,7 +1121,6 @@ int info_chain(cryptonote::Blockchain& bc, const info_chain_scalars& scalars,
     out->synchronized = scalars.synchronized ? 1 : 0;
     out->busy_syncing = scalars.busy_syncing ? 1 : 0;
     out->offline = scalars.offline ? 1 : 0;
-    out->nettype = scalars.nettype;
     out->protocol_version = SHEKYL_PROTOCOL_VERSION;
     return SHEKYL_RPC_FACTS_OK;
   }
@@ -1336,7 +1335,6 @@ int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out)
     scalars.core_target_height = core.get_target_blockchain_height();
     scalars.busy_syncing = payload.is_busy_syncing() ? 1 : 0;
     scalars.offline = core.offline() ? 1 : 0;
-    scalars.nettype = static_cast<uint8_t>(core.get_nettype());
     return daemon_rpc_facts::info_chain(core.get_blockchain_storage(), scalars, out);
   }
   catch (const std::exception& e)
@@ -1858,8 +1856,7 @@ void shekyl_rpc_info_chain_facts_test_fill(shekyl_rpc_info_chain_facts* out, uin
   out->busy_syncing = static_cast<uint8_t>(field_value(seed, 17));
   out->offline = static_cast<uint8_t>(field_value(seed, 18));
   out->following_degraded = static_cast<uint8_t>(field_value(seed, 19));
-  out->nettype = static_cast<uint8_t>(field_value(seed, 20));
-  out->protocol_version = static_cast<uint8_t>(field_value(seed, 21));
+  out->protocol_version = static_cast<uint8_t>(field_value(seed, 20));
 }
 
 int shekyl_rpc_info_chain_facts_test_check(const shekyl_rpc_info_chain_facts* facts, uint64_t seed)

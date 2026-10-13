@@ -4990,6 +4990,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-portable-storage",
+ "shekyl-units",
  "shekyl-wire",
 ]
 

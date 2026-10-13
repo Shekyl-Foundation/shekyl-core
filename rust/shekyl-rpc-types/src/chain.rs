@@ -44,7 +44,28 @@ use crate::nullable::Nullable;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.50: `get_info`'s `tx_pool_size` is the pool
+/// `CORE_RPC_VERSION_MINOR`. 3.54: `get_info` stops repeating the daemon's
+/// network (RK-Q6). `nettype` and the booleans `mainnet`, `testnet` and
+/// `stagenet` are gone from it; `get_version.nettype` is the one place a
+/// daemon names its network. `get_version` gains nothing.
+/// 3.53: `get_info`'s two amounts of coin,
+/// `already_generated_coins` and `total_burned`, are decimal strings of
+/// atomic units (RK-Q2): the wallet RPC's encoding, since a JSON number
+/// loses integers above 2^53 in a JavaScript reader. Both stay required.
+/// Other daemon methods still write amounts as numbers until their own
+/// migration. `get_version` gains nothing.
+/// 3.52: `get_info` stops repeating values under
+/// second names (RK-Q1). `difficulty`, `difficulty_top64`,
+/// `cumulative_difficulty`, `cumulative_difficulty_top64`, `block_size_limit`
+/// and `block_size_median` are gone; `wide_difficulty`,
+/// `wide_cumulative_difficulty`, `block_weight_limit` and
+/// `block_weight_median` stay, the last two now always present. Block
+/// headers keep their triple. `get_version` gains nothing.
+/// 3.51: `get_info` refuses when the chain store
+/// holds more burned than generated, with an error that names the invariant
+/// and its operands (RK-Q9). It answered that state with `burn_pct: 0`.
+/// No member of any reply moves. `get_version` gains nothing.
+/// 3.50: `get_info`'s `tx_pool_size` is the pool
 /// entries this node has broadcast, for every caller; the entries it holds
 /// and has not yet broadcast are `tx_pool_unbroadcast_count`, a host-only
 /// part (RK-Q10). `tx_pool_size` was the broadcast set for a restricted
@@ -153,10 +174,12 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// target on `get_info`, `get_version` and `sync_info`. 3.47
 /// `get_info.has_peers`. 3.48 a restricted `get_info` omits Status and
 /// Peers. 3.49 its connection counts come from the seam board. 3.50 its pool
-/// count is split by broadcast state. 3.51 `get_peer_list` entries lose
-/// `last_seen`: the Rust peer lists carry no clock, and the listing is
-/// read from them.
-pub const CORE_RPC_VERSION_MINOR: u32 = 51;
+/// count is split by broadcast state. 3.51 it refuses on a broken supply
+/// invariant. 3.52 its duplicate wire names retire. 3.53 its
+/// amounts are decimal strings. 3.54 it stops repeating the network. 3.55
+/// `get_peer_list` entries lose `last_seen`: the Rust peer lists carry no
+/// clock, and the listing is read from them.
+pub const CORE_RPC_VERSION_MINOR: u32 = 55;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -546,12 +569,13 @@ mod tests {
         // number is not a lock.
         // 3.44 drops `hard_forks`. 3.43 was already the native shard view;
         // both branches had written 43, so the deletion took the next minor.
-        // 3.50 splits `get_info`'s pool count by broadcast state. 3.51 drops
+        // 3.53 writes `get_info`'s amounts as decimal strings.
+        // 3.54 retires the network's four names from `get_info`. 3.55 drops
         // `last_seen` from `get_peer_list`: the Rust lists carry no clock.
-        assert_eq!(CORE_RPC_VERSION, 196_659);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 51);
+        assert_eq!(CORE_RPC_VERSION, 196_663);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 55);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 51);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 55);
     }
 
     #[test]

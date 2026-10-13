@@ -109,7 +109,7 @@ const fn is_false(b: &bool) -> bool {
 /// discriminator; `ip` and `port` are zero on the arms that do not carry
 /// them.
 ///
-/// No `last_seen` (3.51): the Rust peer lists carry no clock in what they
+/// No `last_seen` (3.55): the Rust peer lists carry no clock in what they
 /// disclose or list (`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4, ruled
 /// 2026-10-09), so there is no value to report and none is invented.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
