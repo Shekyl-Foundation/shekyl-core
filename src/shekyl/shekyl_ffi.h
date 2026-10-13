@@ -4405,20 +4405,27 @@ int shekyl_seam_is_bound(void);
 /// clearnet cause, a refused connect, an unknown kind and an unknown
 /// connector.
 int shekyl_close_implicates_address(std::uint8_t kind, std::uint16_t reply, std::uint8_t connector);
-/// A received peerlist is accepted: the session stays.
-constexpr int SHEKYL_PEERLIST_ACCEPT = 1;
-/// A received peerlist is refused: the caller closes the session. Nothing
-/// else about a received list closes one.
+/// What `shekyl_peerlist_admit_received` answers. Each situation has its
+/// own code; the caller closes the session on REFUSE and on nothing else.
+/// REFUSE: the list broke a rule.
 constexpr int SHEKYL_PEERLIST_REFUSE = 0;
+/// ADMITTED: an outbound session's list passed every rule.
+constexpr int SHEKYL_PEERLIST_ADMITTED = 1;
+/// INBOUND: the peer opened the session; nothing was read or admitted.
+constexpr int SHEKYL_PEERLIST_INBOUND = 2;
+/// NO_SESSION: the board holds no such session; nothing was admitted.
+constexpr int SHEKYL_PEERLIST_NO_SESSION = 3;
+/// NO_HUB: no hub is bound; nothing was admitted.
+constexpr int SHEKYL_PEERLIST_NO_HUB = 4;
+/// BAD_ARGUMENT: a null pointer with a non-zero count; nothing was admitted.
+constexpr int SHEKYL_PEERLIST_BAD_ARGUMENT = 5;
 /// `--allow-local-ip`, as the Rust peer lists' constructor input. Returns
 /// `allow`, so the line that read the flag reads it through this call.
 bool shekyl_peerlist_allow_local_ip(bool allow);
 /// A peerlist a peer sent over session `session` (the socket id), as it
 /// arrived: `count` entries, none dropped or rewritten. Rust reads the
 /// session's connector and direction from the board, applies every
-/// acceptance rule, and answers SHEKYL_PEERLIST_ACCEPT or
-/// SHEKYL_PEERLIST_REFUSE. A list on an inbound session, or on a session
-/// the board does not hold, is accepted and admits nothing.
+/// acceptance rule, and answers one of the SHEKYL_PEERLIST_* codes above.
 int shekyl_peerlist_admit_received(std::uint64_t session, const shekyl_seam_address* entries, std::size_t count);
 /// 1 when `id`'s row holds a cause, and writes it. 0 when it does not.
 int shekyl_seam_session_cause(std::uint64_t id, std::uint8_t* kind_out, std::uint16_t* reply_out);

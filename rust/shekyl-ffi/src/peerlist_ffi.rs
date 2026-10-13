@@ -29,10 +29,23 @@ use crate::legacy_util::slice_from_typed_ptr;
 use crate::seam_ffi::{hub, ShekylSeamAddress, ADDR_IPV4, ADDR_IPV6, ADDR_TOR};
 use crate::secure_relay_rng::SecureRelayRng;
 
-/// The list is accepted. The session stays.
-pub const SHEKYL_PEERLIST_ACCEPT: i32 = 1;
-/// The list is refused. The C++ closes the session. Nothing else closes it.
+/// The list is refused. The C++ closes the session. No other answer
+/// closes it.
 pub const SHEKYL_PEERLIST_REFUSE: i32 = 0;
+/// The list arrived on a session this node opened and passed every rule.
+/// Its new addresses are in gray.
+pub const SHEKYL_PEERLIST_ADMITTED: i32 = 1;
+/// The list arrived on a session the peer opened. Nothing was read from
+/// it and nothing was admitted (PWD-I2).
+pub const SHEKYL_PEERLIST_INBOUND: i32 = 2;
+/// The board holds no session with this id, so its direction is not
+/// known. Nothing was admitted.
+pub const SHEKYL_PEERLIST_NO_SESSION: i32 = 3;
+/// No hub is bound: there are no sessions. Nothing was admitted.
+pub const SHEKYL_PEERLIST_NO_HUB: i32 = 4;
+/// The entries pointer is null with a non-zero count. That is the
+/// caller's fault, not the peer's. Nothing was admitted.
+pub const SHEKYL_PEERLIST_BAD_ARGUMENT: i32 = 5;
 
 /// The process's peer lists and the set they were built with.
 struct State {
@@ -127,6 +140,10 @@ fn address_of(entry: &ShekylSeamAddress) -> Option<NetworkAddress> {
 /// A session the board does not hold has no known direction, so its list
 /// admits nothing and is not refused, like an inbound one. An inbound
 /// session's entries are not decoded: nothing it sends is evidence.
+///
+/// Each situation has its own code (rule 43): "nothing was admitted
+/// because there is no such session" is not the same answer as "the list
+/// was admitted", and neither is a refusal.
 fn receive(
     list: &mut Peerlist,
     row: Option<(ConnectorId, Direction)>,
@@ -136,10 +153,10 @@ fn receive(
     bans: &mut dyn BanQuery,
 ) -> i32 {
     let Some((connector, direction)) = row else {
-        return SHEKYL_PEERLIST_ACCEPT;
+        return SHEKYL_PEERLIST_NO_SESSION;
     };
     if matches!(direction, Direction::Inbound) {
-        return SHEKYL_PEERLIST_ACCEPT;
+        return SHEKYL_PEERLIST_INBOUND;
     }
     let Some(addresses) = entries
         .iter()
@@ -154,7 +171,7 @@ fn receive(
         direction,
     };
     match list.admit_received_list(&addresses, session, now, bans, &mut SecureRelayRng) {
-        Ok(_) => SHEKYL_PEERLIST_ACCEPT,
+        Ok(_) => SHEKYL_PEERLIST_ADMITTED,
         Err(refusal) => {
             tracing::debug!(?refusal, "received peerlist refused");
             SHEKYL_PEERLIST_REFUSE
@@ -164,9 +181,8 @@ fn receive(
 
 /// A peerlist a peer sent over session `session`, as it arrived.
 ///
-/// Returns [`SHEKYL_PEERLIST_ACCEPT`] or [`SHEKYL_PEERLIST_REFUSE`]. The
-/// caller closes the session on refuse and does nothing else with either
-/// answer. With no hub bound there is no session and nothing is admitted.
+/// Returns one of the `SHEKYL_PEERLIST_*` codes. The caller closes the
+/// session on [`SHEKYL_PEERLIST_REFUSE`] and on nothing else.
 ///
 /// # Safety
 ///
@@ -182,13 +198,13 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_received(
     // non-zero count is not a list; it is accepted and admits nothing, so a
     // caller's bug never closes a peer's session.
     let Some(entries) = (unsafe { slice_from_typed_ptr(entries, count) }) else {
-        return SHEKYL_PEERLIST_ACCEPT;
+        return SHEKYL_PEERLIST_BAD_ARGUMENT;
     };
     let Some(hub) = hub() else {
-        return SHEKYL_PEERLIST_ACCEPT;
+        return SHEKYL_PEERLIST_NO_HUB;
     };
     let Some(id) = SocketId::from_ffi(session) else {
-        return SHEKYL_PEERLIST_ACCEPT;
+        return SHEKYL_PEERLIST_NO_SESSION;
     };
     let row = hub
         .board()
@@ -245,24 +261,27 @@ mod tests {
         Some((ConnectorId::Clearnet, Direction::Inbound));
 
     #[test]
-    fn an_outbound_list_is_accepted_and_admitted() {
+    fn an_outbound_list_is_admitted() {
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         let entries: Vec<_> = (1..=5).map(v4).collect();
         assert_eq!(
             decide(&mut list, OUTBOUND, &entries),
-            SHEKYL_PEERLIST_ACCEPT
+            SHEKYL_PEERLIST_ADMITTED
         );
         assert_eq!(list.gray_count(ConnectorId::Clearnet), 5);
     }
 
     /// PWD-I2 at the boundary the C++ calls: accepted, so nothing closes,
     /// and nothing admitted. A list that would be refused on an outbound
-    /// session is still accepted here.
+    /// session is still not refused here.
     #[test]
-    fn an_inbound_list_is_accepted_and_admits_nothing() {
+    fn an_inbound_list_is_not_refused_and_admits_nothing() {
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         let entries: Vec<_> = (1..=5).map(v4).collect();
-        assert_eq!(decide(&mut list, INBOUND, &entries), SHEKYL_PEERLIST_ACCEPT);
+        assert_eq!(
+            decide(&mut list, INBOUND, &entries),
+            SHEKYL_PEERLIST_INBOUND
+        );
         assert_eq!(list.gray_count(ConnectorId::Clearnet), 0);
 
         let too_many: Vec<_> = (0..40).map(v4).collect();
@@ -272,11 +291,11 @@ mod tests {
         );
         assert_eq!(
             decide(&mut list, INBOUND, &too_many),
-            SHEKYL_PEERLIST_ACCEPT
+            SHEKYL_PEERLIST_INBOUND
         );
         assert_eq!(
             decide(&mut list, INBOUND, &[empty()]),
-            SHEKYL_PEERLIST_ACCEPT
+            SHEKYL_PEERLIST_INBOUND
         );
         assert_eq!(list.gray_count(ConnectorId::Clearnet), 0);
     }
@@ -285,7 +304,10 @@ mod tests {
     fn a_session_the_board_does_not_hold_admits_nothing_and_is_not_refused() {
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         let entries: Vec<_> = (1..=5).map(v4).collect();
-        assert_eq!(decide(&mut list, None, &entries), SHEKYL_PEERLIST_ACCEPT);
+        assert_eq!(
+            decide(&mut list, None, &entries),
+            SHEKYL_PEERLIST_NO_SESSION
+        );
         assert_eq!(list.gray_count(ConnectorId::Clearnet), 0);
     }
 
@@ -329,7 +351,10 @@ mod tests {
             SHEKYL_PEERLIST_REFUSE
         );
         let exact: Vec<_> = (0..12).map(v4).collect();
-        assert_eq!(decide(&mut list, OUTBOUND, &exact), SHEKYL_PEERLIST_ACCEPT);
+        assert_eq!(
+            decide(&mut list, OUTBOUND, &exact),
+            SHEKYL_PEERLIST_ADMITTED
+        );
     }
 
     #[test]
@@ -339,7 +364,7 @@ mod tests {
         let mut list = Peerlist::new(RefusedSet::EMPTY);
         assert_eq!(
             decide(&mut list, OUTBOUND, &[private]),
-            SHEKYL_PEERLIST_ACCEPT
+            SHEKYL_PEERLIST_ADMITTED
         );
         assert_eq!(list.gray_count(ConnectorId::Clearnet), 1);
     }
@@ -371,7 +396,7 @@ mod tests {
         let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
         assert_eq!(
             decide(&mut list, OUTBOUND, &[v4(7), v6]),
-            SHEKYL_PEERLIST_ACCEPT
+            SHEKYL_PEERLIST_ADMITTED
         );
         assert!(list.is_gray(&address_of(&v4(7)).expect("v4")));
         assert!(list.is_gray(&address_of(&v6).expect("v6")));

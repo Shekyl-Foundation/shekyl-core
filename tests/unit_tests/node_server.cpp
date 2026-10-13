@@ -2067,6 +2067,8 @@ TEST(node_server, a_peerlist_on_an_inbound_session_never_closes_it)
   EXPECT_TRUE(session.receive(global_peers(5, 13)));
   EXPECT_TRUE(session.receive({{MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080), 100}}));
   EXPECT_TRUE(session.receive({{net::tor_address::unknown(), 100}}));
+  // The answer names the reason: not "admitted", and not a refusal.
+  EXPECT_EQ(shekyl_peerlist_admit_received(session.socket_id, nullptr, 0), SHEKYL_PEERLIST_INBOUND);
 }
 
 // A session the board does not hold has no known direction. Its list
@@ -2077,6 +2079,10 @@ TEST(node_server, a_peerlist_on_an_unknown_session_never_closes_it)
   ASSERT_NE(session.socket_id, 0u);
   const boost::uuids::uuid stranger = shekyl::seam_connection_id(session.socket_id + 1000);
   EXPECT_TRUE(shekyl::received_peerlist(stranger, global_peers(6, 13)));
+  EXPECT_EQ(shekyl_peerlist_admit_received(session.socket_id + 1000, nullptr, 0), SHEKYL_PEERLIST_NO_SESSION);
+  EXPECT_EQ(shekyl_peerlist_admit_received(session.socket_id, nullptr, 0), SHEKYL_PEERLIST_ADMITTED);
+  // A null pointer with a count is the caller's fault and closes nothing.
+  EXPECT_EQ(shekyl_peerlist_admit_received(session.socket_id, nullptr, 3), SHEKYL_PEERLIST_BAD_ARGUMENT);
 }
 
 TEST(node_server, handshake_close_cause_reads_the_recorded_seam_cause)
