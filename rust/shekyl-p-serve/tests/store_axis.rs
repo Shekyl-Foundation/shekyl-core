@@ -20,7 +20,7 @@ use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::BlockHeight;
 use shekyl_p_serve::{
     PServeEndpoint, PassSigner, ShardProvider, StoreShardProvider, TestKeySigner,
-    REQUEST_HEADER_NAME, SIGNATURE_ENVELOPE_LEN,
+    IDENTITY_ENVELOPE_LEN, REQUEST_HEADER_NAME,
 };
 use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_types::ShardId;
@@ -47,9 +47,12 @@ fn shard(n: u64) -> ShardId {
 
 async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeySigner>) {
     let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
-        .await
-        .expect("bind endpoint");
+    let ep = PServeEndpoint::bind(
+        provider,
+        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+    )
+    .await
+    .expect("bind endpoint");
     (ep, signer)
 }
 
@@ -78,7 +81,7 @@ fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
     let after_head = &response[end + 4..];
-    let (body, sig) = after_head.split_at(after_head.len() - SIGNATURE_ENVELOPE_LEN);
+    let (body, sig) = after_head.split_at(after_head.len() - IDENTITY_ENVELOPE_LEN);
     (
         HybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature"),
         body,

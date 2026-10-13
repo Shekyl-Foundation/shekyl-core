@@ -84,8 +84,9 @@ pub enum FetchError {
     /// `content-length` that is missing, unparseable, below the envelope
     /// width, or above the expectation's ceiling, a body that is not the
     /// `shard_frame` grammar or does not end where the envelope begins, or
-    /// an envelope that is not a canonical `HybridSignature`. Refused as
-    /// soon as it is seen — from the head where the head decides it.
+    /// an envelope that is not a canonical signature of the target's
+    /// scheme. Refused as soon as it is seen — from the head where the head
+    /// decides it.
     /// **Name another `P`**; this one is not speaking the protocol.
     Malformed(Malformed),
     /// **`P` served, but the countersignature does not verify** under the
@@ -313,7 +314,9 @@ pub enum Malformed {
     /// frame ends exactly where the declared length says (`SF-D6`: body
     /// long of agreed `N`), not at a parse that happened to finish.
     FrameLong,
-    /// The trailing envelope bytes are not a canonical `HybridSignature`.
+    /// The trailing envelope bytes are not a canonical signature of the
+    /// target's scheme (`PassVerifyingKey`). Another scheme's signature is
+    /// this, whatever key it would verify under: it is not tried.
     Envelope,
 }
 

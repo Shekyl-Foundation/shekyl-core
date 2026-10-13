@@ -110,7 +110,7 @@ and the draw state inside *Settlement rows*, were re-read at
 | Slash fold | Rust: reads the settlement row; Missed is the only candidate. C++, consensus until `DEL-008`: reads "any pass" on the one-challenge beacon | `rust/shekyl-chain-rules/src/archival/slash.rs:410`, `:424`; `src/blockchain_db/lmdb/db_lmdb.cpp:5298`, `:5308` (`archival_challenge_failed_at_height`) |
 | Accrual | Rust: a pair earns for an epoch iff its settlement row is Served; the slash pass gathers, an epoch after the close (`ARCHIVAL_SETTLEMENT_WRITER.md` §15). C++, consensus until `DEL-008`: on "any pass", at the close | `rust/shekyl-chain-rules/src/archival/close.rs:501`, `:514` (`Transition::gather`); `src/blockchain_db/lmdb/db_lmdb.cpp:7510` (`process_archival_epoch_close_at_height`) |
 | Failure window | `m = 11`, `n = 13`. `BaselineObservation` is two-valued. The Rust slash pass gathers through `settlement_window_slashable`, which passes over a NonObservation row and an absent row. The C++ path marshals the two-valued form | `config/consensus_constants.json:46-47`; `rust/shekyl-archival-retention/src/failure_window.rs:357-363`, `:461`, `:507`, `:544`; `rust/shekyl-chain-rules/src/archival/slash.rs:455` |
-| Signature schemes | The canonical encoding carries a scheme byte: 1 (Ed25519 + ML-DSA-65), 2 (multisig container), 3 (Ed25519 + FN-DSA-1024). Scheme 3's one consumer outside tests is the receipt key's generation in `ArchivalPKeys`. `verify_pqc_auth` refuses it | `rust/shekyl-crypto-pq/src/signature.rs:66-67`, `:74`, `:169-174`, `:516-529`; `multisig.rs:18`; `fn_dsa_hybrid.rs:270`, `:360`; `archival_p.rs:762` |
+| Signature schemes | The canonical encoding carries a scheme byte: 1 (Ed25519 + ML-DSA-65), 2 (multisig container), 3 (Ed25519 + FN-DSA-1024). Scheme 3's one consumer outside tests is the receipt key's generation in `ArchivalPKeys`. `verify_pqc_auth` refuses it | `rust/shekyl-crypto-pq/src/signature.rs:66-67`, `:74`, `:169-174`, `:516-529`; `multisig.rs:18`; `fn_dsa_hybrid.rs:269`, `:344`; `archival_p.rs:762` |
 | Bond record | Two key fields: the identity key (`hybrid_pubkey`), from which `p_canonical_id` is derived, and the debit authorizer (`bond_spend_pk`). No receipt-key field | `rust/shekyl-types/src/archival/bond.rs:262-269`; `rust/shekyl-archival-retention/src/id.rs:21` |
 | `RowStatus` | Five arms: `Pending`, `Implemented`, `EnforcedAt`, `ByConstruction`, `HeldByCxx`. None for a row retired by ruling | `rust/shekyl-chain-rules/src/census.rs:62-125` |
 
@@ -1090,7 +1090,7 @@ draw `j` that failed. Three outcomes are not verdicts on a block:
 - **the body is not the one referenced**: its hash is not the reference's.
   The block committed to the reference, and a block whose body cannot be
   had is not connected. This is checked before anything else;
-- **the view could not answer** something it should hold: the snapshot of
+- **the view could not answer** something it should hold: the drawable epoch of
   `epoch(h)`, the hash at `h` or at an anchor, a drawn pair's key, or the
   `0x0C` of a block it holds. Every coinbase carries exactly one `0x0C`
   (CEN-I20), so a known block with none is the view's failure, not the
@@ -1135,12 +1135,12 @@ pub trait BundleView {
     /// Whether a bundle for `h` is already admitted on this chain.
     fn revealed(&self, h: BlockHeight) -> Result<bool, Self::Fault>;
 
-    /// The `h_open(E)` snapshot: `D`, and each pair's receipt key.
-    fn snapshot(&self, epoch: SettlementEpoch) -> Result<Option<&EpochSnapshot>, Self::Fault>;
+    /// The `h_open(E)` drawable epoch: `D`, and each pair's receipt key.
+    fn drawable_epoch(&self, epoch: SettlementEpoch) -> Result<Option<&DrawableEpoch>, Self::Fault>;
 }
 ```
 
-- `D`, as a number, is the snapshot's length. The view has no second
+- `D`, as a number, is the drawable epoch's length. The view has no second
   source for it.
 - Every answer is a function of the chain through `h`, except `revealed`,
   which is the one-per-`h` rule. That is §9.1's reorg property, stated as
@@ -1148,16 +1148,21 @@ pub trait BundleView {
 - The store's view, the switch's batch view and the fixture each implement
   it. The queue runs the verifier against the tip through the store's.
 
-**The snapshot** (`SCS-P19`). One type, in `shekyl-archival-retention`
+**The drawable epoch** (`SCS-P19`): the `h_open(E)` snapshot, as one type.
+The type is `DrawableEpoch`, not `EpochSnapshot` as this section first
+named it: `shekyl-chain-rules` already had an `EpochSnapshot` in its
+epoch-close code, and one name must not mean two things in one crate
+(renamed on PR #1047, 2026-10-13; §9.6 allows a name to move in review).
+It lives in `shekyl-archival-retention`
 beside `secret_draw.rs`: that crate already holds `DrawablePair` and the
 draw's functions and depends on `shekyl-crypto-pq` for the key type, so
 the draw and the verifier reach it without a new edge. `SO-D12`'s
 increment 2 builds it.
 
 ```rust
-pub struct EpochSnapshot { /* private */ }
+pub struct DrawableEpoch { /* private */ }
 
-impl EpochSnapshot {
+impl DrawableEpoch {
     /// The epoch this is the `h_open(E)` state of.
     pub fn epoch(&self) -> SettlementEpoch;
     /// `D`.
@@ -1169,7 +1174,7 @@ impl EpochSnapshot {
 }
 ```
 
-- **A snapshot in which a pair has no receipt key cannot be built.** Its
+- **A drawable epoch in which a pair has no receipt key cannot be built.** Its
   one constructor takes the epoch, each persona's id with its receipt
   key's bytes, and the pairs, and fails on a pair whose persona has no
   key or a key that does not parse. The settlement lane feeds it from

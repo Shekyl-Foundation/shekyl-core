@@ -221,7 +221,9 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
 
 /// The schedule pair from its two flags: both or neither (clap holds that),
 /// the production pair when neither. A cap not strictly inside the epoch
-/// is refused here, as the daemon refuses it at arm.
+/// is refused here, as the daemon refuses it at arm, and so is an epoch
+/// long enough that its response window outruns the pass anchor: both are
+/// `FakechainSchedule::new`'s typed refusals, printed as the tool's error.
 fn schedule_flags(
     settlement_epoch_blocks: Option<NonZeroU64>,
     reorg_cap: Option<NonZeroU64>,
@@ -593,6 +595,40 @@ mod tests {
             ok.in_force(BlockHeight::from_raw(3)),
             shekyl_chain_rules::RuleSet::fakechain(NonZeroU128::new(7), production)
         );
+    }
+
+    /// `--settlement-epoch-blocks` past the longest epoch whose response
+    /// window the pass anchor covers is refused where the pair is built,
+    /// as an error the tool prints — the epoch asked for, why, and the
+    /// longest one that works — and not as a panic. The ceiling is read
+    /// from the rule crate, not written here. Red edit: build the pair
+    /// with a constructor that does not check the relation; the first
+    /// assertion finds `Ok`.
+    #[test]
+    fn an_epoch_whose_window_outruns_the_anchor_is_a_printed_refusal() {
+        use shekyl_chain_rules::ResponseWindowOutrunsAnchor;
+        let longest = ResponseWindowOutrunsAnchor::LONGEST_EPOCH_BLOCKS;
+        let flags = |epoch: u64| schedule_flags(NonZeroU64::new(epoch), NonZeroU64::new(64));
+
+        let refused = flags(longest + 1).expect_err("one block past the longest epoch");
+        let message = format!("shekyl-chain-replay: {refused}");
+        assert!(
+            message.contains(&format!(
+                "settlement epoch of {} blocks is too long",
+                longest + 1
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("at most {longest} blocks")),
+            "the refusal names the value that works: {message}"
+        );
+        // The value it names is taken.
+        assert!(flags(longest).is_ok());
+        // And the cap's refusal is still the cap's.
+        let cap = schedule_flags(NonZeroU64::new(512), NonZeroU64::new(512))
+            .expect_err("a cap equal to its epoch");
+        assert!(cap.to_string().contains("reorg cap 512"), "{cap}");
     }
 
     /// The schedule pair: both flags or neither, zero refused at parse, a

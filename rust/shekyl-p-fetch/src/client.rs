@@ -12,8 +12,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_archival_retention::verify_pass_transcript;
-use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{
     is_refusal_trailer, CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
     SERVING_VIRTUAL_PORT,
@@ -27,7 +25,9 @@ use tokio::time::timeout;
 use crate::body::{read_frame, BodyReader, Checker};
 use crate::error::{FetchError, Malformed, Stall};
 use crate::header::RequestHeader;
-use crate::target::{ExpectedShard, FetchTarget, ServingEndpoint, TxSink, VerifiedShard};
+use crate::target::{
+    ExpectedShard, FetchTarget, PassVerifyingKey, ServingEndpoint, TxSink, VerifiedShard,
+};
 
 /// Concurrent transfers one client may have outstanding (`SF-D7`): the
 /// in-flight cap `N`. Shared by both callers; there is no queue behind
@@ -65,8 +65,6 @@ use crate::target::{ExpectedShard, FetchTarget, ServingEndpoint, TxSink, Verifie
 /// below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer
 /// for a challenge fetch approaching `CHALLENGE_RESPONSE_BLOCKS`.
 pub const MAX_INFLIGHT: usize = 8;
-
-pub use crate::body::SIGNATURE_ENVELOPE_LEN;
 
 /// Longest head this client will buffer while looking for `\r\n\r\n`. The
 /// ruled head is a status line and two headers — well under 200 bytes.
@@ -215,13 +213,13 @@ impl PFetchClient {
     ///
     /// The [`FetchError`] taxonomy. [`FetchError::retries_same_p`] is the
     /// one-bit summary a scheduler needs.
-    pub async fn fetch(
+    pub async fn fetch<K: PassVerifyingKey>(
         &self,
-        target: &FetchTarget,
+        target: &FetchTarget<K>,
         header: &RequestHeader,
         expected: &ExpectedShard,
         sink: Arc<dyn TxSink>,
-    ) -> Result<VerifiedShard, FetchError> {
+    ) -> Result<VerifiedShard<K>, FetchError> {
         let slot = Arc::clone(&self.slots)
             .acquire_owned()
             .await
@@ -239,7 +237,8 @@ impl PFetchClient {
 
         let (head, carried) = read_head(&mut stream, self.timeouts.head).await?;
         let head = parse_head(&head)?;
-        let envelope_len = u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64");
+        // The one scheme this exchange can be: the target's key's.
+        let envelope_len = u64::try_from(K::ENVELOPE_LEN).expect("envelope fits u64");
         // A bare answer's verdict, or `None` for a 200.
         let bare = match head.status {
             400 | 404 | 503 => {
@@ -257,7 +256,7 @@ impl PFetchClient {
                 if declared < envelope_len {
                     return Err(FetchError::Malformed(Malformed::EnvelopeShort { declared }));
                 }
-                let max = expected.max_response_len();
+                let max = expected.max_response_len::<K>();
                 if declared > max {
                     return Err(FetchError::Malformed(Malformed::Oversize { declared, max }));
                 }
@@ -276,6 +275,7 @@ impl PFetchClient {
             &mut stream,
             carried,
             head.content_length,
+            K::ENVELOPE_LEN,
             header,
             self.timeouts.body_stall,
         )?;
@@ -315,22 +315,17 @@ impl PFetchClient {
         let (tx_count, archival_len) = (expected.tx_count(), expected.archival_len());
         tokio::task::spawn_blocking(move || {
             let checker = checker;
-            let signature = HybridSignature::from_canonical_bytes(&envelope)
-                .map_err(|_| FetchError::Malformed(Malformed::Envelope))?;
+            // This scheme's canonical signature, or nothing: there is no
+            // second parse under another scheme.
+            let signature =
+                K::parse_envelope(&envelope).ok_or(FetchError::Malformed(Malformed::Envelope))?;
             // The digest was recomputed from the bytes as they arrived
             // under this request's own nonce, never taken from `P`: a
             // signature over any other bytes, or over these bytes for
             // another request, fails this check.
-            verify_pass_transcript(
-                &verifying_key,
-                header.nonce(),
-                header.anchor_height(),
-                header.anchor_hash(),
-                shard_id.to_raw(),
-                &delivery_digest,
-                &signature,
-            )
-            .map_err(|_| FetchError::BadCountersignature)?;
+            if !verifying_key.verifies(&header, shard_id.to_raw(), &delivery_digest, &signature) {
+                return Err(FetchError::BadCountersignature);
+            }
             if let Some(mismatch) = mismatch {
                 return Err(FetchError::ContentRefused(mismatch));
             }

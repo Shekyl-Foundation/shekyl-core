@@ -18,7 +18,7 @@
 //! `census_rows!` emits a `const` assertion that `<T as Rule>::ROW` is the
 //! entry's own variant. Row binding is structural, not nominal, and it was
 //! decided before the first rule so the migration is one call site rather
-//! than 153 (SCW-18).
+//! than one per census row (SCW-18).
 //!
 //! # One signature per rule class — and the class is view-dependence
 //!

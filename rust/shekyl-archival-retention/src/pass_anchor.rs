@@ -86,6 +86,46 @@ pub const PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT: BlockHeight = {
     }
 };
 
+/// Whether an honest read under `schedule` is anchored below the block it
+/// answers for: `W₂ + L ≤` anchor depth (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+/// §9.1, `SCS-P32`).
+///
+/// Bundle admission refuses a record whose `anchor_height` is not below
+/// `h`. A challenge read of block `h`'s draw is made inside `h`'s window,
+/// by a requester whose tip is at most `h + W₂`, and every requester
+/// anchors at its tip minus the depth. So the highest anchor an honest
+/// read carries is `h + W₂ − depth`, and the ruled relation holds it at
+/// least `L` below `h` — the same `L` the persona's gate allows between
+/// its own tip and the requester's.
+///
+/// `W₂` is the schedule's
+/// ([`SettlementSchedule::challenge_response_blocks`](crate::SettlementSchedule::challenge_response_blocks)),
+/// so this is rule-set data and is asked of every rule set (rule 71); `L`
+/// and the depth are [`PASS_ANCHOR_LAG_BLOCKS`] and
+/// [`PASS_ANCHOR_DEPTH_BLOCKS`]. A schedule whose epoch is too short to
+/// have a window satisfies it: no bundle is admissible under it at all.
+#[must_use]
+pub const fn anchor_depth_covers_response_window(schedule: crate::SettlementSchedule) -> bool {
+    match schedule.challenge_response_blocks() {
+        None => true,
+        Some(window) => match window.get().checked_add(PASS_ANCHOR_LAG_BLOCKS.to_raw()) {
+            Some(reach) => reach <= PASS_ANCHOR_DEPTH_BLOCKS.to_raw(),
+            None => false,
+        },
+    }
+}
+
+// The production triple, asserted where the anchor's constants are. A
+// re-pin of the epoch (and so of `W₂`), of `L` or of the depth that lets
+// an honest read anchor at or above the block it answers for stops the
+// build here, not at an admission refusal on a live chain.
+const _: () = assert!(
+    anchor_depth_covers_response_window(crate::SettlementSchedule::GENESIS),
+    "W2 + L > the pass-anchor depth on the genesis schedule: an honest challenge read could \
+     carry an anchor at or above the block it answers for, and bundle admission refuses \
+     anchor_height >= h (ARCHIVAL_SERVE_CREDIT_SPEC.md SCS-P32); re-pin one with the others"
+);
+
 /// Heights (and hashes) in one window: `L + 1`.
 pub const PASS_ANCHOR_WINDOW_LEN: usize = {
     assert!(PASS_ANCHOR_LAG_BLOCKS.to_raw() <= u32::MAX as u64);
