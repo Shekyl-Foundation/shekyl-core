@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! **No dual-scheme acceptance**, scripted (`FN_DSA_HYBRID.md` §9,
-//! `FND-19`).
+//! `FND-21`).
 //!
 //! `tests/scheme_separation.rs` puts the two real stacks together; its
 //! fixture shard is small, so a response of the other scheme is refused

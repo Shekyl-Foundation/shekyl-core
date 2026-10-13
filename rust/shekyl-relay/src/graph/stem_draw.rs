@@ -11,8 +11,8 @@
 
 use super::*;
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::params::DandelionParams;
-use shekyl_relay_privacy::rng::SplitMix64;
 fn id(byte: u8) -> ConnectionId {
     let mut bytes = [0u8; 16];
     bytes[0] = byte;

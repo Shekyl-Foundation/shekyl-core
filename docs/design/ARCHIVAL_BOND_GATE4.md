@@ -249,6 +249,7 @@ A bond-post transaction contains:
 ArchivalBondPostVin {
   P_pubkey:              HybridPublicKey,
   bond_spend_pk:         Option<HybridPublicKey>, // present iff post_kind == JoinMarket (commits the debit authorizer, §4.1)
+  receipt_sign_pk:       Option<ReceiptSignPk>,   // present iff post_kind == JoinMarket; mandatory there (FN_DSA_HYBRID.md §8)
   p_canonical_id:        [u8; 32],             // hint; verifier recomputes (emission §6.1)
   post_kind:             BondPostKind,         // §3.5
   holdings:              HoldingsDescriptor,   // POST-connect state (empty for Release; == current for Reinstate; §3.5 debit-path note)
@@ -259,11 +260,15 @@ ArchivalBondPostVin {
 }
 
 enum BondPostKind {
-  JoinMarket,
-  Reinstate,
-  Release,
+  Reinstate  = 1,
+  Release    = 2,
+  JoinMarket = 5, // commits bond_spend_pk, the receipt key and the endpoint (FN_DSA_HYBRID.md §8)
+  // 0 = the keyless JoinMarket: RETIRED 2026-10-12 — the receipt key is mandatory. Not a variant;
+  //     `from_u8(0)` is `InvalidPostKind`.
   // 3 = HoldingsUpdate: REJECTED 2026-09-20 — not a variant; `from_u8(3)` is `InvalidPostKind`
-  // (PR #808). The slot is held in this table so the name is not re-minted (rule 23).
+  //     (PR #808).
+  // 4 = EndpointUpdate: REJECTED 2026-09-13 (ARCHIVAL_ENDPOINT_UPDATE.md) — not a variant either.
+  // The three slots are held in this table so no name is re-minted (rule 23).
 }
 ```
 
@@ -278,10 +283,14 @@ u8                      vin_type = 5
 varint                  hybrid_pubkey_len   (≤ 2048)
 [hybrid_pubkey_len]     HybridPublicKey::to_canonical_bytes()   // P_pubkey (identity)
 [32]                    p_canonical_id      (hint; verifier recomputes)
-u8                      post_kind           (0=JoinMarket, 1=Reinstate, 2=Release; 3 REJECTED — InvalidPostKind)
-// if post_kind == 0 (JoinMarket): the dedicated bond-spend key is committed into the record
-varint                  bond_spend_pk_len   (≤ 2048)            // present iff post_kind == 0
-[bond_spend_pk_len]     bond_spend_pk.to_canonical_bytes()      // present iff post_kind == 0
+u8                      post_kind           (1=Reinstate, 2=Release, 5=JoinMarket;
+                                             0, 3 and 4 retired or REJECTED — InvalidPostKind)
+// if post_kind == 5 (JoinMarket): the two keys and the endpoint are committed into the record
+varint                  bond_spend_pk_len   (== 1996)           // present iff post_kind == 5
+[bond_spend_pk_len]     bond_spend_pk.to_canonical_bytes()      // present iff post_kind == 5
+varint                  receipt_sign_pk_len (== 1837)           // present iff post_kind == 5
+[receipt_sign_pk_len]   receipt_sign_pk                         // present iff post_kind == 5; CEN-J28: parses as a key
+[32]                    endpoint            (EU-D3)             // present iff post_kind == 5
 u8                      holdings_kind       (0=ShardSetCompact, 1=CompleteTree)
 // if holdings_kind == 0:
 varint                  shard_count         (≤ 4096)

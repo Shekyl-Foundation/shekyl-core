@@ -342,7 +342,7 @@ fn record_releases_records_only_release_posts() {
         &[BondPostMatch {
             height: BlockHeight::from_raw(1),
             p_canonical_id: canonical_id(&p),
-            post_kind: 0, // JoinMarket
+            post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET, // JoinMarket
         }],
     );
     assert!(accrual2.pending_releases().is_empty());

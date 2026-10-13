@@ -10,8 +10,8 @@
 )]
 // ^ Diagnostic-only float math; excluded from the default build.
 
-use crate::rng::{bernoulli, bounded_uniform, RelayRng};
 use crate::stem_map::{ConnectionId, ReservedSlot, StemMap};
+use shekyl_draw_rng::{bernoulli, bounded_uniform, RelayRng};
 
 use super::util::usize_from;
 

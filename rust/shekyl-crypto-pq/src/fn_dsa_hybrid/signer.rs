@@ -97,7 +97,7 @@ impl DecodedFnDsaKey {
 
     /// The crate's `Zeroize`, in place. `Option::zeroize` takes the value
     /// out, which is two copies of the context on the dropping frame
-    /// (`FN_DSA_HYBRID.md` `FND-20`).
+    /// (`FN_DSA_HYBRID.md` `FND-22`).
     fn wipe(&mut self) {
         if let Some(key) = self.0.as_mut().as_mut() {
             key.zeroize();
@@ -203,7 +203,7 @@ impl Drop for FnDsaHybridSigner {
 // Written by hand and not derived because the derive would call `zeroize` on
 // each field, and for the key's slot that is `Option::zeroize`, which takes
 // the value out: two copies of a 118,640-byte context on the stack of
-// whatever frame the signer is dropped in (`FN_DSA_HYBRID.md` `FND-20`).
+// whatever frame the signer is dropped in (`FN_DSA_HYBRID.md` `FND-22`).
 //
 // Held by `the_signer_is_wiped_on_drop` (the bound) and
 // `drop_wipes_the_held_key_in_place` (what the `Drop` impl's wipe does).

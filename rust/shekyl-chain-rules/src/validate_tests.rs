@@ -157,6 +157,7 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 // vacuous on the coinbase (no post).
                 CenRow::J11,
                 CenRow::J12,
+                CenRow::J28,
                 CenRow::J13,
                 // Slice 8 rows 5 and 6: the post against its record and the
                 // join's admission, vacuous likewise.
@@ -310,6 +311,7 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::J2,
             CenRow::J11,
             CenRow::J12,
+            CenRow::J28,
             CenRow::J19,
             CenRow::J20,
             CenRow::J22,

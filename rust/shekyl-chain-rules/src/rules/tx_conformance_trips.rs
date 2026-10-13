@@ -196,6 +196,9 @@ pub(super) fn j12_short_bond_spend_pk() -> Transaction {
         PQC_HYBRID_SINGLE_KEY_LEN,
         BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xC0; 5],
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xE0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
         },
     ))

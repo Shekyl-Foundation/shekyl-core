@@ -275,8 +275,8 @@ stale_through = [
   { through = "11a2d409f", note = "Doc comment in provider.rs on what a leaf-segment body is refused as. No executable code changed; the verdict's arms are untouched." },
   { through = "8ed51316e", note = "StoreShardProvider reads the sealed body store: each chunk is an AEAD open where the floor capture read a frozen segment. One decrypt per chunk is added on the serve path. Not measured." },
   { through = "dc40167ad", note = "A doc comment in provider.rs: content-length is fixed from the meta row before any chunk byte, and a later chunk authentication failure can only close the stream. No read, hash, sign or socket operation changed. The key check this commit adds is at store open, off this path." },
-  { through = "9a0fab2a41", note = "FND-19 (PR #1049), two commits. The first adds test fixtures under src/wire_pin and no code. The second makes the signer trait const-generic over the envelope width; the serve loop takes the width from its signer where it read one constant. The verdict is over what an abandoned request costs before the envelope, and nothing ahead of the envelope changed: the head, the reads and the fold are the same calls in the same order, and the live scheme's response is byte-identical to fixtures captured before the change. Not measured." },
-  { through = "37b8beb1b8", note = "FND-19 follow-up (PR #1049): sign_receipt_transcript pairs a transcript with the receipt domain. sign_pass_transcript is the same one line. The live serve loop still signs with the identity key and does not call the new function; the test receipt signer changes are behind cfg(test) and the test-signer feature. The verdict is what an abandoned request costs before the envelope, and no read, hash, sign or socket operation on that path is added, removed or reordered. The receipt-key changes in engine-core are off this path set. Not measured." },
+  { through = "9a0fab2a41", note = "FND-21 (PR #1049), two commits. The first adds test fixtures under src/wire_pin and no code. The second makes the signer trait const-generic over the envelope width; the serve loop takes the width from its signer where it read one constant. The verdict is over what an abandoned request costs before the envelope, and nothing ahead of the envelope changed: the head, the reads and the fold are the same calls in the same order, and the live scheme's response is byte-identical to fixtures captured before the change. Not measured." },
+  { through = "37b8beb1b8", note = "FND-21 follow-up (PR #1049): sign_receipt_transcript pairs a transcript with the receipt domain. sign_pass_transcript is the same one line. The live serve loop still signs with the identity key and does not call the new function; the test receipt signer changes are behind cfg(test) and the test-signer feature. The verdict is what an abandoned request costs before the envelope, and no read, hash, sign or socket operation on that path is added, removed or reordered. The receipt-key changes in engine-core are off this path set. Not measured." },
 ]
 
 [[path_set]]
@@ -321,8 +321,8 @@ stale_through = [
   { through = "8ed51316e", note = "StoreShardProvider reads the sealed body store: each chunk is an AEAD open where the floor capture read a frozen segment. One decrypt per chunk is added on the serve path. The client is unchanged. Not measured." },
   { through = "b45e0c389", note = "A doc comment in shekyl-p-fetch header.rs: with_nonce is the challenge's derived nonce, not only a test helper. No executable fetch or serve code changed; no cost moved." },
   { through = "dc40167ad", note = "A doc comment in provider.rs: content-length is fixed from the meta row before any chunk byte, and a later chunk authentication failure can only close the stream. No read, hash, sign or socket operation changed. The key check this commit adds is at store open, off this path." },
-  { through = "b25727e077", note = "FND-19 (PR #1049), three commits. The first adds test fixtures under src/wire_pin and no code. The second makes the signer trait const-generic over the envelope width: the serve loop takes the width from its signer where it read one constant, and the envelope is encoded through a sealed trait that monomorphizes to the same to_canonical_bytes and array conversion. No read, hash, signature or socket write is added or removed, and the whole response for the live scheme is byte-identical to fixtures captured before the change (serve_wire_pin_tests.rs). The third makes the fetch target generic over its key: the client reads the envelope into a heap buffer of the scheme's width where it filled a 3,385-byte stack array, which is one allocation per response, and parses and verifies through a trait that monomorphizes to the same two calls. Not measured." },
-  { through = "37b8beb1b8", note = "FND-19 follow-up (PR #1049): sign_receipt_transcript pairs a transcript with the receipt domain. sign_pass_transcript is the same one line. The live serve loop still signs with the identity key and does not call the new function; the fetch client is untouched; the test receipt signer changes are behind cfg(test) and the test-signer feature. No read, hash, sign, retry or socket operation on the shipped identity path is added, removed or reordered. The receipt-key changes in engine-core are off this path set. Not measured." },
+  { through = "b25727e077", note = "FND-21 (PR #1049), three commits. The first adds test fixtures under src/wire_pin and no code. The second makes the signer trait const-generic over the envelope width: the serve loop takes the width from its signer where it read one constant, and the envelope is encoded through a sealed trait that monomorphizes to the same to_canonical_bytes and array conversion. No read, hash, signature or socket write is added or removed, and the whole response for the live scheme is byte-identical to fixtures captured before the change (serve_wire_pin_tests.rs). The third makes the fetch target generic over its key: the client reads the envelope into a heap buffer of the scheme's width where it filled a 3,385-byte stack array, which is one allocation per response, and parses and verifies through a trait that monomorphizes to the same two calls. Not measured." },
+  { through = "37b8beb1b8", note = "FND-21 follow-up (PR #1049): sign_receipt_transcript pairs a transcript with the receipt domain. sign_pass_transcript is the same one line. The live serve loop still signs with the identity key and does not call the new function; the fetch client is untouched; the test receipt signer changes are behind cfg(test) and the test-signer feature. No read, hash, sign, retry or socket operation on the shipped identity path is added, removed or reordered. The receipt-key changes in engine-core are off this path set. Not measured." },
 ]
 
 [[constant]]
@@ -425,6 +425,22 @@ measured_by = ["BA-T5"]
 status = "unmeasured"
 carrier = "BA-T5 (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8). One blocking thread per permitted connection, because each connection has at most one hop in flight. The cap is MAX_INFLIGHT, recorded separately as p_serve_max_inflight. Unmeasured until the confirming floor block."
 path_set = "serving-runtime"
+
+[[path_set]]
+id = "daemon-packaging"
+spec = ["contrib/packaging/linux"]
+
+[[constant]]
+name = "shekyl_slice_cpu_weight"
+defined_in = "contrib/packaging/linux/shekyl.slice"
+needle = "CPUWeight=400"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = { low = 0.75, high = 0.90, unit = "share of the CPU the daemon keeps under contention with a serving wallet in user.slice" }
+basis = "Reasoned, not measured (ruled 2026-10-12). A top-level slice at CPUWeight=400 against user.slice's default 100 is weighed 4:1 by the kernel's fair-group scheduler, so under full contention the daemon's group is entitled to four fifths of the CPU. BA-T5 session 3 measured the other half of the picture: with the daemon and a serving wallet in different cpu cgroups at equal weight, the daemon kept 65 % of its no-serve sync rate against a wallet serving at nice 19 (the T2' topology, docs/benchmarks/ba_t5_serve_floor_device_20261012.md), which is the fair share at 1:1; 4:1 moves that toward 80 %, less whatever the wallet's own group takes when the daemon is not saturating its share."
+basis_captures = ["docs/benchmarks/ba_t5_serve_floor_device_20261012_t2p_obs.tsv"]
+carrier = "The redefined T2 measurement (docs/FOLLOWUPS.md, ruled 2026-10-12): the daemon as the installed system unit in shekyl.slice, synced and following the tip, the wallet probe in a user session serving at N = 64; block-verify time with and without the slice weight. Its result decides whether 400 stays, moves, or the slice goes."
+path_set = "daemon-packaging"
 
 [[path_set]]
 id = "p-serve"

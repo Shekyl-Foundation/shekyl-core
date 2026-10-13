@@ -114,6 +114,7 @@ use fn_dsa::{
     FN_DSA_LOGN_1024, HASH_ID_RAW,
 };
 use rand::{CryptoRng, RngCore};
+use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 
 /// FN-DSA-1024 verifying-key length, from the crate.
 pub const FN_DSA_1024_PUBLIC_KEY_LENGTH: usize = vrfy_key_size(FN_DSA_LOGN_1024);
@@ -159,6 +160,26 @@ impl FnDsaHybridPublicKey {
         )
     }
 
+    /// The canonical encoding as the chain's word for a receipt key
+    /// ([`ReceiptSignPk`]): what a JoinMarket commits and a bond record
+    /// keeps. Total — the two lengths are one, held at compile time below.
+    #[must_use]
+    pub fn to_receipt_sign_pk(&self) -> ReceiptSignPk {
+        let mut bytes = [0u8; RECEIPT_SIGN_PK_LEN];
+        bytes.copy_from_slice(&self.to_canonical_bytes());
+        ReceiptSignPk::from_bytes(bytes)
+    }
+
+    /// Parse a chain-carried receipt key: [`Self::from_canonical_bytes`]
+    /// over its bytes. This is admission's "parses" (CEN-J28).
+    ///
+    /// # Errors
+    ///
+    /// [`Self::from_canonical_bytes`]'s.
+    pub fn from_receipt_sign_pk(key: &ReceiptSignPk) -> Result<Self, CryptoError> {
+        Self::from_canonical_bytes(key.as_bytes())
+    }
+
     /// Parse the canonical encoding.
     ///
     /// # Errors
@@ -188,6 +209,11 @@ impl FnDsaHybridPublicKey {
         Ok(Self { ed25519, fn_dsa })
     }
 }
+
+// `shekyl-types` restates the canonical length for the crates that carry
+// the key and depend on no cryptography; the two are one number or this
+// crate does not build.
+const _: () = assert!(FnDsaHybridPublicKey::CANONICAL_LEN == RECEIPT_SIGN_PK_LEN);
 
 /// An Ed25519 + FN-DSA-1024 secret key. Wiped on drop; never serialized.
 ///

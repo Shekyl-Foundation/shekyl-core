@@ -9,7 +9,7 @@
 //!
 //! Two responses are held against bytes captured from the tree before the
 //! signer trait became generic over the envelope's width
-//! (`FN_DSA_HYBRID.md` `FND-19`): a 200 closed by the countersignature, and
+//! (`FN_DSA_HYBRID.md` `FND-21`): a 200 closed by the countersignature, and
 //! a 200 closed by the refusal trailer. Each is the whole response — status
 //! line, headers with the content length, body, envelope — so a change that
 //! moves the envelope's width, its place, the content length or the

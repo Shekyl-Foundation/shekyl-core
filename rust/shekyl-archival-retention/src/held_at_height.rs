@@ -194,6 +194,9 @@ mod tests {
         BondRecord {
             hybrid_pubkey: vec![0x0a; 64],
             bond_spend_pk: vec![0x0b; 32],
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x0c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0; 32],
             join_settlement_epoch: epoch(2),
             bonded_total: AtomicUnits::from_raw(2),

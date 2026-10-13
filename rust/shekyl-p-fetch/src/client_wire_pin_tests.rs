@@ -8,7 +8,7 @@
 //! (hybrid scheme 1), and so a 3,385-byte envelope.
 //!
 //! Captured from the tree before the target became generic over its key's
-//! scheme (`FN_DSA_HYBRID.md` `FND-19`), and held since:
+//! scheme (`FN_DSA_HYBRID.md` `FND-21`), and held since:
 //!
 //! - the **request** the client writes for a shard and a header;
 //! - a **200 closed by a countersignature**, replayed to the client, and

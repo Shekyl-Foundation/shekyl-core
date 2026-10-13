@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! **A target is one scheme, decided by its key's type** — held end to end,
-//! against the real serving endpoint (`FN_DSA_HYBRID.md` §9, `FND-19`).
+//! against the real serving endpoint (`FN_DSA_HYBRID.md` §9, `FND-21`).
 //!
 //! The serve loop takes its envelope's width from the signer it was bound
 //! with, and the fetch client takes the width it reads, the signature it

@@ -202,6 +202,16 @@ jobs:
             # the pinned files, each with its digest.
             python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$root$install_dir"
           }
+          # The daemon's slice unit, beside the service unit fpm installs
+          # from --deb-systemd: the package's after-install hook reloads
+          # systemd so the service can join it (ruled 2026-10-12).
+          #
+          # stage_slice <stage-root>
+          stage_slice() {
+            local root="$1"
+            mkdir -p "$root/lib/systemd/system"
+            cp contrib/packaging/linux/shekyl.slice "$root/lib/systemd/system/"
+          }
           # And again on what the package tool actually produced, unpacked:
           # a packager that strips or rewrites a binary ships a tor the
           # daemon refuses at first launch.
@@ -264,6 +274,7 @@ jobs:
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             cp "$BIN_X86"/shekyl-mdb-copy "$STAGE/usr/local/bin/"
             stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE"
+            stage_slice "$STAGE"
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_amd64.deb" \
               --name shekyl --version "$VERSION" \
@@ -273,6 +284,8 @@ jobs:
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib1g \
               --deb-systemd contrib/packaging/linux/shekyld.service \
+              --after-install contrib/packaging/linux/deb-after-install.sh \
+              --after-upgrade contrib/packaging/linux/deb-after-install.sh \
               --deb-no-default-config-files \
               -C "$STAGE" .
             check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_amd64.deb"
@@ -313,6 +326,7 @@ jobs:
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
             cp "$BIN_ARM"/shekyl-mdb-copy "$STAGE/usr/local/bin/"
             stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE"
+            stage_slice "$STAGE"
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_arm64.deb" \
               --name shekyl --version "$VERSION" \
@@ -322,6 +336,8 @@ jobs:
               --maintainer "Shekyl Foundation <info@shekyl.org>" \
               --depends zlib1g \
               --deb-systemd contrib/packaging/linux/shekyld.service \
+              --after-install contrib/packaging/linux/deb-after-install.sh \
+              --after-upgrade contrib/packaging/linux/deb-after-install.sh \
               --deb-no-default-config-files \
               -C "$STAGE" .
             check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_arm64.deb"

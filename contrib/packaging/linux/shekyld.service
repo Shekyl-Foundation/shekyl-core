@@ -4,6 +4,9 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# The daemon's own slice, weighed 4:1 against user.slice under contention
+# (shekyl.slice, shipped beside this unit; ruled 2026-10-12).
+Slice=shekyl.slice
 Type=simple
 ExecStart=/usr/local/bin/shekyld --non-interactive --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log
 ExecStartPre=/bin/mkdir -p /var/log/shekyl
