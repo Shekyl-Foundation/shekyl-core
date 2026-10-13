@@ -54,6 +54,9 @@ fn record() -> BondRecord {
     BondRecord {
         hybrid_pubkey: vec![0x11; 64],
         bond_spend_pk: vec![0x22; 32],
+        receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+            [0x44; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+        ),
         endpoint: [0x33; 32],
         join_settlement_epoch: epoch(3),
         bonded_total: AtomicUnits::from_raw(5_000_000_000),

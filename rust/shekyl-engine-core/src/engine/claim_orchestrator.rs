@@ -389,7 +389,7 @@ mod tests {
         BondPostRecord {
             height: BlockHeight::from_raw(height),
             p_canonical_id: persona,
-            post_kind: 0,
+            post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
         }
     }
 
@@ -733,7 +733,7 @@ mod tests {
             let bond_posts = vec![BondPostRecord {
                 height: BlockHeight::from_raw(tip),
                 p_canonical_id: PCanonicalId::from_bytes([9u8; 32]),
-                post_kind: 0,
+                post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
             }];
 
             let expected_reference = BlockHeight::from_raw(tip) - REF_ANCHOR_AGE;

@@ -32,6 +32,10 @@ fn persona(b: u8) -> PCanonicalId {
     PCanonicalId::from_bytes([b; 32])
 }
 
+/// The JoinMarket's wire byte, as the extractor records it. *Was* `0`, the
+/// keyless JoinMarket's byte, retired 2026-10-12.
+const JOIN: u8 = shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET;
+
 fn bond_match(id: u8, kind: u8) -> BondPostRecord {
     BondPostRecord {
         height: BlockHeight::from_raw(1_000),
@@ -105,7 +109,7 @@ fn exited(id: u8) -> BTreeMap<PCanonicalId, SettlementEpoch> {
 #[test]
 fn the_two_resolutions_never_trade_personas() {
     let state = pscan(
-        vec![bond_match(1, 0), bond_match(2, 0)],
+        vec![bond_match(1, JOIN), bond_match(2, JOIN)],
         exited(1),
         Vec::new(),
         vec![funding(1, 7, 500)],
@@ -132,7 +136,7 @@ fn the_two_resolutions_never_trade_personas() {
 #[test]
 fn in_progress_states_are_named_before_nothing_staked() {
     // Observed exit, nothing else: ExitInProgress (collect's turf).
-    let state = pscan(vec![bond_match(1, 0)], exited(1), Vec::new(), Vec::new());
+    let state = pscan(vec![bond_match(1, JOIN)], exited(1), Vec::new(), Vec::new());
     let ev = evidence(Some(state), None, &[(1, 1)]);
     assert_eq!(
         resolve_unstake_target(&ev).expect("resolvable"),
@@ -141,7 +145,7 @@ fn in_progress_states_are_named_before_nothing_staked() {
 
     // Sealed-but-unconfirmed exit (dispatched, not yet observed): the
     // pending block's release seal is the evidence.
-    let state = pscan(vec![bond_match(1, 0)], exited(1), Vec::new(), Vec::new());
+    let state = pscan(vec![bond_match(1, JOIN)], exited(1), Vec::new(), Vec::new());
     let mut block = PendingPostBlock::empty();
     let g = block.generation();
     assert_eq!(
@@ -211,7 +215,7 @@ fn in_progress_states_are_named_before_nothing_staked() {
 #[test]
 fn a_live_or_exited_persona_missing_from_the_index_fails_closed() {
     let state = pscan(
-        vec![bond_match(1, 0)],
+        vec![bond_match(1, JOIN)],
         Vec::new().into_iter().collect(),
         Vec::new(),
         Vec::new(),
@@ -222,7 +226,7 @@ fn a_live_or_exited_persona_missing_from_the_index_fails_closed() {
         "a live bond with no index row is an error, not NothingStaked"
     );
 
-    let state = pscan(vec![bond_match(1, 0)], exited(1), Vec::new(), Vec::new());
+    let state = pscan(vec![bond_match(1, JOIN)], exited(1), Vec::new(), Vec::new());
     let ev = evidence(Some(state), None, &[]);
     assert!(
         resolve_collect_target(&ev, &BTreeSet::new()).is_err(),
@@ -343,7 +347,7 @@ fn facade_cannot_steer_slot_or_mint_test_witnesses() {
 #[test]
 fn lowest_slot_is_independent_of_cache_insertion_order() {
     let state = pscan(
-        vec![bond_match(1, 0), bond_match(2, 0)],
+        vec![bond_match(1, JOIN), bond_match(2, JOIN)],
         BTreeMap::new(),
         Vec::new(),
         Vec::new(),
@@ -491,7 +495,7 @@ fn a_sealed_exit_is_excluded_so_the_next_live_bond_can_exit() {
     // Personas 1 and 2 both hold live confirmed bonds; neither exit is
     // observed (pending_releases empty), but persona 1's exit is already sealed.
     let state = pscan(
-        vec![bond_match(1, 0), bond_match(2, 0)],
+        vec![bond_match(1, JOIN), bond_match(2, JOIN)],
         BTreeMap::new(),
         Vec::new(),
         Vec::new(),
@@ -528,7 +532,7 @@ fn collect_skips_a_slot_the_caller_proved_unsweepable() {
     let mut exited_both = exited(1);
     exited_both.insert(persona(2), SettlementEpoch::from_raw(9));
     let state = pscan(
-        vec![bond_match(1, 0), bond_match(2, 0)],
+        vec![bond_match(1, JOIN), bond_match(2, JOIN)],
         exited_both,
         Vec::new(),
         vec![funding(1, 7, 500), funding(2, 8, 500)],
@@ -564,7 +568,7 @@ fn a_slot_still_maturing_is_not_permanent_dust() {
     let mut maturing = funding(1, 9, 500);
     maturing.spendable_height = BlockHeight::from_raw(6_000); // > cursor 5_000
     let has_maturing = pscan(
-        vec![bond_match(1, 0)],
+        vec![bond_match(1, JOIN)],
         exited(1),
         Vec::new(),
         vec![funding(1, 7, 500), maturing],
@@ -574,7 +578,7 @@ fn a_slot_still_maturing_is_not_permanent_dust() {
         "a row not yet spendable at the frontier is maturing — the dust is transient"
     );
     let all_mature = pscan(
-        vec![bond_match(2, 0)],
+        vec![bond_match(2, JOIN)],
         exited(2),
         Vec::new(),
         vec![funding(2, 8, 500)],
@@ -599,7 +603,7 @@ fn per_slot_zero_does_not_forge_lane_wide_completion() {
     // Both exited; both still hold rows.
     let ev = evidence(
         Some(pscan(
-            vec![bond_match(1, 0), bond_match(2, 0)],
+            vec![bond_match(1, JOIN), bond_match(2, JOIN)],
             exited_both.clone(),
             Vec::new(),
             vec![funding(1, 7, 500), funding(2, 8, 500)],
@@ -619,7 +623,7 @@ fn per_slot_zero_does_not_forge_lane_wide_completion() {
     // Slot 2's pool emptied: sweeping slot 1 IS lane-wide completion.
     let ev_one = evidence(
         Some(pscan(
-            vec![bond_match(1, 0), bond_match(2, 0)],
+            vec![bond_match(1, JOIN), bond_match(2, JOIN)],
             exited_both,
             Vec::new(),
             vec![funding(1, 7, 500)],
@@ -636,7 +640,7 @@ fn per_slot_zero_does_not_forge_lane_wide_completion() {
     // not exited is `unstake`'s concern, not an uncollected pool.
     let ev_live = evidence(
         Some(pscan(
-            vec![bond_match(1, 0), bond_match(2, 0)],
+            vec![bond_match(1, JOIN), bond_match(2, JOIN)],
             exited(1),
             Vec::new(),
             vec![funding(1, 7, 500), funding(2, 8, 500)],

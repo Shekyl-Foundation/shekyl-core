@@ -332,6 +332,19 @@ async fn stubbing_the_slash_log_is_noticed_through_the_watermark_alone() {
     // below it by a rule it predates never gets there, stubbed or not. The
     // witness is suspended, pinned to the record, and resumes the day the
     // record is deleted (module doc).
+    // Likewise a chain that stops at a retired keyless JoinMarket
+    // (`vectors_tests::RETIRED_KEYLESS_JOINS`): the run ends at 98, far
+    // below the close, with nothing refused.
+    if let Some(retired) = crate::vectors_tests::retired_keyless_join(&manifest.shape) {
+        assert!(report.refused.is_none(), "{:?}", report.refused);
+        assert_eq!(report.connected.len() as u64, retired.at.to_raw());
+        eprintln!(
+            "SlashLog stubbed on `{}`: watermark witness SUSPENDED — the chain is read only \
+             below its retired keyless JoinMarket at {:?}; resumes when it is re-captured",
+            manifest.shape, retired.at
+        );
+        return;
+    }
     if let Some(record) = predates(&manifest.shape) {
         assert_eq!(report.refused, Some(record.refused), "{}", record.why);
         eprintln!(
@@ -392,6 +405,11 @@ async fn stubbing_each_witnessed_family_is_noticed() {
                     Red::Suspended
                 }
                 (Some(refused), _) => Red::Cascade(format!("refused: {refused:?}")),
+                // The run ended at a retired keyless JoinMarket, stub or
+                // no stub: not the stub's doing, and nothing was compared.
+                (None, None) if crate::vectors_tests::retired_keyless_join(shape).is_some() => {
+                    Red::Suspended
+                }
                 // Neither red nor compared is not a stub's doing — the
                 // trace or the run lost the tip. A finding, not an outcome.
                 (None, None) => panic!(

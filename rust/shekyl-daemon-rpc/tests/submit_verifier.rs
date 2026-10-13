@@ -660,6 +660,7 @@ fn build_bond_fixture() -> BondFixture {
         p_canonical_id: shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&p_pubkey),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: bond_spend_pk.clone(),
+            receipt_sign_pk: p_keys.receipt_sign_pk.to_receipt_sign_pk(),
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
