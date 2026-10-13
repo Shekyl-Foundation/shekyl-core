@@ -5,6 +5,14 @@ corrections); implementation is PR-3.** Design before code. Rule 26 is
 cited. Every PR-3 commit implements this file as it stands at that commit.
 *Records-was: OPEN — no implementation starts from this file until a
 review of it has closed.*
+**UPDATE 2026-10-13 (Rick):** the dialer lives in a new crate over
+`shekyl-seam` and `shekyl-peerlist`; the C++ reaches it only through
+`shekyl-ffi`. Neither of those two crates depends on the other, and
+`Hub::connect` is already `dial.connect` followed by `Hub::adopt`
+(`shekyl-seam/src/hub.rs`), so the split this brief asks for is at that
+seam. The failed-address predicate is ruled the same day: it reads the
+declaration's `destination_authenticated` cell ("Failed-address
+memory" below).
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol
