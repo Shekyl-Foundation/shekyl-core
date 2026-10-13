@@ -135,24 +135,31 @@ C++ callers with `set_max_out_peers` and the `,N` parser and go with them.
 ### 2.3 The C++ snapshot (DC-Q1)
 
 One read-only structure, filled once by one call after the parse returns,
-holding exactly the values whose surviving reader is C++. Derived from the
-§3 consumer column, the initial field list is:
+holding exactly the values whose surviving reader is C++. The list is
+derived from §3's "Reader after" column and nothing else; a row whose
+reader cell names the snapshot is a field, grouped here by the C++ that
+reads it:
 
-core: `data-dir`, `network`, `fixed-difficulty`, `prep-blocks-threads`,
-`block-sync-size`, `offline`, `block-download-max-size`, `span-limit`,
-`max-txpool-weight`, `block-notify`, `reorg-notify`, `block-rate-notify`,
-`keep-alt-blocks`, `db-sync-mode`, `db-salvage`, `max-concurrency`;
-miner: `start-mining`, `mining-threads`; the `net_node` remnant:
-`p2p-external-port` (read at the own-address test and the port-only advert,
-[`src/p2p/net_node.inl:1553`](../../src/p2p/net_node.inl),
-[`:2486`](../../src/p2p/net_node.inl)), `pad-transactions`
-([`:1207`](../../src/p2p/net_node.inl)), `add-exclusive-node`,
-`no-sync`, the console's RPC bind pair; the protocol handler:
-`block-download-max-size`, `span-limit`.
+- `main.cpp` until DC-N2: `max-concurrency`, `non-interactive`,
+  `daemon_command` (3);
+- the console client until DC-N2: `rpc-bind-ip`, `rpc-bind-port` (2);
+- core: `data-dir`, the network, `fixed-difficulty`, `prep-blocks-threads`,
+  `block-sync-size`, `offline`, `max-txpool-weight`, `keep-alt-blocks`,
+  `block-notify`, `reorg-notify`, `block-rate-notify`, `db-sync-mode`,
+  `db-salvage` (13);
+- the protocol handler: `block-download-max-size`, `span-limit` (2);
+- the miner: `start-mining`, `mining-threads` (2);
+- the `net_node` remnant: `p2p-external-port` (read at the own-address
+  test and the port-only advert,
+  [`src/p2p/net_node.inl:1553`](../../src/p2p/net_node.inl),
+  [`:2486`](../../src/p2p/net_node.inl)), `add-exclusive-node`, `no-sync`,
+  `pad-transactions` ([`:1207`](../../src/p2p/net_node.inl)) (4).
 
-**Twenty-four fields at the cutover.** A gate pins the count and fails when
-it rises; every later slice that moves a consumer deletes its field. The
-listed names are today's C++ names; the snapshot carries IG's.
+**Twenty-six fields at the cutover**, the sum of the six groups above; the
+pre-flight (§9) observes the count against the landed table and corrects
+this paragraph if §3 changed under IG. A gate pins the count and fails
+when it rises; every later slice that moves a consumer deletes its field.
+The listed names are today's C++ names; the snapshot carries IG's.
 
 ### 2.4 The config file (DC-Q3)
 
@@ -362,7 +369,7 @@ Part A*; it is one column so the fold-in is one edit per row.
 
 | Today | Declared | What | Disposition | Reader after | IG row |
 | --- | --- | --- | --- | --- | --- |
-| `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6` | [`src/rpc/rpc_args.cpp:91-95`](../../src/rpc/rpc_args.cpp) | addresses, switch | KEEP | Rust (RPC) | pending IG Part A |
+| `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6` | [`src/rpc/rpc_args.cpp:91-95`](../../src/rpc/rpc_args.cpp) | addresses, switch | KEEP | Rust (RPC); `rpc-bind-ip` also the C++ console until DC-N2 ([`src/daemon/main.cpp:348`](../../src/daemon/main.cpp)) | pending IG Part A |
 | `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | [`:93-94`](../../src/rpc/rpc_args.cpp) | addresses | KEEP | Rust (RPC) | pending IG Part A |
 | `rpc-access-control-origins` | [`:97`](../../src/rpc/rpc_args.cpp) | list | KEEP | Rust (RPC) | pending IG Part A |
 | `disable-rpc-ban` | [`:105`](../../src/rpc/rpc_args.cpp); its only reader guards a function nothing calls | switch | DELETE | — | REJECTED entry |
@@ -593,7 +600,7 @@ recorded in a sibling `DAEMON_CONFIG_CUTOVER_AUDIT.md`:
 2. Artifact execution: the §4 before-counts observed non-zero; the
    dial-path freeze gate's state after PR-3; the launchers in §5.1 run on
    the Rust parse; the docs gates (IG-9) run on the generated tables; the
-   snapshot field count observed at twenty-four.
+   snapshot field count observed at twenty-six, the §2.3 sum.
 3. Rule 17 at source for `fd-lock` and `toml` at the pinned versions.
 
 Interactions: RT-W10 re-scopes the `--rpc-*` bind parsing into
@@ -683,8 +690,8 @@ Part A rules. Read rules 00, 06, 08, 17, 20, 22, 23, 25, 26, 40, 45, 47,
    every §5.1 launcher edited, the docs generated and their gate green;
    (f) the index row and FOLLOWUPS rows of §10 landed, the `removed_flags`
    sunset row deleted.
-5. **The snapshot only shrinks.** Add the field-count gate at twenty-four
-   in commit (b). A later field is a ruling, not a convenience.
+5. **The snapshot only shrinks.** Add the field-count gate at twenty-six
+   in commit (b), or at the count the pre-flight observed. A later field is a ruling, not a convenience.
 6. **No new daemon option in C++** (standing rule, 2026-10-13). A value C++
    needs comes through the snapshot or not at all.
 7. **Gates before claiming done.** `cargo fmt --check`, `cargo clippy
