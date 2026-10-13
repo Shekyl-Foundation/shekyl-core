@@ -81,10 +81,10 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # 2026-10-11 when the two alt-chain attestation rows closed by dissolution
 # (DRS-E5 `E5-Q4`); 308 the same day when the alt-chain supply-accumulation
 # row closed with the field it described deleted (DRS-E5 a4, CEN-K8); 307
-# on 2026-10-12 at the merge of those two lanes, the list's length; 306 the
-# same day (F-7 gained an owner, its finding record, when its priority was
-# raised).
-GRANDFATHER_CEILING = 306
+# on 2026-10-12 at the merge of those two lanes, the list's length; 305
+# on 2026-10-13 when the fee-and-weight owner (dev) and the F-7 owner
+# (this lane) landed together, the list's length.
+GRANDFATHER_CEILING = 305
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

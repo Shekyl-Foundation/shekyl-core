@@ -65,9 +65,11 @@ struct Row {
     height: u64,
     already_generated_coins: u64,
     base_block_reward: u64,
-    /// Whole transactions per block along the recorded scenario; the
-    /// recorder writes an integer mean, so `TxVolume::per_block` is exact.
-    tx_volume: u64,
+    /// CEN-F20 window the block was priced at. The burn replays
+    /// `TxVolume::window` of this pair. The fixture's `tx_volume` is the
+    /// count the block listed and is not an operand here.
+    volume_tx_count_sum: u64,
+    volume_window_blocks: u64,
     circulating_supply: u64,
     total_staked: u64,
     burn_pct_bp: u64,
@@ -144,15 +146,16 @@ fn economics_differential_records_match_engine() {
 
         // (2) burn_amount composes the shared `from_activity` path; the
         // recorded `burn_pct_bp` must be reproducible (Bug-2 class).
+        let volume = TxVolume::window(row.volume_tx_count_sum, row.volume_window_blocks);
         let metric = ActivityMetric::new(
-            TxVolume::per_block(row.tx_volume),
+            volume,
             row.circulating_supply,
             u128::from(row.total_staked),
             row.height,
         )
         .expect("fixture row is a valid ActivityMetric");
         let pct = calc_burn_pct_from_activity(
-            TxVolume::per_block(row.tx_volume),
+            volume,
             params.tx_volume_baseline,
             row.circulating_supply,
             &params,

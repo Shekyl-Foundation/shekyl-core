@@ -44,10 +44,10 @@
 //! Rows (first column is the row kind):
 //!
 //! ```text
-//! OBS      label mode size in_flight micros bytes
+//! OBS      label mode size in_flight micros bytes outcome   (outcome: served, refused or cut)
 //! PHASE    label size phase micros          (phase: read | hash | sign)
 //! LATE     label mode size in_flight n p50_us p90_us p99_us p999_us max_us
-//! BLOCK    label mode size in_flight n wall_ms cpu_ms served refused
+//! BLOCK    label mode size in_flight n wall_ms cpu_ms served refused cut
 //! TTFB     label size n p50_us p90_us p99_us max_us
 //! ABANDON  label size provider n cpu_us_per_request loopback_bytes_per_request served_delta
 //! ```
@@ -66,9 +66,11 @@ use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{leaves_per_segment, BlockHeight};
 use shekyl_p_serve::{
     PServeEndpoint, PassKey, PassSigner, ProviderError, ShardBody, ShardProvider,
-    StoreShardProvider, TestKeySigner, IDENTITY_ENVELOPE_LEN, REQUEST_HEADER_NAME,
+    StoreShardProvider, TestKeySigner, IDENTITY_ENVELOPE_LEN, MAX_INFLIGHT, REQUEST_HEADER_NAME,
 };
 use shekyl_p_store::{BodyStore, StoreKey};
+use shekyl_runtime::{runtime_with_thread_hooks, Pool, RuntimeBudget, ThreadHooks, ThreadName};
+use shekyl_thread_priority::lower_current_thread;
 use shekyl_types::ShardId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -170,18 +172,61 @@ fn request_head(shard_id: u64, nonce: [u8; 32]) -> Vec<u8> {
 /// land first. A block records those (the endpoint's `refused` count is on
 /// its `BLOCK` row; the `OBS` row carries the 0) and goes on; it does not
 /// retry, because a retry would change the offered load.
-async fn fetch(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> usize {
+///
+/// Returns [`Fetch::Cut`] for a response the endpoint cut mid-way: the
+/// read fails with a reset. That is the endpoint's write-stall timeout
+/// (`WRITE_STALL_TIMEOUT`, 30 s per write) dropping a connection that made
+/// no progress for that long, which session 3 met at 64 in flight with the
+/// serving threads at nice 19 beside a syncing daemon. The endpoint does
+/// not count a cut response as served; the block counts it on its row and
+/// goes on, for the same reason it does not retry a refusal.
+async fn fetch(addr: SocketAddr, shard_id: u64, nonce: [u8; 32]) -> Fetch {
     let mut s = TcpStream::connect(addr).await.expect("connect");
     s.write_all(&request_head(shard_id, nonce))
         .await
         .expect("write request");
     let mut out = Vec::with_capacity(size_of(shard_id).1 + 8192);
-    s.read_to_end(&mut out).await.expect("read response");
+    match s.read_to_end(&mut out).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => return Fetch::Cut,
+        Err(e) => panic!("read response: {e:?}"),
+    }
     if out.is_empty() {
-        return 0;
+        return Fetch::Refused;
     }
     check_whole(shard_id, &out);
-    out.len()
+    Fetch::Served(out.len())
+}
+
+/// What one fetch came back as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fetch {
+    /// A whole response, checked, of this many bytes.
+    Served(usize),
+    /// Closed without a byte: over the in-flight cap.
+    Refused,
+    /// Reset mid-response: the endpoint's write-stall timeout.
+    Cut,
+}
+
+impl Fetch {
+    /// The bytes received, and the outcome word the `OBS` row carries.
+    fn row(self) -> (usize, &'static str) {
+        match self {
+            Self::Served(len) => (len, "served"),
+            Self::Refused => (0, "refused"),
+            Self::Cut => (0, "cut"),
+        }
+    }
+
+    /// The bytes of a served response; a refusal or a cut is a fault at
+    /// one in flight, where neither can happen by design.
+    fn served_or_fault(self, what: &str) -> usize {
+        match self {
+            Self::Served(len) => len,
+            other => panic!("{what}: {other:?} at one in flight"),
+        }
+    }
 }
 
 /// The response is a 200 and exactly as long as it says it is: the head,
@@ -208,9 +253,14 @@ fn check_whole(shard_id: u64, out: &[u8]) {
         declared,
         "the body is not the length the head declares"
     );
-    assert!(
-        declared > size_of(shard_id).1 + IDENTITY_ENVELOPE_LEN,
-        "the declared length does not cover the shard, its frame and the envelope"
+    // The body is the shard's bytes and the signature envelope, nothing
+    // more: the served frame was deleted with the unframed body (PR #1015,
+    // 2026-10-10). Sessions 1 and 2 measured the framed body, a header of a
+    // few bytes more per response.
+    assert_eq!(
+        declared,
+        size_of(shard_id).1 + IDENTITY_ENVELOPE_LEN,
+        "the declared length is the shard and its envelope"
     );
 }
 
@@ -301,9 +351,77 @@ fn percentile(sorted: &[u64], per_mille: usize) -> u64 {
     sorted[((sorted.len() - 1) * per_mille) / 1000]
 }
 
+/// The endpoint's runtime, built one of three ways by `BAT5_PRIORITY`.
+///
+/// Unset: today's probe runtime, four workers and Tokio's blocking
+/// defaults (sessions 1 and 2). `budget`: the serving host's budget
+/// (`SERVING_WORKERS` workers, `MAX_INFLIGHT` blocking threads) through
+/// the single constructor, every thread at the priority it inherits.
+/// `thread`: the same budget and constructor with the start hook the
+/// serving host installs — every worker and blocking thread lowers its
+/// own CPU priority as it starts (`SH-3`). It is the mechanism, not
+/// `shekyl-p-host` itself: the probe serves synthetic shards with an
+/// ephemeral key and has no onion. A `thread` arm whose lowering fails
+/// panics; a block that silently measured normal priority would be a
+/// wrong number with the right label.
+enum EndpointRuntime {
+    Plain(Runtime),
+    Pool(Pool),
+}
+
+impl std::ops::Deref for EndpointRuntime {
+    type Target = Runtime;
+
+    fn deref(&self) -> &Runtime {
+        match self {
+            Self::Plain(runtime) => runtime,
+            Self::Pool(pool) => pool,
+        }
+    }
+}
+
+/// `shekyl-p-host`'s serving budget (`runtime.rs`: `SERVING_WORKERS`,
+/// `SERVING_BLOCKING = MAX_INFLIGHT`), restated here because this crate
+/// cannot depend on the host that depends on it. The record of the run
+/// that uses it says so.
+const HOST_SERVING_WORKERS: usize = 2;
+
+fn endpoint_runtime() -> EndpointRuntime {
+    let host_budget = RuntimeBudget {
+        workers: std::num::NonZeroUsize::new(HOST_SERVING_WORKERS).expect("workers"),
+        blocking: std::num::NonZeroUsize::new(MAX_INFLIGHT).expect("blocking"),
+    };
+    let name = ThreadName::new("sk-serving-probe").expect("thread name");
+    match env("BAT5_PRIORITY").as_deref() {
+        None => EndpointRuntime::Plain(
+            Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .expect("endpoint runtime"),
+        ),
+        Some("budget") => EndpointRuntime::Pool(
+            runtime_with_thread_hooks(host_budget, &name, ThreadHooks::none())
+                .expect("endpoint runtime"),
+        ),
+        Some("thread") => EndpointRuntime::Pool(
+            runtime_with_thread_hooks(
+                host_budget,
+                &name,
+                ThreadHooks::pair(
+                    || lower_current_thread().expect("lower the serving thread's priority"),
+                    || {},
+                ),
+            )
+            .expect("endpoint runtime"),
+        ),
+        Some(other) => panic!("BAT5_PRIORITY must be unset, budget or thread, not {other:?}"),
+    }
+}
+
 /// The endpoint's side: its runtime, the endpoint, and the lateness task.
 struct Served {
-    runtime: Runtime,
+    runtime: EndpointRuntime,
     endpoint: PServeEndpoint,
     signer: Arc<TestKeySigner>,
     provider: Arc<Shards>,
@@ -351,11 +469,7 @@ impl Served {
             full: synthetic(size_of(3).1),
         });
 
-        let runtime = Builder::new_multi_thread()
-            .worker_threads(4)
-            .enable_all()
-            .build()
-            .expect("endpoint runtime");
+        let runtime = endpoint_runtime();
         let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
         let endpoint = runtime
             .block_on(PServeEndpoint::bind(
@@ -458,10 +572,9 @@ fn timed_block(served: &Served, clients: &Runtime, block: Block<'_>) {
     clients.block_on(async {
         for i in 0..warm_up {
             // One in flight: a refusal here is a serve fault, not the cap.
-            assert!(
-                fetch(addr, shard_id, nonce(0x11, i)).await > 0,
-                "a warm-up fetch was refused"
-            );
+            fetch(addr, shard_id, nonce(0x11, i))
+                .await
+                .served_or_fault("a warm-up fetch");
         }
     });
     let served_before = served.endpoint.served_count();
@@ -469,8 +582,9 @@ fn timed_block(served: &Served, clients: &Runtime, block: Block<'_>) {
     served.sample(true);
     let cpu0 = cpu_micros();
     let t0 = Instant::now();
-    clients.block_on(async {
+    let cut = clients.block_on(async {
         let mut k = 0usize;
+        let mut cut = 0usize;
         while k < n {
             let batch = in_flight.min(n - k);
             let mut joins = Vec::new();
@@ -484,16 +598,19 @@ fn timed_block(served: &Served, clients: &Runtime, block: Block<'_>) {
             }
             for j in joins {
                 let (us, got) = j.await.expect("join");
-                println!("OBS\t{label}\t{mode}\t{size}\t{in_flight}\t{us}\t{got}");
+                let (bytes, outcome) = got.row();
+                cut += usize::from(got == Fetch::Cut);
+                println!("OBS\t{label}\t{mode}\t{size}\t{in_flight}\t{us}\t{bytes}\t{outcome}");
             }
             k += batch;
         }
+        cut
     });
     let wall_ms = t0.elapsed().as_millis();
     let cpu_ms = (cpu_micros() - cpu0) / 1_000;
     served.sample(false);
     println!(
-        "BLOCK\t{label}\t{mode}\t{size}\t{in_flight}\t{n}\t{wall_ms}\t{cpu_ms}\t{}\t{}",
+        "BLOCK\t{label}\t{mode}\t{size}\t{in_flight}\t{n}\t{wall_ms}\t{cpu_ms}\t{}\t{}\t{cut}",
         served.endpoint.served_count() - served_before,
         served.endpoint.refused_count() - refused_before
     );
@@ -590,8 +707,9 @@ fn ba_t5_floor_probe() {
         // from the page cache, it is a read from the disk.
         "cold" => {
             let t = Instant::now();
-            let got = clients.block_on(fetch(addr, 0, nonce(0x44, 0)));
-            assert!(got > 0, "the cold fetch was refused at one in flight");
+            let got = clients
+                .block_on(fetch(addr, 0, nonce(0x44, 0)))
+                .served_or_fault("the cold fetch");
             println!(
                 "OBS\t{label}\tcold\tfull-store\t1\t{}\t{got}",
                 t.elapsed().as_micros()
@@ -647,8 +765,9 @@ fn ba_t5_floor_probe() {
                     std::thread::sleep(wait);
                 }
                 let t = Instant::now();
-                let got = clients.block_on(fetch(addr, 0, nonce(0x77, i)));
-                assert!(got > 0, "a sustain fetch was refused at one in flight");
+                let got = clients
+                    .block_on(fetch(addr, 0, nonce(0x77, i)))
+                    .served_or_fault("a sustain fetch");
                 println!(
                     "OBS\t{label}\tsustain\tfull-store\t1\t{}\t{got}",
                     t.elapsed().as_micros()
@@ -681,10 +800,9 @@ fn ba_t5_floor_probe() {
         "ttfb" => {
             let n = env_usize("BAT5_N", 300);
             for i in 0..5 {
-                assert!(
-                    clients.block_on(fetch(addr, 0, nonce(0x11, i))) > 0,
-                    "a warm-up fetch was refused"
-                );
+                clients
+                    .block_on(fetch(addr, 0, nonce(0x11, i)))
+                    .served_or_fault("a warm-up fetch");
             }
             let mut samples = Vec::with_capacity(n);
             for i in 0..n {
