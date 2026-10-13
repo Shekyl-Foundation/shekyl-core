@@ -823,6 +823,9 @@ pub fn verify_bundle<V: BundleView>(
                 height: record.anchor_height,
             }));
         };
+        // A `u32` into a `usize` is lossless on every target the workspace
+        // builds for. In range: `draws` has `count` entries (step 6) and a
+        // set bit's index is below `count` by the bitmap's construction.
         let derived = draws[draw as usize];
         let Some(receipt_key) = drawable.receipt_key(derived.index) else {
             return Err(BundleRefused::Unanswered(BundleUnanswered::Draw { draw }));
@@ -877,6 +880,8 @@ fn derive_draws<V: BundleView>(
         }
     };
 
+    // A `u32` into a `usize` is lossless on every target the workspace
+    // builds for.
     let mut draws = Vec::with_capacity(count as usize);
     for draw in 0..count {
         let selected = select_draw(&kept.seed, hash_at_h, draw, drawable.len(), &mut short)
