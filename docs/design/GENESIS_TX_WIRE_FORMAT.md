@@ -586,9 +586,12 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   wire fields are final per gate-4 §3 + the certify_draw work (#165), no WIP
   markers in the wire source. **Reopen clause (rule-21):** if testnet reveals a
   needed change it lands then (pre-genesis = free). `bond_post` is
-  **JoinMarket-only at genesis** (`verify_join_market_bond_post` refuses any
-  other kind with `PostKindNotJoinMarket`,
-  `rust/shekyl-archival-retention/src/bond_post.rs:225-231`, `:29-30`;
+  **JoinMarket-only at genesis** (today each verify arm refuses the other
+  kinds — `PostKindNotJoinMarket`, `PostKindNotRelease`,
+  `PostKindNotReinstate`,
+  `rust/shekyl-archival-retention/src/bond_post.rs:29-30`, `:51-52`, `:73-74`;
+  the JoinMarket arm is `verify_join_market_bond_post`, `:225-231` — where
+  this clause had cited a single genesis-era `post_kind` gate at `:44`;
   Reinstate/Release/HoldingsUpdate are post-genesis) *[records-was at Q4's
   resolution: Release and Reinstate verify arms have since landed, and
   `HoldingsUpdate` was REJECTED 2026-09-20 — `from_u8(3)` is
