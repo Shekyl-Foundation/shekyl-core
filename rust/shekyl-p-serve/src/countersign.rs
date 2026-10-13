@@ -342,13 +342,28 @@ pub fn sign_pass_transcript(
 
 /// Sign an SF-D8 transcript under `SCHEME_DOMAIN_RECEIPT`.
 ///
-/// The receipt-domain counterpart of [`sign_pass_transcript`], and the only
-/// place a pass transcript is paired with that domain. The held receipt key
-/// and the test receipt signer both call it.
+/// **STAGED** (rule 23; `FN_DSA_HYBRID.md` §9). The receipt-domain
+/// counterpart of [`sign_pass_transcript`], and the only place a pass
+/// transcript is paired with that domain. Its one non-test caller is the
+/// stake actor's held receipt key (`shekyl-engine-core`,
+/// `HeldPersona::sign_receipt_transcript`), which only the staged receipt
+/// capability asks to sign; `TestReceiptKeySigner` is the other caller,
+/// behind `test-signer`. No live serve path reaches it: every production
+/// endpoint is bound at [`IDENTITY_ENVELOPE_LEN`] and signs through
+/// [`sign_pass_transcript`].
+///
+/// **Who makes it live:** the settlement lane's cutover, in the change
+/// that makes a verifier accept scheme-3 receipts, by selecting the
+/// receipt capability for the serving task. **Falsifier:** a receipt
+/// signed through this function reaching a requester before a verifier
+/// accepts one — that is, a production endpoint bound at
+/// [`RECEIPT_ENVELOPE_LEN`] before the cutover.
 ///
 /// # Errors
 ///
-/// Propagates the held signer's failure (malformed key material).
+/// Propagates the held signer's failure: the scheme's signer gave up, or
+/// the domain was refused. A key that does not decode never reaches here;
+/// the signer is built from a decoded key.
 pub fn sign_receipt_transcript(
     signer: &mut FnDsaHybridSigner,
     message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
