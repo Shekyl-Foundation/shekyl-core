@@ -37,6 +37,7 @@
 //! own value in ([`BundleWorld::record_signed_over`]).
 
 use core::cell::RefCell;
+use core::convert::Infallible;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
@@ -329,16 +330,16 @@ impl BundleWorld {
             .get(&self.h)
             .copied()
             .unwrap_or_else(|| fixture_block_hash(self.h));
-        select_draw(
+        // The fixture's short read cannot fail, and the type says so: the
+        // `Err` arm is uninhabited, so the `let` is irrefutable.
+        let Ok(selected) = select_draw(
             &self.seed,
             hash.as_bytes(),
             draw,
             self.snapshot().len(),
-            |index| Ok::<_, ()>(self.view.short.contains(&(self.h, index))),
-        )
-        .expect("the fixture's short read does not fault")
-        .expect("a non-empty set selects")
-        .index
+            |index| Ok::<_, Infallible>(self.view.short.contains(&(self.h, index))),
+        );
+        selected.expect("a non-empty set selects").index
     }
 
     /// The record an honest producer files for draw `j` read on its
