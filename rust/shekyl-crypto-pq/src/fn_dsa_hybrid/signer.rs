@@ -7,9 +7,9 @@
 //!
 //! [`super::HybridEd25519FnDsa`] decodes the FN-DSA half on every sign.
 //! [`FnDsaHybridSigner`] decodes it once into a heap slot and signs from
-//! there, through the same [`super::sign_decoded_key`] the per-call path
-//! uses after its own decode. The serve path's receipt capability is the
-//! caller (`docs/design/FN_DSA_HYBRID.md`, `FND-4`).
+//! there, through the same decoded-key call the per-call path uses after
+//! its own decode. The serve path's receipt capability is the caller
+//! (`docs/design/FN_DSA_HYBRID.md`, `FND-4`).
 
 use ed25519_dalek::SECRET_KEY_LENGTH as ED25519_SECRET_KEY_LENGTH;
 use fn_dsa::{SigningKey as _, SigningKey1024};
@@ -18,6 +18,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::heap_secret::HeapSecret;
 use crate::rng::HedgedOsRng;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::seeded_rng::SeededRng;
 use crate::CryptoError;
 

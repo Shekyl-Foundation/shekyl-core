@@ -89,10 +89,10 @@
 //! signatures rather than decoding per signature — the choice belongs to
 //! the first consumer, the serve path's signing capability.
 //!
-//! [`FnDsaHybridSigner`] (in [`signer`]) is that held key. It decodes once,
-//! into a heap slot, and signs through [`sign_decoded_key`], the same call
-//! `fn_dsa_sign` makes after its own decode. The context and its working
-//! buffers leave the signing stack, and the decode is paid once per key.
+//! [`FnDsaHybridSigner`] is that held key. It decodes once, into a heap
+//! slot, and signs through the same private call `fn_dsa_sign` makes after
+//! its own decode. The context and its working buffers leave the signing
+//! stack, and the decode is paid once per key.
 //! Its measurements are on `a_held_key_signs_on_a_small_stack`.
 
 use crate::heap_secret::HeapSecret;

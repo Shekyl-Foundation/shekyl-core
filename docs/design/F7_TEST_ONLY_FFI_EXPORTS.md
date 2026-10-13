@@ -68,7 +68,7 @@ key*:
 | --- | --- | --- |
 | `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs:220` (added by PR #1049) | Overwrites the header byte of a receipt secret key's FN-DSA half in place, making the key undecodable. Reads no key byte out |
 | `HybridEd25519FnDsa::sign_with_rng_seed` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs:361` | Sign with the FN-DSA half's draw taken from a caller-chosen seed: a deterministic Falcon signature, the thing two of which over one hashed point leak the key (`FN_DSA_HYBRID.md` §2) |
-| `FnDsaHybridSigner::sign_with_rng_seed` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid/signer.rs:178` | The same deterministic sign, over the key decoded once and held |
+| `FnDsaHybridSigner::sign_with_rng_seed` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid/signer.rs:179` | The same deterministic sign, over the key decoded once and held |
 | `HybridEd25519MlDsa::sign_with_ml_dsa_seed` | `rust/shekyl-crypto-pq/src/signature.rs:413` | Already §2.1's example |
 
 **What "ships" means here, exactly.** These are compiled into
