@@ -10,8 +10,8 @@
 
 use super::*;
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::params::{inherited, DandelionParams};
-use shekyl_relay_privacy::rng::SplitMix64;
 
 /// One wider than the shipped noise width, so a frozen alternate can occupy
 /// a slot other than 0. Noise is off here; a hidden connector accepts any

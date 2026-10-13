@@ -40,12 +40,12 @@
 //! `(seed, trials, params)` and `SplitMix64` is seeded explicitly, so a passing
 //! run here is a passing run everywhere — these are fixed vectors, not samples.
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::{
     converged_fluff_return_mixed, ConvergenceBudget, ConvergenceRefusal, FloodParams, FloodReach,
     FLOOD_TICK_MS,
 };
 use shekyl_relay_privacy::schedule::DelayFamily;
-use shekyl_relay_privacy::SplitMix64;
 
 /// The graph the shipped 3250 ms was measured on (retired D7, degree 12).
 /// Production fluff is `EveryPeer`; this directed graph is the longer one,

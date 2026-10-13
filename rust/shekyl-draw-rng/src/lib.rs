@@ -5,12 +5,30 @@
 
 //! The RNG seam and the unbiased integer uniform draw.
 //!
-//! One trait with one method keeps this crate dependency-free and lets the
-//! same draw code serve three consumers: the daemon's CSPRNG in production,
-//! a seeded [`SplitMix64`] in the measurement harness, and the frozen golden
-//! vector. This mirrors `shekyl-standoff`'s `GapRng` deliberately — the two
-//! crates are the same shape (a privacy-load-bearing draw plus a conformance
-//! grade), and a reader who knows one should recognize the other.
+//! One trait with one method keeps this crate dependency-free. The same draw
+//! code serves the daemon's CSPRNG in production, a seeded `SplitMix64` in
+//! the measurement harness, and the frozen golden vector. The trait is the
+//! same shape as `shekyl-standoff`'s `GapRng`: one method, integer draws,
+//! no dependency. The goodness-of-fit grade stays with the distribution it
+//! grades (`shekyl-relay-privacy`'s `conformance` feature, and
+//! `shekyl-standoff`'s).
+//!
+//! # Why its own crate
+//!
+//! The relay scheduler, the peerlist, the dialer and the FFI's CSPRNG all
+//! draw through [`RelayRng`]. It lived in `shekyl-relay-privacy`, so each of
+//! them depended on the relay-timing crate for one trait. No crate below all
+//! of them could hold it, so it has a crate of its own with no dependencies.
+//!
+//! # `SplitMix64` does not exist in a production build
+//!
+//! The seeded reference generator is not a CSPRNG. It lives in `splitmix`
+//! and compiles only under `cfg(any(test, feature = "splitmix"))`. The
+//! `splitmix` feature is enabled from `[dev-dependencies]` edges only
+//! (`scripts/ci/check_test_only_features.py`). A production draw from it is
+//! a compile error, not a review finding. The name is the generator's, so
+//! it is not confused with the `conformance` feature those other crates use
+//! for their float grader.
 //!
 //! # Why not `rand`
 //!
@@ -18,49 +36,33 @@
 //! `std::poisson_distribution` through `crypto::random_device`
 //! (`src/crypto/crypto.h`, `src/crypto/duration.h`). Both distributions are
 //! **implementation-defined**: libstdc++ and libc++ emit different sequences
-//! from identical entropy, which is why no cross-language golden vector for
-//! the inherited timers is possible (see the crate docs). Taking a dependency
-//! on `rand`/`rand_distr` would re-create that problem one layer up — the
-//! sequence would then be pinned to a crate version rather than a stdlib. The
-//! draws here are written out, so the distribution is the reviewable artifact.
+//! from identical entropy. `shekyl-relay-privacy`'s crate docs and
+//! `poisson.rs` record why that rules out a cross-language golden vector for
+//! the inherited timers. Taking a dependency on `rand`/`rand_distr` would
+//! re-create that problem one layer up — the sequence would then be pinned
+//! to a crate version rather than a stdlib. The draws here are written out,
+//! so the distribution is the reviewable artifact.
 
-/// Minimal RNG abstraction the relay-privacy draws are generic over.
+#![deny(unsafe_code)]
+
+/// Minimal RNG abstraction the daemon's draws are generic over.
 ///
 /// Production supplies a CSPRNG; the measurement harness and golden vector
-/// supply a seeded [`SplitMix64`]. A single method is deliberate: it is the
-/// smallest surface that keeps the crate dependency-free, and every draw in
-/// this crate is built from it.
+/// supply a seeded `SplitMix64`. A single method is deliberate: it is the
+/// smallest surface that keeps the crate dependency-free, and every draw
+/// generic over it is built from it.
 pub trait RelayRng {
     /// Next uniformly-distributed 64-bit word.
     fn next_u64(&mut self) -> u64;
 }
 
-/// Deterministic reference RNG for measurement, simulation, and the golden
-/// vector.
-///
-/// SplitMix64 is the same generator `shekyl-standoff`'s harness uses. It is
-/// **not** a CSPRNG and must never be used for a production draw; it exists so
-/// a measured timeline is replayable and a frozen vector is meaningful.
-#[derive(Debug, Clone)]
-pub struct SplitMix64(u64);
+#[cfg(any(test, feature = "splitmix"))]
+mod splitmix;
 
-impl SplitMix64 {
-    /// Seed the generator. Any seed is valid, including zero.
-    #[must_use]
-    pub const fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-}
-
-impl RelayRng for SplitMix64 {
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-}
+/// Seeded reference generator. Absent unless this crate is built for tests
+/// or with the `splitmix` feature.
+#[cfg(any(test, feature = "splitmix"))]
+pub use splitmix::SplitMix64;
 
 impl<R: RelayRng + ?Sized> RelayRng for &mut R {
     fn next_u64(&mut self) -> u64 {
@@ -120,7 +122,7 @@ pub fn bounded_uniform<R: RelayRng + ?Sized>(rng: &mut R, max: u64) -> u64 {
 /// # Panics
 ///
 /// Panics if `denominator` is zero — a zero-denominator probability has no
-/// meaning and every caller in this crate passes a compile-time constant.
+/// meaning and every caller passes a compile-time constant.
 pub fn bernoulli<R: RelayRng + ?Sized>(rng: &mut R, numerator: u64, denominator: u64) -> bool {
     assert!(denominator > 0, "bernoulli denominator must be non-zero");
     bounded_uniform(rng, denominator - 1) < numerator
@@ -129,20 +131,6 @@ pub fn bernoulli<R: RelayRng + ?Sized>(rng: &mut R, numerator: u64, denominator:
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn splitmix64_is_deterministic_for_a_seed() {
-        let a: Vec<u64> = (0..8)
-            .scan(SplitMix64::new(42), |r, _| Some(r.next_u64()))
-            .collect();
-        let b: Vec<u64> = (0..8)
-            .scan(SplitMix64::new(42), |r, _| Some(r.next_u64()))
-            .collect();
-        assert_eq!(a, b);
-        // Distinct seeds must not collide on the first word.
-        let mut c = SplitMix64::new(43);
-        assert_ne!(a[0], c.next_u64());
-    }
 
     #[test]
     fn bounded_uniform_respects_its_bound() {
@@ -164,8 +152,9 @@ mod tests {
 
     #[test]
     fn bernoulli_matches_its_stated_rate_coarsely() {
-        // Coarse smoke check only; the real grade is the chi-square in
-        // `conformance`. 20/100 over 20k trials sits far inside these bounds.
+        // Coarse smoke check only. The chi-square grade lives in
+        // `shekyl-relay-privacy`'s conformance suite. 20/100 over 20k trials
+        // sits far inside these bounds.
         let mut rng = SplitMix64::new(2026);
         let hits = (0..20_000).filter(|_| bernoulli(&mut rng, 20, 100)).count();
         assert!(

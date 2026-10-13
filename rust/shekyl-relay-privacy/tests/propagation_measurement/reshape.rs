@@ -9,10 +9,11 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
-use shekyl_relay_privacy::{EmbargoTimer, SplitMix64};
+use shekyl_relay_privacy::EmbargoTimer;
 
 /// **Round 3 — can we reach ≤0.3% exposure by tuning the levers together, and
 /// which lever does it efficiently?** The passive leak decomposes as

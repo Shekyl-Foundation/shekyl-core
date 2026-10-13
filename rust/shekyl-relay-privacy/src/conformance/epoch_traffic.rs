@@ -26,8 +26,8 @@
 )]
 
 use crate::params::DandelionParams;
-use crate::rng::{bounded_uniform, RelayRng};
 use crate::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 
 use super::composition::{
     build_node_maps, build_two_class, walk_originated, LinkClass, Mix, OriginatedStem, Routing,

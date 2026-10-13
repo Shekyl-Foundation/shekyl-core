@@ -157,14 +157,14 @@ pub const MIXED_ELIGIBILITY_PCT_HUNDREDTHS: u32 = 5000;
 /// fluffs it leaves the zone, which is what keeps a transaction that
 /// entered over Tor reaching the public network at all.
 #[must_use]
-pub fn divert_to_anonymity_zone<R: crate::rng::RelayRng + ?Sized>(rng: &mut R) -> bool {
+pub fn divert_to_anonymity_zone<R: shekyl_draw_rng::RelayRng + ?Sized>(rng: &mut R) -> bool {
     // `bounded_uniform` rather than `% 10_000` for consistency with every
     // other draw in this crate, not because the bias matters here: at this
     // range it is `2^64 mod 10_000 / 2^64` ≈ 8.8e-17, which needs ~1e32
     // samples to observe. Stated rather than implied, because a comment
     // claiming a bias defence invites a test that cannot fail — one was
     // written here and deleted for exactly that reason.
-    crate::rng::bounded_uniform(rng, 9_999) < u64::from(MIXED_ELIGIBILITY_PCT_HUNDREDTHS)
+    shekyl_draw_rng::bounded_uniform(rng, 9_999) < u64::from(MIXED_ELIGIBILITY_PCT_HUNDREDTHS)
 }
 
 /// Outbound connections a node opens per zone by default — the deployed
@@ -650,7 +650,7 @@ pub mod carrier;
 #[cfg(test)]
 mod r1_tests {
     use super::*;
-    use crate::rng::SplitMix64;
+    use shekyl_draw_rng::SplitMix64;
 
     /// Pins the indifference point and that production's sampler uses it.
     ///

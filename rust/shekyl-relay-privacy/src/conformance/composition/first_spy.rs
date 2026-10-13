@@ -16,8 +16,8 @@
 )]
 
 use crate::params::DandelionParams;
-use crate::rng::RelayRng;
 use crate::schedule::{EmbargoTimer, DEFAULT_EMBARGO_TICK_MILLIS};
+use shekyl_draw_rng::RelayRng;
 
 use super::super::util::bernoulli_unit;
 use super::{
