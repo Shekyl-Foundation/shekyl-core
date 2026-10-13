@@ -814,4 +814,45 @@ mod tests {
             other => panic!("expected state version rejection, got {other:?}"),
         }
     }
+
+    /// `PSCAN_STATE_VERSION` moved 10 → 11 because a version-10 file records
+    /// a JoinMarket as the retired byte `0` (`FN_DSA_HYBRID.md` `FND-18`).
+    /// The sibling tests here and in `version_gate.rs` refuse
+    /// `PSCAN_STATE_VERSION ± 1`, which a revert to 10 still passes, and the
+    /// schema snapshot pins the type's shape, not the number. This test pins
+    /// the literal: a file whose leading varint is 10 is refused as stale,
+    /// by version, before its body is read.
+    ///
+    /// Red edit: set the constant back to 10. The prefix then passes the gate
+    /// and the body decode fails with `Postcard`, which the first arm does
+    /// not accept. The second half is the negative control — a file this
+    /// build wrote loads — so a gate that refused everything fails too.
+    #[test]
+    fn a_version_10_file_is_refused_as_stale_not_decoded() {
+        let mut v10 = postcard::to_allocvec(&10u32).expect("encode version 10");
+        // Stands in for a real v10 body, whose bytes need not parse under
+        // the current declaration.
+        v10.extend_from_slice(&[0xff; 8]);
+        match PScanState::from_postcard_bytes(&v10) {
+            Err(WalletLedgerError::UnsupportedBlockVersion {
+                block,
+                file,
+                binary,
+            }) => {
+                assert_eq!(block, "pscan_state");
+                assert_eq!(file, 10, "the refused file is the version-10 one");
+                assert_eq!(binary, PSCAN_STATE_VERSION);
+                assert!(binary > 10, "the bump away from 10 is what this test pins");
+            }
+            other => panic!("a version-10 file must be refused by version, got {other:?}"),
+        }
+
+        let current = PScanState::genesis()
+            .to_postcard_bytes()
+            .expect("encode a current state");
+        assert_eq!(
+            PScanState::from_postcard_bytes(&current).expect("a current file loads"),
+            PScanState::genesis()
+        );
+    }
 }

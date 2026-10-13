@@ -406,9 +406,11 @@ async fn first_stake_refuses_cleanly_before_the_durable_point() {
 #[tokio::test(flavor = "multi_thread")]
 async fn retired_records_clean_the_live_hint_at_open() {
     use shekyl_engine_state::pscan_cursor::PScanCursor;
-    use shekyl_engine_state::pscan_state::{PScanState, RetiredPersonaRecord, PSCAN_STATE_VERSION};
+    use shekyl_engine_state::pscan_state::{PScanState, RetiredPersonaRecord};
     use shekyl_types::{PCanonicalId, PSlot, SettlementEpoch};
-    let _ = PSCAN_STATE_VERSION; // version pinned by the schema snapshot
+    // The state's version is stamped by `PScanState::new`. It is pinned by
+    // `pscan_state::tests::a_version_10_file_is_refused_as_stale_not_decoded`;
+    // the schema snapshot pins the type's shape, not the number.
 
     let fix = make_create_fixture();
     let creds = Credentials::password_only(b"correct horse");
