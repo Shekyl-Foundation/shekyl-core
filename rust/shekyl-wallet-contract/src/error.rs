@@ -1009,6 +1009,32 @@ pub enum WalletRpcError {
          without it — see the server log"
     )]
     StakeStateUnreadable,
+    /// `-29530`, the form with a remedy: the staker's scan state file was
+    /// written by an earlier wallet version and this one refuses it rather
+    /// than migrate it (rule 15; `FN_DSA_HYBRID.md` `FND-18` for the 10 → 11
+    /// bump). Shares the code with [`StakeStateUnreadable`](Self::StakeStateUnreadable)
+    /// — both are "the scan state would not load, so the wallet will not
+    /// open" — and `data` carries the file and both versions so a client can
+    /// tell the two apart without parsing prose (the `-29511` precedent). The
+    /// file is named, not pathed: the user finds it beside the wallet, and
+    /// the path stays in the server log. The remedy is the only one that
+    /// exists today — nothing rewrites the file, `rescan_blockchain` needs an
+    /// open wallet, and the wallet opens once the file is out of the way,
+    /// after which the staking scan rebuilds it from the chain.
+    #[error(
+        "the wallet will not open: its staking scan file {file} was written by an earlier \
+         version of this wallet (file format {found}; this version reads format {expected}). \
+         Move that one file out of the wallet's folder and open the wallet again; the staking \
+         scan rebuilds it from the chain. Leave every other wallet file where it is"
+    )]
+    StakeStateVersionUnsupported {
+        /// The scan state file's name (`<wallet>.wallet.pscan`).
+        file: String,
+        /// The format version the file carries.
+        found: u32,
+        /// The format version this wallet reads.
+        expected: u32,
+    },
     /// `-29531`: the wallet's Tor configuration is unusable.
     #[error("the wallet's Tor configuration is unusable, so serving cannot start")]
     ServingTorUnusable,
@@ -1171,7 +1197,9 @@ impl WalletRpcError {
             Self::CollectSyncing { .. } => WalletRpcErrorCode::CollectSyncing,
             Self::CollectDaemonUnreachable { .. } => WalletRpcErrorCode::CollectDaemonUnreachable,
             Self::UnstakeLocalNodeRequired { .. } => WalletRpcErrorCode::UnstakeLocalNodeRequired,
-            Self::StakeStateUnreadable => WalletRpcErrorCode::StakeStateUnreadable,
+            Self::StakeStateUnreadable | Self::StakeStateVersionUnsupported { .. } => {
+                WalletRpcErrorCode::StakeStateUnreadable
+            }
             Self::ServingTorUnusable => WalletRpcErrorCode::ServingTorUnusable,
             Self::ServingIdentityUnavailable => WalletRpcErrorCode::ServingIdentityUnavailable,
             Self::ServingLocalNodeRequired => WalletRpcErrorCode::ServingLocalNodeRequired,
@@ -1213,6 +1241,14 @@ impl WalletRpcError {
             Self::ShardViewNotOffered { cause, detail } => {
                 Some(json!({ "cause": cause.as_str(), "detail": detail }))
             }
+            // The `-29530` pair: the version form carries what the client
+            // needs to show the remedy; the unreadable form carries nothing
+            // (its cause is in the server log), so `data` is absent there.
+            Self::StakeStateVersionUnsupported {
+                file,
+                found,
+                expected,
+            } => Some(json!({ "file": file, "found": found, "expected": expected })),
             // The `-29511` pair shares one code with two remedies; the
             // structured discriminant is what lets automation branch
             // wait-vs-retry without parsing prose (the -29500 `data.detail`
@@ -1446,6 +1482,18 @@ impl From<PScanStartError> for WalletRpcError {
             // carry a local path; it is logged at the reachable call site
             // (`lifecycle::wrap_and_start_pscan`), not handed to the client.
             PScanStartError::LoadFailed(_source) => Self::StakeStateUnreadable,
+            // The version form of the same refusal: the engine already
+            // reduced the cause to a file name and two version words, which
+            // is exactly what the user needs and nothing the log has to keep.
+            PScanStartError::StateFileVersionUnsupported {
+                file,
+                found,
+                expected,
+            } => Self::StakeStateVersionUnsupported {
+                file,
+                found,
+                expected,
+            },
         }
     }
 }
@@ -2339,6 +2387,61 @@ mod tests {
         assert_eq!(data["finality_depth"], 730);
         assert_eq!(data["breach"], "measured");
         assert_eq!(data["history_cleared"], false);
+    }
+
+    /// Rules 80–82 on the `-29530` refusal. A staker whose `.wallet.pscan`
+    /// was written under an earlier `PSCAN_STATE_VERSION` cannot open the
+    /// wallet, `rescan_blockchain` needs an open wallet, and nothing rewrites
+    /// the file — so the refusal has to name the file, both versions and
+    /// the one remedy that exists. This bites against a mapping that drops
+    /// the engine's typed refusal back into the detail-free
+    /// `StakeStateUnreadable`; it does NOT cover the engine producing that
+    /// refusal from a real seal (`lifecycle_tests::
+    /// a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions`).
+    #[test]
+    fn a_stale_staking_scan_file_is_named_with_both_versions_and_the_remedy() {
+        let err = WalletRpcError::from(PScanStartError::StateFileVersionUnsupported {
+            file: "primary.wallet.pscan".to_owned(),
+            found: 10,
+            expected: 11,
+        });
+        assert_eq!(err.code(), WalletRpcErrorCode::StakeStateUnreadable);
+        assert_eq!(WalletRpcErrorCode::StakeStateUnreadable as i32, -29530);
+
+        let message = err.to_string();
+        assert!(
+            message.contains("primary.wallet.pscan"),
+            "the refusal names the file the user has to find: {message}"
+        );
+        assert!(
+            message.contains("format 10") && message.contains("format 11"),
+            "the refusal names the version found and the version expected: {message}"
+        );
+        assert!(
+            message.contains("Move that one file out of the wallet's folder")
+                && message.contains("open the wallet again"),
+            "the refusal says what to do: {message}"
+        );
+        assert!(
+            !message.contains('/'),
+            "the file is named, not pathed — the path stays in the server log: {message}"
+        );
+
+        let data = err
+            .data()
+            .expect("the version form carries structured data");
+        assert_eq!(data["file"], "primary.wallet.pscan");
+        assert_eq!(data["found"], 10);
+        assert_eq!(data["expected"], 11);
+
+        // Control: the cause-unknown form keeps the detail-free message and
+        // no data, so the two are told apart by `data`, not by prose.
+        let unreadable = WalletRpcError::from(PScanStartError::LoadFailed(Box::new(
+            std::io::Error::other("sealed state did not open"),
+        )));
+        assert_eq!(unreadable.code(), WalletRpcErrorCode::StakeStateUnreadable);
+        assert!(unreadable.data().is_none());
+        assert!(unreadable.to_string().contains("see the server log"));
     }
 
     /// The same refusal during a rescan still names the tree. History is

@@ -1414,8 +1414,19 @@ components:
           -29530 STAKE_STATE_UNREADABLE   open (staker): the sealed staking-scan
                                           state would not load; a staker does
                                           not open without its scan (privacy is
-                                          not a degraded mode). The cause stays
-                                          in the server log
+                                          not a degraded mode). Two forms, told
+                                          apart by `data`: with no data, the
+                                          cause (a corrupt or swapped seal)
+                                          stays in the server log; with
+                                          data.file / data.found /
+                                          data.expected, the `.wallet.pscan`
+                                          file was written under an earlier
+                                          format version and the message names
+                                          the file and the remedy (move that
+                                          one file out of the wallet's folder,
+                                          open the wallet again; the scan
+                                          rebuilds it from the chain — nothing
+                                          migrates it, rule 15)
           -29531 SERVING_TOR_UNUSABLE     open (staker): the wallet's Tor
                                           configuration is unusable, so the
                                           serving host cannot start

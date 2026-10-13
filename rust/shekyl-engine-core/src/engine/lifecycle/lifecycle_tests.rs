@@ -494,6 +494,106 @@ async fn retired_records_clean_the_live_hint_at_open() {
     opened.close(&creds).expect("close");
 }
 
+/// A staker whose `.wallet.pscan` was sealed under `PSCAN_STATE_VERSION` 10
+/// (its joins recorded as the retired byte `0`, `FN_DSA_HYBRID.md` `FND-18`)
+/// is refused at the staking-scan start with the typed version refusal —
+/// the file's name and both versions — not the detail-free `LoadFailed`.
+/// The wallet itself still opens (an unreadable seal degrades the staking
+/// reads, it does not hold funds hostage); it is the tenant's open-time
+/// `start_pscan_if_staker` that refuses, and this is what it refuses with.
+///
+/// Bites against a `start_pscan` that boxes every store error into
+/// `LoadFailed`, and against a seal writer that stops stamping the version
+/// first (the gate would then not fire). Does NOT cover the message a
+/// client sees — that is the wallet-rpc mapping's test
+/// (`wallet-contract::error::tests::
+/// a_stale_staking_scan_file_is_named_with_both_versions_and_the_remedy`).
+/// Red edit: drop the `UnsupportedBlockVersion` arm in `spawn_pscan`'s
+/// `map_err`; the match below then sees `LoadFailed`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions() {
+    use crate::engine::PScanStartError;
+    use shekyl_engine_state::pscan_state::PSCAN_STATE_VERSION;
+    use shekyl_types::PSlot;
+
+    let fix = make_create_fixture();
+    let creds = Credentials::password_only(b"correct horse");
+    let seed = fixed_seed();
+    let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+    let network = params.network;
+    let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
+    engine
+        .persist_bond_record(PSlot::from_raw(0))
+        .expect("persist");
+    engine.close(&creds).expect("close");
+
+    // A real v10 seal, written through the production seal path: the version
+    // word is the literal 10 and the body is what a v10 writer could have
+    // left (the gate refuses before reading it, so its parse is moot).
+    {
+        let (file, _outcome) = shekyl_engine_file::WalletFile::open(
+            &fix.base_path,
+            b"correct horse",
+            network,
+            SafetyOverrides::none(),
+        )
+        .expect("file open");
+        let key = super::super::sealing_keys::state_wrap_key_from_wallet_file(&file);
+        // postcard's varint for the `u32` 10 is the single byte 0x0a (this
+        // crate does not depend on postcard; `pscan_state::tests::
+        // a_version_10_file_is_refused_as_stale_not_decoded` encodes the same
+        // prefix through postcard and the gate reads both identically).
+        let mut v10 = vec![10u8];
+        v10.extend_from_slice(&[0xff; 8]);
+        file.save_pscan_state(key.as_bytes(), &v10).expect("seal");
+    }
+
+    let opened = Engine::<SoloSigner>::open_full(
+        &fix.base_path,
+        &creds,
+        network,
+        dummy_daemon(),
+        SafetyOverrides::none(),
+    )
+    .expect("the wallet opens; the stale seal refuses at the scan start, not here")
+    .into_wallet();
+    assert!(
+        opened.has_stake_engine(),
+        "a staker derives its persona at open"
+    );
+    let expected_file = shekyl_engine_file::paths::pscan_state_path_from(&fix.base_path)
+        .file_name()
+        .expect("the seal path has a file name")
+        .to_string_lossy()
+        .into_owned();
+
+    let arc = std::sync::Arc::new(tokio::sync::RwLock::new(opened));
+    match Engine::<SoloSigner>::start_pscan(arc.clone()).await {
+        Err(PScanStartError::StateFileVersionUnsupported {
+            file,
+            found,
+            expected,
+        }) => {
+            assert_eq!(
+                file, expected_file,
+                "the refusal names the seal file by name"
+            );
+            assert!(!file.contains('/'), "the file is named, not pathed: {file}");
+            assert_eq!(found, 10);
+            assert_eq!(expected, PSCAN_STATE_VERSION);
+        }
+        Ok(_) => panic!("a v10 seal must refuse the scan start"),
+        Err(other) => panic!("expected the typed version refusal, got {other:?}"),
+    }
+
+    // The single-flight slot was released on the refusal (RAII guard), so a
+    // second start refuses the same way rather than with `AlreadyRunning`.
+    assert!(matches!(
+        Engine::<SoloSigner>::start_pscan(arc.clone()).await,
+        Err(PScanStartError::StateFileVersionUnsupported { found: 10, .. })
+    ));
+}
+
 /// Phase 1 query surface: `Engine::primary_address` assembles the
 /// wallet's one reusable address from the `KeyActor`'s cached
 /// public projection and the engine's cached network, and the

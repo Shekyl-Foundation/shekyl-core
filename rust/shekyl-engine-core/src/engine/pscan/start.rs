@@ -144,6 +144,31 @@ pub enum PScanStartError {
     /// post that never dispatches while every sweep logs a generic retry.
     #[error("loading a sealed P-scan / pending-post state failed: {0}")]
     LoadFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The `.wallet.pscan` scan state was written under another schema
+    /// version (`PSCAN_STATE_VERSION`, bumped at every change in what a
+    /// persisted byte means — 10 → 11 recorded a JoinMarket as `5`,
+    /// `FN_DSA_HYBRID.md` `FND-18`). Split from [`LoadFailed`](Self::LoadFailed)
+    /// because this refusal has a remedy the user can carry out and
+    /// `LoadFailed`'s (a corrupt or swapped seal) does not: move that one
+    /// file out of the wallet's folder and open the wallet again, and the
+    /// staking scan rebuilds it from the chain (rule 15: refuse, never
+    /// migrate; nothing rewrites the old bytes). `file` is the file's name,
+    /// not its path — the wallet-facing error names the file the user has
+    /// to find beside the wallet, and the path stays in the server log.
+    /// The `.wallet.pending` seal stays on `LoadFailed`: a stale pending post
+    /// is not rebuilt from the chain, it is staked again.
+    #[error(
+        "{file} was written under P-scan state version {found}; this build reads version \
+         {expected}: move that file out of the wallet's folder and open the wallet again"
+    )]
+    StateFileVersionUnsupported {
+        /// The scan state file's name (`<wallet>.wallet.pscan`).
+        file: String,
+        /// The version word the file carries.
+        found: u32,
+        /// `PSCAN_STATE_VERSION` of this build.
+        expected: u32,
+    },
 }
 
 /// A running P-scan task: the cancel token plus the spawned task's join handle.
@@ -669,7 +694,7 @@ where
         // Brief read borrow: clone the spawn inputs + claim the single-flight slot.
         // Stake is checked first so a non-staker never claims-then-releases; the
         // slot guard is RAII, so any error below releases it on the early return.
-        let (daemon, stake, pending_gate, slot_guard) = {
+        let (daemon, stake, pending_gate, slot_guard, pscan_file_name) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -690,11 +715,20 @@ where
             // The per-wallet pending-seal write lock (§3.3): the dispatch driver
             // and the WI-2 assemble path share this one mutex (see the engine
             // field docs), so their two write cadences cannot race.
+            // The seal's file name, for the version refusal below: the one
+            // load failure whose remedy names a file the user has to find.
+            let pscan_file_name = g
+                .persistence()
+                .pscan_path()
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| shekyl_engine_file::paths::PSCAN_STATE_SUFFIX.to_owned());
             (
                 g.daemon().clone(),
                 stake,
                 g.pending_gate.clone(),
                 slot_guard,
+                pscan_file_name,
             )
         };
 
@@ -729,10 +763,21 @@ where
         // under its own write lock each tick (the two-writer discipline); this is a
         // fail-closed decode probe, and its result is intentionally discarded.
         // `slot_guard` drops on any early return here, releasing the slot.
-        let initial = store
-            .load()
-            .await
-            .map_err(|e| PScanStartError::LoadFailed(Box::new(e)))?;
+        let initial = store.load().await.map_err(|e| match e {
+            // A stale seal, refused by its version word before its body was
+            // read (`version_gate`): the refusal the user acts on, so it
+            // carries the file and both versions instead of a boxed cause.
+            WalletFilePScanStoreError::Codec(WalletLedgerError::UnsupportedBlockVersion {
+                file: found,
+                binary: expected,
+                ..
+            }) => PScanStartError::StateFileVersionUnsupported {
+                file: pscan_file_name,
+                found,
+                expected,
+            },
+            other => PScanStartError::LoadFailed(Box::new(other)),
+        })?;
         pending_seal
             .load()
             .await
