@@ -836,6 +836,67 @@ mod tests {
         }
     }
 
+    /// One owner loop per connector (the §4 run, 2026-10-13): the
+    /// ephemeral-tor listen started Tor's loop, then the zone loop's
+    /// proxy-only branch called `shekyl_zone_set_tor_proxy` and started it
+    /// again, so two `p2p-dial-tor` threads ran. The second start now finds
+    /// the loop claimed and starts nothing; the proxy install still answers
+    /// 0, since the proxy it writes is the same.
+    #[test]
+    fn a_second_start_of_a_connectors_loop_starts_nothing() {
+        let _bind = crate::seam_ffi::seam_bind_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut executor = 0u8;
+        let ceiling = ShekylInboundCeiling {
+            kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+            ceiling: 0,
+            soft_limit: 0,
+            held: 0,
+        };
+        let bound = unsafe {
+            shekyl_seam_bind(
+                std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+                Some(discard),
+                &raw const ceiling,
+            )
+        };
+        assert_eq!(bound, 0);
+        let network_id = [9u8; 16];
+        let host = ensure(
+            network_id.as_ptr(),
+            InboundCeiling::Unbounded(UnboundedReason::Unlimited),
+        )
+        .expect("zone host");
+
+        assert!(
+            crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine),
+            "the first start takes the loop"
+        );
+        assert!(
+            !crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine),
+            "a second start finds it taken and starts nothing"
+        );
+        let socks = std::ffi::CString::new("127.0.0.1").expect("socks host");
+        let rc = unsafe {
+            shekyl_zone_set_tor_proxy(
+                socks.as_ptr(),
+                9050,
+                network_id.as_ptr(),
+                &raw const ceiling,
+            )
+        };
+        assert_eq!(
+            rc, 0,
+            "the proxy install is not refused by the claimed loop"
+        );
+
+        shekyl_zone_shutdown();
+        unsafe {
+            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        }
+    }
+
     /// Shutdown stops and drops the dialer while the seam stays bound, so
     /// a zone host built after it (a daemon re-initialised in one process,
     /// as the unit tests do) had no dialer: every push was held for a

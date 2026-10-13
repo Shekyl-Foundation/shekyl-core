@@ -126,3 +126,26 @@ fn the_candidate_filter_still_applies_inside_the_population() {
     });
     assert!(own.is_empty(), "drew {own:?}");
 }
+
+/// One owner loop per connector. The ephemeral-tor listen and the
+/// proxy-only zone branch both asked for Tor's loop on the same boot
+/// (2026-10-13, the §4 run: two `p2p-dial-tor` threads), so the claim is
+/// the dialer's: the first start takes it, a second finds it taken and
+/// starts nothing, and one connector's claim says nothing about another's.
+#[test]
+fn a_connector_has_one_owner_loop() {
+    let dialer = dialer();
+    assert!(
+        dialer.claim_owner(ConnectorId::Tor),
+        "the first start claims it"
+    );
+    assert!(
+        !dialer.claim_owner(ConnectorId::Tor),
+        "a second start finds the loop claimed"
+    );
+    assert!(
+        dialer.claim_owner(ConnectorId::Clearnet),
+        "another connector's loop is its own claim"
+    );
+    assert!(!dialer.claim_owner(ConnectorId::Clearnet));
+}

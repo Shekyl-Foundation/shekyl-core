@@ -105,6 +105,10 @@ pub struct Dialer {
     snapshot: SnapshotSource,
     /// The address file, once [`Self::open_address_file`] named it.
     store: Mutex<Option<AddressStore>>,
+    /// Which connectors have an owner loop. One per connector: a second
+    /// start is refused, not stacked (the ephemeral-tor path and the
+    /// proxy-only zone branch both asked for Tor's, 2026-10-13).
+    owners: Mutex<[bool; ConnectorId::COUNT]>,
 }
 
 /// The transport layer's bans, asked through the hub.
@@ -215,7 +219,18 @@ impl Dialer {
             support_flags,
             snapshot,
             store: Mutex::new(None),
+            owners: Mutex::new([false; ConnectorId::COUNT]),
         }
+    }
+
+    /// Claim `connector`'s owner loop. `true` the first time; `false` when
+    /// it already has one, and the caller starts nothing. The claim holds
+    /// for the dialer's life: a loop ends only with the dialer.
+    #[must_use]
+    pub fn claim_owner(&self, connector: ConnectorId) -> bool {
+        let mut owners = self.owners.lock().expect("owners");
+        let slot = &mut owners[connector.index()];
+        !std::mem::replace(slot, true)
     }
 
     /// The network every handshake names. Set once, when the zone host

@@ -192,17 +192,24 @@ pub(crate) fn note_network(network: DaemonNetwork) {
 
 /// Start the owner loop for `connector` on a thread of its own, as an
 /// owner of the daemon's timing engine. The compiled seeds enter gray
-/// first, as operator-named addresses (slice 1 brief §3). Called once per
-/// connector, when it is ready to dial.
-pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicClock>) {
+/// first, as operator-named addresses (slice 1 brief §3). Once per
+/// connector: a second call finds the loop claimed and starts nothing
+/// (the ephemeral-tor listen and the proxy-only zone branch both reach
+/// here for Tor, 2026-10-13: two loops ran). Returns whether this call
+/// started the loop.
+pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicClock>) -> bool {
     let Some(dialer) = dialer() else {
-        return;
+        return false;
     };
+    if !dialer.claim_owner(connector) {
+        tracing::debug!("{connector:?} already has its owner loop; not started again");
+        return false;
+    }
     let owner = match engine.register(OwnerClass::Discovery) {
         Ok(owner) => owner,
         Err(err) => {
             tracing::error!("the dialer's wake for {connector:?} could not register: {err:?}");
-            return;
+            return false;
         }
     };
     if connector == ConnectorId::Clearnet {
@@ -230,7 +237,9 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
     });
     if spawned.is_err() {
         tracing::error!("the dialer's thread for {connector:?} could not start");
+        return false;
     }
+    true
 }
 
 /// The per-boot onion `shekyl-tor` published, as this node's own address
