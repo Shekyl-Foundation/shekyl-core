@@ -333,7 +333,7 @@ async fn stubbing_the_slash_log_is_noticed_through_the_watermark_alone() {
     // witness is suspended, pinned to the record, and resumes the day the
     // record is deleted (module doc).
     // Likewise a chain that stops at a retired keyless JoinMarket
-    // (`vectors_tests::RETIRED_KEYLESS_JOINS`): the run ends at 98, far
+    // (`vectors_tests/retired_keyless_join.rs`, `RETIRED_KEYLESS_JOINS`): the run ends at 98, far
     // below the close, with nothing refused.
     if let Some(retired) = crate::vectors_tests::retired_keyless_join(&manifest.shape) {
         assert!(report.refused.is_none(), "{:?}", report.refused);
