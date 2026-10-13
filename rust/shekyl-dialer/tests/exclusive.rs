@@ -149,3 +149,34 @@ fn a_connector_has_one_owner_loop() {
     );
     assert!(!dialer.claim_owner(ConnectorId::Clearnet));
 }
+
+/// An empty declaration is no declaration. The C++ option parser calls
+/// the declaration on every boot, with an empty list when no exclusive
+/// node was named; read as a population of nothing, it held every dial
+/// of every daemon (found by the §4 run, 2026-10-13). Empty opens the
+/// population; it also reopens one declared earlier.
+#[test]
+fn an_empty_declaration_is_no_closed_network() {
+    let open = first_draw(3, |dialer, rng| {
+        for n in 1..=6 {
+            dialer
+                .admit_operator(&peer(n), Tick::new(1), rng)
+                .expect("named");
+        }
+        dialer.set_exclusive(Vec::new(), Tick::new(1), rng);
+    });
+    assert!(open.is_some(), "an empty declaration holds nothing back");
+    let reopened = drawn(64, |dialer, rng| {
+        for n in 1..=6 {
+            dialer
+                .admit_operator(&peer(n), Tick::new(1), rng)
+                .expect("named");
+        }
+        dialer.set_exclusive(vec![peer(9)], Tick::new(1), rng);
+        dialer.set_exclusive(Vec::new(), Tick::new(1), rng);
+    });
+    assert!(
+        reopened.iter().any(|address| *address != peer(9)),
+        "the population is open again after an empty declaration: {reopened:?}"
+    );
+}

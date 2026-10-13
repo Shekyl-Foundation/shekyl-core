@@ -449,9 +449,10 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_operator(entry: *const ShekylSeam
 
 /// A closed network (`--add-exclusive-node`): the candidate population is
 /// exactly these entries, admitted as operator-named. An entry that is
-/// not an address is left out. Returns 0, [`SHEKYL_DIALER_DEFERRED`] when
-/// the list is held for the dialer's build, or -1 for a null pointer with
-/// a non-zero count.
+/// not an address is left out. A count of zero declares no closed
+/// network (the C++ passes one on every boot without the option). Returns
+/// 0, [`SHEKYL_DIALER_DEFERRED`] when the list is held for the dialer's
+/// build, or -1 for a null pointer with a non-zero count.
 ///
 /// # Safety
 ///
@@ -757,6 +758,37 @@ mod tests {
                 .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
                 .is_none(),
             "the one gray address is our own, so nothing is drawn"
+        );
+        unbind();
+    }
+
+    /// The C++ declares the closed network on every boot, with an empty
+    /// list when no exclusive node was named. Empty is no declaration: an
+    /// operator-named address is still drawn (the §4 run, 2026-10-13).
+    #[test]
+    fn an_empty_declaration_before_the_build_declares_no_closed_network() {
+        let _bind = seam_bind_lock()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        unbind();
+        let named = v4(7);
+        assert_eq!(
+            unsafe { shekyl_peerlist_admit_operator(&raw const named) },
+            SHEKYL_DIALER_DEFERRED
+        );
+        assert_eq!(
+            unsafe { shekyl_dialer_set_exclusive(std::ptr::null(), 0) },
+            SHEKYL_DIALER_DEFERRED
+        );
+        bind();
+        let dialer = dialer().expect("built at the bind");
+        let drawn = dialer
+            .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
+            .map(|(address, _aim, _nonce)| address);
+        assert_eq!(drawn, Some(address(7)), "nothing is held back");
+        assert_eq!(
+            unsafe { shekyl_dialer_set_exclusive(std::ptr::null(), 0) },
+            0
         );
         unbind();
     }

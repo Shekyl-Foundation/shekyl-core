@@ -301,7 +301,11 @@ impl Dialer {
     }
 
     /// Declare a closed network: the candidate population is exactly
-    /// these addresses, which are admitted as operator-named.
+    /// these addresses, which are admitted as operator-named. An empty
+    /// declaration is no declaration: the population is open again. (The
+    /// C++ option parser hands an empty list on every boot that names no
+    /// exclusive node; read as a population of nothing, it stopped every
+    /// dial of every daemon — found by the §4 run, 2026-10-13.)
     pub fn set_exclusive<R: RelayRng + ?Sized>(
         &self,
         addresses: Vec<NetworkAddress>,
@@ -322,7 +326,11 @@ impl Dialer {
                 Ok(_) | Err(_) => {}
             }
         }
-        shared.exclusive = Some(addresses.into_iter().collect());
+        shared.exclusive = if addresses.is_empty() {
+            None
+        } else {
+            Some(addresses.into_iter().collect())
+        };
     }
 
     /// An operator-named address (`--add-peer`, a seed): into gray.
@@ -358,6 +366,11 @@ impl Dialer {
             (true, false) => DialOutcome::Confirmed(pending.address.clone()),
             (false, _) => DialOutcome::PayloadRefused(pending.address.clone()),
         };
+        tracing::info!(
+            "{:?} dial {:?}: {outcome:?}",
+            pending.connector,
+            pending.address
+        );
         if !matches!(outcome, DialOutcome::SessionAccepted(_)) {
             self.hub.close(id);
         }
@@ -503,12 +516,15 @@ impl Dialer {
             let Some((address, aim, nonce)) = self.choose(connector, rng) else {
                 continue;
             };
+            tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
             match self.attempt(connector, &address, aim, &nonce, rng) {
                 Attempt::Done(outcome) => {
+                    tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
                     let mut shared = self.shared();
                     Self::record(&mut shared, connector, &outcome, self.hub.now(), rng);
                 }
                 Attempt::Posted(id) => {
+                    tracing::debug!("{connector:?} dial {address:?} handshake posted as {id:?}");
                     self.shared().pending.insert(
                         id.get(),
                         Pending {
@@ -638,14 +654,48 @@ impl Dialer {
             gray,
             gray_candidates,
         };
-        let plan = plan(&census, white_diversity_floor(), WHITE_REFILL_LINE)?;
-        let address = match plan.list {
-            DrawList::Gray => lists.draw_gray_where(connector, &mut eligible, rng)?,
+        let Some(plan) = plan(&census, white_diversity_floor(), WHITE_REFILL_LINE) else {
+            tracing::debug!("{connector:?} wake: no rule applies ({census:?})");
+            if gray > 0 && gray_candidates == 0 {
+                // Every gray seat is held back: say why, per seat.
+                for (address, list) in lists.snapshot() {
+                    if list != shekyl_peerlist::ListName::Gray
+                        || Peerlist::connector_of(&address) != Some(connector)
+                    {
+                        continue;
+                    }
+                    let outside = exclusive
+                        .as_ref()
+                        .is_some_and(|population| !population.contains(&address));
+                    tracing::debug!(
+                        "{connector:?} gray {address:?}: {:?}{}",
+                        filter.check(&address),
+                        if outside {
+                            ", outside the declared population"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
+            return None;
+        };
+        let drawn = match plan.list {
+            DrawList::Gray => lists.draw_gray_where(connector, &mut eligible, rng),
             DrawList::White => {
-                lists.draw_white_where(connector, now, &mut HubBans(hub), &mut eligible, rng)?
+                lists.draw_white_where(connector, now, &mut HubBans(hub), &mut eligible, rng)
             }
         };
+        let Some(address) = drawn else {
+            tracing::debug!(
+                "{connector:?} wake: {:?} chose {:?}, nothing drawn ({census:?})",
+                plan.rule,
+                plan.list
+            );
+            return None;
+        };
         if !shared.attempts[connector.index()].begin(&address, plan.aim) {
+            tracing::debug!("{connector:?} wake: {address:?} already has an attempt");
             return None;
         }
         let nonce = self.nonces.mint(connector, rng);
@@ -667,6 +717,9 @@ impl Dialer {
             return failed(CloseCause::new(CloseKind::LocalClose));
         };
         let (Some(snapshot), Some(network_id)) = ((self.snapshot)(), self.network_id()) else {
+            tracing::debug!(
+                "{connector:?} dial {address:?} not made: no published tip or network id yet"
+            );
             return failed(CloseCause::new(CloseKind::LocalClose));
         };
         let channel = match self.hub.dial_channel(&endpoint) {
