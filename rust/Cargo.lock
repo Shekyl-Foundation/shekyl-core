@@ -4255,8 +4255,16 @@ dependencies = [
 name = "shekyl-dialer"
 version = "3.1.0"
 dependencies = [
+ "shekyl-capped-stream",
  "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-onion-v3",
+ "shekyl-peer-policy",
  "shekyl-peerlist",
+ "shekyl-relay-privacy",
+ "shekyl-seam",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
 ]
 
 [[package]]
@@ -4531,6 +4539,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
+ "shekyl-dialer",
  "shekyl-difficulty",
  "shekyl-draw-rng",
  "shekyl-economics",

@@ -23,11 +23,15 @@ pub mod candidate;
 pub mod fill;
 pub mod memory;
 pub mod nonce;
+pub mod owner;
 pub mod pace;
+pub mod seeds;
 
 pub use attempts::Attempts;
 pub use candidate::{CandidateFilter, Skip};
 pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan, IN_FLIGHT_BOUND};
 pub use memory::FailedAddresses;
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
+pub use owner::{session_of, Dialer, Shared, SnapshotSource};
 pub use pace::{next_wake_nanos, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
+pub use seeds::{seeds, SeedNetwork};

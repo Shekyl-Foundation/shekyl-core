@@ -15,12 +15,25 @@ publish = false
 
 [dependencies]
 shekyl-peerlist = { path = "../shekyl-peerlist" }
+# The seam: the hub's dial, adopt and posts, and the session the handshake
+# reads. The C++ reaches this crate only through shekyl-ffi.
+shekyl-seam = { path = "../shekyl-seam" }
+shekyl-capped-stream = { path = "../shekyl-capped-stream" }
+# The handshake's codec and the Levin bucket reader.
+shekyl-levin = { path = "../shekyl-levin" }
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+# The two outbound targets of the composition table.
+shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 # The RNG seam the draws are generic over.
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 
 [dev-dependencies]
 # The seeded reference generator, for the tests only.
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+# The owner's test rig: a hub over the loopback dialer, with a manual clock.
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 
 [lints]
 workspace = true
