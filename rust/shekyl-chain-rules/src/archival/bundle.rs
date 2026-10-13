@@ -56,10 +56,11 @@
 //!   registered `pending` for the same reason: a `pending` row is in the
 //!   denominator and no rule type is bound to it. The cutover flips them.
 //! - **The falsifier of "staged":** `nothing_on_the_connect_path_calls_the_bundle_verifier`
-//!   in this module's tests reads `validate.rs`, `block.rs` and the
-//!   `rules` tree and fails when any of them names this module's
-//!   functions. The cutover deletes that test in the change that wires
-//!   them.
+//!   reads `validate.rs`, `block.rs`, the `rules` tree, and the archival
+//!   connect path (`archival/mod.rs`'s `transition` and the modules it
+//!   calls). It fails when any of them names this module's functions,
+//!   apart from the `pub use` that exports them. The cutover deletes that
+//!   test in the change that wires them.
 //!
 //! # What the cutover's view has to read, as `dev` stands
 //!
@@ -843,3 +844,11 @@ fn derive_draws<V: BundleView>(
 #[cfg(test)]
 #[path = "bundle_tests.rs"]
 mod bundle_tests;
+
+#[cfg(test)]
+#[path = "bundle_section_tests.rs"]
+mod bundle_section_tests;
+
+#[cfg(test)]
+#[path = "bundle_staging_tests.rs"]
+mod bundle_staging_tests;
