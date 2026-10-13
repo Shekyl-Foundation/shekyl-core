@@ -92,7 +92,7 @@ The engine-service addendum in
 [`P2P_TIMING_ENGINE.md`](P2P_TIMING_ENGINE.md) is the concurrency
 contract the first line calls. C5 is recorded: the responder handshake
 is 685 µs, one rekey is 5.06 µs, seal and open of a 65,535-byte record
-is 889 µs. The D9 deadlines are written by `transport_spans`:
+is 889 µs. The D9 deadlines are `shekyl-transport-layer::spans` (`rust/shekyl-transport-layer/src/spans.rs:35` to `:47`; *records-was* `transport_spans` in C++, moved 2026-10-13):
 clearnet dial 1.415 s (a SOCKS proxy borrows the Tor dial's 9.1 s),
 handshake 1.426 s, gap 1.430 s, Tor dial 9.1 s, gap 2.6 s. No
 accept-rate (D10.3), no transport-runtime thread count
@@ -626,7 +626,7 @@ cancels its tasks, the executor drains, the executor stops.
 **The floor.** An executor thread may block on work the executor
 itself performs only when another executor thread is free to do that
 work. Otherwise the blocked thread is waiting for a post that nothing
-will run. `idle_worker` (`net_node.inl:2217`) is that lane today. It
+will run. *Records-was (superseded 2026-10-13: the Rust dialer's owner loop is a thread of its own and an owner of the timing engine; the C++ dial path below is deleted):* `idle_worker` (`net_node.inl:2217`) is that lane today. It
 is an idle handler on the context (`:1146`), and it calls
 `connections_maker` (`:2220`). `connect` returns only after the
 strand runs `established`. `do_handshake_with_peer` (`:1243`) then
@@ -778,8 +778,7 @@ a connector deadline.
 Send-queue caps, read at `abstract_tcp_server2.h:72-73`: 1,000 messages
 and `100 * 1024 * 1024` bytes.
 
-Outbound dialing is serial. `connections_maker` is
-`net_node.inl:2009`. It reaches
+Outbound dialing is serial: one dial in flight per connector (the Rust dialer, PR-3; *records-was:* `connections_maker` at `net_node.inl:2009`, deleted 2026-10-13). It reaches
 `try_to_connect_and_handshake_with_new_peer` (`net_node.inl:1544`) at
 the call sites `:1917` and `:1970`. A transport handshake adds a round
 trip to every dial. A stalled peer holds that loop for the whole
@@ -948,7 +947,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 asserts those failures are indistinguishable from the far side. |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
 | Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer. The pool is 10 threads (`net_node.inl:1150`) | **D6, ruled.** A socketless `io_context` is the interim until the timing engine lands. Its pool is a measured budget, not 10. |
-| Serial outbound dialing | `connections_maker` at `net_node.inl:2009`, call at `:1917` | **Stays serial through cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
+| Serial outbound dialing | *Records-was* `connections_maker` at `net_node.inl:2009`, call at `:1917`; the Rust dialer's `IN_FLIGHT_BOUND` of one per connector since PR-3 (2026-10-13) | **Stayed serial through the cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
 
 ## Rate limit is four jobs (RULED 2026-09-28)
@@ -1120,7 +1119,7 @@ is never taken from inside a task.
 UPDATE 2026-09-30, thread-budget measurement conditions. The budget is
 three counts, each an editable placeholder today, each "the run record
 replaces this value": the transport runtime's `workers` and `blocking`
-(`transport_spans`, `net_node.inl:3671-3672`, `2` and `1`) and the
+(`shekyl-transport-layer::spans`, `rust/shekyl-transport-layer/src/spans.rs:49-51`, `2` and `1`; *records-was* `transport_spans`) and the
 interim executor's `executor_workers` (`net_node.inl:1173`, `2`). A
 count is changed by editing the placeholder and relinking the daemon;
 none is a runtime knob, so a sweep is one relink per count, C++ only.
@@ -1611,7 +1610,7 @@ depends on that event. The three legs, and the New
 York leg that confirms the slope is about 1, are in the benchmark
 record. A measured satellite-class link whose RTT exceeds 700 ms
 reopens the ceiling. These milliseconds, the Tor dial of 9.1 s, and the
-Tor gap of 2.6 s are what `transport_spans` writes. A clearnet dial
+Tor gap of 2.6 s are what `shekyl-transport-layer::spans` holds. A clearnet dial
 through a SOCKS proxy uses the Tor dial clock: the three clearnet
 legs had no proxy, a Tor-exit dial is 3–6 s, and a longer deadline
 costs only the dialer. Shutdown waits out the longest of them, the
@@ -1787,7 +1786,7 @@ round can reject them.
   other. UPDATE 2026-09-30: the clearnet pair, the Tor dial and inbound
   distributions, the South America and New York clearnet figures
   (the clearnet deadlines are the D9 ceiling form, 1.415 / 1.426 /
-  1.430 s, written by `transport_spans` with the Tor dial 9.1 s and gap
+  1.430 s, held by `shekyl-transport-layer::spans` with the Tor dial 9.1 s and gap
   2.6 s) and one Tor stem hop are in
   [`p2p_cutover_crossbuild_20260929.md`](../benchmarks/p2p_cutover_crossbuild_20260929.md).
   The epee-to-epee stem still did not cross in the first cross-build.

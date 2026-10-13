@@ -394,7 +394,7 @@ White has one clock, `last_observed`. The C++ field is `last_seen`
 not a load rank, and not a field on gray.
 
 The C++ stamps `last_seen` and never reads it back as an age. White eviction
-is the capacity trim at `src/p2p/net_peerlist.h:215`. `EXPIRATION_PERIOD` is
+is the capacity trim at `net_peerlist.h:215`. `EXPIRATION_PERIOD` is
 new. It is not a setting.
 
 Gray carries no timestamp. A gossiped `last_seen` is ignored at admit.
@@ -437,8 +437,8 @@ dropped an outstanding gray draw. A refused payload shared that failure
 path. The spellings are not in Rust.*
 
 C++ disclosure walks white newest-first and then shuffles
-(`src/p2p/net_peerlist.h:302`, `:312`). Both callers pass the anonymize flag
-(`get_peerlist_head` at `src/p2p/net_node.inl:2721` and `:2843`), so the
+(`net_peerlist.h:302`, `:312`). Both callers pass the anonymize flag
+(`get_peerlist_head` at `net_node.inl:2721` and `:2843`), so the
 sample that goes out is already a shuffle of the whole white list,
 truncated. The dial path never became a draw: it sorts candidates by
 `last_seen` (`src/p2p/net_node.inl:1935-1938`) and picks with a bias
@@ -584,6 +584,8 @@ white only through the normal door.
 
 ### 5c. D-S1 — gray intake per session (RULED 2026-10-09)
 
+**§2.5 (Rick, 2026-10-13, PR-3 brief revision 2): PWD-I2's direction rule is retired; D-S1 is what bounds a session now.** A received list is admitted on an inbound session as on an outbound one, under D3, this cap, validity and R4 and the foreign-connector rule; `Refusal::InboundSession` and `SessionRow::direction` are deleted (PR-3). The record and the reopen criterion (§99 PM-2a) are in `SHEKYL_P2P_PROTOCOL.md` PWD-I2.
+
 Gray intake is limited per session, the same on every connector: at
 most `2 × DISCLOSE_COUNT` distinct addresses per session in any
 24-hour span (24 today). Exceeding it is `PeerlistRefused`: an honest
@@ -616,7 +618,7 @@ host to throttle; that is recorded there as the residual.
 
 `--add-exclusive-node` is a gray admit of the declared population
 (*records-was:* and `--add-priority-node`, deleted 2026-10-11). Today
-`connect_to_peerlist` (`src/p2p/net_node.inl:2912`) dials them straight onto
+`connect_to_peerlist` (`net_node.inl:2912`) dials them straight onto
 white. `apply` writes white on that path only for `SessionAccepted`
 or `Confirmed` of an outstanding gray draw. *Records-was: or
 `HarvestDone` of a Foundation host (withdrawn 2026-10-11, §3).*
@@ -630,10 +632,10 @@ loaded address whose type no local connector serves is dropped. No tag is
 stored.
 
 The file is an unordered set of addresses. Archive v8 already deleted the
-anchor and white lists (`src/p2p/net_peerlist.cpp:82`); the save path copies
-both live lists into the one gray list (`src/p2p/net_peerlist.cpp:306`,
-`src/p2p/net_peerlist.cpp:318`); load reads that list
-(`src/p2p/net_peerlist.cpp:156`).
+anchor and white lists (`net_peerlist.cpp:82`); the save path copies
+both live lists into the one gray list (`net_peerlist.cpp:306`,
+`net_peerlist.cpp:318`); load reads that list
+(`net_peerlist.cpp:156`).
 
 `White` has no `Deserialize` and no loader escape hatch. `last_observed` is
 not in the file. A stored timestamp would let load rebuild a white entry
@@ -665,16 +667,18 @@ the range table.
 
 ## 8. C++ behaviors this slice does not keep
 
+**Line numbers in this section and in §7 are at `f317d979c4`; the C++ peerlist (`net_peerlist.h`, `net_peerlist.cpp`) and the C++ dial path were deleted by PR-3 (#1056, 2026-10-13), so the cited lines are a record, not a live reference.**
+
 | Behavior | Where | Rust |
 | --- | --- | --- |
-| Promote from a bare address and stamp now | `set_peer_just_seen`, `src/p2p/net_peerlist.h:334` | No such function. White is written only by `apply` under §5 |
+| Promote from a bare address and stamp now | `set_peer_just_seen`, `net_peerlist.h:334` | No such function. White is written only by `apply` under §5 |
 | Two white writes on one kept outbound dial | `set_peer_just_seen` at `src/p2p/net_node.inl:1403` and `append_with_peer_white` at `:1707` | One `apply`, and only for `SessionAccepted` or `Confirmed` of the gray draw (*records-was:* or `HarvestDone` of a Foundation host, withdrawn 2026-10-11) |
-| `trust_last_seen` | `append_with_peer_white`, `src/p2p/net_peerlist.h:347` | No flag. The clock moves only on contact this node initiated |
-| Gossiped `last_seen` stored on gray insert | `src/p2p/net_peerlist.h:239`, `src/p2p/net_peerlist.h:405` | Ignored. Gray has no clock |
-| Time order as a rank | `by_time` at `src/p2p/net_peerlist.h:184`; the dial sort at `src/p2p/net_node.inl:1935-1938` | Uniform draws. Load is unordered |
-| White list never expires on age | trim is capacity only, `src/p2p/net_peerlist.h:215` | `EXPIRATION_PERIOD` demotes to gray |
+| `trust_last_seen` | `append_with_peer_white`, `net_peerlist.h:347` | No flag. The clock moves only on contact this node initiated |
+| Gossiped `last_seen` stored on gray insert | `net_peerlist.h:239`, `net_peerlist.h:405` | Ignored. Gray has no clock |
+| Time order as a rank | `by_time` at `net_peerlist.h:184`; the dial sort at `src/p2p/net_node.inl:1935-1938` | Uniform draws. Load is unordered |
+| White list never expires on age | trim is capacity only, `net_peerlist.h:215` | `EXPIRATION_PERIOD` demotes to gray |
 | Foundation seed handshake does not promote | the `just_take_peerlist` close at `src/p2p/net_node.inl:1695` | Not kept. A drawn seed the strand accepts is `Confirmed` and writes white, like any peer (§3). *Records-was, same day: `HarvestDone` wrote no white; before that, §3's fleet exception wrote white from any seat* |
-| `--add-peer` kept off the trim front by a synthetic absence of `last_seen` | `src/p2p/net_peerlist.h:444` | The uniform insert rule (§2): the address just seated stays and a random other drawable seat goes, for every source. No privilege, and the draw is still uniform |
+| `--add-peer` kept off the trim front by a synthetic absence of `last_seen` | `net_peerlist.h:444` | The uniform insert rule (§2): the address just seated stays and a random other drawable seat goes, for every source. No privilege, and the draw is still uniform |
 
 `append_with_peer_white(const peerlist_entry&)` accepts any entry. Porting
 that signature is the hole §5 closes.
@@ -686,14 +690,14 @@ that signature is the hole §5 closes.
 These C++ outcomes match the lists. The functions that produce them are not
 the API.
 
-- `--add-peer` is gray (`append_operator_candidate`, `src/p2p/net_node.inl:1098`, `src/p2p/net_peerlist.h:419`).
-- An inbound advertisement is gray (`append_with_peer_gray`, `src/p2p/net_node.inl:2831`).
-- A received peerlist is merged into gray (`src/p2p/net_peerlist.h:239`).
+- `--add-peer` is gray (`append_operator_candidate`, `src/p2p/net_node.inl:1098`, `net_peerlist.h:419`).
+- An inbound advertisement is gray (`append_with_peer_gray`, `net_node.inl:2831`).
+- A received peerlist is merged into gray (`net_peerlist.h:239`).
 - Inbound timed sync does not write white (`src/p2p/net_node.inl:1467-1468` writes only when the session is one this node opened).
-- The file cannot represent white (`src/p2p/net_peerlist.cpp:310`).
+- The file cannot represent white (`net_peerlist.cpp:310`).
 
 C++ `gray_peerlist_housekeeping` writes white
-(`set_peer_just_seen` at `src/p2p/net_node.inl:3363`) after a
+(`set_peer_just_seen` at `net_node.inl:3363`) after a
 handshake that already closed (`check_connection_and_handshake_with_peer`,
 the close at `:1752`). That probe does not keep a session and does not
 consult the outbound cap. The fill's gray dial does keep one
@@ -709,9 +713,9 @@ earlier: this paragraph called the probe a harvest, so a peer outside
 that fleet stayed off white.*
 
 The stripe field the register used to inherit is already gone from the
-peerlist. `src/p2p/net_peerlist.h:367` keeps the previous `last_seen`. `:414`
+peerlist. `net_peerlist.h:367` keeps the previous `last_seen`. `:414`
 is `return true` at the end of `append_with_peer_gray`
-(`src/p2p/net_peerlist.h:414`). Neither is work for this slice.
+(`net_peerlist.h:414`). Neither is work for this slice.
 
 `pruning_seed` is not a term this design uses. Where that spelling still
 appears in code, including comments and tests that name it in order to ignore
@@ -775,7 +779,7 @@ They check different things. Neither stands for the other.
    gray draw; `PayloadRefused` returns that
    draw to drawable gray; a failed redial leaves white.
    The harness fails if it has no sequence (rule 47).
-4. **The C++ list is gone, and so is the old spelling.** `rg -n 'm_peers_white|peerlist_manager' src/p2p`
+4. **The C++ list is gone, and so is the old spelling** (met 2026-10-13, PR-3: the RPC wire history's `_v1`/`_v2` vectors that carried the stripe seed went with it, Rick's ruling of the same day). `rg -n 'm_peers_white|peerlist_manager' src/p2p`
    returns nothing. `rg -n pruning_seed src rust tests` returns nothing,
    comments included. A gate that allowlists the word in a comment or a
    negative test has not finished.
@@ -856,7 +860,7 @@ cannot express. Fix the signature. That does not widen white.
 | --- | --- | --- |
 | 1 | The crate `shekyl-peerlist`: gray, white, `EXPIRATION_PERIOD`, the draws, the door, the cached sample (D3), ban demotion (D4), the per-session intake cap (D-S1), the snapshot, the address file. No FFI, no C++ | The crate's tests cover §11.2, §11.3 and §11.5, and `git diff dev..HEAD --stat -- src/ contrib/` is empty |
 | 2 | The divergence ledger of §8, checked against the tree at the increment's pin; the D3 exception instrument and its results in §5a | Each §8 row names the Rust operation that replaces it, and §11.1 passes. **Checked 2026-10-09 at the PR-2 pin (§16.1):** every C++ site in §8 is where the row says (the `net_peerlist.h` lines moved by four, §16.1), and each row's Rust column is an operation the crate has — `Peerlist::apply` (rows 1, 2, 3, 7), `Source::Session` admits with no clock (row 4), `draw_gray` / `draw_white` / `restore` uniform (row 5), `Partition::expire` through every white read (row 6), `insert_gray`'s keep-the-named eviction (row 8) |
-| 3 | Delete the C++ peerlist. Dial sites that remain call the outcome functions. Delete every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. The address-validity check of §2 (ruled 2026-10-11: network-learned addresses refused at `admit_gray` unless global; `disclose` excludes non-global; operator-named exempt) lands here, with `--allow-local-ip` as the constructor's one input from the C++. **D5 (Rick, 2026-10-11):** this increment lands with slice 3 as one cutover PR, PR-3 | §11.3, §11.4, §11.6 |
+| 3 | **LANDED 2026-10-13 in PR-3 (#1056), with slice 3 (D5).** Delete the C++ peerlist. Dial sites that remain call the outcome functions. Delete every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. The address-validity check of §2 (ruled 2026-10-11: network-learned addresses refused at `admit_gray` unless global; `disclose` excludes non-global; operator-named exempt) lands here, with `--allow-local-ip` as the constructor's one input from the C++. **D5 (Rick, 2026-10-11):** this increment lands with slice 3 as one cutover PR, PR-3 | §11.3, §11.4, §11.6 |
 
 Increment 1 changes no production behavior. Increment 3 is the cutover. The
 crate boundary is what makes `White`'s constructor crate-private; `shekyl-ffi`

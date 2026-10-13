@@ -170,7 +170,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **E2** what verifies a candidate endpoint | NOT IMPLEMENTED | no dial-back, no hairpin, no verification site | **NO — deferred to alpha.9** with E1: *"rushing a dial-back mechanism into a release is how you get the ping-back-as-DoS-amplifier problem."* *(Sweep proposed Yes.)* |
 | **E3** self-dial avoidance | **RULED ELSEWHERE** | not open in this round; substance ruled in the deliverable at `:639` | n/a |
 | **E4** cross-port duplicate avoidance | **RULED ELSEWHERE** | as E3 | n/a |
-| **E5** is §4 discharged by PWD-I1? | **IMPLEMENTED** | discharged: `peerlist_entry_base` carries `adr` + `last_seen` and no `id` (`p2p_protocol_defs.h:58-59`) | done |
+| **E5** is §4 discharged by PWD-I1? | **IMPLEMENTED** | discharged: `peerlist_entry_base` carries `adr` and no `id` (`p2p_protocol_defs.h:58-59` at this pin; `last_seen` left the wire too, 2026-10-13, PR-3) | done |
 | **E6** `--p2p-external-port` | **IMPLEMENTED** | present in `src/p2p/net_node.cpp` / `net_node.h` | done |
 | **E7** overlay endpoint, two postures | **IMPLEMENTED** (as of 2026-09-09) | the three blocking questions were ruled 2026-09-08 as PWD-E9's ambiguous classes; both postures now live: ephemeral default in `rust/shekyl-tor-control-daemon` (`DaemonTorControl`: managed pinned tor, in-memory key, `ADD_ONION` `DiscardPK`, per-boot `ServiceID`) wired via `shekyl_daemon_tor_start` into `node_server::add_ephemeral_tor_zone` (`src/p2p/net_node.inl`); operator-provisioned `--anonymous-inbound` unchanged and yields-to when configured; opt-out `--no-ephemeral-tor` | done — no wire change (the posture publishes an address; the handshake is untouched) |
 | **E8** address volatility measurement | **DEFERRED** | external blocker chain, first link now discharged: E7 shipped 2026-09-09, so the measurement finally *has a subject* — the remaining links (fleet runs it, stressed, `T` measured admissibly) stay owed from the Q12-D6a rig | No — blocked |
@@ -1091,6 +1091,8 @@ before anything is gossiped.
 
 ### PWD-I2 — peerlist *acceptance* is restricted; disclosure is retained unchanged, and the Shi et al. amplifiers are closed
 
+**The direction clause is RETIRED (Rick, 2026-10-13, PR-3 brief revision 2 §2.5).** Every peerlist exchange is an exchange: a received list is admitted on any session, inbound or outbound, under the limits that bind every session — D3 (at most `DISCLOSE_COUNT`, 12, per message), D-S1 (at most 24 distinct addresses per session in 24 hours), address validity and R4, the foreign-connector rule, random gray eviction, and white only through this node's own drawn dials. *Why:* the direction rule made discovery circular — a node's own address travels only in its own sample, and under the rule that sample was accepted only by peers that had already dialled the node, so a node named to no one could become known only through seeds or `--add-peer`; and the rule cannot be narrowed to "accept only the sender's own entry", because picking that entry out of the sample is what the uniform sample prevents. *What it was against:* Shi et al. §III-A's 250 entries per message, FIFO eviction and no per-connection cap — none survives; what remains, an attacker holding many inbound sessions, is bounded at 24 addresses per session per day and by the inbound ceiling. *Records-was:* the "accept only on connections this node initiated" row below, adopted 2026-09-04 and implemented as `Refusal::InboundSession` in `shekyl-peerlist` (PR-2); deleted in PR-3. **Reopen:** if `DAEMON_RELAY_PRIVACY.md` §99 PM-2a shows gray or outbound occupation beyond the attacker's share of honest addresses, the direction rule returns in some form. The per-connection ceiling stands, as D-S1. The rest of this section is the record of the ruling as made.
+
 **RULED.** **Disclosure is not reduced — it is retained exactly as it is**, and
 **three changes are made to what this node *accepts*.**
 
@@ -1432,8 +1434,8 @@ of 1000 still lets one connection cycle the entire white list.
 producer's.** `handle_remote_peerlist` enforces the per-message limit with
 `P2P_MAX_PEERS_IN_HANDSHAKE` (`net_node.inl:2123`), while
 `P2P_DEFAULT_PEERS_IN_HANDSHAKE` is what *this node discloses*
-(`get_peerlist_head`'s depth, `send_peerlist_sz`). **They are both 250 today and
-are independent constants** (`cryptonote_config.h:186-187`), so a ceiling
+(`get_peerlist_head`'s depth, `send_peerlist_sz`). **They were both 250 and
+independent constants** (`cryptonote_config.h:186-187` at this round's pin; both deleted 2026-10-13 with the C++ peerlist — the one number on both sides is `DISCLOSE_COUNT`, 12, in `shekyl-peer-bounds`), so a ceiling
 inheriting the producer default would silently stop matching the acceptance cap
 the moment either moved. **If both survive the rewrite, a gate must assert they
 are equal** — otherwise the inheritance this ceiling relies on is a coincidence,
@@ -2181,9 +2183,9 @@ PR's own edits shift `net_node.h` and `net_node.inl` below these points.
 | `src/p2p/net_node.cpp:191` | `arg_max_connections_per_ip`, default `1` |
 | `src/p2p/net_node.h:449` | `max_connections(1)` in the constructor — the **second** copy of the number |
 | `src/p2p/net_node.inl:678` | assignment from the argument |
-| `src/p2p/net_node.inl:3236` | `has_too_many_connections` |
-| `src/p2p/net_node.inl:3238` | early `return false` for non-public zones |
-| `src/p2p/net_node.inl:3245` | counts `cntxt.m_is_income && is_same_host` |
+| `net_node.inl:3236` (at this round's pin; deleted since) | `has_too_many_connections` |
+| `net_node.inl:3238` (as above) | early `return false` for non-public zones |
+| `net_node.inl:3245` (as above) | counts `cntxt.m_is_income && is_same_host` |
 | `src/p2p/net_node.inl:241` | called from `is_host_limit` |
 | `contrib/epee/include/net/abstract_tcp_server2.inl:950` | the refusal point, `is_income`-gated |
 | `contrib/epee/include/net/net_utils_base.h:83-84` | ipv4 `is_same_host` is `ip() == other.ip()` only |
@@ -2398,7 +2400,7 @@ later, at block validation. The chain, re-read 2026-10-09:
   true on every path. It records the peer's height and top id. It does not
   compare genesis. `CORE_SYNC_DATA` carries no block version and no pruning
   seed, so the handshake's "returned false, dropping connection" arms
-  (`src/p2p/net_node.inl:1387`, `src/p2p/net_node.inl:2796`) do not fire;
+  (`net_node.inl:1387` and `:2796` at this round's pin; the outbound arm went with the C++ dial path 2026-10-13, the inbound arm is `src/p2p/net_node.inl:1598` today) do not fire;
 - therefore a genesis-forked peer's handshake completes, `:1377` runs, and its
   lists fill.
 
@@ -2413,7 +2415,7 @@ processed.** That is the opposite of the genesis-fork signature.
 refusal, which is visible only on the refusing node**, this one is visible on
 the side that is being refused. Its absence from the refused node's log is
 therefore evidence, not a gap. (The accepting side logs its own variant at
-`src/p2p/net_node.inl:2754` and `src/p2p/net_node.inl:2757`, `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
+`src/p2p/net_node.inl:1557` (at this round's pin `:2754` and `:2757`), `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
 two sides do **not** log at the same level, and "loud on both sides" would
 overstate it. The half this discriminator needs is the **refused** side, and
 that is the louder one: `LOG_WARNING_CC`, where the per-IP refusal reaches the
@@ -3713,7 +3715,7 @@ that is a reason to keep the two **legible**, which the paragraph break above
 does, and not a blocker (rule 22).*
 
 **Not ruled here:** `handshake_interval`, `config_id` and `send_peerlist_sz` are
-also written-and-never-read on that struct, but they are cadence and peerlist
+also written-and-never-read on that struct (`send_peerlist_sz` deleted 2026-10-13 with the C++ peerlist), but they are cadence and peerlist
 questions owned by PWD-B1/PWD-B2 and PWD-I2. Deleting them alongside would be
 this row disposing of another row's subject.
 
@@ -4140,7 +4142,7 @@ is not a table of constants.**
 
 | Command | Inherited cap | Disposition |
 | --- | --- | --- |
-| `COMMAND_HANDSHAKE` (1001) | 65536 | Derived from `P2P_MAX_PEERS_IN_HANDSHAKE` (250) × one peerlist entry + `CORE_SYNC_DATA` |
+| `COMMAND_HANDSHAKE` (1001) | 1434 (*records-was* 65536) | Derived from `DISCLOSE_COUNT` (12) × the entry's pinned in-array encoding (98 bytes: the address alone; `last_seen` left the wire the same day, Rick's ruling) + the pinned fixed part (258 bytes: `basic_node_data`, `CORE_SYNC_DATA`, the list envelope, the request's nonce); `shekyl-levin/tests/handshake_bounds.rs` pins both (2026-10-13). *Records-was:* `P2P_MAX_PEERS_IN_HANDSHAKE` (250) × a 256-byte over-bound + 1536 |
 | `COMMAND_TIMED_SYNC` (1002) | 65536 | Same derivation as 1001 |
 | `COMMAND_PING` (1003) | 4096 | **Arm deleted** — PWD-B10 |
 | `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) | 4096 | A four-byte reply behind a 4 KiB cap; derive to the field |
@@ -4356,7 +4358,7 @@ round owes:**
   version of this bullet said "every command in this table carries public
   consensus data", which is false: `COMMAND_HANDSHAKE` and
   `COMMAND_TIMED_SYNC` carry peerlists and support flags
-  (`src/p2p/p2p_protocol_defs.h:172-250`) — peer metadata, not consensus data,
+  (`src/p2p/p2p_protocol_defs.h:120-244`) — peer metadata, not consensus data,
   and peerlist disclosure is a thing PWD-I2 deliberately controls.*
 
   **The set is empty because of what can reach the compressor, which is a
@@ -4531,7 +4533,7 @@ one flight (1224/1160 B), so the *per-connection* buffer is bounded and small.
 > matters is the inbound one — and that is PWC-E11, not PWD-B9.** PWD-B9 is
 > **outbound slot diversity** (`P2P_2_DISPATCH_BRIEF.md:502`), which says
 > nothing about connections a peer opens *to us*. The inbound cap is
-> `has_too_many_connections` (`src/p2p/net_node.inl:3089` **at this round's pin**; PWC-E11 cites `:3083-3105` from its own, and the symbol is named here so the drift is greppable), which filters
+> `has_too_many_connections` (`net_node.inl:3089` **at this round's pin**; deleted since; PWC-E11 cites `:3083-3105` from its own, and the symbol is named here so the drift is greppable), which filters
 > on `cntxt.m_is_income` — and **returns permit for every non-public zone**, so
 > **on Tor there is no inbound per-host cap at all.**
 
@@ -4675,7 +4677,7 @@ rather than the default. The bound itself is this row's, in Rust.
 ### PWD-B2 — jitter, and the discriminator is observability
 
 **RULED.** The five node-server idle makers are fixed-interval
-(`src/p2p/net_node.h:618-622`) and the three protocol-handler timers likewise
+(`src/p2p/net_node.h:444-446`; five at this round's pin, three since PR-3 deleted the connections maker, the gray housekeeping and the peerlist store, 2026-10-13) and the three protocol-handler timers likewise
 (PWC-E4).
 
 > **Ruled: a cadence a *path* observer can correlate across connections
@@ -4784,7 +4786,7 @@ its own connection's clock and not from a shared timer.
 > **What the window buys is narrower and more specific: it decorrelates
 > connections established at nearly the same moment.** That is the common case
 > rather than a corner one — `m_connections_maker_interval` runs every second
-> (`src/p2p/net_node.h:619`), so a node coming up opens several outbound
+> (`net_node.h:619` at this round's pin; the C++ connections maker is deleted, 2026-10-13), so a node coming up opens several outbound
 > connections in a tight cluster, and with a degenerate window they would tick
 > together for the life of those connections.
 
@@ -5111,7 +5113,7 @@ dead surface.
 | PWC-E7 (double-spend is a no-drop offense) | **Ruled** — no drop, and now for a stated reason: it describes our own state | PWD-B7 |
 | PWC-E8 (the three other no-drop classes) | **Ruled** — fee is our-own-state; `tx_extra` and `unlock_time` are non-universal policy | PWD-B7 |
 | PWC-E5 (idle kick 240 s; score floor `DROP_PEERS_ON_SCORE = -2`) | **Deferred — named blocker: both of its inputs are owed by rows this round did not close.** The **score floor** cannot be derived until it is known what increments the score: PWD-B7 decides *which rejections are attributable*, but the tri-state verdict that makes that operational is owed to P2P-3, and PWD-B1's bucket decides what a peer may do before scoring is reached at all — its four parameters are owed too. The **idle kick** is a liveness judgement whose 240 s has never been derived (`pinned-not-re-derived` in the census) and belongs with the cadence work. Target pre-genesis | PWD-B1, PWD-B7's P2P-3 action |
-| PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — and the original named blocker was wrong; the corrected one is stronger** (2026-09-04 review finding, verified at source). `is_same_host` does **not** need an IP: `network_address::is_same_host` dispatches to the concrete type (`contrib/epee/src/net_utils_base.cpp:134-135`) and Tor compares hostname strings (`src/net/tor_address.cpp:181-184`). The I2P comparator left with the address type. The real blockers were: **(a)** every inbound anonymity-zone peer is recorded as the zone's `unknown()` sentinel (`src/p2p/net_node.cpp:336`, `:340`) — an inbound anon peer's identity is unlearnable *by design* — so host-keying compared `unknown == unknown` and `drop_connections` would sever **every inbound anon peer at once**; **(b)** even a learnable onion identity is free to mint, so a per-host key prices nothing an adversary pays. **(a) is closed** by `fix/anon-zone-address-keying`: `is_same_host` no longer equates two addresses that name no host, and `drop_connections` returns early on one, so the sweep selects nothing rather than everything. **(b) is untouched and still defers this row** — the sweep is now safe on an anonymity zone, not useful there. Host-keyed severing therefore cannot be ported to anonymity zones for identity-policy reasons, not comparator reasons — it is the same *identity* problem as the anonymity-zone inbound cap (whose absence is `has_too_many_connections`' explicit non-public early return, `src/p2p/net_node.inl:3091-3092`, not a comparator gap), so both re-derive together, count- or work-based | PWD-I4 sub-round |
+| PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — and the original named blocker was wrong; the corrected one is stronger** (2026-09-04 review finding, verified at source). `is_same_host` does **not** need an IP: `network_address::is_same_host` dispatches to the concrete type (`contrib/epee/src/net_utils_base.cpp:134-135`) and Tor compares hostname strings (`src/net/tor_address.cpp:181-184`). The I2P comparator left with the address type. The real blockers were: **(a)** every inbound anonymity-zone peer is recorded as the zone's `unknown()` sentinel (`net_node.cpp:336` (at this round's pin; `local_interface_hosts` went with the C++ dial path, 2026-10-13), `:340`) — an inbound anon peer's identity is unlearnable *by design* — so host-keying compared `unknown == unknown` and `drop_connections` would sever **every inbound anon peer at once**; **(b)** even a learnable onion identity is free to mint, so a per-host key prices nothing an adversary pays. **(a) is closed** by `fix/anon-zone-address-keying`: `is_same_host` no longer equates two addresses that name no host, and `drop_connections` returns early on one, so the sweep selects nothing rather than everything. **(b) is untouched and still defers this row** — the sweep is now safe on an anonymity zone, not useful there. Host-keyed severing therefore cannot be ported to anonymity zones for identity-policy reasons, not comparator reasons — it is the same *identity* problem as the anonymity-zone inbound cap (whose absence is `has_too_many_connections`' explicit non-public early return, `net_node.inl:3091-3092` (at this round's pin; deleted since), not a comparator gap), so both re-derive together, count- or work-based | PWD-I4 sub-round |
 | PWC-E4a (the never-driven 43 s timer) | **Ruled** — deleted | PWD-B8 |
 
 **Sum check: 3 ruled + 0 absorbed + 2 deferred = 5 rows.** ✅
@@ -5172,10 +5174,10 @@ Two things make it worse than ordinary dead weight, and both belong in the row:
   hazard the census exists to price.
 - **Two of the dead fields are dead *copies of live constants*, which makes
   them traps rather than merely inert.** The 60-second cadence is driven by
-  `once_a_time_seconds<P2P_DEFAULT_HANDSHAKE_INTERVAL>` (`net_node.h:618`) — a
+  `once_a_time_seconds<P2P_DEFAULT_HANDSHAKE_INTERVAL>` (`src/p2p/net_node.h:444`) — a
   **template argument from the constant**, not from the field — and
-  `send_peerlist_sz`'s value is read directly from
-  `P2P_DEFAULT_PEERS_IN_HANDSHAKE` at `net_node.inl:2655`. So an engineer who
+  `send_peerlist_sz`'s value was read directly from
+  `P2P_DEFAULT_PEERS_IN_HANDSHAKE` at `net_node.inl:2655` (both deleted 2026-10-13). So an engineer who
   changed the cadence by editing `m_net_config.handshake_interval` would
   observe **no behavioural change and no compiler complaint**. A dead field
   holding a stale duplicate of a live value is worse than an empty one.

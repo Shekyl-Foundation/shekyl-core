@@ -427,7 +427,9 @@ reaches another node's view."* That is true of the ADDRESS and false of the
 record.** Verified at `f9e000f76`:
 
 - `peerlist_entry_base` carries `adr`, `last_seen` **and `pruning_seed`**, all
-  three serialized (`p2p_protocol_defs.h`);
+  three serialized (`p2p_protocol_defs.h`) — at that pin; since then the
+  stripe seed left the wire (2026-09-21, `PDM-Q7`) and `last_seen` left it
+  (2026-10-13, PR-3), so the entry is its address;
 - the white append sets `pe_local.pruning_seed = con->m_pruning_seed`
   (`net_node.inl:1586`), and `m_pruning_seed` is **the peer's own claim** —
   `context.m_pruning_seed = hshd.pruning_seed`
@@ -625,7 +627,7 @@ what it did not watch.
 
 **The inherited code already reasons this way at one site and not as a
 principle:** `get_peerlist_head`'s `anonymize` path
-([`net_peerlist.h:282`](../../src/p2p/net_peerlist.h#L282)) randomises which
+(`net_peerlist.h:282` at `f317d979c4`; the C++ peerlist is deleted, 2026-10-13) randomises which
 white entries it returns specifically so a repeat query cannot be differenced,
 citing Cao et al. **That is this principle applied to one query. The principle
 is more general, and stating it is what stops a future "consistency"
@@ -1067,7 +1069,7 @@ require an outbound dial:**
 
 **And the code supplies a third leg the proof does not need but gets anyway:
 gray is never disclosed.** `get_peerlist_head` reads the **white list only**
-([`net_peerlist.h:282`](../../src/p2p/net_peerlist.h#L282)), and
+(`net_peerlist.h:282` at `f317d979c4`; deleted 2026-10-13), and
 [`net_node.inl:994`](../../src/p2p/net_node.inl#L994) says so in those words.
 **So an inbound flood's gray entries never reach any other node's view** — they
 poison nothing but our own, for one dial each.

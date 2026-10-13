@@ -514,12 +514,13 @@ stale_through = [
   { through = "d03aeb2e0f", note = "RT-W9 step 1 review (PR #1038): the split yields two Directions, and the length-prefixed framer stays in shekyl-p2p-transport. The same HKDF still feeds the same two record directions; the pinned handshake vectors and the post-rekey record are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "4ae7de867a", note = "RT-W9 step 2 (PR #1039): has_key is gone and the two HKDF functions are one. The two-output bytes are unchanged, and the P2P handshake still uses two outputs. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "7813b29af9", note = "RT-W9 step 2: Direction counts the ciphertexts it has opened (one saturating add of a u64 on each successful open, none on a failed tag) and exposes the count, for the RPC handshake's pending session to gate on. The P2P record path opens through Direction, so that add is on it, twice per record. It is one integer add beside two AEAD operations; no I/O changed. Dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "b57c18478e", note = "PR-3 (#1056): the spans moved from the C++ transport_spans to shekyl-transport-layer::spans, the same numbers with the same provenance comment; the connectors read them from the zone host as before. The outbound cap and its floor moved to the dialer; the dial path is the Rust dialer, whose deadlines these are. Not re-measured: Ruling B measures them again on the Rust path after the cutover." },
 ]
 
 [[constant]]
 name = "clearnet_dial_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.clearnet_dial_within_ns = 1415000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const CLEARNET_DIAL_WITHIN_NANOS: u64 = 1_415_000_000;"
 measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
@@ -531,8 +532,8 @@ path_set = "clearnet-span"
 
 [[constant]]
 name = "clearnet_handshake_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.clearnet_handshake_within_ns = 1426000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const CLEARNET_HANDSHAKE_WITHIN_NANOS: u64 = 1_426_000_000;"
 measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
@@ -544,8 +545,8 @@ path_set = "clearnet-span"
 
 [[constant]]
 name = "clearnet_gap_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.clearnet_gap_within_ns = 1430000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const CLEARNET_GAP_WITHIN_NANOS: u64 = 1_430_000_000;"
 measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
@@ -579,12 +580,13 @@ stale_through = [
   { through = "da7b70c8cf", note = "SH-3: the ordinary runtime constructor is a budget and a name again. shekyl-tor's tests call it with the same two arguments they had before the hook parameter (the serving runtime alone uses ThreadHooks through runtime_with_thread_hooks), so their runtime threads start as before. No production path in this set changed. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "3081ba830b", note = "The failed-address predicate (implicates_address) no longer counts DialFailed or LevinHandshakeRejected on an onion dial; the five destination-naming replies still count. It runs after a dial has ended. The Tor dial and the gap wait are unchanged. Not re-measured." },
   { through = "3a0d211d80", note = "The failed-address predicate reads the destination_authenticated cell, and on Tor a rejected Levin handshake counts again beside the five destination-naming replies. It runs after a dial has ended. The Tor dial and the gap wait are unchanged. Not re-measured." },
+  { through = "b57c18478e", note = "PR-3 (#1056): the spans moved from the C++ transport_spans to shekyl-transport-layer::spans, the same numbers with the same provenance comment; the connectors read them from the zone host as before. The outbound cap and its floor moved to the dialer; the dial path is the Rust dialer, whose deadlines these are. Not re-measured: Ruling B measures them again on the Rust path after the cutover." },
 ]
 
 [[constant]]
 name = "tor_dial_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.tor_dial_within_ns = 9100000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const TOR_DIAL_WITHIN_NANOS: u64 = 9_100_000_000;"
 measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "57d756bca"
@@ -596,8 +598,8 @@ path_set = "tor-span"
 
 [[constant]]
 name = "tor_gap_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.tor_gap_within_ns = 2600000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const TOR_GAP_WITHIN_NANOS: u64 = 2_600_000_000;"
 measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "57d756bca"
@@ -609,8 +611,8 @@ path_set = "tor-span"
 
 [[constant]]
 name = "tor_shutdown_timeout_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.shutdown_timeout_ns = 9100000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const SHUTDOWN_TIMEOUT_NANOS: u64 = TOR_DIAL_WITHIN_NANOS;"
 measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "57d756bca"
@@ -629,8 +631,8 @@ spec = [
 
 [[constant]]
 name = "transport_workers"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.workers = 2;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const WORKERS: usize = 2;"
 measured_by = ["BA-T11"]
 status = "unmeasured"
 carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."
@@ -638,8 +640,8 @@ path_set = "transport-budget"
 
 [[constant]]
 name = "transport_blocking"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.blocking = 1;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const BLOCKING: usize = 1;"
 measured_by = ["BA-T11"]
 status = "unmeasured"
 carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."

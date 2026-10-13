@@ -200,7 +200,7 @@ round exists to close, and because **PWD-I1 may or may not discharge it** (see
 PWD-E5).
 
 - **Adversary:** any peer that has completed one handshake. Our `peer_id` is in the handshake *response* (`:2799`, via `get_local_node_data`) and in `handle_ping`'s reply (`:2809`).
-- **Access:** gossip. `sanitize_peerlist` filters address and pruning seed only (`:2090-2115`); the merge predicate is address-only (`:2147`). Nothing inspects `id`. On address collision the gray record is **replaced including its id** (`src/p2p/net_peerlist.h:420-424`), so any gray entry can be retargeted; white is protected (`:406-408`).
+- **Access:** gossip. `sanitize_peerlist` filters address and pruning seed only (`:2090-2115`); the merge predicate is address-only (`:2147`). Nothing inspects `id`. On address collision the gray record is **replaced including its id** (`net_peerlist.h:420-424 at this round's pin; the C++ peerlist is deleted (2026-10-13)`), so any gray entry can be retargeted; white is protected (`:406-408`).
 - **Delta:** gray housekeeping dials the address and handshakes successfully — reading the *real* peer id into `pi` at `:1393-1394` — then **discards it and promotes `pe.id`, the gossiped value** (`:3167`). The honest address enters white carrying our own id, and `is_peer_used`'s self-check then skips it at every selection (`:1445`, `:1703`, `:1769`). Correction requires that peer to dial us and complete pingback.
 
 The observed value is in a local variable one line above the store of the

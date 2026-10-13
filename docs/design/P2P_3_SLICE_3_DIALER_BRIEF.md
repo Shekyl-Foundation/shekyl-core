@@ -1,6 +1,6 @@
 # P2P-3 slice 3 — discovery and the dialer
 
-**Status: REVIEWED — closed 2026-10-12 (Rick), on #1037 (R1–R5 and the
+**Status: IMPLEMENTED (PR-3, #1056, 2026-10-13) — §3.1–§3.3 of the consolidated plan landed: the Rust dialer is the only dialer, the C++ dial path and the C++ peerlist are deleted, every row of the deletion table checks clean, the freeze list's function rows are discharged; un-drafted after the three-node run.** *Records-was: REVIEWED — closed 2026-10-12 (Rick), on #1037 (R1–R5 and the
 corrections); implementation is PR-3.** Design before code. Rule 26 is
 cited. Every PR-3 commit implements this file as it stands at that commit.
 *Records-was: OPEN — no implementation starts from this file until a
@@ -18,8 +18,8 @@ PWD-I2 or anything else in PR-3. `handle_remote_peerlist` is a
 pass-through: the list as it arrived and the session id go to Rust
 (`shekyl_peerlist_admit_received`), which reads the session's connector
 and direction from the `shekyl-seam` board, applies D3, D-S1, address
-validity, R4, the foreign-connector rule and PWD-I2, and answers accept
-or refuse. The C++ closes only on refuse. A list on an inbound session
+validity, R4 and the foreign-connector rule (and, until §2.5 retired it on 2026-10-13, PWD-I2's direction rule), and answers accept
+or refuse. The C++ closes only on refuse. *Records-was:* a list on an inbound session
 admits nothing and is not `PeerlistRefused`: no score, no failed-address
 write, no close. `sanitize_peerlist`, the `P2P_MAX_PEERS_IN_HANDSHAKE`
 check and the per-entry connector loop are deleted in PR-3. *Records-was
@@ -28,7 +28,7 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.inl — `handle_remote_peerlist`'s body is replaced by one call into Rust (`shekyl::received_peerlist`), the line that reads `--allow-local-ip` reads it through `shekyl_peerlist_allow_local_ip`, and `sanitize_peerlist` is deleted. Step 2 (the same day): `detect_self_handshake` reads the dialer's nonce set through `shekyl_dial_take_handshake_nonce`; `set_max_out_peers` hands the cap to `shekyl_dialer_set_out_peers`; `--add-peer` enters the Rust gray list through `shekyl::admit_operator_peer`; the handshake and timed-sync responses take their sample from `shekyl::disclose`; `on_outbound_handshake` is the strand's read of the Rust dialer's handshake result, the lines kept from `do_handshake_with_peer`'s invoke callback, which step 3 deletes. §3.2 (the same day): the dial path is deleted (the table below); the `--add-exclusive-node` parse hands its list to the dialer through `shekyl::declare_exclusive_peers`; the `--seed-node` addresses enter gray through `shekyl::admit_operator_peer`; `public_connect` is deleted with `zone_server::open`, and the zone's pointer to it, `m_connect`, becomes the flag `m_outbound` at its nine sites (an edit, not a call into Rust: the flag is what the config parsing read the pointer as). The C++ peerlist's deletion: `init_config`'s `peerlist_storage::open` becomes `shekyl_dialer_open_address_file`; the `--allow-local-ip` line is the bare call, its member gone; `deinit` returns true where it stored; the ban-eviction loops, the timed-sync `set_peer_just_seen`, `store_config`, `log_peerlist` and the four list getters are deleted. The moves: `transport_spans` is deleted with its three call sites (the spans are `shekyl-transport-layer::spans`); `set_max_out_peers` is the push alone, the floor refused by the dialer; `change_max_out_public_peers` pushes the cap and the dialer closes the excess, so `release_outbound` is deleted; `get_max_out_public_peers`, `descriptor_reservations` and the three protocol-handler cap lines read the target through `shekyl_dialer_out_target`.
 
-**UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.h — the `sanitize_peerlist` declaration is deleted with its definition; `on_outbound_handshake` is declared (step 2). §3.2: `dial_result`, `connect_func` and `public_connect` are deleted; `m_connect` becomes the flag `m_outbound`. §3.1 of the brief's revision 2 (the same day): the `send_peerlist_sz` assignment is deleted with the field, which nothing read.
+**UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.h — the `sanitize_peerlist` declaration is deleted with its definition; `on_outbound_handshake` is declared (step 2). §3.2: `dial_result`, `connect_func` and `public_connect` are deleted; `m_connect` becomes the flag `m_outbound`. §3.1 of the consolidated brief's revision 2 (the same day): the `send_peerlist_sz` assignment is deleted with the field, which nothing read.
 
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
@@ -46,7 +46,7 @@ this brief's review closing; no derivation and no measurement gates it
 Lines below were read on `dev` at `f317d979c4` (2026-10-08), which
 contains #991 and #1002. `record_addr_failed` takes the address, the
 cause, and the reply (`net_node.h:675`). `shekyl_seam_session_cause`
-is `rust/shekyl-ffi/src/cause_ffi.rs:55`, declared at
+was `cause_ffi.rs:55` (the file is deleted with the C++ dial path, §3.2), declared at
 `shekyl_ffi.h:4430`. The C++ read is `net_node.h:229`.
 *Records-was: the pin was `d93074d1c4`, and the declaration was
 `shekyl_ffi.h:4448`.* This slice mints no identifier family. It is
@@ -62,6 +62,8 @@ The list writer is slice 1's `apply(DialOutcome)`. This slice emits
 that value. It does not write gray or white itself.
 
 ---
+
+**§2.5 — every peerlist exchange is an exchange (Rick, 2026-10-13, PR-3 brief revision 2).** PWD-I2's direction rule is retired: a received list is admitted on any session under D3, D-S1, validity and R4, the foreign-connector rule, random gray eviction, and white only through this node's own drawn dials. The record, the records-was and the reopen criterion (§99 PM-2a) are in `SHEKYL_P2P_PROTOCOL.md` PWD-I2 and the FOLLOWUPS row. In code: `Refusal::InboundSession` and the session's direction field are deleted; `shekyl-peerlist/tests/inbound.rs` pins the three properties.
 
 ## The composition
 
@@ -804,6 +806,8 @@ thrown away.
 
 ## What else the cutover moves to Rust
 
+**LANDED 2026-10-13:** `transport_spans` is `shekyl-transport-layer::spans` (`rust/shekyl-transport-layer/src/spans.rs`), with its provenance; the hidden cap is the dialer's compiled Tor default, the floor is refused at the push, and `release_outbound` went with them. Both `rg` lines below return nothing.
+
 Values Rust reads through C++ move to Rust in the cutover, so
 retuning them no longer means editing C++. Each move removes the C++
 lines; it does not add a second copy.
@@ -828,6 +832,8 @@ lines; it does not add a second copy.
 ---
 
 ## What is deleted
+
+**LANDED 2026-10-13 (PR-3, #1056):** every row below is deleted, each `rg` returns what its row says, and the before side at `dev` hit where the row said it would (rule 47). The freeze gate judged the fifteen function rows and both call rows deleted; the list keeps its shrink rows.
 
 **D5 — RULED 2026-10-11 (Rick).** Slice 1 increment 3 (the C++
 peerlist's deletion, slice 1 brief §13) lands with this slice as one
@@ -902,7 +908,7 @@ keep the callers named below.
 | `gray_peerlist_housekeeping` and its interval | function `:3336`, declaration `net_node.h:713`, interval `:756`. The comment at `net_node.inl:1091` names the function and goes with it | `rg -n -e gray_peerlist_housekeeping -e m_gray_peerlist_housekeeping_interval src/p2p` returns nothing. Before deletion that command hits the declaration, the interval, the `idle_worker` call, the definition, and that comment |
 | `zone_server::open` and its `open_outcome` result type | `zone_server.h:382`; `struct open_outcome` at `:376` | `rg -n -e 'open_outcome open\(' src/p2p/zone_server.h` returns nothing, and `rg -n -w open_outcome src/p2p` returns nothing: the struct is the freeze row's witness and goes with the function |
 | `shekyl_seam_open`'s blocking wait | `rust/shekyl-ffi/src/seam_ffi.rs:303` | The function remains and returns the channel without waiting for the handler to arm. `rg -n -e shekyl_seam_open rust/shekyl-ffi/src/seam_ffi.rs` still hits the definition. Zero hits fails |
-| `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
+| `shekyl_seam_session_cause` | `cause_ffi.rs:55`, declared `shekyl_ffi.h:4430`, C++ read `net_node.h:229` (the file and both readers deleted 2026-10-13) | `rg -n -e shekyl_seam_session_cause rust src` returns nothing |
 | The outbound call of `try_get_support_flags` | call `:1435`, definition `:2677`, inbound call `:2837` inside `handle_handshake`, declaration `net_node.h:673` | `rg -n -e try_get_support_flags src/p2p` still matches the declaration, the definition, and the call in `handle_handshake`, and nothing else. Zero matches fails. A match inside `do_handshake_with_peer` fails, because that function is gone |
 | `node_data.address` (handshake-address ruling, 2026-10-09; deleted 2026-10-13) | The field in `basic_node_data` (`p2p_protocol_defs.h`), written by `get_local_node_data`, read by `handle_handshake` through `derive_advertised_endpoint` (`net_node.cpp`, declared `net_node.h`) and by `get_announced_address` / `get_announced_port`. The Rust codec's `BasicNodeData.address` and its fixtures go with it; the two announce getters compute the address directly and stay, for the operator log line and the tests | `rg -n -e derive_advertised_endpoint -e 'node_data.address' src tests rust` returns nothing. `rg -n -e get_announced_address src/p2p` still hits the declaration, the definition and `get_announced_port`; zero hits fails, because the getter was kept. The harness goldens are re-recorded from the seam in the same commit, 44 bytes shorter per handshake |
 | The timed-sync self-insertion (handshake-address ruling, 2026-10-09) | `net_node.inl:2717` to `:2735`: `outgoing_to_same_zone`, the `max_peerlist_size` subtraction, and the `local_peerlist_new.insert` of `zone.m_our_address` | `rg -n -e outgoing_to_same_zone src/p2p` returns nothing. Before deletion it hits `:2717`, `:2718` and `:2730` |
@@ -917,7 +923,7 @@ keep the callers named below.
 | **Config push this PR adds (Rick, 2026-10-13, §3.1 review): `shekyl_peerlist_set_own_address`, through the `note_own_address` adapter** | the `m_our_address` assignment in `init`: the operator onion of `--anonymous-inbound` is parsed only in C++, so it reaches the lists as a config push. The per-boot onion does not cross (`daemon_tor_ffi.rs` hands it to the lists) | the daemon-config slice, which parses the option in Rust |
 | **Config push this PR adds (§3.2, the dial-path deletion): `shekyl_dialer_set_exclusive`, through the `declare_exclusive_peers` adapter in `zone_server.h`** | one line after the `--add-exclusive-node` parse in `handle_command_line`: the closed network is the Rust dialer's candidate population. *Records-was:* `connect_to_peerlist(m_exclusive_peers)` in `connections_maker`, and the early returns in `connect_to_seed` and `gray_peerlist_housekeeping` | the daemon-config slice, which parses the option in Rust |
 | **C++ this PR adds (§3.2): the `--seed-node` admit loop in `init`** | two lines beside the `--add-peer` loop: each parsed `--seed-node` address enters the Rust gray list through `shekyl::admit_operator_peer`, as an operator-named candidate (slice 1 brief §3: seeds are ordinary peers). *Records-was:* `parse_peers_and_add_to_container` into `m_seed_nodes`, read by `connect_to_seed` | the daemon-config slice |
-| **Config push this PR adds (§3.2, the C++ peerlist's deletion): `shekyl_dialer_open_address_file`** | one line in `init_config`, where `peerlist_storage::open` read the C++ file: the data directory's `p2pstate.bin` is named to the dialer, which reads it into gray, writes it every thirty minutes and at stop (slice 1 brief §7). A push before the seam binds is held for the dialer's build (`SHEKYL_DIALER_DEFERRED`), as `--add-peer`, the closed network and the own address are. *Records-was:* `peerlist_storage` in `init_config`, `store_config` at `deinit` and on the 30-minute idle interval | the daemon-config slice, which parses `--data-dir` in Rust |
+| **Config push this PR adds (§3.2, the C++ peerlist's deletion): `shekyl_dialer_open_address_file`** | one line in `init_config`, where `peerlist_storage::open` read the C++ file: the data directory's `p2pstate.bin` is named to the dialer, which reads it into gray, writes it every thirty minutes and at stop (slice 1 brief §7). **Held for the build, plainly (Rick, 2026-10-13):** `init()` parses the command line and names the address file before its first listen binds the seam, and the dialer is built at that bind, so on a start where the managed Tor does not listen first every config push (`shekyl_dialer_open_address_file`, `shekyl_peerlist_admit_operator`, `shekyl_dialer_set_exclusive`, `shekyl_peerlist_set_own_address`) arrives with no dialer. Each records its argument in `dialer_ffi::DEFERRED` and answers `SHEKYL_DIALER_DEFERRED` (2); the build drains the slot in the order file, operator addresses, closed network, own addresses, and the push has the effect it would have had after the build. A push after the build acts at once. The dialer is also rebuilt with every zone host, since zone shutdown drops it while the seam stays bound. *Records-was:* `peerlist_storage` in `init_config`, `store_config` at `deinit` and on the 30-minute idle interval | the daemon-config slice, which parses `--data-dir` in Rust |
 | `shekyl_rpc_peer_list`, `shekyl_rpc_peer_list_free`, `shekyl_rpc_peerlist_sizes` (*records-was* RK-5a's C++ exports `shekyl_rpc_peer_list` and `shekyl_rpc_peerlist_limits` over the C++ peerlist, and `get_public_*_peers_count` in `shekyl_rpc_info_peers`) | `rust/shekyl-ffi/src/rpc_peerlist_ffi.rs`, from the Rust lists' snapshot and the hub's bans; `shekyl-daemon-rpc` declares them and the console reads the caps from `shekyl-peerlist`. `get_peer_list` entries lose `last_seen` at `CORE_RPC_VERSION` 3.55: the lists carry no clock (slice 1 brief §4) | Rust owns them. `rg -n -e get_public_peerlist -e get_peerlist -e peerlist_limits src` returns nothing |
 | **C++ this PR adds (§3.2, the cap move): `shekyl_dialer_out_target`, a read of the connector's outbound target** | `descriptor_reservations` (the outbound reserve of the inbound ceiling), `get_max_out_public_peers` (the operator's `out_peers` readback), the two `m_payload_handler.set_max_out_peers` lines of `handle_command_line` and the one in `add_ephemeral_tor_zone`: each a line that read the C++ mirror `max_out_connection_count`, replaced by the call. The mirror is unwritten; the dialer owns the target. *Records-was:* the hidden Tor cap assignment and `set_max_out_peers`'s floor check in C++, and `release_outbound`, which closed the excess the dialer now closes on `set_target` | the inbound-ceiling move to Rust (the reservation) and the daemon-config slice (the readback) |
 | **C++ this PR adds (§3.2): the `add-priority-node` row in `removed_flags.cpp`** | the row, its `rust_dialer` reason and the operator message: the flag is refused by name, not forgotten (the priority-node row above) | the daemon-config slice, when the retired-flag table moves with the options |
@@ -1060,6 +1066,8 @@ it names. Each after-command does what its row says, including the
 rows whose subject must still be present.
 
 ## Known defect this slice carries
+
+**Both discharged by their reopen criteria, 2026-10-13 (PR-3, #1056):** the dial is off the io pool (the owner loop is a thread of its own, an owner of the timing engine, `4c9a74d8b1`), and the Rust handshake receives its cause directly on the channel and reads no row the strand can reap (`1a674e7f0e`, `a227931033` deleting `shekyl_seam_session_cause`). The two paragraphs below are the record.
 
 `idle_worker` dials on the 2-worker io pool. While a dial is in
 flight, one thread runs every strand, and the operator view can
