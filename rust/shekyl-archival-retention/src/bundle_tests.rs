@@ -770,6 +770,119 @@ fn the_section_budget_is_c_count_caps() {
     assert_eq!(section_budget(0, 324_000, seb), 0);
 }
 
+/// `D` for the budget is the largest `D` among the epochs of the bundles in
+/// the section (§7.4), asked once per distinct epoch; a section the
+/// specification allows spans two. Red edits: take the first reference's
+/// `D` (the ascending section reads 300); take the last (the descending
+/// section reads 300); take the including block's — a caller's `D` the
+/// helper never sees.
+#[test]
+fn the_sections_d_is_the_largest_among_its_epochs() {
+    let schedule = SettlementSchedule::new(SettlementEpochBlocks::new(10_000).expect("non-zero"));
+    let at = |h: u64| BundleRef::new(kept_at(BlockHeight::from_raw(h), 0, &[]), [0xAB; 32]);
+    let d = |epoch: SettlementEpoch| -> Result<Option<u64>, ()> {
+        Ok(match epoch.to_raw() {
+            0 => Some(300),
+            1 => Some(1_000),
+            _ => None,
+        })
+    };
+    // Epoch 0 then epoch 1: the larger `D` is the later epoch's.
+    assert_eq!(
+        section_d_max(&[at(9_998), at(9_999), at(10_000)], schedule, d),
+        Ok(Some(1_000))
+    );
+    // One reference per epoch, and the larger `D` first (a section in
+    // descending `h` is refused by the verifier, so this holds the helper
+    // alone to "largest", not "last").
+    let mut descending_d = |epoch: SettlementEpoch| -> Result<Option<u64>, ()> {
+        Ok(match epoch.to_raw() {
+            0 => Some(1_000),
+            1 => Some(300),
+            _ => None,
+        })
+    };
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000)], schedule, &mut descending_d),
+        Ok(Some(1_000))
+    );
+    // A single-epoch section is that epoch's `D`, asked once.
+    let mut asked = Vec::new();
+    assert_eq!(
+        section_d_max(&[at(100), at(5_000), at(9_999)], schedule, |epoch| {
+            asked.push(epoch);
+            d(epoch)
+        }),
+        Ok(Some(300))
+    );
+    assert_eq!(asked, [SettlementEpoch::from_raw(0)]);
+    // Two epochs: each asked once, in the section's order.
+    let mut asked = Vec::new();
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000), at(10_001)], schedule, |epoch| {
+            asked.push(epoch);
+            d(epoch)
+        }),
+        Ok(Some(1_000))
+    );
+    assert_eq!(
+        asked,
+        [SettlementEpoch::from_raw(0), SettlementEpoch::from_raw(1)]
+    );
+}
+
+/// An unknown `D` is `None` for the section, never a partial maximum, and
+/// an empty section has no `D`. A fault is itself. Red edits: skip an
+/// epoch whose `D` is unknown and return the maximum of the rest; return
+/// `Some(0)` for an empty section; map a fault to `None`.
+#[test]
+fn an_unknown_d_is_no_d_for_the_section_and_a_fault_is_itself() {
+    let schedule = SettlementSchedule::new(SettlementEpochBlocks::new(10_000).expect("non-zero"));
+    let at = |h: u64| BundleRef::new(kept_at(BlockHeight::from_raw(h), 0, &[]), [0xAB; 32]);
+    let known_only_0 = |epoch: SettlementEpoch| -> Result<Option<u64>, &'static str> {
+        Ok((epoch.to_raw() == 0).then_some(300))
+    };
+    let known_only_1 = |epoch: SettlementEpoch| -> Result<Option<u64>, &'static str> {
+        Ok((epoch.to_raw() == 1).then_some(1_000))
+    };
+    // The unknown epoch is the later one, and the earlier one.
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000)], schedule, known_only_0),
+        Ok(None)
+    );
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000)], schedule, known_only_1),
+        Ok(None)
+    );
+    // Known where the section has only the known epoch.
+    assert_eq!(
+        section_d_max(&[at(9_999)], schedule, known_only_0),
+        Ok(Some(300))
+    );
+    // Empty: no epoch, no `D`, nothing asked.
+    let mut asked = false;
+    assert_eq!(
+        section_d_max(&[], schedule, |_| {
+            asked = true;
+            Ok::<_, &str>(Some(7))
+        }),
+        Ok(None)
+    );
+    assert!(!asked);
+    // A fault on the second epoch is returned as the fault, not as `None`
+    // and not as the first epoch's `D`.
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000)], schedule, |epoch| {
+            if epoch.to_raw() == 0 {
+                Ok(Some(300))
+            } else {
+                Err("unreadable")
+            }
+        }),
+        Err("unreadable")
+    );
+}
+
 /// The budget does not overflow: it saturates. Red edit: compute in `u64`
 /// and the first line panics under `overflow-checks`.
 #[test]

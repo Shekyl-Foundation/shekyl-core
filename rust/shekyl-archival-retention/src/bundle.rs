@@ -64,9 +64,10 @@
 
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
 use shekyl_types::archival::SettlementEpochBlocks;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, SettlementEpoch};
 
 use crate::hash::cshake256_32;
+use crate::SettlementSchedule;
 
 /// cSHAKE256 customization for [`bundle_commitment`] (rule 30: one label,
 /// one message, versioned).
@@ -783,6 +784,58 @@ pub const fn bundle_charge(count: u32) -> u64 {
 pub fn section_budget(c: u64, d_max: u64, seb: SettlementEpochBlocks) -> u64 {
     let cap = u128::from(d_max) * 9 / u128::from(seb.get()) + 1;
     u64::try_from(u128::from(c).saturating_mul(cap)).unwrap_or(u64::MAX)
+}
+
+/// The `D` a section's budget is computed from: [`section_budget`]'s
+/// `d_max` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.4, `SCS-P20`, `SCS-P33`).
+///
+/// > with `c = 2` (PROVISIONAL, §13.2) and **`D` the largest `D` among the
+/// > epochs of the bundles in the section**
+///
+/// Each reference's `h` names an epoch under `schedule`; `d_of_epoch` is
+/// asked for that epoch's `D` — the drawable epoch's length at `h_open(E)`
+/// — once per distinct epoch, in the section's order. The maximum is what
+/// lets one budget hold bundles of two epochs: a section spans at most two,
+/// because `W₂ < SEB`, and a bundle of the larger-`D` epoch is charged
+/// against a cap its own epoch set. Taking the including block's `D`, or
+/// the first reference's, under-budgets a section whose later epoch is
+/// larger and over-budgets one whose earlier epoch is.
+///
+/// The answer is three-valued, as the view's reads are:
+///
+/// - `Ok(Some(d_max))` — every epoch's `D` is known.
+/// - `Ok(None)` — some epoch's `D` is not known here. This is the
+///   alternative block above the fork point, whose epoch's `D` lies past
+///   what this chain holds: the comparison waits for the switch
+///   (`SCS-P23`). **Never a partial maximum** over the epochs that did
+///   answer — a budget from a partial `D` would be a verdict from a guess.
+///   An empty section also has no epoch and so no `D`; `check_section`
+///   admits it under any budget or none, since its charge is zero.
+/// - `Err(fault)` — `d_of_epoch` faulted. Not an unknown `D`, and not a
+///   verdict: the view's own failure, returned as itself.
+///
+/// # Errors
+///
+/// The first fault `d_of_epoch` returns.
+pub fn section_d_max<E>(
+    refs: &[BundleRef],
+    schedule: SettlementSchedule,
+    mut d_of_epoch: impl FnMut(SettlementEpoch) -> Result<Option<u64>, E>,
+) -> Result<Option<u64>, E> {
+    let mut d_max: Option<u64> = None;
+    let mut asked: Option<SettlementEpoch> = None;
+    for reference in refs {
+        let epoch = schedule.epoch_at(reference.h());
+        if asked == Some(epoch) {
+            continue;
+        }
+        asked = Some(epoch);
+        let Some(d) = d_of_epoch(epoch)? else {
+            return Ok(None);
+        };
+        d_max = Some(d_max.map_or(d, |known| known.max(d)));
+    }
+    Ok(d_max)
 }
 
 #[cfg(test)]

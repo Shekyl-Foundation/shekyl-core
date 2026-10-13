@@ -15,7 +15,10 @@
 //!   (`SCS-P39`, `SCS-P40`) — fit the section budget when the budget is
 //!   known. It reads no chain, so it runs on an alternative block at
 //!   arrival (`SCS-P23`), and it returns the section's charge either way,
-//!   for the caller that learns `D` only at the switch.
+//!   for the caller that learns `D` only at the switch. The budget it is
+//!   handed is `section_budget(c, d_max, seb)` with `d_max` from
+//!   `shekyl_archival_retention::section_d_max` over the same references
+//!   — the largest `D` among the section's epochs — and from nothing else.
 //! - [`verify_bundle`] — everything else, for one bundle, against a
 //!   [`BundleView`]: the window, one bundle per `h`, the bitmap and the
 //!   record count, the `0x0C` opening, the witness signature, every draw's
@@ -39,7 +42,12 @@
 //!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it implements [`BundleView`] on its store, calls
 //!   [`check_section`] and [`verify_bundle`] at admission from a block
 //!   rule, writes what [`Admitted`] carries, and deletes the attestation
-//!   path (CEN-B4). DRS-E5 is transport
+//!   path (CEN-B4). Its budget for [`check_section`] is
+//!   `section_budget(c, d_max, seb)` with `d_max` read through
+//!   `shekyl_archival_retention::section_d_max` over the block's
+//!   references and the view's drawable epochs — never the including
+//!   block's `D`, which is one epoch's and the wrong one for a section
+//!   that spans two (§7.4). DRS-E5 is transport
 //!   (`docs/design/DRS_E5_POOL_ALT_PRUNE.md` §2.2, §2.3). Its alternative
 //!   tier has landed ([`crate::alt_against`]) and does not call this
 //!   module: an alternative block's row still carries the attestation
@@ -257,7 +265,8 @@ pub enum SectionRefused {
     OverBudget {
         /// The section's charge: the sum of `max(count, 1)`.
         charge: SectionCharge,
-        /// `c · (⌊9·D / SEB⌋ + 1)`, as the caller computed it.
+        /// `c · (⌊9·D / SEB⌋ + 1)`, as the caller computed it with
+        /// `section_budget` over `section_d_max`'s `D`.
         budget: u64,
     },
 }
@@ -338,7 +347,8 @@ impl SectionCharge {
         self.0
     }
 
-    /// Whether the charge fits `budget` (`section_budget(c, d_max, seb)`).
+    /// Whether the charge fits `budget` (`section_budget(c, d_max, seb)`,
+    /// `d_max` from `shekyl_archival_retention::section_d_max`).
     #[must_use]
     pub const fn within(self, budget: u64) -> bool {
         self.0 <= budget
@@ -376,7 +386,12 @@ pub fn open_reference(position: usize, bytes: &[u8]) -> Result<BundleRef, Sectio
 ///
 /// `budget` is `section_budget(c, d_max, seb)` with `d_max` the largest
 /// `D` among the epochs of the bundles in the section
-/// (`shekyl_archival_retention::section_budget`; `SCS-P33`).
+/// (`shekyl_archival_retention::section_budget`; `SCS-P33`). **`d_max`
+/// comes from `shekyl_archival_retention::section_d_max` over these same
+/// `refs`**, which asks the view for each epoch's `D` and answers `None`
+/// when any is unknown; a caller that passes the including block's `D`,
+/// or any one epoch's, has the wrong budget for a section that spans two
+/// epochs (§7.4), and this function cannot tell.
 ///
 /// Both steps are computed from the references and nothing else: a
 /// reference states its own count (`SCS-P39`). The charge is returned
