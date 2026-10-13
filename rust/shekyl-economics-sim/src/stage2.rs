@@ -1989,6 +1989,10 @@ mod tests {
     /// asymptote this goes red, and what must be re-read is which ledger
     /// the candidates are measured against, and the `n = 0` the engine and
     /// budget folds pass for want of a corpus.
+    ///
+    /// Do not loosen it to make it pass. Once the escalation is live this
+    /// test has no subject: delete it, and regenerate the stage-2 fixtures
+    /// with the escalation in them.
     #[test]
     fn the_shipped_split_is_flat_at_every_count() {
         let shipped = shekyl_economics::EconomicParams::default();
