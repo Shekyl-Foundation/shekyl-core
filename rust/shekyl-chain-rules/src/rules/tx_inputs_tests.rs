@@ -589,8 +589,10 @@ fn j28_a_join_market_s_receipt_key_that_is_a_key_is_admitted() {
     }
 }
 
-/// One edit of a canonical receipt key, in place.
-type KeyEdit = Box<dyn Fn(&mut ReceiptSignPk)>;
+/// One edit of a canonical receipt key's bytes. The key type has no
+/// mutator — a chain-carried type is not edited in place — so a test edits
+/// a copy of the bytes and wraps it with `ReceiptSignPk::from_bytes`.
+type KeyEdit = Box<dyn Fn(&mut [u8; RECEIPT_SIGN_PK_LEN])>;
 
 /// CEN-J28, the refusals — one per way the canonical parse fails, each
 /// **one edit** of the real key (the type holds the length, so a string of
@@ -618,45 +620,34 @@ fn j28_a_receipt_key_that_does_not_parse_is_refused() {
         y
     };
     let edits: [(&str, KeyEdit); 9] = [
-        (
-            "fn-dsa header byte",
-            Box::new(|k| k.as_bytes_mut()[FN_DSA_AT] ^= 0xff),
-        ),
+        ("fn-dsa header byte", Box::new(|k| k[FN_DSA_AT] ^= 0xff)),
         (
             "fn-dsa coefficient past q",
-            Box::new(|k| k.as_bytes_mut()[FN_DSA_AT + 1..FN_DSA_AT + 8].fill(0xff)),
+            Box::new(|k| k[FN_DSA_AT + 1..FN_DSA_AT + 8].fill(0xff)),
         ),
         (
             "fn-dsa half all ones",
-            Box::new(|k| k.as_bytes_mut()[FN_DSA_AT..].fill(0xff)),
+            Box::new(|k| k[FN_DSA_AT..].fill(0xff)),
         ),
         (
             "ed25519 half not a point",
             Box::new(move |k| {
-                k.as_bytes_mut()[ED25519_AT..FN_DSA_LEN_AT].copy_from_slice(&not_a_point);
+                k[ED25519_AT..FN_DSA_LEN_AT].copy_from_slice(&not_a_point);
             }),
         ),
-        ("version 2", Box::new(|k| k.as_bytes_mut()[VERSION_AT] = 2)),
-        (
-            "scheme 1 (ML-DSA)",
-            Box::new(|k| k.as_bytes_mut()[SCHEME_AT] = 1),
-        ),
-        (
-            "reserved non-zero",
-            Box::new(|k| k.as_bytes_mut()[RESERVED_AT] = 1),
-        ),
-        (
-            "ed25519 length 31",
-            Box::new(|k| k.as_bytes_mut()[ED25519_LEN_AT] = 31),
-        ),
+        ("version 2", Box::new(|k| k[VERSION_AT] = 2)),
+        ("scheme 1 (ML-DSA)", Box::new(|k| k[SCHEME_AT] = 1)),
+        ("reserved non-zero", Box::new(|k| k[RESERVED_AT] = 1)),
+        ("ed25519 length 31", Box::new(|k| k[ED25519_LEN_AT] = 31)),
         (
             "fn-dsa length off by one",
-            Box::new(|k| k.as_bytes_mut()[FN_DSA_LEN_AT] ^= 1),
+            Box::new(|k| k[FN_DSA_LEN_AT] ^= 1),
         ),
     ];
     for (name, edit) in &edits {
-        let mut bad = key.clone();
-        edit(&mut bad);
+        let mut bytes = *key.as_bytes();
+        edit(&mut bytes);
+        let bad = ReceiptSignPk::from_bytes(bytes);
         assert_ne!(bad, key, "{name}: the edit changed the key");
         assert!(
             FnDsaHybridPublicKey::from_receipt_sign_pk(&bad).is_err(),

@@ -69,15 +69,14 @@ impl ReceiptSignPk {
     }
 
     /// The canonical bytes.
+    ///
+    /// There is no mutable counterpart: a chain-carried key is not edited
+    /// in place. A fixture that needs a string one edit away from a key
+    /// copies these bytes, edits the copy and wraps it with
+    /// [`Self::from_bytes`].
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; RECEIPT_SIGN_PK_LEN] {
         &self.0
-    }
-
-    /// The canonical bytes, mutably — for a fixture that needs a string
-    /// that is one edit away from a key.
-    pub fn as_bytes_mut(&mut self) -> &mut [u8; RECEIPT_SIGN_PK_LEN] {
-        &mut self.0
     }
 }
 
