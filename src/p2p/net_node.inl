@@ -474,7 +474,7 @@ namespace nodetool
     m_nettype = testnet ? cryptonote::TESTNET : stagenet ? cryptonote::STAGENET : cryptonote::MAINNET;
 
     network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
-    public_zone.m_connect = &public_connect;
+    public_zone.m_outbound = true;
     public_zone.m_bind_ip = command_line::get_arg(vm, arg_p2p_bind_ip);
     public_zone.m_bind_ipv6_address = command_line::get_arg(vm, arg_p2p_bind_ipv6_address);
     public_zone.m_port = command_line::get_arg(vm, arg_p2p_bind_port);
@@ -641,12 +641,12 @@ namespace nodetool
     for (auto& proxy : *proxies)
     {
       network_zone& zone = add_zone(proxy.zone);
-      if (zone.m_connect != nullptr)
+      if (zone.m_outbound)
       {
         MERROR("Listed --" << arg_tx_proxy.name << " twice with " << epee::net_utils::connector_id_to_string(proxy.zone));
         return false;
       }
-      zone.m_connect = &public_connect;
+      zone.m_outbound = true;
       zone.m_proxy_address = std::move(proxy.address);
 
       if (!set_max_out_peers(zone, proxy.max_connections))
@@ -676,7 +676,7 @@ namespace nodetool
       && !command_line::get_arg(vm, arg_no_ephemeral_tor);
     for (const auto& zone : m_network_zones)
     {
-      if (zone.second.m_connect != nullptr)
+      if (zone.second.m_outbound)
         continue;
       if (zone.first == epee::net_utils::connector_id::tor && managed_tor_supplies_socks)
         continue;
@@ -699,7 +699,7 @@ namespace nodetool
         return false;
       }
 
-      if (zone.m_connect == nullptr && tx_relay_zones <= 1)
+      if (!zone.m_outbound && tx_relay_zones <= 1)
       {
         MERROR("Listed --" << arg_anonymous_inbound.name << " without listing any --" << arg_tx_proxy.name << ". The latter is necessary for sending local txes over anonymity networks");
         return false;
@@ -809,7 +809,7 @@ namespace nodetool
           << ") owns the tor zone; ephemeral publish yields to it");
       return;
     }
-    const bool socks_from_tx_proxy = zone_was_present && preexisting->second.m_connect != nullptr;
+    const bool socks_from_tx_proxy = zone_was_present && preexisting->second.m_outbound;
 
     constexpr uint16_t EPHEMERAL_TOR_MAX_STREAMS = 8;
     constexpr uint32_t EPHEMERAL_TOR_BOOTSTRAP_TIMEOUT_SECS = 300;
@@ -900,7 +900,7 @@ namespace nodetool
     if (!socks_from_tx_proxy)
     {
       zone.m_proxy_address = *proxy_endpoint;
-      zone.m_connect = &public_connect;
+      zone.m_outbound = true;
       // Address-hiding outbound target: the measured degree. The dialer
       // deletes this assignment; it owns outbound targets. `--out-peers`
       // does not set it.
@@ -952,7 +952,7 @@ namespace nodetool
       const auto endpoint = net::socks::endpoint::get(proxy);
       CHECK_AND_ASSERT_MES(endpoint, false, "Failed to parse proxy: " << proxy << " - " << endpoint.error().message());
       network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
-      public_zone.m_connect = &public_connect;
+      public_zone.m_outbound = true;
       public_zone.m_proxy_address = *endpoint;
       public_zone.m_can_announce = false;
     }
@@ -2446,14 +2446,4 @@ namespace nodetool
     return ceiling;
   }
 
-  template<typename t_payload_net_handler>
-  typename node_server<t_payload_net_handler>::dial_result
-  node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na)
-  {
-    p2p_connection_context con{};
-    const auto opened = zone.m_net_server.open(na, con);
-    if (opened.kind != 0)
-      return {std::nullopt, opened.kind, opened.reply};
-    return {std::move(con), 0, 0};
-  }
 }

@@ -336,11 +336,15 @@ pub extern "C" fn shekyl_seam_install_loopback() -> i32 {
     0
 }
 
-/// Dial through the installed dialer and wait until the handler is armed.
+/// Dial through the installed dialer and adopt the channel. The harness
+/// and the unit tests open sessions here; the daemon's dialer is
+/// `shekyl-dialer`, which runs the handshake between the two steps.
 ///
-/// `id` is zero and `cause_kind` is the D12 cause when the dial or the arm
-/// fails. The inbound pump runs on a thread this call starts; [`shekyl_seam_reap`]
-/// joins it.
+/// Returns as soon as the row exists, without waiting for the strand to
+/// arm its handler (the C++ dial path that needed the wait is deleted,
+/// 2026-10-13). `id` is zero and `cause_kind` is the D12 cause when the
+/// dial fails. The inbound pump runs on a thread this call starts;
+/// [`shekyl_seam_reap`] joins it.
 ///
 /// # Safety
 /// `addr` is readable.
@@ -374,18 +378,11 @@ pub unsafe extern "C" fn shekyl_seam_open(
     let hub_pump = hub.clone();
     let pump = thread::spawn(move || drive_inbound(&hub_pump, id, session));
     hub.track_pump(id, pump);
-    if hub.await_armed(id) {
-        ShekylSeamOpenResult {
-            id: id.get(),
-            cause_kind: 0,
-            _pad: 0,
-            reply_code: 0,
-        }
-    } else {
-        refused(
-            hub.cause(id)
-                .unwrap_or_else(|| CloseCause::new(CloseKind::LocalClose)),
-        )
+    ShekylSeamOpenResult {
+        id: id.get(),
+        cause_kind: 0,
+        _pad: 0,
+        reply_code: 0,
     }
 }
 

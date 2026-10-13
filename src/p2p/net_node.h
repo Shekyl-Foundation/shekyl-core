@@ -147,15 +147,6 @@ namespace nodetool
     typedef shekyl::zone_server<epee::levin::async_protocol_handler<p2p_connection_context>> net_server;
 
     struct network_zone;
-    struct dial_result
-    {
-      std::optional<p2p_connection_context> context;
-      std::uint8_t cause = SHEKYL_CLOSE_LOCAL_CLOSE;
-      std::uint16_t reply = 0;
-    };
-
-    using connect_func = dial_result(network_zone&, epee::net_utils::network_address const&);
-
     struct config_t
     {
       config_t()
@@ -171,7 +162,7 @@ namespace nodetool
     struct network_zone
     {
       network_zone()
-        : m_connect(nullptr),
+        : m_outbound(false),
           m_net_server(),
           m_seed_nodes(),
           m_bind_ip(),
@@ -188,7 +179,7 @@ namespace nodetool
       }
 
       network_zone(boost::asio::io_context& public_service)
-        : m_connect(nullptr),
+        : m_outbound(false),
           m_net_server(public_service),
           m_seed_nodes(),
           m_bind_ip(),
@@ -204,7 +195,9 @@ namespace nodetool
         set_config_defaults();
       }
 
-      connect_func* m_connect;
+      //! This zone dials out: the clearnet zone, a `--tx-proxy` zone, or the
+      //! zone the managed Tor supplies SOCKS for. The dial itself is Rust's.
+      bool m_outbound;
       net_server m_net_server;
       std::vector<epee::net_utils::network_address> m_seed_nodes;
       std::string m_bind_ip;
@@ -483,7 +476,6 @@ namespace nodetool
     std::vector<nodetool::peerlist_entry> m_command_line_peers;
 
 
-    static dial_result public_connect(network_zone&, epee::net_utils::network_address const&);
     shekyl_zone_params transport_spans() const;
     shekyl_inbound_ceiling transport_ceiling() const;
 
