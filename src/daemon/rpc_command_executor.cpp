@@ -379,8 +379,8 @@ bool t_rpc_command_executor::print_net_stats()
 bool t_rpc_command_executor::print_blockchain_info(int64_t start_block_index, uint64_t end_block_index) {
   // RK-5b: `get_block_headers_range` is served from Rust and renders there.
   // The parser has already resolved the negative form to (-n, n); resolving
-  // it against the tip needs `/get_info`, which is still bridged, so that
-  // read happens on the Rust side beside the rest of the command.
+  // it against the tip is a `get_info` read, native since RK-5c, so the
+  // Rust side reads the tip beside the rest of the command.
   return run_rust_console({"print_blockchain_info",
     std::to_string(start_block_index), std::to_string(end_block_index)});
 }
@@ -1129,10 +1129,10 @@ bool t_rpc_command_executor::print_coinbase_tx_sum(uint64_t height, uint64_t cou
 bool t_rpc_command_executor::alt_chain_info(const std::string &tip, size_t above, uint64_t last_blocks)
 {
   // RK-5b: `get_block_header_by_hash` is served from Rust and the whole
-  // command renders there. `/get_info` and `get_alternate_chains` are still
-  // bridged (RK-5c and RK-8); the length check on the header batch is now a
-  // per-hash correspondence check, which is what the per-element reply makes
-  // possible.
+  // command renders there. `get_info` is native (RK-5c); only
+  // `get_alternate_chains` is still bridged (RK-8). The length check on the
+  // header batch is now a per-hash correspondence check, which is what the
+  // per-element reply makes possible.
   return run_rust_console({"alt_chain_info", tip,
     std::to_string(above), std::to_string(last_blocks)});
 }

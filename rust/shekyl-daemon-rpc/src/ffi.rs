@@ -680,11 +680,9 @@ pub struct InfoChainFactsFfi {
     pub busy_syncing: u8,
     pub offline: u8,
     pub following_degraded: u8,
-    /// `cryptonote::network_type`.
-    pub nettype: u8,
     /// `SHEKYL_PROTOCOL_VERSION`, which only C++ defines.
     pub protocol_version: u8,
-    pub reserved: [u8; 2],
+    pub reserved: [u8; 3],
 }
 
 /// Twin of `shekyl_rpc_info_status_facts` (RK-5c): read only for a caller
@@ -718,8 +716,8 @@ const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, top_hash) == 8);
 const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, difficulty_lo) == 40);
 const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, core_target_height) == 144);
 const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, synchronized) == 152);
-const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, nettype) == 156);
-const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, protocol_version) == 157);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, protocol_version) == 156);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, reserved) == 157);
 const _: () = assert!(std::mem::size_of::<InfoStatusFactsFfi>() == 24);
 const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 48);
 
