@@ -981,6 +981,12 @@ Until the channel exists, RK-5c serves today's two listeners; how it maps
 them onto these fields is that slice's decision. No grant is threaded
 through C++ for `get_info` in any slice of this round.
 
+*Prerequisite met, 2026-10-13: RK-5c landed in full (`CORE_RPC_VERSION`
+3.54; #1017, #1035, #1057). The handler takes a `Disclosure` value with
+status, peers and host axes; a withheld part is absent from the reply
+(RK-Q8, 3.48); `restricted` is still written, as the transitional flag
+this round retires (RK-Q5 there).*
+
 *What the incident's consumer gets.* The web host at `view` reads height,
 difficulty and hash rate from `chain`, sync state from `health`, and pool
 size from `pool`. Two things it does today need more. Its **seed-node
