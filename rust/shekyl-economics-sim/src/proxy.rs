@@ -37,10 +37,11 @@ use std::fmt;
 use std::sync::OnceLock;
 
 use shekyl_archival_retention::{
-    failure_window_slashable, BaselineObservation, ARCHIVAL_BOND_FLOOR_ATOMIC,
+    failure_window_slashable, BaselineObservation, ARCHIVAL_BOND_FLOOR_ATOMIC, CHALLENGED_LEAF_LEN,
     CHALLENGES_PER_PAIR_PER_EPOCH, FAILURE_WINDOW_M, FAILURE_WINDOW_N, MAX_HOLDINGS_SHARDS,
     SETTLEMENT_EPOCH_BLOCKS,
 };
+use shekyl_fcmp::tree::{HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SELENE_CHUNK_WIDTH};
 
 use crate::burden::{COIN, SHARD_BYTES};
 
@@ -89,7 +90,14 @@ pub fn max_holdings_bytes() -> f64 {
 /// conclusion from the one it reached with the opening included. **A robustness
 /// caveat is a property of the use, not of the constant, and does not travel when
 /// the constant does** — so this one is stated per-use below rather than blanket.
-pub const RESPONSE_BYTES: f64 = 128.0 + (4.0 * 38.0) * 32.0 + (18.0 + 38.0) * 32.0;
+pub const RESPONSE_BYTES: f64 = (CHALLENGED_LEAF_LEN
+    + LEAF_CHUNK_SCALARS * SCALAR_BYTES
+    + (HELIOS_CHUNK_WIDTH + SELENE_CHUNK_WIDTH) * SCALAR_BYTES)
+    as f64;
+
+/// A curve-tree scalar on the wire.
+const SCALAR_BYTES: usize = 32;
+const _: () = assert!(RESPONSE_BYTES == 6_784.0);
 
 /// Storage cost basis, fiat `$/byte/year` (mirrors `burden::BASE_STORAGE_FIAT_PER_BYTE_YEAR`
 /// — amortized commodity HDD ≈ `1e-11 $/B/yr`). The honest holder pays this on

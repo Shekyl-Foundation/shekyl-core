@@ -54,8 +54,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
-    CenRow, FakechainSchedule, InvalidBlock, Locus, ReleaseAnchors, SettlementEpochBlocks,
-    Substrate, TxSlot,
+    FakechainSchedule, InvalidBlock, ReleaseAnchors, SettlementEpochBlocks, Substrate,
 };
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -72,6 +71,12 @@ use crate::trace::Trace;
 use shekyl_chain_rules::Candidate;
 use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
+
+mod retired_keyless_join;
+#[allow(unused_imports)] // FND-19 cites `vectors_tests::RETIRED_KEYLESS_JOINS`.
+pub(crate) use retired_keyless_join::RETIRED_KEYLESS_JOINS;
+pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
+
 /// `manifest.json`, as the capture writes it (format 4).
 #[derive(Deserialize, Debug)]
 pub(crate) struct Manifest {
@@ -151,10 +156,15 @@ fn only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly
                 dir.display()
             );
         }
+        // A chain that stops at a retired keyless JoinMarket is read only
+        // below it, so only the receipts below it can be found in the
+        // corpus; the manifest still names every one (asserted above).
+        let readable_below = retired_keyless_join(&manifest.shape).map(|r| r.at);
         let in_manifest: Vec<Injection> = manifest
             .out_of_band_writes
             .iter()
             .map(|r| r.receipt)
+            .filter(|r| readable_below.is_none_or(|at| r.at < at))
             .collect();
         assert_eq!(
             corpus_injections(&dir),
@@ -169,8 +179,9 @@ fn only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly
 /// at — the one the corpus law held to the tip when it was written.
 fn corpus_injections(dir: &Path) -> Vec<Injection> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let mut reader =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    let mut reader = UntilRetiredJoin::new(
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
+    );
     let mut tip: Option<BlockHeight> = None;
     let mut found = Vec::new();
     while let Some(event) = reader.next().expect("corpus reads") {
@@ -188,6 +199,7 @@ fn corpus_injections(dir: &Path) -> Vec<Injection> {
             }),
         }
     }
+    reader.finish(&shape_of(dir));
     found
 }
 
@@ -276,8 +288,9 @@ where
 {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");
-    let mut source =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    let mut source = UntilRetiredJoin::new(
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
+    );
     let trace = Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace"));
     let schedule = FakechainSchedule::new(
         SettlementEpochBlocks::new(manifest.settlement_epoch_blocks)
@@ -320,6 +333,9 @@ where
     .await
     .map_err(|e| format!("{e:?}"));
     cleanup(&path);
+    if report.is_ok() {
+        source.finish(&manifest.shape);
+    }
     report
 }
 
@@ -376,26 +392,21 @@ pub(crate) struct Predates {
     pub(crate) why: &'static str,
 }
 
-/// The chains that predate a rule, as of E6 slice 8 row 6 (2026-10-06).
-pub(crate) const PREDATES: [Predates; 1] = [Predates {
-    shape: "emission-claim",
-    refused: (
-        BlockHeight::from_raw(98),
-        InvalidBlock::new(
-            CenRow::J15,
-            Locus::Input {
-                slot: TxSlot::Listed(0),
-                input: 1,
-            },
-        ),
-    ),
-    why: "the market bond at 98 joins shard `SHARD_ID` compact, and CEN-J15 (slice 8 row 6) \
-          admits a compact join only onto a shard that is closed, final and priced at the \
-          parent; this chain fills no shard (`regtest_e2e.rs`, `market_holdings`). The C++ \
-          daemon that built it marshals a presence bit and no closure, so it accepted the \
-          join — permissive, not divergent (DAEMON_REDB_STORE.md §12). A regeneration that \
-          replays whole fills the shard, lets it close, and prices it before the join.",
-}];
+/// The chains that predate a rule. **None, as of 2026-10-12.** The one
+/// record this held since E6 slice 8 row 6 (2026-10-06) — `emission-claim`,
+/// refused at 98 by CEN-J15 for a compact join onto a shard the chain never
+/// closed — named a block that no longer parses: its join is a keyless
+/// JoinMarket, and the chain is a [`RETIRED_KEYLESS_JOINS`] record now. The
+/// mechanism stays for the next rule a capture predates.
+pub(crate) const PREDATES: [Predates; 0] = [];
+
+/// The shape a captured chain's directory names.
+fn shape_of(dir: &Path) -> String {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .expect("a captured chain's directory is its shape")
+        .to_owned()
+}
 
 /// The record for a captured chain, if it predates a rule.
 pub(crate) fn predates(shape: &str) -> Option<&'static Predates> {
@@ -425,6 +436,20 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // How far the chain replays: whole, or exactly as far as the rule it
     // predates admits.
     let expected_connected = match predates(&manifest.shape) {
+        // A chain that stops at a retired keyless JoinMarket connects every
+        // block below it and is refused nowhere: the stream ended.
+        None if retired_keyless_join(&manifest.shape).is_some() => {
+            assert!(
+                report.refused.is_none(),
+                "{}: refused below its retired join — {:?}",
+                manifest.shape,
+                report.refused
+            );
+            retired_keyless_join(&manifest.shape)
+                .expect("checked")
+                .at
+                .to_raw()
+        }
         None => {
             assert!(
                 report.refused.is_none(),
@@ -610,6 +635,15 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // height, and the report says so with `None` for both (**not
     // compared**, never identical). The pin over this chain's tip resumes
     // when the chain is regenerated.
+    if let Some(retired) = retired_keyless_join(&manifest.shape) {
+        assert!(
+            report.checkpoint.is_none() && report.archival.is_none(),
+            "{}: stopped at the retired join at {:?} and yet compared at the tip",
+            manifest.shape,
+            retired.at
+        );
+        return;
+    }
     if let Some(record) = predates(&manifest.shape) {
         assert!(
             report.checkpoint.is_none() && report.archival.is_none(),
@@ -718,7 +752,13 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
         hold(&dir, &manifest, &report);
+        let retired = retired_keyless_join(&manifest.shape);
         let tip = match (&report.archival, predates(&manifest.shape)) {
+            (None, _) if retired.is_some() => format!(
+                "RETIRED keyless JoinMarket at {:?}: connected below it, tip {} not compared",
+                retired.expect("checked").at,
+                manifest.tip_height
+            ),
             (Some(archival), _) => format!(
                 "digest MATCH at {}, archival snapshot MATCH at {} ({} rows equal)",
                 manifest.tip_height,
@@ -791,8 +831,9 @@ fn note(causes: &mut Vec<Unmutable>, cause: Unmutable) {
 /// did not move).
 fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let mut reader =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    let mut reader = UntilRetiredJoin::new(
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
+    );
     let mut height = reader.first_height().to_raw();
     let mut chain: Vec<(u64, Candidate, Before)> = Vec::new();
     let mut below = Before::default();
@@ -821,6 +862,7 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
             IngestEvent::Inject(_) => {}
         }
     }
+    reader.finish(&shape_of(dir));
     chain
 }
 
@@ -910,8 +952,9 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
     // census judges captured blocks as they are. `DuplicateBondPost`: this
     // census supplies no twins, and the *other* cause —
     // `NoArchivalBodyToDuplicate` — is the heights that carry no post,
-    // which is a reading of the corpus: the bond-post capture does carry
-    // the body, so a twin supply would reach it. (`DuplicateClaim` was the
+    // which is a reading of the corpus: *until 2026-10-12* the bond-post
+    // capture did carry the body, so a twin supply would have reached it
+    // (see the entry below). (`DuplicateClaim` was the
     // fifth until slice 8 row 9 retired it to the driver — `Mutation`
     // docs.) `DuplicateServeCredit` needs no supply (its
     // twin is the body itself) and is unreachable on the corpus alone: no
@@ -937,14 +980,15 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
             ),
             (
                 Mutation::DuplicateBondPost,
-                vec![
-                    Unmutable::NoArchivalBodyToDuplicate {
-                        kind: ArchivalKind::BondPost
-                    },
-                    Unmutable::NoTwinSupplied {
-                        kind: ArchivalKind::BondPost
-                    },
-                ]
+                // *Moved 2026-10-12:* this also listed `NoTwinSupplied`
+                // — the bond-post capture carried the body, so only the
+                // twin was missing. That body is a keyless JoinMarket and
+                // the chain is read only below it now
+                // (`RETIRED_KEYLESS_JOINS`), so no captured chain carries a
+                // post at all and the one cause is the corpus's.
+                vec![Unmutable::NoArchivalBodyToDuplicate {
+                    kind: ArchivalKind::BondPost
+                }]
             ),
             (Mutation::OverweightBlock, vec![Unmutable::NoBodySupply]),
         ],

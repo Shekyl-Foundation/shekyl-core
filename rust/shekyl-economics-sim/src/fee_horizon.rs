@@ -22,7 +22,7 @@ use crate::burden::{
     REPLICAS_PER_SHARD,
 };
 use crate::engine::SimParams;
-use crate::escalation::KNEE_BAND;
+use crate::escalation::{floor_share, KNEE_BAND};
 use crate::scenarios::SCENARIO_9_TAIL_TX_PER_BLOCK;
 
 /// SKL per atomic, the reporting conversion. The integer is `burden::COIN`.
@@ -148,7 +148,9 @@ fn write_closed_form(out: &mut impl fmt::Write, params: &SimParams, fee: u64) ->
             .collect::<Vec<_>>()
             .join(", ")
     };
-    for (label, share) in [("burn x flat 25%", 0.25), ("burn x 100%", 1.0)] {
+    let flat = floor_share() as f64 / SCALE as f64;
+    let flat_label = format!("burn x flat {:.0}%", flat * 100.0);
+    for (label, share) in [(flat_label.as_str(), flat), ("burn x 100%", 1.0)] {
         for (vlabel, v) in volumes {
             let base = fee_era_burn_fraction(params, v);
             writeln!(
@@ -200,7 +202,14 @@ mod tests {
             .flat_per_tx_atomic()
             .expect("the control arm is flat");
         let h_at = |v: u64| {
-            fee_horizon_years(fee, fee_era_burn_fraction(&params, v), 0.25, 0.10, bytes, w)
+            fee_horizon_years(
+                fee,
+                fee_era_burn_fraction(&params, v),
+                floor_share() as f64 / SCALE as f64,
+                0.10,
+                bytes,
+                w,
+            )
         };
         let h_tail = h_at(SCENARIO_9_TAIL_TX_PER_BLOCK);
         let h_base = h_at(baseline);

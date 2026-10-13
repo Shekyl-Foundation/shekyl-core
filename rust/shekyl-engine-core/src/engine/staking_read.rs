@@ -28,7 +28,7 @@
 //!
 //! - **`bonded_principal_confirmed`** — Σ [`ARCHIVAL_BOND_FLOOR_ATOMIC`] over
 //!   distinct personas with a confirmed JoinMarket bond post
-//!   ([`PScanState::bond_post_matches`], `post_kind == 0`) that are neither
+//!   ([`PScanState::bond_post_matches`], `is_join_market_post_kind`) that are neither
 //!   pending-release nor retired. The bond principal is the consensus bond
 //!   floor by construction (the WI-2 assemble path bonds exactly the floor).
 //! - **`bonded_principal_pending`** — the same floor over in-flight posts in
@@ -182,7 +182,7 @@ pub enum StakingReadError {
 /// separated from the sealed-file plumbing so the semantics are unit-testable
 /// against constructed states (including the pin-2 hint-divergence KAT).
 /// The **live-bond set**: distinct personas with a confirmed JoinMarket bond
-/// post (`post_kind == 0`) that are neither pending-release nor durably
+/// post (`is_join_market_post_kind`) that are neither pending-release nor durably
 /// retired — the set the SP-6 reconcile evidence supports. The single
 /// derivation both the WI-RPC-1 balance and the `unstake` slot resolution
 /// read, so "who still holds a live bond" cannot drift between the query
@@ -191,7 +191,7 @@ pub(crate) fn live_bonded_personas(state: &PScanState) -> BTreeSet<PCanonicalId>
     let mut live: BTreeSet<PCanonicalId> = state
         .bond_post_matches()
         .iter()
-        .filter(|m| m.post_kind == 0)
+        .filter(|m| shekyl_wire::transaction::is_join_market_post_kind(m.post_kind))
         .map(|m| m.p_canonical_id)
         .collect();
     for released in state.pending_releases().keys() {
@@ -207,7 +207,8 @@ pub(crate) fn staked_balance_from_records(
     pscan: Option<&PScanState>,
     pending: Option<&PendingPostBlock>,
 ) -> Result<StakedBalance, StakingReadError> {
-    // Distinct personas with a confirmed JoinMarket bond post (`post_kind == 0`)
+    // Distinct personas with a confirmed JoinMarket bond post
+    // (`is_join_market_post_kind`)
     // observed on-chain. This is the single source both principal legs derive
     // from: the live subset (below) is the confirmed principal, and membership
     // here is exactly what disqualifies an in-flight post from the *pending*
@@ -222,7 +223,7 @@ pub(crate) fn staked_balance_from_records(
         Some(state) => state
             .bond_post_matches()
             .iter()
-            .filter(|m| m.post_kind == 0)
+            .filter(|m| shekyl_wire::transaction::is_join_market_post_kind(m.post_kind))
             .map(|m| m.p_canonical_id)
             .collect(),
     };
@@ -466,6 +467,9 @@ mod tests {
         PCanonicalId::from_bytes([b; 32])
     }
 
+    /// The JoinMarket's wire byte, as the extractor records it.
+    const JOIN: u8 = shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET;
+
     fn bond_match(id: u8, kind: u8) -> BondPostRecord {
         BondPostRecord {
             height: BlockHeight::from_raw(1_000),
@@ -547,11 +551,11 @@ mod tests {
         }];
         let s = state(
             vec![
-                bond_match(1, 0), // live
-                bond_match(1, 0), // duplicate of live — counted once
-                bond_match(2, 2), // non-JoinMarket kind — excluded
-                bond_match(3, 0), // pending release — excluded
-                bond_match(4, 0), // retired — excluded
+                bond_match(1, JOIN), // live
+                bond_match(1, JOIN), // duplicate of live — counted once
+                bond_match(2, 2),    // non-JoinMarket kind — excluded
+                bond_match(3, JOIN), // pending release — excluded
+                bond_match(4, JOIN), // retired — excluded
             ],
             releases,
             retired,
@@ -582,7 +586,7 @@ mod tests {
     }
 
     /// Reconcile-window disjointness: a bond whose post has confirmed on-chain
-    /// (a `post_kind == 0` match in the pscan seal) but whose `PendingPostBlock`
+    /// (a JoinMarket match in the pscan seal) but whose `PendingPostBlock`
     /// record is still live (the removal-ordering GC bridge) is counted as
     /// confirmed **only** — never in both legs. A distinct persona with an
     /// in-flight post but no match yet still counts as pending.
@@ -590,7 +594,7 @@ mod tests {
     fn confirmed_bond_not_double_counted_as_pending() {
         // pscan: persona 1's bond has confirmed on-chain.
         let s = state(
-            vec![bond_match(1, 0)],
+            vec![bond_match(1, JOIN)],
             BTreeMap::new(),
             Vec::new(),
             Vec::new(),
@@ -614,6 +618,52 @@ mod tests {
         );
     }
 
+    /// A confirmed JoinMarket — a match recorded with the JoinMarket's wire
+    /// byte, 5, what the wallet's own builder emits — is a live bond, in
+    /// the live set and in the balance. A match recorded with the retired
+    /// keyless byte (0), a Release (2) or a refused byte (3, 4) is no bond.
+    ///
+    /// Red edit: filter `m.post_kind == 0` in `live_bonded_personas` or
+    /// `staked_balance_from_records` — the byte a JoinMarket had before the
+    /// receipt key became mandatory — and the wallet's bond vanishes from
+    /// the live set, or is reported as pending beside its own confirmation.
+    #[test]
+    fn a_join_market_match_is_a_confirmed_live_bond_and_byte_0_is_not() {
+        let floor = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
+        let of_kind = |kind: u8| {
+            state(
+                vec![bond_match(1, kind)],
+                BTreeMap::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        };
+        let mut block = PendingPostBlock::empty();
+        let g = block.generation();
+        assert_eq!(block.seal_post(pending_post(1), g), SealAdmission::Admit);
+
+        assert_eq!(JOIN, 5);
+        let s = of_kind(JOIN);
+        assert_eq!(live_bonded_personas(&s), BTreeSet::from([persona(1)]));
+        let b = staked_balance_from_records(Some(&s), Some(&block)).expect("balance");
+        assert_eq!(b.bonded_principal_confirmed, floor);
+        assert_eq!(
+            b.bonded_principal_pending,
+            AtomicUnits::ZERO,
+            "the confirmed bond is not also pending"
+        );
+        for kind in [0u8, 1, 2, 3, 4, 6] {
+            let s = of_kind(kind);
+            assert!(live_bonded_personas(&s).is_empty(), "post_kind {kind}");
+            let b = staked_balance_from_records(Some(&s), Some(&block)).expect("balance");
+            assert_eq!(
+                b.bonded_principal_confirmed,
+                AtomicUnits::ZERO,
+                "post_kind {kind}"
+            );
+        }
+    }
+
     /// A bond that has confirmed **and** entered pending-release within the
     /// reconcile window is excluded from pending (keyed on the raw match set,
     /// not the live set) — it counts in neither leg, not as phantom pending.
@@ -621,7 +671,7 @@ mod tests {
     fn confirmed_then_releasing_post_is_not_pending() {
         let mut releases = BTreeMap::new();
         releases.insert(persona(1), SettlementEpoch::from_raw(9));
-        let s = state(vec![bond_match(1, 0)], releases, Vec::new(), Vec::new());
+        let s = state(vec![bond_match(1, JOIN)], releases, Vec::new(), Vec::new());
         let mut block = PendingPostBlock::empty();
         let g = block.generation();
         assert_eq!(block.seal_post(pending_post(1), g), SealAdmission::Admit);
@@ -677,7 +727,7 @@ mod tests {
 
         // …but the authoritative evidence supports exactly one live bond.
         let s = state(
-            vec![bond_match(1, 0)],
+            vec![bond_match(1, JOIN)],
             BTreeMap::new(),
             Vec::new(),
             Vec::new(),

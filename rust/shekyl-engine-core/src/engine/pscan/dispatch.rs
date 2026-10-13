@@ -314,7 +314,7 @@ fn select_dispatch_candidate<'a>(
 ///
 /// Keeping them apart in the type is the point. `confirmed_posts` reads like a
 /// general "these personas confirmed something" set and is nothing of the kind
-/// (`confirmed_join_market_personas` filters to `BOND_POST_KIND_JOINMARKET`);
+/// (`confirmed_join_market_personas` filters to `is_join_market_post_kind`);
 /// crossing the two would retire a live drain because its persona's *bond post*
 /// confirmed — a different transaction entirely.
 pub(crate) struct TickEvidence<'a> {

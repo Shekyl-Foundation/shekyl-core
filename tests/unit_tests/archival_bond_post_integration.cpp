@@ -42,9 +42,6 @@ namespace {
 
 struct Gate4Kat {
   std::string join_wire_hex;
-  std::string p_id_hex;
-  uint64_t join_settlement_epoch = 0;
-  uint64_t bond_credit = 0;
 };
 
 Gate4Kat load_gate4_kat()
@@ -61,20 +58,7 @@ Gate4Kat load_gate4_kat()
   const auto& join = doc["join"];
   Gate4Kat kat{};
   kat.join_wire_hex = join["wire_hex"].GetString();
-  kat.p_id_hex = join["p_canonical_id_hex"].GetString();
-  kat.join_settlement_epoch = join["join_settlement_epoch"].GetUint64();
-  kat.bond_credit = join["bond_credit"].GetUint64();
   return kat;
-}
-
-crypto::hash hash_from_hex(const std::string& hex)
-{
-  std::string bin;
-  if (!epee::string_tools::parse_hexstr_to_binbuff(hex, bin) || bin.size() != 32)
-    throw std::runtime_error("invalid 32-byte hash hex");
-  crypto::hash h{};
-  memcpy(h.data, bin.data(), 32);
-  return h;
 }
 
 std::vector<uint8_t> bytes_from_hex(const std::string& hex)
@@ -163,117 +147,11 @@ bool init_blockchain(Blockchain& bc, BlockchainDB* db)
 
 } // namespace
 
-TEST(archival_bond_post, gate4_integration_accepts_valid_join_market)
-{
-  const Gate4Kat kat = load_gate4_kat();
-  txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
-  EXPECT_EQ(bond.p_canonical_id, hash_from_hex(kat.p_id_hex));
-  // EU-D3 cross-language pin: the Rust regenerator (gate4_lifecycle_kat.rs)
-  // wrote the JoinMarket endpoint as 32 x 0x0E; C++ must read those bytes at
-  // the endpoint field — position and length agree across the codecs, not
-  // merely "the wire parsed".
-  {
-    crypto::public_key expected{};
-    memset(expected.data, 0x0E, sizeof(expected.data));
-    EXPECT_EQ(0, memcmp(bond.endpoint.data, expected.data, sizeof(expected.data)));
-  }
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_TRUE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
-}
-
-TEST(archival_bond_post, gate4_integration_rejects_both_bond_terms)
-{
-  const Gate4Kat kat = load_gate4_kat();
-  txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
-  bond.bond_debit = bond.bond_credit;
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
-}
-
-TEST(archival_bond_post, gate4_integration_rejects_debit_without_credit)
-{
-  const Gate4Kat kat = load_gate4_kat();
-  txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
-  bond.bond_credit = 0;
-  bond.bonded_total_atomic = 0;
-  bond.bond_debit = 1;
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
-}
-
-TEST(archival_bond_post, gate4_integration_rejects_existing_bond_record)
-{
-  const Gate4Kat kat = load_gate4_kat();
-  txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
-  const crypto::hash p_id = bond.p_canonical_id;
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  shekyl::db::ArchivalBondValue existing{};
-  existing.hybrid_pubkey = bond.hybrid_public_key;
-  existing.join_settlement_epoch = kat.join_settlement_epoch;
-  existing.bonded_total_atomic = kat.bond_credit;
-  existing.holdings_kind = shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact;
-  existing.held_shard_ids = bond.holdings.shard_ids;
-  existing.shard_add_epochs.assign(existing.held_shard_ids.size(), kat.join_settlement_epoch); // v6: join-time shards carry E_join
-  db->put_bond(p_id, std::move(existing));
-
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
-}
-
 TEST(archival_bond_post, gate4_integration_rejects_p_id_hint_mismatch)
 {
   const Gate4Kat kat = load_gate4_kat();
   txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
   memset(bond.p_canonical_id.data, 0xEE, sizeof(bond.p_canonical_id.data));
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
-}
-
-TEST(archival_bond_post, gate4_integration_rejects_floor_mismatch)
-{
-  const Gate4Kat kat = load_gate4_kat();
-  txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
-  bond.bond_credit += 1;
-  bond.bonded_total_atomic = bond.bond_credit;
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
-}
-
-TEST(archival_bond_post, gate4_integration_rejects_empty_shard_set)
-{
-  txin_archival_bond_post bond = load_join_bond_vin(load_gate4_kat().join_wire_hex);
-  bond.holdings.shard_ids.clear();
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
-}
-
-TEST(archival_bond_post, gate4_integration_rejects_complete_tree_with_shards)
-{
-  txin_archival_bond_post bond = load_join_bond_vin(load_gate4_kat().join_wire_hex);
-  bond.holdings.kind = archival_holdings_kind::CompleteTree;
-  bond.holdings.shard_ids = {1};
-  bond.bonded_total_atomic = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
-  bond.bond_credit = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
 
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
@@ -303,13 +181,25 @@ TEST(archival_bond_post, gate4_integration_rejects_oversized_hybrid_pubkey)
   EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, bap.bc.get_current_blockchain_height()));
 }
 
-TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
+// The JoinMarket verify export refuses every call.
+//
+// Ruling on the review of PR #1046 (2026-10-12; docs/design/FN_DSA_HYBRID.md
+// FND-17, FND-20): the receipt key is mandatory. A JoinMarket has one wire
+// form (post_kind 5) and it commits a receipt key; this export's signature
+// carries none, and the keyless kind this daemon builds (post_kind 0) is
+// retired. So the Rust side verifies no JoinMarket from these arguments and
+// answers ERR_POST_KIND whatever the post says. The daemon's JoinMarket branch
+// in check_archival_bond_post_input is dead until DEL-008 removes it; this
+// pins the refusal so nobody "fixes" it back into an accept.
+//
+// Was: ffi_maps_each_bond_post_error_code mapped a well-formed join to OK and
+// each defect to its own code through this export. Those verdicts are the Rust
+// validator's (shekyl-chain-rules, CEN-J12/J14/J28).
+TEST(archival_bond_post, join_market_verify_ffi_refuses_every_call)
 {
   const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t shard = 42;
   const std::vector<uint8_t> spend_pk(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5);
-  // EU-D3: JoinMarket commits a 32-byte serving endpoint; the marshaler
-  // couples it like the key (32 bytes iff JoinMarket).
   const std::vector<uint8_t> endpoint(32, 0x0E);
 
   auto verify = [&](uint8_t post_kind, uint8_t holdings_kind, const uint64_t* shards, size_t shard_len,
@@ -318,47 +208,24 @@ TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
       post_kind, holdings_kind, shards, shard_len, spend_pk.data(), spend_pk.size(),
       endpoint.data(), endpoint.size(), total, credit, debit, record_exists);
   };
+  // What was the accept, under the retired keyless kind and under kind 5.
+  EXPECT_EQ(verify(0, 0, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
+  EXPECT_EQ(verify(5, 0, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
+  // Another kind's byte, and posts that used to be refused for their own reasons.
+  EXPECT_EQ(verify(1, 0, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
+  EXPECT_EQ(verify(0, 99, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
+  EXPECT_EQ(verify(0, 0, &shard, 1, floor + 1, floor + 1, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
+  EXPECT_EQ(verify(0, 0, &shard, 1, floor, floor, 0, 1), SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
+  EXPECT_NE(SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND, SHEKYL_ARCHIVAL_BOND_POST_OK);
+}
 
-  EXPECT_EQ(verify(0, 0, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_OK);
-  // A conforming Reinstate vin carries NO key (§9.11) — with one it refuses as
-  // coupling at the marshaler (asserted below), so the post-kind verdict is
-  // probed with an empty key.
-  EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
-      1, 0, &shard, 1, nullptr, 0, nullptr, 0, floor, floor, 0, 0),
-    SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
-  EXPECT_EQ(verify(0, 0, nullptr, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR);
-  EXPECT_EQ(verify(0, 99, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND);
-  EXPECT_EQ(verify(0, 0, nullptr, 0, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY);
-  EXPECT_EQ(verify(0, 1, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS);
-  EXPECT_EQ(verify(0, 0, &shard, 1, floor, floor, floor, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS);
-  EXPECT_EQ(verify(0, 0, &shard, 1, 0, 0, 1, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO);
-  EXPECT_EQ(verify(0, 0, &shard, 1, floor + 1, floor + 1, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH);
-  EXPECT_EQ(verify(0, 0, &shard, 1, floor, floor, 0, 1), SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS);
-
-  // §9.11 coupling at the shared vin marshaler: JoinMarket without a key (or
-  // with a truncated one) refuses, as does a Release carrying any key.
-  EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
-      0, 0, &shard, 1, nullptr, 0, endpoint.data(), endpoint.size(), floor, floor, 0, 0),
-    SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
-  EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
-      0, 0, &shard, 1, spend_pk.data(), spend_pk.size() - 1, endpoint.data(), endpoint.size(),
-      floor, floor, 0, 0),
-    SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
-  // EU-D3 at the JoinMarket entry: without an endpoint, or with a truncated
-  // one, the coupling refuses. There is no "endpoint on another kind" case to
-  // pin: the other entries have no endpoint operand, and a non-JoinMarket kind
-  // at this entry is the wrong-kind verdict (asserted above) before any
-  // operand is marshaled — the shape is unrepresentable, not checked.
-  EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
-      0, 0, &shard, 1, spend_pk.data(), spend_pk.size(), nullptr, 0, floor, floor, 0, 0),
-    SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
-  EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
-      0, 0, &shard, 1, spend_pk.data(), spend_pk.size(), endpoint.data(), endpoint.size() - 1,
-      floor, floor, 0, 0),
-    SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
-  // A key on a non-JoinMarket kind is pinned through the Release export below
-  // (the JoinMarket entry answers a Reinstate kind with POST_KIND before it
-  // marshals anything — asserted above).
+// The one row of the old error-code table whose subject is still live: the
+// Release export refuses a debit that carries a key (gate-4 §9.11 coupling).
+// The JoinMarket rows that stood beside it are gone with the test above.
+TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
+{
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const std::vector<uint8_t> spend_pk(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5);
   EXPECT_EQ(shekyl_archival_verify_release_bond_post(
       static_cast<uint8_t>(archival_bond_post_kind::Release), 0, nullptr, 0,
       spend_pk.data(), spend_pk.size(), 0, 0, floor, 1, floor, 0, nullptr, 0,
@@ -465,18 +332,3 @@ TEST(archival_bond_post, gf1_release_rejects_record_without_committed_key)
   EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, {}, h));
 }
 
-TEST(archival_bond_post, gf1_join_market_credit_path_pins_identity_key)
-{
-  // The credit-path twin: JoinMarket authorizes with the identity key only —
-  // the vin's committed bond_spend_pk does not authorize the credit.
-  const Gate4Kat kat = load_gate4_kat();
-  txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
-
-  auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  const uint64_t h = bap.bc.get_current_blockchain_height();
-
-  EXPECT_TRUE(bap.bc.check_archival_bond_post_input(bond, bond.hybrid_public_key, h));
-  EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, bond.bond_spend_pk, h));
-}

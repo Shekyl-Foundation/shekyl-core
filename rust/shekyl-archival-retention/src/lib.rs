@@ -197,6 +197,7 @@ pub use pass_anchor::{
     PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_CUSTOMIZATION,
     PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
+pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 // The emission error is re-exported under a disambiguated name: the bare
 // `WireError` at this root is wire.rs's (serve-credit) type, and bond_wire's is
 // deliberately not re-exported — a crate-root import must not silently resolve
@@ -211,7 +212,8 @@ pub use error::VerifyError;
 pub use failure_window::{
     failure_window_slashable, settlement_retention_floor, settlement_window_slashable,
     BaselineObservation, FailureWindowError, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    FAILURE_WINDOW_SERVE_BUDGET, SETTLEMENT_RETENTION_EPOCHS, WINDOW_MIN_OBSERVATION_PER_MILLE,
+    FAILURE_WINDOW_N_GATHER_BOUND, FAILURE_WINDOW_SERVE_BUDGET, SETTLEMENT_RETENTION_EPOCHS,
+    SLASH_SETTLEMENT_TIP_LAG_EPOCHS, WINDOW_MIN_OBSERVATION_PER_MILLE,
 };
 pub use held_at_height::holds_shard_at;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};

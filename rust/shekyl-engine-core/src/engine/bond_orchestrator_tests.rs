@@ -388,7 +388,7 @@ async fn staker_first_stake_refuses_wrong_slots_and_confirmed_wallets_at_any_slo
             vec![BondPostRecord {
                 height: BlockHeight::from_raw(10),
                 p_canonical_id: persona_3,
-                post_kind: 0,
+                post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
             }],
             Vec::new(),
             Vec::new(),
