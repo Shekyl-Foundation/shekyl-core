@@ -4399,13 +4399,6 @@ int shekyl_seam_session_established(std::uint64_t id);
 int shekyl_seam_session_connector(std::uint64_t id);
 /// 1 when a hub is bound.
 int shekyl_seam_is_bound(void);
-/// 1 when `(kind, reply)` on `connector` should stop dials to that address:
-/// the connector authenticates the destination (Tor does, clearnet does
-/// not) and the cause names it (a rejected Levin handshake, or one of the
-/// five destination-naming proxy replies). 0 otherwise, including every
-/// clearnet cause, a refused connect, an unknown kind and an unknown
-/// connector.
-int shekyl_close_implicates_address(std::uint8_t kind, std::uint16_t reply, std::uint8_t connector);
 /// What `shekyl_peerlist_admit_received` answers. Each situation has its
 /// own code; the caller closes the session on REFUSE and on nothing else.
 /// REFUSE: the list broke a rule.
@@ -4460,6 +4453,10 @@ int shekyl_peerlist_admit_operator(const shekyl_seam_address* entry);
 /// This node's own dialable address on `connector`; null clears it. 0, or
 /// -1 with no dialer or an unknown connector.
 int shekyl_peerlist_set_own_address(std::uint32_t connector, const shekyl_seam_address* entry);
+/// A closed network (`--add-exclusive-node`): the dialer's candidate
+/// population is exactly these `count` entries, admitted as operator-named.
+/// 0, or -1 with no dialer or a null pointer with a non-zero count.
+int shekyl_dialer_set_exclusive(const shekyl_seam_address* entries, std::size_t count);
 /// The disclosure sample for a response on `session` (the socket id): up to
 /// `cap` entries written to `out`, returning how many. Zero below the white
 /// diversity floor, for an unknown session, or with no dialer.
@@ -4472,8 +4469,6 @@ bool shekyl_peerlist_allow_local_ip(bool allow);
 /// session's connector and direction from the board, applies every
 /// acceptance rule, and answers one of the SHEKYL_PEERLIST_* codes above.
 int shekyl_peerlist_admit_received(std::uint64_t session, const shekyl_seam_address* entries, std::size_t count);
-/// 1 when `id`'s row holds a cause, and writes it. 0 when it does not.
-int shekyl_seam_session_cause(std::uint64_t id, std::uint8_t* kind_out, std::uint16_t* reply_out);
 
 /// Copy the process hub's board through `visit`, one fixed-size row per
 /// call. There is one hub. A missing hub, or a board with no rows, visits

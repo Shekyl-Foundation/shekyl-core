@@ -240,6 +240,23 @@ inline void admit_operator_peer(const epee::net_utils::network_address& addr)
     shekyl_peerlist_admit_operator(&raw);
 }
 
+/// A closed network (`--add-exclusive-node`): the Rust dialer's candidate
+/// population is exactly these addresses. An address this adapter cannot
+/// encode is left out of the declaration.
+template<class Addresses>
+inline void declare_exclusive_peers(const Addresses& addresses)
+{
+  std::vector<shekyl_seam_address> raw;
+  raw.reserve(addresses.size());
+  for (const auto& address : addresses)
+  {
+    shekyl_seam_address entry{};
+    if (detail::address_from(address, entry))
+      raw.push_back(entry);
+  }
+  shekyl_dialer_set_exclusive(raw.data(), raw.size());
+}
+
 template <class t_protocol_handler>
 class zone_server final : public zone_binding
 {

@@ -493,7 +493,10 @@ impl Dialer {
     }
 
     /// One wake's plan and draw. `None` when this wake dials nothing.
-    fn choose<R: RelayRng + ?Sized>(
+    /// The nonce is in flight until it is dropped; the owner loop hands
+    /// it to the attempt. Public so a test can read the draw without
+    /// running the loop.
+    pub fn choose<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         rng: &mut R,

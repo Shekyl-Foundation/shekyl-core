@@ -324,6 +324,32 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_operator(entry: *const ShekylSeam
     }
 }
 
+/// A closed network (`--add-exclusive-node`): the candidate population is
+/// exactly these entries, admitted as operator-named. An entry that is
+/// not an address is left out. Returns 0, or -1 with no dialer or a null
+/// pointer with a non-zero count.
+///
+/// # Safety
+///
+/// `entries` points to `count` initialized [`ShekylSeamAddress`] values,
+/// or `count` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_dialer_set_exclusive(
+    entries: *const ShekylSeamAddress,
+    count: usize,
+) -> i32 {
+    let Some(entries) = (unsafe { slice_from_typed_ptr(entries, count) }) else {
+        return -1;
+    };
+    let Some(dialer) = dialer() else {
+        return -1;
+    };
+    let addresses: Vec<NetworkAddress> = entries.iter().filter_map(address_of).collect();
+    let now = dialer.hub().now();
+    dialer.set_exclusive(addresses, now, &mut SecureRelayRng);
+    0
+}
+
 /// This node's own dialable address on `connector`: never a dial
 /// candidate, and one uniform member of the disclosure population. An
 /// entry that is not an address clears it. Returns 0, or -1 with no

@@ -55,6 +55,7 @@ enum class removed_reason
   ignore_ipv4,       // tolerated a failed v4 bind; a loopback bind failure is fatal by design
   derived_advert,    // port advertisement is derived from listener + zone, not configured
   host_inbound_cap,  // per-host inbound admission: a host is not an operator (PWD-I7/I8)
+  rust_dialer,       // a dial-path privilege the Rust dialer does not have (P2P-3 slice 3)
 };
 
 struct removed_flag
@@ -67,7 +68,7 @@ struct removed_flag
 // source of truth — CHANGELOG.md and FOLLOWUPS.md reference it by name
 // rather than duplicating the list, so editing this array keeps the
 // documentation in sync automatically.
-constexpr std::array<removed_flag, 24> REMOVED_FLAGS = {{
+constexpr std::array<removed_flag, 25> REMOVED_FLAGS = {{
   // Daemonizer, deleted in V3.1 (background execution / service management).
   {"detach",                       removed_reason::daemonizer},
   {"pidfile",                      removed_reason::daemonizer},
@@ -113,6 +114,10 @@ constexpr std::array<removed_flag, 24> REMOVED_FLAGS = {{
   // not an operator: under CGNAT one address is many unrelated
   // subscribers, so no value of the cap was correct.
   {"max-connections-per-ip",      removed_reason::host_inbound_cap},
+  // A peer the C++ dial path always dialled first and logged as [priority].
+  // Deleted with that path (Rick, 2026-10-11): the Rust dialer draws
+  // uniformly, and an operator-named address is `--add-peer`.
+  {"add-priority-node",           removed_reason::rust_dialer},
 }};
 
 // boost::program_options::unknown_option::get_option_name() returns the
@@ -214,6 +219,15 @@ bool handle_removed_flag(
         "daemons behind one NAT were partitioned across disjoint peer sets by it.\n"
         "The bound that remains is a total ceiling on inbound connections:\n"
         "use '--in-peers <n>'. See docs/design/SHEKYL_P2P_PROTOCOL.md (PWD-I7).\n";
+      break;
+    case removed_reason::rust_dialer:
+      std::cerr <<
+        "Error: '--" << view << "' was removed. The dialer draws its peers\n"
+        "uniformly and keeps no list it dials first; a privileged address was\n"
+        "a lever an observer could read. To name a peer, use '--add-peer\n"
+        "<address>'; it enters the candidate list like any other. For a closed\n"
+        "network, use '--add-exclusive-node <address>'.\n"
+        "See docs/design/P2P_3_SLICE_3_DIALER_BRIEF.md.\n";
       break;
     case removed_reason::ignore_ipv4:
       std::cerr <<

@@ -39,12 +39,6 @@
 #include <cstring>
 #include <utility>
 
-#ifndef _WIN32
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#endif
-
 #include "common/command_line.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "shekyl/shekyl_ffi.h"
@@ -122,10 +116,9 @@ namespace nodetool
     const command_line::arg_descriptor<uint32_t>    arg_p2p_external_port  = {"p2p-external-port", "External port for p2p network protocol (if port forwarding used with NAT)", 0};
     const command_line::arg_descriptor<bool>        arg_p2p_allow_local_ip = {"allow-local-ip", "Allow local ip add to peer list, mostly in debug purposes"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_peer   = {"add-peer", "Manually add peer to local peerlist"};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_priority_node   = {"add-priority-node", "Specify list of peers to connect to and attempt to keep the connection open"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_exclusive_node   = {"add-exclusive-node", "Specify list of peers to connect to only."
-                                                                                                  " If this option is given the options add-priority-node and seed-node are ignored"};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node   = {"seed-node", "Connect to a node to retrieve peer addresses, and disconnect"};
+                                                                                                  " If this option is given, no other address is dialled, seed-node included"};
+    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node   = {"seed-node", "Name a peer as a dial candidate, like add-peer; the compiled seeds are candidates already"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy = {"tx-proxy", "Send local txes through proxy: <network-type>,[socks5://[user:pass@]]<socks-ip:port>[,max_connections] i.e. \"tor,127.0.0.1:9050,100\""};
     // PWD-E7 (P2P_2_ENDPOINT_ROUND.md): the durable-address warning is stated
     // wherever this flag is documented, because the failure mode is quiet --
@@ -331,40 +324,4 @@ namespace nodetool
         return inbounds;
     }
 
-  std::set<std::string> local_interface_hosts()
-  {
-    std::set<std::string> hosts;
-#ifndef _WIN32
-    struct ifaddrs *ifaddr = nullptr;
-    if (getifaddrs(&ifaddr) != 0)
-      return hosts;
-    for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next)
-    {
-      if (ifa->ifa_addr == nullptr)
-        continue;
-      if (ifa->ifa_addr->sa_family == AF_INET)
-      {
-        const auto *sin = reinterpret_cast<const sockaddr_in *>(ifa->ifa_addr);
-        if (sin->sin_addr.s_addr == INADDR_ANY)
-          continue;
-        // s_addr is already network-order, matching ipv4_network_address.
-        hosts.insert(epee::net_utils::network_address{
-          epee::net_utils::ipv4_network_address{sin->sin_addr.s_addr, 0}}.host_str());
-      }
-      else if (ifa->ifa_addr->sa_family == AF_INET6)
-      {
-        const auto *sin6 = reinterpret_cast<const sockaddr_in6 *>(ifa->ifa_addr);
-        boost::asio::ip::address_v6::bytes_type bytes{};
-        std::memcpy(bytes.data(), sin6->sin6_addr.s6_addr, bytes.size());
-        const boost::asio::ip::address_v6 v6{bytes, sin6->sin6_scope_id};
-        if (v6.is_unspecified())
-          continue;
-        hosts.insert(epee::net_utils::network_address{
-          epee::net_utils::ipv6_network_address{v6, 0}}.host_str());
-      }
-    }
-    freeifaddrs(ifaddr);
-#endif
-    return hosts;
-  }
 }
