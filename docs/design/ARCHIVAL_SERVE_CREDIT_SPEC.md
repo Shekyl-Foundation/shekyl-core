@@ -1090,7 +1090,7 @@ draw `j` that failed. Three outcomes are not verdicts on a block:
 - **the body is not the one referenced**: its hash is not the reference's.
   The block committed to the reference, and a block whose body cannot be
   had is not connected. This is checked before anything else;
-- **the view could not answer** something it should hold: the snapshot of
+- **the view could not answer** something it should hold: the drawable epoch of
   `epoch(h)`, the hash at `h` or at an anchor, a drawn pair's key, or the
   `0x0C` of a block it holds. Every coinbase carries exactly one `0x0C`
   (CEN-I20), so a known block with none is the view's failure, not the
@@ -1135,12 +1135,12 @@ pub trait BundleView {
     /// Whether a bundle for `h` is already admitted on this chain.
     fn revealed(&self, h: BlockHeight) -> Result<bool, Self::Fault>;
 
-    /// The `h_open(E)` snapshot: `D`, and each pair's receipt key.
-    fn snapshot(&self, epoch: SettlementEpoch) -> Result<Option<&EpochSnapshot>, Self::Fault>;
+    /// The `h_open(E)` drawable epoch: `D`, and each pair's receipt key.
+    fn drawable_epoch(&self, epoch: SettlementEpoch) -> Result<Option<&DrawableEpoch>, Self::Fault>;
 }
 ```
 
-- `D`, as a number, is the snapshot's length. The view has no second
+- `D`, as a number, is the drawable epoch's length. The view has no second
   source for it.
 - Every answer is a function of the chain through `h`, except `revealed`,
   which is the one-per-`h` rule. That is §9.1's reorg property, stated as
@@ -1148,16 +1148,21 @@ pub trait BundleView {
 - The store's view, the switch's batch view and the fixture each implement
   it. The queue runs the verifier against the tip through the store's.
 
-**The snapshot** (`SCS-P19`). One type, in `shekyl-archival-retention`
+**The drawable epoch** (`SCS-P19`): the `h_open(E)` snapshot, as one type.
+The type is `DrawableEpoch`, not `EpochSnapshot` as this section first
+named it: `shekyl-chain-rules` already had an `EpochSnapshot` in its
+epoch-close code, and one name must not mean two things in one crate
+(renamed on PR #1047, 2026-10-13; §9.6 allows a name to move in review).
+It lives in `shekyl-archival-retention`
 beside `secret_draw.rs`: that crate already holds `DrawablePair` and the
 draw's functions and depends on `shekyl-crypto-pq` for the key type, so
 the draw and the verifier reach it without a new edge. `SO-D12`'s
 increment 2 builds it.
 
 ```rust
-pub struct EpochSnapshot { /* private */ }
+pub struct DrawableEpoch { /* private */ }
 
-impl EpochSnapshot {
+impl DrawableEpoch {
     /// The epoch this is the `h_open(E)` state of.
     pub fn epoch(&self) -> SettlementEpoch;
     /// `D`.
@@ -1169,7 +1174,7 @@ impl EpochSnapshot {
 }
 ```
 
-- **A snapshot in which a pair has no receipt key cannot be built.** Its
+- **A drawable epoch in which a pair has no receipt key cannot be built.** Its
   one constructor takes the epoch, each persona's id with its receipt
   key's bytes, and the pairs, and fails on a pair whose persona has no
   key or a key that does not parse. The settlement lane feeds it from
