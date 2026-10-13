@@ -292,11 +292,11 @@ does not. The banner's findings range is to be moved to cover
 
 | Piece | Where |
 | --- | --- |
-| The held key | `FnDsaHybridSigner` (`rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs`): decodes an `FnDsaHybridSecretKey` once into a heap slot, then `sign(&mut self, domain, message)`. Same nested body as the scheme (`hybrid_combiner::sign_nested`); the scheme's own sign path is unchanged |
+| The held key | `FnDsaHybridSigner` (`rust/shekyl-crypto-pq/src/fn_dsa_hybrid/signer.rs`): decodes an `FnDsaHybridSecretKey` once into a heap slot, then `sign(&mut self, domain, message)`. Both it and the per-call path sign that decoded key through `sign_decoded_key` and nest through `nest_fn_dsa_signature` (`fn_dsa_hybrid.rs`) |
 | Byte identity | `a_held_key_signs_the_bytes_the_scheme_signs`, and `the_held_key_reproduces_the_pinned_signatures` in `tests/kat_fn_dsa_hybrid_v1.rs`, which reads `FN_DSA_HYBRID_V1_KAT.json` and so runs on the AVX2, no-AVX2 and aarch64 lanes. No vector was added or changed |
 | The key in the actor | `HeldReceiptKey` (`rust/shekyl-engine-core/src/engine/stake_engine/types.rs`), a field of `BondedPersona` and `EphemeralPersona` beside the bundle: a three-state slot — `NotBuilt` until the persona's first receipt signature, then `Built` (the decoded key) or `Undecodable` for the rest of the persona's life (`HeldPersona::sign_receipt_transcript`) |
-| The actor message | `SignReceiptTranscript` (`stake_engine/persona.rs`): the 112-byte transcript in, an `FnDsaHybridSignature` out, the domain fixed to `SCHEME_DOMAIN_RECEIPT` where the key is held. `StakeEngineHandle::sign_receipt_transcript_blocking` is its blocking sender |
-| The capability | `ResidentReceiptKey` (`stake_engine/serving/receipt_key.rs`): a weak actor handle and a slot, and a `PassKey` at the receipt envelope's width — the serving route's signer trait, at 1,356 bytes. Its pre-flight asks the actor (`ReceiptKeyReadiness`) and refuses a stopped actor, an unheld slot and an undecodable key |
+| The actor message | `SignReceiptTranscript` (`stake_engine/persona.rs`): the 112-byte transcript in, an `FnDsaHybridSignature` out. The domain is fixed by `sign_receipt_transcript` (`shekyl-p-serve`), which `HeldPersona::sign_receipt_transcript` calls. `StakeEngineHandle::sign_receipt_transcript_blocking` is its blocking sender |
+| The capability | `ResidentReceiptKey` (`stake_engine/serving/receipt_key.rs`): a weak actor handle, a slot, and a sticky bit set when a signature finds the key undecodable. A `PassKey` at the receipt envelope's width, 1,356 bytes. Pre-flight is actor liveness plus that bit. It does not ask the actor, and an unheld slot is found at sign time, as the identity key finds it |
 | The signer trait | `PassKey<const W>` / `PassSigner<const W>` (`rust/shekyl-p-serve/src/countersign.rs`), sealed over the two schemes by `EnvelopeWidth<W>`; the serve loop takes every width from the signer it is bound with (§9.3) |
 | The fetch target | `FetchTarget<K>` / `VerifiedShard<K>` over the sealed `PassVerifyingKey` (`rust/shekyl-p-fetch/src/target.rs`); `PFetchClient::fetch::<K>` (§9.3) |
 | The receipt check | `verify_receipt_transcript` (`rust/shekyl-archival-retention/src/attestation_wire.rs`), beside `verify_pass_transcript`: the same 112-byte transcript under `SCHEME_DOMAIN_RECEIPT` |
@@ -336,7 +336,10 @@ same error, without reading the secret or attempting a decode
 on a stack a decode attempt does not fit in). The key bytes do not change
 while the persona is held, so a decode that failed once fails every time;
 retrying would spend a decode's stack and time per request, on a path a
-remote reader drives once the capability is live. The state is a unit: no
+remote reader drives once the capability is live. The capability
+remembers the same refusal on itself, so a later pre-flight returns it
+without another question to the actor; the slot stays the authority that
+refuses a second decode. The state is a unit: no
 error value and nothing computed from the key is kept. It is per persona
 (`an_undecodable_key_is_one_personas_state`), the identity key and the
 other personas are unaffected

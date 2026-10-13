@@ -26,8 +26,8 @@ use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
-    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
-    ReceiptKeyReadiness, ServingBodies, SignPassTranscript, SignReceiptTranscript,
+    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, ServingBodies,
+    SignPassTranscript, SignReceiptTranscript,
 };
 use super::release::{AssembleRelease, AssembledReleasePost};
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
@@ -310,17 +310,6 @@ impl StakeEngineHandle {
     ) -> Result<FnDsaHybridSignature, StakeEngineError> {
         self.actor
             .ask(SignReceiptTranscript { p_slot, message })
-            .blocking_send()
-            .map_err(collapse_send_error)
-    }
-
-    /// The receipt capability's pre-flight for the persona at `p_slot`, from
-    /// a **blocking** context ([`ReceiptKeyReadiness`]). STAGED with the
-    /// method above. It parks on the actor's reply, so it runs on the
-    /// blocking pool, where the serve loop asks `PassKey::ready`.
-    pub(crate) fn receipt_key_ready_blocking(&self, p_slot: PSlot) -> Result<(), StakeEngineError> {
-        self.actor
-            .ask(ReceiptKeyReadiness { p_slot })
             .blocking_send()
             .map_err(collapse_send_error)
     }

@@ -121,9 +121,9 @@ pub mod serve;
 pub mod serve_counters;
 
 pub use countersign::{
-    anchor_within_gate, sign_pass_transcript, EnvelopeSignature, EnvelopeWidth, IdentityPassKey,
-    IdentityPassSigner, PassEnvelope, PassKey, PassSigner, SignRefused, IDENTITY_ENVELOPE_LEN,
-    RECEIPT_ENVELOPE_LEN,
+    anchor_within_gate, sign_pass_transcript, sign_receipt_transcript, EnvelopeSignature,
+    EnvelopeWidth, IdentityPassKey, IdentityPassSigner, PassEnvelope, PassKey, PassSigner,
+    SignRefused, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
 };
 #[cfg(any(test, feature = "test-signer"))]
 pub use countersign::{TestKeySigner, TestReceiptKeySigner};

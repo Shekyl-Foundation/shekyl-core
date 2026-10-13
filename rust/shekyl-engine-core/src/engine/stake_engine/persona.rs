@@ -195,9 +195,11 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
 /// 112-byte transcript in and receives the signature out, per served shard
 /// (`SF-D13`, "injection, not custody"; `SH2_RESIDENT_KEY_AUDIT.md` §3 Q1).
 ///
-/// The domain is fixed by [`sign_pass_transcript`] itself, which is the only
-/// signing call the serving stack has; this handler cannot sign anything
-/// else with the key even if asked.
+/// The domain is fixed by [`sign_pass_transcript`] itself, the only signing
+/// call for the identity key. This handler cannot sign anything else with
+/// that key even if asked. The receipt key has its own call,
+/// [`shekyl_p_host::sign_receipt_transcript`], reached through
+/// [`SignReceiptTranscript`].
 ///
 /// An unheld slot is [`StakeEngineError::LookaheadExhausted`], as at every
 /// other slot boundary. The handler does **not** also gate on the
@@ -224,8 +226,9 @@ impl Message<SignPassTranscript> for StakeEngine {
             .ok_or(StakeEngineError::LookaheadExhausted {
                 requested: msg.p_slot,
             })?;
-        // Identity key, live scheme. The receipt key replaces this argument
-        // once that re-key is staged (SH2_RESIDENT_KEY_AUDIT.md §6).
+        // Identity key, live scheme. The receipt key is a second message
+        // ([`SignReceiptTranscript`]). The cutover selects
+        // `ResidentReceiptKey`; it does not replace this argument.
         sign_pass_transcript(&held.keys().hybrid_sign_sk, &msg.message)
             .map_err(StakeEngineError::PassCountersign)
     }
@@ -243,10 +246,11 @@ impl Message<SignPassTranscript> for StakeEngine {
 ///
 /// The shape is [`SignPassTranscript`]'s for the same reason: the secret
 /// does not cross the actor boundary. The 112-byte transcript goes in, the
-/// signature comes out. The domain is fixed where the key is held
-/// ([`HeldPersona::sign_receipt_transcript`]), so this handler cannot sign
-/// anything else with the key even if asked. The transcript is the one the
-/// identity key signs today, unchanged.
+/// signature comes out. The domain is fixed by
+/// [`shekyl_p_host::sign_receipt_transcript`], which
+/// [`HeldPersona::sign_receipt_transcript`] calls, so this handler cannot
+/// sign anything else with the key even if asked. The transcript is the one
+/// the identity key signs today, unchanged.
 ///
 /// The first message for a persona decodes its receipt key and every later
 /// one signs from the held key ([`HeldReceiptKey`], `FND-4`). The first
@@ -280,51 +284,6 @@ impl Message<SignReceiptTranscript> for StakeEngine {
             })?;
         held.sign_receipt_transcript(&msg.message)
             .map_err(StakeEngineError::ReceiptSign)
-    }
-}
-
-/// The receipt capability's pre-flight: will a receipt asked of the persona
-/// at `p_slot` be refused for a reason the actor already knows?
-///
-/// STAGED with [`SignReceiptTranscript`]; its one sender is
-/// `ResidentReceiptKey::ready`.
-///
-/// Two answers are known without signing, and each is the error the
-/// signature itself would give: the slot is not held
-/// ([`StakeEngineError::LookaheadExhausted`]), or an earlier signature found
-/// the receipt key undecodable ([`StakeEngineError::ReceiptSign`], from the
-/// remembered state). Anything else is `Ok` — including a key that has not
-/// been decoded yet, which this does **not** decode: the pre-flight is asked
-/// once per request before the first response byte and must stay cheap, and
-/// a decode is not. So `Ok` is not a promise. A key found undecodable by the
-/// first signature costs that one response its countersignature (the
-/// refusal trailer) and every request after it the bare 503.
-///
-/// It reads the slot's state and no secret.
-pub(crate) struct ReceiptKeyReadiness {
-    pub p_slot: PSlot,
-}
-
-impl Message<ReceiptKeyReadiness> for StakeEngine {
-    type Reply = Result<(), StakeEngineError>;
-
-    async fn handle(
-        &mut self,
-        msg: ReceiptKeyReadiness,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let held = self
-            .held
-            .get(&msg.p_slot)
-            .ok_or(StakeEngineError::LookaheadExhausted {
-                requested: msg.p_slot,
-            })?;
-        if held.receipt_key().is_undecodable() {
-            return Err(StakeEngineError::ReceiptSign(
-                shekyl_crypto_pq::CryptoError::InvalidKeyMaterial,
-            ));
-        }
-        Ok(())
     }
 }
 

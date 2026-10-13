@@ -14,7 +14,7 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridSecretKey, FnDsaHybridSignature, FnDsaHybridSigner,
 };
-use shekyl_crypto_pq::signature::{HybridPublicKey, SCHEME_DOMAIN_RECEIPT};
+use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_scanner::GuaranteedScanner;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::BroadcastTimelineObserver;
@@ -139,14 +139,14 @@ impl HeldPersona {
         }
     }
 
-    /// Sign one 112-byte pass transcript with this persona's receipt key
-    /// under `SCHEME_DOMAIN_RECEIPT`, decoding the key first if this is the
-    /// first signature asked of the persona ([`HeldReceiptKey`]).
+    /// Sign one 112-byte pass transcript with this persona's receipt key,
+    /// decoding it first if this is the first signature asked of the persona
+    /// ([`HeldReceiptKey`]).
     ///
-    /// The one place the receipt domain and the transcript are paired for
-    /// signing, as `sign_pass_transcript` is for the identity key: the
-    /// domain is not a parameter, so no caller can have this key sign
-    /// anything else.
+    /// Thin over [`shekyl_p_host::sign_receipt_transcript`], which is where
+    /// the transcript is paired with the receipt domain. The domain is not a
+    /// parameter here either, so no caller can have this key sign anything
+    /// else.
     ///
     /// `&mut self`: the first call fills the slot, and every call writes the
     /// decoded key's own working buffers. The actor's message loop is the
@@ -164,12 +164,13 @@ impl HeldPersona {
             HeldPersona::Bonded(b) => (&b.0, &mut b.1),
             HeldPersona::Ephemeral(e) => (&e.0, &mut e.1),
         };
-        receipt
-            .signer_over(&keys.receipt_sign_sk)?
-            .sign(SCHEME_DOMAIN_RECEIPT, message)
+        let signer = receipt.signer_over(&keys.receipt_sign_sk)?;
+        shekyl_p_host::sign_receipt_transcript(signer, message)
     }
 
     /// The persona's receipt-key slot, read-only: its state, never its key.
+    /// Tests are the only reader. The sign path borrows the field itself.
+    #[cfg(test)]
     pub(crate) fn receipt_key(&self) -> &HeldReceiptKey {
         match self {
             HeldPersona::Bonded(b) => &b.1,
@@ -276,14 +277,6 @@ impl HeldReceiptKey {
                 Err(shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)
             }
         }
-    }
-
-    /// Whether a receipt asked of this slot now is already known to be
-    /// refused: the first signature found the key undecodable. Reads the
-    /// state and nothing else — no secret, no decode — so it is what a
-    /// pre-flight can ask (`ReceiptKeyReadiness`).
-    pub(crate) fn is_undecodable(&self) -> bool {
-        matches!(self, Self::Undecodable)
     }
 
     /// Where the decoded key is, or `None` in the two states that hold
@@ -886,3 +879,7 @@ pub(crate) enum TestSelfCert {
 /// when a second failure mode actually exists.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct DegenerateDraw;
+
+#[cfg(test)]
+#[path = "held_receipt_key_tests.rs"]
+mod held_receipt_key_tests;

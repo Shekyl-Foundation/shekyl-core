@@ -112,11 +112,11 @@
 //! the `test-signer` feature) — and the serve loop never sees more than
 //! the returned signature.
 //!
-//! [`sign_pass_transcript`] is the one place the domain and the transcript
-//! are paired for *signing*. Implementors call it rather than reaching for
-//! `HybridEd25519MlDsa::sign` directly, so a host cannot bind the
-//! transcript under a neighbouring domain and produce a signature the
-//! daemon's `verify_pass_transcript` rejects.
+//! [`sign_pass_transcript`] pairs a transcript with the attestation domain
+//! and [`sign_receipt_transcript`] pairs one with the receipt domain. Each
+//! is the only signing call for its domain. Implementors call the one their
+//! scheme checks against, rather than the scheme's `sign`, so a host cannot
+//! bind the transcript under a neighbouring domain.
 //!
 //! Inland clocks are ordinal [`shekyl_types::BlockHeight`]; depths are
 //! [`shekyl_types::BlockCount`].
@@ -131,10 +131,10 @@
 use shekyl_archival_retention::pass_anchor::{
     PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
-use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
+use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSignature, FnDsaHybridSigner};
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridSecretKey, HybridSignature, SignatureScheme,
-    SCHEME_DOMAIN_ATTESTATION,
+    SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_RECEIPT,
 };
 use shekyl_crypto_pq::CryptoError;
 use shekyl_types::BlockHeight;
@@ -212,9 +212,10 @@ pub type IdentityPassSigner = dyn PassSigner<IDENTITY_ENVELOPE_LEN>;
 /// Where the persona's attestation signing key lives.
 ///
 /// One method, synchronous, called from the serve loop's blocking pool
-/// once per shard the persona is about to serve. Implementors sign with
-/// [`sign_pass_transcript`] so the domain cannot drift from what the
-/// daemon's `verify_pass_transcript` checks.
+/// once per shard the persona is about to serve. Implementors sign through
+/// the function for their scheme — [`sign_pass_transcript`] or
+/// [`sign_receipt_transcript`] — so the domain cannot drift from the
+/// verifier that checks it.
 ///
 /// The host supplies this; the serve loop never sees the secret. Height
 /// for the pre-sign gate is [`PassSigner::own_height`] — a signer is a
@@ -325,9 +326,9 @@ impl std::error::Error for SignRefused {}
 
 /// Sign an SF-D8 transcript under `SCHEME_DOMAIN_ATTESTATION`.
 ///
-/// This is the only signing call in the serving stack; keeping the domain
-/// here means a `PassSigner` implementation cannot drift from what
-/// `verify_pass_transcript` checks.
+/// The identity-key signing call. [`sign_receipt_transcript`] is its
+/// receipt-domain counterpart. Each domain lives in one function, so a
+/// `PassSigner` cannot drift from the verifier for its scheme.
 ///
 /// # Errors
 ///
@@ -337,6 +338,22 @@ pub fn sign_pass_transcript(
     message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
 ) -> Result<HybridSignature, CryptoError> {
     HybridEd25519MlDsa.sign(secret, SCHEME_DOMAIN_ATTESTATION, message)
+}
+
+/// Sign an SF-D8 transcript under `SCHEME_DOMAIN_RECEIPT`.
+///
+/// The receipt-domain counterpart of [`sign_pass_transcript`], and the only
+/// place a pass transcript is paired with that domain. The held receipt key
+/// and the test receipt signer both call it.
+///
+/// # Errors
+///
+/// Propagates the held signer's failure (malformed key material).
+pub fn sign_receipt_transcript(
+    signer: &mut FnDsaHybridSigner,
+    message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+) -> Result<FnDsaHybridSignature, CryptoError> {
+    signer.sign(SCHEME_DOMAIN_RECEIPT, message)
 }
 
 /// The SF-D5 pre-sign gate: `anchor_height ∈ [p − 720 − L, p − 720 + L]`
@@ -439,7 +456,11 @@ impl PassSigner<IDENTITY_ENVELOPE_LEN> for TestKeySigner {
 /// that is how "a target is one scheme" is tested from both ends.
 #[cfg(any(test, feature = "test-signer"))]
 pub struct TestReceiptKeySigner {
-    secret: shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSecretKey,
+    /// Interior mutability: [`PassKey::sign_pass`] takes `&self`, and the
+    /// held signer signs through `&mut self` because its working buffers
+    /// live in the decoded key. A poisoned lock is recovered: the signer
+    /// holds no invariant a panic could have broken mid-update.
+    signer: std::sync::Mutex<FnDsaHybridSigner>,
     public: shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey,
     height: std::sync::atomic::AtomicU64,
 }
@@ -457,8 +478,12 @@ impl TestReceiptKeySigner {
         let (public, secret) =
             shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa::generate_keypair()
                 .expect("ephemeral scheme-3 keygen");
+        let signer = FnDsaHybridSigner::new(&secret).expect("a generated scheme-3 key decodes");
+        // The encoded secret's only job was the decode. The signer holds
+        // the key; dropping the encoding wipes it.
+        drop(secret);
         Self {
-            secret,
+            signer: std::sync::Mutex::new(signer),
             public,
             height: std::sync::atomic::AtomicU64::new(height.to_raw()),
         }
@@ -481,13 +506,11 @@ impl PassKey<RECEIPT_ENVELOPE_LEN> for TestReceiptKeySigner {
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
     ) -> Result<FnDsaHybridSignature, SignRefused> {
-        shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa
-            .sign(
-                &self.secret,
-                shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT,
-                message,
-            )
-            .map_err(|e| SignRefused::new(e.to_string()))
+        let mut signer = self
+            .signer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        sign_receipt_transcript(&mut signer, message).map_err(|e| SignRefused::new(e.to_string()))
     }
 }
 
