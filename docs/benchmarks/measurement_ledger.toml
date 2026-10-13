@@ -399,11 +399,10 @@ name = "serving_priority_nice"
 defined_in = "rust/shekyl-thread-priority/src/lib.rs"
 needle = "pub const SERVING_NICE: i32 = 19;"
 measured_by = ["BA-T5"]
-status = "estimated"
-estimate = { low = 0.9, high = 1.0, unit = "share of the no-serve sync rate the daemon keeps" }
-basis = "BA-T5 session 2's nice arm: the serving process started under an external nice 19 beside a daemon syncing the chain on the floor device. The daemon kept 96, 97, 94 and 90 % of its no-serve sync rate at N = 8, 16, 32, 64 (cell medians over three passes, read from each window's own points), and serving delivered 5 to 8 responses per second. The shipped mechanism lowers the serving runtime's threads from inside the process to the same nice value, and nothing else; the share is expected to reproduce."
-basis_captures = ["docs/benchmarks/ba_t5_serve_floor_device_20261009_obs.tsv"]
-carrier = "The confirming floor block after SH-3 merges (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8): the syncing daemon, N = 8 and N = 64, with the thread-level mechanism in place of the external nice. Its capture makes this row current, and only a current row listens to its path set; until then a change to the priority setup does not trip the ledger."
+status = "current"
+capture = "docs/benchmarks/ba_t5_serve_floor_device_20261012_t1_obs.tsv"
+capture_rev = "004ed6c6df"
+rev_source = "capture header, the tree line. BA-T5 session 3, topology T1 (daemon and serving probe in one cgroup): the daemon kept 0.93 of its no-serve sync rate at N = 8 and 0.91 at N = 64 with the shipped mechanism, inside the 0.90 to 1.00 estimated from session 2's external-nice arm (docs/benchmarks/ba_t5_serve_floor_device_20261012.md). In a split-cgroup topology the share was 0.65; that is the cgroup weights, not this constant, and carries its own FOLLOWUPS row."
 path_set = "serving-runtime"
 
 [[constant]]
@@ -485,9 +484,12 @@ stale_through = [
   { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime gained a thread-start hook parameter at this commit (a ThreadStart, since reshaped into ThreadHooks on runtime_with_thread_hooks; the two-argument runtime came back at da7b70c8cf, heard below). The clearnet tests passed the empty hook, so their runtime threads started exactly as before; no production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "da7b70c8cf", note = "SH-3: the ordinary runtime constructor is a budget and a name again. The clearnet tests call it with the same two arguments they had before the hook parameter (the serving runtime alone uses ThreadHooks through runtime_with_thread_hooks), so their runtime threads start as before. No production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "e3a167bac2", note = "RT-W9 step 1 (PR #1038): the record layer (aead.rs, channel.rs) and the handshake's symmetric state move out of shekyl-p2p-transport into a new crate, shekyl-noise, which this path set now names so that later changes to that code are heard here. A refactor: the same functions run in the same order on the same bytes, the pinned handshake vectors are untouched and their test is byte-identical. Split now returns a named struct instead of the caller taking the chaining key out of the state, which is one move of three 32-byte values per handshake. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "482da291c5", note = "RT-W9 step 2 at this commit: SymmetricState::mix_key_and_hash for the hybridXK static-KEM tokens, and a three-output HKDF beside the two-output one. A has_key accessor landed with no caller. The P2P handshake and the clearnet connector call none of them. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "edcae056fc", note = "RT-W9 step 1 review (PR #1038): SymmetricState::into_halves owns the initiator/responder key order, and the hash, HKDF and AEAD stay crate-private. The same HKDF still feeds the same two record directions; the pinned handshake vectors are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "1c42c17c21", note = "RT-W9 step 1 review (PR #1038): into_halves and Established::split are must_use. No bytes on the wire moved. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "d03aeb2e0f", note = "RT-W9 step 1 review (PR #1038): the split yields two Directions, and the length-prefixed framer stays in shekyl-p2p-transport. The same HKDF still feeds the same two record directions; the pinned handshake vectors and the post-rekey record are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "4ae7de867a", note = "RT-W9 step 2 (PR #1039): has_key is gone and the two HKDF functions are one. The two-output bytes are unchanged, and the P2P handshake still uses two outputs. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "7813b29af9", note = "RT-W9 step 2: Direction counts the ciphertexts it has opened (one saturating add of a u64 on each successful open, none on a failed tag) and exposes the count, for the RPC handshake's pending session to gate on. The P2P record path opens through Direction, so that add is on it, twice per record. It is one integer add beside two AEAD operations; no I/O changed. Dial, handshake, and gap waits are unchanged. Not re-measured." },
 ]
 
 [[constant]]
