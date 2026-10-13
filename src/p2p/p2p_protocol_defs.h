@@ -52,13 +52,12 @@ namespace nodetool
   // forbids — and it was self-asserted, so it identified nothing anyway.
   // The address IS the entry: a hypothesis about where a peer can be dialed.
   //
-  // It carries no pruning_seed either (PDM-Q7, 2026-09-21): the stripe
+  // It carries no stripe seed either (PDM-Q7, 2026-09-21): the stripe
   // engine is deleted, and the field was the same shape as the id above —
   // durable, address-keyed, self-asserted, gossiped in every peerlist — with
   // eight accepted non-zero values against a uniformly-zero honest fleet,
-  // i.e. free markers for topology tracing. A received entry that still
-  // carries the key is decoded with the key ignored (KV_SERIALIZE_OPT on the
-  // old side; epee skips unknown keys on this side).
+  // i.e. free markers for topology tracing. A received entry carrying a key
+  // this build does not define is decoded with the key ignored.
   template<typename AddressType>
   struct peerlist_entry_base
   {
@@ -78,23 +77,9 @@ namespace nodetool
   typedef peerlist_entry_base<epee::net_utils::network_address> peerlist_entry;
 
   // `anchor_peerlist_entry` was deleted with the anchor mechanism. Its only
-  // job was crossing the restart boundary -- see net_peerlist.h `init()`.
+  // job was crossing the restart boundary, which the Rust address file does
+  // without a type of its own (shekyl-peerlist `address_file`).
 
-  inline 
-  std::string print_peerlist_to_string(const std::vector<peerlist_entry>& pl)
-  {
-    time_t now_time = 0;
-    time(&now_time);
-    std::stringstream ss;
-    ss << std::setfill ('0') << std::setw (8) << std::hex << std::noshowbase;
-    for(const peerlist_entry& pe: pl)
-    {
-      ss << pe.adr.str()
-        << " \tlast_seen: " << (pe.last_seen == 0 ? std::string("never") : epee::misc_utils::get_time_interval_string(now_time - pe.last_seen))
-        << std::endl;
-    }
-    return ss.str();
-  }
 
 
   struct network_config

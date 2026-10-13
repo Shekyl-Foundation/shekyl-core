@@ -56,7 +56,6 @@
 #include "net/levin_protocol_handler_async.h"
 #include "p2p_protocol_defs.h"
 #include "storages/levin_abstract_invoke2.h"
-#include "net_peerlist.h"
 #include "math_helper.h"
 #include "net_node_common.h"
 #include "net/enums.h"
@@ -170,7 +169,6 @@ namespace nodetool
           m_port(),
           m_port_ipv6(),
           m_our_address(),
-          m_peerlist(),
           m_config{},
           m_proxy_address(),
           m_can_announce(false)
@@ -187,7 +185,6 @@ namespace nodetool
           m_port(),
           m_port_ipv6(),
           m_our_address(),
-          m_peerlist(),
           m_config{},
           m_proxy_address(),
           m_can_announce(false)
@@ -205,7 +202,6 @@ namespace nodetool
       std::string m_port;
       std::string m_port_ipv6;
       epee::net_utils::network_address m_our_address; // in anonymity networks
-      peerlist_manager m_peerlist;
       config m_config;
       net::socks::endpoint m_proxy_address;
       // This zone may announce an inbound endpoint (public port-only advert
@@ -250,7 +246,6 @@ namespace nodetool
         m_listening_port(0),
         m_listening_port_ipv6(0),
         m_external_port(0),
-        m_allow_local_ip(false),
         m_igd(no_igd),
         m_offline(false),
         m_network_id(),
@@ -269,14 +264,8 @@ namespace nodetool
     t_payload_net_handler& get_payload_object();
 
     // debug functions
-    bool log_peerlist();
     bool log_connections();
 
-    // These functions only return information for the "public" zone
-    size_t get_public_white_peers_count();
-    size_t get_public_gray_peers_count();
-    void get_public_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
-    void get_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
 
     uint32_t get_announced_port(epee::net_utils::connector_id zone) const;
     //! \return This node's own dialable address on `zone`, or its placeholder —
@@ -348,7 +337,6 @@ namespace nodetool
     int handle_get_support_flags(int command, COMMAND_REQUEST_SUPPORT_FLAGS::request& arg, COMMAND_REQUEST_SUPPORT_FLAGS::response& rsp, p2p_connection_context& context);
     bool init_config();
     bool make_default_config();
-    bool store_config();
 
 
     //----------------- levin_commands_handler -------------------------------------------------------------
@@ -447,7 +435,6 @@ namespace nodetool
     uint32_t m_listening_port{0};
     uint32_t m_listening_port_ipv6{0};
     uint32_t m_external_port{0};
-    bool m_allow_local_ip;
     igd_t m_igd;
     bool m_offline;
     bool m_use_ipv6;
@@ -458,10 +445,8 @@ namespace nodetool
     //! One relay. Connection registries stay on each connector.
     cryptonote::levin::notify m_notifier;
     t_payload_net_handler& m_payload_handler;
-    peerlist_storage m_peerlist_storage;
 
     epee::math_helper::once_a_time_seconds<P2P_DEFAULT_HANDSHAKE_INTERVAL> m_peer_handshake_idle_maker_interval;
-    epee::math_helper::once_a_time_seconds<60*30, false> m_peerlist_store_interval;
     epee::math_helper::once_a_time_seconds<3600, false> m_incoming_connections_interval;
     epee::math_helper::once_a_time_seconds<60> m_ephemeral_tor_liveness_interval;
     //! True while this boot's managed ephemeral tor is believed alive (set at

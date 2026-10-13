@@ -882,31 +882,36 @@ TEST(node_server, add_peer_enters_gray_not_white)
   boost::program_options::notify(vm);
   ASSERT_TRUE(data.server->init(vm));
 
-  // RFC 5737 documentation range, NOT loopback and NOT RFC1918. Both
-  // `append_with_peer_white` and `append_with_peer_gray` gate on
-  // `is_host_allowed`, which refuses loopback unconditionally and refuses
-  // local addresses without `--allow-local-ip` -- so a 127.x fixture is
-  // dropped by both lists and the test would fail for a reason that has
-  // nothing to do with the routing it is pinning. (Checked: the two appends
-  // carry the SAME guard, so this PR introduces no divergence there.)
-  std::vector<nodetool::peerlist_entry> gray{}, white{};
-  data.server->get_peerlist(gray, white);
-
-  const auto holds = [](const std::vector<nodetool::peerlist_entry>& v) {
-    for (const auto& e : v)
-      if (e.adr.host_str() == "203.0.113.9") return true;
-    return false;
-  };
+  // RFC 5737 documentation range, NOT loopback and NOT RFC1918: an
+  // operator-named address is admitted whatever its range, but a global
+  // one keeps this test independent of --allow-local-ip. The lists are the
+  // Rust dialer's; the listing export reads them, white then gray. The
+  // address is pushed before the first listen builds the dialer, so this
+  // also pins that an early push is held for the build.
+  const shekyl_rpc_peer_facts* rows = nullptr;
+  std::size_t len = 0;
+  void* owner = nullptr;
+  ASSERT_EQ(shekyl_rpc_peer_list(0, &rows, &len, &owner), 0);
+  bool in_gray = false;
+  bool in_white = false;
+  for (std::size_t i = 0; i < len; ++i)
+  {
+    const std::string host(rows[i].host, rows[i].host_len);
+    if (host != "203.0.113.9")
+      continue;
+    (rows[i].white ? in_white : in_gray) = true;
+  }
+  shekyl_rpc_peer_list_free(owner);
 
   // The property: it is a candidate.
-  EXPECT_TRUE(holds(gray)) << "--add-peer must enter the gray list";
+  EXPECT_TRUE(in_gray) << "--add-peer must enter the gray list";
   // The limb that actually pins the routing. Without it a change that put the
   // entry in BOTH lists, or in white only, would still satisfy the assertion
   // above or leave it unexercised -- and white is the list that is dialled
-  // preferentially and gossiped onward.
-  EXPECT_FALSE(holds(white))
+  // preferentially and disclosed onward.
+  EXPECT_FALSE(in_white)
     << "--add-peer must NOT enter the white list: it has never been dialled, "
-       "and white entries are gossiped onward by get_peerlist_head";
+       "and white entries are disclosed to peers";
 
   data.server->deinit();
 }

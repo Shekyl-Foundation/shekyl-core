@@ -82,9 +82,9 @@ impl PortableMap for BasicNodeData {
 
 /// `cryptonote::CORE_SYNC_DATA`.
 ///
-/// Carries no `pruning_seed`: the stripe engine is deleted (`PDM-Q7`), and
+/// Carries no stripe seed: the stripe engine is deleted (`PDM-Q7`), and
 /// the field was a self-asserted, durable, address-keyed attribute on the
-/// wire — the shape `PWD-I1` forbids. A peer that still sends the key is
+/// wire — the shape `PWD-I1` forbids. An unknown key a peer sends is
 /// decoded with the key ignored; nothing is ever emitted.
 ///
 /// Carries no `top_version` either: the block version is the constant 1, so
@@ -138,8 +138,8 @@ impl PortableMap for CoreSyncData {
 /// `nodetool::peerlist_entry`.
 ///
 /// The address and a freshness stamp, nothing else: `peer_id` went with
-/// `PWD-I1`, `pruning_seed` with `PDM-Q7` (the stripe engine is deleted).
-/// A gossiped entry carrying either key decodes with the key ignored.
+/// `PWD-I1`, the stripe seed with `PDM-Q7` (the stripe engine is deleted).
+/// A gossiped entry carrying an unknown key decodes with the key ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerlistEntry {
     /// `network_address` union.

@@ -13,6 +13,7 @@
 #include <cstdint>
 
 #include "rpc/rpc_facts_ffi.h"
+#include "shekyl/shekyl_ffi.h"
 
 extern "C" {
 void shekyl_rpc_identity_facts_rust_fill(shekyl_rpc_identity_facts* out, uint64_t seed);
@@ -295,7 +296,7 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_info_chain_facts, protocol_version) == 157,
     "protocol_version offset");
   static_assert(sizeof(shekyl_rpc_info_status_facts) == 24, "info-status facts POD changed size");
-  static_assert(sizeof(shekyl_rpc_info_peers_facts) == 48, "info-peers facts POD changed size");
+  static_assert(sizeof(shekyl_rpc_info_peers_facts) == 32, "info-peers facts POD changed size");
   static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 40, "fee-estimate facts POD changed size");
 
   // RK-5a's three list PODs. Same reason as `shekyl_rpc_tx_entry` above: they
@@ -338,12 +339,13 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_sync_span_facts, filled) == 64, "filled offset");
   static_assert(offsetof(shekyl_rpc_sync_span_facts, reserved) == 65, "reserved offset");
 
-  static_assert(sizeof(shekyl_rpc_peer_facts) == 32, "peer facts changed size");
+  // `shekyl_rpc_peer_facts` is `shekyl_ffi.h`'s since the listing moved to
+  // Rust (2026-10-13): no `last_seen`, 24 bytes, pinned on three sides.
+  static_assert(sizeof(shekyl_rpc_peer_facts) == 24, "peer facts changed size");
   static_assert(offsetof(shekyl_rpc_peer_facts, host) == 0, "host offset");
   static_assert(offsetof(shekyl_rpc_peer_facts, host_len) == 8, "host_len offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, last_seen) == 16, "last_seen offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, ip) == 24, "ip offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, port) == 28, "port offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, white) == 30, "white offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, blocked) == 31, "blocked offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, ip) == 16, "ip offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, port) == 20, "port offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, white) == 22, "white offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, blocked) == 23, "blocked offset");
 }

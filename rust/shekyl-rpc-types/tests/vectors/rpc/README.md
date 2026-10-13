@@ -154,3 +154,10 @@ holds `9`, the entries broadcast, and gains
 The restricted fixture already held `9` and does not move: that every
 caller now reads that number under that key is the change.
 `get_version_synced_v27` is the chain's 3.50 link.
+
+**3.51 — `get_peer_list` entries lose `last_seen`.** `get_peer_list_v4` is
+`_v3` minus that one member, held to its delta
+(`the_v4_peer_list_is_its_v3_minus_only_last_seen`): the listing is read
+from the Rust peer lists, which carry no clock
+(`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4), so there is no value to report.
+`get_version_synced_v28` is the chain's 3.51 link.

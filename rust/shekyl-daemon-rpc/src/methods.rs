@@ -1300,7 +1300,6 @@ pub fn get_peer_list(
             host: e.host,
             ip: e.ip,
             port: e.port,
-            last_seen: e.last_seen,
         };
         if e.white {
             white_list.push(peer);
@@ -2008,10 +2007,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v27` = 3.50). A bump that
+        // Head of the `get_version` chain (`_v28` = 3.51). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v27.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v28.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -3063,7 +3062,6 @@ pub(crate) mod tests {
     fn the_peer_list_splits_by_list_and_filters_blocked_on_request() {
         let peer = |n: u64, white: bool, blocked: bool| crate::core::PeerFacts {
             host: format!("192.0.2.{n}"),
-            last_seen: 1_750_000_000 + n,
             ip: 0,
             port: 18080,
             white,

@@ -166,6 +166,25 @@ namespace
     return opened.id;
   }
 
+  // `open` returns before the strand has created the handler: the wait for
+  // arming went with the C++ dial path (2026-10-13). A test that reads the
+  // link waits for it here, with the mutex released between looks so the
+  // strand can insert it.
+  bool wait_for_link(pool& ex, std::uint64_t id)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      {
+        std::lock_guard<std::mutex> lock(ex.mu);
+        if (ex.links.count(id) == 1)
+          return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+  }
+
   // `closed` posts destruction onto the strand. Stopping the context before
   // that post runs abandons the handler, and destroying it drops the link
   // after the config is gone.
@@ -333,20 +352,8 @@ TEST(seam_endpoint, two_connections_keep_distinct_registry_keys)
   ASSERT_NE(second, 0u);
   ASSERT_NE(first, second);
 
-  // `open` returns before the strand has created the handler (the wait for
-  // arming went with the C++ dial path, 2026-10-13), so the links appear
-  // after this returns. The sleep is outside the lock: the strand that
-  // inserts the link needs the mutex this loop polls under.
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-  while (std::chrono::steady_clock::now() < deadline)
-  {
-    {
-      std::lock_guard<std::mutex> lock(ex.mu);
-      if (ex.links.count(first) == 1 && ex.links.count(second) == 1)
-        break;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
+  ASSERT_TRUE(wait_for_link(ex, first));
+  ASSERT_TRUE(wait_for_link(ex, second));
 
   {
     std::lock_guard<std::mutex> lock(ex.mu);
@@ -442,6 +449,7 @@ TEST(seam_endpoint, a_second_established_does_not_replace_the_link)
 
   const std::uint64_t id = open_clearnet(1);
   ASSERT_NE(id, 0u);
+  ASSERT_TRUE(wait_for_link(ex, id));
   link_t* first = nullptr;
   {
     std::lock_guard<std::mutex> lock(ex.mu);

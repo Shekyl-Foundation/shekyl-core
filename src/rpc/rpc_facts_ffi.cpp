@@ -606,12 +606,6 @@ struct sync_spans_owner
   std::vector<shekyl_rpc_sync_span_facts> entries;
 };
 
-struct peer_list_owner
-{
-  std::vector<std::string> host;
-  std::vector<shekyl_rpc_peer_facts> entries;
-};
-
 struct blocks_owner
 {
   std::vector<std::string> blocks;               // one per height
@@ -1416,14 +1410,11 @@ int shekyl_rpc_info_peers(core_rpc_handle* h, shekyl_rpc_info_peers_facts* out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   try
   {
-    auto& p2p = h->rpc->get_p2p();
     std::memset(out, 0, sizeof(*out));
     out->public_incoming_sockets = shekyl_seam_socket_count(0, 0);
     out->public_outgoing_sockets = shekyl_seam_socket_count(0, 1);
     out->tor_incoming_sockets = shekyl_seam_socket_count(1, 0);
     out->tor_outgoing_sockets = shekyl_seam_socket_count(1, 1);
-    out->white_peerlist_size = p2p.get_public_white_peers_count();
-    out->grey_peerlist_size = p2p.get_public_gray_peers_count();
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
@@ -1677,98 +1668,6 @@ void shekyl_rpc_sync_spans_free(void* owner)
   delete static_cast<daemon_rpc_facts::sync_spans_owner*>(owner);
 }
 
-int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
-  const shekyl_rpc_peer_facts** out, size_t* out_len, void** out_owner)
-{
-  if (out_owner)
-    *out_owner = nullptr;
-  if (!h || !h->rpc || !out || !out_len || !out_owner)
-    return SHEKYL_RPC_FACTS_ERR_NULL;
-  *out = nullptr;
-  *out_len = 0;
-  std::unique_ptr<daemon_rpc_facts::peer_list_owner> owned;
-  try
-  {
-    owned.reset(new daemon_rpc_facts::peer_list_owner());
-    auto& p2p = h->rpc->get_p2p();
-    // Both accessors take (gray, white) in that order.
-    std::vector<nodetool::peerlist_entry> gray_list;
-    std::vector<nodetool::peerlist_entry> white_list;
-    if (public_only)
-      p2p.get_public_peerlist(gray_list, white_list);
-    else
-      p2p.get_peerlist(gray_list, white_list);
-
-    const auto append = [&](const std::vector<nodetool::peerlist_entry>& list, uint8_t white)
-    {
-      for (const nodetool::peerlist_entry& entry : list)
-      {
-        shekyl_rpc_peer_facts e;
-        std::memset(&e, 0, sizeof(e));
-        e.last_seen = static_cast<uint64_t>(entry.last_seen);
-        e.white = white;
-        // Unconditional: whether a blocked peer is reported is the request's
-        // policy, and the request lives in Rust now.
-        e.blocked = p2p.is_host_blocked(entry.adr, NULL) ? 1 : 0;
-        // The three arms differ in what `host` means; resolving them here is
-        // what leaves the caller with no address branch of its own.
-        if (entry.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-        {
-          const auto& v4 = entry.adr.as<epee::net_utils::ipv4_network_address>();
-          e.ip = v4.ip();
-          e.port = v4.port();
-          owned->host.push_back(epee::string_tools::get_ip_string_from_int32(v4.ip()));
-        }
-        else if (entry.adr.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
-        {
-          e.port = entry.adr.as<epee::net_utils::ipv6_network_address>().port();
-          owned->host.push_back(entry.adr.host_str());
-        }
-        else
-        {
-          owned->host.push_back(entry.adr.str());
-        }
-        owned->entries.push_back(e);
-      }
-    };
-    append(white_list, 1);
-    append(gray_list, 0);
-
-    for (size_t i = 0; i < owned->entries.size(); ++i)
-    {
-      owned->entries[i].host = owned->host[i].data();
-      owned->entries[i].host_len = owned->host[i].size();
-    }
-  }
-  catch (const std::exception& e)
-  {
-    MERROR("peer list facts: exception: " << e.what());
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  catch (...)
-  {
-    MERROR("peer list facts: unknown exception");
-    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
-  }
-  *out = owned->entries.empty() ? nullptr : owned->entries.data();
-  *out_len = owned->entries.size();
-  *out_owner = owned.release();
-  return SHEKYL_RPC_FACTS_OK;
-}
-
-void shekyl_rpc_peer_list_free(void* owner)
-{
-  delete static_cast<daemon_rpc_facts::peer_list_owner*>(owner);
-}
-
-void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray)
-{
-  if (out_white)
-    *out_white = P2P_LOCAL_WHITE_PEERLIST_LIMIT;
-  if (out_gray)
-    *out_gray = P2P_LOCAL_GRAY_PEERLIST_LIMIT;
-}
-
 int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
   shekyl_rpc_block_hash_facts* out)
 {
@@ -2000,8 +1899,6 @@ void shekyl_rpc_info_peers_facts_test_fill(shekyl_rpc_info_peers_facts* out, uin
   out->public_outgoing_sockets = field_value(seed, 1);
   out->tor_incoming_sockets = field_value(seed, 2);
   out->tor_outgoing_sockets = field_value(seed, 3);
-  out->white_peerlist_size = field_value(seed, 4);
-  out->grey_peerlist_size = field_value(seed, 5);
 }
 
 int shekyl_rpc_info_peers_facts_test_check(const shekyl_rpc_info_peers_facts* facts, uint64_t seed)

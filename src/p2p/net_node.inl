@@ -138,9 +138,7 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::init_config()
   {
     TRY_ENTRY();
-    auto storage = peerlist_storage::open(m_config_folder + "/" + P2P_NET_DATA_FILENAME);
-    if (storage)
-      m_peerlist_storage = std::move(*storage);
+    shekyl_dialer_open_address_file((m_config_folder + "/" + P2P_NET_DATA_FILENAME).c_str());
 
     network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
     public_zone.m_config.m_support_flags = P2P_SUPPORT_FLAGS;
@@ -274,22 +272,6 @@ namespace nodetool
     if (shekyl_ban_for(host_str.c_str(), 0, duration_ns) != 0)
       return false;
 
-    for(auto& zone : m_network_zones)
-    {
-      peerlist_entry pe{};
-      pe.adr = addr;
-      if (addr.port() == 0)
-      {
-        zone.second.m_peerlist.evict_host_from_peerlist(true, pe);
-        zone.second.m_peerlist.evict_host_from_peerlist(false, pe);
-      }
-      else
-      {
-        zone.second.m_peerlist.remove_from_peer_white(pe);
-        zone.second.m_peerlist.remove_from_peer_gray(pe);
-      }
-    }
-
     MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
     return true;
   }
@@ -314,16 +296,6 @@ namespace nodetool
     if (shekyl_ban_for(host_str.c_str(), 1, duration_ns) != 0)
       return false;
 
-    for(auto& zone : m_network_zones)
-    {
-      for (int i = 0; i < 2; ++i)
-        zone.second.m_peerlist.filter(i == 0, [&subnet](const peerlist_entry &pe){
-          if (pe.adr.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
-            return false;
-          return subnet.matches(pe.adr.as<const epee::net_utils::ipv4_network_address>());
-        });
-    }
-
     MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
     return true;
   }
@@ -346,21 +318,6 @@ namespace nodetool
     const std::string host_str = addr.host_str();
     if (shekyl_ban_permanent(host_str.c_str(), 0) != 0)
       return false;
-    for (auto& zone : m_network_zones)
-    {
-      peerlist_entry pe{};
-      pe.adr = addr;
-      if (addr.port() == 0)
-      {
-        zone.second.m_peerlist.evict_host_from_peerlist(true, pe);
-        zone.second.m_peerlist.evict_host_from_peerlist(false, pe);
-      }
-      else
-      {
-        zone.second.m_peerlist.remove_from_peer_white(pe);
-        zone.second.m_peerlist.remove_from_peer_gray(pe);
-      }
-    }
     MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
     return true;
   }
@@ -371,15 +328,6 @@ namespace nodetool
     const std::string host_str = subnet.host_str();
     if (shekyl_ban_permanent(host_str.c_str(), 1) != 0)
       return false;
-    for (auto& zone : m_network_zones)
-    {
-      for (int i = 0; i < 2; ++i)
-        zone.second.m_peerlist.filter(i == 0, [&subnet](const peerlist_entry &pe){
-          if (pe.adr.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
-            return false;
-          return subnet.matches(pe.adr.as<const epee::net_utils::ipv4_network_address>());
-        });
-    }
     MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
     return true;
   }
@@ -481,7 +429,7 @@ namespace nodetool
     public_zone.m_port_ipv6 = command_line::get_arg(vm, arg_p2p_bind_port_ipv6);
     public_zone.m_can_announce = true;
     m_external_port = command_line::get_arg(vm, arg_p2p_external_port);
-    m_allow_local_ip = shekyl_peerlist_allow_local_ip(command_line::get_arg(vm, arg_p2p_allow_local_ip));
+    shekyl_peerlist_allow_local_ip(command_line::get_arg(vm, arg_p2p_allow_local_ip));
     const bool has_no_igd = command_line::get_arg(vm, arg_no_igd);
     const std::string sigd = command_line::get_arg(vm, arg_igd);
     if (sigd == "enabled")
@@ -996,12 +944,6 @@ namespace nodetool
     CHECK_AND_ASSERT_MES(res, false, "Failed to init config.");
 
 
-    for (auto& zone : m_network_zones)
-    {
-      res = zone.second.m_peerlist.init(m_peerlist_storage.take_connector(zone.first), m_allow_local_ip);
-      CHECK_AND_ASSERT_MES(res, false, "Failed to init peerlist.");
-    }
-
     // `--add-peer` and `--seed-node` name CANDIDATES, not verified peers:
     // operator-named addresses enter the Rust gray list and earn white the
     // way every other address does, through a drawn dial the strand
@@ -1167,31 +1109,6 @@ namespace nodetool
       if(m_igd == igd)
         delete_upnp_port_mapping(m_listening_port);
     }
-    return store_config();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::store_config()
-  {
-    TRY_ENTRY();
-
-    if (!tools::create_directories_if_necessary(m_config_folder))
-    {
-      MWARNING("Failed to create data directory \"" << m_config_folder);
-      return false;
-    }
-
-    peerlist_types active{};
-    for (auto& zone : m_network_zones)
-      zone.second.m_peerlist.get_peerlist(active);
-
-    const std::string state_file_path = m_config_folder + "/" + P2P_NET_DATA_FILENAME;
-    if (!m_peerlist_storage.store(state_file_path, active))
-    {
-      MWARNING("Failed to save config to file " << state_file_path);
-      return false;
-    }
-    CATCH_ENTRY_L0("node_server::store", false);
     return true;
   }
   //-----------------------------------------------------------------------------------
@@ -1241,8 +1158,6 @@ namespace nodetool
         m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
         add_host_fail(context.m_remote_address);
       }
-      if(!context.m_is_income)
-        m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_peerlist.set_peer_just_seen(context.m_remote_address);
       if (!m_payload_handler.process_payload_sync_data(rsp.payload_data, context, false))
       {
         m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
@@ -1323,45 +1238,9 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_public_white_peers_count()
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return public_zone->second.m_peerlist.get_white_peers_count();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_public_gray_peers_count()
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return public_zone->second.m_peerlist.get_gray_peers_count();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::get_public_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white)
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone != m_network_zones.end())
-      public_zone->second.m_peerlist.get_peerlist(gray, white);
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::get_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white)
-  {
-    for (auto &zone: m_network_zones)
-    {
-      zone.second.m_peerlist.get_peerlist(gray, white); // appends
-    }
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::idle_worker()
   {
     m_peer_handshake_idle_maker_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::peer_sync_idle_maker, this));
-    m_peerlist_store_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::store_config, this));
     m_incoming_connections_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::check_incoming_connections, this));
     m_ephemeral_tor_liveness_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::check_ephemeral_tor_liveness, this));
     return true;
@@ -1769,17 +1648,6 @@ namespace nodetool
     m_payload_handler.get_payload_sync_data(rsp.payload_data);
     LOG_DEBUG_CC(context, "COMMAND_HANDSHAKE");
     return 1;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::log_peerlist()
-  {
-    std::vector<peerlist_entry> pl_white;
-    std::vector<peerlist_entry> pl_gray;
-    for (auto& zone : m_network_zones)
-      zone.second.m_peerlist.get_peerlist(pl_gray, pl_white);
-    MINFO(ENDL << "Peerlist white:" << ENDL << print_peerlist_to_string(pl_white) << ENDL << "Peerlist gray:" << ENDL << print_peerlist_to_string(pl_gray) );
-    return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>

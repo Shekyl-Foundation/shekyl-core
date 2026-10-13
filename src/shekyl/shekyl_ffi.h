@@ -4464,6 +4464,34 @@ std::size_t shekyl_peerlist_disclose(std::uint64_t session, shekyl_seam_address*
 /// `--allow-local-ip`, as the Rust peer lists' constructor input. Returns
 /// `allow`, so the line that read the flag reads it through this call.
 bool shekyl_peerlist_allow_local_ip(bool allow);
+/// Recorded for the dialer's build: a push made before the seam binds takes
+/// effect when the dialer is built.
+constexpr int SHEKYL_DIALER_DEFERRED = 2;
+/// The address file (`<data dir>/p2pstate.bin`), named once at start: its
+/// addresses enter gray, and the dialer writes it every thirty minutes and
+/// at stop. 0, SHEKYL_DIALER_DEFERRED, or -1 for a null or non-UTF-8 path.
+int shekyl_dialer_open_address_file(const char* path);
+/// One `get_peer_list` entry, from the Rust peer lists (RK-5a's export,
+/// moved to Rust 2026-10-13). `host` is the ip string for IPv4, the bare
+/// host for IPv6, the whole `host:port` for Tor (`port` 0 there); `ip` is
+/// the IPv4 address with its octets in network order, else 0. No clock.
+struct shekyl_rpc_peer_facts {
+  const char* host;
+  std::size_t host_len;
+  std::uint32_t ip;
+  std::uint16_t port;
+  std::uint8_t white;    // 1 white, 0 gray
+  std::uint8_t blocked;  // 1 when the transport layer bans the host now
+};
+static_assert(sizeof(shekyl_rpc_peer_facts) == 24, "peer facts layout is pinned on both sides");
+/// White then gray entries in one array; `public_only` nonzero lists the
+/// clearnet lists alone. 0, or -1 for a null out pointer or no lists in
+/// this process. Release `*out_owner` with shekyl_rpc_peer_list_free.
+int shekyl_rpc_peer_list(std::uint8_t public_only, const shekyl_rpc_peer_facts** out,
+    std::size_t* out_len, void** out_owner);
+void shekyl_rpc_peer_list_free(void* owner);
+/// How many addresses the clearnet white and gray lists hold. 0, or -1.
+int shekyl_rpc_peerlist_sizes(std::uint64_t* out_white, std::uint64_t* out_gray);
 /// A peerlist a peer sent over session `session` (the socket id), as it
 /// arrived: `count` entries, none dropped or rewritten. Rust reads the
 /// session's connector and direction from the board, applies every

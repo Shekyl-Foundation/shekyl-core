@@ -629,15 +629,17 @@ pub struct SyncSpanFactsFfi {
     pub reserved: [u8; 7],
 }
 
-/// Twin of `shekyl_rpc_peer_facts` (RK-5a). Pinned by layout.
+/// Twin of `shekyl_rpc_peer_facts` (RK-5a), now `shekyl-ffi`'s
+/// `ShekylRpcPeerFacts`, exported from the Rust peer lists. Pinned by
+/// layout on both sides (24 bytes). No `last_seen`: the lists carry no
+/// clock (3.51).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PeerFactsFfi {
     /// Already resolved per address arm by the adapter — the ip string for
-    /// ipv4, `host_str()` for ipv6, the whole `str()` for anything else.
+    /// ipv4, the bare host for ipv6, the whole `host:port` for Tor.
     pub host: *const u8,
     pub host_len: usize,
-    pub last_seen: u64,
     /// The ipv4 address with its four octets in **network** order, as
     /// `ipv4_network_address::ip()` returns it; 0 for every other arm.
     pub ip: u32,
@@ -706,8 +708,6 @@ pub struct InfoPeersFactsFfi {
     pub public_outgoing_sockets: u64,
     pub tor_incoming_sockets: u64,
     pub tor_outgoing_sockets: u64,
-    pub white_peerlist_size: u64,
-    pub grey_peerlist_size: u64,
 }
 
 // RK-5c layout pins, with their `static_assert` counterparts in
@@ -721,7 +721,7 @@ const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, synchronized) == 1
 const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, nettype) == 156);
 const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, protocol_version) == 157);
 const _: () = assert!(std::mem::size_of::<InfoStatusFactsFfi>() == 24);
-const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 48);
+const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 32);
 
 // RK-5a layout pins. `ConnectionFactsFfi`, `SyncSpanFactsFfi` and
 // `PeerFactsFfi` carry pointers, so there is no fill/check twin to catch a
@@ -767,15 +767,16 @@ const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, speed_fraction) == 
 const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, filled) == 64);
 const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, reserved) == 65);
 
-const _: () = assert!(std::mem::size_of::<PeerFactsFfi>() == 32);
+// The twin is `shekyl-ffi`'s `ShekylRpcPeerFacts` and the C++
+// `shekyl_rpc_peer_facts` in `shekyl_ffi.h`, each pinned to 24 bytes.
+const _: () = assert!(std::mem::size_of::<PeerFactsFfi>() == 24);
 const _: () = assert!(std::mem::align_of::<PeerFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host) == 0);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host_len) == 8);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, last_seen) == 16);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, ip) == 24);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 28);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 30);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 31);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, ip) == 16);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 20);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 22);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 23);
 
 extern "C" {
     pub fn shekyl_rpc_fee_estimate(
@@ -808,18 +809,18 @@ extern "C" {
     ) -> i32;
     pub fn shekyl_rpc_sync_spans_free(owner: *mut std::ffi::c_void);
     /// White then gray peerlist entries in one array, discriminated by
-    /// `white`; release the owner with `shekyl_rpc_peer_list_free`.
+    /// `white`, from the Rust peer lists (`shekyl-ffi`); release the owner
+    /// with `shekyl_rpc_peer_list_free`. No core handle.
     pub fn shekyl_rpc_peer_list(
-        h: *mut CoreRpcHandle,
         public_only: u8,
         out: *mut *const PeerFactsFfi,
         out_len: *mut usize,
         out_owner: *mut *mut std::ffi::c_void,
     ) -> i32;
     pub fn shekyl_rpc_peer_list_free(owner: *mut std::ffi::c_void);
-    /// The two compile-time p2p peerlist capacities. Takes no handle and
-    /// cannot fail.
-    pub fn shekyl_rpc_peerlist_limits(out_white: *mut u32, out_gray: *mut u32);
+    /// How many addresses the clearnet white and gray lists hold, from the
+    /// Rust peer lists (`shekyl-ffi`). No core handle.
+    pub fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray: *mut u64) -> i32;
     pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
     /// `get_info`'s chain snapshot (RK-5c), read for every caller.
     pub fn shekyl_rpc_info_chain(h: *mut CoreRpcHandle, out: *mut InfoChainFactsFfi) -> i32;
@@ -1184,7 +1185,6 @@ mod unit_test_link_stubs {
     pub extern "C" fn shekyl_rpc_sync_spans_free(_owner: *mut std::ffi::c_void) {}
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_peer_list(
-        _h: *mut CoreRpcHandle,
         _public_only: u8,
         _out: *mut *const PeerFactsFfi,
         _out_len: *mut usize,
@@ -1201,24 +1201,11 @@ mod unit_test_link_stubs {
     pub extern "C" fn shekyl_seam_session_counts(_out: *mut SeamSessionCountsFfi) -> i32 {
         SHEKYL_SEAM_COUNT_ERR_NO_HUB
     }
-    // The two constant exports have no "no core here" answer to give, and no
-    // unit test may take an answer from them: they exist to carry C++
-    // configuration, so a stub returning zero would let a renderer's test
-    // silently agree with a value the daemon does not hold. Zero is written
-    // anyway — `print_pl_stats` divides by the limit and guards zero — but no
-    // unit test calls these paths, and the console e2e exercises the real
-    // ones.
+    /// "No lists here": a stub that wrote zeros would let a handler's test
+    /// read a process with no dialer as a node with empty lists.
     #[no_mangle]
-    pub extern "C" fn shekyl_rpc_peerlist_limits(out_white: *mut u32, out_gray: *mut u32) {
-        // SAFETY: the caller passes two writable u32 slots or nulls.
-        unsafe {
-            if !out_white.is_null() {
-                out_white.write(0);
-            }
-            if !out_gray.is_null() {
-                out_gray.write(0);
-            }
-        }
+    pub extern "C" fn shekyl_rpc_peerlist_sizes(_out_white: *mut u64, _out_gray: *mut u64) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
     }
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_create(_p: *mut std::ffi::c_void) -> *mut CoreRpcHandle {

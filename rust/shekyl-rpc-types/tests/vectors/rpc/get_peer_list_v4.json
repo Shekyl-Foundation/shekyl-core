@@ -1,0 +1,22 @@
+{
+  "gray_list": [
+    {
+      "host": "abcdefghijklmnop.onion:18080",
+      "ip": 0,
+      "port": 0
+    }
+  ],
+  "status": "OK",
+  "white_list": [
+    {
+      "host": "10.32.0.7",
+      "ip": 117448714,
+      "port": 18080
+    },
+    {
+      "host": "2001:db8::1",
+      "ip": 0,
+      "port": 18081
+    }
+  ]
+}

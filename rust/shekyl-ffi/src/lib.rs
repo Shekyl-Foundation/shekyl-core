@@ -157,6 +157,7 @@ pub mod seam_ffi;
 // The C++ handshake still asks. The Rust dialer will hold the cause itself.
 pub mod dialer_ffi;
 pub mod peerlist_ffi;
+pub mod rpc_peerlist_ffi;
 
 // Operator link rates and the byte-stamp clock the stall check reads.
 pub mod link_ffi;

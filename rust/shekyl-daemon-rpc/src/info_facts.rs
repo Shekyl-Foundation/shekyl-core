@@ -348,13 +348,16 @@ impl InfoFacts for FfiInfoFacts {
 
     fn peers(&self) -> Result<InfoPeersFacts, FactsFault> {
         let pod = self.core.info_peers().map_err(FactsFault::from_code)?;
+        // The two list sizes come from the Rust peer lists, not the core.
+        let (white_peerlist_size, grey_peerlist_size) =
+            crate::core::CoreRpc::peerlist_sizes().map_err(FactsFault::from_code)?;
         Ok(InfoPeersFacts {
             public_incoming_sockets: pod.public_incoming_sockets,
             public_outgoing_sockets: pod.public_outgoing_sockets,
             tor_incoming_sockets: pod.tor_incoming_sockets,
             tor_outgoing_sockets: pod.tor_outgoing_sockets,
-            white_peerlist_size: pod.white_peerlist_size,
-            grey_peerlist_size: pod.grey_peerlist_size,
+            white_peerlist_size,
+            grey_peerlist_size,
         })
     }
 

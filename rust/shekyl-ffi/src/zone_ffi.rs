@@ -320,6 +320,10 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
     hub.install_dial(Arc::new(ZoneDial {
         host: Arc::clone(&host),
     }));
+    // The dialer's life is the zone host's: shutdown stops and drops it
+    // while the seam stays bound, so a host built after one (a re-init in
+    // one process) builds it again. A first build happened at the bind.
+    crate::dialer_ffi::ensure_dialer(&hub);
     crate::dialer_ffi::set_network_id(network_id);
     handle.spawn(pump(hub, clearnet_rx, tor_rx));
     *slot = Some(Arc::clone(&host));
@@ -855,6 +859,75 @@ mod tests {
             host.engine.register(OwnerClass::Transport).is_err(),
             "shutdown closes the engine"
         );
+        unsafe {
+            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        }
+    }
+
+    /// Shutdown stops and drops the dialer while the seam stays bound, so
+    /// a zone host built after it (a daemon re-initialised in one process,
+    /// as the unit tests do) had no dialer: every push was held for a
+    /// build that never came, and the listing export refused.
+    #[test]
+    fn a_zone_host_built_after_shutdown_has_a_dialer() {
+        let _bind = crate::seam_ffi::seam_bind_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut executor = 0u8;
+        let ceiling = crate::inbound_ceiling_ffi::ShekylInboundCeiling {
+            kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+            ceiling: 0,
+            soft_limit: 0,
+            held: 0,
+        };
+        unsafe {
+            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        }
+        let bound = unsafe {
+            shekyl_seam_bind(
+                std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+                Some(discard),
+                &raw const ceiling,
+            )
+        };
+        assert_eq!(bound, 0);
+        assert!(crate::dialer_ffi::dialer().is_some(), "built at the bind");
+        let network_id = [7u8; 16];
+        let params = ShekylZoneParams {
+            network_id: network_id.as_ptr(),
+            clearnet_dial_within_ns: 1_000_000_000,
+            clearnet_handshake_within_ns: 1_000_000_000,
+            clearnet_gap_within_ns: 1_000_000_000,
+            tor_dial_within_ns: 1_000_000_000,
+            tor_gap_within_ns: 1_000_000_000,
+            send_queue_bytes: 65_536,
+            shutdown_timeout_ns: 1_000_000_000,
+            workers: 1,
+            blocking: 1,
+        };
+        let first = ensure(
+            &params,
+            InboundCeiling::Unbounded(UnboundedReason::Unlimited),
+        )
+        .expect("zone host");
+        shekyl_zone_shutdown();
+        assert!(
+            crate::dialer_ffi::dialer().is_none(),
+            "shutdown drops the dialer"
+        );
+        assert!(crate::seam_ffi::hub().is_some(), "and the seam stays bound");
+        drop(first);
+        let second = ensure(
+            &params,
+            InboundCeiling::Unbounded(UnboundedReason::Unlimited),
+        )
+        .expect("a second zone host");
+        assert!(
+            crate::dialer_ffi::dialer().is_some(),
+            "the second host builds the dialer again"
+        );
+        shekyl_zone_shutdown();
+        drop(second);
         unsafe {
             shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
         }

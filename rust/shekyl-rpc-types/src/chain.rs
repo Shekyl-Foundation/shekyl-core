@@ -153,8 +153,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// target on `get_info`, `get_version` and `sync_info`. 3.47
 /// `get_info.has_peers`. 3.48 a restricted `get_info` omits Status and
 /// Peers. 3.49 its connection counts come from the seam board. 3.50 its pool
-/// count is split by broadcast state.
-pub const CORE_RPC_VERSION_MINOR: u32 = 50;
+/// count is split by broadcast state. 3.51 `get_peer_list` entries lose
+/// `last_seen`: the Rust peer lists carry no clock, and the listing is
+/// read from them.
+pub const CORE_RPC_VERSION_MINOR: u32 = 51;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -544,11 +546,12 @@ mod tests {
         // number is not a lock.
         // 3.44 drops `hard_forks`. 3.43 was already the native shard view;
         // both branches had written 43, so the deletion took the next minor.
-        // 3.50 splits `get_info`'s pool count by broadcast state.
-        assert_eq!(CORE_RPC_VERSION, 196_658);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 50);
+        // 3.50 splits `get_info`'s pool count by broadcast state. 3.51 drops
+        // `last_seen` from `get_peer_list`: the Rust lists carry no clock.
+        assert_eq!(CORE_RPC_VERSION, 196_659);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 51);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 50);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 51);
     }
 
     #[test]

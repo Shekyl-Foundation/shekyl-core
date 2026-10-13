@@ -716,7 +716,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         "print_peer_list" => {
             let (white, gray) = peer_list_selection(args.get(1).map(String::as_str));
             let limit = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(0);
-            print_peer_list(&source, white, gray, limit, unix_now())
+            print_peer_list(&source, white, gray, limit)
         }
         "print_peer_list_stats" => print_peer_list_stats(&source),
         "print_connections" => print_connections(&source),
@@ -811,16 +811,6 @@ fn trimmed(value: f64, decimals: usize) -> String {
         Some(_) => s.trim_end_matches('0').trim_end_matches('.').to_owned(),
         None => s,
     }
-}
-
-/// `d<days>.h<hours>.m<minutes>.s<seconds>`, as
-/// `epee::misc_utils::get_time_interval_string` formats it.
-fn time_interval(seconds: u64) -> String {
-    let days = seconds / 86400;
-    let rest = seconds % 86400;
-    let hours = rest / 3600;
-    let rest = rest % 3600;
-    format!("d{days}.h{hours}.m{}.s{}", rest / 60, rest % 60)
 }
 
 /// `tools::get_human_readable_bytes`: base-2 units, `B` with no decimals and
@@ -926,15 +916,9 @@ fn fetch_peer_list(
     Ok(reply)
 }
 
-#[deny(clippy::arithmetic_side_effects)]
-fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer, now: u64) -> String {
-    let elapsed = if peer.last_seen == 0 {
-        // Not "d19000.h..." — a peer never seen has no interval, and the C++
-        // says so too.
-        "never".to_owned()
-    } else {
-        time_interval(now.saturating_sub(peer.last_seen))
-    };
+/// One line per peer: the list and the address. No "last seen" column: the
+/// Rust peer lists carry no clock (3.51).
+fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer) -> String {
     // `host` means three different things across the address arms, and only
     // two of them leave a port to append. On Tor, `host` is
     // the whole `network_address::str()`, which *already ends in a port*, and
@@ -946,7 +930,7 @@ fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer, now: u64) -> String 
     } else {
         format!("{}:{}", peer.host, peer.port)
     };
-    format!("{prefix:<10} {addr:<25} {elapsed}")
+    format!("{prefix:<10} {addr}")
 }
 
 /// Which lists `print_peer_list` prints, from the selector argument.
@@ -971,13 +955,7 @@ fn peer_list_selection(selector: Option<&str>) -> (bool, bool) {
 /// `pruned` selector went with the stripe engine (`PDM-Q7`): there is no
 /// per-peer pruning state left to filter on.
 #[deny(clippy::arithmetic_side_effects)]
-fn print_peer_list(
-    src: &Source,
-    white: bool,
-    gray: bool,
-    limit: usize,
-    now: u64,
-) -> Result<String, String> {
+fn print_peer_list(src: &Source, white: bool, gray: bool, limit: usize) -> Result<String, String> {
     let reply = fetch_peer_list(src, PUBLIC_ONLY)?;
     let mut out = Vec::new();
     let mut take = |prefix: &str, peers: &[shekyl_rpc_types::Peer]| {
@@ -985,7 +963,7 @@ fn print_peer_list(
             .iter()
             .take(if limit == 0 { usize::MAX } else { limit })
         {
-            out.push(render_peer(prefix, peer, now));
+            out.push(render_peer(prefix, peer));
         }
     };
     if white {
@@ -1001,27 +979,26 @@ fn print_peer_list(
 #[deny(clippy::arithmetic_side_effects)]
 fn print_peer_list_stats(src: &Source) -> Result<String, String> {
     let reply = fetch_peer_list(src, PUBLIC_ONLY)?;
-    let (white_limit, gray_limit) = CoreRpc::peerlist_limits();
     Ok(render_peer_list_stats(
         reply.white_list.len(),
         reply.gray_list.len(),
-        white_limit,
-        gray_limit,
+        shekyl_peerlist::WHITE_CAP,
+        shekyl_peerlist::GRAY_CAP,
     ))
 }
 
 /// The rendering, over values a caller states.
 ///
-/// **Split out so the capacities are a parameter rather than an ambient FFI
-/// read.** `shekyl_rpc_peerlist_limits` is a bare `#[no_mangle]` symbol whose
-/// unit-test link stub answers 0, and `ffi.rs` carries a comment saying no
-/// unit test may take an answer from it — a prohibition with nothing enforcing
-/// it, which is how `fee_grace_blocks_max` was later added without inheriting
-/// the rule. Hoisting the read to the caller makes the prohibition
-/// unnecessary rather than unenforced: this function can be tested with real
-/// values, and the symbol is read in exactly one place.
-fn render_peer_list_stats(white: usize, gray: usize, white_limit: u32, gray_limit: u32) -> String {
-    let line = |name: &str, size: usize, limit: u32| -> String {
+/// Split out so the capacities are a parameter: the lists' caps are
+/// `shekyl-peerlist`'s constants, read in exactly one place, and this
+/// function is tested against the values the daemon holds.
+fn render_peer_list_stats(
+    white: usize,
+    gray: usize,
+    white_limit: usize,
+    gray_limit: usize,
+) -> String {
+    let line = |name: &str, size: usize, limit: usize| -> String {
         let percent = if limit == 0 {
             0.0
         } else {
@@ -1029,7 +1006,7 @@ fn render_peer_list_stats(white: usize, gray: usize, white_limit: u32, gray_limi
                 clippy::cast_precision_loss,
                 reason = "a percentage for a human, from two small counts"
             )]
-            let fraction = size as f64 / f64::from(limit);
+            let fraction = size as f64 / limit as f64;
             fraction * 100.0
         };
         format!(

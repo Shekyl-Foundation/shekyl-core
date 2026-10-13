@@ -115,14 +115,14 @@ pub const fn white_diversity_floor() -> usize {
 /// re-derived on the Rust path after PR-3 with the floor.
 pub const WHITE_REFILL_LINE: usize = white_diversity_floor() + DISCLOSE_COUNT;
 
-/// Gray capacity per connector. The C++ value
-/// (`P2P_LOCAL_GRAY_PEERLIST_LIMIT`, `cryptonote_config.h:183`), moved
-/// with the crate and not re-derived (brief §2, §14).
+/// Gray capacity per connector. The C++ value (`P2P_LOCAL_GRAY_PEERLIST_LIMIT`
+/// in `cryptonote_config.h`, deleted with the C++ peerlist 2026-10-13),
+/// moved with the crate and not re-derived (brief §2, §14).
 pub const GRAY_CAP: usize = 5000;
 
-/// White capacity per connector. The C++ value
-/// (`P2P_LOCAL_WHITE_PEERLIST_LIMIT`, `cryptonote_config.h:182`), moved
-/// with the crate and not re-derived.
+/// White capacity per connector. The C++ value (`P2P_LOCAL_WHITE_PEERLIST_LIMIT`
+/// in `cryptonote_config.h`, deleted with the C++ peerlist 2026-10-13),
+/// moved with the crate and not re-derived.
 pub const WHITE_CAP: usize = 1000;
 
 /// Nanoseconds in one hour.

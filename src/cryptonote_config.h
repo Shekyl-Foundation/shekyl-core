@@ -179,8 +179,6 @@
 #define DEFAULT_RPC_SOFT_LIMIT_SIZE                     25 * 1024 * 1024 // 25 MiB
 #define MAX_RPC_CONTENT_LENGTH                          1048576 // 1 MB
 
-#define P2P_LOCAL_WHITE_PEERLIST_LIMIT                  1000
-#define P2P_LOCAL_GRAY_PEERLIST_LIMIT                   5000
 
 // P2P_DEFAULT_CONNECTIONS_COUNT is gone: the default outbound connection count
 // is Rust-owned and reached through `shekyl_p2p_default_out_peers()`

@@ -914,7 +914,7 @@ fn every_v3_p2p_sibling_is_its_v2_minus_only_the_stripe_fields() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 26] = [
+    let links: [(&str, &str); 27] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1019,6 +1019,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v26.json"),
             include_str!("vectors/rpc/get_version_synced_v27.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v27.json"),
+            include_str!("vectors/rpc/get_version_synced_v28.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1037,7 +1041,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 26] = [
+    const ADDED_AT_LINK: [&[&str]; 27] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1064,6 +1068,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.48 (a restricted get_info omits Status and Peers, RK-Q8; get_version gains nothing)
         &[], // 3.49 (get_info's connection counts come from the seam board, RK-Q3; get_version gains nothing)
         &[], // 3.50 (get_info's pool count is split by broadcast state, RK-Q10; get_version gains nothing)
+        &[], // 3.51 (get_peer_list entries drop last_seen: the Rust peer lists carry no clock; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1075,7 +1080,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 26] = [
+    const REMOVED_AT_LINK: [&[&str]; 27] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1102,6 +1107,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.48 (the withheld parts are get_info's; get_version retires nothing)
         &[], // 3.49 (no member moves on either method; the counts' source and meaning do)
         &[], // 3.50 (the host-only member is get_info's; get_version retires nothing)
+        &[], // 3.51 (last_seen leaves get_peer_list; get_version retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1654,37 +1660,65 @@ fn get_peer_list_matches_the_oracle() {
                 host: "10.32.0.7".to_owned(),
                 ip: 0x0700_200a,
                 port: 18080,
-                last_seen: 1_750_000_001,
             },
             // ipv6: `host` is the bare host, `ip` stays zero.
             Peer {
                 host: "2001:db8::1".to_owned(),
                 ip: 0,
                 port: 18081,
-                last_seen: 1_750_000_002,
             },
         ],
         gray_list: vec![Peer {
             host: "abcdefghijklmnop.onion:18080".to_owned(),
             ip: 0,
             port: 0,
-            last_seen: 1_750_000_003,
         }],
     };
     // _v2 = _v1 minus the identifier fields 3.28 removed (PWD-I1) — derived,
     // not recaptured: the C++ oracle for this method is gone (RK-5a), so the
     // chain's memory continues from the Rust emitter's own prior contract.
     // _v3 = _v2 minus `pruning_seed` (3.35, `PDM-Q7`) — derived the same way,
-    // and held to its delta below.
-    assert_parity(include_str!("vectors/rpc/get_peer_list_v3.json"), &built);
+    // and held to its delta below. _v4 = _v3 minus `last_seen` (3.51): the
+    // Rust peer lists carry no clock, and the listing reads them.
+    assert_parity(include_str!("vectors/rpc/get_peer_list_v4.json"), &built);
 
     // `ip` is a JSON *number* here. `get_connections` carries a field of the
     // same name that is a *string*, and the pair of assertions is what keeps
     // a future edit from unifying them.
-    let doc = parsed(include_str!("vectors/rpc/get_peer_list_v3.json"));
+    let doc = parsed(include_str!("vectors/rpc/get_peer_list_v4.json"));
     assert!(
         doc["white_list"][0]["ip"].is_number(),
         "peer.ip is a number"
+    );
+}
+
+/// The `_v4` peer list is its `_v3` minus exactly `last_seen` (3.51): the
+/// Rust peer lists carry no clock (`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4),
+/// so the listing reports none. Same discipline as the deltas above.
+#[test]
+fn the_v4_peer_list_is_its_v3_minus_only_last_seen() {
+    fn strip(value: &Value, field: &str) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .filter(|(k, _)| k.as_str() != field)
+                    .map(|(k, v)| (k.clone(), strip(v, field)))
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.iter().map(|v| strip(v, field)).collect()),
+            other => other.clone(),
+        }
+    }
+    let before = parsed(include_str!("vectors/rpc/get_peer_list_v3.json"));
+    let after = parsed(include_str!("vectors/rpc/get_peer_list_v4.json"));
+    assert_eq!(
+        strip(&before, "last_seen"),
+        after,
+        "the _v4 sibling is not its _v3 minus only `last_seen`"
+    );
+    assert_ne!(
+        before, after,
+        "`last_seen` was not present in the _v3 vector: the delta is vacuous"
     );
 }
 

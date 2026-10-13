@@ -121,26 +121,26 @@ fn deleted_rpc_advert_fields_never_written_still_readable() {
     });
 }
 
-/// `pruning_seed` was deleted from `CORE_SYNC_DATA` and `peerlist_entry`
-/// with the stripe engine (`PDM-Q7`): a self-asserted, durable,
-/// address-keyed attribute gossiped in every peerlist — the shape `PWD-I1`
-/// forbids, and with a uniform honest population every non-zero value was
-/// a free marker. Never emitted; a peer that still sends a well-formed
-/// stripe seed (`384` = stripe 1 at log-stripes 3) decodes with the key
-/// ignored, so the deletion is interop-safe against a mixed fleet in both
-/// directions (`KV_SERIALIZE_OPT` on the C++ side, absent reads as 0).
-fn stale_pruning_seed_ignored<T: PortableMap + PartialEq + std::fmt::Debug>(value: &T) {
+/// Neither `CORE_SYNC_DATA` nor `peerlist_entry` carries a key this build
+/// does not define: the stripe seed went with the stripe engine (`PDM-Q7`),
+/// the peer identifier with `PWD-I1`. Nothing is ever emitted for them, and
+/// a section carrying a key this build never wrote decodes with the key
+/// ignored, so a value of either shape on the wire is not a refusal.
+fn unknown_key_ignored<T: PortableMap + PartialEq + std::fmt::Debug>(value: &T) {
     let mut section = value.to_section().expect("section");
-    assert!(section.get("pruning_seed").is_none());
-    section.insert("pruning_seed", shekyl_portable_storage::Value::UInt32(384));
+    assert!(section.get("a_key_this_build_never_wrote").is_none());
+    section.insert(
+        "a_key_this_build_never_wrote",
+        shekyl_portable_storage::Value::UInt32(384),
+    );
     let bytes = store_to_binary(&section).expect("encode");
     assert_eq!(&T::load(&bytes).expect("load"), value);
 }
 
 #[test]
-fn deleted_pruning_seed_never_written_still_readable() {
-    stale_pruning_seed_ignored(&sync_data());
-    stale_pruning_seed_ignored(&PeerlistEntry {
+fn a_key_this_build_never_wrote_is_read_with_the_key_ignored() {
+    unknown_key_ignored(&sync_data());
+    unknown_key_ignored(&PeerlistEntry {
         adr: NetworkAddress::Ipv4 {
             ip: Ipv4Addr::new(10, 0, 0, 1),
             port: 18_080,
@@ -152,8 +152,7 @@ fn deleted_pruning_seed_never_written_still_readable() {
 /// `CORE_SYNC_DATA` carries no `top_version`: the block version is the
 /// constant 1, so a tip version is not information. Never emitted; a peer
 /// that still sends the key — as a `uint8`, the type it had on the wire —
-/// decodes with the key ignored, the same both-directions interop argument
-/// as `pruning_seed` above.
+/// decodes with the key ignored, as any key this build never wrote is.
 #[test]
 fn deleted_top_version_never_written_still_readable() {
     let value = sync_data();

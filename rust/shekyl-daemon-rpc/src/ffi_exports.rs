@@ -692,8 +692,6 @@ fn info_peers_facts_filled(seed: u64) -> crate::ffi::InfoPeersFactsFfi {
         public_outgoing_sockets: submit_facts_field_value(seed, 1),
         tor_incoming_sockets: submit_facts_field_value(seed, 2),
         tor_outgoing_sockets: submit_facts_field_value(seed, 3),
-        white_peerlist_size: submit_facts_field_value(seed, 4),
-        grey_peerlist_size: submit_facts_field_value(seed, 5),
     }
 }
 

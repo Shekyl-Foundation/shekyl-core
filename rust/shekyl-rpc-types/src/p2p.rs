@@ -108,6 +108,10 @@ const fn is_false(b: &bool) -> bool {
 /// branch is resolved daemon-side, so this type carries a string and no
 /// discriminator; `ip` and `port` are zero on the arms that do not carry
 /// them.
+///
+/// No `last_seen` (3.51): the Rust peer lists carry no clock in what they
+/// disclose or list (`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4, ruled
+/// 2026-10-09), so there is no value to report and none is invented.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Peer {
@@ -120,7 +124,6 @@ pub struct Peer {
     /// arm.
     pub ip: u32,
     pub port: u16,
-    pub last_seen: u64,
 }
 
 /// Response of `GET|POST /get_peer_list`.
