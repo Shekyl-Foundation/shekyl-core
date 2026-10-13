@@ -191,7 +191,8 @@ pub use error::VerifyError;
 pub use failure_window::{
     failure_window_slashable, settlement_retention_floor, settlement_window_slashable,
     BaselineObservation, FailureWindowError, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
-    FAILURE_WINDOW_SERVE_BUDGET, SETTLEMENT_RETENTION_EPOCHS, WINDOW_MIN_OBSERVATION_PER_MILLE,
+    FAILURE_WINDOW_N_GATHER_BOUND, FAILURE_WINDOW_SERVE_BUDGET, SETTLEMENT_RETENTION_EPOCHS,
+    SLASH_SETTLEMENT_TIP_LAG_EPOCHS, WINDOW_MIN_OBSERVATION_PER_MILLE,
 };
 pub use held_at_height::holds_shard_at;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
@@ -205,10 +206,10 @@ pub use reward_arithmetic::{
     WORK_MILLI_SCALE,
 };
 pub use secret_draw::{
-    challenge_nonce, draw_commit, draw_count, draw_horizon, select_draw,
-    serve_credit_batch_commitment, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS,
-    DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION, DRAW_HORIZON_FLOOR,
-    SERVE_CREDIT_BATCH_CUSTOMIZATION,
+    challenge_nonce, draw_commit, draw_count, draw_horizon, draw_target, select_draw,
+    serve_credit_batch_commitment, DrawTarget, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION,
+    CHALLENGE_READS, DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION,
+    DRAW_HORIZON_FLOOR, SERVE_CREDIT_BATCH_CUSTOMIZATION,
 };
 pub use segment_freeze::{
     challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,

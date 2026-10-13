@@ -77,8 +77,14 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # 2026-10-01 when five grandfathered rows closed (the stub, the
 # target_height sentinel, the Ledger sources, the fcmp fuzz build, and
 # the false test-only-builder claim); 316 on 2026-10-10 (PWD-I2 gained an
-# owner); 315 on 2026-10-11 (the port-0 row gained an owner).
-GRANDFATHER_CEILING = 315
+# owner); 315 on 2026-10-11 (the port-0 row gained an owner); 309 on
+# 2026-10-11 when the two alt-chain attestation rows closed by dissolution
+# (DRS-E5 `E5-Q4`); 308 the same day when the alt-chain supply-accumulation
+# row closed with the field it described deleted (DRS-E5 a4, CEN-K8); 307
+# on 2026-10-12 at the merge of those two lanes, the list's length; 306
+# the same day (the fee-and-weight row was rewritten around its remaining
+# item and gained an owner).
+GRANDFATHER_CEILING = 306
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

@@ -1,12 +1,17 @@
 # Archival serve credit — specification
 
-**Status:** OPEN — Round 0 of SO-D8 Slice C, **RULED 2026-10-07**. The
-design is the maintainer's brief of that date (the secret per-block draw)
-and the rulings on the questions this document posed (§13). Nothing in
-this document is built.
+**Status:** OPEN — Round 0 of SO-D8 Slice C. **RULED 2026-10-07** (the
+secret per-block draw, §13.1–§13.4) and **re-ruled 2026-10-11** (one bundle
+per block replaces the carrier transaction, §13.5). Six questions found
+while writing that in were ruled 2026-10-12 (§13.6). One raised on
+review is ruled (§13.7), and two defects found on review are amended
+(§13.8). Built so far: the draw's functions, the
+settlement selection and fold, the issued-draw tables behind a test door,
+and the FN-DSA scheme with the receipt key's derivation (§2). No block path
+issues a draw or admits a pass.
 
 **Authority.** This is the single specification of the serve-credit
-mechanism: draw, request, receipt, carrier, admission, miss derivation and
+mechanism: draw, request, receipt, bundle, admission, miss derivation and
 settlement. Where another document states the mechanism differently, this
 one governs and the other is a record of how the design got here. Decision
 history stays where it is: the decision log
@@ -14,7 +19,7 @@ history stays where it is: the decision log
 records in the round documents listed in §15.
 
 **Pin.** Every statement about what the code does today is cited
-`file:line` at `dev@0e1d1d6126` and is collected in §2. Everything else is
+`file:line` at `dev@834471689` and is collected in §2. Everything else is
 specification.
 
 **Identifiers.** Family `SCS-`: `SCS-P#` for a question this round posed
@@ -41,15 +46,16 @@ result.
    `P` cannot tell a challenge from any other read.
 3. **Receipt.** `P` signs for what it delivered. The signature is the
    last bytes of the response.
-4. **Carrier.** Within `W₂` blocks the producer files the receipts in
-   carrier transactions, each of which also reveals the seed.
-5. **Admission.** Every node checks, once, when the carrier's block
-   connects: that the seed is the one committed, which pair each record's
-   draw index selects, and that the pair's receipt covers it. A record
-   does not name its pair; the pair is derived.
-6. **Issuance and misses.** A draw is *issued* when its seed is revealed.
-   An issued draw with no admitted receipt by `h + W₂` is a miss. Nobody
-   asserts a miss.
+4. **Bundle.** Within `W₂` blocks the producer files one bundle for `h`:
+   the seed, the witness key and signature, and every receipt it holds.
+   Any later miner includes it beside the block it builds.
+5. **Admission.** Every node checks, when the including block connects:
+   that the seed is the one committed, which pair each draw selects, and
+   that each pass's receipt covers its pair. A bundle is admitted whole or
+   not at all. Nothing in it names a pair; the pair is derived.
+6. **Issuance and misses.** Every draw of `h` is *issued* when `h`'s
+   bundle is admitted. A draw with no receipt in the bundle is a miss. A
+   block with no bundle by `h + W₂` issues nothing. Nobody asserts a miss.
 7. **Settlement.** After the epoch's last reveal can have landed, a
    beacon selects three of each pair's issued draws. Two or three passes
    among them settles the pair **Served**; fewer settles **Missed**;
@@ -69,35 +75,44 @@ Three properties the rest of the document exists to keep:
 
 ---
 
-## 2. What the code does today (at `dev@0e1d1d6126`)
+## 2. What the code does today (at `dev@834471689`)
 
 This section is the only place the document describes current behaviour.
+It was re-read whole at this pin on 2026-10-11. Four clauses were carried
+from the previous pin without re-reading the code behind them: the serving
+route's behaviour, that the coinbase secret is not retained, the 2-pass
+threshold inside `SettlementRow::settle`, and the body of the C++ accrual.
+The settlement lane's `SO-D12` increment 1 (PR #1032) merged on
+2026-10-12, after that re-read. The two rows it changed, the `0x0C` tag
+and the draw state inside *Settlement rows*, were re-read at
+`dev@ea08906388` and say so; every other row stands at the pin above.
 
 | Subject | Today | Where |
 | --- | --- | --- |
-| Live challenge mechanism | One beacon challenge per pair-epoch. The derived-assignment issuer is not wired | `src/cryptonote_core/blockchain.cpp:4746-4749` |
-| The public urn | Deleted 2026-10-10. It had no production caller. The secret draw's hash side is what replaced the selection; the draw producer is not live | was `rust/shekyl-archival-retention/src/challenge_assignment.rs`; `src/blockchain_db/blockchain_db.h:2047-2048` |
-| Drawable set | `DrawableSet::at_epoch_open` is built. It enumerates tip bonds. The journal walk that recovers a Release or a slash is not | `rust/shekyl-chain-rules/src/archival/drawable.rs` |
+| Live challenge mechanism | One beacon challenge per pair-epoch: the gate derives `h_fire` and the leaf index itself. No producer bounds how many blocks may challenge a pair; the gate names the secret-draw producer and the admission cutover as the blocker | `src/cryptonote_core/blockchain.cpp:4636-4641`, `:4724`, `:4757` |
+| The public urn | Deleted 2026-10-10. It had no production caller. `DrawablePair` stays, in its own module. The secret draw's hash side replaced the selection; the draw producer is not live. One C++ header comment still names `assign_epoch` as existing in Rust | was `rust/shekyl-archival-retention/src/challenge_assignment.rs` (grep for `challenge_assignment`: one doc comment, `drawable_pair.rs:8`); `rust/shekyl-archival-retention/src/drawable_pair.rs:17`; `src/cryptonote_core/blockchain.cpp:4636`; `src/blockchain_db/blockchain_db.h:2012` |
+| Drawable set | `DrawableSet::at_epoch_open` is built and has no caller outside its own tests. It enumerates tip bonds. The journal walk that recovers a Release or a slash is not built. The slash pass reads the slash log per draw to decide which draws count; it does not build the set | `rust/shekyl-chain-rules/src/archival/drawable.rs:27`, `:44`, `:9-13`; `rust/shekyl-chain-rules/src/archival/slash.rs:361`; `rust/shekyl-archival-retention/src/held_at_height.rs:104` |
 | Assignment cache, membership check | Not in code | grep for `EpochAssignmentCache`, `is_assigned`: no hits |
-| Serve-credit acceptance | One C++ gate. The Rust validator has no rule for CEN-J8–J10 | `src/cryptonote_core/blockchain.cpp:4702`, `:4714`; `rust/shekyl-chain-rules/src/census.rs:492-494` |
-| Serve-credit dedup | Pair-epoch-wide: any earlier pass for `(P, s, E)` refuses the next | `src/cryptonote_core/blockchain.cpp:4760` |
+| Serve-credit acceptance | One C++ gate. The Rust validator has no rule for CEN-J8–J10 | `src/cryptonote_core/blockchain.cpp:4591`, `:4603` (called `:3513`); `rust/shekyl-chain-rules/src/census.rs:502-504` |
+| Serve-credit dedup | Pair-epoch-wide: any earlier pass for `(P, s, E)` refuses the next | `src/cryptonote_core/blockchain.cpp:4650` |
 | Serve-credit vin record | Kept: `p_canonical_id`, `shard_id`, `settlement_epoch`, a 64-byte Ed25519 leg. Pruned: a segment path and a 3,309-byte ML-DSA leg. The signed preimage is over a leaf path | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379-402` |
-| Receipt (`SF-D8` v3) | `P` signs `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id ‖ delivery_digest`, 112 bytes, under `shekyl/archival-attestation-scheme-v3`. Carried on the block-level attestation record, a different record from the vin | `rust/shekyl-archival-retention/src/pass_anchor.rs:64-65`, `:355-372`; `attestation_wire.rs:136-144`; `rust/shekyl-crypto-pq/src/signature.rs:109` |
-| Block attestation (CEN-B4) | No Rust rule; the witness is carried unjudged. The C++ path verifies it | `rust/shekyl-chain-rules/src/census.rs:331`; `block.rs:113-115`; `src/cryptonote_core/blockchain.cpp:5089` |
-| Anchor window | `L + 1` hashes for `[h − 720 − L, h − 720]`, keyed on the including block's predecessor. `L = 4`, depth 720 | `rust/shekyl-archival-retention/src/pass_anchor.rs:70`, `:73-74`, `:122-131` |
+| Receipt (`SF-D8` v3) | `P` signs `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id ‖ delivery_digest`, 112 bytes, under `shekyl/archival-attestation-scheme-v3`, with the identity key under scheme 1. Carried on the block-level attestation record, a different record from the vin. `SCHEME_DOMAIN_RECEIPT` (scheme 3) is defined; nothing outside tests signs or verifies under it | `rust/shekyl-archival-retention/src/pass_anchor.rs:64-65`, `:355-372`; `attestation_wire.rs:138-146`; `rust/shekyl-crypto-pq/src/signature.rs:116`, `:124`; `rust/shekyl-p-serve/src/countersign.rs:171-175` |
+| Block attestation (CEN-B4) | A Rust rule, `rules::attestation::B4`, registered `implemented`. Its one caller is main-chain `validate`. The C++ path still verifies through the FFI, on the main and the alt chain | `rust/shekyl-chain-rules/src/rules/attestation.rs:79`, `:85-86`; `census.rs:334`; `validate.rs:415`; `block.rs:118`; `src/cryptonote_core/blockchain.cpp:4979`, `:5057` (called `:2135`, `:5138`) |
+| Anchor window | `L + 1` hashes for `[h − 720 − L, h − 720]`, keyed on the including block's predecessor. `L = 4`, depth 720 | `rust/shekyl-archival-retention/src/pass_anchor.rs:70`, `:73-74`, `:122-132`; `config/consensus_constants.json:33`, `:36` |
 | Serving route | Single-pass serve, 400 / 404 / 503, refusal trailer, signature over the delivery digest as the last bytes | [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) |
-| `P`'s serving key | Not wired. The serving task is given `NoResidentKey` | `rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:247` |
-| Coinbase tag `0x0C` | Does not exist. The highest tx-extra tag is `0x0B`, and the coinbase grammar admits neither | `rust/shekyl-wire/src/tx_extra/mod.rs:79`; `tx_extra/coinbase.rs:57-62` |
-| Witness key, witness seed ring | Not in code | grep for `derive_witness_keypair`, `LABEL_WITNESS`: no hits |
-| Coinbase transaction secret | Random per block and not retained. The Rust builder takes it from the caller; the C++ builder generates it | `rust/shekyl-block-template/src/lib.rs:191-194`; `src/cryptonote_core/cryptonote_tx_utils.cpp:79` |
-| Settlement fold | `settle_pair`: three of a pair's counted draws selected by the beacon, NonObservation below 3, Served at 2 passes among the three, else Missed (§9.3). The Rust slash pass calls it for every pair with a draw in the epoch | `rust/shekyl-archival-retention/src/settlement_select.rs`; `rust/shekyl-chain-rules/src/archival/slash.rs` |
-| Settlement rows | The Rust slash pass writes one per pair with a counted draw, ahead of the slash it decides. The issued-draw index and its digest (§10) have no block writer yet; a Fakechain-only door stands in for admission. The C++ store keeps the table's handle with no writer | `rust/shekyl-types/src/archival/settlement.rs`; `rust/shekyl-chain-store/src/store/archival_write.rs` (`write_settlements`, `regtest_issue_draws`); `rust/shekyl-chain-store/src/archival_snapshot.rs` (`disposition`) |
-| Slash fold | Rust: reads the settlement row; Missed is the only candidate. C++, consensus until `DEL-008`: reads "any pass" on the one-challenge beacon | `rust/shekyl-chain-rules/src/archival/slash.rs`; `src/blockchain_db/lmdb/db_lmdb.cpp` (`archival_challenge_failed_at_height`) |
-| Accrual | Rust: a pair earns for an epoch iff its settlement row is Served; the slash pass gathers, an epoch after the close (`ARCHIVAL_SETTLEMENT_WRITER.md` §15). C++, consensus until `DEL-008`: on "any pass", at the close | `rust/shekyl-chain-rules/src/archival/close.rs` (`Transition::gather`); `src/blockchain_db/lmdb/db_lmdb.cpp` (`process_archival_epoch_close_at_height`) |
-| Failure window | `m = 11`, `n = 13`; a two-valued observation with no NonObservation arm | `config/consensus_constants.json:46-47`; `rust/shekyl-archival-retention/src/failure_window.rs:258-265` |
-| Signature schemes | Ed25519 + ML-DSA-65 hybrid. The canonical encoding already carries a scheme byte: values 1 (single) and 2 (multisig) | `rust/shekyl-crypto-pq/src/signature.rs:66-67`, `:152-154`; `multisig.rs:18` |
-| Bond record | One identity key (`hybrid_pubkey`), from which `p_canonical_id` is derived. No second key field | `rust/shekyl-types/src/archival/bond.rs:262-265`; `rust/shekyl-archival-retention/src/id.rs:20-21` |
-| `RowStatus` | Five arms. None for a row retired by ruling | `rust/shekyl-chain-rules/src/census.rs:62-148` |
+| `P`'s serving key | Wired. The serving task is given `ResidentPassKey`: a weak handle to the stake actor, which signs the transcript with the identity key (`hybrid_sign_sk`). The receipt key is derived into `ArchivalPKeys` (two HKDF labels); nothing signs with it | `rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:257`; `serving/pass_key.rs:70`, `:103`; `rust/shekyl-crypto-pq/src/archival_p.rs:224`, `:229`, `:596-599`, `:762` |
+| Coinbase tag `0x0C` | Exists, and is required in every coinbase (CEN-I20, `implemented`): one 32-byte draw commitment, in a fixed place in the coinbase's tag order. Rust's coinbase writer draws it. Nothing reads it back as a commitment to open: no verifier is on the connect path (re-read at `dev@ea08906388`) | `rust/shekyl-wire/src/tx_extra/mod.rs:86` (`TX_EXTRA_TAG_DRAW_COMMITMENT`); `tx_extra/coinbase.rs:66` (`COINBASE_TAGS`); `rust/shekyl-chain-rules/src/rules/tx_extra.rs:111` (`I20`); `census.rs:493` |
+| Witness key, witness seed ring | Not in code. `draw_commit` takes a witness key as bytes and `ChallengeDraw` carries a `seed` field; nothing derives, generates or holds either. `SCHEME_DOMAIN_WITNESS_CARRIER` is a label with no signer | grep for `derive_witness_keypair`, `LABEL_WITNESS`, `WitnessRing`, `seed_ring`, `draw_seed`, `witness_key`: no hits; `witness_pk`: `rust/shekyl-archival-retention/src/secret_draw.rs:115` only; `rust/shekyl-archival-fetch-sched/src/read.rs:391-393`; `rust/shekyl-crypto-pq/src/signature.rs:128` |
+| The draw's functions | Built, with this document's vectors pinned in the module: `select_draw`, `draw_commit`, `challenge_nonce`, `serve_credit_batch_commitment`, `draw_horizon`, `draw_count`. Only `challenge_nonce` has a caller outside tests, `ChallengeDraw::nonce` under `challenge_read`, and `challenge_read` has no caller outside tests. The other five reach only the crate's re-export | `rust/shekyl-archival-retention/src/secret_draw.rs:79`, `:115`, `:127`, `:141`, `:164`, `:186` (vectors `:239`, `:396`, `:417`); `lib.rs:207-211`; `rust/shekyl-archival-fetch-sched/src/read.rs:406-407`, `:436` |
+| Coinbase transaction secret | Random per block and not retained. The Rust builder takes it from the caller; the C++ builder generates it | `rust/shekyl-block-template/src/lib.rs:193-196`; `src/cryptonote_core/cryptonote_tx_utils.cpp:79` |
+| Settlement fold | `settle_pair`: three of a pair's counted draws selected by the beacon, NonObservation below 3, Served at 2 passes among the three, else Missed (§9.3). The Rust slash pass calls it for every pair with a draw in the epoch | `rust/shekyl-archival-retention/src/settlement_select.rs:150` (`select_counted` `:75`); `rust/shekyl-chain-rules/src/archival/slash.rs:215`, `:270` |
+| Settlement rows | The Rust slash pass writes one per pair with a counted draw, ahead of the slash it decides. The issued-draw index and its digest (§10) have no block writer; a Fakechain-only door, `regtest_issue_draws`, is their one writer and is not journaled. The per-block draw state (`count`, `carry`, the shortfall, `revealed`) and the drawable set's digest are shaped as tables with view reads (`ChainView::block_draws`, `drawable_digest`) and have no block writer (re-read at `dev@ea08906388`: `rust/shekyl-chain-store/src/schema.rs:768`, `:777`; `rust/shekyl-chain-rules/src/view.rs:581`, `:587`). The C++ store keeps the table's handle with no writer; a revert and a prune delete remain | `rust/shekyl-types/src/archival/settlement.rs:137`; `rust/shekyl-chain-store/src/schema.rs:580`, `:733`, `:742`; `rust/shekyl-chain-store/src/store/archival_write.rs:357` (`write_settlements`), `:609` (`regtest_issue_draws`), `:599`; `rust/shekyl-chain-ingest/src/connector.rs:490`; `rust/shekyl-chain-store/src/archival_snapshot.rs:224` (`disposition`); `src/blockchain_db/lmdb/db_lmdb.cpp:1693`, `:6622`, `:6784` |
+| Slash fold | Rust: reads the settlement row; Missed is the only candidate. C++, consensus until `DEL-008`: reads "any pass" on the one-challenge beacon | `rust/shekyl-chain-rules/src/archival/slash.rs:410`, `:424`; `src/blockchain_db/lmdb/db_lmdb.cpp:5298`, `:5308` (`archival_challenge_failed_at_height`) |
+| Accrual | Rust: a pair earns for an epoch iff its settlement row is Served; the slash pass gathers, an epoch after the close (`ARCHIVAL_SETTLEMENT_WRITER.md` §15). C++, consensus until `DEL-008`: on "any pass", at the close | `rust/shekyl-chain-rules/src/archival/close.rs:501`, `:514` (`Transition::gather`); `src/blockchain_db/lmdb/db_lmdb.cpp:7510` (`process_archival_epoch_close_at_height`) |
+| Failure window | `m = 11`, `n = 13`. `BaselineObservation` is two-valued. The Rust slash pass gathers through `settlement_window_slashable`, which passes over a NonObservation row and an absent row. The C++ path marshals the two-valued form | `config/consensus_constants.json:46-47`; `rust/shekyl-archival-retention/src/failure_window.rs:357-363`, `:461`, `:507`, `:544`; `rust/shekyl-chain-rules/src/archival/slash.rs:455` |
+| Signature schemes | The canonical encoding carries a scheme byte: 1 (Ed25519 + ML-DSA-65), 2 (multisig container), 3 (Ed25519 + FN-DSA-1024). Scheme 3's one consumer outside tests is the receipt key's generation in `ArchivalPKeys`. `verify_pqc_auth` refuses it | `rust/shekyl-crypto-pq/src/signature.rs:66-67`, `:74`, `:169-174`, `:516-529`; `multisig.rs:18`; `fn_dsa_hybrid.rs:270`, `:360`; `archival_p.rs:762` |
+| Bond record | Two key fields: the identity key (`hybrid_pubkey`), from which `p_canonical_id` is derived, and the debit authorizer (`bond_spend_pk`). No receipt-key field | `rust/shekyl-types/src/archival/bond.rs:262-269`; `rust/shekyl-archival-retention/src/id.rs:21` |
+| `RowStatus` | Five arms: `Pending`, `Implemented`, `EnforcedAt`, `ByConstruction`, `HeldByCxx`. None for a row retired by ruling | `rust/shekyl-chain-rules/src/census.rs:62-125` |
 
 ---
 
@@ -111,11 +126,11 @@ File names without a directory are under
 | `E` | Settlement epoch | — | `epoch(h)` under the rule set's schedule |
 | `SEB` | Blocks per epoch | 10,000 | `SETTLEMENT_EPOCH_BLOCKS`, `constants.rs:245` |
 | `h_open(E)`, `h_close(E)` | First and last block of `E` | — | the settlement schedule |
-| `W₂` | Blocks within which a carrier for `h` is admissible | 500 | `CHALLENGE_RESPONSE_BLOCKS`, `constants.rs:180-186` |
+| `W₂` | Blocks within which the bundle for `h` is admissible | 500 | `CHALLENGE_RESPONSE_BLOCKS`, `constants.rs:180-186` |
 | `D` | The drawable set of `E`: the pairs held at `h_open(E)`, in canonical order. In a formula, `D` is the set's size | — | §4.1 |
 | `delivery_digest` | The 32-byte digest of the response `P` delivered, salted with the nonce. `SF-D8` writes it `D`; this document does not | — | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D8` |
 | `h` | The block whose producer draws | — | — |
-| `h_incl` | The block that includes a carrier | — | — |
+| `h_incl` | The block that includes `h`'s bundle | — | — |
 | `j` | Index of a draw within block `h`, from 0 | `u32` | — |
 | `K` | Reads the witness may make of one draw. A consensus constant: admission refuses a record whose `attempt` is `K` or more. Three, because the failure window is sized on three reads (§12) and each further read is another request the persona must serve | 3 | ruled 2026-10-07 (`SCS-P13`) |
 | `attempt` | Which read of a draw produced a record, from 0 | one byte, `< K` | §5, §7.2 |
@@ -128,6 +143,8 @@ File names without a directory are under
 | count cap | Ceiling on draws per block, as a multiple of `3·D/SEB` | 3 | PROVISIONAL (§13.2) |
 | catch-up point | Share of the epoch by which the top-up aims to finish | 70 % | PROVISIONAL (§13.2) |
 | minimum horizon | Floor on the top-up horizon | 200 blocks | PROVISIONAL (§13.2) |
+| `M` | Blocks before the end of `W₂` by which the challenger files a bundle. Challenger policy, not consensus | 30 | PROVISIONAL (§13.2) |
+| `c` | The bundle section's budget, as a multiple of the count cap | 2 | PROVISIONAL (§13.2) |
 
 A pair is **visibly short** at `h` if fewer than 3 of its draws in `E`
 are issued by reveals admitted in blocks below `h`. The **visible
@@ -168,7 +185,7 @@ publicly addressed daemon, would let a thief learn every future seed
 before its reveal, and would act as a miner-identity oracle.
 
 The two must be independent of each other. A party that could derive the
-witness key from a revealed seed could author carriers for `h`, and `P`
+witness key from a revealed seed could author a bundle for `h`, and `P`
 itself could compute its nonce, sign its own receipt and file it.
 
 Both are held in memory only, in the ring
@@ -186,7 +203,7 @@ cSHAKE256_32("shekyl/archival-draw-commit-v1", witness_pk ‖ seed)
 ```
 
 with `witness_pk` the canonical encoding of the witness public key
-(1,837 bytes, fixed) and `seed` the 32 bytes. Every carrier reveals both,
+(1,837 bytes, fixed) and `seed` the 32 bytes. The bundle reveals both,
 so no check needs one without the other. The field's length is the 32
 bytes Q13 ruled. The block hash covers the coinbase, so the commitment is
 fixed before proof of work.
@@ -255,9 +272,9 @@ per attempt. The loop is capped: the 256th attempt selects its candidate
 whatever its weight, so the draw always terminates on a fixed bound.
 
 **The pair is derived, not carried.** `(P, s)` is a function of
-`(seed, block_hash(h), j)` and the issued counts visible at `h`. A record
-names `j` and nothing else about its pair (§7.2), so it cannot name the
-wrong one.
+`(seed, block_hash(h), j)` and the issued counts visible at `h`. A pass is
+one bit at position `j` of the bundle's bitmap (§7.2). Nothing names a
+pair, so nothing can name the wrong one.
 
 The block hash covers the coinbase, so the seed is fixed before proof of
 work and cannot be ground offline: only a hash that meets difficulty is a
@@ -390,9 +407,13 @@ bound `K`.
     ours logs them, a nonce does not mark a read as a challenge without
     the seed, and after the reveal a challenge's nonces are public
     (`SF-D3`).
-- **Ordering.** The client builds no carrier for `h` until every read of
-  `h` has completed or been abandoned. A carrier reveals the seed, and
+- **Ordering.** The client builds no bundle for `h` until every read of
+  `h` has completed or been abandoned. A bundle reveals the seed, and
   the seed exposes that block's remaining reads.
+- **Filing.** The client files the bundle by `h + W₂ − M`, with `M = 30`
+  blocks (PROVISIONAL, §13.2), so that inclusion latency and an ordinary
+  reorg leave it inside its window. A bundle with no passes is filed all
+  the same (§7.1).
 
 The request header, `P`'s gate and `P`'s serving route are as
 [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) states them.
@@ -421,15 +442,20 @@ not claim `P` stores them.
   A later change of scheme is a new value and a version bump under
   [`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc).
 - **FN-DSA-1024 (level V)**, inside the hybrid structure, for the receipt
-  and for the witness's carrier signature. Ruled (§13.1).
+  and for the witness's signature on the bundle. Ruled (§13.1).
 - **Implementation.** The `fn-dsa` crate, pinned to an exact version with
   its four sub-crates. The crate is pre-standard: its keys and signatures
   will change when FIPS 206 is final. §11 carries the FOLLOWUPS row and
   the genesis gate.
 - **Signature domain.** A new scheme domain for the receipt under scheme
-  3, `shekyl/archival-receipt-scheme-v1`; the witness's carrier signature
-  has its own, `shekyl/archival-witness-carrier-scheme-v1`. One label
-  never names two messages or two schemes.
+  3, `shekyl/archival-receipt-scheme-v1`; the witness's signature on the
+  bundle has its own, `shekyl/archival-witness-bundle-scheme-v1`, minted
+  with its constant when the verifier is built. The bundle commitment is
+  a different message from the carrier's set commitment, so it does not
+  take the carrier's label, `shekyl/archival-witness-carrier-scheme-v1`;
+  that constant has no signer and is not used for the bundle. One label
+  never names two messages or two schemes
+  ([`30-cryptography`](../../.cursor/rules/30-cryptography.mdc)).
 - **Key generation.** The receipt key is seeded (§6.3). The witness's key
   is not: it is drawn from the OS for one block and is never derived from
   anything (§4.2).
@@ -450,6 +476,11 @@ The bond record carries two keys:
   `p_canonical_id` and authorizes JoinMarket and Reinstate;
 - a **receipt key**, Ed25519 + FN-DSA-1024, used for nothing but
   receipts. The identity key's signature on the JoinMarket post binds it.
+  **It is mandatory** (ruled on review of PR #1046, 2026-10-12): there is
+  one JoinMarket form and it carries the key, and the record's field is
+  typed and fixed-length. A pair whose record had no key would be in `D`
+  with no key for the `h_open(E)` snapshot to hold, and the snapshot could
+  not be built (§9.6), which would refuse every bundle of that epoch.
 
 The reason is algorithm isolation: persona identity stays on a finalized
 standard, and the pre-standard scheme touches only signatures whose value
@@ -466,123 +497,256 @@ never a key.
 
 ---
 
-## 7. Carrier and reveal
+## 7. The bundle
 
-### 7.1 The carrier
+Ruled 2026-10-11 (`SCS-P14`–`SCS-P31`, §13.5). The carrier transaction
+this section used to specify is gone, with the defect that removed it
+recorded as `SCS-F13`.
 
-A carrier is a `serve_credit_only` transaction: every input is a pass
-record for one block `h`, there are no outputs and no fee. It carries:
+### 7.1 One object per block
 
-- kept: the **seed** of `h`, whole, and **`h`**, once;
-- the **records**, one per input, in input order;
-- prunable: the **witness public key** and one **witness signature** over
-  the set commitment (§7.3).
+The bundle for block `h` is one object:
 
-A reveal for `h` is admissible only in a block `h_incl` with
+- the **reveal**: the seed of `h`, `h`, the witness public key, and one
+  witness signature over the bundle commitment (§7.3);
+- the **pass bitmap**: exactly `count(h)` bits, bit `j` set when draw `j`
+  has a record;
+- the **records**: one per set bit, in ascending `j`.
+
+Rules:
+
+- **Whole or not at all.** A block admits a bundle with every record, or
+  does not admit it. There is no state in which `h`'s seed is revealed and
+  some of its records are pending.
+- **One per `h`.** A chain admits at most one bundle for `h`.
+- **A bundle with no passes is valid, and where `count(h) > 0` it is
+  required of an honest producer.** It is what issues `h`'s misses
+  (§9.2).
+- **A block with `count(h) = 0`** has a bundle with an empty bitmap. It is
+  valid, issues nothing, and marks `h` revealed. Accepting it keeps the
+  rule uniform; a producer does not file it, which is challenger policy
+  (`SCS-P33`). It still costs one unit of the section budget (§7.4,
+  `SCS-P40`), so it cannot be used to fill a section for free.
+- **The reveal and its records are one object**, so the seed is never on
+  chain without them. Nothing is revealed per draw.
+- **Only the producer can author a bundle**, because the witness signature
+  covers every byte of it. Anyone may relay one or include it in a block.
+- **A refused bundle is a producer defect.** The producer corrects and
+  files again. The seed and the witness key stay in the ring (§4.2) until
+  the bundle is included, so it can.
+- **A bundle is not a transaction.** It has no inputs, no outputs and no
+  fee, takes no part in the fee median or the penalty curve, and displaces
+  no fee-paying transaction. Its space is budgeted on its own (§7.4).
+
+The bundle for `h` is admissible only in a block `h_incl` with
 `h < h_incl ≤ h + W₂`.
 
-**The seed is revealed whole, with records, and never per draw.** A
-per-draw reveal would let a producer reveal only failing draws, which is
-a miss assertion in disguise. A carrier with no records is refused
-(`n ≥ 1`), so a reveal is never on chain without records.
+### 7.2 Kept and prunable parts
 
-**Every carrier for `h` carries the whole seed** and is admitted on its
-own. One block's records can exceed one transaction's weight limit
-(§7.4), so a block may need more than one carrier.
+| Part | Field | Width |
+| --- | --- | --- |
+| Kept | seed | 32 |
+| Kept | `h` | 8 |
+| Kept | `count` | 4 |
+| Kept | pass bitmap | `⌈count / 8⌉` |
+| Prunable, once | witness public key | 1,837 |
+| Prunable, once | witness signature | 1,356 |
+| Prunable, per record | `attempt` | 1 |
+| Prunable, per record | `anchor_height` | 8 |
+| Prunable, per record | `delivery_digest` | 32 |
+| Prunable, per record | receipt signature | 1,356 |
 
-A carrier that fails any member's check is refused whole, naming the
-member. The witness refiles the honest members within `W₂`
-([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
-§7.6.2).
+- **A record names nothing.** Its `j` is the position of its bit. `(P, s)`
+  is derived from `(seed, block_hash(h), j)` (§4.4). `E = epoch(h)`. The
+  nonce is recomputed from the seed, `j` and the carried `attempt` (§5.2).
+- **The kept part states its own `count`** (`SCS-P39`). A bitmap's bytes
+  do not say how many bits it has: 13 bytes fit any count from 97 to 104.
+  With `count` beside it the kept part parses on its own, the padding
+  bits are checkable with no chain, and a section's draws can be summed
+  from its references alone. Admission holds the stated `count` to
+  `count(h)` (§9.1 step 3).
+- The bitmap has a fixed length, so there is no list of `j` to frame and no
+  repeat to refuse.
+- Every record is the same width, 1,397 bytes.
+- One rule-42 version bump covers the bundle.
 
-### 7.2 The record
+**The bitmap** (`SCS-P35`): draw `j` is bit `j mod 8` of byte `⌊j / 8⌋`,
+least significant bit first. Padding bits are zero, and a set padding bit
+refuses the bundle. **The records** follow in ascending `j` over the set
+bits, and their number equals the number of set bits; any other count
+refuses.
 
-| Part | Where | Field | Width |
-| --- | --- | --- | --- |
-| Kept | the input | input tag | 1 |
-| Kept | the input | `j` | varint, ≤ 5 |
-| Prunable | the prunable section | `attempt` | 1 |
-| Prunable | the prunable section | `anchor_height` | 8 |
-| Prunable | the prunable section | `delivery_digest` | 32 |
-| Prunable | the prunable section | receipt signature | 1,356 |
+### 7.3 The bundle commitment and the header root
 
-- **A record names `j` and nothing else about its draw.** `(P, s)` is
-  derived from `(seed, block_hash(h), j)` (§4.4). `h` is the carrier's.
-  `E = epoch(h)`. The nonce is recomputed from the seed, `j` and the
-  carried `attempt` (§5.2). `attempt` is prunable: it is read once, at
-  connect, to recompute the nonce, and nothing after needs it.
-- The kept part is in the input and the prunable part in the prunable
-  section, following the existing split between the serve-credit vin and
-  its pruned record.
-- One rule-42 version bump covers the record and the carrier together.
+Ruled:
 
-### 7.3 The set commitment (Q9, RULED 2026-10-07)
+- **The witness signs one commitment over the whole bundle**: the seed,
+  `h`, the bitmap, and every record in order.
+- **The block header's root covers each bundle the block admits**, in
+  ascending `h`. Each bundle contributes its kept bytes and
+  `cSHAKE256_32` of its prunable bytes.
 
-One witness signature per carrier, over
+The commitment (`SCS-P35`, ruled 2026-10-12):
 
 ```text
-cSHAKE256_32("shekyl/archival-serve-credit-batch-v1",
-             seed[32] ‖ h_le[8] ‖ frame(r₁) ‖ … ‖ frame(rₙ))
-frame(r) = varint(len(r)) ‖ r
+cSHAKE256_32("shekyl/archival-serve-credit-bundle-v1",
+             seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ r₁ ‖ … ‖ rₙ)
 ```
 
-with members in input order, each member the record's full serialization
-(its kept bytes, then its prunable bytes), and `n ≥ 1` a structural check
-on the carrier. The seed and `h` lead at fixed width and need no frame.
-Everything the carrier carries sits under the one signature: the seed,
-`h`, and each record's `j` with its prunable fields, `attempt` among
-them. The vectors below are over opaque member bytes and do not move
-with the record's layout.
+which is the kept part followed by the records, with `count` the kept
+part's, the bitmap `⌈count / 8⌉` bytes, and each record
+`attempt[1] ‖ anchor_height_le[8] ‖ delivery_digest[32] ‖ receipt[1,356]`.
 
-Vectors, computed with a standalone cSHAKE256 checked against the NIST
-SP 800-185 samples. `seed = 0x11 × 32`, `h = 1,000,000`
-(`40 42 0f 00 00 00 00 00`). Member bytes are the byte values named;
-`[a..b]` is the run of bytes `a` through `b` inclusive.
+- **Nothing is framed, and that rests on one fact:** every record is the
+  same width. `count` fixes the bitmap's length, the bitmap's set bits fix
+  the number of records, and 1,397 bytes fixes where each ends. The width
+  is fixed because FN-DSA-1024's signature is padded to 1,280 bytes and
+  the canonical hybrid encoding is fixed-length (§6.2). **A scheme whose
+  signature is not fixed-width breaks this construction**, and needs
+  frames or a different commitment along with its version bump.
+- **A new label.** The bundle commitment does not take
+  `shekyl/archival-serve-credit-batch-v1`: one label never names two
+  messages. That label, `serve_credit_batch_commitment`
+  (`rust/shekyl-archival-retention/src/secret_draw.rs`), its vectors and
+  its registry row are superseded and stay in the tree beside the new
+  ones (§11.1, re-ruled 2026-10-12); nothing calls them.
+- **The header field is renamed** (`SCS-P34`): the block header's
+  `attestation_root` becomes `bundle_root`, in the same rule-42 bump that
+  changes what it commits to. The field keeps its place; it does not keep
+  a name for a value it no longer holds.
+- **The prunable hash and the header root**, fixed with the verifier's
+  implementation (PR #1047, open):
 
-| # | Members | Commitment |
+  ```text
+  prunable_hash = cSHAKE256_32("shekyl/archival-bundle-prunable-v1",
+                               witness_pk[1,837] ‖ witness_sig[1,356] ‖ r₁ ‖ … ‖ rₙ)
+
+  root = cSHAKE256_32("shekyl/archival-bundle-root-v1",
+                      n_le[4] ‖ ref₁ ‖ … ‖ refₙ)
+  refᵢ = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉] ‖ prunable_hash[32]
+  ```
+
+  A reference is self-delimiting, because it states its `count`
+  (`SCS-P39`), so the root needs no length frame and is recomputable on
+  an alternative block with no chain (§9.1). The verifier on PR #1047
+  was first built with each reference framed by its byte length, before
+  the count was in the kept part; it moves to this form with that PR.
+  The vectors for all three hashes are pinned in the verifier's tests.
+
+### 7.4 Size and the section budget
+
+Per record: 1,397 B, all prunable. Per bundle: `44 + ⌈count(h) / 8⌉` B
+kept; 3,193 B of witness key and signature plus 1,397 B per pass,
+prunable.
+
+| Draws at `h`, all passed | Kept | Prunable |
 | --- | --- | --- |
-| 1 | `[00..3f]` | `a75502337d8e6b440413009dcc6a96650354ab194abfe1289dbc0f685a6cf14b` |
-| 2 | `[00..3f]`, `[40..9f]` | `cd10b6b4cb65ee0028868f2a62e7b0b5df85b1d6f6ea6d3ff88b680c15053c0b` |
-| 3a | `[00..0f]`, `[10..3f]` | `f32bddca0eb179ed027b4421d5cff58a707b03b140ec54b0161dc57932f2fd6d` |
-| 3b | `[00..1f]`, `[20..3f]` | `91f5ca7a11d3b1120206fb683655ee379b3c69153f6e14d7c859fbae185056ac` |
-| 4 | `a5` × 127, `5a` × 128 | `47d951c68a20dda3111eab91a320338f0c9adde3319bbda4450ad6d784f7a782` |
-| 5 | as 2, at `h = 1,000,001` | `b1d20f8af7d47aa5ea0b046e84c7d655d2a61314badba546f2840e7a7e4807c4` |
+| 97 | 57 B | 138,702 B |
+| 117, the sim's mean at no dropout (§12) | 59 B | 166,642 B |
+| 156, the sim's mean at 30 % dropout | 64 B | 221,125 B |
+| 292, the count cap at `D` = 324,000 | 81 B | 411,117 B |
+| 2,791, the count cap at `D` = 3,100,000 | 393 B | 3,902,220 B |
 
-- Vectors 1, 3a and 3b have byte-identical unframed member
-  concatenations. With framing dropped all three hash to
-  `e29a89bdfc18d9e2ee971720a3784c5e4a15ae7e4101bb8492ec4d6ec9716b8f`.
-  They are the only vectors that go red when framing is dropped.
-- Vector 4 crosses the one-byte / two-byte varint boundary (127 encodes as
-  `7f`, 128 as `80 01`).
-- Vector 5 differs from 2 only in `h`. It goes red if `h` is left out of
-  the commitment.
-- Every vector carries a seed; a commitment without one is not a form of
-  this construction.
+The count cap is `⌊9·D / SEB⌋ + 1`: the per-block target is at most
+`9·D / SEB` and the carry adds less than one (§4.3).
 
-### 7.4 Size
+**The section budget is counted in draws, and every bundle costs at least
+one.** A bundle is charged `max(count, 1)`. The charges of the bundles a
+block `b` admits sum to at most
 
-Per record: at most 6 B kept and 1,397 B prunable, 1,403 B. Per carrier:
-at most 42 B kept (the seed and `h`); 1,837 B of witness key and 1,356 B
-of witness signature prunable; 3,235 B.
+```text
+c · (⌊9·D / SEB⌋ + 1)
+```
 
-A carrier under `TX_WEIGHT_LIMIT` (149,400,
-`rust/shekyl-wire/src/transaction.rs:156-158`) holds
-`⌊(149,400 − 3,235) / 1,403⌋ = 104` records.
+with `c = 2` (PROVISIONAL, §13.2) and **`D` the largest `D` among the
+epochs of the bundles in the section** (`SCS-P20`, `SCS-P33`). That is `c`
+bundles at the count cap for any `D`: without the `+ 1` a network below
+about 555 pairs could never admit one. A section spans at most two epochs,
+because `W₂ < SEB`. It is one addition per bundle, and the bytes follow
+from it.
 
-Against the figure this replaces
-([`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)
-§7.6, `97 × 3,411 + 16,143 = 347,010` B per block at 97 draws):
+**Why at least one** (`SCS-P40`). A zero-draw bundle is admissible
+(§7.1), and charged by its draws it would cost nothing: one block could
+then carry one for every zero-draw block of the last `W₂`, up to 500
+bundles, 1.6 MB of bodies and 500 witness-signature verifications, under a
+budget meant to hold a section to `c` bundles at the count cap. Charged
+one, a block admits at most `c · (⌊9·D / SEB⌋ + 1)` bundles whatever
+their draws. That is 2 on a network small enough to have zero-draw
+blocks, and at maturity the two-bundles-at-the-cap reading is unchanged,
+since a bundle with draws is charged its draws.
 
-| Draws per block | Carriers | Bytes per block | Of which kept |
-| --- | --- | --- | --- |
-| 97, the old figure's count | 1 | 139,326 | 624 |
-| 117, the sim's mean at no dropout (§12) | 2 | 170,621 | 786 |
-| 156, the sim's mean at 30 % dropout | 2 | 225,338 | 1,020 |
+- `c` must not bind on the first build. Its value comes from measurement:
+  the section's bytes, propagation to Tor peers, the orphan rate, and
+  `BA-T33` on the floor device.
+- A template takes bundles earliest `h` first.
+- `MAX_ATTESTATION_RECORDS = 256` cannot stay a fixed number: the count cap
+  passes it at `D` = 324,000.
 
-At the same 97 draws the load is 40 % of the old figure, and what a
-pruned node keeps is under 1 KB a block. These are worst cases on the
-varints; the weight rule for the prunable part is the fee-and-weight
-round's.
+### 7.5 References, bodies and the queue
+
+A block carries **references**, never bundle bodies.
+
+- **A reference** is a bundle's kept bytes and the hash of its prunable
+  bytes: `76 + ⌈count / 8⌉` B, so 76 to 113 B at `D` = 324,000, growing
+  with the bitmap (`SCS-F17`).
+- **Bodies live in one store keyed by that hash.** A body is fetched when
+  needed and accepted on hash equality.
+- **A main-chain block pulls its bodies at connect**, normally from the
+  local queue. **An alternative block pulls them only at the switch.** An
+  alternative chain whose bodies cannot be fetched is never switched to.
+- **A node that relays a block must serve its bodies.** Refusing is
+  attributable misbehaviour.
+- **A body is stored only if** a block with valid proof of work references
+  it, or the queue admitted it.
+- **The reference's bitmap length fixes the body's maximum size**, so an
+  oversized fetch is refused before it completes.
+- **Every stored body has a holder**: the queue, an alternative block, or a
+  main-chain block not yet past `D_max`. The store's invariant register
+  checks it.
+
+**The queue** is the pool's own structure for bundles, separate from
+transactions (DRS-E5).
+
+- Admission is the bundle rule of §9.1 run against the tip.
+- Keyed by `h`, one per `h`, the first valid one wins. Bounded at `W₂`
+  entries.
+- An entry leaves when its bundle is admitted on chain, when `h` is
+  popped, or when its window closes.
+- After a reorg every entry is checked again by the same rule.
+- **The bundle of a popped block returns to the queue from the body
+  store**, if `h` survives and the window is open. This is this
+  document's reading of the two rulings together (a main-chain block not
+  past `D_max` holds its bodies; the queue is re-checked after a reorg),
+  not a sentence of either; it is what §10's re-admission rests on.
+- Persisted, and reconciled at open.
+
+A bundle travels the way a block's origination travels. It has no
+Dandelion++ stem: `0x0C` already makes its author public, and the
+producer's node broadcast block `h` with no origin protection
+(`SCS-P25`).
+
+### 7.6 Retention and sync
+
+- **The prunable part is archival content in the shard domain.** `SHT-Q1`
+  defines the domain by "carries prunable data", so bundles join it.
+  **Its place in the domain** (`SCS-P38`, ruled 2026-10-12): after the
+  transactions of the including block `h_incl`, the block's bundles in
+  ascending `h`, which is the order the header root already covers. **Its
+  length** is its prunable bytes, `3,193 + 1,397 ·` (set bits): a function
+  of the kept bitmap, so a pruned node recomputes it with nothing new
+  stored, and the header root binds it. The cumulative-length fold reads
+  it at connect and undoes it at pop, as it does a transaction's. That
+  formula holds because records are a fixed width (§7.3): a scheme with
+  variable-width signatures would need the length stated, not derived.
+- **It is kept until past `D_max`**, because a reorg must be able to check
+  the bundle again. It is then discarded and filled back from archivers
+  like everything else.
+- **Sync** is skeleton forward, then backfill: kept bytes are checked
+  against the header root, and prunable bytes against the per-bundle hash.
+- **For the shard-size derivation:** the largest bundle's length, at the
+  count cap with every draw passed, is the maximum-object input `SHT-Q2`'s
+  rule needs from this mechanism; it is a function of `D` (§7.4). `SHT-Q2`'s rule that no single object exceeds
+  the shard size now has an object that grows.
 
 ---
 
@@ -590,24 +754,31 @@ round's.
 
 Every daemon prunes. There is no class of node that keeps everything: a
 shard's prunable bodies are discarded at the epoch boundary after its
-freeze. So verification of the prunable parts is stated as one thing:
+freeze.
 
-**Once, at connect, by every node. Never after the prune.** A node syncing
-from scratch accepts that history on the chain it follows.
+- **At connect, every node that holds a bundle's prunable bytes verifies
+  them**: the witness signature and every receipt (§9.1).
+- **A node syncing the skeleton** checks each bundle's kept bytes against
+  the header root and accepts that history on the chain it follows.
+- **A backfilled bundle is accepted on hash equality**: its prunable
+  bytes against the term the header root covers (`SCS-P36`). That is the
+  whole rule; it is uniform and needs no history. Verifying its receipts
+  again is possible while the `h_open(E)` snapshot can still be rebuilt,
+  which the bond journals' horizon bounds (`journal_horizon`), and is
+  required nowhere. The earlier rule here, "never after the prune", is
+  withdrawn (`SCS-P22`).
 
 Settlement runs long after connect and must be computable by a node that
 has pruned. It therefore reads only kept data.
 
-- **Kept:** each carrier's seed and `h`, and each record's `j`. From these
-  and the issued-draw index any node recomputes the draws, each pair's
-  counted draws, and which have pass records.
-- **Prunable:** the witness key and signature, `P`'s receipts, the delivery digests, each
-  record's `attempt`, the anchor fields, and with them the input of the set commitment. All are
-  checked at connect and never needed again.
+- **Kept:** each bundle's seed, `h` and pass bitmap. From these and the
+  issued-draw index any node recomputes the draws, each pair's counted
+  draws, and which of them passed.
+- **Prunable:** the witness key and signature, and each record's receipt,
+  delivery digest, `anchor_height` and `attempt`.
 
-At connect, admission also confirms that the kept seed, `h` and each `j`
-are the ones the witness signature covers, through the set commitment
-(§7.3).
+The kept bytes are bound twice: by the header root, and by the witness
+signature, whose commitment covers them (§7.3).
 
 ---
 
@@ -615,48 +786,128 @@ are the ones the witness signature covers, through the set commitment
 
 ### 9.1 Admission
 
-For a carrier naming `h`, in block `h_incl`. Checks run in this order;
-the order decides which refusal a test observes. Each refusal is a typed
-verdict naming its census row.
+Admission is a block rule. A block whose bundle section fails any check
+below is invalid; nothing admits part of a section or part of a bundle.
+Checks run in this order, and the order decides which refusal a test
+observes. Step 7 runs over every record before step 8 runs over any;
+within step 8 records go in ascending `j`, each anchor check before its
+own receipt. Each refusal is a typed verdict naming its census row.
 
-1. **Structure.** The carrier is `serve_credit_only`, `n ≥ 1`, no `j`
-   repeats within it, and `h < h_incl ≤ h + W₂`. `W₂` is the only window;
-   there is no separate read window.
-2. **Commitment.**
+**The section**, for block `h_incl`:
+
+1. **Form.** The references are in strictly ascending `h`, so no `h`
+   repeats. Each reference parses: its bitmap is exactly `⌈count / 8⌉`
+   bytes for the `count` it states, with zero padding. The header root
+   recomputes from them (§7.3).
+2. **Budget.** The sum of `max(count, 1)` over the section, taken from
+   the references' stated counts, is within the section budget (§7.4).
+
+Both are computed from the references and nothing else. The budget's
+value needs `D`, which is chain state; where that is not known at an
+alternative block's arrival, the sum is still taken and its comparison
+waits for the switch. A reference that understates its `count` to pass
+this sum is refused at step 3.
+
+**Each bundle**, naming `h`:
+
+3. **Structure.** `h < h_incl ≤ h + W₂`. No bundle for `h` is already
+   admitted on this chain. The reference's stated `count` equals
+   `count(h)`. The number of records equals the number of set bits. `W₂` is the only
+   window; there is no separate read window.
+4. **Commitment.**
    `cSHAKE256_32("shekyl/archival-draw-commit-v1", witness_pk ‖ seed)`
    equals `h`'s `0x0C`.
-3. **Witness signature.** It verifies under `witness_pk` over the set
+5. **Witness signature.** It verifies under `witness_pk` over the bundle
    commitment (§7.3).
-4. **Each record's pair.** `j < count(h)`, and `(P, s)` is derived as
-   draw `j` at `h` (§4.4), at the issued counts visible at `h`.
-5. **Nonce.** `attempt < K`, or the carrier is refused. The nonce is
+6. **Each set bit's pair.** `(P, s)` is derived as draw `j` at `h`
+   (§4.4), at the issued counts visible at `h`.
+7. **Nonce.** `attempt < K`, or the bundle is refused. The nonce is
    recomputed from `(seed, block_hash(h), j, attempt)` with one hash
    (§5.2).
-6. **Receipt.** `P`'s receipt verifies under the bond record's receipt
-   key over the transcript of §6.1: the recomputed nonce, the carried
-   `anchor_height`, the hash of the block at that height on the
-   connecting chain (the alternative chain above the fork point when the
-   block is validated there), the derived `shard_id`, and the carried
-   `delivery_digest`. The anchor block must exist below `h_incl`.
-7. **Dedup** on `(h, j)`, which is `(P, s, E, h, j)` with the pair and
-   epoch derived.
+8. **Receipt.** `P`'s receipt verifies under `P`'s receipt key over the
+   transcript of §6.1: the recomputed nonce, the carried `anchor_height`,
+   the hash of the block at that height on the connecting chain, the
+   derived `shard_id`, and the carried `delivery_digest`.
+   **`anchor_height < h`, or the bundle is refused** (`SCS-P32`).
 
-**No bound on `anchor_height` is checked.** The nonce contains
-`block_hash(h)`, so no receipt for `(h, j)` can predate `h`: a lower
-bound keyed on `h` is implied and is not a separate check. An upper bound
-is `P`'s to keep: `P`'s own gate holds the anchor within `L` of `P`'s tip
-minus 720 at read time. The anchor stays on the wire for that gate and
-for organic reads.
+**What a forged bundle can cost a node.** The commitment is checked before
+either signature, and until `h`'s producer releases its bundle nobody
+else can open `h`'s `0x0C`. After that the seed and the witness key are
+public, so anyone can build a body that opens the commitment. What stops
+it there:
+
+- **The witness signature is checked next, before any receipt.** A body
+  the producer did not sign costs the node one signature verification and
+  no receipt verification.
+- **A node that already holds a valid bundle for `h` drops any other
+  before that check**: the queue is one per `h`, first valid wins (§7.5).
+- **A body fetched for a block's reference is checked by hash first**, so
+  a mutated body is refused before it is parsed.
+
+So the exposure is one witness-signature verification per forged body, per
+node, for the blocks whose valid bundle that node has not yet received:
+at most `W₂` heights. It is bounded by the relay layer's ordinary
+per-peer limits, not by proof of work.
+
+**The receipt key is read from the `h_open(E)` bond snapshot, the same
+snapshot `D` is drawn from** (`SCS-P19`). It is one type with two methods:
+the drawable pairs, and each pair's receipt key. The draw and this rule
+both take it as their argument, so they cannot read different heights.
+There is no setting for the height: a key read anywhere else lets a pair
+in `D` lack a key, which would refuse the whole bundle. Bond records are
+immutable, and a receipt key does not change for the life of its record.
+The settlement filter of §9.3 step 2 is a different question and keeps
+its own read at `h`.
+
+**What a bundle's validity depends on:** the chain through `h`, its own
+bytes, and that snapshot. Nothing above `h` enters it, apart from the
+window and the one-per-`h` rule, so a bundle that was valid in a popped
+block is valid again on any chain that keeps `h`, while its window lasts.
+The anchor is held below `h` by the rule itself (step 8), not by today's
+constants.
+
+**No node can be made to include a bundle, and no rule acts on its
+absence** (`SCS-P15`). A block built without a given bundle cannot be told
+apart from one whose miner had not received it. Forcing inclusion would
+let a producer that withholds its bundle halt the chain. A bundle that no
+miner includes through all of `W₂` leaves `h` unrevealed: NonObservation,
+never misses.
+
+**Alternative chains** (`SCS-P23`). When an alternative block arrives,
+only the stateless checks run: the section's form, the root, and the
+budget where `D` is known at or below the fork point. Otherwise the budget
+waits for the switch. Everything else runs at the switch, in the full
+validate over the switch's batch view. An alternative chain with an
+invalid bundle fails there and rolls back, at the cost of a heavier
+chain's proof of work. No bond state is rebuilt at the fork point.
+
+**The anchor's bounds** (`SCS-P7`, amended 2026-10-12 by `SCS-P32`).
+
+- **Below:** none is checked. The nonce contains `block_hash(h)`, so no
+  receipt for `(h, j)` can predate `h`; `P`'s own gate holds the anchor
+  within `L` of `P`'s tip minus the anchor depth at read time.
+- **Above:** `anchor_height < h`, checked at admission. It is what makes
+  "nothing above `h` enters a bundle's validity" a property of this rule.
+  An honest read satisfies it because `W₂ + L ≤` anchor depth, and that
+  relation is asserted on every rule set, as rule-set data (rule 71), so
+  a set that shortens the epoch or the depth cannot break it silently.
+  A Fakechain schedule that breaks it is refused where it is built, as a
+  typed error (PR #1047). The daemon's regtest epoch lever does not reach
+  that constructor in Rust today; the replay tool's epoch flag is the one
+  input that does.
+
+The anchor stays on the wire for `P`'s gate and for organic reads.
 
 ### 9.2 Issuance and misses
 
-- A draw `(h, j)` is **issued** when a carrier revealing `h`'s seed is
-  admitted. Every draw of `h` is issued by the first such carrier,
-  whether or not that carrier holds its record.
-- An issued draw with no admitted record by `h + W₂` is a **miss**. It is
-  derived and never asserted.
-- A block whose seed is never revealed issues nothing: no passes and no
-  misses.
+- Every draw `(h, j)`, for `0 ≤ j < count(h)`, is **issued** when `h`'s
+  bundle is admitted.
+- A draw whose bit is set is a **pass**. A draw whose bit is clear is a
+  **miss**. Both are written in the batch of the block that admits the
+  bundle. A miss is the absence of a receipt in the bundle; nothing
+  asserts one.
+- A block with no bundle admitted by `h + W₂` issues nothing: no passes
+  and no misses.
 
 ### 9.3 Settlement
 
@@ -793,6 +1044,182 @@ floor device is not measured
 does not cover the per-block counts, which admission reads and settlement
 does not.
 
+### 9.6 The verifier and its two contracts
+
+Three lanes build this mechanism (`SCS-P31`). This slice builds validity:
+the pure verifier. The settlement lane (`SO-D12`) builds state: it
+implements the view on its store, calls the verifier at admission, and
+writes what the verifier returns. DRS-E5 builds transport: the body store,
+the queue, references in the alternative store, and the view on the
+switch's batch view.
+
+Two types cross those boundaries, and both are defined here before anyone
+builds against them: **the view**, which is everything the verifier reads,
+and **the kept projection**, which is what it returns for the writer. The
+signatures below are the shape. Names can move in review; what each
+carries cannot without a change to this section.
+
+**The verifier** lives in `shekyl-chain-rules`. It is a pure function,
+names no store type, writes nothing, and is tested against a fixture view.
+
+```rust
+/// Stateless: form, the header root, and the budget when `D` is known.
+/// Runs on a block's references alone, so it runs on an alternative
+/// block at arrival. A reference states its own `count` (`SCS-P39`), so
+/// nothing is asked of the chain.
+pub fn check_section(
+    refs: &[BundleRef],
+    header_root: &[u8; 32],
+    budget: Option<u64>,          // None: `D` not known here; compared at the switch
+) -> Result<SectionCharge, SectionRefused>;   // the sum of max(count, 1)
+
+/// Everything else, for one bundle. Receipts included.
+pub fn verify_bundle<V: BundleView>(
+    reference: &BundleRef,
+    body: &BundleBody,
+    h_incl: BlockHeight,
+    view: &V,
+    rule_set: &RuleSet,
+) -> Result<Admitted, BundleRefused<V::Fault>>;
+```
+
+A refusal is a typed verdict naming its census row and, for a record, the
+draw `j` that failed. Three outcomes are not verdicts on a block:
+
+- **a view fault**, the store's own failure (§9.5);
+- **the body is not the one referenced**: its hash is not the reference's.
+  The block committed to the reference, and a block whose body cannot be
+  had is not connected. This is checked before anything else;
+- **the view could not answer** something it should hold: the snapshot of
+  `epoch(h)`, the hash at `h` or at an anchor, a drawn pair's key, or the
+  `0x0C` of a block it holds. Every coinbase carries exactly one `0x0C`
+  (CEN-I20), so a known block with none is the view's failure, not the
+  block's.
+
+`draw_count(h)` answering "no such block" does refuse the bundle: it names
+a block this chain does not have. A `0x0C` that the bundle's seed and
+witness key do not open is the refusal of step 4.
+
+**Not in this tree.** The verifier is implemented on PR #1047, which is
+open: `check_section`, `verify_bundle`, `open_body`, the bundle's types
+and hashes, and census rows CEN-J29 to J37, registered `pending` because
+the cutover is what wires it. This section is the contract that PR is
+built to; §2 says what the tree itself holds.
+
+**The view.** One method for each thing §9.1 reads, and nothing else.
+
+```rust
+pub trait BundleView {
+    type Fault;
+
+    /// `count(h)`, as written when `h` connected (§4.3). `None`: no such
+    /// block on this chain.
+    fn draw_count(&self, h: BlockHeight) -> Result<Option<u32>, Self::Fault>;
+    // A draw index `j` is 32 bits (§3), so a count is. A store that holds
+    // it wider refuses a value that does not fit; it does not truncate.
+
+    /// `h`'s `0x0C` commitment (§4.2).
+    fn draw_commitment(&self, h: BlockHeight) -> Result<Option<[u8; 32]>, Self::Fault>;
+
+    /// The hash of the block at `height` on this chain. Read twice: at
+    /// `h`, for the selection and the nonce, and at each record's
+    /// `anchor_height`, for the receipt's transcript.
+    fn block_hash(&self, height: BlockHeight) -> Result<Option<BlockHash>, Self::Fault>;
+
+    /// Whether the pair at `index` in `D` is visibly short at `h`: fewer
+    /// than 3 of its draws in `epoch(h)` issued by bundles admitted in
+    /// blocks below `h` (§3). This is the issued counts visible at `h`,
+    /// in the one form the selection asks for.
+    fn visibly_short(&self, h: BlockHeight, index: u64) -> Result<bool, Self::Fault>;
+
+    /// Whether a bundle for `h` is already admitted on this chain.
+    fn revealed(&self, h: BlockHeight) -> Result<bool, Self::Fault>;
+
+    /// The `h_open(E)` snapshot: `D`, and each pair's receipt key.
+    fn snapshot(&self, epoch: SettlementEpoch) -> Result<Option<&EpochSnapshot>, Self::Fault>;
+}
+```
+
+- `D`, as a number, is the snapshot's length. The view has no second
+  source for it.
+- Every answer is a function of the chain through `h`, except `revealed`,
+  which is the one-per-`h` rule. That is §9.1's reorg property, stated as
+  an interface.
+- The store's view, the switch's batch view and the fixture each implement
+  it. The queue runs the verifier against the tip through the store's.
+
+**The snapshot** (`SCS-P19`). One type, in `shekyl-archival-retention`
+beside `secret_draw.rs`: that crate already holds `DrawablePair` and the
+draw's functions and depends on `shekyl-crypto-pq` for the key type, so
+the draw and the verifier reach it without a new edge. `SO-D12`'s
+increment 2 builds it.
+
+```rust
+pub struct EpochSnapshot { /* private */ }
+
+impl EpochSnapshot {
+    /// The epoch this is the `h_open(E)` state of.
+    pub fn epoch(&self) -> SettlementEpoch;
+    /// `D`.
+    pub fn len(&self) -> u64;
+    /// The pair at `index` in canonical order (§4.1).
+    pub fn pair(&self, index: u64) -> Option<DrawablePair>;
+    /// The receipt key of the pair at `index`.
+    pub fn receipt_key(&self, index: u64) -> Option<&FnDsaHybridPublicKey>;
+}
+```
+
+- **A snapshot in which a pair has no receipt key cannot be built.** Its
+  one constructor takes the epoch, each persona's id with its receipt
+  key's bytes, and the pairs, and fails on a pair whose persona has no
+  key or a key that does not parse. The settlement lane feeds it from
+  each persona's bond record as of `h_open(E)`. So "a pair in `D` lacks a key" is
+  not a state the verifier meets.
+- **Both methods read one value.** `select_draw` is given `len()`; the
+  verifier indexes `pair()` and `receipt_key()` with the index it
+  returned. There is no height parameter on either.
+- **It must be buildable for an epoch whose bonds have since been
+  released or slashed.** That is why `SO-D12`'s Release journal stores the
+  whole bond record: the receipt key is rebuilt as of `h_open(E)` with
+  the holdings.
+- A key is stored per persona and returned per pair; the verifier decodes
+  a persona's key once per bundle.
+
+**The kept projection.** What the verifier returns on success, and all the
+writer needs.
+
+```rust
+pub struct Admitted {
+    /// The bundle's kept bytes, parsed: the reference's content.
+    pub kept: BundleKept,
+    /// One entry per draw `j` of `h`, in order: the derived pair and
+    /// whether it passed (`SCS-P37`).
+    pub draws: Vec<DerivedDraw>,
+}
+
+pub struct BundleKept {
+    pub h: BlockHeight,
+    pub seed: [u8; 32],
+    pub passes: PassBitmap,   // exactly `count(h)` bits
+}
+
+pub struct DerivedDraw {
+    pub index: u64,           // position in `D`
+    pub pair: DrawablePair,
+    pub passed: bool,
+}
+```
+
+- `BundleKept` is the kept part of §7.2 and nothing more. It is what the
+  header root covers, what a pruned node retains, and what settlement
+  reads.
+- The writer turns `draws` into index rows `(E, P, s, h, j) →
+  (h_incl, passed)`, folds each into the epoch's digest, marks `h`
+  revealed, and updates the visible counts (§10). It derives nothing.
+- `draws` is part of the contract (`SCS-P37`, ruled 2026-10-12): without
+  it the writer would run the selection a second time for every draw,
+  the misses included. One derivation, one KAT.
+
 ---
 
 ## 10. The issued-draw index
@@ -809,10 +1236,10 @@ with it:
 - **Per block `h`:** `count(h)`, `carry(h)`, the visible shortfall at
   `h`, and whether `h`'s seed has been revealed.
 - **Per pair, per epoch:** its issued draws as `(h, j, h_reveal, passed)`,
-  where `h_reveal` is the block that first admitted `h`'s seed and
-  `passed` is whether a record for the draw has been admitted. The count
-  visible at any `h′` is the number with `h_reveal < h′`. The first
-  carrier for `h` derives every draw of `h` and writes them all. The
+  where `h_reveal` is the block that admitted `h`'s bundle and `passed`
+  is the draw's bit in it. The count visible at any `h′` is the number
+  with `h_reveal < h′`. Admitting the bundle for `h` derives every draw of
+  `h` and writes them all, each with its pass bit. The
   store keys the rows `(E, P, s, h, j)`: one epoch is one range, and
   inside it a pair's draws are adjacent in `(h, j)` order.
 
@@ -839,18 +1266,32 @@ with it:
   and after all three, in any order,
   `053b7619b7c9a1dee912ba0905b91ccb33b8eeb958117c98456e36ea41e99ec8`.
 
-A record's admitted pass is the `passed` bit of its draw's index row, and
-nothing else (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10c`). The serve-credit
-row keyed `(P, s, E, h)` is not kept beside it: admission re-keys or
-deletes that table when it lands. The digest covers issuance only, so
-setting the bit does not move it.
+A pass is the `passed` bit of its draw's index row, and nothing else
+(`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10c`). It is written with the row,
+from the bundle's bitmap. The serve-credit row keyed `(P, s, E, h)` is not
+kept beside it: that table goes with the serve-credit record (§11.1). The
+digest covers issuance only, so the bit is not part of it.
 
 **Reorg.** A pop reverts the batch: the reveals a popped block admitted
 are un-issued, the counts of blocks above the fork point are discarded
 and recomputed on the new chain, and the per-pair lists lose the entries
 whose `h` or `h_reveal` was popped. Nothing outlives the block that wrote
-it. A carrier that was in a popped block is re-admissible on the new
-chain if `h` survives and `h_incl ≤ h + W₂` still holds.
+it. A bundle that was in a popped block returns to the queue from the
+body store (§7.5) and is re-admissible on the new chain if `h` survives and
+`h_incl ≤ h + W₂` still holds: nothing above `h` enters its validity
+(§9.1). Past its window it is lost, and `h` settles as an unrevealed
+block: NonObservation, never misses.
+
+**A pop does not strand the evidence.** DRS-E5 states that as a
+requirement on the pop and left the mechanism to this slice
+(`DRS_E5_POOL_ALT_PRUNE.md` §3, CEN-K10). The mechanism is the bundle
+queue's re-check after a reorg, and the holding store is the body store:
+a main-chain block not yet past `D_max` holds its bundles' bodies, so when
+it is popped the bodies are still there and their bundles go back to the
+queue (§7.5, `SCS-P27`, `SCS-P28`). Every node that connected the popped
+block holds them; a node that never saw that block gets the bundle as it
+gets any other, from the queue's relay or as a body fetched for the block
+that next references it. Nothing is re-filed and nothing is re-signed.
 
 **Pruning.** Both tables for `E` are dropped after the settlement of `E`
 is final.
@@ -868,7 +1309,42 @@ is final.
 3. **Production `ContentVerify`** is written against the
    transaction-range unit.
 4. **The FN-DSA integration follows**, then the mechanism, in increments,
-   each its own PR.
+   each its own PR. Increments 3 and 4 of
+   [`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) are this slice's (`SCS-P26`):
+   - increment 3 first, the bond record carrying `receipt_sign_pk`, in
+     Rust only;
+   - then the `h_open(E)` snapshot's receipt-key read and the bundle rule;
+   - increment 4's signing capability, with `FND-4`'s one decoded key,
+     built here. `P` switches from the identity key to the receipt key
+     in the same change as `SO-D12`'s cutover: no verifier accepts an
+     FN-DSA receipt before it.
+5. **Bundle transport is DRS-E5's**: the queue, the body store and the
+   fetch at the switch (§7.5). This slice supplies the rule they run.
+6. **The shapes under this slice are the settlement lane's** (`SO-D12`,
+   [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §16):
+   the `0x0C` draw commitment, the per-block draw state, the digest of
+   `D` and the snapshot. This slice designs against them as inputs, and
+   meets them only through the view (§9.6).
+
+**This slice's order of work** (`SCS-P31`):
+
+1. This specification, with the contracts of §9.6.
+2. FN-DSA increment 3.
+3. The verifier, pure, against the fixture view.
+   - Vectors: the bundle commitment, the root over references, the
+     bitmap projection, and the selection and nonce KATs re-pinned.
+   - Red edits, each of which must turn a test red: a bundle missing one
+     record's draw; a key read from any height other than `h_open(E)`; a
+     budget sum one over; a reference whose prunable hash does not match
+     its body.
+4. FN-DSA increment 4's signing capability.
+5. The sim, re-run through the production functions. Bundle loss is
+   modelled as late, per-block NonObservation against the V3 bar.
+   **Prediction, recorded before the run: the `(m, n)` figures of §12 do
+   not move**, because they depend on the read-failure rate and not on
+   the observation rate.
+6. After the build, on testnet: `M`, `c`, `BA-T33`, propagation and the
+   orphan rate.
 
 Carried with the implementation:
 
@@ -895,29 +1371,46 @@ Carried with the implementation:
   final.
 - **Genesis gate:** no genesis on a pre-1.0 `fn-dsa`.
 - **Census:** a `RowStatus` arm for a row retired by ruling. It names the
-  successor rows, and the gate requires each successor `Implemented`.
-  CEN-J8, J9 and J10 are the first rows to use it.
+  successor rows, and the gate requires each successor `Implemented`, or
+  `ByConstruction` where the bundle cannot express the refused case
+  (`SO-D9` (i) and membership; `SCS-P30`). CEN-J8, J9 and J10 are the
+  first rows to use it. Their successors are block rules (`SCS-P16`).
+- **The sim** calls the production draw functions instead of carrying its
+  own count rule and selection (`SCS-F15`), with a term for bundles lost
+  to a reorg or an expired window. Implemented as a new mode beside the
+  old one, `--secret-draw-production` (PR #1050, merged 2026-10-12):
+  `ESR-13` (§12).
 - **Registry:** a row in
   [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) for every
   label in §16, landing with its constant. The registry has no status for
   a label without one.
 - **Deletions** (§11.1).
 
-### 11.1 Deleted with the implementation, and why
+### 11.1 Superseded surfaces, and when each goes
 
-[`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc): a
-surface this design replaces is deleted in the change that replaces it,
-with the reason recorded, and is not left inert.
+**Re-ruled 2026-10-12 (maintainer): landed Rust is not deleted to make
+room for this design, and C++ goes only when it is unreachable or fully
+replaced.** The table below is the list of surfaces the bundle
+supersedes. None is deleted by this slice's changes, which are additive
+(PR #1046, PR #1047). The fate of each is decided at the settlement
+lane's cutover, when the verifier is wired and its replacement is live;
+the C++ rows go at `DEL-008`. The change that had begun deleting the
+serve-credit input, PR #1043, was closed unmerged.
+
+The column headed "Deleted" reads "superseded" until then.
 
 | Deleted | Where it is today | Why |
 | --- | --- | --- |
-| The attestation path's pass records and witness | `rust/shekyl-archival-retention/src/attestation_wire.rs:136-144`, `:214-219`, `:234-236` | The pass is carried by the serve-credit input in a carrier (`SCS-P11`). Two records for one fact is the duplication `SCV-4` found |
-| CEN-B4's operand: the block's attestation witness, its root in the header and its verify path | `rust/shekyl-chain-rules/src/block.rs:113-115`; `src/cryptonote_core/blockchain.cpp:5089`; `rust/shekyl-ffi/src/archival_ffi/attestation.rs:161` | With no pass record on the block there is nothing for the root to commit to or the rule to judge |
-| The anchor window | `rust/shekyl-archival-retention/src/pass_anchor.rs:113-131` | Admission checks no anchor bound (§9.1); the anchor hash is one lookup by height |
+| The attestation path's pass records and witness | `rust/shekyl-archival-retention/src/attestation_wire.rs:138-146` and its witness types | The pass is carried by the bundle (`SCS-P16`). The attestation record is not reused for it: its parser, its record and its count ceiling are replaced. The header field survives, renamed `bundle_root` (`SCS-P34`) |
+| The serve-credit input, the `serve_credit_only` class, and the CEN-J rows that judge them | `rust/shekyl-wire/src/transaction.rs` (`ServeCredit`, `is_serve_credit_only`); `rust/shekyl-chain-rules/src/rules/tx.rs` (`TxClass::ServeCreditOnly`) | `SCS-P16`. Superseded, not deleted: its fate is decided at the cutover, beside the verifier |
+| The C++ sidecar path | `src/cryptonote_protocol/cryptonote_protocol_defs.h`; the demote and promote handling in `src/cryptonote_core/blockchain.cpp`; the witness table in `src/blockchain_db/lmdb/db_lmdb.cpp`; `rust/shekyl-ffi/src/archival_ffi/attestation.rs` | At `DEL-008`, with no reuse and no FFI for bundles (`SCS-P24`) |
+| CEN-B4's operand: the block's attestation witness, its root in the header and its verify path | `rust/shekyl-chain-rules/src/block.rs:118`; `src/cryptonote_core/blockchain.cpp:5057`; `rust/shekyl-ffi/src/archival_ffi/attestation.rs:161` | The attestation record is gone, so the rule as written has no operand. The bundle section's root takes the header field, renamed `bundle_root`. **CEN-B4 is retired by ruling for a new row** (`SCS-P34`), through the census arm of §11, so B4 points at its successor |
+| The anchor window | `rust/shekyl-archival-retention/src/pass_anchor.rs:113-131` | Admission checks no anchor *window*: no lower bound, and for the upper one a single comparison, `anchor_height < h` (§9.1, `SCS-P32`). The anchor hash is one lookup by height |
 | The public urn | deleted 2026-10-10; was `rust/shekyl-archival-retention/src/challenge_assignment.rs` | Replaced by the secret draw. `DrawablePair` moved to `drawable_pair.rs`. The other rows in this table stay until their implementations land |
-| The serve-credit input's leaf-path preimage, its segment path and its split signature legs | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379-402` | The record is `j` kept and the receipt prunable (§7.2); the receipt signs the delivery transcript |
-| The beacon's fire height and seal | `rust/shekyl-chain-rules/src/archival/slash.rs:10-11` and the C++ gate at `src/cryptonote_core/blockchain.cpp:4714` | One challenge per pair-epoch is replaced by per-block draws |
+| The serve-credit input's leaf-path preimage, its segment path and its split signature legs | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379-402` | The receipt signs the delivery transcript and rides in the bundle (§7.2). Superseded with the serve-credit record; decided at the cutover |
+| The beacon's fire height and seal | `rust/shekyl-chain-rules/src/archival/slash.rs:10-11` and the C++ gate at `src/cryptonote_core/blockchain.cpp:4724` | One challenge per pair-epoch is replaced by per-block draws |
 
+Where a row's lines are not restated in §2 they are from the previous pin.
 The implementing change enumerates the full surface behind each row,
 including the peer-to-peer and store fields that carry the attestation
 witness.
@@ -1002,8 +1495,33 @@ block independently unrevealed with the stated probability.
   0.30 read failure, which is the 2-of-3 rule's cost and is much larger.
   Neither is priced in currency.
 
-The sim does not model the reads, or dropout that is correlated in time
-or selective. It runs one epoch from its open, which is the whole state
+**Re-run on the production functions, with bundle loss (`ESR-13`,
+2026-10-12).** The mode is `--secret-draw-production`
+(`rust/shekyl-economics-sim/src/secret_draw_production.rs`, PR #1050,
+merged 2026-10-12), and the sim plan records its predictions, results and
+a review addendum
+([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.17 to §5.19). The count is `draw_count`'s and every draw is
+`select_draw`'s; a bundle is filed, included or lost whole. The predictions
+were committed before the results.
+
+- **The bar holds:** 1.02 % short (0.98–1.09) at 10 % dropout with the
+  filing margin `M = 30`.
+- **The `(m, n)` figures above did not move**, as predicted: they depend
+  on the read-failure rate, not on the observation rate.
+- **The integer count rule and the `f64` one agree** in every block of
+  every epoch run.
+- **With `M = 30`, loss to a reorg near the deadline has no effect**: the
+  latest honest inclusion is clear of the blocks such a reorg reaches.
+  With `M = 0`, 0.4 % of bundles arrive late and the short share rises by
+  0.05 to 0.14 points.
+- **A producer that files at the last admissible block is the costly
+  case.** At `M = 30` it loses no bundle and still doubles the short
+  share, to 2.17 %. At a 3-block margin with a 10 % loss rate it reads
+  3.48 %, over the bar. This is the evidence behind V5.
+
+Neither run models the reads, or dropout or loss that is correlated in
+time or aimed at particular blocks. It runs one epoch from its open, which is the whole state
 of the count rule: the carry starts at zero and in-flight stops at the
 epoch's open (§4.3), so no epoch's counts depend on the one before.
 
@@ -1021,8 +1539,8 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | R4 | **The witness carrier signature** is FN-DSA under the same algorithm tag and level as the receipt |
 | R5 | Settlement selects the three counted draws at close by beacon. Replaces "the first three" |
 | R6 | A draw is issued only by reveal; an unrevealed block issues nothing |
-| R7 | The seed is revealed whole, with records, within `[h, h + W₂]`; per-draw reveal is forbidden |
-| R8 | `W₂` is the only window. Admission checks no bound on the anchor (`SCS-P7`) |
+| R7 | The seed is revealed whole, with records, within `[h, h + W₂]`; per-draw reveal is forbidden. Since 2026-10-11 this holds by structure: the reveal and the records are one bundle (`SCS-P14`) |
+| R8 | `W₂` is the only window. Admission checks no lower bound on the anchor (`SCS-P7`). *Amended 2026-10-12 (`SCS-P32`):* it does check an upper bound, `anchor_height < h` |
 | R9 | The in-flight count stops at `h_open(E)` (§4.3). Ratified on review |
 | R10 | The settlement selection as §9.3 states it: candidate bytes, rejection zone, swap, the cap, and the vectors. Ratified on review |
 | R11 | `SO-D8d`'s three integrity layers carry over in the form of §9.5. The first is a running digest folded at admission and checked against every stored issued draw, not only the draws the selection keeps; nothing is re-derived at settlement. Closes `SCS-F11` |
@@ -1039,22 +1557,24 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | V2 | Count rule of §4.3: base 1 per pair per epoch, catch-up by 70 %, minimum horizon 200, cap 3 × nominal | Same |
 | V3 | Bar: at most 3 % of pairs short of 3 at 10 % producer dropout | The sim or testnet exceeds it. The sim reads 1.18 % |
 | V4 | Consecutive reads of a draw are at least 30 blocks apart. Challenger scheduling, not consensus | `BA-T31` shows the unread share still falling, or already flat, at a different spacing |
+| V5 | Filing margin `M = 30` blocks before the end of `W₂`. Challenger policy, not consensus (`SCS-P18`) | Measured inclusion latency and the natural reorg tail give a different figure; or testnet shows honest bundles lost at a meaningful rate, which also reopens the window |
+| V6 | Section budget multiple `c = 2` (`SCS-P20`) | It binds on the first build; or section bytes, propagation to Tor peers, the orphan rate or `BA-T33` say otherwise |
 
 ### 13.3 The twelve questions this round posed — RULED 2026-10-07
 
 | # | Question | Ruling |
 | --- | --- | --- |
 | `SCS-P1` | Layout of `0x0C` | **32 bytes, one commitment** over `witness_pk ‖ seed` under its own domain. Every carrier reveals both, so no check needs one without the other. Q13's length stands |
-| `SCS-P2` | "Revealed once" against the weight limit | **Each carrier carries the whole seed** |
+| `SCS-P2` | "Revealed once" against the weight limit | **Each carrier carries the whole seed.** SUPERSEDED 2026-10-11 (`SCS-P14`): one bundle, one seed |
 | `SCS-P3` | Re-derivable coinbase key material | **Dropped; Q10 stands.** The seed and the witness key are fresh randomness per block, independent of each other, in memory only. A value derived from the coinbase shared secret is known to the coinbase recipient. A persistent witness secret is rejected. Loss is harmless: NonObservation, never misses |
 | `SCS-P4` | The form of the draw mapping | **Rejection sampling over the static set**, capped at 256 attempts, the cap pinned by a vector (§4.4, §4.5) |
-| `SCS-P5` | The record layout | **Kept: input tag and `j`.** `(P, s)` is derived. `h` is the carrier's, beside the seed. Prunable per record: `attempt` (added by `SCS-P13`), `anchor_height`, `delivery_digest`, the receipt. One rule-42 bump for record and carrier. A selection KAT and a test-only replay assertion; no runtime field (§7.2) |
-| `SCS-P6` | Q9 bytes | **Amended:** the commitment covers the seed, `h`, and each record's `j` with its prunable fields (§7.3) |
-| `SCS-P7` | A bound on `anchor_height` | **None.** The lower bound keyed on `h` is implied by the nonce, which contains `block_hash(h)`, and is not checked (§9.1) |
+| `SCS-P5` | The record layout | **Kept: input tag and `j`.** `(P, s)` is derived. `h` is the carrier's, beside the seed. Prunable per record: `attempt` (added by `SCS-P13`), `anchor_height`, `delivery_digest`, the receipt. One rule-42 bump for record and carrier. A selection KAT and a test-only replay assertion; no runtime field. The kept half is SUPERSEDED 2026-10-11 (`SCS-P17`): a pass bitmap replaces the input tag and `j` (§7.2) |
+| `SCS-P6` | Q9 bytes | **Amended:** the commitment covers the seed, `h`, and each record's `j` with its prunable fields. The bytes are SUPERSEDED 2026-10-11 (`SCS-P16`); the coverage stands, with the bitmap in place of each `j` (§7.3) |
+| `SCS-P7` | A bound on `anchor_height` | **None.** The lower bound keyed on `h` is implied by the nonce, which contains `block_hash(h)`, and is not checked (§9.1) *Amended 2026-10-12 (`SCS-P32`):* "none" is the lower bound's answer. An upper bound, `anchor_height < h`, is checked at admission (§9.1) |
 | `SCS-P8` | `issued` above 255 | **Saturate.** The list of issued draws is the selection's operand |
 | `SCS-P9` | The reading of "in flight" | **Unrevealed draws only** |
 | `SCS-P10` | The witness's read load | **Measure, do not gate.** A mining-box measurement, filed as `BA-T30`. The count rule is provisional already |
-| `SCS-P11` | Which record carries the pass | **The serve-credit input.** The attestation path's pass records and CEN-B4's operand are deleted with reason (§11.1) |
+| `SCS-P11` | Which record carries the pass | **The serve-credit input.** The attestation path's pass records and CEN-B4's operand are deleted with reason (§11.1). REVERSED 2026-10-11 (`SCS-P16`): the block-level bundle carries the pass |
 | `SCS-P12` | The height the settlement drop filter reads | **Per draw, at `h`:** the state after `h` connects, strictly above a same-block slash (§9.3) |
 
 ---
@@ -1064,6 +1584,82 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | # | Question | Ruling |
 | --- | --- | --- |
 | `SCS-P13` | The nonce of a re-read: derived from `(seed, h, j)` alone it would return to `P` an hour later with a new anchor, which only a challenge does | **A fresh nonce for every read, for every caller.** A challenge's nonce takes the read's `attempt`; the record carries `attempt` as one prunable byte; admission recomputes the nonce with one hash and refuses `attempt ≥ K`, `K = 3` (§5.2, §7.2, §9.1) |
+
+### 13.5 Reopened and ruled 2026-10-11 — the bundle
+
+The reopen began as four questions about carriers surviving a reorg.
+Grounding them showed that a carrier had no way to travel at all
+(`SCS-F12`), and under that, one defect: §9.2 let one transaction issue
+draws whose records were in another (`SCS-F13`). The maintainer replaced
+the carrier with one bundle per block. Each reversal below is recorded
+under rule 21 as a re-alignment.
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| `SCS-P14` | What carries a block's reveal and its records | **One bundle per block `h`**: the reveal and every pass record for `h`. A block admits it whole or not at all. A bundle with no passes is valid and, where the block has draws, required; it is what issues `h`'s misses (§7.1; the zero-draw block is `SCS-P33`) |
+| `SCS-P15` | Partial inclusion, refusal, and forced inclusion | **None of the three exists.** A valid bundle's validity depends only on the chain through `h`, its own bytes and the `h_open(E)` snapshot, so no node can refuse it. No rule acts on a bundle's absence. Non-inclusion through all of `W₂` is NonObservation for `h`, never misses (§9.1) |
+| `SCS-P16` | What `SCS-P14` reverses | **`SCS-P11` is reversed:** the pass is carried by the block-level bundle. The serve-credit input, the `serve_credit_only` class and the CEN-J rows are superseded, and the successors of J8–J10 are block rules (CEN-J29 to J37). *Re-ruled 2026-10-12:* superseded is not deleted; landed Rust stays until the cutover decides it (§11.1). `SCV-4` (one record for one fact) and R-B (the producer is the witness) still hold. **Fail-whole is the bundle's** (proposal §7.6.2 (B)): a refused bundle is a producer defect, corrected and filed again; admitting records one at a time stays rejected. **`n ≥ 1` is dropped:** R7 holds by structure. The set commitment becomes the bundle commitment, and `serve_credit_batch_commitment` and the §7.3 vectors are regenerated |
+| `SCS-P17` | Where the bundle sits and what commits to it | **Beside the block, not in the block blob.** The header root covers each bundle in `h` order: its kept bytes and a hash of its prunable bytes. Kept: the seed, `h`, and a pass bitmap of exactly `count(h)` bits, which replaces the list of `j`. Prunable: the witness key and signature, and per record the receipt, delivery digest, anchor and `attempt`. Settlement reads only kept data (§7.2, §7.3) |
+| `SCS-P18` | The admission window against reorgs | **`W₂` stays the only consensus window**; the miss deadline and the beacon do not move. **`W₂ + D_max` is REJECTED.** The challenger files by `h + W₂ − M`, `M = 30` blocks, PROVISIONAL and challenger policy. Reopen: testnet shows honest bundles lost at a meaningful rate |
+| `SCS-P19` | The height the receipt key is read at | **The `h_open(E)` bond snapshot, the one `D` is drawn from.** One snapshot type with two methods, taken as an argument by the draw and by the bundle rule. No setting. The settlement filter of `SCS-P12` keeps its own read at `h` (§9.1) |
+| `SCS-P20` | How much bundle a block may carry | **A budget counted in draws:** the admitted bundles' `count(h)` sum to at most `c · 9·D / SEB`, `D` of the including block's epoch, `c = 2` PROVISIONAL. Templates take the earliest `h` first. `MAX_ATTESTATION_RECORDS = 256` cannot stay fixed. *As ruled; the formula and the charge were amended since:* the budget is `c · (⌊9·D / SEB⌋ + 1)` with `D` the largest among the epochs of the bundles in the section (`SCS-P33`), and a bundle is charged `max(count, 1)` (`SCS-P40`). §7.4 states the rule in force |
+| `SCS-P21` | Weight | **The section is outside the fee median and the penalty curve** and displaces no fee-paying transaction. This dissolves two items of the FOLLOWUPS row *Serve-credit inclusion incentive and archival weight pricing*: unpaid inclusion and the cap raise |
+| `SCS-P22` | Retention and sync | **The prunable part is archival content in the shard domain**, kept until past `D_max`, then discarded and backfilled. Sync is skeleton forward, then backfill. §8's "never after the prune" is withdrawn. The largest bundle's prunable size is an input to the shard-size derivation (§7.6) |
+| `SCS-P23` | Alternative chains | **Stateless checks on arrival; everything else at the switch**, in the full validate. An alternative chain with an invalid bundle fails at the switch and rolls back. No bond state is rebuilt at the fork point (§9.1) |
+| `SCS-P24` | The C++ side | **None.** Bundles exist only in Rust and go live with the Rust daemon. The C++ sidecar path is a `DEL-008` deletion: no reuse and no FFI (§11.1) |
+| `SCS-P25` | Dandelion++ for bundles | **WITHDRAWN.** Authorship is public through `0x0C`, and block `h` was broadcast with no origin protection. Reopen: block-origination privacy is designed |
+| `SCS-P26` | Who builds FN-DSA increments 3 and 4 | **This slice.** Increment 3 first: `receipt_sign_pk` in the bond record, Rust only. Then the snapshot read and the bundle rule. Increment 4's signing capability, with `FND-4`'s one decoded key, is built in this slice; `P` switches from the identity key to the receipt key in the same change as `SO-D12`'s cutover, because no verifier accepts an FN-DSA receipt before it. The FN-DSA lane closes at increment 2 (§11) |
+| `SCS-P27` | How a bundle reaches a block and a node | **By reference.** Blocks carry references; bodies live in one store keyed by hash and are fetched when needed. A relayer must serve the bodies of the blocks it relays. An alternative chain whose bodies cannot be fetched is never switched to (§7.5) |
+| `SCS-P28` | Where a bundle waits for inclusion | **A separate bundle queue in the pool**, not a transaction record: keyed by `h`, one per `h`, bounded at `W₂`, admitted by the bundle rule against the tip, re-checked after a reorg, persisted (§7.5) |
+| `SCS-P29` | The pool's fee floor for a transaction returned from a popped block | **No bypass based on how a transaction arrived.** "`kept_by_block` skips `policy_form`" is deleted in DRS-E5 (`E5-Q1`, partly reopened). The ruling of 2026-10-02 applied |
+| `SCS-P30` | Housekeeping | **`SCV-Q5`'s gate accepts `ByConstruction`** for a rule the bundle cannot express: `SO-D9` (i) and membership. §2 is re-pinned whole. The proposal's §2.2 is restated as referential integrity only, and its evidence item 11 is marked as not yet true. The sim calls the production draw functions (`SCS-F15`) |
+| `SCS-P31` | Which lane builds what | **Three lanes, split by what needs checking** (rule 19). This slice: validity — this specification, the verifier's view trait, the pure verifier in `shekyl-chain-rules`, and FN-DSA increments 3 and 4. `SO-D12`: state — its increment 1, the snapshot in its increment 2, and one cutover increment (rule 07) that implements the view on its store, calls the verifier at admission, writes the kept projection, and deletes the attestation path. DRS-E5: transport. **The contracts between lanes are the view trait and the kept projection type**, defined here first (§9.6) |
+
+### 13.6 Posed 2026-10-11, ruled 2026-10-12
+
+Found while writing the bundle into §7 and §9, and the contracts into
+§9.6. All six ruled as recommended, with three adjustments, marked.
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| `SCS-P32` | `SCS-P15` says a bundle's validity depends on nothing above `h`, but the receipt's anchor was held below `h` only by today's constants | **Admission checks `anchor_height < h`, and `W₂ + L ≤` anchor depth is asserted on every rule set**, as rule-set data. Recorded as an **amendment to `SCS-P7`**, not a reversal: P7's reason for no lower bound stands (§9.1) |
+| `SCS-P33` | The budget's integer form: `c · 9·D / SEB` floors to zero below about 555 pairs; a bundle from the previous epoch was counted against the new `D`; a block can have `count(h) = 0` | **Budget = `c · (⌊9·D / SEB⌋ + 1)`, with `D` the largest `D` among the epochs of the bundles in the section.** *Adjusted wording:* one rule, not a two-epoch exception. **A `count(h) = 0` bundle is admissible**, which keeps the rule uniform; not filing it is challenger policy (§7.1, §7.4) |
+| `SCS-P34` | Whether the header root is the existing `attestation_root` field, and CEN-B4's fate | **Reuse the field and rename it**, `bundle_root`, in the same rule-42 bump. *Adjusted:* the rename; a field does not keep a name for a value it no longer holds (rule 93). **B4 is retired by ruling for a new row**, through the census arm. `SCS-F19` is smaller than it read: DRS-E5 has nothing to reopen (§14) |
+| `SCS-P35` | The bundle's bytes | **The commitment of §7.3 under a new label; the bitmap least significant bit first with zero padding, checked.** *Stated outright:* records follow in ascending `j` over the set bits and their number equals the popcount, or the bundle is refused; and "no frame" rests on fixed-width records, which rests on FN-DSA-1024's padded signature and the fixed canonical encoding, written down where a scheme change will meet it (§7.2, §7.3). `…-batch-v1` and its registry row are superseded; *re-ruled 2026-10-12*, they are not deleted (§11.1) |
+| `SCS-P36` | What a backfill verifies | **Hash equality against the header root's term is the acceptance rule.** Re-verifying receipts is optional and bounded by the bond journals' horizon. This corrects `SCS-P22`'s "can be re-verified" (§8) |
+| `SCS-P37` | Whether the verifier returns the derived draws | **Yes.** `Admitted::draws` is part of the contract between the verifier and the writer, in §9.6 beside the view trait, and the settlement lane sees it before it builds its cutover increment |
+
+### 13.7 Posed on review, ruled 2026-10-12
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| `SCS-P38` | `SCS-P22` puts a bundle's prunable part in the shard domain, which `SHT-Q1` orders by transactions and `SHT-Q2` cuts by cumulative length bound through the txid. A bundle's position, its length and what binds the length were not stated, and they decide shard boundaries | **As recommended.** Position: after the including block's transactions, the block's bundles in ascending `h`, the header root's order. Length: `3,193 + 1,397 ·` (set bits), a function of the kept bitmap. **Two sentences added by the ruling:** the length formula depends on fixed-width records; and the largest bundle's length is the `SHT-Q2` maximum-object input for the shard-size lane (§7.6) |
+
+### 13.8 Amended on review, 2026-10-12
+
+Two defects in the section budget, found on review of this change and
+resolved here.
+
+- **`SCS-P39` is confirmed by the maintainer (2026-10-12), read as built
+  on PR #1047.** On review of that PR's earlier tree he had ruled another
+  fix for the same defect: the count taken from the chain as an
+  `Option<u32>`, with the budget check waiting for the switch wherever the
+  chain had none. **That ruling is withdrawn** in favour of this one. His
+  reasons: every node computes the same sum from the same bytes, on the
+  main chain and on an alternative block alike, so no node can disagree
+  about the budget; an overstated count can only fail the budget on a
+  bundle that was invalid anyway; an understated one passes at arrival and
+  is refused by the full check, at connect or at the switch; and the
+  withdrawn form left the budget unchecked until the switch for every
+  bundle above the fork point, where this one bounds an alternative
+  section on arrival. The cost is 4 kept bytes per bundle.
+- **`SCS-P40`** was reviewed as built on the same PR, with nothing asked
+  of it.
+
+| # | Defect | Amendment |
+| --- | --- | --- |
+| `SCS-P39` | The budget was to be checked "on references alone", but a reference held only the bitmap's bytes, which do not determine `count(h)` (13 bytes fit 97 to 104). The sum of draws was therefore not computable without the chain, and the padding bits were not checkable at all without it | **The kept part states `count` (4 bytes, after `h`).** A reference parses on its own; the section's form and its sum of draws are stateless; the header root covers the count and needs no length frame. Admission holds the stated count to `count(h)`. Amends `SCS-P17`'s kept part. Considered and not taken: leaving the reference as it was and calling the budget a stateful check, which would have left an alternative block's section unbounded until the switch for every bundle above the fork point |
+| `SCS-P40` | A zero-draw bundle is admissible (`SCS-P33`) and, charged by its draws, free. One block could carry up to `W₂` of them | **A bundle is charged `max(count, 1)`.** A section holds at most `c · (⌊9·D / SEB⌋ + 1)` bundles whatever their draws. Amends `SCS-P20`. Considered and not taken: refusing zero-draw bundles, which would reverse `SCS-P33`'s uniform rule; and a separate cap on the number of bundles, a second constant for what one charge already bounds |
 
 ---
 
@@ -1085,6 +1681,14 @@ change that carries this specification fixes it; the rest are open.
 | `SCS-F9` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.6.1 and §7.6.2 distinguished "unpruned validators" from "a pruned node". No such split exists: every daemon prunes (§8). **Fixed:** §7.6.1 is replaced by a pointer here and §7.6.2 says every node verifies at connect |
 | `SCS-F10` | `rust/shekyl-wire/src/transaction.rs:202` calls the pruned-record ceiling a twin of a `cryptonote_config.h` constant. `src/cryptonote_config.h:417-423` says it deliberately has no copy there |
 | `SCS-F11` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6 (`SO-D8d`) rules three local integrity layers for a writer that re-derives `issued` by replaying the urn: per-record assignment equality, a persisted digest of `D` compared against a re-walk, and `passes ≤ issued`. Under §10 here `issued` is stored at admission and read at settlement, so the first layer has no second derivation to compare. Which layers carry over is not ruled. §6 there is unchanged and says so. **Ruled 2026-10-07 (R11):** the first layer becomes a running digest folded at admission and checked against every stored issued draw, including a draw the selection then drops; the second and third carry over (§9.5). §6.2 of the proposal states the same check |
+| `SCS-F12` | **A carrier had no way to travel.** At `dev@258b4d851` the C++ pool never relays a zero-fee transaction (`src/cryptonote_core/tx_pool.cpp:1179`), a zero-fee transaction from a peer fails the fee check, and the Rust submit path calls the zero-fee arm unreachable (`rust/shekyl-daemon-rpc/src/submit/verifier.rs:59-62`). A carrier returned to the pool by a pop was never relayed and failed the template's re-check against the new tip. No Rust pool policy existed. **Dissolved 2026-10-11:** there is no carrier; bundles travel by `SCS-P27` and `SCS-P28` DRS-E5 filed the pop's half of this as a FOLLOWUPS row, *A popped serve-credit carrier survives the C++ pool's pop path and is never relayed again*, to be closed by this slice naming the re-inclusion mechanism and the holding store. §10 names them; the row is removed |
+| `SCS-F13` | **§9.2 let one transaction issue draws whose records were in another.** A block could need two carriers (§7.4, as it stood), and the first admitted carrier issued every draw of `h`. The miner of a late block could include one and leave out the other: about 104 pairs took misses, at no cost, with the pairs chosen in advance because carriers are public. An honest reorg, or a second carrier that no miner picked up, did the same with no attacker. **Fixed 2026-10-11** by `SCS-P14` |
+| `SCS-F14` | `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §2.2 records the reorg case as "safe, recorded as checked". What it shows is that no connected record references a removed block. It does not show that an honest receipt survives a reorg, and its evidence item 11 ("re-inclusion admits") was false at the tree (`SCS-F12`). **Fixed** there with this change |
+| `SCS-F15` | `rust/shekyl-economics-sim/src/secret_draw.rs` carries its own count rule, in `f64`, and its own weighted selection, and calls no function of `rust/shekyl-archival-retention/src/secret_draw.rs`. Its module documentation says the draw has no production owner. §12's figures are from the sim's rule, not the consensus one. Open: owed with the sim's next run (§11) |
+| `SCS-F16` | This document's §2 was pinned at `dev@0e1d1d6126` and still said CEN-B4 had no Rust rule; its banner said nothing was built while §16 listed landed constants; §15 carried a second, older copy of its table. **Fixed** with this change |
+| `SCS-F17` | The bundle brief gives a reference as under 100 B. With a 32-byte prunable hash and, since `SCS-P39`, a 4-byte count, it is `76 + ⌈count(h) / 8⌉` B: 113 B at the count cap for `D` = 324,000, and 425 B at `D` = 3,100,000. §7.5 states the range. The brief also gives that cap as 291; with the carry it is 292 (§7.4) |
+| `SCS-F18` | `ARCHIVAL_SETTLEMENT_WRITER.md` §16.6 on PR #1032 recorded `SO-D12d` as "the FN-DSA lane builds increments 2 to 4". `SCS-P26` supersedes it for increments 3 and 4. **Fixed** on that branch by the settlement lane, 2026-10-12 |
+| `SCS-F19` | DRS-E5 (PR #1026, merged 2026-10-12) dissolved its alternative-tier CEN-B4 work (`E5-Q4` δ, `E5-17`) because this slice deleted B4's operand, and under `SCS-P17` and `SCS-P23` a block again carries a root recomputed when an alternative block arrives. **Closed 2026-10-12, smaller than it read:** what δ did was a bond read at the alternative chain's cheap tier. What returns is a stateless recomputation from references, with no bond read, and DRS-E5's brief already asks for that arrival check. δ stays dissolved; DRS-E5 reopens nothing |
 
 ---
 
@@ -1096,17 +1700,10 @@ stays until that code is deleted (§11.1), and is marked.
 
 | Document | What it still owns |
 | --- | --- |
-| [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) | The SO-D8 round's standing rulings: R-B, `SO-D8a`–`d`, the drawable set's construction (Q3, §7.4), the dedicated witness key and its `0x0C` home (Q8, §7.5), the carrier's form and fail-whole (Q9, §7.6), the memory-only ring (Q10, §7.7), the `0x0C` content rule (Q13, §7.8), Slice C's plan and evidence list (§8). `SO-D8e`'s urn and ring, Q8's derivation and Q12's bare hash are superseded and gone |
+| [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) | The SO-D8 round's standing rulings: R-B, `SO-D8a`–`d`, the drawable set's construction (Q3, §7.4), the dedicated witness key and its `0x0C` home (Q8, §7.5), fail-whole and resubmission (Q9, §7.6.2 (B), now the bundle's; `SCS-P16`), the memory-only ring (Q10, §7.7), the `0x0C` content rule (Q13, §7.8), Slice C's plan and evidence list (§8). `SO-D8e`'s urn and ring, Q8's derivation and Q12's bare hash are superseded and gone |
 | [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) | The challenge round's doctrine and forks, the read, the 2-of-3 argument (§3), parameter discipline (§9), and its record of the urn as landed code |
 | [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) | The fetch client: `SF-D1`–`D13`, the delivery digest and its transcript (`SF-D8`), the client's outcome table (`SF-D6`). Its countersigning key and admission window describe live code |
 | [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) | The attestation path as it runs today, and the deletion surface of the round before it |
-| [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) | The settlement writer's rulings (`SO-D1`–`D7`): enumeration, key and value, when it runs |
-
---- | --- |
-| [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) | The SO-D8 round's rulings (R-B, `SO-D8a`–`e`, Q3, Q8–Q13), the drawable set's construction (§7.4), carrier semantics (§7.6.2), Slice C's plan and evidence list (§8) |
-| [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) | The challenge round's doctrine and forks, the 2-of-3 argument (§3), parameter discipline (§9) |
-| [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) | The fetch client: `SF-D1`–`D13`, the delivery digest and its transcript (`SF-D8`), the client's outcome table (`SF-D6`) |
-| [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) | The credit-wire round's record of the deleted mechanism and the deletion surface |
 | [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) | The settlement writer's rulings (`SO-D1`–`D7`): enumeration, key and value, when it runs |
 
 ---
@@ -1128,12 +1725,18 @@ constant or registry row yet.
 | `shekyl/archival-challenge-nonce-v1` | cSHAKE256 | Challenge nonce, over `(seed, block_hash(h), j, attempt)`, §5.2 |
 | `shekyl/archival-issued-index-v1` | cSHAKE256 | One issued draw's term in the epoch's running digest, §10 |
 | `shekyl/archival-settlement-select-v1` | cSHAKE256 | Counted-draw selection, §9.3 |
-| `shekyl/archival-serve-credit-batch-v1` | cSHAKE256 | Set commitment, §7.3 |
+| `shekyl/archival-serve-credit-batch-v1` | cSHAKE256 | The carrier's set commitment. Superseded by the bundle commitment (`SCS-P35`); the constant, its vectors and its registry row stay (§11.1) |
+| `shekyl/archival-serve-credit-bundle-v1` | cSHAKE256 | The bundle commitment, §7.3 |
 | `shekyl-archival-p-receipt-ed25519-v1` | HKDF info | The Ed25519 half of the persona's receipt key, from the master seed, §6.3 |
 | `shekyl-archival-p-receipt-fn-dsa-1024-v1` | HKDF info | The FN-DSA-1024 half of the same key, §6.3 |
 | `shekyl/archival-receipt-scheme-v1` | signature domain | Receipts under scheme 3, §6.2 |
-| `shekyl/archival-witness-carrier-scheme-v1` | signature domain | The witness signature under scheme 3, §7.3 |
+| `shekyl/archival-witness-carrier-scheme-v1` | signature domain | The witness's signature on a carrier. Landed as a constant with no signer; not used for the bundle (§6.2) |
+| `shekyl/archival-witness-bundle-scheme-v1` | signature domain | The witness's signature on the bundle, under scheme 3, §7.3. Minted with the verifier |
 
+Four are minted with their constants on the verifier's PR (#1047, open;
+rule 30), and have no constant in this tree until it merges: the witness's bundle signature domain, the bundle
+commitment, `shekyl/archival-bundle-prunable-v1` and
+`shekyl/archival-bundle-root-v1` (§7.3).
 The seed and the witness key have no label: they are fresh randomness.
 
 ---
@@ -1159,10 +1762,59 @@ The seed and the witness key have no label: they are fresh randomness.
 | An honest pair misses reads on a bad day and walks toward a slash | Up to three reads of a draw, spread across `W₂`; how far that goes depends on how often all three fail, which is unmeasured (§12) |
 | Learn mid-epoch that the epoch is settled, then stop serving | Prevented: the three counted draws are selected at close |
 | Read the public draw count to see that challenges have stopped | Prevented: the base rate keeps draws flowing to the end of every epoch |
-| Derive the witness key from a revealed seed and author carriers, or `P` signs its own receipt | Prevented: the seed and the witness key are independent random values (§4.2) |
+| Derive the witness key from a revealed seed and author a bundle, or `P` signs its own receipt | Prevented: the seed and the witness key are independent random values (§4.2) |
 | Steal a producer's long-lived secret and learn every future seed | No such secret exists: nothing is derived and nothing is persisted |
 | The coinbase recipient learns the seed early | Prevented: the seed is not derived from the coinbase shared secret |
 | A record names a pair the draw did not select | Impossible: the record names only `j`; the pair is derived |
 | Run the selection loop without bound | Prevented: the 256th attempt selects |
-| File one of a block's two carriers and withhold the other | The same as omitting passes: manufactured misses, contained by 2-of-3 |
+| File one of a block's two carriers and withhold the other | Not expressible since 2026-10-11: one bundle per block, admitted whole (`SCS-P14`). Under carriers this was open to any miner, not only the producer (`SCS-F13`) |
 | Re-roll the settlement beacon | Costs the beacon block's producer a block reward |
+
+### 17.1 Wargames of the bundle (2026-10-11)
+
+One row at least for each item of §13.5 to §13.8.
+
+| Item | Attack or failure | Outcome |
+| --- | --- | --- |
+| `SCS-P14` | The miner of a late block includes the part of `h`'s reveal that issues the draws and leaves out the part holding a chosen pair's passes | Not expressible: the reveal and every record are one object, admitted whole. This was free and targetable under carriers (`SCS-F13`) |
+| `SCS-P14` | A producer with no passes files nothing, to hide that its reads all failed | Then `h` is unrevealed: NonObservation. An honest producer files the empty bundle, which issues the misses. A producer that prefers silence could always choose it |
+| `SCS-P14` | The producer signs two different bundles for `h` | A chain admits one per `h`. The choice between them is the producer's, which is the power to omit a pass it already had; contained by 2-of-3 |
+| `SCS-P15` | A node refuses a valid bundle on some local ground | No ground exists: validity is a function of the chain through `h`, the bundle's bytes and the snapshot |
+| `SCS-P15` | Every miner leaves `h`'s bundle out for all of `W₂` | NonObservation for `h`. It takes every block for about 500 blocks: majority-hashrate censorship, outside the threat model |
+| `SCS-P15` | A producer withholds its bundle to stall the chain | Nothing waits on a bundle; no rule acts on absence |
+| `SCS-P16` | A third party slips a bad record into an honest bundle so it is refused whole | The witness signature covers every record; only the producer can author one. A refused bundle is a producer defect, corrected and filed again while the seed is in the ring |
+| `SCS-P16` | Records admitted one at a time as a free-weight channel | Stays rejected; a bundle is admitted whole inside a draw-counted budget |
+| `SCS-P17` | Alter a kept bitmap after the prunable bytes are gone | The header root covers the kept bytes, and the header is under proof of work |
+| `SCS-P17` | Set a bit with no record, or carry a record with no bit | Refused at structure: the record count equals the number of set bits, and the bitmap is exactly `count(h)` bits |
+| `SCS-P18` | An honest reorg pops the block holding a bundle filed near the end of its window | Re-admitted from the queue while the window lasts; past it, NonObservation. The margin `M` is what keeps honest filing clear of the natural reorg tail |
+| `SCS-P18` | A producer files at the last block of the window on purpose | The same as filing late by accident: its own block risks NonObservation. No pair takes a miss from it |
+| `SCS-P19` | A pair is drawn from one height's bond state and its receipt key read from another's, so a drawn pair has no key and the bundle is refused whole | Not constructible: one snapshot value is the argument of both |
+| `SCS-P19` | A persona changes its receipt key mid-epoch to void receipts already given | Bond records are immutable; the key does not change for the record's life |
+| `SCS-P20` | A miner fills the section to crowd out transactions or bloat blocks | The budget is two bundles at the count cap, each bundle is bound to a mined block and admitted once, and the section displaces no transaction |
+| `SCS-P20` | A backlog after an outage starves the oldest windows | Templates take the earliest `h` first, and the budget is about four times the mean demand |
+| `SCS-P21` | A miner at the fee median is priced to leave bundles out | The section is outside the median and the penalty curve; including a bundle costs the miner no fee |
+| `SCS-P22` | A syncing node is fed a false bitmap for an old block | Kept bytes are checked against the header root in the skeleton pass |
+| `SCS-P22` | A backfilled body does not match what the chain committed to | Refused on the per-bundle hash |
+| `SCS-P23` | An alternative chain carries an invalid bundle to make nodes do work | It costs a heavier chain's proof of work; the chain fails at the switch and rolls back |
+| `SCS-P23` | Alternative blocks sent at low cost to trigger receipt verification | Only stateless checks run on arrival; no signature is verified before the switch |
+| `SCS-P24` | The C++ daemon and the Rust daemon disagree on a bundle | No C++ path parses or judges one; bundles go live with the Rust daemon |
+| `SCS-P25` | An observer links a bundle's first relay to the producer's node | Already public: `0x0C` names the author, and the node broadcast block `h` itself |
+| `SCS-P26` | `P` starts signing receipts under the new key before a verifier for it is live | Prevented: the capability is built ahead, and the switch of key is part of the cutover that makes the verifier live |
+| `SCS-P27` | A relayer sends a block and refuses its bundle bodies | Attributable misbehaviour; the block is not connected, and an alternative chain is not switched to, until the bodies arrive from someone |
+| `SCS-P27` | Fill the body store with junk | A body is stored only if a block with valid proof of work references it or the queue admitted it; the reference's bitmap bounds its size; every stored body has a holder |
+| `SCS-P28` | Flood the queue with bundles | One per `h`, at most `W₂` entries. Before the producer releases a bundle nobody else can open that block's `0x0C`. After, a forged body costs a node one witness-signature verification and no receipt verification, only for heights whose valid bundle it does not yet hold (§9.1) |
+| `SCS-P28` | Send a second valid bundle for `h` to displace the first | The first valid one wins in a queue; the block's reference decides which body a node needs |
+| `SCS-P29` | Mine a zero-fee transaction, then orphan the block to get it into every pool | No fee-floor bypass by arrival path; the returned transaction meets the same policy as any other |
+| `SCS-P30` | "Retired by ruling" read as "dropped", so the `DEL-008` gate opens on rows nobody implemented | The retired status names successor rows, and the gate reads each as `Implemented` or `ByConstruction` |
+| `SCS-P32` | On a short-epoch rule set, a reorg above `h` changes an anchor's hash and voids an honest bundle | Not constructible: `anchor_height < h` is checked, and every rule set asserts `W₂ + L ≤` anchor depth |
+| `SCS-P33` | A network with few pairs can never admit a bundle, so it never observes and never pays | The budget is `c` bundles at the count cap for any `D` |
+| `SCS-P33` | A producer files bundles for its zero-draw blocks to use up other blocks' sections | Each is charged one unit of the budget (`SCS-P40`), and there is one per `h`, so they cannot fill a section for free; the `SCS-P40` row gives the bound |
+| `SCS-P34` | One header field read as an attestation root by old code and as a bundle root by new | The field is renamed in the bump that changes its meaning, and B4 is retired for a new row; no code path reads the old name |
+| `SCS-P35` | Two different bundles with one commitment | `count` fixes the bitmap, the popcount fixes the number of records, each record is 1,397 bytes; padding bits are checked. A scheme with variable-width signatures would break this, and §7.3 says so |
+| `SCS-P36` | A node refuses to backfill an old bundle because it cannot rebuild the snapshot | Hash equality is the acceptance rule; nothing requires the snapshot |
+| `SCS-P31` | Two lanes each build their own reading of what the verifier needs, and the store's view answers a different question from the one the verifier asks | The view trait and the kept projection are fixed in §9.6 before either is built; the verifier is tested against a fixture view, so it cannot lean on a store type |
+| `SCS-P37` | The writer's own derivation of a draw's pair disagrees with the verifier's, so a receipt is checked against one pair and the pass is recorded for another | One derivation: the verifier returns the derived draws and the writer derives nothing |
+| `SCS-P38` | Two nodes place a bundle's bytes at different points in the shard domain, or count different lengths for it, and cut shards at different boundaries | The position is the header root's order and the length is a function of the kept bitmap, so both are consensus data already |
+| `SCS-P39` | A block's references understate their counts so the section passes the budget at arrival | The stated count is held to `count(h)` at admission, so the block is invalid; the cost is the block's proof of work |
+| `SCS-P39` | Two sections with one root, by moving a byte between a bitmap and the hash beside it | Not constructible: each reference states its count, which fixes its bitmap's length |
+| `SCS-P40` | A miner fills its block's section with zero-draw bundles from the last `W₂` blocks, to make every node fetch and verify them | Each costs one unit, so the section holds at most `c · (⌊9·D / SEB⌋ + 1)` of them: 2 on a network small enough to have zero-draw blocks |

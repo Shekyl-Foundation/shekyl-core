@@ -3997,6 +3997,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "trybuild",
 ]
 
 [[package]]
@@ -4281,6 +4282,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-curve-tree",
  "shekyl-economics",
+ "shekyl-fcmp",
  "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
@@ -4651,6 +4653,16 @@ name = "shekyl-net-address"
 version = "3.1.0"
 
 [[package]]
+name = "shekyl-noise"
+version = "3.1.0"
+dependencies = [
+ "blake2",
+ "chacha20poly1305",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-onion-v3"
 version = "3.1.0"
 dependencies = [
@@ -4729,6 +4741,8 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-p-serve",
  "shekyl-p-store",
+ "shekyl-runtime",
+ "shekyl-thread-priority",
  "shekyl-types",
  "tokio",
 ]
@@ -4772,8 +4786,6 @@ dependencies = [
 name = "shekyl-p2p-transport"
 version = "3.1.0"
 dependencies = [
- "blake2",
- "chacha20poly1305",
  "criterion",
  "fips203",
  "rand 0.8.6",
@@ -4781,6 +4793,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-levin",
+ "shekyl-noise",
  "x25519-dalek",
  "zeroize",
 ]
@@ -4875,10 +4888,15 @@ version = "3.1.0"
 dependencies = [
  "fips203",
  "hex",
+ "rand_core 0.6.4",
  "serde_json",
+ "sha3",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-noise",
  "shekyl-p2p-transport",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]

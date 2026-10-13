@@ -2,10 +2,17 @@
 
 **Status:** OPEN — increment 1 (the scheme in `shekyl-crypto-pq`, no
 consumers) recorded 2026-10-09 and merged 2026-10-10; increment 2 (the
-receipt key derived per persona slot, §7) recorded 2026-10-10. Increments 3
+receipt key derived per persona slot, §7) recorded 2026-10-10. **Increments 3
 and 4 (the bond record carrying the receipt key, receipts moving onto it)
-each land as their own change and are recorded here as they do. Closes when increment 4
-lands; the dependency record (§2) then moves to
+were handed to SO-D8 Slice C on 2026-10-11**
+([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) `SCS-P26`,
+§11): the verifier of increment 4 is that slice's bundle rule, the signer
+and the verifier must switch in one change, and increment 3 lands in Rust
+only. `FND-4`'s carried item, one decoded key across signatures, goes with
+increment 4. This lane's own work ended with increment 2. **The document
+stays OPEN as the record increments 3 and 4 are written into** when the
+Slice C lane lands them; it closes when increment 4's record is in, and
+the dependency record (§2) then moves to
 [`CRYPTOGRAPHIC_INVENTORY.md`](../CRYPTOGRAPHIC_INVENTORY.md), which already
 carries its summary row.
 **Substrate verified at:** `origin/dev` = `6b23eab315`.

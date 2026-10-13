@@ -68,6 +68,12 @@ rand = "0.8"
 # test signer must ride the dev graph explicitly (same shape as retention's
 # `consensus-kat` unlock).
 shekyl-p-serve = { path = ".", features = ["test-signer"] }
+# `BA-T5` session 3: the floor probe's `BAT5_PRIORITY` arm builds its
+# endpoint runtime the way the serving host does — the single constructor
+# with the thread-start hook that lowers each thread's priority (`SH-3`).
+# Dev edges only; nothing on the shipped serve path uses them.
+shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 
 [lints]
 workspace = true

@@ -127,6 +127,11 @@ pub enum Stale {
 pub enum PerHeightRecord {
     /// [`crate::ChainView::block_at`]. The store's `block_info` cell.
     Block,
+    /// [`crate::HeaderView::header_at`]. The same `block_info` cell as
+    /// `Block` — the store keeps header facts and executed facts in one
+    /// row (DRS-E5 `E5-13`) — named apart so the fault says which read
+    /// found the hole: a header rule's, which an alt view also answers.
+    Header,
     /// [`crate::ChainView::root_at`]. The store's `curve_tree_roots` cell.
     CurveTreeRoot,
     /// [`crate::ChainView::leaf_count_at`]. The store's
@@ -142,6 +147,7 @@ impl fmt::Display for PerHeightRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Block => "block",
+            Self::Header => "block header",
             Self::CurveTreeRoot => "curve-tree root",
             Self::LeafCount => "curve-tree leaf count",
             Self::Outputs => "block outputs",

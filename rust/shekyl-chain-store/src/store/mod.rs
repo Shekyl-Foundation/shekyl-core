@@ -92,6 +92,7 @@
 
 mod alt;
 mod alt_reads;
+mod alt_view;
 mod archival_reads;
 mod archival_write;
 mod at_index;
@@ -117,6 +118,7 @@ mod view;
 mod write;
 
 pub use alt_reads::AltEntry;
+pub use alt_view::{AltChain, AltView};
 pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use connect::Connected;
@@ -791,6 +793,12 @@ mod slash_scan_bench_tests;
 #[cfg(test)]
 #[path = "alt_tests.rs"]
 mod alt_tests;
+
+/// DRS-E5 slice 9 a3: `AltChain::build` (CEN-K2), the stitched `AltView`
+/// against `BatchView`'s reads below the fork, K1a by construction.
+#[cfg(test)]
+#[path = "alt_view_tests.rs"]
+mod alt_view_tests;
 #[cfg(test)]
 #[path = "leaf_read_tests.rs"]
 mod leaf_read_tests;

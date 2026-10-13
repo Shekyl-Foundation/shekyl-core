@@ -31,16 +31,16 @@
 //! `reward_share_floor`), never a re-expression; only the honest holdings size and
 //! the replica tail are model parameters, and both are swept.
 
+use shekyl_archival_retention::reward_arithmetic::ARCHIVAL_PROVISIONAL_CURVE;
 use shekyl_archival_retention::{
     curve_milli, scarcity_micro, work_milli_from_micro, BandedCurveParams,
+    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
 };
 
-/// Provisional consensus reward curve — the same `from_plateau_value(8_000)`
-/// (`plateau_work = 16_000`, `plateau_value = 8_000`) `epoch_close_compute`'s
-/// tests and `EpochCloseInputs` default pin.
+/// The provisional consensus reward curve, production's own constant.
 #[must_use]
 pub fn reward_curve() -> BandedCurveParams {
-    BandedCurveParams::from_plateau_value(8_000)
+    ARCHIVAL_PROVISIONAL_CURVE
 }
 
 /// Shard age in the scarcity term. Pinned to **0** — the attacker-favouring
@@ -50,10 +50,10 @@ pub fn reward_curve() -> BandedCurveParams {
 /// case for the stuffer (so a passing gate is robust to it).
 pub const AGE_MILLI: u64 = 0;
 
-/// Age-weight `age_weight_milli`. Irrelevant at [`AGE_MILLI`] `= 0` (`g` collapses
-/// to the base regardless), carried explicitly so the age-0 choice — not a hidden
-/// default — is what zeroes the incumbency term.
-pub const AGE_WEIGHT_MILLI: u64 = 1_000;
+/// Age-weight `age_weight_milli`, production's. Irrelevant at [`AGE_MILLI`]
+/// `= 0` (`g` collapses to the base regardless), carried explicitly so the
+/// age-0 choice — not a hidden default — is what zeroes the incumbency term.
+pub const AGE_WEIGHT_MILLI: u64 = ARCHIVAL_REWARD_AGE_WEIGHT_MILLI;
 
 /// DQ-2H replica-count tail: `(per-mille of shards, r_market)` bands — a common
 /// core at the target replica count plus a stranded (under-replicated) head and a

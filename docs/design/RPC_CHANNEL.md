@@ -91,8 +91,8 @@ then an AEAD record layer carrying the RPC's HTTP. It replaces RT-4 (pinned
 mutual TLS). The pieces exist: `shekyl-p2p-transport` implements
 `Noise_NNhfs_25519+MLKEM768_ChaChaPoly_BLAKE2s`
 ([`noise.rs:6`](../../rust/shekyl-p2p-transport/src/noise.rs)), its
-symmetric state, AEAD, and interim record layer. RT-W9 extracts the
-symmetric state and `Direction` into `shekyl-noise` and leaves that
+symmetric state, AEAD, and interim record layer. RT-W9 step 1 extracted
+the symmetric state and `Direction` into `shekyl-noise` and left that
 interim framer where it is (§4.4, re-ruled 2026-10-12).
 
 *Why Noise and not RT-4's pinned mutual TLS — the ground is RT-11, and
@@ -374,7 +374,7 @@ Token by token:
 
 Every message ends with its payload, encrypted once a key exists — empty
 in messages 1 and 2, the grant request in 3, the grant in 4. The handshake
-is complete after message 4. The client's first transport record is not
+is complete after message 4. The client's first transport message is not
 part of the pattern; it is what proves the client decapsulated message 4's
 `skem` (below).
 
@@ -402,8 +402,30 @@ The prologue (§4.4) is unchanged.
 - **Daemon authentication** is complete when message 2 decrypts: its key
   depends on the message-1 `skem` (post-quantum) and `es` (classical).
 - **Client authentication** is classical at message 3 (`se`) and hybrid
-  when the client's first transport record decrypts. The daemon acts on
-  nothing before then — that record *is* the first request (§6.2).
+  when the client's first transport message opens. The daemon acts on
+  nothing before then — that message *is* the first request (§6.2).
+  **This boundary is enforced by type, not by convention (RT-W9, ruled
+  2026-10-12).** Someone who breaks X25519 can produce a message 3 that
+  claims any enrolled client; they cannot read message 4 or produce a
+  first transport message. Between message 3 and message 4 the daemon
+  holds `DaemonReadyForMessage4`, whose `fingerprint` is the enrolment
+  lookup and a claim, not an authenticated client. A caller can copy that
+  fingerprint; the copy is still only a claim. After message 4 the daemon
+  holds `PendingSession`, whose only operation is `open_first_message`.
+  It lends its receiving direction, for that one call, to an opener the
+  caller supplies: the channel's record framer (§4.4), which the handshake
+  does not contain. **The opener's result is not what releases the
+  session (ruled 2026-10-12).** A direction counts the ciphertexts it has
+  opened, a failed tag not among them, and the session is released only if
+  the opener succeeded *and* the receiving direction itself opened at
+  least one. An opener that reports success having opened nothing is
+  refused like any other failure, and there is a test with exactly that
+  opener.
+  On success that yields `AuthenticatedSession`: the transport directions,
+  the authenticated client and message 3's payload. On failure the session
+  is gone. `PendingSession` does not expose the request, the directions or
+  the fingerprint; examples that try are checked not to compile
+  (`rust/shekyl-rpc-channel/src/handshake.rs`, `PendingSession`).
 - **Cost:** two round trips before the first request; three
   encapsulate/decapsulate pairs and two ephemeral ML-KEM key generations.
   On the wire: message 1 is 2,320 bytes (1,088 ciphertext, 32 + 1,184
@@ -437,8 +459,22 @@ failing under a named edit** before its pass is trusted:
    **RT-W8 pins and RT-W9 compares** (RT-O11, ruled 2026-10-09): RT-W8 has
    no handshake of ours, so it drives clatter from seeded randomness with
    the real prologue and commits the messages and transport keys as
-   vectors; RT-W9 implements against them, red first. This anchor is
-   complete only when RT-W9 lands, and RT-W8's record says so. Read at
+   vectors; RT-W9 implements against them, red first. **This anchor is
+   complete (RT-W9, step 2).** Shekyl's handshake
+   (`rust/shekyl-rpc-channel/src/handshake.rs`), drawing both statics and
+   every ephemeral from the same seeded streams through the private
+   constructors production calls with the operating system's generator,
+   reproduces the four pinned messages, the handshake hash, and a plain
+   Noise transport message under each direction
+   (`rust/shekyl-rpc-channel/src/pinned_handshake.rs`, RT-O18). The
+   comparison was written first and seen failing with no handshake behind
+   it, and seen failing again under two named edits: the X25519 ephemeral
+   drawn before the `skem` encapsulation (message 1's bytes differ), and
+   message 1's tokens in the first draft's order on both sides (message 1
+   is 2,336 bytes, not 2,320). The pinned transport bytes are
+   `Direction::seal` under empty `TRANSPORT_AD`, the same associated data
+   `PendingSession::open_first_message` uses. They are one Noise ciphertext,
+   not a framed record. Read at
    source: clatter's ML-KEM backend (RustCrypto `ml-kem`, which clatter
    2.3.0 asks for as `0.2.1` and the lock file resolves to **0.2.3**; read
    at both) and ours (`fips203` 0.4.3) draw the same randomness in the same
@@ -513,7 +549,7 @@ sender — bundle or not — makes the daemon do two operations with its
    token)
    (`x25519-dalek`, constant-time by construction). A low-order `e` gives
    an all-zero result; it is refused and never mixed, as the P2P handshake
-   already does (`noise.rs:504`, `low_order_x25519_does_not_mix`). The same
+   already does (`noise.rs:407`, `low_order_x25519_does_not_mix`). The same
    refusal applies to `se` in message 3, where the key is also long-term.
 2. **ML-KEM-768 decapsulation with the static decapsulation key against an
    attacker-chosen ciphertext** — the first thing message 1 asks for, since
@@ -550,15 +586,21 @@ is needed is decided from RT-P6's measurement, not before it.
   constant and the second has a fixed length. A testnet
   client cannot complete a handshake with a mainnet daemon. Nettype selects
   data only (rule 71).
-- **Record layer — RE-RULED 2026-10-12 (PR #1034).** The shared crate is
-  `shekyl-noise`. It holds the AEAD primitives (`hash`, `hkdf`, `seal`,
-  `open`), crate-private; the handshake symmetric state (`SymmetricState`,
-  the protocol name a parameter); and `Direction`, one nonce stream whose
-  caller never supplies the nonce. Rekey is `REKEY_NONCES` = 1,000 uses
-  of that nonce (`channel.rs:18` at the RT-W9 pre-flight pin). A handshake
-  ends in `TransportKeys::into_directions`: two `Direction`s, and no raw
-  key crosses the public API. `ck_and_k` and `force_nonce` stay
-  `#[cfg(test)]` inside the crate.
+- **Record layer — RE-RULED 2026-10-12 (PR #1034). Step 1 landed in
+  PR #1038.** The shared crate is `shekyl-noise`. It holds the AEAD
+  primitives (`hash`, `hkdf`, `seal`, `open`), crate-private; the handshake
+  symmetric state (`SymmetricState`, the protocol name a parameter); and
+  `Direction`, one nonce stream whose caller never supplies the nonce.
+  Rekey is `REKEY_NONCES` = 1,000 uses of that nonce (`channel.rs:18` at
+  the RT-W9 pre-flight pin; the constant now lives on `Direction`). A
+  handshake ends in `SymmetricState::into_directions`: the symmetric state
+  is consumed into two `Direction`s, and no raw key crosses the public
+  API. The re-ruling named `TransportKeys::into_directions`. The landed
+  split consumes `SymmetricState`, so no key-bundle type exists.
+  `Direction::seal` and `Direction::open` return the bytes and the key
+  epoch of the key that produced them. The epoch advances only when rekey
+  runs. The header-protection key is not a field of `Direction`.
+  `ck_and_k` and `force_nonce` stay `#[cfg(test)]` inside the crate.
   **SUPERSEDED 2026-10-12:** extracting `channel.rs` into that crate. The
   interim framer stays in `shekyl-p2p-transport`. It is today's `SendHalf`
   / `RecvHalf`: an encrypted 2-byte length and an encrypted body, two
@@ -569,10 +611,13 @@ is needed is decided from RT-P6's measurement, not before it.
   `FixedWindow` has replaced it and those callers are gone; the
   re-evaluation deletes the interim framer in the P2P round, rather than
   moving it first.
-  The extraction must not move or regenerate the pinned handshake vectors
-  (`kat_m1.hex`, `kat_m2.hex`, asserted at `noise.rs:549-554`): they stay
-  byte-identical and keep passing in place. The key-schedule assertions
-  below that line move with `Direction`.
+  `kat_m1.hex` and `kat_m2.hex` stayed byte-identical and keep passing in
+  `pinned_messages_mix_steps_and_rekey` (`noise.rs`). The key-schedule
+  assertions moved with `Direction` and stay `#[cfg(test)]` inside
+  `shekyl-noise`. There is no feature that exports a traffic key. The C5
+  bench times one rekey through `rekey-timing`, which only
+  `shekyl-p2p-transport`'s `c5-bench` feature enables, and that function
+  does not return the derived keys.
 - **HTTP over records.** hyper and axum expect a byte stream; the channel
   delivers records of at most `MAX_RECORD_PLAINTEXT` bytes. The stream
   adapter is the crate `shekyl-rpc-stream`: `AsyncRead` / `AsyncWrite`
@@ -956,6 +1001,35 @@ outside the grant is refused with its own error — a dedicated JSON-RPC
 code and HTTP 403 on REST — never "method not found" or a 404. The default
 request is the `view` preset (§6.1). Nothing is served until the client's first
 transport record decrypts (§4.1).
+
+**Both payloads are fixed-length (ruled 2026-10-12).** The handshake
+carries the message-3 and message-4 payloads as opaque bytes; their
+encoding is RT-W10's. Whatever it is, each payload has one length for
+every grant, so that neither message's size on the wire tells an observer
+what was requested or what was granted. Message 3 is then always the same
+size, and so is message 4.
+
+**Open, for RT-W10's pre-flight: what message 4 carries.** The paragraph
+above has the daemon clamp the *request* to the ceiling and return the
+result in message 4. The handshake's types (§4.1) withhold the request
+until the first transport message opens, on purpose, so when message 4 is
+written the daemon knows the claimed fingerprint and nothing the client
+asked for. The
+two cannot both stand as written. Two ways through, neither chosen here:
+
+- **Message 4 carries the ceiling.** It depends on the identity alone,
+  which is all the daemon has. The effective grant is the request clamped
+  to it, computed by both sides once the first record opens. A clamped
+  client still knows at connect time, since it knows what it asked for.
+  Nothing computed from an unauthenticated request ever leaves the daemon.
+- **Message 4 carries the effective grant, as written above.** The
+  handshake would hand the request to one function whose only output is
+  message 4's payload. The request is then visible to daemon code before
+  authentication, inside that function, and keeping it from being logged
+  or counted there is a convention again.
+
+Under either, a sender who has broken X25519 learns nothing from message
+4: it is sealed to the client's ML-KEM key.
 
 The `restricted: bool` that today threads through `AppState`, the router,
 and the method handlers becomes the connection's grant; the two gate tests
@@ -1413,12 +1487,13 @@ construction) instead of loopback TCP.
   (PR #1034).**
   ([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md) §4).
   The re-rulings are what is built. **RT-O16 — SUPERSEDED, the
-  test-support feature:** the pinned vector assertions stay at
-  `noise.rs:549-554`; the key-schedule assertions move with `Direction`
-  and stay `#[cfg(test)]`. No feature exports a traffic key. **RT-O17:**
-  `SymmetricState` moves into `shekyl-noise` and takes the protocol name
-  as a parameter. The crate also holds `Direction`. It does not hold the
-  interim framer. **RT-O18 — SUPERSEDED, the test-support entry:** the
+  test-support feature:** the pinned vector assertions stay in
+  `pinned_messages_mix_steps_and_rekey` (`noise.rs`); the key-schedule
+  assertions moved with `Direction` and stay `#[cfg(test)]` inside
+  `shekyl-noise`. No feature exports a traffic key. **RT-O17:**
+  `SymmetricState` is in `shekyl-noise` and takes the protocol name as a
+  parameter. The crate also holds `Direction`. A handshake ends in
+  `SymmetricState::into_directions`. It does not hold the interim framer. **RT-O18 — SUPERSEDED, the test-support entry:** the
   comparison is an in-crate test with a private constructor; one generator
   source is compiled into that test and into the cross-check crate;
   production construction takes no generator; clatter stays in the
@@ -1580,8 +1655,8 @@ rule-26 pre-flight before its first production commit.
 | Slice | Contents | Depends on | Authorization |
 |---|---|---|---|
 | RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, vectors pinned from clatter 2.3.0 under seeded randomness, which RT-W9 compares our handshake against (RT-O11), each observed changing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; creates `shekyl-rpc-channel` with the constants and naming functions (RT-O13); deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
-| RT-W9 | `shekyl-noise` holds `SymmetricState` and `Direction` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedRecord` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 and RT-P6 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; deadline from RT-P6. **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; nothing built |
-| RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view` | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
+| RT-W9 | `shekyl-noise` holds `SymmetricState` and `Direction` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedRecord` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 and RT-P6 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; deadline from RT-P6. **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; step 1 is built (`SymmetricState`, `Direction`, `into_directions`); step 2 is built in PR #1039: the `hybridXK` handshake in `shekyl-rpc-channel`, ending in `into_directions`, compared with the pinned vectors from `rust/shekyl-rpc-channel/src/pinned_handshake.rs` (RT-O18); `ClassedRecord` and `shekyl-rpc-stream` are not |
+| RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view`. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client `AuthenticatedSession` yields, never from the fingerprint `DaemonReadyForMessage4` exposes for the enrolment lookup (§4.1, ruled 2026-10-12).** A copied fingerprint is still only a claim. Its pre-flight settles what message 4 carries (§6.2) | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 | not authorized |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9) | RT-W9 | not authorized |
 | RT-W13 | The check that §11.2 is empty: every row gone, no reader of a deleted flag or field left | lands with RT-W10; re-run after RT-W12 and RT-W14 | not authorized |

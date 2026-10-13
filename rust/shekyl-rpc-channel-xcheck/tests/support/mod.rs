@@ -3,7 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The seeded generator the cross-check draws from.
+//! The seeded generator the handshake comparison and this cross-check draw
+//! from.
+//!
+//! RT-O18: one source file. `shekyl-rpc-channel`'s pinned handshake test and
+//! this crate each compile it. Neither exports it. No feature turns it on.
 
 use rand_core::{CryptoRng, RngCore};
 use sha3::digest::{ExtendableOutput, Update, XofReader};

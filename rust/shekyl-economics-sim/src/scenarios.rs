@@ -124,7 +124,7 @@ pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
     let baseline = params.tx_volume_baseline;
     ScenarioConfig {
         name: "mass_unstaking".into(),
-        description: "80% of stakers unlock within one epoch (~35 days) at year 3".into(),
+        description: "80% of stakers unlock within 25,000 blocks (~35 days) at year 3".into(),
         sim_years: 5,
         volume: VolumeSchedule {
             get_volume: Box::new(move |_block, _bpy| baseline),
@@ -390,6 +390,7 @@ fn gate7_asserted_comparator(
 pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
     let seb = SETTLEMENT_EPOCH_BLOCKS;
     let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    let floor_coins = floor as f64 / crate::burden::COIN as f64;
     vec![
         // Arm A (bonds-only) across the N_P envelope.
         gate7_scenario(
@@ -427,21 +428,30 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
         gate7_scenario(
             params,
             "gate7_admission_min_1x_lean",
-            "Arm B hard lock; ADMISSION_MIN = 1x bond floor (0.75 coin) x N_P=79",
+            &format!(
+                "Arm B hard lock; ADMISSION_MIN = 1x bond floor ({} coin) x N_P=79",
+                floor_coins
+            ),
             false,
             lock_model(R_FULL, seb, NP_LEAN, floor),
         ),
         gate7_scenario(
             params,
             "gate7_admission_min_100x_lean",
-            "Arm B hard lock; ADMISSION_MIN = 100x bond floor (75 coins) x N_P=79",
+            &format!(
+                "Arm B hard lock; ADMISSION_MIN = 100x bond floor ({} coins) x N_P=79",
+                floor_coins * 100.0
+            ),
             false,
             lock_model(R_FULL, seb, NP_LEAN, floor * 100),
         ),
         gate7_scenario(
             params,
             "gate7_admission_min_10000x_lean",
-            "Arm B hard lock; ADMISSION_MIN = 10_000x bond floor (7_500 coins) x N_P=79",
+            &format!(
+                "Arm B hard lock; ADMISSION_MIN = 10_000x bond floor ({} coins) x N_P=79",
+                floor_coins * 10_000.0
+            ),
             false,
             lock_model(R_FULL, seb, NP_LEAN, floor * 10_000),
         ),

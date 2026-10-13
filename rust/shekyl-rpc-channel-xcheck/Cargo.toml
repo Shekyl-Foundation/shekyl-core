@@ -36,6 +36,8 @@ sha3 = { version = "0.10", default-features = false }
 hex = "0.4"
 serde_json = "1"
 # The real prologue, so the pinned vectors bind the bytes the channel will.
+# The handshake comparison lives in shekyl-rpc-channel (RT-O18). This crate
+# regenerates the vectors with clatter and does not drive our handshake.
 shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
 
 [lints]
