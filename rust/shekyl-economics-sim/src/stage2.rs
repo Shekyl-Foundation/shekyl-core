@@ -511,6 +511,16 @@ pub fn a1_sustained_years(aggs: &[A1YearAgg]) -> impl Iterator<Item = &A1YearAgg
 /// A2, A3 and `onset.rs`'s shipped lever all call it; `onset.rs` builds the
 /// alternative budgets (share of fees, a tail floor) beside it.
 #[must_use]
+/// A year's pool prorated to one settlement epoch, in atomic units:
+/// `per_year * SETTLEMENT_EPOCH_BLOCKS / BLOCKS_PER_YEAR`, floored, in the
+/// integers the arms that take an epoch's budget run in (DQ-2G).
+#[must_use]
+pub fn per_epoch_atomic(per_year: u128) -> u64 {
+    let per_epoch = per_year * u128::from(shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS)
+        / u128::from(shekyl_economics::BLOCKS_PER_YEAR);
+    u64::try_from(per_epoch).expect("a year's pool, prorated to an epoch, fits the atomic u64")
+}
+
 pub fn a1_shipped_budget_atomic(a: &A1YearAgg, candidate: &EscalationCurve) -> u128 {
     a.emission_leg_atomic + year_share_atomic(a.whole_burn_atomic, candidate.share(a.n))
 }
@@ -1460,11 +1470,9 @@ fn a3_stranding_report(
         "post noclm%"
     )?;
     let picks = [0usize, years.len() / 2, years.len() - 1];
-    let epy = crate::proxy::epochs_per_year();
     for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
         let a = years[yi];
-        let budget_atomic = a1_shipped_budget_atomic(a, &flat_25());
-        let budget_per_epoch = (budget_atomic as f64 / epy) as u64;
+        let budget_per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25()));
         let claim_cost = ordinary_tx_fee(a.cumulative_outputs, a.admission_rate);
         for &archivers in &A3_ARCHIVER_BAND {
             let pre = crate::stranding::measure(
@@ -1617,7 +1625,6 @@ struct ShardRewardOperands {
 }
 
 fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
-    let epy = crate::proxy::epochs_per_year();
     let mut rewards: Vec<f64> = Vec::new();
     let mut max_per_epoch_skl = 0.0_f64;
     for scenario in folded {
@@ -1626,8 +1633,9 @@ fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
             .iter()
             .filter(|a| a.n >= MAX_HOLDINGS_SHARDS as u64)
         {
-            let pool_atomic = a1_shipped_budget_atomic(a, &flat_25());
-            let pool_per_epoch_skl = (pool_atomic as f64 / COIN) / epy;
+            // The epoch's pool in atomic units; SKL is the report's unit.
+            let pool_per_epoch_skl =
+                per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25())) as f64 / COIN;
             let per_shard = pool_per_epoch_skl / a.n as f64;
             rewards.push(per_shard);
             max_per_epoch_skl = max_per_epoch_skl.max(per_shard);
@@ -1765,8 +1773,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
                 .max_by_key(|c| c.asymptote)
                 .copied()
                 .unwrap_or_else(flat_25);
-            let pool = a1_shipped_budget_atomic(a, &best);
-            let per_epoch = (pool as f64 / crate::proxy::epochs_per_year()) as u64;
+            let per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &best));
             crate::redistribution::a2_report(
                 out,
                 per_epoch,

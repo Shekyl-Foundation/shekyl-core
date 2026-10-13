@@ -50,6 +50,11 @@ use crate::burden::{COIN, SHARD_BYTES};
 pub const BLOCKS_PER_YEAR: u64 = shekyl_economics::BLOCKS_PER_YEAR;
 
 /// Settlement epochs per year: `blocks_per_year / SETTLEMENT_EPOCH_BLOCKS`.
+///
+/// For the report and fiat layers only: a storage cost, a sybil gain, a
+/// cooldown in weeks. No chain quantity is divided by it; an epoch's
+/// budget in atomic units is [`crate::stage2::per_epoch_atomic`] (DQ-2G,
+/// ESR-14).
 #[must_use]
 pub fn epochs_per_year() -> f64 {
     BLOCKS_PER_YEAR as f64 / SETTLEMENT_EPOCH_BLOCKS as f64
