@@ -504,13 +504,6 @@ pub fn a1_sustained_years(aggs: &[A1YearAgg]) -> impl Iterator<Item = &A1YearAgg
     aggs.iter().filter(|a| a.year > A1_RAMP_YEARS && a.n > 0)
 }
 
-/// The shipped budget for one year under a candidate, **atomic**: the decaying
-/// staker emission leg plus the candidate's share of the fee **burn** — the
-/// escalation share taken with production's floor ([`year_share_atomic`]),
-/// never an f64 `× share_fraction`. The one home for the shipped budget: A1,
-/// A2, A3 and `onset.rs`'s shipped lever all call it; `onset.rs` builds the
-/// alternative budgets (share of fees, a tail floor) beside it.
-#[must_use]
 /// A year's pool prorated to one settlement epoch, in atomic units:
 /// `per_year * SETTLEMENT_EPOCH_BLOCKS / BLOCKS_PER_YEAR`, floored, in the
 /// integers the arms that take an epoch's budget run in (DQ-2G).
@@ -521,6 +514,13 @@ pub fn per_epoch_atomic(per_year: u128) -> u64 {
     u64::try_from(per_epoch).expect("a year's pool, prorated to an epoch, fits the atomic u64")
 }
 
+/// The shipped budget for one year under a candidate, **atomic**: the decaying
+/// staker emission leg plus the candidate's share of the fee **burn** — the
+/// escalation share taken with production's floor ([`year_share_atomic`]),
+/// never an f64 `× share_fraction`. The one home for the shipped budget: A1,
+/// A2, A3 and `onset.rs`'s shipped lever all call it; `onset.rs` builds the
+/// alternative budgets (share of fees, a tail floor) beside it.
+#[must_use]
 pub fn a1_shipped_budget_atomic(a: &A1YearAgg, candidate: &EscalationCurve) -> u128 {
     a.emission_leg_atomic + year_share_atomic(a.whole_burn_atomic, candidate.share(a.n))
 }
