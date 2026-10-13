@@ -132,9 +132,12 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     Goes red the day the daemon under test admits a kind-5 JoinMarket,
 #     naming the five walks that are then due back (FOLLOWUPS: "The five
 #     bonded regtest walks are decided dark"). Sabotage 2026-10-13, local
-#     debug build against a dev-built daemon: the refusal arm inverted;
-#     panicked there after the daemon logged the C++ reparse refusal
-#     (184 s; the green run before it 321 s, mine + fund + stake + submit).
+#     debug build against a daemon built from a P2P branch standing on this
+#     dev (its C++ delta was six p2p files and shekyl_ffi.h; the bond-post
+#     parser and the submit commit shim were dev's): the refusal arm
+#     inverted; panicked there after the daemon logged the C++ reparse
+#     refusal (184 s; the green run before it 321 s, mine + fund + stake +
+#     submit — the bond walk's first half, pr-lane before #1046).
 #   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
 #     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
 #   e2e_cxx_template_fills_to_its_median (slow) — historical red
