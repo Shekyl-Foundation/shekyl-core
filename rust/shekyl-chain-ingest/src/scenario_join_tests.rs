@@ -146,6 +146,14 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let record = records[0].record();
     assert_eq!(record.hybrid_pubkey, compact.identity());
     assert_eq!(record.bond_spend_pk, compact.bond_spend());
+    // FN-DSA increment 3: the production constructor commits the persona's
+    // receipt key, and the insert carries exactly those bytes.
+    assert_eq!(
+        record.receipt_sign_pk,
+        compact.receipt_key(),
+        "the join's receipt key is the record's"
+    );
+    assert!(block.judged_by.contains(&CenRow::J28), "J28 judged the key");
     assert_eq!(record.endpoint, ENDPOINT);
     assert_eq!(record.join_settlement_epoch, epoch);
     assert_eq!(
@@ -296,6 +304,12 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         "one clean interval close at the release epoch"
     );
     assert_eq!(released.hybrid_pubkey, whole_record.hybrid_pubkey);
+    // The receipt key is set once at JoinMarket: a Release keeps it.
+    assert_eq!(whole_record.receipt_sign_pk, whole.receipt_key());
+    assert_eq!(
+        released.receipt_sign_pk, whole_record.receipt_sign_pk,
+        "a release does not touch the receipt key"
+    );
     assert_eq!(
         released.join_settlement_epoch,
         whole_record.join_settlement_epoch

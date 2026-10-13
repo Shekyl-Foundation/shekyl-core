@@ -204,6 +204,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // coupling, and the key its kind selects.
             CenRow::J11,
             CenRow::J12,
+            // FN-DSA increment 3 (2026-10-12): the JoinMarket's receipt key
+            // is a key. Filed after J12, as in the registry.
+            CenRow::J28,
             CenRow::J13,
             // Slice 8 row 5: the post against its record — a join's floor and
             // claim slot, a Release's exit, a Reinstate's open interval.
@@ -349,8 +352,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // 2026-10-08: CEN-B7 (the one-time warning on a block version above
     // the last scheduled one) went to bucket 3 with the hard-fork
     // mechanism: a higher version is refused by B1, and there is nothing
-    // to warn about.
-    assert_eq!(CenRow::ALL.len(), 153);
+    // to warn about. 153 → 154 on 2026-10-12: CEN-J28 (a JoinMarket's
+    // `receipt_sign_pk` parses as a canonical FN-DSA hybrid public key)
+    // minted with its implementation, FN-DSA increment 3
+    // (`FN_DSA_HYBRID.md` §6).
+    assert_eq!(CenRow::ALL.len(), 154);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

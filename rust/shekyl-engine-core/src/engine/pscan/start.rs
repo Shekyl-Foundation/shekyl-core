@@ -869,7 +869,7 @@ mod tests {
                 shekyl_engine_state::pscan_state::BondPostRecord {
                     height: BlockHeight::from_raw(1_200),
                     p_canonical_id: PCanonicalId::from_bytes([0xAB; 32]),
-                    post_kind: 0,
+                    post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
                 },
                 shekyl_engine_state::pscan_state::BondPostRecord {
                     height: BlockHeight::from_raw(4_900),

@@ -15,7 +15,10 @@
 //!
 //! ## What this crate produces
 //!
-//! 1. [`JoinMarketVin`]: [`BondPostKind::JoinMarket`] with
+//! 1. [`JoinMarketVin`]: a JoinMarket
+//!    ([`shekyl_archival_retention::BondPostKind::JoinMarket`], wire
+//!    `post_kind` `5`) — the persona's receipt key committed beside
+//!    `bond_spend_pk` (`FN_DSA_HYBRID.md` §8) — with
 //!    `bonded_total_atomic == bond_credit == bond_floor(holdings)` and
 //!    `bond_debit == 0` (§7.1). The vin carries no signature: its on-chain
 //!    authorization is the transaction-level `pqc_auths` slot (surface A), not
@@ -74,7 +77,8 @@ use shekyl_units::AtomicUnits;
 ///
 /// Fields are private: a `JoinMarketVin` can be produced **only** by
 /// [`build_join_market_vin`], which establishes the genesis-frozen JoinMarket
-/// invariants (`post_kind == JoinMarket`, `bond_debit == 0`,
+/// invariants (a JoinMarket committing the persona's receipt key,
+/// `bond_debit == 0`,
 /// `bonded_total_atomic == bond_credit == bond_floor(holdings) != 0`). Consumers
 /// that hold one therefore have a structural witness those invariants hold,
 /// without re-validating them — the same property the verify side
@@ -144,11 +148,17 @@ impl ReleaseVin {
 /// Build a JoinMarket bond-post `vin` for persona `P` over the holdings being
 /// bonded (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.1).
 ///
-/// `keys` pairs P's public identity (`hybrid_bond_id` / `hybrid_sign_pk`) with
-/// the GF-1 debit authorizer; its only producer is
-/// `ArchivalPKeys::bond_post_keys`, so the two roles are same-persona and
+/// `keys` holds P's public identity (`hybrid_bond_id` / `hybrid_sign_pk`), the
+/// GF-1 debit authorizer and the receipt key; its only producer is
+/// `ArchivalPKeys::bond_post_keys`, so the roles are same-persona and
 /// un-transposable by construction. No secret is required — this constructor
 /// does not sign (surface-A signing is the assemble path).
+///
+/// The post (wire `post_kind` `5`, the JoinMarket's one form) commits the
+/// persona's receipt key (`FN_DSA_HYBRID.md` §8), which the
+/// connect copies into the bond record and CEN-J28 requires to parse as a
+/// canonical Ed25519 + FN-DSA-1024 public key. A derived key does, by
+/// construction of its type.
 ///
 /// The constructed `vin` is accepted by
 /// [`shekyl_archival_retention::verify_join_market_bond_post`] with
@@ -191,8 +201,16 @@ pub fn build_join_market_vin(
         .to_canonical_bytes()
         .map_err(BondBuildError::BondSpendEncode)?;
 
-    // JoinMarket is a pure credit path: bonded_total == bond_credit == floor,
-    // bond_debit == 0 (the verify side pins this in verify_join_market_bond_post).
+    // The receipt key (Ed25519 + FN-DSA-1024), committed into the record at
+    // connect beside `bond_spend_pk` and immutable there. It rides the signed
+    // prefix too, so P's identity signature binds it: nobody can swap in
+    // another key under a standing signature (CEN-I18). Its encoding is
+    // total — the type holds only keys both verifiers decode.
+    let receipt_sign_pk = keys.receipt_pk().to_receipt_sign_pk();
+
+    // JoinMarket is a pure credit path. `join_market` is that shape:
+    // bonded_total == bond_credit == floor, bond_debit == 0 (the verify side
+    // pins the same equality in verify_join_market_bond_post).
     //
     // The bond vin carries no signature. Its on-chain authorization is the
     // transaction-level `pqc_auths` slot aligned with this vin, signed by P's
@@ -206,9 +224,9 @@ pub fn build_join_market_vin(
         hybrid_public_key,
         p_canonical_id,
         bond_spend_pk,
+        receipt_sign_pk,
         endpoint,
         holdings,
-        floor,
         floor,
     );
 

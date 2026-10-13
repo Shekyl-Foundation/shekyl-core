@@ -44,7 +44,7 @@ use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme, SCHEME_DOMAIN_PQC_AUTH_TX};
 use shekyl_tx_builder::{InputTerm, OutputTerm};
-use shekyl_types::archival::{BondRecord, Holdings};
+use shekyl_types::archival::{BondRecord, Holdings, ReceiptSignPk};
 use shekyl_types::{PCanonicalId, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::BondPost;
@@ -106,6 +106,13 @@ impl Persona {
             .expect("the bond-spend key encodes")
     }
 
+    /// The receipt key — `receipt_sign_pk` on a JoinMarket ([`Self::join`]
+    /// commits it) and on the bond record that join writes.
+    #[must_use]
+    pub fn receipt_key(&self) -> ReceiptSignPk {
+        self.keys.bond_post_keys().receipt_pk().to_receipt_sign_pk()
+    }
+
     /// `P_canonical_id`, derived from the identity key as the verifier
     /// derives it.
     #[must_use]
@@ -155,7 +162,8 @@ impl Persona {
 
     /// A JoinMarket over `holdings` at `endpoint`, through the production
     /// constructor: the total is the floor of the holdings, the credit is
-    /// the total, the slot is the identity key's.
+    /// the total, the slot is the identity key's. The post (wire `post_kind`
+    /// 5) commits [`Self::receipt_key`], as a wallet's does.
     #[must_use]
     pub fn join(&self, holdings: HoldingsDescriptor, endpoint: [u8; 32]) -> PostedBond<'_> {
         let built = build_join_market_vin(self.keys.bond_post_keys(), holdings, endpoint)

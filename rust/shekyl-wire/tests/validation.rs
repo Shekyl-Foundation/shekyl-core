@@ -472,6 +472,9 @@ fn join_market_bond_post() -> Input {
         p_canonical_id: PCanonicalId::from_bytes([7u8; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![9u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
@@ -479,6 +482,56 @@ fn join_market_bond_post() -> Input {
         bond_credit: 100,
         bond_debit: 0,
     }))
+}
+
+/// [`join_market_bond_post`] with its kind replaced — the in-memory face of
+/// the bond post's kind rules, judged by [`Transaction::validate`].
+fn bond_post_spend_with_kind(kind: BondPostKind) -> Transaction {
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    let mut post = join_market_bond_post();
+    if let Input::BondPost(bp) = &mut post {
+        bp.kind = kind;
+    }
+    tx.prefix.inputs.push(post);
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths.push(pqc_auths[0].clone());
+    }
+    tx
+}
+
+/// `Other` carrying the JoinMarket tag (5) or the retired keyless one (0)
+/// is a misconstruction that never validates. Today the size bound's
+/// counting write reaches the writer's guard first and panics on it
+/// (`serialized_len` `.expect`s the write; the conformance registry's note
+/// on the `Other` invariant), before `BondPost::validate`'s own guard
+/// returns its error. Either is a refusal, so this asserts the one thing
+/// both give — never `Ok` — and that the two tags get the same.
+/// `Other(2)` (Release) is the control: the guard is the tag, not `Other`.
+#[test]
+fn bond_post_other_with_a_joinmarket_tag_never_validates() {
+    use shekyl_wire::transaction::{
+        BOND_POST_KIND_JOINMARKET, BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET,
+    };
+    // `Err(message)` for a returned refusal, `Err(panic message)` for the
+    // writer's guard reached through the counting write.
+    let outcome = |tag: u8| -> Result<(), String> {
+        let tx = bond_post_spend_with_kind(BondPostKind::Other(tag));
+        match std::panic::catch_unwind(move || tx.validate()) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(panic) => Err(panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_default()),
+        }
+    };
+    let live = outcome(BOND_POST_KIND_JOINMARKET).expect_err("Other(5) never validates");
+    let retired =
+        outcome(BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET).expect_err("Other(0) never validates");
+    assert!(live.contains("must not use the JoinMarket tag"), "{live}");
+    assert_eq!(retired, live);
+    assert_eq!(outcome(2), Ok(()), "Other(Release) is not a JoinMarket tag");
 }
 
 #[test]

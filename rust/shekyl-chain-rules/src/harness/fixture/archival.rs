@@ -30,7 +30,9 @@ use std::sync::{Mutex, OnceLock};
 
 use shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
+use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
+use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{
@@ -59,6 +61,10 @@ pub struct FixturePersona {
     /// The bond-spend key, canonical bytes — a JoinMarket's
     /// `bond_spend_pk`, and the bond slot's key on a Release.
     pub bond_spend: Vec<u8>,
+    /// The receipt key a JoinMarket commits: a real Ed25519 + FN-DSA-1024
+    /// key ([`RECEIPT_ED_HALF`], [`RECEIPT_FN_DSA_HALF`]), so the fixture
+    /// join passes CEN-J28 as a wallet's does.
+    pub receipt: ReceiptSignPk,
     /// `P_canonical_id`: the recompute over `identity`.
     pub id: PCanonicalId,
 }
@@ -67,6 +73,19 @@ pub struct FixturePersona {
 const IDENTITY_HALF: u8 = 0x1D;
 /// The constant half of a bond-spend seed.
 const BOND_SPEND_HALF: u8 = 0x5D;
+/// The fill of the receipt key's Ed25519 seed, after the tag's first half.
+const RECEIPT_ED_HALF: u8 = 0x2E;
+/// The fill of the receipt key's FN-DSA seed, after the tag's first half.
+const RECEIPT_FN_DSA_HALF: u8 = 0x2F;
+
+/// A 32-byte receipt-key seed for `tag`: its first sixteen bytes, then
+/// `half`. Distinct per tag as far as the fixtures' tags differ in their
+/// first half, and distinct per `half`.
+fn receipt_seed_of(tag: [u8; 32], half: u8) -> [u8; 32] {
+    let mut seed = [half; 32];
+    seed[..16].copy_from_slice(&tag[..16]);
+    seed
+}
 
 fn seed_of(tag: [u8; 32], half: u8) -> [u8; 64] {
     let mut seed = [half; 64];
@@ -126,10 +145,18 @@ pub fn persona(tag: [u8; 32]) -> FixturePersona {
                 );
             assert!(displaced.is_none(), "a tag's identity key is derived once");
             let id = p_canonical_id_from_hybrid_pubkey(&identity);
+            let receipt = HybridEd25519FnDsa::keypair_from_seeds(
+                &receipt_seed_of(tag, RECEIPT_ED_HALF),
+                &receipt_seed_of(tag, RECEIPT_FN_DSA_HALF),
+            )
+            .expect("a fixture seed derives a receipt key")
+            .0
+            .to_receipt_sign_pk();
             FixturePersona {
                 tag,
                 identity,
                 bond_spend,
+                receipt,
                 id,
             }
         })
@@ -241,7 +268,8 @@ pub fn serve_credit_vin(p: [u8; 32], shard: u64, settlement_epoch: u64) -> Input
 /// the persona's record, under `persona(p).id` — so it is what precedes a
 /// serve credit or a claim for `p` in a block (CEN-L7 refuses either for a
 /// persona without a record). The post carries the persona's identity key
-/// and its recompute (J11) and commits the persona's bond-spend key; the
+/// and its recompute (J11) and commits the persona's bond-spend key and its
+/// receipt key, a real one (J28); the
 /// slot that signs it is the identity key's (J13's credit arm).
 pub fn join_market(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
     let who = persona(p);
@@ -252,6 +280,7 @@ pub fn join_market(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
             p_canonical_id: who.id,
             kind: BondPostKind::JoinMarket {
                 bond_spend_pk: who.bond_spend,
+                receipt_sign_pk: who.receipt,
                 endpoint: [0xe0; 32],
             },
             holdings: Holdings::CompleteTree,

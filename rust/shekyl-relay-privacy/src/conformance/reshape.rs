@@ -12,8 +12,8 @@
 //   Diagnostic-only and excluded from the default build.
 
 use crate::params::DandelionParams;
-use crate::rng::{bernoulli, RelayRng};
 use crate::schedule::EmbargoTimer;
+use shekyl_draw_rng::{bernoulli, RelayRng};
 
 use super::stem::walk_stem;
 use super::util::MAX_SIMULATED_HOPS;

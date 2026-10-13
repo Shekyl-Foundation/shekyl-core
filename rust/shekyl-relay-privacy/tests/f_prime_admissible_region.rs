@@ -92,12 +92,12 @@
 // an integer millisecond reading. Same disposition as `d9_alpha.rs`.
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::conformance::{
     converged_fluff_return_mixed, ConvergenceBudget, FloodParams, FloodReach, FLOOD_TICK_MS,
 };
 use shekyl_relay_privacy::schedule::DelayFamily;
-use shekyl_relay_privacy::SplitMix64;
 
 /// `f7_directed.rs`'s inputs, so this runs on the measurement it governs.
 const MEAN_QUARTER_SECS: u32 = 20;

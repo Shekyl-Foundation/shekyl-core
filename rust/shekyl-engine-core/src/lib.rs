@@ -231,7 +231,7 @@ pub mod __test_helpers {
             vec![BondPostRecord {
                 height: shekyl_types::BlockHeight::from_raw(10),
                 p_canonical_id: persona,
-                post_kind: 0,
+                post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
             }],
             vec![funding_record_for_test(
                 slot,
