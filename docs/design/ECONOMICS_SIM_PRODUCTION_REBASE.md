@@ -2182,7 +2182,7 @@ ESR-8 did.
 
 | # | What was found | Closes by |
 | --- | --- | --- |
-| N1 | **The secret draw's count rule is restated.** §4's ESR-11 row says "no production function exists to call". It does now: `shekyl_archival_retention::{draw_horizon, draw_count, select_draw}`. The sim keeps its own `horizon()`, `block_target()` and three constants (`MIN_HORIZON_BLOCKS`, `CATCH_UP_BY_PERMILLE`, `CAP_MULTIPLE`); only `COUNTED_DRAWS` is pinned to its owner. Whether the sim's f64 `block_target` equals production's fixed-point `draw_count` was read, not run | **Closed by ESR-13** (PR #1050, merged while this PR was open): `secret_draw_production.rs` calls all three, and `secret_draw.rs` is kept as it ran, as the `f64` reference, under its §4 row. See below |
+| N1 | **The secret draw's count rule is restated.** §4's ESR-11 row says "no production function exists to call". It does now: `shekyl_archival_retention::{draw_horizon, draw_count, select_draw}`. The sim keeps its own `horizon()`, `block_target()` and three constants (`MIN_HORIZON_BLOCKS`, `CATCH_UP_BY_PERMILLE`, `CAP_MULTIPLE`); only `COUNTED_DRAWS` is pinned to its owner. Whether the sim's f64 `block_target` equals production's fixed-point `draw_count` was read, not run | **Closed by ESR-13** (PR #1050, merged while this PR was open): `secret_draw_production.rs` calls all three, and `secret_draw.rs` was kept as it ran, as the `f64` reference, under its §4 row. See below. **Superseded 2026-10-13 by ESR-14** (§5.20 item 7, §5.21): `secret_draw.rs` calls the three too, and the `f64` rule and sampler are gone |
 | N2 | **The recorder priced a block the chain does not build.** It paid `effective_emission` on the schedule's whole demand, fifty transactions a block. At the control arm's fee that is 630 to 765 kB against a 300 kB penalty-free zone: over the block-weight limit while the median sits at the zone, so the missing penalty was the smaller half of it. The loop's own comment declared the omission; §4 declared its volume operand only | **Fixed in ESR-8:** the recorder steps the cursor. The burn and the multiplier are that window too: the per-block recomputation §4 had declared is withdrawn. The vectors were regenerated and every column that moved is accounted for below |
 | N3 | `stage2.rs` split the fee burn at the flat `staker_pool_share` where the engine and budget folds use `compute_burn_split_at` at `n = 0`. The two are equal at the shipped parameters and nothing failed if they stopped being equal | **Closed:** the stage-2 ledger advances by production's destroyed amount at the fold's closed-shard count, and `the_shipped_split_is_flat_at_every_count` fails when the shipped asymptote leaves the floor |
 | N4 | `Cargo.toml` justified the `shekyl-chain-rules` dependency by `EMISSION_SPLIT_EPOCH`, which that crate no longer provides. The dependency is still used, for the medians, the volume span and the reference-block age | **Closed:** the comment says what it is used for |
@@ -2213,6 +2213,12 @@ recorded as direction, not as a signed ruling.
    and only then the calls switched. Overtaken by ESR-13; see below.
 
 ### N1: closed by ESR-13, and what this PR withdrew
+
+> **Superseded 2026-10-13 by ESR-14** (§5.20 item 7, §5.21). What follows
+> is the tree at ESR-8's merge. ESR-14 made the withdrawn move again,
+> with the rule's callers shared between the two modules: `secret_draw.rs`
+> calls `draw_count`, `draw_horizon` and `select_draw`, and ESR-13 no
+> longer prints an `f64` reference.
 
 ESR-13 (§5.17 to §5.19, PR #1050) landed on `dev` while this PR was
 open. It runs the secret draw on production's `draw_count`,
