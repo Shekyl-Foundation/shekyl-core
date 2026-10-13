@@ -141,24 +141,18 @@ fn refuse_stray_bond_spend_pk(pk: &[u8]) -> Result<(), u8> {
     }
 }
 
-/// **Refuses every call** with `ERR_POST_KIND` since the receipt key became
-/// mandatory (2026-10-12, PR #1046): a JoinMarket has one wire form, it
-/// commits a receipt key, and this C signature has no argument for one. The
-/// Rust validator judges a JoinMarket through `shekyl-chain-rules`; this
-/// export remains so the C header and its callers still link.
+/// **Refuses every call** with `ERR_POST_KIND`.
 ///
-/// *Was:* verify JoinMarket bond-post semantics after C++ hybrid-pubkey and `P_id` checks.
-///
-/// Hybrid pubkey bounds and `p_canonical_id` hint recompute stay in C++ consensus glue.
-/// `record_exists` is `1` when LMDB already has a bond record for this `P_id`.
-/// `bond_spend_pk_*` must be the canonical-length debit authorizer
-/// (`ERR_BOND_SPEND_PK_COUPLING` otherwise). `endpoint_*` must be exactly 32
-/// bytes (`ERR_ENDPOINT_COUPLING` otherwise); the all-zero key is refused by
-/// verify under the same code.
+/// A JoinMarket commits the persona's receipt key (`FN_DSA_HYBRID.md` §8,
+/// `FND-20`) and this signature has no argument for one. The header gate
+/// freezes the signature, so the export stays and verifies nothing: the
+/// Rust validator judges a JoinMarket through `shekyl-chain-rules`. The
+/// arguments are not read.
 ///
 /// # Safety
-/// `bond_spend_pk_ptr` must be valid for `bond_spend_pk_len` bytes, or null when
-/// the len is 0. `endpoint_ptr` must be valid for `ENDPOINT_BYTES` bytes.
+///
+/// This function dereferences no pointer. A caller may pass null or
+/// dangling pointers; they are not read.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     post_kind: u8,
@@ -180,7 +174,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     // JoinMarket can be rebuilt from these arguments, so none is verified
     // here — not the retired kind, and not kind 5 without its key. Every
     // call is refused with the code a wrong kind has always had. The
-    // signature is unchanged; the arguments are read for nothing.
+    // signature is unchanged; no pointer is dereferenced.
     let _ = (
         post_kind,
         holdings_kind,

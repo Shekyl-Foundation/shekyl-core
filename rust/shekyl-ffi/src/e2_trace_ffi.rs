@@ -267,28 +267,21 @@ pub unsafe extern "C" fn shekyl_e2_archival_snapshot_free(snapshot: *mut ShekylE
     }
 }
 
-/// **Refuses every row** with `SHEKYL_E2_TRACE_ERR_ROW` since the receipt
-/// key became mandatory (2026-10-12, PR #1046): a bond record carries the
-/// persona's receipt key, the C++ `ArchivalBondValue` has no such field,
-/// and this signature has no argument for one. A row built here would hold
-/// a key nobody committed, so none is built: a C++ store that holds a bond
-/// record cannot export its archival snapshot through this handle. The
-/// signature is unchanged.
+/// **Refuses every row** with `SHEKYL_E2_TRACE_ERR_ROW`.
 ///
-/// *Was:* one `archival_bond` row, from the C++ `ArchivalBondValue`'s decoded
-/// fields. `holdings_kind` is the record's kind byte (`0` compact, `1`
-/// complete tree); `held_shards` and `add_epochs` are the compact set's two
-/// index-parallel arrays of `holdings_count` each (ignored for a complete
-/// tree, which holds nothing per shard); `bad_intervals` is
-/// `bad_interval_count` pairs `(start_epoch, end_exclusive)` as
-/// `2 × count` `u64`s; `first_paying_emission_height` is the C++ sentinel
-/// form, `0` for none.
+/// A bond record carries the persona's receipt key (`FN_DSA_HYBRID.md` §8,
+/// `FND-20`) and this signature has no argument for one. A row built here
+/// would hold a key nobody committed, so none is built: a C++ store that
+/// holds a bond record cannot export it through this handle. The header
+/// gate freezes the signature. A null `snapshot` returns
+/// [`SHEKYL_E2_TRACE_ERR_NULL_PTR`]; every other call returns
+/// [`SHEKYL_E2_TRACE_ERR_ROW`]. No pointer is read.
 ///
 /// # Safety
 ///
-/// `snapshot` must be a live handle; `persona` and `endpoint` valid for 32
-/// bytes of reads; each array pointer valid for its stated count of
-/// elements (a null pointer is permitted only with a zero count).
+/// This function dereferences no pointer. A caller may pass null or
+/// dangling pointers for every argument, including `snapshot`; a null
+/// `snapshot` is observed with `is_null` and is not read.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn shekyl_e2_archival_snapshot_push_bond(
