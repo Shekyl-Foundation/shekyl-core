@@ -101,6 +101,7 @@ fn service(rig: &Rig, accepted: bool) {
             rig.hub.handler_gone(id);
             rig.hub.reap(id);
         }
+        Post::HandshakeResult { .. } => {}
     }
 }
 
@@ -126,7 +127,7 @@ fn a_delivery_posted_before_closed_is_parsed() {
         .expect("posts")
         .iter()
         .map(|post| match post {
-            Post::Deliver { .. } => Phase::Delivering,
+            Post::Deliver { .. } | Post::HandshakeResult { .. } => Phase::Delivering,
             Post::Closed { .. } => Phase::Closed,
             Post::Established { .. } => Phase::Arming,
         })
@@ -169,7 +170,9 @@ fn a_tor_row_posts_deliver_and_closed_with_the_tor_connector() {
         .expect("posts")
         .iter()
         .map(|post| match post {
-            Post::Deliver { connector, .. } | Post::Closed { connector, .. } => *connector,
+            Post::Deliver { connector, .. }
+            | Post::Closed { connector, .. }
+            | Post::HandshakeResult { connector, .. } => *connector,
             Post::Established { .. } => unreachable!("serviced above"),
         })
         .collect();

@@ -55,6 +55,25 @@ pub enum Post {
         /// One whole message.
         bytes: Vec<u8>,
     },
+    /// The outbound handshake finished with a well-formed response, and the
+    /// channel was adopted. The strand reads these fields and accepts or
+    /// refuses the sync payload in that turn, before any later frame. It
+    /// is not a delivery: the handshake owner already decoded the response
+    /// on the channel, and the strand does not parse it again.
+    HandshakeResult {
+        /// The admission id.
+        id: SocketId,
+        /// The connector this id was established on, as on `Deliver`.
+        connector: ConnectorId,
+        /// What the dial was for. A kept dial sets the session-established
+        /// flag and flips the relay on accept; a confirm dial does neither,
+        /// and the owner closes it in that turn.
+        keep: bool,
+        /// The peer's support flags, zero included.
+        support_flags: u32,
+        /// The peer's sync payload.
+        sync: SyncPayload,
+    },
     /// The socket is gone. Destroy the handler when its call count is zero.
     Closed {
         /// The admission id.
@@ -66,11 +85,26 @@ pub enum Post {
     },
 }
 
+/// The peer's `CORE_SYNC_DATA`, as fields. The strand reads them; it does
+/// not parse a Levin response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncPayload {
+    /// The peer's chain height.
+    pub current_height: u64,
+    /// Low 64 bits of its cumulative difficulty.
+    pub cumulative_difficulty: u64,
+    /// High 64 bits of its cumulative difficulty.
+    pub cumulative_difficulty_top64: u64,
+    /// Its top block id.
+    pub top_id: [u8; 32],
+}
+
 impl Post {
     /// The admission id this post names.
     #[must_use]
     pub const fn id(&self) -> SocketId {
         match self {
+            Self::HandshakeResult { id, .. } => *id,
             Self::Established { id, .. } | Self::Deliver { id, .. } | Self::Closed { id, .. } => {
                 *id
             }
@@ -298,6 +332,26 @@ impl Hub {
     pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
         let channel = self.dial_channel(endpoint)?;
         self.adopt(channel.open, channel.session, channel.endpoint, channel.gap)
+    }
+
+    /// Post the outbound handshake's result for `id`. The caller has
+    /// adopted the channel; this is the first post after its
+    /// `established`, ahead of any frame the pump will deliver.
+    pub fn post_handshake_result(
+        &self,
+        id: SocketId,
+        connector: ConnectorId,
+        keep: bool,
+        support_flags: u32,
+        sync: SyncPayload,
+    ) {
+        (self.post)(Post::HandshakeResult {
+            id,
+            connector,
+            keep,
+            support_flags,
+            sync,
+        });
     }
 
     /// Register a channel the connector already admitted.

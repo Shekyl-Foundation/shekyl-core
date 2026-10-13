@@ -32,7 +32,7 @@ pub use connection::{
 pub use dial::{Channel, Dial};
 pub use drive::{drive_inbound, drive_inbound_async};
 pub use endpoint::{admit, connector_from_index, direction_from_index, Endpoint, TOR_HOST_MAX};
-pub use hub::{Attached, Hub, Post};
+pub use hub::{Attached, Hub, Post, SyncPayload};
 pub use loopback::Loopback;
 pub use registry::{Board, Row};
 pub use shekyl_transport_layer::{
