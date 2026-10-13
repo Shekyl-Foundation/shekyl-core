@@ -102,6 +102,31 @@ pub const BOND_POST_KIND_JOINMARKET: u8 = 5;
 /// — and is never reassigned.
 pub const BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET: u8 = 0;
 
+/// `post_kind` 0, refused at parse (`FN_DSA_HYBRID.md` §8, `FND-19`).
+///
+/// [`BondPost::read`] returns this inside an [`io::Error`]. A caller that
+/// has to tell this refusal from every other malformed transaction matches
+/// [`Self::downcast_is`] on [`io::Error::get_ref`]; the sentence is what a
+/// human and the conformance table's read-face row see.
+#[derive(Debug)]
+pub struct RetiredKeylessJoinMarket;
+
+impl RetiredKeylessJoinMarket {
+    /// Whether `cause` — the inner error of an [`io::Error`] — is this refusal.
+    #[must_use]
+    pub fn downcast_is(cause: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+        cause.is::<Self>()
+    }
+}
+
+impl std::fmt::Display for RetiredKeylessJoinMarket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("shekyl-wire: bond_post post_kind 0 is the retired keyless JoinMarket")
+    }
+}
+
+impl std::error::Error for RetiredKeylessJoinMarket {}
+
 /// Whether `post_kind` is a JoinMarket. The one predicate every byte-level
 /// "is this a JoinMarket?" reads, so a consumer that records the wire byte
 /// asks the definition that produced it.
@@ -753,9 +778,8 @@ impl BondPost {
         } else if post_kind == BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET {
             // A keyless JoinMarket's coupled fields follow this byte on the
             // wire; read as `Other` they would be taken for the holdings.
-            return Err(io::Error::other(
-                "shekyl-wire: bond_post post_kind 0 is the retired keyless JoinMarket",
-            ));
+            // The type, not the sentence, is what a caller matches.
+            return Err(io::Error::other(RetiredKeylessJoinMarket));
         } else {
             BondPostKind::Other(post_kind)
         };

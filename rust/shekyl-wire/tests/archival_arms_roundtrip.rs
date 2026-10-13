@@ -193,12 +193,13 @@ fn bond_post_other_must_not_reuse_joinmarket_tag() {
 
 use shekyl_archival_retention::{
     ArchivalBondPostVin, BondKind, BondPostKind as RetentionKind, BondWireError,
-    HoldingsDescriptor, HoldingsKind, ShardSet, RECEIPT_SIGN_PK_CANONICAL_BYTES,
+    HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_wire::transaction::{
-    is_join_market_post_kind, BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET, TAG_INPUT_BOND_POST,
+    is_join_market_post_kind, RetiredKeylessJoinMarket, BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET,
+    TAG_INPUT_BOND_POST,
 };
 
 const IDENTITY: u8 = 0xAB;
@@ -296,12 +297,11 @@ fn written(input: &Input) -> Vec<u8> {
     bytes
 }
 
-/// The receipt key's length has three names — the type's, the retention
-/// crate's, and the key type's own in `shekyl-crypto-pq` — and one value.
+/// The receipt key's length has two names — `RECEIPT_SIGN_PK_LEN` and
+/// `FnDsaHybridPublicKey::CANONICAL_LEN` — and one value.
 #[test]
 fn the_receipt_key_length_is_its_twin_s() {
     assert_eq!(RECEIPT_SIGN_PK_LEN, FnDsaHybridPublicKey::CANONICAL_LEN);
-    assert_eq!(RECEIPT_SIGN_PK_LEN, RECEIPT_SIGN_PK_CANONICAL_BYTES);
     assert_eq!(RECEIPT_SIGN_PK_LEN, 1_837);
     assert_eq!(receipt_key().as_bytes().len(), RECEIPT_SIGN_PK_LEN);
     assert!(ReceiptSignPk::from_slice(&[RECEIPT; RECEIPT_SIGN_PK_LEN - 1]).is_none());
@@ -364,7 +364,7 @@ fn a_join_market_round_trips_and_both_representations_agree() {
     let decoded = ArchivalBondPostVin::read(&mut &expected[..]).expect("retention read");
     assert_eq!(decoded, retention);
     assert_eq!(decoded.post_kind(), RetentionKind::JoinMarket);
-    assert!(decoded.kind.is_join_market());
+    assert!(decoded.post_kind().is_join_market());
     assert_eq!(decoded.receipt_sign_pk(), Some(&receipt_key()));
     assert_eq!(decoded.bond_spend_pk(), retention.bond_spend_pk());
     assert_eq!(decoded.endpoint(), Some(&ENDPOINT));
@@ -381,6 +381,11 @@ fn the_retired_keyless_join_market_is_refused_at_parse() {
         join_market_bytes(0, Some(RECEIPT_SIGN_PK_LEN)),
     ] {
         let err = Input::read(&mut &bytes[..]).expect_err("the wire refuses post_kind 0");
+        assert!(
+            err.get_ref()
+                .is_some_and(RetiredKeylessJoinMarket::downcast_is),
+            "{err}"
+        );
         assert!(
             err.to_string()
                 .contains("post_kind 0 is the retired keyless JoinMarket"),
