@@ -4438,6 +4438,9 @@ int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t
 /// is refused, or an unknown connector. Lowering a cap closes kept
 /// sessions only.
 int shekyl_dialer_set_out_peers(std::uint32_t connector, std::uint32_t cap);
+/// The connector's outbound target as the dialer holds it: the pushed cap,
+/// or the compiled default before any push. 0 for an unknown connector.
+std::uint32_t shekyl_dialer_out_target(std::uint32_t connector);
 /// The core's tip: the dialer's next handshake carries it. Called wherever
 /// the tip changes, and once at start.
 void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
@@ -4544,25 +4547,6 @@ void shekyl_bans_clear(void);
 int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
 void shekyl_executor_release(std::uint64_t handle);
 
-/// Spans and the transport-runtime budget. The caller supplies every
-/// number. The five deadlines are the measured spans; `workers` and
-/// `blocking` stay the structural floor until the thread-budget leg.
-/// `shutdown_timeout_ns` is the longest of the armed deadlines.
-/// `network_id` is 16 bytes. Field order matches the Rust `repr(C)`
-/// struct.
-struct shekyl_zone_params {
-  const std::uint8_t* network_id;
-  std::uint64_t clearnet_dial_within_ns;
-  std::uint64_t clearnet_handshake_within_ns;
-  std::uint64_t clearnet_gap_within_ns;
-  std::uint64_t tor_dial_within_ns;
-  std::uint64_t tor_gap_within_ns;
-  std::uint64_t send_queue_bytes;
-  std::uint64_t shutdown_timeout_ns;
-  std::size_t workers;
-  std::size_t blocking;
-};
-
 /// Bind clearnet. Writes the bound ports. `ipv6` and `proxy_host` may be
 /// null. `encrypt` nonzero is the clearnet channel option on; zero is off.
 /// Returns 0, or -1 when the bind fails.
@@ -4570,14 +4554,14 @@ int shekyl_zone_listen_clearnet(
     const char* ipv4, std::uint16_t port,
     const char* ipv6, std::uint16_t port_v6, int use_ipv6,
     const char* proxy_host, std::uint16_t proxy_port, int encrypt,
-    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling,
     int* out_port, int* out_port_v6);
 /// Bind the Tor forward listener. `extra` may be null. Returns 0, or -1
 /// when the bind fails.
 int shekyl_zone_listen_tor(
     const char* socks_host, std::uint16_t socks_port,
     const char* extra, std::uint16_t extra_port,
-    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling,
     int* out_port);
 /// The SOCKS proxy the Tor connector dials through, for a tor zone with no
 /// inbound listener. `shekyl_zone_listen_tor` installs it for zones that
@@ -4585,7 +4569,7 @@ int shekyl_zone_listen_tor(
 /// does not parse.
 int shekyl_zone_set_tor_proxy(
     const char* socks_host, std::uint16_t socks_port,
-    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling);
+    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling);
 /// Replace the ceiling later accepts use. Returns 0, or -1 when `ceiling`
 /// is null, not a known decision, or the seam is unbound.
 int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);

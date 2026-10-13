@@ -209,22 +209,10 @@ namespace nodetool
                         MERROR("Invalid max connections given to --" << arg_tx_proxy.name);
                         return std::nullopt;
                     }
-                    // F-8b: the embargo constant is derived from a fluff
-                    // first-passage measured at this outbound degree. Below
-                    // it the real first passage exceeds the provisioned
-                    // value and the embargo is under-provisioned in the
-                    // privacy-losing direction, so an under-floor count is
-                    // refused at startup rather than warned about and run.
-                    const std::int64_t out_floor =
-                        shekyl_relay_zone_min_provisioned_out_peers();
-                    if (0 < proxies.back().max_connections && proxies.back().max_connections < out_floor)
-                    {
-                        MERROR("--" << arg_tx_proxy.name << " outbound count "
-                            << proxies.back().max_connections << " is below the floor of "
-                            << out_floor << " that the relay embargo derivation assumes; "
-                            "refusing to start under-provisioned. Omit the count to use the default.");
-                        return std::nullopt;
-                    }
+                    // F-8b: a count below the floor the relay embargo
+                    // derivation assumes is refused where the cap is set,
+                    // by the dialer (set_max_out_peers), with the reason
+                    // logged there.
                 }
             }
 

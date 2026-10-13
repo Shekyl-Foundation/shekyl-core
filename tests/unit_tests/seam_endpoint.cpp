@@ -366,6 +366,11 @@ TEST(seam_endpoint, two_connections_keep_distinct_registry_keys)
     EXPECT_EQ(left_id, shekyl::seam_connection_id(first));
     EXPECT_EQ(right_id, shekyl::seam_connection_id(second));
   }
+  // The link registers with the config when it arms, a strand turn after
+  // it is created, so the count follows the links.
+  const auto counted = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (ex.config.get_connections_count() != 2 && std::chrono::steady_clock::now() < counted)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   EXPECT_EQ(ex.config.get_connections_count(), 2u);
 
   shekyl_seam_close(first);

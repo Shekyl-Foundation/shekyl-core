@@ -239,6 +239,12 @@ impl Dialer {
         &self.hub
     }
 
+    /// The connector's outbound target as it stands.
+    #[must_use]
+    pub fn target(&self, connector: ConnectorId) -> usize {
+        self.shared().targets[connector.index()]
+    }
+
     /// The connector's outbound target. A cap of 0 is legal and dials
     /// nothing. Lowering it closes kept sessions only, uniformly, and
     /// returns the ids closed; a pending attempt and a confirm row are

@@ -560,7 +560,7 @@ namespace nodetool
     if ( !set_max_out_peers(public_zone, command_line::get_arg(vm, arg_out_peers) ) )
       return false;
     else
-      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, public_zone.m_config.m_net_config.max_out_connection_count);
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, shekyl_dialer_out_target(SHEKYL_CONNECTOR_CLEARNET));
 
 
     // Negative is unset. The ceiling is derived in `apply_inbound_ceiling`
@@ -600,7 +600,7 @@ namespace nodetool
       if (!set_max_out_peers(zone, proxy.max_connections))
         return false;
       else
-        m_payload_handler.set_max_out_peers(proxy.zone, proxy.max_connections);
+        m_payload_handler.set_max_out_peers(proxy.zone, shekyl_dialer_out_target(SHEKYL_CONNECTOR_TOR));
 
       // No noise ARGUMENT here, and none to pass: the notifier has taken no
       // covert payload since #515 deleted the C++ carrier, and
@@ -835,7 +835,7 @@ namespace nodetool
     // already named one, init()'s dial_through_tor writes that address back,
     // so dials use the operator SOCKS and the onion stays on this managed Tor.
     if (!zone.m_net_server.listen_tor(proxy_endpoint->address, "", "", false,
-        reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans()))
+        reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling()))
     {
       MERROR("Cannot bind the ephemeral tor forward listener on 127.0.0.1 (OS-assigned port); tearing tor down");
       shekyl_daemon_tor_shutdown();
@@ -849,12 +849,9 @@ namespace nodetool
     {
       zone.m_proxy_address = *proxy_endpoint;
       zone.m_outbound = true;
-      // Address-hiding outbound target: the measured degree. The dialer
-      // deletes this assignment; it owns outbound targets. `--out-peers`
-      // does not set it.
-      const std::uint32_t hidden_out = shekyl_relay_zone_min_provisioned_out_peers();
-      zone.m_config.m_net_config.max_out_connection_count = hidden_out;
-      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, hidden_out);
+      // Address-hiding outbound target: the dialer's compiled default for
+      // Tor, the measured degree. `--out-peers` does not set it.
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, shekyl_dialer_out_target(SHEKYL_CONNECTOR_TOR));
       set_max_in_peers(zone, -1);
     }
     m_ephemeral_tor_alive = true;
@@ -977,12 +974,11 @@ namespace nodetool
       if (!zone.second.m_bind_ip.empty())
       {
         const shekyl_inbound_ceiling ceiling = transport_ceiling();
-        const shekyl_zone_params spans = transport_spans();
         const std::uint8_t* network_id = reinterpret_cast<const std::uint8_t*>(&m_network_id);
         if (zone.first == epee::net_utils::connector_id::tor)
         {
           MINFO("Binding tor forward on " << zone.second.m_bind_ip << ":" << zone.second.m_port);
-          res = zone.second.m_net_server.listen_tor(zone.second.m_proxy_address.address, zone.second.m_bind_ip, zone.second.m_port, true, network_id, ceiling, spans);
+          res = zone.second.m_net_server.listen_tor(zone.second.m_proxy_address.address, zone.second.m_bind_ip, zone.second.m_port, true, network_id, ceiling);
         }
         else
         {
@@ -997,7 +993,7 @@ namespace nodetool
           }
           const bool have_proxy = zone.second.m_proxy_address.address.port() != 0;
           res = zone.second.m_net_server.listen_clearnet(zone.second.m_bind_ip, zone.second.m_port, ipv6_addr, ipv6_port, m_use_ipv6 && !ipv6_addr.empty(),
-              have_proxy ? &zone.second.m_proxy_address.address : nullptr, clearnet_encrypt, network_id, ceiling, spans);
+              have_proxy ? &zone.second.m_proxy_address.address : nullptr, clearnet_encrypt, network_id, ceiling);
         }
         CHECK_AND_ASSERT_MES(res, false, "Failed to bind server");
       }
@@ -1008,7 +1004,7 @@ namespace nodetool
         // address and a tor binding for the connections it establishes.
         MINFO("Tor zone dials through " << zone.second.m_proxy_address.address << " with no inbound");
         res = zone.second.m_net_server.dial_through_tor(zone.second.m_proxy_address.address,
-            reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans());
+            reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling());
         CHECK_AND_ASSERT_MES(res, false, "Failed to install the tor proxy");
       }
     }
@@ -1207,28 +1203,6 @@ namespace nodetool
   size_t node_server<t_payload_net_handler>::get_outgoing_connections_count()
   {
     return static_cast<size_t>(shekyl_seam_board_direction_count(SHEKYL_DIRECTION_OUTBOUND));
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::release_outbound(epee::net_utils::connector_id connector, size_t how_many)
-  {
-    if (how_many == 0)
-      return;
-    const auto board = shekyl::seam_board_snapshot();
-    const auto connector_byte = static_cast<std::uint8_t>(connector);
-    std::vector<std::uint64_t> outbound_ids;
-    for (const auto& row : board)
-      if (row.endpoint.connector == connector_byte
-          && row.endpoint.direction == SHEKYL_DIRECTION_OUTBOUND)
-        outbound_ids.push_back(row.id);
-    const auto zone = m_network_zones.find(connector);
-    size_t released = 0;
-    for (auto id = outbound_ids.rbegin(); id != outbound_ids.rend() && released < how_many; ++id, ++released)
-    {
-      if (zone != m_network_zones.end())
-        zone->second.m_net_server.get_config_object().close(shekyl::seam_connection_id(*id));
-      shekyl_seam_close(*id);
-    }
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -1724,30 +1698,11 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_max_out_peers(network_zone& zone, int64_t max)
   {
-    if(max == -1) {
-      zone.m_config.m_net_config.max_out_connection_count = shekyl_p2p_default_out_peers();
+    // -1 is unset: the dialer's compiled default for the connector. A
+    // positive cap below the F-8b floor is refused there, with the reason
+    // logged; 0 stays legal and stops outbound entirely.
+    if(max == -1)
       return true;
-    }
-    // F-8b: the embargo constant is derived from a fluff first passage
-    // measured at outbound degree `shekyl_relay_zone_min_provisioned_out_peers()`.
-    // A zone capped below that degree fluffs slower than the derivation
-    // assumes, so the embargo is under-provisioned in the privacy-losing
-    // direction. This is the one place every zone's outbound cap is set —
-    // public (`--out-peers`) and anonymity (`--tx-proxy`, whose parser also
-    // refuses with a flag-specific message) — so the floor is enforced here
-    // rather than only at one parser. A cap of 0 stays legal: it stops
-    // outbound relay entirely, which is loud (liveness-visible), unlike a
-    // quietly degraded fluff degree.
-    const int64_t out_floor = shekyl_relay_zone_min_provisioned_out_peers();
-    if (0 < max && max < out_floor)
-    {
-      MERROR("Outbound connection cap " << max << " is below the floor of "
-          << out_floor << " that the relay embargo derivation assumes (F-8b); "
-          "refusing to start under-provisioned. Omit the option for the default ("
-          << shekyl_p2p_default_out_peers() << ") or give a value >= " << out_floor << ".");
-      return false;
-    }
-    zone.m_config.m_net_config.max_out_connection_count = max;
     return shekyl_dialer_set_out_peers(static_cast<std::uint32_t>(&zone == &m_network_zones.at(epee::net_utils::connector_id::clearnet) ? epee::net_utils::connector_id::clearnet : epee::net_utils::connector_id::tor), static_cast<std::uint32_t>(max)) == 0;
   }
 
@@ -1798,7 +1753,7 @@ namespace nodetool
     // public inbound by 2N. Each zone with an explicit cap is bounded by the
     // Rust admission table; the ceiling bounds the pool they all draw from.
     for (const auto& entry : m_network_zones)
-      add(entry.second.m_config.m_net_config.max_out_connection_count);
+      add(shekyl_dialer_out_target(static_cast<std::uint32_t>(entry.first)));
     return reserved;
   }
 
@@ -1921,44 +1876,28 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::change_max_out_public_peers(size_t count)
   {
-    // Same F-8b floor as set_max_out_peers, on the runtime path (`out_peers`
-    // console command / RPC) that no startup check can see. The daemon is
-    // already running here, so the under-floor request is clamped loudly
-    // rather than refused; 0 stays legal (see set_max_out_peers).
-    const size_t out_floor =
-        static_cast<size_t>(shekyl_relay_zone_min_provisioned_out_peers());
-    if (0 < count && count < out_floor)
+    // The runtime path (`out_peers` console command / RPC). The dialer
+    // refuses a positive cap below the F-8b floor and logs why; the cap is
+    // then unchanged. Lowering it closes the excess kept sessions there.
+    const std::uint32_t previous = shekyl_dialer_out_target(SHEKYL_CONNECTOR_CLEARNET);
+    if (shekyl_dialer_set_out_peers(SHEKYL_CONNECTOR_CLEARNET, static_cast<std::uint32_t>(count)) != 0)
+      return;
+    m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, count);
+    // The outbound cap is a term in the inbound ceiling's reservation, so
+    // changing it at runtime invalidates a ceiling derived against the old
+    // one. Raising `out_peers` without this leaves inbound reserved against
+    // a smaller outbound budget, and live outbound plus inbound can then
+    // exceed the descriptor limit -- the exact exhaustion the ceiling
+    // exists to prevent. Re-derives against the same non-p2p reservation
+    // the last call used, so a caller that never knew the RPC budget does
+    // not have to learn it. A cap the new ceiling cannot hold is refused
+    // and the previous outbound cap is put back; lowering the cap is the
+    // path that drops live connections, and that path widens the ceiling.
+    if (!apply_inbound_ceiling(m_reserved_beyond_p2p))
     {
-      MWARNING("out_peers " << count << " is below the floor of " << out_floor
-          << " that the relay embargo derivation assumes (F-8b); clamping to "
-          << out_floor << ".");
-      count = out_floor;
-    }
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone != m_network_zones.end())
-    {
-      const auto current = get_outgoing_connections_count(public_zone->first);
-      const size_t previous = public_zone->second.m_config.m_net_config.max_out_connection_count;
-      public_zone->second.m_config.m_net_config.max_out_connection_count = count;
-      if (current > count)
-        release_outbound(public_zone->first, current - count);
-      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, count);
-      // The outbound cap is a term in the inbound ceiling's reservation, so
-      // changing it at runtime invalidates a ceiling derived against the old
-      // one. Raising `out_peers` without this leaves inbound reserved against
-      // a smaller outbound budget, and live outbound plus inbound can then
-      // exceed the descriptor limit -- the exact exhaustion the ceiling
-      // exists to prevent. Re-derives against the same non-p2p reservation
-      // the last call used, so a caller that never knew the RPC budget does
-      // not have to learn it. A cap the new ceiling cannot hold is refused
-      // and the previous outbound cap is put back; lowering the cap is the
-      // path that drops live connections, and that path widens the ceiling.
-      if (!apply_inbound_ceiling(m_reserved_beyond_p2p))
-      {
-        public_zone->second.m_config.m_net_config.max_out_connection_count = previous;
-        m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, previous);
-        apply_inbound_ceiling(m_reserved_beyond_p2p);
-      }
+      shekyl_dialer_set_out_peers(SHEKYL_CONNECTOR_CLEARNET, previous);
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, previous);
+      apply_inbound_ceiling(m_reserved_beyond_p2p);
     }
   }
 
@@ -2034,10 +1973,7 @@ namespace nodetool
   template<class t_payload_net_handler>
   uint32_t node_server<t_payload_net_handler>::get_max_out_public_peers() const
   {
-    const auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return public_zone->second.m_config.m_net_config.max_out_connection_count;
+    return shekyl_dialer_out_target(SHEKYL_CONNECTOR_CLEARNET);
   }
 
   template<class t_payload_net_handler>
@@ -2269,40 +2205,6 @@ namespace nodetool
   {
     delete_upnp_port_mapping_v4(port);
     delete_upnp_port_mapping_v6(port);
-  }
-
-  template<class t_payload_net_handler>
-  shekyl_zone_params node_server<t_payload_net_handler>::transport_spans() const
-  {
-    // Clearnet dial, handshake, and gap: 2 x (700 ms GEO-satellite RTT
-    // ceiling + the node-local residual), rounded up to 1 ms. Residuals
-    // are the larger of the LAN, South America (~170 ms), and New York
-    // (~24 ms) legs in docs/benchmarks/p2p_cutover_crossbuild_20260929.md.
-    // Dial 1.415 s (residual 7.2 ms), handshake 1.426 s (12.6 ms, the
-    // measured median of the body), gap 1.430 s (residual 14.7 ms). The
-    // ~700 ms handshake tail is not a term in any of these.
-    // Tor dial 9.1 s: 2 x p99 (4.54 s) of the floor dial distribution,
-    // South America circuit, proof-of-work on. A clearnet dial through a
-    // SOCKS proxy uses this clock: the worst measured SOCKS path, pending
-    // its own distribution. The three clearnet legs had no proxy.
-    // Tor gap 2.6 s: the outbound
-    // direction, the larger of the two distant-circuit gaps.
-    // Shutdown waits out the longest armed deadline, the Tor dial.
-    // Send queue: one admitted packet, room for the largest legitimate message.
-    // workers and blocking: the structural floor. The thread-budget leg
-    // replaces them after the ledger row.
-    shekyl_zone_params spans{};
-    spans.network_id = nullptr;
-    spans.clearnet_dial_within_ns = 1415000000ull;
-    spans.clearnet_handshake_within_ns = 1426000000ull;
-    spans.clearnet_gap_within_ns = 1430000000ull;
-    spans.tor_dial_within_ns = 9100000000ull;
-    spans.tor_gap_within_ns = 2600000000ull;
-    spans.send_queue_bytes = LEVIN_DEFAULT_MAX_PACKET_SIZE;
-    spans.shutdown_timeout_ns = 9100000000ull;
-    spans.workers = 2;
-    spans.blocking = 1;
-    return spans;
   }
 
   template<class t_payload_net_handler>

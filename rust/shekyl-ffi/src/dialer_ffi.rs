@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use shekyl_dialer::{seeds, Dialer, LoadError, SeedNetwork, Shared};
 use shekyl_levin::SupportFlags;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
-use shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS;
+use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_rpc_types::DaemonNetwork;
 use shekyl_seam::{connector_from_index, Hub, SocketId, SyncPayload};
 use shekyl_timing_engine::{Handle, MonotonicClock, OwnerClass};
@@ -303,6 +303,9 @@ pub extern "C" fn shekyl_dialer_set_out_peers(connector: u32, cap: u32) -> i32 {
         return -1;
     };
     if cap > 0 && cap < MIN_PROVISIONED_OUT_PEERS {
+        tracing::error!(
+            "outbound cap {cap} for {connector:?} is below the floor of {MIN_PROVISIONED_OUT_PEERS} that the relay embargo derivation assumes (F-8b); refused. Omit the option for the default ({P2P_DEFAULT_OUT_PEERS}) or give a value >= {MIN_PROVISIONED_OUT_PEERS}"
+        );
         return -1;
     }
     CAPS.lock().expect("caps")[connector.index()] = Some(cap);
@@ -310,6 +313,28 @@ pub extern "C" fn shekyl_dialer_set_out_peers(connector: u32, cap: u32) -> i32 {
         let _closed = dialer.set_target(connector, cap as usize, &mut SecureRelayRng);
     }
     0
+}
+
+/// The connector's outbound target as the dialer holds it: the cap the
+/// C++ pushed, or the compiled default before any push (`--out-peers`'s
+/// default on clearnet, the hidden-cap floor on Tor). Read for the
+/// descriptor reservation and the operator's `out_peers` readback. An
+/// unknown connector is 0.
+#[no_mangle]
+pub extern "C" fn shekyl_dialer_out_target(connector: u32) -> u32 {
+    let Some(connector) = connector_from_index(connector) else {
+        return 0;
+    };
+    if let Some(dialer) = dialer() {
+        return u32::try_from(dialer.target(connector)).unwrap_or(u32::MAX);
+    }
+    match CAPS.lock().expect("caps")[connector.index()] {
+        Some(cap) => cap,
+        None => match connector {
+            ConnectorId::Clearnet => P2P_DEFAULT_OUT_PEERS,
+            ConnectorId::Tor => MIN_PROVISIONED_OUT_PEERS,
+        },
+    }
 }
 
 /// The core's tip: height, cumulative difficulty (low and high 64 bits)

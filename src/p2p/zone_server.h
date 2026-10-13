@@ -363,8 +363,7 @@ public:
   }
 
   bool listen_clearnet(const std::string& ip, const std::string& port, const std::string& ipv6, const std::string& port_v6,
-      bool use_ipv6, const boost::asio::ip::tcp::endpoint* proxy, bool encrypt, const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling,
-      const shekyl_zone_params& spans)
+      bool use_ipv6, const boost::asio::ip::tcp::endpoint* proxy, bool encrypt, const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling)
   {
     const auto parsed_port = detail::port_of(port);
     if (!parsed_port)
@@ -380,8 +379,6 @@ public:
     if (!detail::ensure_seam(ceiling))
       return false;
     detail::register_binding(SHEKYL_CONNECTOR_CLEARNET, this);
-    shekyl_zone_params params = spans;
-    params.network_id = network_id;
     int bound = -1;
     int bound_v6 = -1;
     const std::string proxy_host = proxy != nullptr ? proxy->address().to_string() : std::string();
@@ -389,7 +386,7 @@ public:
         ip.c_str(), *parsed_port,
         use_ipv6 ? ipv6.c_str() : nullptr, parsed_v6, use_ipv6 ? 1 : 0,
         proxy != nullptr ? proxy_host.c_str() : nullptr, proxy != nullptr ? proxy->port() : 0,
-        encrypt ? 1 : 0, &params, &ceiling, &bound, &bound_v6);
+        encrypt ? 1 : 0, network_id, &ceiling, &bound, &bound_v6);
     if (rc != 0)
       return false;
     m_port = bound;
@@ -398,7 +395,7 @@ public:
   }
 
   bool listen_tor(const boost::asio::ip::tcp::endpoint& socks, const std::string& extra_ip, const std::string& extra_port, bool have_extra,
-      const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling, const shekyl_zone_params& spans)
+      const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling)
   {
     std::uint16_t parsed_extra = 0;
     if (have_extra)
@@ -411,14 +408,12 @@ public:
     if (!detail::ensure_seam(ceiling))
       return false;
     detail::register_binding(SHEKYL_CONNECTOR_TOR, this);
-    shekyl_zone_params params = spans;
-    params.network_id = network_id;
     const std::string socks_host = socks.address().to_string();
     int bound = -1;
     const int rc = shekyl_zone_listen_tor(
         socks_host.c_str(), socks.port(),
         have_extra ? extra_ip.c_str() : nullptr, parsed_extra,
-        &params, &ceiling, &bound);
+        network_id, &ceiling, &bound);
     if (rc != 0)
       return false;
     m_port = bound;
@@ -431,15 +426,13 @@ public:
   /// address in the host. Without this call both were missing and every
   /// Tor dial was `DialFailed` before the network.
   bool dial_through_tor(const boost::asio::ip::tcp::endpoint& socks, const std::uint8_t* network_id,
-      const shekyl_inbound_ceiling& ceiling, const shekyl_zone_params& spans)
+      const shekyl_inbound_ceiling& ceiling)
   {
     if (!detail::ensure_seam(ceiling))
       return false;
     detail::register_binding(SHEKYL_CONNECTOR_TOR, this);
-    shekyl_zone_params params = spans;
-    params.network_id = network_id;
     const std::string socks_host = socks.address().to_string();
-    return shekyl_zone_set_tor_proxy(socks_host.c_str(), socks.port(), &params, &ceiling) == 0;
+    return shekyl_zone_set_tor_proxy(socks_host.c_str(), socks.port(), network_id, &ceiling) == 0;
   }
 
   void enqueue(std::uint64_t id, std::uint32_t kind, shekyl_seam_observed observed, bool have_observed, std::vector<std::uint8_t> bytes) override

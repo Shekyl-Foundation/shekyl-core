@@ -34,6 +34,7 @@ use shekyl_tor::{
     accept_inbound as accept_tor_inbound, dial_one as dial_tor, Admitted as TorAdmitted,
     Inbound as TorInbound,
 };
+use shekyl_transport_layer::spans;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -80,25 +81,6 @@ struct ClearnetReady {
 }
 
 static HOST: LazyLock<Mutex<Option<Arc<Host>>>> = LazyLock::new(|| Mutex::new(None));
-
-/// Spans and the runtime budget. The numbers are the caller's. The five
-/// deadlines are the measured spans; `workers` and `blocking` stay the
-/// structural floor until the thread-budget leg. `shutdown_timeout_ns`
-/// is the longest armed deadline. Field order matches `shekyl_zone_params`.
-/// This module does not pick a thread count or a deadline.
-#[repr(C)]
-pub struct ShekylZoneParams {
-    pub network_id: *const u8,
-    pub clearnet_dial_within_ns: u64,
-    pub clearnet_handshake_within_ns: u64,
-    pub clearnet_gap_within_ns: u64,
-    pub tor_dial_within_ns: u64,
-    pub tor_gap_within_ns: u64,
-    pub send_queue_bytes: u64,
-    pub shutdown_timeout_ns: u64,
-    pub workers: usize,
-    pub blocking: usize,
-}
 
 struct ZoneDial {
     host: Arc<Host>,
@@ -268,7 +250,7 @@ async fn recv_admitted<T>(
     }
 }
 
-fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host>, ()> {
+fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, ()> {
     let mut slot = HOST.lock().expect("zone host");
     if let Some(host) = slot.as_ref() {
         return Ok(Arc::clone(host));
@@ -277,9 +259,9 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
         return Err(());
     };
     hub.set_ceiling(ceiling);
-    let network_id = read_id(params.network_id).ok_or(())?;
-    let workers = NonZeroUsize::new(params.workers).ok_or(())?;
-    let blocking = NonZeroUsize::new(params.blocking).ok_or(())?;
+    let network_id = read_id(network_id).ok_or(())?;
+    let workers = NonZeroUsize::new(spans::WORKERS).ok_or(())?;
+    let blocking = NonZeroUsize::new(spans::BLOCKING).ok_or(())?;
     let name = ThreadName::new("p2p-transport").map_err(|_| ())?;
     let pool = runtime(RuntimeBudget { workers, blocking }, &name).map_err(|_| ())?;
     let handle = pool.handle().clone();
@@ -307,14 +289,14 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
         tor_proxy: Mutex::new(None),
         clearnet_tx,
         tor_tx,
-        shutdown_timeout: Duration::from_nanos(params.shutdown_timeout_ns),
+        shutdown_timeout: Duration::from_nanos(spans::SHUTDOWN_TIMEOUT_NANOS),
         network_id,
-        clearnet_dial_within: Tick::new(params.clearnet_dial_within_ns),
-        clearnet_handshake_within: Tick::new(params.clearnet_handshake_within_ns),
-        clearnet_gap_within: Tick::new(params.clearnet_gap_within_ns),
-        tor_dial_within: Tick::new(params.tor_dial_within_ns),
-        tor_gap_within: Tick::new(params.tor_gap_within_ns),
-        send_queue_bytes: usize::try_from(params.send_queue_bytes).unwrap_or(usize::MAX),
+        clearnet_dial_within: Tick::new(spans::CLEARNET_DIAL_WITHIN_NANOS),
+        clearnet_handshake_within: Tick::new(spans::CLEARNET_HANDSHAKE_WITHIN_NANOS),
+        clearnet_gap_within: Tick::new(spans::CLEARNET_GAP_WITHIN_NANOS),
+        tor_dial_within: Tick::new(spans::TOR_DIAL_WITHIN_NANOS),
+        tor_gap_within: Tick::new(spans::TOR_GAP_WITHIN_NANOS),
+        send_queue_bytes: usize::try_from(spans::SEND_QUEUE_BYTES).unwrap_or(usize::MAX),
         on_cause,
     });
     hub.install_dial(Arc::new(ZoneDial {
@@ -426,20 +408,19 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
     proxy_host: *const c_char,
     proxy_port: u16,
     encrypt: i32,
-    params: *const ShekylZoneParams,
+    network_id: *const u8,
     ceiling: *const ShekylInboundCeiling,
     out_port: *mut i32,
     out_port_v6: *mut i32,
 ) -> i32 {
-    if params.is_null() || ceiling.is_null() || out_port.is_null() || out_port_v6.is_null() {
+    if network_id.is_null() || ceiling.is_null() || out_port.is_null() || out_port_v6.is_null() {
         return -1;
     }
-    let params = unsafe { &*params };
     let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
         Some(ceiling) => ceiling,
         None => return -1,
     };
-    let Ok(host) = ensure(params, ceiling) else {
+    let Ok(host) = ensure(network_id, ceiling) else {
         return -1;
     };
     let Some(ipv4) = c_str(ipv4) else {
@@ -558,19 +539,18 @@ pub unsafe extern "C" fn shekyl_zone_listen_tor(
     socks_port: u16,
     extra: *const c_char,
     extra_port: u16,
-    params: *const ShekylZoneParams,
+    network_id: *const u8,
     ceiling: *const ShekylInboundCeiling,
     out_port: *mut i32,
 ) -> i32 {
-    if params.is_null() || ceiling.is_null() || out_port.is_null() {
+    if network_id.is_null() || ceiling.is_null() || out_port.is_null() {
         return -1;
     }
-    let params = unsafe { &*params };
     let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
         Some(ceiling) => ceiling,
         None => return -1,
     };
-    let Ok(host) = ensure(params, ceiling) else {
+    let Ok(host) = ensure(network_id, ceiling) else {
         return -1;
     };
     let Some(socks_host) = c_str(socks_host) else {
@@ -645,18 +625,17 @@ fn spawn_tor(host: &Host, listener: TcpListener) {
 pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
     socks_host: *const c_char,
     socks_port: u16,
-    params: *const ShekylZoneParams,
+    network_id: *const u8,
     ceiling: *const ShekylInboundCeiling,
 ) -> i32 {
-    if params.is_null() || ceiling.is_null() {
+    if network_id.is_null() || ceiling.is_null() {
         return -1;
     }
-    let params = unsafe { &*params };
     let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
         Some(ceiling) => ceiling,
         None => return -1,
     };
-    let Ok(host) = ensure(params, ceiling) else {
+    let Ok(host) = ensure(network_id, ceiling) else {
         return -1;
     };
     let Some(socks_host) = c_str(socks_host) else {
@@ -816,20 +795,8 @@ mod tests {
         };
         assert_eq!(bound, 0);
         let network_id = [7u8; 16];
-        let params = ShekylZoneParams {
-            network_id: network_id.as_ptr(),
-            clearnet_dial_within_ns: 1_000_000_000,
-            clearnet_handshake_within_ns: 1_000_000_000,
-            clearnet_gap_within_ns: 1_000_000_000,
-            tor_dial_within_ns: 1_000_000_000,
-            tor_gap_within_ns: 1_000_000_000,
-            send_queue_bytes: 65_536,
-            shutdown_timeout_ns: 1_000_000_000,
-            workers: 1,
-            blocking: 1,
-        };
         let host = ensure(
-            &params,
+            network_id.as_ptr(),
             InboundCeiling::Unbounded(UnboundedReason::Unlimited),
         )
         .expect("zone host");
@@ -845,7 +812,12 @@ mod tests {
         assert!(host.tor_proxy.lock().expect("tor proxy").is_none());
         let socks = std::ffi::CString::new("127.0.0.1").expect("socks host");
         let rc = unsafe {
-            shekyl_zone_set_tor_proxy(socks.as_ptr(), 9050, &raw const params, &raw const ceiling)
+            shekyl_zone_set_tor_proxy(
+                socks.as_ptr(),
+                9050,
+                network_id.as_ptr(),
+                &raw const ceiling,
+            )
         };
         assert_eq!(rc, 0);
         assert_eq!(
@@ -893,20 +865,8 @@ mod tests {
         assert_eq!(bound, 0);
         assert!(crate::dialer_ffi::dialer().is_some(), "built at the bind");
         let network_id = [7u8; 16];
-        let params = ShekylZoneParams {
-            network_id: network_id.as_ptr(),
-            clearnet_dial_within_ns: 1_000_000_000,
-            clearnet_handshake_within_ns: 1_000_000_000,
-            clearnet_gap_within_ns: 1_000_000_000,
-            tor_dial_within_ns: 1_000_000_000,
-            tor_gap_within_ns: 1_000_000_000,
-            send_queue_bytes: 65_536,
-            shutdown_timeout_ns: 1_000_000_000,
-            workers: 1,
-            blocking: 1,
-        };
         let first = ensure(
-            &params,
+            network_id.as_ptr(),
             InboundCeiling::Unbounded(UnboundedReason::Unlimited),
         )
         .expect("zone host");
@@ -918,7 +878,7 @@ mod tests {
         assert!(crate::seam_ffi::hub().is_some(), "and the seam stays bound");
         drop(first);
         let second = ensure(
-            &params,
+            network_id.as_ptr(),
             InboundCeiling::Unbounded(UnboundedReason::Unlimited),
         )
         .expect("a second zone host");

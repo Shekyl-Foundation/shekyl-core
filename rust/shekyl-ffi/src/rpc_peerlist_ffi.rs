@@ -87,8 +87,8 @@ fn entries(public_only: bool) -> Option<PeerListOwner> {
         })
         .collect();
     rows.sort_by_key(|(_, list)| matches!(list, ListName::Gray));
-    let mut hosts = Vec::with_capacity(rows.len());
-    let mut facts = Vec::with_capacity(rows.len());
+    let mut hosts = Vec::new();
+    let mut facts = Vec::new();
     for (address, list) in &rows {
         let (host, ip, port) = render(address);
         let blocked = match address {
@@ -212,6 +212,7 @@ mod tests {
 
     use super::*;
     use crate::inbound_ceiling_ffi::{ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_UNLIMITED};
+    use crate::legacy_util::slice_from_typed_ptr;
     use crate::seam_ffi::{seam_bind_lock, shekyl_seam_bind, ShekylSeamObserved};
     use crate::secure_relay_rng::SecureRelayRng;
 
@@ -279,7 +280,7 @@ mod tests {
         let mut out = Vec::new();
         for i in 0..len {
             let e = unsafe { rows.add(i).read() };
-            let host = unsafe { std::slice::from_raw_parts(e.host, e.host_len) };
+            let host = unsafe { slice_from_typed_ptr(e.host, e.host_len) }.expect("a host");
             out.push((
                 String::from_utf8(host.to_vec()).expect("utf-8"),
                 e.ip,

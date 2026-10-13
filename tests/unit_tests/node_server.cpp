@@ -733,12 +733,33 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   const std::int64_t floor_value = shekyl_relay_zone_min_provisioned_out_peers();
   ASSERT_EQ(12, floor_value) << "the floor must match the degree fluff_return_ms was measured at";
 
-  // Below the floor: refused, and refused because of the floor (1..=11 all
-  // land in the guarded range; 4 is the motivating operator practice).
-  EXPECT_FALSE(parse("tor,127.0.0.1:9050,4").has_value())
-    << "an under-floor outbound count must refuse to parse";
-  EXPECT_FALSE(parse("tor,127.0.0.1:9050,11").has_value())
+  // The parser carries the count; the floor is enforced where the cap is
+  // set, by the dialer (2026-10-13), so an under-floor count parses and
+  // then refuses init (1..=11 all land in the guarded range; 4 is the
+  // motivating operator practice).
+  const auto under = parse("tor,127.0.0.1:9050,4");
+  ASSERT_TRUE(under.has_value()) << "the parser carries the count";
+  EXPECT_EQ(4, under->front().max_connections);
+  // One server per init: a second init on the same server would refuse the
+  // proxy as listed twice, and pass the under-floor case for the wrong reason.
+  const auto init_with_proxy = [](const char* proxy_arg) -> bool {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+    Server server(cprotocol);
+    const auto node_dir = create_node_dir();
+    if (node_dir.empty())
+      return false;
+    auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
+        boost::filesystem::remove_all(node_dir);
+      });
+    return server.init(offline_node_vm(node_dir, {"--tx-proxy", proxy_arg}));
+  };
+  EXPECT_FALSE(init_with_proxy("tor,127.0.0.1:9050,4"))
+    << "an under-floor outbound count must refuse to start";
+  EXPECT_FALSE(init_with_proxy("tor,127.0.0.1:9050,11"))
     << "one below the floor must still refuse";
+  EXPECT_TRUE(init_with_proxy("tor,127.0.0.1:9050,12"))
+    << "the floor itself is a valid count";
 
   // At the floor and above: accepted, with the count preserved.
   const auto at_floor = parse("tor,127.0.0.1:9050,12");
@@ -921,11 +942,12 @@ TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
   // F-8b, the public-zone half: `--tx-proxy` counts are floored at the parser
   // (test above), but the same outbound-degree quantity is also set by
   // `--out-peers` at init and by the `out_peers` console/RPC command at
-  // runtime. The floor lives in `set_max_out_peers` (every zone's one setter)
-  // and, for the runtime path, `change_max_out_public_peers` clamps loudly —
-  // otherwise a NAT'd operator at `--out-peers 2` runs a fluff degree far
-  // below any point `fluff_return_ms` was measured at and the embargo is
-  // under-provisioned in the privacy-losing direction.
+  // runtime. The floor lives in the dialer, which both paths push the cap
+  // to (2026-10-13): init refuses to start, and the runtime path refuses
+  // the request and leaves the cap as it was — otherwise a NAT'd operator
+  // at `--out-peers 2` runs a fluff degree far below any point
+  // `fluff_return_ms` was measured at and the embargo is under-provisioned
+  // in the privacy-losing direction.
   struct test_data_t
   {
     test_core pr_core;
@@ -977,7 +999,7 @@ TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
 
     data.server->change_max_out_public_peers(4);
     EXPECT_EQ(12u, data.server->get_max_out_public_peers())
-      << "a runtime under-floor request must clamp to the floor, not take effect";
+      << "a runtime under-floor request is refused and the cap is unchanged";
 
     data.server->change_max_out_public_peers(0);
     EXPECT_EQ(0u, data.server->get_max_out_public_peers())
@@ -1912,8 +1934,9 @@ TEST(node_server, in_peers_ceiling_re_derives_when_the_outbound_reserve_changes)
   EXPECT_LT(after, before)
     << "raising the outbound reserve must lower the inbound ceiling";
 
-  // And back down again: the reserve is recomputed, not ratcheted.
-  d.server->change_max_out_public_peers(8);
+  // And back down again, to the floor (the dialer refuses below it): the
+  // reserve is recomputed, not ratcheted.
+  d.server->change_max_out_public_peers(12);
   EXPECT_GT(d.server->get_max_in_public_peers(), after)
     << "lowering the outbound reserve must return the headroom";
 }

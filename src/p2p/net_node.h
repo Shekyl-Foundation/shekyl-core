@@ -411,10 +411,6 @@ namespace nodetool
     size_t get_incoming_connections_count(epee::net_utils::connector_id connector);
     size_t get_outgoing_connections_count();
     size_t get_outgoing_connections_count(epee::net_utils::connector_id connector);
-    //! Close the `how_many` newest outbound rows of `connector`. The board
-    //! names the ids. The zone's handler is closed when it still holds one,
-    //! and `shekyl_seam_close` drops a row the handler table does not.
-    void release_outbound(epee::net_utils::connector_id connector, size_t how_many);
 
     bool check_incoming_connections();
 
@@ -461,7 +457,6 @@ namespace nodetool
     std::vector<nodetool::peerlist_entry> m_command_line_peers;
 
 
-    shekyl_zone_params transport_spans() const;
     shekyl_inbound_ceiling transport_ceiling() const;
 
 
