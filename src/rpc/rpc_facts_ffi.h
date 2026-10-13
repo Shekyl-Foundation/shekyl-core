@@ -506,9 +506,8 @@ typedef struct shekyl_rpc_info_chain_facts {
     uint8_t  busy_syncing;
     uint8_t  offline;
     uint8_t  following_degraded;
-    uint8_t  nettype;                  // cryptonote::network_type
     uint8_t  protocol_version;         // SHEKYL_PROTOCOL_VERSION, a C++ constant
-    uint8_t  reserved[2];
+    uint8_t  reserved[3];
 } shekyl_rpc_info_chain_facts;
 
 int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out);
@@ -639,7 +638,7 @@ namespace daemon_rpc_facts {
 int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
     shekyl_rpc_fee_estimate_facts* out) noexcept;
 
-// `get_info`'s chain snapshot. The five scalars are what the adapter reads
+// `get_info`'s chain snapshot. The four scalars are what the adapter reads
 // from `core` and the p2p payload object; everything else is read here, under
 // one chain lock.
 struct info_chain_scalars
@@ -648,7 +647,6 @@ struct info_chain_scalars
   uint8_t synchronized;
   uint8_t busy_syncing;
   uint8_t offline;
-  uint8_t nettype;
 };
 
 int info_chain(cryptonote::Blockchain& bc, const info_chain_scalars& scalars,

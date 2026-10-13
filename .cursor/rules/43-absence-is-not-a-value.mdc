@@ -111,6 +111,7 @@ Retired:
 | `get_info.burn_pct` on refusal | `0` | RK-Q9, 3.51 (a refusal is a store fault) |
 | `get_info.block_weight_limit`, `block_weight_median` | omitted at `0`, decoded back to `0` | RK-Q1, 3.52 (always present) |
 | `get_info` connection counts / `has_peers` | no hub read as zero peers | RK-5c `PeerFacts` (`FactsFault::HubAbsent`) |
+| `shekyl-cli` `show_chain` (`height`, `tx_count`) and `tests/stressnet/monitor.py` `height` | a missing key printed or read as `0` | RK-5c reader sweep, 2026-10-13 ("unreadable" in the CLI; an error in the monitor) |
 
 Still open:
 
@@ -120,4 +121,4 @@ Still open:
 | `shekyl_seam_socket_count` (`seam_ffi.rs`; read at `src/rpc/rpc_facts_ffi.cpp:1421-1424`) | same three-way `0` | P2P lane / RK-W |
 | block header `block_weight`, `long_term_weight` (`rust/shekyl-rpc-types/src/chain.rs:336`, `:344`) | omitted at `0` | RK-W |
 | block header difficulty triple | three copies of one value; adopts `HexU128` | RK-W |
-| `shekyl-cli` `show_chain` (`commands/chain.rs:112`, `:122`) and `tests/stressnet/monitor.py` `height` | a missing key printed or read as `0` | RK-5c reader sweep (proposed) |
+| `shekyl-cli` shard commands, `show_fetch` and `print_coverage_row` (`commands/chain.rs`) | a missing key printed as `0` | archival CLI lane (`docs/FOLLOWUPS.md`) |

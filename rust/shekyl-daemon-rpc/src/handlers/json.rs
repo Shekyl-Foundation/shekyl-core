@@ -337,6 +337,40 @@ mod tests {
     /// A native method's failure names its own cause in the envelope —
     /// never "FFI dispatch failed", which it cannot be.
     #[test]
+    fn a_store_fault_is_rendered_in_its_own_words() {
+        use super::render;
+        use crate::methods::{RpcFault, StoreFault};
+        use shekyl_types::ChainCount;
+        use shekyl_units::AtomicUnits;
+
+        let store = StoreFault::SupplyInvariant {
+            coins_generated: AtomicUnits::from_raw(1_000),
+            total_burned: AtomicUnits::from_raw(1_001),
+            chain_height: ChainCount::from_raw(77),
+        };
+        let (status, _, body) = render::<shekyl_rpc_types::GetInfoResponse>(
+            "get_info",
+            "node facts unavailable",
+            Ok(Err(RpcFault::Store(store))),
+        );
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["status"], "ERROR");
+        assert_eq!(v["error"], store.to_string());
+
+        // A facts code beside it is still the method's generic line.
+        let (_, _, body) = render::<shekyl_rpc_types::GetInfoResponse>(
+            "get_info",
+            "node facts unavailable",
+            Ok(Err(RpcFault::Facts(
+                crate::chain_facts::FactsFault::Inconsistent,
+            ))),
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"], "node facts unavailable");
+    }
+
+    #[test]
     fn native_error_envelope_names_the_cause() {
         let (status, _, body) = json_error("chain facts unavailable");
         assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
@@ -423,6 +457,9 @@ fn render<T: serde::Serialize>(
                 json_error("reply could not be encoded")
             }
         },
+        // A store that contradicts itself is reported in its own words:
+        // which invariant, and with what numbers. The handler logged it.
+        Ok(Err(crate::methods::RpcFault::Store(store))) => json_error(&store.to_string()),
         Ok(Err(fault)) => {
             tracing::warn!(?fault, method, "facts unavailable");
             json_error(unavailable)
