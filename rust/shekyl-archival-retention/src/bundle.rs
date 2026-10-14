@@ -709,8 +709,8 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
 ///
 /// [`TooManyReferences`] if the section holds 2³² references or more: the
 /// root's preimage counts them in four bytes, so such a section has no
-/// root ([`section_reference_count`]). A consensus caller refuses the
-/// section for it; nothing here panics.
+/// root. A consensus caller refuses the section for it; nothing here
+/// panics.
 pub fn bundle_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
     let n = section_reference_count(refs.len())?;
     let mut input = Vec::new();
@@ -737,13 +737,15 @@ pub struct TooManyReferences {
 /// `n` as the root's preimage carries it: the section's reference count in
 /// 32 bits, checked, never truncated.
 ///
-/// The one conversion of a section's length to the root's `n`, so the
-/// boundary is testable without a section of 2³² references.
+/// Crate-private. [`bundle_root`] is the caller. The bound is tested on
+/// this function because a section of 2³² references is not something a
+/// test allocates. The verifier maps [`bundle_root`]'s error and does not
+/// call this.
 ///
 /// # Errors
 ///
 /// [`TooManyReferences`] if `len` is 2³² or more.
-pub fn section_reference_count(len: usize) -> Result<u32, TooManyReferences> {
+fn section_reference_count(len: usize) -> Result<u32, TooManyReferences> {
     u32::try_from(len).map_err(|_| TooManyReferences { found: len })
 }
 
@@ -804,13 +806,11 @@ pub fn section_budget(c: u64, d_max: u64, seb: SettlementEpochBlocks) -> u64 {
 /// The answer is three-valued, as the view's reads are:
 ///
 /// - `Ok(Some(d_max))` — every epoch's `D` is known.
-/// - `Ok(None)` — some epoch's `D` is not known here. This is the
-///   alternative block above the fork point, whose epoch's `D` lies past
-///   what this chain holds: the comparison waits for the switch
-///   (`SCS-P23`). **Never a partial maximum** over the epochs that did
-///   answer — a budget from a partial `D` would be a verdict from a guess.
-///   An empty section also has no epoch and so no `D`; `check_section`
-///   admits it under any budget or none, since its charge is zero.
+/// - `Ok(None)` — some epoch's `D` is not known, or the section names no
+///   epoch. **Never a partial maximum** over the epochs that did answer.
+///   The bundle verifier does not use this for an empty section: an empty
+///   section is admitted without a call, because it has no `D` to wait
+///   for. A non-empty section with `Ok(None)` waits (`SCS-P23`).
 /// - `Err(fault)` — `d_of_epoch` faulted. Not an unknown `D`, and not a
 ///   verdict: the view's own failure, returned as itself.
 ///

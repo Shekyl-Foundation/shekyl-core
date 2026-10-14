@@ -32,6 +32,7 @@ use shekyl_archival_retention::{
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
+use super::bundle_section_tests::check_section_at_cap;
 use super::*;
 use crate::harness::bundle::{
     fixture_block_hash, with_hash, BundleRead, BundleReadFaulted, BundleWorld,
@@ -557,13 +558,13 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
     // The stateless check passes it at a budget the honest one exceeds...
     let section = std::slice::from_ref(&nine);
     assert_eq!(
-        check_section(section, &root_of(section), Some(9)).map(SectionCharge::get),
+        check_section_at_cap(section, &root_of(section), 9).map(SectionCharge::get),
         Ok(9)
     );
-    assert!(check_section(
+    assert!(check_section_at_cap(
         std::slice::from_ref(&honest),
         &root_of(std::slice::from_ref(&honest)),
-        Some(9)
+        9
     )
     .is_err());
     // ...and admission refuses it, before anything is opened.
