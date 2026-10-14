@@ -502,7 +502,34 @@ the same job with the Rust `main()` and its one stop path, a second daemon
 on the same data directory refused by the lock, a config directory whose
 access list grants Users write refused with exit 2, and another network's
 data directory refused by the marker; RT-W14 later adds a service-manager
-case (install, start, `SERVICE_RUNNING`, stop). New: the
+case (install, start, `SERVICE_RUNNING`, stop).
+
+The cutover's edit of the job's script (`scripts/ci/daemon_boot_stop_smoke.ps1`,
+#1072; Rick, 2026-10-14):
+
+- **Say why the daemon never answered.** The `get_info` poll catches and
+  ignores every error, so a daemon that listens but keeps answering with
+  an HTTP error is reported as a bare timeout. The poll keeps its last
+  error and prints it with the timeout message.
+- **The store check moves with the store.** The script looks for the
+  store under `fake\lmdb\data.mdb`, a path the regtest branch at
+  [`src/cryptonote_core/cryptonote_core.cpp:477`](../../src/cryptonote_core/cryptonote_core.cpp)
+  makes. Under DC-Q5 an explicit data directory is used as given and the
+  network subdirectory is row data for the default layout only, so the
+  check asserts the store at the path the cutover gives it. It also
+  asserts `shekyld.lock`, present and held while the daemon runs, and the
+  `shekyld.network` marker, holding `regtest` and its network id after the
+  run (DC-Q15).
+- **A Ctrl-Break case needs its own launch.** `GenerateConsoleCtrlEvent`
+  delivers Ctrl-Break, not Ctrl-C, to a process started in its own process
+  group (`CREATE_NEW_PROCESS_GROUP`). .NET's `Process.Start` cannot set that
+  flag, so the case needs a small `CreateProcess` call or helper, and the
+  runner's process needs a console. Whether the hosted Windows runner has
+  one is a pre-flight check (§9), not an assumption; if it has none, the
+  case belongs in the Windows lane's local run instead of CI. Window close,
+  logoff and shutdown cannot be generated this way at all.
+
+New: the
 grammar gate (IG-3, IG-9) over the daemon's table; the snapshot field-count
 gate (§2.9); the recipe gate (DC-Q8), asserting that the shipped unit's
 paths agree with its `StateDirectory` and `LogsDirectory` and that every
@@ -640,7 +667,10 @@ before the first production commit:
 3. Read the daemon-store set for the marker (§2.6) at that pin.
 4. Rule 17 at source for every crate the parse and the checks need beyond
    `shekyl-options`.
-5. Demonstrate DC-F12 with a test before the runner replaces the C++ path:
+5. Check whether the hosted Windows runner's process has a console, which
+   decides where the Ctrl-Break case of §5.2 runs: in CI, or in the Windows
+   lane's local run.
+6. Demonstrate DC-F12 with a test before the runner replaces the C++ path:
    a notify spawn through `tools::spawn`, then the managed Tor's exit, whose
    `child.wait()` does not return its status.
 
@@ -722,7 +752,7 @@ commit.
    green; (d) the runtime handlers of §2.7 and the notify runner of §2.10; (e) every §4.2 deletion, with
    its before and after counts in the commit message; (f) every launcher,
    the generated documentation and its gate, and the Windows smoke job's
-   four cutover cases (§5.2); (g) the index and FOLLOWUPS
+   cutover cases and its script's edit (§5.2); (g) the index and FOLLOWUPS
    rows of §10.
 5. **No new daemon option in C++.** A value C++ needs reaches it through
    the snapshot, or not at all.
