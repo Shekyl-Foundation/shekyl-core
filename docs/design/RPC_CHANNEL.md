@@ -261,11 +261,10 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   the daemon's own top-level slice at `CPUWeight=400`, weighed 4:1
   against `user.slice`, so a per-user wallet serving beside the service
   cannot take the daemon's CPU. The slice is the packaging's; the
-  service-mode switch this round adds changes nothing about it. *Open
-  for this round:* whether the service unit reads a config file at
-  `/etc/shekyl/shekyld.conf` (the deleted Monero-heritage example unit
-  under `utils/systemd/` did; the shipped unit passes flags) is RT-16's
-  to decide with the switch, not the packaging's.
+  service-mode switch this round adds changes nothing about it. The run
+  mode selects the root, and every default path derives from it
+  ([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) IG-13, IG-Q36); Linux keeps
+  `/etc/shekyl/shekyld-<network>.toml`.
 - **The mode is declared, never inferred.** On Unix a unit
   running the daemon under its dedicated user and that same user starting
   it by hand are indistinguishable from inside the process, so the daemon
@@ -273,12 +272,32 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   explicit switch that the installed unit or service registration passes;
   without it the daemon is run-as-me. A daemon never guesses its mode from
   its account, its data directory, or its parent.
+- **`shekyld` answers the Windows Service Control Manager itself** (ruled
+  2026-10-13), in Rust, entered only through the `service` switch
+  ([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) IG-Q36; command line only,
+  IG-Q37). No wrapper process (NSSM, WinSW, a Shekyl-built host) and no
+  self-registration: install and uninstall are the installer's and
+  `shekyl-cli`'s, through one shared Rust library, and restart-on-failure
+  is the SCM's failure actions, set at install. On POSIX the service
+  manager runs the foreground process and the switch is refused. *Why it
+  recurred:* the April daemonizer deletion assumed every OS service
+  manager runs a foreground process; the SCM kills a registered process
+  that never connects to its dispatcher (error 1053). Record:
+  [`WINDOWS_SERVICE_RULING_2026-10-13.md`](../completed/WINDOWS_SERVICE_RULING_2026-10-13.md).
+- **The process entry moves to Rust** in the daemon-configuration
+  cutover (`DAEMON_CONFIG_CUTOVER.md`, PR #1066): the SCM dispatcher must
+  run at process entry, and `main()` is C++ until then. RT-W14 depends on
+  it.
 - **Service mode is new Rust work, not a revival.** The inherited daemonizer
   was deleted in V3.1 and its five flags retired
   ([`removed_flags.cpp:74-78`](../../src/common/removed_flags.cpp)); none of
   it is restored (rule 15).
 - **Installation needs elevation once**, so the service is an opt-in step;
   run-as-me keeps working with none.
+- **A run-as-me daemon's home is always per-user**: `FOLDERID_LocalAppData`
+  on Windows, never Roaming AppData, whatever the token. A machine-wide
+  home exists only in service mode and only when the installer created it
+  ([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) IG-13).
 - **The data directory moves** for the service: a machine-wide home
   (`%ProgramData%` on Windows) with an ACL admitting the service account
   and Administrators, holding chain data, the daemon's channel bundle, the
@@ -1676,4 +1695,4 @@ rule-26 pre-flight before its first production commit.
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 | not authorized |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9) | RT-W9 | not authorized |
 | RT-W13 | The check that §11.2 is empty: every row gone, no reader of a deleted flag or field left | lands with RT-W10; re-run after RT-W12 and RT-W14 | not authorized |
-| RT-W14 | Service mode (RT-16): the declared-mode switch; console key and its offline reset; enrol at install; machine-wide rendezvous; Windows service under a virtual account and its installer step (service first, fresh data home never adopted, inheritance broken); Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8 | not authorized |
+| RT-W14 | Service mode (RT-16): the declared-mode switch; console key and its offline reset; enrol at install; machine-wide rendezvous; Windows service under a virtual account and its installer step (service first, fresh data home never adopted, inheritance broken); Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8, the Rust process entry (the daemon-configuration cutover, PR #1066) | not authorized |
