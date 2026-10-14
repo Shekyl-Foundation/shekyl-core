@@ -8,7 +8,8 @@ rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this document
 holds the glossary tree and the name tables. Part B (the name tables of
 `shekyl-cli`, `shekyl-wallet-rpc`, the consoles and the utilities) is
-brought to the maintainer for ruling before anything lands.
+brought to the maintainer for ruling before anything lands: §10–§15 are
+Part B, DRAFT, each heading saying so.
 **Verified against:** `shekyl-core` @ `737da3127` (`dev`; the option surface
 is unchanged from `2c3fae3c`, only `rpc_facts_ffi.*` moved) and PR-3 (#1056,
 `feat/p2p3-dialer-cutover`) @ `fce0a2fa`. Reviewed at **`737da3127`**. Every
@@ -401,3 +402,300 @@ Read for revision 1: all seven option-registering files linked into `shekyld` an
 Read again for revision 2, at `737da312` and `baaba2bd`: `core_rpc_server::add_host_fail` and its callers; `core_rpc_ffi.cpp`'s context comment; `set_max_in_peers` and the ceiling application in `net_node.inl`; `InboundCeiling`; the `--anonymous-inbound` loop; the miner's option read; `mlog.cpp`'s default categories; the cover switch in `command_line_args.h` and `main.cpp`; `shekyl_zone_listen_tor`'s signature; the wallet decision log entry; `shekyl-cli`'s daemon-down copy. The `shekyl-dev` and GUI consumer list is the implementing lane's grep, not re-run here.
 
 Not read: the C++ console handlers' argument grammars (Part B), the Rust daemon console (Part B), the utilities' option sets (Part B), the GUI's settings screen, the mobile tree.
+
+
+---
+
+## 10. Part B — the wallet binaries, the console and the utilities — DRAFT for ruling (2026-10-14)
+
+Part B names every identifier of `shekyl-cli`, `shekyl-wallet-rpc`, the daemon's console and the utilities under the ruled rules (IG-1…IG-15) and glossary (§3). Each section below carries its own status in its heading; nothing in §10–§15 is ruled until marked. Verified against `shekyl-core` @ `7cf70b705` (`dev`). A name shared with the daemon's table (`network`, `config-file`, `log-*`) has a row here only where its kind, default or surface differs; otherwise the daemon's row (§5) is the row, and one meaning everywhere (IG-2) is what makes that possible.
+
+**What Part B found, before the tables.** Two collisions the tree exposes are put to the maintainer first (IG-Q21, IG-Q22); kinds the wallet surfaces need and §2 lacks (IG-Q23); one secret taken on a prompt line (IG-Q24); the console's forty-four words, which R8 deletes into `shekyl-cli` (IG-Q25); the keep-or-delete per utility that DC-Q12 routed here (IG-Q26); and the scope of the gate (IG-Q27).
+
+## 11. Glossary — the wallet subtree and the console's terms (v0) — DRAFT for ruling
+
+Rows below add to §3. A term already in §3 that gains a parent here keeps its one meaning; where Part B needs the meaning widened, the row says so and IG-Q32 puts the widening to the maintainer (`password`, `address`, `rpc`, `relay`, `difficulty`, `height`, `connections`). Verbs are terms of kind *verb* under their subject (IG-3).
+
+| Term | Parents | Meaning |
+|---|---|---|
+| wallet | — | the wallet: its files and its operations |
+| daemon | — | the daemon a wallet binary talks to |
+| script | — | a file of prompt lines run as one session |
+| json | — | machine output: one object per command |
+| debug | — | show the machine detail of a failure |
+| tx | — | a transaction |
+| request | — | a payment request |
+| uri | — | a `shekyl:` payment URI |
+| stake | — | the staking balance and bond |
+| shard | — | an archival shard |
+| mine | — | mining control (IG-Q21: one spelling with `mining`) |
+| prove | — | make a proof |
+| check | — | check a proof |
+| sign | — | sign a message with the wallet key |
+| verify | — | verify a signature |
+| balance | —, stake | a balance breakdown |
+| send | — | send money |
+| fee | — | a fee quote |
+| status | —, wallet, stake, mine, sync | the current state (IG-Q33) |
+| chain | — | the chain the daemon holds |
+| exit | — | leave the prompt |
+| stop | —, mine | stop |
+| key | tx | a key image |
+| peer | p2p, closed, — | another Shekyl node |
+| archival | dev, — | the archival layer |
+| sync | dev, — | chain synchronization |
+| block | notify, — | a block |
+| ban | p2p, — | a host or subnet refused at socket admission |
+| rpc | —, wallet | an RPC service: the daemon's, or the wallet's |
+| file | config, log, ban, wallet, script, mnemonic, password, socket, png, address | a file path (value term) |
+| dir | data, wallet | a directory path (value term) |
+| password | socks, wallet, rpc | a secret credential; always a secret (IG-Q32 widens Part A's row) |
+| username | socks, rpc | a credential's name |
+| socks | clearnet, tor, daemon | the SOCKS5 endpoint dialled through |
+| endpoint | daemon, rpc | a literal IP and port |
+| socket | daemon, rpc | the local socket of RPC_CHANNEL RT-15 |
+| mnemonic | wallet | the wallet's recovery words (IG-Q24: never on a command line) |
+| stdin | password | read from standard input |
+| name | wallet | a wallet's name |
+| direction | list | `in` or `out` |
+| unmatched | list | receives matching no request |
+| matched | list | requests already paid |
+| all | list | every entry |
+| held | list | the shards this wallet holds |
+| amount | send, request, uri, stake, prove | a decimal SKL amount (kind `amount`, IG-Q23) |
+| label | request, uri | a human label |
+| expiry | new | when a request stops being valid: a duration or a unix time |
+| priority | send | `economy`, `standard` or `high` |
+| yes | send, stake, tx | confirm without a prompt |
+| full | address | the whole address, not the display form |
+| address | mining, uri, send, check, verify, mine, — | a Shekyl address (Part A's meaning, widened to the wallet's rows); bare, the wallet's primary address |
+| count | input, output | how many |
+| input | fee | a transaction input |
+| output | fee | a transaction output |
+| image | key | a key image |
+| spent | image | whether it is spent |
+| message | sign, prove, check, verify | free text, the rest of the line |
+| signature | verify | a signature |
+| id | tx, shard | an identifier: a transaction hash or a shard number |
+| text | note | free text |
+| png | fetch | a PNG image of the shard |
+| pixels | png | the image's side, in pixels |
+| complete | archival | the whole corpus |
+| tree | complete | the CompleteTree posture (IG-Q28) |
+| acknowledge | archival | the acknowledgement phrase that posture requires |
+| short | list | the short form |
+| from | show, list, sum | the first height |
+| to | show, list | the last height |
+| last | stats | the most recent N blocks |
+| hex | show | print the raw bytes as hex |
+| hard | rescan | rebuild from the chain |
+| seconds | add | a duration in seconds |
+| alt | chain | the alternative chains |
+| coinbase | chain | coinbase outputs |
+| sum | coinbase | a total |
+| stats | chain, peer, txpool, p2p | statistics |
+| white | list | the white peer list |
+| gray | list | the gray peer list |
+| create | wallet | verb |
+| open | wallet | verb |
+| close | wallet | verb |
+| restore | wallet | verb |
+| refresh | wallet | verb |
+| rescan | wallet | verb |
+| list | tx, request, shard, peer, ban, txpool, chain | verb |
+| show | tx, shard, chain, block, ban | verb |
+| note | tx | verb |
+| abandon | tx | verb |
+| relay | dev, tx | transaction relay; as a verb, relay this transaction |
+| new | request | verb |
+| make | uri | verb |
+| read | uri | verb |
+| outputs | stake | verb: list the staking outputs |
+| available | stake | verb |
+| add | stake, ban | verb |
+| return | stake | verb |
+| release | stake | verb |
+| collect | stake | verb |
+| join | stake | verb |
+| fetch | shard | verb |
+| start | mine | verb |
+| payment | prove, check | a payment proof |
+| reserve | prove, check | a reserve proof |
+| remove | ban | verb |
+| flush | txpool | verb |
+| pop | chain | verb (IG-Q25: `dev-`?) |
+| connections | rpc, peer | concurrent connections; the live peer connections |
+| difficulty | dev, chain | the difficulty |
+| height | block, reorg, split, chain, restore | a block height |
+
+Value keywords added: `in`, `out` (direction), `economy`, `standard`, `high` (priority), `white`, `gray`.
+
+## 12. The wallet binaries' name tables — DRAFT for ruling
+
+Legend as §5: **R** rename or fold, **K** kept, **X** REJECTED row, **–** removed with no trace, **N** new.
+
+### 12.1 `shekyl-cli` — options
+
+| Today | New | Kind | Default | Surface | Notes |
+|---|---|---|---|---|---|
+| `help`, `version` | same | switch | | CLI | K |
+| `network`, `testnet`, `stagenet` | `network` | one-of | `mainnet` | CLI | R; the two shorthand flags are aliases (IG-5) and go |
+| — | `config-file` | path | `/etc/shekyl/shekyl-cli-<network>.toml` | CLI | N; the wallet binaries' TOML file the decision log ruled, under Part A's shape (IG-Q29) |
+| `wallet-dir` (alias `engine-dir`) | `wallet-dir` | path | account home + `.shekyl/wallets/<network>` | both | K; alias gone (IG-5) |
+| `wallet` (alias `engine-file`) | `wallet-file` | path | unset | both | R (IG-3: a path ends in `file`); alias gone |
+| `daemon-address` | `daemon-endpoint` | endpoint | `127.0.0.1:<row rpc port>` | both | R (IG-Q31); a hostname or URL is refused |
+| (`daemon-address` `uds://`) | `daemon-socket-file` | path | unset | both | N (IG-Q31); RT-15's local leg; unconstructible together with `daemon-endpoint` |
+| `rpc-url` | `wallet-rpc-endpoint` | endpoint | unset | both | R (IG-Q31); set means an external `shekyl-wallet-rpc`, not self-hosting |
+| (`rpc-url` `uds://`) | `wallet-rpc-socket-file` | path | unset | both | N; unconstructible together with `wallet-rpc-endpoint` |
+| `proxy` | `daemon-socks` | endpoint | unset | both | R; the dial to the daemon goes through it; no scheme is spelled (SOCKS5, names resolved remotely) |
+| `daemon-ca-cert` | — | | | | X (RT-O8: the `https://` arm is deleted in RT-W12; the channel replaces TLS) |
+| `debug` | `debug` | switch | off | both | K; prints the machine detail (`error.data`) of a failure |
+| `password-file` | `wallet-password-file` | path | unset | both | R; a file holding the wallet password; required when stdin is not a terminal |
+| `complete-tree-foundation` (hidden) | `archival-complete-tree` | switch | off | both | R (IG-Q28): a public row; hidden-but-not-`dev` has no visibility (IG-9) |
+| `acknowledge` (hidden) | `archival-acknowledge` | one-of (the ruled phrase) | unset | CLI | R (IG-Q28) |
+| `json` | `json` | switch | off | CLI | K |
+| `script` | `script-file` | path | unset | CLI | R |
+| — | `log-file`, `log-level`, `log-category`, `log-size-max` | as §5 | as §5, the file `shekyl-cli-<network>.log` | both | N; the daemon's rows apply |
+
+### 12.2 `shekyl-cli` — the scripted subcommands' options
+
+| Today | New | Kind | Surface | Notes |
+|---|---|---|---|---|
+| `create --seed-out` | `wallet create --mnemonic-file` | path | CLI | R (IG-Q24: the recovery words are written to a new `0600` file, never printed under `--json`) |
+| `create --password-file`, `--password-stdin` | `--wallet-password-file`, `--wallet-password-stdin` | path; switch | CLI | R; the two are unconstructible together |
+| `restore --seed-file` | `wallet restore --mnemonic-file` | path | CLI | R |
+| `restore --restore-height` | `--wallet-restore-height` | integer | CLI | R |
+
+### 12.3 `shekyl-cli` — command words
+
+The prompt's forms today are bare noun, subject plus verb, and product verb (CU-7). Under IG-3 a command is `<path> <verb>`; a bare word is a subject whose one action needs no verb. The table lists the ruled form, positional kinds, and flags; flags are names under the command's last word.
+
+| Today | New | Positionals (kinds) | Flags | Notes |
+|---|---|---|---|---|
+| `wallet` | `wallet status` | | | R (IG-Q33: `status` is a verb everywhere) |
+| `wallet create <name>` | same | name | | K |
+| `wallet open <name>` | same | name | | K |
+| `wallet close` | same | | | K |
+| `wallet restore <name> <seed...>` | `wallet restore <name>` | name | `--mnemonic-file <path>` | R (IG-Q24: the words come from a file or a hidden prompt, never the line) |
+| `wallet password` | same | | | K |
+| `wallet refresh` | same | | | K |
+| `wallet rescan [hard]` | `wallet rescan` | | `--hard` | R |
+| `balance` | `balance` | | | K |
+| `send <amount> <address> [--priority p] [--yes]` | same | amount, address | `--priority` one-of; `--yes` | K |
+| `fee [--inputs N] [--outputs N]` | `fee` | | `--input-count`, `--output-count` integer | R (IG-Q22: `outputs` is a stake verb) |
+| `address [--full \| --out <path>]` | `address` | | `--full`; `--file <path>` | R (IG-Q22: `out` is a direction) |
+| `status` | `wallet status` | | | R (IG-Q33) |
+| `chain` | `chain` | | | K |
+| `version`, `help [command]`, `exit` (`quit`) | same; `quit` goes | | | K; the synonym is an alias (IG-5) |
+| `tx list [--in \| --out] [--unmatched]` | `tx list` | | `--direction in\|out`; `--unmatched` | R (IG-Q22) |
+| `tx show <id>` | same | id | `--hex` (the console's `+hex`) | K |
+| `tx note <txid> [<text...>]` | same | id, text | | K |
+| `tx abandon <txid>` | same | id | | K |
+| `request new <amount> <label> [--expiry e]` | same | amount, label | `--expiry` quantity (duration) or integer (unix time) | K |
+| `request list [--matched \| --all]` | same | | `--matched`; `--all` | K |
+| `uri make [--amount X] [--label L] [--address A]` | same | | `--amount`; `--label`; `--address` | K |
+| `uri read <uri>` | same | uri (string) | | K |
+| `stake` | `stake status` | | | R (IG-Q33) |
+| `stake balance`, `stake outputs`, `stake available` | same | | | K |
+| `stake add <amount> [--yes]`, `stake return <amount> [--yes]` | same | amount | `--yes` | K |
+| `stake release [--yes]`, `stake collect` | same | | `--yes` | K |
+| `stake join <shard-id>...` | same | id… | | K |
+| `shard list`, `shard list all`, `shard list mine` | `shard list`, `shard list all`, `shard list held` | | | R (`mine` is the mining subject) |
+| `shard show <id>` | same | id | | K |
+| `shard fetch <id> [--png p] [--size s]` | same | id | `--png-file <path>`; `--png-pixels` integer | R (`size` is the log budget) |
+| `mine start [threads\|auto]`, `mine stop`, `mine status` | same (IG-Q21) | integer or `auto` | | K |
+| `prove payment <txid> <address> [message...]`, `prove reserve [amount] [message...]` | same | id, address, message; amount, message | | K |
+| `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | | | K |
+| `sign <message...>`, `verify <address> <signature> <message...>` | same | | | K |
+| the `RETIRED` table (`transfer`, `transfers`, `show_transfer`, `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`, `drain`, `drain_balance`, `unstake`, `stake exit`, `collect_unstaked`, `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`, `start_mining`, `stop_mining`, `mining_status`, `chain_health`, …) | — | | | – (IG-Q30: §0 rules no migration table; none names a refused feature) |
+
+### 12.4 `shekyl-wallet-rpc` — options
+
+| Today | New | Kind | Default | Surface | Notes |
+|---|---|---|---|---|---|
+| `help`, `version` | same | switch | | CLI | K |
+| `network` | `network` | one-of | `mainnet` | CLI | K |
+| — | `config-file` | path | `/etc/shekyl/shekyl-wallet-rpc-<network>.toml` | CLI | N (IG-Q29) |
+| `wallet-dir` | `wallet-dir` | path | account home + `.shekyl/wallets/<network>` | both | K; today's `.` is relative (IG-Q9) |
+| `rpc-bind` (IP:port) | `rpc-listen` | endpoint, loopback unless credentials are set | `127.0.0.1:29500` | both | R; a wildcard is refused (RT-1); the daemon's table reserves the same name for the same meaning (IG-10) |
+| `rpc-bind` (`uds://`) | `rpc-socket-file` | path | unset | both | N; Unix only; refused on Windows |
+| `rpc-login` | `rpc-username`, `rpc-password` | secret | unset | file | R (IG-Q29); both set or neither; a non-loopback `rpc-listen` with neither is refused |
+| `disable-rpc-login` | — | | | | – (IG-4; "no credentials" is the absence of the two rows, accepted on loopback or a socket) |
+| `daemon-address` | `daemon-endpoint`, `daemon-socket-file` | endpoint; path | `127.0.0.1:<row rpc port>`; unset | both | R (IG-Q31) |
+| `proxy` | `daemon-socks` | endpoint | unset | both | R |
+| `log-file` | `log-file`, with `log-level`, `log-category`, `log-size-max` | as §5 | the file `shekyl-wallet-rpc-<network>.log` | both | K; the daemon's rows apply |
+
+## 13. The daemon console — DRAFT for ruling (IG-Q25)
+
+The console's forty-four C++ words (`src/daemon/command_server.cpp`) and the twenty methods the Rust console already renders (`rust/shekyl-daemon-rpc/src/console/mod.rs`) are one surface that R8 moves into `shekyl-cli` (DC-N2, blocked on RT-15). This table gives each word its `shekyl-cli` form under IG-3; whether the interim C++ console is renamed to it or deleted unrenamed is IG-Q25.
+
+| Today | New | Positionals / flags | Notes |
+|---|---|---|---|
+| `help [cmd]`, `apropos <kw>...` | `help [command]` | | `apropos` folds into `help` |
+| `print_height` | `chain height` | | |
+| `print_bc <from> [<to>]` | `chain show` | `--from`, `--to` integer | |
+| `bc_dyn_stats <n>` | `chain stats` | `--last` integer | |
+| `alt_chain_info [hash]` | `chain alt [hash]` | hash | |
+| `print_coinbase_tx_sum <from> [<count>]` | `chain coinbase sum` | `--from`, `--last` | |
+| `diff` | `chain difficulty` | | |
+| `pop_blocks <n>` | `dev-chain-pop <n>` | integer | IG-8: a destructive lever, regtest only; or an X row |
+| `print_block <hash\|height>` | `block show <hash\|height>` | hash or integer | |
+| `print_tx <hash> [+hex] [+json]` | `tx show <id>` | `--hex`; `--json` is the session's | shares the wallet's word |
+| `relay_tx <txid>` | `tx relay <id>` | id | |
+| `is_key_image_spent <ki>` | `tx key image spent <image>` | hash | |
+| `print_pool`, `print_pool_sh`, `print_pool_stats`, `flush_txpool [txid]` | `txpool list [--short]`, `txpool stats`, `txpool flush [id]` | | |
+| `print_pl [white] [gray] [limit]`, `print_pl_stats`, `print_cn`, `print_net_stats` | `peer list [--white] [--gray] [--max N]`, `peer stats`, `peer connections`, `p2p stats` | | |
+| `limit [kB/s]`, `limit_up`, `limit_down` | `p2p-upload-max <rate\|unlimited>`, `p2p-download-max <rate\|unlimited>` | quantity (rate) | IG-12: the option name is the command; `limit` (both at once) is one option per value and goes |
+| `out_peers <n>` | — | | X: the option is deleted (§5) |
+| `in_peers <n>` | `p2p-inbound-max <n>` | integer ≥ 1 | IG-12 |
+| `bans`, `ban <ip\|@file> [secs]`, `unban <ip>`, `banned <ip>` | `ban list`, `ban add <ip> [--seconds N]`, `ban remove <ip>`, `ban show <ip>` | an IP; a file is `p2p-ban-file` | |
+| `start_mining <addr> [threads\|auto] [bg] [battery]`, `stop_mining`, `mining_status`, `show_hr`, `hide_hr` | `mine start <address> [threads\|auto]`, `mine stop`, `mine status` | | the background arguments go with `bg-mining-*` (§5); the hash-rate display is `mine status` |
+| `set_log <level\|categories>` | `log-level <level>`, `log-category <k=v>...` | one-of; map | IG-12 |
+| `status`, `print_status`, `sync_info` | `status`, `sync status` | | `print_status` is a duplicate |
+| `stop_daemon`, `exit` | `stop` | | one word for one act |
+| `save`, `flush_cache [bad-txs] [bad-blocks]` | — | | –: LMDB and C++ cache internals; nothing to switch once the Rust store owns commits |
+| `version` | `version` | | |
+
+## 14. The utilities — DRAFT for ruling (IG-Q26, IG-Q27)
+
+DC-Q12 routed keep-or-delete per tool here. The recommendation column is the lane's; the ruling is the maintainer's. A kept tool gets its table in the ruling commit; a deleted one gets no row (an implementation, not a refused feature) unless the maintainer names it a refused feature.
+
+| Binary | Options today | Recommendation | Reason |
+|---|---|---|---|
+| `shekyl-blockchain-import`, `-export` | `input-file`/`output-file`, `log-level`, `block-start`, `block-stop`, `batch-size`, `pop-blocks`, `dangerous-unverified-import`, `batch`, `resume`, plus `data-dir`, `testnet`, `stagenet` | delete | Monero bootstrap-file tools over LMDB; the Rust corpus tools (`shekyl-chain-replay fetch` / `replay`) are the successor, and DRS's store replaces LMDB |
+| `shekyl-blockchain-usage`, `-ancestry`, `-depth`, `-stats` | `rct-only`, `with-ringsize`, `txid`, `output`, `height`, `cache-*`, `with-*`, … | delete | ring-signature-era analytics (`rct-only`, `ringsize`) with no referent under FCMP++ (rule 60) |
+| `shekyl-mdb-copy` | LMDB's own | delete with LMDB | DRS's redb cutover; until then it is LMDB's tool, not ours to name |
+| `shekyl-gen-ssl-cert` | `certificate-filename`, `private-key-filename`, `passphrase`, `passphrase-file`, `prompt-for-passphrase` | delete | RT-11: the RPC channel replaces TLS; the `rpc-ssl-*` rows are already X (§5) |
+| `shekyl-gen-trusted-multisig` | documented in `EXECUTABLES.md` §4 | the doc row goes | the binary does not exist in the tree (the C++ wallet was deleted in Phase 5) |
+| `shekyl-utils-deserialize` (`cn_deserialize`), `shekyl-utils-object-sizes` | `input`, `log-level`; none | delete | C++ debug tools; `tx show --hex` and the Rust codecs' tests cover the need |
+| `shekyl-e2-trace-export` (opt-in build) | `out`, `block-start`, `block-stop`, `data-dir`, network | DRS-E2's | the replay driver's own tool; its table is that lane's if it ships |
+| `geblock` (`shekyl-genesis-tool`) | subcommands `gen-wallets`, `build`, `verify`, `block-id`; `--network`, `--out-dir`, `--recipients`, `--config`, `--recipients-dir` | table it (IG-Q27) | the genesis ceremony tool; not on the shipped list but every operator of the ceremony types its names |
+| `shekyl-chain-replay`, `shekyl-wss-q1b-bench` | clap | out of the gate (IG-Q27) unless ruled in | development and benchmark tools, never shipped |
+
+## 15. Questions for Part B — DRAFT for ruling
+
+**IG-Q21 — `mining` and `mine`.** One tree, one spelling: the daemon's rows are `mining-address` and `mining-threads` (§5, ruled); the wallet's commands are `mine start`, `mine stop`, `mine status` (CU-3, landed). Proposal: the subject is `mine` everywhere, and §5's two rows become `mine-address` and `mine-threads` in the ruling commit (a Part A rename the maintainer authorizes); the console's `mine start` takes the address the daemon's row would otherwise hold.
+
+**IG-Q22 — `out`, `outputs` and `size`.** `address --out <path>` is a path, `tx list --out` a direction, `fee --outputs N` a count, `stake outputs` a verb, `shard fetch --size` pixels while `log-size-max` is disk. IG-2 allows one meaning. Proposal: `address --file`, `tx list --direction in|out`, `fee --input-count` / `--output-count`, `shard fetch --png-file` / `--png-pixels`.
+
+**IG-Q23 — kinds the wallet needs.** §2 has no `amount`, `id`, `name` or `text` kind. Proposal: `amount` is a decimal SKL string with at most nine places, parsed exactly to atomic units by `shekyl-units` (a fixed-point decimal, not a float); `id` is a 64-hex transaction hash or a decimal shard number, as the row says; `name` is a wallet file name (one path component, no separators); `text` is the rest of the line, verbatim. Durations reuse the quantity kind (`1h`, `7d`); `--expiry` also admits an integer unix time.
+
+**IG-Q24 — a secret on a prompt line.** `wallet restore <name> <seed...>` takes the recovery words on the line; IG-6 says a secret is never accepted on the command line, and a `--script` file is a command line. Proposal: `wallet restore <name> --mnemonic-file <path>` and, at a terminal, a hidden prompt; the words never appear in a line, a history or a script.
+
+**IG-Q25 — the console.** R8 moves the console into `shekyl-cli`; renaming forty-four interim C++ words that R8 deletes is rule-15 churn. Proposal: §13 is the catalog both the Rust console and `shekyl-cli` serve; the C++ console is not renamed and dies with R8; until then the Rust console's twenty methods already render through one export and take §13's words at the cutover.
+
+**IG-Q26 — the utilities.** Rule per row of §14.
+
+**IG-Q27 — the gate's scope.** "Every shipped binary" is `EXECUTABLES.md`'s list; `geblock` is not on it and is typed by the ceremony's operators; `shekyl-chain-replay` and the bench are never shipped. Proposal: the gate's subject is every binary a release or a ceremony ships, named as a list the gate asserts non-empty (rule 47); development tools follow the rules by convention and are not in the gate.
+
+**IG-Q28 — hidden flags that are not `dev-`.** `--complete-tree-foundation` and `--acknowledge` are hidden today; IG-9 has no visibility for a hidden public option. Proposal: `archival-complete-tree` (public, documented as the Foundation posture) and `archival-acknowledge` (one-of: the ruled phrase).
+
+**IG-Q29 — the wallet binaries' file and credentials.** The decision log ruled TOML for the wallet binaries and Part A superseded its environment layer. Proposal: `config-file` under Part A's shape (`/etc/shekyl/<binary>-<network>.toml`), and `rpc-username` / `rpc-password` as file-only secrets replacing `--rpc-login`, with `--disable-rpc-login` gone (IG-4): no credentials is the absence of the rows, accepted on loopback or a socket only.
+
+**IG-Q30 — the `RETIRED` table and `quit`.** §0 rules no migration table and no aliases. Proposal: the table and the synonym go; none of its rows names a refused feature, so no X row.
+
+**IG-Q31 — the daemon and wallet-RPC addresses.** `--daemon-address` and `--rpc-url` take `http://host:port` or `uds:///path`, neither an endpoint. Proposal: `daemon-endpoint` (endpoint) and `daemon-socket-file` (path), unconstructible together; `wallet-rpc-endpoint` and `wallet-rpc-socket-file` the same; a hostname is refused (IG-Q6's reason: a resolver leaks).
+
+**IG-Q32 — Part A rows Part B widens.** `password` (§3: "SOCKS5 credentials") becomes "a secret credential; always a secret", with parents `socks`, `wallet`, `rpc`; `address` gains the wallet's parents and is also a subject (the bare command); `rpc` gains parent `wallet`; `relay`, `difficulty`, `height`, `connections` gain the console's parents. Meanings do not change; parents do.
+
+**IG-Q33 — `status`.** A bare `status` command, `mine status` and `sync status` make `status` both a subject and a verb. Proposal: `status` is a verb everywhere (`wallet status`, `stake status`, `mine status`, `sync status`); the daemon's bare `status` stays as the one subject-less word, or becomes `daemon status` when the console moves.
