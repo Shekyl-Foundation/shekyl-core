@@ -1,6 +1,6 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — Round 0 brief, held (2026-10-14).** Rule 26 is cited.
+**Status: OPEN — Round 0 brief, held (2026-10-14; DC-Q13…DC-Q15 ruled the same day).** Rule 26 is cited.
 The input grammar's Part A is ruled and merged (#1067, merge `7cf70b7052`):
 its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
@@ -10,7 +10,8 @@ of that draft: the C++ is not canonical, so the configuration is designed in
 Rust and the C++ appears only as what the cutover deletes. The brief owns
 the mechanism. Option names, kinds, defaults, surfaces and diagnostic codes
 are the grammar's and are cited, never restated. No implementation starts
-until PR-3 (#1056) merges and the questions in §1.2 are ruled.
+until PR-3 (#1056) merges, the grammar's Part B (#1068) merges and is
+folded in, and DC-Q16 (§1.2) is ruled.
 
 Anchors pinned to `dev` `7cf70b7052` (2026-10-14; the option surface is
 unchanged from `737da31276`, where the Round 0 read-out was taken). PR-3
@@ -47,39 +48,28 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
 | DC-Q12 | One cutover for the parse surface and every Rust consumer, based on PR-3 after it merges. The blockchain utilities keep their own option sets until IG Part B | §9 |
 | Review of `057112b2` (Rick, 2026-10-13) | §3 is the Rust typed configuration by section with a "replaces" column; the C++ list lives only in §4. One RPC start call carrying the core handle. No configuration or Rust-derived value crosses to the zone host. The Rust-ownable runtime changes call their Rust owners. A Windows permission allowlist. §6 lists only failures the types cannot prevent. The snapshot recounted after IG-Q4 | throughout |
 | Grammar §0 (Rick, 2026-10-13; merged with #1067) | `shekyld`'s process entry, `main()`, moves to Rust in this lane (the Windows service round, RT-16) | §2.2, DC-Q13 |
+| DC-Q13 (Rick, 2026-10-14) | (b): CMake builds the executable and its `main` makes one call into Rust, which owns the process. The C++ remnant exposes one coarse entry pair, `run(snapshot)` returning a status and `stop()`, both `noexcept` and catching every C++ exception, so none unwinds through Rust frames. Rust's entry catches its own panics into an exit status. One signal owner, Rust: `tools::signal_handler::install` is deleted from `Daemon::run`. The pair replaces the orchestration in `main.cpp` and `daemon.cpp`, and the C++ shrinks | §2.2, §4.2 |
+| DC-Q14 (Rick, 2026-10-14) | A Rust runner owns the notify commands, fed chain facts by the C++ event sites (requirements in §2.10; the reaping hazard it removes is DC-F12) | §2.10, §4.2 |
+| DC-Q15 (Rick, 2026-10-14) | The lock is `shekyld.lock` at the data directory's root, held through `flock` or `LockFileEx` and never deleted on exit. The marker is `shekyld.network` (TOML content, not a `.toml` name, so it is not mistaken for operator configuration), holding `network` and `network-id`, written by temporary file, `fsync`, rename and directory `fsync`, read only under the lock. Its refusals tell another network apart from the same network with a different network id (an earlier release's data after a regenesis: use a fresh `data-dir`) | §2.2, §2.6, §6 |
 
 ### 1.2 Open, for Rick to rule before implementation
 
-- **DC-Q13 — the shape of a Rust `main()`.** (a) The `shekyld` executable is
-  a Rust binary crate that links the C++ static libraries through its build
-  script. It is the literal move, and it moves the link step from CMake to
-  Cargo for every target the depends system and the reproducible builds
-  cover. (b) CMake keeps producing the executable; its one C++ translation
-  unit holds a `main` whose body is one call, `shekyl_daemon_main()`,
-  exported from the daemon's Rust image. Rust then owns the process:
-  arguments, the parse, the lock, the marker, logging, signals, the run
-  modes RT-16 adds, and the call into the C++ remnant. **Recommendation:
-  (b).** Every behaviour the ruling asks for is in Rust under (b); (a)
-  changes the build of every C++ library in the same PR as the cutover, a
-  second validation surface (rule 19). (a) becomes the right step when the
-  C++ remnant is small enough that linking it from Cargo is the minor part.
-- **DC-Q14 — who runs the notify commands.** The grammar makes them argument
-  arrays with named placeholders (IG-Q5), and the configuration is Rust's.
-  Today C++ splits the command string on whitespace and spawns it
-  ([`src/common/notify.cpp:52`](../../src/common/notify.cpp)), from three
-  event sites in C++. **Recommendation:** a Rust runner owns the three
-  commands and their placeholders; each C++ event site pushes the event's
-  facts (height and hash; split height, new height, added and removed; the
-  window, observed and expected counts) through one FFI call per event kind.
-  The facts are chain data, not configuration, so the push does not breach
-  DC-Q1, and no command crosses the boundary.
-- **DC-Q15 — the marker's and the lock's files.** Rick ruled what the marker
-  does. **Recommendation** for the files: the lock is `shekyld.lock` and the
-  marker is `shekyld-network.toml`, both at the data directory's root; the
-  marker holds `network` and `network-id` (the hex of the network id derived
-  from genesis), is written to a temporary file and renamed into place, and
-  is read only after the lock is held, so two starts cannot both find an
-  empty directory and both mark it.
+- **The grammar's Part B (#1068, open).** Rick's Part B ruling of
+  2026-10-14 changes IG-12 and two names this brief uses: a runtime value is
+  marked in a Runtime column and changed with `option set` and read with
+  `option show` (source `runtime`); mining starts and stops with `mine
+  start` and `mine stop`; `mining-address` and `mining-threads` become
+  `mine-address` and `mine-threads`; the per-account root on Windows is
+  `FOLDERID_LocalAppData` plus `Shekyl`. This brief cites the merged Part A
+  and is changed in one replacement when #1068 merges.
+- **DC-Q16 — the daemon's set and show requests.** Under the new IG-12 the
+  per-request handlers of §2.7 become one mechanism driven by the Runtime
+  column. RPC method names and wire shapes are outside the grammar's scope
+  (`INPUT_GRAMMAR.md` §1). **Recommendation:** one generic set request and
+  one generic show request, each carrying the option's name and its value
+  as text, parsed by the table's own parser and constructor and routed to
+  the row's owner, so marking a further option runtime needs no new
+  endpoint; the RPC lane names them.
 
 ---
 
@@ -105,43 +95,58 @@ exist, and an offline node is the product of the two being off (IG-Q3).
 
 What crosses the FFI after the cutover, and nothing else:
 
-- C++ to Rust: the core handle, once, to the RPC start (§2.3); chain facts
-  for the notify runner (DC-Q14); the one runtime request that still reaches
-  the miner (§2.7).
-- Rust to C++: the snapshot (§2.9), once, before the C++ remnant is
-  constructed.
+- Rust to C++: the remnant's entry pair, `run(snapshot)` and `stop()`
+  (DC-Q13), and the one runtime request that still reaches the miner
+  (§2.7).
+- C++ to Rust: the core handle, once, to the RPC start (§2.3); the core's
+  tip, published as it changes (`shekyl_core_publish_tip`, `dialer_ffi.rs:372`
+  on PR-3, called from `blockchain.cpp:5959` there); chain facts for the
+  notify runner (§2.10).
 
-### 2.2 The start sequence
-
-Under DC-Q13 (b):
+### 2.2 The start sequence (DC-Q13)
 
 1. `main()` calls `shekyl_daemon_main()`; Rust owns the process from here.
+   Rust's entry catches its own panics and turns them into an exit status.
 2. Rust reads its arguments with `std::env::args_os` (IG-Q2), resolves
    `--network` and `--config-file`, checks the file's permissions (§2.4),
    reads and validates it whole, applies the command line over it per key,
    resolves every path (§2.5), reads the ban file, and constructs the typed
    sections. `--help` and `--version` are answered here. A refusal renders
    through IG-11 and exits with status 2; nothing below runs.
-3. Rust takes the data-directory lock (DC-N1). There is none today:
+3. Rust takes the data-directory lock, `shekyld.lock` (DC-N1, DC-Q15),
+   through `flock` or `LockFileEx`, and holds it for the life of the
+   process; the file is never deleted. There is no lock today:
    `tools::file_locker` ([`src/common/util.h:101-105`](../../src/common/util.h))
    has no caller, and the comment at
    [`src/cryptonote_core/cryptonote_core.cpp:480`](../../src/cryptonote_core/cryptonote_core.cpp)
    says "try to lock it" over code that only creates the directory.
-4. Rust checks the network marker (§2.6), writing it when the directory
-   holds no daemon store.
+4. Under the lock, Rust checks the network marker (§2.6), writing it when
+   the directory holds no daemon store.
 5. Rust initialises logging from its section, then emits the required
    announcements: the effective-configuration line, every `dev-` lever set,
    and the posture line (Tor-only, clearnet-only, offline), to the log and
    to standard error whatever the level (IG-14).
-6. Rust starts the owners that need no chain: the managed Tor or the
-   operator's SOCKS, the zone host, the dialer and the peer lists, each from
-   its section.
-7. Rust fills the snapshot and calls the C++ remnant's one entry. C++
-   constructs core, the protocol handler and what remains of `net_node`
-   from the snapshot, and calls the RPC start once with the core handle
-   (§2.3). The remnant runs until stop and returns its status.
-8. Stop is Rust's: a signal reaches the Rust handler, which stops the RPC,
-   asks the C++ remnant to stop, joins it, and releases the lock last.
+6. Rust installs the one signal handler and starts the managed Tor's
+   bootstrap, if the Tor posture is `Managed`. Nothing that serves peers or
+   clients starts yet.
+7. Rust fills the snapshot (§2.9) and calls the remnant's `run(snapshot)`
+   on a thread of its own. C++ constructs core, which publishes its tip
+   (`shekyl_core_publish_tip`), then the protocol handler and what remains
+   of `net_node`, and calls the RPC start once with the core handle (§2.3).
+8. Only then does Rust start the zone host, its listeners and the dialer,
+   each from its section: a peer that connects earlier would find no tip
+   to handshake with and no protocol handler to receive its messages.
+9. Stop is Rust's: the signal reaches the Rust handler, which stops the
+   dialer and the zone host, stops the RPC, calls the remnant's `stop()`,
+   joins the `run` thread, stops the managed Tor, and releases the lock
+   last. `run` and `stop` are `noexcept` and catch every C++ exception;
+   `run` returns its status to Rust, which becomes the exit status.
+
+`tools::signal_handler::install` in `Daemon::run`
+([`src/daemon/daemon.cpp:272`](../../src/daemon/daemon.cpp)) is deleted:
+one process has one signal owner. The orchestration in
+`src/daemon/main.cpp` and `src/daemon/daemon.cpp` is replaced by the entry
+pair.
 
 ### 2.3 RPC: one start call
 
@@ -230,13 +235,21 @@ and `check_block_rate`'s regtest skip
 ([`src/cryptonote_core/cryptonote_core.cpp:1621`](../../src/cryptonote_core/cryptonote_core.cpp)).
 A harness that wants a fresh chain uses a fresh `data-dir`.
 
-The marker (IG-Q17), checked after the lock is held:
+The marker (IG-Q17, DC-Q15) is `shekyld.network` at the data directory's
+root: TOML content holding `network` and `network-id`, under a name that is
+not mistaken for operator configuration. It is written to a temporary file,
+`fsync`ed, renamed into place, and the directory is `fsync`ed; it is read
+only while the lock is held, so two starts cannot both find an empty
+directory and both mark it. The cases:
 
 - The directory holds no daemon store: the marker is written, recording the
   network name and the network id, before any store is created.
 - It holds a marker for this network: start.
 - It holds a marker for another network: refuse with a code naming both
   networks and the fix (a different `data-dir`, or the other network).
+- It holds a marker for this network's name with a different network id:
+  refuse with its own code. This is an earlier release's data after a
+  regenesis, and the fix is a fresh `data-dir`.
 - It holds a daemon store and no marker: refuse likewise. The directory is
   never marked after the fact.
 
@@ -270,7 +283,8 @@ cutover:
 - `/out_peers` and its console command are deleted with the option.
 
 Each refuses exactly as the startup parse does. The live value belongs to
-its owner, and no request writes the config file.
+its owner, and no request writes the config file. Under the Part B ruling
+these handlers become one set and one show request (§1.2, DC-Q16).
 
 ### 2.8 The clearnet public address (DC-Q10)
 
@@ -305,6 +319,26 @@ C++ keeps today's defaults as constants until their lanes decide.
 slice that moves a reader deletes its field. If the pre-flight finds a C++
 reader of the advertised address surviving PR-3, it is a twelfth field,
 recorded there.
+
+### 2.10 The notify runner (DC-Q14)
+
+A Rust runner owns the three commands. Each C++ event site pushes the
+event's facts through one FFI call per kind (a new block: height and hash;
+a reorganization: split height, new height, blocks added, blocks removed;
+a block-rate warning: the window in seconds, the observed and the expected
+counts). The push hands the facts to the runner and returns: it never
+blocks the chain path. The runner:
+
+- runs the row's argument array with its `{name}` placeholders filled
+  (IG-Q5), with no shell;
+- clears the environment, the rule the Tor launcher already follows
+  ([`rust/shekyl-tor-control-client/src/control/actor.rs:883`](../../rust/shekyl-tor-control-client/src/control/actor.rs));
+- gives the child a null standard input and no inherited descriptors;
+- reaps its own children and never changes a process-wide signal
+  disposition (DC-F12);
+- keeps at most one command in flight per kind; an event that arrives
+  while one runs is coalesced or dropped, and each drop is counted in a log
+  line. Today every event spawns without bound.
 
 ---
 
@@ -387,7 +421,8 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | the environment levers | `rg -n -e 'getenv("SHEKYL_' src/cryptonote_core/blockchain.cpp` → 2; `rg -n -e 'env::var("SEEDHASH_' rust/shekyl-ffi/src/pow_randomx_ffi.rs` → 4; `rg -n -e 'getenv("RPC_LOGIN")' src/rpc` → 1 | 0; the four `dev-` levers replace them, and Rust arms the schedules from its section |
 | the carrier global | `rg -n -e 'set_carrier_development' src` → more than 2 | 0; the relay reads `dev-relay-cover` |
 | `tools::set_max_concurrency` from the daemon | [`src/daemon/main.cpp:310-311`](../../src/daemon/main.cpp) | gone with `main.cpp`'s parse |
-| the C++ notify parsing | [`src/common/notify.cpp:52`](../../src/common/notify.cpp) splits a command string on whitespace | gone under DC-Q14's recommendation |
+| the C++ notify path | [`src/common/notify.cpp:52`](../../src/common/notify.cpp) splits a command string on whitespace; [`src/common/spawn.cpp:124`](../../src/common/spawn.cpp) sets `SIGCHLD` to ignored for the whole process (DC-F12) | `tools::Notify` and the daemon's use of `tools::spawn` gone; `rg -n -e 'SIGCHLD' src/daemon src/cryptonote_core src/common/notify.cpp` → 0 for the daemon (the runner is Rust's, DC-Q14) |
+| the C++ signal owner and orchestration (DC-Q13) | [`src/daemon/daemon.cpp:272`](../../src/daemon/daemon.cpp) installs `tools::signal_handler`; `Daemon::run`, `t_internals` and `main.cpp`'s body orchestrate the start | `rg -n -e 'signal_handler::install' src/daemon` → 0; the orchestration replaced by the remnant's `run(snapshot)` and `stop()`; `main.cpp` is one call |
 | `utils/conf/shekyld.conf` | the file exists; cited at [`docs/USER_GUIDE.md:131-133`](../USER_GUIDE.md) | gone |
 | `scripts/ci/check_carrier_flag_hidden.sh` | exists | replaced by a table test that `dev-relay-cover` is hidden and refused on mainnet |
 | C++ tests of the deleted mechanism | `tests/unit_tests/command_line.cpp:52-104`, `tests/unit_tests/rpc_args_daemon_surface.cpp` | deleted; `IsYes` stays |
@@ -468,6 +503,7 @@ exit status is 2.
 | the data directory cannot be created, or is not a directory | refuse, naming the path and the OS error |
 | the data directory is locked by another daemon (DC-N1) | refuse, naming the directory |
 | the marker names another network | refuse, naming both networks and the fix (§2.6) |
+| the marker names this network with a different network id | refuse with its own code: an earlier release's data after a regenesis; use a fresh `data-dir` |
 | a daemon store with no marker | refuse; the directory is never marked after the fact |
 | the log location cannot be written | refuse, naming the path |
 | the ban file cannot be read, or a line does not parse | refuse, naming the file and the line |
@@ -522,9 +558,11 @@ exit status is 2.
 
 ## 9. Sequencing and pre-flight
 
-One cutover PR, based on PR-3 after it merges, after §1.2 is ruled. It
+One cutover PR, based on PR-3 after it merges, once Part B is folded in and
+DC-Q16 is ruled (§1.2). It
 lands the table, the parse, the sections, the lock, the marker, logging in
-Rust, the announcements, the Rust `main()`, the one RPC start, every Rust
+Rust, the announcements, the Rust `main()` and the remnant's entry pair,
+the notify runner, the one RPC start, every Rust
 owner reading its section, the snapshot, the runtime handlers of §2.7,
 every deletion of §4, every launcher of §5.1 in this repository, and the
 generated documentation. The blockchain utilities keep their option sets;
@@ -543,6 +581,9 @@ before the first production commit:
 3. Read the daemon-store set for the marker (§2.6) at that pin.
 4. Rule 17 at source for every crate the parse and the checks need beyond
    `shekyl-options`.
+5. Demonstrate DC-F12 with a test before the runner replaces the C++ path:
+   a notify spawn through `tools::spawn`, then the managed Tor's exit, whose
+   `child.wait()` does not return its status.
 
 Interactions: RT-W10 takes `rpc-listen` from reserved to live and makes
 `rpc-admin-listen` a REJECTED row; RT-16 adds the service run mode on top of
@@ -565,7 +606,7 @@ chain-sync lanes do not touch the option surface.
 
 ---
 
-## 11. Findings established at source (DC-F1…DC-F11)
+## 11. Findings established at source (DC-F1…DC-F12)
 
 | Id | Finding | Route |
 | --- | --- | --- |
@@ -580,6 +621,7 @@ chain-sync lanes do not touch the option surface.
 | DC-F9 | A list given on both surfaces kept only the command line's, undocumented | absorbed: IG-6 makes it the rule |
 | DC-F10 | A `*` origin aborts the daemon after its log says RPC started. `shekyl_daemon_rpc_start` returns a handle and spawns the server ([`rust/shekyl-daemon-rpc/src/ffi_exports.rs:208-212`](../../rust/shekyl-daemon-rpc/src/ffi_exports.rs)); the task builds the CORS layer ([`rust/shekyl-daemon-rpc/src/server.rs:87-115`](../../rust/shekyl-daemon-rpc/src/server.rs)); tower-http 0.6.8 panics on a wildcard passed to `AllowOrigin::list` (its `allow_origin.rs`, lines 60 to 64, read at source); the workspace builds with `panic = "abort"` in both profiles (`rust/Cargo.toml`, lines 671 to 676), so the process ends; no panic hook is installed, so the reason reaches standard error only. Entries that are not valid header values are logged and dropped ([`rust/shekyl-daemon-rpc/src/server.rs:100-102`](../../rust/shekyl-daemon-rpc/src/server.rs)) | absorbed: the origin kind refuses both at parse |
 | DC-F11 | A list option with no values was "present" to the C++: the vector semantic installs an empty default ([`src/common/command_line.h:179-183`](../../src/common/command_line.h)) and `has_arg` tests the map entry ([`src/common/command_line.h:256-262`](../../src/common/command_line.h)), so every start declared a closed network with no peers. PR-3 reads an empty declaration as none on the Rust side (`6fc926404`) | absorbed: the closed-network declaration is absent or non-empty |
+| DC-F12 | The first notify command switches child reaping off for the whole process. `tools::spawn` sets `signal(SIGCHLD, SIG_IGN)` after a spawn it does not wait for ([`src/common/spawn.cpp:124`](../../src/common/spawn.cpp)); from then on the kernel reaps every child, the managed Tor included, which the Rust side waits on ([`rust/shekyl-tor-control-client/src/control/actor.rs:616`](../../rust/shekyl-tor-control-client/src/control/actor.rs), [`:1011`](../../rust/shekyl-tor-control-client/src/control/actor.rs)). Under tokio 1.51.0 on Linux the pidfd reaper's wait then fails with `ECHILD` instead of an exit status; on macOS and FreeBSD the `SIGCHLD` handler tokio relies on is overwritten and the wait never completes | absorbed: the Rust runner reaps its own children and never changes a signal disposition (§2.10); pre-flight demonstrates it (§9) |
 
 ---
 
@@ -601,8 +643,9 @@ ruled. Read rules 00, 06, 08, 17, 19, 20, 22, 23, 25, 26, 35, 36, 40, 45,
 47, 50, 71, 82, 83, 90, 94 and 95, and `INPUT_GRAMMAR.md`, before the first
 commit.
 
-1. **Preconditions.** PR-3 is on `dev`, and DC-Q13, DC-Q14 and DC-Q15 are
-   ruled. Stop and ask if either is not true.
+1. **Preconditions.** PR-3 is on `dev`; the grammar's Part B is on `dev`
+   and folded into this brief; DC-Q16 is ruled. Stop and ask if any is not
+   true.
 2. **Worktree and branch.** One worktree off `dev`; stage explicit paths;
    push each commit to the open PR after merging `dev`; no attribution
    trailers or footers.
@@ -610,11 +653,12 @@ commit.
 4. **Commit order, every commit building:** (a) the daemon's table in
    `shekyl-options` terms, the parse, the file checks, the sections, the
    lock and the marker, with a test for every §6 row; (b) the Rust
-   `main()`, logging in Rust, the announcements, the snapshot and its
-   field-count gate, the C++ remnant's one entry; (c) every Rust owner
+   `main()` and its one signal owner, logging in Rust, the announcements,
+   the snapshot and its field-count gate, the remnant's `run(snapshot)` and
+   `stop()` pair, `noexcept` and exception-catching; (c) every Rust owner
    reading its section, the one RPC start, every configuration parameter
    removed from every start function, the FFI header and its signature gate
-   green; (d) the runtime handlers of §2.7; (e) every §4.2 deletion, with
+   green; (d) the runtime handlers of §2.7 and the notify runner of §2.10; (e) every §4.2 deletion, with
    its before and after counts in the commit message; (f) every launcher,
    the generated documentation and its gate; (g) the index and FOLLOWUPS
    rows of §10.
