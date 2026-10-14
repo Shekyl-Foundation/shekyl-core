@@ -1,6 +1,6 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — Round 0 brief, held (2026-10-14; DC-Q13…DC-Q15 ruled the same day).** Rule 26 is cited.
+**Status: OPEN — Round 0 brief, held (2026-10-14; DC-Q13…DC-Q17 ruled the same day).** Rule 26 is cited.
 The input grammar's Part A is ruled and merged (#1067, merge `7cf70b7052`):
 its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
@@ -10,8 +10,8 @@ of that draft: the C++ is not canonical, so the configuration is designed in
 Rust and the C++ appears only as what the cutover deletes. The brief owns
 the mechanism. Option names, kinds, defaults, surfaces and diagnostic codes
 are the grammar's and are cited, never restated. No implementation starts
-until PR-3 (#1056) merges, the grammar's Part B (#1068) merges and is
-folded in, and DC-Q16 and DC-Q17 (§1.2) are ruled.
+until PR-3 (#1056) merges and the grammar's Part B (#1068) merges with the
+run-mode row of DC-Q17 and is folded in (§1.2).
 
 Anchors pinned to `dev` `7cf70b7052` (2026-10-14; the option surface is
 unchanged from `737da31276`, where the Round 0 read-out was taken). PR-3
@@ -52,8 +52,11 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
 | DC-Q14 (Rick, 2026-10-14) | A Rust runner owns the notify commands, fed chain facts by the C++ event sites (requirements in §2.10; the reaping hazard it removes is DC-F12) | §2.10, §4.2 |
 | RT-16, Windows service mode (Rick, 2026-10-13; recorded by the Windows lane for [`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16, not yet on `dev`) | `shekyld` itself answers the Windows Service Control Manager, in Rust, entered only through RT-16's declared service-mode switch, which is a daemon-config option. No wrapper process and no self-registration: installing is the installer's and `shekyl-cli`'s, and restart on failure is the SCM's failure actions, set at install. On POSIX nothing changes: systemd and launchd run the foreground process. A run-as-user daemon's home is always per-user (`%LOCALAPPDATA%` on Windows, never the roaming profile, whatever the token); a machine-wide home exists only in the declared service mode, and only when the installer created it. The SCM dispatcher needs the process entry, which is this lane's (DC-Q13) | §2.2, §2.4, §2.5, DC-Q17 |
 | DC-Q15 (Rick, 2026-10-14) | The lock is `shekyld.lock` at the data directory's root, held through `flock` or `LockFileEx` and never deleted on exit. The marker is `shekyld.network` (TOML content, not a `.toml` name, so it is not mistaken for operator configuration), holding `network` and `network-id`, written by temporary file, `fsync`, rename and directory `fsync`, read only under the lock. Its refusals tell another network apart from the same network with a different network id (an earlier release's data after a regenesis: use a fresh `data-dir`) | §2.2, §2.6, §6 |
+| DC-Q16 (Rick, 2026-10-14) | One generic set request and one generic show request, carrying the option's name and its value as text in the grammar's syntax, parsed by the table and routed to the row's owner. Show never returns a secret, only that it is set. Both need the admin grant by default; a row may declare itself visible at the view grant, and otherwise the view grant sees nothing. Set accepts only rows marked Runtime and refuses any other with a code saying it is startup-only. Show reports each value's source (`default`, `file`, `cli`, `runtime`). The RPC lane names the methods | §2.7, §6 |
+| DC-Q17 (Rick, 2026-10-14) | (1) The run mode is an option of the closed-set kind, command-line only: it selects the config root, so the file cannot set it, and a file key is refused. The grammar round names it. (2) The config-file default follows the run mode on every platform: in service mode the system root (`/etc/shekyl` on Unix, the installer-created `%ProgramData%\Shekyl` on Windows); in user mode the per-account root (the home's `.shekyl` on Unix, `FOLDERID_LocalAppData\Shekyl` on Windows). A directory that fails the allowlist of §2.4 is refused, never read | §2.4, §2.5, §6 |
+| RT-W14's start reporting (Rick, 2026-10-14) | Under the SCM the Rust entry reports `SERVICE_START_PENDING` with checkpoints and wait hints through steps 2 to 8 of §2.2, and `SERVICE_RUNNING` only when RT-15's rendezvous is published. Without it the SCM's start timeout of about 30 seconds kills the service (error 1053): the managed Tor's bootstrap alone may take 300 seconds ([`src/p2p/net_node.inl:892`](../../src/p2p/net_node.inl)) | §2.2 |
 
-### 1.2 Open, for Rick to rule before implementation
+### 1.2 Open before implementation
 
 - **The grammar's Part B (#1068, open).** Rick's Part B ruling of
   2026-10-14 changes IG-12 and two names this brief uses: a runtime value is
@@ -63,26 +66,10 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
   `mine-address` and `mine-threads`; the per-account root on Windows is
   `FOLDERID_LocalAppData` plus `Shekyl`. This brief cites the merged Part A
   and is changed in one replacement when #1068 merges.
-- **DC-Q16 — the daemon's set and show requests.** Under the new IG-12 the
-  per-request handlers of §2.7 become one mechanism driven by the Runtime
-  column. RPC method names and wire shapes are outside the grammar's scope
-  (`INPUT_GRAMMAR.md` §1). **Recommendation:** one generic set request and
-  one generic show request, each carrying the option's name and its value
-  as text, parsed by the table's own parser and constructor and routed to
-  the row's owner, so marking a further option runtime needs no new
-  endpoint; the RPC lane names them.
-- **DC-Q17 — the service-mode switch and the Windows config path.** Two
-  facts from the RT-16 ruling meet the grammar. (1) RT-16's service-mode
-  switch is a daemon-config option, and neither the merged grammar nor
-  Part B has a row for it; the name `run-as-service` is taken by a REJECTED
-  row (`INPUT_GRAMMAR.md` §5), so the switch needs a new name and row from
-  the grammar round. (2) The grammar keeps the daemon's config-file default
-  at `%ProgramData%\shekyl` on Windows, while RT-16 allows a machine-wide
-  home only in the declared service mode and only when the installer
-  created it. **Recommendation:** the config-file default follows the run
-  mode: the per-account root for a run-as-user daemon, the
-  installer-created machine-wide directory in service mode; and in either
-  mode a directory that fails the allowlist of §2.4 is refused, never read.
+- **The run mode's name and row (DC-Q17).** The grammar round names the
+  option and adds its row; DC-Q16's per-row view visibility is a column of
+  the same table. Neither exists on `dev` or in #1068 at the time of
+  writing; `run-as-service` is a REJECTED name (`INPUT_GRAMMAR.md` §5).
 
 ---
 
@@ -120,13 +107,18 @@ What crosses the FFI after the cutover, and nothing else:
 
 1. `main()` calls `shekyl_daemon_main()`; Rust owns the process from here.
    Rust's entry catches its own panics and turns them into an exit status.
-   On Windows, when RT-16's service-mode switch is given, the entry
-   connects to the Service Control Manager's dispatcher before anything
-   else (the dispatcher itself is RT-W14's, built on this entry); outside
-   the SCM that connect fails and the start is refused (rule 82). A start
-   by the SCM without the switch fails in the SCM's own terms.
+   On Windows, in service mode (DC-Q17), the entry connects to the Service
+   Control Manager's dispatcher before anything else (the dispatcher is
+   RT-W14's, built on this entry); outside the SCM that connect fails and
+   the start is refused (rule 82). A start by the SCM in user mode fails in
+   the SCM's own terms. Under the SCM the entry reports
+   `SERVICE_START_PENDING`, with a checkpoint and a wait hint at each of
+   steps 2 to 8 below, and `SERVICE_RUNNING` only when RT-15's rendezvous
+   is published; the start takes longer than the SCM's default timeout of
+   about 30 seconds, and a service that reports no progress is killed
+   (error 1053).
 2. Rust reads its arguments with `std::env::args_os` (IG-Q2), resolves
-   `--network` and `--config-file`, checks the file's permissions (§2.4),
+   the run mode, `--network` and `--config-file`, checks the file's permissions (§2.4),
    reads and validates it whole, applies the command line over it per key,
    resolves every path (§2.5), reads the ban file, and constructs the typed
    sections. `--help` and `--version` are answered here. A refusal renders
@@ -187,10 +179,16 @@ restricted port, and `core_rpc_server::init`'s reading of options go.
 
 ### 2.4 The config file (DC-Q3)
 
-Location, precedence and the missing-file rule are the `config-file` row of
-`INPUT_GRAMMAR.md` §5: a missing file at the default per-network path is the
+The default location follows the run mode on every platform (DC-Q17): in
+service mode the system root (`/etc/shekyl` on Unix, the
+installer-created `%ProgramData%\Shekyl` on Windows), in user mode the
+per-account root (the home's `.shekyl` on Unix,
+`FOLDERID_LocalAppData\Shekyl` on Windows); the file in it is chosen by
+the network. Precedence and the missing-file rule are the `config-file` row
+of `INPUT_GRAMMAR.md` §5: a missing file at the default path is the
 defaults, stated in the effective-configuration line; a missing file at a
-path the operator named refuses with a code naming the path.
+path the operator named refuses with a code naming the path. The run mode
+and the network are command-line only, because they choose the file.
 
 The checks run in this order, so that no value from an unsafe file is ever
 read:
@@ -212,10 +210,11 @@ INTERACTIVE, a user's SID, CREATOR OWNER, Everyone, Users). The installer
 creates the directory with exactly that list. The read check for a secret
 uses the same allowlist.
 
-A run-as-user daemon that finds a system file is RT-16's case
-([`RPC_CHANNEL.md`](RPC_CHANNEL.md), RT-16): the checks above are the same
-in both run modes, and this slice decides nothing about which account owns
-the file.
+The checks above are the same in both run modes. In user mode the
+daemon's own account may write its file: whoever can write that account's
+files can already run code as it. In service mode only the system root is
+read, and only through the installer's restrictive list, which closes the
+pre-created-directory hole of §7 item 7.
 
 ### 2.5 Paths and secrets (DC-Q7, IG-13)
 
@@ -307,8 +306,19 @@ cutover:
 - `/out_peers` and its console command are deleted with the option.
 
 Each refuses exactly as the startup parse does. The live value belongs to
-its owner, and no request writes the config file. Under the Part B ruling
-these handlers become one set and one show request (§1.2, DC-Q16).
+its owner, and no request writes the config file.
+
+Under the Part B ruling these handlers become one generic set request and
+one generic show request (DC-Q16). Each carries an option's name and, for
+set, its value as text in the grammar's syntax; the table's own parser and
+constructor build the value and the request goes to the row's owner. Set
+accepts only a row marked Runtime and refuses any other with a startup-only
+code. Show reports each value with its source (`default`, `file`, `cli`,
+`runtime`), so an operator sees that a runtime change does not survive a
+restart, and shows a secret only as set. Both need the admin grant; a row
+may declare itself visible at the view grant, and the view grant sees no
+other row. The RPC lane names the two methods; `mine start` is the one
+request that still reaches C++.
 
 ### 2.8 The clearnet public address (DC-Q10)
 
@@ -374,7 +384,7 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 
 | Section | Owner | Holds | Replaces |
 | --- | --- | --- | --- |
-| paths | `shekyl-daemon-config` (lock, marker); core through the snapshot | the resolved data directory and log file, and their sources | `data-dir`, `log-file`, `config-file`, `os-version` (folded into `version`) |
+| paths | `shekyl-daemon-config` (lock, marker); core through the snapshot | the run mode (user or service, DC-Q17), the resolved data directory and log file, and their sources | `data-dir`, `log-file`, `config-file`, `os-version` (folded into `version`) |
 | logging | `shekyl-logging` | the level, the per-category levels, the disk budget for the live file and its archives (IG-Q19) | `log-level`, `max-log-file-size`, `max-log-files` |
 | network | `shekyl-daemon-config`, read by every owner | the network and its params row | `testnet`, `stagenet`, `regtest` |
 | clearnet connector | the zone host and the dialer | the posture: `Off`, or `On` with listen endpoints, an optional SOCKS endpoint with its credentials, and the advertised endpoints | `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6`, `p2p-ignore-ipv4`, `p2p-external-port`, `proxy`, and `offline` with the Tor connector |
@@ -521,7 +531,7 @@ exit status is 2.
 | an unknown name, on either surface | refuse with the nearest live name (IG-10) |
 | a REJECTED or RESERVED name | refuse with its reason (IG-10) |
 | a value its kind refuses: a range, a unit, `*` as an origin, a hostname as an endpoint, a relative path, a non-UTF-8 argument | refuse, naming the option, the source and the rule |
-| a value on a surface its row forbids: a secret or a command on the command line, `network` in the file | refuse, naming where it may be given |
+| a value on a surface its row forbids: a secret or a command on the command line, the network or the run mode in the file | refuse, naming where it may be given |
 | a `dev-` option on a network its row does not name, and on mainnet always (IG-8) | refuse |
 | no account home and no explicit paths | refuse, naming the options that fix it |
 | the data directory cannot be created, or is not a directory | refuse, naming the path and the OS error |
@@ -533,6 +543,8 @@ exit status is 2.
 | the ban file cannot be read, or a line does not parse | refuse, naming the file and the line |
 | a listener cannot bind | its owner refuses to start, naming the endpoint, and the daemon stops |
 | a runtime change the constructor refuses (§2.7) | the request fails with the code the startup parse would give; the daemon runs |
+| a set request for a row not marked Runtime | the request fails with the startup-only code; the daemon runs |
+| service mode outside the SCM (Windows) | refuse at entry, naming the run mode and how the service is started |
 
 ---
 
@@ -565,9 +577,9 @@ exit status is 2.
    the log path (an administrator's file write). Route: the auto-load and
    the elevation branch are deleted; a pre-created directory carries a
    write-granting entry for its creator, so the allowlist of §2.4 refuses
-   it rather than reading it; the installer creates the service mode's
-   directory, so that refusal is not left for an attacker to cause
-   (DC-Q17).
+   it rather than reading it; only service mode reads the system root,
+   and the installer creates it with the restrictive list, so that refusal
+   is not left for an attacker to cause (DC-Q17).
 
 ---
 
@@ -594,8 +606,8 @@ exit status is 2.
 
 ## 9. Sequencing and pre-flight
 
-One cutover PR, based on PR-3 after it merges, once Part B is folded in and
-DC-Q16 and DC-Q17 are ruled (§1.2). It
+One cutover PR, based on PR-3 after it merges, once Part B, with the run mode's
+row, is folded in (§1.2). It
 lands the table, the parse, the sections, the lock, the marker, logging in
 Rust, the announcements, the Rust `main()` and the remnant's entry pair,
 the notify runner, the one RPC start, every Rust
@@ -682,7 +694,7 @@ ruled. Read rules 00, 06, 08, 17, 19, 20, 22, 23, 25, 26, 35, 36, 40, 45,
 commit.
 
 1. **Preconditions.** PR-3 is on `dev`; the grammar's Part B is on `dev`
-   and folded into this brief; DC-Q16 and DC-Q17 are ruled. Stop and ask if any is not
+   with the run mode's row, and folded into this brief. Stop and ask if any is not
    true.
 2. **Worktree and branch.** One worktree off `dev`; stage explicit paths;
    push each commit to the open PR after merging `dev`; no attribution
