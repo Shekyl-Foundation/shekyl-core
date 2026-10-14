@@ -413,7 +413,9 @@ defense, but a `Debug` derive added later (or a `format!("{:?}",
 struct)` that pulled in a non-redacted field) bypasses it. The
 subscriber layer is a backstop. Tests assert that both layers fire.
 
-### Config file handling: TOML, layered precedence, XDG paths
+### Config file handling: TOML, layered precedence, XDG paths — SUPERSEDED 2026-10-13 (input grammar IG-13, R7)
+
+**Superseded 2026-10-13.** The environment layer (item 2) and the XDG paths are replaced by the input grammar's IG-13 and the config ruling R7, and `--config` becomes `--config-file`; see *2026-10-13 — Input grammar Part A ruled* below. TOML and the CLI-over-file precedence stand.
 
 `shekyl-wallet-rpc` and `shekyl-cli` read configuration from (in
 descending precedence):
@@ -6640,3 +6642,37 @@ daemon in a different cpu cgroup only part of its CPU back
    cannot break silently again.
 
 ---
+
+## 2026-10-13 — Input grammar Part A ruled: one grammar for every binary; no environment layer; `--config-file`
+
+**Decision (maintainer, 2026-10-13; recorded on PR #1067).** The rules
+IG-1…IG-15 of [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) are ruled
+and become the cursor rule
+[`83-input-grammar`](../.cursor/rules/83-input-grammar.mdc); the daemon's
+glossary subtree and name table are ruled with them, and the questions
+IG-Q1…IG-Q20 are ruled as recorded in that document's §8 (IG-Q20, ruled
+the same day, names PR-3's `--small-network` as the public row
+`p2p-disclose-early`).
+
+This entry **supersedes** *Config file handling: TOML, layered
+precedence, XDG paths* above, for `shekyl-wallet-rpc` and `shekyl-cli`:
+
+1. **No environment layer in any binary** (IG-13). No option value
+   comes from the environment; default paths come from the operating
+   system's account and known-folder interfaces, never from `HOME`,
+   `XDG_*` or `%APPDATA%`; the only environment reads are
+   presentation-only.
+2. **`--config` becomes `--config-file`** (R7): the network picks the
+   default file, `--config-file` replaces that path whole, the file is
+   validated whole before anything applies, ownership and permissions
+   are checked, and one startup line shows every effective value and
+   its source, a secret shown as set and never its value (IG-6).
+3. **TOML and the precedence CLI over file over defaults stand**; the
+   file's keys are the option names exactly, and a command-line list or
+   map replaces the file's whole.
+
+The wallet binaries' own name tables are Part B of the same round and
+are brought to the maintainer for ruling before anything lands.
+
+---
+
