@@ -1116,12 +1116,11 @@ carries an option's name and its value as text in the input grammar's
 syntax, built by the option table's own constructor, the one the startup
 parse uses, and routed to the row's Rust owner. The grammar side is
 `INPUT_GRAMMAR.md` IG-12 and IG-Q38. RPC method names and wire shapes are
-outside the grammar (`INPUT_GRAMMAR.md` §1), so they are this round's. The
-daemon-config lane's brief posed them as RQ-1…RQ-5, numbered here
-RT-O23…RT-O27. The implementing PR is the daemon-config cutover's; it
+outside the grammar (`INPUT_GRAMMAR.md` §1), so they are this round's,
+as `RT-O23…RT-O27`. The implementing PR is the daemon-config cutover's; it
 cites this section.
 
-**RT-O23 — names (RQ-1).** `option_set` and `option_show`: the grammar's
+**RT-O23 — names.** `option_set` and `option_show`: the grammar's
 own words (`option set`, `option show`, IG-3), so what an operator types
 and what a script calls are the same terms. One spelling each, no alias,
 as `request_archival_shard` was born
@@ -1129,7 +1128,7 @@ as `request_archival_shard` was born
 **JSON-RPC methods only, with no REST path:** one way to call each, not
 two. Every route they replace is a REST path today.
 
-**RT-O24 — grants (RQ-2).**
+**RT-O24 — grants.**
 
 - **`option_set` is in `node`.** Every endpoint it replaces is in `node`
   today. Because the method is generic, marking a row runtime later
@@ -1184,7 +1183,7 @@ two. Every route they replace is a REST path today.
   a value that can become a grant, so RT-W10 maps a connection's grants
   onto it without rewriting the handler.
 
-**RT-O25 — wire shape (RQ-3).**
+**RT-O25 — wire shape.**
 
 - **`option_set`** takes `{"options": [{"name": …, "value": …}, …]}`; each
   value is text in the grammar's syntax (`"512KiB/s"`, `"unlimited"`,
@@ -1249,7 +1248,7 @@ two. Every route they replace is a REST path today.
   bumps `CORE_RPC_VERSION` for both. A call outside the caller's grant is
   refused as §6.2 says; that code is RT-W10's, not minted here.
 
-**RT-O26 — where the handlers live (RQ-4).** Both handlers are native in
+**RT-O26 — where the handlers live.** Both handlers are native in
 `shekyl-daemon-rpc` and never cross into C++. They take an options handle
 supplied by the composition root (`shekyl-daemon-image`), in the shape
 `request_archival_shard`'s facts already have (`AppState::shard_view`,
@@ -1257,7 +1256,7 @@ supplied by the composition root (`shekyl-daemon-image`), in the shape
 crate depends on the options interface, not on the subsystems; the
 composition root wires each runtime row to its owner. No new FFI.
 
-**RT-O27 — what a change leaves behind (RQ-5).**
+**RT-O27 — what a change leaves behind.**
 
 - **One lock for the whole set operation**, not one per row. Per-row
   locking breaks all-or-nothing: two multi-row sets, one ordered
@@ -1320,7 +1319,8 @@ key; paired with an eclipse, it lets someone rewind a node and then feed
 it a chain. *Today,* the route is admin-only on every network, with no
 network gate
 ([`server.rs:352-356`](../../rust/shekyl-daemon-rpc/src/server.rs)); the
-helper's comment calling it FAKECHAIN-gated is wrong. **Reopen (rule 21):**
+helper's comment calling it FAKECHAIN-gated is wrong. The
+daemon-configuration cutover records the same as DC-F14 (PR #1066). **Reopen (rule 21):**
 a demonstrated operator recovery need returns it as a ruled capability.
 
 ---
