@@ -335,14 +335,35 @@ supplies, with no FFI (RT-O26):
   RT-W10 it joins `RESTRICTED_METHODS`
   ([`rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs:49`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs)),
   so the view listener refuses it. It never writes the config file.
-- **All or nothing needs an apply that cannot fail.** Every refusal lives
-  in the constructors; each owner's runtime interface takes a built value
-  and returns nothing that can fail (RT-O25). The logging owner does not
-  meet this yet: its filter is swapped through a reload handle whose
-  `reload` returns a `Result`, reachable only through the FFI module
+- **Build, check, apply: all or nothing under one lock** (Rick, 2026-10-14).
+  A value can be refused for two reasons: its own invariants, and the
+  owner's live state. `p2p-inbound-max` has both: its value must be at
+  least 1, and it must not exceed the descriptor ceiling, which is runtime
+  state
+  ([`src/p2p/net_node.inl:3229`](../../src/p2p/net_node.inl);
+  `InboundCeiling::resolve(snapshot, reserved, inbound_held)`,
+  [`rust/shekyl-peer-policy/src/inbound_ceiling.rs:98`](../../rust/shekyl-peer-policy/src/inbound_ceiling.rs)).
+  So a set runs three steps under its one lock:
+  1. **build**: every value through its constructor, value-only
+     invariants;
+  2. **check**: each owner tests its built value against its live state,
+     with no side effect, and may refuse;
+  3. **apply**: each owner takes the checked value and cannot fail.
+
+  Every refusal, from either of the first two steps, is reported before
+  anything is applied, so the set is all or nothing. The startup parse
+  runs the same check step against the state at startup: one rule on both
+  surfaces (IG-12). The logging owner's apply does not meet step 3 yet:
+  its filter is swapped through a reload handle whose `reload` returns a
+  `Result`, reachable only through the FFI module
   ([`rust/shekyl-logging/src/ffi.rs:639`](../../rust/shekyl-logging/src/ffi.rs)).
   The cutover gives `shekyl-logging` a Rust interface that holds the
-  handle for the life of the process.
+  handle for the life of the process and cannot fail.
+- **What a change does to traffic already running.** Lowering
+  `p2p-inbound-max` below the current inbound count refuses new inbound
+  until the count falls under the cap, and never cuts an existing session;
+  the audit line records the count at the change. A rate limit takes
+  effect on the next transfer and never aborts one in flight.
 - **Defaults are values.** Every runtime row's default can be written back:
   `p2p-inbound-max` takes `none` for no operator cap and `log-category`
   takes `none` for no per-category overrides. An empty category list never
@@ -637,7 +658,7 @@ exit status is 2.
 | the log location cannot be written | refuse, naming the path |
 | the ban file cannot be read, or a line does not parse | refuse, naming the file and the line |
 | a listener cannot bind | its owner refuses to start, naming the endpoint, and the daemon stops |
-| a runtime change the constructor refuses (§2.7) | the request fails with the code the startup parse would give; the daemon runs |
+| a runtime change that its constructor or its owner's check refuses, such as an inbound cap above the descriptor ceiling (§2.7) | the request fails with the code the startup parse would give, nothing in it is applied, and the daemon runs |
 | a set request for a row not marked Runtime | the request fails with the startup-only code; the daemon runs |
 | `service` outside the SCM (Windows) | refuse at entry, naming how the service is started |
 | `service` on Linux, FreeBSD or macOS | refuse with its typed code: the platform's service manager runs the foreground process |
