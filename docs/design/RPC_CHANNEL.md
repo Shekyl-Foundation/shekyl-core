@@ -1158,9 +1158,13 @@ two. Every route they replace is a REST path today.
   (`INPUT_GRAMMAR.md` §5), so every row starts as `config`, and no
   decision anyone has made about a specific row changes. Changing the
   field's shape now costs nothing; changing it later would be a
-  migration. **It changes IG-9, so it needs the same word in the grammar
-  lane.** The `status` assignments listed above are the second decision
-  that word carries. *From the tree:* the direction named rate limits, the
+  migration. **The grammar side lands in PR #1074**, ruled by Rick the
+  same day: IG-9's `view` field becomes the row's disclosing grant, with a
+  Grant column in `INPUT_GRAMMAR.md` §5 carrying the `status` assignments
+  listed above, and IG-12 and IG-Q38 move `option set` from the admin
+  grant to `node`. Until #1074 merges, `dev`'s grammar still says
+  `view` and admin; the two PRs are one decision and merge together.
+  *From the tree:* the direction named rate limits, the
   inbound cap and log level; `log-category` is placed beside `log-level`
   here, since today one filter holds both
   ([`filter.rs:107-131`](../../rust/shekyl-logging/src/filter.rs)).
@@ -1213,7 +1217,25 @@ two. Every route they replace is a REST path today.
   3. **apply**: each owner takes the checked value and **cannot fail**.
 
   Every refusal, from either of the first two steps, is reported before
-  anything is applied, so the set is all or nothing. The startup parse
+  anything is applied, so the set is all or nothing. **What all or
+  nothing promises:** every row of a request is applied or none is, and no
+  reply and no `option_show` ever sees part of a request, since both run
+  under the lock. Each owner applies all of its own rows from one request
+  in one step: the link limiter takes both rates at once. Across owners
+  the apply is a sequence, not one instant, so a transfer may meet a new
+  rate a moment before the log level changes. That is safe because no
+  invariant spans two owners. A runtime row whose validity depends on
+  another owner's row is refused when the table is reviewed, which RT-O24
+  already makes a grant decision, or it moves to the other row's owner.
+  One configuration snapshot read by every owner was weighed and is not
+  used: it would make the live value the snapshot's rather than the
+  owner's (DC-Q16), and couple every subsystem to one shared object.
+  **The check reads a moment's state.** The inbound ceiling can move
+  between check and apply as descriptors are taken and released. That
+  cannot make the applied cap unsafe: the transport layer's ceiling bounds
+  admission whatever the cap (`INPUT_GRAMMAR.md` §5, the `p2p-inbound-max`
+  row). The check exists so that an operator is told a cap would have no
+  effect. The startup parse
   runs the same check against the state at startup: one rule on both
   surfaces (IG-12). *From the tree:* today `/in_peers` keeps the old cap
   when the new one exceeds the ceiling, writes a log line and still
@@ -1240,7 +1262,8 @@ two. Every route they replace is a REST path today.
   `name`, `source` (`default`, `file`, `cli` or `runtime`), `runtime`
   (whether `option_set` accepts it), and then one of two forms:
   - **a value row** carries `value`: the value as text in the grammar's
-    syntax, or `null` when the row has no value (unset);
+    syntax, or `null` when the row has no value (unset). A runtime row is
+    never `null`, because its default is a value (below);
   - **a secret row** carries no `value` member. It carries `secret: true`
     and `set: true` or `false`. A secret's text is never sent.
 
@@ -1250,17 +1273,20 @@ two. Every route they replace is a REST path today.
   but may not see is absent from the reply; an unknown name is refused.
 - **What `option_show` prints, `option_set` accepts.** The text shown for
   a value is valid input to `option_set` and builds the same value. A
-  property test over every runtime row holds this. *Found against the
-  grammar, for its lane:* two runtime rows default to unset with no way to
-  write "unset" as a value: `p2p-inbound-max` (integer ≥ 1, default unset)
-  and `log-category` (a map, default unset) (`INPUT_GRAMMAR.md` §5). An
-  operator who sets either cannot return it to its default without a
-  restart. **Every runtime row's default must be expressible as a value**,
-  like `unlimited`. For `log-category`, the inherited runtime path reads an
-  empty category list as "logging off"
+  property test over every runtime row holds this. **Every runtime row's
+  default is a value**, written as text like any other: `unlimited` for a
+  rate, and `none` for `p2p-inbound-max` (no operator cap) and
+  `log-category` (no per-category overrides). So `option_show` never
+  prints `null` for a runtime row, and the property needs no special
+  case. `null` appears only on a row that is not runtime and has no
+  value, and `option_set` refuses such rows anyway. *Found against the
+  grammar:* on `dev` both rows default to unset with no way to write it
+  (`INPUT_GRAMMAR.md` §5), so an operator who set either could not return
+  it to its default without a restart. The spelling `none` is the
+  grammar's, ruled the same day as IG-Q39 in PR #1074. For `log-category`,
+  the inherited runtime path reads an empty category list as "logging off"
   ([`filter.rs:155-162`](../../rust/shekyl-logging/src/filter.rs)), an
-  in-band meaning (rule 43) that the generic set must not inherit. Its
-  "no overrides" needs its own spelling.
+  in-band meaning (rule 43) that the generic set does not inherit.
 - **Errors.** A configuration refusal carries the IG-11 diagnostic: its
   stable code (`config.value.range`, the startup-only refusal, …), the
   option, the source (`runtime`) and the named parameters. Its human
