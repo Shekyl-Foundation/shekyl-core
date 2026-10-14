@@ -1,8 +1,8 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — Round 0 brief, held (2026-10-14; DC-Q13…DC-Q18 ruled the same day).** Rule 26 is cited.
-The input grammar's Part A is ruled and merged (#1067, merge `7cf70b7052`):
-its rules are the cursor rule
+**Status: OPEN — Round 0 brief, complete and held for PR-3 (2026-10-14; every DC-Q ruled, the grammar's Part B folded in).** Rule 26 is cited.
+The input grammar is ruled and merged: Part A (#1067, merge `7cf70b7052`)
+and Part B (#1068, merge `cd1d0cc8ed`). Its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
 daemon's names are [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) §5. This brief is
 the single replacement of the 2026-10-13 draft, written under Rick's review
@@ -10,12 +10,11 @@ of that draft: the C++ is not canonical, so the configuration is designed in
 Rust and the C++ appears only as what the cutover deletes. The brief owns
 the mechanism. Option names, kinds, defaults, surfaces and diagnostic codes
 are the grammar's and are cited, never restated. No implementation starts
-until PR-3 (#1056) merges and the grammar's Part B (#1068) merges with the
-`service` row and the `view` field, and is folded in (§1.2).
+until PR-3 (#1056) merges (§1.2).
 
-Anchors pinned to `dev` `7cf70b7052` (2026-10-14; the option surface is
+Anchors pinned to `dev` `cd1d0cc8ed` (2026-10-14; the option surface is
 unchanged from `737da31276`, where the Round 0 read-out was taken). PR-3
-citations are branch citations at `8359ef5312` (`feat/p2p3-dialer-cutover`)
+citations are branch citations at `422361000c` (`feat/p2p3-dialer-cutover`)
 and are written without a leading `src/` or `rust/`, so the pinned-anchor
 gate does not resolve them against `dev`. §9's pre-flight re-pins both at
 the implementation pin.
@@ -48,6 +47,7 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
 | DC-Q12 | One cutover for the parse surface and every Rust consumer, based on PR-3 after it merges. The blockchain utilities keep their own option sets until IG Part B | §9 |
 | Review of `057112b2` (Rick, 2026-10-13) | §3 is the Rust typed configuration by section with a "replaces" column; the C++ list lives only in §4. One RPC start call carrying the core handle. No configuration or Rust-derived value crosses to the zone host. The Rust-ownable runtime changes call their Rust owners. A Windows permission allowlist. §6 lists only failures the types cannot prevent. The snapshot recounted after IG-Q4 | throughout |
 | Grammar §0 (Rick, 2026-10-13; merged with #1067) | `shekyld`'s process entry, `main()`, moves to Rust in this lane (the Windows service round, RT-16) | §2.2, DC-Q13 |
+| The grammar's Part B (Rick, 2026-10-14; merged with #1068) | IG-12's contract: a row is marked runtime (`yes` or `no`, IG-9) and changed with `option set`, read with `option show`, whose sources include `runtime`; mining changes while running through `mine start` and `mine stop`, so `mine-address` and `mine-threads` are not runtime. IG-9's row gains `view` (DC-Q16). `mine` is the subject everywhere (IG-Q21). IG-13 per platform: one per-account root (the passwd home plus `.shekyl` on Linux, FreeBSD and macOS; `FOLDERID_LocalAppData` plus `Shekyl` on Windows); on Windows the run mode selects the daemon's root; on Linux, FreeBSD and macOS the config file is `/etc/shekyl/` and the data and log defaults sit under the per-account root. The daemon console's catalog (`INPUT_GRAMMAR.md` §13: `daemon status`, `daemon stop`, no successor for `pop_blocks`); the C++ console is not renamed and dies with R8 (IG-Q25). The utilities' fate (§14.1, IG-Q26) | §2.4, §2.5, §2.7, §2.9, §3, §4.2, §9 |
 | DC-Q13 (Rick, 2026-10-14) | (b): CMake builds the executable and its `main` makes one call into Rust, which owns the process. The C++ remnant exposes one coarse entry pair, `run(snapshot)` returning a status and `stop()`, both `noexcept` and catching every C++ exception, so none unwinds through Rust frames. Rust's entry catches its own panics into an exit status. One signal owner, Rust: `tools::signal_handler::install` is deleted from `Daemon::run`. The pair replaces the orchestration in `main.cpp` and `daemon.cpp`, and the C++ shrinks | §2.2, §4.2 |
 | DC-Q14 (Rick, 2026-10-14) | A Rust runner owns the notify commands, fed chain facts by the C++ event sites (requirements in §2.10; the reaping hazard it removes is DC-F12) | §2.10, §4.2 |
 | RT-16, Windows service mode (Rick, 2026-10-13; [`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16, its Consequences as landed by #1070, with the verbatim record `docs/completed/WINDOWS_SERVICE_RULING_2026-10-13.md` in the same PR) | `shekyld` itself answers the Windows Service Control Manager, in Rust, entered only through RT-16's declared service-mode switch, which is a daemon-config option. No wrapper process and no self-registration: installing is the installer's and `shekyl-cli`'s, and restart on failure is the SCM's failure actions, set at install. On POSIX nothing changes: systemd and launchd run the foreground process. A run-as-user daemon's home is always per-user (`%LOCALAPPDATA%` on Windows, never the roaming profile, whatever the token); a machine-wide home exists only in the declared service mode, and only when the installer created it. The SCM dispatcher needs the process entry, which is this lane's (DC-Q13) | §2.2, §2.4, §2.5, DC-Q17 |
@@ -60,14 +60,13 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
 
 ### 1.2 Open before implementation
 
-- **The grammar's Part B (#1068, open).** Rick's Part B ruling of
-  2026-10-14 changes IG-12 and two names this brief uses: a runtime value is
-  marked in a Runtime column and changed with `option set` and read with
-  `option show` (source `runtime`); mining starts and stops with `mine
-  start` and `mine stop`; `mining-address` and `mining-threads` become
-  `mine-address` and `mine-threads`; the per-account root on Windows is
-  `FOLDERID_LocalAppData` plus `Shekyl`. This brief cites the merged Part A
-  and is changed in one replacement when #1068 merges.
+- **PR-3 (#1056) merging.** The brief stays a draft until then (Rick,
+  2026-10-14); its branch citations are re-pinned to the merged lines then.
+- **The names of the set and show requests.** The RPC lane names them
+  (DC-Q16); the implementing PR needs them, the brief does not.
+- **#1070 merging** turns the RT-16 record's path in §1.1 into a link. No
+  design depends on it.
+
 ---
 
 ## 2. The mechanism
@@ -108,8 +107,9 @@ What crosses the FFI after the cutover, and nothing else:
    Service Control Manager's dispatcher before anything else (the dispatcher is
    RT-W14's, built on this entry); outside the SCM that connect fails and
    the start is refused (rule 82). A start by the SCM without `service` fails
-   in the SCM's own terms. On Linux and macOS `service` is refused with a
-   typed code: systemd and launchd run the foreground process. Under the SCM the entry reports
+   in the SCM's own terms. On Linux, FreeBSD and macOS `service` is refused
+   with a typed code: the platform's service manager runs the foreground
+   process. Under the SCM the entry reports
    `SERVICE_START_PENDING`, with a checkpoint and a wait hint at each of
    steps 2 to 8 below, and `SERVICE_RUNNING` only when RT-15's rendezvous
    is published; the start takes longer than the SCM's default timeout of
@@ -177,8 +177,8 @@ restricted port, and `core_rpc_server::init`'s reading of options go.
 
 ### 2.4 The config file (DC-Q3)
 
-The default location (DC-Q17): on Linux and macOS the `/etc/shekyl/`
-files in every mode (R2); on Windows the root of the run mode, the
+The default location (DC-Q17, IG-13): on Linux, FreeBSD and macOS the
+`/etc/shekyl/` files, the daemon having one run mode there (R2); on Windows the root of the run mode, the
 per-account root (`FOLDERID_LocalAppData`) for a run-as-user daemon and
 the installer-created `%ProgramData%\shekyl\` with `service`. The file in
 the root is chosen by the network. Precedence and the missing-file rule are the `config-file` row
@@ -230,8 +230,10 @@ a typed code. That closes the pre-created-directory hole of §7 item 7.
 - The per-user runtime directory, when an owner needs one, comes from the
   platform's own interface (IG-Q14). This slice reads none; the socket
   directory of RT-W10 is RPC_CHANNEL's.
-- The default data directory is the home's `.shekyl` with the network's
-  subdirectory; an explicit `data-dir` is taken as given (DC-Q5). One
+- On Linux, FreeBSD and macOS the data and log defaults sit under the
+  per-account root, the passwd home's `.shekyl` (IG-13), while the config
+  file stays under `/etc/shekyl/`. The default data directory is the
+  root with the network's subdirectory; an explicit `data-dir` is taken as given (DC-Q5). One
   Windows rule: the admin-membership split in
   [`src/common/daemon_default_data_dir.cpp:79-98`](../../src/common/daemon_default_data_dir.cpp)
   is deleted with the file.
@@ -276,7 +278,7 @@ directory and both mark it. The cases:
   never marked after the fact.
 
 "A daemon store" is a closed set the pre-flight reads at the implementation
-pin. At `7cf70b7052` it is the LMDB environment
+pin. At `cd1d0cc8ed` it is the LMDB environment
 (`CRYPTONOTE_BLOCKCHAINDATA_FILENAME`,
 [`src/cryptonote_config.h:275`](../../src/cryptonote_config.h)) and the
 peer-state file (`P2P_NET_DATA_FILENAME`,
@@ -285,40 +287,35 @@ chain store joins it when the daemon opens one. The managed Tor's data
 directory is not a store. DC-F1, the check of a store's block 0 against the
 network, stays the chain-store lane's and does not block this cutover.
 
-### 2.7 Runtime changes (IG-12)
+### 2.7 Runtime changes (IG-12, DC-Q16)
 
 Today every runtime change is forwarded to the C++ JSON handlers through
 one dispatch
 ([`rust/shekyl-daemon-rpc/src/handlers/json.rs:82-91`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
-[`:389-395`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs)). After the
-cutover:
+[`:389-395`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs)), one
+endpoint per knob. After the cutover there is one generic set request and
+one generic show request, named by the RPC lane:
 
-- `/set_limit` builds the two rate values with the constructors of
-  `p2p-upload-max` and `p2p-download-max` and calls the link's Rust owner.
-- `/in_peers` builds the value with `p2p-inbound-max`'s constructor and
-  calls the zone host's admission owner.
-- `/set_log_level` and `/set_log_categories` build their values with the
-  constructors of `log-level` and `log-category` and call `shekyl-logging`.
-- `/start_mining` builds `mining-address` and `mining-threads` with their
-  constructors and is the only one that reaches C++, carrying the validated
-  values, until the miner moves to Rust.
-- `/out_peers` and its console command are deleted with the option.
+- **Set** carries an option's name and its value as text in the grammar's
+  syntax. The table's own parser and constructor build the value, exactly
+  as at startup, and the request goes to the row's Rust owner. It accepts
+  only a row marked runtime (`INPUT_GRAMMAR.md` §5: `p2p-upload-max`,
+  `p2p-download-max`, `p2p-inbound-max`, `log-level`, `log-category`) and
+  refuses any other with the startup-only code; it needs the admin grant
+  and never writes the config file.
+- **Show** reports each value with its source (`default`, `file`, `cli`,
+  `runtime`), so an operator sees that a runtime change does not survive a
+  restart; it shows a secret only as set; it returns every row at the admin
+  grant and, at the view grant, only rows whose `view` field is yes. Rows
+  that link the operator or describe the host never opt in.
+- **`mine start` and `mine stop`** build `mine-address` and `mine-threads`
+  through their constructors and are the one request that still reaches
+  C++, carrying validated values, until the miner moves to Rust.
 
-Each refuses exactly as the startup parse does. The live value belongs to
-its owner, and no request writes the config file.
-
-Under the Part B ruling these handlers become one generic set request and
-one generic show request (DC-Q16). Each carries an option's name and, for
-set, its value as text in the grammar's syntax; the table's own parser and
-constructor build the value and the request goes to the row's owner. Set
-accepts only a row marked Runtime and refuses any other with a startup-only
-code. Show reports each value with its source (`default`, `file`, `cli`,
-`runtime`), so an operator sees that a runtime change does not survive a
-restart, and shows a secret only as set. Set needs the admin grant. Show
-returns every row at the admin grant and, at the view grant, only rows
-whose `view` field is yes (IG-9, default no); rows that link the operator
-or describe the host never opt in. The RPC lane names the two methods; `mine start` is the one
-request that still reaches C++.
+The live value belongs to its owner. Deleted with the per-knob endpoints:
+`/set_limit`, `/in_peers`, `/set_log_level`, `/set_log_categories` as
+routes of their own, `/out_peers` with its option, and the console words
+they served (`INPUT_GRAMMAR.md` §13).
 
 ### 2.8 The clearnet public address (DC-Q10)
 
@@ -343,8 +340,8 @@ C++ keeps today's defaults as constants until their lanes decide.
 | the fixed difficulty | core | `dev-difficulty` |
 | the pool's weight bound | core | `txpool-weight-max` |
 | sync on or off | the protocol handler | `dev-sync` |
-| the mining address | the miner | `mining-address` |
-| the mining threads | the miner | `mining-threads` |
+| the mining address | the miner | `mine-address` |
+| the mining threads | the miner | `mine-threads` |
 | console on or off | the C++ console | `console` |
 | the console's command words | the C++ console client | the positional words |
 | the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint |
@@ -393,7 +390,7 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 | rpc | `shekyl-daemon-rpc` | the admin and view listener sets, the origin list, the connection cap | `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6`, `rpc-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-access-control-origins`, `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-response-soft-limit`, `disable-rpc-ban` |
 | txpool | core, through the snapshot | the weight bound | `max-txpool-weight` |
 | notify | the Rust runner (DC-Q14) | three commands, each an argument array with its named placeholders | `block-notify`, `reorg-notify`, `block-rate-notify` |
-| mining | the miner, through the snapshot | the address and the thread count | `start-mining`, `mining-threads`, the five `bg-mining-*` |
+| mine | the miner, through the snapshot | the address and the thread count | `start-mining`, `mining-threads`, the five `bg-mining-*` |
 | dev | each lever's owner | the levers of `INPUT_GRAMMAR.md` §5, each accepted only on the networks its row names, never on mainnet (IG-8) | `fixed-difficulty`, `no-sync`, `clearnet-transport-encrypt`, `carrier-development`, the four environment levers |
 | session | the C++ console, through the snapshot, until R8 | console on or off, the command words | `non-interactive`, `daemon_command` |
 
@@ -435,13 +432,14 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | `variables_map` and `program_options` in `shekyld` | `rg -n -e 'variables_map' -e 'program_options' src/daemon src/cryptonote_core src/p2p src/rpc src/cryptonote_basic src/blockchain_db src/cryptonote_protocol` → more than 0; `rg -n -e 'Boost_PROGRAM_OPTIONS_LIBRARY' src/daemon/CMakeLists.txt` → 1 | 0 and 0 |
 | `src/daemon/command_line_args.h`, `src/common/removed_flags.{h,cpp}`, `src/rpc/rpc_args.{h,cpp}`, `src/common/daemon_default_data_dir.{h,cpp}` | files exist; `removed_flags.cpp` still sends Windows operators to Task Scheduler ([`src/common/removed_flags.cpp:158-162`](../../src/common/removed_flags.cpp)), which RT-16 rejects; `daemon_default_data_dir.cpp` infers the mode from the account's elevation, which RT-16 forbids | `rg -n -e 'removed_flags' -e 'rpc_args' -e 'daemon_default_data_dir' -e 'command_line_args' src tests` → 0 |
 | the RPC start's configuration and the C++ listener loop (§2.3) | `shekyl_daemon_rpc_start` has nine parameters; `rg -n -e 'rpc_instance' -e 'rust_rpc_handles' src/daemon` → more than 0 | one parameter, the core handle; 0 |
-| the zone host's C++-supplied values (Rick's review, item 3) | at PR-3's head `shekyl_zone_listen_clearnet` takes the bind values, the SOCKS host and port, the encrypt flag, the network id and the ceiling (`zone_ffi.rs:402-415`); the ceiling is computed in C++ (`transport_ceiling`, `net_node.h:456`, `net_node.inl:834`, `:970`, `:1003`); the spans are already Rust's (the transport layer's `spans.rs` on PR-3) | the zone host reads its sections, the network id comes from the network row, the ceiling from Rust's own resolver; `rg -n -e 'transport_ceiling' -e 'm_network_id' src/p2p` → 0 |
+| the zone host's C++-supplied values (Rick's review, item 3) | at PR-3's head `shekyl_zone_listen_clearnet` takes the bind values, the SOCKS host and port, the encrypt flag, the network id and the ceiling (`zone_ffi.rs:452-464`); the ceiling is computed in C++ (`transport_ceiling`, `net_node.h:456`, `net_node.inl:832`, `:968`, `:997`); the spans are already Rust's (the transport layer's `spans.rs` on PR-3) | the zone host reads its sections, the network id comes from the network row, the ceiling from Rust's own resolver; `rg -n -e 'transport_ceiling' -e 'm_network_id' src/p2p` → 0 |
 | every other configuration push | `rg -n -e shekyl_zone_set_connector_cap -e shekyl_zone_clear_connector_cap -e shekyl_link_set_up -e shekyl_link_set_down src rust/shekyl-ffi/src src/shekyl/shekyl_ffi.h` → more than 6; `shekyl_log_init_file`, `shekyl_log_set_level`, `shekyl_log_set_categories` called from [`contrib/epee/src/mlog.cpp:215`](../../contrib/epee/src/mlog.cpp), [`:306`](../../contrib/epee/src/mlog.cpp), [`:338`](../../contrib/epee/src/mlog.cpp); `shekyl_daemon_tor_start`'s data-directory parameter ([`src/p2p/net_node.inl:896-898`](../../src/p2p/net_node.inl)) | the pushes gone; the managed Tor reads the paths section; `mlog_configure` shrinks to installing the tracing forwarder |
 | PR-3's pushes | `rg -n -e shekyl_dialer_set_out_peers -e shekyl_peerlist_allow_local_ip -e shekyl_peerlist_admit_operator -e shekyl_peerlist_disclose_early -e shekyl_dialer_set_exclusive -e shekyl_dialer_open_address_file -e note_own_address -e admit_operator_peer src rust/shekyl-ffi src/shekyl/shekyl_ffi.h` → more than 8 at the PR-3 merge (`dialer_ffi.rs:325`, `:438`, `:463`, `:485`, `:512`; `peerlist_ffi.rs:67`) | 0; `shekyl_peerlist_set_own_address` survives only as the peer lists' own entry, called by `shekyl-tor` and by the configuration, never by C++ |
 | the reverse pulls | `rg -n -e shekyl_p2p_default_out_peers -e shekyl_relay_zone_min_provisioned_out_peers -e shekyl_dialer_out_target src` → more than 3 | 0 |
 | UPnP | `rg -n -i -e 'upnp' -e 'm_igd' -e 'igd_t' src/p2p` → more than 40 ([`src/p2p/net_node.h:463-467`](../../src/p2p/net_node.h), [`:663-670`](../../src/p2p/net_node.h), [`src/p2p/net_node.inl:66-68`](../../src/p2p/net_node.inl), [`:1183-1189`](../../src/p2p/net_node.inl), [`:2358`](../../src/p2p/net_node.inl), [`:3381-3383`](../../src/p2p/net_node.inl)) | 0 |
 | miniupnpc | `rg -n -i -e 'miniupnp' -e 'UPNP' CMakeLists.txt external/CMakeLists.txt cmake/FindMiniupnpc.cmake .gitmodules contrib/brew/Brewfile .github/workflows src/p2p/CMakeLists.txt` → more than 15 ([`CMakeLists.txt:490`](../../CMakeLists.txt), [`external/CMakeLists.txt:32-51`](../../external/CMakeLists.txt)) | 0; the submodule leaves `.gitmodules` and the tree; the note at [`scripts/ci/check_doc_claims.py:694`](../../scripts/ci/check_doc_claims.py) is updated |
 | `out-peers` and its runtime surface | `rg -n -e 'out_peers' -e 'OUT_PEERS' -e 'change_max_out_public_peers' -e 'get_max_out_public_peers' src rust/shekyl-daemon-rpc/src` → more than 20 ([`src/rpc/core_rpc_server.cpp:1166-1171`](../../src/rpc/core_rpc_server.cpp), [`src/daemon/command_server.cpp:211-213`](../../src/daemon/command_server.cpp), [`rust/shekyl-daemon-rpc/src/server.rs:344`](../../rust/shekyl-daemon-rpc/src/server.rs)) | 0 |
+| the per-knob runtime endpoints and the console words (§2.7) | `rg -n -e '"/set_limit"' -e '"/in_peers"' -e '"/set_log_level"' -e '"/set_log_categories"' rust/shekyl-daemon-rpc/src/server.rs` → more than 4 ([`rust/shekyl-daemon-rpc/src/server.rs:319-349`](../../rust/shekyl-daemon-rpc/src/server.rs)) | 0; one set and one show request in their place. The console word `pop_blocks` has no successor (`INPUT_GRAMMAR.md` §13); whether its RPC route goes with it is the RPC lane's |
 | the `,N` suffixes | `rg -n -e 'get_max_connections' -e 'max_connections' src/p2p/net_node.cpp src/p2p/net_node.h` → more than 8 | 0 |
 | `disable-rpc-ban` and the RPC server's dead scorer | `rg -n -e 'disable_rpc_ban' -e 'core_rpc_server::add_host_fail' -e 'RPC_IP_FAILS_BEFORE_BLOCK' src` → more than 5 ([`src/rpc/core_rpc_server.cpp:173-190`](../../src/rpc/core_rpc_server.cpp); the shared context is unblockable, [`src/rpc/core_rpc_ffi.cpp:84-89`](../../src/rpc/core_rpc_ffi.cpp)) | 0; `node_server::add_host_fail` ([`src/p2p/net_node.inl:451`](../../src/p2p/net_node.inl)) is the P2P function and stays |
 | the test and debug levers | `rg -n -e 'test_drop_download' -e 'g_test_dbg_lock_sleep' -e 'show_time_stats' src contrib/epee/include/syncobj.h` → more than 10 | 0 |
@@ -467,7 +465,7 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 
 ## 5. Ripples
 
-### 5.1 Launchers, re-censused at `7cf70b7052`
+### 5.1 Launchers, re-censused at `cd1d0cc8ed`
 
 Every launcher moves to the grammar's names in the cutover. Under DC-Q5 a
 regtest daemon that is not offline runs the managed Tor, and nothing wipes
@@ -512,7 +510,7 @@ flag a unit or template passes is a live name.
 
 ### 5.3 Documentation
 
-The option tables at [`docs/EXECUTABLES.md:52-84`](../EXECUTABLES.md) and
+The option tables at [`docs/EXECUTABLES.md:53-82`](../EXECUTABLES.md) and
 [`docs/USER_GUIDE.md:135-190`](../USER_GUIDE.md), and the example at
 [`docs/USER_GUIDE.md:115-133`](../USER_GUIDE.md), are generated from the
 table and gated (IG-9). `docs/proxies.md` is rewritten for the connector
@@ -554,7 +552,7 @@ exit status is 2.
 | a runtime change the constructor refuses (§2.7) | the request fails with the code the startup parse would give; the daemon runs |
 | a set request for a row not marked Runtime | the request fails with the startup-only code; the daemon runs |
 | `service` outside the SCM (Windows) | refuse at entry, naming how the service is started |
-| `service` on Linux or macOS | refuse with its typed code: the platform's service manager runs the foreground process |
+| `service` on Linux, FreeBSD or macOS | refuse with its typed code: the platform's service manager runs the foreground process |
 | `service` on Windows with the machine-wide root missing, mis-owned, or writable outside Administrators, SYSTEM and the service account | refuse with its typed code, naming the root and what was found; the daemon never creates it |
 
 ---
@@ -618,15 +616,16 @@ exit status is 2.
 
 ## 9. Sequencing and pre-flight
 
-One cutover PR, based on PR-3 after it merges, once Part B, with the `service`
-row and the `view` field, is folded in (§1.2). It
+One cutover PR, based on PR-3 after it merges (§1.2). It
 lands the table, the parse, the sections, the lock, the marker, logging in
 Rust, the announcements, the Rust `main()` and the remnant's entry pair,
 the notify runner, the one RPC start, every Rust
 owner reading its section, the snapshot, the runtime handlers of §2.7,
 every deletion of §4, every launcher of §5.1 in this repository, and the
-generated documentation. The blockchain utilities keep their option sets;
-the descriptors they share with the daemon (`arg_data_dir`,
+generated documentation. The utilities Part B deletes go in their own PRs (`INPUT_GRAMMAR.md`
+§14.1); those that remain (`shekyl-blockchain-import`, `-export`, `-stats`
+until the redb cutover, and DRS-E2's `shekyl-e2-trace-export`) keep their
+option sets; the descriptors they share with the daemon (`arg_data_dir`,
 `arg_testnet_on`, `arg_stagenet_on`, `arg_db_sync_mode`) move into a header
 they own, and `src/blockchain_utilities/blockchain_import.cpp:662`'s call to
 `core::init_options` becomes a call into it.
@@ -705,8 +704,8 @@ ruled. Read rules 00, 06, 08, 17, 19, 20, 22, 23, 25, 26, 35, 36, 40, 45,
 47, 50, 71, 82, 83, 90, 94 and 95, and `INPUT_GRAMMAR.md`, before the first
 commit.
 
-1. **Preconditions.** PR-3 is on `dev`; the grammar's Part B is on `dev`
-   with the `service` row and the `view` field, and folded into this brief. Stop and ask if any is not
+1. **Preconditions.** PR-3 is on `dev`, and the RPC lane has named the
+   set and show requests (§2.7). Stop and ask if any is not
    true.
 2. **Worktree and branch.** One worktree off `dev`; stage explicit paths;
    push each commit to the open PR after merging `dev`; no attribution
