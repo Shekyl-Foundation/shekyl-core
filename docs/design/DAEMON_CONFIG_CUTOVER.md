@@ -102,25 +102,46 @@ What crosses the FFI after the cutover, and nothing else:
 ### 2.2 The start sequence (DC-Q13)
 
 1. `main()` calls `shekyl_daemon_main()`; Rust owns the process from here.
-   Rust's entry catches its own panics and turns them into an exit status.
-   On Windows, with `service` set (DC-Q17), the entry connects to the
-   Service Control Manager's dispatcher before anything else (the dispatcher is
-   RT-W14's, built on this entry); outside the SCM that connect fails and
-   the start is refused (rule 82). A start by the SCM without `service` fails
-   in the SCM's own terms. On Linux, FreeBSD and macOS `service` is refused
-   with a typed code: the platform's service manager runs the foreground
-   process. Under the SCM the entry reports
-   `SERVICE_START_PENDING`, with a checkpoint and a wait hint at each of
-   steps 2 to 8 below, and `SERVICE_RUNNING` only when RT-15's rendezvous
-   is published; the start takes longer than the SCM's default timeout of
-   about 30 seconds, and a service that reports no progress is killed
-   (error 1053).
+   **A panic is never silent.** The workspace builds with `panic = "abort"`
+   in both profiles (`rust/Cargo.toml`, lines 671 to 676), so a panic cannot
+   be caught and turned into an exit status, and an unwind across the C++
+   frames below would be undefined anyway. The entry therefore installs a
+   panic hook first: it writes the panic's message and location to the log,
+   when one is open, and to standard error, then the process aborts with
+   the platform's abort status. *Records-was: DC-Q13's text said the entry
+   catches its own panics into an exit status, which the abort profile
+   makes unbuildable; the hook keeps the ruling's intent, that a Rust
+   failure always says what happened.*
+   **`service` before and after RT-W14.** The SCM dispatcher, the
+   `SERVICE_START_PENDING` checkpoints and wait hints through steps 2 to 8,
+   and `SERVICE_RUNNING` once RT-15's rendezvous is published are RT-W14's
+   (`RPC_CHANNEL.md`, RT-W14, which waits on RT-W10), built on this entry:
+   without them the SCM's start timeout of about 30 seconds kills a start
+   that the managed Tor's bootstrap alone can stretch to 300 seconds (error
+   1053). Until RT-W14 lands, the cutover ships the `service` row as
+   RESERVED (IG-10): given on Windows, it is refused with a code naming
+   RT-W14, and on Linux, FreeBSD and macOS it is refused as RT-16 rules.
+   Everything else `service` selects is built here and switched on by
+   RT-W14: the root by run mode, the machine-wide root's checks (§2.4), and
+   the elevation branch's deletion.
 2. Rust reads its arguments with `std::env::args_os` (IG-Q2), resolves
    the run mode (`service`), `--network` and `--config-file`, checks the file's permissions (§2.4),
    reads and validates it whole, applies the command line over it per key,
    resolves every path (§2.5), reads the ban file, and constructs the typed
    sections. `--help` and `--version` are answered here. A refusal renders
    through IG-11 and exits with status 2; nothing below runs.
+   **Client mode.** When positional command words are given, `shekyld` is a
+   client of a daemon that is already running, as `main.cpp:341-393` is
+   today: it takes no lock, checks no marker, creates no data directory,
+   writes no log file and makes no announcement. Rust logs to standard
+   error only, fills a snapshot holding the words, the network and the
+   first `rpc-admin-listen` endpoint, and calls the remnant's
+   `run(snapshot)`, which runs the C++ console client against that endpoint
+   (its transport is already Rust's: `rust/shekyl-daemon-rpc/src/ctl_client.rs`,
+   `console/mod.rs`) and returns its status. A command with
+   `rpc-admin-listen = none` has no daemon to reach and is refused at parse
+   with a typed code naming the option. Steps 3 onward are for a daemon
+   start only. Client mode dies with the C++ console (R8, DC-N2).
 3. Rust takes the data-directory lock, `shekyld.lock` (DC-N1, DC-Q15),
    through `flock` or `LockFileEx`, and holds it for the life of the
    process; the file is never deleted. There is no lock today:
@@ -343,8 +364,8 @@ C++ keeps today's defaults as constants until their lanes decide.
 | the mining address | the miner | `mine-address` |
 | the mining threads | the miner | `mine-threads` |
 | console on or off | the C++ console | `console` |
-| the console's command words | the C++ console client | the positional words |
-| the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint |
+| the console's command words | the C++ console client | the positional words; empty for a daemon start |
+| the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint, present only in client mode, where its absence is refused at parse (§2.2) |
 
 **Eleven fields.** A gate pins the count and fails when it rises; each later
 slice that moves a reader deletes its field. If the pre-flight finds a C++
@@ -453,13 +474,13 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | the environment levers | `rg -n -e 'getenv("SHEKYL_' src/cryptonote_core/blockchain.cpp` → 2; `rg -n -e 'env::var("SEEDHASH_' rust/shekyl-ffi/src/pow_randomx_ffi.rs` → 4; `rg -n -e 'getenv("RPC_LOGIN")' src/rpc` → 1 | 0; the four `dev-` levers replace them, and Rust arms the schedules from its section |
 | the carrier global | `rg -n -e 'set_carrier_development' src` → more than 2 | 0; the relay reads `dev-relay-cover` |
 | `tools::set_max_concurrency` from the daemon | [`src/daemon/main.cpp:310-311`](../../src/daemon/main.cpp) | gone with `main.cpp`'s parse |
-| the C++ notify path | [`src/common/notify.cpp:52`](../../src/common/notify.cpp) splits a command string on whitespace; [`src/common/spawn.cpp:124`](../../src/common/spawn.cpp) sets `SIGCHLD` to ignored for the whole process (DC-F12) | `tools::Notify` and the daemon's use of `tools::spawn` gone; `rg -n -e 'SIGCHLD' src/daemon src/cryptonote_core src/common/notify.cpp` → 0 for the daemon (the runner is Rust's, DC-Q14) |
+| the C++ notify path and its process-wide `SIGCHLD` change (DC-F12) | [`src/common/notify.cpp:52`](../../src/common/notify.cpp) splits a command string on whitespace; [`src/common/spawn.cpp:124`](../../src/common/spawn.cpp) sets `SIGCHLD` to ignored for the whole process; the daemon is their only user (`src/cryptonote_core/cryptonote_core.cpp:53`, `src/cryptonote_core/blockchain.cpp:72` include `notify.h`), with `tests/unit_tests/notify.cpp` | `src/common/notify.{h,cpp}`, `src/common/spawn.{h,cpp}` and `tests/unit_tests/notify.cpp` deleted with their CMake entries; `rg -n -e 'tools::Notify' -e 'tools::spawn' -e 'SIGCHLD' src tests` → 0 (the runner is Rust's, DC-Q14, and tests itself) |
 | the C++ signal owner and orchestration (DC-Q13) | [`src/daemon/daemon.cpp:272`](../../src/daemon/daemon.cpp) installs `tools::signal_handler`, whose Windows handler stops only on Ctrl-C and Ctrl-Break ([`src/common/util.h:193-201`](../../src/common/util.h), DC-F13); `Daemon::run`, `t_internals` and `main.cpp`'s body orchestrate the start | `rg -n -e 'signal_handler::install' src/daemon` → 0; the orchestration replaced by the remnant's `run(snapshot)` and `stop()`; `main.cpp` is one call |
 | `utils/conf/shekyld.conf` | the file exists; cited at [`docs/USER_GUIDE.md:131-133`](../USER_GUIDE.md) | gone |
 | `scripts/ci/check_carrier_flag_hidden.sh` | exists | replaced by a table test that `dev-relay-cover` is hidden and refused on mainnet |
 | C++ tests of the deleted mechanism | `tests/unit_tests/command_line.cpp:52-104`, `tests/unit_tests/rpc_args_daemon_surface.cpp` | deleted; `IsYes` stays |
 | C++ tests that build a `variables_map` | `rg -n -e 'variables_map' tests/unit_tests/node_server.cpp tests/core_tests/chaingen.h tests/core_tests/chaingen_main.cpp tests/unit_tests/sync_orphan_arm.cpp tests/unit_tests/main.cpp tests/performance_tests/main.cpp` → more than 10 | 0; they construct the remnant from a snapshot built by the real Rust parse of a test argument list (rule 26 B2) |
-| the disclose-early rename's acceptance | `rg -n -e 'small_network' -e 'SmallNetwork' -e 'SMALL_NETWORK' -e 'small-network' src rust docs` | only PR-3's UNFREEZE record (IG-Q20) |
+| the disclose-early rename's acceptance (IG-Q20) | `rg -n -e 'small_network' -e 'SmallNetwork' -e 'SMALL_NETWORK' -e 'small-network' src rust` → 0 at PR-3's head | 0 in code. Under `docs/` the literals stay in the records that define the rename, and only there: PR-3's UNFREEZE line, `INPUT_GRAMMAR.md` IG-Q20, the decision log's Part A entry, and this row; `rg -l` over `docs` lists exactly those files |
 
 ---
 
@@ -691,7 +712,8 @@ chain-sync lanes do not touch the option surface.
 | the blockchain utilities' option sets | IG Part B; this brief §9 |
 | the GUI sidecar's arguments | this brief §5.1; the GUI repository |
 | the background miner's thread | the mining lane ([`CLI_USABILITY.md`](CLI_USABILITY.md) §1) |
-| the inherited defaults of `txpool-weight-max` (IG-Q11) and `rpc-connections-max` (IG-Q12) | rows the implementing PR files when the names land, owned by the pool's and the RPC lane's documents |
+| the inherited default of `txpool-weight-max` (IG-Q11) | [`DRS_E5_POOL_ALT_PRUNE.md`](DRS_E5_POOL_ALT_PRUNE.md), the pool's live document |
+| the inherited default of `rpc-connections-max` (IG-Q12) | RT-O9.4, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the `removed_flags` shim sunset | this brief §4; the row leaves with the files |
 
 ---

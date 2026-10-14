@@ -23,6 +23,12 @@ There is no V3.1 / V3.2 / V3.x release train.
 - **The GUI sidecar's daemon argument list follows the cutover's spellings (DC-Q8).** `shekyl-gui-wallet/src-tauri/src/daemon_manager.rs` passes five daemon flags; under the ruled grammar it passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` and drops `--non-interactive` (`INPUT_GRAMMAR.md` §5); the cross-repo change lands with the cutover under its own authorisation. Blocked on the cutover landing — falsify by the GUI spawning a cutover daemon that starts.
   - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §5.1
   - Target: pre-genesis
+- **`txpool-weight-max` ships the inherited default, 648000000 bytes, until the pool's owner re-derives it (IG-Q11).** The figure is a Monero operand, "3 days at 300000 bytes" (`src/cryptonote_config.h:328`); the daemon-configuration cutover lands the option under the grammar's name with that value and no derivation behind it. Blocked on the pool's admission policy being derived for Shekyl's block size and fee model — falsify by a ruled default with its derivation in the pool's document.
+  - Owner: [`DRS_E5_POOL_ALT_PRUNE.md`](design/DRS_E5_POOL_ALT_PRUNE.md)
+  - Target: pre-genesis
+- **`rpc-connections-max` ships the inherited 25 until the RPC lane derives it under the resource policy (IG-Q12).** Today three options set one effective cap, the per-private-IP 25 (`INPUT_GRAMMAR.md` IG-F1), which nobody derived; the cutover collapses them into one option carrying that value. Blocked on RT-O9.4's resource policy assigning a cost to a connection — falsify by a ruled default derived in `RPC_CHANNEL.md`.
+  - Owner: `RT-O9.4` — [`RPC_CHANNEL.md`](design/RPC_CHANNEL.md)
+  - Target: pre-genesis
 - **The background miner's thread and the `start_mining` arguments it served.** The five `--bg-mining-*` options and the `do_background_mining` and `ignore_battery` arguments of `start_mining` are deleted by the daemon-configuration cutover (DC-Q6, IG-12: a runtime lever with no startup twin shares no constructor); whether the background-mining thread in `src/cryptonote_basic/miner.cpp` goes with them is the mining lane's ruling, not the cutover's. Blocked on that ruling — falsify by `rg -n -i -e 'background' src/cryptonote_basic/miner.cpp` returning nothing.
   - Owner: [`CLI_USABILITY.md`](design/CLI_USABILITY.md) §1 (the doing-vs-controlling-mining correction; the mining lane's live document)
   - Target: pre-genesis
