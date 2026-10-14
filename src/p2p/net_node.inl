@@ -991,12 +991,8 @@ namespace nodetool
       }
       else if (zone.first == epee::net_utils::connector_id::tor && zone.second.m_proxy_address.address.port() != 0)
       {
-        // `--tx-proxy tor,...` without `--anonymous-inbound`: no listener,
-        // and the dials still go through the seam, which needs the SOCKS
-        // address and a tor binding for the connections it establishes.
-        // (The managed Tor reaches here too, with its onion published; the
-        // Rust side says which proxy the zone dials through and which own
-        // address it holds.)
+        // This branch installs the Tor dial path through the seam; the
+        // managed onion, if any, is published from Rust.
         res = zone.second.m_net_server.dial_through_tor(zone.second.m_proxy_address.address,
             reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling());
         CHECK_AND_ASSERT_MES(res, false, "Failed to install the tor proxy");
