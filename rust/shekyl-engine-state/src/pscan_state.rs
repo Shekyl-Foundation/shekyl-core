@@ -85,6 +85,18 @@ use crate::pscan_cursor::PScanCursor;
 /// ledger over its sub-blocks).
 pub const PSCAN_STATE_VERSION: u32 = 11;
 
+/// Diagnostic name of this block. [`crate::version_gate::gate_leading_version`]
+/// stamps it on [`WalletLedgerError::UnsupportedBlockVersion`] when the outer
+/// schema word disagrees, and the P-scan start path matches it so a nested
+/// cursor refusal is not reported as this file's format.
+pub const PSCAN_STATE_BLOCK: &str = "pscan_state";
+
+/// The schema word a `.wallet.pscan` holds when its joins were recorded as
+/// the retired keyless byte `0`. [`PSCAN_STATE_VERSION`] moved off this word
+/// so that file is refused rather than read as no bond
+/// (`FN_DSA_HYBRID.md` `FND-18`).
+pub const PSCAN_STATE_VERSION_KEYLESS_JOIN: u32 = 10;
+
 /// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
 /// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
 /// ladder: `ARCHIVAL_FIREWALL_GATE6.md` §2.4 GF-4b), most→least safe as an
@@ -538,7 +550,7 @@ impl PScanState {
         // `PFundingOutputRecord::tx_hash` from the middle of a repeated record,
         // which shifts every following byte; decoding first would report a
         // staker's intact wallet as corrupt instead of naming the re-scan.
-        crate::version_gate::gate_leading_version(bytes, "pscan_state", PSCAN_STATE_VERSION)?;
+        crate::version_gate::gate_leading_version(bytes, PSCAN_STATE_BLOCK, PSCAN_STATE_VERSION)?;
         let state: Self = postcard::from_bytes(bytes)?;
         state.cursor.check_version()?;
         Ok(state)
@@ -807,11 +819,58 @@ mod tests {
                 file,
                 binary,
             }) => {
-                assert_eq!(block, "pscan_state");
+                assert_eq!(block, PSCAN_STATE_BLOCK);
                 assert_eq!(file, PSCAN_STATE_VERSION + 1);
                 assert_eq!(binary, PSCAN_STATE_VERSION);
             }
             other => panic!("expected state version rejection, got {other:?}"),
         }
+    }
+
+    /// `PSCAN_STATE_VERSION` moved off [`PSCAN_STATE_VERSION_KEYLESS_JOIN`]
+    /// because that file records a JoinMarket as the retired byte `0`
+    /// (`FN_DSA_HYBRID.md` `FND-18`). The sibling tests here and in
+    /// `version_gate.rs` refuse `PSCAN_STATE_VERSION ± 1`, which a revert to
+    /// the keyless-join word still passes, and the schema snapshot pins the
+    /// type's shape, not the number. This test pins that word: a file whose
+    /// leading varint is it is refused as stale, by version, before its body
+    /// is read.
+    ///
+    /// Red edit: set [`PSCAN_STATE_VERSION`] back to
+    /// [`PSCAN_STATE_VERSION_KEYLESS_JOIN`]. The prefix then passes the gate
+    /// and the body decode fails with `Postcard`, which the first arm does
+    /// not accept. The second half is the negative control — a file this
+    /// build wrote loads — so a gate that refused everything fails too.
+    #[test]
+    fn a_version_10_file_is_refused_as_stale_not_decoded() {
+        let mut keyless_join_seal = postcard::to_allocvec(&PSCAN_STATE_VERSION_KEYLESS_JOIN)
+            .expect("encode the keyless-join schema word");
+        // Stands in for a real keyless-join body, whose bytes need not parse
+        // under the current declaration.
+        keyless_join_seal.extend_from_slice(&[0xff; 8]);
+        match PScanState::from_postcard_bytes(&keyless_join_seal) {
+            Err(WalletLedgerError::UnsupportedBlockVersion {
+                block,
+                file,
+                binary,
+            }) => {
+                assert_eq!(block, PSCAN_STATE_BLOCK);
+                assert_eq!(file, PSCAN_STATE_VERSION_KEYLESS_JOIN);
+                assert_eq!(binary, PSCAN_STATE_VERSION);
+                assert!(
+                    binary > PSCAN_STATE_VERSION_KEYLESS_JOIN,
+                    "the bump away from the keyless-join word is what this test pins"
+                );
+            }
+            other => panic!("a keyless-join file must be refused by version, got {other:?}"),
+        }
+
+        let current = PScanState::genesis()
+            .to_postcard_bytes()
+            .expect("encode a current state");
+        assert_eq!(
+            PScanState::from_postcard_bytes(&current).expect("a current file loads"),
+            PScanState::genesis()
+        );
     }
 }

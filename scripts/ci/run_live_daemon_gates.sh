@@ -124,6 +124,20 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bridged pool routes and not the native one; the native
 #     /get_transactions handler passing `true` for the flag panicked naming
 #     that route alone. ~77 s measured, local Release daemon.
+#   e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser — the
+#     FND-20 tripwire for the five DECIDED_DARK walks below: drives the
+#     bond walk to its submit and asserts the C++ parser's refusal
+#     ("submit commit: C++ reparse failed on engine-validated bytes", HTTP
+#     500, the wallet's DaemonUnavailable ambiguity — not a Rust verdict).
+#     Goes red the day the daemon under test admits a kind-5 JoinMarket,
+#     naming the five walks that are then due back (FOLLOWUPS: "The five
+#     bonded regtest walks are decided dark"). Sabotage 2026-10-13, local
+#     debug build against a daemon built from a P2P branch standing on this
+#     dev (its C++ delta was six p2p files and shekyl_ffi.h; the bond-post
+#     parser and the submit commit shim were dev's): the refusal arm
+#     inverted; panicked there after the daemon logged the C++ reparse
+#     refusal (184 s; the green run before it 321 s, mine + fund + stake +
+#     submit — the bond walk's first half, pr-lane before #1046).
 #   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
 #     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
 #   e2e_cxx_template_fills_to_its_median (slow) — historical red
@@ -136,6 +150,7 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
 #     that fixed the daemon's hard-fork table. Same pool cost as above.
 ARMED=(
+  engine::regtest_e2e::e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser
   engine::regtest_e2e::origin::restricted_listener_is_withheld_status_and_capped_by_native_handlers
   engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
@@ -180,7 +195,14 @@ ARMED_SLOW=(
 #     would not apply the post either: pool, mine, connect and relay all
 #     parse the blob in C++. The walks stay in the tree — the positive
 #     subject returns when the daemon under test admits a kind-5 JoinMarket
-#     (DEL-008) — and move back to ARMED or ARMED_SLOW then.
+#     (DEL-008) — and move back to ARMED or ARMED_SLOW then. That day is
+#     not left to be noticed: the ARMED tripwire
+#     e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser drives
+#     the same bonding path to the submit and asserts the refusal, so a
+#     daemon that admits the post turns it red naming these five. The
+#     deferral record is the FOLLOWUPS row "The five bonded regtest walks
+#     are decided dark until the daemon under test admits a kind-5
+#     JoinMarket" (owner DEL-008).
 #     Prior reds, so the original subject is not lost:
 #       e2e_staker_bond_post_accepted_and_applied — PR-4a daemon-gap
 #         tripwire (unimplemented-arm Malformed).

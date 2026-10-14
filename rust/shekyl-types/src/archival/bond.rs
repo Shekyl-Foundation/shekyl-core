@@ -59,25 +59,15 @@ impl ReceiptSignPk {
         Self(Box::new(bytes))
     }
 
-    /// The key from a slice, or `None` when the slice is not exactly
-    /// [`RECEIPT_SIGN_PK_LEN`] bytes. A slice of the wrong length
-    /// allocates nothing.
-    #[must_use]
-    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
-        let array: &[u8; RECEIPT_SIGN_PK_LEN] = bytes.try_into().ok()?;
-        Some(Self::from_bytes(*array))
-    }
-
     /// The canonical bytes.
+    ///
+    /// There is no mutable counterpart: a chain-carried key is not edited
+    /// in place. A fixture that needs a string one edit away from a key
+    /// copies these bytes, edits the copy and wraps it with
+    /// [`Self::from_bytes`].
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; RECEIPT_SIGN_PK_LEN] {
         &self.0
-    }
-
-    /// The canonical bytes, mutably — for a fixture that needs a string
-    /// that is one edit away from a key.
-    pub fn as_bytes_mut(&mut self) -> &mut [u8; RECEIPT_SIGN_PK_LEN] {
-        &mut self.0
     }
 }
 

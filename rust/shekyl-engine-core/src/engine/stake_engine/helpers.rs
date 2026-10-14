@@ -13,6 +13,8 @@ use shekyl_crypto_pq::output::{construct_output, recover_combined_ss};
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
+
+use crate::engine::stake_timing::DEFAULT_ENTRY_GAP;
 use shekyl_tx_builder::{LeafEntry, SpendInput};
 use shekyl_types::GlobalOutputIndex;
 use shekyl_units::AtomicUnits;
@@ -350,46 +352,138 @@ pub(crate) fn key_image_from_spend_key_x(
         .to_bytes())
 }
 
-/// Draw an entry gap and check for the double-jitter-trap degeneracy pattern
-/// (S5, Round 3 — per-draw guard, float-free, integer-only).
+/// At most one correct-source refusal per this many guarded draws.
 ///
-/// Draws twice from `rng`. If the two `spread` values are equal, the guard
-/// fires and [`DegenerateDraw`] is returned — the caller maps this to
-/// [`StakeEngineError::RngDegeneracy`]. On success, the first draw's `spread`
-/// is returned; the probe draw is consumed and discarded.
+/// One pair collides with probability `1/(window + 1)`. That per-pair rate
+/// is not the refusal a caller sees. [`entry_gap_degeneracy_run`] is the
+/// smallest number of pairs whose combined rate meets this interval, and
+/// [`DegenerateDraw`] is returned only when every pair in the run collided.
+/// A finite equality test cannot refuse a stuck source and also promise
+/// zero refusals of a correct one; this interval is the accepted residue.
+pub(crate) const ENTRY_GAP_DEGENERACY_BOUND: u128 = 100_000_000;
+
+/// `window + 1`, the number of spreads in `[0, window]`.
 ///
-/// **Why two draws?** The double-jitter trap produces a triangular spread
-/// distribution (peaked at 0) by computing `|a - b|`; consecutive draws from
-/// such a source are statistically likely to cluster. Two consecutive equal
-/// spreads from a correct CSPRNG occur with probability ≈ 1/(window+1) ≈
-/// 0.17 % — rare enough to fire on a stuck RNG without triggering excessive
-/// retries on a correct one.
+/// `None` when `window` is 0: every spread is 0, so a pair cannot differ.
+/// `u128::from` is not const on the 1.94 toolchain; the cast widens.
+const fn entry_gap_pair_base(window: u64) -> Option<u128> {
+    let base = (window as u128) + 1;
+    if base > 1 {
+        Some(base)
+    } else {
+        None
+    }
+}
+
+/// Pairs compared at `window` before a guarded draw refuses.
 ///
-/// **False-positive handling:** the caller (the `PlanBondPost` handler) surfaces
-/// `RngDegeneracy` and the user retries. A single false positive in 601 bond
-/// requests is acceptable; multiple consecutive false positives signal a
-/// broken entropy source.
+/// The smallest `n` such that `(window + 1)^n` is at least
+/// [`ENTRY_GAP_DEGENERACY_BOUND`]. A zero window has no distinct spread,
+/// so its run is one pair and the guard refuses.
+pub(crate) const fn entry_gap_degeneracy_run(window: u64) -> u32 {
+    let Some(base) = entry_gap_pair_base(window) else {
+        return 1;
+    };
+    let mut denominator: u128 = 1;
+    let mut pairs: u32 = 0;
+    loop {
+        pairs += 1;
+        denominator = match denominator.checked_mul(base) {
+            Some(next) => next,
+            // The product no longer fits, so it is past the bound.
+            None => return pairs,
+        };
+        if denominator >= ENTRY_GAP_DEGENERACY_BOUND {
+            return pairs;
+        }
+    }
+}
+
+/// `entry_gap_degeneracy_run(window)` meets [`ENTRY_GAP_DEGENERACY_BOUND`],
+/// and one fewer pair does not.
+pub(crate) const fn entry_gap_degeneracy_run_is_minimal(window: u64) -> bool {
+    let pairs = entry_gap_degeneracy_run(window);
+    let Some(base) = entry_gap_pair_base(window) else {
+        return pairs == 1;
+    };
+    let Some(full) = entry_gap_denominator(base, pairs) else {
+        return false;
+    };
+    if full < ENTRY_GAP_DEGENERACY_BOUND {
+        return false;
+    }
+    if pairs == 1 {
+        return true;
+    }
+    match entry_gap_denominator(base, pairs - 1) {
+        Some(shorter) => shorter < ENTRY_GAP_DEGENERACY_BOUND,
+        None => false,
+    }
+}
+
+/// `(base)^pairs`, or `None` when the power overflows `u128`.
+const fn entry_gap_denominator(base: u128, pairs: u32) -> Option<u128> {
+    let mut denominator: u128 = 1;
+    let mut drawn: u32 = 0;
+    while drawn < pairs {
+        denominator = match denominator.checked_mul(base) {
+            Some(next) => next,
+            None => return None,
+        };
+        drawn += 1;
+    }
+    Some(denominator)
+}
+
+/// The operational window's run meets the bound, is minimal, and is more
+/// than one pair. One pair is the per-pair collision, not the refusal.
+const _: () = {
+    let window = DEFAULT_ENTRY_GAP.as_blocks();
+    assert!(entry_gap_degeneracy_run_is_minimal(window));
+    assert!(entry_gap_degeneracy_run(window) > 1);
+};
+
+/// One comparison inside a guarded entry-gap draw.
 ///
-/// **Extracted for testability** (S7(b)): tests feed degenerate `GapRng`
-/// implementations directly into this function without going through the actor
-/// or `OsRng`.
+/// The distinct arm carries the first draw. The probe is the second draw;
+/// it tests the source and is not a placement.
+enum EntryGapPair {
+    Distinct { spread: u64 },
+    Equal,
+}
+
+fn draw_entry_gap_pair<R: GapRng>(window: u64, rng: &mut R) -> EntryGapPair {
+    let spread = draw_entry_gap(window, rng);
+    let probe = draw_entry_gap(window, rng);
+    if spread == probe {
+        EntryGapPair::Equal
+    } else {
+        EntryGapPair::Distinct { spread }
+    }
+}
+
+/// Draw an entry-gap spread, refusing a stuck source (S5).
+///
+/// Compares [`entry_gap_degeneracy_run`] pairs from `rng`. Returns the
+/// first spread of the first pair whose spreads differ. Returns
+/// [`DegenerateDraw`] when every pair was equal; the actor maps that to
+/// [`StakeEngineError::RngDegeneracy`]. A constant source collides on
+/// every pair and is refused inside this call. A correct source is refused
+/// at most once per [`ENTRY_GAP_DEGENERACY_BOUND`] calls.
+///
+/// Tests pass a `GapRng` directly (S7(b)). The live actor does not.
 ///
 /// # Precondition: `window > 0`
 ///
-/// A zero-width window draws `spread == 0` deterministically on every call, so
-/// the two probe draws are *trivially* equal and the guard would fire — but that
-/// is a **window misconfiguration**, not RNG degeneracy: a zero-width standoff
-/// provides no funding↔bond-post decorrelation, defeating the gate-6 firewall
-/// the draw exists to serve. The operational caller always passes
-/// [`DEFAULT_ENTRY_GAP`] (600), so a zero window is unreachable in
-/// production; the `debug_assert` catches any future misuse loudly in test/debug
-/// builds rather than silently mislabelling it as `RngDegeneracy`. (More
-/// generally the guard is only well-behaved for windows large enough that
-/// `1/(window+1)` is an acceptable false-positive rate — 600 gives ≈ 0.17 %.)
+/// A zero-width window draws `spread == 0` on every call, so every pair is
+/// equal and the guard refuses. That is a window misconfiguration, not a
+/// stuck source: a zero-width standoff provides no funding-to-bond-post
+/// decorrelation. The operational caller passes [`DEFAULT_ENTRY_GAP`].
+/// The `debug_assert` fires on a zero window in test and debug builds.
 ///
-/// The draw yields a single `spread` — there is no order coin (retired: only the
-/// bond post is chain-attributable, so there is no second event to order,
-/// `ARCHIVAL_FIREWALL_GATE6.md` method note 8).
+/// The returned value is one `spread`. There is no order coin: only the
+/// bond post is chain-attributable (`ARCHIVAL_FIREWALL_GATE6.md` method
+/// note 8).
 pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
     window: u64,
     rng: &mut R,
@@ -397,13 +491,13 @@ pub(crate) fn draw_entry_gap_guarded<R: GapRng>(
     debug_assert!(
         window > 0,
         "entry-gap window must be > 0: a zero-width standoff provides no \
-         decorrelation and makes the degeneracy guard fire unconditionally; \
+         decorrelation and makes every pair equal; \
          pass the operational DEFAULT_ENTRY_GAP window"
     );
-    let spread_draw = draw_entry_gap(window, rng);
-    let spread_probe = draw_entry_gap(window, rng);
-    if spread_draw == spread_probe {
-        return Err(DegenerateDraw);
+    for _ in 0..entry_gap_degeneracy_run(window) {
+        if let EntryGapPair::Distinct { spread } = draw_entry_gap_pair(window, rng) {
+            return Ok(spread);
+        }
     }
-    Ok(spread_draw)
+    Err(DegenerateDraw)
 }

@@ -85,7 +85,7 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
 
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     // Read up to a retired keyless JoinMarket and no further
-    // (`vectors_tests::RETIRED_KEYLESS_JOINS`): the block that lists one
+    // (`vectors_tests/retired_keyless_join.rs`, `RETIRED_KEYLESS_JOINS`): the block that lists one
     // does not parse, and the reader is sequential.
     let mut reader = crate::vectors_tests::UntilRetiredJoin::new(
         CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
@@ -223,7 +223,7 @@ fn expected(shape: &str) -> Vec<Archival> {
         // 1025. Both joins are keyless (`post_kind` 0), which no longer
         // parses, and every archival input these chains carry sits at or
         // above that block — so none can be read from them any more
-        // (`vectors_tests::RETIRED_KEYLESS_JOINS`). The JoinMarket, the
+        // (`vectors_tests/retired_keyless_join.rs`, `RETIRED_KEYLESS_JOINS`). The JoinMarket, the
         // credit and the Release are witnessed on driven chains
         // (`scenario_archival_tests`, `scenario_join_tests`).
         "bond-post" | "emission-claim" | "limit-full" | "median-full" | "spend-1in-2out"

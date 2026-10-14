@@ -40,7 +40,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use serde_json::Value;
-use shekyl_wire::{prunable_hash_of, Block, Input, Transaction};
+use shekyl_wire::{prunable_hash_of, Block, Input, RetiredKeylessJoinMarket, Transaction};
 
 const FIXTURE: &str = "tests/fixtures/prunable_digest_parity_v1.json";
 const BODIES: &str = "tests/fixtures/pqc_signing_preimage_v1.json";
@@ -118,13 +118,13 @@ const RETIRED_KEYLESS_BOND_POSTS: [&str; 2] = [
 ];
 
 /// `bytes` is refused by the parser for carrying the retired keyless
-/// JoinMarket byte, and for nothing else.
+/// JoinMarket byte, and for nothing else — matched on the typed cause
+/// `BondPost::read` returns, not on the sentence it displays.
 fn refused_as_the_retired_keyless_join_market(name: &str, bytes: &[u8]) {
-    let err = Transaction::from_bytes(bytes)
-        .expect_err("a keyless JoinMarket no longer parses")
-        .to_string();
+    let err = Transaction::from_bytes(bytes).expect_err("a keyless JoinMarket no longer parses");
     assert!(
-        err.contains("post_kind 0 is the retired keyless JoinMarket"),
+        err.get_ref()
+            .is_some_and(RetiredKeylessJoinMarket::downcast_is),
         "{name}: refused for another reason: {err}"
     );
 }
