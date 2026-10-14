@@ -1,10 +1,14 @@
 # Tor gap from cold first contact, 2026-10-14
 
-**Status: IN PROGRESS (run A read; run B running; the derivation and the
-spans change wait for Rick's reading of the numbers).** Ruled by Rick,
-2026-10-13: the Tor gap is re-derived from cold first contact, on two
-responders, before anything else changes (PR-3, #1056; the brief's
-revision 4).
+**Status: IN PROGRESS (run A read and corrected 2026-10-14: its
+responder-side numbers are not usable; run B stopped at sample 17; both
+rerun with lifted spans once logging never blocks, `shekyl-core` #1069;
+the derivation and the spans change wait for Rick's reading of the
+rerun).** Ruled by Rick, 2026-10-13: the Tor gap is re-derived from cold
+first contact, on two responders, before anything else changes (PR-3,
+#1056; the brief's revision 4). Ruled again 2026-10-14: three fixes
+first (logging never blocks; the gap measures the peer's silence; one
+process clock), then the rerun.
 
 ## Why
 
@@ -90,35 +94,66 @@ Over the 66 sessions:
 | responder channel → session | 527 ms | 786 ms | 956 ms | 956 ms |
 | Tor dial, start → SOCKS success | 4.51 s | 6.36 s | 8.47 s | 8.47 s |
 
-**Readings.** The dialer's own interval has no tail: the pause is in
-the Tor network, not the client. The outbound direction is the larger.
+**Readings.** The dialer's own interval has no tail: the pause is not in
+the client. Whether it is in the Tor network or in the responder is not
+settled by this run (the correction below). The outbound direction is the larger.
 Both gap series are censored at the current spans: 3 of the 69 contacts
 that reached SOCKS success exceeded the dialer's 2.6 s gap, so the
 uncensored p99 is at the gap or above it; 26 of 100 cold dials exceeded
 the 9.1 s Tor dial deadline, which the 2026-09-29 floor distribution set
 from warm circuits.
 
-**A responder-side defect, found in run A, open.** Four of the
-responder's 69 accepts ended as `SessionRefused` or
-`LevinHandshakeTimeout` on its side (its connections 76, 78, 80, 82). In
-three, the responder read the request 327 to 810 ms after its accept and
-within half a millisecond its handshake-gap timer fired, so the reply's
-send failed and the session was refused; a 2.6 s deadline cannot fire at
-0.3 s. At all four instants the responder's own two dialer loops woke in
-the same half-millisecond. A wake meant for the Discovery owners reached
-the Transport owner, which reads any wake as a timeout
-(`shekyl-tor/src/drive.rs`, the wake arm of `run`). The engine's `poll`,
-`arm`, registration, id minting, slot delivery and the owner handle's
-`arm` show no such path on reading; the driver now logs the armed
-deadline and every delivered wake (`tor gap armed`, `tor gap fired`), and
-the next run names the stray wake. Also seen (sample 48): the responder's
-accept came 4.3 s after the dialer's SOCKS success, after the dialer had
-timed out and closed; the inbound gap as instrumented does not see a
-stall that precedes the accept, the outbound gap does.
+**Corrected 2026-10-14: the responder's refusals were its own logging
+stalls, not a stray wake.** Four of the responder's 69 accepts ended as
+`SessionRefused` or `LevinHandshakeTimeout` on its side (its connections
+76, 78, 80, 82), and the client's three `LevinHandshakeTimeout:0`
+samples match them. The responder's stderr log layer wrote
+synchronously. When a write to stderr stalled, every thread that logged
+waited on it: the P2P transport workers and both dialer loops among
+them. The instrumented reproduction the same day caught one such stall
+at 18 s on the measurement host and four longer than 5 s within an
+hour. There the engine fired the gap 0.2 ms late, and the driver took
+the wake 15.5 s after. A log line is stamped when it is written, after
+the stall, so in run A the accept looked 0.3 to 0.8 s old when the gap
+fired; it was older than the 2.6 s gap. The two dialer loops woke in the
+same half-millisecond because the same stall released them.
+*Records-was:* this section read the refusals as a Discovery wake
+delivered to the Transport owner. The instrumented runs found no
+misrouted wake, no late engine delivery (Transport worst 0.2 ms) and no
+clock offset worth the name (0.49 ms). The fixes: every log sink behind
+a bounded queue that drops and counts (`shekyl-core` #1069); the gap ends
+at the peer's first complete Levin frame and a fired wake waits one IO
+driver turn for the reader (`dc9130534`); one process clock (`9d17708e2`).
+
+**What this does to run A's numbers.** The responder-side series (the
+inbound gap, the responder's channel to session) and the outbound gap's
+tail can carry responder stalls, and the three client handshake timeouts
+are responder stalls. None of them is used for the derivation; the rerun
+replaces them. The gap now ends at the first complete frame, so the
+rerun records `first_frame_ns` on both sides beside `gap_ns`.
+
+**The 26 client dial timeouts are not client-host stalls** (checked
+2026-10-14). The client's clearnet dialer logs a wake about once a
+second. Inside every timed-out dial window the largest hole in that
+heartbeat is at most 1.50 s, the same as in the successful dials (at
+most 1.88 s), and the client's log layer was as synchronous as the
+responder's, so a stall would have opened a hole. 26 of 100 cold Tor
+dials took longer than the 9.1 s deadline.
+
+**The five `timeout` samples are managed-tor bootstrap failures.** Each
+client log ends at `Initializing p2p server` and says nothing more
+before the sample is stopped at 120 s: the operator sees a node that is
+silent, not one that says Tor has not bootstrapped (FOLLOWUPS).
+
+Also seen (sample 48): the responder's accept came 4.3 s after the
+dialer's SOCKS success, after the dialer had timed out and closed; the
+inbound gap as instrumented does not see a stall that precedes the
+accept, the outbound gap does.
 
 ## Run B
 
-*Running.*
+Stopped at sample 17 of 100 (04:15Z) when the responder defect was
+ruled to be fixed first. Its rows are not recorded; it reruns with A.
 
 ## Derivation (D9)
 
