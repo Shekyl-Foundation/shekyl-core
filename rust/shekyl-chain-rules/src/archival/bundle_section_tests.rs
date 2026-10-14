@@ -3,12 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `check_section` and `open_reference`: order, the header root, and the
-//! section budget (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1 steps 1 and 2,
-//! `SCS-P39`, `SCS-P40`).
+//! `check_section` and `open_reference`: order, the header root, the
+//! window, then the section budget (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1
+//! steps 1 and 2, `SCS-P39`, `SCS-P40`, `SCS-P41`).
 //!
-//! Sibling of `bundle_tests`, which judges one bundle. Every test names
-//! the edit that turns it red.
+//! Admission in this file is [`check_section`] or
+//! [`check_section_until_switch`]. [`SectionCharge`] is the arithmetic
+//! and is not a section result. Sibling of `bundle_tests`, which judges
+//! one bundle. Every test names the edit that turns it red.
 
 use std::sync::OnceLock;
 
@@ -51,16 +53,17 @@ fn root_of(refs: &[BundleRef]) -> [u8; 32] {
     bundle_root(refs).expect("a test section's count fits 32 bits")
 }
 
-/// The including block for `refs`: one above the last, so every reference
-/// in a section of consecutive heights is inside any window as long as the
-/// section. An empty section is included at 101.
+/// The including block for `refs`: one above the last. The oldest
+/// reference then sits `refs.len()` blocks below it, so a section of
+/// consecutive heights longer than `W₂` fails the window at position 0.
+/// An empty section is included at 101.
 fn h_incl_of(refs: &[BundleRef]) -> BlockHeight {
     BlockHeight::from_raw(refs.last().map_or(101, |r| r.h().to_raw() + 1))
 }
 
 /// A Fakechain rule set whose epoch is `blocks` long, so `W₂` is
 /// `blocks / 20`, with a reorg cap of 10.
-fn rules_of(blocks: u64) -> RuleSet {
+pub(in crate::archival::bundle) fn rules_of(blocks: u64) -> RuleSet {
     RuleSet::fakechain(
         None,
         FakechainSchedule::new(
@@ -71,30 +74,14 @@ fn rules_of(blocks: u64) -> RuleSet {
     )
 }
 
-/// The comparison tests' cap. [`check_section`] computes the real one from
-/// the section's epochs; this door exists so a test can name a cap. It
-/// runs the section's shape and the comparison and skips the window, so it
-/// can price a section longer than any window admits (the zero-draw test
-/// below names where the window binds first).
-pub(super) fn check_section_at_cap(
+/// [`check_section`] over `refs`, rooted from them, included one above the
+/// last. The cap is the one `view`'s `D` and `rules` derive.
+fn judged(
     refs: &[BundleRef],
-    header_root: &[u8; 32],
-    cap: u64,
-) -> Result<SectionCharge, SectionRefused> {
-    let charge = super::section_shape(refs, header_root)?;
-    if charge.within(cap) {
-        Ok(charge)
-    } else {
-        Err(SectionRefused::OverBudget {
-            charge,
-            budget: cap,
-        })
-    }
-}
-
-/// The comparison seam: a section whose root is its own, judged at `cap`.
-fn charged(refs: &[BundleRef], cap: u64) -> Result<u64, SectionRefused> {
-    check_section_at_cap(refs, &root_of(refs), cap).map(SectionCharge::get)
+    view: &FixtureBundleView,
+    rules: &RuleSet,
+) -> Result<SectionStanding, SectionCheckFailed<BundleReadFaulted>> {
+    check_section(refs, &root_of(refs), h_incl_of(refs), view, rules)
 }
 
 /// Arrival, before any `D` is known. A non-empty section waits.
@@ -252,99 +239,146 @@ fn a_section_whose_root_does_not_recompute_refuses() {
 
 /// Red edit 3 of the specification's §11: **a budget sum one over.** The
 /// charges of a section sum to at most `c · (⌊9·D / SEB⌋ + 1)`: exactly at
-/// the budget admits, one over refuses — at the count cap of a large `D`,
-/// and at a `D` so small that `⌊9·D / SEB⌋` is zero and the budget is the
-/// `+ 1` alone (`SCS-P33`). A bundle with draws is charged its draws, so
-/// two bundles at the count cap are still what a section holds. Red
-/// edits: `>=` for `>` refuses a section at its budget; drop the `+ 1`
+/// the budget admits, one over refuses — at the count cap of a `D` this
+/// fixture can hold, and at a `D` so small that `⌊9·D / SEB⌋` is zero and
+/// the budget is the `+ 1` alone (`SCS-P33`). A bundle with draws is
+/// charged its draws, so two bundles at the count cap are still what a
+/// section holds. The cap is the one [`check_section`] derives from `D`.
+/// Red edits: `>=` for `>` refuses a section at its budget; drop the `+ 1`
 /// and the small network's budget is zero.
 #[test]
 fn a_section_at_its_budget_admits_and_one_over_refuses() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
     let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
-    let check = |counts: &[u32], budget: u64| charged(&section_of(counts), budget);
-    let over = |charge: u64, budget: u64| {
-        Err(SectionRefused::OverBudget {
-            charge: SectionCharge::of(&section_of(&[u32::try_from(charge).expect("small")])),
+    let rules = rules_of(seb.get());
+    let over = |counts: &[u32], budget: u64| {
+        let refs = section_of(counts);
+        Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
+            charge: SectionCharge::of(&refs),
             budget,
-        })
+        }))
+    };
+    let admit = |counts: &[u32], view: &FixtureBundleView| {
+        let refs = section_of(counts);
+        assert_eq!(
+            judged(&refs, view, &rules),
+            Ok(SectionStanding::Admitted(SectionCharge::of(&refs)))
+        );
     };
 
     // `D` = 8: `⌊72 / 10,000⌋` is zero, the count cap is 1, the budget 2.
     let small = section_budget(c, 8, seb);
     assert_eq!(small, 2);
-    assert_eq!(check(&[1, 1], small), Ok(2));
-    assert_eq!(check(&[2], small), Ok(2));
-    assert_eq!(check(&[1, 2], small), over(3, small));
-    assert_eq!(check(&[1, 1, 1], small), over(3, small));
+    let small_view = view_holding(&[(0, 8)]);
+    admit(&[1, 1], &small_view);
+    admit(&[2], &small_view);
+    assert_eq!(
+        judged(&section_of(&[1, 2]), &small_view, &rules),
+        over(&[1, 2], small)
+    );
+    assert_eq!(
+        judged(&section_of(&[1, 1, 1]), &small_view, &rules),
+        over(&[1, 1, 1], small)
+    );
 
-    // `D` = 324,000: the count cap is 292 and the budget two of them.
+    // `D` = 10,000: the count cap is 10 and the budget two of them.
+    // `D` = 324,000 is the large network's cap of 292 and budget of 584;
+    // that figure is [`section_budget`]'s, and a section of 584 references
+    // does not fit the window (the zero-draw test).
+    let wide = section_budget(c, 10_000, seb);
+    assert_eq!(wide, 20);
+    let wide_view = view_holding(&[(0, 10_000)]);
+    admit(&[10, 10], &wide_view);
+    admit(&[4, 6, 10], &wide_view);
+    assert_eq!(
+        judged(&section_of(&[10, 11]), &wide_view, &rules),
+        over(&[10, 11], wide)
+    );
     let large = section_budget(c, 324_000, seb);
     assert_eq!(large, 584);
-    assert_eq!(check(&[292, 292], large), Ok(584), "two bundles at the cap");
-    assert_eq!(check(&[100, 192, 292], large), Ok(584));
-    assert_eq!(check(&[292, 293], large), over(585, large));
+    assert!(SectionCharge::of(&section_of(&[292, 292])).within(large));
+    assert!(!SectionCharge::of(&section_of(&[292, 293])).within(large));
 }
 
 /// **A bundle is charged `max(count, 1)`** (`SCS-P40`): a zero-draw bundle
 /// is admissible and costs one, so it cannot be used to fill a section
-/// for free. A section of zero-draw bundles is admitted exactly at the
-/// budget and refused one over — on a small network, where the budget is
-/// 2 and zero-draw blocks are common, and on a large one. A mixed section
-/// pays for both kinds.
+/// for free. On the small network the budget is 2, so two zero-draw
+/// bundles are admitted and a third is over budget — and so are 500 of
+/// them, one for every block of `W₂`. A section inside the window holds
+/// at most `W₂` references. The large network's budget of 584 is
+/// [`section_budget`]'s figure; a section of 584 zero-draw bundles does
+/// not fit the window, and both section checks refuse it at CEN-J31
+/// before any `D` is read (`SCS-P41`). The charge of 584 is arithmetic.
+/// A mixed section pays for both kinds, against the budget
+/// [`check_section`] derives — every such budget is even.
 ///
 /// **Red edit: sum `count` instead of the charge** (`r.count()` for
 /// `r.charge()` in `SectionCharge::of`). Every zero-draw section below
-/// then charges nothing and is admitted whatever its length: the "one
-/// over" assertions fail, and so does the 500-bundle one.
+/// then charges nothing: the one- and two-bundle sections are admitted
+/// with a zero charge, and the 500-bundle section fits budget 2.
 #[test]
 fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
     let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
+    let rules = rules_of(seb.get());
     let zeros = |n: usize| section_of(&vec![0u32; n]);
     let over = |refs: &[BundleRef], budget: u64| {
-        Err(SectionRefused::OverBudget {
+        Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(refs),
             budget,
-        })
+        }))
+    };
+    let admit = |refs: &[BundleRef], view: &FixtureBundleView| {
+        assert_eq!(
+            judged(refs, view, &rules),
+            Ok(SectionStanding::Admitted(SectionCharge::of(refs)))
+        );
     };
 
-    // The small network: budget 2, so two zero-draw bundles and no third.
+    // The small network: budget 2. Five hundred zero-draw bundles are
+    // inside `W₂` and over that budget.
     let small = section_budget(c, 8, seb);
     assert_eq!(small, 2);
-    assert_eq!(charged(&zeros(1), small), Ok(1));
-    assert_eq!(charged(&zeros(2), small), Ok(2));
-    assert_eq!(charged(&zeros(3), small), over(&zeros(3), small));
+    let view = view_holding(&[(0, 8)]);
+    admit(&zeros(1), &view);
+    admit(&zeros(2), &view);
+    assert_eq!(judged(&zeros(3), &view, &rules), over(&zeros(3), small));
     assert_eq!(SectionCharge::of(&zeros(3)).get(), 3);
-    // What `SCS-P40` closes: one for every zero-draw block of the last
-    // `W₂`, 500 of them, under a budget of 2.
     assert_eq!(SectionCharge::of(&zeros(500)).get(), 500);
-    assert_eq!(charged(&zeros(500), small), over(&zeros(500), small));
+    assert_eq!(judged(&zeros(500), &view, &rules), over(&zeros(500), small));
 
-    // The large network: the budget is 584, but a section is held to the
-    // window first, and under the genesis schedule `W₂` is 500. So 584
-    // zero-draw bundles price within the budget and are still refused,
-    // at CEN-J31, before the budget is read (`SCS-P41`).
+    // 584 is the large network's budget, and it is not an admission: 501
+    // and 584 references put the oldest outside `W₂`.
     let large = section_budget(c, 324_000, seb);
-    assert_eq!(charged(&zeros(584), large), Ok(584));
-    assert_eq!(charged(&zeros(585), large), over(&zeros(585), large));
+    assert_eq!(large, 584);
+    let priced = SectionCharge::of(&zeros(584));
+    assert_eq!(priced.get(), 584);
+    assert!(priced.within(large));
+    assert!(!SectionCharge::of(&zeros(585)).within(large));
+    let outside = SectionRefused::OutsideWindow { position: 0 };
+    for n in [501usize, 584] {
+        view.take_reads();
+        let refs = zeros(n);
+        assert_eq!(
+            judged(&refs, &view, &rules),
+            Err(SectionCheckFailed::Refused(outside)),
+            "{n} zero-draw bundles"
+        );
+        assert!(
+            view.take_reads().is_empty(),
+            "{n}: refused before any D is read"
+        );
+        assert_eq!(awaiting(&refs), Err(outside), "{n} at arrival");
+    }
+    // Five hundred fit the window, so arrival keeps the charge and does
+    // not apply a budget.
     assert_eq!(awaiting(&zeros(500)).map(|s| s.charge().get()), Ok(500));
-    assert_eq!(
-        awaiting(&zeros(501)),
-        Err(SectionRefused::OutsideWindow { position: 0 })
-    );
 
-    // Mixed: a zero-draw bundle beside bundles with draws costs its one.
+    // A zero-draw bundle beside a bundle with draws costs its one. Charge
+    // 3 is over budget 2. It is not compared with an odd cap.
     let mixed = section_of(&[0, 1, 0]);
-    assert_eq!(charged(&mixed, 3), Ok(3));
-    assert_eq!(charged(&mixed, 2), over(&mixed, 2));
-    let at_cap = section_of(&[292, 0, 291]);
-    assert_eq!(charged(&at_cap, large), Ok(584));
-    let one_more = section_of(&[292, 0, 292]);
-    assert_eq!(charged(&one_more, large), over(&one_more, large));
-    // And a bundle with draws is charged exactly its draws: two at the
-    // count cap fit, as before the amendment.
-    assert_eq!(charged(&section_of(&[292, 292]), large), Ok(584));
+    assert_eq!(SectionCharge::of(&mixed).get(), 3);
+    assert_eq!(judged(&mixed, &view, &rules), over(&mixed, small));
 }
 
 /// At arrival the charge is still taken: `D` is not known where an
@@ -374,32 +408,69 @@ fn a_section_awaiting_its_budget_keeps_its_charge() {
     );
 }
 
-/// The section's checks in §9.1's order: form (order, then root) before
-/// budget. Red edit: check the budget first.
+/// The section's checks in §9.1's order, each as [`check_section`]'s
+/// result: order, then the root, then the window, then the budget. A
+/// reference that is also outside the window is still refused for order.
+/// Red edit: check the budget first, or the window before the order.
 #[test]
 fn of_two_section_defects_the_earlier_check_refuses() {
+    let rules = rules_of(10_000);
+    // `D` = 8, so the budget is 2. Two references of eight draws charge 16.
+    let view = view_holding(&[(0, 8)]);
     let a = reference_at(100, 8);
     let b = reference_at(101, 8);
+    let h_incl = BlockHeight::from_raw(102);
+    let judge = |refs: &[BundleRef], root: &[u8; 32]| {
+        view.take_reads();
+        let outcome = check_section(refs, root, h_incl, &view, &rules);
+        (outcome, view.take_reads())
+    };
+
+    // Out of order, a wrong root, and over budget at once. Order is first,
+    // and it reads nothing.
     let swapped = [b.clone(), a.clone()];
-    // Out of order, a wrong root, and over budget at once.
+    let (outcome, reads) = judge(&swapped, &[0; 32]);
     assert_eq!(
-        check_section_at_cap(&swapped, &[0; 32], 0),
-        Err(SectionRefused::OutOfOrder { position: 1 })
+        outcome,
+        Err(SectionCheckFailed::Refused(SectionRefused::OutOfOrder {
+            position: 1
+        }))
     );
-    // In order, a wrong root, and over budget.
+    assert!(reads.is_empty());
+
+    // The first reference is also outside the window (`h` 1000, included
+    // at 102). Order still wins: a window-first check would refuse
+    // position 0.
+    let far = [reference_at(1000, 8), reference_at(100, 8)];
+    let (outcome, reads) = judge(&far, &[0; 32]);
     assert_eq!(
-        check_section_at_cap(&[a.clone(), b.clone()], &[0; 32], 0),
-        Err(SectionRefused::Root)
+        outcome,
+        Err(SectionCheckFailed::Refused(SectionRefused::OutOfOrder {
+            position: 1
+        }))
     );
+    assert!(reads.is_empty());
+
+    // In order, a wrong root, and over budget. The root is next.
     let refs = [a, b];
+    let (outcome, reads) = judge(&refs, &[0; 32]);
     assert_eq!(
-        check_section_at_cap(&refs, &root_of(&refs), 15),
-        Err(SectionRefused::OverBudget {
-            charge: SectionCharge::of(&refs),
-            budget: 15
-        })
+        outcome,
+        Err(SectionCheckFailed::Refused(SectionRefused::Root))
     );
+    assert!(reads.is_empty());
+
+    // In order, the right root: the budget is the check that reads `D`.
     assert_eq!(SectionCharge::of(&refs).get(), 16);
+    let (outcome, reads) = judge(&refs, &root_of(&refs));
+    assert_eq!(
+        outcome,
+        Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
+            charge: SectionCharge::of(&refs),
+            budget: 2,
+        }))
+    );
+    assert_eq!(reads, [BundleRead::DrawableEpoch]);
 }
 
 const PERSONA: [u8; 32] = [0x41; 32];
@@ -430,7 +501,7 @@ fn drawable(epoch: u64, pairs: u64) -> DrawableEpoch {
     .expect("one persona, distinct shards")
 }
 
-fn view_holding(epochs: &[(u64, u64)]) -> FixtureBundleView {
+pub(in crate::archival::bundle) fn view_holding(epochs: &[(u64, u64)]) -> FixtureBundleView {
     let mut view = FixtureBundleView::default();
     for &(epoch, pairs) in epochs {
         view.drawable_epochs
