@@ -557,7 +557,7 @@ system. The CLI's two modes are:
 - **One-shot mode.** `shekyl-cli balance` (no agent running) spawns
   an in-process `shekyl-wallet-rpc` instance, runs the command
   against it, shuts it down, and exits.
-- **Agent mode.** `shekyl-wallet-rpc --uds /path/sock my.wallet`
+- **Agent mode.** `shekyl-wallet-rpc --rpc-bind uds:///path/sock`
   starts a long-running RPC daemon. `shekyl-cli --rpc-url uds:///path/sock
   balance` is a remote client to it.
 
