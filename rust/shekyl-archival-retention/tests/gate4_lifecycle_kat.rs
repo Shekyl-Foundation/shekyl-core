@@ -73,17 +73,9 @@ fn build_gate4_document() -> Value {
         hybrid_pk_bytes,
         p_id,
         bond_spend_pk.clone(),
-        // Unlike `bond_spend_pk`, the receipt key is judged as a key by the
-        // battery this document runs (`BondPostError::ReceiptKeyNotAKey`),
-        // so it is a real one. It is not a pinned field: the pinned join is
-        // the retired keyless form and carries none.
-        shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa::keypair_from_seeds(
-            &[0x5C; 32],
-            &[0x5D; 32],
-        )
-        .expect("keygen")
-        .0
-        .to_receipt_sign_pk(),
+        shekyl_archival_retention::ReceiptSignPk::from_bytes(
+            [0x5C; shekyl_archival_retention::RECEIPT_SIGN_PK_LEN],
+        ),
         [0x0Eu8; ENDPOINT_BYTES],
         HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,

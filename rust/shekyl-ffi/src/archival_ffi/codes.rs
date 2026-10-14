@@ -666,15 +666,7 @@ pub(super) fn map_wire_error(_err: &WireError) -> u8 {
 /// `u8` codes; the Rust verify body stays free of C-side string tables.
 pub(super) fn map_bond_post_error(err: BondPostError) -> u8 {
     match err {
-        // `ReceiptKeyNotAKey` reaches no FFI path. A receipt key exists only
-        // on a JoinMarket, and the JoinMarket export
-        // (`shekyl_archival_verify_join_market_bond_post`) refuses every
-        // call with `ERR_POST_KIND` before it verifies anything (FND-20).
-        // It answers the code that export already gives, so the C side
-        // gains no code it cannot receive. Both go at DEL-008.
-        BondPostError::PostKindNotJoinMarket | BondPostError::ReceiptKeyNotAKey => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
-        }
+        BondPostError::PostKindNotJoinMarket => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND,
         BondPostError::ShardSetCompactEmpty => SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY,
         BondPostError::CompleteTreeWithShardIds => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS

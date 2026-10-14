@@ -8,23 +8,13 @@
 use super::*;
 use crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet, ENDPOINT_BYTES};
-use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
-
-/// A real scheme-3 receipt key, so the valid vin passes
-/// [`BondPostError::ReceiptKeyNotAKey`] as a wallet-built post does.
-fn receipt_key() -> crate::ReceiptSignPk {
-    HybridEd25519FnDsa::keypair_from_seeds(&[0x5C; 32], &[0x5D; 32])
-        .expect("keygen")
-        .0
-        .to_receipt_sign_pk()
-}
 
 fn valid_join_vin() -> ArchivalBondPostVin {
     ArchivalBondPostVin::join_market(
         vec![0xAB; 64],
         [0x11; 32],
         vec![0xE5; 64],
-        receipt_key(),
+        crate::ReceiptSignPk::from_bytes([0x5C; crate::RECEIPT_SIGN_PK_LEN]),
         [0xEE; ENDPOINT_BYTES],
         HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
@@ -51,44 +41,6 @@ fn rejects_all_zero_endpoint() {
     ep[ENDPOINT_BYTES - 1] = 1;
     vin.set_endpoint(ep);
     assert!(verify_join_market_bond_post(&vin, false).is_ok());
-}
-
-/// The submit battery's copy of CEN-J28: a receipt key that is not a key
-/// is refused before the record fact is consulted, so it is `Malformed` at
-/// submit and never the claim-slot conflict. The edits are three of
-/// CEN-J28's own (`shekyl-chain-rules` `tx_inputs_tests.rs`): scheme byte 1,
-/// an FN-DSA half of all `0xFF`, and the all-zero string.
-#[test]
-fn rejects_a_receipt_key_that_is_not_a_key() {
-    /// The scheme byte follows the version byte.
-    const SCHEME_AT: usize = 1;
-    /// The FN-DSA-1024 public key is the key's last 1,793 bytes.
-    const FN_DSA_AT: usize = crate::RECEIPT_SIGN_PK_LEN - 1793;
-    let valid = receipt_key();
-    let mut scheme_one = *valid.as_bytes();
-    scheme_one[SCHEME_AT] = 1;
-    let mut fn_dsa_ones = *valid.as_bytes();
-    fn_dsa_ones[FN_DSA_AT..].fill(0xFF);
-    for bytes in [scheme_one, fn_dsa_ones, [0u8; crate::RECEIPT_SIGN_PK_LEN]] {
-        let vin = ArchivalBondPostVin::join_market(
-            vec![0xAB; 64],
-            [0x11; 32],
-            vec![0xE5; 64],
-            crate::ReceiptSignPk::from_bytes(bytes),
-            [0xEE; ENDPOINT_BYTES],
-            HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
-            },
-            2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        );
-        for record_exists in [false, true] {
-            assert_eq!(
-                verify_join_market_bond_post(&vin, record_exists),
-                Err(BondPostError::ReceiptKeyNotAKey)
-            );
-        }
-    }
 }
 
 #[test]
