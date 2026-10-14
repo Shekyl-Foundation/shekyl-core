@@ -46,7 +46,8 @@ an option is the table's. A command is a path whose last term is a
 *verb* (the command acts) or a *view* (a noun whose command prints it);
 verbs and views are terms of that kind under their parent, a subject that
 is itself a verb or a view is a command alone (`send`, `balance`), and
-each command has exactly one spelling. The gate walks every live and
+each command has exactly one spelling. A view changes no state; a
+command that changes state ends in a verb. The gate walks every live and
 reserved name and every command in every binary's table (a REJECTED row is a
 refused spelling, exempt by kind; IG-10) and fails on: an undefined
 segment; an adjacent pair that is not a parent→child edge; a qualifier

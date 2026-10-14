@@ -1,9 +1,8 @@
 # Shekyl input grammar — the rules and every binary's names
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
-2026-10-14 (§10–§15, IG-Q21…IG-Q33). Each question carries its ruling in
-its own line; IG-Q34 and IG-Q35 are OPEN, in their own lines, and §14.2 is
-OPEN in its heading. The rules IG-1…IG-15 are the cursor rule
+2026-10-14 (§10–§15, IG-Q21…IG-Q35). Each question carries its ruling in
+its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
 document holds the glossary tree and the name tables.
 **Verified against:** `shekyl-core` @ `737da3127` (`dev`; the option surface
@@ -58,7 +57,7 @@ Out of scope: RPC method names (a wire contract owned by the RPC lane) and log c
 
 **IG-2 One vocabulary, as a tree.** The glossary is a tree of terms. Each term is defined once, project-wide, and lists its parents; a term with no parent is a *subject*. A term reused under several parents keeps its one meaning (`listen` under `clearnet`, `onion`, `rpc` and `view`). Every segment of every name is a term in the tree, including plain words (`file`, `dir`, `max`, `help`): the gate has no exemption list.
 
-**IG-3 Structure.** A name is a path through the tree: it starts at a subject and each segment is a child of the one before (`tor-socks-password` is `tor` → `socks` → `password`). A subject alone is a name (`network`). The qualifiers `max` and `min` may end any path. A path-valued option ends in `file` or `dir`. A term may both carry a value and have children (`tor`, `tor-socks`). `dev` is a subject like any other (IG-8); its children may be other subjects (`dev-clearnet-encrypt`). The gate checks that a name is well formed; whether it is an option is the table's. A command is a path whose last term is a *verb* (the command acts) or a *view* (a noun whose command prints it); verbs and views are terms of that kind under their parent, a subject that is itself a verb or a view is a command alone (`send`, `balance`), and each command has exactly one spelling.
+**IG-3 Structure.** A name is a path through the tree: it starts at a subject and each segment is a child of the one before (`tor-socks-password` is `tor` → `socks` → `password`). A subject alone is a name (`network`). The qualifiers `max` and `min` may end any path. A path-valued option ends in `file` or `dir`. A term may both carry a value and have children (`tor`, `tor-socks`). `dev` is a subject like any other (IG-8); its children may be other subjects (`dev-clearnet-encrypt`). The gate checks that a name is well formed; whether it is an option is the table's. A command is a path whose last term is a *verb* (the command acts) or a *view* (a noun whose command prints it); verbs and views are terms of that kind under their parent, a subject that is itself a verb or a view is a command alone (`send`, `balance`), and each command has exactly one spelling. A view changes no state; a command that changes state ends in a verb.
 
 The gate walks every live and reserved name and every command in every binary's table (an X row is a refused spelling, exempt by kind; IG-10) and fails on: an undefined segment; an adjacent pair that is not a parent→child edge in the tree; a qualifier anywhere but last; a term defined twice. The edit that proves it can fail: add an option `socks-tor`.
 
@@ -116,8 +115,8 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 
 | Term | Parents | Meaning |
 |---|---|---|
-| help | — | print usage |
-| version | — | print the version and the OS line |
+| help | — | *view* — print usage |
+| version | — | *view* — print the version and the OS line |
 | network | — | which chain: `mainnet`, `testnet`, `stagenet`, `regtest` |
 | config | — | the TOML file of option values |
 | data | — | the per-network directory holding the daemon's stores and state |
@@ -151,7 +150,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | block | notify, — | a new block |
 | rate | block | the block-rate check |
 | reorg | notify, archival | a chain reorganization |
-| height | block, reorg, split, chain, restore | a block height: under `block` the new block's, under `reorg` the new tip's, under `split` the last block both chains share |
+| height | block, reorg, split, chain, restore | a block height: under `block` the new block's, under `reorg` the new tip's, under `split` the last block both chains share; under `chain`, *view* — the chain's height |
 | hash | block | the new block's hash |
 | split | reorg | the point where the two chains part (`{split-height}`) |
 | added | reorg | blocks in the new chain |
@@ -160,21 +159,21 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | observed | rate | blocks seen in the window |
 | expected | rate | blocks expected in the window |
 | mine | — | the daemon's miner and its control |
-| address | mine, make, — | a Shekyl address (the payment meaning; never a network location) |
+| address | mine, make, — | a Shekyl address (the payment meaning; never a network location); bare, *view* — the wallet's primary address |
 | threads | mine | a thread count |
 | rpc | —, wallet | an RPC service's listeners: the daemon's, or the wallet's (`shekyl-wallet-rpc`, and `wallet-rpc-*` in `shekyl-cli`) |
 | view | rpc | the view grant (RPC_CHANNEL RT-13) |
 | admin | rpc | the admin grant (RPC_CHANNEL RT-O9) |
 | cors | rpc | cross-origin resource sharing |
 | origin | cors | an allowed origin |
-| connections | rpc, peer | concurrent connections |
+| connections | rpc, peer | concurrent connections; under `peer`, *view* — the live peer connections |
 | console | — | the daemon's interactive console (interim; R8) |
 | dev | — | a development lever (IG-8) |
 | encrypt | clearnet | the pre-flip clearnet encryption switch |
-| relay | dev, tx | transaction relay (Dandelion++) |
+| relay | dev, tx | transaction relay (Dandelion++); under `tx`, *verb* — relay a transaction |
 | cover | relay | Dandelion++ cover traffic ([`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md)) |
 | sync | dev, — | chain synchronization |
-| difficulty | dev, chain | a fixed mining difficulty |
+| difficulty | dev, chain | a fixed mining difficulty; under `chain`, *view* — the current difficulty |
 | pow | dev | the RandomX seed schedule |
 | seed | pow | the RandomX seed |
 | epoch | seed, settlement | a fixed-length run of blocks |
@@ -439,7 +438,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | exit | — | *verb* — leave the prompt |
 | status | wallet, stake, mine, sync, daemon | *view* — the current state |
 | stop | mine, daemon | *verb* — stop |
-| set | option | *verb* — set a runtime value |
+| set | option, password, note | *verb* — assign a value |
 | show | tx, shard, chain, block, ban, option | *verb* — print one item |
 | endpoint | daemon, rpc | a peer-endpoint the binary dials (IG-Q31) |
 | socket | daemon, rpc | the local socket of RPC_CHANNEL RT-15 |
@@ -451,7 +450,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | held | list | *view* — the shards this wallet holds |
 | amount | make | an amount (kind `amount`) |
 | label | make | a human label |
-| expiry | new | how long a request stays valid: a duration |
+| expiry | create | how long a request stays valid: a duration |
 | priority | send | `economy`, `standard` or `high` |
 | yes | send, add, return, release, collect | confirm without a prompt |
 | full | address | the whole address, not the display form |
@@ -477,17 +476,16 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | white | list | the white peer list |
 | gray | list | the gray peer list |
 | spent | chain | *view* — whether a key image is spent |
-| create | wallet | *verb* — create |
+| create | wallet, request | *verb* — create |
 | open | wallet | *verb* — open |
 | close | wallet | *verb* — close |
 | restore | wallet | *verb* — restore from the recovery words |
 | refresh | wallet | *verb* — sync with the daemon |
 | rescan | wallet | *verb* — rebuild the history |
 | list | tx, request, shard, peer, ban, txpool | *verb* — print the entries |
-| note | tx | *verb* — attach or print a local note |
+| note | tx | *view* — a transaction's local note |
 | abandon | tx | *verb* — give up on a dispatched send |
 | decode | tx | *verb* — decode a transaction blob |
-| new | request | *verb* — make a new request |
 | make | uri | *verb* — compose |
 | read | uri | *verb* — decode |
 | outputs | stake | *view* — the staking-side outputs |
@@ -499,8 +497,8 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | join | stake | *verb* — name the shards to serve |
 | fetch | shard | *verb* — fetch |
 | start | mine | *verb* — start |
-| payment | prove, check | a payment proof |
-| reserve | prove, check | a reserve proof |
+| payment | prove, check | *view* — a payment proof, or the verdict on one |
+| reserve | prove, check | *view* — a reserve proof, or the verdict on one |
 | remove | ban | *verb* — remove |
 | flush | txpool | *verb* — flush |
 
@@ -544,7 +542,7 @@ Legend as §5: **R** rename or fold, **K** kept, **X** REJECTED row, **–** rem
 
 ### 12.3 `shekyl-cli` — command words
 
-A command's last term is a verb or a view (IG-3); its flags are names under that term.
+A command's last term is a verb or a view, and a command that changes state ends in a verb (IG-3); its flags are names under that term.
 
 | Today | New | Positionals | Flags | Notes |
 |---|---|---|---|---|
@@ -553,7 +551,7 @@ A command's last term is a verb or a view (IG-3); its flags are names under that
 | `wallet open <name>` | same | name | | K |
 | `wallet close` | same | | | K |
 | `wallet restore <name> <seed...>` | `wallet restore <name>` | name | `--mnemonic-file <path>` | R (IG-Q24): the words come from the file or a hidden prompt, never a line, a history or a script |
-| `wallet password` | same | | | K; IG-Q34 (OPEN) |
+| `wallet password` | `wallet password set` | | | R (IG-Q34) |
 | `wallet refresh` | same | | | K |
 | `wallet rescan [hard]` | `wallet rescan` | | `--hard` | R |
 | `balance` | `balance` | | | K |
@@ -566,10 +564,10 @@ A command's last term is a verb or a view (IG-3); its flags are names under that
 | `exit` (synonym `quit`) | `exit` | | | R (IG-Q30): `quit` goes |
 | `tx list [--in \| --out] [--unmatched]` | `tx list` | | `--direction in\|out`; `--unmatched` | R (IG-Q22) |
 | `tx show <id>` | same | hash | `--hex` | K |
-| `tx note <txid> [<text...>]` | same | hash, text | | K; IG-Q34 (OPEN) |
+| `tx note <txid> [<text...>]` | `tx note <id>`, `tx note set <id> <text>` | hash; hash, text | | R (IG-Q34): `tx note` is a view; `tx note set` with empty text clears the note |
 | `tx abandon <txid>` | same | hash | | K |
 | — | `tx decode <hex>` | a transaction blob, hex | | N (IG-Q26): decodes with the Rust codecs; `shekyl-utils-deserialize` then goes |
-| `request new <amount> <label> [--expiry e]` | same | amount, text | `--expiry` quantity (duration) | K; IG-Q34 (OPEN) |
+| `request new <amount> <label> [--expiry e]` | `request create <amount> <label>` | amount, text | `--expiry` quantity (duration) | R (IG-Q34) |
 | `request list [--matched \| --all]` | same | | `--matched`; `--all` | K |
 | `uri make [--amount X] [--label L] [--address A]` | same | | `--amount` amount; `--label` text; `--address` address | K |
 | `uri read <uri>` | same | a `shekyl:` URI | | K |
@@ -582,8 +580,8 @@ A command's last term is a verb or a view (IG-3); its flags are names under that
 | `shard show <id>` | same | integer | | K |
 | `shard fetch <id> [--png p] [--size n]` | same | integer | `--png-file <path>`; `--png-pixels` integer | R (IG-Q22) |
 | `mine start [threads\|auto]`, `mine stop`, `mine status` | same | integer or `auto` | | K (IG-Q21) |
-| `prove payment <txid> <address> [message...]`, `prove reserve [amount] [message...]` | same | hash, address, text; amount, text | | K; IG-Q34 (OPEN) |
-| `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | hash, address, text; address, text | | K; IG-Q34 (OPEN) |
+| `prove payment <txid> <address> [message...]`, `prove reserve [amount] [message...]` | same | hash, address, text; amount, text | | K; views (IG-Q34) |
+| `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | hash, address, text; address, text | | K; views (IG-Q34) |
 | `sign <message...>`, `verify <address> <signature> <message...>` | same | text; address, text | | K |
 | the `RETIRED` table (`transfer`, `transfers`, `show_transfer`, `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`, `drain`, `drain_balance`, `unstake`, `stake exit`, `collect_unstaked`, `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`, `start_mining`, `stop_mining`, `mining_status`, `chain_health`, …) | — | | | – (IG-Q30) |
 
@@ -649,9 +647,9 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 
 Each deletion fixes its consumers: the weekly workflow's comment, the logging and blob-dump gate comments that name the tools, the Windows installer and the build workflows for `shekyl-mdb-copy`, and `EXECUTABLES.md`.
 
-### 14.2 `geblock` — OPEN for ruling (IG-Q35)
+### 14.2 `geblock`
 
-The four acts of the genesis ceremony tool under IG-3. Default paths are the build tree's, fixed at compile time (absolute; a binary copied elsewhere passes the paths). Terms this table adds, for ruling with it:
+The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no path defaults: every path flag is required wherever it applies, so the command line records exactly what the ceremony used. Terms this table adds:
 
 | Term | Parents | Meaning |
 |---|---|---|
@@ -667,10 +665,10 @@ The four acts of the genesis ceremony tool under IG-3. Default paths are the bui
 
 | Today | New | Flags | Notes |
 |---|---|---|---|
-| `gen-wallets --network n --out-dir d` | `genesis recipients create` | `--network`; `--dir <path>` | a new directory on secured storage, refused inside a git tree |
-| `build --network n [--recipients f]` | `genesis build` | `--network`; `--recipients-file <path>` | the transaction hex goes to stdout |
-| `verify [--config f] [--recipients-dir d]` | `genesis verify` | `--constants-file <path>`; `--recipients-dir <path>` | `--config` named the C header, which IG-7's `config-file` cannot also name |
-| `block-id --network n [--recipients f] [--config f]` | `genesis block` | `--network`; `--recipients-file <path>`; `--constants-file <path>` | |
+| `gen-wallets --network n --out-dir d` | `genesis recipients create` | `--network`; `--dir <path>` (required) | creates the directory fresh, mode `0700`, refused if it exists or lies inside a git tree; writes the wallet files `0600`, under the secret-file checks of IG-Q24 and §12.1 |
+| `build --network n [--recipients f]` | `genesis build` | `--network`; `--recipients-file <path>` (required) | the transaction hex goes to stdout |
+| `verify [--config f] [--recipients-dir d]` | `genesis verify` | `--constants-file <path>`, `--recipients-dir <path>` (both required) | `--config` named the C header, which IG-7's `config-file` cannot also name |
+| `block-id --network n [--recipients f] [--config f]` | `genesis block` | `--network`; `--recipients-file <path>`, `--constants-file <path>` (both required) | |
 
 ## 15. Questions for Part B
 
@@ -700,6 +698,6 @@ The four acts of the genesis ceremony tool under IG-3. Default paths are the bui
 
 **IG-Q33 — `status` — RULED 2026-10-14.** `status` is a view everywhere: `wallet status`, `stake status`, `mine status`, `sync status`, and the daemon's `daemon status`. The daemon stops with `daemon stop`, so the shared `shekyl-cli` shell has no bare word that stops the daemon.
 
-**IG-Q34 — commands the amended IG-3 does not classify — OPEN.** Each needs a verb or a view as its last term. `wallet password` acts, but `password` is the noun `wallet-password-file` uses: proposal `wallet password set`, with `set` a verb under `password`. `tx note <id> [<text>]` prints a note, or sets one when text is given, two acts in one spelling: proposal `tx note <id>` a view and `tx note set <id> <text>`. `request new` ends in an adjective: proposal `request create`, reusing the verb. `prove payment`, `prove reserve`, `check payment` and `check reserve` end in the proof's noun: proposal, read as views (each prints a proof or a verdict), no rename.
+**IG-Q34 — commands IG-3's verb-or-view rule classifies — RULED 2026-10-14.** A view changes no state; a command that changes state ends in a verb (IG-3). `wallet password` changes the wallet, so it is `wallet password set`. `tx note <id>` is a view, and `tx note set <id> <text>` assigns the note; empty text clears it. `request new` is `request create`. `prove payment`, `prove reserve`, `check payment` and `check reserve` compute and print without changing anything, so they are views. `set` keeps one meaning, assign a value, under `option`, `password` and `note`.
 
-**IG-Q35 — `geblock`'s table — OPEN.** §14.2.
+**IG-Q35 — `geblock`'s table — RULED 2026-10-14.** §14.2, with its glossary rows. `geblock` has no path defaults: `--dir`, `--recipients-file`, `--recipients-dir` and `--constants-file` are required wherever they apply, so the command line records exactly what the ceremony used. `genesis recipients create` creates its directory fresh (`0700`, refused if it exists or lies inside a git tree) and writes the wallet files `0600`, under the secret-file checks of IG-Q24 and §12.1.
