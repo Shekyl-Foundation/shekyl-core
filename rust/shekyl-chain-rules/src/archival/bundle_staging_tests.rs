@@ -47,10 +47,13 @@ fn every_refusal_names_its_census_row() {
         .row(),
         CenRow::J30
     );
-    let rows: [(B, CenRow, Option<u32>); 11] = [
+    assert_eq!(
+        SectionRefused::OutsideWindow { position: 0 }.row(),
+        CenRow::J31
+    );
+    let rows: [(B, CenRow, Option<u32>); 10] = [
         (B::OutsideWindow, CenRow::J31, None),
         (B::AlreadyRevealed, CenRow::J31, None),
-        (B::UnknownBlock, CenRow::J31, None),
         (B::BodyMalformed, CenRow::J32, None),
         (B::Count, CenRow::J32, None),
         (B::RecordCount, CenRow::J32, None),

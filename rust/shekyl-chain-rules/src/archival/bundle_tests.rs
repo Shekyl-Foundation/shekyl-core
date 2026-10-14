@@ -494,17 +494,23 @@ fn a_second_bundle_for_a_revealed_block_refuses() {
     assert!(judge(&world, &reference, &body).is_ok());
 }
 
-/// A bundle for a block the chain does not have is refused. Red edit:
-/// treat a missing count as zero — the bundle would then be judged
-/// against an empty bitmap and refused as `Bitmap`.
+/// A view with no count for `h` has failed to answer; it has not judged
+/// the bundle (`SCS-P42`). The window check has already put `h` below the
+/// including block, so `h` is a block of this chain and its count was
+/// written when it connected. Red edits: refuse it as a verdict — a store
+/// that missed a row would then invalidate an honest block; treat it as
+/// zero — the bundle would then be judged against an empty bitmap and
+/// refused as `Count`.
 #[test]
-fn a_bundle_for_a_block_the_chain_does_not_have_refuses() {
+fn a_missing_draw_count_is_the_views_failure_not_a_verdict() {
     let mut world = BundleWorld::new(10);
     let (reference, body) = world.bundle(&[1]);
     world.view.counts.remove(&world.h);
     assert_eq!(
         judge(&world, &reference, &body),
-        invalid(BundleInvalid::UnknownBlock)
+        Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
+            height: world.h
+        }))
     );
 }
 
@@ -711,7 +717,7 @@ fn a_bundle_that_does_not_open_the_commitment_refuses() {
 /// signature, checked next and before any receipt: a body the producer did
 /// not sign costs one signature verification, no drawable epoch read and no
 /// receipt verification (§9.1). Red edits: verify receipts first (the read
-/// log gains `DrawableEpoch`); verify under `SCHEME_DOMAIN_WITNESS_CARRIER`.
+/// log gains `DrawableEpoch`); verify under `SCHEME_DOMAIN_RECEIPT`.
 #[test]
 fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
     let world = BundleWorld::new(10);

@@ -21,7 +21,8 @@ use shekyl_types::{BlockHeight, SettlementEpoch};
 
 use super::*;
 use crate::harness::bundle::{with_hash, BundleRead, BundleReadFaulted, FixtureBundleView};
-use crate::rule_set::{SettlementEpochBlocks, SettlementSchedule};
+use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
+use shekyl_types::BlockCount;
 
 /// A reference at `h` to a bundle of `count` draws, none passed.
 fn reference_at(h: u64, count: u32) -> BundleRef {
@@ -50,14 +51,37 @@ fn root_of(refs: &[BundleRef]) -> [u8; 32] {
     bundle_root(refs).expect("a test section's count fits 32 bits")
 }
 
+/// The including block for `refs`: one above the last, so every reference
+/// in a section of consecutive heights is inside any window as long as the
+/// section. An empty section is included at 101.
+fn h_incl_of(refs: &[BundleRef]) -> BlockHeight {
+    BlockHeight::from_raw(refs.last().map_or(101, |r| r.h().to_raw() + 1))
+}
+
+/// A Fakechain rule set whose epoch is `blocks` long, so `W₂` is
+/// `blocks / 20`, with a reorg cap of 10.
+fn rules_of(blocks: u64) -> RuleSet {
+    RuleSet::fakechain(
+        None,
+        FakechainSchedule::new(
+            SettlementEpochBlocks::new(blocks).expect("non-zero"),
+            BlockCount::from_raw(10),
+        )
+        .expect("0 < cap < SEB, and W₂ + L within the anchor depth"),
+    )
+}
+
 /// The comparison tests' cap. [`check_section`] computes the real one from
-/// the section's epochs; this door exists so a test can name a cap.
+/// the section's epochs; this door exists so a test can name a cap. It
+/// runs the section's shape and the comparison and skips the window, so it
+/// can price a section longer than any window admits (the zero-draw test
+/// below names where the window binds first).
 pub(super) fn check_section_at_cap(
     refs: &[BundleRef],
     header_root: &[u8; 32],
     cap: u64,
 ) -> Result<SectionCharge, SectionRefused> {
-    let charge = super::section_form(refs, header_root)?;
+    let charge = super::section_shape(refs, header_root)?;
     if charge.within(cap) {
         Ok(charge)
     } else {
@@ -75,7 +99,7 @@ fn charged(refs: &[BundleRef], cap: u64) -> Result<u64, SectionRefused> {
 
 /// Arrival, before any `D` is known. A non-empty section waits.
 fn awaiting(refs: &[BundleRef]) -> Result<SectionStanding, SectionRefused> {
-    check_section_until_switch(refs, &root_of(refs))
+    check_section_until_switch(refs, &root_of(refs), h_incl_of(refs), &RuleSet::GENESIS)
 }
 
 /// References are in strictly ascending `h`, so none repeats. Red edit:
@@ -167,49 +191,61 @@ fn a_section_the_root_cannot_count_is_a_j29_refusal() {
 /// comparison; or compare against the root of the references sorted.
 #[test]
 fn a_section_whose_root_does_not_recompute_refuses() {
+    // Every section here is of references at 100 and 101, or empty.
+    let incl = BlockHeight::from_raw(102);
     let a = reference_at(100, 8);
     let b = reference_at(101, 3);
     let refs = [a.clone(), b.clone()];
     let root = root_of(&refs);
     assert_eq!(
-        check_section_until_switch(&refs, &root),
+        check_section_until_switch(&refs, &root, incl, &RuleSet::GENESIS),
         Ok(SectionStanding::Awaiting(SectionCharge::of(&refs)))
     );
 
     let mut wrong = root;
     wrong[5] ^= 1;
     assert_eq!(
-        check_section_until_switch(&refs, &wrong),
+        check_section_until_switch(&refs, &wrong, incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root)
     );
     // The root of a section that omits a reference, or adds one.
     assert_eq!(
-        check_section_until_switch(&refs, &root_of(std::slice::from_ref(&a))),
+        check_section_until_switch(
+            &refs,
+            &root_of(std::slice::from_ref(&a)),
+            incl,
+            &RuleSet::GENESIS
+        ),
         Err(SectionRefused::Root)
     );
     assert_eq!(
-        check_section_until_switch(std::slice::from_ref(&a), &root),
+        check_section_until_switch(std::slice::from_ref(&a), &root, incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root)
     );
     // One field of one reference: a different prunable hash, and a
     // different stated count over the same bitmap bytes.
     assert_eq!(
-        check_section_until_switch(&[a.clone(), with_hash(&b, [0xAC; 32])], &root),
+        check_section_until_switch(
+            &[a.clone(), with_hash(&b, [0xAC; 32])],
+            &root,
+            incl,
+            &RuleSet::GENESIS
+        ),
         Err(SectionRefused::Root)
     );
     assert_eq!(
-        check_section_until_switch(&[a, reference_at(101, 4)], &root),
+        check_section_until_switch(&[a, reference_at(101, 4)], &root, incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root),
         "three draws and four are one byte of bitmap and two roots"
     );
     // An empty section commits the empty root, and no other. It names no
     // epoch, so arrival admits it.
     assert_eq!(
-        check_section_until_switch(&[], &root_of(&[])),
+        check_section_until_switch(&[], &root_of(&[]), incl, &RuleSet::GENESIS),
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
     assert_eq!(
-        check_section_until_switch(&[], &[0; 32]),
+        check_section_until_switch(&[], &[0; 32], incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root)
     );
 }
@@ -285,10 +321,18 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
     assert_eq!(SectionCharge::of(&zeros(500)).get(), 500);
     assert_eq!(charged(&zeros(500), small), over(&zeros(500), small));
 
-    // The large network: 584 zero-draw bundles and no more.
+    // The large network: the budget is 584, but a section is held to the
+    // window first, and under the genesis schedule `W₂` is 500. So 584
+    // zero-draw bundles price within the budget and are still refused,
+    // at CEN-J31, before the budget is read (`SCS-P41`).
     let large = section_budget(c, 324_000, seb);
     assert_eq!(charged(&zeros(584), large), Ok(584));
     assert_eq!(charged(&zeros(585), large), over(&zeros(585), large));
+    assert_eq!(awaiting(&zeros(500)).map(|s| s.charge().get()), Ok(500));
+    assert_eq!(
+        awaiting(&zeros(501)),
+        Err(SectionRefused::OutsideWindow { position: 0 })
+    );
 
     // Mixed: a zero-draw bundle beside bundles with draws costs its one.
     let mixed = section_of(&[0, 1, 0]);
@@ -325,7 +369,7 @@ fn a_section_awaiting_its_budget_keeps_its_charge() {
     assert!(charge.within(u64::MAX));
 
     assert_eq!(
-        check_section_until_switch(&[], &root_of(&[])),
+        check_section_until_switch(&[], &root_of(&[]), h_incl_of(&[]), &RuleSet::GENESIS),
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
 }
@@ -405,8 +449,9 @@ fn view_holding(epochs: &[(u64, u64)]) -> FixtureBundleView {
 #[test]
 fn the_cap_is_the_largest_d_among_the_sections_epochs() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
-    let schedule = SettlementSchedule::new(seb);
+    let rules = rules_of(seb.get());
     let boundary = seb.get();
+    let h_incl = BlockHeight::from_raw(boundary + 1);
     // Two references in the earlier epoch, one in the later. Three
     // references, two epochs: each epoch is asked once.
     let spanning = [
@@ -422,7 +467,7 @@ fn the_cap_is_the_largest_d_among_the_sections_epochs() {
     let both = view_holding(&[(0, 0), (1, boundary)]);
     both.take_reads();
     assert_eq!(
-        check_section(&spanning, &root_of(&spanning), &both, schedule),
+        check_section(&spanning, &root_of(&spanning), h_incl, &both, &rules),
         Ok(SectionStanding::Admitted(SectionCharge::of(&spanning)))
     );
     assert_eq!(
@@ -434,7 +479,7 @@ fn the_cap_is_the_largest_d_among_the_sections_epochs() {
     let earlier = [reference_at(boundary - 2, 2), reference_at(boundary - 1, 2)];
     let only_small = view_holding(&[(0, 0)]);
     assert_eq!(
-        check_section(&earlier, &root_of(&earlier), &only_small, schedule),
+        check_section(&earlier, &root_of(&earlier), h_incl, &only_small, &rules),
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(&earlier),
             budget: small_cap,
@@ -444,7 +489,13 @@ fn the_cap_is_the_largest_d_among_the_sections_epochs() {
     // The later epoch missing is not the earlier epoch's cap. It waits.
     let later_unknown = view_holding(&[(0, 0)]);
     assert_eq!(
-        check_section(&spanning, &root_of(&spanning), &later_unknown, schedule),
+        check_section(
+            &spanning,
+            &root_of(&spanning),
+            h_incl,
+            &later_unknown,
+            &rules
+        ),
         Ok(SectionStanding::Awaiting(SectionCharge::of(&spanning)))
     );
 }
@@ -457,15 +508,16 @@ fn the_cap_is_the_largest_d_among_the_sections_epochs() {
 #[test]
 fn an_empty_section_is_admitted_and_an_unreadable_epoch_is_not_a_cap() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
-    let schedule = SettlementSchedule::new(seb);
+    let rules = rules_of(seb.get());
     let boundary = seb.get();
+    let h_incl = BlockHeight::from_raw(boundary + 1);
     let spanning = [reference_at(boundary - 1, 2), reference_at(boundary, 2)];
 
     let mut faulting = view_holding(&[]);
     faulting.fault = Some(BundleRead::DrawableEpoch);
     faulting.take_reads();
     assert_eq!(
-        check_section(&[], &root_of(&[]), &faulting, schedule),
+        check_section(&[], &root_of(&[]), h_incl, &faulting, &rules),
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
     assert!(faulting.take_reads().is_empty());
@@ -478,13 +530,13 @@ fn an_empty_section_is_admitted_and_an_unreadable_epoch_is_not_a_cap() {
         .drawable_epochs
         .insert(SettlementEpoch::from_raw(1), drawable(1, boundary));
     assert_eq!(
-        check_section(&spanning, &root_of(&spanning), &mismatched, schedule),
+        check_section(&spanning, &root_of(&spanning), h_incl, &mismatched, &rules),
         Ok(SectionStanding::Awaiting(SectionCharge::of(&spanning)))
     );
 
     faulting.take_reads();
     assert_eq!(
-        check_section(&spanning, &root_of(&spanning), &faulting, schedule),
+        check_section(&spanning, &root_of(&spanning), h_incl, &faulting, &rules),
         Err(SectionCheckFailed::View(BundleReadFaulted(
             BundleRead::DrawableEpoch
         )))
@@ -493,10 +545,116 @@ fn an_empty_section_is_admitted_and_an_unreadable_epoch_is_not_a_cap() {
     let swapped = [spanning[1].clone(), spanning[0].clone()];
     faulting.take_reads();
     assert_eq!(
-        check_section(&swapped, &root_of(&spanning), &faulting, schedule),
+        check_section(&swapped, &root_of(&spanning), h_incl, &faulting, &rules),
         Err(SectionCheckFailed::Refused(SectionRefused::OutOfOrder {
             position: 1
         }))
     );
     assert!(faulting.take_reads().is_empty());
+}
+
+/// **Every reference is inside the window before the budget reads any `D`**
+/// (`SCS-P41`). A reference outside it is refused at CEN-J31, at its
+/// position, by both section checks. The case this closes: a section whose
+/// own epochs are held and over budget, plus one reference to a block the
+/// window does not reach, in an epoch nobody holds. Before, that one
+/// reference turned the whole section to `Awaiting` and the budget was
+/// never compared; now the section is refused for the reference.
+///
+/// Red edits: drop the window from the section's form — the
+/// future-epoch section is then `Awaiting` and the stale one over budget;
+/// check the window after the budget — the stale one is then refused at
+/// CEN-J30, not J31; `<` for `≤` at `h + W₂` — the edge reference at
+/// exactly `W₂` is refused.
+#[test]
+fn a_reference_outside_the_window_is_refused_before_the_budget() {
+    let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
+    let rules = rules_of(seb.get());
+    let window = rules
+        .settlement_schedule()
+        .challenge_response_blocks()
+        .expect("a 10,000-block epoch has a window")
+        .get();
+    assert_eq!(window, 500);
+    let boundary = seb.get();
+    let h_incl = BlockHeight::from_raw(boundary + 1);
+    // Epoch 1 holds D = 0, so its budget is 2; these charge 4.
+    let over = [reference_at(boundary - 1, 2), reference_at(boundary, 2)];
+    let view = view_holding(&[(0, 0), (1, 0)]);
+    assert_eq!(
+        check_section(&over, &root_of(&over), h_incl, &view, &rules),
+        Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
+            charge: SectionCharge::of(&over),
+            budget: 2,
+        }))
+    );
+
+    // The same section and one reference to a block above the including
+    // one, in an epoch the view does not hold.
+    let future = [
+        over[0].clone(),
+        over[1].clone(),
+        reference_at(boundary + seb.get(), 0),
+    ];
+    let refused = Err(SectionRefused::OutsideWindow { position: 2 });
+    view.take_reads();
+    assert_eq!(
+        check_section(&future, &root_of(&future), h_incl, &view, &rules),
+        refused.map_err(SectionCheckFailed::Refused)
+    );
+    assert!(view.take_reads().is_empty(), "refused before any D is read");
+    assert_eq!(
+        check_section_until_switch(&future, &root_of(&future), h_incl, &rules),
+        refused
+    );
+
+    // A reference older than the window, ahead of an over-budget pair: the
+    // window refuses it, at its position, before the budget.
+    let stale = [
+        reference_at(boundary - window - 1, 1),
+        reference_at(boundary - window, 9),
+    ];
+    let at_edge = BlockHeight::from_raw(boundary);
+    assert_eq!(
+        check_section(&stale, &root_of(&stale), at_edge, &view, &rules),
+        Err(SectionCheckFailed::Refused(SectionRefused::OutsideWindow {
+            position: 0
+        }))
+    );
+    // A reference exactly `W₂` below is inside, and the section reaches
+    // the budget.
+    let edge = [reference_at(boundary - window, 1)];
+    assert_eq!(
+        check_section(&edge, &root_of(&edge), at_edge, &view, &rules).map(SectionStanding::charge),
+        Ok(SectionCharge::of(&edge))
+    );
+    // The including block itself is not inside its own window.
+    let itself = [reference_at(boundary, 1)];
+    assert_eq!(
+        check_section_until_switch(&itself, &root_of(&itself), at_edge, &rules),
+        Err(SectionRefused::OutsideWindow { position: 0 })
+    );
+}
+
+/// A rule set whose epoch has no response window refuses every reference,
+/// as [`verify_bundle`] refuses every bundle under it (§9.1 step 3). An
+/// empty section names no block and is admitted. Red edit: treat a missing
+/// window as unbounded.
+#[test]
+fn no_window_admits_no_reference() {
+    let rules = rules_of(19);
+    assert!(rules
+        .settlement_schedule()
+        .challenge_response_blocks()
+        .is_none());
+    let one = [reference_at(100, 1)];
+    let h_incl = BlockHeight::from_raw(101);
+    assert_eq!(
+        check_section_until_switch(&one, &root_of(&one), h_incl, &rules),
+        Err(SectionRefused::OutsideWindow { position: 0 })
+    );
+    assert_eq!(
+        check_section_until_switch(&[], &root_of(&[]), h_incl, &rules),
+        Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
+    );
 }

@@ -9,18 +9,19 @@
 //! §9.1 (admission, the ordered checks) and §9.6 (the verifier and its two
 //! contracts). Three functions:
 //!
-//! - [`check_section`] — form, then the budget. The references are in
-//!   strictly ascending `h`, the header root recomputes from them, and
-//!   their charges — `max(count, 1)` each, from the count each reference
-//!   states (`SCS-P39`, `SCS-P40`) — fit `section_budget` over the largest
-//!   `D` among the section's own epochs. `D` is
+//! - [`check_section`] — form, the window, then the budget. The references
+//!   are in strictly ascending `h`, the header root recomputes from them,
+//!   each names an `h` with `h < h_incl ≤ h + W₂` (`SCS-P41`), and their
+//!   charges — `max(count, 1)` each, from the count each reference states
+//!   (`SCS-P39`, `SCS-P40`) — fit `section_budget` over the largest `D`
+//!   among the section's own epochs. `D` is
 //!   [`DrawableEpoch::len`](shekyl_archival_retention::DrawableEpoch::len),
 //!   read here from [`BundleView::drawable_epoch`]. The function takes no
 //!   cap.
-//! - [`check_section_until_switch`] — the same form check at arrival, when
-//!   this chain does not yet hold those epochs (`SCS-P23`). An empty
-//!   section is admitted. Any other section whose form holds waits: the
-//!   budget comparison is [`check_section`]'s, at the switch.
+//! - [`check_section_until_switch`] — the same form and window checks at
+//!   arrival, when this chain does not yet hold those epochs (`SCS-P23`).
+//!   An empty section is admitted. Any other section that passes them
+//!   waits: the budget comparison is [`check_section`]'s, at the switch.
 //! - [`verify_bundle`] — everything else, for one bundle, against a
 //!   [`BundleView`]: the window, one bundle per `h`, the bitmap and the
 //!   record count, the `0x0C` opening, the witness signature, every draw's
@@ -44,15 +45,17 @@
 //!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it implements [`BundleView`] on its store, calls
 //!   [`check_section`] and [`verify_bundle`] at admission from a block
 //!   rule, writes what [`Admitted`] carries, and deletes the attestation
-//!   path (CEN-B4). [`check_section`] takes that view and the block's
-//!   schedule; the cap is the section's. DRS-E5 is transport
+//!   path (CEN-B4). [`check_section`] takes that view, the block's height
+//!   and its rule set; the cap is the section's. DRS-E5 is transport
 //!   (`docs/design/DRS_E5_POOL_ALT_PRUNE.md` §2.2, §2.3). Its alternative
 //!   tier has landed ([`crate::alt_against`]) and does not call this
 //!   module: an alternative block's row still carries the attestation
 //!   witness, not bundle references. When E5 replaces that with
 //!   references, an arrival that can see the chain calls [`open_reference`]
 //!   and [`check_section`]: an epoch above the fork has no `D`, and one
-//!   such epoch waits the whole section (`SCS-P23`).
+//!   such epoch waits the whole section (`SCS-P23`). The window check
+//!   comes first, so only an epoch of a reference inside the window can do
+//!   that (`SCS-P41`).
 //!   [`check_section_until_switch`] is that form when the arrival has no
 //!   view. At the switch, `validate` runs [`check_section`] and
 //!   [`verify_bundle`] over the switch's batch view, on which E5 implements
@@ -91,10 +94,12 @@
 //! - [`BundleView::draw_count`] and [`BundleView::revealed`] are one row:
 //!   `ChainView::block_draws(h)`, a `BlockDraws` whose `count` is already
 //!   the `u32` this trait asks for and whose `revealed` is the
-//!   one-per-`h` flag. A height with no row has no count, and the rule
-//!   refuses it as [`BundleInvalid::UnknownBlock`]. No block writes the
-//!   row before admission lands, so until the cutover every height reads
-//!   that way. `carry` and `shortfall` on the same row are the count
+//!   one-per-`h` flag. The window check has already put `h` below
+//!   `h_incl`, so `h` is a block of this chain, and a height with no row is
+//!   the view failing to answer: [`BundleUnanswered::DrawCount`], not a
+//!   verdict (`SCS-P42`). No block writes the row before admission lands,
+//!   so a cutover that left a height without one would otherwise refuse
+//!   honest bundles. `carry` and `shortfall` on the same row are the count
 //!   rule's, and this rule does not read them.
 //! - [`BundleView::draw_commitment`] is the coinbase's `0x0C` field. The
 //!   coinbase grammar (CEN-I20) now requires exactly one, so a block of
@@ -202,8 +207,10 @@ pub trait BundleView {
     /// The view's own failure to answer. Never a verdict.
     type Fault;
 
-    /// `count(h)`, as written when `h` connected (§4.3). `None`: no such
-    /// block on this chain.
+    /// `count(h)`, as written when `h` connected (§4.3). `None`: the view
+    /// holds no count for `h`. Every `h` this is asked about is below the
+    /// including block, so that is the view's failure, never a verdict
+    /// ([`BundleUnanswered::DrawCount`]).
     ///
     /// A draw index `j` is 32 bits (§3), so a count is. A store that holds
     /// it wider refuses a value that does not fit; it does not truncate.
@@ -262,6 +269,16 @@ pub enum SectionRefused {
     },
     /// The header's root is not the root over these references. CEN-J29.
     Root,
+    /// The reference at `position` names an `h` the including block is not
+    /// inside the window of: not `h < h_incl ≤ h + W₂`, or the rule set's
+    /// epoch is too short to have a window. The section's copy of
+    /// [`BundleInvalid::OutsideWindow`], checked before the budget so that
+    /// no reference outside the window reaches the budget's reads
+    /// (`SCS-P41`). CEN-J31.
+    OutsideWindow {
+        /// The offending reference's position in the section.
+        position: usize,
+    },
     /// The references' charges sum past the section budget. CEN-J30.
     OverBudget {
         /// The section's charge: the sum of `max(count, 1)`.
@@ -281,6 +298,7 @@ impl SectionRefused {
             | Self::TooManyReferences { .. }
             | Self::Root => CenRow::J29,
             Self::OverBudget { .. } => CenRow::J30,
+            Self::OutsideWindow { .. } => CenRow::J31,
         }
     }
 }
@@ -305,6 +323,13 @@ impl fmt::Display for SectionRefused {
                 )
             }
             Self::Root => f.write_str("the header root is not the root over the references"),
+            Self::OutsideWindow { position } => {
+                write!(
+                    f,
+                    "bundle reference #{position} names a block the including block is \
+                     outside the window of"
+                )
+            }
             Self::OverBudget { charge, budget } => {
                 write!(
                     f,
@@ -413,35 +438,40 @@ pub fn open_reference(position: usize, bytes: &[u8]) -> Result<BundleRef, Sectio
     BundleRef::decode(bytes).map_err(|_: BundleWireError| SectionRefused::Malformed { position })
 }
 
-/// §9.1 steps 1 and 2, in that order: form, then the budget.
+/// §9.1 steps 1 and 2, in that order: form and the window, then the
+/// budget.
 ///
 /// The cap is [`section_budget`] over [`section_d_max`] of these
-/// references. `c` is [`BUNDLE_SECTION_BUDGET_MULTIPLE`] and `seb` is
-/// `schedule`'s. `D` is the drawable epoch's length, and it counts only
+/// references. `c` is [`BUNDLE_SECTION_BUDGET_MULTIPLE`]; `seb` and `W₂`
+/// are `rule_set`'s. `D` is the drawable epoch's length, and it counts only
 /// when that epoch is the one asked. An empty section is
-/// [`SectionStanding::Admitted`] and is not read. Any other unknown `D`
-/// is [`SectionStanding::Awaiting`] for the whole section.
+/// [`SectionStanding::Admitted`] and is not read. Any other unknown `D` is
+/// [`SectionStanding::Awaiting`] for the whole section. Every reference is
+/// inside the window before any `D` is read (`SCS-P41`), so the epochs
+/// asked are those of the `W₂` blocks below `h_incl`: an unknown one is an
+/// alternative chain's epoch above its fork point, not a reference that
+/// names a block nobody could hold.
 ///
 /// # Errors
 ///
-/// [`SectionCheckFailed::Refused`] for the first form or budget check that
-/// failed. [`SectionCheckFailed::View`] when a drawable-epoch read faults.
-/// A fault is not a verdict.
+/// [`SectionCheckFailed::Refused`] for the first form, window or budget
+/// check that failed. [`SectionCheckFailed::View`] when a drawable-epoch
+/// read faults. A fault is not a verdict.
 pub fn check_section<V: BundleView>(
     refs: &[BundleRef],
     header_root: &[u8; 32],
+    h_incl: BlockHeight,
     view: &V,
-    schedule: SettlementSchedule,
+    rule_set: &RuleSet,
 ) -> Result<SectionStanding, SectionCheckFailed<V::Fault>> {
-    let charge = section_form(refs, header_root).map_err(SectionCheckFailed::Refused)?;
+    let schedule = rule_set.settlement_schedule();
+    let charge =
+        section_form(refs, header_root, h_incl, schedule).map_err(SectionCheckFailed::Refused)?;
     if refs.is_empty() {
         return Ok(SectionStanding::Admitted(charge));
     }
     let d_max = section_d_max(refs, schedule, |epoch| {
-        Ok(match view.drawable_epoch(epoch)? {
-            Some(drawable) if drawable.epoch() == epoch => Some(drawable.len()),
-            _ => None,
-        })
+        Ok(drawable_for(view, epoch)?.map(DrawableEpoch::len))
     })
     .map_err(SectionCheckFailed::View)?;
     let Some(d_max) = d_max else {
@@ -458,20 +488,23 @@ pub fn check_section<V: BundleView>(
     }
 }
 
-/// [`check_section`]'s form check when the arrival has no view (`SCS-P23`).
+/// [`check_section`]'s form and window checks when the arrival has no view
+/// (`SCS-P23`).
 ///
 /// An empty section is [`SectionStanding::Admitted`]. Any other section
-/// whose form holds is [`SectionStanding::Awaiting`]: there is no `D`
+/// that passes them is [`SectionStanding::Awaiting`]: there is no `D`
 /// here, so there is no budget refusal.
 ///
 /// # Errors
 ///
-/// [`SectionRefused`], naming the first form check that failed.
+/// [`SectionRefused`], naming the first form or window check that failed.
 pub fn check_section_until_switch(
     refs: &[BundleRef],
     header_root: &[u8; 32],
+    h_incl: BlockHeight,
+    rule_set: &RuleSet,
 ) -> Result<SectionStanding, SectionRefused> {
-    let charge = section_form(refs, header_root)?;
+    let charge = section_form(refs, header_root, h_incl, rule_set.settlement_schedule())?;
     if refs.is_empty() {
         Ok(SectionStanding::Admitted(charge))
     } else {
@@ -479,8 +512,32 @@ pub fn check_section_until_switch(
     }
 }
 
-/// §9.1 step 1: order, then a root the count can name, then the charge.
+/// §9.1 step 1 and the section's window: [`section_shape`], then every
+/// reference inside the window.
+///
+/// The window is step 3's `h < h_incl ≤ h + W₂`, asked here of every
+/// reference: it reads `h_incl` and the schedule and nothing of the chain,
+/// so it is as stateless as the rest of the form (`SCS-P41`). Because the
+/// references' heights ascend strictly inside it, a section that passes
+/// holds at most `W₂` of them.
 fn section_form(
+    refs: &[BundleRef],
+    header_root: &[u8; 32],
+    h_incl: BlockHeight,
+    schedule: SettlementSchedule,
+) -> Result<SectionCharge, SectionRefused> {
+    let charge = section_shape(refs, header_root)?;
+    if let Some(position) = refs
+        .iter()
+        .position(|r| !inside_window(r.h(), h_incl, schedule))
+    {
+        return Err(SectionRefused::OutsideWindow { position });
+    }
+    Ok(charge)
+}
+
+/// §9.1 step 1: order, then a root the count can name, then the charge.
+fn section_shape(
     refs: &[BundleRef],
     header_root: &[u8; 32],
 ) -> Result<SectionCharge, SectionRefused> {
@@ -499,6 +556,31 @@ fn section_form(
     Ok(SectionCharge::of(refs))
 }
 
+/// `h < h_incl ≤ h + W₂`, with `W₂` the schedule's. A schedule whose epoch
+/// is too short to have a window has nothing inside one. §9.1 step 3's
+/// window, asked by the section and by [`verify_bundle`] alike.
+fn inside_window(h: BlockHeight, h_incl: BlockHeight, schedule: SettlementSchedule) -> bool {
+    let Some(window) = schedule.challenge_response_blocks() else {
+        return false;
+    };
+    matches!(
+        h_incl.to_raw().checked_sub(h.to_raw()),
+        Some(distance) if distance >= 1 && distance <= window.get()
+    )
+}
+
+/// `epoch`'s drawable epoch, if the view holds the one filed for it. A
+/// value filed under another epoch is not this epoch's `D`, and the
+/// caller treats it as absent.
+fn drawable_for<V: BundleView>(
+    view: &V,
+    epoch: SettlementEpoch,
+) -> Result<Option<&DrawableEpoch>, V::Fault> {
+    Ok(view
+        .drawable_epoch(epoch)?
+        .filter(|drawable| drawable.epoch() == epoch))
+}
+
 /// Why one bundle is refused: the verdict. Each arm names its census row
 /// ([`Self::row`]) and, for a record, the draw that failed
 /// ([`Self::draw`]).
@@ -515,9 +597,6 @@ pub enum BundleInvalid {
     OutsideWindow,
     /// A bundle for `h` is already admitted on this chain. CEN-J31.
     AlreadyRevealed,
-    /// The chain has no block `h`: the view has no draw count for it.
-    /// CEN-J31.
-    UnknownBlock,
     /// The count the reference states is not the chain's `count(h)`
     /// (`SCS-P39`). The bitmap is exactly as long as its stated count by
     /// construction, so this is the whole of "the bitmap is exactly
@@ -556,7 +635,7 @@ impl BundleInvalid {
     #[must_use]
     pub const fn row(&self) -> CenRow {
         match self {
-            Self::OutsideWindow | Self::AlreadyRevealed | Self::UnknownBlock => CenRow::J31,
+            Self::OutsideWindow | Self::AlreadyRevealed => CenRow::J31,
             Self::BodyMalformed | Self::Count | Self::RecordCount => CenRow::J32,
             Self::Commitment => CenRow::J33,
             Self::WitnessSignature => CenRow::J34,
@@ -585,7 +664,6 @@ impl fmt::Display for BundleInvalid {
                 f.write_str("the including block is outside the bundle's window")
             }
             Self::AlreadyRevealed => f.write_str("a bundle for this block is already admitted"),
-            Self::UnknownBlock => f.write_str("the bundle names a block this chain does not have"),
             Self::Count => f.write_str("the reference's count is not the block's draw count"),
             Self::RecordCount => f.write_str("the records are not one per set bit"),
             Self::Commitment => {
@@ -605,6 +683,13 @@ impl std::error::Error for BundleInvalid {}
 /// answer for. Not a verdict ([`BundleRefused::Unanswered`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BundleUnanswered {
+    /// No draw count for `h`, which the window check has put below the
+    /// including block, so it is a block of this chain and its count was
+    /// written when it connected (`SCS-P42`).
+    DrawCount {
+        /// The block asked about: `h`.
+        height: BlockHeight,
+    },
     /// No drawable epoch for the epoch of a block that has draws — or
     /// one of another epoch.
     DrawableEpoch {
@@ -676,6 +761,9 @@ impl<F: fmt::Display> fmt::Display for BundleRefused<F> {
         match self {
             Self::Invalid(invalid) => write!(f, "{invalid}"),
             Self::BodyNotReferenced => f.write_str("the body is not the one the reference names"),
+            Self::Unanswered(BundleUnanswered::DrawCount { height }) => {
+                write!(f, "the view has no draw count at height {height}")
+            }
             Self::Unanswered(BundleUnanswered::DrawableEpoch { epoch }) => {
                 write!(f, "the view has no drawable epoch for epoch {epoch}")
             }
@@ -795,18 +883,19 @@ pub fn verify_bundle<V: BundleView>(
     }
 
     // 3. Structure. `W₂` is the only window; there is no read window.
-    let Some(window) = schedule.challenge_response_blocks() else {
+    if !inside_window(h, h_incl, schedule) {
         return invalid(BundleInvalid::OutsideWindow);
-    };
-    match h_incl.to_raw().checked_sub(h.to_raw()) {
-        Some(distance) if distance >= 1 && distance <= window.get() => {}
-        _ => return invalid(BundleInvalid::OutsideWindow),
     }
     if view.revealed(h)? {
         return invalid(BundleInvalid::AlreadyRevealed);
     }
+    // `h` is below `h_incl`, so it is a block of this chain and its count
+    // was written when it connected: no count is the view's hole, not a
+    // verdict (`SCS-P42`).
     let Some(count) = view.draw_count(h)? else {
-        return invalid(BundleInvalid::UnknownBlock);
+        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
+            height: h,
+        }));
     };
     if reference.count() != count {
         return invalid(BundleInvalid::Count);
@@ -862,13 +951,10 @@ pub fn verify_bundle<V: BundleView>(
 
     // 6. Every draw's pair, at the issued counts visible at `h`.
     let epoch = schedule.epoch_at(h);
-    let drawable = match view.drawable_epoch(epoch)? {
-        Some(drawable) if drawable.epoch() == epoch => drawable,
-        _ => {
-            return Err(BundleRefused::Unanswered(BundleUnanswered::DrawableEpoch {
-                epoch,
-            }))
-        }
+    let Some(drawable) = drawable_for(view, epoch)? else {
+        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawableEpoch {
+            epoch,
+        }));
     };
     let Some(hash_at_h) = view.block_hash(h)? else {
         return Err(BundleRefused::Unanswered(BundleUnanswered::BlockHash {

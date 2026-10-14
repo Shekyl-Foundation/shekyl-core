@@ -816,15 +816,20 @@ own receipt. Each refusal is a typed verdict naming its census row.
 1. **Form.** The references are in strictly ascending `h`, so no `h`
    repeats. Each reference parses: its bitmap is exactly `⌈count / 8⌉`
    bytes for the `count` it states, with zero padding. The header root
-   recomputes from them (§7.3).
+   recomputes from them (§7.3). **Every reference names an `h` with
+   `h < h_incl ≤ h + W₂`**, step 3's window, refused under CEN-J31 at the
+   reference's position (`SCS-P41`). So a section holds at most `W₂`
+   references.
 2. **Budget.** The sum of `max(count, 1)` over the section, taken from
    the references' stated counts, is within the section budget (§7.4).
 
-Both are computed from the references and nothing else. The budget's
-value needs `D`, which is chain state; where that is not known at an
-alternative block's arrival, the sum is still taken and its comparison
-waits for the switch. A reference that understates its `count` to pass
-this sum is refused at step 3.
+Both are computed from the references, the including block's height and
+the rule set, and nothing else. The budget's value needs `D`, which is
+chain state; where that is not known at an alternative block's arrival,
+the sum is still taken and its comparison waits for the switch. Because
+the window is checked first, the only epochs the budget asks about are
+those of the `W₂` blocks below `h_incl`. A reference that understates its
+`count` to pass this sum is refused at step 3.
 
 **Each bundle**, naming `h`:
 
@@ -901,8 +906,11 @@ only the stateless checks run: the section's form, the root, and the
 budget where `D` is known at or below the fork point. Otherwise the budget
 waits for the switch. That comparison is `check_section`: it reads `D` as
 the largest `DrawableEpoch::len` among the section's epochs, and one
-unknown epoch waits the whole section. `check_section_until_switch` is
-the form alone, for an arrival that has no view. Everything else runs at
+unknown epoch waits the whole section. Every reference is inside the
+window before any `D` is read, so an unknown epoch is one opened above
+the fork point, never a reference to a block outside the window
+(`SCS-P41`). `check_section_until_switch` is the form and the window
+alone, for an arrival that has no view. Everything else runs at
 the switch, in the full validate over the switch's batch view. An
 alternative chain with an invalid bundle fails there and rolls back, at
 the cost of a heavier chain's proof of work. No bond state is rebuilt at
@@ -1092,24 +1100,27 @@ carries cannot without a change to this section.
 names no store type, writes nothing, and is tested against a fixture view.
 
 ```rust
-/// Form, then the budget. The cap is `section_budget` over the largest
-/// `DrawableEpoch::len` among these references' epochs, read from `view`.
-/// An empty section is `Admitted` and asks nothing. A section whose epoch
-/// has no `D` here is `Awaiting`: the charge is kept, the comparison is
-/// not a pass. The function takes no cap.
+/// Form and the window, then the budget. The cap is `section_budget` over
+/// the largest `DrawableEpoch::len` among these references' epochs, read
+/// from `view`. An empty section is `Admitted` and asks nothing. A section
+/// whose epoch has no `D` here is `Awaiting`: the charge is kept, the
+/// comparison is not a pass. The function takes no cap.
 pub fn check_section<V: BundleView>(
     refs: &[BundleRef],
     header_root: &[u8; 32],
+    h_incl: BlockHeight,
     view: &V,
-    schedule: SettlementSchedule,
+    rule_set: &RuleSet,
 ) -> Result<SectionStanding, SectionCheckFailed<V::Fault>>;
 
-/// The same form check at arrival, before this chain holds the epochs.
-/// An empty section is `Admitted`. Any other section whose form holds
-/// is `Awaiting`; the budget is `check_section`'s, at the switch.
+/// The same form and window checks at arrival, before this chain holds the
+/// epochs. An empty section is `Admitted`. Any other section that passes
+/// them is `Awaiting`; the budget is `check_section`'s, at the switch.
 pub fn check_section_until_switch(
     refs: &[BundleRef],
     header_root: &[u8; 32],
+    h_incl: BlockHeight,
+    rule_set: &RuleSet,
 ) -> Result<SectionStanding, SectionRefused>;
 
 /// Everything else, for one bundle. Receipts included.
@@ -1129,15 +1140,16 @@ draw `j` that failed. Three outcomes are not verdicts on a block:
 - **the body is not the one referenced**: its hash is not the reference's.
   The block committed to the reference, and a block whose body cannot be
   had is not connected. This is checked before anything else;
-- **the view could not answer** something it should hold: the drawable epoch of
-  `epoch(h)`, the hash at `h` or at an anchor, a drawn pair's key, or the
-  `0x0C` of a block it holds. Every coinbase carries exactly one `0x0C`
-  (CEN-I20), so a known block with none is the view's failure, not the
-  block's.
+- **the view could not answer** something it should hold: the draw count
+  of `h`, the drawable epoch of `epoch(h)`, the hash at `h` or at an
+  anchor, a drawn pair's key, or the `0x0C` of a block it holds. Every
+  coinbase carries exactly one `0x0C` (CEN-I20), so a known block with
+  none is the view's failure, not the block's. The draw count is the same
+  case (`SCS-P42`): step 3's window puts `h` below `h_incl`, so `h` is a
+  block of this chain and its count was written when it connected.
 
-`draw_count(h)` answering "no such block" does refuse the bundle: it names
-a block this chain does not have. A `0x0C` that the bundle's seed and
-witness key do not open is the refusal of step 4.
+A `0x0C` that the bundle's seed and witness key do not open is the
+refusal of step 4.
 
 **In this tree, STAGED.** The verifier merged on 2026-10-13 (PR #1047):
 `check_section`, `verify_bundle`, `open_body`, `open_reference`, the
@@ -1156,8 +1168,8 @@ the settlement lane's (`SO-D12`, `SCS-P31`).
 pub trait BundleView {
     type Fault;
 
-    /// `count(h)`, as written when `h` connected (§4.3). `None`: no such
-    /// block on this chain.
+    /// `count(h)`, as written when `h` connected (§4.3). `None`: the view
+    /// holds no count for `h`, which is its own failure (`SCS-P42`).
     fn draw_count(&self, h: BlockHeight) -> Result<Option<u32>, Self::Fault>;
     // A draw index `j` is 32 bits (§3), so a count is. A store that holds
     // it wider refuses a value that does not fit; it does not truncate.
@@ -1714,6 +1726,21 @@ resolved here.
 | --- | --- | --- |
 | `SCS-P39` | The budget was to be checked "on references alone", but a reference held only the bitmap's bytes, which do not determine `count(h)` (13 bytes fit 97 to 104). The sum of draws was therefore not computable without the chain, and the padding bits were not checkable at all without it | **The kept part states `count` (4 bytes, after `h`).** A reference parses on its own; the section's form and its sum of draws are stateless; the header root covers the count and needs no length frame. Admission holds the stated count to `count(h)`. Amends `SCS-P17`'s kept part. Considered and not taken: leaving the reference as it was and calling the budget a stateful check, which would have left an alternative block's section unbounded until the switch for every bundle above the fork point |
 | `SCS-P40` | A zero-draw bundle is admissible (`SCS-P33`) and, charged by its draws, free. One block could carry up to `W₂` of them | **A bundle is charged `max(count, 1)`.** A section holds at most `c · (⌊9·D / SEB⌋ + 1)` bundles whatever their draws. Amends `SCS-P20`. Considered and not taken: refusing zero-draw bundles, which would reverse `SCS-P33`'s uniform rule; and a separate cap on the number of bundles, a second constant for what one charge already bounds |
+
+### 13.9 Posed on review, 2026-10-14 — awaiting ruling
+
+A review of the merged verifier (`dev@4ba8b4c2e0`) found that two ruled
+texts disagree with each other or with the property they were ruled for,
+and that the tree does not do what a third says. `SCS-P41` and `SCS-P42`
+are built as recommended on the branch that carries them, so the ruling
+reads code, and either is a small revert if refused. `SCS-P43` is not
+built: it changes a type this section contracts to another lane.
+
+| # | Defect | Recommended, and built |
+| --- | --- | --- |
+| `SCS-P41` | §9.1 ruled "one unknown epoch waits the whole section", and §13.8 justified `SCS-P39` by bounding an alternative section on arrival. `check_section` had no `h_incl`, so one reference to a block outside the window — above the including block, in an epoch nobody holds — turned the whole section to `Awaiting` and the budget was never compared, for that section's in-window references too. It was safe only if every caller also ran `verify_bundle` on every reference, which nothing in the API required | **The window is part of the section's form.** `check_section` and `check_section_until_switch` take `h_incl` and the rule set, and after order and root refuse a reference not inside `h < h_incl ≤ h + W₂` (`SectionRefused::OutsideWindow`, CEN-J31, at its position). It reads nothing of the chain, so it is as stateless as the rest of the form. An unknown epoch is then one opened above an alternative chain's fork point, the case `SCS-P23` designed `Awaiting` for, and §13.8's bound holds for every section whose epochs are known at the fork. **Two consequences, stated:** a section holds at most `W₂` references, which under the genesis schedule (500) binds before the budget does on a large network (584); and a section that is both over budget and holds an out-of-window reference is refused at CEN-J31, not J30, so the observable order of §9.1 changes for that case. Both functions take `&RuleSet` instead of a bare `SettlementSchedule`, so neither can be handed the process-wide override the validator may not read (`rule_set.rs`). Considered and not taken: a partial budget over the epochs that are known, which would refuse an honest alternative section whose larger `D` is above the fork |
+| `SCS-P42` | §9.6 ruled that `draw_count(h)` answering "no such block" refuses the bundle (`BundleInvalid::UnknownBlock`, CEN-J31). Step 3's window has by then put `h` below `h_incl`, so `h` is a block of the chain the view stands for and `None` can only be the view failing to answer. The `0x0C` arm already treats the same situation as not a verdict. Until the cutover writes `block_draws` for every block, a missed row would turn a store's hole into an invalid honest block | **No count for `h` is `BundleUnanswered::DrawCount`, not a verdict**, and `BundleInvalid::UnknownBlock` is deleted: no state of a conforming view produces it. Reverses §9.6's sentence, which is replaced. CEN-J31 keeps the window and one-per-`h` refusals |
+| `SCS-P43` | §9.6 says the verifier decodes a persona's receipt key once per bundle. In the tree a scheme-3 public key holds bytes and its FN-DSA half is decoded on every verification, so every receipt pays a decode; and `DrawableEpoch::new` decodes each persona's key once to check it and discards the result | **Recommended, not built: a decoded verifying-key type in `shekyl-crypto-pq`, built once from the canonical bytes, that verifies without decoding; `DrawableEpoch` holds one per persona and `receipt_key` returns it.** Each key is then decoded once per epoch, where it is already decoded to be checked, which is fewer than once per bundle. The fetch side keeps the bytes type: one target, one key. **Not built here** because it changes `DrawableEpoch::receipt_key`'s type, which this section contracts and `SO-D12`'s increment 2 builds against. Before ruling: the decoded key's size per persona, measured, against the resident cost on the floor device |
 
 ---
 
