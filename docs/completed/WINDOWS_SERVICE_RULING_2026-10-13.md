@@ -36,7 +36,7 @@ and launchd; false for the SCM, which kills a registered process that does
 not connect to its dispatcher (error 1053). Task Scheduler was the patch
 for that gap; it is rejected (RT-16, §12).
 
-## For the daemon-config lane (Round 0 inventory)
+## For the daemon-config lane (Round 0 inventory) — CARRIED by the daemon-configuration cutover (#1066); not implemented from this record
 
 1. **Own the process entry.** The SCM dispatch sits at entry, behind the
    service-mode switch; the switch is a daemon-config option (no new C++
@@ -58,7 +58,7 @@ for that gap; it is rejected (RT-16, §12).
    Scheduler; rewrite when the table moves to Rust (also an RPC_CHANNEL
    §11.2 row owned by RT-W14).
 
-## Noted for the Rust `main()` work (hand over when that lane opens)
+## Noted for the Rust `main()` work (hand over when that lane opens) — CARRIED by the daemon-configuration cutover (#1066, DC-F13); not implemented from this record
 
 - **Run-as-me does not stop cleanly.** `src/common/util.h:193-201`: every
   console event other than Ctrl-C/Ctrl-Break (window close, logoff,
