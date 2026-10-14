@@ -33,23 +33,22 @@
 //!   that signed with the receipt key before a verifier accepted it would
 //!   be serving shards whose countersignature every requester rejects.
 //!   The cutover's edit sites, each of which names the identity scheme or
-//!   its width today (checked at source 2026-10-13):
-//!   - `rust/shekyl-p-host/src/host.rs`: the `key` field's
-//!     `PassKey<IDENTITY_ENVELOPE_LEN>` (`:59`), its `Debug` rendering
-//!     (`:81`), and the bind, which hard-codes
-//!     `PassSigner<IDENTITY_ENVELOPE_LEN>` beside them (`:429`);
-//!   - `rust/shekyl-daemon-image/src/shard_view.rs` (`:95-103`): the
-//!     holder's target is built from `record.hybrid_pubkey` with
-//!     `HybridPublicKey::from_canonical_bytes`; it becomes
-//!     `FnDsaHybridPublicKey::from_receipt_sign_pk(&record.receipt_sign_pk)`;
-//!   - `rust/shekyl-archival-fetch-sched/src/facts.rs:55`
-//!     (`FetchTarget<HybridPublicKey>`) and `read.rs:91`, `:460`
-//!     (`VerifiedShard<HybridPublicKey>`);
-//!   - the harnesses: `rust/shekyl-sp-t3-spike/src/harness.rs:354` builds
-//!     `FetchTarget<HybridPublicKey>`; `rust/shekyl-p-loopback/src/lib.rs:154`
-//!     (`fetch_target<K: PassVerifyingKey>`) is already generic and needs
+//!   its width today:
+//!   - `shekyl-p-host`: the serving key is
+//!     `PassKey<IDENTITY_ENVELOPE_LEN>`, and the bind builds
+//!     `PassSigner<IDENTITY_ENVELOPE_LEN>`;
+//!   - `shekyl-daemon-image`'s shard view: the holder's target is built
+//!     from `record.hybrid_pubkey` with
+//!     `HybridPublicKey::from_canonical_bytes`. It becomes
+//!     `FnDsaHybridPublicKey::from_receipt_sign_pk` of the record's
+//!     receipt key;
+//!   - `shekyl-archival-fetch-sched`: `FetchTarget<HybridPublicKey>` and
+//!     `VerifiedShard<HybridPublicKey>`;
+//!   - the harnesses: `shekyl-sp-t3-spike` builds
+//!     `FetchTarget<HybridPublicKey>`. `shekyl-p-loopback`'s
+//!     `fetch_target<K: PassVerifyingKey>` is already generic and needs
 //!     no edit — its callers choose the key, and change with it;
-//!   - `serving/start.rs` and the `expect(dead_code)` on
+//!   - `serving/start.rs`, and the `expect(dead_code)` on
 //!     [`ResidentReceiptKey::new`], below.
 //! - **Falsifier.** `serving/start.rs` handing the serving task this
 //!   capability while no verifier accepts a scheme-3 receipt. Held three
