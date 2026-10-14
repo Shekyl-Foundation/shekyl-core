@@ -1,12 +1,15 @@
 # Tor gap from cold first contact, 2026-10-14
 
-**Status: IN PROGRESS (the rerun with lifted spans is read, 2026-10-14:
-runs A and B, 100 samples each; nothing is derived until Rick reads it).**
-Ruled by Rick, 2026-10-13: the Tor gap is re-derived from cold first
-contact, on two responders, before anything else changes (PR-3, #1056;
-the brief's revision 4). Ruled again 2026-10-14: three fixes first
-(logging never blocks; the gap measures the peer's silence; one process
-clock), then the rerun with the Tor dial and gap lifted to 120 s.
+**Status: DERIVED (Rick, 2026-10-14, the close-out ruling for alpha.11).**
+The rerun's two TSVs set `TOR_DIAL_WITHIN_NANOS` at 120 s and
+`TOR_GAP_WITHIN_NANOS` at 31 s, both RustPath, in `spans.rs` and the
+measurement ledger (the derivation is the last section). Reopen at 500
+pooled Rust-path samples. Ruled by Rick, 2026-10-13: the Tor gap is
+re-derived from cold first contact, on two responders, before anything
+else changes (PR-3, #1056; the brief's revision 4). Ruled again
+2026-10-14: three fixes first (logging never blocks; the gap measures
+the peer's silence; one process clock), then the rerun with the Tor dial
+and gap lifted to 120 s.
 
 ## Why
 
@@ -234,8 +237,20 @@ sessions the p99 is the maximum. Raw rows:
 
 ## Derivation (D9)
 
-*After both runs and Rick's reading.* `TOR_GAP_WITHIN_NANOS` = 2 × p99 of
-the largest distribution across both runs and both directions, labelled
-`RustPath`, with this document as the provenance in `spans.rs`; if run B
-governs, the floor sets the number. The measurement ledger's Tor-gap row
-cites the two debug timings as the samples that can reopen it.
+Ruled by Rick, 2026-10-14, from the two rerun TSVs pooled: 200 cold
+starts, 189 sessions. Both spans are RustPath (`TOR_SPANS_BASIS` in
+`spans.rs`). Clearnet is unchanged. Reopen at 500 pooled Rust-path
+samples.
+
+| Span | Value | From the pooled rows |
+| --- | --- | --- |
+| `TOR_DIAL_WITHIN_NANOS` | 120 s | Bounded by Tor's own SOCKS timeout (`SocksTimeout`, 2 minutes by default; the managed Tor does not set it), past which Tor fails the request itself. The distribution is censored there: 4 of 200 dials ran past 120 s; over the 189 sessions p50 6.39 s, p90 65.29 s, p99 112.66 s |
+| `TOR_GAP_WITHIN_NANOS` | 31 s | 2 × 15.50 s of the outbound gap (SOCKS success to the peer's first complete frame), n = 189 |
+| `SHUTDOWN_TIMEOUT_NANOS` | 120 s | The longest armed deadline, the Tor dial |
+
+**The gap's percentile, stated exactly.** The pooled outbound gaps'
+largest four are 46.91 s, 18.69 s, 15.50 s, 6.60 s. 15.50 s is rank 187 of 189, about p98.9; the
+nearest-rank p99 (`ceil(0.99 × 189)` = rank 188) is 18.69 s, which would
+give 37.4 s, and the maximum is a single circuit (run B, sample 72). The
+ruling's value is 31 s. The inbound gap's pooled p99 is 27.69 s, inside
+it.

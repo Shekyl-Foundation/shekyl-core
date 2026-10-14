@@ -524,6 +524,7 @@ stale_through = [
   { through = "fbfc1fff5", note = "PR-3 diagnosis instrumentation: debug lines at the clearnet dial, the handshake, the first bytes read and the gap's wake, each a tracing call beside the existing I/O. The dial, handshake and gap waits do the same I/O. Not re-measured." },
   { through = "dc9130534", note = "PR-3 fix 2 (Rick, 2026-10-14): the gap now ends at the peer's first complete Levin frame, not at this node's handshake verdict, and a fired wake waits one IO driver turn for the reader before it times the peer out. This changes what the gap span bounds: the capture measured channel to verdict, which includes this node's own handshake work, so it overstates the peer's silence the gap now measures. The span stays as it is until the cold-first-contact rerun measures channel to first frame. The dial is unchanged. Not re-measured." },
   { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
+  { through = "ee87fc633", note = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved. The clearnet path set holds cause.rs; clearnet closes are unchanged." },
 ]
 
 [[constant]]
@@ -597,31 +598,30 @@ stale_through = [
   { through = "dc9130534", note = "PR-3 fix 2 (Rick, 2026-10-14): the gap now ends at the peer's first complete Levin frame, not at this node's handshake verdict, and a fired wake waits one IO driver turn for the reader before it times the peer out. This changes what the gap span bounds: the capture measured channel to verdict, which includes this node's own handshake work, so it overstates the peer's silence the gap now measures. The span stays as it is until the cold-first-contact rerun measures channel to first frame. The dial is unchanged. Not re-measured." },
   { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
 ]
+cleared = [
+  { through = "ee87fc633", reason = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved." },
+]
 
 [[constant]]
 name = "tor_dial_within_ns"
 defined_in = "rust/shekyl-transport-layer/src/spans.rs"
-needle = "pub const TOR_DIAL_WITHIN_NANOS: u64 = 9_100_000_000;"
+needle = "pub const TOR_DIAL_WITHIN_NANOS: u64 = 120_000_000_000;"
 measured_by = ["BA-T8"]
-status = "stale"
-stale_since = "57d756bca"
-carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
-capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
-capture_rev = "572ed17c3"
-rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
+status = "current"
+capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
+capture_rev = "19863b044"
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; bounded by Tor's own SOCKS timeout; censored there, 4 of 200 dials past it). Reopen at 500 pooled Rust-path samples."
 path_set = "tor-span"
 
 [[constant]]
 name = "tor_gap_within_ns"
 defined_in = "rust/shekyl-transport-layer/src/spans.rs"
-needle = "pub const TOR_GAP_WITHIN_NANOS: u64 = 2_600_000_000;"
+needle = "pub const TOR_GAP_WITHIN_NANOS: u64 = 31_000_000_000;"
 measured_by = ["BA-T8"]
-status = "stale"
-stale_since = "57d756bca"
-carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
-capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
-capture_rev = "572ed17c3"
-rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
+status = "current"
+capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
+capture_rev = "19863b044"
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; 2 x 15.50 s of the pooled outbound gap, n = 189 (rank 187; the nearest-rank p99 is 18.69 s, recorded in the derivation)). Reopen at 500 pooled Rust-path samples."
 path_set = "tor-span"
 
 [[constant]]
@@ -629,12 +629,10 @@ name = "tor_shutdown_timeout_ns"
 defined_in = "rust/shekyl-transport-layer/src/spans.rs"
 needle = "pub const SHUTDOWN_TIMEOUT_NANOS: u64 = TOR_DIAL_WITHIN_NANOS;"
 measured_by = ["BA-T8"]
-status = "stale"
-stale_since = "57d756bca"
-carrier = "BA-T8 (BA-G7). Takes the Tor dial figure; the connector and transport have changed since the capture, and no change has been reviewed for cost."
-capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
-capture_rev = "572ed17c3"
-rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
+status = "current"
+capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
+capture_rev = "19863b044"
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; takes the Tor dial figure). Reopen at 500 pooled Rust-path samples."
 path_set = "tor-span"
 
 [[path_set]]

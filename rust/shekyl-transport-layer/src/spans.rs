@@ -19,11 +19,28 @@
 //! the body), gap 1.430 s (residual 14.7 ms). The ~700 ms handshake tail
 //! is not a term in any of these.
 //!
-//! Tor dial 9.1 s: 2 × p99 (4.54 s) of the floor dial distribution, South
-//! America circuit, proof-of-work on. A clearnet dial through a SOCKS
-//! proxy uses this clock: the worst measured SOCKS path, pending its own
-//! distribution. The three clearnet legs had no proxy. Tor gap 2.6 s: the
-//! outbound direction, the larger of the two distant-circuit gaps.
+//! The Tor spans are RustPath (Rick, 2026-10-14), measured on the Rust
+//! dialer from cold first contact: two runs of 100 fresh client starts,
+//! each with a fresh managed Tor, against a responder on the measurement
+//! host and on the floor device, with both spans lifted to 120 s so
+//! neither distribution was cut where it is derived
+//! (`docs/benchmarks/p2p_tor_gap_cold_20261014.md`, from its
+//! `_rerunA.tsv` and `_rerunB.tsv`; 189 sessions).
+//!
+//! Tor dial 120 s: bounded by Tor's own SOCKS timeout (`SocksTimeout`,
+//! 2 minutes by default; the managed Tor does not set it), past which
+//! Tor fails the request itself. The distribution is censored there: 4 of
+//! the 200 dials ran past 120 s, and the pooled p99 of the sessions was
+//! 112.7 s (p50 6.4 s, p90 65.3 s). A clearnet dial through a SOCKS
+//! proxy uses this clock.
+//!
+//! Tor gap 31 s: 2 × 15.50 s of the pooled outbound gap, the dialer's
+//! SOCKS success to the peer's first complete Levin frame (n = 189).
+//! 15.50 s is rank 187 of 189, about p98.9; the nearest-rank p99 is
+//! 18.69 s and the maximum 46.91 s, a single circuit. The inbound gap's
+//! pooled p99 was 27.69 s.
+//!
+//! Reopen both at 500 pooled Rust-path samples.
 //!
 //! Shutdown waits out the longest armed deadline, the Tor dial. The send
 //! queue holds one admitted packet, room for the largest legitimate
@@ -38,25 +55,23 @@ pub const CLEARNET_HANDSHAKE_WITHIN_NANOS: u64 = 1_426_000_000;
 /// Clearnet gap: the longest silence a session keeps.
 pub const CLEARNET_GAP_WITHIN_NANOS: u64 = 1_430_000_000;
 /// Tor connect through the SOCKS proxy; also the proxied clearnet dial.
-#[cfg(not(feature = "measurement-spans"))]
-pub const TOR_DIAL_WITHIN_NANOS: u64 = 9_100_000_000;
+pub const TOR_DIAL_WITHIN_NANOS: u64 = 120_000_000_000;
 /// Tor gap: the longest silence a session keeps.
 #[cfg(not(feature = "measurement-spans"))]
-pub const TOR_GAP_WITHIN_NANOS: u64 = 2_600_000_000;
+pub const TOR_GAP_WITHIN_NANOS: u64 = 31_000_000_000;
+/// What the Tor spans were measured on: the Rust path.
+pub const TOR_SPANS_BASIS: shekyl_relay_privacy::AdmissibleBasis =
+    shekyl_relay_privacy::AdmissibleBasis::RustPath;
 
 /// Whether this build lifts the Tor spans for the cold-first-contact
 /// measurement (Rick, 2026-10-14). The zone host logs a warning at start
 /// when it does.
 pub const MEASUREMENT_SPANS: bool = cfg!(feature = "measurement-spans");
-/// The measurement build's Tor dial and gap: 120 s, far past every cold
-/// contact seen (run A's longest dial was censored at 9.1 s), so the
-/// distribution is read rather than cut. A harness input, not a derived
-/// span.
+/// The measurement build's Tor gap: 120 s, the dial's bound, so the gap's
+/// distribution is read rather than cut at the span it derives. A harness
+/// input, not a derived span. The dial is 120 s in every build.
 #[cfg(feature = "measurement-spans")]
 pub const MEASUREMENT_SPAN_NANOS: u64 = 120_000_000_000;
-/// Tor connect, measurement build.
-#[cfg(feature = "measurement-spans")]
-pub const TOR_DIAL_WITHIN_NANOS: u64 = MEASUREMENT_SPAN_NANOS;
 /// Tor gap, measurement build.
 #[cfg(feature = "measurement-spans")]
 pub const TOR_GAP_WITHIN_NANOS: u64 = MEASUREMENT_SPAN_NANOS;

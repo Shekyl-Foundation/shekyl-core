@@ -278,7 +278,7 @@ fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, (
         tracing::warn!(
             tor_dial_within_ns = spans::TOR_DIAL_WITHIN_NANOS,
             tor_gap_within_ns = spans::TOR_GAP_WITHIN_NANOS,
-            "measurement build: the Tor dial and gap deadlines are lifted; not a release"
+            "measurement build: the Tor gap deadline is lifted to the dial's; not a release"
         );
     }
     let engine = EngineService::start(clock);

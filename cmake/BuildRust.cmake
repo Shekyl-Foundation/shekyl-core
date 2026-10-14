@@ -313,9 +313,9 @@ else()
 endif()
 
 # The cold-first-contact measurement build only (Rick, 2026-10-14): the
-# Tor dial and gap deadlines lifted to 120 s. Never on in a release build;
+# Tor gap deadline lifted to 120 s, the dial's bound. Never on in a release build;
 # scripts/ci/check_measurement_spans.py fails any release path that sets it.
-option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor dial and gap deadlines to 120 s" OFF)
+option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor gap deadline to 120 s" OFF)
 set(_measurement_features "")
 if(SHEKYL_MEASUREMENT_SPANS)
     # Selecting the crate as well lets the command line name its feature;
