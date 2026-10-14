@@ -560,6 +560,7 @@ pub unsafe extern "C" fn shekyl_zone_listen_tor(
         return -1;
     };
     *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
+    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks_ip}:{socks_port}");
     crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     let extra = match c_str(extra) {
         Some(text) => {
@@ -645,6 +646,7 @@ pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
         return -1;
     };
     *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
+    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks_ip}:{socks_port}");
     crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     0
 }

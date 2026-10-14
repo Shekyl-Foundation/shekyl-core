@@ -1005,7 +1005,9 @@ namespace nodetool
         // `--tx-proxy tor,...` without `--anonymous-inbound`: no listener,
         // and the dials still go through the seam, which needs the SOCKS
         // address and a tor binding for the connections it establishes.
-        MINFO("Tor zone dials through " << zone.second.m_proxy_address.address << " with no inbound");
+        // (The managed Tor reaches here too, with its onion published; the
+        // Rust side says which proxy the zone dials through and which own
+        // address it holds.)
         res = zone.second.m_net_server.dial_through_tor(zone.second.m_proxy_address.address,
             reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling());
         CHECK_AND_ASSERT_MES(res, false, "Failed to install the tor proxy");
