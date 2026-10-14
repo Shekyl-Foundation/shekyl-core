@@ -512,6 +512,21 @@ impl SubmitStateShim for FfiSubmitShim {
         cert: &VerificationCertificate,
         expected: &SubmitFacts,
     ) -> CommitOutcome {
+        // FND-20: the C++ reparse below refuses `post_kind` above Release,
+        // and a JoinMarket is kind 5. Return before the call, so Phase D's
+        // mutable re-checks do not run. The capability refusal is the
+        // verdict: a key-image or fee race during Phase C is reported as
+        // this outcome, and retrying the same bytes fails the same way.
+        // Identity short-circuits return before `commit`. Deleted with
+        // this shim at DEL-008, when the Rust store commits.
+        if meta.carries_join_market {
+            tracing::info!(
+                txid = %txid,
+                "submit commit: this daemon's C++ commit step cannot hold a JoinMarket \
+                 bond post (FND-20); answered Rejected{{JoinMarketUnsupported}}"
+            );
+            return CommitOutcome::JoinMarketUnsupported;
+        }
         let n_key_images = expected.key_image_conflicts.len();
         let mut fresh_pod = ffi::SubmitFactsFfi::zeroed();
         let mut fresh_ki = vec![0u8; n_key_images];

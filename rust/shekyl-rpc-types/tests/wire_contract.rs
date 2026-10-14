@@ -62,6 +62,12 @@ fn frozen_corpus() -> Vec<(SubmitVerdict, &'static str)> {
             },
             r#"{"verdict":"rejected","cause":"reference_not_found"}"#,
         ),
+        (
+            SubmitVerdict::Rejected {
+                cause: RejectCause::JoinMarketUnsupported,
+            },
+            r#"{"verdict":"rejected","cause":"join_market_unsupported"}"#,
+        ),
         // `Unrecognized` is deserialize-side only in the protocol (a daemon
         // never authors it), but the type can express it and its
         // representation is part of the frozen surface.

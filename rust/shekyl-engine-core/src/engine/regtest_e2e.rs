@@ -710,32 +710,6 @@ impl RegtestDaemon {
         log_tail(&self.data_dir.join("daemon.log"))
     }
 
-    /// Wait for the daemon to have logged a line containing `needle`.
-    ///
-    /// Polled, not read once: the daemon's stdout is redirected to the
-    /// captured file, so it is block-buffered and a line can land after the
-    /// RPC answer it describes has already been returned (the same reason
-    /// [`console`](Self::console) polls). `Ok` once the line is there;
-    /// `Err` carries the log tail after `timeout` without it, for the
-    /// caller's own panic (read while the fixture is alive: `Drop` removes
-    /// the datadir).
-    pub(super) fn wait_for_log_line(&self, needle: &str, timeout: Duration) -> Result<(), String> {
-        let log_path = self.data_dir.join("daemon.log");
-        let deadline = Instant::now() + timeout;
-        loop {
-            if std::fs::read_to_string(&log_path)
-                .map(|text| text.contains(needle))
-                .unwrap_or(false)
-            {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                return Err(log_tail(&log_path));
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-    }
-
     /// Panic with the daemon log inlined. Call on a submit/dispatch
     /// failure: `Drop` removes the datadir (log included) as the unwind
     /// proceeds, so a "see the log file" pointer would name a deleted file.
@@ -3020,7 +2994,7 @@ enum FixtureStake {
 /// (`FN_DSA_HYBRID.md` §8, FND-20), so each caller is `DECIDED_DARK` in
 /// `scripts/ci/run_live_daemon_gates.sh` until the daemon admits one
 /// (DEL-008). The bodies stay: they are the positive subject. The armed
-/// tripwire `e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser`
+/// tripwire `e2e_the_cxx_daemon_answers_join_market_unsupported`
 /// drives the same path to the submit and pins the refusal, so the day the
 /// daemon admits one is a red, not a silence (FOLLOWUPS, "The five bonded
 /// regtest walks are decided dark").
@@ -3409,7 +3383,7 @@ async fn stake_persona_and_submit_bond(
 /// - A shallow P-scan finality horizon + tight cadence via the injectable
 ///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_staker_bond_post_accepted_and_applied() {
     use super::stake_engine::PSlot;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
@@ -3502,36 +3476,35 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// submit and asserts the refusal, **named precisely**:
 ///
 /// - the daemon's native submit route parses and verifies the post in Rust
-///   first (Phase A, Phase C — the wallet-built post is valid, so neither
-///   refuses), then the commit shim re-parses the exact bytes in C++
-///   (`daemon_submit_ffi.cpp`, `commit_tx`), where
-///   `txin_archival_bond_post`'s serializer refuses `post_kind` above
-///   Release (`cryptonote_basic.h`) before any C++ or Rust verify;
-/// - that is `SHEKYL_SUBMIT_INTERNAL_FAULT`, logged as `submit commit: C++
-///   reparse failed on engine-validated bytes`, answered as HTTP 500 (an
-///   engine fault is never a verdict, `handlers/submit.rs`), which the
-///   wallet's submitter maps to `SubmitterError::Ambiguous { DaemonUnavailable }`
-///   — not a `Rejected` verdict, which would mean a Rust rule refused it.
+///   (Phase A, Phase C: the wallet-built post is valid, so neither
+///   refuses), then reaches the C++ commit shim, which cannot reparse a
+///   kind-5 post (`txin_archival_bond_post`'s serializer refuses
+///   `post_kind` above Release, `cryptonote_basic.h`) and so does not try:
+///   it answers `CommitOutcome::JoinMarketUnsupported` (`ffi_shim.rs`);
+/// - the engine turns that into `Rejected { JoinMarketUnsupported }`, the
+///   one place that cause is authored, and the wallet's submitter maps it
+///   to `SubmitterError::RejectedTerminal { JoinMarketUnsupported }`, which
+///   the dispatch driver treats as terminal: the post is withdrawn and its
+///   funding reservation released, never resubmitted. Any other answer
+///   (a Rust verdict on the post, a commit fault, a transport error) is a
+///   different finding.
 ///
 /// The day the daemon under test admits a kind-5 JoinMarket (the Rust
 /// daemon at the cutover, `DEL-008`), the submit succeeds and this test
 /// panics naming the five walks that are due back on ARMED / ARMED_SLOW. A
-/// refusal of any other shape is also red, with the daemon log inlined:
-/// the C++ parser is the one place this refusal is allowed to come from.
+/// refusal of any other shape is also red, with the daemon log inlined.
 ///
 /// Cost: the first half of the bond walk that was ARMED per-PR before
 /// 2026-10-13 (mine, fund, discover, stake, submit), minus its confirm half.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "FND-20 tripwire: needs SHEKYLD_BIN + a built regtest daemon; red when the daemon admits a kind-5 JoinMarket"]
-async fn e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser() {
-    use super::error::AmbiguousErrorKind;
+async fn e2e_the_cxx_daemon_answers_join_market_unsupported() {
+    use super::error::TerminalErrorKind;
     use super::transaction_submitter::{BroadcastSubmitError, SubmitterError};
 
     const SLOT: u32 = 0;
     /// The bond walk's cushion: a non-zero change output, nothing more.
     const FUNDING_CUSHION: u64 = 200_000_000;
-    /// The commit shim's own words for the refusal this test pins.
-    const CXX_REPARSE_REFUSAL: &str = "submit commit: C++ reparse failed on engine-validated bytes";
 
     let daemon = RegtestDaemon::start().await;
     // Schedule guard (see the bond walk): wallet epoch arithmetic here must
@@ -3553,8 +3526,8 @@ async fn e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser() {
     .await;
 
     match submitted.verdict {
-        Err(BroadcastSubmitError::Submit(SubmitterError::Ambiguous {
-            kind: AmbiguousErrorKind::DaemonUnavailable,
+        Err(BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
+            kind: TerminalErrorKind::JoinMarketUnsupported,
         })) => {}
         Ok(receipt) => panic!(
             "THE DAEMON ADMITTED A KIND-5 JOINMARKET ({receipt:?}). FND-20's blocker has \
@@ -3567,24 +3540,15 @@ async fn e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser() {
              this tripwire"
         ),
         Err(other) => panic!(
-            "the kind-5 JoinMarket was refused, but not as the C++ parser refuses it \
-             ({other:?}); a Rust-side rejection or a transport fault is a different \
-             finding; daemon log tail:\n{}",
+            "the kind-5 JoinMarket was refused, but not as Rejected{{JoinMarketUnsupported}} \
+             from the C++ commit shim ({other:?}); a Rust verdict on the post, a commit \
+             fault or a transport error is a different finding; daemon log tail:\n{}",
             daemon.log_tail()
         ),
     }
-    // The 500 can come back before the daemon's block-buffered stdout
-    // reaches the captured log, so wait for the line rather than read once.
-    if let Err(tail) = daemon.wait_for_log_line(CXX_REPARSE_REFUSAL, Duration::from_secs(10)) {
-        panic!(
-            "the refusal was ambiguous to the wallet, but the daemon did not log the C++ \
-             reparse refusal ({CXX_REPARSE_REFUSAL:?}) within 10s; something else made the \
-             submit fail; daemon log tail:\n{tail}"
-        );
-    }
     eprintln!(
-        "FND-20 tripwire: the C++ daemon refused the wallet-built kind-5 JoinMarket at its \
-         parser ({CXX_REPARSE_REFUSAL}); the five bonded walks stay DECIDED_DARK"
+        "FND-20 tripwire: the C++ daemon answered the wallet-built kind-5 JoinMarket \
+         Rejected{{JoinMarketUnsupported}}; the five bonded walks stay DECIDED_DARK"
     );
 }
 
@@ -3636,7 +3600,7 @@ async fn e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser() {
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;
@@ -4288,7 +4252,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
 ///
 /// [`EXIT_FEE_RESERVE_ATOMIC`]: shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use super::drain_dispatch::DrainRequestError;
     use super::drain_orchestrator::DrainOrchestrationError;
@@ -4580,7 +4544,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 /// façades end-to-end. This walk keeps the seam-level byte proposition:
 /// it exists so a façade-layer regression can never mask a wire one.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_release_accepted_and_connected() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::emission_source::fetch_claim_source_for;
@@ -4748,7 +4712,7 @@ async fn e2e_release_accepted_and_connected() {
 /// 7. The daemon row is STILL present with `bonded_total == 0`:
 ///    retirement is a wallet-side act; the chain record outlives it.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser goes red (FOLLOWUPS: the five bonded regtest walks)"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_unstake_collect_retire_composed_arc() {
     use super::emission_source::fetch_claim_source_for;
     use super::prpc::LocalNodeRpc;

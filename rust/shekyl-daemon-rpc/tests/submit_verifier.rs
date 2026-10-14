@@ -564,7 +564,7 @@ struct BondFixture {
 static BOND_FIXTURE: OnceLock<BondFixture> = OnceLock::new();
 
 fn bond_fixture() -> &'static BondFixture {
-    BOND_FIXTURE.get_or_init(build_bond_fixture)
+    BOND_FIXTURE.get_or_init(|| build_bond_fixture(None))
 }
 
 /// Facts under which the bond fixture is fully admissible: the spend
@@ -584,7 +584,11 @@ fn bond_mutated(f: impl FnOnce(&mut Transaction)) -> ParsedSubmission {
     reparse(&tx)
 }
 
-fn build_bond_fixture() -> BondFixture {
+/// Build the bond fixture. `receipt` replaces the receipt key its
+/// JoinMarket commits; `None` commits the persona's own derived key, the
+/// valid post. A replacement is committed under the identity signature like
+/// any other field, so every other leg of the battery still holds.
+fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -> BondFixture {
     use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
@@ -660,7 +664,8 @@ fn build_bond_fixture() -> BondFixture {
         p_canonical_id: shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&p_pubkey),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: bond_spend_pk.clone(),
-            receipt_sign_pk: p_keys.receipt_sign_pk.to_receipt_sign_pk(),
+            receipt_sign_pk: receipt
+                .map_or_else(|| p_keys.receipt_sign_pk.to_receipt_sign_pk(), Clone::clone),
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
@@ -1120,6 +1125,47 @@ fn engine_accepts_the_bond_post_end_to_end_with_the_production_verifier() {
 }
 
 #[test]
+fn a_backend_that_cannot_hold_a_join_market_answers_a_definite_rejection() {
+    // The engine classifies an injected `CommitOutcome::JoinMarketUnsupported`
+    // as a definite rejection, relays nothing, and names the JoinMarket to
+    // the backend on `TxMeta::carries_join_market`. The production shim's
+    // return, ahead of `shekyl_submit_commit_tx`, is the live tripwire's
+    // subject (`e2e_the_cxx_daemon_answers_join_market_unsupported`).
+    let fx = bond_fixture();
+    let shim = MockShim::new(bond_admitting_facts(), CommitOutcome::JoinMarketUnsupported);
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    assert_eq!(
+        engine
+            .submit(&fx.hex, SubmitCaller::Owner)
+            .expect("a definite answer, not an engine fault"),
+        SubmitVerdict::Rejected {
+            cause: shekyl_rpc_types::RejectCause::JoinMarketUnsupported
+        },
+    );
+    assert_eq!(
+        shim.relay_count(),
+        0,
+        "nothing was admitted, so nothing relays"
+    );
+    assert!(
+        shim.commits.lock().unwrap()[0].meta.carries_join_market,
+        "the engine names a JoinMarket to the backend"
+    );
+
+    // And names nothing else one: a plain spend commits with the flag down.
+    let spend = fixture();
+    let shim = MockShim::new(admitting_facts(spend), CommitOutcome::Committed);
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    engine
+        .submit(&spend.hex, SubmitCaller::Owner)
+        .expect("no engine fault");
+    assert!(
+        !shim.commits.lock().unwrap()[0].meta.carries_join_market,
+        "a spend is not a JoinMarket"
+    );
+}
+
+#[test]
 fn bond_record_already_exists_is_a_claim_slot_conflict() {
     // §8.7.1 BP3 at Phase C: the record probe came back present — someone
     // else consumed the claim slot → DoubleSpendConflict, never Malformed
@@ -1175,6 +1221,33 @@ fn missing_bond_record_fact_is_a_shim_contract_fault() {
         "a bond-post snapshot without the BP3 fact must fault loudly"
     );
     assert_eq!(shim.commit_count(), 0, "no commit after a contract fault");
+}
+
+#[test]
+fn bond_receipt_key_that_is_not_a_key_is_rejected() {
+    // BP6, the submit battery's copy of CEN-J28: a JoinMarket whose
+    // receipt key does not parse as a scheme-3 key would be admitted,
+    // relayed, and make every block that includes it invalid. The fixture
+    // is built and signed whole around the all-zero key, so the identity
+    // signature, the proofs and every other BP leg hold and the refusal is
+    // the receipt-key check's alone: without it this post is `Ok`.
+    let fx = build_bond_fixture(Some(&shekyl_types::archival::ReceiptSignPk::from_bytes(
+        [0u8; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+    )));
+    assert_eq!(
+        verify(&fx.parsed, &bond_admitting_facts()),
+        Err(VerifyFailure::Malformed),
+        "a receipt key that is not a key must be Malformed (BP6)"
+    );
+    // Malformed, not the claim-slot conflict: the key is judged before the
+    // record fact is consulted.
+    let mut taken = bond_admitting_facts();
+    taken.bond_record_exists = Some(true);
+    assert_eq!(
+        verify(&fx.parsed, &taken),
+        Err(VerifyFailure::Malformed),
+        "the receipt key is judged before BP3"
+    );
 }
 
 #[test]

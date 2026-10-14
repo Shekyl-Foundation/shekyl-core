@@ -124,20 +124,19 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bridged pool routes and not the native one; the native
 #     /get_transactions handler passing `true` for the flag panicked naming
 #     that route alone. ~77 s measured, local Release daemon.
-#   e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser — the
-#     FND-20 tripwire for the five DECIDED_DARK walks below: drives the
-#     bond walk to its submit and asserts the C++ parser's refusal
-#     ("submit commit: C++ reparse failed on engine-validated bytes", HTTP
-#     500, the wallet's DaemonUnavailable ambiguity — not a Rust verdict).
-#     Goes red the day the daemon under test admits a kind-5 JoinMarket,
-#     naming the five walks that are then due back (FOLLOWUPS: "The five
-#     bonded regtest walks are decided dark"). Sabotage 2026-10-13, local
-#     debug build against a daemon built from a P2P branch standing on this
-#     dev (its C++ delta was six p2p files and shekyl_ffi.h; the bond-post
-#     parser and the submit commit shim were dev's): the refusal arm
-#     inverted; panicked there after the daemon logged the C++ reparse
-#     refusal (184 s; the green run before it 321 s, mine + fund + stake +
-#     submit — the bond walk's first half, pr-lane before #1046).
+#   e2e_the_cxx_daemon_answers_join_market_unsupported — the FND-20
+#     tripwire for the five DECIDED_DARK walks below: drives the bond walk
+#     to its submit and asserts the C++ commit shim's typed answer
+#     (Rejected{JoinMarketUnsupported}, which the wallet takes as terminal
+#     and releases the post's funding — not a Rust verdict on the post, not
+#     a commit fault). Goes red the day the daemon under test admits a
+#     kind-5 JoinMarket, naming the five walks that are then due back
+#     (FOLLOWUPS: "The five bonded regtest walks are decided dark").
+#     Sabotage 2026-10-14, local Release daemon built from this branch: the
+#     C++ shim's JoinMarket answer disabled (`if false && …`), daemon
+#     rebuilt; the commit fell through to the C++ reparse and the test
+#     panicked on its other-finding arm naming Submit(Ambiguous {
+#     DaemonUnavailable }) (78 s; the green run before it 89 s).
 #   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
 #     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
 #   e2e_cxx_template_fills_to_its_median (slow) — historical red
@@ -150,7 +149,7 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
 #     that fixed the daemon's hard-fork table. Same pool cost as above.
 ARMED=(
-  engine::regtest_e2e::e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser
+  engine::regtest_e2e::e2e_the_cxx_daemon_answers_join_market_unsupported
   engine::regtest_e2e::origin::restricted_listener_is_withheld_status_and_capped_by_native_handlers
   engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
@@ -185,11 +184,12 @@ ARMED_SLOW=(
 #   The five walks below each call `stake_persona_to_confirmed_bond`, which
 #     submits a `post_kind` 5 JoinMarket. The C++ daemon cannot parse that
 #     byte, and the frozen verify export refuses every JoinMarket
-#     (`FN_DSA_HYBRID.md` §8, FND-20). Observed red 2026-10-13 on
-#     `e2e_staker_bond_post_accepted_and_applied`: submit returned
-#     DaemonUnavailable after "C++ reparse failed on engine-validated
-#     bytes". The lane exits on the first red, so the other four were not
-#     reached; they share the helper and fail the same way. Teaching the
+#     (`FN_DSA_HYBRID.md` §8, FND-20); its commit shim answers
+#     Rejected{JoinMarketUnsupported} for one. Observed red 2026-10-13 on
+#     `e2e_staker_bond_post_accepted_and_applied`, when that refusal still
+#     surfaced as a commit fault. The lane exits on the first red, so the
+#     other four were not reached; they share the helper and fail the same
+#     way. Teaching the
 #     C++ decoder the receipt key is the departure this increment refuses
 #     (no file under `src/` moved). A Rust reparse inside the submit shim
 #     would not apply the post either: pool, mine, connect and relay all
@@ -197,7 +197,7 @@ ARMED_SLOW=(
 #     subject returns when the daemon under test admits a kind-5 JoinMarket
 #     (DEL-008) — and move back to ARMED or ARMED_SLOW then. That day is
 #     not left to be noticed: the ARMED tripwire
-#     e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser drives
+#     e2e_the_cxx_daemon_answers_join_market_unsupported drives
 #     the same bonding path to the submit and asserts the refusal, so a
 #     daemon that admits the post turns it red naming these five. The
 #     deferral record is the FOLLOWUPS row "The five bonded regtest walks

@@ -266,6 +266,7 @@ fn submitter_error_from_cause(cause: RejectCause) -> SubmitterError {
         RejectCause::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
         RejectCause::DoubleSpendConflict => terminal(TerminalErrorKind::DoubleSpend),
         RejectCause::Unrecognized => terminal(TerminalErrorKind::Unrecognized),
+        RejectCause::JoinMarketUnsupported => terminal(TerminalErrorKind::JoinMarketUnsupported),
         RejectCause::StaleRoot => retryable(RetryableRejectCause::StaleRoot),
         RejectCause::ReferenceTooRecent => retryable(RetryableRejectCause::ReferenceTooRecent),
         RejectCause::ReferenceNotFound => retryable(RetryableRejectCause::ReferenceNotFound),
@@ -679,6 +680,10 @@ mod tests {
                 TerminalErrorKind::DoubleSpend,
             ),
             (RejectCause::Unrecognized, TerminalErrorKind::Unrecognized),
+            (
+                RejectCause::JoinMarketUnsupported,
+                TerminalErrorKind::JoinMarketUnsupported,
+            ),
         ] {
             let err =
                 outcome_to_result(TxSubmitOutcome::Rejected { cause }).expect_err("terminal cause");
