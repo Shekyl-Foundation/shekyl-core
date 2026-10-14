@@ -268,8 +268,22 @@ fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, (
     let clock = MonotonicClock::new();
     let budget_clock = clock.clone();
     node_gate().install_clock(Arc::new(move || budget_clock.now().get()));
+    // Two clocks run in this process: the hub's and every ban's (the
+    // process clock), and this host's engine (every transport deadline).
+    // Read together here, their difference is the offset any comparison
+    // across them carries (the clearnet admission checks compare an engine
+    // `now` with a ban written on the process clock).
+    let process_now = crate::seam_ffi::ban_now().get();
+    let engine_now = clock.now().get();
+    tracing::info!(
+        process_now,
+        engine_now,
+        offset_ns = process_now.saturating_sub(engine_now),
+        "clocks at the zone host's start: process clock, engine clock"
+    );
     let engine = EngineService::start(clock);
     let engine_handle = engine.handle();
+    spawn_lateness_report(engine_handle.clone());
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| match cause.kind() {
@@ -370,6 +384,42 @@ fn adopt_tor(hub: &Hub, admitted: TorAdmitted) {
 fn spawn_drive(hub: &Hub, id: SocketId, session: Session) {
     let hub = hub.clone();
     tokio::spawn(async move { drive_inbound_async(&hub, id, session).await });
+}
+
+/// Every 60 s, the engine's lateness totals for each class that has fired,
+/// at debug (Rick, 2026-10-14: the transport diagnosis). The thread ends
+/// when the engine closes.
+fn spawn_lateness_report(engine: Handle<MonotonicClock>) {
+    const EVERY: Duration = Duration::from_secs(60);
+    let spawned = std::thread::Builder::new()
+        .name("p2p-lateness".to_owned())
+        .spawn(move || loop {
+            std::thread::sleep(EVERY);
+            for class in shekyl_timing_engine::OwnerClass::ALL {
+                let Ok(totals) = engine.lateness(class) else {
+                    return;
+                };
+                if totals.fires == 0 && totals.home_reports == 0 {
+                    continue;
+                }
+                tracing::debug!(
+                    class = ?class,
+                    fires = totals.fires,
+                    max_wake_delay_ns = totals.max_wake_delay,
+                    wakes_late_1ms = totals.wakes_at_least(1_000_000),
+                    wakes_late_100ms = totals.wakes_at_least(100_000_000),
+                    home_reports = totals.home_reports,
+                    max_home_delay_ns = totals.max_home_delay,
+                    homes_late_1ms = totals.homes_at_least(1_000_000),
+                    homes_late_100ms = totals.homes_at_least(100_000_000),
+                    replaced_wakes = totals.replaced_wakes,
+                    "engine lateness"
+                );
+            }
+        });
+    if spawned.is_err() {
+        tracing::warn!("the engine lateness report could not start");
+    }
 }
 
 fn read_id(ptr: *const u8) -> Option<[u8; 16]> {

@@ -210,7 +210,7 @@ fn process_clock() -> Arc<MonotonicClock> {
     Arc::clone(CLOCK.get_or_init(|| Arc::new(MonotonicClock::new())))
 }
 
-fn ban_now() -> Tick {
+pub(crate) fn ban_now() -> Tick {
     process_clock().now()
 }
 

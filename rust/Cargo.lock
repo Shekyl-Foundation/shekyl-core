@@ -5045,6 +5045,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -203,6 +203,13 @@ where
         settle(reserved, CloseCause::new(CloseKind::LocalClose), &on_cause);
         return;
     }
+    tracing::debug!(
+        conn = reserved.id().get(),
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "tor dial armed"
+    );
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async move {
         let dialed = Instant::now();
@@ -243,6 +250,21 @@ where
     let stream = tokio::select! {
         biased;
         result = wake.as_mut() => {
+            match &result {
+                Ok(wake) => tracing::debug!(
+                    conn = reserved.id().get(),
+                    owner = ?owner.id(),
+                    wake_owner = ?wake.owner,
+                    class = ?wake.class,
+                    generation = ?wake.generation,
+                    wake_deadline = wake.deadline.get(),
+                    fired_at = wake.fired_at.get(),
+                    armed_deadline = deadline.get(),
+                    now = owner.clock().now().get(),
+                    "tor dial fired"
+                ),
+                Err(err) => tracing::debug!(conn = reserved.id().get(), ?err, "tor dial wait ended"),
+            }
             let kind = match result {
                 Ok(_) => CloseKind::TransportTimeout,
                 Err(_) => CloseKind::LocalClose,

@@ -255,6 +255,12 @@ where
         on_cause(CloseCause::new(CloseKind::LocalClose));
         return;
     }
+    tracing::debug!(
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "clearnet dial armed"
+    );
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async {
         let dialed = Instant::now();
@@ -300,6 +306,20 @@ where
     let connected = tokio::select! {
         biased;
         result = wake.as_mut() => {
+            match &result {
+                Ok(wake) => tracing::debug!(
+                    owner = ?owner.id(),
+                    wake_owner = ?wake.owner,
+                    class = ?wake.class,
+                    generation = ?wake.generation,
+                    wake_deadline = wake.deadline.get(),
+                    fired_at = wake.fired_at.get(),
+                    armed_deadline = deadline.get(),
+                    now = owner.clock().now().get(),
+                    "clearnet dial fired"
+                ),
+                Err(err) => tracing::debug!(?err, "clearnet dial wait ended"),
+            }
             let kind = match result {
                 Ok(_) => CloseKind::TransportTimeout,
                 Err(_) => CloseKind::LocalClose,
@@ -423,6 +443,12 @@ where
         ignore(owner.deregister());
         return Err(CloseCause::new(CloseKind::LocalClose));
     }
+    tracing::debug!(
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "clearnet gap armed"
+    );
     let (established, rx) = oneshot::channel();
     Ok(Some(ArmedGap {
         watch: GapWatch { owner, rx },
@@ -445,7 +471,19 @@ async fn watch_gap<C: Clock>(watch: Option<GapWatch<C>>) -> GapEnd {
             Err(_) => GapEnd::Dropped,
         },
         result = wake.as_mut() => match result {
-            Ok(_) => GapEnd::Timeout,
+            Ok(wake) => {
+                tracing::debug!(
+                    owner = ?watch.owner.id(),
+                    wake_owner = ?wake.owner,
+                    class = ?wake.class,
+                    generation = ?wake.generation,
+                    wake_deadline = wake.deadline.get(),
+                    fired_at = wake.fired_at.get(),
+                    now = watch.owner.clock().now().get(),
+                    "clearnet gap fired"
+                );
+                GapEnd::Timeout
+            }
             Err(_) => GapEnd::Closed,
         },
     };
@@ -526,7 +564,9 @@ where
             end = gap_fut.as_mut(), if gap_open => {
                 gap_open = false;
                 match end {
-                    GapEnd::Established => {}
+                    GapEnd::Established => {
+                        tracing::debug!(conn, "clearnet session established (the strand's verdict)");
+                    }
                     GapEnd::Dropped | GapEnd::Closed => {
                         return end_connection(
                             hold,
@@ -736,7 +776,13 @@ async fn read_half(
     overfull: Arc<Overfull>,
     conn: u64,
 ) -> CloseCause {
+    // The responder's timestamps (Rick, 2026-10-14): first byte read.
+    let mut first_read = true;
     read_capped(&mut read, inbound, &overfull, &node_gate(), conn, |chunk| {
+        if first_read {
+            first_read = false;
+            tracing::debug!(conn, "clearnet first bytes read");
+        }
         seam.push(chunk).map_err(|_| CloseKind::RecordRejected)
     })
     .await
