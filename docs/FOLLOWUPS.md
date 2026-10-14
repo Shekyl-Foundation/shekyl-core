@@ -999,6 +999,14 @@ Default. Lands before genesis if it should exist at launch.
 - **Relay: populate the 48-cell Pi verification surface, then consume it per shape.**
   - Target: pre-genesis
 
+- **An empty multi-value option must read as absent (the daemon-config slice; PR-3 brief revision 3 §3 item 3).** The cause of `6fc92640`: C++ `has_arg` is true for a vector option with an empty default, so `init()` declared the exclusive-node population on every boot with an empty list, the Rust dialer read it as a population of nothing, and no daemon of the branch dialled. PR-3 reads an empty declaration as no declaration on the Rust side; the typed configuration makes the rule general: a multi-value option is absent or non-empty, never an empty list standing for absence. Falsify by: `rg -n "has_arg" src/p2p/net_node.inl` returns nothing once the parse surface is Rust's.
+  - Owner: the daemon-config slice, through [`P2P_3_SLICE_3_DIALER_BRIEF.md`](design/P2P_3_SLICE_3_DIALER_BRIEF.md) §3.4 (the C++ PR-3 added, which that slice deletes; its own brief is not in this tree yet)
+  - Target: pre-genesis
+
+- **`--small-network` moves to the Rust option table (the daemon-config slice; PR-3 brief revision 3 §2.6).** PR-3 adds the option in C++ as the one ruled exception to "no new daemon option": one `arg_descriptor<bool>` (`net_node.cpp`), its `extern` (`net_node.h`), its `add_arg` and one push, `shekyl_peerlist_small_network()` (`net_node.inl`), each with a deletion-table row in `P2P_3_SLICE_3_DIALER_BRIEF.md`. The daemon-config grammar may rename it. Falsify by: `rg -n small_network src/p2p` returns nothing.
+  - Owner: the daemon-config slice, through [`P2P_3_SLICE_3_DIALER_BRIEF.md`](design/P2P_3_SLICE_3_DIALER_BRIEF.md) §3.4 (the rows it deletes)
+  - Target: pre-genesis
+
 - **PWD-I2's direction clause is RETIRED, not closed as implemented (Rick, 2026-10-13, PR-3 brief revision 2 §2.5).** A received peerlist is admitted on any session, inbound or outbound, under D3, D-S1, address validity and R4, the foreign-connector rule, random gray eviction and white-by-own-dial-only; `Refusal::InboundSession` and the session's direction field are deleted from `shekyl-peerlist` (PR-3, #1056). The rule made discovery circular: a node's own address travels only in its own sample, which only peers that had already dialled it would accept. What it was against (Shi et al. §III-A: 250 entries per message, FIFO eviction, no per-connection cap) is gone; what remains is bounded by D-S1 and the inbound ceiling. **Reopen:** if `DAEMON_RELAY_PRIVACY.md` §99 PM-2a shows gray or outbound occupation beyond the attacker's share of honest addresses, the direction rule returns in some form. The record is `SHEKYL_P2P_PROTOCOL.md` PWD-I2.
   - Owner: [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) §99 (PM-2a, the reopen measurement)
   - Target: pre-genesis
