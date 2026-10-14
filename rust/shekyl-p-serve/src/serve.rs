@@ -177,16 +177,19 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// backstop against a peer that trickles forever, not a latency budget.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Bound on **one** write making progress into the socket.
+/// How long one write may find the socket with no room.
 ///
 /// [`WRITE_TIMEOUT`] alone would let a peer that simply stops reading hold
-/// its in-flight slot for ten minutes: 64 such connections, ~100 bytes
-/// each, deny every witness the persona is bonded to answer, renewed
-/// indefinitely for nothing. A peer that stalls blocks the very next chunk
-/// write, so this — not the total — is what a silent connection actually
-/// costs. It bounds *stalls*, not slowness: `write_all` returns when the
-/// kernel accepts the bytes, and the bound restarts per chunk, so a genuine
-/// slow circuit is served for as long as it keeps draining.
+/// its in-flight slot for that whole bound: [`MAX_INFLIGHT`] such
+/// connections deny every witness the persona is bonded to answer, renewed
+/// indefinitely for nothing. A peer that stalls blocks the next chunk
+/// write, so this — not the total — is what a silent connection costs.
+///
+/// The clock runs only while [`write_bounded`] waits on a socket that
+/// accepted nothing. Bytes accepted start it over, so a peer that keeps
+/// draining is served until [`WRITE_TIMEOUT`]. A poll that finds the
+/// socket writable writes, however late it is: the serving runtime runs
+/// below the daemon (`SH-3`), and that lateness is not a stall.
 const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Internal read/write granularity for the shard body.
@@ -1001,12 +1004,28 @@ pub fn read_and_fold_in_memory(
     }
 }
 
-/// One write, bounded by [`WRITE_STALL_TIMEOUT`] — see that constant for
-/// why the per-write bound, not the total, is what a stalled peer costs.
-async fn write_bounded<W: AsyncWrite + Unpin>(stream: &mut W, bytes: &[u8]) -> io::Result<()> {
-    tokio::time::timeout(WRITE_STALL_TIMEOUT, stream.write_all(bytes))
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write stalled"))?
+/// Write `bytes` to completion.
+///
+/// Each attempt is one [`AsyncWriteExt::write`]: the bytes the socket will
+/// take. [`WRITE_STALL_TIMEOUT`] bounds that attempt, and bytes accepted
+/// start the bound over. See that constant for why the per-wait bound, not
+/// the total, is what a stalled peer costs.
+///
+/// [`tokio::time::timeout`] polls the write first, so a socket that has
+/// room completes even when the wait has already run out. A timeout around
+/// [`AsyncWriteExt::write_all`] would stay pending until the whole slice
+/// was accepted and would charge that lateness to the peer.
+async fn write_bounded<S: AsyncWrite + Unpin>(stream: &mut S, mut bytes: &[u8]) -> io::Result<()> {
+    while !bytes.is_empty() {
+        let accepted = tokio::time::timeout(WRITE_STALL_TIMEOUT, stream.write(bytes))
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response write stalled"))??;
+        if accepted == 0 {
+            return Err(io::Error::new(io::ErrorKind::WriteZero, "wrote nothing"));
+        }
+        bytes = &bytes[accepted..];
+    }
+    Ok(())
 }
 
 /// Read until the end of the request head (`\r\n\r\n`), bounded by
