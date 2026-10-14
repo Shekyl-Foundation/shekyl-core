@@ -21,8 +21,7 @@ pre-flight's. `RT-O16…RT-O22` are the RT-W9 pre-flight's
 ruled 2026-10-11. `RT-O16`, `RT-O18`, `RT-O20` and the sequencing half of
 `RT-O21` were re-ruled 2026-10-12 (PR #1034); the re-rulings are what is
 built. `RT-O23…RT-O27` are the runtime option requests' (§6.4), posed
-by the daemon-configuration cutover on 2026-10-14 and open until Rick
-confirms the direction recorded there. No new family (rule 94).
+by the daemon-configuration cutover and ruled 2026-10-14. No new family (rule 94).
 **Decision authority:** Rick.
 **Relationship to R0:** R0's §1 premise (every RPC leg is
 operator-to-operator; the adversary is the path, never the peer) and §3
@@ -899,7 +898,7 @@ network, never a node.
 | `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block`, `calc_pow` (a computation service; moved from the admin set, RT-O9.4) |
 | `mining-control` | This node's own miner: `/start_mining`, `/stop_mining`, `/mining_status`, `/set_log_hash_rate` |
 | `bans` | `set_bans`, `get_bans`, `banned` |
-| `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `/pop_blocks`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard`; **`option_set`, which is setting every row the option table marks runtime**, so marking a row runtime widens this grant (§6.4, RT-O24). `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers` and `/in_peers` are here until the daemon-config cutover deletes them |
+| `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard`; **`option_set`, which is setting every row the option table marks runtime**, so marking a row runtime widens this grant (§6.4, RT-O24). `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers` and `/in_peers` are here until the daemon-config cutover deletes them |
 | `config` | The node's configuration: `option_show`'s default rows, every row that names no other grant, including everything that describes the host or links the operator (the onion, SOCKS endpoints, paths, notify commands, `mine-address`). A secret's value is in no grant (§6.4, RT-O24). Carried by the `admin` preset only |
 | `enrol` | `rpc-enrol`, `rpc-revoke` (RT-O9.1). Carried by the `admin` preset only |
 
@@ -933,12 +932,15 @@ can contain either.
   arrived on. Reason: no remote job needs this data, and it is exactly what
   Dandelion++ exists to hide.
 - **Armed test levers (RT-O9.2; the arming ruled 2026-10-09).**
-  `generateblocks` and `inject_archival_serve_credit` are not production
-  capabilities. The regtest harnesses depend on `generateblocks`
+  `generateblocks`, `inject_archival_serve_credit` and `/pop_blocks`
+  (ruled 2026-10-14, §6.4) are not production capabilities. The regtest
+  harnesses depend on `generateblocks`
   (`engine/gf7_sealing_run.rs:94`, `engine/daemon_observability.rs`), so
   RT-W10 carries an **armed-and-pinned override** (rule 71): an explicit
   start switch, logged at every start; when armed, the levers are served to
-  the host's administrator only. Never selected by nettype. *Today's defect,
+  the host's administrator only. Never selected by nettype. `/pop_blocks`
+  has three users, all served there: the regtest roll-back helper, the
+  Python framework and the CT-2 fixture generator (§6.4). *Today's defect,
   recorded:* `inject_archival_serve_credit` is absent from
   `RESTRICTED_METHODS`, so the restricted listener serves it, and its only
   gate is a `FAKECHAIN` branch (`core_rpc_server.cpp:946`) — the pattern
@@ -1101,10 +1103,11 @@ the admin listener.
 
 ### 6.4 Runtime options: `option_set` and `option_show` (RT-O23…RT-O27)
 
-**Status: Round 0, 2026-10-14. Direction given by Rick the same day,
-synthesized here with the tree at `1b7803f69a` (`dev`); ruled when he
-confirms.** Three points come from the tree rather than from the
-direction, and each says so.
+**Status: RULED 2026-10-14 (Rick), as written below.** His direction of
+the same day, synthesized with the tree at `1b7803f69a` (`dev`), with his
+two changes on PR #1073: a secret row carries no `value` member
+(RT-O25), and `/pop_blocks` moves to the armed test levers. Points that
+came from the tree rather than from the direction say so.
 
 **Origin.** DC-Q16 (Rick, 2026-10-14; the daemon-configuration cutover,
 PR #1066, `DAEMON_CONFIG_CUTOVER.md` §2.7) replaces the per-setting runtime
@@ -1210,17 +1213,16 @@ two. Every route they replace is a REST path today.
 - **`option_show`** takes an optional `{"names": [...]}`. With no names, it
   returns every row the caller may see, in table order. Each row carries
   `name`, `source` (`default`, `file`, `cli` or `runtime`), `runtime`
-  (whether `option_set` accepts it) and `value`, which is one of three
-  things:
-  - a string: the value as text in the grammar's syntax;
-  - `null`: the row has no value (unset);
-  - `{"secret": "set"}`: a secret that is set. Its text is never sent.
+  (whether `option_set` accepts it), and then one of two forms:
+  - **a value row** carries `value`: the value as text in the grammar's
+    syntax, or `null` when the row has no value (unset);
+  - **a secret row** carries no `value` member. It carries `secret: true`
+    and `set: true` or `false`. A secret's text is never sent.
 
-  Neither an unset row nor a secret uses a member of the text domain
-  (rule 43: no string marker, and no boolean beside a value). Readers
-  decode `value` into a three-variant type and refuse any other shape. A
-  name the caller asked for but may not see is absent from the reply; an
-  unknown name is refused.
+  `value` is text or `null` and nothing else: no string marker stands for
+  a secret (rule 43). Readers decode a row into a two-variant type and
+  refuse a row with both forms or neither. A name the caller asked for
+  but may not see is absent from the reply; an unknown name is refused.
 - **What `option_show` prints, `option_set` accepts.** The text shown for
   a value is valid input to `option_set` and builds the same value. A
   property test over every runtime row holds this. *Found against the
@@ -1304,15 +1306,22 @@ not ported:** it leaves RK-8 (`DAEMON_RPC_KV_CUTOVER.md` §2), and the
 comments at `regtest_e2e.rs:5866` and `console/mod.rs:1123` that say RK-8
 migrates it are corrected by the implementing PR.
 
-*Not decided here: `/pop_blocks`.* `DAEMON_CONFIG_CUTOVER.md` §4 (PR #1066) leaves to
-this lane whether the route goes with the console word, and IG-Q25 gives
-the word no successor "because tests make real reorganisations through
-production pathways". Three callers use the route today: the regtest
-roll-back helper
+**`/pop_blocks` is an armed test lever (ruled 2026-10-14).**
+`DAEMON_CONFIG_CUTOVER.md` §4 (PR #1066) left to this lane whether the
+route goes with the console word, which IG-Q25 gives no successor. It
+moves to the armed test levers (RT-O9.2, §6.1): in no grant, served to the
+host's administrator only, and only when the logged start switch is
+armed. Its three users take it there: the regtest roll-back helper
 ([`regtest_e2e.rs:777-785`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs)),
 the Python framework (`daemon.py:217-221`) and the CT-2 fixture generator
 ([`gen_ct2_fixture.py:159`](../../rust/shekyl-curve-tree/tests/fixtures/gen_ct2_fixture.py)).
-The route stays in `node` until a ruling decides it.
+*Reason:* rewinding a node's chain is no capability for an enrolled remote
+key; paired with an eclipse, it lets someone rewind a node and then feed
+it a chain. *Today,* the route is admin-only on every network, with no
+network gate
+([`server.rs:352-356`](../../rust/shekyl-daemon-rpc/src/server.rs)); the
+helper's comment calling it FAKECHAIN-gated is wrong. **Reopen (rule 21):**
+a demonstrated operator recovery need returns it as a ruled capability.
 
 ---
 
@@ -1662,8 +1671,8 @@ construction) instead of loopback TCP.
 
 ## 10. Open items
 
-Every item below is ruled. `RT-O23…RT-O27` (§6.4) are open: Rick's
-direction of 2026-10-14 is recorded there, to be confirmed as the ruling.
+Every item is ruled. `RT-O23…RT-O27` were ruled 2026-10-14 and are
+recorded in §6.4.
 
 - **A finding against WP-D8, owned where WP-D8 lives.** The same
   `create_owner_only_file` writes the **exported seed file** with no
