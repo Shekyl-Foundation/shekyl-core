@@ -9,7 +9,11 @@ were handed to SO-D8 Slice C on 2026-10-11**
 §11): the verifier of increment 4 is that slice's bundle rule, the signer
 and the verifier must switch in one change, and increment 3 lands in Rust
 only. `FND-4`'s carried item, one decoded key across signatures, goes with
-increment 4. This lane's own work ended with increment 2. **The document
+increment 4. This lane's own code work ended with increment 2; **one item
+stays this lane's: the floor-device run** (`FND-9`, `FND-12`; `BA-T33`'s
+floor arm and its FOLLOWUPS row), ruled by the maintainer on 2026-10-11,
+and it is the lane's only open work item (§10). The C++ JoinMarket path is
+not changed or ported by this lane (`FND-20`). **The document
 stays OPEN until the settlement lane's cutover selects the receipt
 capability and receipts move onto the key** (§9.4); it closes when that
 is recorded here, and the dependency record (§2) then moves to
@@ -242,10 +246,16 @@ open a second road to a release.
   `FnDsaHybridPublicKey::from_canonical_bytes`, which checks both halves. Done: §8.
 - **Increment 4** signs the unchanged 112-byte transcript under
   `SCHEME_DOMAIN_RECEIPT`. The refusal trailer's `0xFF` fill is already
-  shown not to parse (`an_all_ones_fill_is_not_a_signature`).
+  shown not to parse (`an_all_ones_fill_is_not_a_signature`). Built STAGED:
+  §9; the switch is the settlement lane's cutover (§9.4).
 - **Slice C** uses `HybridEd25519FnDsa::generate_keypair` for the witness's
-  per-block key and `SCHEME_DOMAIN_WITNESS_CARRIER` for its signature. That
-  key is random, never seeded and never stored.
+  per-block key. That key is random, never seeded and never stored. Its
+  signature is over the bundle commitment under `SCHEME_DOMAIN_WITNESS_BUNDLE`
+  (`shekyl/archival-witness-bundle-scheme-v1`), minted with the bundle
+  verifier, not under `SCHEME_DOMAIN_WITNESS_CARRIER`: the one-bundle-per-block
+  round (`SCS-P14` onward) replaced the carrier, and the carrier's label,
+  which increment 1 minted for it, stays as a constant with no signer
+  (specification §16).
 
 ## 7. Increment 2 — the receipt key
 
@@ -619,3 +629,18 @@ capability per start. A cutover that wants no such response decodes at
 serving-task start as well; that is one receipt-key decode per serving
 start, on the stack §9.1 gives, and it is the cutover's to add because it
 is the cutover that makes the cost one the live path should pay.
+
+## 10. What this lane still owes (2026-10-14)
+
+After the handoff of increments 3 and 4 to Slice C, one item is this
+lane's, as ruled by the maintainer on 2026-10-11: **the floor-device run.**
+Sign, verify and seeded key generation under scheme 3 on the floor device,
+with the scheme's vectors run on that hardware in the same session
+(`FND-9`), and the receipt key's cost at engine assembly measured there
+(`FND-12`). It is `BA-T33`'s floor arm; the FOLLOWUPS row carries the
+falsifier, and a floor-device session is a shared-estate claim.
+
+Nothing else is queued here. The witness signature is Slice C's under its
+own domain (§6), the receipt signer is staged (§9), and the switch that
+makes receipts live is the settlement lane's cutover (§9.4).
+
