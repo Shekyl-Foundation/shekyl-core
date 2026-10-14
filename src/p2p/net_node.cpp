@@ -120,7 +120,6 @@ namespace nodetool
                                                                                                   " address, the compiled seeds and every address learned from a peer included."
                                                                                                   " Name only peers you control; the option is for a private network, not for"
                                                                                                   " joining the public one"};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node   = {"seed-node", "Name a peer as a dial candidate, like add-peer; the compiled seeds are candidates already"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy = {"tx-proxy", "Send local txes through proxy: <network-type>,[socks5://[user:pass@]]<socks-ip:port>[,max_connections] i.e. \"tor,127.0.0.1:9050,100\""};
     // PWD-E7 (P2P_2_ENDPOINT_ROUND.md): the durable-address warning is stated
     // wherever this flag is documented, because the failure mode is quiet --

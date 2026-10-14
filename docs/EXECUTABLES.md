@@ -71,7 +71,6 @@ shekyld [options] [command]
 | `--p2p-bind-port <port>` | P2P listen port |
 | `--add-peer <ip:port>` | Name a peer as a dial candidate; it is dialled like any other |
 | `--add-exclusive-node <addr:port>` | Declare a closed network: dial these peers and no other address, the compiled seeds and every address learned from a peer included. Name only peers you control |
-| `--seed-node <ip:port>` | Name a peer as a dial candidate, like `--add-peer`; the compiled seeds are candidates already |
 | `--out-peers <n>` | Maximum outbound connections |
 | `--in-peers <n>` | Maximum inbound connections |
 | `--no-igd` | Disable UPnP port forwarding |

@@ -425,7 +425,7 @@ pub unsafe extern "C" fn shekyl_core_published_tip(
     1
 }
 
-/// An operator-named address (`--add-peer`, `--seed-node`): into gray,
+/// An operator-named address (`--add-peer`): into gray,
 /// whatever its range. Returns 1 when it newly entered gray, 0 when it
 /// already sat or was refused, [`SHEKYL_DIALER_DEFERRED`] when the dialer
 /// is not built yet and the address is held for its build, -1 when the

@@ -116,7 +116,6 @@ namespace nodetool
     command_line::add_arg(desc, arg_p2p_allow_local_ip);
     command_line::add_arg(desc, arg_p2p_add_peer);
     command_line::add_arg(desc, arg_p2p_add_exclusive_node);
-    command_line::add_arg(desc, arg_p2p_seed_node);
     command_line::add_arg(desc, arg_tx_proxy);
     command_line::add_arg(desc, arg_anonymous_inbound);
     command_line::add_arg(desc, arg_no_ephemeral_tor);
@@ -501,12 +500,6 @@ namespace nodetool
       if (!parse_peers_and_add_to_container(vm, arg_p2p_add_exclusive_node, m_exclusive_peers))
         return false;
       shekyl::declare_exclusive_peers(m_exclusive_peers);
-    }
-
-    if (command_line::has_arg(vm, arg_p2p_seed_node))
-    {
-      if (!parse_peers_and_add_to_container(vm, arg_p2p_seed_node, public_zone.m_seed_nodes))
-        return false;
     }
 
     if (!command_line::is_arg_defaulted(vm, arg_ban_list))
@@ -944,14 +937,12 @@ namespace nodetool
     CHECK_AND_ASSERT_MES(res, false, "Failed to init config.");
 
 
-    // `--add-peer` and `--seed-node` name CANDIDATES, not verified peers:
-    // operator-named addresses enter the Rust gray list and earn white the
-    // way every other address does, through a drawn dial the strand
-    // accepts (slice 1 brief §3: seeds are ordinary peers).
+    // `--add-peer` names CANDIDATES, not verified peers: operator-named
+    // addresses enter the Rust gray list and earn white the way every other
+    // address does, through a drawn dial the strand accepts (slice 1 brief
+    // §3: seeds are ordinary peers; the compiled seeds enter from Rust).
     for(const auto& p: m_command_line_peers)
       shekyl::admit_operator_peer(p.adr);
-    for(const auto& seed: public_zone.m_seed_nodes)
-      shekyl::admit_operator_peer(seed);
 
     //configure self
 

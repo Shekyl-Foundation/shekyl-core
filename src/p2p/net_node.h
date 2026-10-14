@@ -163,7 +163,6 @@ namespace nodetool
       network_zone()
         : m_outbound(false),
           m_net_server(),
-          m_seed_nodes(),
           m_bind_ip(),
           m_bind_ipv6_address(),
           m_port(),
@@ -179,7 +178,6 @@ namespace nodetool
       network_zone(boost::asio::io_context& public_service)
         : m_outbound(false),
           m_net_server(public_service),
-          m_seed_nodes(),
           m_bind_ip(),
           m_bind_ipv6_address(),
           m_port(),
@@ -196,7 +194,6 @@ namespace nodetool
       //! zone the managed Tor supplies SOCKS for. The dial itself is Rust's.
       bool m_outbound;
       net_server m_net_server;
-      std::vector<epee::net_utils::network_address> m_seed_nodes;
       std::string m_bind_ip;
       std::string m_bind_ipv6_address;
       std::string m_port;
@@ -498,7 +495,6 @@ namespace nodetool
     extern const command_line::arg_descriptor<bool>        arg_p2p_allow_local_ip;
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_peer;
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_exclusive_node;
-    extern const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node;
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy;
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound;
     extern const command_line::arg_descriptor<bool> arg_no_ephemeral_tor;
