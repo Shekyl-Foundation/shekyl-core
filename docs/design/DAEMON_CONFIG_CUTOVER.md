@@ -55,15 +55,16 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
 | DC-Q16 (Rick, 2026-10-14) | One generic set request and one generic show request, carrying the option's name and its value as text in the grammar's syntax, parsed by the table and routed to the row's owner. Show never returns a secret, only that it is set. Both need the admin grant by default; a row may declare itself visible at the view grant, and otherwise the view grant sees nothing. Set accepts only rows marked Runtime and refuses any other with a code saying it is startup-only. Show reports each value's source (`default`, `file`, `cli`, `runtime`). The RPC lane names the methods | §2.7, §6 |
 | DC-Q17 / IG-Q36 (Rick, 2026-10-14; RT-16 ruled 2026-10-13) | `service` is a public switch, off by default (its surface is DC-Q18's: command line only): `shekyld` answers the platform's service manager (RT-16). It is accepted only where RT-16 defines it, Windows, and refused elsewhere with a typed code. The run mode selects one root, and every default path (`config-file`, `data-dir`, `log-file`) derives from it. On Windows a run-as-user daemon uses the per-account root (`FOLDERID_LocalAppData`) and `service` uses `%ProgramData%\shekyl\`, which only the installer creates (owner and access list: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. Linux and macOS keep the `/etc/shekyl/` config files in every mode (R2). The REJECTED row `run-as-service` keeps its name with a new reason. The name and rows land in #1068; the mechanism, including the deletion of the elevation branch in `daemon_default_data_dir.cpp`, lands here. Both cite RT-16 by document once its branch is pushed (done: #1070). *Records-was: the same day's first ruling made the run mode a command-line-only closed set and the config root follow the mode on every platform* | §2.2, §2.4, §2.5, §6 |
 | DC-Q18 (Rick, 2026-10-14) | `service` is command-line only (IG-7): the run mode selects the file, so a key in that file could only restate or contradict it, and on Windows the installer's service registration carries the command line. A `service` key in the file is refused. Only the grammar row's Surface cell changes | §2.4, §6 |
-| DC-Q16, the grammar side (Rick, 2026-10-14) | IG-9's row gains the field `view`, yes or no, default no. A row is shown at the view grant only when it opts in, and rows that link the operator or describe the host never do: `mine-address`, `tor-onion`, the peer, closed-peer and ban rows, paths, SOCKS endpoints, notify commands, every secret. IG-12's contract: `option set` refuses a row not marked runtime with a typed code, requires the admin grant and never writes the file; `option show` reports each value with its source, shows a secret only as set, returns only `view: yes` rows at the view grant and every row at admin. Lands on #1068 | §2.7 |
+| DC-Q16, the grammar side (Rick, 2026-10-14) | *Records-was, superseded by the next row: IG-9's row gains the field `view`, yes or no, default no.* A row is shown at the view grant only when it opts in, and rows that link the operator or describe the host never do: `mine-address`, `tor-onion`, the peer, closed-peer and ban rows, paths, SOCKS endpoints, notify commands, every secret. IG-12's contract: `option set` refuses a row not marked runtime with a typed code, requires the admin grant and never writes the file; `option show` reports each value with its source, shows a secret only as set, returns only `view: yes` rows at the view grant and every row at admin. Lands on #1068 | §2.7 |
+| Runtime requests and disclosure (Rick, 2026-10-14, with [`RPC_CHANNEL.md`](RPC_CHANNEL.md) §6.4, RT-O23…RT-O27, PR #1073) | (1) IG-9's `view` field becomes the row's disclosing grant: `health`, `status`, `peers` or `config`, default `config`; `log-level`, `log-category` and the three P2P rate and cap rows are `status`. (2) Every runtime row's default is writable as a value: `p2p-inbound-max` takes `none` (no operator cap) and `log-category` takes `none` (no per-category overrides); an empty category list never means logging off. (3) `/pop_blocks` has no grammar successor; it is an armed test lever (RT-O9.2), RT-W10's. §6.4: the requests are `option_set` and `option_show`, JSON-RPC methods only; `option_set` is in the `node` grant, which is setting every runtime row; set is all or nothing over infallible applies; a secret row carries `secret: true` and `set`, never a value; refusals carry the IG-11 diagnostics in the error's `data` member under one new code; one lock over a set, one audit line per set | §2.7, §4.2 |
 | RT-W14's start reporting (Rick, 2026-10-14) | Under the SCM the Rust entry reports `SERVICE_START_PENDING` with checkpoints and wait hints through steps 2 to 8 of §2.2, and `SERVICE_RUNNING` only when RT-15's rendezvous is published. Without it the SCM's start timeout of about 30 seconds kills the service (error 1053): the managed Tor's bootstrap alone may take 300 seconds ([`src/p2p/net_node.inl:892`](../../src/p2p/net_node.inl)) | §2.2 |
 
 ### 1.2 Open before implementation
 
 - **PR-3 (#1056) merging.** The brief stays a draft until then (Rick,
   2026-10-14); its branch citations are re-pinned to the merged lines then.
-- **The names of the set and show requests.** The RPC lane names them
-  (DC-Q16); the implementing PR needs them, the brief does not.
+- **#1073 merging** puts `RPC_CHANNEL.md` §6.4, which this brief cites for
+  the runtime requests, on `dev`. It is ruled; no design waits on the merge.
 - **#1070 merging** turns the RT-16 record's path in §1.1 into a link. No
   design depends on it.
 
@@ -316,35 +317,70 @@ chain store joins it when the daemon opens one. The managed Tor's data
 directory is not a store. DC-F1, the check of a store's block 0 against the
 network, stays the chain-store lane's and does not block this cutover.
 
-### 2.7 Runtime changes (IG-12, DC-Q16)
+### 2.7 Runtime changes (IG-12, DC-Q16, `RPC_CHANNEL.md` §6.4)
 
 Today every runtime change is forwarded to the C++ JSON handlers through
 one dispatch
 ([`rust/shekyl-daemon-rpc/src/handlers/json.rs:82-91`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
 [`:389-395`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs)), one
-endpoint per knob. After the cutover there is one generic set request and
-one generic show request, named by the RPC lane:
+endpoint per knob. After the cutover there are two JSON-RPC methods,
+`option_set` and `option_show` (RT-O23), served natively by
+`shekyl-daemon-rpc` through an options handle the composition root
+supplies, with no FFI (RT-O26):
 
-- **Set** carries an option's name and its value as text in the grammar's
-  syntax. The table's own parser and constructor build the value, exactly
-  as at startup, and the request goes to the row's Rust owner. It accepts
-  only a row marked runtime (`INPUT_GRAMMAR.md` §5: `p2p-upload-max`,
-  `p2p-download-max`, `p2p-inbound-max`, `log-level`, `log-category`) and
-  refuses any other with the startup-only code; it needs the admin grant
-  and never writes the config file.
-- **Show** reports each value with its source (`default`, `file`, `cli`,
-  `runtime`), so an operator sees that a runtime change does not survive a
-  restart; it shows a secret only as set; it returns every row at the admin
-  grant and, at the view grant, only rows whose `view` field is yes. Rows
-  that link the operator or describe the host never opt in.
+- **`option_set`** takes a list of name and value pairs, each value text in
+  the grammar's syntax. The table's own parser and constructor build every
+  value first, exactly as at startup, and the set applies all or nothing:
+  one refusal refuses the request and every refusal in it is reported. A
+  duplicate name, an unknown name and an empty list are refused. It accepts
+  only a row marked runtime (`p2p-upload-max`, `p2p-download-max`,
+  `p2p-inbound-max`, `log-level`, `log-category`) and refuses any other
+  with the startup-only code. It is in the `node` grant (RT-O24); until
+  RT-W10 it joins `RESTRICTED_METHODS`
+  ([`rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs:49`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs)),
+  so the view listener refuses it. It never writes the config file.
+- **All or nothing needs an apply that cannot fail.** Every refusal lives
+  in the constructors; each owner's runtime interface takes a built value
+  and returns nothing that can fail (RT-O25). The logging owner does not
+  meet this yet: its filter is swapped through a reload handle whose
+  `reload` returns a `Result`, reachable only through the FFI module
+  ([`rust/shekyl-logging/src/ffi.rs:639`](../../rust/shekyl-logging/src/ffi.rs)).
+  The cutover gives `shekyl-logging` a Rust interface that holds the
+  handle for the life of the process.
+- **Defaults are values.** Every runtime row's default can be written back:
+  `p2p-inbound-max` takes `none` for no operator cap and `log-category`
+  takes `none` for no per-category overrides. An empty category list never
+  means logging off; the inherited reading
+  ([`rust/shekyl-logging/src/filter.rs:155-162`](../../rust/shekyl-logging/src/filter.rs))
+  goes.
+- **`option_show`** takes an optional list of names and returns each row
+  the caller may see, in table order, with its name, source (`default`,
+  `file`, `cli`, `runtime`) and whether it is runtime. A value row carries
+  `value`, text or null; a secret row carries no value, only `secret: true`
+  and `set`. The text it prints round-trips through `option_set`, held by a
+  property test. It is served to `health`, and each row is present only
+  under the grant the row names: `health`, `status`, `peers` or `config`,
+  default `config` (RT-O24). The five runtime rows are `status`; rows that
+  link the operator or describe the host stay `config`, which only the
+  `admin` preset carries. Until RT-W10, `Disclosure`
+  ([`rust/shekyl-daemon-rpc/src/info.rs:70`](../../rust/shekyl-daemon-rpc/src/info.rs))
+  gains a `config` axis, set in `FULL` and clear in `VIEW`.
+- **Errors** carry the IG-11 diagnostics in the JSON-RPC error's `data`
+  member under one new code, with a `CORE_RPC_VERSION` bump (RT-O25).
+- **Concurrency and audit.** One lock covers a whole set, and show reads
+  under it. Each applied set writes one audit line: the caller, each row,
+  its old and new value. A table gate holds that no row is both runtime
+  and secret (RT-O27).
 - **`mine start` and `mine stop`** build `mine-address` and `mine-threads`
   through their constructors and are the one request that still reaches
   C++, carrying validated values, until the miner moves to Rust.
 
-The live value belongs to its owner. Deleted with the per-knob endpoints:
-`/set_limit`, `/in_peers`, `/set_log_level`, `/set_log_categories` as
-routes of their own, `/out_peers` with its option, and the console words
-they served (`INPUT_GRAMMAR.md` §13).
+The live value belongs to its owner. Deleted with their handlers and
+callers: `/set_limit`, `/in_peers`, `/out_peers`, `/set_log_level`,
+`/set_log_categories` and `/get_limit`, which `option_show` replaces and
+which leaves RK-8 instead of being ported (§4.2). `/pop_blocks` is not
+this cutover's: it becomes an armed test lever behind RT-W10's start
+switch (RT-O9.2; DC-F14).
 
 ### 2.8 The clearnet public address (DC-Q10)
 
@@ -468,7 +504,7 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | UPnP | `rg -n -i -e 'upnp' -e 'm_igd' -e 'igd_t' src/p2p` → more than 40 ([`src/p2p/net_node.h:463-467`](../../src/p2p/net_node.h), [`:663-670`](../../src/p2p/net_node.h), [`src/p2p/net_node.inl:66-68`](../../src/p2p/net_node.inl), [`:1183-1189`](../../src/p2p/net_node.inl), [`:2358`](../../src/p2p/net_node.inl), [`:3381-3383`](../../src/p2p/net_node.inl)) | 0 |
 | miniupnpc | `rg -n -i -e 'miniupnp' -e 'UPNP' CMakeLists.txt external/CMakeLists.txt cmake/FindMiniupnpc.cmake .gitmodules contrib/brew/Brewfile .github/workflows src/p2p/CMakeLists.txt` → more than 15 ([`CMakeLists.txt:490`](../../CMakeLists.txt), [`external/CMakeLists.txt:32-51`](../../external/CMakeLists.txt)) | 0; the submodule leaves `.gitmodules` and the tree; the note at [`scripts/ci/check_doc_claims.py:694`](../../scripts/ci/check_doc_claims.py) is updated |
 | `out-peers` and its runtime surface | `rg -n -e 'out_peers' -e 'OUT_PEERS' -e 'change_max_out_public_peers' -e 'get_max_out_public_peers' src rust/shekyl-daemon-rpc/src` → more than 20 ([`src/rpc/core_rpc_server.cpp:1166-1171`](../../src/rpc/core_rpc_server.cpp), [`src/daemon/command_server.cpp:211-213`](../../src/daemon/command_server.cpp), [`rust/shekyl-daemon-rpc/src/server.rs:344`](../../rust/shekyl-daemon-rpc/src/server.rs)) | 0 |
-| the per-knob runtime endpoints and the console words (§2.7) | `rg -n -e '"/set_limit"' -e '"/in_peers"' -e '"/set_log_level"' -e '"/set_log_categories"' rust/shekyl-daemon-rpc/src/server.rs` → more than 4 ([`rust/shekyl-daemon-rpc/src/server.rs:319-349`](../../rust/shekyl-daemon-rpc/src/server.rs)) | 0; one set and one show request in their place. The console word `pop_blocks` has no successor (`INPUT_GRAMMAR.md` §13); whether its RPC route goes with it is the RPC lane's |
+| the per-knob runtime endpoints, their callers and the console words (§2.7, `RPC_CHANNEL.md` §6.4) | `rg -n -e '"/set_limit"' -e '"/in_peers"' -e '"/set_log_level"' -e '"/set_log_categories"' -e '"/get_limit"' rust/shekyl-daemon-rpc/src/server.rs` → more than 5 ([`rust/shekyl-daemon-rpc/src/server.rs:267`](../../rust/shekyl-daemon-rpc/src/server.rs), [`:319-349`](../../rust/shekyl-daemon-rpc/src/server.rs)); the callers of `/get_limit`: the Rust console's `print_net_stats` ([`rust/shekyl-daemon-rpc/src/console/mod.rs:1121-1166`](../../rust/shekyl-daemon-rpc/src/console/mod.rs)), the Python framework ([`utils/python-rpc/framework/daemon.py:433-436`](../../utils/python-rpc/framework/daemon.py)), the C++ client test ([`tests/unit_tests/daemon_rpc_client.cpp:107-110`](../../tests/unit_tests/daemon_rpc_client.cpp)), and the regtest check of `print_net_stats` | 0; `option_set` and `option_show` in their place, the callers moved to them; `/get_limit` leaves RK-8 (replaced, not ported). `/pop_blocks` stays and moves behind RT-W10's armed switch (RT-O9.2) |
 | the `,N` suffixes | `rg -n -e 'get_max_connections' -e 'max_connections' src/p2p/net_node.cpp src/p2p/net_node.h` → more than 8 | 0 |
 | `disable-rpc-ban` and the RPC server's dead scorer | `rg -n -e 'disable_rpc_ban' -e 'core_rpc_server::add_host_fail' -e 'RPC_IP_FAILS_BEFORE_BLOCK' src` → more than 5 ([`src/rpc/core_rpc_server.cpp:173-190`](../../src/rpc/core_rpc_server.cpp); the shared context is unblockable, [`src/rpc/core_rpc_ffi.cpp:84-89`](../../src/rpc/core_rpc_ffi.cpp)) | 0; `node_server::add_host_fail` ([`src/p2p/net_node.inl:451`](../../src/p2p/net_node.inl)) is the P2P function and stays |
 | the test and debug levers | `rg -n -e 'test_drop_download' -e 'g_test_dbg_lock_sleep' -e 'show_time_stats' src contrib/epee/include/syncobj.h` → more than 10 | 0 |
@@ -726,7 +762,7 @@ chain-sync lanes do not touch the option surface.
 
 ---
 
-## 11. Findings established at source (DC-F1…DC-F13)
+## 11. Findings established at source (DC-F1…DC-F14)
 
 | Id | Finding | Route |
 | --- | --- | --- |
@@ -741,6 +777,7 @@ chain-sync lanes do not touch the option surface.
 | DC-F9 | A list given on both surfaces kept only the command line's, undocumented | absorbed: IG-6 makes it the rule |
 | DC-F10 | A `*` origin aborts the daemon after its log says RPC started. `shekyl_daemon_rpc_start` returns a handle and spawns the server ([`rust/shekyl-daemon-rpc/src/ffi_exports.rs:208-212`](../../rust/shekyl-daemon-rpc/src/ffi_exports.rs)); the task builds the CORS layer ([`rust/shekyl-daemon-rpc/src/server.rs:87-115`](../../rust/shekyl-daemon-rpc/src/server.rs)); tower-http 0.6.8 panics on a wildcard passed to `AllowOrigin::list` (its `allow_origin.rs`, lines 60 to 64, read at source); the workspace builds with `panic = "abort"` in both profiles (`rust/Cargo.toml`, lines 671 to 676), so the process ends; no panic hook is installed, so the reason reaches standard error only. Entries that are not valid header values are logged and dropped ([`rust/shekyl-daemon-rpc/src/server.rs:100-102`](../../rust/shekyl-daemon-rpc/src/server.rs)) | absorbed: the origin kind refuses both at parse |
 | DC-F11 | A list option with no values was "present" to the C++: the vector semantic installs an empty default ([`src/common/command_line.h:179-183`](../../src/common/command_line.h)) and `has_arg` tests the map entry ([`src/common/command_line.h:256-262`](../../src/common/command_line.h)), so every start declared a closed network with no peers. PR-3 reads an empty declaration as none on the Rust side (`6fc926404`) | absorbed: the closed-network declaration is absent or non-empty |
+| DC-F14 | `/pop_blocks` is not limited to regtest today. Neither its handler ([`src/rpc/core_rpc_server.cpp:1186`](../../src/rpc/core_rpc_server.cpp)) nor the chain code checks the network, and the route is only `AdminOnly` ([`rust/shekyl-daemon-rpc/src/server.rs:353-355`](../../rust/shekyl-daemon-rpc/src/server.rs)), so a caller on the loopback admin listener can rewind a mainnet chain; the harness comment calling it "FAKECHAIN-gated" ([`rust/shekyl-engine-core/src/engine/regtest_e2e.rs:777`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs)) is false | routed: RT-O9.2's armed test lever, RT-W10's (`RPC_CHANNEL.md` §6.4); the comment is corrected when the route moves |
 | DC-F13 | On Windows a run-as-user daemon is terminated, not stopped, by every console event but Ctrl-C and Ctrl-Break: the handler logs "Exiting without saving" and returns `FALSE` for window close, logoff and shutdown ([`src/common/util.h:193-201`](../../src/common/util.h)), so RT-16's "stops at logout" does not hold today. Low severity: the stores are transactional and Tor exits through `TAKEOWNERSHIP` | absorbed: one stop path for every signal, console event and SCM control (§2.2 step 9) |
 | DC-F12 | The first notify command switches child reaping off for the whole process. `tools::spawn` sets `signal(SIGCHLD, SIG_IGN)` after a spawn it does not wait for ([`src/common/spawn.cpp:124`](../../src/common/spawn.cpp)); from then on the kernel reaps every child, the managed Tor included, which the Rust side waits on ([`rust/shekyl-tor-control-client/src/control/actor.rs:616`](../../rust/shekyl-tor-control-client/src/control/actor.rs), [`:1011`](../../rust/shekyl-tor-control-client/src/control/actor.rs)). Under tokio 1.51.0 on Linux the pidfd reaper's wait then fails with `ECHILD` instead of an exit status; on macOS and FreeBSD the `SIGCHLD` handler tokio relies on is overwritten and the wait never completes | absorbed: the Rust runner reaps its own children and never changes a signal disposition (§2.10); pre-flight demonstrates it (§9) |
 
@@ -764,8 +801,8 @@ ruled. Read rules 00, 06, 08, 17, 19, 20, 22, 23, 25, 26, 35, 36, 40, 45,
 47, 50, 71, 82, 83, 90, 94 and 95, and `INPUT_GRAMMAR.md`, before the first
 commit.
 
-1. **Preconditions.** PR-3 is on `dev`, and the RPC lane has named the
-   set and show requests (§2.7). Stop and ask if any is not
+1. **Preconditions.** PR-3 is on `dev`. The runtime requests are
+   `RPC_CHANNEL.md` §6.4's (RT-O23…RT-O27), ruled 2026-10-14. Stop and ask if any is not
    true.
 2. **Worktree and branch.** One worktree off `dev`; stage explicit paths;
    push each commit to the open PR after merging `dev`; no attribution
