@@ -76,8 +76,15 @@ fn render(address: &NetworkAddress) -> (String, u32, u16) {
 }
 
 /// The entries, white then gray, for every connector or clearnet only.
-fn entries(public_only: bool) -> Option<PeerListOwner> {
-    let dialer = dialer()?;
+/// A process with no dialer holds no peer lists (an `--offline` daemon
+/// never starts one), so its listing is empty.
+fn entries(public_only: bool) -> PeerListOwner {
+    let Some(dialer) = dialer() else {
+        return PeerListOwner {
+            hosts: Vec::new(),
+            entries: Vec::new(),
+        };
+    };
     let hub = dialer.hub();
     let snapshot = dialer.shared().lists.snapshot();
     let mut rows: Vec<(NetworkAddress, ListName)> = snapshot
@@ -113,13 +120,14 @@ fn entries(public_only: bool) -> Option<PeerListOwner> {
     for (entry, host) in owner.entries.iter_mut().zip(&owner.hosts) {
         entry.host = host.as_ptr();
     }
-    Some(owner)
+    owner
 }
 
 /// White then gray peerlist entries in one array, discriminated by
 /// `white`; `public_only` nonzero lists the clearnet lists alone. Returns
 /// 0 with `*out`, `*out_len` and `*out_owner` written, or -1 for a null
-/// out pointer or no peer lists in this process. Release `*out_owner` with
+/// out pointer. A process with no peer lists answers 0 entries. Release
+/// `*out_owner` with
 /// [`shekyl_rpc_peer_list_free`]; the entries point into it.
 ///
 /// # Safety
@@ -136,10 +144,7 @@ pub unsafe extern "C" fn shekyl_rpc_peer_list(
         return FACTS_ERR_NULL;
     }
     unsafe { out_owner.write(std::ptr::null_mut()) };
-    let Some(owner) = entries(public_only != 0) else {
-        return FACTS_ERR_NULL;
-    };
-    let owner = Box::new(owner);
+    let owner = Box::new(entries(public_only != 0));
     let first = if owner.entries.is_empty() {
         std::ptr::null()
     } else {
@@ -168,8 +173,10 @@ pub unsafe extern "C" fn shekyl_rpc_peer_list_free(owner: *mut c_void) {
 }
 
 /// How many addresses the clearnet white and gray lists hold, for
-/// `get_info`. Returns 0 with both written, or -1 for a null out pointer
-/// or no peer lists in this process.
+/// `get_info`. Returns 0 with both written, or -1 for a null out pointer.
+/// A process with no dialer holds no peer lists (an `--offline` daemon
+/// never starts one), so both are 0. *Records-was:* no dialer was -1, and
+/// every `get_info` on an offline daemon failed with `NullHandle`.
 ///
 /// # Safety
 ///
@@ -180,7 +187,11 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
         return FACTS_ERR_NULL;
     }
     let Some(dialer) = dialer() else {
-        return FACTS_ERR_NULL;
+        unsafe {
+            out_white.write(0);
+            out_gray.write(0);
+        }
+        return FACTS_OK;
     };
     let (white, gray) = {
         let mut shared = dialer.shared();
@@ -293,8 +304,12 @@ mod tests {
         out
     }
 
+    /// An `--offline` daemon starts no dialer, so it holds no peer lists:
+    /// both exports answer empty, and `get_info` answers. *Records-was:*
+    /// both refused, and an offline daemon's every `get_info` failed with
+    /// `NullHandle` (found by a regtest smoke run, 2026-10-14).
     #[test]
-    fn with_no_lists_in_the_process_the_export_refuses() {
+    fn with_no_lists_in_the_process_the_exports_answer_empty() {
         let _bind = seam_bind_lock()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -304,15 +319,19 @@ mod tests {
         let mut owner: *mut c_void = std::ptr::null_mut();
         assert_eq!(
             unsafe { shekyl_rpc_peer_list(0, &raw mut rows, &raw mut len, &raw mut owner) },
-            FACTS_ERR_NULL
+            FACTS_OK
         );
-        assert!(owner.is_null());
-        let mut white = 0u64;
-        let mut gray = 0u64;
+        assert_eq!(len, 0);
+        assert!(rows.is_null());
+        assert!(!owner.is_null());
+        unsafe { shekyl_rpc_peer_list_free(owner) };
+        let mut white = 7u64;
+        let mut gray = 7u64;
         assert_eq!(
             unsafe { shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) },
-            FACTS_ERR_NULL
+            FACTS_OK
         );
+        assert_eq!((white, gray), (0, 0));
     }
 
     /// The three address arms render as the wire contract says, every entry

@@ -4496,12 +4496,12 @@ struct shekyl_rpc_peer_facts {
 };
 static_assert(sizeof(shekyl_rpc_peer_facts) == 24, "peer facts layout is pinned on both sides");
 /// White then gray entries in one array; `public_only` nonzero lists the
-/// clearnet lists alone. 0, or -1 for a null out pointer or no lists in
-/// this process. Release `*out_owner` with shekyl_rpc_peer_list_free.
+/// clearnet lists alone, none with no lists. 0, or -1 for a null out
+/// pointer. Release `*out_owner` with shekyl_rpc_peer_list_free.
 int shekyl_rpc_peer_list(std::uint8_t public_only, const shekyl_rpc_peer_facts** out,
     std::size_t* out_len, void** out_owner);
 void shekyl_rpc_peer_list_free(void* owner);
-/// How many addresses the clearnet white and gray lists hold. 0, or -1.
+/// Clearnet white and gray list sizes, 0 and 0 with no lists. 0, or -1.
 int shekyl_rpc_peerlist_sizes(std::uint64_t* out_white, std::uint64_t* out_gray);
 /// A peerlist a peer sent over session `session` (the socket id), as it
 /// arrived: `count` entries, none dropped or rewritten. Rust reads the
