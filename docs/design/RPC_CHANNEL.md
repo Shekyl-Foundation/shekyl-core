@@ -1188,19 +1188,40 @@ two. Every route they replace is a REST path today.
 - **`option_set`** takes `{"options": [{"name": …, "value": …}, …]}`; each
   value is text in the grammar's syntax (`"512KiB/s"`, `"unlimited"`,
   `"warn"`), the same text the command line and the file accept. It
-  applies **all or nothing**: every pair is parsed and built first, and
-  none applies if any fails. A refused request reports every refusal in
+  applies **all or nothing**: every pair is built and checked first, and
+  none applies if any is refused. A refused request reports every refusal in
   it, not the first; the startup file is likewise validated whole. A name
   given twice, an unknown name and an empty list are each refused. The
   reply lists each row it set, in the shape `option_show` uses, with
   source `runtime`.
-- **All or nothing needs an infallible apply.** The rows go to different
+- **Build, check, apply, under RT-O27's one lock.** *Refined by Rick
+  on PR #1066, 2026-10-14; relayed to this record by the daemon-config
+  lane, `DAEMON_CONFIG_CUTOVER.md` §2.7 there.* The rows go to different
   owners: the link limiter, the zone host's admission and
-  `shekyl-logging`. Building every value first gives atomicity only if
-  handing a built value to its owner cannot fail. **Each owner's runtime
-  interface takes a built value and cannot fail.** Every refusal lives in
-  the constructor. *From the tree:* the logging owner does not meet this
-  yet. Its runtime path swaps the filter through a reload handle whose
+  `shekyl-logging`. A value can be refused for two reasons, its own
+  invariants and the owner's live state, so not every refusal lives in the
+  constructor. `p2p-inbound-max` has both: it must be at least 1, and it
+  must not exceed the descriptor ceiling, which is runtime state
+  ([`net_node.inl:3229`](../../src/p2p/net_node.inl);
+  `InboundCeiling::resolve(snapshot, reserved, inbound_held)`,
+  [`inbound_ceiling.rs:98`](../../rust/shekyl-peer-policy/src/inbound_ceiling.rs)).
+  A set therefore runs three steps:
+  1. **build**: every value through its constructor, value-only
+     invariants;
+  2. **check**: each owner tests its built value against its live state,
+     with no side effect, and may refuse;
+  3. **apply**: each owner takes the checked value and **cannot fail**.
+
+  Every refusal, from either of the first two steps, is reported before
+  anything is applied, so the set is all or nothing. The startup parse
+  runs the same check against the state at startup: one rule on both
+  surfaces (IG-12). *From the tree:* today `/in_peers` keeps the old cap
+  when the new one exceeds the ceiling, writes a log line and still
+  answers `OK` (`net_node.inl:3229-3233`,
+  [`core_rpc_server.cpp:1176-1184`](../../src/rpc/core_rpc_server.cpp)),
+  so the caller has to notice the unchanged value. The check step makes
+  that a refusal. *Also from the tree:* the logging owner does not meet
+  step 3 yet. Its runtime path swaps the filter through a reload handle whose
   `reload` returns a `Result`
   ([`ffi.rs:639`](../../rust/shekyl-logging/src/ffi.rs)), and the handle
   is reached only through the FFI module. The implementing PR gives the
@@ -1209,6 +1230,11 @@ two. Every route they replace is a REST path today.
   flight and merges before the daemon-config cutover's PR-3; it changes the
   sinks and leaves the filter and the reload path as they are, so this
   finding stands on both trees and the interface is built on its result.
+- **What a change does to traffic already running** (same refinement).
+  Lowering `p2p-inbound-max` below the current inbound count refuses new
+  inbound until the count falls under the cap, and never cuts an existing
+  session; the audit line records the count at the change. A rate limit
+  takes effect on the next transfer and never aborts one in flight.
 - **`option_show`** takes an optional `{"names": [...]}`. With no names, it
   returns every row the caller may see, in table order. Each row carries
   `name`, `source` (`default`, `file`, `cli` or `runtime`), `runtime`
