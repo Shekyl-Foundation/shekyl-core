@@ -11,8 +11,9 @@ and the verifier must switch in one change, and increment 3 lands in Rust
 only. `FND-4`'s carried item, one decoded key across signatures, goes with
 increment 4. This lane's own code work ended with increment 2; **one item
 stays this lane's: the floor-device run** (`FND-9`, `FND-12`; `BA-T33`'s
-floor arm and its FOLLOWUPS row), ruled by the maintainer on 2026-10-11,
-and it is the lane's only open work item (§10). The C++ JoinMarket path is
+floor arm and its FOLLOWUPS row), ruled by the maintainer on 2026-10-11.
+It is the lane's next work; §10 lists it with the three further FOLLOWUPS
+rows this record owns. The C++ JoinMarket path is
 not changed or ported by this lane (`FND-20`). **The document
 stays OPEN until the settlement lane's cutover selects the receipt
 capability and receipts move onto the key** (§9.4); it closes when that
@@ -48,7 +49,7 @@ half. Nothing signs or verifies with it yet.
 | --- | --- |
 | The combiner and the canonical header, one body for both schemes | `rust/shekyl-crypto-pq/src/hybrid_combiner.rs` |
 | Scheme 3: types, key generation, sign, verify | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs` |
-| Scheme byte and the two scheme domains | `rust/shekyl-crypto-pq/src/signature.rs` (`HYBRID_SCHEME_ID_ED25519_FN_DSA_1024`, `SCHEME_DOMAIN_RECEIPT`, `SCHEME_DOMAIN_WITNESS_CARRIER`) |
+| Scheme byte and the two scheme domains increment 1 minted | `rust/shekyl-crypto-pq/src/signature.rs` (`HYBRID_SCHEME_ID_ED25519_FN_DSA_1024`, `SCHEME_DOMAIN_RECEIPT`, `SCHEME_DOMAIN_WITNESS_CARRIER`). Slice C later minted a third, `SCHEME_DOMAIN_WITNESS_BUNDLE`, which is what the witness signs under; the carrier's domain has no signer (§6) |
 | The hedged RNG adapter and the fail-loud key-material draw | `rust/shekyl-crypto-pq/src/rng.rs` (`HedgedOsRng`, `key_material32`) |
 | Vectors | `docs/test_vectors/FN_DSA_HYBRID_V1_KAT.json`, `rust/shekyl-crypto-pq/tests/kat_fn_dsa_hybrid_v1.rs` |
 | Genesis gate | `scripts/ci/check_fn_dsa_genesis_gate.py` |
@@ -632,15 +633,24 @@ is the cutover that makes the cost one the live path should pay.
 
 ## 10. What this lane still owes (2026-10-14)
 
-After the handoff of increments 3 and 4 to Slice C, one item is this
-lane's, as ruled by the maintainer on 2026-10-11: **the floor-device run.**
-Sign, verify and seeded key generation under scheme 3 on the floor device,
-with the scheme's vectors run on that hardware in the same session
+After the handoff of increments 3 and 4 to Slice C, one piece of work is
+this lane's, as ruled by the maintainer on 2026-10-11: **the floor-device
+run.** Sign, verify and seeded key generation under scheme 3 on the floor
+device, with the scheme's vectors run on that hardware in the same session
 (`FND-9`), and the receipt key's cost at engine assembly measured there
-(`FND-12`). It is `BA-T33`'s floor arm; the FOLLOWUPS row carries the
+(`FND-12`). It is `BA-T33`'s floor arm; its FOLLOWUPS row carries the
 falsifier, and a floor-device session is a shared-estate claim.
 
-Nothing else is queued here. The witness signature is Slice C's under its
-own domain (§6), the receipt signer is staged (§9), and the switch that
-makes receipts live is the settlement lane's cutover (§9.4).
+This record also owns three further FOLLOWUPS rows. None is scheduled; each
+names its own blocker or trigger:
 
+| Row | Trigger |
+| --- | --- |
+| Move `fn-dsa` to its FIPS 206 release and regenerate every scheme-3 vector | FIPS 206 published and the crate at 1.0 (§4; the genesis gate refuses a genesis tag until then) |
+| Move the remaining inline secrets in moved structs to the heap (`FND-13`, `FND-15`) | A field-by-field pass over the named sites, with the rule-35 amendment |
+| `SeededRng::from_seed` still materializes one ChaCha20 cipher on the stack (`FND-14`) | An upstream `chacha20` constructor that writes into caller memory; unsafe placement is refused in this crate |
+
+Nothing else is queued here. The witness signs the bundle under
+`SCHEME_DOMAIN_WITNESS_BUNDLE` and that signature is Slice C's (§6); the
+receipt signer is staged (§9), and the switch that makes receipts live is
+the settlement lane's cutover (§9.4).
