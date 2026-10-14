@@ -145,8 +145,16 @@ or `%APPDATA%`. Each binary's per-account root is the passwd entry's home
 plus `.shekyl` on Linux, FreeBSD and macOS, and
 `SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows,
 never Roaming AppData, which copies the wallet and its config to domain
-servers (rule 36); the daemon's data and log defaults, the wallet
-directory and the wallet binaries' config files sit under it. The only environment reads permitted are presentation-only
+servers (rule 36); a run-as-user daemon's data and log defaults, the wallet
+directory and the wallet binaries' config files sit under it. The
+daemon's run mode selects its root, and every default path it derives
+(`config-file`, `data-dir`, `log-file`) sits under that root: on Windows,
+run-as-user uses the per-account root and `service` uses
+`%ProgramData%\shekyl\`, which only the installer creates (owner and ACL:
+Administrators, SYSTEM and the service account); the daemon never creates
+the machine-wide root, and one that is missing, mis-owned or writable by
+others refuses with a typed code. On Linux and macOS the config file stays
+`/etc/shekyl/` in every mode. The only environment reads permitted are presentation-only
 (terminal capabilities that change rendering, never a value). Every
 resolved default path appears in the startup line with its source. A
 service account whose passwd home is unset or `/nonexistent` has no
