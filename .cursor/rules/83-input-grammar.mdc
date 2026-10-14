@@ -71,7 +71,8 @@ endpoint (a literal IP and a port; no hostnames); peer-endpoint (an
 endpoint or `<v3>.onion:port`); address (a Shekyl address, checked
 against the network); origin (an explicit web origin, RFC 6454: scheme `http` or
 `https`, a host, an optional port, nothing after; `*` is refused); hash
-(64 hexadecimal characters: a transaction id or a block hash); amount (a
+(64 hexadecimal characters, a 32-byte value: a transaction id, a block
+hash or a key image); amount (a
 decimal SKL amount with at most `DISPLAY_DECIMAL_POINT` fractional
 digits, `shekyl-units` the one source, parsed exactly to atomic units,
 never a float); name (a wallet's name: one path component, no
@@ -104,8 +105,8 @@ genuinely needs is not a development lever and gets a public row.
 
 **IG-9 One table per binary, generated everything.** The table row: id,
 name, kind, constraint, keywords, default (a value, unset, or "derived
-from the network row"), surfaces, runtime (whether the value can change
-while running, IG-12), view (`yes` or `no`, default `no`: whether
+from the network row"), surfaces, runtime (`yes` or `no`: whether
+`option set` accepts the row, IG-12), view (`yes` or `no`, default `no`: whether
 `option show` returns the row at the view grant, IG-12), visibility
 (`public` / `dev` / `rejected` / `reserved`), accepted networks (`dev`
 only), owning subsystem, help text. A row is shown at the view grant
@@ -142,9 +143,10 @@ it refuses a row not marked runtime with a typed code, requires the admin
 grant, and never writes the file. `option show [<name>]` reports each
 value with its source (`default`, `file`, `cli`, `runtime`), shows a
 secret only as set, returns only `view: yes` rows at the view grant, and
-every row at the admin grant. Mining starts and stops with `mine start`
-and `mine stop`, which build `mine-address` and `mine-threads` through
-their constructors. The live value is owned by its subsystem. No binary
+every row at the admin grant. Mining changes while running through
+`mine start` and `mine stop` instead, which build `mine-address` and
+`mine-threads` through their constructors, so those rows are not marked
+runtime. The live value is owned by its subsystem. No binary
 ever writes its own config file.
 
 **IG-13 Inputs come from the table, and nowhere else.** No option value
@@ -155,15 +157,17 @@ plus `.shekyl` on Linux, FreeBSD and macOS, and
 `SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows,
 never Roaming AppData, which copies the wallet and its config to domain
 servers (rule 36); a run-as-user daemon's data and log defaults, the wallet
-directory and the wallet binaries' config files sit under it. The
-daemon's run mode selects its root, and every default path it derives
-(`config-file`, `data-dir`, `log-file`) sits under that root: on Windows,
-run-as-user uses the per-account root and `service` uses
+directory and the wallet binaries' config files sit under it. On Windows
+the daemon's run mode selects its root, and every default path it derives
+(`config-file`, `data-dir`, `log-file`) sits under that root: run-as-user
+uses the per-account root and `service` uses
 `%ProgramData%\shekyl\`, which only the installer creates (owner and ACL:
 Administrators, SYSTEM and the service account); the daemon never creates
 the machine-wide root, and one that is missing, mis-owned or writable by
-others refuses with a typed code. On Linux and macOS the config file stays
-`/etc/shekyl/` in every mode. The only environment reads permitted are presentation-only
+others refuses with a typed code. On Linux, FreeBSD and macOS the daemon
+has one run mode (`service` is refused there): its config file is
+`/etc/shekyl/`, and its data and log defaults sit under the per-account
+root. The only environment reads permitted are presentation-only
 (terminal capabilities that change rendering, never a value). Every
 resolved default path appears in the startup line with its source. A
 service account whose passwd home is unset or `/nonexistent` has no

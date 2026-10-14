@@ -76,7 +76,7 @@ The gate walks every live and reserved name and every command in every binary's 
 | endpoint | `--x 127.0.0.1:11029`, `--x [::1]:11029` | string | a literal IP and a port; no hostnames |
 | peer-endpoint | an endpoint, or `<v3>.onion:port` | string | |
 | address | `--x shekyl1…` | string | a Shekyl address, checked against the network |
-| hash | `--x 6f1c…` | string | 64 hexadecimal characters: a transaction id or a block hash |
+| hash | `--x 6f1c…` | string | 64 hexadecimal characters, a 32-byte value: a transaction id, a block hash or a key image |
 | amount | `--x 1.5` | string | a decimal SKL amount with at most `DISPLAY_DECIMAL_POINT` fractional digits (`shekyl-units`, the one source), parsed exactly to atomic units; never a float |
 | name | `--x miner` | string | a wallet's name: one path component, no separators |
 | text | the rest of the line | string | free text, verbatim |
@@ -93,15 +93,15 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 **IG-8 Development levers.** A `dev-` option is hidden from help and generated docs, names the networks it is accepted on as data in its row (a `dev-` option given on any other network is refused at parse, rule 71), and is announced at every start when set. It follows every other rule. **No `dev-` option is ever accepted on mainnet**: a lever mainnet genuinely needs is not a development lever and gets a public row.
 
-**IG-9 One table per binary, generated everything.** The table row: id, name, kind, constraint, keywords, default (a value, unset, or "derived from the network row"), surfaces, runtime (whether the value can change while running, IG-12), view (`yes` or `no`, default `no`: whether `option show` returns the row at the view grant, IG-12), visibility (`public` / `dev` / `rejected` / `reserved`), accepted networks (`dev` only), owning subsystem, help text. From the table: `--help`, completion, the documentation tables, and an annotated TOML example. A gate regenerates the docs and diffs them, and asserts the table is non-empty (rule 47). A row is shown at the view grant only when it opts in; rows that link the operator or describe the host never do: `mine-address`, `tor-onion`, the peer, closed-peer and ban rows, paths, SOCKS endpoints, notify commands, and every secret.
+**IG-9 One table per binary, generated everything.** The table row: id, name, kind, constraint, keywords, default (a value, unset, or "derived from the network row"), surfaces, runtime (`yes` or `no`: whether `option set` accepts the row, IG-12), view (`yes` or `no`, default `no`: whether `option show` returns the row at the view grant, IG-12), visibility (`public` / `dev` / `rejected` / `reserved`), accepted networks (`dev` only), owning subsystem, help text. From the table: `--help`, completion, the documentation tables, and an annotated TOML example. A gate regenerates the docs and diffs them, and asserts the table is non-empty (rule 47). A row is shown at the view grant only when it opts in; rows that link the operator or describe the host never do: `mine-address`, `tor-onion`, the peer, closed-peer and ban rows, paths, SOCKS endpoints, notify commands, and every secret.
 
 **IG-10 Unknown and refused names.** An unknown name is one general refusal that names the nearest live name, computed from the table (edit distance), never from a hand list. A REJECTED row (a feature deliberately refused) carries its reason and a pointer to the decision; it is never accepted, never in help, and its refusal states the reason. A REJECTED row is a contract entry in the sense of rule 23, not a code symbol: it is never deleted as dead. A RESERVED row (a name held for a ruled future option; rule 23's reserved slot) is the same kind of entry: never accepted, never in help, and its refusal names what the name is reserved for and where that is ruled.
 
 **IG-11 Diagnostics.** Every refusal is a typed value: a stable code (`config.value.range`, `config.file.permissions`, …), the option, the source (`cli`, `file:path:line`, `default`, `runtime`) and named parameters. One renderer turns it into the English message, which states what was wrong, where, and what to do (rule 82). Machine output and logs carry the code. A configuration refusal exits with status 2; a runtime failure with 1.
 
-**IG-12 Runtime changes share the constructor.** A value that can also change while running (rates, inbound cap, log level, mining) is marked runtime in its row (IG-9) and is built by the same constructor on both surfaces, with the same refusals. `option set <name> <value>` changes it: it refuses a row not marked runtime with a typed code, requires the admin grant, and never writes the file. `option show [<name>]` reports each value with its source (`default`, `file`, `cli`, `runtime`), shows a secret only as set, returns only `view: yes` rows at the view grant, and every row at the admin grant. Mining starts and stops with `mine start` and `mine stop`, which build `mine-address` and `mine-threads` through their constructors. The live value is owned by its subsystem. No binary ever writes its own config file.
+**IG-12 Runtime changes share the constructor.** A value that can also change while running (rates, inbound cap, log level, mining) is marked runtime in its row (IG-9) and is built by the same constructor on both surfaces, with the same refusals. `option set <name> <value>` changes it: it refuses a row not marked runtime with a typed code, requires the admin grant, and never writes the file. `option show [<name>]` reports each value with its source (`default`, `file`, `cli`, `runtime`), shows a secret only as set, returns only `view: yes` rows at the view grant, and every row at the admin grant. Mining changes while running through `mine start` and `mine stop` instead, which build `mine-address` and `mine-threads` through their constructors, so those rows are not marked runtime. The live value is owned by its subsystem. No binary ever writes its own config file.
 
-**IG-13 Inputs come from the table, and nowhere else.** No option value comes from the environment. Default paths come from the operating system's account and known-folder interfaces, never from `HOME`, `XDG_*` or `%APPDATA%`. Each binary's per-account root is the passwd entry's home plus `.shekyl` on Linux, FreeBSD and macOS, and `SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows, never Roaming AppData, which copies the wallet and its config to domain servers (rule 36); a run-as-user daemon's data and log defaults, the wallet directory and the wallet binaries' config files sit under it. The daemon's run mode selects its root, and every default path it derives (`config-file`, `data-dir`, `log-file`) sits under that root: on Windows, run-as-user uses the per-account root and `service` (IG-Q36) uses `%ProgramData%\shekyl\`, which only the installer creates (owner and ACL: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. On Linux and macOS the config file stays R2's `/etc/shekyl/` in every mode. The only environment reads permitted are presentation-only (terminal capabilities that change rendering, never a value). Every resolved default path appears in the startup line with its source. A service account whose passwd home is unset or `/nonexistent` has no default paths: the packaging sets the account's home or the unit passes `--data-dir` and `--log-file` (the shipped unit does both, IG-F10).
+**IG-13 Inputs come from the table, and nowhere else.** No option value comes from the environment. Default paths come from the operating system's account and known-folder interfaces, never from `HOME`, `XDG_*` or `%APPDATA%`. Each binary's per-account root is the passwd entry's home plus `.shekyl` on Linux, FreeBSD and macOS, and `SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows, never Roaming AppData, which copies the wallet and its config to domain servers (rule 36); a run-as-user daemon's data and log defaults, the wallet directory and the wallet binaries' config files sit under it. On Windows the daemon's run mode selects its root, and every default path it derives (`config-file`, `data-dir`, `log-file`) sits under that root: run-as-user uses the per-account root and `service` (IG-Q36) uses `%ProgramData%\shekyl\`, which only the installer creates (owner and ACL: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. On Linux, FreeBSD and macOS the daemon has one run mode (`service` is refused there): its config file is R2's `/etc/shekyl/`, and its data and log defaults sit under the per-account root. The only environment reads permitted are presentation-only (terminal capabilities that change rendering, never a value). Every resolved default path appears in the startup line with its source. A service account whose passwd home is unset or `/nonexistent` has no default paths: the packaging sets the account's home or the unit passes `--data-dir` and `--log-file` (the shipped unit does both, IG-F10).
 
 **IG-14 Required announcements are not log events.** The effective-configuration line, `dev-` lever warnings and posture warnings (clearnet-only, offline, a plaintext RPC listener bound beyond loopback) reach the log and standard error at every start whatever the log level. The effective-configuration line shows every value and its source; a secret is shown as set, never its value (IG-6).
 
@@ -121,8 +121,8 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | config | — | the TOML file of option values |
 | data | — | the per-network directory holding the daemon's stores and state |
 | log | — | the daemon's log sink |
-| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic | a file path (value term) |
-| dir | data, wallet | a directory path (value term) |
+| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic, recipients, constants | a file path (value term) |
+| dir | data, wallet, create, recipients | a directory path (value term) |
 | level | log | a log severity: `error`, `warn`, `info`, `debug`, `trace` |
 | category | log | a log category, owned by `shekyl-logging` |
 | size | log | the disk a log may use |
@@ -142,12 +142,12 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | disclose | p2p | what this node tells other nodes of its known peers and its own address |
 | early | disclose | below the white-diversity floor |
 | inbound | p2p | connections other nodes open to us |
-| upload | p2p | bytes we send, bytes we receive |
-| download | p2p | bytes we send, bytes we receive |
+| upload | p2p | bytes we send |
+| download | p2p | bytes we receive |
 | txpool | — | the transaction pool |
 | weight | txpool | transaction weight, in bytes |
 | notify | — | run an operator command on an event |
-| block | notify, — | a new block |
+| block | notify, —, genesis | a block: under `notify` the new one; under `genesis`, *view* — the genesis block id and transaction hash |
 | rate | block | the block-rate check |
 | reorg | notify, archival | a chain reorganization |
 | height | block, reorg, split, chain, restore | a block height: under `block` the new block's, under `reorg` the new tip's, under `split` the last block both chains share; under `chain`, *view* — the chain's height |
@@ -201,7 +201,7 @@ Cross-row constraints are types, not checks: the P2P section is built from a cle
 
 ## 5. The daemon's name table
 
-The Runtime column marks the rows that can change while running (IG-12). Every row is `view: no` (IG-9); a row is shown at the view grant only when a ruling opts it in.
+The Runtime column marks the rows `option set` accepts (IG-12). Every row is `view: no` (IG-9); a row is shown at the view grant only when a ruling opts it in.
 
 Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row (the feature is refused; the reason is in the row), **–** removed with no trace (an implementation switch, a debug knob, or nothing left to switch), **L** lane-owned (not ported; IG-Q4), **N** new.
 
@@ -214,7 +214,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `os-version` | — | | | |  | R into `version` |
 | `testnet`, `stagenet`, `regtest` | `network` | one-of | `mainnet` | CLI |  | R |
 | — | `service` | switch | off | CLI |  | N (IG-Q36, IG-Q37): `shekyld` answers the platform's service manager (RT-16); accepted only where RT-16 defines it (Windows), refused elsewhere with a typed code; selects the daemon's root (IG-13) |
-| `config-file` | `config-file` | path | `/etc/shekyl/shekyld-<network>.toml` on Linux and macOS in every mode; on Windows the daemon's root (IG-13) + `shekyld-<network>.toml` | CLI |  | K; a missing file at the default per-network path means defaults, and the startup line says so; a missing file at a path the operator named refuses with a typed code (IG-11) that names the path; an unsafe file or directory refuses |
+| `config-file` | `config-file` | path | `/etc/shekyl/shekyld-<network>.toml` on Linux, FreeBSD and macOS; on Windows the daemon's root (IG-13) + `shekyld-<network>.toml` | CLI |  | K; a missing file at the default per-network path means defaults, and the startup line says so; a missing file at a path the operator named refuses with a typed code (IG-11) that names the path; an unsafe file or directory refuses |
 | `data-dir` | `data-dir` | path | the daemon's root (IG-13) + network subdir (row) | both |  | K; an explicit path is taken as given, the default layout keeps the network subdirectory, and a Rust network marker refuses a wrong-chain directory (IG-Q17, ruled 2026-10-13); no home refuses; the daemon's root on every platform (IG-13, IG-Q36); exclusive lock (IG-F2) |
 | `log-file` | `log-file` | path | the daemon's root (IG-13) + `logs/shekyld-<network>.log` | both |  | K; the per-network name the docs promised (IG-F4) |
 | `log-level` | `log-level` | one-of | `warn` | both | yes | R (numeric 0–4 and category strings go); by default the log records what needs the operator's attention, and the startup and posture lines are announcements, not log events (IG-14); runtime `set_log_level` shares the constructor |
@@ -271,8 +271,8 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `block-notify` | `notify-block` | command | unset | file |  | R (IG-Q5); placeholders `{height}`, `{hash}` |
 | `reorg-notify` | `notify-reorg` | command | unset | file |  | R (IG-Q5); placeholders `{split-height}` (the last block both chains share), `{height}` (the new tip), `{added}` (blocks in the new chain), `{removed}` (blocks discarded) |
 | `block-rate-notify` | `notify-block-rate` | command | unset | file |  | R (IG-Q5); placeholders `{window}` (the window in seconds), `{observed}`, `{expected}` |
-| `start-mining` | `mine-address` | address | unset | both | by `mine start` | R; set means mine from start |
-| `mining-threads` | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | by `mine start` | R (IG-Q21); one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
+| `start-mining` | `mine-address` | address | unset | both |  | R; set means mine from start; `mine start` builds it while running (IG-12) |
+| `mining-threads` | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both |  | R (IG-Q21); `mine start` builds it while running (IG-12); one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
 | `bg-mining-*` (5) | — | | | |  | X (Monero background mining) |
 
 ### RPC, named for the ratified RPC_CHANNEL model
@@ -432,7 +432,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | prove | — | make a proof |
 | check | — | check a proof |
 | sign | — | *verb* — sign a message with the wallet key |
-| verify | — | *verb* — verify a message signature |
+| verify | —, genesis | *verb* — check a claim against its source: a message signature, or under `genesis` every network rebuilt against the pins |
 | send | — | *verb* — send money |
 | fee | — | *view* — a fee quote |
 | balance | —, stake | *view* — a balance breakdown |
@@ -478,7 +478,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | white | list | the white peer list |
 | gray | list | the gray peer list |
 | spent | chain | *view* — whether a key image is spent |
-| create | wallet, request | *verb* — create |
+| create | wallet, request, recipients | *verb* — create |
 | open | wallet | *verb* — open |
 | close | wallet | *verb* — close |
 | restore | wallet | *verb* — restore from the recovery words |
@@ -651,7 +651,7 @@ Each deletion fixes its consumers: the weekly workflow's comment, the logging an
 
 ### 14.2 `geblock`
 
-The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no path defaults: every path flag is required wherever it applies, so the command line records exactly what the ceremony used. Terms this table adds:
+The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no path defaults: every path flag is required wherever it applies, so the command line records exactly what the ceremony used. Terms this table adds (the parents it gives `verify`, `create`, `dir`, `file` and `block` are in §3 and §11):
 
 | Term | Parents | Meaning |
 |---|---|---|
@@ -659,11 +659,6 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 | recipients | genesis, build, verify, block | the genesis recipients: their wallets and the recipients file |
 | constants | verify, block | the C header that holds the genesis pins and nonce |
 | build | genesis | *verb* — build the genesis coinbase transaction |
-| verify | genesis | *verb* — rebuild every network and compare against the pins (widens §11's `verify`) |
-| create | recipients | *verb* — create the five recipient wallets |
-| dir | create, recipients | a directory path (value term) |
-| file | recipients, constants | a file path (value term) |
-| block | genesis | *view* — the genesis block id and transaction hash |
 
 | Today | New | Flags | Notes |
 |---|---|---|---|
