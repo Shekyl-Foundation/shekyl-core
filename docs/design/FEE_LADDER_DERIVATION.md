@@ -3162,6 +3162,17 @@ not contradict. *Integer arm:* 108/600 outside the bar at 30 000 blocks,
 every one of them the truncation, none of them the map. The tick is not a
 transient; it is a quantizer doing what quantizers do in a loop.
 
+> **2026-10-13 (ESR-14).** The feedback instrument now reads the window
+> as production reads it: whole transactions per block into the fold's
+> `VolumeWindow`, in place of a float running sum of fractional demand
+> (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.20, item 1). On that reading the
+> exact arm keeps every verdict above (4/600 outside the bar at 30 000
+> blocks, worst 87 bp). The integer arm, the truncating reading FL-R24
+> retired from consensus, reads 116/600 outside the bar with a worst
+> amplitude of 281 bp: whole-transaction demand feeds its one-tick
+> toggles more coarsely. The figures in this paragraph are the 2026-09-10
+> run's, on the instrument's own float window.
+
 **FL-R24 — the pre-registered rule fires; RULED 2026-09-10: exact SMA, reward and floor together ("accepted/agree").** Integer stationary
 `grace_bp_max` = 307 > 300 at age 30 (`grace_bp_mean` = 4, inside its
 bound). By the rule as written, branch (ii) is recommended. The
