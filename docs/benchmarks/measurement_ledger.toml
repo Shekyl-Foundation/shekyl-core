@@ -525,6 +525,7 @@ stale_through = [
   { through = "dc9130534", note = "PR-3 fix 2 (Rick, 2026-10-14): the gap now ends at the peer's first complete Levin frame, not at this node's handshake verdict, and a fired wake waits one IO driver turn for the reader before it times the peer out. This changes what the gap span bounds: the capture measured channel to verdict, which includes this node's own handshake work, so it overstates the peer's silence the gap now measures. The span stays as it is until the cold-first-contact rerun measures channel to first frame. The dial is unchanged. Not re-measured." },
   { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
   { through = "ee87fc633", note = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved. The clearnet path set holds cause.rs; clearnet closes are unchanged." },
+  { through = "b096e8c77", note = "spans.rs changes the Tor spans and the shutdown wait only; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -600,6 +601,7 @@ stale_through = [
 ]
 cleared = [
   { through = "ee87fc633", reason = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved." },
+  { through = "b096e8c77", reason = "The spans themselves: TOR_DIAL_WITHIN_NANOS 120 s and TOR_GAP_WITHIN_NANOS 31 s from the rerun (this ledger's current rows), SHUTDOWN_TIMEOUT_NANOS following the dial, TOR_SPANS_BASIS RustPath, and the measurement feature lifting the gap alone. The values are the capture's; nothing else on these paths changed." },
 ]
 
 [[constant]]
