@@ -1,7 +1,7 @@
 # Shekyl input grammar — the rules and every binary's names
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
-2026-10-14 (§10–§15, IG-Q21…IG-Q38). Each question carries its ruling in
+2026-10-14 (§10–§15, IG-Q21…IG-Q39). Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
 document holds the glossary tree and the name tables.
@@ -85,7 +85,7 @@ The gate walks every live and reserved name and every command in every binary's 
 | secret | not accepted | string | file only; never logged or echoed, and shown in the startup line only as set; zeroized; held only in Rust |
 | command | not accepted | array of strings `["/path/prog", "arg", "{height}"]` | file only; run without a shell; placeholders are `{name}`, each name a glossary term under the row with one meaning everywhere; braces are the only syntax, `%` is literal; an unknown name refuses |
 | list (of a scalar kind) | the flag repeated | an array under the same key | the keyword `none` is the empty list; a CLI list replaces the file's list whole |
-| map (of a scalar kind) | `--x key=value`, repeated | a table under the same key | keys are a closed set named in the row; a CLI map replaces the file's map whole |
+| map (of a scalar kind) | `--x key=value`, repeated | a table under the same key | keys are a closed set named in the row; the keyword `none` is the empty map; a CLI map replaces the file's map whole |
 
 A row narrows its kind with a constraint stated in the row and enforced by its constructor (a range, "global unicast only", "onion only"). A row may admit named keywords from the closed keyword set alongside its kind (`unlimited`, `auto`, `stdin`); paths are absolute, so a keyword never collides with a file. A row with no default is *unset* when not given, and the row states what unset means; there are no sentinel values. There are no floating-point values anywhere in the grammar.
 
@@ -93,13 +93,13 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 **IG-8 Development levers.** A `dev-` option is hidden from help and generated docs, names the networks it is accepted on as data in its row (a `dev-` option given on any other network is refused at parse, rule 71), and is announced at every start when set. It follows every other rule. **No `dev-` option is ever accepted on mainnet**: a lever mainnet genuinely needs is not a development lever and gets a public row.
 
-**IG-9 One table per binary, generated everything.** The table row: id, name, kind, constraint, keywords, default (a value, unset, or "derived from the network row"), surfaces, runtime (`yes` or `no`: whether `option set` accepts the row, IG-12), view (`yes` or `no`, default `no`: whether `option show` returns the row at the view grant, IG-12), visibility (`public` / `dev` / `rejected` / `reserved`), accepted networks (`dev` only), owning subsystem, help text. From the table: `--help`, completion, the documentation tables, and an annotated TOML example. A gate regenerates the docs and diffs them, and asserts the table is non-empty (rule 47). A row is shown at the view grant only when it opts in; rows that link the operator or describe the host never do: `mine-address`, `tor-onion`, the peer, closed-peer and ban rows, paths, SOCKS endpoints, notify commands, and every secret.
+**IG-9 One table per binary, generated everything.** The table row: id, name, kind, constraint, keywords, default (a value, unset, or "derived from the network row"), surfaces, runtime (`yes` or `no`: whether `option set` accepts the row, IG-12), grant (`health`, `status`, `peers` or `config`, default `config`: the grant under which `option show` discloses the row; [`RPC_CHANNEL.md`](RPC_CHANNEL.md) §6.4, RT-O24), visibility (`public` / `dev` / `rejected` / `reserved`), accepted networks (`dev` only), owning subsystem, help text. From the table: `--help`, completion, the documentation tables, and an annotated TOML example. A gate regenerates the docs and diffs them, and asserts the table is non-empty (rule 47). A row names `health` only if it passes RPC_CHANNEL §6.1's line for that grant: a client needs it to decide whether it can use the node now, and it says nothing lasting about the node; no row does today. The peer, closed-peer and ban rows are `peers`; everything that describes the host or links the operator (`mine-address`, `tor-onion`, paths, SOCKS endpoints, notify commands) is `config`; a secret's value is shown under no grant.
 
 **IG-10 Unknown and refused names.** An unknown name is one general refusal that names the nearest live name, computed from the table (edit distance), never from a hand list. A REJECTED row (a feature deliberately refused) carries its reason and a pointer to the decision; it is never accepted, never in help, and its refusal states the reason. A REJECTED row is a contract entry in the sense of rule 23, not a code symbol: it is never deleted as dead. A RESERVED row (a name held for a ruled future option; rule 23's reserved slot) is the same kind of entry: never accepted, never in help, and its refusal names what the name is reserved for and where that is ruled.
 
 **IG-11 Diagnostics.** Every refusal is a typed value: a stable code (`config.value.range`, `config.file.permissions`, …), the option, the source (`cli`, `file:path:line`, `default`, `runtime`) and named parameters. One renderer turns it into the English message, which states what was wrong, where, and what to do (rule 82). Machine output and logs carry the code. A configuration refusal exits with status 2; a runtime failure with 1.
 
-**IG-12 Runtime changes share the constructor.** A value that can also change while running (rates, inbound cap, log level, mining) is marked runtime in its row (IG-9) and is built by the same constructor on both surfaces, with the same refusals. `option set <name> <value>` changes it: it refuses a row not marked runtime with a typed code, requires the admin grant, and never writes the file. `option show [<name>]` reports each value with its source (`default`, `file`, `cli`, `runtime`), shows a secret only as set, returns only `view: yes` rows at the view grant, and every row at the admin grant. Mining changes while running through `mine start` and `mine stop` instead, which build `mine-address` and `mine-threads` through their constructors, so those rows are not marked runtime. The live value is owned by its subsystem. No binary ever writes its own config file.
+**IG-12 Runtime changes share the constructor.** A value that can also change while running (rates, inbound cap, log level, mining) is marked runtime in its row (IG-9) and is built by the same constructor on both surfaces, with the same refusals. `option set <name> <value>` changes it: it refuses a row not marked runtime with a typed code, requires the `node` grant, and never writes the file. `option show [<name>]` reports each value with its source (`default`, `file`, `cli`, `runtime`) and returns each row whose grant (IG-9) the caller holds; a row the caller may not see is absent, never emptied, and a secret's value is shown under no grant, only whether it is set. Every runtime row's default is writable as a value (`unlimited`, `none`), so `option set` returns a row to its default without a restart; what `option show` prints is valid input to `option set` and builds the same value; and no row is both runtime and a secret, which the gate asserts (RPC_CHANNEL §6.4, RT-O25, RT-O27). Mining changes while running through `mine start` and `mine stop` instead, which build `mine-address` and `mine-threads` through their constructors, so those rows are not marked runtime. The live value is owned by its subsystem. No binary ever writes its own config file.
 
 **IG-13 Inputs come from the table, and nowhere else.** No option value comes from the environment. Default paths come from the operating system's account and known-folder interfaces, never from `HOME`, `XDG_*` or `%APPDATA%`. Each binary's per-account root is the passwd entry's home plus `.shekyl` on Linux, FreeBSD and macOS, and `SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows, never Roaming AppData, which copies the wallet and its config to domain servers (rule 36); a run-as-user daemon's data and log defaults, the wallet directory and the wallet binaries' config files sit under it. On Windows the daemon's run mode selects its root, and every default path it derives (`config-file`, `data-dir`, `log-file`) sits under that root: run-as-user uses the per-account root and `service` (IG-Q36) uses `%ProgramData%\shekyl\`, which only the installer creates (owner and ACL: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. On Linux, FreeBSD and macOS the daemon has one run mode (`service` is refused there): its config file is R2's `/etc/shekyl/`, and its data and log defaults sit under the per-account root. The only environment reads permitted are presentation-only (terminal capabilities that change rendering, never a value). Every resolved default path appears in the startup line with its source. A service account whose passwd home is unset or `/nonexistent` has no default paths: the packaging sets the account's home or the unit passes `--data-dir` and `--log-file` (the shipped unit does both, IG-F10).
 
@@ -201,98 +201,98 @@ Cross-row constraints are types, not checks: the P2P section is built from a cle
 
 ## 5. The daemon's name table
 
-The Runtime column marks the rows `option set` accepts (IG-12). Every row is `view: no` (IG-9); a row is shown at the view grant only when a ruling opts it in.
+The Runtime column marks the rows `option set` accepts (IG-12). The Grant column names the grant under which `option show` discloses a live row (IG-9); blank is the default, `config`.
 
 Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row (the feature is refused; the reason is in the row), **–** removed with no trace (an implementation switch, a debug knob, or nothing left to switch), **L** lane-owned (not ported; IG-Q4), **N** new.
 
 ### Network, paths, logging
 
-| Today | New | Kind | Default | Surface | Runtime | Notes |
-|---|---|---|---|---|---|---|
-| `help` | `help` | switch | | CLI |  | K |
-| `version` | `version` | switch | | CLI |  | K; prints the OS line too |
-| `os-version` | — | | | |  | R into `version` |
-| `testnet`, `stagenet`, `regtest` | `network` | one-of | `mainnet` | CLI |  | R |
-| — | `service` | switch | off | CLI |  | N (IG-Q36, IG-Q37): `shekyld` answers the platform's service manager ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16); accepted only where RT-16 defines it (Windows), refused elsewhere with a typed code; selects the daemon's root (IG-13) |
-| `config-file` | `config-file` | path | `/etc/shekyl/shekyld-<network>.toml` on Linux, FreeBSD and macOS; on Windows the daemon's root (IG-13) + `shekyld-<network>.toml` | CLI |  | K; a missing file at the default per-network path means defaults, and the startup line says so; a missing file at a path the operator named refuses with a typed code (IG-11) that names the path; an unsafe file or directory refuses |
-| `data-dir` | `data-dir` | path | the daemon's root (IG-13) + network subdir (row) | both |  | K; an explicit path is taken as given, the default layout keeps the network subdirectory, and a Rust network marker refuses a wrong-chain directory (IG-Q17, ruled 2026-10-13); no home refuses; the daemon's root on every platform (IG-13, IG-Q36); exclusive lock (IG-F2) |
-| `log-file` | `log-file` | path | the daemon's root (IG-13) + `logs/shekyld-<network>.log` | both |  | K; the per-network name the docs promised (IG-F4) |
-| `log-level` | `log-level` | one-of | `warn` | both | yes | R (numeric 0–4 and category strings go); by default the log records what needs the operator's attention, and the startup and posture lines are announcements, not log events (IG-14); runtime `set_log_level` shares the constructor |
-| — | `log-category` | map category→level | unset | both | yes | N; replaces the category half of `log-level` and `set_log_categories`; the keys are validated against `shekyl-logging`'s category list at construction, by reference (§1 keeps the names out of this grammar) |
-| `max-log-file-size`, `max-log-files` | `log-size-max` | quantity (bytes) | `1GiB` | both |  | R; the disk the log may use, live file and archives together; rotation inside it is the logging owner's (IG-Q19) |
-| `max-concurrency` | — | | | |  | – (IG-Q7) |
+| Today | New | Kind | Default | Surface | Runtime | Grant | Notes |
+|---|---|---|---|---|---|---|---|
+| `help` | `help` | switch | | CLI |  |  | K |
+| `version` | `version` | switch | | CLI |  |  | K; prints the OS line too |
+| `os-version` | — | | | |  |  | R into `version` |
+| `testnet`, `stagenet`, `regtest` | `network` | one-of | `mainnet` | CLI |  |  | R |
+| — | `service` | switch | off | CLI |  |  | N (IG-Q36, IG-Q37): `shekyld` answers the platform's service manager ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16); accepted only where RT-16 defines it (Windows), refused elsewhere with a typed code; selects the daemon's root (IG-13) |
+| `config-file` | `config-file` | path | `/etc/shekyl/shekyld-<network>.toml` on Linux, FreeBSD and macOS; on Windows the daemon's root (IG-13) + `shekyld-<network>.toml` | CLI |  |  | K; a missing file at the default per-network path means defaults, and the startup line says so; a missing file at a path the operator named refuses with a typed code (IG-11) that names the path; an unsafe file or directory refuses |
+| `data-dir` | `data-dir` | path | the daemon's root (IG-13) + network subdir (row) | both |  |  | K; an explicit path is taken as given, the default layout keeps the network subdirectory, and a Rust network marker refuses a wrong-chain directory (IG-Q17, ruled 2026-10-13); no home refuses; the daemon's root on every platform (IG-13, IG-Q36); exclusive lock (IG-F2) |
+| `log-file` | `log-file` | path | the daemon's root (IG-13) + `logs/shekyld-<network>.log` | both |  |  | K; the per-network name the docs promised (IG-F4) |
+| `log-level` | `log-level` | one-of | `warn` | both | yes | status | R (numeric 0–4 and category strings go); by default the log records what needs the operator's attention, and the startup and posture lines are announcements, not log events (IG-14); runtime `set_log_level` shares the constructor |
+| — | `log-category` | map category→level, or `none` | `none` | both | yes | status | N; `none` is no per-category overrides, and an empty category list never means logging off; replaces the category half of `log-level` and `set_log_categories`; the keys are validated against `shekyl-logging`'s category list at construction, by reference (§1 keeps the names out of this grammar) |
+| `max-log-file-size`, `max-log-files` | `log-size-max` | quantity (bytes) | `1GiB` | both |  |  | R; the disk the log may use, live file and archives together; rotation inside it is the logging owner's (IG-Q19) |
+| `max-concurrency` | — | | | |  |  | – (IG-Q7) |
 
 ### Connectors and P2P
 
-| Today | New | Kind | Default | Surface | Runtime | Notes |
-|---|---|---|---|---|---|---|
-| — | `clearnet` | one-of `on` `off` | `on` | both |  | N (IG-F6, IG-Q3) |
-| `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound` | `tor` | one-of `managed` `operator` `off` | `managed` | both |  | R |
-| (`tx-proxy` endpoint) | `tor-socks` | endpoint | unset | both |  | R; required with `tor = operator`, unconstructible otherwise |
-| (`tx-proxy` `user:pass@`) | `tor-socks-username`, `tor-socks-password` | secret | unset | file |  | N; today parsed and never handed to Rust (IG-F11) |
-| (`anonymous-inbound` onion) | `tor-onion` | peer-endpoint, onion only | unset | both |  | R; `tor = operator` only; one onion: a second onion on one node is a second identity an observer can link to the first, and it offers peers nothing the first does not |
-| (`anonymous-inbound` bind) | `tor-onion-listen` | endpoint | unset | both |  | R; required with `tor-onion` |
-| (`tx-proxy` / `anonymous-inbound` `,N`) | — | | | |  | – (R5) |
-| `proxy` | `clearnet-socks` | endpoint | unset | both |  | R |
-| (`proxy` `user:pass@`) | `clearnet-socks-username`, `clearnet-socks-password` | secret | unset | file |  | N |
-| `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6` | `clearnet-listen` | list of endpoint | `0.0.0.0:<row p2p port>` | both |  | R; `none` = dial-only on clearnet |
-| `p2p-external-port` | `clearnet-advertise` | list of endpoint (global unicast; at most one per address family) | unset | both |  | R (Q10a; absorbs the external port; PWD-E6's capability kept) |
-| `p2p-ignore-ipv4` | — | | | |  | – (the listen lists state the address families) |
-| `no-igd`, `igd` | — | | | |  | X `upnp`, `igd` (R4) |
-| `allow-local-ip` | `p2p-local` | switch | off | both |  | R |
-| `add-peer`, `seed-node` | `p2p-peer` | list of peer-endpoint | `none` | both |  | R; IP and onion only (IG-Q6); seeds are ordinary peers |
-| `add-exclusive-node` | `p2p-closed-peer` | list of peer-endpoint | `none` | both |  | R; non-empty declares a closed network |
-| `p2p-disclose-early` `[PR-3]` | `p2p-disclose-early` | switch | off | both |  | K (IG-Q20); for bootstrapping or testing a network smaller than the white-diversity floor (48): this node discloses its known peers and its own address below the floor, on each connector until that connector's white count reaches the floor or the span `P2P_DISCLOSE_EARLY_SPAN_NANOS` ends it, whichever comes first; announced at start (IG-14) |
-| `add-priority-node` | — | | | |  | X (bypasses the identity protections; removed by PR-3) |
-| `ban-list` | `p2p-ban-file` | path | unset | both |  | R; read in Rust at parse |
-| `out-peers` | — | | | |  | X (the outbound degree is a protocol constant) |
-| `in-peers` | `p2p-inbound-max` | integer ≥ 1 | unset | both | yes | R; unset is no operator cap; the transport layer's descriptor ceiling bounds admission whatever the cap (each layer owns its own count and admission: [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D4 and D8, ruled 2026-09-25); runtime `in_peers` shares the constructor (IG-Q18) |
-| `limit-rate-up` | `p2p-upload-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | R; runtime `set_limit` shares the constructor; `0` refused on both surfaces |
-| `limit-rate-down` | `p2p-download-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | R |
-| `limit-rate` | — | | | |  | R (one option per value) |
-| `tos-flag` | — | | | |  | X (a traffic-class marking is a label any on-path observer can classify Shekyl traffic by) |
-| `offline` | — | | | |  | R into `clearnet = off` and `tor = off` (IG-Q3) |
-| `pad-transactions` | — | | | |  | L relay |
-| `clearnet-transport-encrypt` | `dev-clearnet-encrypt` | switch | off | both |  | R; testnet, stagenet, regtest (IG-8: never mainnet); deleted at the Noise flip |
-| `no-sync` | `dev-sync` | one-of `on` `off` | `on` | both |  | R; regtest; the chain-sync lane owns it |
-| `carrier-development` | `dev-relay-cover` | switch | off | both |  | R; testnet, stagenet, regtest (IG-8: never mainnet); `check_carrier_flag_hidden.sh` replaced by a table test |
+| Today | New | Kind | Default | Surface | Runtime | Grant | Notes |
+|---|---|---|---|---|---|---|---|
+| — | `clearnet` | one-of `on` `off` | `on` | both |  |  | N (IG-F6, IG-Q3) |
+| `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound` | `tor` | one-of `managed` `operator` `off` | `managed` | both |  |  | R |
+| (`tx-proxy` endpoint) | `tor-socks` | endpoint | unset | both |  |  | R; required with `tor = operator`, unconstructible otherwise |
+| (`tx-proxy` `user:pass@`) | `tor-socks-username`, `tor-socks-password` | secret | unset | file |  |  | N; today parsed and never handed to Rust (IG-F11) |
+| (`anonymous-inbound` onion) | `tor-onion` | peer-endpoint, onion only | unset | both |  |  | R; `tor = operator` only; one onion: a second onion on one node is a second identity an observer can link to the first, and it offers peers nothing the first does not |
+| (`anonymous-inbound` bind) | `tor-onion-listen` | endpoint | unset | both |  |  | R; required with `tor-onion` |
+| (`tx-proxy` / `anonymous-inbound` `,N`) | — | | | |  |  | – (R5) |
+| `proxy` | `clearnet-socks` | endpoint | unset | both |  |  | R |
+| (`proxy` `user:pass@`) | `clearnet-socks-username`, `clearnet-socks-password` | secret | unset | file |  |  | N |
+| `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6` | `clearnet-listen` | list of endpoint | `0.0.0.0:<row p2p port>` | both |  |  | R; `none` = dial-only on clearnet |
+| `p2p-external-port` | `clearnet-advertise` | list of endpoint (global unicast; at most one per address family) | unset | both |  |  | R (Q10a; absorbs the external port; PWD-E6's capability kept) |
+| `p2p-ignore-ipv4` | — | | | |  |  | – (the listen lists state the address families) |
+| `no-igd`, `igd` | — | | | |  |  | X `upnp`, `igd` (R4) |
+| `allow-local-ip` | `p2p-local` | switch | off | both |  |  | R |
+| `add-peer`, `seed-node` | `p2p-peer` | list of peer-endpoint | `none` | both |  | peers | R; IP and onion only (IG-Q6); seeds are ordinary peers |
+| `add-exclusive-node` | `p2p-closed-peer` | list of peer-endpoint | `none` | both |  | peers | R; non-empty declares a closed network |
+| `p2p-disclose-early` `[PR-3]` | `p2p-disclose-early` | switch | off | both |  |  | K (IG-Q20); for bootstrapping or testing a network smaller than the white-diversity floor (48): this node discloses its known peers and its own address below the floor, on each connector until that connector's white count reaches the floor or the span `P2P_DISCLOSE_EARLY_SPAN_NANOS` ends it, whichever comes first; announced at start (IG-14) |
+| `add-priority-node` | — | | | |  |  | X (bypasses the identity protections; removed by PR-3) |
+| `ban-list` | `p2p-ban-file` | path | unset | both |  | peers | R; read in Rust at parse |
+| `out-peers` | — | | | |  |  | X (the outbound degree is a protocol constant) |
+| `in-peers` | `p2p-inbound-max` | integer ≥ 1, or `none` | `none` | both | yes | status | R; `none` is no operator cap; the transport layer's descriptor ceiling bounds admission whatever the cap (each layer owns its own count and admission: [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D4 and D8, ruled 2026-09-25); runtime `in_peers` shares the constructor (IG-Q18) |
+| `limit-rate-up` | `p2p-upload-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | status | R; runtime `set_limit` shares the constructor; `0` refused on both surfaces |
+| `limit-rate-down` | `p2p-download-max` | quantity (rate), or `unlimited` | `unlimited` | both | yes | status | R |
+| `limit-rate` | — | | | |  |  | R (one option per value) |
+| `tos-flag` | — | | | |  |  | X (a traffic-class marking is a label any on-path observer can classify Shekyl traffic by) |
+| `offline` | — | | | |  |  | R into `clearnet = off` and `tor = off` (IG-Q3) |
+| `pad-transactions` | — | | | |  |  | L relay |
+| `clearnet-transport-encrypt` | `dev-clearnet-encrypt` | switch | off | both |  |  | R; testnet, stagenet, regtest (IG-8: never mainnet); deleted at the Noise flip |
+| `no-sync` | `dev-sync` | one-of `on` `off` | `on` | both |  |  | R; regtest; the chain-sync lane owns it |
+| `carrier-development` | `dev-relay-cover` | switch | off | both |  |  | R; testnet, stagenet, regtest (IG-8: never mainnet); `check_carrier_flag_hidden.sh` replaced by a table test |
 
 ### Core, pool, notify, mine
 
-| Today | New | Kind | Default | Surface | Runtime | Notes |
-|---|---|---|---|---|---|---|
-| `test-drop-download`, `test-drop-download-height`, `test-dbg-lock-sleep`, `show-time-stats` | — | | | |  | – |
-| `keep-fakechain` | — | | | |  | – (nothing is wiped, R3) |
-| `fixed-difficulty` | `dev-difficulty` | integer ≥ 1 | unset | both |  | R; regtest |
-| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` | — | | | |  | L chain-sync |
-| `db-sync-mode`, `db-salvage` | — | | | |  | L DRS |
-| `keep-alt-blocks` | — | | | |  | L DRS-E5 |
-| `max-txpool-weight` | `txpool-weight-max` | quantity (bytes) | `648000000B` | both |  | R; a Monero-derived operand (IG-Q11) |
-| `block-notify` | `notify-block` | command | unset | file |  | R (IG-Q5); placeholders `{height}`, `{hash}` |
-| `reorg-notify` | `notify-reorg` | command | unset | file |  | R (IG-Q5); placeholders `{split-height}` (the last block both chains share), `{height}` (the new tip), `{added}` (blocks in the new chain), `{removed}` (blocks discarded) |
-| `block-rate-notify` | `notify-block-rate` | command | unset | file |  | R (IG-Q5); placeholders `{window}` (the window in seconds), `{observed}`, `{expected}` |
-| `start-mining` | `mine-address` | address | unset | both |  | R; set means mine from start; `mine start` builds it while running (IG-12) |
-| `mining-threads` | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both |  | R (IG-Q21); `mine start` builds it while running (IG-12); one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
-| `bg-mining-*` (5) | — | | | |  | X (Monero background mining) |
+| Today | New | Kind | Default | Surface | Runtime | Grant | Notes |
+|---|---|---|---|---|---|---|---|
+| `test-drop-download`, `test-drop-download-height`, `test-dbg-lock-sleep`, `show-time-stats` | — | | | |  |  | – |
+| `keep-fakechain` | — | | | |  |  | – (nothing is wiped, R3) |
+| `fixed-difficulty` | `dev-difficulty` | integer ≥ 1 | unset | both |  |  | R; regtest |
+| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` | — | | | |  |  | L chain-sync |
+| `db-sync-mode`, `db-salvage` | — | | | |  |  | L DRS |
+| `keep-alt-blocks` | — | | | |  |  | L DRS-E5 |
+| `max-txpool-weight` | `txpool-weight-max` | quantity (bytes) | `648000000B` | both |  |  | R; a Monero-derived operand (IG-Q11) |
+| `block-notify` | `notify-block` | command | unset | file |  |  | R (IG-Q5); placeholders `{height}`, `{hash}` |
+| `reorg-notify` | `notify-reorg` | command | unset | file |  |  | R (IG-Q5); placeholders `{split-height}` (the last block both chains share), `{height}` (the new tip), `{added}` (blocks in the new chain), `{removed}` (blocks discarded) |
+| `block-rate-notify` | `notify-block-rate` | command | unset | file |  |  | R (IG-Q5); placeholders `{window}` (the window in seconds), `{observed}`, `{expected}` |
+| `start-mining` | `mine-address` | address | unset | both |  |  | R; set means mine from start; `mine start` builds it while running (IG-12) |
+| `mining-threads` | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both |  |  | R (IG-Q21); `mine start` builds it while running (IG-12); one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
+| `bg-mining-*` (5) | — | | | |  |  | X (Monero background mining) |
 
 ### RPC, named for the ratified RPC_CHANNEL model
 
-| Today | New | Kind | Default | Surface | Runtime | Notes |
-|---|---|---|---|---|---|---|
-| — | `rpc-listen` | list of endpoint | | |  | visibility `reserved` (IG-9, IG-10): held for the authenticated channel listener (RT-W10); not accepted in this cut |
-| `rpc-bind-ip`, `rpc-bind-port`, `rpc-bind-ipv6-address`, `rpc-use-ipv6` | `rpc-admin-listen` | list of endpoint, loopback only | `127.0.0.1:<row rpc port>` | both |  | R; the interim plaintext full-access listener; loopback only by RT-14 (a plaintext listener never binds beyond loopback; only the authenticated channel listener may bind wildcard); becomes an X row when RT-W10 lands (IG-Q16) |
-| `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only | `none` | both |  | R; survives RT-W10 unchanged (plaintext loopback at view, off by default, ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
-| `rpc-access-control-origins` | `rpc-cors-origin` | list of origin | `none` | both |  | R; explicit web origins only, `none` is CORS default-deny; `*` is refused: a wildcard lets any page in the operator's browser read and drive the plaintext admin listener |
-| `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both |  | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy, the same shape as `txpool-weight-max` |
-| `disable-rpc-ban` | — | | | |  | – (R5; the scorer it switches has no caller, IG-F9) |
-| `rpc-response-soft-limit` | — | | | |  | – (response limits belong to the RPC resource policy, IG-Q12) |
+| Today | New | Kind | Default | Surface | Runtime | Grant | Notes |
+|---|---|---|---|---|---|---|---|
+| — | `rpc-listen` | list of endpoint | | |  |  | visibility `reserved` (IG-9, IG-10): held for the authenticated channel listener (RT-W10); not accepted in this cut |
+| `rpc-bind-ip`, `rpc-bind-port`, `rpc-bind-ipv6-address`, `rpc-use-ipv6` | `rpc-admin-listen` | list of endpoint, loopback only | `127.0.0.1:<row rpc port>` | both |  |  | R; the interim plaintext full-access listener; loopback only by RT-14 (a plaintext listener never binds beyond loopback; only the authenticated channel listener may bind wildcard); becomes an X row when RT-W10 lands (IG-Q16) |
+| `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only | `none` | both |  |  | R; survives RT-W10 unchanged (plaintext loopback at view, off by default, ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
+| `rpc-access-control-origins` | `rpc-cors-origin` | list of origin | `none` | both |  |  | R; explicit web origins only, `none` is CORS default-deny; `*` is refused: a wildcard lets any page in the operator's browser read and drive the plaintext admin listener |
+| `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both |  |  | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy, the same shape as `txpool-weight-max` |
+| `disable-rpc-ban` | — | | | |  |  | – (R5; the scorer it switches has no caller, IG-F9) |
+| `rpc-response-soft-limit` | — | | | |  |  | – (response limits belong to the RPC resource policy, IG-Q12) |
 
 ### Session (interim, until `shekyl-cli` serves the console — R8)
 
-| Today | New | Kind | Default | Surface | Runtime | Notes |
-|---|---|---|---|---|---|---|
-| `non-interactive` | `console` | switch | off | CLI |  | R (IG-Q8); deleted with the console |
-| `daemon_command` (positional) | unchanged | | | |  | moves to `shekyl-cli` (Part B) |
+| Today | New | Kind | Default | Surface | Runtime | Grant | Notes |
+|---|---|---|---|---|---|---|---|
+| `non-interactive` | `console` | switch | off | CLI |  |  | R (IG-Q8); deleted with the console |
+| `daemon_command` (positional) | unchanged | | | |  |  | moves to `shekyl-cli` (Part B) |
 
 ### Environment levers (regtest only, IG-8)
 
@@ -617,13 +617,13 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 | `print_coinbase_tx_sum <from> [<count>]` | `chain coinbase sum` | `--from`, `--last` integer | |
 | `diff` | `chain difficulty` | | |
 | `is_key_image_spent <ki>` | `chain spent <key-image>` | hash | |
-| `pop_blocks <n>` | — | | –: tests make real reorganisations through production pathways |
+| `pop_blocks <n>` | — | | –: no grammar successor; it is an armed test lever (RPC_CHANNEL RT-O9.2, §6.4) |
 | `print_block <hash\|height>` | `block show <hash\|height>` | hash or integer | |
 | `print_tx <hash> [+hex] [+json]` | `tx show <id>` | hash; `--hex`; `--json` is the session's | shares the wallet's word |
 | `relay_tx <txid>` | `tx relay <id>` | hash | |
 | `print_pool`, `print_pool_sh`, `print_pool_stats`, `flush_txpool [txid]` | `txpool list [--short]`, `txpool stats`, `txpool flush [id]` | | |
 | `print_pl [white] [gray] [limit]`, `print_pl_stats`, `print_cn`, `print_net_stats` | `peer list [--white] [--gray] [--max N]`, `peer stats`, `peer connections`, `p2p stats` | | |
-| `limit [kB/s]`, `limit_up`, `limit_down`, `in_peers <n>`, `set_log <level\|categories>` | `option set <name> <value>`, `option show [<name>]` | an option name; a value of that row's kind | IG-12: `option set` takes only the rows §5 marks runtime, needs the admin grant, and never writes the file; `option show` reports each source and, at the view grant, only `view: yes` rows; `limit` (both rates at once) is one option per value and goes |
+| `limit [kB/s]`, `limit_up`, `limit_down`, `in_peers <n>`, `set_log <level\|categories>` | `option set <name> <value>`, `option show [<name>]` | an option name; a value of that row's kind | IG-12: `option set` takes only the rows §5 marks runtime, needs the `node` grant, and never writes the file; `option show` reports each source and returns each row whose grant the caller holds (§5's Grant column); `limit` (both rates at once) is one option per value and goes |
 | `out_peers <n>` | — | | – (the option is an X row, §5) |
 | `bans`, `ban <ip\|@file> [secs]`, `unban <ip>`, `banned <ip>` | `ban list`, `ban add <ip> [--seconds N]`, `ban remove <ip>`, `ban show <ip>` | an IP; a file is `p2p-ban-file` | |
 | `start_mining <addr> [threads\|auto] [bg] [battery]`, `stop_mining`, `mining_status`, `show_hr`, `hide_hr` | `mine start <address> [threads\|auto]`, `mine stop`, `mine status` | address; integer or `auto` | builds `mine-address` and `mine-threads` (IG-12); the background arguments go with `bg-mining-*` (§5); the hash rate is in `mine status` |
@@ -677,7 +677,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 **IG-Q24 — the recovery words — RULED 2026-10-14.** The recovery words never appear on a command line, in a history or in a script; they come from `--mnemonic-file` or a hidden prompt. The mnemonic file and the password file get the config file's ownership and permission checks: a group- or world-readable file refuses with a typed code. The wallet password is one option, `wallet-password-file`, admitting the keyword `stdin` (IG-5).
 
-**IG-Q25 — the console — RULED 2026-10-14.** The C++ console is not renamed and dies with R8. §13 is the catalog the Rust console and `shekyl-cli` serve: runtime settings are `option set` and `option show` (IG-12); `is_key_image_spent` is the view `chain spent <key-image>`; `pop_blocks` has no successor, because tests make real reorganisations through production pathways; the daemon's words are `daemon status` and `daemon stop`.
+**IG-Q25 — the console — RULED 2026-10-14.** The C++ console is not renamed and dies with R8. §13 is the catalog the Rust console and `shekyl-cli` serve: runtime settings are `option set` and `option show` (IG-12); `is_key_image_spent` is the view `chain spent <key-image>`; `pop_blocks` has no grammar successor: it is an armed test lever (RT-O9.2, RPC_CHANNEL §6.4); the daemon's words are `daemon status` and `daemon stop`.
 
 **IG-Q26 — the utilities — RULED 2026-10-14.** As §14.1. The deletions are separate implementation PRs, each fixing its consumers. `tx decode <hex>` (§12.3) replaces `shekyl-utils-deserialize`.
 
@@ -703,4 +703,6 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 **IG-Q37 — where `service` is given — RULED 2026-10-14** (DC-Q18 in the daemon-configuration cutover). Command line only (IG-7): the run mode selects the file, so a key in that file could only restate or contradict it, and on Windows the installer's service registration carries the command line.
 
-**IG-Q38 — what `option show` may reveal — RULED 2026-10-14** (DC-Q16's grammar side). IG-9's row gains the field `view`, `yes` or `no`, default `no`: a row is shown at the view grant only when it opts in, and rows that link the operator or describe the host never do: `mine-address`, `tor-onion`, the peer, closed-peer and ban rows, paths, SOCKS endpoints, notify commands, and every secret. IG-12 carries the contract: `option set` refuses a row not marked runtime with a typed code, requires the admin grant and never writes the file; `option show` reports each value with its source (`default`, `file`, `cli`, `runtime`), shows a secret only as set, returns only `view: yes` rows at the view grant and every row at the admin grant.
+**IG-Q38 — what `option show` may reveal — RULED 2026-10-14** (DC-Q16's grammar side, with RPC_CHANNEL §6.4, RT-O24). IG-9's row names the grant under which `option show` discloses it: `health`, `status`, `peers` or `config`, default `config`. `log-level`, `log-category` and the three P2P rate and cap rows are `status`. A row names `health` only if it passes RPC_CHANNEL §6.1's line for that grant: a client needs it to decide whether it can use the node now, and it says nothing lasting about the node; no row does today. The peer, closed-peer and ban rows are `peers`; everything that describes the host or links the operator (`mine-address`, `tor-onion`, paths, SOCKS endpoints, notify commands) is `config`; a secret's value is shown under no grant. IG-12 carries the contract: `option set` refuses a row not marked runtime with a typed code, requires the `node` grant and never writes the file; `option show` reports each value with its source and returns each row whose grant the caller holds.
+
+**IG-Q39 — runtime defaults are values — RULED 2026-10-14** (with RPC_CHANNEL §6.4, RT-O25 and RT-O27). Every runtime row's default is writable as a value: `p2p-inbound-max` takes `none` (no operator cap), and `log-category` takes `none` (no per-category overrides); an empty category list never means logging off. What `option show` prints is valid input to `option set` and builds the same value, and no row is both runtime and a secret.
