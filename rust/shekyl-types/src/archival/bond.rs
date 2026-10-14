@@ -59,15 +59,6 @@ impl ReceiptSignPk {
         Self(Box::new(bytes))
     }
 
-    /// The key from a slice, or `None` when the slice is not exactly
-    /// [`RECEIPT_SIGN_PK_LEN`] bytes. A slice of the wrong length
-    /// allocates nothing.
-    #[must_use]
-    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
-        let array: &[u8; RECEIPT_SIGN_PK_LEN] = bytes.try_into().ok()?;
-        Some(Self::from_bytes(*array))
-    }
-
     /// The canonical bytes.
     ///
     /// There is no mutable counterpart: a chain-carried key is not edited

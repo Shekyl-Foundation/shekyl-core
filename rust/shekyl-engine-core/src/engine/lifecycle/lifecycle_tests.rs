@@ -406,9 +406,11 @@ async fn first_stake_refuses_cleanly_before_the_durable_point() {
 #[tokio::test(flavor = "multi_thread")]
 async fn retired_records_clean_the_live_hint_at_open() {
     use shekyl_engine_state::pscan_cursor::PScanCursor;
-    use shekyl_engine_state::pscan_state::{PScanState, RetiredPersonaRecord, PSCAN_STATE_VERSION};
+    use shekyl_engine_state::pscan_state::{PScanState, RetiredPersonaRecord};
     use shekyl_types::{PCanonicalId, PSlot, SettlementEpoch};
-    let _ = PSCAN_STATE_VERSION; // version pinned by the schema snapshot
+    // The state's version is stamped by `PScanState::new`. It is pinned by
+    // `pscan_state::tests::a_version_10_file_is_refused_as_stale_not_decoded`;
+    // the schema snapshot pins the type's shape, not the number.
 
     let fix = make_create_fixture();
     let creds = Credentials::password_only(b"correct horse");
@@ -490,6 +492,108 @@ async fn retired_records_clean_the_live_hint_at_open() {
         "no actor for a fully-retired wallet"
     );
     opened.close(&creds).expect("close");
+}
+
+/// A staker whose `.wallet.pscan` was sealed under
+/// `PSCAN_STATE_VERSION_KEYLESS_JOIN` (its joins recorded as the retired
+/// byte `0`, `FN_DSA_HYBRID.md` `FND-18`) is refused at the staking-scan
+/// start with the typed version refusal — the seal path and both versions —
+/// not the detail-free `LoadFailed`. The wallet itself still opens (an
+/// unreadable seal degrades the staking reads, it does not hold funds
+/// hostage); it is the tenant's open-time `start_pscan_if_staker` that
+/// refuses, and this is what it refuses with. The server log prints this
+/// error, so the path is the seal's path.
+///
+/// Bites against a `start_pscan` that boxes every store error into
+/// `LoadFailed`, and against a seal writer that stops stamping the version
+/// first (the gate would then not fire). Does NOT cover the message a
+/// client sees — that is the wallet-rpc mapping's test
+/// (`wallet-contract::error::tests::
+/// a_stale_staking_scan_file_is_named_with_both_versions_and_the_remedy`).
+/// A nested cursor mismatch staying `LoadFailed` is
+/// `start_tests::a_cursor_version_mismatch_is_not_the_file_format`.
+/// Red edit: drop the `PSCAN_STATE_BLOCK` arm in `pscan_load_failure`; the
+/// match below then sees `LoadFailed`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions() {
+    use crate::engine::PScanStartError;
+    use shekyl_engine_state::pscan_state::{PSCAN_STATE_VERSION, PSCAN_STATE_VERSION_KEYLESS_JOIN};
+    use shekyl_types::PSlot;
+
+    let fix = make_create_fixture();
+    let creds = Credentials::password_only(b"correct horse");
+    let seed = fixed_seed();
+    let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+    let network = params.network;
+    let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create");
+    engine
+        .persist_bond_record(PSlot::from_raw(0))
+        .expect("persist");
+    engine.close(&creds).expect("close");
+
+    // A seal whose leading word is the keyless-join schema, written through
+    // the production seal path. The body is what that writer could have left
+    // (the gate refuses before reading it, so its parse is moot).
+    {
+        let (file, _outcome) = shekyl_engine_file::WalletFile::open(
+            &fix.base_path,
+            b"correct horse",
+            network,
+            SafetyOverrides::none(),
+        )
+        .expect("file open");
+        let key = super::super::sealing_keys::state_wrap_key_from_wallet_file(&file);
+        // postcard's varint for this `u32` is the single byte of the word
+        // (this crate does not depend on postcard; `pscan_state::tests::
+        // a_version_10_file_is_refused_as_stale_not_decoded` encodes the same
+        // prefix through postcard and the gate reads both identically).
+        let version = u8::try_from(PSCAN_STATE_VERSION_KEYLESS_JOIN)
+            .expect("the keyless-join schema word is one postcard byte");
+        let mut keyless_join_seal = vec![version];
+        keyless_join_seal.extend_from_slice(&[0xff; 8]);
+        file.save_pscan_state(key.as_bytes(), &keyless_join_seal)
+            .expect("seal");
+    }
+
+    let opened = Engine::<SoloSigner>::open_full(
+        &fix.base_path,
+        &creds,
+        network,
+        dummy_daemon(),
+        SafetyOverrides::none(),
+    )
+    .expect("the wallet opens; the stale seal refuses at the scan start, not here")
+    .into_wallet();
+    assert!(
+        opened.has_stake_engine(),
+        "a staker derives its persona at open"
+    );
+    let expected_path = shekyl_engine_file::paths::pscan_state_path_from(&fix.base_path);
+
+    let arc = std::sync::Arc::new(tokio::sync::RwLock::new(opened));
+    match Engine::<SoloSigner>::start_pscan(arc.clone()).await {
+        Err(PScanStartError::StateFileVersionUnsupported {
+            path,
+            found,
+            expected,
+        }) => {
+            assert_eq!(path, expected_path, "the log line carries the seal path");
+            assert_eq!(found, PSCAN_STATE_VERSION_KEYLESS_JOIN);
+            assert_eq!(expected, PSCAN_STATE_VERSION);
+        }
+        Ok(_) => panic!("a keyless-join seal must refuse the scan start"),
+        Err(other) => panic!("expected the typed version refusal, got {other:?}"),
+    }
+
+    // The single-flight slot was released on the refusal (RAII guard), so a
+    // second start refuses the same way rather than with `AlreadyRunning`.
+    assert!(matches!(
+        Engine::<SoloSigner>::start_pscan(arc.clone()).await,
+        Err(PScanStartError::StateFileVersionUnsupported {
+            found: PSCAN_STATE_VERSION_KEYLESS_JOIN,
+            ..
+        })
+    ));
 }
 
 /// Phase 1 query surface: `Engine::primary_address` assembles the
