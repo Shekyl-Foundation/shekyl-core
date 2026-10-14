@@ -72,7 +72,7 @@ struct Deferred {
     operator: Vec<NetworkAddress>,
     exclusive: Option<Vec<NetworkAddress>>,
     own: Vec<(ConnectorId, Vec<NetworkAddress>)>,
-    small_network: bool,
+    disclose_early: bool,
 }
 
 static DEFERRED: Mutex<Deferred> = Mutex::new(Deferred {
@@ -80,7 +80,7 @@ static DEFERRED: Mutex<Deferred> = Mutex::new(Deferred {
     operator: Vec::new(),
     exclusive: None,
     own: Vec::new(),
-    small_network: false,
+    disclose_early: false,
 });
 
 /// Recorded for the dialer's build: the entry's effect follows when the
@@ -125,13 +125,13 @@ pub(crate) fn ensure_dialer(hub: &Hub) -> Arc<Dialer> {
                 operator: Vec::new(),
                 exclusive: None,
                 own: Vec::new(),
-                small_network: false,
+                disclose_early: false,
             },
         )
     };
     let now = hub.now();
-    if deferred.small_network {
-        dialer.set_small_network(now);
+    if deferred.disclose_early {
+        dialer.set_disclose_early(now);
     }
     if let Some(path) = deferred.address_file {
         open_file(&dialer, &path);
@@ -453,20 +453,20 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_operator(entry: *const ShekylSeam
     }
 }
 
-/// `--small-network` (brief revision 3 §2.6): the lists disclose below
+/// `--p2p-disclose-early` (brief revision 3 §2.6): the lists disclose below
 /// the white diversity floor, fresh per request, until the span or the
 /// floor ends it per connector. Returns 0, or [`SHEKYL_DIALER_DEFERRED`]
 /// when held for the dialer's build. The C++ option that pushes this is
 /// the one exception to "no new daemon option in C++"; the daemon-config
 /// slice deletes it and moves the option to the Rust option table.
 #[no_mangle]
-pub extern "C" fn shekyl_peerlist_small_network() -> i32 {
+pub extern "C" fn shekyl_peerlist_disclose_early() -> i32 {
     let Some(dialer) = dialer() else {
-        DEFERRED.lock().expect("deferred").small_network = true;
+        DEFERRED.lock().expect("deferred").disclose_early = true;
         return SHEKYL_DIALER_DEFERRED;
     };
     let now = dialer.hub().now();
-    dialer.set_small_network(now);
+    dialer.set_disclose_early(now);
     0
 }
 
@@ -816,29 +816,29 @@ mod tests {
         unbind();
     }
 
-    /// `--small-network` is parsed before the seam binds, like every
+    /// `--p2p-disclose-early` is parsed before the seam binds, like every
     /// config push: held for the build, then the flag runs on every
     /// connector from the build's clock.
     #[test]
-    fn the_small_network_flag_held_for_the_build_runs_from_the_build() {
+    fn the_disclose_early_flag_held_for_the_build_runs_from_the_build() {
         let _bind = seam_bind_lock()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         unbind();
-        assert_eq!(shekyl_peerlist_small_network(), SHEKYL_DIALER_DEFERRED);
+        assert_eq!(shekyl_peerlist_disclose_early(), SHEKYL_DIALER_DEFERRED);
         bind();
         let dialer = dialer().expect("built at the bind");
         for connector in ConnectorId::ALL {
             assert!(
                 matches!(
-                    dialer.shared().lists.small_network(*connector),
-                    Some(shekyl_peerlist::SmallNetwork::Running { .. })
+                    dialer.shared().lists.disclose_early(*connector),
+                    Some(shekyl_peerlist::DiscloseEarly::Running { .. })
                 ),
                 "{connector:?} runs the flag from the build"
             );
         }
         assert_eq!(
-            shekyl_peerlist_small_network(),
+            shekyl_peerlist_disclose_early(),
             0,
             "after the build the push acts at once"
         );

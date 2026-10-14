@@ -334,15 +334,15 @@ impl Dialer {
         };
     }
 
-    /// `--small-network` (brief revision 3 §2.6): the lists disclose below
+    /// `--p2p-disclose-early` (brief revision 3 §2.6): the lists disclose below
     /// the floor on every connector until the span or the floor ends it
     /// there. Logged here, once, with when it ends (rule 82).
-    pub fn set_small_network(&self, now: Tick) {
-        self.shared().lists.set_small_network(now);
+    pub fn set_disclose_early(&self, now: Tick) {
+        self.shared().lists.set_disclose_early(now);
         tracing::info!(
-            "--small-network is on: this node discloses its known peers and its own address below the floor of {}; on each connector the flag ends after {} hours or when that connector's white count reaches the floor, whichever comes first, and a flagged node is recognisable while it holds",
+            "--p2p-disclose-early is on: this node discloses its known peers and its own address below the floor of {}; on each connector the flag ends after {} hours or when that connector's white count reaches the floor, whichever comes first, and a flagged node is recognisable while it holds",
             white_diversity_floor(),
-            shekyl_peerlist::SMALL_NETWORK_SPAN_NANOS / 3_600_000_000_000
+            shekyl_peerlist::P2P_DISCLOSE_EARLY_SPAN_NANOS / 3_600_000_000_000
         );
     }
 

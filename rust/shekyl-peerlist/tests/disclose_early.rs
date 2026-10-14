@@ -3,12 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `--small-network` (Rick, 2026-10-13, PR-3 brief revision 3 §2.6): the
+//! `--p2p-disclose-early` (Rick, 2026-10-13, PR-3 brief revision 3 §2.6): the
 //! one ruled exception to "no disclosure below the floor". While the flag
 //! runs on a connector, a request below the floor gets a fresh uniform
 //! draw of `min(DISCLOSE_COUNT, population)` over white plus this node's
 //! own address, the refused set filtering it; nothing is cached. The flag
-//! ends per connector at `SMALL_NETWORK_SPAN_NANOS` from the moment it
+//! ends per connector at `P2P_DISCLOSE_EARLY_SPAN_NANOS` from the moment it
 //! reached the lists, or the first time white reaches the floor, whichever
 //! comes first, and once ended stays ended for the run. Time is a `Tick`
 //! handed in: the clock is the test's.
@@ -18,8 +18,9 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    white_diversity_floor, ConnectorId, DialOutcome, NetworkAddress, NoBans, Peerlist, RefusedSet,
-    SmallNetwork, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, SMALL_NETWORK_SPAN_NANOS,
+    white_diversity_floor, ConnectorId, DialOutcome, DiscloseEarly, NetworkAddress, NoBans,
+    Peerlist, RefusedSet, Source, Tick, DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS,
+    P2P_DISCLOSE_EARLY_SPAN_NANOS,
 };
 use shekyl_transport_layer::BanList;
 
@@ -99,7 +100,7 @@ fn set(list: &BTreeSet<NetworkAddress>) -> BTreeSet<NetworkAddress> {
 fn with_the_flag_a_white_of_one_discloses_that_address_and_our_own() {
     let mut rng = SplitMix64::new(1);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
-    list.set_small_network(at_hours(0));
+    list.set_disclose_early(at_hours(0));
     confirm(&mut list, &onion(1), at_hours(0), &mut rng);
     list.set_own_address(ConnectorId::Tor, Some(onion(900)))
         .expect("own");
@@ -109,8 +110,8 @@ fn with_the_flag_a_white_of_one_discloses_that_address_and_our_own() {
         .collect();
     assert_eq!(sample, [onion(1), onion(900)].into_iter().collect());
     assert_eq!(
-        list.small_network(ConnectorId::Tor),
-        Some(SmallNetwork::Running { since: at_hours(0) })
+        list.disclose_early(ConnectorId::Tor),
+        Some(DiscloseEarly::Running { since: at_hours(0) })
     );
 }
 
@@ -126,7 +127,7 @@ fn without_the_flag_the_same_white_of_one_discloses_nothing() {
     assert!(list
         .disclose(ConnectorId::Tor, at_hours(1), &mut NoBans, &mut rng)
         .is_empty());
-    assert_eq!(list.small_network(ConnectorId::Tor), None);
+    assert_eq!(list.disclose_early(ConnectorId::Tor), None);
 }
 
 /// No cache while the flag holds: white grows between two requests and
@@ -135,7 +136,7 @@ fn without_the_flag_the_same_white_of_one_discloses_nothing() {
 fn under_the_flag_nothing_is_cached_and_the_second_reply_shows_the_growth() {
     let mut rng = SplitMix64::new(2);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
-    list.set_small_network(at_hours(0));
+    list.set_disclose_early(at_hours(0));
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     with_white(&mut list, 1, 1, at_hours(0), &mut rng);
     let first = list.disclose(connector, at_hours(1), &mut NoBans, &mut rng);
@@ -166,20 +167,20 @@ fn under_the_flag_nothing_is_cached_and_the_second_reply_shows_the_growth() {
 fn at_the_span_with_white_below_the_floor_the_reply_is_empty() {
     let mut rng = SplitMix64::new(3);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
-    list.set_small_network(at_hours(1));
+    list.set_disclose_early(at_hours(1));
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     with_white(&mut list, 1, 5, at_hours(1), &mut rng);
-    let just_before = Tick::new(at_hours(1).get() + SMALL_NETWORK_SPAN_NANOS - 1);
+    let just_before = Tick::new(at_hours(1).get() + P2P_DISCLOSE_EARLY_SPAN_NANOS - 1);
     assert_eq!(
         list.disclose(connector, just_before, &mut NoBans, &mut rng)
             .len(),
         5
     );
-    let at_span = Tick::new(at_hours(1).get() + SMALL_NETWORK_SPAN_NANOS);
+    let at_span = Tick::new(at_hours(1).get() + P2P_DISCLOSE_EARLY_SPAN_NANOS);
     assert!(list
         .disclose(connector, at_span, &mut NoBans, &mut rng)
         .is_empty());
-    assert_eq!(list.small_network(connector), Some(SmallNetwork::Ended));
+    assert_eq!(list.disclose_early(connector), Some(DiscloseEarly::Ended));
     // Ended stays ended: more white, still below the floor, still nothing.
     with_white(&mut list, 6, 5, at_span, &mut rng);
     assert!(list
@@ -199,12 +200,12 @@ fn at_the_span_with_white_below_the_floor_the_reply_is_empty() {
 fn when_white_reaches_the_floor_the_flag_ends_and_the_window_sample_rules_after() {
     let mut rng = SplitMix64::new(4);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
-    list.set_small_network(at_hours(0));
+    list.set_disclose_early(at_hours(0));
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, floor(), at_hours(0), &mut rng);
     assert_eq!(
-        list.small_network(connector),
-        Some(SmallNetwork::Ended),
+        list.disclose_early(connector),
+        Some(DiscloseEarly::Ended),
         "the flag ended at the white write that reached the floor"
     );
     let drawn_at = at_hours(2);
@@ -223,7 +224,7 @@ fn when_white_reaches_the_floor_the_flag_ends_and_the_window_sample_rules_after(
         list.white_count(connector, at_hours(4), &mut bans, &mut rng),
         usize::from(floor()) - 1
     );
-    assert_eq!(list.small_network(connector), Some(SmallNetwork::Ended));
+    assert_eq!(list.disclose_early(connector), Some(DiscloseEarly::Ended));
     assert_eq!(
         list.disclose(connector, at_hours(5), &mut bans, &mut rng),
         sample,
@@ -243,7 +244,7 @@ fn when_white_reaches_the_floor_the_flag_ends_and_the_window_sample_rules_after(
 fn the_flag_ends_at_the_floor_without_any_disclosure() {
     let mut rng = SplitMix64::new(5);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
-    list.set_small_network(at_hours(0));
+    list.set_disclose_early(at_hours(0));
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     let white = with_white(&mut list, 1, floor(), at_hours(0), &mut rng);
     let mut bans = BanList::new();
@@ -255,7 +256,7 @@ fn the_flag_ends_at_the_floor_without_any_disclosure() {
             .is_empty(),
         "the flag ended at the crossing, so no sample was ever drawn under it"
     );
-    assert_eq!(list.small_network(connector), Some(SmallNetwork::Ended));
+    assert_eq!(list.disclose_early(connector), Some(DiscloseEarly::Ended));
 }
 
 /// Per connector: one connector reaching the floor leaves the other's flag
@@ -264,18 +265,18 @@ fn the_flag_ends_at_the_floor_without_any_disclosure() {
 fn one_connector_at_the_floor_leaves_the_others_flag_running() {
     let mut rng = SplitMix64::new(6);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
-    list.set_small_network(at_hours(0));
+    list.set_disclose_early(at_hours(0));
     with_white(&mut list, 1, floor(), at_hours(0), &mut rng);
     assert_eq!(
-        list.small_network(ConnectorId::Clearnet),
-        Some(SmallNetwork::Ended)
+        list.disclose_early(ConnectorId::Clearnet),
+        Some(DiscloseEarly::Ended)
     );
     confirm(&mut list, &onion(1), at_hours(0), &mut rng);
     list.set_own_address(ConnectorId::Tor, Some(onion(900)))
         .expect("own");
     assert_eq!(
-        list.small_network(ConnectorId::Tor),
-        Some(SmallNetwork::Running { since: at_hours(0) })
+        list.disclose_early(ConnectorId::Tor),
+        Some(DiscloseEarly::Running { since: at_hours(0) })
     );
     let tor: BTreeSet<_> = list
         .disclose(ConnectorId::Tor, at_hours(1), &mut NoBans, &mut rng)
@@ -290,7 +291,7 @@ fn one_connector_at_the_floor_leaves_the_others_flag_running() {
 fn the_refused_set_still_filters_the_sample_under_the_flag() {
     let mut rng = SplitMix64::new(7);
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
-    list.set_small_network(at_hours(0));
+    list.set_disclose_early(at_hours(0));
     let connector = Peerlist::connector_of(&v4(1)).expect("served");
     // An operator-named private address is admitted whatever its range and
     // can be confirmed white; it is never disclosed.

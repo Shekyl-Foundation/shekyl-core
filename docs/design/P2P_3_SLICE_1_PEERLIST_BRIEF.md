@@ -495,7 +495,7 @@ sample already drawn is served until the window ends even if white
 falls below the floor meanwhile (F1), since a reply that changed
 mid-window would tell the requester what changed.
 
-**The one ruled exception: `--small-network` (Rick, 2026-10-13, PR-3
+**The one ruled exception: `--p2p-disclose-early` (Rick, 2026-10-13, PR-3
 brief revision 4 §2.6; landed in #1056 `3603dbace`).** A network of
 fewer than 48 nodes never reaches the floor, so under the rule above no
 node discloses and discovery cannot start; the first §4 run of PR-3
@@ -507,7 +507,7 @@ triggers it, who benefits:* the local operator, for the network's
 discovery while it boots; no remote party can set, extend or end it,
 and a peer can push white toward the floor only through this node's own
 dials, which only ends the flag early. *Span and end:* on each connector
-the flag ends at whichever comes first — `SMALL_NETWORK_SPAN_NANOS` (24
+the flag ends at whichever comes first — `P2P_DISCLOSE_EARLY_SPAN_NANOS` (24
 hours from the moment the flag reaches the lists at startup; its own
 constant, not `DISCLOSE_WINDOW_NANOS`, and a restart starts it again) or
 the first time that connector's white count reaches the floor, checked
@@ -525,7 +525,7 @@ small network. A network that stays below 48 stops discovering after
 the first day, and nodes that join later are found only through nodes
 whose flag still runs; restarting nodes one at a time renews it. A
 testing and bootstrap flag, not an operating posture. The fill rules do
-not read it. Tests: `shekyl-peerlist/tests/small_network.rs`.
+not read it. Tests: `shekyl-peerlist/tests/disclose_early.rs`.
 
 An exception — leaving out this node's current outbound sessions —
 goes in only if a conformance measurement in PR-2 shows it helps:

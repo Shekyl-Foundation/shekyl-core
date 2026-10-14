@@ -30,7 +30,7 @@ use crate::sample::sample_prefix;
 use crate::validity::RefusedSet;
 use crate::{
     DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS,
-    SESSION_INTAKE_CAP, SMALL_NETWORK_SPAN_NANOS, WHITE_CAP,
+    P2P_DISCLOSE_EARLY_SPAN_NANOS, SESSION_INTAKE_CAP, WHITE_CAP,
 };
 
 /// The connector's cached disclosure sample (D3): drawn once, kept for the
@@ -41,12 +41,12 @@ struct Sample {
     addresses: Vec<NetworkAddress>,
 }
 
-/// `--small-network` on one connector (brief revision 3 §2.6): while it
+/// `--p2p-disclose-early` on one connector (brief revision 3 §2.6): while it
 /// runs, the connector discloses below the floor with a fresh draw on
 /// every request; it ends at the span or the first time white reaches the
 /// floor, and once ended stays ended for the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SmallNetwork {
+pub enum DiscloseEarly {
     /// Running since the flag reached the lists.
     Running {
         /// When the flag reached the lists; the span counts from here.
@@ -56,10 +56,10 @@ pub enum SmallNetwork {
     Ended,
 }
 
-/// Why a connector's `--small-network` flag ended.
+/// Why a connector's `--p2p-disclose-early` flag ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SmallNetworkEnd {
-    /// [`crate::SMALL_NETWORK_SPAN_NANOS`] ran out.
+pub enum DiscloseEarlyEnd {
+    /// [`crate::P2P_DISCLOSE_EARLY_SPAN_NANOS`] ran out.
     Span,
     /// White reached the floor.
     Floor,
@@ -105,8 +105,8 @@ pub(crate) struct Partition {
     /// Per session, the distinct addresses it has offered and when each
     /// last arrived (D-S1). Pruned to the intake span on every touch.
     intake: BTreeMap<ConnectionId, BTreeMap<NetworkAddress, Tick>>,
-    /// `--small-network` on this connector; `None` when never set.
-    small_network: Option<SmallNetwork>,
+    /// `--p2p-disclose-early` on this connector; `None` when never set.
+    disclose_early: Option<DiscloseEarly>,
 }
 
 impl Partition {
@@ -481,17 +481,17 @@ impl Partition {
         self.own_address = address;
     }
 
-    /// `--small-network` reached the lists at `now`: the flag runs on this
+    /// `--p2p-disclose-early` reached the lists at `now`: the flag runs on this
     /// connector from here. Set once per run; a second call keeps the first.
-    pub(crate) fn set_small_network(&mut self, now: Tick) {
-        if self.small_network.is_none() {
-            self.small_network = Some(SmallNetwork::Running { since: now });
+    pub(crate) fn set_disclose_early(&mut self, now: Tick) {
+        if self.disclose_early.is_none() {
+            self.disclose_early = Some(DiscloseEarly::Running { since: now });
         }
     }
 
     /// The flag's state on this connector.
-    pub(crate) fn small_network(&self) -> Option<SmallNetwork> {
-        self.small_network
+    pub(crate) fn disclose_early(&self) -> Option<DiscloseEarly> {
+        self.disclose_early
     }
 
     /// End the flag if it runs and `now` is at or past the span, or if
@@ -499,22 +499,22 @@ impl Partition {
     /// when it was not running or nothing ended it. Checked at every white
     /// write and at every disclosure, so the floor ends it whenever white
     /// crosses, not only when a reply is drawn.
-    pub(crate) fn end_small_network_if_due(
+    pub(crate) fn end_disclose_early_if_due(
         &mut self,
         floor: usize,
         now: Tick,
-    ) -> Option<SmallNetworkEnd> {
-        let Some(SmallNetwork::Running { since }) = self.small_network else {
+    ) -> Option<DiscloseEarlyEnd> {
+        let Some(DiscloseEarly::Running { since }) = self.disclose_early else {
             return None;
         };
         let reason = if self.white_seats >= floor {
-            SmallNetworkEnd::Floor
-        } else if now.get().saturating_sub(since.get()) >= SMALL_NETWORK_SPAN_NANOS {
-            SmallNetworkEnd::Span
+            DiscloseEarlyEnd::Floor
+        } else if now.get().saturating_sub(since.get()) >= P2P_DISCLOSE_EARLY_SPAN_NANOS {
+            DiscloseEarlyEnd::Span
         } else {
             return None;
         };
-        self.small_network = Some(SmallNetwork::Ended);
+        self.disclose_early = Some(DiscloseEarly::Ended);
         Some(reason)
     }
 
@@ -545,7 +545,7 @@ impl Partition {
     /// over white plus this node's own address, cached for the window.
     /// An address `refused` holds is not in the population (brief §2).
     ///
-    /// While `--small-network` runs on this connector (§2.6), the floor
+    /// While `--p2p-disclose-early` runs on this connector (§2.6), the floor
     /// does not gate the reply and nothing is cached: every request gets
     /// a fresh draw from the same population, and a draw made under the
     /// flag is never stored as the window's sample. The caller ends the
@@ -557,7 +557,7 @@ impl Partition {
         now: Tick,
         rng: &mut R,
     ) -> Vec<NetworkAddress> {
-        if matches!(self.small_network, Some(SmallNetwork::Running { .. })) {
+        if matches!(self.disclose_early, Some(DiscloseEarly::Running { .. })) {
             let mut population = self.disclosure_population(refused);
             let take = sample_prefix(&mut population, DISCLOSE_COUNT, rng);
             population.truncate(take);

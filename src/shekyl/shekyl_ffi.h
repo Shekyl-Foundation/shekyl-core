@@ -4469,12 +4469,12 @@ std::size_t shekyl_peerlist_disclose(std::uint64_t session, shekyl_seam_address*
 /// `--allow-local-ip`, as the Rust peer lists' constructor input. Returns
 /// `allow`, so the line that read the flag reads it through this call.
 bool shekyl_peerlist_allow_local_ip(bool allow);
-/// `--small-network` (PR-3 brief revision 3 §2.6): the peer lists disclose
+/// `--p2p-disclose-early` (PR-3 brief revision 3 §2.6): the peer lists disclose
 /// below the white diversity floor, fresh per request, until 24 hours pass
 /// or a connector's white reaches the floor. 0, or SHEKYL_DIALER_DEFERRED
 /// when held for the dialer's build. The option is the one C++ exception
 /// to "no new daemon option"; the daemon-config slice deletes it.
-int shekyl_peerlist_small_network(void);
+int shekyl_peerlist_disclose_early(void);
 /// Recorded for the dialer's build: a push made before the seam binds takes
 /// effect when the dialer is built.
 constexpr int SHEKYL_DIALER_DEFERRED = 2;

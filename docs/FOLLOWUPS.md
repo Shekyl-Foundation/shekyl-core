@@ -1003,7 +1003,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: the daemon-config slice, through [`P2P_3_SLICE_3_DIALER_BRIEF.md`](design/P2P_3_SLICE_3_DIALER_BRIEF.md) §3.4 (the C++ PR-3 added, which that slice deletes; its own brief is not in this tree yet)
   - Target: pre-genesis
 
-- **`--small-network` moves to the Rust option table (the daemon-config slice; PR-3 brief revision 3 §2.6).** PR-3 adds the option in C++ as the one ruled exception to "no new daemon option": one `arg_descriptor<bool>` (`net_node.cpp`), its `extern` (`net_node.h`), its `add_arg` and one push, `shekyl_peerlist_small_network()` (`net_node.inl`), each with a deletion-table row in `P2P_3_SLICE_3_DIALER_BRIEF.md`. The daemon-config grammar may rename it. Falsify by: `rg -n small_network src/p2p` returns nothing.
+- **`--p2p-disclose-early` moves to the Rust option table (the daemon-config slice; PR-3 brief revision 3 §2.6).** PR-3 adds the option in C++ as the one ruled exception to "no new daemon option": one `arg_descriptor<bool>` (`net_node.cpp`), its `extern` (`net_node.h`), its `add_arg` and one push, `shekyl_peerlist_disclose_early()` (`net_node.inl`), each with a deletion-table row in `P2P_3_SLICE_3_DIALER_BRIEF.md`. The daemon-config grammar may rename it. Falsify by: `rg -n -e disclose_early src/p2p` returns nothing after the daemon-config cutover.
   - Owner: the daemon-config slice, through [`P2P_3_SLICE_3_DIALER_BRIEF.md`](design/P2P_3_SLICE_3_DIALER_BRIEF.md) §3.4 (the rows it deletes)
   - Target: pre-genesis
 

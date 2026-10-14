@@ -117,7 +117,7 @@ namespace nodetool
     command_line::add_arg(desc, arg_tx_proxy);
     command_line::add_arg(desc, arg_anonymous_inbound);
     command_line::add_arg(desc, arg_no_ephemeral_tor);
-    command_line::add_arg(desc, arg_small_network);
+    command_line::add_arg(desc, arg_p2p_disclose_early);
     command_line::add_arg(desc, arg_ban_list);
     command_line::add_arg(desc, arg_no_sync);
     command_line::add_arg(desc, arg_no_igd);
@@ -428,8 +428,8 @@ namespace nodetool
     public_zone.m_can_announce = true;
     m_external_port = command_line::get_arg(vm, arg_p2p_external_port);
     shekyl_peerlist_allow_local_ip(command_line::get_arg(vm, arg_p2p_allow_local_ip));
-    if (command_line::get_arg(vm, arg_small_network))
-      shekyl_peerlist_small_network();
+    if (command_line::get_arg(vm, arg_p2p_disclose_early))
+      shekyl_peerlist_disclose_early();
     const bool has_no_igd = command_line::get_arg(vm, arg_no_igd);
     const std::string sigd = command_line::get_arg(vm, arg_igd);
     if (sigd == "enabled")
