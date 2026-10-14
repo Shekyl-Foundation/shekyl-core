@@ -708,91 +708,31 @@ jobs:
           # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
           # here rather than discovered by the first Windows operator.
           cmake --build build --config Release --target daemon mdb_copy --parallel 2
-      - name: smoke-test daemonizer removal
+      - name: smoke-test daemon boot and stop
         shell: pwsh
-        # After the V3.1 daemonizer removal, shekyld.exe must (a) link
-        # cleanly on MSVC without the src/daemonizer/ subsystem, (b) run
-        # without invoking the removed POSIX fork() / Windows SCM code
-        # paths, and (c) intercept the retired CLI flags via
-        # src/common/removed_flags.{h,cpp}.
+        # The daemon's runtime gate on Windows: boot the built shekyld.exe
+        # offline on regtest with a fresh data directory and a free RPC port,
+        # wait until it answers get_info, ask it to stop over RPC, and assert
+        # it exits 0 within a timeout having created its chain store
+        # (scripts/ci/daemon_boot_stop_smoke.ps1, which asserts each of its
+        # subjects: rule 47).
         #
-        # The removed-flag assertions cover shekyld alone. They used to
-        # cover the C++ wallet-rpc too, but that binary is deleted (its
-        # name and install slot went to the Rust shekyl-wallet-rpc in the
-        # C1/C2 cutover). They cannot transfer to the Rust binary: the
-        # migration message they grep for comes from
-        # src/common/removed_flags.{h,cpp}, and clap answers "unexpected
-        # argument" instead. The shim's wallet-side caller
-        # (src/wallet/wallet_args.cpp) was deleted with wallet2 at Phase 5,
-        # so shekyld is now the shim's only caller.
+        # It replaces the daemonizer-removal smoke test (Rick, 2026-10-14).
+        # That step re-proved the link the build step already proves,
+        # asserted that a deleted code path did nothing, and pinned the
+        # removed_flags shim the daemon-configuration cutover deletes
+        # (DAEMON_CONFIG_CUTOVER.md, DC-Q4); its --help check returned
+        # before the logger was initialised, so it exercised less than its
+        # comment claimed.
         #
-        # No wallet binary is checked on Windows because none is built
-        # there — `BuildRust.cmake` skips them, tracked in docs/FOLLOWUPS.md
-        # under "Rust wallet stack: no Windows support". Not because the
-        # stack is Unix-only: that stopped being true on 2026-08-25, when
-        # both binaries were observed compiling and linking for
-        # x86_64-pc-windows-msvc with their end-to-end tests passing. What
-        # is unverified is the CMake path, staging, install and archive
-        # layout, so WP-W5 removes the gate deliberately rather than as a
-        # side effect. This job is the daemon's MSVC gate until then. --help
-        # exits 0 after printing the option list, which exercises the full
-        # argument-parsing + logger-init path without waiting on a network
-        # port. --detach is expected to exit nonzero with the V3.1
-        # migration message; grepping the message pins the shim so a
-        # future regression ("unknown option --detach") fails CI loudly
-        # rather than shipping as a user-visible downgrade. The checks
-        # are intentionally Windows-only because POSIX fork / Windows SCM
-        # behaviors diverge at exactly this boundary.
+        # The cutover extends this job on the same daemon: the Rust main()
+        # and its one stop path; a second daemon on the same data directory
+        # refused by the lock; a config directory whose access list grants
+        # Users write refused with exit 2; another network's data directory
+        # refused by the marker. RT-W14 later adds a service-manager case
+        # (install, start, SERVICE_RUNNING, stop).
         run: |
-          # Native invocations go through `cmd /c` rather than PowerShell's `&`
-          # operator. The previous two iterations of this step hit PowerShell
-          # gotchas (array-vs-scalar -notmatch on 2>&1 output, then
-          # $PSNativeCommandUseErrorActionPreference turning expected-nonzero
-          # exits into terminating errors before $LASTEXITCODE could be read).
-          # cmd.exe has none of that behavior — exit code is just the exit
-          # code, stderr merges to the file via `2>&1` without any ErrorRecord
-          # elevation. PowerShell is reduced to "inspect $LASTEXITCODE" and
-          # "Select-String on a file," which are the well-behaved parts.
-          $ErrorActionPreference = 'Stop'
-          $daemon = 'build\bin\Release\shekyld.exe'
-
-          function Assert-HelpOk([string]$exe, [string]$label) {
-            cmd /c "`"$exe`" --help > NUL 2>&1"
-            if ($LASTEXITCODE -ne 0) {
-              throw "$label --help failed with exit $LASTEXITCODE"
-            }
-          }
-
-          function Assert-RemovedFlag([string]$exe, [string]$label, [string]$flag) {
-            $outFile = New-TemporaryFile
-            try {
-              cmd /c "`"$exe`" $flag > `"$outFile`" 2>&1"
-              $exit = $LASTEXITCODE
-              $out  = Get-Content -Raw -LiteralPath $outFile
-              if ($exit -eq 0) {
-                throw "$label $flag unexpectedly succeeded; output: $out"
-              }
-              if ($out -notmatch 'was removed in V3\.1') {
-                throw "$label $flag did not produce the V3.1 migration message; output: $out"
-              }
-            } finally {
-              Remove-Item -LiteralPath $outFile -ErrorAction SilentlyContinue
-            }
-          }
-
-          Assert-HelpOk $daemon 'shekyld'
-          Assert-RemovedFlag $daemon 'shekyld' '--detach'
-
-          # Both Assert-RemovedFlag calls deliberately leave $LASTEXITCODE
-          # nonzero — that's exactly what we're asserting on. GitHub Actions'
-          # pwsh shell wrapper is literally:
-          #     pwsh -Command ". '$script'; if (Test-Path variable:\LASTEXITCODE) { exit $LASTEXITCODE }"
-          # so a script that returns successfully but leaves $LASTEXITCODE=1
-          # behind (from the last native command) gets miscategorized as a
-          # failed step. Reset explicitly. Any earlier failure fires `throw`
-          # inside the Assert-* helpers, which aborts before we get here, so
-          # this only runs on genuine success.
-          exit 0
+          pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
 
   source-archive:
     name: "source archive"
