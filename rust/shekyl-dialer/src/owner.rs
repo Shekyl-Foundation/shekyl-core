@@ -82,6 +82,13 @@ pub struct Shared {
     /// A closed network (`--add-exclusive-node`): the candidate
     /// population, when set. Not a dialer arm.
     exclusive: Option<BTreeSet<NetworkAddress>>,
+    /// Every operator-named address this dialer was given (the compiled
+    /// seeds, `--add-peer`), in the order given: what a stranded connector
+    /// re-admits when no closed network is declared.
+    configured: Vec<NetworkAddress>,
+    /// Which connectors are stranded: no kept session, nothing in flight,
+    /// and no drawable candidate at their last wake.
+    stranded: [bool; ConnectorId::COUNT],
     /// When the address file was last written or read; `None` until
     /// then, so the first due store is one interval after the open.
     last_store: Option<Tick>,
@@ -211,6 +218,8 @@ impl Dialer {
                 pending: BTreeMap::new(),
                 kept: BTreeMap::new(),
                 exclusive: None,
+                configured: Vec::new(),
+                stranded: [false; ConnectorId::COUNT],
                 last_store: None,
             })),
             nonces: HandshakeNonceSet::new(),
@@ -346,14 +355,19 @@ impl Dialer {
         );
     }
 
-    /// An operator-named address (`--add-peer`, a seed): into gray.
+    /// An operator-named address (`--add-peer`, a seed): into gray, and
+    /// remembered as configured, so a stranded connector can re-admit it.
     pub fn admit_operator<R: RelayRng + ?Sized>(
         &self,
         address: &NetworkAddress,
         now: Tick,
         rng: &mut R,
     ) -> Result<bool, Refusal> {
-        self.shared()
+        let mut shared = self.shared();
+        if !shared.configured.contains(address) {
+            shared.configured.push(address.clone());
+        }
+        shared
             .lists
             .admit_gray(address, Source::Operator, now, &mut HubBans(&self.hub), rng)
     }
@@ -683,6 +697,48 @@ impl Dialer {
             gray,
             gray_candidates,
         };
+        // Recovery (Rick, 2026-10-14). A connector with a target that has
+        // no kept session, nothing in flight and no drawable candidate is
+        // stranded: its lists cannot get it a peer. It re-admits its
+        // configured addresses to gray as operator-named, under normal
+        // admission: the closed network's list when one is declared, else
+        // the compiled seeds and `--add-peer`. This wake dials nothing; the
+        // next draws from what was admitted.
+        let stranded = target > 0
+            && census.kept == 0
+            && census.in_flight == 0
+            && white_candidates == 0
+            && gray_candidates == 0;
+        if stranded {
+            let population: Vec<NetworkAddress> = match &exclusive {
+                Some(population) => population.iter().cloned().collect(),
+                None => shared.configured.clone(),
+            };
+            let mut admitted = 0usize;
+            for address in population
+                .iter()
+                .filter(|address| Peerlist::connector_of(address) == Some(connector))
+            {
+                if let Ok(true) =
+                    lists.admit_gray(address, Source::Operator, now, &mut HubBans(hub), rng)
+                {
+                    admitted += 1;
+                }
+            }
+            if !shared.stranded[connector.index()] {
+                shared.stranded[connector.index()] = true;
+                tracing::info!(
+                    "{connector:?}: no kept session, nothing in flight and no drawable candidate; re-admitted {admitted} configured address(es) to gray"
+                );
+            }
+            return None;
+        }
+        if shared.stranded[connector.index()] {
+            shared.stranded[connector.index()] = false;
+            tracing::info!(
+                "{connector:?}: no longer stranded; a candidate is drawable or a dial is in flight"
+            );
+        }
         let Some(plan) = plan(&census, white_diversity_floor(), WHITE_REFILL_LINE) else {
             tracing::debug!("{connector:?} wake: no rule applies ({census:?})");
             if gray > 0 && gray_candidates == 0 {

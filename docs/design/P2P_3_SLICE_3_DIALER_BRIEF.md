@@ -675,6 +675,19 @@ is `DialFailed` or `PeerlistRefused`, with the connector's cause.
 
 ---
 
+**Recovery (Rick, 2026-10-14).** A connector whose wake finds no kept
+session, nothing in flight, and no drawable white or gray candidate is
+stranded: its lists cannot get it a peer. That wake re-admits the
+connector's configured addresses to gray as operator-named, under normal
+admission: the compiled seeds and `--add-peer`, or, when a closed
+network is declared (`--add-exclusive-node`), that list alone. It dials
+nothing itself; the next wake draws. The apply table and the address
+file are unchanged. The dialer logs one line on entering the state, with
+the count re-admitted, and one on leaving it. A connector with a target
+of zero is never stranded. Tests: `shekyl-dialer/tests/recovery.rs` (a
+stranded connector re-admits and dials; a healthy one does not re-admit
+a dead `--add-peer`; a declared closed network re-admits only its list).
+
 ## Support flags
 
 The handshake response carries `support_flags`. That value, including
