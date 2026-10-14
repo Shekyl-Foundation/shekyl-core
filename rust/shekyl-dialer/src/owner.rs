@@ -739,6 +739,7 @@ impl Dialer {
             Ok(channel) => channel,
             Err(cause) => return failed(cause),
         };
+        let connected_at = std::time::Instant::now();
         let request = HandshakeRequest {
             node_data: BasicNodeData {
                 network_id,
@@ -764,6 +765,13 @@ impl Dialer {
             drop(channel);
             return failed(cause);
         }
+        // Cold first contact (Rick, 2026-10-13): the dialler's own share of
+        // SOCKS success to the handshake request on the wire; the writer
+        // logs the wire moment as "tor first bytes written".
+        tracing::debug!(
+            "{connector:?} dial {address:?}: handshake queued {} ns after the channel opened",
+            u64::try_from(connected_at.elapsed().as_nanos()).unwrap_or(u64::MAX)
+        );
 
         let mut channel = channel;
         let response = match read_response(&mut channel.session) {

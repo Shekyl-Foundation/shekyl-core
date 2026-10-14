@@ -343,13 +343,28 @@ where
     let gate = node_gate();
     let mut writer = tokio::spawn(async move {
         let mut stall = shekyl_capped_stream::WriteStall::new(conn);
+        // Cold first contact (Rick, 2026-10-13): the dialler's SOCKS success
+        // to its first bytes on the wire, the handshake request. The same
+        // line on the responder is its first reply.
+        let mut first_write = true;
         let cause = write_capped(
             &mut write,
             &writer_queue,
             &overfull_write,
             &gate,
             &mut stall,
-            |plain| Ok(Cow::Borrowed(plain)),
+            |plain| {
+                if first_write {
+                    first_write = false;
+                    tracing::debug!(
+                        conn,
+                        outbound,
+                        first_write_ns = span_ns(channel_at.elapsed()),
+                        "tor first bytes written"
+                    );
+                }
+                Ok(Cow::Borrowed(plain))
+            },
         )
         .await;
         tracing::info!(conn, stall = %stall, "write stall");
@@ -357,7 +372,19 @@ where
     });
     let gate = node_gate();
     let inbound_close = inbound.clone();
+    // Cold first contact: the responder's accept to its first bytes read,
+    // the dialler's handshake request; on the dialler, the first reply.
+    let mut first_read = true;
     let read_fut = read_capped(&mut read, inbound, &overfull, &gate, conn, |chunk| {
+        if first_read {
+            first_read = false;
+            tracing::debug!(
+                conn,
+                outbound,
+                first_read_ns = span_ns(channel_at.elapsed()),
+                "tor first bytes read"
+            );
+        }
         Ok(vec![chunk.to_vec()])
     });
     tokio::pin!(read_fut);
