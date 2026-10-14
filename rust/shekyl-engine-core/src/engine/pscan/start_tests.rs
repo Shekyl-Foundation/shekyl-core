@@ -17,7 +17,11 @@ use super::*;
 use std::collections::BTreeMap;
 
 use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
-use shekyl_engine_state::pscan_cursor::PScanCursor;
+use shekyl_engine_state::pscan_cursor::{PScanCursor, PSCAN_CURSOR_BLOCK, PSCAN_CURSOR_VERSION};
+use shekyl_engine_state::pscan_state::{
+    PSCAN_STATE_BLOCK, PSCAN_STATE_VERSION, PSCAN_STATE_VERSION_KEYLESS_JOIN,
+};
+use shekyl_engine_state::WalletLedgerError;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 use tempfile::TempDir;
@@ -329,6 +333,60 @@ fn pscan_slot_admits_one_claimant_at_a_time() {
     drop(guard);
     assert!(!slot.is_claimed(), "dropping the guard releases the slot");
     assert!(slot.try_claim().is_some(), "the slot can be reclaimed");
+}
+
+/// The stale-file refusal is the outer schema word only. A cursor mismatch
+/// uses the same `UnsupportedBlockVersion` shape and must stay `LoadFailed`,
+/// so the client is not told the file format is the cursor's version. The
+/// outer refusal keeps the seal path and does not carry the user remedy.
+///
+/// Bites against `pscan_load_failure` matching every version error. The real
+/// seal is `lifecycle_tests::a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions`.
+#[test]
+fn a_cursor_version_mismatch_is_not_the_file_format() {
+    let path = std::path::PathBuf::from("/home/staker/primary.wallet.pscan");
+    let stale = super::pscan_load_failure(
+        super::WalletFilePScanStoreError::Codec(WalletLedgerError::UnsupportedBlockVersion {
+            block: PSCAN_STATE_BLOCK,
+            file: PSCAN_STATE_VERSION_KEYLESS_JOIN,
+            binary: PSCAN_STATE_VERSION,
+        }),
+        path.clone(),
+    );
+    let logged = stale.to_string();
+    assert!(
+        logged.contains("/home/staker/primary.wallet.pscan"),
+        "the log line carries the seal path: {logged}"
+    );
+    assert!(
+        !logged.contains("Move that"),
+        "the user remedy is not this error's text: {logged}"
+    );
+    match stale {
+        PScanStartError::StateFileVersionUnsupported {
+            path: got,
+            found,
+            expected,
+        } => {
+            assert_eq!(got, path);
+            assert_eq!(found, PSCAN_STATE_VERSION_KEYLESS_JOIN);
+            assert_eq!(expected, PSCAN_STATE_VERSION);
+        }
+        other => panic!("the outer schema word is the typed refusal, got {other:?}"),
+    }
+
+    let cursor = super::pscan_load_failure(
+        super::WalletFilePScanStoreError::Codec(WalletLedgerError::UnsupportedBlockVersion {
+            block: PSCAN_CURSOR_BLOCK,
+            file: PSCAN_CURSOR_VERSION + 1,
+            binary: PSCAN_CURSOR_VERSION,
+        }),
+        path,
+    );
+    assert!(
+        matches!(cursor, PScanStartError::LoadFailed(_)),
+        "a cursor mismatch is not the file format, got {cursor:?}"
+    );
 }
 
 /// The store's blocking-I/O helper must not panic on a `current_thread` runtime

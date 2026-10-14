@@ -677,10 +677,10 @@ async fn wrap_and_start_tasks(
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
-            // Log the detailed cause server-side — the boxed error can carry a
-            // local path / internal schema detail that the stable client-facing
-            // `WalletRpcError` deliberately withholds. Same discipline as
-            // `restart_pscan`, and the fail-closed reason is spelled here.
+            // Log the engine error. A stale outer version names the seal path
+            // in that text; a boxed load failure can carry a path too. The
+            // client error names the file, or nothing, and never the directory.
+            // Same discipline as `restart_pscan`.
             tracing::warn!(
                 error = %e,
                 "a staker's sealed P-scan state failed to load; aborting the open \

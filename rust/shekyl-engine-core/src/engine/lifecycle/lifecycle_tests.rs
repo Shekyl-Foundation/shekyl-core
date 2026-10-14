@@ -494,13 +494,15 @@ async fn retired_records_clean_the_live_hint_at_open() {
     opened.close(&creds).expect("close");
 }
 
-/// A staker whose `.wallet.pscan` was sealed under `PSCAN_STATE_VERSION` 10
-/// (its joins recorded as the retired byte `0`, `FN_DSA_HYBRID.md` `FND-18`)
-/// is refused at the staking-scan start with the typed version refusal —
-/// the file's name and both versions — not the detail-free `LoadFailed`.
-/// The wallet itself still opens (an unreadable seal degrades the staking
-/// reads, it does not hold funds hostage); it is the tenant's open-time
-/// `start_pscan_if_staker` that refuses, and this is what it refuses with.
+/// A staker whose `.wallet.pscan` was sealed under
+/// `PSCAN_STATE_VERSION_KEYLESS_JOIN` (its joins recorded as the retired
+/// byte `0`, `FN_DSA_HYBRID.md` `FND-18`) is refused at the staking-scan
+/// start with the typed version refusal — the seal path and both versions —
+/// not the detail-free `LoadFailed`. The wallet itself still opens (an
+/// unreadable seal degrades the staking reads, it does not hold funds
+/// hostage); it is the tenant's open-time `start_pscan_if_staker` that
+/// refuses, and this is what it refuses with. The server log prints this
+/// error, so the path is the seal's path.
 ///
 /// Bites against a `start_pscan` that boxes every store error into
 /// `LoadFailed`, and against a seal writer that stops stamping the version
@@ -508,12 +510,14 @@ async fn retired_records_clean_the_live_hint_at_open() {
 /// client sees — that is the wallet-rpc mapping's test
 /// (`wallet-contract::error::tests::
 /// a_stale_staking_scan_file_is_named_with_both_versions_and_the_remedy`).
-/// Red edit: drop the `UnsupportedBlockVersion` arm in `spawn_pscan`'s
-/// `map_err`; the match below then sees `LoadFailed`.
+/// A nested cursor mismatch staying `LoadFailed` is
+/// `start_tests::a_cursor_version_mismatch_is_not_the_file_format`.
+/// Red edit: drop the `PSCAN_STATE_BLOCK` arm in `pscan_load_failure`; the
+/// match below then sees `LoadFailed`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions() {
     use crate::engine::PScanStartError;
-    use shekyl_engine_state::pscan_state::PSCAN_STATE_VERSION;
+    use shekyl_engine_state::pscan_state::{PSCAN_STATE_VERSION, PSCAN_STATE_VERSION_KEYLESS_JOIN};
     use shekyl_types::PSlot;
 
     let fix = make_create_fixture();
@@ -527,9 +531,9 @@ async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_version
         .expect("persist");
     engine.close(&creds).expect("close");
 
-    // A real v10 seal, written through the production seal path: the version
-    // word is the literal 10 and the body is what a v10 writer could have
-    // left (the gate refuses before reading it, so its parse is moot).
+    // A seal whose leading word is the keyless-join schema, written through
+    // the production seal path. The body is what that writer could have left
+    // (the gate refuses before reading it, so its parse is moot).
     {
         let (file, _outcome) = shekyl_engine_file::WalletFile::open(
             &fix.base_path,
@@ -539,13 +543,16 @@ async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_version
         )
         .expect("file open");
         let key = super::super::sealing_keys::state_wrap_key_from_wallet_file(&file);
-        // postcard's varint for the `u32` 10 is the single byte 0x0a (this
-        // crate does not depend on postcard; `pscan_state::tests::
+        // postcard's varint for this `u32` is the single byte of the word
+        // (this crate does not depend on postcard; `pscan_state::tests::
         // a_version_10_file_is_refused_as_stale_not_decoded` encodes the same
         // prefix through postcard and the gate reads both identically).
-        let mut v10 = vec![10u8];
-        v10.extend_from_slice(&[0xff; 8]);
-        file.save_pscan_state(key.as_bytes(), &v10).expect("seal");
+        let version = u8::try_from(PSCAN_STATE_VERSION_KEYLESS_JOIN)
+            .expect("the keyless-join schema word is one postcard byte");
+        let mut keyless_join_seal = vec![version];
+        keyless_join_seal.extend_from_slice(&[0xff; 8]);
+        file.save_pscan_state(key.as_bytes(), &keyless_join_seal)
+            .expect("seal");
     }
 
     let opened = Engine::<SoloSigner>::open_full(
@@ -561,28 +568,20 @@ async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_version
         opened.has_stake_engine(),
         "a staker derives its persona at open"
     );
-    let expected_file = shekyl_engine_file::paths::pscan_state_path_from(&fix.base_path)
-        .file_name()
-        .expect("the seal path has a file name")
-        .to_string_lossy()
-        .into_owned();
+    let expected_path = shekyl_engine_file::paths::pscan_state_path_from(&fix.base_path);
 
     let arc = std::sync::Arc::new(tokio::sync::RwLock::new(opened));
     match Engine::<SoloSigner>::start_pscan(arc.clone()).await {
         Err(PScanStartError::StateFileVersionUnsupported {
-            file,
+            path,
             found,
             expected,
         }) => {
-            assert_eq!(
-                file, expected_file,
-                "the refusal names the seal file by name"
-            );
-            assert!(!file.contains('/'), "the file is named, not pathed: {file}");
-            assert_eq!(found, 10);
+            assert_eq!(path, expected_path, "the log line carries the seal path");
+            assert_eq!(found, PSCAN_STATE_VERSION_KEYLESS_JOIN);
             assert_eq!(expected, PSCAN_STATE_VERSION);
         }
-        Ok(_) => panic!("a v10 seal must refuse the scan start"),
+        Ok(_) => panic!("a keyless-join seal must refuse the scan start"),
         Err(other) => panic!("expected the typed version refusal, got {other:?}"),
     }
 
@@ -590,7 +589,10 @@ async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_version
     // second start refuses the same way rather than with `AlreadyRunning`.
     assert!(matches!(
         Engine::<SoloSigner>::start_pscan(arc.clone()).await,
-        Err(PScanStartError::StateFileVersionUnsupported { found: 10, .. })
+        Err(PScanStartError::StateFileVersionUnsupported {
+            found: PSCAN_STATE_VERSION_KEYLESS_JOIN,
+            ..
+        })
     ));
 }
 

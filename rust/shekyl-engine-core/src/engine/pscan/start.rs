@@ -59,11 +59,12 @@
 //! Reopen engine-held storage only if the store moves to a `Weak` upgrade-per-
 //! sweep shape (a design round of its own, not a lifecycle patch).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_engine_file::{WalletFile, WalletFileError};
-use shekyl_engine_state::pscan_state::PScanState;
+use shekyl_engine_state::pscan_state::{PScanState, PSCAN_STATE_BLOCK};
 use shekyl_engine_state::WalletLedgerError;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -136,34 +137,27 @@ pub enum PScanStartError {
     /// read-modify-seal of the same `.wallet.pscan`.
     #[error("a P-scan task is already running for this wallet")]
     AlreadyRunning,
-    /// A sealed state could not be loaded (corrupt / version mismatch) — either
-    /// the `.wallet.pscan` scan state or the `.wallet.pending` bond-post block
-    /// (its schema-v2 fail-closed refusal of a WI-2 v1 seal surfaces here).
-    /// Surfaced before the spawn rather than as a silent task death: the caller
-    /// learns the firewall scan / dispatch did not start, instead of a pending
-    /// post that never dispatches while every sweep logs a generic retry.
+    /// A sealed state could not be loaded. That is a corrupt `.wallet.pscan`
+    /// or `.wallet.pending` body, a pending-post version mismatch, or a
+    /// nested cursor version inside a seal whose outer word this build
+    /// accepts. The outer `.wallet.pscan` schema word is
+    /// [`StateFileVersionUnsupported`](Self::StateFileVersionUnsupported),
+    /// not this variant. Surfaced before the spawn rather than as a silent
+    /// task death: the caller learns the firewall scan / dispatch did not
+    /// start, instead of a pending post that never dispatches while every
+    /// sweep logs a generic retry.
     #[error("loading a sealed P-scan / pending-post state failed: {0}")]
     LoadFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
-    /// The `.wallet.pscan` scan state was written under another schema
-    /// version (`PSCAN_STATE_VERSION`, bumped at every change in what a
-    /// persisted byte means — 10 → 11 recorded a JoinMarket as `5`,
-    /// `FN_DSA_HYBRID.md` `FND-18`). Split from [`LoadFailed`](Self::LoadFailed)
-    /// because this refusal has a remedy the user can carry out and
-    /// `LoadFailed`'s (a corrupt or swapped seal) does not: move that one
-    /// file out of the wallet's folder and open the wallet again, and the
-    /// staking scan rebuilds it from the chain (rule 15: refuse, never
-    /// migrate; nothing rewrites the old bytes). `file` is the file's name,
-    /// not its path — the wallet-facing error names the file the user has
-    /// to find beside the wallet, and the path stays in the server log.
-    /// The `.wallet.pending` seal stays on `LoadFailed`: a stale pending post
-    /// is not rebuilt from the chain, it is staked again.
-    #[error(
-        "{file} was written under P-scan state version {found}; this build reads version \
-         {expected}: move that file out of the wallet's folder and open the wallet again"
-    )]
+    /// The `.wallet.pscan` seal's own schema word ([`PSCAN_STATE_BLOCK`]) is
+    /// not the one this build reads. The server log prints this error, so
+    /// `path` is the seal. The wallet-facing remedy — move that one file
+    /// aside and open the wallet again — is the RPC mapping of this variant,
+    /// not this text. A nested cursor mismatch stays
+    /// [`LoadFailed`](Self::LoadFailed).
+    #[error("{path} carries P-scan state version {found}; this build reads version {expected}")]
     StateFileVersionUnsupported {
-        /// The scan state file's name (`<wallet>.wallet.pscan`).
-        file: String,
+        /// The scan-state seal's path.
+        path: PathBuf,
         /// The version word the file carries.
         found: u32,
         /// `PSCAN_STATE_VERSION` of this build.
@@ -311,6 +305,32 @@ pub(crate) enum WalletFilePScanStoreError {
     /// (De)serializing the `PScanState` body across the seal boundary.
     #[error("P-scan state codec: {0}")]
     Codec(WalletLedgerError),
+}
+
+/// Map a pscan-store load failure to the start error.
+///
+/// Only the outer schema word ([`PSCAN_STATE_BLOCK`]) is the stale-file
+/// refusal. `path` stays on that error so the server log, which prints the
+/// engine error, names the seal. A nested cursor version uses the same
+/// [`WalletLedgerError::UnsupportedBlockVersion`] shape with a different
+/// block name and stays [`PScanStartError::LoadFailed`], as does a corrupt
+/// body or a seal-open failure.
+fn pscan_load_failure(err: WalletFilePScanStoreError, path: PathBuf) -> PScanStartError {
+    if let WalletFilePScanStoreError::Codec(WalletLedgerError::UnsupportedBlockVersion {
+        block,
+        file: found,
+        binary: expected,
+    }) = &err
+    {
+        if *block == PSCAN_STATE_BLOCK {
+            return PScanStartError::StateFileVersionUnsupported {
+                path,
+                found: *found,
+                expected: *expected,
+            };
+        }
+    }
+    PScanStartError::LoadFailed(Box::new(err))
 }
 
 impl<S, D, L, E, R, P> PScanStore for WalletFilePScanStore<S, D, L, E, R, P>
@@ -569,7 +589,9 @@ where
     ///
     /// Everything except the non-staker case propagates from
     /// [`start_pscan`](Self::start_pscan): [`PScanStartError::AlreadyRunning`],
-    /// [`PScanStartError::LoadFailed`]. A non-staker is `Ok(None)`, not an error —
+    /// [`PScanStartError::LoadFailed`],
+    /// [`PScanStartError::StateFileVersionUnsupported`]. A non-staker is
+    /// `Ok(None)`, not an error —
     /// for this call the absent stake engine is the expected quiet path, not a
     /// wiring failure.
     pub async fn start_pscan_if_staker(
@@ -600,7 +622,9 @@ where
     /// - [`PScanStartError::NoStakeEngine`] if no stake engine is running.
     /// - [`PScanStartError::AlreadyRunning`] if a P-scan task already holds the
     ///   single-flight slot for this wallet.
-    /// - [`PScanStartError::LoadFailed`] if the sealed state cannot be loaded.
+    /// - [`PScanStartError::LoadFailed`] if a sealed state cannot be loaded.
+    /// - [`PScanStartError::StateFileVersionUnsupported`] if the `.wallet.pscan`
+    ///   seal's own schema word is not this build's.
     pub async fn start_pscan(self_arc: Arc<RwLock<Self>>) -> Result<PScanHandle, PScanStartError> {
         Self::start_pscan_with(self_arc, PScanConfig::production(), DEFAULT_PSCAN_CADENCE).await
     }
@@ -636,7 +660,9 @@ where
     /// - [`PScanStartError::NoStakeEngine`] if no stake engine is running.
     /// - [`PScanStartError::AlreadyRunning`] if a P-scan task already holds the
     ///   single-flight slot for this wallet.
-    /// - [`PScanStartError::LoadFailed`] if the sealed state cannot be loaded.
+    /// - [`PScanStartError::LoadFailed`] if a sealed state cannot be loaded.
+    /// - [`PScanStartError::StateFileVersionUnsupported`] if the `.wallet.pscan`
+    ///   seal's own schema word is not this build's.
     ///
     /// All per-sweep failures are recoverable and logged by the loop, not here.
     pub(crate) async fn start_pscan_with(
@@ -694,7 +720,7 @@ where
         // Brief read borrow: clone the spawn inputs + claim the single-flight slot.
         // Stake is checked first so a non-staker never claims-then-releases; the
         // slot guard is RAII, so any error below releases it on the early return.
-        let (daemon, stake, pending_gate, slot_guard, pscan_file_name) = {
+        let (daemon, stake, pending_gate, slot_guard, pscan_path) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -715,24 +741,16 @@ where
             // The per-wallet pending-seal write lock (§3.3): the dispatch driver
             // and the WI-2 assemble path share this one mutex (see the engine
             // field docs), so their two write cadences cannot race.
-            // The seal's file name, for the version refusal below: the one
-            // load failure whose remedy names a file the user has to find.
-            // Always present: `pscan_state_path_from` pushes `.pscan` onto
-            // the full base, so the last component is never empty or `..`
-            // (pinned by `paths::tests::pscan_path_always_has_a_file_name`).
-            let pscan_file_name = g
-                .persistence()
-                .pscan_path()
-                .file_name()
-                .expect("the .pscan path ends in its suffix, so it has a file name")
-                .to_string_lossy()
-                .into_owned();
+            // The seal path travels with an outer-version failure so the server
+            // log can name the seal. The client name is derived at the RPC
+            // boundary.
+            let pscan_path = g.persistence().pscan_path().to_path_buf();
             (
                 g.daemon().clone(),
                 stake,
                 g.pending_gate.clone(),
                 slot_guard,
-                pscan_file_name,
+                pscan_path,
             )
         };
 
@@ -756,9 +774,11 @@ where
             engine: self_arc.clone(),
         };
 
-        // Load both sealed states up front so a corrupt / version-mismatched seal
-        // surfaces **here**, loudly, as [`PScanStartError::LoadFailed`] — never as a
-        // silent per-sweep retry. The pscan seal already fails loud this way; the
+        // Load both sealed states up front so a corrupt or version-mismatched
+        // seal surfaces **here**, loudly — the outer pscan schema word as
+        // [`PScanStartError::StateFileVersionUnsupported`], everything else as
+        // [`PScanStartError::LoadFailed`] — never as a silent per-sweep retry.
+        // The pscan seal already fails loud this way; the
         // pending seal's decode runs lazily inside the dispatch tick (mapped to a
         // transient `Dispatched` error the sweep just logs-and-retries), so without
         // this probe a WI-2 v1 `.wallet.pending` under this v2 binary would make the
@@ -767,21 +787,10 @@ where
         // under its own write lock each tick (the two-writer discipline); this is a
         // fail-closed decode probe, and its result is intentionally discarded.
         // `slot_guard` drops on any early return here, releasing the slot.
-        let initial = store.load().await.map_err(|e| match e {
-            // A stale seal, refused by its version word before its body was
-            // read (`version_gate`): the refusal the user acts on, so it
-            // carries the file and both versions instead of a boxed cause.
-            WalletFilePScanStoreError::Codec(WalletLedgerError::UnsupportedBlockVersion {
-                file: found,
-                binary: expected,
-                ..
-            }) => PScanStartError::StateFileVersionUnsupported {
-                file: pscan_file_name,
-                found,
-                expected,
-            },
-            other => PScanStartError::LoadFailed(Box::new(other)),
-        })?;
+        let initial = store
+            .load()
+            .await
+            .map_err(|e| pscan_load_failure(e, pscan_path))?;
         pending_seal
             .load()
             .await

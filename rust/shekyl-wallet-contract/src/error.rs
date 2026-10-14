@@ -1011,13 +1011,15 @@ pub enum WalletRpcError {
     StakeStateUnreadable,
     /// `-29530`, the form with a remedy: the staker's scan state file was
     /// written by an earlier wallet version and this one refuses it rather
-    /// than migrate it (rule 15; `FN_DSA_HYBRID.md` `FND-18` for the 10 → 11
-    /// bump). Shares the code with [`StakeStateUnreadable`](Self::StakeStateUnreadable)
+    /// than migrate it (rule 15; `FN_DSA_HYBRID.md` `FND-18` for the move off
+    /// [`PSCAN_STATE_VERSION_KEYLESS_JOIN`](shekyl_engine_state::pscan_state::PSCAN_STATE_VERSION_KEYLESS_JOIN)).
+    /// Shares the code with [`StakeStateUnreadable`](Self::StakeStateUnreadable)
     /// — both are "the scan state would not load, so the wallet will not
-    /// open" — and `data` carries the file and both versions so a client can
-    /// tell the two apart without parsing prose (the `-29511` precedent). The
-    /// file is named, not pathed: the user finds it beside the wallet, and
-    /// the path stays in the server log. The remedy is the only one that
+    /// open" — and `data` carries the file name and both versions so a client
+    /// can tell the two apart without parsing prose (the `-29511` precedent).
+    /// `file` is the name only. The directory stays on
+    /// [`PScanStartError::StateFileVersionUnsupported`](shekyl_engine_core::PScanStartError::StateFileVersionUnsupported),
+    /// which is what the server log prints. The remedy is the only one that
     /// exists today — nothing rewrites the file, `rescan_blockchain` needs an
     /// open wallet, and the wallet opens once the file is out of the way,
     /// after which the staking scan rebuilds it from the chain.
@@ -1475,27 +1477,38 @@ impl From<PScanStartError> for WalletRpcError {
             // A mid-session bond-watch recovery: a domain state with a
             // user-doable remedy (reopen), never an internal fault.
             PScanStartError::RecoveredPendingReopen => Self::StakeRecoveredPendingReopen,
-            // The reachable one: a corrupt / version-mismatched `.wallet.pscan`
-            // (or `.wallet.pending`) seal. A staker whose firewall scan cannot
-            // start must not open into a state where it silently is not
-            // scanning (privacy is not a degraded mode). The boxed cause can
-            // carry a local path; it is logged at the reachable call site
-            // (`lifecycle::wrap_and_start_pscan`), not handed to the client.
+            // A corrupt seal, a pending-post version mismatch, or a nested
+            // cursor version. The boxed cause can carry a local path; it is
+            // logged at the reachable call site (`lifecycle::wrap_and_start_tasks`),
+            // not handed to the client.
             PScanStartError::LoadFailed(_source) => Self::StakeStateUnreadable,
-            // The version form of the same refusal: the engine already
-            // reduced the cause to a file name and two version words, which
-            // is exactly what the user needs and nothing the log has to keep.
+            // The outer schema word. The engine error carries the path, which
+            // the log already printed. The client gets the file's name when
+            // that name is Unicode; otherwise the detail-free form, never a
+            // replacement character or a directory.
             PScanStartError::StateFileVersionUnsupported {
-                file,
+                path,
                 found,
                 expected,
-            } => Self::StakeStateVersionUnsupported {
-                file,
-                found,
-                expected,
+            } => match staking_scan_file_name(&path) {
+                Some(file) => Self::StakeStateVersionUnsupported {
+                    file,
+                    found,
+                    expected,
+                },
+                None => Self::StakeStateUnreadable,
             },
         }
     }
+}
+
+/// The scan-state file's name, for the client. `None` when the path has no
+/// final component, that component is empty, or it is not Unicode.
+fn staking_scan_file_name(path: &std::path::Path) -> Option<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
 }
 
 impl From<ServingStartError> for WalletRpcError {
@@ -2393,18 +2406,37 @@ mod tests {
     /// was written under an earlier `PSCAN_STATE_VERSION` cannot open the
     /// wallet, `rescan_blockchain` needs an open wallet, and nothing rewrites
     /// the file — so the refusal has to name the file, both versions and
-    /// the one remedy that exists. This bites against a mapping that drops
-    /// the engine's typed refusal back into the detail-free
-    /// `StakeStateUnreadable`; it does NOT cover the engine producing that
-    /// refusal from a real seal (`lifecycle_tests::
+    /// the one remedy that exists. The engine error keeps the directory for
+    /// the server log; this mapping is the only user sentence. A path with
+    /// no Unicode file name falls back to the detail-free form rather than
+    /// inventing a name. This bites against a mapping that drops the engine's
+    /// typed refusal back into `StakeStateUnreadable` for a normal path, and
+    /// against one that forwards the directory. It does NOT cover the engine
+    /// producing that refusal from a real seal (`lifecycle_tests::
     /// a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions`).
     #[test]
     fn a_stale_staking_scan_file_is_named_with_both_versions_and_the_remedy() {
-        let err = WalletRpcError::from(PScanStartError::StateFileVersionUnsupported {
-            file: "primary.wallet.pscan".to_owned(),
-            found: 10,
-            expected: 11,
-        });
+        use shekyl_engine_state::pscan_state::{
+            PSCAN_STATE_VERSION, PSCAN_STATE_VERSION_KEYLESS_JOIN,
+        };
+
+        let path = std::path::PathBuf::from("/home/staker/primary.wallet.pscan");
+        let engine_err = PScanStartError::StateFileVersionUnsupported {
+            path: path.clone(),
+            found: PSCAN_STATE_VERSION_KEYLESS_JOIN,
+            expected: PSCAN_STATE_VERSION,
+        };
+        let logged = engine_err.to_string();
+        assert!(
+            logged.contains("/home/staker/primary.wallet.pscan"),
+            "the log line carries the seal path: {logged}"
+        );
+        assert!(
+            !logged.contains("Move that"),
+            "the remedy is the client sentence, not the log line: {logged}"
+        );
+
+        let err = WalletRpcError::from(engine_err);
         assert_eq!(err.code(), WalletRpcErrorCode::StakeStateUnreadable);
         assert_eq!(WalletRpcErrorCode::StakeStateUnreadable as i32, -29530);
 
@@ -2414,7 +2446,8 @@ mod tests {
             "the refusal names the file the user has to find: {message}"
         );
         assert!(
-            message.contains("format 10") && message.contains("format 11"),
+            message.contains(&format!("format {PSCAN_STATE_VERSION_KEYLESS_JOIN}"))
+                && message.contains(&format!("format {PSCAN_STATE_VERSION}")),
             "the refusal names the version found and the version expected: {message}"
         );
         assert!(
@@ -2423,16 +2456,45 @@ mod tests {
             "the refusal says what to do: {message}"
         );
         assert!(
-            !message.contains('/'),
-            "the file is named, not pathed — the path stays in the server log: {message}"
+            !message.contains("/home/staker"),
+            "the directory stays in the server log: {message}"
         );
 
         let data = err
             .data()
             .expect("the version form carries structured data");
         assert_eq!(data["file"], "primary.wallet.pscan");
-        assert_eq!(data["found"], 10);
-        assert_eq!(data["expected"], 11);
+        assert_eq!(data["found"], PSCAN_STATE_VERSION_KEYLESS_JOIN);
+        assert_eq!(data["expected"], PSCAN_STATE_VERSION);
+
+        let unnamed = WalletRpcError::from(PScanStartError::StateFileVersionUnsupported {
+            path: std::path::PathBuf::from(".."),
+            found: PSCAN_STATE_VERSION_KEYLESS_JOIN,
+            expected: PSCAN_STATE_VERSION,
+        });
+        assert!(
+            matches!(unnamed, WalletRpcError::StakeStateUnreadable),
+            "a path with no file name is the detail-free form"
+        );
+        assert!(unnamed.data().is_none());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let mut bytes = b"/tmp/".to_vec();
+            bytes.extend_from_slice(&[0xff, 0xfe]);
+            bytes.extend_from_slice(b".wallet.pscan");
+            let non_unicode = WalletRpcError::from(PScanStartError::StateFileVersionUnsupported {
+                path: std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)),
+                found: PSCAN_STATE_VERSION_KEYLESS_JOIN,
+                expected: PSCAN_STATE_VERSION,
+            });
+            assert!(
+                matches!(non_unicode, WalletRpcError::StakeStateUnreadable),
+                "a non-Unicode file name is not shown to the client"
+            );
+            assert!(non_unicode.data().is_none());
+        }
 
         // Control: the cause-unknown form keeps the detail-free message and
         // no data, so the two are told apart by `data`, not by prose.
