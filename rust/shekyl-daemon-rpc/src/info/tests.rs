@@ -17,7 +17,9 @@ use shekyl_types::{BlockHash, ChainCount};
 use shekyl_units::AtomicUnits;
 
 use super::*;
-use crate::info_facts::{InfoChainFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts};
+use crate::info_facts::{
+    InfoChainFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts, SessionCounts,
+};
 
 /// The emitter's `tagged_hash`: byte i = (i*7 + tag) & 0xff.
 fn tagged_hash(tag: u8) -> BlockHash {
@@ -505,10 +507,23 @@ fn has_peers_is_exactly_a_nonzero_connection_count_wherever_status_is_shown() {
             facts.sessions = SessionCounts { outbound, inbound };
             let reply = get_info(&facts, Disclosure::FULL, 0).expect("a full caller");
             let status = reply.node.shown().expect("a full caller is shown Status");
+            // Offline: no `has_peers` and no counts, both the state. Running:
+            // `has_peers` is exactly a nonzero count.
+            let expected = match status.connections {
+                StatusConnections::Offline => None,
+                StatusConnections::Running { outgoing, incoming } => {
+                    Some(outgoing > 0 || incoming > 0)
+                }
+            };
             assert_eq!(
-                reply.health.has_peers,
-                status.outgoing_connections_count > 0 || status.incoming_connections_count > 0,
+                reply.health.p2p.has_peers(),
+                expected,
                 "offline {offline}, {outbound} out, {inbound} in: {status:?}"
+            );
+            assert_eq!(
+                matches!(status.connections, StatusConnections::Offline),
+                offline,
+                "Status's connections are the state offline exactly when Health's are"
             );
         }
     }
@@ -524,19 +539,30 @@ fn has_peers_and_the_connection_counts_are_one_board_read() {
     assert_eq!(facts.sessions_reads.load(Ordering::Relaxed), 1);
 }
 
-/// An offline node shown its own Status reports zero connections in
-/// both directions, and the board is not read. Zero is the answer
-/// here, not a stand-in: the node was configured to have no sessions.
+/// **An offline node shown its own Status carries no connection count,
+/// and the board is not read** (Rick, 2026-10-14). The node was
+/// configured to have no sessions, so the state is the answer: a zero
+/// would read as a running node with none.
 #[test]
-fn an_offline_node_reports_zero_connections_without_reading_the_board() {
+fn an_offline_node_reports_no_connection_count_and_the_board_is_not_read() {
     let mut facts = synced_facts();
     facts.chain.offline = true;
     facts.peers = PeerFacts::Offline;
     facts.sessions_fault = Some(FactsFault::HubAbsent);
     let reply = ours(&facts, Disclosure::FULL);
-    assert_eq!(reply["outgoing_connections_count"], 0);
-    assert_eq!(reply["incoming_connections_count"], 0);
-    assert_eq!(reply["has_peers"], false);
+    let members = reply.as_object().expect("a reply is an object");
+    for key in [
+        "outgoing_connections_count",
+        "incoming_connections_count",
+        "has_peers",
+    ] {
+        assert!(
+            !members.contains_key(key),
+            "an offline node carries no `{key}`"
+        );
+    }
+    assert_eq!(reply["offline"], true);
+    assert_eq!(reply["p2p"], "offline");
     assert_eq!(facts.sessions_reads.load(Ordering::Relaxed), 0);
 }
 
@@ -558,18 +584,18 @@ fn a_restricted_reply_from_a_node_with_peers_says_it_has_peers() {
     assert_eq!(ours(&synced_facts(), Disclosure::FULL)["has_peers"], true);
 }
 
-/// **An offline node has no peers, and the board is not asked.** A
-/// node started `--offline` binds no hub at all, so the read would
+/// **An offline node says it is offline, and the board is not asked.**
+/// A node started `--offline` binds no hub at all, so the read would
 /// return the missing-hub fault and `get_info` would refuse on every
 /// offline node. Offline is known from configuration, so the read is
 /// not made: the count below is zero reads, with the fault armed to
-/// show that nothing consulted it, and a session count of twenty to
-/// show that nothing consulted that either.
+/// show that nothing consulted it. Health carries `offline: true` and no
+/// `has_peers`, for every caller (Rick, 2026-10-14).
 ///
 /// The edits that turn this red: reading the board for an offline
-/// node, or turning the fault into `false` after the read.
+/// node, or writing `has_peers: false` for it.
 #[test]
-fn an_offline_node_has_no_peers_and_the_board_is_not_read() {
+fn an_offline_node_says_so_and_the_board_is_not_read() {
     for fault in [None, Some(FactsFault::HubAbsent)] {
         for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
             let mut facts = synced_facts();
@@ -581,7 +607,10 @@ fn an_offline_node_has_no_peers_and_the_board_is_not_read() {
             )
             .expect("the reply serializes");
             assert_eq!(reply["offline"], true);
-            assert_eq!(reply["has_peers"], false);
+            assert!(
+                reply.get("has_peers").is_none(),
+                "{disclosure:?}: an offline node carries no `has_peers`"
+            );
             assert_eq!(
                 facts.sessions_reads.load(Ordering::Relaxed),
                 0,

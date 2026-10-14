@@ -468,9 +468,8 @@ mod tests {
                 target_height: shekyl_rpc_types::Nullable::NULL,
                 synchronized: true,
                 busy_syncing: false,
-                offline: false,
                 following_degraded: false,
-                has_peers: true,
+                p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
             },
             identity: InfoIdentity {
                 protocol_version: 3,
@@ -497,8 +496,10 @@ mod tests {
                 free_space: 1,
                 database_size: 1,
                 version: "test".to_owned(),
-                outgoing_connections_count: 0,
-                incoming_connections_count: 0,
+                connections: shekyl_rpc_types::StatusConnections::Running {
+                    outgoing: 0,
+                    incoming: 0,
+                },
                 alt_blocks_count: 0,
                 rpc_connections_count: 0,
             }),

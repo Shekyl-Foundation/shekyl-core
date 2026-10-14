@@ -271,13 +271,13 @@ pub(crate) fn tip_reading_from_info(info: &GetInfoResponse) -> TipReading {
     // Ordered most-specific first, so the reported cause is the one an
     // operator can act on: "offline" is actionable, "never synchronized" is
     // the symptom it would also produce.
-    let cause = if info.health.offline {
+    let cause = if health.p2p.is_offline() {
         Some(NotFollowing::Offline)
     } else if info.health.following_degraded {
         Some(NotFollowing::Degraded)
     } else if !health.synchronized {
         Some(NotFollowing::NeverSynchronized)
-    } else if !health.has_peers {
+    } else if health.p2p.has_peers() == Some(false) {
         Some(NotFollowing::NoPeers)
     } else {
         None
@@ -445,7 +445,8 @@ mod tests {
     fn offline_overlay(height: u64) -> serde_json::Value {
         json!({
             "height": height, "status": "OK", "synchronized": true, "offline": true,
-            "p2p": "offline",
+            "p2p": "offline", "has_peers": null,
+            "outgoing_connections_count": null, "incoming_connections_count": null,
             "public_incoming_socket_count": null, "public_outgoing_socket_count": null,
             "tor_incoming_socket_count": null, "tor_outgoing_socket_count": null,
             "white_peerlist_size": null, "grey_peerlist_size": null

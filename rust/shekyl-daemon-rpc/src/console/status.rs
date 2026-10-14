@@ -156,11 +156,12 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     let status = info.node.shown();
     let connections = status.map_or_else(
         || "connections not disclosed".to_owned(),
-        |status| {
-            format!(
-                "{}(out)+{}(in) connections",
-                status.outgoing_connections_count, status.incoming_connections_count
-            )
+        |status| match status.connections {
+            shekyl_rpc_types::StatusConnections::Running { outgoing, incoming } => {
+                format!("{outgoing}(out)+{incoming}(in) connections")
+            }
+            // Offline is the state, not zero connections (Rick, 2026-10-14).
+            shekyl_rpc_types::StatusConnections::Offline => "P2P: offline".to_owned(),
         },
     );
     let mining_text = match &mining {

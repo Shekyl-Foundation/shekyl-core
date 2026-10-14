@@ -1536,8 +1536,8 @@ fn the_3_53_get_info_vectors_are_their_predecessors_with_the_two_amounts_as_stri
 /// any count (Rick, 2026-10-14). Each running fixture's successor is its
 /// predecessor plus exactly `"p2p": "running"`; the restricted fixture withholds
 /// Peers and has no successor. The offline fixture is the peerless one
-/// started offline: `offline` true, `"p2p": "offline"`, and the six counts
-/// gone, not zeroed.
+/// started offline: `offline` true, `"p2p": "offline"`, and `has_peers`, the
+/// two connection counts and the six Peers counts gone, not zeroed.
 #[test]
 fn the_3_56_get_info_vectors_say_whether_p2p_runs_before_any_count() {
     for (before_raw, after_raw) in [
@@ -1560,7 +1560,7 @@ fn the_3_56_get_info_vectors_say_whether_p2p_runs_before_any_count() {
         assert_eq!(
             derived,
             parsed(after_raw),
-            "the successor adds exactly p2p: on"
+            "the successor adds exactly p2p: running"
         );
     }
     let mut derived = parsed(include_str!(
@@ -1570,6 +1570,9 @@ fn the_3_56_get_info_vectors_say_whether_p2p_runs_before_any_count() {
     object.insert("offline".to_owned(), true.into());
     object.insert("p2p".to_owned(), "offline".into());
     for key in [
+        "has_peers",
+        "outgoing_connections_count",
+        "incoming_connections_count",
         "public_incoming_socket_count",
         "public_outgoing_socket_count",
         "tor_incoming_socket_count",
@@ -2278,8 +2281,9 @@ fn fee_v3_is_v2_with_the_bridge_slot_removed() {
 mod get_info {
     use super::{assert_parity, parsed, tagged_hash};
     use shekyl_rpc_types::{
-        GetInfoResponse, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost, InfoIdentity,
-        InfoP2p, InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
+        GetInfoResponse, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
+        InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
+        StatusConnections,
     };
     use shekyl_units::AtomicUnits;
 
@@ -2296,9 +2300,8 @@ mod get_info {
                 target_height: Nullable::value(1_234_567),
                 synchronized: true,
                 busy_syncing: false,
-                offline: false,
                 following_degraded: false,
-                has_peers: true,
+                p2p: HealthP2p::Running { has_peers: true },
             },
             identity: InfoIdentity {
                 protocol_version: 3,
@@ -2326,8 +2329,10 @@ mod get_info {
                 free_space: 123_456_789_012,
                 database_size: 7 * 1024 * 1024 * 1024 + 1,
                 version: "3.1.0-oracle".to_owned(),
-                outgoing_connections_count: 8,
-                incoming_connections_count: 12,
+                connections: StatusConnections::Running {
+                    outgoing: 8,
+                    incoming: 12,
+                },
                 alt_blocks_count: 3,
                 rpc_connections_count: 0,
             }),
@@ -2370,12 +2375,14 @@ mod get_info {
         built.health.synchronized = false;
         // Nobody to learn a target from, and nobody to relay through.
         built.health.target_height = Nullable::NULL;
-        built.health.has_peers = false;
+        built.health.p2p = HealthP2p::Running { has_peers: false };
         let Hidden::Shown(node) = &mut built.node else {
             unreachable!("the fixture shows Status")
         };
-        node.outgoing_connections_count = 0;
-        node.incoming_connections_count = 0;
+        node.connections = StatusConnections::Running {
+            outgoing: 0,
+            incoming: 0,
+        };
         let Hidden::Shown(InfoP2p::Running(peers)) = &mut built.peers else {
             unreachable!("the fixture shows a running node's Peers")
         };
@@ -2390,20 +2397,19 @@ mod get_info {
     }
 
     /// **A daemon started offline reports the state, never a zero**
-    /// (Rick, 2026-10-14; 3.56). Its Peers part is `"p2p": "offline"` with no
-    /// count, and Health's `offline` agrees with it.
+    /// (Rick, 2026-10-14; 3.56). Health carries `offline: true` and no
+    /// `has_peers`, Status no connection count, and Peers is
+    /// `"p2p": "offline"` with no count.
     #[test]
     fn offline_matches_the_vector() {
         let mut built = synced();
         built.health.synchronized = false;
         built.health.target_height = Nullable::NULL;
-        built.health.has_peers = false;
-        built.health.offline = true;
+        built.health.p2p = HealthP2p::Offline;
         let Hidden::Shown(node) = &mut built.node else {
             unreachable!("the fixture shows Status")
         };
-        node.outgoing_connections_count = 0;
-        node.incoming_connections_count = 0;
+        node.connections = StatusConnections::Offline;
         built.peers = Hidden::Shown(InfoP2p::Offline);
         assert_parity(include_str!("vectors/rpc/get_info_offline_v1.json"), &built);
     }
@@ -2429,18 +2435,47 @@ mod get_info {
         assert!(refusal.contains("without `p2p`"), "got {refusal:?}");
     }
 
-    /// `p2p` and Health's `offline` both read the daemon's configuration,
-    /// so a reply where they disagree is refused in both directions.
+    /// `p2p`, `has_peers` and the Status connection counts each read the
+    /// daemon's configuration beside `offline`. Each disagreement is refused
+    /// on its own: every case below differs from a valid reply in that one
+    /// part only.
     #[test]
-    fn p2p_that_disagrees_with_offline_is_refused() {
-        let mut off = parsed(include_str!("vectors/rpc/get_info_offline_v1.json"));
-        off["offline"] = false.into();
-        let refusal = decode(&off).expect_err("offline agrees with offline: true");
-        assert!(refusal.contains("disagrees"), "got {refusal:?}");
-        let mut on = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
-        on["offline"] = true.into();
-        let refusal = decode(&on).expect_err("a running node is not offline");
-        assert!(refusal.contains("disagrees"), "got {refusal:?}");
+    fn each_part_that_disagrees_with_offline_is_refused() {
+        let offline = parsed(include_str!("vectors/rpc/get_info_offline_v1.json"));
+        let running = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let refused = |doc: &serde_json::Value, needle: &str| {
+            let refusal = decode(doc).expect_err("a disagreement must not decode");
+            assert!(refusal.contains(needle), "{needle}: got {refusal:?}");
+        };
+
+        // has_peers beside offline: true, and its absence beside false.
+        let mut doc = offline.clone();
+        doc["has_peers"] = false.into();
+        refused(&doc, "`has_peers` disagrees");
+        let mut doc = running.clone();
+        doc.as_object_mut().unwrap().remove("has_peers");
+        refused(&doc, "`has_peers` disagrees");
+
+        // Connection counts beside offline: true.
+        let mut doc = offline.clone();
+        doc["outgoing_connections_count"] = 0.into();
+        doc["incoming_connections_count"] = 0.into();
+        refused(&doc, "connection counts disagree");
+
+        // p2p alone disagreeing: a running Health and Status with an
+        // offline Peers part, and the reverse.
+        let mut doc = running.clone();
+        doc["p2p"] = "offline".into();
+        for key in PEERS_KEYS {
+            doc.as_object_mut().unwrap().remove(key);
+        }
+        refused(&doc, "`p2p` disagrees");
+        let mut doc = offline.clone();
+        doc["p2p"] = "running".into();
+        for key in PEERS_KEYS {
+            doc[key] = 0.into();
+        }
+        refused(&doc, "`p2p` disagrees");
     }
 
     /// A restricted reply withholds Status and Peers, so the vector decodes

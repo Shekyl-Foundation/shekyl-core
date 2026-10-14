@@ -67,6 +67,14 @@
 //! count of zero would read as a running node with no peers. The decoder
 //! refuses `"offline"` with any count, `"running"` without all six, a count with no
 //! `p2p`, and an `"offline"` that disagrees with Health's `offline`.
+//!
+//! The same holds on every part (Rick, 2026-10-14). An offline daemon's
+//! Health carries `offline: true` and no `has_peers` ([`HealthP2p`]), and its
+//! Status carries no connection counts ([`StatusConnections`]): it has no
+//! peers and no connections by configuration, and `false` or `0` would read
+//! as a running node that has none. The decoder refuses `has_peers` beside
+//! `offline: true`, its absence beside `offline: false`, and connection
+//! counts that disagree with `offline` in the same way.
 
 use serde::{Deserialize, Serialize};
 use shekyl_units::{AtomicUnits, AtomicUnitsString};
@@ -116,19 +124,52 @@ pub struct InfoHealth {
     pub target_height: Nullable<u64>,
     pub synchronized: bool,
     pub busy_syncing: bool,
-    pub offline: bool,
     /// The node is knowingly not following the heaviest chain it has seen
     /// (C2-R1b F-1(a)); sticky for the life of the process.
     pub following_degraded: bool,
-    /// Whether this node has at least one peer it can relay through: a
-    /// session that has finished its handshake, on any connector (RK-D14,
-    /// RK-Q4).
-    ///
-    /// Health, so every caller is told. It is a boolean and never a count:
-    /// how many peers a node has describes the node and belongs to Status,
-    /// which a daemon may withhold. A reader that wants "can this node
-    /// relay" reads this, and never infers it from the Status counts.
-    pub has_peers: bool,
+    /// Whether this daemon runs P2P, and when it does, whether it has a peer
+    /// (`offline` and `has_peers` on the wire).
+    pub p2p: HealthP2p,
+}
+
+/// Health's P2P state: the daemon's configuration, and when P2P runs,
+/// whether it has a peer (Rick, 2026-10-14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthP2p {
+    /// The daemon was started offline (`--offline`). It has no peers by
+    /// configuration, so there is no `has_peers` to report.
+    Offline,
+    /// P2P runs.
+    Running {
+        /// Whether this node has at least one peer it can relay through: a
+        /// session that has finished its handshake, on any connector
+        /// (RK-D14, RK-Q4).
+        ///
+        /// Health, so every caller is told. It is a boolean and never a
+        /// count: how many peers a node has describes the node and belongs
+        /// to Status, which a daemon may withhold. A reader that wants "can
+        /// this node relay" reads this, and never infers it from the Status
+        /// counts.
+        has_peers: bool,
+    },
+}
+
+impl HealthP2p {
+    /// Whether the daemon was started offline.
+    #[must_use]
+    pub const fn is_offline(self) -> bool {
+        matches!(self, Self::Offline)
+    }
+
+    /// Whether the node has a peer, when P2P runs; `None` when it is
+    /// offline, which is a state and not an answer of `false`.
+    #[must_use]
+    pub const fn has_peers(self) -> Option<bool> {
+        match self {
+            Self::Offline => None,
+            Self::Running { has_peers } => Some(has_peers),
+        }
+    }
 }
 
 /// Which protocol this daemon speaks.
@@ -215,10 +256,22 @@ pub struct InfoStatus {
     pub free_space: u64,
     pub database_size: u64,
     pub version: String,
-    pub outgoing_connections_count: u64,
-    pub incoming_connections_count: u64,
+    /// The handshaken sessions per direction, or the state offline
+    /// (`outgoing_connections_count` and `incoming_connections_count` on
+    /// the wire, both absent when offline).
+    pub connections: StatusConnections,
     pub alt_blocks_count: u64,
     pub rpc_connections_count: u64,
+}
+
+/// Status's connection counts, or the state offline (Rick, 2026-10-14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusConnections {
+    /// The daemon was started offline: it has no connections by
+    /// configuration, and no count stands for them.
+    Offline,
+    /// Handshaken sessions on every connector, per direction.
+    Running { outgoing: u64, incoming: u64 },
 }
 
 /// The Peers part: whether this daemon runs P2P, and when it does, its
@@ -299,6 +352,12 @@ pub enum GetInfoShapeError {
     /// `p2p` disagrees with Health's `offline`: both read the daemon's
     /// configuration, so they cannot differ.
     P2pDisagreesWithOffline { offline: bool },
+    /// `has_peers` and `offline` disagree: an offline daemon carries no
+    /// `has_peers`, and a running one always does.
+    HasPeersDisagreesWithOffline { offline: bool },
+    /// The Status part's connection counts disagree with `offline`: absent
+    /// for an offline daemon, both present for a running one.
+    ConnectionsDisagreeWithOffline { offline: bool },
 }
 
 impl core::fmt::Display for GetInfoShapeError {
@@ -325,6 +384,16 @@ impl core::fmt::Display for GetInfoShapeError {
                 f,
                 "`p2p` disagrees with `offline: {offline}`: both are the daemon's configuration"
             ),
+            Self::HasPeersDisagreesWithOffline { offline } => write!(
+                f,
+                "`has_peers` disagrees with `offline: {offline}`: an offline daemon carries no \
+                 `has_peers`, and a running one always does"
+            ),
+            Self::ConnectionsDisagreeWithOffline { offline } => write!(
+                f,
+                "the connection counts disagree with `offline: {offline}`: an offline daemon \
+                 carries none, and a running one carries both"
+            ),
         }
     }
 }
@@ -349,7 +418,8 @@ struct GetInfoWire {
     busy_syncing: bool,
     offline: bool,
     following_degraded: bool,
-    has_peers: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    has_peers: Option<bool>,
 
     // Identity.
     protocol_version: u64,
@@ -498,29 +568,85 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             restricted,
         } = wire;
 
-        let node = hidden_part!(
+        // Health's P2P state: `has_peers` exactly when P2P runs.
+        let p2p_health = match (offline, has_peers) {
+            (true, None) => HealthP2p::Offline,
+            (false, Some(has_peers)) => HealthP2p::Running { has_peers },
+            _ => return Err(GetInfoShapeError::HasPeersDisagreesWithOffline { offline }),
+        };
+        let status_rest = hidden_part!(
             "status",
             [
                 start_time,
                 free_space,
                 database_size,
                 version,
-                outgoing_connections_count,
-                incoming_connections_count,
                 alt_blocks_count,
                 rpc_connections_count,
             ],
-            InfoStatus {
+            (
                 start_time,
                 free_space,
                 database_size,
                 version,
-                outgoing_connections_count,
-                incoming_connections_count,
                 alt_blocks_count,
                 rpc_connections_count,
-            }
+            )
         );
+        let node = match status_rest {
+            Hidden::Withheld => {
+                if outgoing_connections_count.is_some() || incoming_connections_count.is_some() {
+                    return Err(GetInfoShapeError::PartialPart {
+                        part: "status",
+                        missing: "start_time",
+                    });
+                }
+                Hidden::Withheld
+            }
+            Hidden::Shown((
+                start_time,
+                free_space,
+                database_size,
+                version,
+                alt_blocks_count,
+                rpc_connections_count,
+            )) => {
+                let connections = match (
+                    offline,
+                    outgoing_connections_count,
+                    incoming_connections_count,
+                ) {
+                    (true, None, None) => StatusConnections::Offline,
+                    (true, _, _) => {
+                        return Err(GetInfoShapeError::ConnectionsDisagreeWithOffline { offline })
+                    }
+                    (false, Some(outgoing), Some(incoming)) => {
+                        StatusConnections::Running { outgoing, incoming }
+                    }
+                    (false, None, _) => {
+                        return Err(GetInfoShapeError::PartialPart {
+                            part: "status",
+                            missing: "outgoing_connections_count",
+                        })
+                    }
+                    (false, _, None) => {
+                        return Err(GetInfoShapeError::PartialPart {
+                            part: "status",
+                            missing: "incoming_connections_count",
+                        })
+                    }
+                };
+                Hidden::Shown(InfoStatus {
+                    start_time,
+                    free_space,
+                    database_size,
+                    version,
+                    connections,
+                    alt_blocks_count,
+                    rpc_connections_count,
+                })
+            }
+        };
         if node.shown().is_some_and(|status| status.version.is_empty()) {
             return Err(GetInfoShapeError::EmptyVersion);
         }
@@ -583,9 +709,8 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 target_height,
                 synchronized,
                 busy_syncing,
-                offline,
                 following_degraded,
-                has_peers,
+                p2p: p2p_health,
             },
             identity: InfoIdentity { protocol_version },
             chain: InfoChain {
@@ -640,9 +765,9 @@ impl From<GetInfoResponse> for GetInfoWire {
             target_height: health.target_height,
             synchronized: health.synchronized,
             busy_syncing: health.busy_syncing,
-            offline: health.offline,
+            offline: health.p2p.is_offline(),
             following_degraded: health.following_degraded,
-            has_peers: health.has_peers,
+            has_peers: health.p2p.has_peers(),
             protocol_version: identity.protocol_version,
             wide_difficulty: HexU128(chain.difficulty),
             wide_cumulative_difficulty: HexU128(chain.cumulative_difficulty),
@@ -660,8 +785,14 @@ impl From<GetInfoResponse> for GetInfoWire {
             start_time: node.as_ref().map(|n| n.start_time),
             free_space: node.as_ref().map(|n| n.free_space),
             database_size: node.as_ref().map(|n| n.database_size),
-            outgoing_connections_count: node.as_ref().map(|n| n.outgoing_connections_count),
-            incoming_connections_count: node.as_ref().map(|n| n.incoming_connections_count),
+            outgoing_connections_count: node.as_ref().and_then(|n| match n.connections {
+                StatusConnections::Running { outgoing, .. } => Some(outgoing),
+                StatusConnections::Offline => None,
+            }),
+            incoming_connections_count: node.as_ref().and_then(|n| match n.connections {
+                StatusConnections::Running { incoming, .. } => Some(incoming),
+                StatusConnections::Offline => None,
+            }),
             alt_blocks_count: node.as_ref().map(|n| n.alt_blocks_count),
             rpc_connections_count: node.as_ref().map(|n| n.rpc_connections_count),
             version: node.map(|n| n.version),

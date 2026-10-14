@@ -35,15 +35,21 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
                 // Whether the daemon runs P2P at all: its configuration,
                 // told to every caller. The reply's decoder holds it equal
                 // to the Peers part's state (Rick, 2026-10-14).
-                "p2p": if info.health.offline { "offline" } else { "running" },
+                "p2p": if info.health.p2p.is_offline() { "offline" } else { "running" },
             });
             // Status is wholly shown or wholly absent, and a restricted
             // daemon withholds it. A withheld part is not a zero, so the
             // keys stay off the object and the line below says the part
             // was not disclosed. A shown zero is a count.
+            // An offline daemon's Status carries no count: the `p2p` member
+            // above says why, and the line below prints the state.
             if let Some(status) = info.node.shown() {
-                body["outgoing_connections_count"] = json!(status.outgoing_connections_count);
-                body["incoming_connections_count"] = json!(status.incoming_connections_count);
+                if let shekyl_rpc_types::StatusConnections::Running { outgoing, incoming } =
+                    status.connections
+                {
+                    body["outgoing_connections_count"] = json!(outgoing);
+                    body["incoming_connections_count"] = json!(incoming);
+                }
             }
             Ok(body)
         }

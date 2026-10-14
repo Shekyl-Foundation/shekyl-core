@@ -597,6 +597,7 @@ fn project_alarm(reason: AlarmReason) -> WatchdogAlarmReason {
             WatchdogAlarmReason::PresentButUnconfirmedPastHorizon
         }
         AlarmReason::DaemonPeerless => WatchdogAlarmReason::DaemonPeerless,
+        AlarmReason::DaemonOffline => WatchdogAlarmReason::DaemonOffline,
     }
 }
 

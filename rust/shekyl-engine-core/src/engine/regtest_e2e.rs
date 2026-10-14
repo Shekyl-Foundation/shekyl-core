@@ -501,7 +501,7 @@ impl RegtestDaemon {
                         self.offline,
                         "get_info's P2P state must be the daemon's configuration; got {state:?}"
                     );
-                    assert_eq!(info.health.offline, self.offline);
+                    assert_eq!(info.health.p2p.is_offline(), self.offline);
                     return;
                 }
                 Err(e) => last_err = format!("{e:?}"),

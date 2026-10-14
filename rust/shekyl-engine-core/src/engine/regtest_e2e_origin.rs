@@ -297,18 +297,16 @@ async fn restricted_listener_is_withheld_status_and_capped_by_native_handlers() 
     // The two listeners describe the same chain.
     assert_eq!(restricted_info.health.height, admin_info.health.height);
     // Health is told to both. This daemon runs `--offline`, which binds no
-    // p2p hub at all. It still answers, and says it has no peers: offline
-    // is configuration, so the handler does not ask a board that is not
+    // p2p hub at all. It still answers, and says it is offline: a state,
+    // with no `has_peers` beside it (Rick, 2026-10-14). Offline is
+    // configuration, so the handler does not ask a board that is not
     // there. A handler that asked would refuse this request, and the
     // harness would never have seen the daemon come up.
     for (listener, info) in [("restricted", &restricted_info), ("admin", &admin_info)] {
-        assert!(
-            info.health.offline,
-            "{listener}: the harness starts this daemon offline"
-        );
-        assert!(
-            !info.health.has_peers,
-            "{listener}: an offline daemon has no peers, and says so"
+        assert_eq!(
+            info.health.p2p,
+            shekyl_rpc_types::HealthP2p::Offline,
+            "{listener}: the harness starts this daemon offline, and it says so"
         );
     }
 
@@ -400,7 +398,8 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
         .await
         .expect("admin get_info");
     assert!(
-        restricted_info.health.has_peers && admin_info.health.has_peers,
+        restricted_info.health.p2p.has_peers() == Some(true)
+            && admin_info.health.p2p.has_peers() == Some(true),
         "a node with a handshaken session has peers, on both listeners"
     );
     assert_eq!(
@@ -410,12 +409,14 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
          so `has_peers` above did not come from them"
     );
     assert!(
-        admin_info
-            .node
-            .shown()
-            .expect("the admin listener is shown Status")
-            .outgoing_connections_count
-            >= 1,
+        matches!(
+            admin_info
+                .node
+                .shown()
+                .expect("the admin listener is shown Status")
+                .connections,
+            shekyl_rpc_types::StatusConnections::Running { outgoing, .. } if outgoing >= 1
+        ),
         "the admin listener reports the session the pair was started with"
     );
 

@@ -1174,9 +1174,8 @@ fn info_reply(height: u64) -> String {
             target_height: shekyl_rpc_types::Nullable::NULL,
             synchronized: true,
             busy_syncing: false,
-            offline: false,
             following_degraded: false,
-            has_peers: true,
+            p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         },
         identity: InfoIdentity {
             protocol_version: 3,
@@ -1203,8 +1202,10 @@ fn info_reply(height: u64) -> String {
             free_space: 1 << 40,
             database_size: 1 << 30,
             version: "3.1.0-test".to_owned(),
-            outgoing_connections_count: 8,
-            incoming_connections_count: 3,
+            connections: shekyl_rpc_types::StatusConnections::Running {
+                outgoing: 8,
+                incoming: 3,
+            },
             alt_blocks_count: 0,
             rpc_connections_count: 1,
         }),
