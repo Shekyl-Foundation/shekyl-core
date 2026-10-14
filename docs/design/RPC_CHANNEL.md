@@ -20,7 +20,9 @@ pre-flight's. `RT-O16…RT-O22` are the RT-W9 pre-flight's
 ([`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md)),
 ruled 2026-10-11. `RT-O16`, `RT-O18`, `RT-O20` and the sequencing half of
 `RT-O21` were re-ruled 2026-10-12 (PR #1034); the re-rulings are what is
-built. No new family (rule 94).
+built. `RT-O23…RT-O27` are the runtime option requests' (§6.4), posed
+by the daemon-configuration cutover on 2026-10-14 and open until Rick
+confirms the direction recorded there. No new family (rule 94).
 **Decision authority:** Rick.
 **Relationship to R0:** R0's §1 premise (every RPC leg is
 operator-to-operator; the adversary is the path, never the peer) and §3
@@ -890,14 +892,15 @@ network, never a node.
 |---|---|
 | `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, RT-O9.4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, RT-O9.4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
 | `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, RT-O9.3) |
-| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), the RPC and protocol contract versions (the nettype comes from `get_version`) |
-| `status` | Facts about **this node**, each a fingerprint: build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_limit`; `/get_net_stats` |
-| `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes |
+| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), the RPC and protocol contract versions (the nettype comes from `get_version`); `option_show`, whose rows are each present only when the connection holds the grant the row names (§6.4, RT-O24) |
+| `status` | Facts about **this node**, each a fingerprint: build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_net_stats`; `option_show`'s `status` rows, this node's rate limits, inbound cap and log settings (§6.4); `/get_limit` until the daemon-config cutover deletes it |
+| `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes; `option_show`'s `peers` rows: the peer, closed-peer and ban rows (§6.4) |
 | `submit` | `/submit_transaction` |
 | `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block`, `calc_pow` (a computation service; moved from the admin set, RT-O9.4) |
 | `mining-control` | This node's own miner: `/start_mining`, `/stop_mining`, `/mining_status`, `/set_log_hash_rate` |
 | `bans` | `set_bans`, `get_bans`, `banned` |
-| `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `/pop_blocks`, `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers`, `/in_peers`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard` |
+| `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `/pop_blocks`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard`; **`option_set`, which is setting every row the option table marks runtime**, so marking a row runtime widens this grant (§6.4, RT-O24). `/set_log_level`, `/set_log_categories`, `/set_limit`, `/out_peers` and `/in_peers` are here until the daemon-config cutover deletes them |
+| `config` | The node's configuration: `option_show`'s default rows, every row that names no other grant, including everything that describes the host or links the operator (the onion, SOCKS endpoints, paths, notify commands, `mine-address`). A secret's value is in no grant (§6.4, RT-O24). Carried by the `admin` preset only |
 | `enrol` | `rpc-enrol`, `rpc-revoke` (RT-O9.1). Carried by the `admin` preset only |
 
 *Two notes on `health`, both owned by the RK-5c round.*
@@ -961,7 +964,7 @@ an explicit list of grants):
 | `miner` | `view` + `mining-work` |
 | `admin` | every grant, `enrol` included — and **neither** non-grant class |
 
-**`status` and `peers` are in no preset but `admin`.** They are granted
+**`status`, `peers` and `config` are in no preset but `admin`.** They are granted
 only when the operator names them, so publishing a node's uptime or its
 peers is a deliberate act, not something a consumer inherits from the
 preset it landed in. The plaintext loopback listener is fixed at `view`
@@ -1095,6 +1098,221 @@ the admin listener.
   are then set from measured cost on the Pi 4, not guessed.
 - **A request over a bound is refused with the bound named**, never
   silently truncated.
+
+### 6.4 Runtime options: `option_set` and `option_show` (RT-O23…RT-O27)
+
+**Status: Round 0, 2026-10-14. Direction given by Rick the same day,
+synthesized here with the tree at `1b7803f69a` (`dev`); ruled when he
+confirms.** Three points come from the tree rather than from the
+direction, and each says so.
+
+**Origin.** DC-Q16 (Rick, 2026-10-14; the daemon-configuration cutover,
+PR #1066, `DAEMON_CONFIG_CUTOVER.md` §2.7) replaces the per-setting runtime
+endpoints with one generic set request and one generic show request. Each
+carries an option's name and its value as text in the input grammar's
+syntax, built by the option table's own constructor, the one the startup
+parse uses, and routed to the row's Rust owner. The grammar side is
+`INPUT_GRAMMAR.md` IG-12 and IG-Q38. RPC method names and wire shapes are
+outside the grammar (`INPUT_GRAMMAR.md` §1), so they are this round's. The
+daemon-config lane's brief posed them as RQ-1…RQ-5, numbered here
+RT-O23…RT-O27. The implementing PR is the daemon-config cutover's; it
+cites this section.
+
+**RT-O23 — names (RQ-1).** `option_set` and `option_show`: the grammar's
+own words (`option set`, `option show`, IG-3), so what an operator types
+and what a script calls are the same terms. One spelling each, no alias,
+as `request_archival_shard` was born
+([`json_rpc.rs:225-227`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs)).
+**JSON-RPC methods only, with no REST path:** one way to call each, not
+two. Every route they replace is a REST path today.
+
+**RT-O24 — grants (RQ-2).**
+
+- **`option_set` is in `node`.** Every endpoint it replaces is in `node`
+  today. Because the method is generic, marking a row runtime later
+  widens what every `node` holder can do, with no new endpoint to review.
+  So **`node` includes setting every runtime row**, and §6.1's `node` row
+  says so. The grammar table's Runtime column is therefore a grant
+  decision and is reviewed as one.
+- **`option_show` discloses each row under the grant the row names.** In
+  place of IG-9's yes/no `view` field, each row names one of four grants:
+  - `health` — what `view: yes` meant. A row may name `health` only if it
+    passes §6.1's line for that grant: a client needs it to decide whether
+    it can use the node now, and it says nothing lasting about the node.
+    No row does today.
+  - `status` — this node's rate limits, inbound cap and log settings
+    (`p2p-upload-max`, `p2p-download-max`, `p2p-inbound-max`, `log-level`,
+    `log-category`). `/get_limit` sits in `status` today, so its readers
+    keep the rate limits at the same grant.
+  - `peers` — the peer, closed-peer and ban rows.
+  - **`config`, the default** — every other row, including everything
+    that describes the host or links the operator: the onion, SOCKS
+    endpoints, paths, notify commands, `mine-address`. `config` is a new
+    grant, carried by the `admin` preset only, like `status` and `peers`.
+
+  A grant is a set of facts (§6.1), and this keeps it one. A dashboard
+  that wants the rate limits holds `status` and is never shown the onion,
+  the paths or the peers. Today every row is `view: no`
+  (`INPUT_GRAMMAR.md` §5), so every row starts as `config`, and no
+  decision anyone has made about a specific row changes. Changing the
+  field's shape now costs nothing; changing it later would be a
+  migration. **It changes IG-9, so it needs the same word in the grammar
+  lane.** The `status` assignments listed above are the second decision
+  that word carries. *From the tree:* the direction named rate limits, the
+  inbound cap and log level; `log-category` is placed beside `log-level`
+  here, since today one filter holds both
+  ([`filter.rs:107-131`](../../rust/shekyl-logging/src/filter.rs)).
+- **Who may call `option_show`:** like `get_info`, any connection holding
+  `health`; each row is present only when the connection holds the row's
+  grant. A row the caller may not see is **absent** from the reply, never
+  zeroed or emptied (§6.1, rule 43). A secret's value is never shown, at
+  any grant. No row is host-only (RT-O9.3).
+- ***From the tree:* the interim mapping, before RT-W10.** The methods
+  land on today's two listeners, before the channel exists. `option_set`
+  joins `RESTRICTED_METHODS`
+  ([`json_rpc.rs:49`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs))
+  and the specified list its gate test compares against
+  (`restricted_method_list_matches_the_specification`, `json_rpc.rs:718`),
+  so the restricted listener refuses it. `option_show` is served on both
+  listeners, and its rows are chosen through `Disclosure`
+  ([`info.rs:70`](../../rust/shekyl-daemon-rpc/src/info.rs)), which already
+  carries `status` and `peers` axes; it gains a `config` axis, set by
+  `Disclosure::FULL` and clear in `Disclosure::VIEW`. That is RK-5c's shape,
+  a value that can become a grant, so RT-W10 maps a connection's grants
+  onto it without rewriting the handler.
+
+**RT-O25 — wire shape (RQ-3).**
+
+- **`option_set`** takes `{"options": [{"name": …, "value": …}, …]}`; each
+  value is text in the grammar's syntax (`"512KiB/s"`, `"unlimited"`,
+  `"warn"`), the same text the command line and the file accept. It
+  applies **all or nothing**: every pair is parsed and built first, and
+  none applies if any fails. A refused request reports every refusal in
+  it, not the first; the startup file is likewise validated whole. A name
+  given twice, an unknown name and an empty list are each refused. The
+  reply lists each row it set, in the shape `option_show` uses, with
+  source `runtime`.
+- **All or nothing needs an infallible apply.** The rows go to different
+  owners: the link limiter, the zone host's admission and
+  `shekyl-logging`. Building every value first gives atomicity only if
+  handing a built value to its owner cannot fail. **Each owner's runtime
+  interface takes a built value and cannot fail.** Every refusal lives in
+  the constructor. *From the tree:* the logging owner does not meet this
+  yet. Its runtime path swaps the filter through a reload handle whose
+  `reload` returns a `Result`
+  ([`ffi.rs:639`](../../rust/shekyl-logging/src/ffi.rs)), and the handle
+  is reached only through the FFI module. The implementing PR gives the
+  owner a Rust interface that holds the handle for the life of the process.
+  PR #1069 (every log sink queued, so a log call never blocks) is in
+  flight and merges before the daemon-config cutover's PR-3; it changes the
+  sinks and leaves the filter and the reload path as they are, so this
+  finding stands on both trees and the interface is built on its result.
+- **`option_show`** takes an optional `{"names": [...]}`. With no names, it
+  returns every row the caller may see, in table order. Each row carries
+  `name`, `source` (`default`, `file`, `cli` or `runtime`), `runtime`
+  (whether `option_set` accepts it) and `value`, which is one of three
+  things:
+  - a string: the value as text in the grammar's syntax;
+  - `null`: the row has no value (unset);
+  - `{"secret": "set"}`: a secret that is set. Its text is never sent.
+
+  Neither an unset row nor a secret uses a member of the text domain
+  (rule 43: no string marker, and no boolean beside a value). Readers
+  decode `value` into a three-variant type and refuse any other shape. A
+  name the caller asked for but may not see is absent from the reply; an
+  unknown name is refused.
+- **What `option_show` prints, `option_set` accepts.** The text shown for
+  a value is valid input to `option_set` and builds the same value. A
+  property test over every runtime row holds this. *Found against the
+  grammar, for its lane:* two runtime rows default to unset with no way to
+  write "unset" as a value: `p2p-inbound-max` (integer ≥ 1, default unset)
+  and `log-category` (a map, default unset) (`INPUT_GRAMMAR.md` §5). An
+  operator who sets either cannot return it to its default without a
+  restart. **Every runtime row's default must be expressible as a value**,
+  like `unlimited`. For `log-category`, the inherited runtime path reads an
+  empty category list as "logging off"
+  ([`filter.rs:155-162`](../../rust/shekyl-logging/src/filter.rs)), an
+  in-band meaning (rule 43) that the generic set must not inherit. Its
+  "no overrides" needs its own spelling.
+- **Errors.** A configuration refusal carries the IG-11 diagnostic: its
+  stable code (`config.value.range`, the startup-only refusal, …), the
+  option, the source (`runtime`) and the named parameters. Its human
+  text comes from the one IG-11 renderer, so a client sees what the
+  startup parse would print. Today's error object has only `code` and
+  `message` ([`types.rs:53-56`](../../rust/shekyl-daemon-rpc/src/types.rs)).
+  The implementing PR therefore adds JSON-RPC 2.0's optional `data` member,
+  carrying the list of diagnostics, and one new numeric code for a
+  configuration refusal, the next free after `-25`
+  ([`archival.rs:84`](../../rust/shekyl-rpc-types/src/archival.rs)). It
+  bumps `CORE_RPC_VERSION` for both. A call outside the caller's grant is
+  refused as §6.2 says; that code is RT-W10's, not minted here.
+
+**RT-O26 — where the handlers live (RQ-4).** Both handlers are native in
+`shekyl-daemon-rpc` and never cross into C++. They take an options handle
+supplied by the composition root (`shekyl-daemon-image`), in the shape
+`request_archival_shard`'s facts already have (`AppState::shard_view`,
+[`server.rs:59`](../../rust/shekyl-daemon-rpc/src/server.rs)). The RPC
+crate depends on the options interface, not on the subsystems; the
+composition root wires each runtime row to its owner. No new FFI.
+
+**RT-O27 — what a change leaves behind (RQ-5).**
+
+- **One lock for the whole set operation**, not one per row. Per-row
+  locking breaks all-or-nothing: two multi-row sets, one ordered
+  upload-then-download and the other download-then-upload, can interleave
+  and leave a mix of both. `option_show` reads under the same lock, so a
+  reply never pairs one set's upload rate with another's download rate.
+- **Every applied set is logged once**: the caller (the enrolled key's
+  fingerprint, or the owner leg; until RT-W10, the listener), each row,
+  its old value and its new one. Nothing is persisted, and the daemon
+  never writes its config file.
+- **No row is both runtime and secret**, asserted by a gate on the table,
+  so the audit line's values can never carry a secret.
+- **Raising the log level at runtime never makes the log record the
+  host-only class** (stem data and unrelayed pool entries, RT-O9.3). An
+  enrolled key cannot read the log, but the data would sit on disk. This
+  is a check owned by `shekyl-logging`, not a block on this work.
+
+**What replaces what.** The implementing PR deletes each route below with
+its handler, and fixes its callers in the same PR.
+
+| Today | Grant today (§6.1) | After |
+|---|---|---|
+| `/set_limit` | `node` | `option_set` on `p2p-upload-max`, `p2p-download-max` |
+| `/in_peers` | `node` | `option_set` on `p2p-inbound-max` |
+| `/out_peers` | `node` | deleted with its option; the outbound degree is a protocol constant |
+| `/set_log_level`, `/set_log_categories` | `node` | `option_set` on `log-level`, `log-category` |
+| `/get_limit` | `status` | `option_show`; the rate-limit rows are `status` (RT-O24) |
+
+Census at `1b7803f69a`: the routes
+([`server.rs:267-354`](../../rust/shekyl-daemon-rpc/src/server.rs)), the
+router (`:413-432`) and the path list (`:664-688`); the forwarding handlers
+([`json.rs:293`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
+`:389-394`, through the dispatch at `:75-91`). Callers: the Rust console's
+`print_net_stats`, which reads `/get_limit`
+([`console/mod.rs:1121-1164`](../../rust/shekyl-daemon-rpc/src/console/mod.rs))
+with its tests (`console/tests.rs:1130-1170`); the Python framework
+([`daemon.py:360-455`](../../utils/python-rpc/framework/daemon.py)); the
+C++ client test
+([`daemon_rpc_client.cpp:107-155`](../../tests/unit_tests/daemon_rpc_client.cpp));
+the regtest check of `print_net_stats`
+([`regtest_e2e.rs:5817-5876`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs));
+and the C++ console
+([`rpc_command_executor.cpp`](../../src/daemon/rpc_command_executor.cpp)),
+which dies with R8 (`INPUT_GRAMMAR.md` IG-Q25). **`/get_limit` is replaced,
+not ported:** it leaves RK-8 (`DAEMON_RPC_KV_CUTOVER.md` §2), and the
+comments at `regtest_e2e.rs:5866` and `console/mod.rs:1123` that say RK-8
+migrates it are corrected by the implementing PR.
+
+*Not decided here: `/pop_blocks`.* `DAEMON_CONFIG_CUTOVER.md` §4 (PR #1066) leaves to
+this lane whether the route goes with the console word, and IG-Q25 gives
+the word no successor "because tests make real reorganisations through
+production pathways". Three callers use the route today: the regtest
+roll-back helper
+([`regtest_e2e.rs:777-785`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs)),
+the Python framework (`daemon.py:217-221`) and the CT-2 fixture generator
+([`gen_ct2_fixture.py:159`](../../rust/shekyl-curve-tree/tests/fixtures/gen_ct2_fixture.py)).
+The route stays in `node` until a ruling decides it.
 
 ---
 
@@ -1442,7 +1660,10 @@ construction) instead of loopback TCP.
   in the tree, and the lane declined to substitute a model and report it as
   item 1; item 7 is unimplemented.
 
-## 10. Open items — all ruled
+## 10. Open items
+
+Every item below is ruled. `RT-O23…RT-O27` (§6.4) are open: Rick's
+direction of 2026-10-14 is recorded there, to be confirmed as the ruling.
 
 - **A finding against WP-D8, owned where WP-D8 lives.** The same
   `create_owner_only_file` writes the **exported seed file** with no
