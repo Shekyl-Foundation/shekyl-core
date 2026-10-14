@@ -475,7 +475,8 @@ address is one uniform member of that connector's disclosure
 population (slice 1 brief §5a), with no special position; our clearnet
 entry is included when it is known, as today. A node discloses nothing
 on a connector until its eligible white list reaches
-`white_diversity_floor`. The timed-sync self-insertion
+`white_diversity_floor`, except under `--small-network`, the one ruled
+exception (slice 1 brief §5a; brief revision 4 §2.6). The timed-sync self-insertion
 (`net_node.inl:2717` to `:2735`, `outgoing_to_same_zone` inserting
 `zone.m_our_address` into the peerlist it sends) is deleted at the
 cutover; it is in the deletion table below. The ProxyMark rerun
@@ -920,6 +921,9 @@ keep the callers named below.
 | **C++ this PR adds: the `levin_commands_handler` virtual and `commands_handler()`** | `contrib/epee/include/net/levin_base.h`, `levin_protocol_handler_async.h` | The same slice. `rg -n -e on_outbound_handshake -e commands_handler contrib/epee` hits both until then |
 | **C++ this PR adds: `seam_link::context_mut()`** | `src/p2p/seam_endpoint.h` | The same slice |
 | **C++ this PR adds: the `disclose` adapter** | `zone_server.h` | slice 4, with the two senders |
+| **C++ this PR adds (revision 4 §2.6): the `--small-network` descriptor** | `arg_small_network`, `net_node.cpp`; its `extern`, `net_node.h`. The one ruled exception to "no new daemon option in C++": a yes/no pushed into Rust and nothing else; the working name may be renamed by the daemon-config grammar | deleted by the daemon-config slice |
+| **C++ this PR adds (revision 4 §2.6): the `--small-network` `add_arg`** | `net_node.inl`, beside the other `add_arg` lines | deleted by the daemon-config slice |
+| **C++ this PR adds (revision 4 §2.6): the `--small-network` push** | `net_node.inl`, one call, `shekyl_peerlist_small_network()`, beside the other config pushes; held for the dialer's build like them | deleted by the daemon-config slice |
 | **C++ this PR adds: the `admit_operator_peer` and `note_own_address` adapters** | `zone_server.h` | the daemon-config slice |
 | **C++ this PR adds: `shekyl_core_publish_tip` in `blockchain.cpp`** | `Blockchain::update_next_cumulative_weight_limit`, one call | the DRS store cutover, or the chain-sync slice |
 | **Config push this PR adds (Rick, 2026-10-13, §3.1 review): `shekyl_peerlist_set_own_address`, through the `note_own_address` adapter** | the `m_our_address` assignment in `init`: the operator onion of `--anonymous-inbound` is parsed only in C++, so it reaches the lists as a config push. The per-boot onion does not cross (`daemon_tor_ffi.rs` hands it to the lists) | the daemon-config slice, which parses the option in Rust |

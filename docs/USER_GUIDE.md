@@ -173,6 +173,7 @@ or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
 | `--out-peers <n>` | Maximum outbound peer connections |
 | `--in-peers <n>` | Maximum inbound peer connections |
 | `--add-peer <host:port>` | Manually add a peer |
+| `--small-network` | For bootstrapping or testing a network smaller than 48 nodes: this node discloses its known peers and its own address to peers before the usual floor of 48 confirmed peers is reached. It ends after 24 hours, or when the node knows 48 confirmed peers, whichever comes first; a restart starts it again. A flagged node is recognisable while the flag holds |
 | `--ban-list <path>` | File of banned IP addresses |
 
 **Background operation**

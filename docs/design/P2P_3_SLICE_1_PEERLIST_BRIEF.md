@@ -495,6 +495,38 @@ sample already drawn is served until the window ends even if white
 falls below the floor meanwhile (F1), since a reply that changed
 mid-window would tell the requester what changed.
 
+**The one ruled exception: `--small-network` (Rick, 2026-10-13, PR-3
+brief revision 4 §2.6; landed in #1056 `3603dbace`).** A network of
+fewer than 48 nodes never reaches the floor, so under the rule above no
+node discloses and discovery cannot start; the first §4 run of PR-3
+showed it on three nodes, and the testnet is on the order of ten. With
+the flag, a connector whose white is below the floor still discloses a
+uniform draw of `min(DISCLOSE_COUNT, population)` over white plus this
+node's own address, the refused set filtering it as always. *Who
+triggers it, who benefits:* the local operator, for the network's
+discovery while it boots; no remote party can set, extend or end it,
+and a peer can push white toward the floor only through this node's own
+dials, which only ends the flag early. *Span and end:* on each connector
+the flag ends at whichever comes first — `SMALL_NETWORK_SPAN_NANOS` (24
+hours from the moment the flag reaches the lists at startup; its own
+constant, not `DISCLOSE_WINDOW_NANOS`, and a restart starts it again) or
+the first time that connector's white count reaches the floor, checked
+at every white write and not only at a disclosure; one connector
+reaching the floor does not end the flag on another; once ended it stays
+ended for the run and the rules above apply. *No cache:* every draw
+under the flag is fresh and none is stored as the window's sample,
+because the first draw at boot would hold about one address and the
+24-hour cache would serve it for the flag's whole life. *Costs,
+accepted:* a flagged node is recognisable, since it answers where an
+unflagged node returns nothing; and because every draw is fresh, a peer
+that asks repeatedly learns all of that connector's white, which is
+under 48 addresses while the flag holds — the price of discovery on a
+small network. A network that stays below 48 stops discovering after
+the first day, and nodes that join later are found only through nodes
+whose flag still runs; restarting nodes one at a time renews it. A
+testing and bootstrap flag, not an operating posture. The fill rules do
+not read it. Tests: `shekyl-peerlist/tests/small_network.rs`.
+
 An exception — leaving out this node's current outbound sessions —
 goes in only if a conformance measurement in PR-2 shows it helps:
 
