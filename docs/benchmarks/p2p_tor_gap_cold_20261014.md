@@ -1,0 +1,129 @@
+# Tor gap from cold first contact, 2026-10-14
+
+**Status: IN PROGRESS (run A read; run B running; the derivation and the
+spans change wait for Rick's reading of the numbers).** Ruled by Rick,
+2026-10-13: the Tor gap is re-derived from cold first contact, on two
+responders, before anything else changes (PR-3, #1056; the brief's
+revision 4).
+
+## Why
+
+The 2026-09-29 rig (`p2p_cutover_crossbuild_20260929.md`) measured the
+Tor gap as the channel-to-session interval on warm circuits between a
+dialer and a seed that had already talked: it excluded cold first
+contact, where the dialer's managed tor holds no descriptor and builds
+its circuits from nothing. `TOR_GAP_WITHIN_NANOS` was set from it at
+2.6 s. The first §4 run of PR-3 (attempt 7, 2026-10-13) lost a session
+to that gap on a cold contact, and the ruling followed. **These runs
+supersede the 2026-09-29 rig for the gap.**
+
+## Instrument (`8359ef531`, debug lines that stay in the code)
+
+In the Tor driver, from the instant it keeps for the channel (the
+responder's accept, the dialer's SOCKS success):
+
+- `tor first bytes written` — the writer puts a connection's first
+  bytes on the wire: the dialer's handshake request, the responder's
+  first reply;
+- `tor first bytes read` — the reader takes its first bytes: the
+  responder's accept to the request, the dialer's reply;
+- `tor session established` (`gap_ns`, already there) — channel to
+  session, both sides.
+
+In the dialer, how long after the channel opened the handshake request
+was queued (`handshake queued … ns after the channel opened`), so a
+client-side delay before the wire is told apart from the wire.
+
+## Rig
+
+Roles, not hosts (rule 37). The client is a stagenet daemon on an x86
+fleet host (Ubuntu 24.04), built from a fresh checkout of `8359ef531`
+with `-DARCH=default`, with the pinned 15.0.24 Tor Expert Bundle beside
+it. **Every sample restarts the client daemon and its managed tor** in a
+wiped data directory: no cached descriptor, fresh circuits. The client
+names the responder with `--add-peer <onion>:13021` and
+`--p2p-disclose-early`; the responder runs the same build with the flag
+and stays up for the whole run. Clearnet is bound to loopback on both,
+so Tor is the only way between them. Ports and hosts are in
+`shekyl-dev`'s usage ledger.
+
+- **Run A:** the responder is the measurement host (x86, Ubuntu 24.04).
+- **Run B:** the responder is the floor device (Pi 4, aarch64, rule 76),
+  built natively from the same commit, with the pinned 16.0a13 aarch64
+  bundle beside it. The same client, the same link.
+
+Per sample the TSV records the outcome, the dialer's SOCKS leg
+(`c_proxy_connect_ns`, `c_dial_ns`), the queue delay (`c_queued_ns`),
+`c_first_write_ns`, `c_first_read_ns`, `c_gap_ns`, and from the
+responder's log, joined by the sample's window, `b_first_read_ns`,
+`b_gap_ns` and the responder's close cause. Outcomes other than
+`session` are the timeouts, by kind:
+
+- `TransportTimeout:0` — the Tor dial deadline (9.1 s) before SOCKS
+  success;
+- `LevinHandshakeTimeout:0` — the dialer's gap (2.6 s) after SOCKS
+  success, no reply;
+- `timeout` — the managed tor did not bootstrap within the sample's 120 s;
+- `ProxyRefused:240` — SOCKS reply 0xF0, descriptor not found.
+
+Raw rows: `p2p_tor_gap_cold_20261014_runA.tsv`,
+`p2p_tor_gap_cold_20261014_runB.tsv`. Percentiles are the nearest-rank
+`ceil(p × n)`.
+
+## Run A (100 samples, 02:58Z to 03:58Z)
+
+| Outcome | n |
+| --- | --- |
+| session | 66 |
+| `TransportTimeout:0` | 26 |
+| `timeout` (tor bootstrap) | 5 |
+| `LevinHandshakeTimeout:0` | 3 |
+
+Over the 66 sessions:
+
+| Series | p50 | p90 | p99 | max |
+| --- | --- | --- | --- | --- |
+| dialer SOCKS success → request on the wire | 0.4 ms | 0.5 ms | 0.6 ms | 0.6 ms |
+| dialer SOCKS success → first reply byte (outbound gap) | 515 ms | 806 ms | 1663 ms | 1663 ms |
+| responder accept → first byte read (inbound gap) | 500 ms | 749 ms | 955 ms | 955 ms |
+| dialer channel → session | 516 ms | 808 ms | 1664 ms | 1664 ms |
+| responder channel → session | 527 ms | 786 ms | 956 ms | 956 ms |
+| Tor dial, start → SOCKS success | 4.51 s | 6.36 s | 8.47 s | 8.47 s |
+
+**Readings.** The dialer's own interval has no tail: the pause is in
+the Tor network, not the client. The outbound direction is the larger.
+Both gap series are censored at the current spans: 3 of the 69 contacts
+that reached SOCKS success exceeded the dialer's 2.6 s gap, so the
+uncensored p99 is at the gap or above it; 26 of 100 cold dials exceeded
+the 9.1 s Tor dial deadline, which the 2026-09-29 floor distribution set
+from warm circuits.
+
+**A responder-side defect, found in run A, open.** Four of the
+responder's 69 accepts ended as `SessionRefused` or
+`LevinHandshakeTimeout` on its side (its connections 76, 78, 80, 82). In
+three, the responder read the request 327 to 810 ms after its accept and
+within half a millisecond its handshake-gap timer fired, so the reply's
+send failed and the session was refused; a 2.6 s deadline cannot fire at
+0.3 s. At all four instants the responder's own two dialer loops woke in
+the same half-millisecond. A wake meant for the Discovery owners reached
+the Transport owner, which reads any wake as a timeout
+(`shekyl-tor/src/drive.rs`, the wake arm of `run`). The engine's `poll`,
+`arm`, registration, id minting, slot delivery and the owner handle's
+`arm` show no such path on reading; the driver now logs the armed
+deadline and every delivered wake (`tor gap armed`, `tor gap fired`), and
+the next run names the stray wake. Also seen (sample 48): the responder's
+accept came 4.3 s after the dialer's SOCKS success, after the dialer had
+timed out and closed; the inbound gap as instrumented does not see a
+stall that precedes the accept, the outbound gap does.
+
+## Run B
+
+*Running.*
+
+## Derivation (D9)
+
+*After both runs and Rick's reading.* `TOR_GAP_WITHIN_NANOS` = 2 × p99 of
+the largest distribution across both runs and both directions, labelled
+`RustPath`, with this document as the provenance in `spans.rs`; if run B
+governs, the floor sets the number. The measurement ledger's Tor-gap row
+cites the two debug timings as the samples that can reopen it.
