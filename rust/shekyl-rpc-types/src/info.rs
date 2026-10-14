@@ -58,15 +58,15 @@
 //! peers. A reader of a hidden part now asks [`Hidden::shown`] and is told
 //! when there is nothing to read.
 //!
-//! # P2P off is a state, not a zero
+//! # Offline is a state, not a zero
 //!
 //! The Peers part says first whether this daemon runs P2P at all, under
-//! `p2p` (Rick, 2026-10-14; `CORE_RPC_VERSION` 3.56). `"p2p": "on"` carries
-//! the six counts; `"p2p": "off"` carries none, because a daemon started
-//! with P2P off has no sockets and no peer lists by configuration, and a
+//! `p2p` (Rick, 2026-10-14; `CORE_RPC_VERSION` 3.56). `"p2p": "running"` carries
+//! the six counts; `"p2p": "offline"` carries none, because a daemon started
+//! offline has no sockets and no peer lists by configuration, and a
 //! count of zero would read as a running node with no peers. The decoder
-//! refuses `"off"` with any count, `"on"` without all six, a count with no
-//! `p2p`, and an `"off"` that disagrees with Health's `offline`.
+//! refuses `"offline"` with any count, `"running"` without all six, a count with no
+//! `p2p`, and an `"offline"` that disagrees with Health's `offline`.
 
 use serde::{Deserialize, Serialize};
 use shekyl_units::{AtomicUnits, AtomicUnitsString};
@@ -222,14 +222,14 @@ pub struct InfoStatus {
 }
 
 /// The Peers part: whether this daemon runs P2P, and when it does, its
-/// transport and peerlist detail. A daemon started with P2P off reports
-/// [`InfoP2p::Off`] and no count.
+/// transport and peerlist detail. A daemon started offline reports
+/// [`InfoP2p::Offline`] and no count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InfoP2p {
     /// P2P runs; its counts.
     Running(InfoPeers),
-    /// The daemon was started with P2P off (`--offline`).
-    Off,
+    /// The daemon was started offline (`--offline`).
+    Offline,
 }
 
 impl InfoP2p {
@@ -238,7 +238,7 @@ impl InfoP2p {
     pub fn running(&self) -> Option<&InfoPeers> {
         match self {
             Self::Running(peers) => Some(peers),
-            Self::Off => None,
+            Self::Offline => None,
         }
     }
 }
@@ -290,9 +290,9 @@ pub enum GetInfoShapeError {
     /// part. A shown part names the build, so an empty one is not an
     /// answer and is not read as "undisclosed" (RK-D23).
     EmptyVersion,
-    /// `"p2p": "off"` arrived with a count. Off carries none: a zero beside
+    /// `"p2p": "offline"` arrived with a count. Offline carries none: a zero beside
     /// it would be a count nobody took.
-    CountWhileP2pOff { key: &'static str },
+    CountWhileOffline { key: &'static str },
     /// A Peers count arrived without `p2p`, which says what the counts are
     /// of.
     CountWithoutP2p { key: &'static str },
@@ -313,9 +313,9 @@ impl core::fmt::Display for GetInfoShapeError {
                 "the status part carries an empty `version`: a shown part names the build, \
                  and a reply that does not disclose it withholds the part",
             ),
-            Self::CountWhileP2pOff { key } => write!(
+            Self::CountWhileOffline { key } => write!(
                 f,
-                "`p2p` is off and `{key}` arrived: a daemon with P2P off reports no count"
+                "`p2p` is offline and `{key}` arrived: an offline daemon reports no count"
             ),
             Self::CountWithoutP2p { key } => write!(
                 f,
@@ -424,8 +424,8 @@ struct GetInfoWire {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum P2pWire {
-    On,
-    Off,
+    Running,
+    Offline,
 }
 
 /// Build a hidden part from its keys: all of them, or none.
@@ -538,11 +538,11 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
                 None => Hidden::Withheld,
                 Some(key) => return Err(GetInfoShapeError::CountWithoutP2p { key }),
             },
-            Some(P2pWire::Off) => match first_count {
-                None => Hidden::Shown(InfoP2p::Off),
-                Some(key) => return Err(GetInfoShapeError::CountWhileP2pOff { key }),
+            Some(P2pWire::Offline) => match first_count {
+                None => Hidden::Shown(InfoP2p::Offline),
+                Some(key) => return Err(GetInfoShapeError::CountWhileOffline { key }),
             },
-            Some(P2pWire::On) => {
+            Some(P2pWire::Running) => {
                 let mut values = [0u64; 6];
                 for (slot, (key, value)) in values.iter_mut().zip(counts) {
                     *slot = value.ok_or(GetInfoShapeError::PartialPart {
@@ -563,7 +563,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             }
         };
         if let Hidden::Shown(state) = &peers {
-            if matches!(state, InfoP2p::Off) != offline {
+            if matches!(state, InfoP2p::Offline) != offline {
                 return Err(GetInfoShapeError::P2pDisagreesWithOffline { offline });
             }
         }
@@ -629,8 +629,8 @@ impl From<GetInfoResponse> for GetInfoWire {
         } = reply;
         let node = node.shown().cloned();
         let p2p = peers.shown().map(|state| match state {
-            InfoP2p::Running(_) => P2pWire::On,
-            InfoP2p::Off => P2pWire::Off,
+            InfoP2p::Running(_) => P2pWire::Running,
+            InfoP2p::Offline => P2pWire::Offline,
         });
         let peers = peers.shown().and_then(InfoP2p::running).cloned();
         Self {

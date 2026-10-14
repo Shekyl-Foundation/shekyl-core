@@ -981,7 +981,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.53 (get_info's amounts become decimal strings, RK-Q2; get_version gains nothing)
         &[], // 3.54 (get_info stops repeating the network, RK-Q6; get_version gains nothing)
         &[], // 3.55 (get_peer_list entries drop last_seen: the Rust peer lists carry no clock; get_version gains nothing)
-        &[], // 3.56 (P2P off is a state on get_info and the three P2P methods; get_version gains nothing)
+        &[], // 3.56 (offline is a state on get_info and the three P2P methods; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1025,7 +1025,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.53 (no member comes or goes; two of get_info's change encoding)
         &[], // 3.54 (the four network names are get_info's; get_version keeps its `nettype`)
         &[], // 3.55 (last_seen leaves get_peer_list; get_version retires nothing)
-        &[], // 3.56 (P2P off is a state elsewhere; get_version retires nothing)
+        &[], // 3.56 (offline is a state elsewhere; get_version retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1534,9 +1534,9 @@ fn the_3_53_get_info_vectors_are_their_predecessors_with_the_two_amounts_as_stri
 
 /// **3.56, by derivation.** A daemon reports whether it runs P2P before
 /// any count (Rick, 2026-10-14). Each running fixture's successor is its
-/// predecessor plus exactly `"p2p": "on"`; the restricted fixture withholds
+/// predecessor plus exactly `"p2p": "running"`; the restricted fixture withholds
 /// Peers and has no successor. The offline fixture is the peerless one
-/// started with P2P off: `offline` true, `"p2p": "off"`, and the six counts
+/// started offline: `offline` true, `"p2p": "offline"`, and the six counts
 /// gone, not zeroed.
 #[test]
 fn the_3_56_get_info_vectors_say_whether_p2p_runs_before_any_count() {
@@ -1556,7 +1556,7 @@ fn the_3_56_get_info_vectors_say_whether_p2p_runs_before_any_count() {
     ] {
         let mut derived = parsed(before_raw);
         let object = derived.as_object_mut().expect("a fixture is an object");
-        assert!(object.insert("p2p".to_owned(), "on".into()).is_none());
+        assert!(object.insert("p2p".to_owned(), "running".into()).is_none());
         assert_eq!(
             derived,
             parsed(after_raw),
@@ -1568,7 +1568,7 @@ fn the_3_56_get_info_vectors_say_whether_p2p_runs_before_any_count() {
     ));
     let object = derived.as_object_mut().expect("a fixture is an object");
     object.insert("offline".to_owned(), true.into());
-    object.insert("p2p".to_owned(), "off".into());
+    object.insert("p2p".to_owned(), "offline".into());
     for key in [
         "public_incoming_socket_count",
         "public_outgoing_socket_count",
@@ -1585,7 +1585,7 @@ fn the_3_56_get_info_vectors_say_whether_p2p_runs_before_any_count() {
     assert_eq!(
         derived,
         parsed(include_str!("vectors/rpc/get_info_offline_v1.json")),
-        "the offline fixture is the peerless one with P2P off and no count"
+        "the offline fixture is the peerless one offline and no count"
     );
 }
 
@@ -1999,23 +1999,23 @@ fn sync_info_empty_matches_the_oracle() {
     assert!(!obj.contains_key("peers") && !obj.contains_key("spans"));
 }
 
-/// **A daemon started with P2P off answers `P2P_OFF` and nothing else** on
+/// **A daemon started offline answers `offline` and nothing else** on
 /// `get_peer_list`, `get_connections` and `sync_info` (Rick, 2026-10-14;
 /// 3.56). An empty list under `OK` is a running node with none; this is a
-/// node with P2P off, and the two decode to different values.
+/// node that is offline, and the two decode to different values.
 #[test]
-fn the_p2p_methods_answer_p2p_off_alone() {
-    let off = include_str!("vectors/rpc/get_peer_list_off_v1.json");
-    assert_parity(off, &P2pReply::<GetPeerListResponse>::Off);
+fn the_p2p_methods_answer_offline_alone() {
+    let off = include_str!("vectors/rpc/get_peer_list_offline_v1.json");
+    assert_parity(off, &P2pReply::<GetPeerListResponse>::Offline);
     assert_parity(
-        include_str!("vectors/rpc/get_connections_off_v1.json"),
-        &P2pReply::<GetConnectionsResponse>::Off,
+        include_str!("vectors/rpc/get_connections_offline_v1.json"),
+        &P2pReply::<GetConnectionsResponse>::Offline,
     );
     assert_parity(
-        include_str!("vectors/rpc/sync_info_off_v1.json"),
-        &P2pReply::<SyncInfoResponse>::Off,
+        include_str!("vectors/rpc/sync_info_offline_v1.json"),
+        &P2pReply::<SyncInfoResponse>::Offline,
     );
-    assert_eq!(parsed(off), serde_json::json!({ "status": "P2P_OFF" }));
+    assert_eq!(parsed(off), serde_json::json!({ "status": "offline" }));
 
     // A running reply decodes as running, empty lists and all.
     let empty: P2pReply<GetConnectionsResponse> =
@@ -2034,21 +2034,21 @@ fn the_p2p_methods_answer_p2p_off_alone() {
     assert!(idle.running().is_some());
 }
 
-/// `P2P_OFF` beside any other member is refused: a daemon with P2P off has
+/// `offline` beside any other member is refused: an offline daemon has
 /// no peer, connection or span to report.
 #[test]
-fn p2p_off_beside_a_member_is_refused() {
+fn offline_beside_a_member_is_refused() {
     for doc in [
-        serde_json::json!({ "status": "P2P_OFF", "connections": [] }),
-        serde_json::json!({ "status": "P2P_OFF", "white_list": [] }),
-        serde_json::json!({ "status": "P2P_OFF", "height": 1, "target_height": null, "overview": "[]" }),
+        serde_json::json!({ "status": "offline", "connections": [] }),
+        serde_json::json!({ "status": "offline", "white_list": [] }),
+        serde_json::json!({ "status": "offline", "height": 1, "target_height": null, "overview": "[]" }),
     ] {
         let connections = serde_json::from_value::<P2pReply<GetConnectionsResponse>>(doc.clone());
         let peers = serde_json::from_value::<P2pReply<GetPeerListResponse>>(doc.clone());
         let sync = serde_json::from_value::<P2pReply<SyncInfoResponse>>(doc.clone());
         assert!(
             connections.is_err() && peers.is_err() && sync.is_err(),
-            "P2P_OFF with a member must not decode: {doc}"
+            "offline with a member must not decode: {doc}"
         );
     }
 }
@@ -2389,8 +2389,8 @@ mod get_info {
         );
     }
 
-    /// **A daemon started with P2P off reports the state, never a zero**
-    /// (Rick, 2026-10-14; 3.56). Its Peers part is `"p2p": "off"` with no
+    /// **A daemon started offline reports the state, never a zero**
+    /// (Rick, 2026-10-14; 3.56). Its Peers part is `"p2p": "offline"` with no
     /// count, and Health's `offline` agrees with it.
     #[test]
     fn offline_matches_the_vector() {
@@ -2404,22 +2404,22 @@ mod get_info {
         };
         node.outgoing_connections_count = 0;
         node.incoming_connections_count = 0;
-        built.peers = Hidden::Shown(InfoP2p::Off);
+        built.peers = Hidden::Shown(InfoP2p::Offline);
         assert_parity(include_str!("vectors/rpc/get_info_offline_v1.json"), &built);
     }
 
-    /// Each way a Peers part could say "off" and a count at once, or a
+    /// Each way a Peers part could say "offline" and a count at once, or a
     /// count without saying what it is of, is refused by name.
     #[test]
-    fn p2p_off_with_a_count_and_a_count_without_p2p_are_refused() {
+    fn offline_with_a_count_and_a_count_without_p2p_are_refused() {
         let off = parsed(include_str!("vectors/rpc/get_info_offline_v1.json"));
         for key in PEERS_KEYS {
             let mut doc = off.clone();
             doc[key] = 0.into();
-            let refusal = decode(&doc).expect_err("off carries no count");
+            let refusal = decode(&doc).expect_err("offline carries no count");
             assert!(
-                refusal.contains("off") && refusal.contains(key),
-                "the refusal names P2P off and `{key}`; got {refusal:?}"
+                refusal.contains("offline") && refusal.contains(key),
+                "the refusal names offline and `{key}`; got {refusal:?}"
             );
         }
         let running = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
@@ -2435,7 +2435,7 @@ mod get_info {
     fn p2p_that_disagrees_with_offline_is_refused() {
         let mut off = parsed(include_str!("vectors/rpc/get_info_offline_v1.json"));
         off["offline"] = false.into();
-        let refusal = decode(&off).expect_err("off is offline");
+        let refusal = decode(&off).expect_err("offline agrees with offline: true");
         assert!(refusal.contains("disagrees"), "got {refusal:?}");
         let mut on = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
         on["offline"] = true.into();

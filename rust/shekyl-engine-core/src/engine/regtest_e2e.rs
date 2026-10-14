@@ -154,9 +154,9 @@ pub(super) struct RegtestDaemon {
     /// judges the chain under a rule set naming that pair, not the
     /// production one).
     schedule: Option<RegtestSchedule>,
-    /// Whether this daemon was started with P2P off (`--offline`). Its
+    /// Whether this daemon was started offline (`--offline`). Its
     /// `get_info` must then report that state, not a count of zero.
-    p2p_off: bool,
+    offline: bool,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
     /// `None` on the sink of a [`origin::StemSinkPair`], whose origin holds
     /// the one guard for both.
@@ -340,7 +340,7 @@ impl RegtestDaemon {
         install_wallet_tracing();
 
         let bin = Self::binary();
-        let p2p_off = matches!(peering, Peering::Offline);
+        let offline = matches!(peering, Peering::Offline);
         let p2p_ports: &[u16] = match &peering {
             Peering::Offline => &[],
             Peering::Linked {
@@ -462,7 +462,7 @@ impl RegtestDaemon {
             rpc,
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
-            p2p_off,
+            offline,
             _serial: serial,
         };
         daemon.await_ready().await;
@@ -490,18 +490,18 @@ impl RegtestDaemon {
             {
                 Ok(info) => {
                     // The harness reads the P2P state, not a count: a daemon
-                    // started with P2P off says so, and one whose P2P runs
+                    // started offline says so, and one whose P2P runs
                     // reports its counts (Rick, 2026-10-14).
                     let state = info
                         .peers
                         .shown()
                         .expect("the harness's main listener is shown Peers");
                     assert_eq!(
-                        matches!(state, shekyl_rpc_types::InfoP2p::Off),
-                        self.p2p_off,
+                        matches!(state, shekyl_rpc_types::InfoP2p::Offline),
+                        self.offline,
                         "get_info's P2P state must be the daemon's configuration; got {state:?}"
                     );
-                    assert_eq!(info.health.offline, self.p2p_off);
+                    assert_eq!(info.health.offline, self.offline);
                     return;
                 }
                 Err(e) => last_err = format!("{e:?}"),
@@ -5860,7 +5860,7 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
         // The log tail echoes the command and carries the log line; the
         // state is the line the console printed, and no table follows it.
         assert!(
-            out.lines().any(|line| line.trim() == "P2P: off")
+            out.lines().any(|line| line.trim() == "P2P: offline")
                 && !out.contains("Remote Host")
                 && !out.contains("list size"),
             "{command} must render the live core's P2P state; got:\n{out}"

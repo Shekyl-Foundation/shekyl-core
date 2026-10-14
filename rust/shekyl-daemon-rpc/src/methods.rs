@@ -1321,12 +1321,12 @@ pub fn get_net_stats(facts: &dyn P2pFacts) -> Result<GetNetStatsResponse, RpcFau
 }
 
 /// `get_connections` (JSON-RPC, admin-only): the live p2p connections.
-/// A daemon started with P2P off answers `P2P_OFF` alone (Rick,
+/// A daemon started offline answers `offline` alone (Rick,
 /// 2026-10-14): it has no connections by configuration, and an empty list
 /// would read as a running node with none.
 pub fn get_connections(facts: &dyn P2pFacts) -> Result<P2pReply<GetConnectionsResponse>, RpcFault> {
-    if facts.p2p_state()? == P2pRead::Off {
-        return Ok(P2pReply::Off);
+    if facts.p2p_state()? == P2pRead::Offline {
+        return Ok(P2pReply::Offline);
     }
     let snapshot = facts.connections()?;
     Ok(P2pReply::Running(GetConnectionsResponse {
@@ -1346,14 +1346,14 @@ pub fn get_connections(facts: &dyn P2pFacts) -> Result<P2pReply<GetConnectionsRe
 /// the peerlist, and the facts export reports each entry's blocked state
 /// without deciding what to do about it.
 ///
-/// A daemon started with P2P off answers `P2P_OFF` alone: it has no peer
+/// A daemon started offline answers `offline` alone: it has no peer
 /// lists by configuration.
 pub fn get_peer_list(
     request: &GetPeerListRequest,
     facts: &dyn P2pFacts,
 ) -> Result<P2pReply<GetPeerListResponse>, RpcFault> {
     let entries = match facts.peer_list(request.public_only)? {
-        P2pRead::Off => return Ok(P2pReply::Off),
+        P2pRead::Offline => return Ok(P2pReply::Offline),
         P2pRead::Running(entries) => entries,
     };
     let mut white_list = Vec::new();
@@ -1388,14 +1388,14 @@ pub fn get_peer_list(
 /// the queue in three separate acquisitions too, and closing that would mean
 /// holding a p2p lock across a chain read.
 ///
-/// A daemon started with P2P off answers `P2P_OFF` alone: it downloads
+/// A daemon started offline answers `offline` alone: it downloads
 /// from no peer, so it has no sync to report.
 pub fn sync_info(
     chain: &dyn ChainFacts,
     p2p: &dyn P2pFacts,
 ) -> Result<P2pReply<SyncInfoResponse>, RpcFault> {
-    if p2p.p2p_state()? == P2pRead::Off {
-        return Ok(P2pReply::Off);
+    if p2p.p2p_state()? == P2pRead::Offline {
+        return Ok(P2pReply::Offline);
     }
     let tip = chain.chain_tip()?;
     let connections = p2p.connections()?;
@@ -3213,26 +3213,26 @@ pub(crate) mod tests {
         );
     }
 
-    /// **A daemon started with P2P off answers `P2P_OFF` alone on all three
+    /// **A daemon started offline answers `offline` alone on all three
     /// methods** (Rick, 2026-10-14), and reads no connection, span or chain
     /// for it: every other fact here is a fault, so a read would refuse.
     #[test]
-    fn a_daemon_with_p2p_off_answers_the_state_on_every_p2p_method() {
+    fn an_offline_daemon_answers_the_state_on_every_p2p_method() {
         let off = FakeP2p {
             connections: Err(FactsFault::Internal),
             spans: Err(FactsFault::Internal),
-            peers: Ok(P2pRead::Off),
-            state: Ok(P2pRead::Off),
+            peers: Ok(P2pRead::Offline),
+            state: Ok(P2pRead::Offline),
             ..FakeP2p::default()
         };
-        assert_eq!(get_connections(&off).expect("a state"), P2pReply::Off);
+        assert_eq!(get_connections(&off).expect("a state"), P2pReply::Offline);
         assert_eq!(
             get_peer_list(&GetPeerListRequest::default(), &off).expect("a state"),
-            P2pReply::Off
+            P2pReply::Offline
         );
         assert_eq!(
             sync_info(&facts(false, 0), &off).expect("a state"),
-            P2pReply::Off
+            P2pReply::Offline
         );
     }
 

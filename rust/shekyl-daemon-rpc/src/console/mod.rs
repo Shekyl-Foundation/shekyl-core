@@ -892,11 +892,11 @@ const PUBLIC_ONLY: bool = false;
 /// outright. Asking for the public list here would silently drop the
 /// non-public zones from `print_pl` and leave it disagreeing with the counts
 /// `print_pl_stats` prints.
-/// What the console prints for a daemon started with P2P off: the state,
+/// What the console prints for a daemon started offline: the state,
 /// not an empty table (Rick, 2026-10-14).
-const P2P_OFF_LINE: &str = "P2P: off";
+const OFFLINE_LINE: &str = "P2P: offline";
 
-/// `None` for a daemon started with P2P off.
+/// `None` for a daemon started offline.
 fn fetch_peer_list(
     src: &Source,
     public_only: bool,
@@ -969,7 +969,7 @@ fn peer_list_selection(selector: Option<&str>) -> (bool, bool) {
 #[deny(clippy::arithmetic_side_effects)]
 fn print_peer_list(src: &Source, white: bool, gray: bool, limit: usize) -> Result<String, String> {
     let Some(reply) = fetch_peer_list(src, PUBLIC_ONLY)? else {
-        return Ok(P2P_OFF_LINE.to_owned());
+        return Ok(OFFLINE_LINE.to_owned());
     };
     let mut out = Vec::new();
     let mut take = |prefix: &str, peers: &[shekyl_rpc_types::Peer]| {
@@ -993,7 +993,7 @@ fn print_peer_list(src: &Source, white: bool, gray: bool, limit: usize) -> Resul
 #[deny(clippy::arithmetic_side_effects)]
 fn print_peer_list_stats(src: &Source) -> Result<String, String> {
     let Some(reply) = fetch_peer_list(src, PUBLIC_ONLY)? else {
-        return Ok(P2P_OFF_LINE.to_owned());
+        return Ok(OFFLINE_LINE.to_owned());
     };
     Ok(render_peer_list_stats(
         reply.white_list.len(),
@@ -1044,7 +1044,7 @@ fn print_connections(src: &Source) -> Result<String, String> {
         crate::methods::get_connections(&crate::chain_facts::FfiP2pFacts::new(core.clone()))
     })?;
     let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
-        return Ok(P2P_OFF_LINE.to_owned());
+        return Ok(OFFLINE_LINE.to_owned());
     };
     require_ok(&reply.status)?;
     // Wide enough for the widest address actually present, plus the four
@@ -1219,7 +1219,7 @@ fn sync_info(src: &Source) -> Result<String, String> {
         crate::methods::sync_info(&chain, &p2p)
     })?;
     let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
-        return Ok(P2P_OFF_LINE.to_owned());
+        return Ok(OFFLINE_LINE.to_owned());
     };
     require_ok(&reply.status)?;
     // No target, or one below our own height (we are ahead of what we were

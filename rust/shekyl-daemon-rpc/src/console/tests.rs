@@ -857,14 +857,14 @@ fn print_height_renders_the_remote_reply() {
     assert_eq!(text, "42");
 }
 
-/// **A daemon started with P2P off prints the state** on every peer
+/// **A daemon started offline prints the state** on every peer
 /// command (Rick, 2026-10-14): not an empty table, and not a request
 /// failure.
 #[test]
-fn a_daemon_with_p2p_off_prints_the_state_on_every_peer_command() {
-    let off = r#"{"status":"P2P_OFF"}"#;
+fn an_offline_daemon_prints_the_state_on_every_peer_command() {
+    let off = r#"{"status":"offline"}"#;
     let rpc_off =
-        serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": { "status": "P2P_OFF" } })
+        serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": { "status": "offline" } })
             .to_string();
     for (args, reply) in [
         (&["print_peer_list"][..], off.to_owned()),
@@ -875,7 +875,7 @@ fn a_daemon_with_p2p_off_prints_the_state_on_every_peer_command() {
         let address = one_shot(reply);
         let (code, text) = run(args, Some(&address));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{args:?}: {text}");
-        assert_eq!(text, "P2P: off", "{args:?}");
+        assert_eq!(text, "P2P: offline", "{args:?}");
     }
 }
 

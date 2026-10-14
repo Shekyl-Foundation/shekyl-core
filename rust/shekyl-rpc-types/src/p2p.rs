@@ -294,19 +294,19 @@ pub struct SyncInfoResponse {
 }
 
 /// A reply about peers or connections, from a daemon that may have been
-/// started with P2P off (Rick, 2026-10-14; 3.56).
+/// started offline (Rick, 2026-10-14; 3.56).
 ///
-/// [`P2pReply::Off`] is `{"status": "P2P_OFF"}` and nothing else: the daemon
+/// [`P2pReply::Offline`] is `{"status": "offline"}` and nothing else: the daemon
 /// has no peers, connections or download queue by configuration, and an
 /// empty list under `OK` would read as a running node that has none. The
-/// decoder refuses a `P2P_OFF` status beside any other member, and a running
-/// reply whose status is `P2P_OFF`.
+/// decoder refuses a `offline` status beside any other member, and a running
+/// reply whose status is `offline`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum P2pReply<T> {
     /// P2P runs; the method's reply.
     Running(T),
-    /// The daemon was started with P2P off.
-    Off,
+    /// The daemon was started offline.
+    Offline,
 }
 
 impl<T> P2pReply<T> {
@@ -315,7 +315,7 @@ impl<T> P2pReply<T> {
     pub fn running(&self) -> Option<&T> {
         match self {
             Self::Running(reply) => Some(reply),
-            Self::Off => None,
+            Self::Offline => None,
         }
     }
 
@@ -324,7 +324,7 @@ impl<T> P2pReply<T> {
     pub fn into_running(self) -> Option<T> {
         match self {
             Self::Running(reply) => Some(reply),
-            Self::Off => None,
+            Self::Offline => None,
         }
     }
 }
@@ -353,40 +353,40 @@ impl P2pRunningReply for SyncInfoResponse {
     }
 }
 
-/// `{"status": "P2P_OFF"}`, the whole of an off reply.
+/// `{"status": "offline"}`, the whole of an offline reply.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct P2pOffWire {
-    status: P2pOffStatus,
+struct OfflineWire {
+    status: OfflineStatus,
 }
 
-/// The one status an off reply carries.
+/// The one status an offline reply carries.
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(try_from = "RpcStatus", into = "RpcStatus")]
-struct P2pOffStatus;
+struct OfflineStatus;
 
-impl TryFrom<RpcStatus> for P2pOffStatus {
+impl TryFrom<RpcStatus> for OfflineStatus {
     type Error = &'static str;
 
     fn try_from(status: RpcStatus) -> Result<Self, Self::Error> {
-        if status.is_p2p_off() {
+        if status.is_offline() {
             Ok(Self)
         } else {
-            Err("not P2P_OFF")
+            Err("not offline")
         }
     }
 }
 
-impl From<P2pOffStatus> for RpcStatus {
-    fn from(_: P2pOffStatus) -> Self {
-        Self::p2p_off()
+impl From<OfflineStatus> for RpcStatus {
+    fn from(_: OfflineStatus) -> Self {
+        Self::offline()
     }
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum P2pReplyWire<T> {
-    Off(P2pOffWire),
+    Offline(OfflineWire),
     Running(T),
 }
 
@@ -394,8 +394,8 @@ impl<T: Serialize> Serialize for P2pReply<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             Self::Running(reply) => reply.serialize(serializer),
-            Self::Off => P2pOffWire {
-                status: P2pOffStatus,
+            Self::Offline => OfflineWire {
+                status: OfflineStatus,
             }
             .serialize(serializer),
         }
@@ -408,10 +408,10 @@ where
 {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         match P2pReplyWire::<T>::deserialize(deserializer)? {
-            P2pReplyWire::Off(_) => Ok(Self::Off),
-            P2pReplyWire::Running(reply) if reply.status().is_p2p_off() => {
+            P2pReplyWire::Offline(_) => Ok(Self::Offline),
+            P2pReplyWire::Running(reply) if reply.status().is_offline() => {
                 Err(serde::de::Error::custom(
-                    "a P2P_OFF reply carries no other member: a daemon with P2P off \
+                    "an offline reply carries no other member: an offline daemon \
                      reports no peer, connection or span",
                 ))
             }

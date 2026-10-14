@@ -189,13 +189,13 @@ pub fn get_info(
     };
 
     // Peers says first whether P2P runs (Rick, 2026-10-14). A daemon
-    // started with P2P off reports that state and no count. The state and
+    // started offline reports that state and no count. The state and
     // Health's `offline` both come from the daemon's configuration, read
     // in two places; if they disagree, one of the reads is wrong, and the
     // reply refuses rather than carry both.
     let peers = if disclosure.peers {
         let state = match facts.peers()? {
-            PeerFacts::Off => InfoP2p::Off,
+            PeerFacts::Offline => InfoP2p::Offline,
             PeerFacts::Running(peers) => InfoP2p::Running(InfoPeers {
                 public_incoming_socket_count: peers.public_incoming_sockets,
                 public_outgoing_socket_count: peers.public_outgoing_sockets,
@@ -205,7 +205,7 @@ pub fn get_info(
                 grey_peerlist_size: peers.grey_peerlist_size,
             }),
         };
-        if matches!(state, InfoP2p::Off) != chain.offline {
+        if matches!(state, InfoP2p::Offline) != chain.offline {
             tracing::error!(
                 offline = chain.offline,
                 "get_info refused: the P2P state disagrees with the core's offline flag"

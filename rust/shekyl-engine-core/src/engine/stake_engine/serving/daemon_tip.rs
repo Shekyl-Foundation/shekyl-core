@@ -440,12 +440,12 @@ mod tests {
     }
 
     /// The overlay that makes [`reply`]'s document an offline daemon's: the
-    /// daemon says so in Health, and its Peers part is the state P2P off
+    /// daemon says so in Health, and its Peers part is the state offline
     /// with no count (3.56), which the decoder holds equal to `offline`.
     fn offline_overlay(height: u64) -> serde_json::Value {
         json!({
             "height": height, "status": "OK", "synchronized": true, "offline": true,
-            "p2p": "off",
+            "p2p": "offline",
             "public_incoming_socket_count": null, "public_outgoing_socket_count": null,
             "tor_incoming_socket_count": null, "tor_outgoing_socket_count": null,
             "white_peerlist_size": null, "grey_peerlist_size": null

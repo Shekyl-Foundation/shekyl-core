@@ -346,7 +346,7 @@ pub trait P2pFacts: Send + Sync {
     fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault>;
     /// The peerlist, white entries then gray. `public_only` selects a
     /// different p2p call, not a filter over one result.
-    /// [`P2pRead::Off`] for a daemon started with P2P off.
+    /// [`P2pRead::Offline`] for a daemon started offline.
     fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault>;
     /// Whether P2P runs, from the daemon's configuration: read before a
     /// method that reads no peer list answers about peers or connections.

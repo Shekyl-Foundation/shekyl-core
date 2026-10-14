@@ -14,7 +14,7 @@
   "incoming_connections_count": 0,
   "offline": true,
   "outgoing_connections_count": 0,
-  "p2p": "off",
+  "p2p": "offline",
   "protocol_version": 3,
   "release_multiplier": 1200000,
   "restricted": false,

@@ -602,21 +602,21 @@ is **not read**. It is a read avoided in the gather, on what the node was
 configured to be; the fault code is never mapped to `false`. When
 `offline` is not set, a missing hub is still the `HubAbsent` refusal.
 
-**P2P off is a state on the Peers part, never a zero (Rick, 2026-10-14;
+**Offline is a state on the Peers part, never a zero (Rick, 2026-10-14;
 `CORE_RPC_VERSION` 3.56).** The Peers part says first whether the
-daemon runs P2P: `"p2p": "on"` with its six counts, or `"p2p": "off"`
-with none. The type is `InfoP2p::{Running(InfoPeers), Off}`, and the
+daemon runs P2P: `"p2p": "running"` with its six counts, or `"p2p": "offline"`
+with none. The type is `InfoP2p::{Running(InfoPeers), Offline}`, and the
 decoder refuses `"off"` with any count, `"on"` without all six, a count
 with no `p2p`, and a `p2p` that disagrees with Health's `offline`; the
 handler refuses the same disagreement as `Inconsistent`. The state is
 read from what the p2p layer recorded when it read `--offline`
 (`shekyl_p2p_record_offline`, called where `net_node` reads the flag),
 never inferred from the dialer's absence. Both peer-list exports answer
-`FACTS_P2P_OFF` and write nothing for it; an online daemon with no
-peer lists is still `NullHandle`. In the facts layer `PeerFacts::Off`
+`FACTS_OFFLINE` and write nothing for it; an online daemon with no
+peer lists is still `NullHandle`. In the facts layer `PeerFacts::Offline`
 carries nothing and `InfoPeersFacts` is reached only through
 `PeerFacts::Running`, and the sizes export is read first, so no count
-is read for a daemon with P2P off. Health's `has_peers` and Status's two
+is read for an offline daemon. Health's `has_peers` and Status's two
 connection counts keep their meanings above for an offline node.
 
 ### 4.3 Economics — RK-D19 — LANDED (amounts decimal since RK-Q2; the supply invariant refuses since RK-Q9)

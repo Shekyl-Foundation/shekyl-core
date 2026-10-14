@@ -35,7 +35,7 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
                 // Whether the daemon runs P2P at all: its configuration,
                 // told to every caller. The reply's decoder holds it equal
                 // to the Peers part's state (Rick, 2026-10-14).
-                "p2p": if info.health.offline { "off" } else { "on" },
+                "p2p": if info.health.offline { "offline" } else { "running" },
             });
             // Status is wholly shown or wholly absent, and a restricted
             // daemon withholds it. A withheld part is not a zero, so the
@@ -99,9 +99,9 @@ fn difficulty_line(val: &Value) -> String {
 /// no connections, which is a different fact.
 fn connections_line(val: &Value) -> String {
     if p2p_is_off(val) {
-        // A daemon started with P2P off has no connections by configuration;
+        // A daemon started offline has no connections by configuration;
         // its state is the line, not a count of zero.
-        return "  P2P:          off".to_owned();
+        return "  P2P:          offline".to_owned();
     }
     match (
         val.get("outgoing_connections_count")
@@ -116,9 +116,9 @@ fn connections_line(val: &Value) -> String {
     }
 }
 
-/// Whether the daemon said it runs with P2P off.
+/// Whether the daemon said it runs offline.
 fn p2p_is_off(val: &Value) -> bool {
-    val.get("p2p").and_then(Value::as_str) == Some("off")
+    val.get("p2p").and_then(Value::as_str) == Some("offline")
 }
 
 /// A line for one of the chain's counts: the label, then the number.
@@ -488,22 +488,22 @@ mod tests {
         );
     }
 
-    /// **A daemon started with P2P off prints that state** (Rick,
-    /// 2026-10-14): "P2P: off", not "0 out / 0 in", even though its Status
+    /// **A daemon started offline prints that state** (Rick,
+    /// 2026-10-14): "P2P: offline", not "0 out / 0 in", even though its Status
     /// part carries two zeros.
     #[test]
-    fn a_daemon_with_p2p_off_prints_the_state_not_a_zero() {
+    fn an_offline_daemon_prints_the_state_not_a_zero() {
         assert_eq!(
             connections_line(&json!({
-                "p2p": "off",
+                "p2p": "offline",
                 "outgoing_connections_count": 0,
                 "incoming_connections_count": 0,
             })),
-            "  P2P:          off"
+            "  P2P:          offline"
         );
         assert_eq!(
             connections_line(&json!({
-                "p2p": "on",
+                "p2p": "running",
                 "outgoing_connections_count": 0,
                 "incoming_connections_count": 0,
             })),

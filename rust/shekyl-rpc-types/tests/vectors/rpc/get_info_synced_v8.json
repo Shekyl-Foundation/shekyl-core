@@ -15,7 +15,7 @@
   "incoming_connections_count": 12,
   "offline": false,
   "outgoing_connections_count": 8,
-  "p2p": "on",
+  "p2p": "running",
   "protocol_version": 3,
   "public_incoming_socket_count": 13,
   "public_outgoing_socket_count": 10,

@@ -154,16 +154,16 @@ pub struct SyncSpansSnapshot {
     pub spans: Vec<SyncSpanFacts>,
 }
 
-/// A P2P read from a daemon that may have been started with P2P off
-/// (Rick, 2026-10-14). [`P2pRead::Off`] carries nothing: the daemon has no
+/// A P2P read from a daemon that may have been started offline
+/// (Rick, 2026-10-14). [`P2pRead::Offline`] carries nothing: the daemon has no
 /// peers, connections or lists by configuration, and nothing stands in for
 /// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum P2pRead<T> {
     /// P2P runs; what was read.
     Running(T),
-    /// The daemon was started with P2P off.
-    Off,
+    /// The daemon was started offline.
+    Offline,
 }
 
 /// One peerlist entry, copied out of the Rust peer lists' export. No
@@ -696,9 +696,9 @@ impl CoreRpc {
                 &raw mut len,
                 &raw mut owner,
             );
-            if rc == ffi::SHEKYL_RPC_FACTS_P2P_OFF {
+            if rc == ffi::SHEKYL_RPC_FACTS_OFFLINE {
                 // Nothing was written, the owner included.
-                return Ok(P2pRead::Off);
+                return Ok(P2pRead::Offline);
             }
             if rc != ffi::SHEKYL_RPC_FACTS_OK {
                 return Err(rc);
@@ -723,7 +723,7 @@ impl CoreRpc {
     /// How many addresses the clearnet white and gray lists hold
     /// (`shekyl_rpc_peerlist_sizes`, exported by `shekyl-ffi` from the Rust
     /// peer lists), as `(white, gray)`. No core handle: the lists are the
-    /// dialer's. [`P2pRead::Off`] for a daemon started with P2P off.
+    /// dialer's. [`P2pRead::Offline`] for a daemon started offline.
     pub fn peerlist_sizes() -> Result<P2pRead<(u64, u64)>, i32> {
         let mut white: u64 = 0;
         let mut gray: u64 = 0;
@@ -731,7 +731,7 @@ impl CoreRpc {
         let rc = unsafe { ffi::shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) };
         match rc {
             ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running((white, gray))),
-            ffi::SHEKYL_RPC_FACTS_P2P_OFF => Ok(P2pRead::Off),
+            ffi::SHEKYL_RPC_FACTS_OFFLINE => Ok(P2pRead::Offline),
             fault => Err(fault),
         }
     }
@@ -742,7 +742,7 @@ impl CoreRpc {
         // SAFETY: no arguments; reads one atomic.
         match unsafe { ffi::shekyl_rpc_p2p_state() } {
             ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running(())),
-            ffi::SHEKYL_RPC_FACTS_P2P_OFF => Ok(P2pRead::Off),
+            ffi::SHEKYL_RPC_FACTS_OFFLINE => Ok(P2pRead::Offline),
             fault => Err(fault),
         }
     }

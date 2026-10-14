@@ -106,12 +106,12 @@ pub struct InfoStatusFacts {
 
 /// The Peers part's facts: whether P2P runs, and when it does, its counts
 /// (Rick, 2026-10-14). [`InfoPeersFacts`] is reached only through
-/// [`PeerFacts::Running`]; a daemon started with P2P off has no counts to
-/// read, and [`PeerFacts::Off`] carries nothing.
+/// [`PeerFacts::Running`]; a daemon started offline has no counts to
+/// read, and [`PeerFacts::Offline`] carries nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerFacts {
     Running(InfoPeersFacts),
-    Off,
+    Offline,
 }
 
 /// Per-connector transport and peerlist detail of a daemon whose P2P runs.
@@ -171,7 +171,7 @@ pub trait InfoFacts: Send + Sync {
     /// Status facts. Called only on behalf of a caller who is shown Status.
     fn status(&self) -> Result<InfoStatusFacts, FactsFault>;
     /// Peers facts. Called only on behalf of a caller who is shown Peers.
-    /// [`PeerFacts::Off`] for a daemon started with P2P off; an online
+    /// [`PeerFacts::Offline`] for a daemon started offline; an online
     /// daemon with no peer lists is a fault.
     fn peers(&self) -> Result<PeerFacts, FactsFault>;
     /// The node's sessions, per direction, from one snapshot of the seam
@@ -354,11 +354,11 @@ impl InfoFacts for FfiInfoFacts {
 
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         // The two list sizes come from the Rust peer lists, not the core,
-        // and are read first: a daemon started with P2P off answers that
+        // and are read first: a daemon started offline answers that
         // there, and no count is read for it.
         let (white_peerlist_size, grey_peerlist_size) =
             match crate::core::CoreRpc::peerlist_sizes().map_err(FactsFault::from_code)? {
-                crate::core::P2pRead::Off => return Ok(PeerFacts::Off),
+                crate::core::P2pRead::Offline => return Ok(PeerFacts::Offline),
                 crate::core::P2pRead::Running(sizes) => sizes,
             };
         let pod = self.core.info_peers().map_err(FactsFault::from_code)?;

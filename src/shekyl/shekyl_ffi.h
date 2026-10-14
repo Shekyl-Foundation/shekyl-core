@@ -4496,14 +4496,14 @@ struct shekyl_rpc_peer_facts {
 };
 static_assert(sizeof(shekyl_rpc_peer_facts) == 24, "peer facts layout is pinned on both sides");
 /// White then gray entries in one array; `public_only` nonzero lists the
-/// clearnet lists alone. 0; 1 (P2P off, nothing written); or -1 for a null
+/// clearnet lists alone. 0; 1 (offline, nothing written); or -1 for a null
 /// out pointer or no lists online. Release `*out_owner` with shekyl_rpc_peer_list_free.
 int shekyl_rpc_peer_list(std::uint8_t public_only, const shekyl_rpc_peer_facts** out,
     std::size_t* out_len, void** out_owner);
 void shekyl_rpc_peer_list_free(void* owner);
-/// Clearnet white and gray list sizes. 0; 1 (P2P off, nothing written); or -1.
+/// Clearnet white and gray list sizes. 0; 1 (offline, nothing written); or -1.
 int shekyl_rpc_peerlist_sizes(std::uint64_t* out_white, std::uint64_t* out_gray);
-/// Whether P2P runs: 0 on, 1 started with P2P off, -2 before it is recorded.
+/// Whether P2P runs: 0 running, 1 offline, -2 before it is recorded.
 int shekyl_rpc_p2p_state(void);
 /// Record --offline where the p2p layer reads it; returns `offline`.
 bool shekyl_p2p_record_offline(bool offline);

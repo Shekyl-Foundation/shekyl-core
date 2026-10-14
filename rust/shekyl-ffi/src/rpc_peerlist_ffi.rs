@@ -13,8 +13,8 @@
 //! through the hub. Nothing here changes the lists.
 //!
 //! **An offline daemon reports a state, never a zero (Rick, 2026-10-14).**
-//! A daemon started with P2P off (`--offline`) has no peer lists by
-//! configuration. Both exports then answer [`FACTS_P2P_OFF`] and write
+//! A daemon started offline (`--offline`) has no peer lists by
+//! configuration. Both exports then answer [`FACTS_OFFLINE`] and write
 //! nothing: no count of zero and no empty listing, either of which would
 //! read as a running node with no peers. The state is read from what the
 //! p2p layer recorded when it read `--offline`
@@ -46,9 +46,9 @@ const FACTS_OK: i32 = 0;
 const FACTS_ERR_NULL: i32 = -1;
 /// The p2p layer has not read its configuration yet.
 const FACTS_ERR_NOT_READY: i32 = -2;
-/// This daemon was started with P2P off: a state, not a fault. Nothing is
-/// written. Twin of `shekyl-daemon-rpc`'s `SHEKYL_RPC_FACTS_P2P_OFF`.
-pub const FACTS_P2P_OFF: i32 = 1;
+/// This daemon was started offline: a state, not a fault. Nothing is
+/// written. Twin of `shekyl-daemon-rpc`'s `SHEKYL_RPC_FACTS_OFFLINE`.
+pub const FACTS_OFFLINE: i32 = 1;
 
 /// What the p2p layer recorded when it read `--offline`.
 static P2P_MODE: AtomicU8 = AtomicU8::new(MODE_UNRECORDED);
@@ -61,19 +61,19 @@ const MODE_OFF: u8 = 2;
 pub(crate) enum P2pMode {
     /// The p2p layer has not read `--offline` yet.
     Unrecorded,
-    On,
-    Off,
+    Running,
+    Offline,
 }
 
 pub(crate) fn p2p_mode() -> P2pMode {
     match P2P_MODE.load(Ordering::Acquire) {
-        MODE_ON => P2pMode::On,
-        MODE_OFF => P2pMode::Off,
+        MODE_ON => P2pMode::Running,
+        MODE_OFF => P2pMode::Offline,
         _ => P2pMode::Unrecorded,
     }
 }
 
-/// Record whether this daemon was started with P2P off, and return it. The
+/// Record whether this daemon was started offline, and return it. The
 /// p2p layer calls this where it reads `--offline`, so the record is the
 /// configuration itself.
 #[no_mangle]
@@ -84,13 +84,13 @@ pub extern "C" fn shekyl_p2p_record_offline(offline: bool) -> bool {
 
 /// Whether this daemon runs P2P, for the RPC methods that read no peer
 /// list (`get_connections`, `sync_info`): 0 when it runs,
-/// [`FACTS_P2P_OFF`] when it was started with P2P off, -2 before the p2p
+/// [`FACTS_OFFLINE`] when it was started offline, -2 before the p2p
 /// layer has read its configuration.
 #[no_mangle]
 pub extern "C" fn shekyl_rpc_p2p_state() -> i32 {
     match p2p_mode() {
-        P2pMode::On => FACTS_OK,
-        P2pMode::Off => FACTS_P2P_OFF,
+        P2pMode::Running => FACTS_OK,
+        P2pMode::Offline => FACTS_OFFLINE,
         P2pMode::Unrecorded => FACTS_ERR_NOT_READY,
     }
 }
@@ -180,8 +180,8 @@ fn entries(public_only: bool) -> Option<PeerListOwner> {
 
 /// White then gray peerlist entries in one array, discriminated by
 /// `white`; `public_only` nonzero lists the clearnet lists alone. Returns
-/// 0 with `*out`, `*out_len` and `*out_owner` written; [`FACTS_P2P_OFF`]
-/// with nothing written when the daemon was started with P2P off; -1 for a
+/// 0 with `*out`, `*out_len` and `*out_owner` written; [`FACTS_OFFLINE`]
+/// with nothing written when the daemon was started offline; -1 for a
 /// null out pointer or an online daemon with no peer lists. Release
 /// `*out_owner` with
 /// [`shekyl_rpc_peer_list_free`]; the entries point into it.
@@ -199,8 +199,8 @@ pub unsafe extern "C" fn shekyl_rpc_peer_list(
     if out.is_null() || out_len.is_null() || out_owner.is_null() {
         return FACTS_ERR_NULL;
     }
-    if p2p_mode() == P2pMode::Off {
-        return FACTS_P2P_OFF;
+    if p2p_mode() == P2pMode::Offline {
+        return FACTS_OFFLINE;
     }
     unsafe { out_owner.write(std::ptr::null_mut()) };
     let Some(owner) = entries(public_only != 0) else {
@@ -235,8 +235,8 @@ pub unsafe extern "C" fn shekyl_rpc_peer_list_free(owner: *mut c_void) {
 }
 
 /// How many addresses the clearnet white and gray lists hold, for
-/// `get_info`. Returns 0 with both written; [`FACTS_P2P_OFF`] with nothing
-/// written when the daemon was started with P2P off; -1 for a null out
+/// `get_info`. Returns 0 with both written; [`FACTS_OFFLINE`] with nothing
+/// written when the daemon was started offline; -1 for a null out
 /// pointer or an online daemon with no peer lists.
 ///
 /// # Safety
@@ -247,8 +247,8 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
     if out_white.is_null() || out_gray.is_null() {
         return FACTS_ERR_NULL;
     }
-    if p2p_mode() == P2pMode::Off {
-        return FACTS_P2P_OFF;
+    if p2p_mode() == P2pMode::Offline {
+        return FACTS_OFFLINE;
     }
     let Some(dialer) = dialer() else {
         return FACTS_ERR_NULL;
@@ -369,11 +369,11 @@ mod tests {
         P2P_MODE.store(MODE_UNRECORDED, Ordering::Release);
     }
 
-    /// A daemon started with P2P off reports that state on both exports and
+    /// A daemon started offline reports that state on both exports and
     /// writes nothing: no count, no row, no owner (Rick, 2026-10-14). The
     /// state export says the same.
     #[test]
-    fn a_daemon_started_with_p2p_off_reports_the_state_and_writes_nothing() {
+    fn a_daemon_started_offline_reports_the_state_and_writes_nothing() {
         let _bind = seam_bind_lock()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -386,17 +386,21 @@ mod tests {
         let mut owner = sentinel_owner;
         assert_eq!(
             unsafe { shekyl_rpc_peer_list(0, &raw mut rows, &raw mut len, &raw mut owner) },
-            FACTS_P2P_OFF
+            FACTS_OFFLINE
         );
         assert_eq!((rows, len, owner), (sentinel_rows, 7, sentinel_owner));
         let mut white = 7u64;
         let mut gray = 7u64;
         assert_eq!(
             unsafe { shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) },
-            FACTS_P2P_OFF
+            FACTS_OFFLINE
         );
-        assert_eq!((white, gray), (7, 7), "nothing is written for P2P off");
-        assert_eq!(shekyl_rpc_p2p_state(), FACTS_P2P_OFF);
+        assert_eq!(
+            (white, gray),
+            (7, 7),
+            "nothing is written for an offline daemon"
+        );
+        assert_eq!(shekyl_rpc_p2p_state(), FACTS_OFFLINE);
         forget_mode();
     }
 

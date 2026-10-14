@@ -141,7 +141,7 @@ impl StemSinkPair {
                 .expect("origin get_connections");
             let connections = reply
                 .into_running()
-                .expect("a linked daemon's P2P runs; it must not report P2P off");
+                .expect("a linked daemon's P2P runs; it must not report offline");
             let outbound = connections
                 .connections
                 .iter()
@@ -279,9 +279,9 @@ async fn restricted_listener_is_withheld_status_and_capped_by_native_handlers() 
     );
     assert_eq!(
         admin_info.peers,
-        shekyl_rpc_types::Hidden::Shown(shekyl_rpc_types::InfoP2p::Off),
+        shekyl_rpc_types::Hidden::Shown(shekyl_rpc_types::InfoP2p::Offline),
         "the admin listener is shown Peers, and this daemon runs `--offline`: \
-         the part is the state P2P off, with no count"
+         the part is the state offline, with no count"
     );
     assert!(
         admin_status.start_time > 0 && !admin_status.version.is_empty(),
