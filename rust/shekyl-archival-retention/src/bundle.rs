@@ -64,9 +64,10 @@
 
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
 use shekyl_types::archival::SettlementEpochBlocks;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, SettlementEpoch};
 
 use crate::hash::cshake256_32;
+use crate::SettlementSchedule;
 
 /// cSHAKE256 customization for [`bundle_commitment`] (rule 30: one label,
 /// one message, versioned).
@@ -704,18 +705,48 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
 /// The caller supplies ascending `h`; the order is part of what is hashed,
 /// and the verifier's section check refuses any other.
 ///
-/// # Panics
+/// # Errors
 ///
-/// If the section holds 2³² references or more.
-#[must_use]
-pub fn bundle_root(refs: &[BundleRef]) -> [u8; 32] {
-    let n = u32::try_from(refs.len()).expect("a section's reference count fits 32 bits");
+/// [`TooManyReferences`] if the section holds 2³² references or more: the
+/// root's preimage counts them in four bytes, so such a section has no
+/// root. A consensus caller refuses the section for it; nothing here
+/// panics.
+pub fn bundle_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
+    let n = section_reference_count(refs.len())?;
     let mut input = Vec::new();
     input.extend_from_slice(&n.to_le_bytes());
     for reference in refs {
         reference.encode_into(&mut input);
     }
-    cshake256_32(BUNDLE_ROOT_CUSTOMIZATION, &input)
+    Ok(cshake256_32(BUNDLE_ROOT_CUSTOMIZATION, &input))
+}
+
+/// A section holds more references than the root's `n_le[4]` can count.
+///
+/// The wire's condition, owned here: §7.3 fixes the count's width at four
+/// bytes, so a section of 2³² or more references has no root preimage at
+/// all — it is not a section the format can commit to. The verifier's
+/// section check turns it into its own refusal of the block (CEN-J29).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, thiserror::Error)]
+#[error("a section of {found} references has no root: the root counts them in 32 bits")]
+pub struct TooManyReferences {
+    /// The references offered.
+    pub found: usize,
+}
+
+/// `n` as the root's preimage carries it: the section's reference count in
+/// 32 bits, checked, never truncated.
+///
+/// Crate-private. [`bundle_root`] is the caller. The bound is tested on
+/// this function because a section of 2³² references is not something a
+/// test allocates. The verifier maps [`bundle_root`]'s error and does not
+/// call this.
+///
+/// # Errors
+///
+/// [`TooManyReferences`] if `len` is 2³² or more.
+fn section_reference_count(len: usize) -> Result<u32, TooManyReferences> {
+    u32::try_from(len).map_err(|_| TooManyReferences { found: len })
 }
 
 /// What one bundle costs its section, in draws: `max(count, 1)`
@@ -755,6 +786,56 @@ pub const fn bundle_charge(count: u32) -> u64 {
 pub fn section_budget(c: u64, d_max: u64, seb: SettlementEpochBlocks) -> u64 {
     let cap = u128::from(d_max) * 9 / u128::from(seb.get()) + 1;
     u64::try_from(u128::from(c).saturating_mul(cap)).unwrap_or(u64::MAX)
+}
+
+/// The `D` a section's budget is computed from: [`section_budget`]'s
+/// `d_max` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.4, `SCS-P20`, `SCS-P33`).
+///
+/// > with `c = 2` (PROVISIONAL, §13.2) and **`D` the largest `D` among the
+/// > epochs of the bundles in the section**
+///
+/// Each reference's `h` names an epoch under `schedule`; `d_of_epoch` is
+/// asked for that epoch's `D` — the drawable epoch's length at `h_open(E)`
+/// — once per distinct epoch, in the section's order. The maximum is what
+/// lets one budget hold bundles of two epochs: a section spans at most two,
+/// because `W₂ < SEB`, and a bundle of the larger-`D` epoch is charged
+/// against a cap its own epoch set. Taking the including block's `D`, or
+/// the first reference's, under-budgets a section whose later epoch is
+/// larger and over-budgets one whose earlier epoch is.
+///
+/// The answer is three-valued, as the view's reads are:
+///
+/// - `Ok(Some(d_max))` — every epoch's `D` is known.
+/// - `Ok(None)` — some epoch's `D` is not known, or the section names no
+///   epoch. **Never a partial maximum** over the epochs that did answer.
+///   The bundle verifier does not use this for an empty section: an empty
+///   section is admitted without a call, because it has no `D` to wait
+///   for. A non-empty section with `Ok(None)` waits (`SCS-P23`).
+/// - `Err(fault)` — `d_of_epoch` faulted. Not an unknown `D`, and not a
+///   verdict: the view's own failure, returned as itself.
+///
+/// # Errors
+///
+/// The first fault `d_of_epoch` returns.
+pub fn section_d_max<E>(
+    refs: &[BundleRef],
+    schedule: SettlementSchedule,
+    mut d_of_epoch: impl FnMut(SettlementEpoch) -> Result<Option<u64>, E>,
+) -> Result<Option<u64>, E> {
+    let mut d_max: Option<u64> = None;
+    let mut asked: Option<SettlementEpoch> = None;
+    for reference in refs {
+        let epoch = schedule.epoch_at(reference.h());
+        if asked == Some(epoch) {
+            continue;
+        }
+        asked = Some(epoch);
+        let Some(d) = d_of_epoch(epoch)? else {
+            return Ok(None);
+        };
+        d_max = Some(d_max.map_or(d, |known| known.max(d)));
+    }
+    Ok(d_max)
 }
 
 #[cfg(test)]

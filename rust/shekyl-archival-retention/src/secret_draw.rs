@@ -558,6 +558,39 @@ mod tests {
         );
     }
 
+    /// The specification's negative control (§5.2): a nonce computed
+    /// **without** the `attempt` byte — `seed ‖ block_hash(h) ‖ j_le[4]`,
+    /// 68 bytes under the nonce label — is `87ade5ae…03adc456` for `j = 0`
+    /// and matches no row of the table. The specification publishes only
+    /// the first and last four bytes of that value, so this asserts the
+    /// prefix and the suffix and does not invent the middle. It is what goes
+    /// red if `challenge_nonce` drops the byte: the four rows above would
+    /// then collapse onto this value. Red edit: remove `input[68] = attempt`
+    /// and shorten the preimage; the `j = 0` rows all read this hash.
+    #[test]
+    fn a_nonce_without_the_attempt_byte_matches_no_row() {
+        let mut preimage = [0u8; 32 + 32 + 4];
+        preimage[..32].copy_from_slice(&SEED);
+        preimage[32..64].copy_from_slice(&HASH);
+        preimage[64..68].copy_from_slice(&0u32.to_le_bytes());
+        let without_attempt = hex(&cshake256_32(CHALLENGE_NONCE_CUSTOMIZATION, &preimage));
+        assert!(
+            without_attempt.starts_with("87ade5ae"),
+            "prefix of the specification's control"
+        );
+        assert!(
+            without_attempt.ends_with("03adc456"),
+            "suffix of the specification's control"
+        );
+        for (draw, attempt) in [(0, 0), (0, 1), (0, 2), (1, 0)] {
+            assert_ne!(
+                hex(&challenge_nonce(&SEED, &HASH, draw, attempt)),
+                without_attempt,
+                "j = {draw}, attempt = {attempt}: the attempt byte is in the preimage"
+            );
+        }
+    }
+
     /// The vectors of the specification's §7.3.
     #[test]
     fn the_batch_commitment_matches_the_specifications_vectors() {

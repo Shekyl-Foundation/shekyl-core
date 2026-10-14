@@ -31,6 +31,12 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// [`bundle_root`] over a section every test here can hold: far fewer than
+/// 2³² references, so the one refusal is not this helper's.
+fn root(refs: &[BundleRef]) -> [u8; 32] {
+    bundle_root(refs).expect("a test section's count fits 32 bits")
+}
+
 /// Record `k` of the vectors: `attempt = k mod 3`, `anchor_height =
 /// 999_000 + k`, `delivery_digest = (0xD0 + k) × 32`, and a receipt whose
 /// byte `i` is `(7·i + 13·k + 1) mod 251`.
@@ -589,22 +595,22 @@ fn vector_refs() -> (BundleRef, BundleRef) {
 fn the_root_matches_its_vectors() {
     let (first, second) = vector_refs();
     assert_eq!(
-        hex(&bundle_root(&[])),
+        hex(&root(&[])),
         "1d271689c2934e75f2b8a25f57a686a75744d5f254ce014341eeba7b56845226"
     );
     assert_eq!(
-        hex(&bundle_root(std::slice::from_ref(&first))),
+        hex(&root(std::slice::from_ref(&first))),
         "e2888ebb63918165e0efa48e215e157ec8e255331fcf8b415390affb6e84836c"
     );
     assert_eq!(
-        hex(&bundle_root(&[first.clone(), second.clone()])),
+        hex(&root(&[first.clone(), second.clone()])),
         "a64fe23abd6c2350d9fdf4fa0109ffc69701b3adad19e0e331858f966328de4b"
     );
     // Order is hashed: the section check refuses the swap, and the root
     // would not agree with it either.
     assert_ne!(
-        bundle_root(&[first.clone(), second.clone()]),
-        bundle_root(&[second, first])
+        root(&[first.clone(), second.clone()]),
+        root(&[second, first])
     );
 }
 
@@ -620,14 +626,14 @@ fn the_root_matches_its_vectors() {
 #[test]
 fn two_sections_cannot_share_a_root_preimage() {
     let (first, second) = vector_refs();
-    let two = bundle_root(&[first.clone(), second.clone()]);
+    let two = root(&[first.clone(), second.clone()]);
     assert_ne!(
         hex(&two),
         "c4e0066605daec9bd4a8fac7ad935fb9881cd2ebc95546d2d7cc643dceb3720a",
         "n counts references, not bytes"
     );
     assert_ne!(
-        hex(&bundle_root(std::slice::from_ref(&first))),
+        hex(&root(std::slice::from_ref(&first))),
         "c6bdd61d22246ea3b1a44fcafb5e28f8cd4259ca675a1db3b37c467cdac2ab6c",
         "n is hashed"
     );
@@ -670,7 +676,7 @@ fn two_sections_cannot_share_a_root_preimage() {
     // 97 and 104 draws are both 13 bytes of bitmap and are different
     // references, with different roots: the count is in the preimage.
     assert_eq!(wide(97, 5).encode().len(), wide(104, 5).encode().len());
-    assert_ne!(bundle_root(&[wide(97, 5)]), bundle_root(&[wide(104, 5)]));
+    assert_ne!(root(&[wide(97, 5)]), root(&[wide(104, 5)]));
 }
 
 /// The root covers each reference's seed, `h`, count, bitmap and prunable
@@ -678,8 +684,8 @@ fn two_sections_cannot_share_a_root_preimage() {
 #[test]
 fn the_root_moves_with_every_field_of_a_reference() {
     let (first, second) = vector_refs();
-    let base = bundle_root(&[first.clone(), second.clone()]);
-    let with = |changed: BundleRef| bundle_root(&[changed, second.clone()]);
+    let base = root(&[first.clone(), second.clone()]);
+    let with = |changed: BundleRef| root(&[changed, second.clone()]);
     let ph = *first.prunable_hash();
     let mut seed = first.kept().clone();
     seed.seed[0] ^= 1;
@@ -704,6 +710,42 @@ fn the_root_moves_with_every_field_of_a_reference() {
     assert_ne!(base, with(BundleRef::new(first.kept().clone(), other)));
 }
 
+/// The root counts its references in four bytes, and a section the count
+/// cannot hold has no root rather than a panic: the conversion is checked
+/// where a section's length becomes `n`. Tested on the conversion, which is
+/// the one place the bound lives, because a section of 2³² references is
+/// not something a test allocates. Red edit: `len as u32` (the count
+/// wraps to 0 and the section hashes as empty), or `unwrap_or(u32::MAX)`.
+#[test]
+fn a_section_the_root_cannot_count_has_no_root() {
+    assert_eq!(section_reference_count(0), Ok(0));
+    assert_eq!(section_reference_count(1), Ok(1));
+    let (first, second) = vector_refs();
+    assert_eq!(
+        bundle_root(&[first, second]).map(|root| hex(&root)),
+        Ok("a64fe23abd6c2350d9fdf4fa0109ffc69701b3adad19e0e331858f966328de4b".to_string())
+    );
+    // The boundary itself needs a `usize` wider than 32 bits to state.
+    #[cfg(target_pointer_width = "64")]
+    {
+        let last = usize::try_from(u32::MAX).expect("fits");
+        assert_eq!(section_reference_count(last), Ok(u32::MAX));
+        let first_past = last + 1;
+        assert_eq!(
+            section_reference_count(first_past),
+            Err(TooManyReferences { found: first_past })
+        );
+        assert_eq!(
+            section_reference_count(usize::MAX),
+            Err(TooManyReferences { found: usize::MAX })
+        );
+        assert_eq!(
+            TooManyReferences { found: first_past }.to_string(),
+            "a section of 4294967296 references has no root: the root counts them in 32 bits"
+        );
+    }
+}
+
 // ---------------------------------------------------------------- budget
 
 /// The section budget (§7.4, `SCS-P33`): `c · (⌊9·D / SEB⌋ + 1)`. Red
@@ -726,6 +768,119 @@ fn the_section_budget_is_c_count_caps() {
     assert_eq!(section_budget(c, 324_000, seb), 584);
     assert_eq!(section_budget(1, 3_100_000, seb), 2_791);
     assert_eq!(section_budget(0, 324_000, seb), 0);
+}
+
+/// `D` for the budget is the largest `D` among the epochs of the bundles in
+/// the section (§7.4), asked once per distinct epoch; a section the
+/// specification allows spans two. Red edits: take the first reference's
+/// `D` (the ascending section reads 300); take the last (the descending
+/// section reads 300); take the including block's — a caller's `D` the
+/// helper never sees.
+#[test]
+fn the_sections_d_is_the_largest_among_its_epochs() {
+    let schedule = SettlementSchedule::new(SettlementEpochBlocks::new(10_000).expect("non-zero"));
+    let at = |h: u64| BundleRef::new(kept_at(BlockHeight::from_raw(h), 0, &[]), [0xAB; 32]);
+    let d = |epoch: SettlementEpoch| -> Result<Option<u64>, ()> {
+        Ok(match epoch.to_raw() {
+            0 => Some(300),
+            1 => Some(1_000),
+            _ => None,
+        })
+    };
+    // Epoch 0 then epoch 1: the larger `D` is the later epoch's.
+    assert_eq!(
+        section_d_max(&[at(9_998), at(9_999), at(10_000)], schedule, d),
+        Ok(Some(1_000))
+    );
+    // One reference per epoch, and the larger `D` first (a section in
+    // descending `h` is refused by the verifier, so this holds the helper
+    // alone to "largest", not "last").
+    let mut descending_d = |epoch: SettlementEpoch| -> Result<Option<u64>, ()> {
+        Ok(match epoch.to_raw() {
+            0 => Some(1_000),
+            1 => Some(300),
+            _ => None,
+        })
+    };
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000)], schedule, &mut descending_d),
+        Ok(Some(1_000))
+    );
+    // A single-epoch section is that epoch's `D`, asked once.
+    let mut asked = Vec::new();
+    assert_eq!(
+        section_d_max(&[at(100), at(5_000), at(9_999)], schedule, |epoch| {
+            asked.push(epoch);
+            d(epoch)
+        }),
+        Ok(Some(300))
+    );
+    assert_eq!(asked, [SettlementEpoch::from_raw(0)]);
+    // Two epochs: each asked once, in the section's order.
+    let mut asked = Vec::new();
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000), at(10_001)], schedule, |epoch| {
+            asked.push(epoch);
+            d(epoch)
+        }),
+        Ok(Some(1_000))
+    );
+    assert_eq!(
+        asked,
+        [SettlementEpoch::from_raw(0), SettlementEpoch::from_raw(1)]
+    );
+}
+
+/// An unknown `D` is `None` for the section, never a partial maximum, and
+/// an empty section has no `D`. A fault is itself. Red edits: skip an
+/// epoch whose `D` is unknown and return the maximum of the rest; return
+/// `Some(0)` for an empty section; map a fault to `None`.
+#[test]
+fn an_unknown_d_is_no_d_for_the_section_and_a_fault_is_itself() {
+    let schedule = SettlementSchedule::new(SettlementEpochBlocks::new(10_000).expect("non-zero"));
+    let at = |h: u64| BundleRef::new(kept_at(BlockHeight::from_raw(h), 0, &[]), [0xAB; 32]);
+    let known_only_0 = |epoch: SettlementEpoch| -> Result<Option<u64>, &'static str> {
+        Ok((epoch.to_raw() == 0).then_some(300))
+    };
+    let known_only_1 = |epoch: SettlementEpoch| -> Result<Option<u64>, &'static str> {
+        Ok((epoch.to_raw() == 1).then_some(1_000))
+    };
+    // The unknown epoch is the later one, and the earlier one.
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000)], schedule, known_only_0),
+        Ok(None)
+    );
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000)], schedule, known_only_1),
+        Ok(None)
+    );
+    // Known where the section has only the known epoch.
+    assert_eq!(
+        section_d_max(&[at(9_999)], schedule, known_only_0),
+        Ok(Some(300))
+    );
+    // Empty: no epoch, no `D`, nothing asked.
+    let mut asked = false;
+    assert_eq!(
+        section_d_max(&[], schedule, |_| {
+            asked = true;
+            Ok::<_, &str>(Some(7))
+        }),
+        Ok(None)
+    );
+    assert!(!asked);
+    // A fault on the second epoch is returned as the fault, not as `None`
+    // and not as the first epoch's `D`.
+    assert_eq!(
+        section_d_max(&[at(9_999), at(10_000)], schedule, |epoch| {
+            if epoch.to_raw() == 0 {
+                Ok(Some(300))
+            } else {
+                Err("unreadable")
+            }
+        }),
+        Err("unreadable")
+    );
 }
 
 /// The budget does not overflow: it saturates. Red edit: compute in `u64`

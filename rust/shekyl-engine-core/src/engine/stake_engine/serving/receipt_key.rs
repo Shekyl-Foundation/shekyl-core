@@ -32,6 +32,24 @@
 //!   its fetch targets with the receipt key from the bond record. A persona
 //!   that signed with the receipt key before a verifier accepted it would
 //!   be serving shards whose countersignature every requester rejects.
+//!   The cutover's edit sites, each of which names the identity scheme or
+//!   its width today:
+//!   - `shekyl-p-host`: the serving key is
+//!     `PassKey<IDENTITY_ENVELOPE_LEN>`, and the bind builds
+//!     `PassSigner<IDENTITY_ENVELOPE_LEN>`;
+//!   - `shekyl-daemon-image`'s shard view: the holder's target is built
+//!     from `record.hybrid_pubkey` with
+//!     `HybridPublicKey::from_canonical_bytes`. It becomes
+//!     `FnDsaHybridPublicKey::from_receipt_sign_pk` of the record's
+//!     receipt key;
+//!   - `shekyl-archival-fetch-sched`: `FetchTarget<HybridPublicKey>` and
+//!     `VerifiedShard<HybridPublicKey>`;
+//!   - the harnesses: `shekyl-sp-t3-spike` builds
+//!     `FetchTarget<HybridPublicKey>`. `shekyl-p-loopback`'s
+//!     `fetch_target<K: PassVerifyingKey>` is already generic and needs
+//!     no edit — its callers choose the key, and change with it;
+//!   - `serving/start.rs`, and the `expect(dead_code)` on
+//!     [`ResidentReceiptKey::new`], below.
 //! - **Falsifier.** `serving/start.rs` handing the serving task this
 //!   capability while no verifier accepts a scheme-3 receipt. Held three
 //!   ways. `the_serving_task_is_not_started_with_the_receipt_key` reads that

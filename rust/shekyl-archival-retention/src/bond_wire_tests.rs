@@ -280,6 +280,12 @@ fn post_kind_table_has_release_at_2_and_rejects_the_deleted_bytes_3_and_4() {
 /// in the drawable set that the `h_open(E)` snapshot cannot build — so the
 /// byte joins 3 and 4: unassigned, refused, never re-minted. Byte 5 is the
 /// JoinMarket, the one JoinMarket byte, and 6 is the first past the table.
+///
+/// `shekyl-wire` defines the same byte as `BOND_POST_KIND_JOINMARKET`.
+/// Neither crate can import the other's (the wire's dependency on this
+/// crate is dev-only; this crate has no edge to the wire), so the two are
+/// tied by `the_join_market_byte_is_five_and_the_refused_bytes_stay_refused`
+/// in `shekyl-wire/tests/archival_arms_roundtrip.rs`, which can see both.
 #[test]
 fn byte_0_is_the_retired_keyless_join_market_and_byte_5_is_the_join_market() {
     assert!(matches!(

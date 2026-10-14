@@ -73,8 +73,6 @@ use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
 
 mod retired_keyless_join;
-#[allow(unused_imports)] // FND-19 cites `vectors_tests::RETIRED_KEYLESS_JOINS`.
-pub(crate) use retired_keyless_join::RETIRED_KEYLESS_JOINS;
 pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
 
 /// `manifest.json`, as the capture writes it (format 4).
@@ -396,7 +394,7 @@ pub(crate) struct Predates {
 /// record this held since E6 slice 8 row 6 (2026-10-06) — `emission-claim`,
 /// refused at 98 by CEN-J15 for a compact join onto a shard the chain never
 /// closed — named a block that no longer parses: its join is a keyless
-/// JoinMarket, and the chain is a [`RETIRED_KEYLESS_JOINS`] record now. The
+/// JoinMarket, and the chain is a [`retired_keyless_join::RETIRED_KEYLESS_JOINS`] record now. The
 /// mechanism stays for the next rule a capture predates.
 pub(crate) const PREDATES: [Predates; 0] = [];
 
@@ -984,7 +982,7 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
                 // — the bond-post capture carried the body, so only the
                 // twin was missing. That body is a keyless JoinMarket and
                 // the chain is read only below it now
-                // (`RETIRED_KEYLESS_JOINS`), so no captured chain carries a
+                // (`retired_keyless_join::RETIRED_KEYLESS_JOINS`), so no captured chain carries a
                 // post at all and the one cause is the corpus's.
                 vec![Unmutable::NoArchivalBodyToDuplicate {
                     kind: ArchivalKind::BondPost

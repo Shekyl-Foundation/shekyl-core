@@ -429,7 +429,15 @@ info:
   # runtime retires after it has been idle. Serving continues, and the
   # wallet log names the cause once. The count does not say whether the
   # daemon received more CPU. api_version stays 1.
-  version: 0.12.0
+  # 0.13.0: -29530 STAKE_STATE_UNREADABLE gains a second form. When the
+  # staker's .wallet.pscan was written under an earlier PSCAN_STATE_VERSION,
+  # `data` carries file (the seal's file name, never its path), found and
+  # expected (the two format versions), and the message names the remedy:
+  # move that one file out of the wallet's folder and open the wallet again.
+  # The cause-unknown form is unchanged and carries no `data`: its cause is
+  # withheld to the server log (rule 43's "not disclosed to this caller"
+  # reading, not an absent answer). api_version stays 1.
+  version: 0.13.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -1414,8 +1422,19 @@ components:
           -29530 STAKE_STATE_UNREADABLE   open (staker): the sealed staking-scan
                                           state would not load; a staker does
                                           not open without its scan (privacy is
-                                          not a degraded mode). The cause stays
-                                          in the server log
+                                          not a degraded mode). Two forms, told
+                                          apart by `data`: with no data, the
+                                          cause (a corrupt or swapped seal)
+                                          stays in the server log; with
+                                          data.file / data.found /
+                                          data.expected, the `.wallet.pscan`
+                                          file was written under an earlier
+                                          format version and the message names
+                                          the file and the remedy (move that
+                                          one file out of the wallet's folder,
+                                          open the wallet again; the scan
+                                          rebuilds it from the chain — nothing
+                                          migrates it, rule 15)
           -29531 SERVING_TOR_UNUSABLE     open (staker): the wallet's Tor
                                           configuration is unusable, so the
                                           serving host cannot start

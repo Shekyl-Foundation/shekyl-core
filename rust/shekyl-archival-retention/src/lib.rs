@@ -140,11 +140,11 @@ pub use bond_wire::{
 };
 pub use bundle::{
     bundle_charge, bundle_commitment, bundle_prunable_hash, bundle_root, section_budget,
-    BundleBody, BundleKept, BundleRecord, BundleRef, BundleWireError, PassBitmap,
-    BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_KEPT_FIXED_LEN, BUNDLE_PRUNABLE_CUSTOMIZATION,
-    BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN, BUNDLE_ROOT_CUSTOMIZATION,
-    BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_SEED_LEN, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
-    BUNDLE_WITNESS_LEN,
+    section_d_max, BundleBody, BundleKept, BundleRecord, BundleRef, BundleWireError, PassBitmap,
+    TooManyReferences, BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_KEPT_FIXED_LEN,
+    BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN,
+    BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_SEED_LEN,
+    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
@@ -191,11 +191,12 @@ pub use emission_verify::{
 };
 pub use pass_anchor::{
     anchor_depth_covers_response_window, pass_countersignature_message, pass_delivery_digest,
-    pass_request_header_bytes, PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher,
-    PassRequestHeader, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN,
-    PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_CUSTOMIZATION,
-    PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
+    pass_request_header_bytes, response_window_outrunning_anchor, PassAnchorWindow,
+    PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader, PASS_ANCHOR_DEPTH_BLOCKS,
+    PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
+    PASS_REQUEST_HEADER_LEN,
 };
 pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 // The emission error is re-exported under a disambiguated name: the bare
