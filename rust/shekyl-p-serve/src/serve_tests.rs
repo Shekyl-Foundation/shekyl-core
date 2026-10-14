@@ -6,8 +6,10 @@
 //! Endpoint tests for [`crate::serve`]. Lives beside the production loop so
 //! the file that answers the wire stays under a thousand lines; private
 //! items remain visible via `#[path]` from `serve.rs`. The countersignature's
-//! placement and the unsigned-body cases live in [`seal`], for the same
-//! reason.
+//! placement and the unsigned-body cases live in [`seal`], and the
+//! write-stall bound lives in [`stall`], for the same reason.
+
+use std::sync::Arc;
 
 use super::*;
 use crate::countersign::{PassKey, SignRefused, TestKeySigner, IDENTITY_ENVELOPE_LEN};
@@ -925,6 +927,9 @@ mod invariant;
 
 #[path = "serve_bench_seam_tests.rs"]
 mod bench_seam;
+
+#[path = "serve_stall_tests.rs"]
+mod stall;
 
 #[path = "serve_wire_pin_tests.rs"]
 mod wire_pin;
