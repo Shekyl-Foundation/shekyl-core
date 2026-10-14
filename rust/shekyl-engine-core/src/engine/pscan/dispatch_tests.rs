@@ -1076,6 +1076,39 @@ async fn terminal_rejection_removes_and_never_resends() {
     assert_eq!(broadcast.sent().len(), 1, "never resends after terminal");
 }
 
+/// A daemon that cannot hold a JoinMarket (FND-20) answers a definite
+/// rejection, and the driver treats it as terminal: the post and its
+/// funding reservation go in one seal and it is never resent. Before the
+/// daemon answered this way, the same refusal was a commit fault, which
+/// the driver resubmits until the alarm horizon and then holds for good.
+#[tokio::test]
+async fn a_daemon_that_cannot_hold_a_join_market_releases_the_post() {
+    let unsupported = Err(BroadcastSubmitError::Submit(
+        SubmitterError::RejectedTerminal {
+            kind: crate::engine::error::TerminalErrorKind::JoinMarketUnsupported,
+        },
+    ));
+    let (mut driver, store, broadcast) =
+        driver_with_posts(vec![post(1, 100, 0, &[7, 8])], vec![unsupported]);
+
+    tick(&mut driver, 100).await;
+    assert_eq!(broadcast.sent().len(), 1);
+    let block = store
+        .block
+        .lock()
+        .expect("mem store")
+        .clone()
+        .expect("sealed");
+    assert!(block.posts().is_empty(), "the post is withdrawn");
+    assert!(
+        block.reserved_gindexes().is_empty(),
+        "its funding is spendable again"
+    );
+
+    tick(&mut driver, 101).await;
+    assert_eq!(broadcast.sent().len(), 1, "never resent to the same daemon");
+}
+
 // -- §3.4 resubmit bound: the alarm horizon ---------------------------------
 
 /// A dispatched post unconfirmed past the alarm horizon stops

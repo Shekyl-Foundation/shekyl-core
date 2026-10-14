@@ -168,6 +168,10 @@ pub enum RejectCause {
     /// Reference block hash unknown to this daemon (typically: daemon not
     /// yet synced to it). Sync-gated retry (§2.5).
     ReferenceNotFound,
+    /// A JoinMarket bond post this daemon cannot admit: its C++ commit
+    /// step has no decoder for the receipt-key form (FND-20). Every other
+    /// check passed. Deleted with the C++ commit shim (DEL-008).
+    JoinMarketUnsupported,
     /// Forward-compat catch-all: a cause this client build does not know.
     #[serde(other)]
     Unrecognized,
@@ -339,6 +343,7 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 | `Rejected{ReferenceTooRecent}` | Timed backoff (min-age is 5 blocks; the wallet built too close to the tip), then resubmit-same-bytes. |
 | `Rejected{ReferenceNotFound}` | Sync-gated: consult daemon health context (§5.2). If the daemon is behind, wait for sync and resubmit-same-bytes; if the daemon is synced and still does not know the reference, treat as `StaleRoot`. Own-daemon-gated branching per §7.2. |
 | `Rejected{Unrecognized}` | Release + one-shot rebuild (the F28 loop-breaker applies). |
+| `Rejected{JoinMarketUnsupported}` | Terminal release, no rebuild: nothing was built wrong, and the same daemon gives the same answer. The pending stake is withdrawn and its funding is spendable again; staking resumes against a daemon that admits a JoinMarket (FND-20, DEL-008). Authored only by the C++ commit shim, ahead of its reparse (`ffi_shim.rs`), so it never reaches the wallet as the commit fault that reparse would have been. |
 | `Err(RpcError)` | The ambiguous case. Hold locks, TTL, resubmit-same-bytes; the next definite verdict resolves. |
 
 **Idempotent resubmission is the status query.** Under identity-first

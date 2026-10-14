@@ -560,7 +560,10 @@ fn classify_probe(outcome: TxSubmitOutcome) -> ProbeVerdict {
             RejectCause::Malformed
             | RejectCause::FeeTooLow
             | RejectCause::DoubleSpendConflict
-            | RejectCause::Unrecognized => ProbeVerdict::Kernel(ProbeOutcome::RejectedTerminal),
+            | RejectCause::Unrecognized
+            | RejectCause::JoinMarketUnsupported => {
+                ProbeVerdict::Kernel(ProbeOutcome::RejectedTerminal)
+            }
             // Retryable: needs a fresh reference — a human-authorized
             // rebuild, not an automatic one.
             RejectCause::StaleRoot
@@ -581,7 +584,8 @@ fn probe_trace(outcome: TxSubmitOutcome) -> WatchdogProbeOutcome {
             RejectCause::Malformed
             | RejectCause::FeeTooLow
             | RejectCause::DoubleSpendConflict
-            | RejectCause::Unrecognized => WatchdogProbeOutcome::RejectedTerminal,
+            | RejectCause::Unrecognized
+            | RejectCause::JoinMarketUnsupported => WatchdogProbeOutcome::RejectedTerminal,
             RejectCause::StaleRoot
             | RejectCause::ReferenceTooRecent
             | RejectCause::ReferenceNotFound => WatchdogProbeOutcome::RejectedRetryable,

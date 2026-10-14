@@ -302,6 +302,9 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         let meta = TxMeta {
             weight: parsed.weight,
             fee: parsed.fee,
+            carries_join_market: parsed.bond_post().is_some_and(|(_, bond)| {
+                matches!(bond.kind, shekyl_wire::BondPostKind::JoinMarket { .. })
+            }),
         };
         match self
             .shim
@@ -321,6 +324,12 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 })
             }
             CommitOutcome::Raced(fresh) => Self::classify_race(&parsed, &cert, &fresh, caller),
+            // FND-20: a definite answer, not a fault. The wallet releases
+            // the post instead of resubmitting it to a daemon that cannot
+            // hold it.
+            CommitOutcome::JoinMarketUnsupported => Ok(SubmitVerdict::Rejected {
+                cause: RejectCause::JoinMarketUnsupported,
+            }),
             CommitOutcome::InternalFault => Err(EngineFault::CommitFault),
         }
     }

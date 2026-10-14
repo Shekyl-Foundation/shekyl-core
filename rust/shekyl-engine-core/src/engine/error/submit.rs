@@ -63,6 +63,14 @@ pub enum TerminalErrorKind {
     ///
     /// [`RejectCause::Unrecognized`]: shekyl_rpc_client::RejectCause::Unrecognized
     Unrecognized,
+
+    /// The daemon cannot admit a JoinMarket bond post: its C++ commit step
+    /// decodes no JoinMarket form that carries a receipt key
+    /// (`FN_DSA_HYBRID.md` `FND-20`). The transaction passed every check;
+    /// resubmitting it to the same daemon gets the same answer. Nothing
+    /// was built wrong, so nothing is rebuilt: the reservation is released
+    /// and the stake waits for a daemon that can take it (`DEL-008`).
+    JoinMarketUnsupported,
 }
 
 /// Retryable daemon-rejection sub-discriminant

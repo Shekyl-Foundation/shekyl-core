@@ -417,9 +417,9 @@ impl SubmitLoopBreaker {
     /// the escalation point; there is never a third build.
     const TRIP_THRESHOLD: u8 = 2;
 
-    /// Which terminal kinds the breaker scopes over. `DoubleSpend` is
-    /// excluded: its disposition is terminal release with no rebuild
-    /// prescription, so there is no loop to break.
+    /// Which terminal kinds the breaker scopes over. `DoubleSpend` and
+    /// `JoinMarketUnsupported` are excluded: their disposition is terminal
+    /// release with no rebuild prescription, so there is no loop to break.
     pub(super) fn in_scope(kind: TerminalErrorKind) -> bool {
         matches!(
             kind,

@@ -488,6 +488,10 @@ pub struct TxMeta {
     pub weight: u64,
     /// Transaction fee (`Ct::Fcmp` fee field).
     pub fee: u64,
+    /// Whether the transaction carries a JoinMarket bond post: the one
+    /// fact about its kind a commit backend may have no decoder for
+    /// ([`CommitOutcome::JoinMarketUnsupported`]).
+    pub carries_join_market: bool,
 }
 
 /// Outcome of the Phase-D check-and-commit (§3.2 / §4.2).
@@ -506,6 +510,13 @@ pub enum CommitOutcome {
     /// under pool pressure (F23 / defect 0.7) — classified
     /// `Rejected{FeeTooLow}` (pool-pressure variant).
     PrunedOnInsert,
+    /// The backend cannot hold a JoinMarket bond post and did not try: the
+    /// C++ commit step decodes no JoinMarket form that carries a receipt
+    /// key (`FN_DSA_HYBRID.md` `FND-20`), so its reparse of these bytes
+    /// would fail. Classified `Rejected{JoinMarketUnsupported}`: the
+    /// transaction passed every check, and this daemon is what it does not
+    /// fit. Deleted with the C++ commit shim at `DEL-008`.
+    JoinMarketUnsupported,
     /// Internal inconsistency (§3.4: release-mode txid divergence between
     /// the engine hash and C++ `get_transaction_hash` over the same blob,
     /// or a marshalling fault). Never a verdict: surfaced as a loud

@@ -44,6 +44,7 @@ use crate::engine::stake_timing::OsRngGapAdapter;
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
 
 use crate::engine::bond_assembly::PBoundBytes;
+use crate::engine::error::TerminalErrorKind;
 use crate::engine::transaction_submitter::{BroadcastSubmitError, SubmitSuccess, SubmitterError};
 
 // ---------------------------------------------------------------------------
@@ -793,14 +794,26 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                     .await
                     .map_err(|e| DispatchError::Store(Box::new(e)))?;
                 self.held_this_session.remove(&persona);
-                tracing::error!(
-                    ?kind,
-                    attempts,
-                    "bond-post dispatch ALARM: terminal verify rejection — record removed, \
-                     bytes pruned, funding reservation released (one seal). Re-anchor is a \
-                     fresh assemble on the next natural bond-attempt trigger (§3.6), never \
-                     automatic"
-                );
+                if kind == TerminalErrorKind::JoinMarketUnsupported {
+                    // FND-20: nothing was wrong with the post. Say so, in
+                    // the words a staker can act on.
+                    tracing::error!(
+                        attempts,
+                        "staking is not available on this daemon: it cannot accept the \
+                         transaction that joins the archival market yet. The pending stake was \
+                         withdrawn and its funds are spendable again. Stake again once the \
+                         daemon is updated"
+                    );
+                } else {
+                    tracing::error!(
+                        ?kind,
+                        attempts,
+                        "bond-post dispatch ALARM: terminal verify rejection — record removed, \
+                         bytes pruned, funding reservation released (one seal). Re-anchor is a \
+                         fresh assemble on the next natural bond-attempt trigger (§3.6), never \
+                         automatic"
+                    );
+                }
             }
             // Retryable / ambiguous: unknown or transient outcome. The state
             // already says `Dispatched` (sealed before the send), so the

@@ -512,6 +512,18 @@ impl SubmitStateShim for FfiSubmitShim {
         cert: &VerificationCertificate,
         expected: &SubmitFacts,
     ) -> CommitOutcome {
+        // FND-20: the C++ reparse below refuses `post_kind` above Release,
+        // and a JoinMarket is kind 5, so it would fail on these bytes as an
+        // internal fault. Answer it as what it is before the call. Deleted
+        // with this shim at DEL-008, when the Rust store commits.
+        if meta.carries_join_market {
+            tracing::info!(
+                txid = %txid,
+                "submit commit: this daemon's C++ commit step cannot hold a JoinMarket \
+                 bond post (FND-20); answered Rejected{{JoinMarketUnsupported}}"
+            );
+            return CommitOutcome::JoinMarketUnsupported;
+        }
         let n_key_images = expected.key_image_conflicts.len();
         let mut fresh_pod = ffi::SubmitFactsFfi::zeroed();
         let mut fresh_ki = vec![0u8; n_key_images];
