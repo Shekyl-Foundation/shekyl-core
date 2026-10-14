@@ -1,6 +1,6 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — Round 0 brief, held (2026-10-14; DC-Q13…DC-Q17 ruled the same day, DC-Q18 open).** Rule 26 is cited.
+**Status: OPEN — Round 0 brief, held (2026-10-14; DC-Q13…DC-Q18 ruled the same day).** Rule 26 is cited.
 The input grammar's Part A is ruled and merged (#1067, merge `7cf70b7052`):
 its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
@@ -10,8 +10,8 @@ of that draft: the C++ is not canonical, so the configuration is designed in
 Rust and the C++ appears only as what the cutover deletes. The brief owns
 the mechanism. Option names, kinds, defaults, surfaces and diagnostic codes
 are the grammar's and are cited, never restated. No implementation starts
-until PR-3 (#1056) merges, the grammar's Part B (#1068) merges with the
-`service` row and is folded in, and DC-Q18 is ruled (§1.2).
+until PR-3 (#1056) merges and the grammar's Part B (#1068) merges with the
+`service` row and the `view` field, and is folded in (§1.2).
 
 Anchors pinned to `dev` `7cf70b7052` (2026-10-14; the option surface is
 unchanged from `737da31276`, where the Round 0 read-out was taken). PR-3
@@ -53,7 +53,9 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
 | RT-16, Windows service mode (Rick, 2026-10-13; recorded by the Windows lane for [`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16, not yet on `dev`) | `shekyld` itself answers the Windows Service Control Manager, in Rust, entered only through RT-16's declared service-mode switch, which is a daemon-config option. No wrapper process and no self-registration: installing is the installer's and `shekyl-cli`'s, and restart on failure is the SCM's failure actions, set at install. On POSIX nothing changes: systemd and launchd run the foreground process. A run-as-user daemon's home is always per-user (`%LOCALAPPDATA%` on Windows, never the roaming profile, whatever the token); a machine-wide home exists only in the declared service mode, and only when the installer created it. The SCM dispatcher needs the process entry, which is this lane's (DC-Q13) | §2.2, §2.4, §2.5, DC-Q17 |
 | DC-Q15 (Rick, 2026-10-14) | The lock is `shekyld.lock` at the data directory's root, held through `flock` or `LockFileEx` and never deleted on exit. The marker is `shekyld.network` (TOML content, not a `.toml` name, so it is not mistaken for operator configuration), holding `network` and `network-id`, written by temporary file, `fsync`, rename and directory `fsync`, read only under the lock. Its refusals tell another network apart from the same network with a different network id (an earlier release's data after a regenesis: use a fresh `data-dir`) | §2.2, §2.6, §6 |
 | DC-Q16 (Rick, 2026-10-14) | One generic set request and one generic show request, carrying the option's name and its value as text in the grammar's syntax, parsed by the table and routed to the row's owner. Show never returns a secret, only that it is set. Both need the admin grant by default; a row may declare itself visible at the view grant, and otherwise the view grant sees nothing. Set accepts only rows marked Runtime and refuses any other with a code saying it is startup-only. Show reports each value's source (`default`, `file`, `cli`, `runtime`). The RPC lane names the methods | §2.7, §6 |
-| DC-Q17 / IG-Q36 (Rick, 2026-10-14; RT-16 ruled 2026-10-13) | `service` is a public switch, off by default, accepted on the command line and in the file: `shekyld` answers the platform's service manager (RT-16). It is accepted only where RT-16 defines it, Windows, and refused elsewhere with a typed code. The run mode selects one root, and every default path (`config-file`, `data-dir`, `log-file`) derives from it. On Windows a run-as-user daemon uses the per-account root (`FOLDERID_LocalAppData`) and `service` uses `%ProgramData%\shekyl\`, which only the installer creates (owner and access list: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. Linux and macOS keep the `/etc/shekyl/` config files in every mode (R2). The REJECTED row `run-as-service` keeps its name with a new reason. The name and rows land in #1068; the mechanism, including the deletion of the elevation branch in `daemon_default_data_dir.cpp`, lands here. Both cite RT-16 by document once its branch is pushed. *Records-was: the same day's first ruling made the run mode a command-line-only closed set and the config root follow the mode on every platform* | §2.2, §2.4, §2.5, §6 |
+| DC-Q17 / IG-Q36 (Rick, 2026-10-14; RT-16 ruled 2026-10-13) | `service` is a public switch, off by default (its surface is DC-Q18's: command line only): `shekyld` answers the platform's service manager (RT-16). It is accepted only where RT-16 defines it, Windows, and refused elsewhere with a typed code. The run mode selects one root, and every default path (`config-file`, `data-dir`, `log-file`) derives from it. On Windows a run-as-user daemon uses the per-account root (`FOLDERID_LocalAppData`) and `service` uses `%ProgramData%\shekyl\`, which only the installer creates (owner and access list: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. Linux and macOS keep the `/etc/shekyl/` config files in every mode (R2). The REJECTED row `run-as-service` keeps its name with a new reason. The name and rows land in #1068; the mechanism, including the deletion of the elevation branch in `daemon_default_data_dir.cpp`, lands here. Both cite RT-16 by document once its branch is pushed. *Records-was: the same day's first ruling made the run mode a command-line-only closed set and the config root follow the mode on every platform* | §2.2, §2.4, §2.5, §6 |
+| DC-Q18 (Rick, 2026-10-14) | `service` is command-line only (IG-7): the run mode selects the file, so a key in that file could only restate or contradict it, and on Windows the installer's service registration carries the command line. A `service` key in the file is refused. Only the grammar row's Surface cell changes | §2.4, §6 |
+| DC-Q16, the grammar side (Rick, 2026-10-14) | IG-9's row gains the field `view`, yes or no, default no. A row is shown at the view grant only when it opts in, and rows that link the operator or describe the host never do: `mine-address`, `tor-onion`, the peer, closed-peer and ban rows, paths, SOCKS endpoints, notify commands, every secret. IG-12's contract: `option set` refuses a row not marked runtime with a typed code, requires the admin grant and never writes the file; `option show` reports each value with its source, shows a secret only as set, returns only `view: yes` rows at the view grant and every row at admin. Lands on #1068 | §2.7 |
 | RT-W14's start reporting (Rick, 2026-10-14) | Under the SCM the Rust entry reports `SERVICE_START_PENDING` with checkpoints and wait hints through steps 2 to 8 of §2.2, and `SERVICE_RUNNING` only when RT-15's rendezvous is published. Without it the SCM's start timeout of about 30 seconds kills the service (error 1053): the managed Tor's bootstrap alone may take 300 seconds ([`src/p2p/net_node.inl:892`](../../src/p2p/net_node.inl)) | §2.2 |
 
 ### 1.2 Open before implementation
@@ -66,18 +68,6 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
   `mine-address` and `mine-threads`; the per-account root on Windows is
   `FOLDERID_LocalAppData` plus `Shekyl`. This brief cites the merged Part A
   and is changed in one replacement when #1068 merges.
-- **DC-Q18 — `service` given in the file.** On Windows the run mode chooses
-  the root, and the root holds the file that is read, so a `service` key in
-  that file cannot change which file was read: a per-account file saying
-  `service = true` makes a run-as-user daemon try the service manager and
-  refuse; a machine-root file saying `service = false` read by a service
-  would describe a mode the process is not in. Nothing unsafe follows,
-  since every case refuses, but the key can only agree or contradict.
-  **Recommendation:** the switch's surface is the command line (the
-  service registration passes it), and a file key is refused, as for
-  `network`. If the file surface stays, the rule is that the file's value
-  must equal the mode that chose the file, and a mismatch refuses.
-
 ---
 
 ## 2. The mechanism
@@ -194,9 +184,8 @@ the installer-created `%ProgramData%\shekyl\` with `service`. The file in
 the root is chosen by the network. Precedence and the missing-file rule are the `config-file` row
 of `INPUT_GRAMMAR.md` §5: a missing file at the default path is the
 defaults, stated in the effective-configuration line; a missing file at a
-path the operator named refuses with a code naming the path. The network is
-command-line only, because it chooses the file; `service`'s surface is
-DC-Q18.
+path the operator named refuses with a code naming the path. The network and
+`service` are command-line only, because they choose the file (DC-Q18).
 
 The checks run in this order, so that no value from an unsafe file is ever
 read:
@@ -325,9 +314,10 @@ constructor build the value and the request goes to the row's owner. Set
 accepts only a row marked Runtime and refuses any other with a startup-only
 code. Show reports each value with its source (`default`, `file`, `cli`,
 `runtime`), so an operator sees that a runtime change does not survive a
-restart, and shows a secret only as set. Both need the admin grant; a row
-may declare itself visible at the view grant, and the view grant sees no
-other row. The RPC lane names the two methods; `mine start` is the one
+restart, and shows a secret only as set. Set needs the admin grant. Show
+returns every row at the admin grant and, at the view grant, only rows
+whose `view` field is yes (IG-9, default no); rows that link the operator
+or describe the host never opt in. The RPC lane names the two methods; `mine start` is the one
 request that still reaches C++.
 
 ### 2.8 The clearnet public address (DC-Q10)
@@ -541,7 +531,7 @@ exit status is 2.
 | an unknown name, on either surface | refuse with the nearest live name (IG-10) |
 | a REJECTED or RESERVED name | refuse with its reason (IG-10) |
 | a value its kind refuses: a range, a unit, `*` as an origin, a hostname as an endpoint, a relative path, a non-UTF-8 argument | refuse, naming the option, the source and the rule |
-| a value on a surface its row forbids: a secret or a command on the command line, the network in the file | refuse, naming where it may be given |
+| a value on a surface its row forbids: a secret or a command on the command line, the network or `service` in the file | refuse, naming where it may be given |
 | a `dev-` option on a network its row does not name, and on mainnet always (IG-8) | refuse |
 | no account home and no explicit paths | refuse, naming the options that fix it |
 | the data directory cannot be created, or is not a directory | refuse, naming the path and the OS error |
@@ -620,7 +610,7 @@ exit status is 2.
 ## 9. Sequencing and pre-flight
 
 One cutover PR, based on PR-3 after it merges, once Part B, with the `service`
-row, is folded in and DC-Q18 is ruled (§1.2). It
+row and the `view` field, is folded in (§1.2). It
 lands the table, the parse, the sections, the lock, the marker, logging in
 Rust, the announcements, the Rust `main()` and the remnant's entry pair,
 the notify runner, the one RPC start, every Rust
@@ -707,7 +697,7 @@ ruled. Read rules 00, 06, 08, 17, 19, 20, 22, 23, 25, 26, 35, 36, 40, 45,
 commit.
 
 1. **Preconditions.** PR-3 is on `dev`; the grammar's Part B is on `dev`
-   with the `service` row, and folded into this brief; DC-Q18 is ruled. Stop and ask if any is not
+   with the `service` row and the `view` field, and folded into this brief. Stop and ask if any is not
    true.
 2. **Worktree and branch.** One worktree off `dev`; stage explicit paths;
    push each commit to the open PR after merging `dev`; no attribution
