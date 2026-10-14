@@ -383,8 +383,8 @@ mod tests {
         assert_eq!(expected.tx_count(), 1);
         assert_eq!(expected.archival_len().to_raw(), SHARD_BYTES as u64);
         assert!(
-            body.len() + shekyl_p_fetch::SIGNATURE_ENVELOPE_LEN as u64
-                <= expected.max_response_len()
+            body.len() + shekyl_p_fetch::IDENTITY_ENVELOPE_LEN as u64
+                <= expected.max_response_len::<shekyl_crypto_pq::signature::HybridPublicKey>()
         );
     }
 

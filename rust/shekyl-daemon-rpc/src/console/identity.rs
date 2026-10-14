@@ -13,6 +13,7 @@ use shekyl_rpc_types::{
     core_rpc_version_string, DaemonNetwork, IdentityExpectation, IdentityMismatch,
 };
 
+use crate::chain_facts::{ChainFacts, FfiChainFacts};
 use crate::ctl_client;
 
 use super::{json_rpc_result, Source};
@@ -22,7 +23,30 @@ impl Source {
     pub(super) fn ensure_identity(&self) -> Result<(), String> {
         match self {
             Source::Live(_) => Ok(()),
-            Source::Remote { checked, .. } => checked.get_or_init(|| handshake(self)).clone(),
+            Source::Remote { .. } => self.network().map(|_| ()),
+        }
+    }
+
+    /// The daemon's network, from the one place a daemon names it (RK-Q6).
+    ///
+    /// Remote, it is what the daemon answered `get_version` with, kept from
+    /// the identity handshake: no second request, and never this console's
+    /// own flag read back. In-process, it is the identity facts `get_version`
+    /// itself is built from.
+    pub(super) fn network(&self) -> Result<DaemonNetwork, String> {
+        match self {
+            Source::Live(core) => FfiChainFacts::new(core.clone())
+                .identity()
+                .map(|identity| identity.nettype)
+                .map_err(|fault| format!("the daemon's network cannot be read: {fault:?}")),
+            Source::Remote {
+                address,
+                timeout,
+                nettype,
+                checked,
+            } => checked
+                .get_or_init(|| handshake(address, *timeout, *nettype))
+                .clone(),
         }
     }
 
@@ -43,16 +67,14 @@ impl Source {
     }
 }
 
-fn handshake(src: &Source) -> Result<(), String> {
-    let (address, timeout, nettype) = match src {
-        Source::Live(_) => return Ok(()),
-        Source::Remote {
-            address,
-            timeout,
-            nettype,
-            ..
-        } => (address.as_str(), *timeout, *nettype),
-    };
+/// The identity handshake against a remote daemon. Its verdict is the
+/// network the daemon reported, which the expectation has checked is this
+/// console's own.
+fn handshake(
+    address: &str,
+    timeout: std::time::Duration,
+    nettype: u8,
+) -> Result<DaemonNetwork, String> {
     let network = DaemonNetwork::from_cryptonote(nettype).ok_or_else(|| {
         format!(
             "refusing to render: this console was given network code {nettype}, which this \
@@ -63,7 +85,7 @@ fn handshake(src: &Source) -> Result<(), String> {
     let result = get_version_result(address, timeout)?;
     IdentityExpectation::exact(network)
         .read(&result)
-        .map(|_| ())
+        .map(|reply| reply.nettype)
         .map_err(|refusal| {
             let message = console_identity_message(&refusal.mismatch);
             match refusal.evidence {

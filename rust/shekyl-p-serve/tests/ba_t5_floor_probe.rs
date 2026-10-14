@@ -66,7 +66,7 @@ use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{leaves_per_segment, BlockHeight};
 use shekyl_p_serve::{
     PServeEndpoint, PassKey, PassSigner, ProviderError, ShardBody, ShardProvider,
-    StoreShardProvider, TestKeySigner, MAX_INFLIGHT, REQUEST_HEADER_NAME, SIGNATURE_ENVELOPE_LEN,
+    StoreShardProvider, TestKeySigner, IDENTITY_ENVELOPE_LEN, MAX_INFLIGHT, REQUEST_HEADER_NAME,
 };
 use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_runtime::{runtime_with_thread_hooks, Pool, RuntimeBudget, ThreadHooks, ThreadName};
@@ -160,7 +160,7 @@ fn request_head(shard_id: u64, nonce: [u8; 32]) -> Vec<u8> {
 /// One whole fetch. Returns the bytes received, having checked that the
 /// response is a 200 and exactly as long as it says it is: the head, then
 /// `content-length` bytes, no fewer and no more. A response cut short
-/// anywhere, the head and frame included, is a failed block and is not
+/// anywhere, the head and body included, is a failed block and is not
 /// timed as a served one.
 ///
 /// Returns 0 for a connection the endpoint closed without writing a byte.
@@ -231,7 +231,7 @@ impl Fetch {
 
 /// The response is a 200 and exactly as long as it says it is: the head,
 /// then `content-length` bytes, no fewer and no more. A response cut
-/// short anywhere, the head and frame included, is a failed block and is
+/// short anywhere, the head and body included, is a failed block and is
 /// not timed as a served one.
 fn check_whole(shard_id: u64, out: &[u8]) {
     let head_end = out
@@ -253,14 +253,12 @@ fn check_whole(shard_id: u64, out: &[u8]) {
         declared,
         "the body is not the length the head declares"
     );
-    // The body is the shard's bytes and the signature envelope, nothing
-    // more: the served frame was deleted with the unframed body (PR #1015,
-    // 2026-10-10). Sessions 1 and 2 measured the framed body, a header of a
-    // few bytes more per response.
+    // The body is the shard and the signature envelope. The framed header
+    // this length used to require is gone with the unframed body.
     assert_eq!(
         declared,
-        size_of(shard_id).1 + SIGNATURE_ENVELOPE_LEN,
-        "the declared length is not the shard and its envelope"
+        size_of(shard_id).1 + IDENTITY_ENVELOPE_LEN,
+        "the declared length is the shard and its envelope"
     );
 }
 
@@ -474,7 +472,7 @@ impl Served {
         let endpoint = runtime
             .block_on(PServeEndpoint::bind(
                 Arc::clone(&provider) as Arc<dyn ShardProvider>,
-                Arc::clone(&signer) as Arc<dyn PassSigner>,
+                Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
             ))
             .expect("bind");
 
@@ -619,11 +617,11 @@ fn timed_block(served: &Served, clients: &Runtime, block: Block<'_>) {
 
 /// The three costs a response is made of, each alone, on this thread:
 /// reading the shard at the serve loop's chunk size, the delivery digest
-/// over the framed bytes, and one countersignature.
+/// over the shard, and one countersignature.
 fn isolated_phases(served: &Served, label: &str, n: usize) {
     for shard_id in [1u64, 2, 0] {
         let (size, payload) = size_of(shard_id);
-        let mut framed = Vec::with_capacity(payload + 16);
+        let mut shard = Vec::with_capacity(payload);
         for _ in 0..n {
             let t = Instant::now();
             let mut body = served
@@ -631,16 +629,16 @@ fn isolated_phases(served: &Served, label: &str, n: usize) {
                 .shard_bytes(shard_id)
                 .expect("open")
                 .expect("held");
-            framed.clear();
+            shard.clear();
             while let Some(chunk) = body.next_chunk(CHUNK_BYTES).expect("read") {
-                framed.extend_from_slice(&chunk);
+                shard.extend_from_slice(&chunk);
             }
             println!("PHASE\t{label}\t{size}\tread\t{}", t.elapsed().as_micros());
-            assert_eq!(framed.len(), payload);
+            assert_eq!(shard.len(), payload);
         }
         for i in 0..n {
             let t = Instant::now();
-            let digest = pass_delivery_digest(&nonce(0x22, i), &framed);
+            let digest = pass_delivery_digest(&nonce(0x22, i), &shard);
             println!("PHASE\t{label}\t{size}\thash\t{}", t.elapsed().as_micros());
             assert_ne!(digest, [0u8; 32]);
         }

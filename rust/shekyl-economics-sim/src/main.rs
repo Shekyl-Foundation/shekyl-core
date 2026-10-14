@@ -129,19 +129,12 @@ fn main() {
     if std::env::args().any(|a| a == "--secret-draw-production") {
         // ESR-13 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.17): ESR-11's epoch
         // on production's `draw_count` and `select_draw`, with a block's
-        // draws issued only when its bundle is admitted. ESR-11's cells are
-        // printed beside it as the `f64` reference. Each cell is reported
-        // to stderr as it finishes, with its wall time; then the table to
-        // stderr and JSON to stdout.
+        // draws issued only when its bundle is admitted. Each cell is
+        // reported to stderr as it finishes, with its wall time; then the
+        // table to stderr and JSON to stdout.
         let started = std::time::Instant::now();
-        let mut report = secret_draw_production::Report {
-            reference: Vec::new(),
-            cells: Vec::new(),
-        };
+        let mut report = secret_draw_production::Report { cells: Vec::new() };
         for pairs in secret_draw::EVIDENCE_PAIRS {
-            report
-                .reference
-                .extend(secret_draw_production::f64_reference(pairs));
             for spec in secret_draw_production::evidence_specs(pairs) {
                 let cell_started = std::time::Instant::now();
                 let cell = secret_draw_production::cell(spec);

@@ -65,6 +65,10 @@ pub(crate) mod daemon_tip;
 pub(crate) mod disk;
 pub(crate) mod health;
 pub(crate) mod pass_key;
+// STAGED: built and tested, selected by nothing here (see the module).
+pub(crate) mod receipt_key;
+#[cfg(test)]
+mod receipt_round_trip_tests;
 #[cfg(test)]
 mod round_trip_tests;
 pub(crate) mod start;

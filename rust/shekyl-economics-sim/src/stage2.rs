@@ -34,7 +34,7 @@ use crate::calibration::{
     PerByteRate, RUCKNIUM_DURATION_DAYS, RUCKNIUM_SPAM_BYTES_GB, RUCKNIUM_SPAM_FEES_XMR,
 };
 use crate::chain_cursor::{ChainCursor, ChainStep};
-use crate::engine::{ScenarioConfig, SimParams};
+use crate::engine::{emitted_at_start, ScenarioConfig, SimParams};
 use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
 use crate::fee_model::OrdinaryTx;
 use crate::population::{
@@ -363,8 +363,8 @@ pub fn year_share_atomic(pool_atomic: u128, share_milli: u64) -> u128 {
 pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAgg> {
     let economic = params.economic();
     let total_blocks = params.blocks_per_year * config.sim_years;
-    let mut already_generated: u128 =
-        (config.initial_emitted_fraction * params.emission_curve_asymptote as f64) as u128;
+    let mut already_generated =
+        emitted_at_start(params.emission_curve_asymptote, config.initial_emitted_ppm);
     let mut total_burned: u128 = 0;
     let mut fold = HonestFold::default();
     // Integer atomic accumulators (DQ-2G: the budget quantities never touch f64).
@@ -502,6 +502,16 @@ pub fn a1_min_clearance_ratio(
 /// The years A1 judges: past the ramp, with a non-empty corpus.
 pub fn a1_sustained_years(aggs: &[A1YearAgg]) -> impl Iterator<Item = &A1YearAgg> {
     aggs.iter().filter(|a| a.year > A1_RAMP_YEARS && a.n > 0)
+}
+
+/// A year's pool prorated to one settlement epoch, in atomic units:
+/// `per_year * SETTLEMENT_EPOCH_BLOCKS / BLOCKS_PER_YEAR`, floored, in the
+/// integers the arms that take an epoch's budget run in (DQ-2G).
+#[must_use]
+pub fn per_epoch_atomic(per_year: u128) -> u64 {
+    let per_epoch = per_year * u128::from(shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS)
+        / u128::from(shekyl_economics::BLOCKS_PER_YEAR);
+    u64::try_from(per_epoch).expect("a year's pool, prorated to an epoch, fits the atomic u64")
 }
 
 /// The shipped budget for one year under a candidate, **atomic**: the decaying
@@ -1460,11 +1470,9 @@ fn a3_stranding_report(
         "post noclm%"
     )?;
     let picks = [0usize, years.len() / 2, years.len() - 1];
-    let epy = crate::proxy::epochs_per_year();
     for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
         let a = years[yi];
-        let budget_atomic = a1_shipped_budget_atomic(a, &flat_25());
-        let budget_per_epoch = (budget_atomic as f64 / epy) as u64;
+        let budget_per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25()));
         let claim_cost = ordinary_tx_fee(a.cumulative_outputs, a.admission_rate);
         for &archivers in &A3_ARCHIVER_BAND {
             let pre = crate::stranding::measure(
@@ -1617,7 +1625,6 @@ struct ShardRewardOperands {
 }
 
 fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
-    let epy = crate::proxy::epochs_per_year();
     let mut rewards: Vec<f64> = Vec::new();
     let mut max_per_epoch_skl = 0.0_f64;
     for scenario in folded {
@@ -1626,8 +1633,9 @@ fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
             .iter()
             .filter(|a| a.n >= MAX_HOLDINGS_SHARDS as u64)
         {
-            let pool_atomic = a1_shipped_budget_atomic(a, &flat_25());
-            let pool_per_epoch_skl = (pool_atomic as f64 / COIN) / epy;
+            // The epoch's pool in atomic units; SKL is the report's unit.
+            let pool_per_epoch_skl =
+                per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25())) as f64 / COIN;
             let per_shard = pool_per_epoch_skl / a.n as f64;
             rewards.push(per_shard);
             max_per_epoch_skl = max_per_epoch_skl.max(per_shard);
@@ -1676,7 +1684,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     writeln!(
         out,
         "Stage-2 archival burden trajectory (§12.1 checkpoint 1)\n\
-         outputs = carried txs x {OUTPUTS_PER_TX_NORMAL:.0} (1in/2out normal traffic, drives tree depth); \
+         outputs = carried txs x {OUTPUTS_PER_TX_NORMAL} (1in/2out normal traffic, drives tree depth); \
          archival bytes = Σ carried txs x archival_len(1in/2out @ depth) ({AB0}..{AB1} B/tx shallow..deep);\n\
          carried = what the producer's fill rule admits at the effective median (ESR-6), not the schedule's demand;\n\
          n = shard_of(cumulative archival bytes), W = {SHARD:.1} MB/shard (SHT-Q2)\n\
@@ -1765,8 +1773,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
                 .max_by_key(|c| c.asymptote)
                 .copied()
                 .unwrap_or_else(flat_25);
-            let pool = a1_shipped_budget_atomic(a, &best);
-            let per_epoch = (pool as f64 / crate::proxy::epochs_per_year()) as u64;
+            let per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &best));
             crate::redistribution::a2_report(
                 out,
                 per_epoch,
@@ -2191,8 +2198,14 @@ mod tests {
     /// `cargo test --release -p shekyl-economics-sim -- --ignored
     /// matches_the_committed_fixture` (both arms). The nightly
     /// `economics-sim-ignored` job runs both.
+    ///
+    /// The committed fixtures are generated and checked on Linux x86-64.
+    /// The scenario layer calls `powf`, `exp` and `ln` (`burden.rs`,
+    /// `fee_floor.rs`, `fee_ladder.rs`, `mn_feasibility.rs`), whose last
+    /// bit can differ between C runtimes, and a last bit can move a printed
+    /// digit. The chain quantities are integers and do not (DQ-2G).
     #[test]
-    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored; nightly economics-sim-ignored"]
+    #[ignore = "full --stage2 report; ~150 s in release — run with --release --ignored; nightly economics-sim-ignored; fixture generated and checked on Linux x86-64"]
     fn stage2_narration_matches_the_committed_fixture() {
         assert_narration_matches(&PRODUCTION_ARM);
     }
@@ -2203,7 +2216,7 @@ mod tests {
     /// and print its fee, and it moves only when a fold operand shared by
     /// both arms does.
     #[test]
-    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored; nightly economics-sim-ignored"]
+    #[ignore = "full --stage2 report; ~100 s in release — run with --release --ignored; nightly economics-sim-ignored; fixture generated and checked on Linux x86-64"]
     fn stage2_narration_flat_control_matches_the_committed_fixture() {
         assert_narration_matches(&FLAT_CONTROL_ARM);
     }

@@ -377,9 +377,8 @@ impl CoreRpc {
             busy_syncing: 0,
             offline: 0,
             following_degraded: 0,
-            nettype: 0,
             protocol_version: 0,
-            reserved: [0; 2],
+            reserved: [0; 3],
         };
         // SAFETY: live handle; `pod` is a valid out pointer for the call.
         let rc = unsafe { ffi::shekyl_rpc_info_chain(self.handle, &raw mut pod) };
