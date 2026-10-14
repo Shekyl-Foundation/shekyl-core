@@ -47,6 +47,14 @@ use crate::engine::bond_assembly::PBoundBytes;
 use crate::engine::error::TerminalErrorKind;
 use crate::engine::transaction_submitter::{BroadcastSubmitError, SubmitSuccess, SubmitterError};
 
+/// What the wallet log tells a staker when this daemon cannot hold a
+/// JoinMarket (FND-20). The dispatch test pins this sentence, so deleting
+/// the branch fails that test.
+const STAKING_UNAVAILABLE_ON_THIS_DAEMON: &str = "\
+staking is not available on this daemon: it cannot accept the transaction \
+that joins the archival market yet. The pending stake was withdrawn and its \
+funds are spendable again. Stake again once the daemon is updated";
+
 // ---------------------------------------------------------------------------
 // The sealed-block store (trait + locked write path)
 // ---------------------------------------------------------------------------
@@ -797,13 +805,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 if kind == TerminalErrorKind::JoinMarketUnsupported {
                     // FND-20: nothing was wrong with the post. Say so, in
                     // the words a staker can act on.
-                    tracing::error!(
-                        attempts,
-                        "staking is not available on this daemon: it cannot accept the \
-                         transaction that joins the archival market yet. The pending stake was \
-                         withdrawn and its funds are spendable again. Stake again once the \
-                         daemon is updated"
-                    );
+                    tracing::error!(attempts, "{STAKING_UNAVAILABLE_ON_THIS_DAEMON}");
                 } else {
                     tracing::error!(
                         ?kind,

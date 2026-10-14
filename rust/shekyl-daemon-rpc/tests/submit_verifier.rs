@@ -1126,12 +1126,11 @@ fn engine_accepts_the_bond_post_end_to_end_with_the_production_verifier() {
 
 #[test]
 fn a_backend_that_cannot_hold_a_join_market_answers_a_definite_rejection() {
-    // FND-20: the C++ commit step decodes no JoinMarket form that carries a
-    // receipt key. The engine tells the backend the transaction carries one
-    // (`TxMeta::carries_join_market`), the C++ shim answers
-    // `JoinMarketUnsupported` without calling into C++, and the engine
-    // turns that into a definite rejection the wallet acts on, never the
-    // 500 a commit fault is, which the wallet resubmits.
+    // The engine classifies an injected `CommitOutcome::JoinMarketUnsupported`
+    // as a definite rejection, relays nothing, and names the JoinMarket to
+    // the backend on `TxMeta::carries_join_market`. The production shim's
+    // return, ahead of `shekyl_submit_commit_tx`, is the live tripwire's
+    // subject (`e2e_the_cxx_daemon_answers_join_market_unsupported`).
     let fx = bond_fixture();
     let shim = MockShim::new(bond_admitting_facts(), CommitOutcome::JoinMarketUnsupported);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);

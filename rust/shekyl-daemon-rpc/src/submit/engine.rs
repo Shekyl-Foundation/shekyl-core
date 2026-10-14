@@ -324,9 +324,10 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 })
             }
             CommitOutcome::Raced(fresh) => Self::classify_race(&parsed, &cert, &fresh, caller),
-            // FND-20: a definite answer, not a fault. The wallet releases
-            // the post instead of resubmitting it to a daemon that cannot
-            // hold it.
+            // FND-20: Phases A–C passed. Phase D's mutable re-checks do
+            // not run: the shim returns before `shekyl_submit_commit_tx`
+            // because it cannot reparse these bytes. The capability
+            // refusal is the verdict.
             CommitOutcome::JoinMarketUnsupported => Ok(SubmitVerdict::Rejected {
                 cause: RejectCause::JoinMarketUnsupported,
             }),

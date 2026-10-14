@@ -513,9 +513,12 @@ impl SubmitStateShim for FfiSubmitShim {
         expected: &SubmitFacts,
     ) -> CommitOutcome {
         // FND-20: the C++ reparse below refuses `post_kind` above Release,
-        // and a JoinMarket is kind 5, so it would fail on these bytes as an
-        // internal fault. Answer it as what it is before the call. Deleted
-        // with this shim at DEL-008, when the Rust store commits.
+        // and a JoinMarket is kind 5. Return before the call, so Phase D's
+        // mutable re-checks do not run. The capability refusal is the
+        // verdict: a key-image or fee race during Phase C is reported as
+        // this outcome, and retrying the same bytes fails the same way.
+        // Identity short-circuits return before `commit`. Deleted with
+        // this shim at DEL-008, when the Rust store commits.
         if meta.carries_join_market {
             tracing::info!(
                 txid = %txid,
