@@ -30,7 +30,7 @@ use crate::sample::sample_prefix;
 use crate::validity::RefusedSet;
 use crate::{
     DISCLOSE_COUNT, DISCLOSE_WINDOW_NANOS, EXPIRATION_PERIOD_NANOS, GRAY_CAP, INTAKE_SPAN_NANOS,
-    SESSION_INTAKE_CAP, WHITE_CAP,
+    SESSION_INTAKE_CAP, SMALL_NETWORK_SPAN_NANOS, WHITE_CAP,
 };
 
 /// The connector's cached disclosure sample (D3): drawn once, kept for the
@@ -39,6 +39,30 @@ use crate::{
 struct Sample {
     drawn_at: Tick,
     addresses: Vec<NetworkAddress>,
+}
+
+/// `--small-network` on one connector (brief revision 3 §2.6): while it
+/// runs, the connector discloses below the floor with a fresh draw on
+/// every request; it ends at the span or the first time white reaches the
+/// floor, and once ended stays ended for the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmallNetwork {
+    /// Running since the flag reached the lists.
+    Running {
+        /// When the flag reached the lists; the span counts from here.
+        since: Tick,
+    },
+    /// Ended, for this run.
+    Ended,
+}
+
+/// Why a connector's `--small-network` flag ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmallNetworkEnd {
+    /// [`crate::SMALL_NETWORK_SPAN_NANOS`] ran out.
+    Span,
+    /// White reached the floor.
+    Floor,
 }
 
 /// Where one address sits. One seat, so gray and white cannot both hold it.
@@ -81,6 +105,8 @@ pub(crate) struct Partition {
     /// Per session, the distinct addresses it has offered and when each
     /// last arrived (D-S1). Pruned to the intake span on every touch.
     intake: BTreeMap<ConnectionId, BTreeMap<NetworkAddress, Tick>>,
+    /// `--small-network` on this connector; `None` when never set.
+    small_network: Option<SmallNetwork>,
 }
 
 impl Partition {
@@ -455,31 +481,46 @@ impl Partition {
         self.own_address = address;
     }
 
-    /// D3: the connector's cached sample. A sample, once drawn, is served
-    /// unchanged until its window ends — whatever white does meanwhile
-    /// (F1, Rick 2026-10-09): a demotion, an expiry or a ban in the window
-    /// does not change the reply, since a reply that changed would tell
-    /// the requester what changed. The floor is checked only when a
-    /// sample is drawn: below `floor` (the eligible white count after
-    /// demotion and expiry) nothing is drawn and the reply is empty.
-    /// Otherwise a fresh uniform draw of `min(DISCLOSE_COUNT, population)`
-    /// over white plus this node's own address, cached for the window.
-    /// An address `refused` holds is not in the population (brief §2).
-    pub(crate) fn disclose<R: RelayRng + ?Sized>(
+    /// `--small-network` reached the lists at `now`: the flag runs on this
+    /// connector from here. Set once per run; a second call keeps the first.
+    pub(crate) fn set_small_network(&mut self, now: Tick) {
+        if self.small_network.is_none() {
+            self.small_network = Some(SmallNetwork::Running { since: now });
+        }
+    }
+
+    /// The flag's state on this connector.
+    pub(crate) fn small_network(&self) -> Option<SmallNetwork> {
+        self.small_network
+    }
+
+    /// End the flag if it runs and `now` is at or past the span, or if
+    /// white has reached `floor`. Returns why it ended, for the log; `None`
+    /// when it was not running or nothing ended it. Checked at every white
+    /// write and at every disclosure, so the floor ends it whenever white
+    /// crosses, not only when a reply is drawn.
+    pub(crate) fn end_small_network_if_due(
         &mut self,
         floor: usize,
-        refused: &RefusedSet,
         now: Tick,
-        rng: &mut R,
-    ) -> Vec<NetworkAddress> {
-        if let Some(sample) = &self.sample {
-            if now.get().saturating_sub(sample.drawn_at.get()) < DISCLOSE_WINDOW_NANOS {
-                return sample.addresses.clone();
-            }
-        }
-        if self.white_seats < floor {
-            return Vec::new();
-        }
+    ) -> Option<SmallNetworkEnd> {
+        let Some(SmallNetwork::Running { since }) = self.small_network else {
+            return None;
+        };
+        let reason = if self.white_seats >= floor {
+            SmallNetworkEnd::Floor
+        } else if now.get().saturating_sub(since.get()) >= SMALL_NETWORK_SPAN_NANOS {
+            SmallNetworkEnd::Span
+        } else {
+            return None;
+        };
+        self.small_network = Some(SmallNetwork::Ended);
+        Some(reason)
+    }
+
+    /// The disclosure population: eligible white plus this node's own
+    /// address, the refused set filtering both.
+    fn disclosure_population(&self, refused: &RefusedSet) -> Vec<NetworkAddress> {
         let mut population: Vec<NetworkAddress> = self
             .white_iter()
             .filter(|address| refused.refuses(address).is_none())
@@ -490,6 +531,47 @@ impl Partition {
                 population.push(own.clone());
             }
         }
+        population
+    }
+
+    /// D3: the connector's cached sample. A sample, once drawn, is served
+    /// unchanged until its window ends — whatever white does meanwhile
+    /// (F1, Rick 2026-10-09): a demotion, an expiry or a ban in the window
+    /// does not change the reply, since a reply that changed would tell
+    /// the requester what changed. The floor is checked only when a
+    /// sample is drawn: below `floor` (the eligible white count after
+    /// demotion and expiry) nothing is drawn and the reply is empty.
+    /// Otherwise a fresh uniform draw of `min(DISCLOSE_COUNT, population)`
+    /// over white plus this node's own address, cached for the window.
+    /// An address `refused` holds is not in the population (brief §2).
+    ///
+    /// While `--small-network` runs on this connector (§2.6), the floor
+    /// does not gate the reply and nothing is cached: every request gets
+    /// a fresh draw from the same population, and a draw made under the
+    /// flag is never stored as the window's sample. The caller ends the
+    /// flag when it is due before calling here.
+    pub(crate) fn disclose<R: RelayRng + ?Sized>(
+        &mut self,
+        floor: usize,
+        refused: &RefusedSet,
+        now: Tick,
+        rng: &mut R,
+    ) -> Vec<NetworkAddress> {
+        if matches!(self.small_network, Some(SmallNetwork::Running { .. })) {
+            let mut population = self.disclosure_population(refused);
+            let take = sample_prefix(&mut population, DISCLOSE_COUNT, rng);
+            population.truncate(take);
+            return population;
+        }
+        if let Some(sample) = &self.sample {
+            if now.get().saturating_sub(sample.drawn_at.get()) < DISCLOSE_WINDOW_NANOS {
+                return sample.addresses.clone();
+            }
+        }
+        if self.white_seats < floor {
+            return Vec::new();
+        }
+        let mut population = self.disclosure_population(refused);
         let take = sample_prefix(&mut population, DISCLOSE_COUNT, rng);
         population.truncate(take);
         self.sample = Some(Sample {

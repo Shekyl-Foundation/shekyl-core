@@ -29,6 +29,8 @@ shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+# The small-network flag's end is logged where it is decided (rule 82).
+tracing = "0.1"
 
 [dev-dependencies]
 shekyl-peerlist = { path = ".", features = ["conformance"] }

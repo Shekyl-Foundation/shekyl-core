@@ -15,7 +15,7 @@ use shekyl_transport_layer::{connector_for, BanList, ConnectorId};
 
 use crate::address_file::{self, AddressFileError};
 use crate::outcome::{DialOutcome, ListName, Refusal, SessionRow, Source, WhiteClock};
-use crate::partition::Partition;
+use crate::partition::{Partition, SmallNetwork, SmallNetworkEnd};
 use crate::validity::RefusedSet;
 use crate::{white_diversity_floor, DISCLOSE_COUNT, WHITE_REFILL_LINE};
 
@@ -293,7 +293,45 @@ impl Peerlist {
         let partition = self.partition_mut(connector);
         partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
         partition.expire(now, rng);
+        Self::end_small_network_if_due(connector, partition, now);
         partition.disclose(white_diversity_floor(), &refused, now, rng)
+    }
+
+    /// `--small-network` reached the lists at `now` (Rick, 2026-10-13,
+    /// PR-3 brief revision 3 §2.6): every connector discloses below the
+    /// floor, with a fresh draw per request, until
+    /// [`crate::SMALL_NETWORK_SPAN_NANOS`] from `now` or until that
+    /// connector's white count first reaches the floor; once ended on a
+    /// connector it stays ended for the run. The local operator triggers
+    /// it; the network's discovery while it boots is what benefits; no
+    /// remote party can set, extend or end it. While it runs a node is
+    /// recognisable, since it answers where an unflagged node returns
+    /// nothing.
+    pub fn set_small_network(&mut self, now: Tick) {
+        for partition in &mut self.partitions {
+            partition.set_small_network(now);
+        }
+    }
+
+    /// The flag's state on `connector`: `None` when it was never set.
+    #[must_use]
+    pub fn small_network(&self, connector: ConnectorId) -> Option<SmallNetwork> {
+        self.partition(connector).small_network()
+    }
+
+    /// End the connector's flag if the span ran out or white reached the
+    /// floor, and say so (rule 82).
+    fn end_small_network_if_due(connector: ConnectorId, partition: &mut Partition, now: Tick) {
+        match partition.end_small_network_if_due(white_diversity_floor(), now) {
+            Some(SmallNetworkEnd::Floor) => tracing::info!(
+                "{connector:?}: --small-network ends, white reached the floor of {}; the usual disclosure rules apply from here",
+                white_diversity_floor()
+            ),
+            Some(SmallNetworkEnd::Span) => tracing::info!(
+                "{connector:?}: --small-network ends, its span ran out; the usual disclosure rules apply from here"
+            ),
+            None => {}
+        }
     }
 
     /// One uniform gray address of `connector`, remembered as an
@@ -393,11 +431,15 @@ impl Peerlist {
         match outcome {
             // Outstanding draw: white, clock stamped `now`. Already white:
             // the clock moves only because the session stayed (brief §5).
+            // A white write is where `--small-network` ends at the floor
+            // (§2.6): whenever white crosses, not only at a disclosure.
             DialOutcome::SessionAccepted(address) => {
                 partition.confirm(address, now, rng, WhiteClock::Move);
+                Self::end_small_network_if_due(connector, partition, now);
             }
             DialOutcome::Confirmed(address) => {
                 partition.confirm(address, now, rng, WhiteClock::Hold);
+                Self::end_small_network_if_due(connector, partition, now);
             }
             DialOutcome::DialFailed(address, _) | DialOutcome::PeerlistRefused(address) => {
                 partition.drop_outstanding(address);

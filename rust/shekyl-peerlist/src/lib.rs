@@ -62,6 +62,7 @@ pub mod conformance;
 
 pub use outcome::{DialOutcome, ListName, Refusal, SessionRow, Source};
 
+pub use partition::{SmallNetwork, SmallNetworkEnd};
 pub use peerlist::{BanQuery, NoBans, Peerlist, Snapshot};
 pub use shekyl_net_address::{Host, NetworkAddress};
 /// A daemon connection. The type is `shekyl_relay_privacy::ConnectionId`;
@@ -130,6 +131,14 @@ pub const EXPIRATION_PERIOD_NANOS: u64 = 24 * HOUR_NANOS;
 /// The disclosure window: one cached sample per connector for this long
 /// (D3). The same 24 hours as the expiry.
 pub const DISCLOSE_WINDOW_NANOS: u64 = 24 * HOUR_NANOS;
+
+/// How long `--small-network` holds on each connector from the moment the
+/// flag reaches the lists at startup (Rick, 2026-10-13, PR-3 brief revision
+/// 3 §2.6): 24 hours. Its own constant, not [`DISCLOSE_WINDOW_NANOS`],
+/// though both are a day; a restart starts it again. The flag also ends,
+/// per connector, the first time that connector's white count reaches
+/// [`white_diversity_floor`], and once ended stays ended for the run.
+pub const SMALL_NETWORK_SPAN_NANOS: u64 = 24 * HOUR_NANOS;
 
 /// The span over which a session's distinct admitted addresses are
 /// counted against [`SESSION_INTAKE_CAP`] (D-S1).
