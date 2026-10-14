@@ -204,6 +204,10 @@ impl Rule for J13 {
 /// one shard (`ShardSetCompactEmpty`) and a complete tree lists none
 /// (`CompleteTreeWithShardIds`); the serving endpoint is set
 /// (`EndpointZero`); a credit post carries no debit (`BondDebitNonzero`).
+/// The receipt key is not this row's. CEN-J28 judges it in `tx_form` with
+/// `FnDsaHybridPublicKey::from_receipt_sign_pk`, and the pool's credit arm
+/// calls that same predicate. This function does not read the key, so a
+/// bad key is never named J14.
 ///
 /// The multiplier is the corpus gap slice 8 §2 named: every join the
 /// fixtures and the driver posted before this row held a complete tree at
