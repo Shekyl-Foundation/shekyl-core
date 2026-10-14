@@ -1092,6 +1092,37 @@ The deletion section is the gate. Each before-command hits the sites
 it names. Each after-command does what its row says, including the
 rows whose subject must still be present.
 
+## The four-node discovery run
+
+Run 2026-10-14, 22:05Z to 22:19Z (819 s), on one measurement host,
+with the release build of `8cf79a6b4` (measurement spans off). Four
+stagenet daemons, A, B, C and D, each with its own managed tor and
+per-boot onion, and clearnet bound to loopback, so the only way between
+them is Tor. A, B and C run `--p2p-disclose-early`; D does not. B is
+named by A, C and D (`--add-peer`); no node names C or D. Every phase
+has a bound, and the run fails at the first one missed. Each step and
+what it showed:
+
+| At | Step | Shown |
+| --- | --- | --- |
+| +458 s | C restarted naming B; B's lists read | B holds C's onion, which only C's own disclosure could carry: the own onion in a sample |
+| +525 s | D restarted naming B; B read | B holds a session from D and not D's onion: below the floor, the unflagged node disclosed nothing |
+| +676 s | A restarted naming B only | A holds C's onion, which reached A in B's samples |
+| +677 s | A's connections | a live session to B: the first success is kept |
+| +687 s | A's lists and connections | C is white on A with no session to C: the draw of C was confirm-and-close |
+| +692 s | A's connections | an outbound session to C: with gray empty and under target, the keep is from white |
+| +713 s | A restarted naming nothing | A holds C from the address file, has a new onion, and logs the flag on again with its span restarted |
+| +764 s | A's connections | sessions to B and C again |
+
+Three things in the logs are not failures of this slice. Each node with
+nothing configured logs the stranded state once per connector, with a
+count of 0 (stagenet compiles no seeds). At the stop, B and C each
+log one `ProxyUnavailable` warning: the dialer outlives the managed
+tor, which is the stop-order row in `docs/FOLLOWUPS.md`, now named
+in one line where it was a run of local closes. The four inbound
+"signature mismatch" errors on B and C are the run's reachability
+probes, one per successful probe, to the second.
+
 ## Known defect this slice carries
 
 **Both discharged by their reopen criteria, 2026-10-13 (PR-3, #1056):** the dial is off the io pool (the owner loop is a thread of its own, an owner of the timing engine, `4c9a74d8b1`), and the Rust handshake receives its cause directly on the channel and reads no row the strand can reap (`1a674e7f0e`, `a227931033` deleting `shekyl_seam_session_cause`). The two paragraphs below are the record.
