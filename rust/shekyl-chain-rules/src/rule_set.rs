@@ -29,7 +29,8 @@ use core::fmt;
 use shekyl_address::Network;
 use shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
 use shekyl_archival_retention::{
-    anchor_depth_covers_response_window, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
+    anchor_depth_covers_response_window, response_window_outrunning_anchor,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
 };
 pub use shekyl_archival_retention::{SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::{BlockCount, BlockHeight};
@@ -208,7 +209,11 @@ impl std::error::Error for ReorgCapNotInsideEpoch {}
 pub struct ResponseWindowOutrunsAnchor {
     /// Blocks per epoch the pair named.
     pub settlement_epoch: SettlementEpochBlocks,
-    /// `W₂` under that epoch.
+    /// `W₂` under that epoch: always the window that outran the anchor,
+    /// never a stand-in. An epoch too short to have a window cannot be
+    /// refused for this (the relation holds vacuously), so no value of this
+    /// type carries a zero here
+    /// (`shekyl_archival_retention::response_window_outrunning_anchor`).
     pub response_window: BlockCount,
 }
 
@@ -300,16 +305,14 @@ impl FakechainSchedule {
             ));
         }
         let settlement = SettlementSchedule::new(settlement_epoch);
-        if !anchor_depth_covers_response_window(settlement) {
-            // The predicate is false only where a window exists.
-            let response_window = match settlement.challenge_response_blocks() {
-                Some(window) => BlockCount::from_raw(window.get()),
-                None => BlockCount::ZERO,
-            };
+        // Only a window that exists can outrun the anchor: an epoch too
+        // short to have one satisfies the relation vacuously and has no
+        // window to name, so the refusal's window is always the real one.
+        if let Some(window) = response_window_outrunning_anchor(settlement) {
             return Err(FakechainScheduleRefused::ResponseWindowOutrunsAnchor(
                 ResponseWindowOutrunsAnchor {
                     settlement_epoch,
-                    response_window,
+                    response_window: BlockCount::from_raw(window.get()),
                 },
             ));
         }

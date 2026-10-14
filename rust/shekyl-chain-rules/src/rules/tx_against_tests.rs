@@ -1006,7 +1006,9 @@ fn i18_the_identity_signature_covers_the_join_markets_receipt_key() {
     for at in [8usize, RECEIPT_SIGN_PK_LEN - 1] {
         let mut tampered = signed.clone();
         let (post_input, key) = receipt_key_of(&mut tampered);
-        key.as_bytes_mut()[at] ^= 0x01;
+        let mut bytes = *key.as_bytes();
+        bytes[at] ^= 0x01;
+        *key = ReceiptSignPk::from_bytes(bytes);
         assert_ne!(tampered, signed);
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(&tampered, TxSlot::Lone, &mut coverage)
