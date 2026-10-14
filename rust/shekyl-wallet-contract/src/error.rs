@@ -2193,6 +2193,7 @@ fn terminal_to_reject_cause(kind: TerminalErrorKind) -> RejectCause {
         TerminalErrorKind::DoubleSpend => RejectCause::DoubleSpendConflict,
         TerminalErrorKind::FeeTooLow => RejectCause::FeeTooLow,
         TerminalErrorKind::Malformed => RejectCause::Malformed,
+        TerminalErrorKind::JoinMarketUnsupported => RejectCause::JoinMarketUnsupported,
         // `TerminalErrorKind` is `#[non_exhaustive]`; `Unrecognized` and any
         // unknown future kinds take the fail-safe Unrecognized disposition
         // (DAEMON_SUBMIT_VERDICT §2.5).

@@ -1076,6 +1076,88 @@ async fn terminal_rejection_removes_and_never_resends() {
     assert_eq!(broadcast.sent().len(), 1, "never resends after terminal");
 }
 
+/// A daemon that cannot hold a JoinMarket (FND-20) answers a definite
+/// rejection, and the driver treats it as terminal: the post and its
+/// funding reservation go in one seal, it is never resent, and the log
+/// tells the staker staking is not available on this daemon. Before the
+/// daemon answered this way, the same refusal was a commit fault, which
+/// the driver resubmits until the alarm horizon and then holds for good.
+#[tokio::test]
+async fn a_daemon_that_cannot_hold_a_join_market_releases_the_post() {
+    use std::io::Write;
+    use std::sync::Arc;
+
+    /// In-memory sink for the fmt subscriber. The shape is the one
+    /// `scan_step_tests` uses to pin a log line.
+    #[derive(Clone, Default)]
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+    impl Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("buffer lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
+        type Writer = SharedBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    let sink = SharedBuf::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(sink.clone())
+        .finish();
+    // Thread-local, and this test's runtime is current-thread, so the
+    // guard covers both ticks. Two passes, because tracing caches
+    // per-callsite interest on the first thread that hits the callsite:
+    // the first pass registers it, the rebuild recomputes interest
+    // against this subscriber, and the second pass is what we read.
+    let _guard = tracing::subscriber::set_default(subscriber);
+    drive_one_unsupported_release().await;
+    tracing::callsite::rebuild_interest_cache();
+    sink.0.lock().expect("buffer lock").clear();
+    drive_one_unsupported_release().await;
+
+    let text = String::from_utf8(sink.0.lock().expect("buffer lock").clone())
+        .expect("fmt output is UTF-8");
+    assert!(
+        text.contains(STAKING_UNAVAILABLE_ON_THIS_DAEMON),
+        "the staker must be told staking is unavailable; captured log: {text:?}"
+    );
+}
+
+async fn drive_one_unsupported_release() {
+    let unsupported = Err(BroadcastSubmitError::Submit(
+        SubmitterError::RejectedTerminal {
+            kind: crate::engine::error::TerminalErrorKind::JoinMarketUnsupported,
+        },
+    ));
+    let (mut driver, store, broadcast) =
+        driver_with_posts(vec![post(1, 100, 0, &[7, 8])], vec![unsupported]);
+
+    tick(&mut driver, 100).await;
+    assert_eq!(broadcast.sent().len(), 1);
+    let block = store
+        .block
+        .lock()
+        .expect("mem store")
+        .clone()
+        .expect("sealed");
+    assert!(block.posts().is_empty(), "the post is withdrawn");
+    assert!(
+        block.reserved_gindexes().is_empty(),
+        "its funding is spendable again"
+    );
+
+    tick(&mut driver, 101).await;
+    assert_eq!(broadcast.sent().len(), 1, "never resent to the same daemon");
+}
+
 // -- §3.4 resubmit bound: the alarm horizon ---------------------------------
 
 /// A dispatched post unconfirmed past the alarm horizon stops
