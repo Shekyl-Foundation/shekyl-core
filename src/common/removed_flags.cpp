@@ -67,7 +67,7 @@ struct removed_flag
 // source of truth — CHANGELOG.md and FOLLOWUPS.md reference it by name
 // rather than duplicating the list, so editing this array keeps the
 // documentation in sync automatically.
-constexpr std::array<removed_flag, 25> REMOVED_FLAGS = {{
+constexpr std::array<removed_flag, 24> REMOVED_FLAGS = {{
   // Daemonizer, deleted in V3.1 (background execution / service management).
   {"detach",                       removed_reason::daemonizer},
   {"pidfile",                      removed_reason::daemonizer},
