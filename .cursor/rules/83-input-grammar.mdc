@@ -90,9 +90,10 @@ given, and the row states what unset means; there are no sentinel
 values. There are no floating-point values anywhere in the grammar.
 
 **IG-7 Surfaces.** Each row says where it may be given. Command-line
-only: `help`, `version`, `network`, `config-file`. File only: every
-secret and every command value. Everything else: both, CLI winning per
-key.
+only: `help`, `version`, `network`, `config-file`, `service` (each selects
+which file is read, so a key in that file could only restate or
+contradict it). File only: every secret and every command value.
+Everything else: both, CLI winning per key.
 
 **IG-8 Development levers.** A `dev-` option is hidden from help and
 generated docs, names the networks it is accepted on as data in its row
@@ -103,12 +104,17 @@ genuinely needs is not a development lever and gets a public row.
 
 **IG-9 One table per binary, generated everything.** The table row: id,
 name, kind, constraint, keywords, default (a value, unset, or "derived
-from the network row"), surfaces, runtime (whether the value can change while running,
-IG-12), visibility (`public` / `dev` /
-`rejected` / `reserved`), accepted networks (`dev` only), owning subsystem, help text.
-From the table: `--help`, completion, the documentation tables, and an
-annotated TOML example. A gate regenerates the docs and diffs them, and
-asserts the table is non-empty (rule 47).
+from the network row"), surfaces, runtime (whether the value can change
+while running, IG-12), view (`yes` or `no`, default `no`: whether
+`option show` returns the row at the view grant, IG-12), visibility
+(`public` / `dev` / `rejected` / `reserved`), accepted networks (`dev`
+only), owning subsystem, help text. A row is shown at the view grant
+only when it opts in; rows that link the operator or describe the host
+never do: `mine-address`, `tor-onion`, the peer, closed-peer and ban
+rows, paths, SOCKS endpoints, notify commands, and every secret. From the
+table: `--help`, completion, the documentation tables, and an annotated
+TOML example. A gate regenerates the docs and diffs them, and asserts the
+table is non-empty (rule 47).
 
 **IG-10 Unknown and refused names.** An unknown name is one general
 refusal that names the nearest live name, computed from the table (edit
@@ -131,12 +137,15 @@ A configuration refusal exits with status 2; a runtime failure with 1.
 **IG-12 Runtime changes share the constructor.** A value that can also
 change while running (rates, inbound cap, log level, mining) is marked
 runtime in its row (IG-9) and is built by the same constructor on both
-surfaces, with the same refusals. It is changed with `option set <name>
-<value>` and read with `option show [<name>]`, which reports its source
-as `runtime`; mining starts and stops with `mine start` and `mine stop`,
-which build `mine-address` and `mine-threads` through their constructors.
-The live value is owned by its subsystem. Nothing is written to the
-config file: no binary ever writes its own config file.
+surfaces, with the same refusals. `option set <name> <value>` changes it:
+it refuses a row not marked runtime with a typed code, requires the admin
+grant, and never writes the file. `option show [<name>]` reports each
+value with its source (`default`, `file`, `cli`, `runtime`), shows a
+secret only as set, returns only `view: yes` rows at the view grant, and
+every row at the admin grant. Mining starts and stops with `mine start`
+and `mine stop`, which build `mine-address` and `mine-threads` through
+their constructors. The live value is owned by its subsystem. No binary
+ever writes its own config file.
 
 **IG-13 Inputs come from the table, and nowhere else.** No option value
 comes from the environment. Default paths come from the operating
