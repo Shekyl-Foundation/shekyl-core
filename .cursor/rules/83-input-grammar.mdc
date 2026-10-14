@@ -65,8 +65,10 @@ quantity (an integer and a unit — bytes `B KiB MiB GiB TiB`, IEC only,
 `KB`/`MB` refused; rates the same over `/s`; durations `ms s min h d`);
 endpoint (a literal IP and a port; no hostnames); peer-endpoint (an
 endpoint or `<v3>.onion:port`); address (a Shekyl address, checked
-against the network); path (absolute only); secret (file only; never
-logged or echoed; zeroized; held only in Rust); command (file only; an
+against the network); origin (a web origin, RFC 6454: scheme `http` or
+`https`, a host, an optional port, nothing after; or `*`); path
+(absolute only); secret (file only; never logged or echoed, shown in the
+startup line only as set; zeroized; held only in Rust); command (file only; an
 argument array run without a shell; placeholders named in the row); list
 and map of a scalar kind (the flag repeated; `none` is the empty list; a
 command-line list or map replaces the file's whole). A row narrows its
@@ -90,7 +92,7 @@ genuinely needs is not a development lever and gets a public row.
 **IG-9 One table per binary, generated everything.** The table row: id,
 name, kind, constraint, keywords, default (a value, unset, or "derived
 from the network row"), surfaces, visibility (`public` / `dev` /
-`rejected`), accepted networks (`dev` only), owning subsystem, help text.
+`rejected` / `reserved`), accepted networks (`dev` only), owning subsystem, help text.
 From the table: `--help`, completion, the documentation tables, and an
 annotated TOML example. A gate regenerates the docs and diffs them, and
 asserts the table is non-empty (rule 47).
@@ -101,7 +103,10 @@ distance), never from a hand list. A REJECTED row (a feature deliberately
 refused) carries its reason and a pointer to the decision; it is never
 accepted, never in help, and its refusal states the reason. A REJECTED
 row is a contract entry in the sense of rule 23, not a code symbol: it is
-never deleted as dead.
+never deleted as dead. A RESERVED row (a name held for a ruled future
+option; rule 23's reserved slot) is the same kind of entry: never
+accepted, never in help, and its refusal names what the name is reserved
+for and where that is ruled.
 
 **IG-11 Diagnostics.** Every refusal is a typed value: a stable code
 (`config.value.range`, `config.file.permissions`, …), the option, the
@@ -122,12 +127,16 @@ system's account and known-folder interfaces (the passwd entry's home on
 Unix, the known-folder API on Windows), not from `HOME`, `XDG_*` or
 `%APPDATA%`. The only environment reads permitted are presentation-only
 (terminal capabilities that change rendering, never a value). Every
-resolved default path appears in the startup line with its source.
+resolved default path appears in the startup line with its source. A
+service account whose passwd home is unset or `/nonexistent` has no
+default paths: the packaging sets the account's home or the unit passes
+`--data-dir` and `--log-file`.
 
 **IG-14 Required announcements are not log events.** The
 effective-configuration line, `dev-` lever warnings and posture warnings
 (clearnet-only, offline) reach the log and standard error at every start
-whatever the log level.
+whatever the log level. The effective-configuration line shows every
+value and its source; a secret is shown as set, never its value (IG-6).
 
 **IG-15 Home.** These rules are this file. The glossary tree and the name
 tables live in `docs/design/INPUT_GRAMMAR.md`. One Rust crate holds the

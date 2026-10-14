@@ -6650,7 +6650,9 @@ IG-1…IG-15 of [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) are ruled
 and become the cursor rule
 [`83-input-grammar`](../.cursor/rules/83-input-grammar.mdc); the daemon's
 glossary subtree and name table are ruled with them, and the questions
-IG-Q1…IG-Q19 are ruled as recorded in that document's §8.
+IG-Q1…IG-Q20 are ruled as recorded in that document's §8 (IG-Q20, ruled
+the same day, names PR-3's `--small-network` as the public row
+`p2p-disclose-early`).
 
 This entry **supersedes** *Config file handling: TOML, layered
 precedence, XDG paths* above, for `shekyl-wallet-rpc` and `shekyl-cli`:
@@ -6664,7 +6666,7 @@ precedence, XDG paths* above, for `shekyl-wallet-rpc` and `shekyl-cli`:
    default file, `--config-file` replaces that path whole, the file is
    validated whole before anything applies, ownership and permissions
    are checked, and one startup line shows every effective value and
-   its source.
+   its source, a secret shown as set and never its value (IG-6).
 3. **TOML and the precedence CLI over file over defaults stand**; the
    file's keys are the option names exactly, and a command-line list or
    map replaces the file's whole.

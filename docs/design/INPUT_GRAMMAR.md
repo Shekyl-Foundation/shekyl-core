@@ -1,8 +1,9 @@
 # Shekyl input grammar — Round 0, Part A (the rules) and the daemon's names
 
-**Status:** RULED 2026-10-13 (Rick) — Round 0, Part A. IG-Q1…IG-Q19 ruled as
+**Status:** RULED 2026-10-13 (Rick) — Round 0, Part A. IG-Q1…IG-Q20 ruled as
 proposed at revision 3 with the amendments carried in-line (IG-8, the
-`config-file` row, IG-Q12, IG-Q14) and IG-Q17 as ruled the same day. The
+`config-file` row, IG-Q12, IG-Q14); IG-Q17 and IG-Q20 were ruled on their
+own the same day. The
 rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this document
 holds the glossary tree and the name tables. Part B (the name tables of
@@ -37,7 +38,7 @@ binary.
 - **No backward compatibility before genesis.** Renamed spellings leave no trace and no migration table; our own scripts and configs are fixed in the same change. A *feature* deliberately refused keeps one REJECTED entry with its reason (rule 23).
 - **English only.** Each human-facing string has one home; diagnostics are typed codes with parameters.
 - **No aliases. No negative names.** A capability on by default is a closed set.
-- **Config (R2, R6, R7):** TOML; the network picks the file (`/etc/shekyl/shekyld-<network>.toml`); `--network` is command-line only; `--config-file` replaces the default path whole; the CLI replaces the file per key, lists whole; the file is validated whole before anything applies; ownership and permission checks; file keys are the option names exactly; one startup line shows every effective value and its source. No environment-variable layer in any binary. Credentials are typed secrets (R9).
+- **Config (R2, R6, R7):** TOML; the network picks the file (`/etc/shekyl/shekyld-<network>.toml`); `--network` is command-line only; `--config-file` replaces the default path whole; the CLI replaces the file per key, lists whole; the file is validated whole before anything applies; ownership and permission checks; file keys are the option names exactly; one startup line shows every effective value and its source (a secret is shown as set, never its value: IG-6). No environment-variable layer in any binary. Credentials are typed secrets (R9).
 - **Rust reads every option directly (R1).** No C++ parses or relays configuration; no new option is added in C++.
 - **Deleted:** UPnP and miniupnpc (R4); `--out-peers` (the outbound degree is a protocol constant: below 12, Dandelion++ breaks); `bg-mining-*`; both regtest branches, the managed-Tor skip and the database wipe, with `--keep-fakechain` (R3); `--seed-node`, the `,N` suffixes, `--disable-rpc-ban`, the per-public-IP RPC cap, the debug knobs (R5). Sync and LMDB knobs go to their lanes, not ported (R5).
 - **`--offline` means "run with P2P not running"** (Rick's reading; its spelling is IG-Q3).
@@ -84,8 +85,9 @@ The gate walks every live and reserved name in every binary's table (an X row is
 | endpoint | `--x 127.0.0.1:11029`, `--x [::1]:11029` | string | a literal IP and a port; no hostnames |
 | peer-endpoint | an endpoint, or `<v3>.onion:port` | string | |
 | address | `--x shekyl1…` | string | a Shekyl address, checked against the network |
+| origin | `--x https://host:443` | string | a web origin (RFC 6454): scheme `http` or `https`, a host, an optional port, nothing after; or `*` |
 | path | `--x /abs/path` | string | absolute only |
-| secret | not accepted | string | file only; never logged or echoed; zeroized; held only in Rust |
+| secret | not accepted | string | file only; never logged or echoed, and shown in the startup line only as set; zeroized; held only in Rust |
 | command | not accepted | array of strings `["/path/prog", "arg", "%h"]` | file only; run without a shell; placeholders named in the row |
 | list (of a scalar kind) | the flag repeated | an array under the same key | the keyword `none` is the empty list; a CLI list replaces the file's list whole |
 | map (of a scalar kind) | `--x key=value`, repeated | a table under the same key | keys are a closed set named in the row; a CLI map replaces the file's map whole |
@@ -96,9 +98,9 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 **IG-8 Development levers.** A `dev-` option is hidden from help and generated docs, names the networks it is accepted on as data in its row (a `dev-` option given on any other network is refused at parse, rule 71), and is announced at every start when set. It follows every other rule. **No `dev-` option is ever accepted on mainnet**: a lever mainnet genuinely needs is not a development lever and gets a public row.
 
-**IG-9 One table per binary, generated everything.** The table row: id, name, kind, constraint, keywords, default (a value, unset, or "derived from the network row"), surfaces, visibility (`public` / `dev` / `rejected`), accepted networks (`dev` only), owning subsystem, help text. From the table: `--help`, completion, the documentation tables, and an annotated TOML example. A gate regenerates the docs and diffs them, and asserts the table is non-empty (rule 47).
+**IG-9 One table per binary, generated everything.** The table row: id, name, kind, constraint, keywords, default (a value, unset, or "derived from the network row"), surfaces, visibility (`public` / `dev` / `rejected` / `reserved`), accepted networks (`dev` only), owning subsystem, help text. From the table: `--help`, completion, the documentation tables, and an annotated TOML example. A gate regenerates the docs and diffs them, and asserts the table is non-empty (rule 47).
 
-**IG-10 Unknown and refused names.** An unknown name is one general refusal that names the nearest live name, computed from the table (edit distance), never from a hand list. A REJECTED row (a feature deliberately refused) carries its reason and a pointer to the decision; it is never accepted, never in help, and its refusal states the reason. A REJECTED row is a contract entry in the sense of rule 23, not a code symbol: it is never deleted as dead.
+**IG-10 Unknown and refused names.** An unknown name is one general refusal that names the nearest live name, computed from the table (edit distance), never from a hand list. A REJECTED row (a feature deliberately refused) carries its reason and a pointer to the decision; it is never accepted, never in help, and its refusal states the reason. A REJECTED row is a contract entry in the sense of rule 23, not a code symbol: it is never deleted as dead. A RESERVED row (a name held for a ruled future option; rule 23's reserved slot) is the same kind of entry: never accepted, never in help, and its refusal names what the name is reserved for and where that is ruled.
 
 **IG-11 Diagnostics.** Every refusal is a typed value: a stable code (`config.value.range`, `config.file.permissions`, …), the option, the source (`cli`, `file:path:line`, `default`) and named parameters. One renderer turns it into the English message, which states what was wrong, where, and what to do (rule 82). Machine output and logs carry the code. A configuration refusal exits with status 2; a runtime failure with 1.
 
@@ -106,7 +108,7 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 **IG-13 Inputs come from the table, and nowhere else.** No option value comes from the environment. Default paths come from the operating system's account and known-folder interfaces (the passwd entry's home on Unix, the known-folder API on Windows), not from `HOME`, `XDG_*` or `%APPDATA%`. The only environment reads permitted are presentation-only (terminal capabilities that change rendering, never a value). Every resolved default path appears in the startup line with its source. A service account whose passwd home is unset or `/nonexistent` has no default paths: the packaging sets the account's home or the unit passes `--data-dir` and `--log-file` (the shipped unit does both, IG-F10).
 
-**IG-14 Required announcements are not log events.** The effective-configuration line, `dev-` lever warnings and posture warnings (clearnet-only, offline) reach the log and standard error at every start whatever the log level.
+**IG-14 Required announcements are not log events.** The effective-configuration line, `dev-` lever warnings and posture warnings (clearnet-only, offline) reach the log and standard error at every start whatever the log level. The effective-configuration line shows every value and its source; a secret is shown as set, never its value (IG-6).
 
 **IG-15 Home.** The rules become one cursor rule. The glossary tree and the name tables live in one design document. One Rust crate holds the table types, the value kinds and their parsers, the unit types, the diagnostic type and the renderer; every binary builds its table from it.
 
@@ -257,9 +259,9 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `db-sync-mode`, `db-salvage` | — | | | | L DRS |
 | `keep-alt-blocks` | — | | | | L DRS-E5 |
 | `max-txpool-weight` | `txpool-weight-max` | quantity (bytes) | `648000000B` | both | R; a Monero-derived operand (IG-Q11) |
-| `block-notify` | `notify-block` | command | unset | file | R (IG-Q5) |
-| `reorg-notify` | `notify-reorg` | command | unset | file | R |
-| `block-rate-notify` | `notify-block-rate` | command | unset | file | R |
+| `block-notify` | `notify-block` | command | unset | file | R (IG-Q5); placeholders: `%b` the block's hash (today's `%s`) |
+| `reorg-notify` | `notify-reorg` | command | unset | file | R (IG-Q5); placeholders, today's set: `%s` the split height, `%h` the new height, `%n` blocks in the new chain, `%d` blocks discarded from the old |
+| `block-rate-notify` | `notify-block-rate` | command | unset | file | R (IG-Q5); placeholders, today's set: `%t` the window in minutes, `%b` blocks observed in it, `%e` blocks expected in it |
 | `start-mining` | `mining-address` | address | unset | both | R; set means mine from start |
 | `mining-threads` | `mining-threads` | integer ≥ 1, or `auto` | `auto` | both | K; one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
 | `bg-mining-*` (5) | — | | | | X (Monero background mining) |
@@ -268,10 +270,10 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 
 | Today | New | Kind | Default | Surface | Notes |
 |---|---|---|---|---|---|
-| — | `rpc-listen` | list of endpoint | | | **Reserved** for the authenticated channel listener (RT-W10); not in this cut's table |
+| — | `rpc-listen` | list of endpoint | | | visibility `reserved` (IG-9, IG-10): held for the authenticated channel listener (RT-W10); not accepted in this cut |
 | `rpc-bind-ip`, `rpc-bind-port`, `rpc-bind-ipv6-address`, `rpc-use-ipv6` | `rpc-admin-listen` | list of endpoint, loopback only | `127.0.0.1:<row rpc port>` | both | R; the interim plaintext full-access listener; loopback only by RT-14 (a plaintext listener never binds beyond loopback; only the authenticated channel listener may bind wildcard); becomes an X row when RT-W10 lands (IG-Q16) |
 | `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only | `none` | both | R; survives RT-W10 unchanged (plaintext loopback at view, off by default, ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
-| `rpc-access-control-origins` | `rpc-cors-origin` | list | `none` | both | R |
+| `rpc-access-control-origins` | `rpc-cors-origin` | list of origin | `none` | both | R; `none` is CORS default-deny |
 | `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy, the same shape as `txpool-weight-max` |
 | `disable-rpc-ban` | — | | | | – (R5; the scorer it switches has no caller, IG-F9) |
 | `rpc-response-soft-limit` | — | | | | – (response limits belong to the RPC resource policy, IG-Q12) |
