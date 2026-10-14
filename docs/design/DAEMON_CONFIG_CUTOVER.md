@@ -106,21 +106,29 @@ What crosses the FFI after the cutover, and nothing else:
    in both profiles (`rust/Cargo.toml`, lines 671 to 676), so a panic cannot
    be caught and turned into an exit status, and an unwind across the C++
    frames below would be undefined anyway. The entry therefore installs a
-   panic hook first: it writes the panic's message and location to the log,
-   when one is open, and to standard error, then the process aborts with
-   the platform's abort status. *Records-was: DC-Q13's text said the entry
-   catches its own panics into an exit status, which the abort profile
-   makes unbuildable; the hook keeps the ruling's intent, that a Rust
-   failure always says what happened.*
+   panic hook first (Rick, 2026-10-14). It records the panicking thread's
+   name, the panic's message and its location, and it never blocks:
+   standard error first, written directly with no lock taken; then the
+   log, only through a non-blocking attempt that is skipped if it would
+   wait, because the panicking thread may hold the logging lock. Then the
+   process aborts. The abort's crash status is distinct from the
+   configuration refusal's 2 and the runtime failure's 1 (IG-11), so a
+   supervisor tells the three apart. Both start-time files survive an
+   abort intact: the lock is an operating-system lock the kernel releases
+   with the process, and the marker is only ever replaced by a renamed,
+   flushed temporary file (§2.6). *Records-was: DC-Q13 said the entry
+   catches its own panics into an exit status; superseded by the
+   workspace's `panic = "abort"`, Rick, 2026-10-14.*
    **`service` before and after RT-W14.** The SCM dispatcher, the
    `SERVICE_START_PENDING` checkpoints and wait hints through steps 2 to 8,
    and `SERVICE_RUNNING` once RT-15's rendezvous is published are RT-W14's
    (`RPC_CHANNEL.md`, RT-W14, which waits on RT-W10), built on this entry:
    without them the SCM's start timeout of about 30 seconds kills a start
    that the managed Tor's bootstrap alone can stretch to 300 seconds (error
-   1053). Until RT-W14 lands, the cutover ships the `service` row as
-   RESERVED (IG-10): given on Windows, it is refused with a code naming
-   RT-W14, and on Linux, FreeBSD and macOS it is refused as RT-16 rules.
+   1053). Until RT-W14 lands, the `service` row has the grammar's
+   `reserved` visibility (IG-9, IG-10), as `rpc-listen` has for RT-W10
+   (`INPUT_GRAMMAR.md` §5): it is not accepted, and its refusal names RT-W14.
+   The grammar lane sets the row's visibility (Rick, 2026-10-14).
    Everything else `service` selects is built here and switched on by
    RT-W14: the root by run mode, the machine-wide root's checks (§2.4), and
    the elevation branch's deletion.
