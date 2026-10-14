@@ -42,9 +42,12 @@ a name. The qualifiers `max` and `min` may end any path. A path-valued
 option ends in `file` or `dir`. A term may both carry a value and have
 children. `dev` is a subject like any other (IG-8); its children may be
 other subjects. The gate checks that a name is well formed; whether it is
-an option is the table's. A command is `<path> <verb>`, where the verbs
-are terms of kind *verb* defined under that subject. The gate walks every
-live and reserved name in every binary's table (a REJECTED row is a
+an option is the table's. A command is a path whose last term is a
+*verb* (the command acts) or a *view* (a noun whose command prints it);
+verbs and views are terms of that kind under their parent, a subject that
+is itself a verb or a view is a command alone (`send`, `balance`), and
+each command has exactly one spelling. The gate walks every live and
+reserved name and every command in every binary's table (a REJECTED row is a
 refused spelling, exempt by kind; IG-10) and fails on: an undefined
 segment; an adjacent pair that is not a parent→child edge; a qualifier
 anywhere but last; a term defined twice. The edit that proves it can
@@ -66,7 +69,12 @@ quantity (an integer and a unit — bytes `B KiB MiB GiB TiB`, IEC only,
 endpoint (a literal IP and a port; no hostnames); peer-endpoint (an
 endpoint or `<v3>.onion:port`); address (a Shekyl address, checked
 against the network); origin (an explicit web origin, RFC 6454: scheme `http` or
-`https`, a host, an optional port, nothing after; `*` is refused); path
+`https`, a host, an optional port, nothing after; `*` is refused); hash
+(64 hexadecimal characters: a transaction id or a block hash); amount (a
+decimal SKL amount with at most `DISPLAY_DECIMAL_POINT` fractional
+digits, `shekyl-units` the one source, parsed exactly to atomic units,
+never a float); name (a wallet's name: one path component, no
+separators); text (the rest of the line, verbatim); path
 (absolute only); secret (file only; never logged or echoed, shown in the
 startup line only as set; zeroized; held only in Rust); command (file only; an
 argument array run without a shell; placeholders are `{name}`, each
@@ -75,7 +83,8 @@ the only syntax, `%` literal, an unknown name refused); list
 and map of a scalar kind (the flag repeated; `none` is the empty list; a
 command-line list or map replaces the file's whole). A row narrows its
 kind with a constraint enforced by its constructor and may admit named
-keywords (`unlimited`, `auto`). A row with no default is *unset* when not
+keywords (`unlimited`, `auto`, `stdin`; paths are absolute, so a keyword
+never collides with a file). A row with no default is *unset* when not
 given, and the row states what unset means; there are no sentinel
 values. There are no floating-point values anywhere in the grammar.
 
@@ -93,7 +102,8 @@ genuinely needs is not a development lever and gets a public row.
 
 **IG-9 One table per binary, generated everything.** The table row: id,
 name, kind, constraint, keywords, default (a value, unset, or "derived
-from the network row"), surfaces, visibility (`public` / `dev` /
+from the network row"), surfaces, runtime (whether the value can change while running,
+IG-12), visibility (`public` / `dev` /
 `rejected` / `reserved`), accepted networks (`dev` only), owning subsystem, help text.
 From the table: `--help`, completion, the documentation tables, and an
 annotated TOML example. A gate regenerates the docs and diffs them, and
@@ -112,22 +122,30 @@ for and where that is ruled.
 
 **IG-11 Diagnostics.** Every refusal is a typed value: a stable code
 (`config.value.range`, `config.file.permissions`, …), the option, the
-source (`cli`, `file:path:line`, `default`) and named parameters. One
+source (`cli`, `file:path:line`, `default`, `runtime`) and named parameters. One
 renderer turns it into the English message, which states what was wrong,
 where, and what to do (rule 82). Machine output and logs carry the code.
 A configuration refusal exits with status 2; a runtime failure with 1.
 
 **IG-12 Runtime changes share the constructor.** A value that can also
-change while running (rates, inbound cap, log level, mining) is built by
-the same constructor on both surfaces, with the same refusals. The live
-value is owned by its subsystem. No binary ever writes its own config
-file.
+change while running (rates, inbound cap, log level, mining) is marked
+runtime in its row (IG-9) and is built by the same constructor on both
+surfaces, with the same refusals. It is changed with `option set <name>
+<value>` and read with `option show [<name>]`, which reports its source
+as `runtime`; mining starts and stops with `mine start` and `mine stop`,
+which build `mine-address` and `mine-threads` through their constructors.
+The live value is owned by its subsystem. Nothing is written to the
+config file: no binary ever writes its own config file.
 
 **IG-13 Inputs come from the table, and nowhere else.** No option value
 comes from the environment. Default paths come from the operating
-system's account and known-folder interfaces (the passwd entry's home on
-Unix, the known-folder API on Windows), not from `HOME`, `XDG_*` or
-`%APPDATA%`. The only environment reads permitted are presentation-only
+system's account and known-folder interfaces, never from `HOME`, `XDG_*`
+or `%APPDATA%`. Each binary's per-account root is the passwd entry's home
+plus `.shekyl` on Linux, FreeBSD and macOS, and
+`SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows,
+never Roaming AppData, which copies the wallet and its config to domain
+servers (rule 36); the daemon's data and log defaults, the wallet
+directory and the wallet binaries' config files sit under it. The only environment reads permitted are presentation-only
 (terminal capabilities that change rendering, never a value). Every
 resolved default path appears in the startup line with its source. A
 service account whose passwd home is unset or `/nonexistent` has no
@@ -136,7 +154,8 @@ default paths: the packaging sets the account's home or the unit passes
 
 **IG-14 Required announcements are not log events.** The
 effective-configuration line, `dev-` lever warnings and posture warnings
-(clearnet-only, offline) reach the log and standard error at every start
+(clearnet-only, offline, a plaintext RPC listener bound beyond
+loopback) reach the log and standard error at every start
 whatever the log level. The effective-configuration line shows every
 value and its source; a secret is shown as set, never its value (IG-6).
 
