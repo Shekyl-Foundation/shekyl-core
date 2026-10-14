@@ -314,6 +314,14 @@ where
         ignore(owner.deregister());
         return CloseCause::new(CloseKind::LocalClose);
     }
+    tracing::debug!(
+        conn,
+        outbound,
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "tor gap armed"
+    );
 
     let StreamEnds {
         session: bytes,
@@ -415,6 +423,25 @@ where
             }
             result = wake.as_mut(), if gap_open => {
                 ignore(owner.deregister());
+                // Cold first contact (2026-10-14): on one responder the gap
+                // fired 1.8 s early, in the same half-millisecond as the
+                // dialer loops' wakes. The delivered wake, against what was
+                // armed, says whose it was.
+                match &result {
+                    Ok(wake) => tracing::debug!(
+                        conn,
+                        outbound,
+                        owner = ?owner.id(),
+                        wake_owner = ?wake.owner,
+                        generation = ?wake.generation,
+                        wake_deadline = wake.deadline.get(),
+                        fired_at = wake.fired_at.get(),
+                        armed_deadline = deadline.get(),
+                        now = owner.clock().now().get(),
+                        "tor gap fired"
+                    ),
+                    Err(err) => tracing::debug!(conn, outbound, ?err, "tor gap wait ended"),
+                }
                 let kind = match result {
                     Ok(_) => CloseKind::LevinHandshakeTimeout,
                     Err(_) => CloseKind::LocalClose,
