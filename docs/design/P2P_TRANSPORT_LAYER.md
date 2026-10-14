@@ -1821,7 +1821,7 @@ hand-kept copy.
 
 | Phase | Causes |
 | --- | --- |
-| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `DialFailed`, `ProxyRefused`, `LocalClose` |
+| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `DialFailed`, `ProxyRefused`, `ProxyUnavailable`, `LocalClose` |
 | Channel exists, Levin handshake not done | `LevinHandshakeTimeout`, `LevinHandshakeRejected`, `LocalClose` |
 | Any time after the channel exists | `PeerClosed`, `RecordRejected`, `SessionRefused`, `IoError`, `SendQueueFull`, `LocalClose` |
 

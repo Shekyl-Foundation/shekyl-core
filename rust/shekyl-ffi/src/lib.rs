@@ -158,6 +158,7 @@ pub mod seam_ffi;
 pub mod dialer_ffi;
 pub mod peerlist_ffi;
 pub mod rpc_peerlist_ffi;
+pub mod close_cause_ffi;
 
 // Operator link rates and the byte-stamp clock the stall check reads.
 pub mod link_ffi;

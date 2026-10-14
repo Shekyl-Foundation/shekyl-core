@@ -728,7 +728,11 @@ one-way; clearnet: no, NNhfs authenticates no one) and does not match
 the connector by name. The destination-naming causes are
 `LevinHandshakeRejected`, and `ProxyRefused` with a reply in `0x04 0x05
 0xF0 0xF1 0xF2`. `DialFailed` is not one: on Tor it is this node's
-SOCKS port. So on clearnet no cause counts, and on Tor exactly six do:
+SOCKS port. Nor is `ProxyUnavailable` (Rick, 2026-10-14): the Tor
+connector names its own proxy, a TCP connect to the SOCKS port that
+failed or an exchange Tor closed without a reply, as that kind and not
+`LocalClose`, and warns about it once a minute at most, never per dial.
+So on clearnet no cause counts, and on Tor exactly six do:
 the rejection and the five replies. The cell already existed in
 `shekyl-transport-layer/src/declaration.rs`; nothing was added to the
 table. Its tests: clearnet, no cause counts; Tor, exactly those six and

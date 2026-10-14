@@ -844,11 +844,11 @@ mod tests {
         drop(engine);
     }
 
-    /// The SOCKS port is closed. Covers the TCP connect to the local proxy
-    /// in `dial_one`. Does not cover a proxy that answers and then refuses,
-    /// and does not cover the C++ forget cache.
+    /// The SOCKS port is closed: the TCP connect to this node's own proxy
+    /// fails. That is `ProxyUnavailable`, which names the proxy and never
+    /// the onion (Rick, 2026-10-14).
     #[test]
-    fn a_closed_socks_port_does_not_implicate_the_onion() {
+    fn a_closed_socks_port_is_the_proxy_and_does_not_implicate_the_onion() {
         let (engine, listener, seen) = start(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
             InboundCeiling::Bounded(4),
@@ -858,7 +858,50 @@ mod tests {
             host: v3_onion_hostname(&[0x11; 32]),
             port: 18081,
         });
-        let cause = wait_kind(&seen, CloseKind::LocalClose);
+        let cause = wait_kind(&seen, CloseKind::ProxyUnavailable);
+        assert!(!cause.implicates_address(ConnectorId::Tor));
+        listener.shutdown();
+        drop(engine);
+    }
+
+    /// The proxy accepts and closes the SOCKS exchange without a reply, as
+    /// a Tor that is going down does: `ProxyUnavailable`, not `LocalClose`.
+    #[test]
+    fn a_socks_exchange_closed_without_a_reply_is_the_proxy() {
+        let engine = EngineService::start(MonotonicClock::new());
+        let pool = runtime(budget(), &name()).expect("runtime");
+        let recorded = causes();
+        let handle_pool = pool.handle().clone();
+        let proxy_port = handle_pool.block_on(async {
+            let proxy = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("proxy");
+            let port = proxy.local_addr().expect("addr").port();
+            tokio::spawn(async move {
+                let (mut sock, _) = proxy.accept().await.expect("accept");
+                let mut greeting = [0u8; 3];
+                sock.read_exact(&mut greeting).await.expect("greet");
+                // No method selection, no reply: the exchange just ends.
+                drop(sock);
+            });
+            port
+        });
+        let listener = listen(
+            pool,
+            &engine.handle(),
+            &Sockets::new(),
+            &config(
+                SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
+                Vec::new(),
+                InboundCeiling::Bounded(4),
+                Tick::new(5_000_000_000),
+                Tick::new(5_000_000_000),
+                recorded.sink,
+            ),
+        )
+        .expect("listen");
+        listener.dial(onion());
+        let cause = wait_kind(&recorded.seen, CloseKind::ProxyUnavailable);
         assert!(!cause.implicates_address(ConnectorId::Tor));
         listener.shutdown();
         drop(engine);

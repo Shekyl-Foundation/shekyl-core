@@ -43,25 +43,7 @@ namespace shekyl
 {
   inline const char* seam_close_name(std::uint8_t kind)
   {
-    switch (kind)
-    {
-      case SHEKYL_CLOSE_PREFIX_MISMATCH: return "PrefixMismatch";
-      case SHEKYL_CLOSE_TRANSPORT_HANDSHAKE_FAILED: return "TransportHandshakeFailed";
-      case SHEKYL_CLOSE_TRANSPORT_TIMEOUT: return "TransportTimeout";
-      case SHEKYL_CLOSE_ADMISSION_REFUSED: return "AdmissionRefused";
-      case SHEKYL_CLOSE_INBOUND_NOT_ACCEPTED: return "InboundNotAccepted";
-      case SHEKYL_CLOSE_DIAL_FAILED: return "DialFailed";
-      case SHEKYL_CLOSE_PROXY_REFUSED: return "ProxyRefused";
-      case SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT: return "LevinHandshakeTimeout";
-      case SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED: return "LevinHandshakeRejected";
-      case SHEKYL_CLOSE_PEER_CLOSED: return "PeerClosed";
-      case SHEKYL_CLOSE_RECORD_REJECTED: return "RecordRejected";
-      case SHEKYL_CLOSE_SESSION_REFUSED: return "SessionRefused";
-      case SHEKYL_CLOSE_IO_ERROR: return "IoError";
-      case SHEKYL_CLOSE_SEND_QUEUE_FULL: return "SendQueueFull";
-      case SHEKYL_CLOSE_LOCAL_CLOSE: return "LocalClose";
-      default: return kind == 0 ? "none" : "unknown";
-    }
+    return shekyl_close_kind_name(kind);
   }
 
   /// Registry key for `socket_id`. Zero is not an id, so the result is

@@ -64,6 +64,15 @@ macro_rules! close_kinds {
                 }
             }
 
+            /// The kind's name, NUL-terminated, for the C side's log
+            /// lines: one table, so a new kind is named everywhere.
+            #[must_use]
+            pub const fn name_nul(self) -> &'static str {
+                match self {
+                    $(Self::$name => concat!(stringify!($name), "\0"),)*
+                }
+            }
+
             const fn phase_class(self) -> PhaseClass {
                 match self {
                     $(Self::$name => PhaseClass::$phase,)*
@@ -102,6 +111,7 @@ close_kinds! {
     (13, SendQueueFull, ChannelExists, "SHEKYL_CLOSE_SEND_QUEUE_FULL"),
     (14, LocalClose, Every, "SHEKYL_CLOSE_LOCAL_CLOSE"),
     (15, InboundNotAccepted, BeforeChannel, "SHEKYL_CLOSE_INBOUND_NOT_ACCEPTED"),
+    (16, ProxyUnavailable, BeforeChannel, "SHEKYL_CLOSE_PROXY_UNAVAILABLE"),
 }
 
 /// One close cause. `reply_code` is the overlay reply for
@@ -214,7 +224,11 @@ impl CloseCause {
     ///
     /// [`CloseKind::DialFailed`] does not. It is a direct connect that was
     /// refused, and on a proxied dial that connect is to this node's own
-    /// SOCKS port, which says nothing about the destination. Every other
+    /// SOCKS port, which says nothing about the destination.
+    /// [`CloseKind::ProxyUnavailable`] does not: it is this node's own SOCKS
+    /// proxy failing, a TCP connect to it that failed or an exchange it
+    /// closed without a reply (Rick, 2026-10-14), and it names the proxy,
+    /// never the onion. Every other
     /// kind is a timeout, this node's own close, or the peer's ordinary
     /// end of file.
     ///
@@ -364,6 +378,7 @@ mod tests {
             CloseKind::ProxyRefused,
             CloseKind::LocalClose,
             CloseKind::InboundNotAccepted,
+            CloseKind::ProxyUnavailable,
         ];
         let gap = [
             CloseKind::LevinHandshakeTimeout,

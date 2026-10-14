@@ -4507,6 +4507,8 @@ int shekyl_rpc_peerlist_sizes(std::uint64_t* out_white, std::uint64_t* out_gray)
 int shekyl_rpc_p2p_state(void);
 /// Record --offline where the p2p layer reads it; returns `offline`.
 bool shekyl_p2p_record_offline(bool offline);
+/// The close kind's name for a log line, from the Rust table; static, never freed.
+const char* shekyl_close_kind_name(std::uint8_t kind);
 /// A peerlist a peer sent over session `session` (the socket id), as it
 /// arrived: `count` entries, none dropped or rewritten. Rust reads the
 /// session's connector and direction from the board, applies every
