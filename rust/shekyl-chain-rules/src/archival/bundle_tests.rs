@@ -25,14 +25,14 @@
 //! Every test names the edit that turns it red.
 
 use shekyl_archival_retention::{
-    bundle_root, BundleBody, BundleRecord, BundleRef, DrawableEpoch, DrawablePair, PassBitmap,
-    BUNDLE_RECORD_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN, CHALLENGE_READS,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    bundle_root, section_budget, BundleBody, BundleRecord, BundleRef, DrawableEpoch, DrawablePair,
+    PassBitmap, BUNDLE_RECORD_LEN, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_WITNESS_KEY_LEN,
+    BUNDLE_WITNESS_LEN, CHALLENGE_READS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
-use super::bundle_section_tests::check_section_at_cap;
+use super::bundle_section_tests::{rules_of, view_holding};
 use super::*;
 use crate::harness::bundle::{
     fixture_block_hash, with_hash, BundleRead, BundleReadFaulted, BundleWorld,
@@ -494,17 +494,23 @@ fn a_second_bundle_for_a_revealed_block_refuses() {
     assert!(judge(&world, &reference, &body).is_ok());
 }
 
-/// A bundle for a block the chain does not have is refused. Red edit:
-/// treat a missing count as zero — the bundle would then be judged
-/// against an empty bitmap and refused as `Bitmap`.
+/// A view with no count for `h` has failed to answer; it has not judged
+/// the bundle (`SCS-P42`). The window check has already put `h` below the
+/// including block, so `h` is a block of this chain and its count was
+/// written when it connected. Red edits: refuse it as a verdict — a store
+/// that missed a row would then invalidate an honest block; treat it as
+/// zero — the bundle would then be judged against an empty bitmap and
+/// refused as `Count`.
 #[test]
-fn a_bundle_for_a_block_the_chain_does_not_have_refuses() {
+fn a_missing_draw_count_is_the_views_failure_not_a_verdict() {
     let mut world = BundleWorld::new(10);
     let (reference, body) = world.bundle(&[1]);
     world.view.counts.remove(&world.h);
     assert_eq!(
         judge(&world, &reference, &body),
-        invalid(BundleInvalid::UnknownBlock)
+        Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
+            height: world.h
+        }))
     );
 }
 
@@ -535,14 +541,17 @@ fn a_reference_whose_count_is_not_the_chains_refuses() {
     }
 }
 
-/// **A reference that understates its count to pass the section budget is
-/// an invalid block** (`SCS-P39`, §17.1). The section check sums the
-/// counts references state, with no chain; a miner restates a ten-draw
-/// bundle as nine draws, or as none, and the section's charge shrinks.
-/// The stateless check cannot see it and does not need to: admission
-/// holds the stated count to `count(h)`. Red edit: compare the bitmap's
-/// byte length to the chain's instead of the count — nine and ten draws
-/// are both two bytes, and the understated reference is admitted.
+/// **A reference that understates its count to shrink the section charge
+/// is an invalid block** (`SCS-P39`, §17.1). The section check sums the
+/// counts references state. Every budget [`check_section`] derives is
+/// even (`c = 2`), so a one-draw understatement never crosses it: nine
+/// and ten are both over budget 8 and both within budget 10. Restating
+/// the same bundle as no draws does cross a real budget — charge 1 fits
+/// budget 2 and charge 10 does not — and the section check admits the
+/// lie. Admission holds the stated count to `count(h)` either way.
+/// Red edit: compare the bitmap's byte length to the chain's instead of
+/// the count — nine and ten draws are both two bytes, and the understated
+/// reference is admitted.
 #[test]
 fn a_reference_that_understates_its_count_is_refused_at_admission() {
     let world = BundleWorld::new(10);
@@ -555,19 +564,53 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
     );
     assert_eq!(nine.charge(), 9, "the section is charged one less");
     assert_eq!(nine.encode().len(), honest.encode().len());
-    // The stateless check passes it at a budget the honest one exceeds...
-    let section = std::slice::from_ref(&nine);
-    assert_eq!(
-        check_section_at_cap(section, &root_of(section), 9).map(SectionCharge::get),
-        Ok(9)
-    );
-    assert!(check_section_at_cap(
-        std::slice::from_ref(&honest),
-        &root_of(std::slice::from_ref(&honest)),
-        9
-    )
-    .is_err());
-    // ...and admission refuses it, before anything is opened.
+
+    let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
+    let rules = rules_of(seb.get());
+    let epoch = rules.settlement_schedule().epoch_at(honest.h()).to_raw();
+    let budget_of = |d: u64| section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, d, seb);
+    // `⌊9·4_000 / 10_000⌋ + 1 = 4`, times `c`, is 8. `D = 5_000` is the
+    // next count cap, budget 10. `D = 8` is the small network, budget 2.
+    assert_eq!(budget_of(4_000), 8);
+    assert_eq!(budget_of(5_000), 10);
+    assert_eq!(budget_of(8), 2);
+    let at = |reference: &BundleRef, pairs: u64| {
+        let view = view_holding(&[(epoch, pairs)]);
+        let section = std::slice::from_ref(reference);
+        check_section(
+            section,
+            &root_of(section),
+            BlockHeight::from_raw(reference.h().to_raw() + 1),
+            &view,
+            &rules,
+        )
+    };
+    let over = |reference: &BundleRef, budget: u64| {
+        Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
+            charge: SectionCharge::of(std::slice::from_ref(reference)),
+            budget,
+        }))
+    };
+    let admitted = |reference: &BundleRef| {
+        Ok(SectionStanding::Admitted(SectionCharge::of(
+            std::slice::from_ref(reference),
+        )))
+    };
+    assert_eq!(at(&nine, 4_000), over(&nine, 8));
+    assert_eq!(at(&honest, 4_000), over(&honest, 8));
+    assert_eq!(at(&nine, 5_000), admitted(&nine));
+    assert_eq!(at(&honest, 5_000), admitted(&honest));
+
+    // The restatement that does cross a real budget. The section check
+    // admits it; the count check does not.
+    let (all_miss, miss_body) = world.bundle(&[]);
+    assert_eq!(all_miss.charge(), 10);
+    let none = with_passes(&all_miss, PassBitmap::new(0, &[]).expect("no bits"));
+    assert_eq!(none.charge(), 1);
+    assert_eq!(at(&none, 8), admitted(&none));
+    assert_eq!(at(&all_miss, 8), over(&all_miss, 2));
+
+    // Admission refuses each restatement, before anything is opened.
     world.view.take_reads();
     assert_eq!(judge(&world, &nine, &body), invalid(BundleInvalid::Count));
     assert_eq!(
@@ -580,10 +623,6 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
         PassBitmap::new(11, honest.passes().as_bytes()).expect("two bytes"),
     );
     assert_eq!(judge(&world, &eleven, &body), invalid(BundleInvalid::Count));
-    // An all-miss bundle restated as a bundle of no draws.
-    let (all_miss, miss_body) = world.bundle(&[]);
-    let none = with_passes(&all_miss, PassBitmap::new(0, &[]).expect("no bits"));
-    assert_eq!(none.charge(), 1);
     assert_eq!(
         judge(&world, &none, &miss_body),
         invalid(BundleInvalid::Count)
@@ -711,7 +750,7 @@ fn a_bundle_that_does_not_open_the_commitment_refuses() {
 /// signature, checked next and before any receipt: a body the producer did
 /// not sign costs one signature verification, no drawable epoch read and no
 /// receipt verification (§9.1). Red edits: verify receipts first (the read
-/// log gains `DrawableEpoch`); verify under `SCHEME_DOMAIN_WITNESS_CARRIER`.
+/// log gains `DrawableEpoch`); verify under `SCHEME_DOMAIN_RECEIPT`.
 #[test]
 fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
     let world = BundleWorld::new(10);

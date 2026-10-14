@@ -203,12 +203,6 @@ impl EnvelopeWidth<RECEIPT_ENVELOPE_LEN> for PassEnvelope {
 /// The signature a `W`-byte envelope carries.
 pub type EnvelopeSignature<const W: usize> = <PassEnvelope as EnvelopeWidth<W>>::Signature;
 
-/// A [`PassKey`] of the live scheme: the bond identity key's.
-pub type IdentityPassKey = dyn PassKey<IDENTITY_ENVELOPE_LEN>;
-
-/// A [`PassSigner`] of the live scheme: the bond identity key's.
-pub type IdentityPassSigner = dyn PassSigner<IDENTITY_ENVELOPE_LEN>;
-
 /// Where the persona's attestation signing key lives.
 ///
 /// One method, synchronous, called from the serve loop's blocking pool
