@@ -1,14 +1,12 @@
 # Tor gap from cold first contact, 2026-10-14
 
-**Status: IN PROGRESS (run A read and corrected 2026-10-14: its
-responder-side numbers are not usable; run B stopped at sample 17; both
-rerun with lifted spans once logging never blocks, `shekyl-core` #1069;
-the derivation and the spans change wait for Rick's reading of the
-rerun).** Ruled by Rick, 2026-10-13: the Tor gap is re-derived from cold
-first contact, on two responders, before anything else changes (PR-3,
-#1056; the brief's revision 4). Ruled again 2026-10-14: three fixes
-first (logging never blocks; the gap measures the peer's silence; one
-process clock), then the rerun.
+**Status: IN PROGRESS (the rerun with lifted spans is read, 2026-10-14:
+runs A and B, 100 samples each; nothing is derived until Rick reads it).**
+Ruled by Rick, 2026-10-13: the Tor gap is re-derived from cold first
+contact, on two responders, before anything else changes (PR-3, #1056;
+the brief's revision 4). Ruled again 2026-10-14: three fixes first
+(logging never blocks; the gap measures the peer's silence; one process
+clock), then the rerun with the Tor dial and gap lifted to 120 s.
 
 ## Why
 
@@ -164,6 +162,75 @@ accept, the outbound gap does.
 
 Stopped at sample 17 of 100 (04:15Z) when the responder defect was
 ruled to be fixed first. Its rows are not recorded; it reruns with A.
+
+## The rerun with lifted spans (2026-10-14)
+
+The same rig as above, rebuilt at `19863b044` (PR-3 with #1069 merged):
+logging never blocks, the gap ends at the first complete Levin frame,
+and one process clock. Client and responders are measurement builds
+(`SHEKYL_MEASUREMENT_SPANS`): the Tor dial and gap deadlines are 120 s,
+so neither distribution is cut at the deadline it derives; each daemon
+logged the warning that says so. A sample waits up to 300 s. Run A's
+responder is the measurement host, run B's the floor device built
+natively; the client is the same x86 host for both. A two-sample dry
+run preceded each run. Percentiles are nearest-rank; at about 95
+sessions the p99 is the maximum. Raw rows:
+`p2p_tor_gap_cold_20261014_rerunA.tsv`, `p2p_tor_gap_cold_20261014_rerunB.tsv`.
+
+| Outcome | Run A | Run B |
+| --- | --- | --- |
+| session | 95 | 94 |
+| Tor dial over 120 s (`TransportTimeout:0`) | 2 | 2 |
+| SOCKS refusal (`ProxyRefused`, replies 6 and 240) | 2 | 0 |
+| managed Tor did not bootstrap in 300 s | 1 | 3 |
+| Tor bootstrapped after 268 s; its dial was in flight when the sample ended | 0 | 1 |
+
+**Run A, responder on the measurement host.**
+
+| Series | n | p50 | p90 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| Tor dial (dial start to SOCKS success) | 95 | 6.95 s | 68.45 s | 116.33 s | 116.33 s |
+| Outbound gap (SOCKS success to the first complete frame) | 95 | 625.7 ms | 1.32 s | 15.50 s | 15.50 s |
+| Inbound gap (accept to the first complete frame) | 95 | 621.9 ms | 1.24 s | 27.69 s | 27.69 s |
+| Dialer's write interval (SOCKS success to the request on the wire) | 95 | 0.5 ms | 0.7 ms | 1.0 ms | 1.0 ms |
+| Dialer, channel to its own verdict | 95 | 639.6 ms | 1.41 s | 20.01 s | 20.01 s |
+| Responder, channel to its own verdict | 95 | 628.5 ms | 1.34 s | 27.69 s | 27.69 s |
+
+**Run B, responder on the floor device.**
+
+| Series | n | p50 | p90 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| Tor dial (dial start to SOCKS success) | 94 | 5.86 s | 55.76 s | 112.66 s | 112.66 s |
+| Outbound gap (SOCKS success to the first complete frame) | 94 | 616.3 ms | 1.07 s | 46.91 s | 46.91 s |
+| Inbound gap (accept to the first complete frame) | 94 | 626.6 ms | 1.30 s | 46.12 s | 46.12 s |
+| Dialer's write interval (SOCKS success to the request on the wire) | 94 | 0.4 ms | 0.7 ms | 0.9 ms | 0.9 ms |
+| Dialer, channel to its own verdict | 94 | 617.2 ms | 1.07 s | 46.91 s | 46.91 s |
+| Responder, channel to its own verdict | 94 | 627.4 ms | 1.30 s | 46.12 s | 46.12 s |
+
+**Readings, before any derivation.**
+
+- **The Tor dial has a long tail that 9.1 s was cutting.** 37 of run A's
+  95 sessions and 26 of run B's 94 dialled for longer than 9.1 s. Two
+  dials in each run exceeded even 120 s, so the dial's p99 is still
+  censored: it is at least the 116 s and 113 s shown.
+- **The gaps are network time, not node time.** The dialer puts its
+  request on the wire within 1 ms of its SOCKS success. The gap tails are
+  single circuits: in run B's sample 72 the request reached the responder
+  46.1 s after its accept and the reply reached the dialer 46.9 s after its
+  SOCKS success; in run A's sample 71 the responder's tor attached the
+  stream 27.3 s before the dialer's SOCKS success, so the responder waited
+  that long for a frame the dialer could not yet send.
+- **The dialer's own verdict can lag its first frame.** In run A's sample
+  18 the reply frame arrived after 769 ms and the dialer's verdict after
+  20.0 s (samples 4 and 19: 9.9 s and 7.9 s). Since the gap ends at the
+  first complete frame, that lag no longer times the peer out.
+- **The two responders agree in the body.** The gaps' p50 differ by
+  under 2 % and their p90 by under 25 %, and neither host is slower in
+  both directions (run A's outbound p90 is the higher, run B's inbound
+  p90). The floor device does not slow the handshake; the tails are
+  single circuits on either host.
+- **Stops.** 3 of run A's and 1 of run B's 100 SIGINT stops overran the
+  rig's 60 s budget; the causes are in FOLLOWUPS (the stop row).
 
 ## Derivation (D9)
 
