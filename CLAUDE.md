@@ -113,6 +113,7 @@ UX (end-user-facing surfaces)
 - [`80-usability`](.cursor/rules/80-usability.mdc) — usability-first design
 - [`81-no-protocol-knowledge`](.cursor/rules/81-no-protocol-knowledge.mdc) — users never need to understand the protocol
 - [`82-failure-mode-ux`](.cursor/rules/82-failure-mode-ux.mdc) — failure modes are first-class design scope
+- [`83-input-grammar`](.cursor/rules/83-input-grammar.mdc) — the input grammar (always applies): one tree glossary, names as paths, no negation, no aliases, syntax kinds, one table per binary, typed diagnostics, no environment input
 
 ---
 

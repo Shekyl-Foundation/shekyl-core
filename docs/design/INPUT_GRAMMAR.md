@@ -1,7 +1,13 @@
 # Shekyl input grammar — Round 0, Part A (the rules) and the daemon's names
 
-**Status:** OPEN — Round 0, DRAFT revision 3 for the maintainer's ruling
-(2026-10-13). Nothing here is ruled until marked. Replaces revision 2 whole.
+**Status:** RULED 2026-10-13 (Rick) — Round 0, Part A. IG-Q1…IG-Q19 ruled as
+proposed at revision 3 with the amendments carried in-line (IG-8, the
+`config-file` row, IG-Q12, IG-Q14) and IG-Q17 as ruled the same day. The
+rules IG-1…IG-15 are the cursor rule
+[`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this document
+holds the glossary tree and the name tables. Part B (the name tables of
+`shekyl-cli`, `shekyl-wallet-rpc`, the consoles and the utilities) is
+brought to the maintainer for ruling before anything lands.
 **Verified against:** `shekyl-core` @ `737da3127` (`dev`; the option surface
 is unchanged from `2c3fae3c`, only `rpc_facts_ffi.*` moved) and PR-3 (#1056,
 `feat/p2p3-dialer-cutover`) @ `baaba2bd`. Reviewed at **`737da3127`**. Every
@@ -14,18 +20,6 @@ registered family. Registered at birth in the PR that lands this document
 2026-10-13, cited the same way by the daemon-configuration cutover brief
 (`DAEMON_CONFIG_CUTOVER.md`, draft PR #1066); they are not an identifier
 family of this document.
-
-**Revision 3 (the lane's folds; each is a proposal, none a ruling).** Against
-revision 2 as the maintainer read it: (a) IG-3 says which names the gate
-walks, so X rows are not failed as malformed; (b) the `log-category` row
-takes its keys by reference to `shekyl-logging`, not by enumeration, keeping
-§1's scope; (c) the `p2p-inbound-max` row cites the transport-layer rulings
-D4 and D8 by number; (d) the `rpc-admin-listen` row cites the loopback
-refusal that already exists in Rust; (e) IG-F6 cites the Tor-only posture
-ruling by document, not by date; (f) IG-Q17 — superseded the same day by Rick's ruling, recorded in §8; (g) IG-Q18 carries the lane's proposal, read from the
-Tor posture document; (h) IG-Q14 adds the runtime-directory refusal;
-(i) IG-Q19 states the change from today's effective budget; (j) IG-13 adds
-the packaging condition on account homes.
 
 **Sequencing (ruled 2026-10-13).** Part A (the rules) plus the daemon's
 section of the name table gate the daemon-config brief. Part B — the name
@@ -100,7 +94,7 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 **IG-7 Surfaces.** Each row says where it may be given. Command-line only: `help`, `version`, `network`, `config-file`. File only: every secret and every command value. Everything else: both, CLI winning per key.
 
-**IG-8 Development levers.** A `dev-` option is hidden from help and generated docs, names the networks it is accepted on as data in its row (a `dev-` option given on any other network is refused at parse, rule 71), and is announced at every start when set. It follows every other rule.
+**IG-8 Development levers.** A `dev-` option is hidden from help and generated docs, names the networks it is accepted on as data in its row (a `dev-` option given on any other network is refused at parse, rule 71), and is announced at every start when set. It follows every other rule. **No `dev-` option is ever accepted on mainnet**: a lever mainnet genuinely needs is not a development lever and gets a public row.
 
 **IG-9 One table per binary, generated everything.** The table row: id, name, kind, constraint, keywords, default (a value, unset, or "derived from the network row"), surfaces, visibility (`public` / `dev` / `rejected`), accepted networks (`dev` only), owning subsystem, help text. From the table: `--help`, completion, the documentation tables, and an annotated TOML example. A gate regenerates the docs and diffs them, and asserts the table is non-empty (rule 47).
 
@@ -207,7 +201,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `version` | `version` | switch | | CLI | K; prints the OS line too |
 | `os-version` | — | | | | R into `version` |
 | `testnet`, `stagenet`, `regtest` | `network` | one-of | `mainnet` | CLI | R |
-| `config-file` | `config-file` | path | `/etc/shekyl/shekyld-<network>.toml`; Windows `%ProgramData%\shekyl\shekyld-<network>.toml` (known-folder API) | CLI | K; a missing file means defaults; an unsafe file or directory refuses |
+| `config-file` | `config-file` | path | `/etc/shekyl/shekyld-<network>.toml`; Windows `%ProgramData%\shekyl\shekyld-<network>.toml` (known-folder API) | CLI | K; a missing file at the default per-network path means defaults, and the startup line says so; a missing file at a path the operator named refuses with a typed code (IG-11) that names the path; an unsafe file or directory refuses |
 | `data-dir` | `data-dir` | path | account home + `.shekyl` + network subdir (row) | both | K; an explicit path is taken as given, the default layout keeps the network subdirectory, and a Rust network marker refuses a wrong-chain directory (IG-Q17, ruled 2026-10-13); no home refuses; one Windows rule (per-user); exclusive lock (IG-F2) |
 | `log-file` | `log-file` | path | account home + `.shekyl/logs/shekyld-<network>.log` | both | K; the per-network name the docs promised (IG-F4) |
 | `log-level` | `log-level` | one-of | `warn` | both | R (numeric 0–4 and category strings go); by default the log records what needs the operator's attention, and the startup and posture lines are announcements, not log events (IG-14); runtime `set_log_level` shares the constructor |
@@ -245,9 +239,9 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `tos-flag` | — | | | | X (a traffic-class marking is a label any on-path observer can classify Shekyl traffic by) |
 | `offline` | — | | | | R into `clearnet = off` and `tor = off` (IG-Q3) |
 | `pad-transactions` | — | | | | L relay |
-| `clearnet-transport-encrypt` | `dev-clearnet-encrypt` | switch | off | both | R; all networks; deleted at the Noise flip |
+| `clearnet-transport-encrypt` | `dev-clearnet-encrypt` | switch | off | both | R; testnet, stagenet, regtest (IG-8: never mainnet); deleted at the Noise flip |
 | `no-sync` | `dev-sync` | one-of `on` `off` | `on` | both | R; regtest; the chain-sync lane owns it |
-| `carrier-development` | `dev-relay-cover` | switch | off | both | R; all networks; `check_carrier_flag_hidden.sh` replaced by a table test |
+| `carrier-development` | `dev-relay-cover` | switch | off | both | R; testnet, stagenet, regtest (IG-8: never mainnet); `check_carrier_flag_hidden.sh` replaced by a table test |
 
 ### Core, pool, notify, mining
 
@@ -272,10 +266,10 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | Today | New | Kind | Default | Surface | Notes |
 |---|---|---|---|---|---|
 | — | `rpc-listen` | list of endpoint | | | **Reserved** for the authenticated channel listener (RT-W10); not in this cut's table |
-| `rpc-bind-ip`, `rpc-bind-port`, `rpc-bind-ipv6-address`, `rpc-use-ipv6` | `rpc-admin-listen` | list of endpoint, loopback only | `127.0.0.1:<row rpc port>` | both | R; the interim plaintext full-access listener; loopback only is today's rule in Rust (`rust/shekyl-daemon-rpc/src/bind.rs:70`, `refuse_non_loopback`, RT-W2); becomes an X row when RT-W10 lands (IG-Q16) |
+| `rpc-bind-ip`, `rpc-bind-port`, `rpc-bind-ipv6-address`, `rpc-use-ipv6` | `rpc-admin-listen` | list of endpoint, loopback only | `127.0.0.1:<row rpc port>` | both | R; the interim plaintext full-access listener; loopback only by RT-14 (a plaintext listener never binds beyond loopback; only the authenticated channel listener may bind wildcard); becomes an X row when RT-W10 lands (IG-Q16) |
 | `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only | `none` | both | R; survives RT-W10 unchanged (plaintext loopback at view, off by default, ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
 | `rpc-access-control-origins` | `rpc-cors-origin` | list | `none` | both | R |
-| `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | the RPC resource policy's (IG-Q12) | both | R; one option for one value, where today three set it (IG-F1) |
+| `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy, the same shape as `txpool-weight-max` |
 | `disable-rpc-ban` | — | | | | – (R5; the scorer it switches has no caller, IG-F9) |
 | `rpc-response-soft-limit` | — | | | | – (response limits belong to the RPC resource policy, IG-Q12) |
 
@@ -334,52 +328,52 @@ The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with th
 
 ## 7. Landed text and consumers the cutover changes
 
-- **Superseded rulings.** `V3_WALLET_DECISION_LOG.md:416-437` rules an environment layer, `--config` and XDG paths for the wallet binaries; IG-13 and R7 supersede it, and the PR that lands this document adds the superseding entry. `CLI_USABILITY.md:108` ("daemon flags do not change"), CU-2's hidden aliases and CU-7's diagnosing retired spellings are superseded by IG-5 and §0; Part B rewrites them.
+- **Superseded rulings.** `V3_WALLET_DECISION_LOG.md:416-437` rules an environment layer, `--config` and XDG paths for the wallet binaries; IG-13 and R7 supersede it; the superseding entry is in the decision log (2026-10-13). `CLI_USABILITY.md:108` ("daemon flags do not change"), CU-2's hidden aliases and CU-7's diagnosing retired spellings are superseded by IG-5 and §0; Part B rewrites them.
 - **Spellings inside other binaries.** `shekyl-cli`'s daemon-down copy prints `shekyld --testnet` (`rust/shekyl-cli/src/main.rs:528-529`); it changes in the cutover.
 - **Consumers outside this repo, in lockstep.** `shekyl-dev` (`tools/config/*.conf.example`, `tools/config/systemd/*`, `scripts/seed/shekyld-*.service`, `stressnet/STRESSNET_PLAYBOOK.md`) and the GUI sidecar (the daemon argument list in `shekyl-gui-wallet`'s `daemon_manager.rs`, five flags) carry today's spellings. Each gets its PR, merged with the cutover, and the release that carries the cutover (alpha.11 or later) ships the new files with the binary: an old file makes the new daemon refuse to start with status 2.
 - **Launchers in this repo.** The regtest harness, `drs_bench.py`, the fleet generator, the test scripts and fixture generators move to the new spellings in the cutover; under R3 regtest runs the managed Tor like every network and wipes nothing, so a harness that wants a fresh chain uses a fresh `data-dir`.
 
 ---
 
-## 8. Questions to rule
+## 8. Questions, ruled 2026-10-13
 
-**IG-Q1 — the rules.** Ratify IG-1…IG-15 as written, or amend. (Revision 1's IG-2, IG-3 and IG-6 failed its own table; the tree glossary and syntax-only kinds are the repair.)
+**IG-Q1 — the rules — RULED 2026-10-13.** IG-1…IG-15 as written here, with IG-8's mainnet clause; they are the cursor rule `83-input-grammar`.
 
-**IG-Q2 — the parser.** Problem: clap's `derive` puts names in attributes, which defeats one table per binary, and its errors are its own English, outside IG-11. Proposal: parse in the shared crate. The grammar is `--name value`, `--name=value`, switches and repeats; `--` ends options; no short flags; no abbreviation; arguments read with `std::env::args_os`, a non-UTF-8 argument refused with a typed code; suggestions from `strsim` (in the lock). A fuzz target covers the parser. clap leaves each binary as it conforms.
+**IG-Q2 — the parser — RULED 2026-10-13.** clap's `derive` puts names in attributes, which defeats one table per binary, and its errors are its own English, outside IG-11. The parser is the shared crate's. The grammar is `--name value`, `--name=value`, switches and repeats; `--` ends options; no short flags; no abbreviation; arguments read with `std::env::args_os`, a non-UTF-8 argument refused with a typed code; suggestions from `strsim` (in the lock). A fuzz target covers the parser. clap leaves each binary as it conforms.
 
-**IG-Q3 — the offline state.** Problem: with connectors as subjects, "offline" is exactly `clearnet = off` and `tor = off`, and a `p2p-offline` switch would set that state a second way (IG-5). Proposal: no offline option; the four postures are the product of the two connector settings (default; Tor-only; clearnet-only, warned at every start; offline, announced at every start). `core::m_offline` (`cryptonote_core.cpp:1552,1621`) and the protocol handler (`daemon.cpp:135`) read the derived fact.
+**IG-Q3 — the offline state — RULED 2026-10-13.** With connectors as subjects, "offline" is exactly `clearnet = off` and `tor = off`, and a `p2p-offline` switch would set that state a second way (IG-5). There is no offline option; the four postures are the product of the two connector settings (default; Tor-only; clearnet-only, warned at every start; offline, announced at every start). `core::m_offline` (`cryptonote_core.cpp:1552,1621`) and the protocol handler (`daemon.cpp:135`) read the derived fact.
 
-**IG-Q4 — lane-owned knobs are not ported.** The C++ keeps today's defaults as constants until each lane decides whether a knob exists. `drs_bench.py` loses `--block-sync-size`, `--db-sync-mode` and `--keep-fakechain`; DRS owns that loss.
+**IG-Q4 — lane-owned knobs are not ported — RULED 2026-10-13.** The C++ keeps today's defaults as constants until each lane decides whether a knob exists. `drs_bench.py` loses `--block-sync-size`, `--db-sync-mode` and `--keep-fakechain`; DRS owns that loss.
 
-**IG-Q5 — notify commands.** An argument array, file only, run without a shell; the placeholders are named per row (`%h` height, `%b` block hash, …), and an unknown placeholder refuses.
+**IG-Q5 — notify commands — RULED 2026-10-13.** An argument array, file only, run without a shell; the placeholders are named per row (`%h` height, `%b` block hash, …), and an unknown placeholder refuses.
 
-**IG-Q6 — peer endpoints take no hostnames.** Today `--add-peer` resolves DNS locally (`net_node.inl:520-548`), which leaks the lookup on a Tor-only node and makes the daemon a resolver. IP and onion only, and the network row's seed list likewise.
+**IG-Q6 — peer endpoints take no hostnames — RULED 2026-10-13.** Today `--add-peer` resolves DNS locally (`net_node.inl:520-548`), which leaks the lookup on a Tor-only node and makes the daemon a resolver. IP and onion only, and the network row's seed list likewise.
 
-**IG-Q7 — `max-concurrency`.** A cap on one C++ thread pool (`util.cpp:861`), a macOS workaround. Removed; concurrency belongs to the thread-budget work.
+**IG-Q7 — `max-concurrency` — RULED 2026-10-13.** A cap on one C++ thread pool (`util.cpp:861`), a macOS workaround. Removed; concurrency belongs to the thread-budget work.
 
-**IG-Q8 — the interim console.** Every service unit and the GUI pass `--non-interactive`. No console unless `--console` is given, until R8 deletes it.
+**IG-Q8 — the interim console — RULED 2026-10-13.** Every service unit and the GUI pass `--non-interactive`. No console unless `--console` is given, until R8 deletes it.
 
-**IG-Q9 — absolute paths only,** on both surfaces.
+**IG-Q9 — absolute paths only — RULED 2026-10-13.** On both surfaces.
 
-**IG-Q10 — integers only, IEC units only.**
+**IG-Q10 — integers only, IEC units only — RULED 2026-10-13.**
 
-**IG-Q11 — `txpool-weight-max`.** The default is "3 days at 300000 bytes" (`cryptonote_config.h:328`), a Monero operand. The name lands with the inherited default and a FOLLOWUPS row for the pool/economics owner to re-derive it.
+**IG-Q11 — `txpool-weight-max` — RULED 2026-10-13.** The default is "3 days at 300000 bytes" (`cryptonote_config.h:328`), a Monero operand. The name lands with the inherited default and a FOLLOWUPS row for the pool/economics owner to re-derive it.
 
-**IG-Q12 — `rpc-connections-max`'s default.** Problem: the only number on hand is the C++'s effective 25, which nobody derived. The cap is a resource limit, and RT-O9 ruled cost limits a resource policy separate from grants. Proposal: the RPC lane derives the default with that policy; the name lands now with a FOLLOWUPS row, as `txpool-weight-max` does.
+**IG-Q12 — `rpc-connections-max`'s default — RULED 2026-10-13.** The only number on hand is the C++'s effective 25, which nobody derived. The cap is a resource limit, and RT-O9.4 ruled cost a resource policy separate from grants. The cutover ships the inherited value 25 with a FOLLOWUPS row for the RPC lane to derive the default under that policy, the same shape as `txpool-weight-max`.
 
-**IG-Q13 — names.** Family `IG-`; the shared crate `shekyl-options`; the daemon crate `shekyl-daemon-config`.
+**IG-Q13 — names — RULED 2026-10-13.** Family `IG-`; the shared crate `shekyl-options`; the daemon crate `shekyl-daemon-config`.
 
-**IG-Q14 — no environment input (IG-13).** Problem: §0 rules no environment layer, but default paths today come from `HOME` (and the wallets read `XDG_RUNTIME_DIR`, `shekyl-wallet-rpc/src/server.rs:744`), so the environment still decides values. Proposal: home from the passwd entry and the Windows known-folder API; the per-user runtime directory from the uid (`/run/user/<uid>`), not from `XDG_RUNTIME_DIR`, and its absence (no login session: a container, a system service) is a typed refusal naming the explicit option, never a fallback; terminal reads (`shekyl-cli/src/display.rs:98-104`) stay, as presentation. Cost: a user who relocates `HOME` by environment passes `--data-dir` instead.
+**IG-Q14 — no environment input (IG-13) — RULED 2026-10-13.** Default paths came from `HOME`, and the wallets read `XDG_RUNTIME_DIR` (`shekyl-wallet-rpc/src/server.rs:744`), so the environment still decided values. Home comes from the passwd entry and the Windows known-folder API. Each platform takes its per-user runtime directory from its own OS interface, never from the environment: Linux `/run/user/<uid>`; macOS `confstr(_CS_DARWIN_USER_TEMP_DIR)`; FreeBSD, or any platform without one, the typed refusal (IG-11) naming the explicit, operator-named socket directory ruled in the RPC channel round ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §7.1, 2026-10-09). Terminal reads (`shekyl-cli/src/display.rs:98-104`) stay, as presentation. Cost: a user who relocates `HOME` by environment passes `--data-dir` instead.
 
-**IG-Q15 — `address` and `carrier` (§3, IG-F7, IG-F8).** `address` is a Shekyl address only; network locations are endpoints. `carrier` is the serve-credit witness carrier only; the cover switch is `dev-relay-cover`.
+**IG-Q15 — `address` and `carrier` (§3, IG-F7, IG-F8) — RULED 2026-10-13.** `address` is a Shekyl address only; network locations are endpoints. `carrier` is the serve-credit witness carrier only; the cover switch is `dev-relay-cover`.
 
-**IG-Q16 — RPC names for the ratified model.** Problem: RPC_CHANNEL (ratified 2026-10-09) replaces today's listeners with the authenticated channel, the same-user socket, and an optional plaintext loopback listener at view. Naming today's full-access listener `rpc-listen` would hand that name to the channel listener later with a different meaning. Proposal: reserve `rpc-listen` for the channel listener; today's full-access listener is `rpc-admin-listen` (what it is: plaintext, loopback, admin), an X row when RT-W10 lands; `rpc-view-listen` is the ratified view listener from now on.
+**IG-Q16 — RPC names for the ratified model — RULED 2026-10-13.** RPC_CHANNEL (ratified 2026-10-09) replaces today's listeners with the authenticated channel, the same-user socket, and an optional plaintext loopback listener at view. Naming today's full-access listener `rpc-listen` would hand that name to the channel listener later with a different meaning. `rpc-listen` is reserved for the channel listener; today's full-access listener is `rpc-admin-listen` (what it is: plaintext, loopback, admin), an X row when RT-W10 lands; `rpc-view-listen` is the ratified view listener from now on.
 
-**IG-Q17 — an explicit `data-dir` is taken as given — RULED 2026-10-13 (Rick; the same ruling is DC-Q5 in the daemon-configuration cutover).** An explicit `data-dir` is taken as given; no network subdirectory is appended to it. The default `data-dir` keeps the network subdirectory as its default layout. The defence against a directory serving the wrong chain is a **network marker**, owned by the daemon-config lane, in Rust: written when the daemon creates its stores in a directory that holds none, recording the network id (derived from genesis) and the network name; a mismatch refuses the start with a typed code (IG-11) naming both networks and the fix; a directory holding a daemon store but no marker refuses likewise and is never marked after the fact. The marker is a separate file from the data-directory lock (DC-N1; IG-F2). DC-F1, the genesis-at-open check on the store's contents, stays with the chain-store lane as a separate check and is no longer a blocker for the cutover. *Records-was (the question as put):* the decisions file's Q5 had kept the subdirectory under explicit paths because nothing checks a non-empty store's block 0 against the network's genesis (`blockchain.cpp:352-369`), and revision 3 had named the chain-store row as the cutover's blocker.
+**IG-Q17 — an explicit `data-dir` is taken as given — RULED 2026-10-13 (the same ruling is DC-Q5 in the daemon-configuration cutover).** An explicit `data-dir` is taken as given; no network subdirectory is appended to it. The default `data-dir` keeps the network subdirectory as its default layout. The defence against a directory serving the wrong chain is a **network marker**, owned by the daemon-config lane, in Rust: written when the daemon creates its stores in a directory that holds none, recording the network id (derived from genesis) and the network name; a mismatch refuses the start with a typed code (IG-11) naming both networks and the fix; a directory holding a daemon store but no marker refuses likewise and is never marked after the fact. The marker is a separate file from the data-directory lock (DC-N1; IG-F2). DC-F1, the genesis-at-open check on the store's contents, stays with the chain-store lane as a separate check and is no longer a blocker for the cutover.
 
-**IG-Q18 — "no inbound".** Problem: today `--in-peers 0` turns all inbound off; with `p2p-inbound-max` ≥ 1, clearnet inbound off is `clearnet-listen none`, but the managed Tor's per-boot onion has no off. Is a Tor dial-only posture a capability we want? If yes, it is a `tor` mode, not a zero cap. Proposal (the lane's, from [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §9): the managed ephemeral Tor is rejected there *as a cover configuration*, so the per-boot onion is inbound reachability (PWD-E7, default-on), not cover, and a dial-only posture loses no cover. Dial-only already exists on the operator arm of this table — `tor = operator` with `tor-socks` set and `tor-onion` unset, today's `--no-ephemeral-tor --tx-proxy` — so no new mode: `managed` always publishes, and an operator who wants dial-only runs the operator arm. `p2p-inbound-max` stays integer ≥ 1.
+**IG-Q18 — "no inbound" — RULED 2026-10-13.** Today `--in-peers 0` turns all inbound off; with `p2p-inbound-max` ≥ 1, clearnet inbound off is `clearnet-listen none`, and the managed Tor's per-boot onion has no off. The managed ephemeral Tor is rejected in [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §9 *as a cover configuration*, so the per-boot onion is inbound reachability (PWD-E7, default-on), not cover, and a dial-only posture loses no cover. Dial-only exists on the operator arm of this table — `tor = operator` with `tor-socks` set and `tor-onion` unset — so there is no new mode: `managed` always publishes, and an operator who wants dial-only runs the operator arm. `p2p-inbound-max` stays integer ≥ 1.
 
-**IG-Q19 — one log budget.** Problem: a file size and a file count multiply into a disk budget nobody chose (100 MiB × 50 = 5 GiB). The operator's resource is disk. Proposal: one quantity, `log-size-max`, the total for the live file and its archives; how often to rotate within it is the logging owner's. The default, 1 GiB, is a judgement to rule; it is a reduction from today's effective 5 GiB (100 MiB × 50 archives, `EXECUTABLES.md:62-63`), and the release notes say so.
+**IG-Q19 — one log budget — RULED 2026-10-13.** A file size and a file count multiply into a disk budget nobody chose (100 MiB × 50 = 5 GiB). The operator's resource is disk. One quantity, `log-size-max`, is the total for the live file and its archives; how often to rotate within it is the logging owner's. The default is 1 GiB; it is a reduction from today's effective 5 GiB (100 MiB × 50 archives, `EXECUTABLES.md:62-63`), and the release notes say so.
 
 ---
 
