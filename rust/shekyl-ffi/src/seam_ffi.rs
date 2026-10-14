@@ -203,14 +203,16 @@ pub(crate) fn process_sockets() -> shekyl_seam::Sockets {
     TABLE.get_or_init(shekyl_seam::Sockets::new).clone()
 }
 
-/// The clock ban deadlines and the bound hub share. A ban written before
-/// the seam is bound is still read against this origin after bind.
-fn process_clock() -> Arc<MonotonicClock> {
+/// The process's one clock (Rick, 2026-10-14): ban deadlines, the bound
+/// hub, the zone host's engine and the link gate all read this origin. A
+/// ban written before the seam is bound is still read against it after
+/// bind, and an engine `now` compares with a ban without an offset.
+pub(crate) fn process_clock() -> Arc<MonotonicClock> {
     static CLOCK: OnceLock<Arc<MonotonicClock>> = OnceLock::new();
     Arc::clone(CLOCK.get_or_init(|| Arc::new(MonotonicClock::new())))
 }
 
-pub(crate) fn ban_now() -> Tick {
+fn ban_now() -> Tick {
     process_clock().now()
 }
 

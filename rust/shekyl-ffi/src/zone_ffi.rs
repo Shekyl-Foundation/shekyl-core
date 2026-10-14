@@ -265,22 +265,15 @@ fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, (
     let name = ThreadName::new("p2p-transport").map_err(|_| ())?;
     let pool = runtime(RuntimeBudget { workers, blocking }, &name).map_err(|_| ())?;
     let handle = pool.handle().clone();
-    let clock = MonotonicClock::new();
-    let budget_clock = clock.clone();
-    node_gate().install_clock(Arc::new(move || budget_clock.now().get()));
-    // Two clocks run in this process: the hub's and every ban's (the
-    // process clock), and this host's engine (every transport deadline).
-    // Read together here, their difference is the offset any comparison
-    // across them carries (the clearnet admission checks compare an engine
-    // `now` with a ban written on the process clock).
-    let process_now = crate::seam_ffi::ban_now().get();
-    let engine_now = clock.now().get();
-    tracing::info!(
-        process_now,
-        engine_now,
-        offset_ns = process_now.saturating_sub(engine_now),
-        "clocks at the zone host's start: process clock, engine clock"
-    );
+    // One process clock (Rick, 2026-10-14). The engine (every transport
+    // deadline) and the link gate read the origin the hub and every ban
+    // read, so the clearnet admission checks, which compare an engine `now`
+    // with a ban, compare on one clock. A `MonotonicClock` is its origin:
+    // the clone is the same clock. *Records-was:* the host started its own
+    // clock here, one origin per zone host.
+    let process = crate::seam_ffi::process_clock();
+    let clock = MonotonicClock::clone(&process);
+    node_gate().install_clock(Arc::new(move || process.now().get()));
     let engine = EngineService::start(clock);
     let engine_handle = engine.handle();
     spawn_lateness_report(engine_handle.clone());
@@ -883,6 +876,61 @@ mod tests {
             host.engine.register(OwnerClass::Transport).is_err(),
             "shutdown closes the engine"
         );
+        unsafe {
+            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        }
+    }
+
+    /// One process clock (Rick, 2026-10-14): the zone host's engine reads
+    /// the hub's origin, so an engine `now` read between two hub reads lies
+    /// between them. *Records-was:* the host started its own clock, and the
+    /// two origins differed by the time between the seam's first clock read
+    /// and the host's start (0.49 ms on the measurement host; unbounded in
+    /// general, since a ban can be written long before the host starts).
+    #[test]
+    fn the_engine_reads_the_process_clock() {
+        let _bind = crate::seam_ffi::seam_bind_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut executor = 0u8;
+        let ceiling = ShekylInboundCeiling {
+            kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+            ceiling: 0,
+            soft_limit: 0,
+            held: 0,
+        };
+        let bound = unsafe {
+            shekyl_seam_bind(
+                std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+                Some(discard),
+                &raw const ceiling,
+            )
+        };
+        assert_eq!(bound, 0);
+        let network_id = [7u8; 16];
+        let host = ensure(
+            network_id.as_ptr(),
+            InboundCeiling::Unbounded(UnboundedReason::Unlimited),
+        )
+        .expect("zone host");
+        let owner = host
+            .engine
+            .register(OwnerClass::Transport)
+            .expect("transport owner");
+        for _ in 0..1_000 {
+            let before = host.hub.now();
+            let engine_now = owner.clock().now();
+            let after = host.hub.now();
+            assert!(
+                before <= engine_now && engine_now <= after,
+                "the engine's clock ({}) is not the hub's ({} to {})",
+                engine_now.get(),
+                before.get(),
+                after.get()
+            );
+        }
+        drop(owner);
+        shekyl_zone_shutdown();
         unsafe {
             shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
         }
