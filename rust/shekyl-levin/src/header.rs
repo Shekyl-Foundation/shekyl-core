@@ -229,3 +229,66 @@ mod tests {
         assert_eq!(BucketHead::read(&bytes), Err(Error::BadSignature));
     }
 }
+
+/// Whether a peer's first complete Levin frame has arrived, fed the bytes
+/// as they are read (Rick, 2026-10-14): the transport's handshake gap
+/// measures the peer's silence up to this point, so it disarms here and
+/// not on the strand's verdict. A frame is the [`HEADER_SIZE`]-byte header
+/// and the `payload_len` bytes it declares. A first header whose signature
+/// is not [`LEVIN_SIGNATURE`] never completes: the gap stays armed, and the
+/// strand closes the connection on the bad signature as before.
+#[derive(Debug, Default)]
+pub struct FirstFrame {
+    head: [u8; HEADER_SIZE],
+    have: usize,
+    body_left: Option<u64>,
+    complete: bool,
+    bad: bool,
+}
+
+impl FirstFrame {
+    /// A tracker that has seen no byte.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed the next `bytes` read from the peer. Returns whether the first
+    /// complete frame has arrived, now or before; once true it stays true.
+    pub fn feed(&mut self, mut bytes: &[u8]) -> bool {
+        if self.complete || self.bad {
+            return self.complete;
+        }
+        if self.body_left.is_none() {
+            let take = (HEADER_SIZE - self.have).min(bytes.len());
+            self.head[self.have..self.have + take].copy_from_slice(&bytes[..take]);
+            self.have += take;
+            bytes = &bytes[take..];
+            if self.have < HEADER_SIZE {
+                return false;
+            }
+            match BucketHead::read(&self.head) {
+                Ok(head) => self.body_left = Some(head.payload_len),
+                Err(_) => {
+                    self.bad = true;
+                    return false;
+                }
+            }
+        }
+        if let Some(left) = self.body_left {
+            let got = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            let left = left.saturating_sub(got);
+            self.body_left = Some(left);
+            if left == 0 {
+                self.complete = true;
+            }
+        }
+        self.complete
+    }
+
+    /// Whether the first complete frame has arrived.
+    #[must_use]
+    pub const fn complete(&self) -> bool {
+        self.complete
+    }
+}

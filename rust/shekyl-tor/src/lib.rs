@@ -683,34 +683,146 @@ mod tests {
         drop(engine);
     }
 
+    /// A first Levin frame of `body` bytes: a handshake request's header
+    /// and its body.
+    fn levin_frame(body: usize) -> Vec<u8> {
+        let head = shekyl_levin::BucketHead {
+            payload_len: u64::try_from(body).expect("small"),
+            expect_response: 1,
+            command: 1001,
+            flags: shekyl_levin::Flags::REQUEST,
+            protocol_version: shekyl_levin::PROTOCOL_VERSION_1,
+        };
+        let mut out = head.write().to_vec();
+        out.extend(std::iter::repeat_n(7u8, body));
+        out
+    }
+
+    fn no_gap_timeout(seen: &Mutex<Vec<CloseCause>>) -> bool {
+        seen.lock()
+            .expect("causes")
+            .iter()
+            .all(|cause| cause.kind() != CloseKind::LevinHandshakeTimeout)
+    }
+
+    fn read_bytes(
+        handle: &tokio::runtime::Handle,
+        session: &mut super::Session,
+        len: usize,
+    ) -> Vec<u8> {
+        handle.block_on(async {
+            let mut got = Vec::new();
+            while got.len() < len {
+                let chunk = tokio::time::timeout(Duration::from_secs(2), session.recv())
+                    .await
+                    .expect("bytes in time")
+                    .expect("bytes");
+                got.extend(chunk);
+            }
+            got
+        })
+    }
+
+    /// The gap measures the peer's silence (Rick, 2026-10-14): the peer's
+    /// first complete Levin frame ends it, and a strand verdict that is
+    /// slow after that frame (here, never given) does not time the peer
+    /// out. *Records-was:* the strand's verdict ended the gap, so this
+    /// node's own slowness timed out a peer that had spoken.
     #[test]
-    fn session_established_disarms_the_gap() {
+    fn a_complete_frame_ends_the_gap_while_the_verdict_is_slow() {
         let (engine, mut listener, seen) = start(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
             InboundCeiling::Bounded(4),
-            Tick::new(1_000_000_000),
+            Tick::new(300_000_000),
         );
         let mut client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
         client
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_write_timeout(Some(Duration::from_secs(2)))
             .expect("timeout");
+        let frame = levin_frame(40);
+        client.write_all(&frame).expect("write");
+        let handle = listener.runtime_handle().clone();
+        let mut session = handle.block_on(next_session(&mut listener.sessions));
+        assert_eq!(read_bytes(&handle, &mut session, frame.len()), frame);
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(
+            no_gap_timeout(&seen),
+            "the gap fired after the peer's first complete frame"
+        );
+        client.write_all(b"still").expect("write");
+        assert_eq!(read_bytes(&handle, &mut session, 5), b"still");
+        listener.shutdown();
+        drop(engine);
+    }
+
+    /// A complete header with part of the body it declares is not a frame:
+    /// the peer is still silent, and the gap times it out.
+    #[test]
+    fn a_partial_frame_still_times_out() {
+        let (engine, mut listener, seen) = start(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            InboundCeiling::Bounded(4),
+            Tick::new(300_000_000),
+        );
+        let mut client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
+        let frame = levin_frame(40);
+        client.write_all(&frame[..frame.len() - 1]).expect("write");
+        let handle = listener.runtime_handle().clone();
+        let mut session = handle.block_on(next_session(&mut listener.sessions));
+        let cause = handle.block_on(async {
+            while session.recv().await.is_some() {}
+            session.close_cause()
+        });
+        assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+        assert_eq!(
+            wait_kind(&seen, CloseKind::LevinHandshakeTimeout).kind(),
+            CloseKind::LevinHandshakeTimeout
+        );
+        drop(client);
+        listener.shutdown();
+        drop(engine);
+    }
+
+    /// Data that arrived before the deadline is read even when the driver
+    /// resumes after it (Rick, 2026-10-14). Both runtime workers are held
+    /// across the deadline, as a blocked log call held them in the PR-3
+    /// measurement; the peer's frame arrives while they are held. When the
+    /// driver resumes, the gap's wake has fired, and the frame must win.
+    #[test]
+    fn a_frame_that_arrived_before_the_deadline_wins_when_the_driver_resumes_after_it() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (engine, mut listener, seen) = start(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            InboundCeiling::Bounded(4),
+            Tick::new(300_000_000),
+        );
+        let mut client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
         client
             .set_write_timeout(Some(Duration::from_secs(2)))
             .expect("timeout");
         let handle = listener.runtime_handle().clone();
         let mut session = handle.block_on(next_session(&mut listener.sessions));
-        session.session_established();
-        std::thread::sleep(Duration::from_millis(1_500));
+        let held = Arc::new(AtomicUsize::new(0));
+        for _ in 0..budget().workers.get() {
+            let held = Arc::clone(&held);
+            handle.spawn(async move {
+                held.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(900));
+            });
+        }
+        let waiting = Instant::now();
+        while held.load(Ordering::SeqCst) < budget().workers.get() {
+            assert!(waiting.elapsed() < Duration::from_secs(2), "workers held");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let frame = levin_frame(40);
+        client.write_all(&frame).expect("write");
+        assert_eq!(read_bytes(&handle, &mut session, frame.len()), frame);
+        std::thread::sleep(Duration::from_millis(300));
         assert!(
-            seen.lock()
-                .expect("causes")
-                .iter()
-                .all(|cause| cause.kind() != CloseKind::LevinHandshakeTimeout),
-            "the gap fired after the session was established"
+            no_gap_timeout(&seen),
+            "the gap fired although the frame arrived before its deadline"
         );
-        client.write_all(b"still").expect("write");
-        let got = handle.block_on(session.recv()).expect("bytes");
-        assert_eq!(got, b"still");
         listener.shutdown();
         drop(engine);
     }

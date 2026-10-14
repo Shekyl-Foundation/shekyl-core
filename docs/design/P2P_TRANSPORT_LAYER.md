@@ -315,9 +315,15 @@ under the same engine owner, armed when the socket exists.
 
 The Tor connector is `shekyl-tor`. The stream is the channel: no Noise,
 no handshake on the blocking pool. It uses the same byte cap and the
-same socket copy as clearnet. The gap is an arm of that wait. Holding
-the session without `session_established` is the Levin handshake
-timeout. Dropping the session ends the connection and releases the
+same socket copy as clearnet. The gap is an arm of that wait. The gap
+measures the peer's silence (Rick, 2026-10-14). It ends at the peer's
+first complete Levin frame, on both connectors, and never at
+`session_established`, which is this node's own work. A peer that sends
+no complete frame inside the gap is the Levin handshake timeout. Each
+driver polls its reader before the gap's wake. A fired wake then waits
+one IO driver turn for the reader (`SilenceGap` in
+`shekyl-capped-stream`), so a frame that arrived before the deadline
+wins even when the driver resumes after it. Dropping the session ends the connection and releases the
 admission slot. Outbound is SOCKS5 through `shekyl-socks`, and one
 engine owner covers that exchange, the circuit build, and rendezvous.
 Inbound is `accept_tor`, then that wait. A listener that stops
@@ -1718,7 +1724,8 @@ listener, and so a connection in the gap phase.
 5. **The gap between channel established and session established.**
    Every connection that has a channel but no session gets a
    per-connector gap timer, derived under D9. It is never the idle
-   timer. The byte limit in this phase is PWD-B3's cap for command
+   timer. It runs from the channel to the peer's first complete Levin
+   frame, not to this node's session verdict (Rick, 2026-10-14). The byte limit in this phase is PWD-B3's cap for command
    1001. It replaces the inherited 256 KiB
    (`LEVIN_INITIAL_MAX_PACKET_SIZE`). On Tor inbound, this timer is the
    first bound a connection meets, beneath PoW and `MaxStreams`.

@@ -623,7 +623,17 @@ fn a_socks_refusal_carries_the_reply_byte() {
     drop(engine);
 }
 
-fn dial_against<F>(gap: Tick, accept: F) -> (CloseCause, Vec<CloseKind>)
+/// One plain dial, admitted, with its session still open.
+struct Dialled {
+    engine: EngineService<MonotonicClock>,
+    pool: shekyl_runtime::Pool,
+    session: shekyl_capped_stream::Session,
+    // Dropping `gap` is a local close. The hub holds it in production.
+    gap: Option<tokio::sync::oneshot::Sender<()>>,
+    seen: Arc<Mutex<Vec<CloseKind>>>,
+}
+
+fn dial_session<F>(gap: Tick, accept: F) -> Dialled
 where
     F: FnOnce(std::net::TcpStream) + Send + 'static,
 {
@@ -664,9 +674,26 @@ where
     let handle = engine.handle();
     pool.spawn(super::dial_one(dial, handle));
     let admitted = pool.block_on(async { admitted_rx.recv().await.expect("admitted") });
-    // Dropping `gap` is a local close. The hub holds it in production.
-    let gap = admitted.gap;
-    let mut session = admitted.session;
+    Dialled {
+        engine,
+        pool,
+        session: admitted.session,
+        gap: admitted.gap,
+        seen: recorded.seen,
+    }
+}
+
+fn dial_against<F>(gap: Tick, accept: F) -> (CloseCause, Vec<CloseKind>)
+where
+    F: FnOnce(std::net::TcpStream) + Send + 'static,
+{
+    let Dialled {
+        engine,
+        pool,
+        mut session,
+        gap,
+        seen: recorded,
+    } = dial_session(gap, accept);
     let cause = pool.block_on(async {
         while session.recv().await.is_some() {}
         session.close_cause()
@@ -676,7 +703,7 @@ where
     // the writer join returns, so a snapshot taken here can still be empty.
     let start = Instant::now();
     let seen = loop {
-        let seen = recorded.seen.lock().expect("causes").clone();
+        let seen = recorded.lock().expect("causes").clone();
         if seen.contains(&cause.kind()) {
             break seen;
         }
@@ -686,6 +713,135 @@ where
     pool.shutdown(Duration::from_millis(50));
     drop(engine);
     (cause, seen)
+}
+
+/// A first Levin frame of `body` bytes: a handshake request's header and
+/// its body.
+fn levin_frame(body: usize) -> Vec<u8> {
+    let head = shekyl_levin::BucketHead {
+        payload_len: u64::try_from(body).expect("small"),
+        expect_response: 1,
+        command: 1001,
+        flags: shekyl_levin::Flags::REQUEST,
+        protocol_version: shekyl_levin::PROTOCOL_VERSION_1,
+    };
+    let mut out = head.write().to_vec();
+    out.extend(std::iter::repeat_n(7u8, body));
+    out
+}
+
+fn read_bytes(
+    pool: &shekyl_runtime::Pool,
+    session: &mut shekyl_capped_stream::Session,
+    len: usize,
+) -> Vec<u8> {
+    pool.block_on(async {
+        let mut got = Vec::new();
+        while got.len() < len {
+            let chunk = tokio::time::timeout(Duration::from_secs(2), session.recv())
+                .await
+                .expect("bytes in time")
+                .expect("bytes");
+            got.extend(chunk);
+        }
+        got
+    })
+}
+
+/// The gap measures the peer's silence (Rick, 2026-10-14): the peer's
+/// first complete Levin frame ends it, and a strand verdict that is slow
+/// after that frame (here, never given) does not time the peer out.
+/// *Records-was:* the strand's verdict ended the gap.
+#[test]
+fn a_complete_frame_ends_the_gap_while_the_verdict_is_slow() {
+    let frame = levin_frame(40);
+    let sent = frame.clone();
+    let mut dialled = dial_session(Tick::new(300_000_000), move |mut sock| {
+        sock.write_all(&sent).expect("frame");
+        std::thread::sleep(Duration::from_millis(1_500));
+        drop(sock);
+    });
+    assert_eq!(
+        read_bytes(&dialled.pool, &mut dialled.session, frame.len()),
+        frame
+    );
+    std::thread::sleep(Duration::from_millis(900));
+    assert!(
+        !dialled
+            .seen
+            .lock()
+            .expect("causes")
+            .contains(&CloseKind::LevinHandshakeTimeout),
+        "the gap fired after the peer's first complete frame"
+    );
+    drop(dialled.gap.take());
+    dialled.pool.shutdown(Duration::from_millis(50));
+    drop(dialled.engine);
+}
+
+/// A complete header with part of the body it declares is not a frame: the
+/// peer is still silent, and the gap times it out.
+#[test]
+fn a_partial_frame_still_times_out() {
+    let frame = levin_frame(40);
+    let (cause, seen) = dial_against(Tick::new(200_000_000), move |mut sock| {
+        sock.write_all(&frame[..frame.len() - 1]).expect("partial");
+        std::thread::sleep(Duration::from_secs(2));
+        drop(sock);
+    });
+    assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+    assert!(seen.contains(&CloseKind::LevinHandshakeTimeout));
+}
+
+/// Data that arrived before the deadline is read even when the driver
+/// resumes after it (Rick, 2026-10-14). Both runtime workers are held
+/// across the deadline, as a blocked log call held them in the PR-3
+/// measurement; the peer's frame arrives while they are held. When the
+/// driver resumes, the gap's wake has fired, and the frame must win.
+#[test]
+fn a_frame_that_arrived_before_the_deadline_wins_when_the_driver_resumes_after_it() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let frame = levin_frame(40);
+    let sent = frame.clone();
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let mut dialled = dial_session(Tick::new(300_000_000), move |mut sock| {
+        if go_rx.recv().is_ok() {
+            sock.write_all(&sent).expect("frame");
+        }
+        std::thread::sleep(Duration::from_millis(1_500));
+        drop(sock);
+    });
+    let workers = harness_budget().workers.get();
+    let held = Arc::new(AtomicUsize::new(0));
+    for _ in 0..workers {
+        let held = Arc::clone(&held);
+        dialled.pool.spawn(async move {
+            held.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(900));
+        });
+    }
+    let waiting = Instant::now();
+    while held.load(Ordering::SeqCst) < workers {
+        assert!(waiting.elapsed() < Duration::from_secs(2), "workers held");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    go_tx.send(()).expect("go");
+    assert_eq!(
+        read_bytes(&dialled.pool, &mut dialled.session, frame.len()),
+        frame
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !dialled
+            .seen
+            .lock()
+            .expect("causes")
+            .contains(&CloseKind::LevinHandshakeTimeout),
+        "the gap fired although the frame arrived before its deadline"
+    );
+    drop(dialled.gap.take());
+    dialled.pool.shutdown(Duration::from_millis(50));
+    drop(dialled.engine);
 }
 
 #[test]

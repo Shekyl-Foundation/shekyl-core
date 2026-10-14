@@ -182,7 +182,7 @@ pub use compress::{
 pub use error::Error;
 pub use fragment::{fragmented_notify, noise_notify};
 pub use header::{
-    BucketHead, Flags, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
+    BucketHead, FirstFrame, Flags, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
     LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
 pub use ingress::{

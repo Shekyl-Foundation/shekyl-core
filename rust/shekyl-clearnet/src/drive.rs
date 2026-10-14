@@ -8,9 +8,12 @@
 //! blocking queue counts.
 
 use std::borrow::Cow;
+use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::task::{ready, Poll};
 use std::time::{Duration, Instant};
 
 use shekyl_capped_stream::{
@@ -411,7 +414,8 @@ struct ChannelOpen {
 }
 
 enum GapEnd {
-    Established,
+    /// The peer's first complete Levin frame arrived: the gap ends.
+    FirstFrame,
     Dropped,
     Timeout,
     Closed,
@@ -458,20 +462,32 @@ where
 
 /// The wake future is pinned once inside this function. Rebuilding it on
 /// each poll of the outer select would drop a wake the slot had stored.
-async fn watch_gap<C: Clock>(watch: Option<GapWatch<C>>) -> GapEnd {
+///
+/// The gap measures the peer's silence (Rick, 2026-10-14): it ends at the
+/// peer's first complete Levin frame (`frame`, set by the reader), and a
+/// fired wake waits one IO driver turn for it (`SilenceGap`). The strand's
+/// verdict is this node's own work and only logs here.
+async fn watch_gap<C: Clock>(watch: Option<GapWatch<C>>, frame: Arc<AtomicBool>) -> GapEnd {
     let Some(watch) = watch else {
         return std::future::pending().await;
     };
     let mut wake = std::pin::pin!(watch.owner.wait_wake_async());
     let mut rx = watch.rx;
-    let end = tokio::select! {
-        biased;
-        result = &mut rx => match result {
-            Ok(()) => GapEnd::Established,
-            Err(_) => GapEnd::Dropped,
-        },
-        result = wake.as_mut() => match result {
-            Ok(wake) => {
+    let mut verdict_open = true;
+    let mut gap = shekyl_capped_stream::SilenceGap::new();
+    let end = std::future::poll_fn(|cx| {
+        if verdict_open {
+            if let Poll::Ready(result) = Pin::new(&mut rx).poll(cx) {
+                verdict_open = false;
+                if result.is_err() {
+                    return Poll::Ready(GapEnd::Dropped);
+                }
+                tracing::debug!("clearnet session established (the strand's verdict)");
+            }
+        }
+        match ready!(gap.poll(&frame, wake.as_mut(), cx)) {
+            None => Poll::Ready(GapEnd::FirstFrame),
+            Some(Ok(wake)) => {
                 tracing::debug!(
                     owner = ?watch.owner.id(),
                     wake_owner = ?wake.owner,
@@ -482,11 +498,12 @@ async fn watch_gap<C: Clock>(watch: Option<GapWatch<C>>) -> GapEnd {
                     now = watch.owner.clock().now().get(),
                     "clearnet gap fired"
                 );
-                GapEnd::Timeout
+                Poll::Ready(GapEnd::Timeout)
             }
-            Err(_) => GapEnd::Closed,
-        },
-    };
+            Some(Err(_)) => Poll::Ready(GapEnd::Closed),
+        }
+    })
+    .await;
     ignore(watch.owner.deregister());
     end
 }
@@ -553,19 +570,39 @@ where
         .await;
     }
     let inbound_close = inbound.clone();
-    let read_fut = read_half(read, recv, inbound, Arc::clone(&overfull), conn);
+    let frame = Arc::new(AtomicBool::new(false));
+    let read_fut = read_half(
+        read,
+        recv,
+        inbound,
+        Arc::clone(&overfull),
+        conn,
+        Arc::clone(&frame),
+    );
     tokio::pin!(read_fut);
     let mut gap_open = watch.is_some();
-    let gap_fut = watch_gap(watch);
+    let gap_fut = watch_gap(watch, frame);
     tokio::pin!(gap_fut);
     loop {
+        // Buffered input first: a frame that arrived before the deadline is
+        // read even when this task resumes after it, then the gap is looked
+        // at (Rick, 2026-10-14).
         tokio::select! {
             biased;
+            read_cause = &mut read_fut => {
+                return end_connection(
+                    hold,
+                    &inbound_close,
+                    WriteJoin::Pending(&mut writer),
+                    read_cause,
+                )
+                .await;
+            }
             end = gap_fut.as_mut(), if gap_open => {
                 gap_open = false;
                 match end {
-                    GapEnd::Established => {
-                        tracing::debug!(conn, "clearnet session established (the strand's verdict)");
+                    GapEnd::FirstFrame => {
+                        tracing::debug!(conn, "clearnet first frame received; the gap ends");
                     }
                     GapEnd::Dropped | GapEnd::Closed => {
                         return end_connection(
@@ -586,15 +623,6 @@ where
                         .await;
                     }
                 }
-            }
-            read_cause = &mut read_fut => {
-                return end_connection(
-                    hold,
-                    &inbound_close,
-                    WriteJoin::Pending(&mut writer),
-                    read_cause,
-                )
-                .await;
             }
             write_cause = &mut writer => {
                 let cause = write_cause
@@ -775,15 +803,23 @@ async fn read_half(
     inbound: shekyl_capped_stream::InboundEnd,
     overfull: Arc<Overfull>,
     conn: u64,
+    frame: Arc<AtomicBool>,
 ) -> CloseCause {
     // The responder's timestamps (Rick, 2026-10-14): first byte read.
     let mut first_read = true;
+    // The peer's first complete Levin frame, over the plaintext the seam
+    // hands up: it ends the handshake gap.
+    let mut first_frame = shekyl_levin::FirstFrame::new();
     read_capped(&mut read, inbound, &overfull, &node_gate(), conn, |chunk| {
         if first_read {
             first_read = false;
             tracing::debug!(conn, "clearnet first bytes read");
         }
-        seam.push(chunk).map_err(|_| CloseKind::RecordRejected)
+        let plain = seam.push(chunk).map_err(|_| CloseKind::RecordRejected)?;
+        if !first_frame.complete() && plain.iter().any(|piece| first_frame.feed(piece)) {
+            frame.store(true, Ordering::Release);
+        }
+        Ok(plain)
     })
     .await
 }

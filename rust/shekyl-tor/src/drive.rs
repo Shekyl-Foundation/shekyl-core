@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -405,6 +406,12 @@ where
     // Cold first contact: the responder's accept to its first bytes read,
     // the dialler's handshake request; on the dialler, the first reply.
     let mut first_read = true;
+    // The gap measures the peer's silence (Rick, 2026-10-14): it ends at
+    // the peer's first complete Levin frame, read here, not at the strand's
+    // verdict, which is this node's own work.
+    let mut first_frame = shekyl_levin::FirstFrame::new();
+    let frame_in = Arc::new(AtomicBool::new(false));
+    let frame_seen = Arc::clone(&frame_in);
     let read_fut = read_capped(&mut read, inbound, &overfull, &gate, conn, |chunk| {
         if first_read {
             first_read = false;
@@ -415,19 +422,47 @@ where
                 "tor first bytes read"
             );
         }
+        if !first_frame.complete() && first_frame.feed(chunk) {
+            frame_in.store(true, Ordering::Release);
+            tracing::debug!(
+                conn,
+                outbound,
+                first_frame_ns = span_ns(channel_at.elapsed()),
+                "tor first frame received; the gap ends"
+            );
+        }
         Ok(vec![chunk.to_vec()])
     });
     tokio::pin!(read_fut);
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let mut hold = Some(hold);
     let mut gap_open = true;
+    let mut gap = shekyl_capped_stream::SilenceGap::new();
+    let mut verdict_open = true;
     loop {
+        // Buffered input first: a frame that arrived before the deadline is
+        // read even when this task resumes after it, and only then is the
+        // gap's wake looked at (`SilenceGap`).
         tokio::select! {
             biased;
-            result = &mut gap_rx, if gap_open => {
-                gap_open = false;
-                ignore(owner.deregister());
+            read_cause = &mut read_fut => {
+                if gap_open {
+                    ignore(owner.deregister());
+                }
+                return stop(
+                    &inbound_close,
+                    hold.take(),
+                    WriteJoin::Pending(&mut writer),
+                    read_cause,
+                )
+                .await;
+            }
+            result = &mut gap_rx, if verdict_open => {
+                verdict_open = false;
                 if result.is_err() {
+                    if gap_open {
+                        ignore(owner.deregister());
+                    }
                     return stop(
                         &inbound_close,
                         hold.take(),
@@ -443,8 +478,12 @@ where
                     "tor session established"
                 );
             }
-            result = wake.as_mut(), if gap_open => {
+            result = std::future::poll_fn(|cx| gap.poll(&frame_seen, wake.as_mut(), cx)), if gap_open => {
+                gap_open = false;
                 ignore(owner.deregister());
+                let Some(result) = result else {
+                    continue;
+                };
                 // Cold first contact (2026-10-14): on one responder the gap
                 // fired 1.8 s early, in the same half-millisecond as the
                 // dialer loops' wakes. The delivered wake, against what was
@@ -475,18 +514,6 @@ where
                     hold.take(),
                     WriteJoin::Pending(&mut writer),
                     cause,
-                )
-                .await;
-            }
-            read_cause = &mut read_fut => {
-                if gap_open {
-                    ignore(owner.deregister());
-                }
-                return stop(
-                    &inbound_close,
-                    hold.take(),
-                    WriteJoin::Pending(&mut writer),
-                    read_cause,
                 )
                 .await;
             }
