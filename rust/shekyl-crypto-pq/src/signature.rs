@@ -122,9 +122,10 @@ pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-sch
 /// [`SCHEME_DOMAIN_ATTESTATION`], which names the same transcript under the
 /// identity key and scheme 1: one label never names two schemes.
 pub const SCHEME_DOMAIN_RECEIPT: &[u8] = b"shekyl/archival-receipt-scheme-v1";
-/// The witness's signature over a carrier's set commitment, under scheme 3
-/// with a key generated fresh for the block (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
-/// §7.3).
+/// **SUPERSEDED** by [`SCHEME_DOMAIN_WITNESS_BUNDLE`] (`SCS-P16`): the
+/// witness's signature over a carrier's set commitment, under scheme 3.
+/// No signer and no verifier uses it; it stays registered so the label is
+/// never minted again for another message.
 pub const SCHEME_DOMAIN_WITNESS_CARRIER: &[u8] = b"shekyl/archival-witness-carrier-scheme-v1";
 /// The witness's signature over a bundle's commitment, under scheme 3 with
 /// the key generated fresh for the block and committed in its `0x0C`
@@ -132,10 +133,9 @@ pub const SCHEME_DOMAIN_WITNESS_CARRIER: &[u8] = b"shekyl/archival-witness-carri
 /// `shekyl/archival-serve-credit-bundle-v1` commitment
 /// (`shekyl_archival_retention::bundle_commitment`).
 ///
-/// Distinct from [`SCHEME_DOMAIN_WITNESS_CARRIER`]: the bundle commitment
-/// is a different message from the carrier's set commitment, and one label
-/// never names two messages. The carrier's label stays beside this one
-/// with no signer.
+/// Distinct from the superseded [`SCHEME_DOMAIN_WITNESS_CARRIER`]: the
+/// bundle commitment is a different message from the carrier's set
+/// commitment, and one label never names two messages.
 pub const SCHEME_DOMAIN_WITNESS_BUNDLE: &[u8] = b"shekyl/archival-witness-bundle-scheme-v1";
 // Surface B (bond-post vin) has no scheme domain: the SA-2b reconciliation
 // (SIGNATURE_ALIGNMENT.md §2.2) ruled the bond vin's on-chain auth rides the

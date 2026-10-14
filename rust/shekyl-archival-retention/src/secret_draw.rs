@@ -4,12 +4,15 @@
 // BSD-3-Clause
 
 //! The secret draw: selection, the `0x0C` commitment, the challenge nonce,
-//! and the serve-credit batch commitment.
+//! and the superseded serve-credit batch commitment.
 //!
 //! Design: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
-//! §4 (the draw), §5.2 (the nonce), §7.3 (the set commitment). All four
-//! hashes are consensus: every node must pick the same pair, recompute
-//! the same nonce, and fold the same carrier. The witness key and the
+//! §4 (the draw), §5.2 (the nonce), §7.3 (the bundle commitment). The
+//! first three hashes are consensus: every node must pick the same pair
+//! and recompute the same nonce. **The batch commitment is SUPERSEDED** by
+//! the bundle commitment (`SCS-P16`, `SCS-P35`;
+//! [`crate::bundle_commitment`]): no consensus path computes it, and it
+//! stays until the cutover decides it (spec §11.1). The witness key and the
 //! receipt scheme are Slice C's FN-DSA increment; this module is the
 //! hash side, which that increment does not move.
 
@@ -29,6 +32,8 @@ pub const DRAW_COMMIT_CUSTOMIZATION: &[u8] = b"shekyl/archival-draw-commit-v1";
 pub const CHALLENGE_NONCE_CUSTOMIZATION: &[u8] = b"shekyl/archival-challenge-nonce-v1";
 
 /// cSHAKE256 customization for [`serve_credit_batch_commitment`].
+/// **SUPERSEDED** by `shekyl/archival-serve-credit-bundle-v1`
+/// (`SCS-P35`): registered, with no consensus caller.
 pub const SERVE_CREDIT_BATCH_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-credit-batch-v1";
 
 /// Attempts at one draw before the candidate in hand is accepted.
@@ -148,8 +153,10 @@ pub fn challenge_nonce(seed: &[u8; 32], block_hash: &[u8; 32], draw: u32, attemp
     cshake256_32(CHALLENGE_NONCE_CUSTOMIZATION, &input)
 }
 
-/// The witness signature's preimage: seed, `h`, then each record framed
-/// as `varint(len) ‖ bytes`, in input order.
+/// **SUPERSEDED** by [`crate::bundle_commitment`] (`SCS-P16`, `SCS-P35`):
+/// the carrier's set commitment, which nothing signs and no consensus path
+/// computes. Seed, `h`, then each record framed as `varint(len) ‖ bytes`,
+/// in input order.
 ///
 /// `None` when there are no members (`n ≥ 1` is a structural check).
 #[must_use]
