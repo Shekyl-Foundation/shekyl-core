@@ -63,7 +63,9 @@ $psi.UseShellExecute = $false
 
 $base = "http://127.0.0.1:$rpcPort"
 $proc = $null
-$failed = $true
+# The first failure is the verdict. Teardown runs whatever happened, never
+# replaces that failure, and fails a run that otherwise passed.
+$failure = $null
 try {
     Write-Host "starting $Daemon (data dir $dataDir, RPC port $rpcPort)"
     $proc = [System.Diagnostics.Process]::Start($psi)
@@ -110,17 +112,55 @@ try {
     if (-not (Test-Path -LiteralPath $store -PathType Leaf)) {
         throw "no chain store at '$store'"
     }
-
-    Write-Host "PASS: started, answered get_info, stopped with status 0, store at $store"
-    $failed = $false
-} finally {
-    if ($proc -and -not $proc.HasExited) {
-        $proc.Kill($true)
-        $proc.WaitForExit()
-    }
-    if ($failed -and (Test-Path -LiteralPath $logFile)) {
-        Write-Host '--- last 60 lines of the daemon log ---'
-        Get-Content -LiteralPath $logFile -Tail 60 | Write-Host
-    }
-    Remove-Item -LiteralPath $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+} catch {
+    $failure = $_
 }
+
+# Teardown. Each step runs on its own; none of them throws.
+$teardownErrors = [System.Collections.Generic.List[string]]::new()
+
+# Stop the daemon if it is still running. A process that exits between the
+# check and the kill is a stopped process, not a teardown error.
+if ($proc) {
+    try {
+        if (-not $proc.HasExited) {
+            $proc.Kill($true)
+        }
+        if (-not $proc.WaitForExit(10000)) {
+            $teardownErrors.Add("the daemon (pid $($proc.Id)) was still running 10 s after it was killed")
+        }
+    } catch {
+        if (-not $proc.HasExited) {
+            $teardownErrors.Add("could not stop the daemon (pid $($proc.Id)): $($_.Exception.Message)")
+        }
+    }
+}
+
+if ($failure -and (Test-Path -LiteralPath $logFile)) {
+    Write-Host '--- last 60 lines of the daemon log ---'
+    Get-Content -LiteralPath $logFile -Tail 60 | Write-Host
+}
+
+# Remove the data directory. Windows can hold a file handle briefly after a
+# process exits, so a failed removal is retried before it counts.
+$removeError = $null
+for ($i = 0; $i -lt 10 -and (Test-Path -LiteralPath $dataDir); $i++) {
+    try {
+        Remove-Item -LiteralPath $dataDir -Recurse -Force -ErrorAction Stop
+    } catch {
+        $removeError = $_
+        Start-Sleep -Milliseconds 500
+    }
+}
+if (Test-Path -LiteralPath $dataDir) {
+    $teardownErrors.Add("could not remove the data directory '$dataDir': $($removeError.Exception.Message)")
+}
+
+if ($failure) {
+    foreach ($e in $teardownErrors) { Write-Warning "teardown: $e" }
+    throw $failure
+}
+if ($teardownErrors.Count -gt 0) {
+    throw ("the smoke test passed but its teardown failed: " + ($teardownErrors -join '; '))
+}
+Write-Host "PASS: started, answered get_info, stopped with status 0, created its store, and cleaned up"
