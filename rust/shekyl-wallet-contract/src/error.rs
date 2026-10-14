@@ -2402,22 +2402,10 @@ mod tests {
         assert_eq!(data["history_cleared"], false);
     }
 
-    /// Rules 80–82 on the `-29530` refusal. A staker whose `.wallet.pscan`
-    /// was written under an earlier `PSCAN_STATE_VERSION` cannot open the
-    /// wallet, `rescan_blockchain` needs an open wallet, and nothing rewrites
-    /// the file — so the refusal has to name the file, both versions and
-    /// the one remedy that exists. The engine error keeps the directory for
-    /// the server log; this mapping is the only user sentence. A path with
-    /// no Unicode file name falls back to the detail-free form rather than
-    /// inventing a name. This bites against a mapping that drops the engine's
-    /// typed refusal back into `StakeStateUnreadable` for a normal path, and
-    /// against one that forwards the directory. It does NOT cover the engine
-    /// producing that refusal from a real seal (`lifecycle_tests::
-    /// a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions`).
-    /// A scan file from a newer wallet is refused with the same remedy, and
-    /// the message does not call it older: it names both formats and says
-    /// another version wrote it. Red edit: the earlier wording, "written by
-    /// an earlier version", which is false here.
+    /// A scan file from a newer wallet is refused with the same remedy as
+    /// a stale one, and the message does not call it older: it names both
+    /// formats and says another version wrote it. Red edit: the earlier
+    /// wording, "written by an earlier version", which is false here.
     #[test]
     fn a_scan_file_from_a_newer_wallet_is_not_called_older() {
         use shekyl_engine_state::pscan_state::PSCAN_STATE_VERSION;
@@ -2437,6 +2425,18 @@ mod tests {
         assert!(message.contains("Move that one file"), "{message}");
     }
 
+    /// Rules 80–82 on the `-29530` refusal. A staker whose `.wallet.pscan`
+    /// was written under an earlier `PSCAN_STATE_VERSION` cannot open the
+    /// wallet, `rescan_blockchain` needs an open wallet, and nothing rewrites
+    /// the file — so the refusal has to name the file, both versions and
+    /// the one remedy that exists. The engine error keeps the directory for
+    /// the server log; this mapping is the only user sentence. A path with
+    /// no Unicode file name falls back to the detail-free form rather than
+    /// inventing a name. This bites against a mapping that drops the engine's
+    /// typed refusal back into `StakeStateUnreadable` for a normal path, and
+    /// against one that forwards the directory. It does NOT cover the engine
+    /// producing that refusal from a real seal (`lifecycle_tests::
+    /// a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions`).
     #[test]
     fn a_stale_staking_scan_file_is_named_with_both_versions_and_the_remedy() {
         use shekyl_engine_state::pscan_state::{
