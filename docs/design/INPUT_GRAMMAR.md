@@ -10,7 +10,7 @@ holds the glossary tree and the name tables. Part B (the name tables of
 brought to the maintainer for ruling before anything lands.
 **Verified against:** `shekyl-core` @ `737da3127` (`dev`; the option surface
 is unchanged from `2c3fae3c`, only `rpc_facts_ffi.*` moved) and PR-3 (#1056,
-`feat/p2p3-dialer-cutover`) @ `baaba2bd`. Reviewed at **`737da3127`**. Every
+`feat/p2p3-dialer-cutover`) @ `1e189a3e8`. Reviewed at **`737da3127`**. Every
 `file:line` is at the dev pin unless marked `[PR-3]`.
 **Identifier family:** `IG-` (input grammar): rules `IG-1…IG-15`, questions
 `IG-Q1…IG-Qn`, findings `IG-F1…IG-Fn`. The prefixes collide with no
@@ -141,6 +141,8 @@ Indentation is the tree. A term listed under two parents is one term.
 | peer | p2p, closed | another Shekyl node |
 | closed | p2p | a network consisting only of the listed peers |
 | ban | p2p | a host or subnet refused at socket admission |
+| disclose | p2p | what this node tells other nodes of its known peers and its own address |
+| early | disclose | below the white-diversity floor |
 | inbound | p2p | connections other nodes open to us |
 | upload, download | p2p | bytes we send, bytes we receive |
 | txpool | — | the transaction pool |
@@ -229,6 +231,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `allow-local-ip` | `p2p-local` | switch | off | both | R |
 | `add-peer`, `seed-node` | `p2p-peer` | list of peer-endpoint | `none` | both | R; IP and onion only (IG-Q6); seeds are ordinary peers |
 | `add-exclusive-node` | `p2p-closed-peer` | list of peer-endpoint | `none` | both | R; non-empty declares a closed network |
+| `small-network` `[PR-3]` | `p2p-disclose-early` | switch | off | both | R (IG-Q20); for bootstrapping or testing a network smaller than the white-diversity floor (48): this node discloses its known peers and its own address below the floor, on each connector until that connector's white count reaches the floor or the span `P2P_DISCLOSE_EARLY_SPAN_NANOS` ends it, whichever comes first; announced at start (IG-14) |
 | `add-priority-node` | — | | | | X (bypasses the identity protections; removed by PR-3) |
 | `ban-list` | `p2p-ban-file` | path | unset | both | R; read in Rust at parse |
 | `out-peers` | — | | | | X (the outbound degree is a protocol constant) |
@@ -306,7 +309,7 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today; 47 live names after, the four levers among them (unchanged at RT-W10: `rpc-listen` arrives and `rpc-admin-listen` becomes an X row).
+**Count:** 83 registered options and 4 environment levers today, plus PR-3's `small-network`; 48 live names after, the four levers among them (unchanged at RT-W10: `rpc-listen` arrives and `rpc-admin-listen` becomes an X row).
 
 ---
 
@@ -374,6 +377,10 @@ The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with th
 **IG-Q18 — "no inbound" — RULED 2026-10-13.** Today `--in-peers 0` turns all inbound off; with `p2p-inbound-max` ≥ 1, clearnet inbound off is `clearnet-listen none`, and the managed Tor's per-boot onion has no off. The managed ephemeral Tor is rejected in [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §9 *as a cover configuration*, so the per-boot onion is inbound reachability (PWD-E7, default-on), not cover, and a dial-only posture loses no cover. Dial-only exists on the operator arm of this table — `tor = operator` with `tor-socks` set and `tor-onion` unset — so there is no new mode: `managed` always publishes, and an operator who wants dial-only runs the operator arm. `p2p-inbound-max` stays integer ≥ 1.
 
 **IG-Q19 — one log budget — RULED 2026-10-13.** A file size and a file count multiply into a disk budget nobody chose (100 MiB × 50 = 5 GiB). The operator's resource is disk. One quantity, `log-size-max`, is the total for the live file and its archives; how often to rotate within it is the logging owner's. The default is 1 GiB; it is a reduction from today's effective 5 GiB (100 MiB × 50 archives, `EXECUTABLES.md:62-63`), and the release notes say so.
+
+---
+
+**IG-Q20 — PR-3's `--small-network` — RULED 2026-10-13.** PR-3 (head `1e189a3e8`, `src/p2p/net_node.cpp:135` `[PR-3]`) registers `--small-network` in C++ as the one ruled exception to "no new daemon option", a working name pending this table; it is read once into `shekyl_peerlist_small_network` (`src/p2p/net_node.inl:433` `[PR-3]`). The option is **`p2p-disclose-early`**, a public switch (§5): a network at genesis is small, and IG-8 accepts no `dev-` option on mainnet. The Rust symbols PR-3 adds for the switch take the name before PR-3 merges: `SMALL_NETWORK_SPAN_NANOS` becomes `P2P_DISCLOSE_EARLY_SPAN_NANOS`; `SmallNetwork` and `SmallNetworkEnd` become `DiscloseEarly` and `DiscloseEarlyEnd`; the `small_network` field, methods and test become `disclose_early`; the log line and doc comments name `--p2p-disclose-early`. The C++ option and its FFI push keep their names until the daemon-config cutover deletes them. Acceptance: `rg -n -i 'small.?network' rust/` returns nothing outside those two deletion rows.
 
 ---
 
