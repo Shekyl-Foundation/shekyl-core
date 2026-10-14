@@ -85,10 +85,10 @@ The gate walks every live and reserved name in every binary's table (an X row is
 | endpoint | `--x 127.0.0.1:11029`, `--x [::1]:11029` | string | a literal IP and a port; no hostnames |
 | peer-endpoint | an endpoint, or `<v3>.onion:port` | string | |
 | address | `--x shekyl1…` | string | a Shekyl address, checked against the network |
-| origin | `--x https://host:443` | string | a web origin (RFC 6454): scheme `http` or `https`, a host, an optional port, nothing after; or `*` |
+| origin | `--x https://host:443` | string | an explicit web origin (RFC 6454): scheme `http` or `https`, a host, an optional port, nothing after; `*` is refused |
 | path | `--x /abs/path` | string | absolute only |
 | secret | not accepted | string | file only; never logged or echoed, and shown in the startup line only as set; zeroized; held only in Rust |
-| command | not accepted | array of strings `["/path/prog", "arg", "%h"]` | file only; run without a shell; placeholders named in the row |
+| command | not accepted | array of strings `["/path/prog", "arg", "{height}"]` | file only; run without a shell; placeholders are `{name}`, each name a glossary term under the row with one meaning everywhere; braces are the only syntax, `%` is literal; an unknown name refuses |
 | list (of a scalar kind) | the flag repeated | an array under the same key | the keyword `none` is the empty list; a CLI list replaces the file's list whole |
 | map (of a scalar kind) | `--x key=value`, repeated | a table under the same key | keys are a closed set named in the row; a CLI map replaces the file's map whole |
 
@@ -153,6 +153,14 @@ Indentation is the tree. A term listed under two parents is one term.
 | block | notify | a new block |
 | rate | block | the block-rate check |
 | reorg | notify, archival | a chain reorganization |
+| height | block, reorg, split | a block height: under `block` the new block's, under `reorg` the new tip's, under `split` the last block both chains share |
+| hash | block | the new block's hash |
+| split | reorg | the point where the two chains part (`{split-height}`) |
+| added | reorg | blocks in the new chain |
+| removed | reorg | blocks discarded from the old chain |
+| window | rate | the observation window, in seconds |
+| observed | rate | blocks seen in the window |
+| expected | rate | blocks expected in the window |
 | mining | — | the daemon's own miner |
 | address | mining | a Shekyl address (the payment meaning; never a network location) |
 | threads | mining | a thread count |
@@ -259,9 +267,9 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `db-sync-mode`, `db-salvage` | — | | | | L DRS |
 | `keep-alt-blocks` | — | | | | L DRS-E5 |
 | `max-txpool-weight` | `txpool-weight-max` | quantity (bytes) | `648000000B` | both | R; a Monero-derived operand (IG-Q11) |
-| `block-notify` | `notify-block` | command | unset | file | R (IG-Q5); placeholders: `%b` the block's hash (today's `%s`) |
-| `reorg-notify` | `notify-reorg` | command | unset | file | R (IG-Q5); placeholders, today's set: `%s` the split height, `%h` the new height, `%n` blocks in the new chain, `%d` blocks discarded from the old |
-| `block-rate-notify` | `notify-block-rate` | command | unset | file | R (IG-Q5); placeholders, today's set: `%t` the window in minutes, `%b` blocks observed in it, `%e` blocks expected in it |
+| `block-notify` | `notify-block` | command | unset | file | R (IG-Q5); placeholders `{height}`, `{hash}` |
+| `reorg-notify` | `notify-reorg` | command | unset | file | R (IG-Q5); placeholders `{split-height}` (the last block both chains share), `{height}` (the new tip), `{added}` (blocks in the new chain), `{removed}` (blocks discarded) |
+| `block-rate-notify` | `notify-block-rate` | command | unset | file | R (IG-Q5); placeholders `{window}` (the window in seconds), `{observed}`, `{expected}` |
 | `start-mining` | `mining-address` | address | unset | both | R; set means mine from start |
 | `mining-threads` | `mining-threads` | integer ≥ 1, or `auto` | `auto` | both | K; one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
 | `bg-mining-*` (5) | — | | | | X (Monero background mining) |
@@ -273,7 +281,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | — | `rpc-listen` | list of endpoint | | | visibility `reserved` (IG-9, IG-10): held for the authenticated channel listener (RT-W10); not accepted in this cut |
 | `rpc-bind-ip`, `rpc-bind-port`, `rpc-bind-ipv6-address`, `rpc-use-ipv6` | `rpc-admin-listen` | list of endpoint, loopback only | `127.0.0.1:<row rpc port>` | both | R; the interim plaintext full-access listener; loopback only by RT-14 (a plaintext listener never binds beyond loopback; only the authenticated channel listener may bind wildcard); becomes an X row when RT-W10 lands (IG-Q16) |
 | `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only | `none` | both | R; survives RT-W10 unchanged (plaintext loopback at view, off by default, ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
-| `rpc-access-control-origins` | `rpc-cors-origin` | list of origin | `none` | both | R; `none` is CORS default-deny |
+| `rpc-access-control-origins` | `rpc-cors-origin` | list of origin | `none` | both | R; explicit web origins only, `none` is CORS default-deny; `*` is refused: a wildcard lets any page in the operator's browser read and drive the plaintext admin listener |
 | `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy, the same shape as `txpool-weight-max` |
 | `disable-rpc-ban` | — | | | | – (R5; the scorer it switches has no caller, IG-F9) |
 | `rpc-response-soft-limit` | — | | | | – (response limits belong to the RPC resource policy, IG-Q12) |
@@ -350,7 +358,7 @@ The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with th
 
 **IG-Q4 — lane-owned knobs are not ported — RULED 2026-10-13.** The C++ keeps today's defaults as constants until each lane decides whether a knob exists. `drs_bench.py` loses `--block-sync-size`, `--db-sync-mode` and `--keep-fakechain`; DRS owns that loss.
 
-**IG-Q5 — notify commands — RULED 2026-10-13.** An argument array, file only, run without a shell; the placeholders are named per row (`%h` height, `%b` block hash, …), and an unknown placeholder refuses.
+**IG-Q5 — notify commands — RULED 2026-10-13, amended the same day.** An argument array, file only, run without a shell. Placeholders are named, `{name}`, where each name is a glossary term under its notify row (§3) and has one meaning everywhere; an unknown name refuses; braces are the only syntax, so `%` is literal. The sets, as designed and not as today's substitutions: `notify-block` `{height}`, `{hash}`; `notify-reorg` `{split-height}`, `{height}`, `{added}`, `{removed}`; `notify-block-rate` `{window}`, `{observed}`, `{expected}` (§5).
 
 **IG-Q6 — peer endpoints take no hostnames — RULED 2026-10-13.** Today `--add-peer` resolves DNS locally (`net_node.inl:520-548`), which leaks the lookup on a Tor-only node and makes the daemon a resolver. IP and onion only, and the network row's seed list likewise.
 

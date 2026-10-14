@@ -65,11 +65,13 @@ quantity (an integer and a unit — bytes `B KiB MiB GiB TiB`, IEC only,
 `KB`/`MB` refused; rates the same over `/s`; durations `ms s min h d`);
 endpoint (a literal IP and a port; no hostnames); peer-endpoint (an
 endpoint or `<v3>.onion:port`); address (a Shekyl address, checked
-against the network); origin (a web origin, RFC 6454: scheme `http` or
-`https`, a host, an optional port, nothing after; or `*`); path
+against the network); origin (an explicit web origin, RFC 6454: scheme `http` or
+`https`, a host, an optional port, nothing after; `*` is refused); path
 (absolute only); secret (file only; never logged or echoed, shown in the
 startup line only as set; zeroized; held only in Rust); command (file only; an
-argument array run without a shell; placeholders named in the row); list
+argument array run without a shell; placeholders are `{name}`, each
+name a glossary term under the row with one meaning everywhere, braces
+the only syntax, `%` literal, an unknown name refused); list
 and map of a scalar kind (the flag repeated; `none` is the empty list; a
 command-line list or map replaces the file's whole). A row narrows its
 kind with a constraint enforced by its constructor and may admit named
