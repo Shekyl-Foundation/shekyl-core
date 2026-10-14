@@ -154,10 +154,23 @@ pub struct SyncSpansSnapshot {
     pub spans: Vec<SyncSpanFacts>,
 }
 
-/// One peerlist entry, copied out of the Rust peer lists' export. No
-/// clock: the lists carry none (3.55).
+/// A P2P read from a daemon that may have been started with P2P off
+/// (Rick, 2026-10-14). [`P2pRead::Off`] carries nothing: the daemon has no
+/// peers, connections or lists by configuration, and nothing stands in for
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PeerFacts {
+pub enum P2pRead<T> {
+    /// P2P runs; what was read.
+    Running(T),
+    /// The daemon was started with P2P off.
+    Off,
+}
+
+/// One peerlist entry, copied out of the Rust peer lists' export. No
+/// clock: the lists carry none (3.55). Named apart from
+/// [`crate::info_facts::PeerFacts`], `get_info`'s Peers state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerEntry {
     /// Already resolved per address arm by the adapter.
     pub host: String,
     /// The ipv4 address packed as `epee`'s `ipv4_network_address::ip()`
@@ -671,7 +684,7 @@ impl CoreRpc {
     /// The peerlist (`shekyl_rpc_peer_list`, exported by `shekyl-ffi` from
     /// the Rust peer lists), white entries then gray, copied out before the
     /// owner is released. No core handle: the lists are the dialer's.
-    pub fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, i32> {
+    pub fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, i32> {
         let mut rows: *const ffi::PeerFactsFfi = std::ptr::null();
         let mut len: usize = 0;
         let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
@@ -683,13 +696,17 @@ impl CoreRpc {
                 &raw mut len,
                 &raw mut owner,
             );
+            if rc == ffi::SHEKYL_RPC_FACTS_P2P_OFF {
+                // Nothing was written, the owner included.
+                return Ok(P2pRead::Off);
+            }
             if rc != ffi::SHEKYL_RPC_FACTS_OK {
                 return Err(rc);
             }
             let mut peers = Vec::with_capacity(len);
             if !rows.is_null() {
                 for e in std::slice::from_raw_parts(rows, len) {
-                    peers.push(PeerFacts {
+                    peers.push(PeerEntry {
                         host: borrowed_string(e.host, e.host_len),
                         ip: e.ip,
                         port: e.port,
@@ -699,23 +716,34 @@ impl CoreRpc {
                 }
             }
             ffi::shekyl_rpc_peer_list_free(owner);
-            Ok(peers)
+            Ok(P2pRead::Running(peers))
         }
     }
 
     /// How many addresses the clearnet white and gray lists hold
     /// (`shekyl_rpc_peerlist_sizes`, exported by `shekyl-ffi` from the Rust
     /// peer lists), as `(white, gray)`. No core handle: the lists are the
-    /// dialer's.
-    pub fn peerlist_sizes() -> Result<(u64, u64), i32> {
+    /// dialer's. [`P2pRead::Off`] for a daemon started with P2P off.
+    pub fn peerlist_sizes() -> Result<P2pRead<(u64, u64)>, i32> {
         let mut white: u64 = 0;
         let mut gray: u64 = 0;
         // SAFETY: two valid out pointers.
         let rc = unsafe { ffi::shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) };
-        if rc == ffi::SHEKYL_RPC_FACTS_OK {
-            Ok((white, gray))
-        } else {
-            Err(rc)
+        match rc {
+            ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running((white, gray))),
+            ffi::SHEKYL_RPC_FACTS_P2P_OFF => Ok(P2pRead::Off),
+            fault => Err(fault),
+        }
+    }
+
+    /// Whether P2P runs (`shekyl_rpc_p2p_state`, exported by `shekyl-ffi`
+    /// from what the p2p layer recorded when it read `--offline`).
+    pub fn p2p_state() -> Result<P2pRead<()>, i32> {
+        // SAFETY: no arguments; reads one atomic.
+        match unsafe { ffi::shekyl_rpc_p2p_state() } {
+            ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running(())),
+            ffi::SHEKYL_RPC_FACTS_P2P_OFF => Ok(P2pRead::Off),
+            fault => Err(fault),
         }
     }
 

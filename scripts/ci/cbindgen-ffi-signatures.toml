@@ -28,5 +28,12 @@ usize_is_size_t = true
 [export]
 item_types = ["functions", "typedefs", "opaque"]
 
+# A crossing struct whose hand-written C name differs from its Rust name is
+# renamed here, so the generated signature names the header's type, which
+# the header defines (and pins by static_assert). The relay blob types share
+# one name on both sides; the peer-list entry does not.
+[export.rename]
+"ShekylRpcPeerFacts" = "shekyl_rpc_peer_facts"
+
 [parse]
 parse_deps = false

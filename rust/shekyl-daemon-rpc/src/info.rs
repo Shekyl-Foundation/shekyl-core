@@ -47,11 +47,11 @@
 use shekyl_economics::{project_at_tip, EconomicParams, TipOperands};
 use shekyl_rpc_types::{
     GetInfoResponse, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost, InfoIdentity,
-    InfoPeers, InfoPool, InfoStatus, RpcStatus,
+    InfoP2p, InfoPeers, InfoPool, InfoStatus, RpcStatus,
 };
 
 use crate::chain_facts::FactsFault;
-use crate::info_facts::{InfoFacts, PoolScope, SessionCounts};
+use crate::info_facts::{InfoFacts, PeerFacts, PoolScope, SessionCounts};
 use crate::methods::{RpcFault, StoreFault};
 
 /// What a caller is shown: which parts its grants select, and whether it is
@@ -188,16 +188,31 @@ pub fn get_info(
         Hidden::Withheld
     };
 
+    // Peers says first whether P2P runs (Rick, 2026-10-14). A daemon
+    // started with P2P off reports that state and no count. The state and
+    // Health's `offline` both come from the daemon's configuration, read
+    // in two places; if they disagree, one of the reads is wrong, and the
+    // reply refuses rather than carry both.
     let peers = if disclosure.peers {
-        let peers = facts.peers()?;
-        Hidden::Shown(InfoPeers {
-            public_incoming_socket_count: peers.public_incoming_sockets,
-            public_outgoing_socket_count: peers.public_outgoing_sockets,
-            tor_incoming_socket_count: peers.tor_incoming_sockets,
-            tor_outgoing_socket_count: peers.tor_outgoing_sockets,
-            white_peerlist_size: peers.white_peerlist_size,
-            grey_peerlist_size: peers.grey_peerlist_size,
-        })
+        let state = match facts.peers()? {
+            PeerFacts::Off => InfoP2p::Off,
+            PeerFacts::Running(peers) => InfoP2p::Running(InfoPeers {
+                public_incoming_socket_count: peers.public_incoming_sockets,
+                public_outgoing_socket_count: peers.public_outgoing_sockets,
+                tor_incoming_socket_count: peers.tor_incoming_sockets,
+                tor_outgoing_socket_count: peers.tor_outgoing_sockets,
+                white_peerlist_size: peers.white_peerlist_size,
+                grey_peerlist_size: peers.grey_peerlist_size,
+            }),
+        };
+        if matches!(state, InfoP2p::Off) != chain.offline {
+            tracing::error!(
+                offline = chain.offline,
+                "get_info refused: the P2P state disagrees with the core's offline flag"
+            );
+            return Err(RpcFault::Facts(FactsFault::Inconsistent));
+        }
+        Hidden::Shown(state)
     } else {
         Hidden::Withheld
     };

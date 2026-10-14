@@ -502,14 +502,14 @@ mod tests {
                 alt_blocks_count: 0,
                 rpc_connections_count: 0,
             }),
-            peers: Hidden::Shown(InfoPeers {
+            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(InfoPeers {
                 public_incoming_socket_count: 0,
                 public_outgoing_socket_count: 0,
                 tor_incoming_socket_count: 0,
                 tor_outgoing_socket_count: 0,
                 white_peerlist_size: 0,
                 grey_peerlist_size: 0,
-            }),
+            })),
             host: Hidden::Withheld,
             restricted: false,
         })

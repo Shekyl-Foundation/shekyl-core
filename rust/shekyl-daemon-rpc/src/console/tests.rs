@@ -857,6 +857,28 @@ fn print_height_renders_the_remote_reply() {
     assert_eq!(text, "42");
 }
 
+/// **A daemon started with P2P off prints the state** on every peer
+/// command (Rick, 2026-10-14): not an empty table, and not a request
+/// failure.
+#[test]
+fn a_daemon_with_p2p_off_prints_the_state_on_every_peer_command() {
+    let off = r#"{"status":"P2P_OFF"}"#;
+    let rpc_off =
+        serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": { "status": "P2P_OFF" } })
+            .to_string();
+    for (args, reply) in [
+        (&["print_peer_list"][..], off.to_owned()),
+        (&["print_peer_list_stats"][..], off.to_owned()),
+        (&["print_connections"][..], rpc_off.clone()),
+        (&["sync_info"][..], rpc_off.clone()),
+    ] {
+        let address = one_shot(reply);
+        let (code, text) = run(args, Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{args:?}: {text}");
+        assert_eq!(text, "P2P: off", "{args:?}");
+    }
+}
+
 #[test]
 fn non_ok_status_is_a_request_failure_with_the_status_as_reason() {
     let address = one_shot(typed_reply(&GetHeightResponse {
@@ -1186,14 +1208,14 @@ fn info_reply(height: u64) -> String {
             alt_blocks_count: 0,
             rpc_connections_count: 1,
         }),
-        peers: Hidden::Shown(InfoPeers {
+        peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(InfoPeers {
             public_incoming_socket_count: 3,
             public_outgoing_socket_count: 8,
             tor_incoming_socket_count: 0,
             tor_outgoing_socket_count: 0,
             white_peerlist_size: 10,
             grey_peerlist_size: 20,
-        }),
+        })),
         host: Hidden::Shown(shekyl_rpc_types::InfoHost {
             tx_pool_unbroadcast_count: 0,
         }),

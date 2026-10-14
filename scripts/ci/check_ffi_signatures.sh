@@ -64,6 +64,7 @@ trap 'rm -rf "${workdir}"' EXIT
 # header's suffix, which ffi_signature_gate.cpp includes.
 SURFACES=(
   "relay:rust/shekyl-ffi/src/relay_zone_ffi/mod.rs"
+  "rpc_peerlist:rust/shekyl-ffi/src/rpc_peerlist_ffi.rs"
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
 )
 

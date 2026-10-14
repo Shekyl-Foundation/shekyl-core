@@ -892,10 +892,15 @@ const PUBLIC_ONLY: bool = false;
 /// outright. Asking for the public list here would silently drop the
 /// non-public zones from `print_pl` and leave it disagreeing with the counts
 /// `print_pl_stats` prints.
+/// What the console prints for a daemon started with P2P off: the state,
+/// not an empty table (Rick, 2026-10-14).
+const P2P_OFF_LINE: &str = "P2P: off";
+
+/// `None` for a daemon started with P2P off.
 fn fetch_peer_list(
     src: &Source,
     public_only: bool,
-) -> Result<shekyl_rpc_types::GetPeerListResponse, String> {
+) -> Result<Option<shekyl_rpc_types::GetPeerListResponse>, String> {
     let request = shekyl_rpc_types::GetPeerListRequest {
         public_only,
         include_blocked: true,
@@ -908,13 +913,19 @@ fn fetch_peer_list(
         Source::Remote { .. } => {
             let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
             let raw = src.post_remote("/get_peer_list", body)?;
-            decode_reply::<shekyl_rpc_types::GetPeerListResponse>(&raw, "get_peer_list")?
+            decode_reply::<shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetPeerListResponse>>(
+                &raw,
+                "get_peer_list",
+            )?
         }
+    };
+    let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
+        return Ok(None);
     };
     if !reply.status.is_ok() {
         return Err(reply.status.0);
     }
-    Ok(reply)
+    Ok(Some(reply))
 }
 
 /// One line per peer: the list and the address. No "last seen" column: the
@@ -957,7 +968,9 @@ fn peer_list_selection(selector: Option<&str>) -> (bool, bool) {
 /// per-peer pruning state left to filter on.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_peer_list(src: &Source, white: bool, gray: bool, limit: usize) -> Result<String, String> {
-    let reply = fetch_peer_list(src, PUBLIC_ONLY)?;
+    let Some(reply) = fetch_peer_list(src, PUBLIC_ONLY)? else {
+        return Ok(P2P_OFF_LINE.to_owned());
+    };
     let mut out = Vec::new();
     let mut take = |prefix: &str, peers: &[shekyl_rpc_types::Peer]| {
         for peer in peers
@@ -979,7 +992,9 @@ fn print_peer_list(src: &Source, white: bool, gray: bool, limit: usize) -> Resul
 /// `print_pl_stats`: how full each list is.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_peer_list_stats(src: &Source) -> Result<String, String> {
-    let reply = fetch_peer_list(src, PUBLIC_ONLY)?;
+    let Some(reply) = fetch_peer_list(src, PUBLIC_ONLY)? else {
+        return Ok(P2P_OFF_LINE.to_owned());
+    };
     Ok(render_peer_list_stats(
         reply.white_list.len(),
         reply.gray_list.len(),
@@ -1028,6 +1043,9 @@ fn print_connections(src: &Source) -> Result<String, String> {
     let reply = native_json_rpc(src, "get_connections", &serde_json::json!({}), |core| {
         crate::methods::get_connections(&crate::chain_facts::FfiP2pFacts::new(core.clone()))
     })?;
+    let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
+        return Ok(P2P_OFF_LINE.to_owned());
+    };
     require_ok(&reply.status)?;
     // Wide enough for the widest address actually present, plus the four
     // characters of the `INC `/`OUT ` prefix and a two-column gutter — the
@@ -1200,6 +1218,9 @@ fn sync_info(src: &Source) -> Result<String, String> {
         let p2p = crate::chain_facts::FfiP2pFacts::new(core.clone());
         crate::methods::sync_info(&chain, &p2p)
     })?;
+    let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
+        return Ok(P2P_OFF_LINE.to_owned());
+    };
     require_ok(&reply.status)?;
     // No target, or one below our own height (we are ahead of what we were
     // told to reach): the progress line uses our height, so the percentage

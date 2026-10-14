@@ -5,15 +5,26 @@
 
 //! The RPC's view of the peer lists: `get_peer_list` and `get_info`'s two
 //! list sizes, read from the Rust lists (RK-5a's two exports, moved here
-//! from C++ with the C++ peerlist's deletion, 2026-10-13).
+//! from C++ with the C++ peerlist's deletion, 2026-10-13); and whether this
+//! daemon runs P2P at all.
 //!
 //! The entries carry no clock: the lists hold none (slice 1 brief §4).
 //! `blocked` is the transport layer's ban on the address's host, asked
 //! through the hub. Nothing here changes the lists.
+//!
+//! **An offline daemon reports a state, never a zero (Rick, 2026-10-14).**
+//! A daemon started with P2P off (`--offline`) has no peer lists by
+//! configuration. Both exports then answer [`FACTS_P2P_OFF`] and write
+//! nothing: no count of zero and no empty listing, either of which would
+//! read as a running node with no peers. The state is read from what the
+//! p2p layer recorded when it read `--offline`
+//! ([`shekyl_p2p_record_offline`]), never inferred from the dialer's
+//! absence: an online daemon with no dialer is a fault, and says so.
 
 use std::ffi::c_void;
 
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use shekyl_peerlist::{BanQuery, ConnectorId, ListName, NetworkAddress, Peerlist, Tick};
 use shekyl_seam::Hub;
@@ -31,8 +42,58 @@ impl BanQuery for HubBans<'_> {
 
 /// The facts codes the RPC's exports share (`rpc_facts_ffi.h`).
 const FACTS_OK: i32 = 0;
-/// A null out pointer, or no peer lists in this process.
+/// A null out pointer, or an online daemon with no peer lists.
 const FACTS_ERR_NULL: i32 = -1;
+/// The p2p layer has not read its configuration yet.
+const FACTS_ERR_NOT_READY: i32 = -2;
+/// This daemon was started with P2P off: a state, not a fault. Nothing is
+/// written. Twin of `shekyl-daemon-rpc`'s `SHEKYL_RPC_FACTS_P2P_OFF`.
+pub const FACTS_P2P_OFF: i32 = 1;
+
+/// What the p2p layer recorded when it read `--offline`.
+static P2P_MODE: AtomicU8 = AtomicU8::new(MODE_UNRECORDED);
+const MODE_UNRECORDED: u8 = 0;
+const MODE_ON: u8 = 1;
+const MODE_OFF: u8 = 2;
+
+/// Whether P2P runs in this daemon, as its configuration says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum P2pMode {
+    /// The p2p layer has not read `--offline` yet.
+    Unrecorded,
+    On,
+    Off,
+}
+
+pub(crate) fn p2p_mode() -> P2pMode {
+    match P2P_MODE.load(Ordering::Acquire) {
+        MODE_ON => P2pMode::On,
+        MODE_OFF => P2pMode::Off,
+        _ => P2pMode::Unrecorded,
+    }
+}
+
+/// Record whether this daemon was started with P2P off, and return it. The
+/// p2p layer calls this where it reads `--offline`, so the record is the
+/// configuration itself.
+#[no_mangle]
+pub extern "C" fn shekyl_p2p_record_offline(offline: bool) -> bool {
+    P2P_MODE.store(if offline { MODE_OFF } else { MODE_ON }, Ordering::Release);
+    offline
+}
+
+/// Whether this daemon runs P2P, for the RPC methods that read no peer
+/// list (`get_connections`, `sync_info`): 0 when it runs,
+/// [`FACTS_P2P_OFF`] when it was started with P2P off, -2 before the p2p
+/// layer has read its configuration.
+#[no_mangle]
+pub extern "C" fn shekyl_rpc_p2p_state() -> i32 {
+    match p2p_mode() {
+        P2pMode::On => FACTS_OK,
+        P2pMode::Off => FACTS_P2P_OFF,
+        P2pMode::Unrecorded => FACTS_ERR_NOT_READY,
+    }
+}
 
 /// One peerlist entry, as `get_peer_list` renders it. Twin of
 /// `shekyl_rpc_peer_facts` (C++) and `shekyl-daemon-rpc`'s `PeerFactsFfi`,
@@ -76,15 +137,9 @@ fn render(address: &NetworkAddress) -> (String, u32, u16) {
 }
 
 /// The entries, white then gray, for every connector or clearnet only.
-/// A process with no dialer holds no peer lists (an `--offline` daemon
-/// never starts one), so its listing is empty.
-fn entries(public_only: bool) -> PeerListOwner {
-    let Some(dialer) = dialer() else {
-        return PeerListOwner {
-            hosts: Vec::new(),
-            entries: Vec::new(),
-        };
-    };
+/// `None` when there are no peer lists to read.
+fn entries(public_only: bool) -> Option<PeerListOwner> {
+    let dialer = dialer()?;
     let hub = dialer.hub();
     let snapshot = dialer.shared().lists.snapshot();
     let mut rows: Vec<(NetworkAddress, ListName)> = snapshot
@@ -120,13 +175,14 @@ fn entries(public_only: bool) -> PeerListOwner {
     for (entry, host) in owner.entries.iter_mut().zip(&owner.hosts) {
         entry.host = host.as_ptr();
     }
-    owner
+    Some(owner)
 }
 
 /// White then gray peerlist entries in one array, discriminated by
 /// `white`; `public_only` nonzero lists the clearnet lists alone. Returns
-/// 0 with `*out`, `*out_len` and `*out_owner` written, or -1 for a null
-/// out pointer. A process with no peer lists answers 0 entries. Release
+/// 0 with `*out`, `*out_len` and `*out_owner` written; [`FACTS_P2P_OFF`]
+/// with nothing written when the daemon was started with P2P off; -1 for a
+/// null out pointer or an online daemon with no peer lists. Release
 /// `*out_owner` with
 /// [`shekyl_rpc_peer_list_free`]; the entries point into it.
 ///
@@ -143,8 +199,14 @@ pub unsafe extern "C" fn shekyl_rpc_peer_list(
     if out.is_null() || out_len.is_null() || out_owner.is_null() {
         return FACTS_ERR_NULL;
     }
+    if p2p_mode() == P2pMode::Off {
+        return FACTS_P2P_OFF;
+    }
     unsafe { out_owner.write(std::ptr::null_mut()) };
-    let owner = Box::new(entries(public_only != 0));
+    let Some(owner) = entries(public_only != 0) else {
+        return FACTS_ERR_NULL;
+    };
+    let owner = Box::new(owner);
     let first = if owner.entries.is_empty() {
         std::ptr::null()
     } else {
@@ -173,10 +235,9 @@ pub unsafe extern "C" fn shekyl_rpc_peer_list_free(owner: *mut c_void) {
 }
 
 /// How many addresses the clearnet white and gray lists hold, for
-/// `get_info`. Returns 0 with both written, or -1 for a null out pointer.
-/// A process with no dialer holds no peer lists (an `--offline` daemon
-/// never starts one), so both are 0. *Records-was:* no dialer was -1, and
-/// every `get_info` on an offline daemon failed with `NullHandle`.
+/// `get_info`. Returns 0 with both written; [`FACTS_P2P_OFF`] with nothing
+/// written when the daemon was started with P2P off; -1 for a null out
+/// pointer or an online daemon with no peer lists.
 ///
 /// # Safety
 ///
@@ -186,12 +247,11 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
     if out_white.is_null() || out_gray.is_null() {
         return FACTS_ERR_NULL;
     }
+    if p2p_mode() == P2pMode::Off {
+        return FACTS_P2P_OFF;
+    }
     let Some(dialer) = dialer() else {
-        unsafe {
-            out_white.write(0);
-            out_gray.write(0);
-        }
-        return FACTS_OK;
+        return FACTS_ERR_NULL;
     };
     let (white, gray) = {
         let mut shared = dialer.shared();
@@ -304,34 +364,76 @@ mod tests {
         out
     }
 
-    /// An `--offline` daemon starts no dialer, so it holds no peer lists:
-    /// both exports answer empty, and `get_info` answers. *Records-was:*
-    /// both refused, and an offline daemon's every `get_info` failed with
-    /// `NullHandle` (found by a regtest smoke run, 2026-10-14).
+    /// Back to the state before the p2p layer read its configuration.
+    fn forget_mode() {
+        P2P_MODE.store(MODE_UNRECORDED, Ordering::Release);
+    }
+
+    /// A daemon started with P2P off reports that state on both exports and
+    /// writes nothing: no count, no row, no owner (Rick, 2026-10-14). The
+    /// state export says the same.
     #[test]
-    fn with_no_lists_in_the_process_the_exports_answer_empty() {
+    fn a_daemon_started_with_p2p_off_reports_the_state_and_writes_nothing() {
         let _bind = seam_bind_lock()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         unbind();
+        assert!(shekyl_p2p_record_offline(true));
+        let sentinel_rows = std::ptr::dangling::<ShekylRpcPeerFacts>();
+        let sentinel_owner = std::ptr::dangling_mut::<u8>().cast::<c_void>();
+        let mut rows = sentinel_rows;
+        let mut len = 7usize;
+        let mut owner = sentinel_owner;
+        assert_eq!(
+            unsafe { shekyl_rpc_peer_list(0, &raw mut rows, &raw mut len, &raw mut owner) },
+            FACTS_P2P_OFF
+        );
+        assert_eq!((rows, len, owner), (sentinel_rows, 7, sentinel_owner));
+        let mut white = 7u64;
+        let mut gray = 7u64;
+        assert_eq!(
+            unsafe { shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) },
+            FACTS_P2P_OFF
+        );
+        assert_eq!((white, gray), (7, 7), "nothing is written for P2P off");
+        assert_eq!(shekyl_rpc_p2p_state(), FACTS_P2P_OFF);
+        forget_mode();
+    }
+
+    /// An online daemon with no peer lists is a fault on both exports, not
+    /// an empty answer: it is not a state any configuration asked for.
+    #[test]
+    fn an_online_daemon_with_no_dialer_is_a_fault() {
+        let _bind = seam_bind_lock()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        unbind();
+        assert!(!shekyl_p2p_record_offline(false));
         let mut rows: *const ShekylRpcPeerFacts = std::ptr::null();
         let mut len = 0usize;
         let mut owner: *mut c_void = std::ptr::null_mut();
         assert_eq!(
             unsafe { shekyl_rpc_peer_list(0, &raw mut rows, &raw mut len, &raw mut owner) },
-            FACTS_OK
+            FACTS_ERR_NULL
         );
-        assert_eq!(len, 0);
-        assert!(rows.is_null());
-        assert!(!owner.is_null());
-        unsafe { shekyl_rpc_peer_list_free(owner) };
-        let mut white = 7u64;
-        let mut gray = 7u64;
+        assert!(owner.is_null());
+        let mut white = 0u64;
+        let mut gray = 0u64;
         assert_eq!(
             unsafe { shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) },
-            FACTS_OK
+            FACTS_ERR_NULL
         );
-        assert_eq!((white, gray), (0, 0));
+        assert_eq!(
+            shekyl_rpc_p2p_state(),
+            FACTS_OK,
+            "P2P runs; the lists are the fault"
+        );
+        forget_mode();
+        assert_eq!(
+            shekyl_rpc_p2p_state(),
+            FACTS_ERR_NOT_READY,
+            "before the p2p layer reads --offline there is no state to report"
+        );
     }
 
     /// The three address arms render as the wire contract says, every entry
@@ -342,6 +444,7 @@ mod tests {
         let _bind = seam_bind_lock()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        shekyl_p2p_record_offline(false);
         unbind();
         bind();
         let dialer = dialer().expect("built at the bind");
@@ -392,6 +495,7 @@ mod tests {
             "clearnet only: two v4 and one v6, all gray"
         );
         unbind();
+        forget_mode();
     }
 
     #[test]

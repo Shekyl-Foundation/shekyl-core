@@ -459,7 +459,7 @@ namespace nodetool
       MFATAL("Invalid value for --" << arg_igd.name << ", expected enabled, disabled or delayed");
       return false;
     }
-    m_offline = command_line::get_arg(vm, cryptonote::arg_offline);
+    m_offline = shekyl_p2p_record_offline(command_line::get_arg(vm, cryptonote::arg_offline));
     m_use_ipv6 = command_line::get_arg(vm, arg_p2p_use_ipv6);
     m_require_ipv4 = !command_line::get_arg(vm, arg_p2p_ignore_ipv4);
 

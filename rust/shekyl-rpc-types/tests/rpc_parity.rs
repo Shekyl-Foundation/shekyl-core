@@ -23,7 +23,7 @@ use shekyl_rpc_types::{
     GetBlockResponse, GetConnectionsResponse, GetHeightResponse, GetLastBlockHeaderResponse,
     GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
     GetTransactionsResponse, GetVersionResponse, HashHex, HexU128, IsKeyImageSpentRequest,
-    IsKeyImageSpentResponse, KeyImageStatus, Nullable, Peer, RpcStatus, SyncInfoPeer,
+    IsKeyImageSpentResponse, KeyImageStatus, Nullable, P2pReply, Peer, RpcStatus, SyncInfoPeer,
     SyncInfoResponse, SyncSpan, TxEntry, TxLocation, CORE_RPC_VERSION,
 };
 
@@ -802,7 +802,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 31] = [
+    let links: [(&str, &str); 32] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -927,6 +927,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v31.json"),
             include_str!("vectors/rpc/get_version_synced_v32.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v32.json"),
+            include_str!("vectors/rpc/get_version_synced_v33.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -945,7 +949,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 31] = [
+    const ADDED_AT_LINK: [&[&str]; 32] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -977,6 +981,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.53 (get_info's amounts become decimal strings, RK-Q2; get_version gains nothing)
         &[], // 3.54 (get_info stops repeating the network, RK-Q6; get_version gains nothing)
         &[], // 3.55 (get_peer_list entries drop last_seen: the Rust peer lists carry no clock; get_version gains nothing)
+        &[], // 3.56 (P2P off is a state on get_info and the three P2P methods; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -988,7 +993,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 31] = [
+    const REMOVED_AT_LINK: [&[&str]; 32] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1020,6 +1025,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.53 (no member comes or goes; two of get_info's change encoding)
         &[], // 3.54 (the four network names are get_info's; get_version keeps its `nettype`)
         &[], // 3.55 (last_seen leaves get_peer_list; get_version retires nothing)
+        &[], // 3.56 (P2P off is a state elsewhere; get_version retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1526,6 +1532,63 @@ fn the_3_53_get_info_vectors_are_their_predecessors_with_the_two_amounts_as_stri
     }
 }
 
+/// **3.56, by derivation.** A daemon reports whether it runs P2P before
+/// any count (Rick, 2026-10-14). Each running fixture's successor is its
+/// predecessor plus exactly `"p2p": "on"`; the restricted fixture withholds
+/// Peers and has no successor. The offline fixture is the peerless one
+/// started with P2P off: `offline` true, `"p2p": "off"`, and the six counts
+/// gone, not zeroed.
+#[test]
+fn the_3_56_get_info_vectors_say_whether_p2p_runs_before_any_count() {
+    for (before_raw, after_raw) in [
+        (
+            include_str!("vectors/rpc/get_info_synced_v7.json"),
+            include_str!("vectors/rpc/get_info_synced_v8.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_syncing_v6.json"),
+            include_str!("vectors/rpc/get_info_syncing_v7.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_info_peerless_startup_v7.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v8.json"),
+        ),
+    ] {
+        let mut derived = parsed(before_raw);
+        let object = derived.as_object_mut().expect("a fixture is an object");
+        assert!(object.insert("p2p".to_owned(), "on".into()).is_none());
+        assert_eq!(
+            derived,
+            parsed(after_raw),
+            "the successor adds exactly p2p: on"
+        );
+    }
+    let mut derived = parsed(include_str!(
+        "vectors/rpc/get_info_peerless_startup_v8.json"
+    ));
+    let object = derived.as_object_mut().expect("a fixture is an object");
+    object.insert("offline".to_owned(), true.into());
+    object.insert("p2p".to_owned(), "off".into());
+    for key in [
+        "public_incoming_socket_count",
+        "public_outgoing_socket_count",
+        "tor_incoming_socket_count",
+        "tor_outgoing_socket_count",
+        "white_peerlist_size",
+        "grey_peerlist_size",
+    ] {
+        assert!(
+            object.remove(key).is_some(),
+            "the running fixture carries `{key}`"
+        );
+    }
+    assert_eq!(
+        derived,
+        parsed(include_str!("vectors/rpc/get_info_offline_v1.json")),
+        "the offline fixture is the peerless one with P2P off and no count"
+    );
+}
+
 /// **3.54, by derivation.** `get_info` stops repeating the daemon's network
 /// (RK-Q6). Each fixture's successor is its predecessor minus exactly
 /// `nettype`, `mainnet`, `testnet` and `stagenet`. Before a key is removed,
@@ -1936,6 +1999,60 @@ fn sync_info_empty_matches_the_oracle() {
     assert!(!obj.contains_key("peers") && !obj.contains_key("spans"));
 }
 
+/// **A daemon started with P2P off answers `P2P_OFF` and nothing else** on
+/// `get_peer_list`, `get_connections` and `sync_info` (Rick, 2026-10-14;
+/// 3.56). An empty list under `OK` is a running node with none; this is a
+/// node with P2P off, and the two decode to different values.
+#[test]
+fn the_p2p_methods_answer_p2p_off_alone() {
+    let off = include_str!("vectors/rpc/get_peer_list_off_v1.json");
+    assert_parity(off, &P2pReply::<GetPeerListResponse>::Off);
+    assert_parity(
+        include_str!("vectors/rpc/get_connections_off_v1.json"),
+        &P2pReply::<GetConnectionsResponse>::Off,
+    );
+    assert_parity(
+        include_str!("vectors/rpc/sync_info_off_v1.json"),
+        &P2pReply::<SyncInfoResponse>::Off,
+    );
+    assert_eq!(parsed(off), serde_json::json!({ "status": "P2P_OFF" }));
+
+    // A running reply decodes as running, empty lists and all.
+    let empty: P2pReply<GetConnectionsResponse> =
+        serde_json::from_str(include_str!("vectors/rpc/get_connections_empty_v1.json"))
+            .expect("an empty running reply decodes");
+    assert_eq!(
+        empty,
+        P2pReply::Running(GetConnectionsResponse {
+            status: RpcStatus::ok(),
+            connections: Vec::new(),
+        })
+    );
+    let idle: P2pReply<SyncInfoResponse> =
+        serde_json::from_str(include_str!("vectors/rpc/sync_info_empty_v3.json"))
+            .expect("an idle running reply decodes");
+    assert!(idle.running().is_some());
+}
+
+/// `P2P_OFF` beside any other member is refused: a daemon with P2P off has
+/// no peer, connection or span to report.
+#[test]
+fn p2p_off_beside_a_member_is_refused() {
+    for doc in [
+        serde_json::json!({ "status": "P2P_OFF", "connections": [] }),
+        serde_json::json!({ "status": "P2P_OFF", "white_list": [] }),
+        serde_json::json!({ "status": "P2P_OFF", "height": 1, "target_height": null, "overview": "[]" }),
+    ] {
+        let connections = serde_json::from_value::<P2pReply<GetConnectionsResponse>>(doc.clone());
+        let peers = serde_json::from_value::<P2pReply<GetPeerListResponse>>(doc.clone());
+        let sync = serde_json::from_value::<P2pReply<SyncInfoResponse>>(doc.clone());
+        assert!(
+            connections.is_err() && peers.is_err() && sync.is_err(),
+            "P2P_OFF with a member must not decode: {doc}"
+        );
+    }
+}
+
 // ── RK-5b: the header remainder, and four deliberate divergences ────────────
 //
 // **A green parity run here does NOT mean "Rust matches C++".** Three of this
@@ -2162,7 +2279,7 @@ mod get_info {
     use super::{assert_parity, parsed, tagged_hash};
     use shekyl_rpc_types::{
         GetInfoResponse, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost, InfoIdentity,
-        InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
+        InfoP2p, InfoPeers, InfoPool, InfoStatus, Nullable, RpcStatus,
     };
     use shekyl_units::AtomicUnits;
 
@@ -2214,14 +2331,14 @@ mod get_info {
                 alt_blocks_count: 3,
                 rpc_connections_count: 0,
             }),
-            peers: Hidden::Shown(InfoPeers {
+            peers: Hidden::Shown(InfoP2p::Running(InfoPeers {
                 public_incoming_socket_count: 13,
                 public_outgoing_socket_count: 10,
                 tor_incoming_socket_count: 4,
                 tor_outgoing_socket_count: 2,
                 white_peerlist_size: 500,
                 grey_peerlist_size: 2500,
-            }),
+            })),
             host: Hidden::Shown(InfoHost {
                 tx_pool_unbroadcast_count: 3,
             }),
@@ -2232,7 +2349,7 @@ mod get_info {
     #[test]
     fn synced_matches_the_oracle() {
         assert_parity(
-            include_str!("vectors/rpc/get_info_synced_v7.json"),
+            include_str!("vectors/rpc/get_info_synced_v8.json"),
             &synced(),
         );
     }
@@ -2244,7 +2361,7 @@ mod get_info {
         built.health.target_height = Nullable::value(1_300_000);
         built.health.busy_syncing = true;
         built.health.following_degraded = true;
-        assert_parity(include_str!("vectors/rpc/get_info_syncing_v6.json"), &built);
+        assert_parity(include_str!("vectors/rpc/get_info_syncing_v7.json"), &built);
     }
 
     #[test]
@@ -2259,17 +2376,71 @@ mod get_info {
         };
         node.outgoing_connections_count = 0;
         node.incoming_connections_count = 0;
-        let Hidden::Shown(peers) = &mut built.peers else {
-            unreachable!("the fixture shows Peers")
+        let Hidden::Shown(InfoP2p::Running(peers)) = &mut built.peers else {
+            unreachable!("the fixture shows a running node's Peers")
         };
         peers.public_incoming_socket_count = 0;
         peers.public_outgoing_socket_count = 0;
         peers.tor_incoming_socket_count = 0;
         peers.tor_outgoing_socket_count = 0;
         assert_parity(
-            include_str!("vectors/rpc/get_info_peerless_startup_v7.json"),
+            include_str!("vectors/rpc/get_info_peerless_startup_v8.json"),
             &built,
         );
+    }
+
+    /// **A daemon started with P2P off reports the state, never a zero**
+    /// (Rick, 2026-10-14; 3.56). Its Peers part is `"p2p": "off"` with no
+    /// count, and Health's `offline` agrees with it.
+    #[test]
+    fn offline_matches_the_vector() {
+        let mut built = synced();
+        built.health.synchronized = false;
+        built.health.target_height = Nullable::NULL;
+        built.health.has_peers = false;
+        built.health.offline = true;
+        let Hidden::Shown(node) = &mut built.node else {
+            unreachable!("the fixture shows Status")
+        };
+        node.outgoing_connections_count = 0;
+        node.incoming_connections_count = 0;
+        built.peers = Hidden::Shown(InfoP2p::Off);
+        assert_parity(include_str!("vectors/rpc/get_info_offline_v1.json"), &built);
+    }
+
+    /// Each way a Peers part could say "off" and a count at once, or a
+    /// count without saying what it is of, is refused by name.
+    #[test]
+    fn p2p_off_with_a_count_and_a_count_without_p2p_are_refused() {
+        let off = parsed(include_str!("vectors/rpc/get_info_offline_v1.json"));
+        for key in PEERS_KEYS {
+            let mut doc = off.clone();
+            doc[key] = 0.into();
+            let refusal = decode(&doc).expect_err("off carries no count");
+            assert!(
+                refusal.contains("off") && refusal.contains(key),
+                "the refusal names P2P off and `{key}`; got {refusal:?}"
+            );
+        }
+        let running = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        let mut doc = running.clone();
+        doc.as_object_mut().unwrap().remove("p2p");
+        let refusal = decode(&doc).expect_err("a count says what it is of");
+        assert!(refusal.contains("without `p2p`"), "got {refusal:?}");
+    }
+
+    /// `p2p` and Health's `offline` both read the daemon's configuration,
+    /// so a reply where they disagree is refused in both directions.
+    #[test]
+    fn p2p_that_disagrees_with_offline_is_refused() {
+        let mut off = parsed(include_str!("vectors/rpc/get_info_offline_v1.json"));
+        off["offline"] = false.into();
+        let refusal = decode(&off).expect_err("off is offline");
+        assert!(refusal.contains("disagrees"), "got {refusal:?}");
+        let mut on = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
+        on["offline"] = true.into();
+        let refusal = decode(&on).expect_err("a running node is not offline");
+        assert!(refusal.contains("disagrees"), "got {refusal:?}");
     }
 
     /// A restricted reply withholds Status and Peers, so the vector decodes
@@ -2323,7 +2494,7 @@ mod get_info {
     /// key, for every key of both parts — never a part read as withheld.
     #[test]
     fn a_hidden_part_missing_one_key_is_refused_not_read_as_withheld() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
         for (part, keys) in [("status", &STATUS_KEYS[..]), ("peers", &PEERS_KEYS[..])] {
             for key in keys {
                 let mut doc = full.clone();
@@ -2344,7 +2515,7 @@ mod get_info {
     /// part is unaffected, and the reply writes back without those keys.
     #[test]
     fn a_hidden_part_with_no_keys_is_withheld_and_writes_none() {
-        let full = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+        let full = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
 
         let mut doc = full.clone();
         for key in STATUS_KEYS {
@@ -2360,8 +2531,8 @@ mod get_info {
         );
 
         let mut doc = full;
-        for key in PEERS_KEYS {
-            doc.as_object_mut().unwrap().remove(key);
+        for key in PEERS_KEYS.iter().chain(&["p2p"]) {
+            doc.as_object_mut().unwrap().remove(*key);
         }
         let reply = decode(&doc).expect("a reply without Peers decodes");
         assert_eq!(reply.peers, Hidden::Withheld);
@@ -2377,7 +2548,7 @@ mod get_info {
     /// decodes.
     #[test]
     fn a_shown_status_with_an_empty_version_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
         doc["version"] = "".into();
         let refusal = decode(&doc).expect_err("an empty version is not an answer");
         assert!(refusal.contains("empty `version`"), "got {refusal:?}");
@@ -2396,7 +2567,7 @@ mod get_info {
     /// without the key, and `0` is a count, not an absence (RK-Q10).
     #[test]
     fn the_host_part_is_withheld_when_its_key_is_absent() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
         let shown = decode(&doc).expect("the host's reply decodes");
         assert_eq!(
             shown.host,
@@ -2426,7 +2597,7 @@ mod get_info {
     /// it cannot carry the attribute on a flattened type.
     #[test]
     fn an_unknown_key_is_refused() {
-        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+        let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
         doc.as_object_mut()
             .unwrap()
             .insert("emission_era".to_owned(), "Founding".into());
@@ -2448,7 +2619,7 @@ mod get_info {
             "restricted",
             "burn_pct",
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
             doc.as_object_mut().unwrap().remove(key);
             let refusal = decode(&doc).expect_err("a missing required key must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -2468,7 +2639,7 @@ mod get_info {
     #[test]
     fn the_two_amounts_are_required_decimal_strings() {
         for key in ["already_generated_coins", "total_burned"] {
-            let full = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+            let full = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
 
             let mut missing = full.clone();
             missing.as_object_mut().unwrap().remove(key);
@@ -2536,7 +2707,7 @@ mod get_info {
             ("testnet", serde_json::json!(false)),
             ("stagenet", serde_json::json!(false)),
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
             doc.as_object_mut().unwrap().insert(key.to_owned(), value);
             let refusal = decode(&doc).expect_err("a retired name must not decode");
             assert!(
@@ -2559,7 +2730,7 @@ mod get_info {
             ("block_size_limit", serde_json::json!(600_000)),
             ("block_size_median", serde_json::json!(300_000)),
         ] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
             doc.as_object_mut().unwrap().insert(key.to_owned(), value);
             let refusal = decode(&doc).expect_err("a retired name must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -2577,7 +2748,7 @@ mod get_info {
     #[test]
     fn the_weight_names_are_required_and_zero_is_written() {
         for key in ["block_weight_limit", "block_weight_median"] {
-            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+            let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
             doc.as_object_mut().unwrap().remove(key);
             let refusal = decode(&doc).expect_err("a missing weight name must not decode");
             assert!(refusal.contains(key), "{key}: got {refusal:?}");
@@ -2608,7 +2779,7 @@ mod get_info {
                 serde_json::json!(format!("0x1{}", "0".repeat(32))),
                 serde_json::json!(255),
             ] {
-                let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v7.json"));
+                let mut doc = parsed(include_str!("vectors/rpc/get_info_synced_v8.json"));
                 doc[key] = wrong.clone();
                 assert!(
                     decode(&doc).is_err(),

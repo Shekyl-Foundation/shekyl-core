@@ -133,12 +133,15 @@ impl StemSinkPair {
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut last = String::new();
         while Instant::now() < deadline {
-            let connections: shekyl_rpc_types::GetConnectionsResponse = self
+            let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetConnectionsResponse> = self
                 .origin
                 .rpc
                 .json_rpc_call("get_connections", None)
                 .await
                 .expect("origin get_connections");
+            let connections = reply
+                .into_running()
+                .expect("a linked daemon's P2P runs; it must not report P2P off");
             let outbound = connections
                 .connections
                 .iter()
@@ -274,9 +277,11 @@ async fn restricted_listener_is_withheld_status_and_capped_by_native_handlers() 
         "a restricted listener must not disclose Peers: the socket counts and \
          the peerlist sizes"
     );
-    assert!(
-        admin_info.peers.shown().is_some(),
-        "the admin listener is shown Peers"
+    assert_eq!(
+        admin_info.peers,
+        shekyl_rpc_types::Hidden::Shown(shekyl_rpc_types::InfoP2p::Off),
+        "the admin listener is shown Peers, and this daemon runs `--offline`: \
+         the part is the state P2P off, with no count"
     );
     assert!(
         admin_status.start_time > 0 && !admin_status.version.is_empty(),

@@ -17,7 +17,7 @@
 //! | [`InfoChain`], [`InfoEconomics`] | `chain` |
 //! | [`InfoPool`] | `pool` |
 //! | [`InfoStatus`] | `status` |
-//! | [`InfoPeers`] | `peers` |
+//! | [`InfoP2p`] | `peers` |
 //!
 //! The parts are flattened onto one JSON object. The two outside the `view`
 //! preset are carried as [`Hidden`], which is the part or its absence.
@@ -57,6 +57,16 @@
 //! answer: a wallet read the zeroed connection counts as a node with no
 //! peers. A reader of a hidden part now asks [`Hidden::shown`] and is told
 //! when there is nothing to read.
+//!
+//! # P2P off is a state, not a zero
+//!
+//! The Peers part says first whether this daemon runs P2P at all, under
+//! `p2p` (Rick, 2026-10-14; `CORE_RPC_VERSION` 3.56). `"p2p": "on"` carries
+//! the six counts; `"p2p": "off"` carries none, because a daemon started
+//! with P2P off has no sockets and no peer lists by configuration, and a
+//! count of zero would read as a running node with no peers. The decoder
+//! refuses `"off"` with any count, `"on"` without all six, a count with no
+//! `p2p`, and an `"off"` that disagrees with Health's `offline`.
 
 use serde::{Deserialize, Serialize};
 use shekyl_units::{AtomicUnits, AtomicUnitsString};
@@ -211,7 +221,29 @@ pub struct InfoStatus {
     pub rpc_connections_count: u64,
 }
 
-/// Per-connector transport and peerlist detail.
+/// The Peers part: whether this daemon runs P2P, and when it does, its
+/// transport and peerlist detail. A daemon started with P2P off reports
+/// [`InfoP2p::Off`] and no count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InfoP2p {
+    /// P2P runs; its counts.
+    Running(InfoPeers),
+    /// The daemon was started with P2P off (`--offline`).
+    Off,
+}
+
+impl InfoP2p {
+    /// The counts, when P2P runs.
+    #[must_use]
+    pub fn running(&self) -> Option<&InfoPeers> {
+        match self {
+            Self::Running(peers) => Some(peers),
+            Self::Off => None,
+        }
+    }
+}
+
+/// Per-connector transport and peerlist detail of a daemon whose P2P runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoPeers {
     pub public_incoming_socket_count: u64,
@@ -235,7 +267,7 @@ pub struct GetInfoResponse {
     /// The node-status part. Named `node` because `status` is the reply's
     /// [`RpcStatus`], as on every method.
     pub node: Hidden<InfoStatus>,
-    pub peers: Hidden<InfoPeers>,
+    pub peers: Hidden<InfoP2p>,
     /// The host-only part: withheld from every caller but the host's
     /// administrator.
     pub host: Hidden<InfoHost>,
@@ -258,6 +290,15 @@ pub enum GetInfoShapeError {
     /// part. A shown part names the build, so an empty one is not an
     /// answer and is not read as "undisclosed" (RK-D23).
     EmptyVersion,
+    /// `"p2p": "off"` arrived with a count. Off carries none: a zero beside
+    /// it would be a count nobody took.
+    CountWhileP2pOff { key: &'static str },
+    /// A Peers count arrived without `p2p`, which says what the counts are
+    /// of.
+    CountWithoutP2p { key: &'static str },
+    /// `p2p` disagrees with Health's `offline`: both read the daemon's
+    /// configuration, so they cannot differ.
+    P2pDisagreesWithOffline { offline: bool },
 }
 
 impl core::fmt::Display for GetInfoShapeError {
@@ -271,6 +312,18 @@ impl core::fmt::Display for GetInfoShapeError {
             Self::EmptyVersion => f.write_str(
                 "the status part carries an empty `version`: a shown part names the build, \
                  and a reply that does not disclose it withholds the part",
+            ),
+            Self::CountWhileP2pOff { key } => write!(
+                f,
+                "`p2p` is off and `{key}` arrived: a daemon with P2P off reports no count"
+            ),
+            Self::CountWithoutP2p { key } => write!(
+                f,
+                "`{key}` arrived without `p2p`: the Peers part says first whether P2P runs"
+            ),
+            Self::P2pDisagreesWithOffline { offline } => write!(
+                f,
+                "`p2p` disagrees with `offline: {offline}`: both are the daemon's configuration"
             ),
         }
     }
@@ -354,6 +407,8 @@ struct GetInfoWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tor_outgoing_socket_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    p2p: Option<P2pWire>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     white_peerlist_size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grey_peerlist_size: Option<u64>,
@@ -363,6 +418,14 @@ struct GetInfoWire {
     tx_pool_unbroadcast_count: Option<u64>,
 
     restricted: bool,
+}
+
+/// `p2p` on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum P2pWire {
+    On,
+    Off,
 }
 
 /// Build a hidden part from its keys: all of them, or none.
@@ -428,6 +491,7 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
             public_outgoing_socket_count,
             tor_incoming_socket_count,
             tor_outgoing_socket_count,
+            p2p,
             white_peerlist_size,
             grey_peerlist_size,
             tx_pool_unbroadcast_count,
@@ -460,25 +524,49 @@ impl TryFrom<GetInfoWire> for GetInfoResponse {
         if node.shown().is_some_and(|status| status.version.is_empty()) {
             return Err(GetInfoShapeError::EmptyVersion);
         }
-        let peers = hidden_part!(
-            "peers",
-            [
-                public_incoming_socket_count,
-                public_outgoing_socket_count,
-                tor_incoming_socket_count,
-                tor_outgoing_socket_count,
-                white_peerlist_size,
-                grey_peerlist_size,
-            ],
-            InfoPeers {
-                public_incoming_socket_count,
-                public_outgoing_socket_count,
-                tor_incoming_socket_count,
-                tor_outgoing_socket_count,
-                white_peerlist_size,
-                grey_peerlist_size,
+        let counts = [
+            ("public_incoming_socket_count", public_incoming_socket_count),
+            ("public_outgoing_socket_count", public_outgoing_socket_count),
+            ("tor_incoming_socket_count", tor_incoming_socket_count),
+            ("tor_outgoing_socket_count", tor_outgoing_socket_count),
+            ("white_peerlist_size", white_peerlist_size),
+            ("grey_peerlist_size", grey_peerlist_size),
+        ];
+        let first_count = counts.iter().find(|(_, v)| v.is_some()).map(|(k, _)| *k);
+        let peers = match p2p {
+            None => match first_count {
+                None => Hidden::Withheld,
+                Some(key) => return Err(GetInfoShapeError::CountWithoutP2p { key }),
+            },
+            Some(P2pWire::Off) => match first_count {
+                None => Hidden::Shown(InfoP2p::Off),
+                Some(key) => return Err(GetInfoShapeError::CountWhileP2pOff { key }),
+            },
+            Some(P2pWire::On) => {
+                let mut values = [0u64; 6];
+                for (slot, (key, value)) in values.iter_mut().zip(counts) {
+                    *slot = value.ok_or(GetInfoShapeError::PartialPart {
+                        part: "peers",
+                        missing: key,
+                    })?;
+                }
+                let [public_incoming_socket_count, public_outgoing_socket_count, tor_incoming_socket_count, tor_outgoing_socket_count, white_peerlist_size, grey_peerlist_size] =
+                    values;
+                Hidden::Shown(InfoP2p::Running(InfoPeers {
+                    public_incoming_socket_count,
+                    public_outgoing_socket_count,
+                    tor_incoming_socket_count,
+                    tor_outgoing_socket_count,
+                    white_peerlist_size,
+                    grey_peerlist_size,
+                }))
             }
-        );
+        };
+        if let Hidden::Shown(state) = &peers {
+            if matches!(state, InfoP2p::Off) != offline {
+                return Err(GetInfoShapeError::P2pDisagreesWithOffline { offline });
+            }
+        }
         let host = hidden_part!(
             "host",
             [tx_pool_unbroadcast_count],
@@ -540,7 +628,11 @@ impl From<GetInfoResponse> for GetInfoWire {
             restricted,
         } = reply;
         let node = node.shown().cloned();
-        let peers = peers.shown().cloned();
+        let p2p = peers.shown().map(|state| match state {
+            InfoP2p::Running(_) => P2pWire::On,
+            InfoP2p::Off => P2pWire::Off,
+        });
+        let peers = peers.shown().and_then(InfoP2p::running).cloned();
         Self {
             status,
             height: health.height,
@@ -577,6 +669,7 @@ impl From<GetInfoResponse> for GetInfoWire {
             public_outgoing_socket_count: peers.as_ref().map(|p| p.public_outgoing_socket_count),
             tor_incoming_socket_count: peers.as_ref().map(|p| p.tor_incoming_socket_count),
             tor_outgoing_socket_count: peers.as_ref().map(|p| p.tor_outgoing_socket_count),
+            p2p,
             white_peerlist_size: peers.as_ref().map(|p| p.white_peerlist_size),
             grey_peerlist_size: peers.as_ref().map(|p| p.grey_peerlist_size),
             tx_pool_unbroadcast_count: host.shown().map(|h| h.tx_pool_unbroadcast_count),

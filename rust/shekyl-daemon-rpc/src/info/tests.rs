@@ -17,7 +17,7 @@ use shekyl_types::{BlockHash, ChainCount};
 use shekyl_units::AtomicUnits;
 
 use super::*;
-use crate::info_facts::{InfoChainFacts, InfoPeersFacts, InfoStatusFacts, PoolCounts};
+use crate::info_facts::{InfoChainFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts};
 
 /// The emitter's `tagged_hash`: byte i = (i*7 + tag) & 0xff.
 fn tagged_hash(tag: u8) -> BlockHash {
@@ -41,7 +41,7 @@ pub(crate) struct FakeInfoFacts {
     pub(crate) pool_drops_unbroadcast: bool,
     pub(crate) store_size: u64,
     pub(crate) status: InfoStatusFacts,
-    pub(crate) peers: InfoPeersFacts,
+    pub(crate) peers: PeerFacts,
     pub(crate) sessions: SessionCounts,
     pub(crate) sessions_fault: Option<FactsFault>,
     pub(crate) sessions_reads: AtomicUsize,
@@ -94,14 +94,14 @@ pub(crate) fn synced_facts() -> FakeInfoFacts {
             alt_blocks_count: 3,
             version: "3.1.0-oracle".to_owned(),
         },
-        peers: InfoPeersFacts {
+        peers: PeerFacts::Running(InfoPeersFacts {
             public_incoming_sockets: 13,
             public_outgoing_sockets: 10,
             tor_incoming_sockets: 4,
             tor_outgoing_sockets: 2,
             white_peerlist_size: 500,
             grey_peerlist_size: 2500,
-        },
+        }),
         chain_fault: None,
         pool_fault: None,
         store_size_fault: None,
@@ -150,7 +150,7 @@ impl InfoFacts for FakeInfoFacts {
             .map_or_else(|| Ok(self.status.clone()), Err)
     }
 
-    fn peers(&self) -> Result<InfoPeersFacts, FactsFault> {
+    fn peers(&self) -> Result<PeerFacts, FactsFault> {
         self.peers_reads.fetch_add(1, Ordering::Relaxed);
         self.peers_fault.map_or(Ok(self.peers), Err)
     }
@@ -183,7 +183,7 @@ fn synced_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&synced_facts(), Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v7.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_synced_v8.json"
         ))
     );
 }
@@ -223,7 +223,7 @@ fn syncing_reproduces_the_oracle_vector() {
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v6.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_syncing_v7.json"
         ))
     );
 }
@@ -234,16 +234,71 @@ fn peerless_startup_reproduces_the_oracle_vector() {
     facts.chain.synchronized = false;
     facts.chain.core_target_height = None;
     facts.sessions = SessionCounts::NONE;
-    facts.peers.public_incoming_sockets = 0;
-    facts.peers.public_outgoing_sockets = 0;
-    facts.peers.tor_incoming_sockets = 0;
-    facts.peers.tor_outgoing_sockets = 0;
+    let PeerFacts::Running(peers) = &mut facts.peers else {
+        unreachable!("the fixture's P2P runs")
+    };
+    peers.public_incoming_sockets = 0;
+    peers.public_outgoing_sockets = 0;
+    peers.tor_incoming_sockets = 0;
+    peers.tor_outgoing_sockets = 0;
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
-            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v7.json"
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_peerless_startup_v8.json"
         ))
     );
+}
+
+/// **A daemon started with P2P off reports the state, never a zero**
+/// (Rick, 2026-10-14). The Peers part is `"p2p": "off"` with no count,
+/// Health's `offline` agrees, and the board is not read.
+#[test]
+fn offline_reproduces_the_offline_vector() {
+    let mut facts = synced_facts();
+    facts.chain.synchronized = false;
+    facts.chain.core_target_height = None;
+    facts.chain.offline = true;
+    facts.peers = PeerFacts::Off;
+    facts.sessions_fault = Some(FactsFault::NullHandle);
+    facts.peers = PeerFacts::Off;
+    assert_eq!(
+        ours(&facts, Disclosure::FULL),
+        oracle(include_str!(
+            "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_offline_v1.json"
+        ))
+    );
+    assert_eq!(facts.sessions_reads.load(Ordering::Relaxed), 0);
+}
+
+/// The P2P state and the core's `offline` flag are one configuration read
+/// twice. A reply where they disagree is refused, in both directions: the
+/// handler does not pick one.
+#[test]
+fn a_p2p_state_that_disagrees_with_offline_refuses() {
+    let mut off_but_online = synced_facts();
+    off_but_online.peers = PeerFacts::Off;
+    assert!(matches!(
+        get_info(&off_but_online, Disclosure::FULL, 0),
+        Err(RpcFault::Facts(FactsFault::Inconsistent))
+    ));
+    let mut running_but_offline = synced_facts();
+    running_but_offline.chain.offline = true;
+    assert!(matches!(
+        get_info(&running_but_offline, Disclosure::FULL, 0),
+        Err(RpcFault::Facts(FactsFault::Inconsistent))
+    ));
+}
+
+/// An online daemon with no peer lists is a fault, not a Peers part of
+/// zeros: the facts layer's `NullHandle` refuses the reply.
+#[test]
+fn an_online_daemon_with_no_peer_lists_refuses() {
+    let mut facts = synced_facts();
+    facts.peers_fault = Some(FactsFault::NullHandle);
+    assert!(matches!(
+        get_info(&facts, Disclosure::FULL, 0),
+        Err(RpcFault::Facts(FactsFault::NullHandle))
+    ));
 }
 
 /// The same facts as the synced case, asked by a restricted caller:
@@ -374,8 +429,11 @@ fn has_peers_is_a_handshaken_session_and_nothing_else() {
 
     // No socket counted, one handshaken session: a peer.
     let mut facts = synced_facts();
-    facts.peers.public_incoming_sockets = 0;
-    facts.peers.public_outgoing_sockets = 0;
+    let PeerFacts::Running(peers) = &mut facts.peers else {
+        unreachable!("the fixture's P2P runs")
+    };
+    peers.public_incoming_sockets = 0;
+    peers.public_outgoing_sockets = 0;
     facts.sessions = SessionCounts {
         outbound: 1,
         inbound: 0,
@@ -441,6 +499,9 @@ fn has_peers_is_exactly_a_nonzero_connection_count_wherever_status_is_shown() {
         ] {
             let mut facts = synced_facts();
             facts.chain.offline = offline;
+            if offline {
+                facts.peers = PeerFacts::Off;
+            }
             facts.sessions = SessionCounts { outbound, inbound };
             let reply = get_info(&facts, Disclosure::FULL, 0).expect("a full caller");
             let status = reply.node.shown().expect("a full caller is shown Status");
@@ -470,6 +531,7 @@ fn has_peers_and_the_connection_counts_are_one_board_read() {
 fn an_offline_node_reports_zero_connections_without_reading_the_board() {
     let mut facts = synced_facts();
     facts.chain.offline = true;
+    facts.peers = PeerFacts::Off;
     facts.sessions_fault = Some(FactsFault::HubAbsent);
     let reply = ours(&facts, Disclosure::FULL);
     assert_eq!(reply["outgoing_connections_count"], 0);
@@ -512,6 +574,7 @@ fn an_offline_node_has_no_peers_and_the_board_is_not_read() {
         for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
             let mut facts = synced_facts();
             facts.chain.offline = true;
+            facts.peers = PeerFacts::Off;
             facts.sessions_fault = fault;
             let reply = serde_json::to_value(
                 get_info(&facts, disclosure, 0).expect("an offline node answers"),
@@ -811,7 +874,7 @@ fn a_restricted_reply_withholds_status_and_peers() {
     )
     .expect("the reply serializes");
     let full_members = full.as_object_mut().expect("a reply is an object");
-    for key in STATUS_KEYS.iter().chain(PEERS_KEYS.iter()) {
+    for key in STATUS_KEYS.iter().chain(PEERS_KEYS.iter()).chain(&["p2p"]) {
         assert!(
             full_members.remove(*key).is_some(),
             "a full reply carries `{key}`"

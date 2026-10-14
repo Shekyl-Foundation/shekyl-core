@@ -32,6 +32,10 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
                 // `difficulty`, which is a wrong number past 2^64.
                 "wide_difficulty": HexU128(info.chain.difficulty),
                 "tx_count": info.chain.tx_count,
+                // Whether the daemon runs P2P at all: its configuration,
+                // told to every caller. The reply's decoder holds it equal
+                // to the Peers part's state (Rick, 2026-10-14).
+                "p2p": if info.health.offline { "off" } else { "on" },
             });
             // Status is wholly shown or wholly absent, and a restricted
             // daemon withholds it. A withheld part is not a zero, so the
@@ -94,6 +98,11 @@ fn difficulty_line(val: &Value) -> String {
 /// key absent is a withheld Status part: a zero would claim the node has
 /// no connections, which is a different fact.
 fn connections_line(val: &Value) -> String {
+    if p2p_is_off(val) {
+        // A daemon started with P2P off has no connections by configuration;
+        // its state is the line, not a count of zero.
+        return "  P2P:          off".to_owned();
+    }
     match (
         val.get("outgoing_connections_count")
             .and_then(Value::as_u64),
@@ -105,6 +114,11 @@ fn connections_line(val: &Value) -> String {
         }
         _ => "  Connections:  not disclosed".to_owned(),
     }
+}
+
+/// Whether the daemon said it runs with P2P off.
+fn p2p_is_off(val: &Value) -> bool {
+    val.get("p2p").and_then(Value::as_str) == Some("off")
 }
 
 /// A line for one of the chain's counts: the label, then the number.
@@ -471,6 +485,30 @@ mod tests {
                 "incoming_connections_count": 1,
             })),
             "  Connections:  3 out / 1 in"
+        );
+    }
+
+    /// **A daemon started with P2P off prints that state** (Rick,
+    /// 2026-10-14): "P2P: off", not "0 out / 0 in", even though its Status
+    /// part carries two zeros.
+    #[test]
+    fn a_daemon_with_p2p_off_prints_the_state_not_a_zero() {
+        assert_eq!(
+            connections_line(&json!({
+                "p2p": "off",
+                "outgoing_connections_count": 0,
+                "incoming_connections_count": 0,
+            })),
+            "  P2P:          off"
+        );
+        assert_eq!(
+            connections_line(&json!({
+                "p2p": "on",
+                "outgoing_connections_count": 0,
+                "incoming_connections_count": 0,
+            })),
+            "  Connections:  0 out / 0 in",
+            "a running node with no connections is a count"
         );
     }
 }

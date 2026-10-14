@@ -178,8 +178,11 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// invariant. 3.52 its duplicate wire names retire. 3.53 its
 /// amounts are decimal strings. 3.54 it stops repeating the network. 3.55
 /// `get_peer_list` entries lose `last_seen`: the Rust peer lists carry no
-/// clock, and the listing is read from them.
-pub const CORE_RPC_VERSION_MINOR: u32 = 55;
+/// clock, and the listing is read from them. 3.56 a daemon started with P2P
+/// off reports that state: `get_info`'s Peers part is `"p2p": "off"` with
+/// no count (and `"p2p": "on"` with its counts), and `get_peer_list`,
+/// `get_connections` and `sync_info` answer `P2P_OFF` alone.
+pub const CORE_RPC_VERSION_MINOR: u32 = 56;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -205,6 +208,10 @@ impl RpcStatus {
     pub const OK: &'static str = "OK";
     /// `"BUSY"` — the core is not ready to answer.
     pub const BUSY: &'static str = "BUSY";
+    /// `"P2P_OFF"` — the daemon was started with P2P off (`--offline`), so
+    /// a method about peers or connections has nothing to report: a state,
+    /// never an empty list (Rick, 2026-10-14; 3.56).
+    pub const P2P_OFF: &'static str = "P2P_OFF";
 
     /// The success status.
     #[must_use]
@@ -216,6 +223,18 @@ impl RpcStatus {
     #[must_use]
     pub fn is_ok(&self) -> bool {
         self.0 == Self::OK
+    }
+
+    /// The status of a reply from a daemon started with P2P off.
+    #[must_use]
+    pub fn p2p_off() -> Self {
+        Self(Self::P2P_OFF.to_owned())
+    }
+
+    /// Whether the daemon answered that P2P is off.
+    #[must_use]
+    pub fn is_p2p_off(&self) -> bool {
+        self.0 == Self::P2P_OFF
     }
 }
 
@@ -572,10 +591,11 @@ mod tests {
         // 3.53 writes `get_info`'s amounts as decimal strings.
         // 3.54 retires the network's four names from `get_info`. 3.55 drops
         // `last_seen` from `get_peer_list`: the Rust lists carry no clock.
-        assert_eq!(CORE_RPC_VERSION, 196_663);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 55);
+        // 3.56 reports P2P off as a state, never a zero.
+        assert_eq!(CORE_RPC_VERSION, 196_664);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 56);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 55);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 56);
     }
 
     #[test]
