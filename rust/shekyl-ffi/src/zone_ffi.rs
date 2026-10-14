@@ -274,6 +274,13 @@ fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, (
     let process = crate::seam_ffi::process_clock();
     let clock = MonotonicClock::clone(&process);
     node_gate().install_clock(Arc::new(move || process.now().get()));
+    if spans::MEASUREMENT_SPANS {
+        tracing::warn!(
+            tor_dial_within_ns = spans::TOR_DIAL_WITHIN_NANOS,
+            tor_gap_within_ns = spans::TOR_GAP_WITHIN_NANOS,
+            "measurement build: the Tor dial and gap deadlines are lifted; not a release"
+        );
+    }
     let engine = EngineService::start(clock);
     let engine_handle = engine.handle();
     spawn_lateness_report(engine_handle.clone());

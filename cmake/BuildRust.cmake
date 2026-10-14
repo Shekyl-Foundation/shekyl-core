@@ -312,11 +312,23 @@ else()
     set(SHEKYL_DAEMON_IMAGE_LIBRARY "${RUST_BUILD_DIR}/libshekyl_daemon_image.a")
 endif()
 
+# The cold-first-contact measurement build only (Rick, 2026-10-14): the
+# Tor dial and gap deadlines lifted to 120 s. Never on in a release build;
+# scripts/ci/check_measurement_spans.py fails any release path that sets it.
+option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor dial and gap deadlines to 120 s" OFF)
+set(_measurement_features "")
+if(SHEKYL_MEASUREMENT_SPANS)
+    # Selecting the crate as well lets the command line name its feature;
+    # cargo unifies it into the daemon image's graph.
+    set(_measurement_features -p shekyl-transport-layer --features shekyl-transport-layer/measurement-spans)
+    message(WARNING "SHEKYL_MEASUREMENT_SPANS is ON: this daemon is a measurement build, not a release")
+endif()
+
 add_custom_command(
     OUTPUT ${SHEKYL_DAEMON_IMAGE_LIBRARY}
     COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
         ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-        -p shekyl-daemon-image
+        -p shekyl-daemon-image ${_measurement_features}
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
     DEPENDS ${_shekyl_rust_deps}
     COMMENT "${_rust_comment} (shekyl-daemon-image: shekyl-ffi + shekyl-daemon-rpc)"

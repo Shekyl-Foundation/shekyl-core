@@ -38,9 +38,28 @@ pub const CLEARNET_HANDSHAKE_WITHIN_NANOS: u64 = 1_426_000_000;
 /// Clearnet gap: the longest silence a session keeps.
 pub const CLEARNET_GAP_WITHIN_NANOS: u64 = 1_430_000_000;
 /// Tor connect through the SOCKS proxy; also the proxied clearnet dial.
+#[cfg(not(feature = "measurement-spans"))]
 pub const TOR_DIAL_WITHIN_NANOS: u64 = 9_100_000_000;
 /// Tor gap: the longest silence a session keeps.
+#[cfg(not(feature = "measurement-spans"))]
 pub const TOR_GAP_WITHIN_NANOS: u64 = 2_600_000_000;
+
+/// Whether this build lifts the Tor spans for the cold-first-contact
+/// measurement (Rick, 2026-10-14). The zone host logs a warning at start
+/// when it does.
+pub const MEASUREMENT_SPANS: bool = cfg!(feature = "measurement-spans");
+/// The measurement build's Tor dial and gap: 120 s, far past every cold
+/// contact seen (run A's longest dial was censored at 9.1 s), so the
+/// distribution is read rather than cut. A harness input, not a derived
+/// span.
+#[cfg(feature = "measurement-spans")]
+pub const MEASUREMENT_SPAN_NANOS: u64 = 120_000_000_000;
+/// Tor connect, measurement build.
+#[cfg(feature = "measurement-spans")]
+pub const TOR_DIAL_WITHIN_NANOS: u64 = MEASUREMENT_SPAN_NANOS;
+/// Tor gap, measurement build.
+#[cfg(feature = "measurement-spans")]
+pub const TOR_GAP_WITHIN_NANOS: u64 = MEASUREMENT_SPAN_NANOS;
 /// Bytes of session plaintext the writer holds: `LEVIN_DEFAULT_MAX_PACKET_SIZE`.
 pub const SEND_QUEUE_BYTES: u64 = 100_000_000;
 /// The pool's shutdown wait: the longest armed deadline, the Tor dial.

@@ -70,6 +70,16 @@ responder's log, joined by the sample's window, `b_first_read_ns`,
 - `timeout` — the managed tor did not bootstrap within the sample's 120 s;
 - `ProxyRefused:240` — SOCKS reply 0xF0, descriptor not found.
 
+**The rerun's build (ruled 2026-10-14).** The client and both
+responders run a measurement build: CMake's `SHEKYL_MEASUREMENT_SPANS`
+option lifts the Tor dial and gap deadlines to 120 s
+(`shekyl-transport-layer`'s `measurement-spans` feature), so neither
+distribution is cut at the deadline it derives. The daemon logs a
+warning at start when it is one. `scripts/ci/check_measurement_spans.py`
+fails any release path that turns the option on. The rerun also records
+`first_frame_ns` on both sides, the gap's new end, and keeps the data
+directory of any sample whose Tor does not bootstrap.
+
 Raw rows: `p2p_tor_gap_cold_20261014_runA.tsv`,
 `p2p_tor_gap_cold_20261014_runB.tsv`. Percentiles are the nearest-rank
 `ceil(p × n)`.
