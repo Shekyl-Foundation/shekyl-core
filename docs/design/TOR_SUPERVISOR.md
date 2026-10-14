@@ -59,16 +59,16 @@ controller" (control-spec, *Commands*, `TAKEOWNERSHIP`).
 
 | Id | Finding | Anchor |
 | --- | --- | --- |
-| **TSV-1** | **Health is one bootstrap poll.** Readiness is `GETINFO status/bootstrap-phase` every 500 ms until `Ready`, then nothing. No production code issues `SETEVENTS`; the daemon passes `EventSink::unsubscribed()`, whose own doc says the first production `SETEVENTS` must replace it | `control/bootstrap.rs:10-11`; `control/actor.rs:211-239`, `:668`, `:1117-1153`; `shekyl-tor-control-daemon/src/ephemeral.rs:253` |
-| **TSV-2** | **Death is seen only as the control connection ending.** There is no watcher on the child after spawn: `child.wait()` runs in the spawn race and inside shutdown only. A Tor that wedges with its control socket open is not seen at all | `control/actor.rs:1011`, `:616`, `:1260-1266`, `:1306-1313` |
-| **TSV-3** | **The one death notice is filtered out at the default log level.** `check_ephemeral_tor_liveness` polls every 60 s and on the death edge writes one `MERROR` under `net.p2p`; the default filter is `net.p2p:FATAL` | `src/p2p/net_node.inl:71`, `:2297-2315`; `net_node.h:756`; `contrib/epee/src/mlog.cpp:127` |
-| **TSV-4** | **The no-respawn premise is half gone.** `lib.rs:40-46` forbids respawn because "the C++ consumer's zone/proxy configuration is init-time static". The Rust dial path already reads the SOCKS address per dial from `Host.tor_proxy`; only its writer is init-time. The C++ copy `zone.m_proxy_address` is static and leaves with the daemon-configuration cutover | `rust/shekyl-ffi/src/zone_ffi.rs` lines 63 and 172-178 (#1056); `src/p2p/net_node.inl:979` |
-| **TSV-5** | **The launch names no owner, and its argument surface is closed by a test.** `TAKEOWNERSHIP` is sent after `AUTHENTICATE`; `__OwningControllerProcess` is not passed, so a daemon that dies between spawn and that command leaves Tor running. `the_managed_launch_surface_is_the_typed_options` pins the argument list; this round widens it on purpose (§3.8), and the test is edited in the same change | `control/actor.rs:854-861`, `:874-954`, `:1485-1497` |
-| **TSV-6** | **Teardown today is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, then a synchronous wipe, and it is slow.** `REAP_TIMEOUT` (15 s) bounds the graceful stop and reap only; `kill()` and the wipe are unbounded. PR-3's rig measured the managed Tor's teardown at p50 0.1 s, p90 20.5 s, max 54.9 s over 99 stops, with the dialer redialling through the dying proxy (up to 56 `LocalClose` dials in one stop) | `control/actor.rs:611-632`, `:783-798`; `ephemeral.rs:66`, `:395-415`; `data_dir.rs`; `docs/FOLLOWUPS.md` line 1035 (#1056) |
-| **TSV-7** | **The wallet already has the supervisor's shape.** A plain owned task: spawn, await death or shutdown, classify, publish posture on a `watch`, back off, respawn, never give up; every spawn re-runs the pin gate; `SocksPort auto` and a fresh `GETINFO net/listeners/socks` per incarnation. Its defaults: 1 s base, 60 s cap, `Degraded` after 5 failures, 600 s of `Ready` resets the count. PWD-E9 forbids sharing the supervisor *instance* or its state with the daemon; library reuse is allowed | `shekyl-tor-control-wallet/src/service.rs:289-303`, `:541-648`; SP-T0 §3c (`:572-656`); PWD-E9 `:756` |
+| **TSV-1** | **Health is one bootstrap poll.** Readiness is `GETINFO status/bootstrap-phase` every 500 ms until `Ready`, then nothing. No production code issues `SETEVENTS`; the daemon passes `EventSink::unsubscribed()`, whose own doc says the first production `SETEVENTS` must replace it | `rust/shekyl-tor-control-client/src/control/bootstrap.rs:10-11`; `rust/shekyl-tor-control-client/src/control/actor.rs:211-239`, `:668`, `:1117-1153`; `rust/shekyl-tor-control-daemon/src/ephemeral.rs:253` |
+| **TSV-2** | **Death is seen only as the control connection ending.** There is no watcher on the child after spawn: `child.wait()` runs in the spawn race and inside shutdown only. A Tor that wedges with its control socket open is not seen at all | `rust/shekyl-tor-control-client/src/control/actor.rs:1011`, `:616`, `:1260-1266`, `:1306-1313` |
+| **TSV-3** | **The one death notice is filtered out at the default log level.** `check_ephemeral_tor_liveness` polls every 60 s and on the death edge writes one `MERROR` under `net.p2p`; the default filter is `net.p2p:FATAL` | `src/p2p/net_node.inl:71`, `:2297-2315`; `src/p2p/net_node.h:756`; `contrib/epee/src/mlog.cpp:127` |
+| **TSV-4** | **The no-respawn premise is half gone.** `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` forbids respawn because "the C++ consumer's zone/proxy configuration is init-time static". The Rust dial path already reads the SOCKS address per dial from `Host.tor_proxy`; only its writer is init-time. The C++ copy `zone.m_proxy_address` is static and leaves with the daemon-configuration cutover | `rust/shekyl-ffi/src/zone_ffi.rs` lines 63 and 172-178 (#1056); `src/p2p/net_node.inl:979` |
+| **TSV-5** | **The launch names no owner, and its argument surface is closed by a test.** `TAKEOWNERSHIP` is sent after `AUTHENTICATE`; `__OwningControllerProcess` is not passed, so a daemon that dies between spawn and that command leaves Tor running. `the_managed_launch_surface_is_the_typed_options` pins the argument list; this round widens it on purpose (§3.8), and the test is edited in the same change | `rust/shekyl-tor-control-client/src/control/actor.rs:854-861`, `:874-954`, `:1485-1497` |
+| **TSV-6** | **Teardown today is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, then a synchronous wipe, and it is slow.** `REAP_TIMEOUT` (15 s) bounds the graceful stop and reap only; `kill()` and the wipe are unbounded. PR-3's rig measured the managed Tor's teardown at p50 0.1 s, p90 20.5 s, max 54.9 s over 99 stops, with the dialer redialling through the dying proxy (up to 56 `LocalClose` dials in one stop) | `rust/shekyl-tor-control-client/src/control/actor.rs:611-632`, `:783-798`; `rust/shekyl-tor-control-daemon/src/ephemeral.rs:66`, `:395-415`; `data_dir.rs`; `docs/FOLLOWUPS.md` line 1035 (#1056) |
+| **TSV-7** | **The wallet already has the supervisor's shape.** A plain owned task: spawn, await death or shutdown, classify, publish posture on a `watch`, back off, respawn, never give up; every spawn re-runs the pin gate; `SocksPort auto` and a fresh `GETINFO net/listeners/socks` per incarnation. Its defaults: 1 s base, 60 s cap, `Degraded` after 5 failures, 600 s of `Ready` resets the count. PWD-E9 forbids sharing the supervisor *instance* or its state with the daemon; library reuse is allowed | `rust/shekyl-tor-control-wallet/src/service.rs:289-303`, `:541-648`; SP-T0 §3c (`:572-656`); PWD-E9 `:756` |
 | **TSV-8** | **Cold starts fail and cold dials are slow, measured.** PR-3's run A (x86 client on the measurement host, fresh data directory per sample, pinned 15.0.24 bundle): 5 of 100 managed Tors did not bootstrap within 120 s, and the daemon log said nothing; Tor dial start to SOCKS success p50 4.51 s, p99 8.47 s over the 66 sessions, and 26 of 100 cold dials exceeded the 9.1 s dial deadline. Censored at both ends; not floor-device figures | `docs/benchmarks/p2p_tor_gap_cold_20261014.md` (#1056) (run A); `docs/FOLLOWUPS.md` line 1038 (#1056) |
 | **TSV-9** | **The daemon cannot reap its own children while `tools::spawn` ignores `SIGCHLD`.** `signal(SIGCHLD, SIG_IGN)` makes the kernel reap every child, the managed Tor included: tokio's wait fails with `ECHILD` on Linux and never completes on macOS and FreeBSD. Respawn depends on reaping; DC-F12's fix ("the Rust runner reaps its own children and never changes a signal disposition") is a prerequisite of this round's implementation | `docs/design/DAEMON_CONFIG_CUTOVER.md` line 800 (#1066) (DC-F12) |
-| **TSV-10** | **Windows and macOS have no managed Tor yet.** Both are `unavailable` with `"pending": "TB-11"` in `config/tor_pins.json` until each has a launch test. §9's matrix on those platforms needs TB-11's pins adopted first | `TOR_BUNDLE_DISTRIBUTION.md` TB-11, §5 step 2 |
+| **TSV-10** | **Windows and macOS have no managed Tor yet.** Both are `unavailable` with `"pending": "TB-11"` in `config/tor_pins.json` until each has a launch test. The digests are already verified (`TOR_BUNDLE_DISTRIBUTION.md` §4); §9's cases on those platforms **are** TB-11's launch tests, so the change whose Windows job passes them adopts the Windows pin and removes its `pending` marker, and the same for macOS once a macOS job exists | `TOR_BUNDLE_DISTRIBUTION.md` TB-11, §5 step 2 |
 | **TSV-11** | **`get_info` carries no Tor fact.** `InfoHealth` has no Tor field; the per-connector Tor socket counts are `peers`-grant facts | `rust/shekyl-rpc-types/src/info.rs:97-122`, `:214-220` |
 | **TSV-12** | **The only dialer lever is the per-connector target, and the owner loop lives as long as the dialer.** `set_target(0)` is legal and dials nothing; `claim_owner` refuses a second loop. A pause and resume therefore changes the target and the proxy slot, and never restarts the loop. A closed SOCKS port is `LocalClose`, which by design does not implicate the address and does not back off | `rust/shekyl-dialer/src/owner.rs` lines 226-232 and 258-266 (#1056); `rust/shekyl-tor/src/drive.rs` lines 217-218 (#1056); `rust/shekyl-transport-layer/src/cause.rs` lines 215-218 (#1056) |
 
@@ -100,7 +100,7 @@ into `shekyl-tor-control-client`, which both already name. The task owns:
 - one `watch` channel carrying the state below, which is the only Tor fact any
   other component reads.
 
-The FFI's process singleton (`daemon_tor_ffi.rs:61`) and the C++ liveness poll
+The FFI's process singleton (`rust/shekyl-ffi/src/daemon_tor_ffi.rs:61`) and the C++ liveness poll
 go (§10). Under #1066 the supervisor is started by the Rust `main()` in step 6
 and stopped in step 9; there is no C++ caller.
 
@@ -114,7 +114,7 @@ and stopped in step 9; there is no C++ caller.
 | `Restarting` | attempt, retry in, cause | The incarnation is torn down; the next starts after the delay. The connector is paused |
 
 There is no terminal state. A clean stop ends the task and drops the sender,
-as the wallet's does (`service.rs:88-91`).
+as the wallet's does (`rust/shekyl-tor-control-wallet/src/service.rs:88-91`).
 
 | From | Input | To |
 | --- | --- | --- |
@@ -176,7 +176,7 @@ its own onion through its own SOCKS port, using `shekyl_socks::connect`
 (`rust/shekyl-socks/src/lib.rs:148`) with a fresh isolation principal per
 probe so that every probe builds a fresh rendezvous circuit rather than
 reusing one (`Isolation::Principal`, `:52`; the launch already sets
-`ExtendedErrors`, `actor.rs:900-901`).
+`ExtendedErrors`, `rust/shekyl-tor-control-client/src/control/actor.rs:900-901`).
 
 - **Success** is the SOCKS reply `0x00`. The onion service's side answers the
   client's `BEGIN` only after it has connected to its local target, so success
@@ -235,7 +235,7 @@ volatility measurement now counts respawns as well as restarts.
 1. Close the owning control connection. Tor exits on its close (`TAKEOWNERSHIP`)
    without waiting for circuits; the onion, published without `Detach`, dies
    with it. No `DEL_ONION` and no `SIGTERM`.
-2. Wait for the exit within `SHUTDOWN_GRACE` (`actor.rs:97`, 5 s).
+2. Wait for the exit within `SHUTDOWN_GRACE` (`rust/shekyl-tor-control-client/src/control/actor.rs:97`, 5 s).
 3. If it has not exited, kill it and reap. On Windows the kill is
    `TerminateProcess`.
 4. Rename the `DataDirectory` to a tombstone name in the same parent
@@ -246,7 +246,9 @@ volatility measurement now counts respawns as well as restarts.
    routine returns at step 4: the stop path and the respawn path never wait on
    a recursive delete (TSV-6).
 6. At start, before Tor launches, the sweep removes every `ephemeral-tor-*`
-   entry, tombstones included (`data_dir.rs` already matches the prefix).
+   entry: live names, tombstones and the kept log (§3.10). `data_dir.rs`
+   already matches the prefix but removes with `remove_dir_all` alone, which
+   leaves a file; the sweep removes files as well as directories.
 
 If the rename fails (a scanner holding a file on Windows), the directory stays
 under its live name and the next start's sweep removes it; the failure is
@@ -255,7 +257,7 @@ failed start.
 
 ### 3.8 Launch
 
-The launch adds, to `managed_tor_command` (`actor.rs:874-954`):
+The launch adds, to `managed_tor_command` (`rust/shekyl-tor-control-client/src/control/actor.rs:874-954`):
 
 - `__OwningControllerProcess <daemon pid>`, then after `TAKEOWNERSHIP`,
   `RESETCONF __OwningControllerProcess`, the control specification's recipe.
@@ -266,7 +268,7 @@ The launch adds, to `managed_tor_command` (`actor.rs:874-954`):
 - `MaxMemInQueues <TSV-B10>`, once measured;
 - the file log moved out of the `DataDirectory` (§3.10).
 
-`the_managed_launch_surface_is_the_typed_options` (`actor.rs:1485-1497`) is
+`the_managed_launch_surface_is_the_typed_options` (`rust/shekyl-tor-control-client/src/control/actor.rs:1485-1497`) is
 edited in the same change, so the widening is visible to a reviewer as one
 test diff. `TSV-Q3` poses the specification's other route,
 `__OwningControllerFD`.
@@ -288,7 +290,8 @@ address change, and the next probe confirms it did.
 `NOTICE`, `WARN` and `ERR` arrive over the control connection (§3.4) and go to
 the daemon's log under a `tor` category. Tor's own `SafeLogging` stays at its
 default, so addresses in those lines are scrubbed. Tor's file log moves out of
-the `DataDirectory` to `tor-<incarnation>.log` in the parent, and the routine
+the `DataDirectory` to `ephemeral-tor-<id>.log` in the parent, under the
+sweep's prefix, and the routine
 keeps exactly the previous incarnation's file: a crash loop then keeps the last
 dead incarnation's evidence when the tombstone deletes its directory, and the
 next start's sweep removes it, so no Tor log survives into another boot's run.
@@ -338,9 +341,9 @@ the measurement host is a diagnostic, never the source.
 
 | Bound | What it bounds | Starting point | Measured by |
 | --- | --- | --- | --- |
-| `TSV-B1` | backoff cap | the wallet's 60 s (`service.rs:293`) | fresh-directory bootstrap time on the floor device: a cap shorter than a bootstrap respawns a Tor that was about to succeed |
+| `TSV-B1` | backoff cap | the wallet's 60 s (`rust/shekyl-tor-control-wallet/src/service.rs:293`) | fresh-directory bootstrap time on the floor device: a cap shorter than a bootstrap respawns a Tor that was about to succeed |
 | `TSV-B2` | `Usable` time that resets the attempt count | the wallet's 600 s (`:295`) | the soak's distribution of time between failures |
-| `TSV-B3` | bootstrap bound before `Restarting` | 300 s today (`net_node.inl:892`); 5 of 100 cold starts exceeded 120 s (TSV-8) | 100 cold starts on the floor device, uncensored, data directories kept for the failures |
+| `TSV-B3` | bootstrap bound before `Restarting` | 300 s today (`src/p2p/net_node.inl:892`); 5 of 100 cold starts exceeded 120 s (TSV-8) | 100 cold starts on the floor device, uncensored, data directories kept for the failures |
 | `TSV-B4` | backoff base | the wallet's 1 s (`:292`) | the same run |
 | `TSV-B5` | descriptor-upload failure before `Degraded` | none | `HS_DESC` traces over the soak |
 | `TSV-B6` | probe period, jitter, and failures before `Degraded` | none | the probe's success distribution over the soak; the period is also priced against the floor device's circuit cost |
@@ -382,8 +385,8 @@ draft, and the constants land in the commit that records the measurement.
 - **RPC.** The state is a `health` fact. The cause, "since" and the attempt
   count are `status` facts by RPC_CHANNEL §6.1's line (TSV-F3, `TSV-Q11`); the
   RPC lane names the fields.
-- **Tor bundle (TB).** §9's Windows and macOS cases are TB-11's launch tests;
-  they need TB-11's pins adopted (TSV-10).
+- **Tor bundle (TB).** §9's Windows and macOS cases are TB-11's launch tests:
+  the change that passes them on a platform adopts that platform's pin (TSV-10).
 
 ## 7. Threat-model addenda (rule 26 A3)
 
@@ -397,7 +400,7 @@ draft, and the constants land in the commit that records the measurement.
 
 ## 8. The guard question (brief §2.9)
 
-`ephemeral.rs:80-83` makes the `DataDirectory` unique per boot and wiped "so a
+`rust/shekyl-tor-control-daemon/src/ephemeral.rs:80-83` makes the `DataDirectory` unique per boot and wiped "so a
 restart cannot reuse entry guards", and PWD-E9 (`:826-828`) gives the reason:
 entry guards "cannot join onions". The wallet's Tor persists its guards
 (DQ-T0.7; `WALLET_SIDE_STORE.md:634`). Respawn now multiplies incarnations
@@ -434,7 +437,22 @@ within one boot, and the ruled respawn takes a fresh `DataDirectory` each time.
 objective 1's guard amplification, and costs a linkage that the respawn's
 timing already gives away. It amends the brief's "fresh `DataDirectory`" only
 in what is carried: the directory is new, the guard file inside it is the
-boot's. **Reopen** if a measurement shows a respawn's onions are *not* linkable
+boot's.
+
+*How (b) is carried, and where it is inexact.* Between §3.7's step 3 (the
+reap) and step 4 (the tombstone rename), the routine copies the old
+directory's `state` file into the next incarnation's fresh `DataDirectory`
+before that Tor launches; nothing else crosses. Tor writes `state` on a
+schedule, rarely under the ruled `AvoidDiskWrites 1`, and is expected to write
+it at its own clean exit, which the owning connection's close produces; the
+implementing change asserts that with a test rather than assuming it. A Tor
+killed in step 3, or one that crashed, leaves whatever it last wrote, which
+can predate its current guards; and a first incarnation that dies before its
+first write leaves nothing, so the next draws fresh. (b) is therefore exact on
+a clean teardown and best-effort on a kill or a crash, and every best-effort
+case can add a guard sample that (a) would also have added.
+
+**Reopen** if a measurement shows a respawn's onions are *not* linkable
 by timing (for example, if respawns become rare enough that the gap is longer
 than gossip's horizon), or if Tor's own guard state turns out to hold anything
 beyond guards and build-time statistics (`WALLET_SIDE_STORE.md:634` lists what
@@ -443,8 +461,9 @@ it holds). Posed as `TSV-Q4`.
 ## 9. Acceptance
 
 Each case runs on Linux, Windows and macOS against the supervisor, and asserts
-the announced transitions, the recovery, and the RPC's Tor state. Linux can
-run them today; Windows and macOS need TB-11's pins adopted first (TSV-10). The respawn case is a launch test: it runs in the Windows CI job
+the announced transitions, the recovery, and the RPC's Tor state. On Windows
+and macOS they are TB-11's launch tests (TSV-10): the change whose job passes
+them adopts that platform's pin. The respawn case runs in the Windows CI job
 beside the boot-and-stop smoke test (#1072), and in a macOS job once one exists.
 
 | Case | Expected | Apparatus (per platform, to be built) |
@@ -466,14 +485,14 @@ not an acceptance basis.
 
 | Deleted | Where | Replaced by |
 | --- | --- | --- |
-| The no-respawn disposition and its FFI echo | `shekyl-tor-control-daemon/src/lib.rs:40-46`; `daemon_tor_ffi.rs:320-323` | §3.6 |
-| `DEL_ONION` on stop | `control/actor.rs:783-798` (daemon path; the wallet keeps its own) | §3.7 step 1 |
-| `SIGTERM` in the managed shutdown | `control/actor.rs:611-632` (`request_graceful_stop`) | §3.7 step 1 |
-| The synchronous wipe in teardown and on drop | `ephemeral.rs:395-415`; `data_dir.rs` `wipe`, `Drop` | the tombstone (§3.7 steps 4 to 6) |
-| `EventSink::unsubscribed()` on the daemon path | `ephemeral.rs:253` | §3.4 |
-| The C++ liveness poll and its filtered `MERROR` | `net_node.inl:2292`, `:2297-2315`; `net_node.h:647`, `:756-758` | the state watch and §3.11 |
-| `EPHEMERAL_TOR_BOOTSTRAP_TIMEOUT_SECS` and the start-failure branches | `net_node.inl:892-946` | `TSV-B3`, and §1's "start is iteration one" |
-| The FFI singleton and its start, publish, alive and shutdown exports | `daemon_tor_ffi.rs:61`, `:142-341` | the Rust `main()` owns the supervisor (#1066) |
+| The no-respawn disposition and its FFI echo | `rust/shekyl-tor-control-daemon/src/lib.rs:40-46`; `rust/shekyl-ffi/src/daemon_tor_ffi.rs:320-323` | §3.6 |
+| `DEL_ONION` on stop | `rust/shekyl-tor-control-client/src/control/actor.rs:783-798` (daemon path; the wallet keeps its own) | §3.7 step 1 |
+| `SIGTERM` in the managed shutdown | `rust/shekyl-tor-control-client/src/control/actor.rs:611-632` (`request_graceful_stop`) | §3.7 step 1 |
+| The synchronous wipe in teardown and on drop | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415`; `data_dir.rs` `wipe`, `Drop` | the tombstone (§3.7 steps 4 to 6) |
+| `EventSink::unsubscribed()` on the daemon path | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:253` | §3.4 |
+| The C++ liveness poll and its filtered `MERROR` | `src/p2p/net_node.inl:2292`, `:2297-2315`; `src/p2p/net_node.h:647`, `:756-758` | the state watch and §3.11 |
+| `EPHEMERAL_TOR_BOOTSTRAP_TIMEOUT_SECS` and the start-failure branches | `src/p2p/net_node.inl:892-946` | `TSV-B3`, and §1's "start is iteration one" |
+| The FFI singleton and its start, publish, alive and shutdown exports | `rust/shekyl-ffi/src/daemon_tor_ffi.rs:61`, `:142-341` | the Rust `main()` owns the supervisor (#1066) |
 
 The C++ rows go with #1066's cutover of `net_node` start and stop; the order
 is that round's.
@@ -508,7 +527,14 @@ PWD-E7, PWD-E9, TB-1 to TB-13, SP-T0 §3b, §3c, DQ-T0.6, DQ-T0.7;
 `RPC_CHANNEL.md` §6.1; `INPUT_GRAMMAR.md` IG-6, IG-13, IG-14 and its Tor rows;
 the control specification's `TAKEOWNERSHIP`, `__OwningControllerProcess`,
 `__OwningControllerFD`, Status, `HS_DESC`, `NETWORK_LIVENESS` and `LOG`
-sections. Examined and found nothing to change: the pin gate and TB-7's
+sections. Every rooted code anchor here (`rust/…`, `src/…`) is under
+`check_doc_claims.py`'s dead-citation ratchet; anchors on #1056 and #1066 and
+the continuation forms (`:668`) are not, and these were read by hand at their
+pins: `actor.rs` 97, 211-239, 611-632, 783-798, 854-861, 874-954, 1260-1266,
+1306-1313, 1485-1497; `service.rs` 289-303; `zone_ffi.rs` 63 and 172-178 and
+`owner.rs` 226-232 and 258-266 on #1056; `net_node.inl` 71, 892, 2297-2315;
+`mlog.cpp` 127; #1056's FOLLOWUPS rows 1035 and 1038. Examined and found
+nothing to change: the pin gate and TB-7's
 launch environment (the supervisor re-runs the gate as it stands); the
 `shekyl-socks` client (it already keeps the reply byte the probe classifies
 by). Not examined, and next round's scope: the Windows and macOS process and
