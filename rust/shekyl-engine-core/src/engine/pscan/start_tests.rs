@@ -344,7 +344,9 @@ fn pscan_slot_admits_one_claimant_at_a_time() {
 /// seal is `lifecycle_tests::a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions`.
 #[test]
 fn a_cursor_version_mismatch_is_not_the_file_format() {
-    let path = std::path::PathBuf::from("/home/staker/primary.wallet.pscan");
+    // Sibling of the documented `/home/alice/wallets/primary.wallet` base.
+    // `alice` names nobody; a personal home is not a fixture this repo can publish.
+    let path = std::path::PathBuf::from("/home/alice/wallets/primary.wallet.pscan");
     let stale = super::pscan_load_failure(
         super::WalletFilePScanStoreError::Codec(WalletLedgerError::UnsupportedBlockVersion {
             block: PSCAN_STATE_BLOCK,
@@ -354,8 +356,9 @@ fn a_cursor_version_mismatch_is_not_the_file_format() {
         path.clone(),
     );
     let logged = stale.to_string();
+    let rendered = path.display().to_string();
     assert!(
-        logged.contains("/home/staker/primary.wallet.pscan"),
+        logged.contains(&rendered),
         "the log line carries the seal path: {logged}"
     );
     assert!(

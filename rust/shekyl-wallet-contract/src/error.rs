@@ -2420,15 +2420,18 @@ mod tests {
             PSCAN_STATE_VERSION, PSCAN_STATE_VERSION_KEYLESS_JOIN,
         };
 
-        let path = std::path::PathBuf::from("/home/staker/primary.wallet.pscan");
+        // Sibling of the documented `/home/alice/wallets/primary.wallet` base.
+        // `alice` names nobody; a personal home is not a fixture this repo can publish.
+        let path = std::path::PathBuf::from("/home/alice/wallets/primary.wallet.pscan");
         let engine_err = PScanStartError::StateFileVersionUnsupported {
             path: path.clone(),
             found: PSCAN_STATE_VERSION_KEYLESS_JOIN,
             expected: PSCAN_STATE_VERSION,
         };
         let logged = engine_err.to_string();
+        let rendered = path.display().to_string();
         assert!(
-            logged.contains("/home/staker/primary.wallet.pscan"),
+            logged.contains(&rendered),
             "the log line carries the seal path: {logged}"
         );
         assert!(
@@ -2455,8 +2458,14 @@ mod tests {
                 && message.contains("open the wallet again"),
             "the refusal says what to do: {message}"
         );
+        let directory = path
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .expect("the fixture path has a directory")
+            .display()
+            .to_string();
         assert!(
-            !message.contains("/home/staker"),
+            !message.contains(&directory),
             "the directory stays in the server log: {message}"
         );
 
