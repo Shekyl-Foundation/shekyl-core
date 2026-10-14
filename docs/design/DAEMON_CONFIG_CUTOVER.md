@@ -55,16 +55,14 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
 | DC-Q16 (Rick, 2026-10-14) | One generic set request and one generic show request, carrying the option's name and its value as text in the grammar's syntax, parsed by the table and routed to the row's owner. Show never returns a secret, only that it is set. Both need the admin grant by default; a row may declare itself visible at the view grant, and otherwise the view grant sees nothing. Set accepts only rows marked Runtime and refuses any other with a code saying it is startup-only. Show reports each value's source (`default`, `file`, `cli`, `runtime`). The RPC lane names the methods | §2.7, §6 |
 | DC-Q17 / IG-Q36 (Rick, 2026-10-14; RT-16 ruled 2026-10-13) | `service` is a switch, off by default, command line only (DC-Q18), with the grammar's `reserved` visibility until RT-W14 builds the service-manager dispatcher and public after: `shekyld` answers the platform's service manager (RT-16). It is accepted only where RT-16 defines it, Windows, and refused elsewhere with a typed code. The run mode selects one root, and every default path (`config-file`, `data-dir`, `log-file`) derives from it. On Windows a run-as-user daemon uses the per-account root (`FOLDERID_LocalAppData`) and `service` uses `%ProgramData%\shekyl\`, which only the installer creates (owner and access list: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. Linux and macOS keep the `/etc/shekyl/` config files in every mode (R2). The REJECTED row `run-as-service` keeps its name with a new reason. The name and rows land in #1068; the mechanism, including the deletion of the elevation branch in `daemon_default_data_dir.cpp`, lands here. Both cite RT-16 by document. | §2.2, §2.4, §2.5, §6 |
 | DC-Q18 (Rick, 2026-10-14) | `service` is command-line only (IG-7): the run mode selects the file, so a key in that file could only restate or contradict it, and on Windows the installer's service registration carries the command line. A `service` key in the file is refused. Only the grammar row's Surface cell changes | §2.4, §6 |
-| Runtime requests and disclosure (Rick, 2026-10-14, with [`RPC_CHANNEL.md`](RPC_CHANNEL.md) §6.4, RT-O23…RT-O27, PR #1073) | (1) IG-9's `view` field becomes the row's disclosing grant: `health`, `status`, `peers` or `config`, default `config`; `log-level`, `log-category` and the three P2P rate and cap rows are `status`. (2) Every runtime row's default is writable as a value: `p2p-inbound-max` takes `none` (no operator cap) and `log-category` takes `none` (no per-category overrides); an empty category list never means logging off. (3) `/pop_blocks` has no grammar successor; it is an armed test lever (RT-O9.2), RT-W10's. §6.4: the requests are `option_set` and `option_show`, JSON-RPC methods only; `option_set` is in the `node` grant, which is setting every runtime row; set is all or nothing over infallible applies; a secret row carries `secret: true` and `set`, never a value; refusals carry the IG-11 diagnostics in the error's `data` member under one new code; one lock over a set, one audit line per set | §2.7, §4.2 |
+| Runtime requests and disclosure (Rick, 2026-10-14, with [`RPC_CHANNEL.md`](RPC_CHANNEL.md) §6.4, RT-O23…RT-O27, PR #1073) | (1) IG-9's `view` field becomes the row's disclosing grant: `health`, `status`, `peers` or `config`, default `config`; `log-level`, `log-category` and the two P2P rate rows are `status`. (2) Every runtime row's default is writable as a value: a rate takes `unlimited` and `log-category` takes `none` (no per-category overrides); an empty category list never means logging off. (3) `/pop_blocks` has no grammar successor; it is an armed test lever (RT-O9.2), RT-W10's. §6.4: the requests are `option_set` and `option_show`, JSON-RPC methods only; `option_set` is in the `node` grant, which is setting every runtime row; set is all or nothing over infallible applies; a secret row carries `secret: true` and `set`, never a value; refusals carry the IG-11 diagnostics in the error's `data` member under one new code; one lock over a set, one audit line per set | §2.7, §4.2 |
 | RT-W14's start reporting (Rick, 2026-10-14) | Under the SCM the Rust entry reports `SERVICE_START_PENDING` with checkpoints and wait hints through steps 2 to 8 of §2.2, and `SERVICE_RUNNING` only when RT-15's rendezvous is published. Without it the SCM's start timeout of about 30 seconds kills the service (error 1053): the managed Tor's bootstrap alone may take 300 seconds ([`src/p2p/net_node.inl:892`](../../src/p2p/net_node.inl)) | §2.2 |
+| Inbound cap deleted (Rick, 2026-10-14; `INPUT_GRAMMAR.md` IG-Q40) | `p2p-inbound-max` is deleted and `in-peers` is a REJECTED row (IG-10) whose reopener is a byte quota for metered links (§8). The Rust descriptor safety bound (`InboundCeiling`) is the only inbound bound and is unchanged; the daemon does not raise its own descriptor limit. The unbounded cases (Windows, an unlimited or unreadable limit, an unreadable count, headroom past the counter) behave as today and stay PWD-B1's (the FOLLOWUPS row on a Windows node's inbound bound); their warnings name nothing the operator can set. Adversarial per-session cost stays with PWD-B12 and PWD-B1. The runtime set is four rows, and a set builds then applies, with no check step (§2.7). A refused inbound connection is tested against the real bound, on Unix only (§5.2). The benchmark scripts take `clearnet-listen none` and the Foundation configurations in `shekyl-dev` drop `in-peers` in the cutover (§5.1). PWD-I7 closes with this ruling | §2.7, §4.2, §5, §6, §8 |
 
 ### 1.2 Open before implementation
 
 - **PR-3 (#1056) merging.** The brief stays a draft until then (Rick,
   2026-10-14); its branch citations are re-pinned to the merged lines then.
-- **#1073 and #1074 merging** put on `dev` the text this brief already
-  cites: `RPC_CHANNEL.md` §6.4 (the runtime requests) and the grammar's
-  Grant column, IG-12 and IG-Q39. Both are ruled; no design waits on them.
 
 ---
 
@@ -330,43 +328,30 @@ supplies, with no FFI (RT-O26):
   one refusal refuses the request and every refusal in it is reported. A
   duplicate name, an unknown name and an empty list are refused. It accepts
   only a row marked runtime (`p2p-upload-max`, `p2p-download-max`,
-  `p2p-inbound-max`, `log-level`, `log-category`) and refuses any other
+  `log-level`, `log-category`) and refuses any other
   with the startup-only code. It is in the `node` grant (RT-O24); until
   RT-W10 it joins `RESTRICTED_METHODS`
   ([`rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs:49`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs)),
   so the view listener refuses it. It never writes the config file.
-- **Build, check, apply: all or nothing under one lock** (Rick, 2026-10-14).
-  A value can be refused for two reasons: its own invariants, and the
-  owner's live state. `p2p-inbound-max` has both: its value must be at
-  least 1, and it must not exceed the descriptor ceiling, which is runtime
-  state
-  ([`src/p2p/net_node.inl:3229`](../../src/p2p/net_node.inl);
-  `InboundCeiling::resolve(snapshot, reserved, inbound_held)`,
-  [`rust/shekyl-peer-policy/src/inbound_ceiling.rs:98`](../../rust/shekyl-peer-policy/src/inbound_ceiling.rs)).
-  So a set runs three steps under its one lock:
-  1. **build**: every value through its constructor, value-only
-     invariants;
-  2. **check**: each owner tests its built value against its live state,
-     with no side effect, and may refuse;
-  3. **apply**: each owner takes the checked value and cannot fail.
+- **Build, then apply: all or nothing under one lock** (Rick, 2026-10-14).
+  No runtime row's validity depends on its owner's live state, so every
+  refusal is its constructor's. A set runs two steps under its one lock:
+  1. **build**: every value through its constructor;
+  2. **apply**: each owner takes the built value and cannot fail.
 
-  Every refusal, from either of the first two steps, is reported before
-  anything is applied, so the set is all or nothing. The startup parse
-  runs the same check step against the state at startup: one rule on both
-  surfaces (IG-12). The logging owner's apply does not meet step 3 yet:
+  Every refusal is reported before anything is applied, so the set is all
+  or nothing. The startup parse runs the same constructors: one rule on
+  both surfaces (IG-12). The logging owner's apply does not meet step 2 yet:
   its filter is swapped through a reload handle whose `reload` returns a
   `Result`, reachable only through the FFI module
   ([`rust/shekyl-logging/src/ffi.rs:639`](../../rust/shekyl-logging/src/ffi.rs)).
   The cutover gives `shekyl-logging` a Rust interface that holds the
   handle for the life of the process and cannot fail.
-- **What a change does to traffic already running.** Lowering
-  `p2p-inbound-max` below the current inbound count refuses new inbound
-  until the count falls under the cap, and never cuts an existing session;
-  the audit line records the count at the change. A rate limit takes
+- **What a change does to traffic already running.** A rate limit takes
   effect on the next transfer and never aborts one in flight.
 - **Defaults are values.** Every runtime row's default can be written back:
-  `p2p-inbound-max` takes `none` for no operator cap and `log-category`
-  takes `none` for no per-category overrides. An empty category list never
+  a rate takes `unlimited`, and `log-category` takes `none` for no
+  per-category overrides. An empty category list never
   means logging off; the inherited reading
   ([`rust/shekyl-logging/src/filter.rs:155-162`](../../rust/shekyl-logging/src/filter.rs))
   goes.
@@ -377,7 +362,7 @@ supplies, with no FFI (RT-O26):
   and `set`. The text it prints round-trips through `option_set`, held by a
   property test. It is served to `health`, and each row is present only
   under the grant the row names: `health`, `status`, `peers` or `config`,
-  default `config` (RT-O24). The five runtime rows are `status`; rows that
+  default `config` (RT-O24). The four runtime rows are `status`; rows that
   link the operator or describe the host stay `config`, which only the
   `admin` preset carries. Until RT-W10, `Disclosure`
   ([`rust/shekyl-daemon-rpc/src/info.rs:70`](../../rust/shekyl-daemon-rpc/src/info.rs))
@@ -394,8 +379,10 @@ supplies, with no FFI (RT-O26):
 
 The live value belongs to its owner. Deleted with their handlers and
 callers: `/set_limit`, `/in_peers`, `/out_peers`, `/set_log_level`,
-`/set_log_categories` and `/get_limit`, which `option_show` replaces and
-which leaves RK-8 instead of being ported (§4.2). `/pop_blocks` is not
+`/set_log_categories` and `/get_limit`. `/in_peers` and `/out_peers` set
+options this cutover deletes, so nothing replaces them; `option_set`
+replaces the other setters, and `option_show` replaces `/get_limit`, which
+leaves RK-8 instead of being ported (§4.2). `/pop_blocks` is not
 this cutover's: it becomes an armed test lever behind RT-W10's start
 switch (RT-O9.2; DC-F14).
 
@@ -468,7 +455,7 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 | network | `shekyl-daemon-config`, read by every owner | the network and its params row | `testnet`, `stagenet`, `regtest` |
 | clearnet connector | the zone host and the dialer | the posture: `Off`, or `On` with listen endpoints, an optional SOCKS endpoint with its credentials, and the advertised endpoints | `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6`, `p2p-ignore-ipv4`, `p2p-external-port`, `proxy`, and `offline` with the Tor connector |
 | Tor connector | `shekyl-tor` and the zone host | the posture: `Off`, `Managed`, or `Operator` with a SOCKS endpoint, its credentials, and an optional onion with its local listen endpoint | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound` |
-| p2p policy | the dialer and the peer lists | the operator's peers, the closed-network declaration (absent or non-empty, DC-F11), the local-range override, early disclosure, the ban file's entries, the inbound cap, the two rate bounds | `add-peer`, `seed-node`, `add-exclusive-node`, `allow-local-ip`, `p2p-disclose-early` (PR-3), `ban-list`, `in-peers`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `out-peers`, `tos-flag`, `no-igd`, `igd` |
+| p2p policy | the dialer and the peer lists | the operator's peers, the closed-network declaration (absent or non-empty, DC-F11), the local-range override, early disclosure, the ban file's entries, the two rate bounds | `add-peer`, `seed-node`, `add-exclusive-node`, `allow-local-ip`, `p2p-disclose-early` (PR-3), `ban-list`, `in-peers`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `out-peers`, `tos-flag`, `no-igd`, `igd` |
 | rpc | `shekyl-daemon-rpc` | the admin and view listener sets, the origin list, the connection cap | `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6`, `rpc-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-access-control-origins`, `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-response-soft-limit`, `disable-rpc-ban` |
 | txpool | core, through the snapshot | the weight bound | `max-txpool-weight` |
 | notify | the Rust runner (DC-Q14) | three commands, each an argument array with its named placeholders | `block-notify`, `reorg-notify`, `block-rate-notify` |
@@ -521,6 +508,7 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | UPnP | `rg -n -i -e 'upnp' -e 'm_igd' -e 'igd_t' src/p2p` → more than 40 ([`src/p2p/net_node.h:463-467`](../../src/p2p/net_node.h), [`:663-670`](../../src/p2p/net_node.h), [`src/p2p/net_node.inl:66-68`](../../src/p2p/net_node.inl), [`:1183-1189`](../../src/p2p/net_node.inl), [`:2358`](../../src/p2p/net_node.inl), [`:3381-3383`](../../src/p2p/net_node.inl)) | 0 |
 | miniupnpc | `rg -n -i -e 'miniupnp' -e 'UPNP' CMakeLists.txt external/CMakeLists.txt cmake/FindMiniupnpc.cmake .gitmodules contrib/brew/Brewfile .github/workflows src/p2p/CMakeLists.txt` → more than 15 ([`CMakeLists.txt:490`](../../CMakeLists.txt), [`external/CMakeLists.txt:32-51`](../../external/CMakeLists.txt)) | 0; the submodule leaves `.gitmodules` and the tree; the note at [`scripts/ci/check_doc_claims.py:694`](../../scripts/ci/check_doc_claims.py) is updated |
 | `out-peers` and its runtime surface | `rg -n -e 'out_peers' -e 'OUT_PEERS' -e 'change_max_out_public_peers' -e 'get_max_out_public_peers' src rust/shekyl-daemon-rpc/src` → more than 20 ([`src/rpc/core_rpc_server.cpp:1166-1171`](../../src/rpc/core_rpc_server.cpp), [`src/daemon/command_server.cpp:211-213`](../../src/daemon/command_server.cpp), [`rust/shekyl-daemon-rpc/src/server.rs:344`](../../rust/shekyl-daemon-rpc/src/server.rs)) | 0 |
+| the inbound cap and every text that names it (§1.1, the inbound-cap ruling) | `rg -n -e 'in_peers' -e 'in-peers' -e 'change_max_in_public_peers' -e 'get_max_in_public_peers' -e 'm_inbound_cap_explicit' src rust tests` → more than 90 ([`src/p2p/net_node.inl:2969-2980`](../../src/p2p/net_node.inl), [`:3221-3250`](../../src/p2p/net_node.inl), the console word at [`src/daemon/command_server.cpp:217`](../../src/daemon/command_server.cpp), and the five unbounded-case warnings at [`src/p2p/net_node.inl:3094-3122`](../../src/p2p/net_node.inl)) | 0; the safety bound stays, and its warnings say that inbound is unbounded and why, naming nothing the operator can set; `InboundCeiling::resolve`'s `reserved` no longer counts explicit inbound caps, since no zone has one; the C++ tests that pin `--in-peers 0` suppressing the address announcement ([`tests/unit_tests/node_server.cpp:2113-2119`](../../tests/unit_tests/node_server.cpp)) are replaced by the same assertion under `clearnet-listen none` |
 | the per-knob runtime endpoints, their callers and the console words (§2.7, `RPC_CHANNEL.md` §6.4) | `rg -n -e '"/set_limit"' -e '"/in_peers"' -e '"/set_log_level"' -e '"/set_log_categories"' -e '"/get_limit"' rust/shekyl-daemon-rpc/src/server.rs` → more than 5 ([`rust/shekyl-daemon-rpc/src/server.rs:267`](../../rust/shekyl-daemon-rpc/src/server.rs), [`:319-349`](../../rust/shekyl-daemon-rpc/src/server.rs)); the callers of `/get_limit`: the Rust console's `print_net_stats` ([`rust/shekyl-daemon-rpc/src/console/mod.rs:1121-1166`](../../rust/shekyl-daemon-rpc/src/console/mod.rs)), the Python framework ([`utils/python-rpc/framework/daemon.py:433-436`](../../utils/python-rpc/framework/daemon.py)), the C++ client test ([`tests/unit_tests/daemon_rpc_client.cpp:107-110`](../../tests/unit_tests/daemon_rpc_client.cpp)), and the regtest check of `print_net_stats` | 0; `option_set` and `option_show` in their place, the callers moved to them; `/get_limit` leaves RK-8 (replaced, not ported). `/pop_blocks` stays and moves behind RT-W10's armed switch (RT-O9.2) |
 | the `,N` suffixes | `rg -n -e 'get_max_connections' -e 'max_connections' src/p2p/net_node.cpp src/p2p/net_node.h` → more than 8 | 0 |
 | `disable-rpc-ban` and the RPC server's dead scorer | `rg -n -e 'disable_rpc_ban' -e 'core_rpc_server::add_host_fail' -e 'RPC_IP_FAILS_BEFORE_BLOCK' src` → more than 5 ([`src/rpc/core_rpc_server.cpp:173-190`](../../src/rpc/core_rpc_server.cpp); the shared context is unblockable, [`src/rpc/core_rpc_ffi.cpp:84-89`](../../src/rpc/core_rpc_ffi.cpp)) | 0; `node_server::add_host_fail` ([`src/p2p/net_node.inl:451`](../../src/p2p/net_node.inl)) is the P2P function and stays |
@@ -561,13 +549,13 @@ a chain.
 | [`rust/shekyl-levin/tests/dual_stack.rs:71-72`](../../rust/shekyl-levin/tests/dual_stack.rs), [`rust/shekyl-levin/tests/inbound_cost_bench.rs:166-167`](../../rust/shekyl-levin/tests/inbound_cost_bench.rs) | `--out-peers 0` goes; each gains the Tor-off setting (Rick names the second) | yes |
 | [`scripts/bench/drs_bench.py:256-257`](../../scripts/bench/drs_bench.py) | loses `--keep-fakechain` and `--db-sync-mode` (IG-Q4); the linked daemons gain the Tor-off setting | yes, except the offline seed at [`:291`](../../scripts/bench/drs_bench.py) |
 | [`scripts/bench/wss_q1b_regtest_open_edge.sh`](../../scripts/bench/wss_q1b_regtest_open_edge.sh), [`rust/shekyl-wire/tests/vectors/capture_coinbase.py`](../../rust/shekyl-wire/tests/vectors/capture_coinbase.py), [`rust/shekyl-curve-tree/tests/fixtures/gen_ct2_fixture.py`](../../rust/shekyl-curve-tree/tests/fixtures/gen_ct2_fixture.py) | spelling | offline |
-| [`scripts/bench/ba_t5_session2_run.sh`](../../scripts/bench/ba_t5_session2_run.sh), [`scripts/bench/ba_t5_session3_run.sh`](../../scripts/bench/ba_t5_session3_run.sh) | the restricted port becomes a view listener | testnet |
+| [`scripts/bench/ba_t5_session2_run.sh`](../../scripts/bench/ba_t5_session2_run.sh), [`scripts/bench/ba_t5_session3_run.sh`](../../scripts/bench/ba_t5_session3_run.sh) | the restricted port becomes a view listener; `--in-peers 0` and the P2P bind flags become `clearnet-listen none` | testnet |
 | [`rust/shekyl-cli/tests/json_script.rs:291`](../../rust/shekyl-cli/tests/json_script.rs), [`rust/shekyl-cli/tests/scripts/daemon_session.txt:8`](../../rust/shekyl-cli/tests/scripts/daemon_session.txt) | spelling | testnet, offline |
 | [`rust/shekyl-cli/src/main.rs:524-532`](../../rust/shekyl-cli/src/main.rs) | its daemon-down message prints the daemon's network spelling | — |
 | [`contrib/tor/shekyl-over-tor.sh`](../../contrib/tor/shekyl-over-tor.sh) | passes `--detach`, retired in V3.1, so it is broken today (DC-F8); rewritten or deleted | — |
 | [`Dockerfile`](../../Dockerfile) | spelling; drops `--non-interactive` | — |
 | the GUI sidecar (`shekyl-gui-wallet`, `daemon_manager.rs`) | passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` (`INPUT_GRAMMAR.md` §5); a PR in that repository, merged with the cutover | — |
-| `shekyl-dev`: configuration examples, unit files, the stressnet playbook, the Foundation seed recipe (roles only, rule 37) | TOML files at the system path; a change in that repository under its own authorisation | — |
+| `shekyl-dev`: configuration examples, unit files, the stressnet playbook, the Foundation seed recipe (roles only, rule 37) | TOML files at the system path; an explicit `in-peers` goes; a change in that repository under its own authorisation | — |
 
 ### 5.2 Gates
 
@@ -615,7 +603,12 @@ New: the
 grammar gate (IG-3, IG-9) over the daemon's table; the snapshot field-count
 gate (§2.9); the recipe gate (DC-Q8), asserting that the shipped unit's
 paths agree with its `StateDirectory` and `LogsDirectory` and that every
-flag a unit or template passes is a live name.
+flag a unit or template passes is a live name; the refused-inbound test
+(Rick, 2026-10-14), which uses the real safety bound with no option and no
+development lever: it starts the daemon with a lowered descriptor limit on
+the child (`prlimit` or `ulimit -n`), fills the derived ceiling, and
+asserts that the next accept is refused. It runs on Unix only, because
+Windows has no per-process descriptor limit (PWD-B1).
 
 ### 5.3 Documentation
 
@@ -623,7 +616,10 @@ The option tables at [`docs/EXECUTABLES.md:53-82`](../EXECUTABLES.md) and
 [`docs/USER_GUIDE.md:135-190`](../USER_GUIDE.md), and the example at
 [`docs/USER_GUIDE.md:115-133`](../USER_GUIDE.md), are generated from the
 table and gated (IG-9). `docs/proxies.md` is rewritten for the connector
-postures and loses `--add-node`, which never existed. The release notes say
+postures and loses `--add-node`, which never existed.
+`SHEKYL_P2P_PROTOCOL.md`'s passage on the derived port advertisement names
+`clearnet-listen none` as the operator's way to stay unannounced, where it
+names `--in-peers 0` today. The release notes say
 the log budget falls from an effective 5 GiB to 1 GiB (IG-Q19).
 
 ---
@@ -658,7 +654,7 @@ exit status is 2.
 | the log location cannot be written | refuse, naming the path |
 | the ban file cannot be read, or a line does not parse | refuse, naming the file and the line |
 | a listener cannot bind | its owner refuses to start, naming the endpoint, and the daemon stops |
-| a runtime change that its constructor or its owner's check refuses, such as an inbound cap above the descriptor ceiling (§2.7) | the request fails with the code the startup parse would give, nothing in it is applied, and the daemon runs |
+| a runtime change its constructor refuses, such as a log level the grammar does not name (§2.7) | the request fails with the code the startup parse would give, nothing in it is applied, and the daemon runs |
 | a set request for a row not marked Runtime | the request fails with the startup-only code; the daemon runs |
 | `service` outside the SCM (Windows) | refuse at entry, naming how the service is started |
 | `service` on Linux, FreeBSD or macOS | refuse with its typed code: the platform's service manager runs the foreground process |
@@ -713,6 +709,11 @@ exit status is 2.
 - **UPnP.** Attack surface the managed onion makes unnecessary for inbound.
   Reopens on a ruling that clearnet inbound without an operator-configured
   address is a product requirement.
+- **An operator inbound cap (`in-peers`; IG-Q40).** A peer count is a
+  poor proxy for what an operator pays, which is bytes: the two rate
+  limits bound that, and the descriptor safety bound keeps the process
+  whole. Reopens as a byte quota, not a count, when an operator on a
+  metered link needs one.
 - **A retired-flag table.** Every release before genesis is a wipe. Reopens
   at genesis; the REJECTED rows are the record until then.
 - **The blockchain utilities** keep their own option sets until IG Part B
