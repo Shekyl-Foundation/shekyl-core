@@ -1010,8 +1010,8 @@ pub enum WalletRpcError {
     )]
     StakeStateUnreadable,
     /// `-29530`, the form with a remedy: the staker's scan state file was
-    /// written by an earlier wallet version and this one refuses it rather
-    /// than migrate it (rule 15; `FN_DSA_HYBRID.md` `FND-18` for the move off
+    /// written by another wallet version, older or newer, and this one
+    /// refuses it rather than migrate it (rule 15; `FN_DSA_HYBRID.md` `FND-18` for the move off
     /// [`PSCAN_STATE_VERSION_KEYLESS_JOIN`](shekyl_engine_state::pscan_state::PSCAN_STATE_VERSION_KEYLESS_JOIN)).
     /// Shares the code with [`StakeStateUnreadable`](Self::StakeStateUnreadable)
     /// — both are "the scan state would not load, so the wallet will not
@@ -1024,7 +1024,7 @@ pub enum WalletRpcError {
     /// open wallet, and the wallet opens once the file is out of the way,
     /// after which the staking scan rebuilds it from the chain.
     #[error(
-        "the wallet will not open: its staking scan file {file} was written by an earlier \
+        "the wallet will not open: its staking scan file {file} was written by another \
          version of this wallet (file format {found}; this version reads format {expected}). \
          Move that one file out of the wallet's folder and open the wallet again; the staking \
          scan rebuilds it from the chain. Leave every other wallet file where it is"
@@ -2414,6 +2414,29 @@ mod tests {
     /// against one that forwards the directory. It does NOT cover the engine
     /// producing that refusal from a real seal (`lifecycle_tests::
     /// a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_versions`).
+    /// A scan file from a newer wallet is refused with the same remedy, and
+    /// the message does not call it older: it names both formats and says
+    /// another version wrote it. Red edit: the earlier wording, "written by
+    /// an earlier version", which is false here.
+    #[test]
+    fn a_scan_file_from_a_newer_wallet_is_not_called_older() {
+        use shekyl_engine_state::pscan_state::PSCAN_STATE_VERSION;
+
+        let err = WalletRpcError::from(PScanStartError::StateFileVersionUnsupported {
+            path: std::path::PathBuf::from("/home/alice/wallets/primary.wallet.pscan"),
+            found: PSCAN_STATE_VERSION + 1,
+            expected: PSCAN_STATE_VERSION,
+        });
+        let message = err.to_string();
+        assert!(!message.contains("earlier"), "{message}");
+        assert!(message.contains("another version"), "{message}");
+        assert!(
+            message.contains(&format!("file format {}", PSCAN_STATE_VERSION + 1)),
+            "{message}"
+        );
+        assert!(message.contains("Move that one file"), "{message}");
+    }
+
     #[test]
     fn a_stale_staking_scan_file_is_named_with_both_versions_and_the_remedy() {
         use shekyl_engine_state::pscan_state::{

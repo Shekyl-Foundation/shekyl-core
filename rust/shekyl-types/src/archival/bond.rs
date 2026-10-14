@@ -78,14 +78,24 @@ impl From<[u8; RECEIPT_SIGN_PK_LEN]> for ReceiptSignPk {
 }
 
 impl fmt::Debug for ReceiptSignPk {
-    /// The first eight bytes: enough to tell two keys apart in a failed
-    /// assertion without printing 1,837 of them.
+    /// Eight bytes of each half: the first eight of the Ed25519 key, which
+    /// follows the encoding's 8-byte header, and the last eight of the
+    /// string, which are the FN-DSA key's. The header is the same in every
+    /// valid key, so a prefix would print every key alike; these tell two
+    /// keys apart in a failed assertion, whichever half differs, without
+    /// printing 1,837 bytes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const HEADER: usize = 8;
+        const SHOWN: usize = 8;
         f.write_str("ReceiptSignPk(")?;
-        for byte in self.0.iter().take(8) {
+        for byte in &self.0[HEADER..HEADER + SHOWN] {
             write!(f, "{byte:02x}")?;
         }
-        f.write_str("…)")
+        f.write_str("…")?;
+        for byte in &self.0[RECEIPT_SIGN_PK_LEN - SHOWN..] {
+            write!(f, "{byte:02x}")?;
+        }
+        f.write_str(")")
     }
 }
 
@@ -416,5 +426,33 @@ impl SigmaWorkMilli {
     #[must_use]
     pub const fn to_raw(self) -> u64 {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::format;
+
+    use super::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
+
+    /// Two keys that differ in either half print differently, and two that
+    /// share only the encoding's header do not print alike. Red edit: print
+    /// the first eight bytes — every valid key then prints the same.
+    #[test]
+    fn debug_tells_two_keys_apart_by_either_half() {
+        let header = [0x01, 0x03, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00];
+        let key = |ed: u8, fn_dsa_tail: u8| {
+            let mut bytes = [0u8; RECEIPT_SIGN_PK_LEN];
+            bytes[..8].copy_from_slice(&header);
+            bytes[8] = ed;
+            bytes[RECEIPT_SIGN_PK_LEN - 1] = fn_dsa_tail;
+            format!("{:?}", ReceiptSignPk::from_bytes(bytes))
+        };
+        assert_ne!(key(1, 0), key(2, 0), "the Ed25519 halves differ");
+        assert_ne!(key(0, 1), key(0, 2), "the FN-DSA halves differ");
+        assert_eq!(
+            key(0xAB, 0xCD),
+            "ReceiptSignPk(ab00000000000000…00000000000000cd)"
+        );
     }
 }

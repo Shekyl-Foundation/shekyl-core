@@ -194,27 +194,56 @@ ruling's text of record is `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 3
 
 ## 6. What this PR leaves owed
 
-- **The receipt-key re-key — owed by name, so the proving test does not
-  become a false claim.** The Slice C Round 0 ruling (maintainer's brief,
-  2026-10-07) puts a **separate FN-DSA-1024 receipt key** in the bond record,
-  keeps identity on ML-DSA-65, and algorithm-tags the receipt signature.
-  PR #993 is that ruling as an open spec. Its own order is that the spec
-  lands before any code, and that the FN-DSA-1024 integration is a later PR.
-  This PR does not mint scheme 3 and does not add a receipt-key type. #990
-  is correct against its pin — it binds the pass receipt to the bond
-  *identity* key, and `serving/pass_key.rs`'s proving test is literally
-  `signs_under_the_bond_identity_key` — and will be re-keyed. What survives
-  unchanged: in-actor signing, the key never leaving `HeldPersona`,
-  `ResidentPassKey`/`ready()`, `RefusingKey`, the `ServeHealth` row, the
-  loopback harness (`shekyl-p-loopback`). What changes: `SignPassTranscript`
-  reads `receipt_sign_sk` instead of `hybrid_sign_sk`; the transcript carries
-  the algorithm tag; the bond record carries the receipt public key; the
-  proving test asserts signing under the *receipt* key, with a negative
-  control that an identity-key signature is refused. What gets better:
-  `persona.rs`'s doc comment that "`hybrid_sign_sk` authorises three" things
-  is discharged — the receipt key authorises exactly one. **Order:** the
-  spec in #993 lands first; the re-key then lands with, or directly after,
-  the FN-DSA integration that spec sequences as its own PR.
+- **The receipt key on the serve path — STAGED; selection is owed to the
+  settlement lane's cutover (`FN_DSA_HYBRID.md` §9.4).** The Slice C Round 0
+  ruling (maintainer's brief, 2026-10-07) puts a **separate FN-DSA-1024
+  receipt key** in the bond record and keeps identity on ML-DSA-65. The bond
+  record carries it as `receipt_sign_pk`
+  (`rust/shekyl-types/src/archival/bond.rs`). The stake actor has two
+  signing messages, side by side:
+  - `SignPassTranscript`
+    (`rust/shekyl-engine-core/src/engine/stake_engine/persona.rs:210`) signs
+    with the bond identity key, `hybrid_sign_sk`, through
+    `sign_pass_transcript`: hybrid scheme 1, `SCHEME_DOMAIN_ATTESTATION`
+    (`persona.rs:232`). This is the path this PR built. It is unchanged.
+  - `SignReceiptTranscript` (`persona.rs:268`) signs with the receipt key,
+    `receipt_sign_sk`, through `HeldPersona::sign_receipt_transcript`
+    (`stake_engine/types.rs:167`): hybrid scheme 3, `SCHEME_DOMAIN_RECEIPT`.
+    The key is decoded into `HeldReceiptKey` by the first signature asked
+    of the persona.
+
+  Each message has its own serving capability. `ResidentPassKey`
+  (`stake_engine/serving/pass_key.rs:70`) is a `PassKey` at the identity
+  width and is **live**: `serving/start.rs:257` hands it to the serving
+  task. Its proving test, `signs_under_the_bond_identity_key`
+  (`pass_key.rs:160`), describes the live path. `ResidentReceiptKey`
+  (`stake_engine/serving/receipt_key.rs`) is a `PassKey` at the receipt
+  width and is **built and not selected**: no production code constructs
+  it, the `expect(dead_code)` on `ResidentReceiptKey::new` fails the lint
+  lane if one does, and `the_serving_task_is_not_started_with_the_receipt_key`
+  reads `start.rs`. Its proving tests are
+  `signs_under_the_receipt_key_and_the_receipt_domain` and
+  `a_receipt_is_not_an_identity_signature`. `receipt_round_trip_tests.rs`
+  runs it behind the real endpoint, and each scheme's fetch target refuses
+  the other scheme's endpoint
+  (`the_two_schemes_do_not_accept_each_others_endpoints`).
+
+  The receipt capability has this PR's shape: in-actor signing, the key
+  never leaving `HeldPersona`, a weak handle and a slot, and `ready()` as
+  actor liveness without a round-trip. Its `ready()` also refuses once a
+  signature has found the receipt key undecodable. It runs behind the same
+  loopback harness (`shekyl-p-loopback`). `RefusingKey` is a `PassKey` at
+  the identity width only (`rust/shekyl-p-host/src/signer.rs:97`). The
+  transcript is the same 112 bytes for both keys; the signature's own
+  scheme byte names the scheme (`FN_DSA_HYBRID.md` §1). `persona.rs:189`'s
+  doc comment that
+  `hybrid_sign_sk` authorises three things holds while the identity key
+  signs the pass. The receipt key signs only through
+  `sign_receipt_transcript`, which fixes the receipt domain. What is owed
+  is selection — the host's key width, the construction at
+  `serving/start.rs:257`, and the daemon's fetch targets over
+  `receipt_sign_pk` — in the change that makes a verifier accept scheme-3
+  receipts. `FN_DSA_HYBRID.md` §9.4 owns that list.
 - ~~`BENCHMARK_ALIGNMENT.md` §S's default ("S, with the pre-flight method")
   stays the maintainer's to rule; this PR supplies the answer §S was waiting
   on.~~ **RULED on `dev` before this PR merged** (maintainer, 2026-10-05;
