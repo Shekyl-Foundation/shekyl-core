@@ -690,13 +690,30 @@ impl RegtestDaemon {
         log_tail(&self.data_dir.join("daemon.log"))
     }
 
-    /// The daemon's whole captured log, for an assertion on a line the
-    /// daemon wrote (as opposed to [`log_tail`](Self::log_tail), the last
-    /// 40 lines inlined into a panic). Read while the fixture is alive:
-    /// `Drop` removes the datadir.
-    pub(super) fn log_text(&self) -> String {
-        std::fs::read_to_string(self.data_dir.join("daemon.log"))
-            .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
+    /// Wait for the daemon to have logged a line containing `needle`.
+    ///
+    /// Polled, not read once: the daemon's stdout is redirected to the
+    /// captured file, so it is block-buffered and a line can land after the
+    /// RPC answer it describes has already been returned (the same reason
+    /// [`console`](Self::console) polls). `Ok` once the line is there;
+    /// `Err` carries the log tail after `timeout` without it, for the
+    /// caller's own panic (read while the fixture is alive: `Drop` removes
+    /// the datadir).
+    pub(super) fn wait_for_log_line(&self, needle: &str, timeout: Duration) -> Result<(), String> {
+        let log_path = self.data_dir.join("daemon.log");
+        let deadline = Instant::now() + timeout;
+        loop {
+            if std::fs::read_to_string(&log_path)
+                .map(|text| text.contains(needle))
+                .unwrap_or(false)
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(log_tail(&log_path));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
 
     /// Panic with the daemon log inlined. Call on a submit/dispatch
@@ -3514,8 +3531,6 @@ async fn e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser() {
         FixtureStake::FirstStake,
     )
     .await;
-    // Read before any panic: the unwind drops the daemon and its log.
-    let log = daemon.log_text();
 
     match submitted.verdict {
         Err(BroadcastSubmitError::Submit(SubmitterError::Ambiguous {
@@ -3538,13 +3553,15 @@ async fn e2e_the_cxx_daemon_refuses_a_kind5_join_market_at_its_parser() {
             daemon.log_tail()
         ),
     }
-    assert!(
-        log.contains(CXX_REPARSE_REFUSAL),
-        "the refusal was ambiguous to the wallet, but the daemon did not log the C++ reparse \
-         refusal ({CXX_REPARSE_REFUSAL:?}); something else made the submit fail; daemon log \
-         tail:\n{}",
-        daemon.log_tail()
-    );
+    // The 500 can come back before the daemon's block-buffered stdout
+    // reaches the captured log, so wait for the line rather than read once.
+    if let Err(tail) = daemon.wait_for_log_line(CXX_REPARSE_REFUSAL, Duration::from_secs(10)) {
+        panic!(
+            "the refusal was ambiguous to the wallet, but the daemon did not log the C++ \
+             reparse refusal ({CXX_REPARSE_REFUSAL:?}) within 10s; something else made the \
+             submit fail; daemon log tail:\n{tail}"
+        );
+    }
     eprintln!(
         "FND-20 tripwire: the C++ daemon refused the wallet-built kind-5 JoinMarket at its \
          parser ({CXX_REPARSE_REFUSAL}); the five bonded walks stay DECIDED_DARK"

@@ -717,12 +717,16 @@ where
             // field docs), so their two write cadences cannot race.
             // The seal's file name, for the version refusal below: the one
             // load failure whose remedy names a file the user has to find.
+            // Always present: `pscan_state_path_from` pushes `.pscan` onto
+            // the full base, so the last component is never empty or `..`
+            // (pinned by `paths::tests::pscan_path_always_has_a_file_name`).
             let pscan_file_name = g
                 .persistence()
                 .pscan_path()
                 .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| shekyl_engine_file::paths::PSCAN_STATE_SUFFIX.to_owned());
+                .expect("the .pscan path ends in its suffix, so it has a file name")
+                .to_string_lossy()
+                .into_owned();
             (
                 g.daemon().clone(),
                 stake,

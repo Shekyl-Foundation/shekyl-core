@@ -290,6 +290,25 @@ mod tests {
         assert_ne!(got, Path::new("/tmp/a.keys"));
     }
 
+    /// The `.pscan` path always has a file name: the suffix is pushed onto
+    /// the full base as bytes, so the last component is never empty or
+    /// `..`, whatever the base. The P-scan version refusal names that file
+    /// to the user (`PScanStartError::StateFileVersionUnsupported`) and
+    /// relies on this.
+    #[test]
+    fn pscan_path_always_has_a_file_name() {
+        for base in ["", "/", "..", "a/", "/tmp/..", "/tmp/primary.wallet"] {
+            let path = pscan_state_path_from(Path::new(base));
+            let name = path
+                .file_name()
+                .unwrap_or_else(|| panic!("pscan path from base {base:?} has no file name"));
+            assert!(
+                name.to_string_lossy().ends_with(PSCAN_STATE_SUFFIX),
+                "base {base:?}: file name {name:?} does not end in the suffix"
+            );
+        }
+    }
+
     #[test]
     fn keys_path_on_extensionless_base() {
         assert_eq!(
