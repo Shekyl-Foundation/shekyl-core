@@ -107,10 +107,36 @@ On POSIX:
   runs. Prefer `size_rolling` or `unrotated` when the `0600`
   discipline must hold for the process lifetime.
 
+### Every sink is queued; a log call never blocks
+
+Each sink — stderr always, the file when configured — sits behind its
+own bounded queue (`SINK_QUEUE_LINES`, 8 192 lines) with its own writer
+thread (`log-stderr`, `log-file`). A log call only enqueues. When a
+sink stalls and its queue fills, further lines for that sink are
+dropped and counted, never waited on; when the sink's writer catches
+up it writes one line, `N lines dropped since <time>`, so the loss is
+never silent. *Records-was (to 2026-10-14):* the stderr layer wrote
+synchronously, and one slow stderr write (a file on a stalled disk, a
+slow journald) held every logging thread, the daemon's P2P transport
+workers among them, for as long as it stalled.
+`tests/never_blocks.rs` times each log call while the sink's write
+stalls, and checks the drop report once the sink catches up.
+
+A write the sink refuses (a dead stderr pipe, a full disk, a failing
+file) is counted the same way and reported as `N lines failed to write
+since <time>` once the sink takes writes again. A flush is counted only
+when that `flush` returns an error, as `N flushes failed since <time>`.
+A summary the sink refuses stays pending; it is not itself a failed
+flush. `tracing_appender`'s worker discards a writer's error, so without
+the count those lines were lost with nothing said.
+`tests/write_errors.rs` refuses a fixed run of writes, then accepts.
+What the queues leave (shutdown, the pre-init passthrough, a bound in
+lines, the thread ledger) is recorded in the crate doc.
+
 ### `LoggerGuard`
 
-RAII guard for the non-blocking writer thread. Must outlive the
-process's interesting work. See "The `LoggerGuard` footgun" below.
+RAII guard for the sinks' writer threads, one per sink. Must outlive
+the process's interesting work. See "The `LoggerGuard` footgun" below.
 
 ### `directives_from_legacy_categories(current, new, fallback) -> Result<TranslationReport, FilterError>`
 
@@ -249,8 +275,8 @@ before review approval.
    viewkeys, or transaction outputs in the event payload.
 2. **Not `no_std`.** Requires `std`, a filesystem, and (on POSIX)
    `libc`. This crate is not intended for embedded targets.
-3. **Not async-safe beyond `tracing`'s own guarantees.** The
-   non-blocking writer buffers events in memory. If the binary
+3. **Not async-safe beyond `tracing`'s own guarantees.** Every
+   sink's writer buffers events in memory. If the binary
    exits (panic, `exit()`, signal) before the returned
    `LoggerGuard` is dropped, buffered events are lost. Graceful
    shutdown paths must let `main` return normally or explicitly
