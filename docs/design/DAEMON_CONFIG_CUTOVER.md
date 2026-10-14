@@ -495,7 +495,16 @@ a chain.
 the dated UNFREEZE line, or waits for PR-3 to retire the rows.
 `scripts/ci/check_ffi_signatures.sh` covers every signature in §2.3 and
 §4.2. `scripts/ci/check_network_uniformity.sh`: the FAKECHAIN arms are
-outside its fence; this cutover deletes three and adds none. New: the
+outside its fence; this cutover deletes three and adds none. The Windows job's daemon smoke test (Rick, 2026-10-14), which replaces
+the daemonizer-removal step on today's spellings ahead of the cutover,
+boots the built `shekyld.exe` offline on regtest with a fresh data
+directory and a free RPC port, waits for `get_info`, stops it over RPC and
+asserts exit 0 within a timeout and a created store; the cutover extends
+the same job with the Rust `main()` and its one stop path, a second daemon
+on the same data directory refused by the lock, a config directory whose
+access list grants Users write refused with exit 2, and another network's
+data directory refused by the marker; RT-W14 later adds a service-manager
+case (install, start, `SERVICE_RUNNING`, stop). New: the
 grammar gate (IG-3, IG-9) over the daemon's table; the snapshot field-count
 gate (§2.9); the recipe gate (DC-Q8), asserting that the shipped unit's
 paths agree with its `StateDirectory` and `LogsDirectory` and that every
@@ -713,7 +722,8 @@ commit.
    removed from every start function, the FFI header and its signature gate
    green; (d) the runtime handlers of §2.7 and the notify runner of §2.10; (e) every §4.2 deletion, with
    its before and after counts in the commit message; (f) every launcher,
-   the generated documentation and its gate; (g) the index and FOLLOWUPS
+   the generated documentation and its gate, and the Windows smoke job's
+   four cutover cases (§5.2); (g) the index and FOLLOWUPS
    rows of §10.
 5. **No new daemon option in C++.** A value C++ needs reaches it through
    the snapshot, or not at all.
