@@ -5857,9 +5857,12 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
     // not an empty table (Rick, 2026-10-14).
     for command in ["sync_info", "print_cn", "print_pl", "print_pl_stats"] {
         let out = daemon.console(command);
-        assert_eq!(
-            out.trim(),
-            "P2P: off",
+        // The log tail echoes the command and carries the log line; the
+        // state is the line the console printed, and no table follows it.
+        assert!(
+            out.lines().any(|line| line.trim() == "P2P: off")
+                && !out.contains("Remote Host")
+                && !out.contains("list size"),
             "{command} must render the live core's P2P state; got:\n{out}"
         );
     }
