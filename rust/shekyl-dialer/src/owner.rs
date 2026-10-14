@@ -517,9 +517,25 @@ impl Dialer {
                     .get()
                     .saturating_add(next_wake_nanos(rng)),
             );
-            if owner.arm(deadline).is_err() || owner.wait_wake().is_err() {
+            if owner.arm(deadline).is_err() {
                 break;
             }
+            let Ok(wake) = owner.wait_wake() else {
+                break;
+            };
+            // The same fields the Tor driver logs at its gap (Rick,
+            // 2026-10-14): a wake delivered to the wrong home shows here.
+            tracing::debug!(
+                "{connector:?} wake: owner {:?} got {:?} class {:?} generation {:?} deadline {} fired_at {} now {}; armed {}",
+                owner.id(),
+                wake.owner,
+                wake.class,
+                wake.generation,
+                wake.deadline.get(),
+                wake.fired_at.get(),
+                owner.clock().now().get(),
+                deadline.get()
+            );
             if self.stop.load(Ordering::Acquire) {
                 break;
             }

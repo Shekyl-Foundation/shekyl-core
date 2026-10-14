@@ -433,6 +433,7 @@ where
                         outbound,
                         owner = ?owner.id(),
                         wake_owner = ?wake.owner,
+                        class = ?wake.class,
                         generation = ?wake.generation,
                         wake_deadline = wake.deadline.get(),
                         fired_at = wake.fired_at.get(),
