@@ -665,7 +665,8 @@ enum BondArm<'a> {
 /// the BP4 economic battery.
 ///
 /// `verify_join_market_bond_post` (`shekyl-archival-retention`) is the single
-/// verdict source both paths share: post-kind, holdings-shape consistency,
+/// verdict source both paths share: post-kind, the non-zero endpoint, the
+/// receipt key (BP6, CEN-J28's predicate), holdings-shape consistency,
 /// credit/debit exclusivity, debit == 0, the bond-floor equality, and the
 /// record-absent claim slot.
 fn verify_credit_arm(

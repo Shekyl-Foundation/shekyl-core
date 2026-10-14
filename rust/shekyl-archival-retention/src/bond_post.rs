@@ -6,8 +6,9 @@
 //! JoinMarket bond-post semantic verify (gate-4 §3.2–3.5).
 //!
 //! Structural bounds (hybrid pubkey length) and `P_canonical_id` hint checks stay
-//! in C++ consensus glue; this module covers post-kind, holdings, term rigidity,
-//! floor equality, and record-existence (via `record_exists` from LMDB).
+//! in C++ consensus glue; this module covers post-kind, the JoinMarket's endpoint
+//! and receipt key, holdings, term rigidity, floor equality, and record-existence
+//! (via `record_exists` from LMDB).
 //!
 //! Two rules here are about the transaction or the block rather than the vin, so
 //! they sit outside the per-kind verifiers as free predicates:
@@ -17,6 +18,7 @@
 //! though only the first is wired through the FFI so far; the second is called
 //! by the wallet-side producer while the daemon still counts inputs in C++.
 
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use thiserror::Error;
 
 use crate::bond_floor::{bond_floor, bond_floor_of};
@@ -48,6 +50,14 @@ pub enum BondPostError {
          advertises nothing"
     )]
     EndpointZero,
+    /// The receipt key the JoinMarket commits does not parse as a scheme-3
+    /// key (`FnDsaHybridPublicKey::from_receipt_sign_pk`). The bond record
+    /// stores it for the record's life and every receipt the persona signs
+    /// is verified under it, so a string that is not a key is a bond whose
+    /// receipts nobody can check. CEN-J28 refuses the same bytes at connect
+    /// with the same predicate; this is the submit battery's copy of it.
+    #[error("JoinMarket receipt_sign_pk is not a scheme-3 hybrid public key")]
+    ReceiptKeyNotAKey,
     #[error("post_kind is not Release")]
     PostKindNotRelease,
     #[error("Release requires an existing bond record")]
@@ -222,16 +232,30 @@ pub fn verify_reinstate_bond_post(
 /// the next challenge), but the **all-zero key is refused**: the bond record
 /// stores "no endpoint" as the zero key and cannot tell the two apart, so a
 /// zero key would connect as a bonded persona that advertises nothing.
+///
+/// The receipt key **is** validated as a key
+/// ([`BondPostError::ReceiptKeyNotAKey`]): unlike a bad endpoint, a receipt
+/// key that does not parse is not the persona's own loss. Admitted to the
+/// pool, it is relayed, and any block that includes it is invalid under
+/// CEN-J28.
 pub fn verify_join_market_bond_post(
     vin: &ArchivalBondPostVin,
     record_exists: bool,
 ) -> Result<(), BondPostError> {
-    let BondKind::JoinMarket { endpoint, .. } = &vin.kind else {
+    let BondKind::JoinMarket {
+        endpoint,
+        receipt_sign_pk,
+        ..
+    } = &vin.kind
+    else {
         return Err(BondPostError::PostKindNotJoinMarket);
     };
 
     if endpoint.iter().all(|b| *b == 0) {
         return Err(BondPostError::EndpointZero);
+    }
+    if FnDsaHybridPublicKey::from_receipt_sign_pk(receipt_sign_pk).is_err() {
+        return Err(BondPostError::ReceiptKeyNotAKey);
     }
 
     match vin.holdings.kind {

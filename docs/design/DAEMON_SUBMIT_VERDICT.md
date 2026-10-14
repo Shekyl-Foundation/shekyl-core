@@ -1360,6 +1360,7 @@ called at `:3614`; funding spend inputs run the regular K battery over
 | BP3 | Bond record does not already exist (DB) | `:4207-4208`, consumed at `bond_post.rs:73-75` | **B fact + D re-check** — a bond-post block landing during C flips it; conflict → `DoubleSpendConflict` (claim-slot leg) |
 | BP4 | Economic battery: post-kind, holdings-shape consistency, credit/debit exclusivity, debit == 0, **bond-floor equality** | `:4212-4226` → `verify_join_market_bond_post`, `bond_post.rs:40-78`; floor per `bond_floor.rs:19-30` | **C** — already Rust (`shekyl-archival-retention`), native call; violations → `Malformed` |
 | BP5 | `pqc_auths[i].hybrid_public_key == bond.hybrid_public_key` | `:3620-3626` | **A** — structural cross-field check; `Malformed` |
+| BP6 | A JoinMarket's `receipt_sign_pk` parses as a scheme-3 key (`FnDsaHybridPublicKey::from_receipt_sign_pk`) | none: the C++ decoder has no JoinMarket form that carries one (`FN_DSA_HYBRID.md` `FND-20`); the connect-side row is CEN-J28 (`shekyl-chain-rules` `rules/tx_inputs.rs`) | **C** — inside `verify_join_market_bond_post` (`BondPostError::ReceiptKeyNotAKey`), ahead of BP3, so a bad key is `Malformed` and never the claim-slot conflict. The same predicate CEN-J28 runs at connect, so the pool admits no JoinMarket the block rule would refuse |
 
 **PR-4b closure (the BP rows are wired).** `verifier.rs::verify_bond_post`
 runs the battery natively for the **JoinMarket** kind: O6 → the bond CT
