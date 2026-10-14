@@ -1,10 +1,11 @@
 # SH-2 resident attestation key — Round 0 pre-flight audit
 
-**Status:** OPEN — Round 0 (pre-flight) recorded 2026-10-06; implementation
-landed in the same PR (#990). §9.7 item 3 RULED 2026-10-07 (§4). Stays in
-`docs/design/` while it owns the receipt-key re-key named in §6; flips to
-CLOSED-as-record and moves to `docs/completed/` when that re-key lands or is
-re-owned by the consolidated serve-credit spec.
+**Status:** CLOSED-as-record (2026-10-14, archived by ruling on PR #1076).
+Round 0 (pre-flight) recorded 2026-10-06; implementation landed in the same
+PR (#990). §9.7 item 3 RULED 2026-10-07 (§4). It owns no open work: the
+receipt key's selection on the serving path, named in §6, is owned by
+[`FN_DSA_HYBRID.md`](../design/FN_DSA_HYBRID.md) §9.4. Do not implement from
+this record.
 **Substrate verified at:** `origin/dev` = `0e1d1d6126` (PR #982 merged).
 **Branch / worktree:** `feat/sh2-resident-pass-key`.
 **Anchors:** `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 (the SH- composition
