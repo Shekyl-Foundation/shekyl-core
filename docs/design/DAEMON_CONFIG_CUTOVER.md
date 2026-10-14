@@ -11,7 +11,7 @@ Rust and the C++ appears only as what the cutover deletes. The brief owns
 the mechanism. Option names, kinds, defaults, surfaces and diagnostic codes
 are the grammar's and are cited, never restated. No implementation starts
 until PR-3 (#1056) merges, the grammar's Part B (#1068) merges and is
-folded in, and DC-Q16 (§1.2) is ruled.
+folded in, and DC-Q16 and DC-Q17 (§1.2) are ruled.
 
 Anchors pinned to `dev` `7cf70b7052` (2026-10-14; the option surface is
 unchanged from `737da31276`, where the Round 0 read-out was taken). PR-3
@@ -50,6 +50,7 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
 | Grammar §0 (Rick, 2026-10-13; merged with #1067) | `shekyld`'s process entry, `main()`, moves to Rust in this lane (the Windows service round, RT-16) | §2.2, DC-Q13 |
 | DC-Q13 (Rick, 2026-10-14) | (b): CMake builds the executable and its `main` makes one call into Rust, which owns the process. The C++ remnant exposes one coarse entry pair, `run(snapshot)` returning a status and `stop()`, both `noexcept` and catching every C++ exception, so none unwinds through Rust frames. Rust's entry catches its own panics into an exit status. One signal owner, Rust: `tools::signal_handler::install` is deleted from `Daemon::run`. The pair replaces the orchestration in `main.cpp` and `daemon.cpp`, and the C++ shrinks | §2.2, §4.2 |
 | DC-Q14 (Rick, 2026-10-14) | A Rust runner owns the notify commands, fed chain facts by the C++ event sites (requirements in §2.10; the reaping hazard it removes is DC-F12) | §2.10, §4.2 |
+| RT-16, Windows service mode (Rick, 2026-10-13; recorded by the Windows lane for [`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16, not yet on `dev`) | `shekyld` itself answers the Windows Service Control Manager, in Rust, entered only through RT-16's declared service-mode switch, which is a daemon-config option. No wrapper process and no self-registration: installing is the installer's and `shekyl-cli`'s, and restart on failure is the SCM's failure actions, set at install. On POSIX nothing changes: systemd and launchd run the foreground process. A run-as-user daemon's home is always per-user (`%LOCALAPPDATA%` on Windows, never the roaming profile, whatever the token); a machine-wide home exists only in the declared service mode, and only when the installer created it. The SCM dispatcher needs the process entry, which is this lane's (DC-Q13) | §2.2, §2.4, §2.5, DC-Q17 |
 | DC-Q15 (Rick, 2026-10-14) | The lock is `shekyld.lock` at the data directory's root, held through `flock` or `LockFileEx` and never deleted on exit. The marker is `shekyld.network` (TOML content, not a `.toml` name, so it is not mistaken for operator configuration), holding `network` and `network-id`, written by temporary file, `fsync`, rename and directory `fsync`, read only under the lock. Its refusals tell another network apart from the same network with a different network id (an earlier release's data after a regenesis: use a fresh `data-dir`) | §2.2, §2.6, §6 |
 
 ### 1.2 Open, for Rick to rule before implementation
@@ -70,6 +71,18 @@ grammar's shared crate) and `shekyl-daemon-config` (IG-Q13).
   as text, parsed by the table's own parser and constructor and routed to
   the row's owner, so marking a further option runtime needs no new
   endpoint; the RPC lane names them.
+- **DC-Q17 — the service-mode switch and the Windows config path.** Two
+  facts from the RT-16 ruling meet the grammar. (1) RT-16's service-mode
+  switch is a daemon-config option, and neither the merged grammar nor
+  Part B has a row for it; the name `run-as-service` is taken by a REJECTED
+  row (`INPUT_GRAMMAR.md` §5), so the switch needs a new name and row from
+  the grammar round. (2) The grammar keeps the daemon's config-file default
+  at `%ProgramData%\shekyl` on Windows, while RT-16 allows a machine-wide
+  home only in the declared service mode and only when the installer
+  created it. **Recommendation:** the config-file default follows the run
+  mode: the per-account root for a run-as-user daemon, the
+  installer-created machine-wide directory in service mode; and in either
+  mode a directory that fails the allowlist of §2.4 is refused, never read.
 
 ---
 
@@ -107,6 +120,11 @@ What crosses the FFI after the cutover, and nothing else:
 
 1. `main()` calls `shekyl_daemon_main()`; Rust owns the process from here.
    Rust's entry catches its own panics and turns them into an exit status.
+   On Windows, when RT-16's service-mode switch is given, the entry
+   connects to the Service Control Manager's dispatcher before anything
+   else (the dispatcher itself is RT-W14's, built on this entry); outside
+   the SCM that connect fails and the start is refused (rule 82). A start
+   by the SCM without the switch fails in the SCM's own terms.
 2. Rust reads its arguments with `std::env::args_os` (IG-Q2), resolves
    `--network` and `--config-file`, checks the file's permissions (§2.4),
    reads and validates it whole, applies the command line over it per key,
@@ -136,8 +154,10 @@ What crosses the FFI after the cutover, and nothing else:
 8. Only then does Rust start the zone host, its listeners and the dialer,
    each from its section: a peer that connects earlier would find no tip
    to handshake with and no protocol handler to receive its messages.
-9. Stop is Rust's: the signal reaches the Rust handler, which stops the
-   dialer and the zone host, stops the RPC, calls the remnant's `stop()`,
+9. Stop is Rust's, and there is one stop path, fed by the POSIX signals,
+   every Windows console event (Ctrl-C, Ctrl-Break, window close, logoff,
+   shutdown), and the SCM's stop and pre-shutdown controls (DC-F13). The
+   handler stops the dialer and the zone host, stops the RPC, calls the remnant's `stop()`,
    joins the `run` thread, stops the managed Tor, and releases the lock
    last. `run` and `stop` are `noexcept` and catch every C++ exception;
    `run` returns its status to Rust, which becomes the exit status.
@@ -200,7 +220,11 @@ the file.
 ### 2.5 Paths and secrets (DC-Q7, IG-13)
 
 - Home comes from the passwd entry on Unix and the known-folder API on
-  Windows, never from `HOME`, `XDG_*` or `%APPDATA%`. Today it comes from
+  Windows, never from `HOME`, `XDG_*` or `%APPDATA%`. On Windows a
+  run-as-user daemon's root is per-user and never the roaming profile
+  (RT-16; the grammar's Part B names `FOLDERID_LocalAppData`); a
+  machine-wide root exists only in the declared service mode, created by
+  the installer. Today it comes from
   `HOME`, with `/` when unset
   ([`src/common/util.cpp:645-649`](../../src/common/util.cpp)). An account
   with no home has no default paths, and the paths it needs are named on
@@ -399,7 +423,7 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | every `arg_descriptor` there | `rg -n -e 'arg_descriptor<' src/daemon src/cryptonote_core src/p2p src/rpc src/cryptonote_basic src/blockchain_db` → more than 0 | 0 |
 | the map reads | `rg -n -e 'get_arg(vm' -e 'has_arg(vm' -e 'is_arg_defaulted(vm' src/daemon src/cryptonote_core src/p2p src/rpc src/cryptonote_basic src/blockchain_db src/cryptonote_protocol` → more than 90 | 0 |
 | `variables_map` and `program_options` in `shekyld` | `rg -n -e 'variables_map' -e 'program_options' src/daemon src/cryptonote_core src/p2p src/rpc src/cryptonote_basic src/blockchain_db src/cryptonote_protocol` → more than 0; `rg -n -e 'Boost_PROGRAM_OPTIONS_LIBRARY' src/daemon/CMakeLists.txt` → 1 | 0 and 0 |
-| `src/daemon/command_line_args.h`, `src/common/removed_flags.{h,cpp}`, `src/rpc/rpc_args.{h,cpp}`, `src/common/daemon_default_data_dir.{h,cpp}` | files exist | `rg -n -e 'removed_flags' -e 'rpc_args' -e 'daemon_default_data_dir' -e 'command_line_args' src tests` → 0 |
+| `src/daemon/command_line_args.h`, `src/common/removed_flags.{h,cpp}`, `src/rpc/rpc_args.{h,cpp}`, `src/common/daemon_default_data_dir.{h,cpp}` | files exist; `removed_flags.cpp` still sends Windows operators to Task Scheduler ([`src/common/removed_flags.cpp:158-162`](../../src/common/removed_flags.cpp)), which RT-16 rejects; `daemon_default_data_dir.cpp` infers the mode from the account's elevation, which RT-16 forbids | `rg -n -e 'removed_flags' -e 'rpc_args' -e 'daemon_default_data_dir' -e 'command_line_args' src tests` → 0 |
 | the RPC start's configuration and the C++ listener loop (§2.3) | `shekyl_daemon_rpc_start` has nine parameters; `rg -n -e 'rpc_instance' -e 'rust_rpc_handles' src/daemon` → more than 0 | one parameter, the core handle; 0 |
 | the zone host's C++-supplied values (Rick's review, item 3) | at PR-3's head `shekyl_zone_listen_clearnet` takes the bind values, the SOCKS host and port, the encrypt flag, the network id and the ceiling (`zone_ffi.rs:402-415`); the ceiling is computed in C++ (`transport_ceiling`, `net_node.h:456`, `net_node.inl:834`, `:970`, `:1003`); the spans are already Rust's (the transport layer's `spans.rs` on PR-3) | the zone host reads its sections, the network id comes from the network row, the ceiling from Rust's own resolver; `rg -n -e 'transport_ceiling' -e 'm_network_id' src/p2p` → 0 |
 | every other configuration push | `rg -n -e shekyl_zone_set_connector_cap -e shekyl_zone_clear_connector_cap -e shekyl_link_set_up -e shekyl_link_set_down src rust/shekyl-ffi/src src/shekyl/shekyl_ffi.h` → more than 6; `shekyl_log_init_file`, `shekyl_log_set_level`, `shekyl_log_set_categories` called from [`contrib/epee/src/mlog.cpp:215`](../../contrib/epee/src/mlog.cpp), [`:306`](../../contrib/epee/src/mlog.cpp), [`:338`](../../contrib/epee/src/mlog.cpp); `shekyl_daemon_tor_start`'s data-directory parameter ([`src/p2p/net_node.inl:896-898`](../../src/p2p/net_node.inl)) | the pushes gone; the managed Tor reads the paths section; `mlog_configure` shrinks to installing the tracing forwarder |
@@ -422,7 +446,7 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | the carrier global | `rg -n -e 'set_carrier_development' src` → more than 2 | 0; the relay reads `dev-relay-cover` |
 | `tools::set_max_concurrency` from the daemon | [`src/daemon/main.cpp:310-311`](../../src/daemon/main.cpp) | gone with `main.cpp`'s parse |
 | the C++ notify path | [`src/common/notify.cpp:52`](../../src/common/notify.cpp) splits a command string on whitespace; [`src/common/spawn.cpp:124`](../../src/common/spawn.cpp) sets `SIGCHLD` to ignored for the whole process (DC-F12) | `tools::Notify` and the daemon's use of `tools::spawn` gone; `rg -n -e 'SIGCHLD' src/daemon src/cryptonote_core src/common/notify.cpp` → 0 for the daemon (the runner is Rust's, DC-Q14) |
-| the C++ signal owner and orchestration (DC-Q13) | [`src/daemon/daemon.cpp:272`](../../src/daemon/daemon.cpp) installs `tools::signal_handler`; `Daemon::run`, `t_internals` and `main.cpp`'s body orchestrate the start | `rg -n -e 'signal_handler::install' src/daemon` → 0; the orchestration replaced by the remnant's `run(snapshot)` and `stop()`; `main.cpp` is one call |
+| the C++ signal owner and orchestration (DC-Q13) | [`src/daemon/daemon.cpp:272`](../../src/daemon/daemon.cpp) installs `tools::signal_handler`, whose Windows handler stops only on Ctrl-C and Ctrl-Break ([`src/common/util.h:193-201`](../../src/common/util.h), DC-F13); `Daemon::run`, `t_internals` and `main.cpp`'s body orchestrate the start | `rg -n -e 'signal_handler::install' src/daemon` → 0; the orchestration replaced by the remnant's `run(snapshot)` and `stop()`; `main.cpp` is one call |
 | `utils/conf/shekyld.conf` | the file exists; cited at [`docs/USER_GUIDE.md:131-133`](../USER_GUIDE.md) | gone |
 | `scripts/ci/check_carrier_flag_hidden.sh` | exists | replaced by a table test that `dev-relay-cover` is hidden and refused on mainnet |
 | C++ tests of the deleted mechanism | `tests/unit_tests/command_line.cpp:52-104`, `tests/unit_tests/rpc_args_daemon_surface.cpp` | deleted; `IsYes` stays |
@@ -532,6 +556,18 @@ exit status is 2.
    (DC-N1) and the marker (§2.6); DC-F1 checks the store's own contents.
 6. **Turn on a development lever on mainnet** through a stray line in a
    file. Route: IG-8's refusal at parse.
+7. **Configure an elevated daemon from an unprivileged account on a shared
+   Windows host.** Today an elevated daemon's default data directory is
+   under `%ProgramData%`, which any local user may create first, and the
+   daemon loads `shekyl.conf` from it unasked
+   ([`src/daemon/main.cpp:178-216`](../../src/daemon/main.cpp)): the
+   planted file can set the proxy (exposing the node's traffic origin) or
+   the log path (an administrator's file write). Route: the auto-load and
+   the elevation branch are deleted; a pre-created directory carries a
+   write-granting entry for its creator, so the allowlist of §2.4 refuses
+   it rather than reading it; the installer creates the service mode's
+   directory, so that refusal is not left for an attacker to cause
+   (DC-Q17).
 
 ---
 
@@ -559,7 +595,7 @@ exit status is 2.
 ## 9. Sequencing and pre-flight
 
 One cutover PR, based on PR-3 after it merges, once Part B is folded in and
-DC-Q16 is ruled (§1.2). It
+DC-Q16 and DC-Q17 are ruled (§1.2). It
 lands the table, the parse, the sections, the lock, the marker, logging in
 Rust, the announcements, the Rust `main()` and the remnant's entry pair,
 the notify runner, the one RPC start, every Rust
@@ -587,7 +623,8 @@ before the first production commit:
 
 Interactions: RT-W10 takes `rpc-listen` from reserved to live and makes
 `rpc-admin-listen` a REJECTED row; RT-16 adds the service run mode on top of
-the Rust `main()`; slice 4 deletes the C++ peer-list handler; the RD and
+the Rust `main()`, and RT-W14's SCM dispatcher hooks the entry of §2.2
+step 1; slice 4 deletes the C++ peer-list handler; the RD and
 chain-sync lanes do not touch the option surface.
 
 ---
@@ -606,7 +643,7 @@ chain-sync lanes do not touch the option surface.
 
 ---
 
-## 11. Findings established at source (DC-F1…DC-F12)
+## 11. Findings established at source (DC-F1…DC-F13)
 
 | Id | Finding | Route |
 | --- | --- | --- |
@@ -621,6 +658,7 @@ chain-sync lanes do not touch the option surface.
 | DC-F9 | A list given on both surfaces kept only the command line's, undocumented | absorbed: IG-6 makes it the rule |
 | DC-F10 | A `*` origin aborts the daemon after its log says RPC started. `shekyl_daemon_rpc_start` returns a handle and spawns the server ([`rust/shekyl-daemon-rpc/src/ffi_exports.rs:208-212`](../../rust/shekyl-daemon-rpc/src/ffi_exports.rs)); the task builds the CORS layer ([`rust/shekyl-daemon-rpc/src/server.rs:87-115`](../../rust/shekyl-daemon-rpc/src/server.rs)); tower-http 0.6.8 panics on a wildcard passed to `AllowOrigin::list` (its `allow_origin.rs`, lines 60 to 64, read at source); the workspace builds with `panic = "abort"` in both profiles (`rust/Cargo.toml`, lines 671 to 676), so the process ends; no panic hook is installed, so the reason reaches standard error only. Entries that are not valid header values are logged and dropped ([`rust/shekyl-daemon-rpc/src/server.rs:100-102`](../../rust/shekyl-daemon-rpc/src/server.rs)) | absorbed: the origin kind refuses both at parse |
 | DC-F11 | A list option with no values was "present" to the C++: the vector semantic installs an empty default ([`src/common/command_line.h:179-183`](../../src/common/command_line.h)) and `has_arg` tests the map entry ([`src/common/command_line.h:256-262`](../../src/common/command_line.h)), so every start declared a closed network with no peers. PR-3 reads an empty declaration as none on the Rust side (`6fc926404`) | absorbed: the closed-network declaration is absent or non-empty |
+| DC-F13 | On Windows a run-as-user daemon is terminated, not stopped, by every console event but Ctrl-C and Ctrl-Break: the handler logs "Exiting without saving" and returns `FALSE` for window close, logoff and shutdown ([`src/common/util.h:193-201`](../../src/common/util.h)), so RT-16's "stops at logout" does not hold today. Low severity: the stores are transactional and Tor exits through `TAKEOWNERSHIP` | absorbed: one stop path for every signal, console event and SCM control (§2.2 step 9) |
 | DC-F12 | The first notify command switches child reaping off for the whole process. `tools::spawn` sets `signal(SIGCHLD, SIG_IGN)` after a spawn it does not wait for ([`src/common/spawn.cpp:124`](../../src/common/spawn.cpp)); from then on the kernel reaps every child, the managed Tor included, which the Rust side waits on ([`rust/shekyl-tor-control-client/src/control/actor.rs:616`](../../rust/shekyl-tor-control-client/src/control/actor.rs), [`:1011`](../../rust/shekyl-tor-control-client/src/control/actor.rs)). Under tokio 1.51.0 on Linux the pidfd reaper's wait then fails with `ECHILD` instead of an exit status; on macOS and FreeBSD the `SIGCHLD` handler tokio relies on is overwritten and the wait never completes | absorbed: the Rust runner reaps its own children and never changes a signal disposition (§2.10); pre-flight demonstrates it (§9) |
 
 ---
@@ -644,7 +682,7 @@ ruled. Read rules 00, 06, 08, 17, 19, 20, 22, 23, 25, 26, 35, 36, 40, 45,
 commit.
 
 1. **Preconditions.** PR-3 is on `dev`; the grammar's Part B is on `dev`
-   and folded into this brief; DC-Q16 is ruled. Stop and ask if any is not
+   and folded into this brief; DC-Q16 and DC-Q17 are ruled. Stop and ask if any is not
    true.
 2. **Worktree and branch.** One worktree off `dev`; stage explicit paths;
    push each commit to the open PR after merging `dev`; no attribution
