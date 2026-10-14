@@ -43,9 +43,11 @@
 //!
 //! Every sink, stderr included, sits behind a bounded queue with its own
 //! writer thread (`log-stderr`, `log-file`), so a log call never waits on
-//! a sink. A full queue drops and counts; a write or flush the sink refuses
-//! is counted; the writer thread reports both counts in one line once the
-//! sink takes writes again. What that leaves, on the record (Rick's review
+//! a sink. A full queue drops and counts. A write the sink refuses is
+//! counted. A flush is counted only when that `flush` returns an error.
+//! The writer thread reports the counts in one line once the sink takes
+//! writes again; a summary the sink refuses stays pending and is not itself
+//! a failed flush. What that leaves, on the record (Rick's review
 //! of #1069, 2026-10-14):
 //!
 //! - **Shutdown.** Dropping the [`LoggerGuard`] queues a shutdown (waiting
@@ -123,7 +125,7 @@ use tracing_subscriber::Registry;
 /// it was installed from Rust or from C.
 pub(crate) static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Whether [`install_subscriber_inner`] has successfully called `try_init`.
+/// Whether [`install_reserved`] has successfully called `try_init`.
 ///
 /// Set only after `try_init` returns Ok, and never cleared —
 /// `set_global_default` has no uninstall. FFI emit, enabled, and the
@@ -178,13 +180,17 @@ pub(crate) type FilterReloadHandle = reload::Handle<EnvFilter, Registry>;
 #[must_use = "dropping LoggerGuard without binding flushes buffered events \
               and may silently lose logs; bind to a named local such as `_guard`"]
 pub struct LoggerGuard {
-    // One per sink: stderr always, the file when configured. Every sink
-    // has its own queue and writer thread (`queue`), and each guard
-    // flushes its queue when dropped. `pub(crate)` so the FFI path in
-    // [`crate::ffi`] can build a guard when the C caller owns the init —
-    // it holds the guard in global state and drops it on
+    // One field per sink. Drop flushes that sink's queue. The fields are
+    // never read: moving a guard out would take the writer thread out of
+    // the value that shuts it down. `pub(crate)` so the FFI path in
+    // [`crate::ffi`] can hold the guard and drop it on
     // `shekyl_log_shutdown`.
-    pub(crate) _worker_guards: Vec<WorkerGuard>,
+    /// stderr's writer thread. stderr is always queued.
+    #[allow(dead_code)]
+    pub(crate) stderr: WorkerGuard,
+    /// The file sink's writer thread, when a file sink is configured.
+    #[allow(dead_code)]
+    pub(crate) file: Option<WorkerGuard>,
 }
 
 /// Errors returned from [`init`].
@@ -241,11 +247,27 @@ pub fn init(config: Config) -> Result<LoggerGuard, InitError> {
 }
 
 /// Install the subscriber and hand back both the guard *and* the
-/// reload handle. Reservation ([`INITIALIZED`]) and successful
-/// install ([`SUBSCRIBER_INSTALLED`]) are coordinated here so both
-/// [`init`] and the FFI path stay in lockstep.
+/// reload handle. [`init`], the FFI path, and the test hook all enter
+/// through [`install_reserved`], so the reservation ([`INITIALIZED`])
+/// and the successful install ([`SUBSCRIBER_INSTALLED`]) stay one protocol.
 pub(crate) fn install_subscriber(
     config: Config,
+) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
+    install_reserved(config, std::io::stderr(), queue::SINK_QUEUE_LINES)
+}
+
+/// Reserve the process subscriber, then install `config` with `stderr`
+/// queued at `lines`.
+///
+/// One reservation for every caller. A failed attempt clears
+/// [`INITIALIZED`] so a later call can retry. Success leaves the
+/// reservation set for the process lifetime and flips
+/// [`SUBSCRIBER_INSTALLED`], so emit, enabled, and the forwarder stop
+/// using the pre-init stderr passthrough.
+fn install_reserved<W: std::io::Write + Send + 'static>(
+    config: Config,
+    stderr: W,
+    lines: usize,
 ) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
     if INITIALIZED
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -254,12 +276,7 @@ pub(crate) fn install_subscriber(
         return Err(InitError::AlreadyInitialized);
     }
 
-    // Release the reservation on hard failure so a follow-up init
-    // with a fixed config can succeed. On success the reservation
-    // stays set for the process lifetime *and* we flip
-    // `SUBSCRIBER_INSTALLED` so emit/enabled/forwarder stop using
-    // the pre-init stderr passthrough.
-    let result = install_subscriber_inner(config);
+    let result = install_subscriber_with_stderr(config, stderr, lines);
     if result.is_err() {
         INITIALIZED.store(false, Ordering::SeqCst);
     } else {
@@ -268,14 +285,8 @@ pub(crate) fn install_subscriber(
     result
 }
 
-fn install_subscriber_inner(
-    config: Config,
-) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
-    install_subscriber_with_stderr(config, std::io::stderr(), queue::SINK_QUEUE_LINES)
-}
-
-/// The subscriber over `stderr` as the stderr sink, every sink queued at
-/// `lines`. Production passes the process's `stderr` and
+/// The subscriber itself. `stderr` is the stderr sink. Every sink is
+/// queued at `lines`. Production passes the process's `stderr` and
 /// [`SINK_QUEUE_LINES`]; the never-blocks test passes a sink that stalls.
 fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     config: Config,
@@ -292,68 +303,50 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
 
     // Queued like every sink: a log call never waits on stderr. What
     // stderr carries (levels, format) is unchanged; that is IG-14's.
-    let (stderr_writer, stderr_guard) = queue::queued(stderr, "stderr", lines);
+    let (stderr_writer, stderr_guard) = queue::queued(stderr, queue::Sink::Stderr, lines);
     let stderr_layer = fmt::layer().with_writer(stderr_writer);
 
-    if let Some(file_sink) = config.file_sink {
-        let (non_blocking, worker_guard) = appender::open(&file_sink, lines)?;
-        let file_layer = fmt::layer().with_writer(non_blocking).with_ansi(false);
-
-        tracing_subscriber::registry()
-            .with(reloadable_filter)
-            .with(stderr_layer)
-            .with(file_layer)
-            .try_init()
-            .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
-
-        Ok((
-            LoggerGuard {
-                _worker_guards: vec![stderr_guard, worker_guard],
-            },
-            reload_handle,
-        ))
+    let (file_layer, file_guard) = if let Some(file_sink) = config.file_sink {
+        let (writer, guard) = appender::open(&file_sink, lines)?;
+        (
+            Some(fmt::layer().with_writer(writer).with_ansi(false)),
+            Some(guard),
+        )
     } else {
-        tracing_subscriber::registry()
-            .with(reloadable_filter)
-            .with(stderr_layer)
-            .try_init()
-            .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
+        (None, None)
+    };
 
-        Ok((
-            LoggerGuard {
-                _worker_guards: vec![stderr_guard],
-            },
-            reload_handle,
-        ))
-    }
+    tracing_subscriber::registry()
+        .with(reloadable_filter)
+        .with(stderr_layer)
+        .with(file_layer)
+        .try_init()
+        .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
+
+    Ok((
+        LoggerGuard {
+            stderr: stderr_guard,
+            file: file_guard,
+        },
+        reload_handle,
+    ))
 }
 
 /// Test-only hook: [`init`] with `stderr` standing in for the process's
 /// stderr and every sink's queue at `lines`, so a test can stall the sink
 /// and watch the queue drop and report instead of blocking the caller.
+///
+/// Enters through [`install_reserved`], the same reservation as [`init`]
+/// and the FFI path.
 #[doc(hidden)]
 pub fn __test_only_init_with_stderr<W: std::io::Write + Send + 'static>(
     config: Config,
     stderr: W,
     lines: usize,
 ) -> Result<LoggerGuard, InitError> {
-    if INITIALIZED
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Err(InitError::AlreadyInitialized);
-    }
-    match install_subscriber_with_stderr(config, stderr, lines) {
-        Ok((guard, reload_handle)) => {
-            SUBSCRIBER_INSTALLED.store(true, Ordering::SeqCst);
-            ffi::__register_reload_handle(reload_handle);
-            Ok(guard)
-        }
-        Err(err) => {
-            INITIALIZED.store(false, Ordering::SeqCst);
-            Err(err)
-        }
-    }
+    let (guard, reload_handle) = install_reserved(config, stderr, lines)?;
+    ffi::__register_reload_handle(reload_handle);
+    Ok(guard)
 }
 
 /// Test-only hook: raise the reservation flag without installing a subscriber.

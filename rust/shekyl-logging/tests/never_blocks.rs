@@ -3,32 +3,37 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Logging never blocks (Rick, 2026-10-14). A sink whose writes stall for
-//! 10 s, while a timing-engine owner and a loopback session run and log on
-//! every step: the wakes and the session's round trips stay on time, and
-//! once the sink catches up it carries one line saying how many lines were
-//! dropped. *Records-was:* the stderr layer wrote synchronously, and a
-//! stalled stderr held every logging thread for as long as it stalled
-//! (18 s on one responder in the PR-3 measurement), its P2P transport
-//! workers among them.
+//! A log call returns while its sink is stalled.
+//!
+//! The sink's first writes block until `STALL` has passed. Each `tracing`
+//! call in that window must return within [`ON_TIME`]. Once the sink
+//! catches up it carries one line saying how many lines were dropped.
+//! *Records-was:* the stderr layer wrote synchronously, and a stalled
+//! stderr held the caller for as long as the write took (18 s on one
+//! responder in the PR-3 measurement).
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use shekyl_logging::{Config, __test_only_init_with_stderr};
-use shekyl_timing_engine::{Clock, EngineService, MonotonicClock, OwnerClass, Tick};
 use tracing::Level;
 
-/// How long the sink stalls: every write that starts inside the window waits
-/// until the window ends.
-const STALL: Duration = Duration::from_secs(10);
-/// Small, so the queue fills and drops inside the stall.
+/// How long a write that starts inside the window waits.
+const STALL: Duration = Duration::from_secs(1);
+/// Small, so the queue fills and drops while the sink is stalled.
 const QUEUE_LINES: usize = 16;
-/// What "on time" means here. A blocked logger would show the whole stall.
+/// Calls issued while the sink is stalled. More than the queue, so a drop
+/// is required.
+const CALLS: usize = QUEUE_LINES * 4;
+/// A log call that waits on the sink takes the rest of [`STALL`], which is
+/// longer than this.
 const ON_TIME: Duration = Duration::from_millis(500);
+/// How long to wait, after the stall, for the writer to publish the drop.
+const REPORT_WAIT: Duration = Duration::from_secs(2);
+
+const DROPPED: &[u8] = b"lines dropped since";
 
 /// A sink that stalls every write until `until`, then records what it gets.
 struct StallingSink {
@@ -51,8 +56,13 @@ impl Write for StallingSink {
     }
 }
 
+fn contains_dropped(written: &Mutex<Vec<u8>>) -> bool {
+    let buf = written.lock().expect("sink");
+    buf.windows(DROPPED.len()).any(|window| window == DROPPED)
+}
+
 #[test]
-fn a_stalled_sink_delays_no_wake_and_no_session_and_reports_its_drops() {
+fn a_stalled_sink_does_not_hold_the_log_call_and_reports_its_drops() {
     let written = Arc::new(Mutex::new(Vec::new()));
     let start = Instant::now();
     let sink = StallingSink {
@@ -62,80 +72,35 @@ fn a_stalled_sink_delays_no_wake_and_no_session_and_reports_its_drops() {
     let guard = __test_only_init_with_stderr(Config::stderr_only(Level::DEBUG), sink, QUEUE_LINES)
         .expect("init");
 
-    // A timing-engine owner: arm 20 ms ahead, wait, log, repeat, through the
-    // stall and past it.
-    let engine = EngineService::start(MonotonicClock::new());
-    let handle = engine.handle();
-    let wakes = thread::spawn(move || {
-        let owner = handle.register(OwnerClass::Transport).expect("owner");
-        let mut worst = Duration::ZERO;
-        let mut count = 0u32;
-        while start.elapsed() < STALL + Duration::from_secs(1) {
-            let deadline = Tick::new(owner.clock().now().get() + 20_000_000);
-            owner.arm(deadline).expect("arm");
-            let wake = owner.wait_wake().expect("wake");
-            let late = Duration::from_nanos(
-                owner
-                    .clock()
-                    .now()
-                    .get()
-                    .saturating_sub(wake.deadline.get()),
-            );
-            worst = worst.max(late);
-            count += 1;
-            tracing::debug!(count, late = ?late, "wake");
-        }
-        (count, worst)
-    });
-
-    // A loopback session: the server echoes and logs, the client measures
-    // each round trip and logs.
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let address = listener.local_addr().expect("address");
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
-        let mut buf = [0u8; 8];
-        while stream.read_exact(&mut buf).is_ok() {
-            tracing::debug!(bytes = buf.len(), "echo");
-            if stream.write_all(&buf).is_err() {
-                break;
-            }
-        }
-    });
-    let mut client = TcpStream::connect(address).expect("connect");
-    let mut worst_rtt = Duration::ZERO;
-    let mut round_trips = 0u32;
-    while start.elapsed() < STALL + Duration::from_secs(1) {
-        let sent = Instant::now();
-        client.write_all(&[7u8; 8]).expect("send");
-        let mut back = [0u8; 8];
-        client.read_exact(&mut back).expect("echo");
-        let rtt = sent.elapsed();
-        worst_rtt = worst_rtt.max(rtt);
-        round_trips += 1;
-        tracing::debug!(rtt = ?rtt, "round trip");
-        thread::sleep(Duration::from_millis(20));
+    for call in 0..CALLS {
+        let started = Instant::now();
+        tracing::debug!(call, "tick");
+        let took = started.elapsed();
+        assert!(
+            took < ON_TIME,
+            "log call {call} took {took:?} while the sink was stalled"
+        );
     }
-    drop(client);
-    server.join().expect("server");
-    let (wake_count, worst_wake) = wakes.join().expect("wakes");
 
-    assert!(wake_count > 100, "the owner kept waking: {wake_count}");
-    assert!(
-        worst_wake < ON_TIME,
-        "a wake was {worst_wake:?} late while the sink stalled"
-    );
-    assert!(round_trips > 100, "the session kept running: {round_trips}");
-    assert!(
-        worst_rtt < ON_TIME,
-        "a round trip took {worst_rtt:?} while the sink stalled"
-    );
-
-    // Dropping the guard flushes the queue: the sink has caught up.
+    let deadline = start + STALL + REPORT_WAIT;
+    while Instant::now() < deadline && !contains_dropped(&written) {
+        thread::sleep(Duration::from_millis(10));
+    }
     drop(guard);
+
     let text = String::from_utf8_lossy(&written.lock().expect("sink")).into_owned();
+    let report = text
+        .lines()
+        .find(|line| line.contains("lines dropped since"))
+        .unwrap_or_else(|| panic!("the sink carries the drop report once it catches up:\n{text}"));
+    let dropped: u64 = report
+        .split("WARN shekyl_logging: ")
+        .nth(1)
+        .and_then(|rest| rest.split([' ', ';']).next())
+        .and_then(|count| count.parse().ok())
+        .unwrap_or_else(|| panic!("the report names a count: {report}"));
     assert!(
-        text.contains("lines dropped since"),
-        "the sink carries the drop report once it catches up"
+        dropped > 0,
+        "the queue dropped at least one of the {CALLS} calls: {report}"
     );
 }

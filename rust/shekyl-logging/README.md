@@ -119,17 +119,19 @@ never silent. *Records-was (to 2026-10-14):* the stderr layer wrote
 synchronously, and one slow stderr write (a file on a stalled disk, a
 slow journald) held every logging thread, the daemon's P2P transport
 workers among them, for as long as it stalled.
-`tests/never_blocks.rs` holds a 10 s stall against a timing-engine
-owner and a loopback session.
+`tests/never_blocks.rs` times each log call while the sink's write
+stalls, and checks the drop report once the sink catches up.
 
-A write or flush the sink refuses (a dead stderr pipe, a full disk, a
-failing file) is counted the same way and reported as `N lines failed
-to write since <time>` once the sink takes writes again;
-`tracing_appender`'s worker discards a writer's error, so without the
-count those lines were lost with nothing said.
-`tests/write_errors.rs` holds a sink that refuses writes for 5 s. What
-the queues leave (shutdown, the pre-init passthrough, a bound in lines,
-the thread ledger) is recorded in the crate doc.
+A write the sink refuses (a dead stderr pipe, a full disk, a failing
+file) is counted the same way and reported as `N lines failed to write
+since <time>` once the sink takes writes again. A flush is counted only
+when that `flush` returns an error, as `N flushes failed since <time>`.
+A summary the sink refuses stays pending; it is not itself a failed
+flush. `tracing_appender`'s worker discards a writer's error, so without
+the count those lines were lost with nothing said.
+`tests/write_errors.rs` refuses a fixed run of writes, then accepts.
+What the queues leave (shutdown, the pre-init passthrough, a bound in
+lines, the thread ledger) is recorded in the crate doc.
 
 ### `LoggerGuard`
 

@@ -89,15 +89,15 @@ pub(crate) fn open(sink: &FileSink, lines: usize) -> Result<(NonBlocking, Worker
     let (non_blocking, guard) = match sink.rotation {
         Rotation::Never => {
             let appender = tracing_appender::rolling::never(dir, &sink.filename_prefix);
-            crate::queue::queued(appender, "file", lines)
+            crate::queue::queued(appender, crate::queue::Sink::File, lines)
         }
         Rotation::Hourly => {
             let appender = tracing_appender::rolling::hourly(dir, &sink.filename_prefix);
-            crate::queue::queued(appender, "file", lines)
+            crate::queue::queued(appender, crate::queue::Sink::File, lines)
         }
         Rotation::Daily => {
             let appender = tracing_appender::rolling::daily(dir, &sink.filename_prefix);
-            crate::queue::queued(appender, "file", lines)
+            crate::queue::queued(appender, crate::queue::Sink::File, lines)
         }
         Rotation::Size {
             max_bytes,
@@ -105,7 +105,7 @@ pub(crate) fn open(sink: &FileSink, lines: usize) -> Result<(NonBlocking, Worker
         } => {
             let writer = SizeRollingWriter::new(dir, &sink.filename_prefix, max_bytes, max_files)
                 .map_err(InitError::FileSinkCreate)?;
-            crate::queue::queued(writer, "file", lines)
+            crate::queue::queued(writer, crate::queue::Sink::File, lines)
         }
     };
     Ok((non_blocking, guard))
