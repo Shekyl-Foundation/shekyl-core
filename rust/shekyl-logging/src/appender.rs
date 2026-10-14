@@ -20,7 +20,7 @@ use crate::InitError;
 
 /// Open the file sink described by `sink` and return the non-blocking
 /// writer plus its worker guard.
-pub(crate) fn open(sink: &FileSink) -> Result<(NonBlocking, WorkerGuard), InitError> {
+pub(crate) fn open(sink: &FileSink, lines: usize) -> Result<(NonBlocking, WorkerGuard), InitError> {
     let dir = sink.directory.as_path();
 
     // Ensure the directory exists. If the caller passed a path that
@@ -89,15 +89,15 @@ pub(crate) fn open(sink: &FileSink) -> Result<(NonBlocking, WorkerGuard), InitEr
     let (non_blocking, guard) = match sink.rotation {
         Rotation::Never => {
             let appender = tracing_appender::rolling::never(dir, &sink.filename_prefix);
-            tracing_appender::non_blocking(appender)
+            crate::queue::queued(appender, "file", lines)
         }
         Rotation::Hourly => {
             let appender = tracing_appender::rolling::hourly(dir, &sink.filename_prefix);
-            tracing_appender::non_blocking(appender)
+            crate::queue::queued(appender, "file", lines)
         }
         Rotation::Daily => {
             let appender = tracing_appender::rolling::daily(dir, &sink.filename_prefix);
-            tracing_appender::non_blocking(appender)
+            crate::queue::queued(appender, "file", lines)
         }
         Rotation::Size {
             max_bytes,
@@ -105,7 +105,7 @@ pub(crate) fn open(sink: &FileSink) -> Result<(NonBlocking, WorkerGuard), InitEr
         } => {
             let writer = SizeRollingWriter::new(dir, &sink.filename_prefix, max_bytes, max_files)
                 .map_err(InitError::FileSinkCreate)?;
-            tracing_appender::non_blocking(writer)
+            crate::queue::queued(writer, "file", lines)
         }
     };
     Ok((non_blocking, guard))

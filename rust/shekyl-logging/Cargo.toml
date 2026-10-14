@@ -42,6 +42,8 @@ libc = "0.2"
 [dev-dependencies]
 tempfile = "3"
 trybuild = "1"
+# The never-blocks test runs a timing-engine owner beside a stalled sink.
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
