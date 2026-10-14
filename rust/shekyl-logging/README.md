@@ -122,6 +122,15 @@ workers among them, for as long as it stalled.
 `tests/never_blocks.rs` holds a 10 s stall against a timing-engine
 owner and a loopback session.
 
+A write or flush the sink refuses (a dead stderr pipe, a full disk, a
+failing file) is counted the same way and reported as `N lines failed
+to write since <time>` once the sink takes writes again;
+`tracing_appender`'s worker discards a writer's error, so without the
+count those lines were lost with nothing said.
+`tests/write_errors.rs` holds a sink that refuses writes for 5 s. What
+the queues leave (shutdown, the pre-init passthrough, a bound in lines,
+the thread ledger) is recorded in the crate doc.
+
 ### `LoggerGuard`
 
 RAII guard for the sinks' writer threads, one per sink. Must outlive

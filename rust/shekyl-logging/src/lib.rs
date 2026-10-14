@@ -39,6 +39,33 @@
 //! interesting work. Binding it to `_` or letting it drop at a `;` defeats
 //! the purpose. See the guard's own docs for the defense hierarchy.
 //!
+//! # Every sink is queued
+//!
+//! Every sink, stderr included, sits behind a bounded queue with its own
+//! writer thread (`log-stderr`, `log-file`), so a log call never waits on
+//! a sink. A full queue drops and counts; a write or flush the sink refuses
+//! is counted; the writer thread reports both counts in one line once the
+//! sink takes writes again. What that leaves, on the record (Rick's review
+//! of #1069, 2026-10-14):
+//!
+//! - **Shutdown.** Dropping the [`LoggerGuard`] queues a shutdown (waiting
+//!   at most 100 ms for room) and then waits at most 1 s for the writer
+//!   thread to drain, and returns either way: about a second. Lines still
+//!   queued then are lost. A sink still stalled at that point can hold the
+//!   process's exit anyway: a writer thread inside a write the kernel
+//!   cannot interrupt (a stalled disk) keeps the process from exiting, and
+//!   anything else writing to the same stalled stderr blocks with it. The
+//!   service manager's stop timeout is the bound.
+//! - **Before init.** The FFI's pre-init passthrough (WARNING and above,
+//!   straight to stderr; see [`ffi`]) stays synchronous: a stalled stderr
+//!   blocks those calls. It serves only the lines logged before the
+//!   subscriber is installed.
+//! - **The bound is lines, not bytes.** [`SINK_QUEUE_LINES`] counts lines,
+//!   so a queue of long lines holds more memory than the figure suggests.
+//! - **The thread ledger does not count them.** `tracing_appender` spawns
+//!   the two writer threads itself, not through `shekyl-thread-ledger`, so
+//!   the daemon's ledger print leaves them out.
+//!
 //! # Quick-start
 //!
 //! ```no_run
