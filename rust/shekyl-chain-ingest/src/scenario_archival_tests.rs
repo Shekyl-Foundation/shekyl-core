@@ -398,8 +398,11 @@ async fn a_join_markets_receipt_key_is_the_records_and_a_release_leaves_it() {
     // The FN-DSA half starts at byte 44 of the canonical encoding
     // (`version ‖ scheme ‖ reserved(2) ‖ len(4) ‖ ed25519(32) ‖ len(4)`);
     // its first byte is the encoding's header, and no other value decodes.
-    let mut not_a_key = key.clone();
-    not_a_key.as_bytes_mut()[44] ^= 0xff;
+    let not_a_key = {
+        let mut bytes = *key.as_bytes();
+        bytes[44] ^= 0xff;
+        shekyl_types::archival::ReceiptSignPk::from_bytes(bytes)
+    };
     let refused = join_committing(&first, not_a_key);
     refused_at(
         scenario
