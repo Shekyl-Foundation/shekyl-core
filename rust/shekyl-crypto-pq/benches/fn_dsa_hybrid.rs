@@ -13,8 +13,9 @@
 //!
 //! Two arms are of the held key, [`FnDsaHybridSigner`] (`FND-4`):
 //! `fn_dsa_hybrid_sign_held` is the production entry with the key decoded
-//! before the loop, and `fn_dsa_hybrid_hold_key` is the one decode, with
-//! the wipe that ends the key's life.
+//! before the loop, and `fn_dsa_hybrid_hold_key` is the one decode into a
+//! held key; the wipe and release that end the key's life are dropped
+//! outside the timed region.
 //!
 //! `fn_dsa_hybrid_persona_slot_derivation` is one persona slot's whole key
 //! derivation, of which the receipt key's generation is part (`FND-12`).
@@ -80,8 +81,13 @@ fn bench_sign_held(c: &mut Criterion) {
 
 fn bench_hold_key(c: &mut Criterion) {
     let (_public, secret) = keypair();
+    // `iter_with_large_drop` drops each signer outside the timed region, so
+    // the figure is the decode into a held key and not also the wipe and
+    // the release of the ~114 kB context that ends its life.
     c.bench_function("fn_dsa_hybrid_hold_key", |b| {
-        b.iter(|| FnDsaHybridSigner::new(black_box(&secret)).expect("the generated key decodes"))
+        b.iter_with_large_drop(|| {
+            FnDsaHybridSigner::new(black_box(&secret)).expect("the generated key decodes")
+        })
     });
 }
 
