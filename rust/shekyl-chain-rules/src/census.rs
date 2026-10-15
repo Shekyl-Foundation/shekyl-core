@@ -122,7 +122,12 @@ pub enum RowStatus {
     /// side of it. Four at mint: CEN-K1a and CEN-K2 (`AltChain::build`
     /// links an alt entry to a recorded row or refuses it), CEN-K3
     /// (`insert_alt_block` refuses a held hash) and CEN-K8 (`HeaderRecord`
-    /// carries no `coins_generated` for an alt entry to disturb).
+    /// carries no `coins_generated` for an alt entry to disturb). The same
+    /// status holds the rows the **switch** enforces — CEN-K5, K5b, K6 and
+    /// K7, held by `shekyl-chain-ingest`, the store's single writer, whose
+    /// switch sequences promotion, the fork choice's match and the demoted
+    /// rows (DRS-E5 a5): like the store, a crate the validator does not
+    /// import, which is what the status names.
     ///
     /// The registry entry cites the crate and the test that proves the
     /// holder refuses — `held_by_store("<crate>", "<test>")` — and the gate
@@ -597,17 +602,20 @@ census_rows! {
         // store (DRS-D12 (i)), so each is `held_by_store` with the test in
         // `shekyl-chain-store` that proves it (E5-18). The alt tier's own
         // rows are `enforced_at` its sites: the height-0 claim (K1b), the
-        // tier as the set and order of its steps (K4). K5–K7, K9 and K10
-        // are promotion's and the pop path's (slice 10).
+        // tier as the set and order of its steps (K4). K5–K7 are the
+        // switch's — the single writer's sequencing of the store, in
+        // `shekyl-chain-ingest` (DRS-E5 a5; `DRS_E5_POOL_ALT_PRUNE.md`
+        // §2.3), `held_by_store` with the switch test that proves each. K9
+        // and K10 are the pool's (PR-b).
         K1a held_by_store("shekyl-chain-store", "a_chain_through_two_alt_entries_reaches_a_recorded_row"),
         K1b enforced_at(crate::rules::alt::K1b, "a_height_zero_claim_is_refused_before_anything_is_read"),
         K2 held_by_store("shekyl-chain-store", "the_orphan_is_unlinked_at_the_first_unheld_hash"),
         K3 held_by_store("shekyl-chain-store", "insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals"),
         K4 enforced_at(crate::rules::alt::K4, "the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else"),
-        K5 pending,
-        K5b pending,
-        K6 pending,
-        K7 pending,
+        K5 held_by_store("shekyl-chain-ingest", "a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix"),
+        K5b held_by_store("shekyl-chain-ingest", "a_tampered_witness_on_an_alt_row_fails_promotion_k5b"),
+        K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
+        K7 held_by_store("shekyl-chain-ingest", "a_checkpoint_forced_switch_discards_the_demoted_chain"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
         K9 pending,
         K10 pending,
