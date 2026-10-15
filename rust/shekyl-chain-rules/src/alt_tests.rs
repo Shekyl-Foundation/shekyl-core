@@ -328,6 +328,41 @@ fn a_height_zero_claim_is_refused_before_anything_is_read() {
 }
 
 #[test]
+fn an_anchor_above_the_recorded_tip_is_no_floor_yet() {
+    // CEN-E2's floor is the last anchor at or below the recorded tip. An
+    // anchor at 13 on a chain whose tip is 11 has not been reached: a fork
+    // rooted at 4 is not below any floor, and the cap does not bind.
+    const ANCHORED_AT_13: ReleaseAnchors = ReleaseAnchors::for_tests(None, &[anchor(13, 0xAD)]);
+    let chain = chain_of(12);
+    let ahead = Trust::full(ANCHORED_AT_13);
+    chain.with_view(|view| {
+        judged(alt_against(
+            formed_on(&chain, candidate_on(&chain, Vec::new())),
+            &forked(&view, fork_rooted_at(&chain, 4)),
+            &RuleSet::GENESIS,
+            &ahead,
+        ))
+        .unwrap_or_else(|refused| panic!("an unreached anchor floored the fork: {refused}"));
+    });
+    // Reached, the same anchor table floors it: the tip at 11 sits at or
+    // above an anchor at 5 in the two-anchor table, and 4 is below it.
+    const BOTH: ReleaseAnchors =
+        ReleaseAnchors::for_tests(None, &[anchor(5, 0xA5), anchor(13, 0xAD)]);
+    chain.with_view(|view| {
+        assert_refused(
+            judged(alt_against(
+                formed_on(&chain, candidate_on(&chain, Vec::new())),
+                &forked(&view, fork_rooted_at(&chain, 4)),
+                &RuleSet::GENESIS,
+                &Trust::full(BOTH),
+            )),
+            CenRow::E2,
+            Locus::Block,
+        );
+    });
+}
+
+#[test]
 fn an_alternative_rooted_below_the_anchor_is_refused_and_one_at_or_above_it_is_not() {
     // CEN-E2 band 1. The anchor is at 5; a fork rooted at 4 would replace
     // the anchored block, one rooted at 5 or 7 would not. The refusal is
