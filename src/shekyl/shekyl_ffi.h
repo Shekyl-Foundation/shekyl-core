@@ -4645,6 +4645,59 @@ std::uint64_t shekyl_recv_mark_ms(std::uint64_t recv_ms, std::uint64_t started_m
 /// (`shekyl_dialer_note_network` does, from the network the daemon chose).
 int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 
+/// The daemon's entry (DAEMON_CONFIG_CUTOVER.md §2.2, DC-Q13; defined in
+/// `rust/shekyl-daemon/src/entry.rs`, carried by the daemon image). C++
+/// `main()` fills a `ShekylDaemonEntry` and calls `shekyl_daemon_main`; Rust
+/// owns the process from there and calls `run` with the snapshot of the
+/// values whose reader is still C++. The structures below are the Rust
+/// `#[repr(C)]` definitions member for member; `SHEKYL_DAEMON_SNAPSHOT_FIELDS`
+/// is asserted against `shekyl_daemon_snapshot_field_count()` at run.
+#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 12u
+
+/// A list of NUL-terminated strings.
+struct ShekylStringList {
+  const char* const* items;
+  size_t len;
+};
+
+/// The values whose reader is still C++ (§2.9), filled once by Rust.
+struct ShekylDaemonSnapshot {
+  const char* data_dir;
+  uint8_t network;
+  bool offline;
+  uint64_t fixed_difficulty;
+  uint64_t txpool_weight_max;
+  bool sync;
+  const char* mine_address;
+  uint32_t mine_threads;
+  bool console;
+  ShekylStringList command;
+  const char* client_endpoint;
+  uint16_t advertised_port;
+};
+
+/// The remnant's `run`: `noexcept`, returns the exit status. The legacy
+/// argument vector is the rendering of today's spellings, parsed until
+/// commit (e) of the cutover deletes the C++ readers.
+typedef int (*ShekylDaemonRunFn)(const ShekylDaemonSnapshot* snapshot, int argc, const char* const* argv);
+/// The remnant's `stop`: requests the stop `run` waits for; `noexcept`.
+typedef void (*ShekylDaemonStopFn)(void);
+
+/// What `main()` hands the Rust entry.
+struct ShekylDaemonEntry {
+  const char* release_name;
+  const char* version_full;
+  uint32_t protocol_version;
+  ShekylDaemonRunFn run;
+  ShekylDaemonStopFn stop;
+};
+
+/// The snapshot's field count, from the Rust definition.
+uint32_t shekyl_daemon_snapshot_field_count();
+/// Runs the daemon and returns its exit status: 2 a configuration refusal,
+/// 1 a runtime failure, `run`'s status otherwise; a panic aborts.
+int32_t shekyl_daemon_main(const ShekylDaemonEntry* entry);
+
 } // extern "C"
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h

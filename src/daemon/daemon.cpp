@@ -258,18 +258,20 @@ bool Daemon::run(bool interactive)
     throw std::runtime_error{"Can't run stopped daemon"};
   }
 
-  std::atomic<bool> stop(false), shutdown(false);
-  boost::thread stop_thread = boost::thread([&stop, &shutdown, this] {
-    while (!stop)
+  // The stop is requested by the Rust signal owner through
+  // `daemonize::request_stop` (DAEMON_CONFIG_CUTOVER.md §2.2 step 9): one
+  // process has one signal owner, and this loop only polls the flag.
+  std::atomic<bool> stop(false);
+  boost::thread stop_thread = boost::thread([&stop, this] {
+    while (!stop && !g_stop_requested.load())
       epee::misc_utils::sleep_no_w(100);
-    if (shutdown)
+    if (g_stop_requested.load())
       this->stop_p2p();
   });
   epee::misc_utils::auto_scope_leave_caller scope_exit_handler = epee::misc_utils::create_scope_leave_handler([&](){
     stop = true;
     stop_thread.join();
   });
-  tools::signal_handler::install([&stop, &shutdown](int){ stop = shutdown = true; });
   // Every exit from run() — the normal return, a caught exception, a throw
   // that escapes — stops the Rust RPC tasks before ~t_internals destroys the
   // core they hold pointers into. The normal path stops them explicitly
@@ -401,6 +403,13 @@ bool Daemon::run(bool interactive)
     MFATAL("Uncaught exception!");
     return false;
   }
+}
+
+std::atomic<bool> g_stop_requested{false};
+
+void request_stop()
+{
+  g_stop_requested.store(true);
 }
 
 void Daemon::stop()

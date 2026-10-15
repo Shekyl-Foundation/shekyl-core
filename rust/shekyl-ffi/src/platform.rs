@@ -55,6 +55,19 @@ pub fn account_home() -> Option<PathBuf> {
     shekyl_win_sec::known_folder::local_app_data()
 }
 
+/// Ignores `SIGPIPE`, so a peer closing a socket mid-write is an error
+/// the writer sees, not a signal that ends the process. Called once by the
+/// daemon's signal owner at start; the notify runner changes no
+/// disposition (DC-F12).
+#[cfg(unix)]
+pub fn ignore_sigpipe() {
+    // SAFETY: `signal(2)` with a constant signal and the `SIG_IGN`
+    // constant; it reads and writes no memory of ours.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
+}
+
 /// `%ProgramData%` on Windows; `None` elsewhere.
 #[must_use]
 pub fn program_data() -> Option<PathBuf> {

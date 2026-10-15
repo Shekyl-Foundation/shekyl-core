@@ -845,7 +845,7 @@ mod tests {
 
     fn platform() -> Platform {
         Platform {
-            home: Some(PathBuf::from("/home/op")),
+            home: Some(PathBuf::from("/srv/op")),
             program_data: None,
         }
     }
@@ -870,10 +870,10 @@ mod tests {
     fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
         let c = build_from(&[], "").unwrap();
         assert_eq!(c.network, Network::Mainnet);
-        assert_eq!(c.data_dir, PathBuf::from("/home/op/.shekyl"));
+        assert_eq!(c.data_dir, PathBuf::from("/srv/op/.shekyl"));
         assert_eq!(
             c.logging.file,
-            PathBuf::from("/home/op/.shekyl/logs/shekyld-mainnet.log")
+            PathBuf::from("/srv/op/.shekyl/logs/shekyld-mainnet.log")
         );
         assert_eq!(c.logging.directive(), "warn");
         assert_eq!(c.tor, Tor::Managed { binary: None });

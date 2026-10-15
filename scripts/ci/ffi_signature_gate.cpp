@@ -41,6 +41,7 @@
 #include "shekyl_ffi_generated_tx_extra_codec.h"
 #include "shekyl_ffi_generated_rpc_peerlist.h"
 #include "shekyl_ffi_generated_close_cause.h"
+#include "shekyl_ffi_generated_daemon_entry.h"
 
 int main()
 {

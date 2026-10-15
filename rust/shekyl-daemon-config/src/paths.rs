@@ -84,7 +84,7 @@ mod tests {
 
     fn platform() -> Platform {
         Platform {
-            home: Some(PathBuf::from("/home/op")),
+            home: Some(PathBuf::from("/srv/op")),
             program_data: None,
         }
     }

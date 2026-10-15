@@ -53,8 +53,8 @@ borrows mainnet constants for genesis, ports, and network id
 
 **CLI activation.** Passing `--regtest` to `shekyld` sets
 `m_nettype = FAKECHAIN` (`src/cryptonote_core/cryptonote_core.cpp:472–475`).
-The flag is mutually exclusive with `--testnet` / `--stagenet`
-(`src/daemon/main.cpp:267–273, 329–330`). Companion flags:
+The flag is mutually exclusive with `--testnet` / `--stagenet`: the
+configuration takes one network. Companion flags:
 
 - `--fixed-difficulty <N>` — pin difficulty to a constant. Default `0`
   means "use adaptive difficulty," so for instant-mining the harness

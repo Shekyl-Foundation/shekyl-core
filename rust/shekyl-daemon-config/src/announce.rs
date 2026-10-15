@@ -116,7 +116,7 @@ mod tests {
             shekyl_options::read_file(&TABLE, Path::new("/etc/shekyl/x.toml"), file).unwrap();
         let resolved = resolve(&TABLE, network, cli, given).unwrap();
         let platform = Platform {
-            home: Some(PathBuf::from("/home/op")),
+            home: Some(PathBuf::from("/srv/op")),
             program_data: None,
         };
         let config = build(&resolved, network, mode, &platform, None).unwrap();

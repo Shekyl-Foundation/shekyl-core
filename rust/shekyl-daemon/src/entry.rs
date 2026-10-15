@@ -1,0 +1,151 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The C ABI between the Rust `main()` and the C++ remnant
+//! (`DAEMON_CONFIG_CUTOVER.md` §2.1, §2.9).
+//!
+//! Nothing crosses in either direction but what is here. C++ `main()`
+//! hands [`shekyl_daemon_main`] a [`ShekylDaemonEntry`]: its version
+//! strings and two function pointers, `run` and `stop`. Rust fills a
+//! [`ShekylDaemonSnapshot`], the read-only structure holding exactly the
+//! values whose reader is still C++, and calls `run` with it. The C++
+//! defines no symbol Rust imports, so every Rust test can drive the entry
+//! with a fake pair. This file is the whole C ABI and a signature-gate
+//! surface; the two `#[allow(unsafe_code)]` below are its only exceptions
+//! to the crate's rule, each on the one item the lint names.
+//!
+//! **Twelve fields.** [`SNAPSHOT_FIELDS`] pins the count and
+//! [`shekyl_daemon_snapshot_field_count`] exports it for the C++ to assert;
+//! each later slice that moves a reader into Rust deletes its field. The
+//! legacy argument vector `run` also takes is not a field: it is the
+//! rendering of today's spellings the remnant parses until commit (e)
+//! deletes the C++ readers, and it goes with them.
+
+use std::ffi::{c_char, c_int};
+
+/// A list of C strings.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ShekylStringList {
+    /// The strings, each NUL-terminated; valid for `len` entries.
+    pub items: *const *const c_char,
+    /// How many.
+    pub len: usize,
+}
+
+/// The values whose reader is still C++ (`DAEMON_CONFIG_CUTOVER.md` §2.9),
+/// filled once by Rust before the remnant is constructed.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ShekylDaemonSnapshot {
+    /// The resolved data directory, NUL-terminated; read by core.
+    pub data_dir: *const c_char,
+    /// The network, as `cryptonote::network_type`: 0 mainnet, 1 testnet,
+    /// 2 stagenet, 3 fakechain (regtest).
+    pub network: u8,
+    /// Offline: both connectors off; read by core and the protocol handler.
+    pub offline: bool,
+    /// The fixed difficulty, or 0 for none; read by core.
+    pub fixed_difficulty: u64,
+    /// The pool's weight bound in bytes; read by core.
+    pub txpool_weight_max: u64,
+    /// Chain synchronisation on; read by the protocol handler.
+    pub sync: bool,
+    /// The mining address, NUL-terminated, or null for none; read by the
+    /// miner.
+    pub mine_address: *const c_char,
+    /// The mining thread count, or 0 for `auto`; read by the miner.
+    pub mine_threads: u32,
+    /// The interactive console on; read by the C++ console.
+    pub console: bool,
+    /// The console's command words; empty for a daemon start. Read by the
+    /// C++ console client.
+    pub command: ShekylStringList,
+    /// The admin endpoint a client-mode command reaches, NUL-terminated,
+    /// or null for a daemon start. Read by the C++ console client.
+    pub client_endpoint: *const c_char,
+    /// The advertised clearnet port, or 0 for none; read by the handshake
+    /// (`DAEMON_CONFIG_CUTOVER_AUDIT.md` §2, the twelfth field).
+    pub advertised_port: u16,
+}
+
+/// The snapshot's field count. A gate asserts it against the definition
+/// above and the C++ asserts it against [`shekyl_daemon_snapshot_field_count`].
+pub const SNAPSHOT_FIELDS: u32 = 12;
+
+/// The remnant's `run`: constructs core, the protocol handler, the node
+/// server and the RPC from the snapshot, parses the legacy argument vector
+/// for the readers commit (e) deletes, runs until stopped, and returns the
+/// exit status. `noexcept`: every C++ exception is caught inside it.
+pub type RunFn = extern "C" fn(*const ShekylDaemonSnapshot, c_int, *const *const c_char) -> c_int;
+
+/// The remnant's `stop`: requests the stop `run` is waiting for and
+/// returns at once. `noexcept`.
+pub type StopFn = extern "C" fn();
+
+/// What C++ hands the Rust entry.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ShekylDaemonEntry {
+    /// `SHEKYL_RELEASE_NAME`, NUL-terminated.
+    pub release_name: *const c_char,
+    /// `SHEKYL_VERSION_FULL`, NUL-terminated.
+    pub version_full: *const c_char,
+    /// `SHEKYL_PROTOCOL_VERSION`.
+    pub protocol_version: u32,
+    /// The remnant's `run`.
+    pub run: Option<RunFn>,
+    /// The remnant's `stop`.
+    pub stop: Option<StopFn>,
+}
+
+/// The snapshot's field count, for the C++ to assert against the
+/// structure it reads. `no_mangle` is what the `unsafe_code` lint flags
+/// here, for the symbol it exports; the body is safe.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn shekyl_daemon_snapshot_field_count() -> u32 {
+    SNAPSHOT_FIELDS
+}
+
+/// The daemon's one C entry: C++ `main()` builds an entry and calls this,
+/// and Rust owns the process from here. Returns the exit status.
+///
+/// # Safety
+///
+/// `entry` must be null or point to a `ShekylDaemonEntry` that outlives
+/// the call and whose strings are NUL-terminated and static.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_daemon_main(entry: *const ShekylDaemonEntry) -> i32 {
+    if entry.is_null() {
+        return crate::run::EXIT_FAILED;
+    }
+    // SAFETY: the caller's contract above.
+    let entry = unsafe { &*entry };
+    crate::main(entry)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The gate: the structure's field count is the pinned count, read off
+    /// this file's text so a field added without moving the pin fails here.
+    #[test]
+    fn the_snapshot_has_exactly_the_pinned_fields() {
+        let source = include_str!("entry.rs");
+        let start = source
+            .find("pub struct ShekylDaemonSnapshot {")
+            .expect("the struct");
+        let end = source[start..].find("\n}\n").expect("its end") + start;
+        let fields = source[start..end]
+            .lines()
+            .filter(|l| l.trim_start().starts_with("pub ") && l.contains(':'))
+            .count();
+        assert_eq!(u32::try_from(fields).unwrap(), SNAPSHOT_FIELDS);
+        assert_eq!(shekyl_daemon_snapshot_field_count(), SNAPSHOT_FIELDS);
+    }
+}

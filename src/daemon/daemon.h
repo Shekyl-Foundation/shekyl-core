@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <boost/program_options.hpp>
 
@@ -58,5 +59,12 @@ private:
 
   std::unique_ptr<t_internals> mp_internals;
 };
+
+/// The flag the run loop polls; set by `request_stop`.
+extern std::atomic<bool> g_stop_requested;
+
+/// Requests the stop `Daemon::run` is waiting for and returns at once.
+/// Called by the Rust signal owner through the entry's `stop`.
+void request_stop();
 
 } // namespace daemonize

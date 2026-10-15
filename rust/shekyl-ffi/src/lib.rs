@@ -192,6 +192,9 @@ pub mod daemon_tor_ffi;
 /// The account's home from the operating system's account interface (IG-13).
 pub mod platform;
 
+/// The daemon's panic hook: a panic is never silent under `panic = "abort"`.
+pub mod panic_hook;
+
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
 // `shekyl_log_install_tracing_forwarder`, …) are compiled into

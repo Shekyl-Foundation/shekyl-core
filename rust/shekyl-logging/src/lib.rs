@@ -294,8 +294,11 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     stderr: W,
     lines: usize,
 ) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
-    let filter = filter::resolve_env_filter(config.fallback_default)
-        .map_err(|e| InitError::FilterParse(e.to_string()))?;
+    let filter = match &config.directive {
+        Some(directive) => EnvFilter::try_new(directive),
+        None => filter::resolve_env_filter(config.fallback_default),
+    }
+    .map_err(|e| InitError::FilterParse(e.to_string()))?;
 
     // Wrap the resolved `EnvFilter` in a reload layer so later
     // `shekyl_log_set_categories` calls from C (via the FFI) can

@@ -146,14 +146,21 @@ and a tokio child's `wait()` still returns its status.
 ## 7. Decisions the implementation takes inside the brief
 
 - **Where the entry lives.** The start and stop logic is a new safe crate,
-  `shekyl-daemon`, over `shekyl-daemon-config`, `shekyl-daemon-rpc`,
-  `shekyl-ffi`'s Rust surface and `shekyl-tor-control-daemon`. Its one C
-  ABI symbol, `shekyl_daemon_main`, is exported by `shekyl-daemon-image`,
-  the composition root §2.1 names: `shekyl-ffi` cannot export it without
-  depending on `shekyl-daemon-rpc`, which depends on neither. The remnant's
-  pair, defined in C++, is declared and wrapped in `shekyl-ffi` and
-  declared for C++ in `src/shekyl/shekyl_ffi.h`, so the signature gate
-  covers it.
+  `shekyl-daemon`, over `shekyl-daemon-config`, `shekyl-logging`,
+  `shekyl-ffi`'s Rust surface and `shekyl-runtime`. Its one C symbol,
+  `shekyl_daemon_main`, is defined there and carried into the archive by
+  `shekyl-daemon-image`, the composition root §2.1 names, as
+  `shekyl-ffi`'s exports are: `shekyl-ffi` cannot define it without
+  depending on crates that depend on `shekyl-ffi`. The C++ defines no
+  symbol Rust imports: `main()` hands the entry a `ShekylDaemonEntry` of
+  the version strings and two function pointers, `run` and `stop`, so no
+  Rust crate links against the daemon's objects, every Rust test drives
+  the entry with a fake pair, and the signature gate's rule that every
+  declared `shekyl_` function is a Rust export holds. The entry, the entry
+  types and the snapshot are `rust/shekyl-daemon/src/entry.rs`, a gate
+  surface; `shekyl_daemon_snapshot_field_count` is the export the C++
+  asserts, and the two `no_mangle` items carry the crate's only
+  `allow(unsafe_code)`, each scoped to itself.
 - **The daemon at each intermediate commit.** From commit (b) Rust owns
   `argv` and parses it with the grammar. Until commit (e) deletes the last
   C++ reader, C++ still reads options through `boost::program_options`, so

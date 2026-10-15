@@ -133,7 +133,8 @@ What crosses the FFI after the cutover, and nothing else:
    sections. `--help` and `--version` are answered here. A refusal renders
    through IG-11 and exits with status 2; nothing below runs.
    **Client mode.** When positional command words are given, `shekyld` is a
-   client of a daemon that is already running, as `src/daemon/main.cpp:341-393` is
+   client of a daemon that is already running, as the remnant's client branch
+   in `src/daemon/main.cpp` is
    today: it takes no lock, checks no marker, creates no data directory,
    writes no log file and makes no announcement. Rust logs to standard
    error only, fills a snapshot holding the words, the network and the
@@ -530,7 +531,7 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | `m_require_ipv4` | `rg -n -e 'm_require_ipv4' src` → 2 | 0 |
 | the environment levers | `rg -n -F -e 'getenv("SHEKYL_' src/cryptonote_core/blockchain.cpp` → 2; `rg -n -F -e 'env::var("SEEDHASH_' rust/shekyl-ffi/src/pow_randomx_ffi.rs` → 4; `rg -n -F -e 'getenv("RPC_LOGIN")' src/rpc` → 1; `rg -n -e 'SHEKYL_TOR_BINARY' rust docs/COMPILING_DEBUGGING_TESTING.md` → 8, read once at [`rust/shekyl-tor-control-client/src/binary.rs:491`](../../rust/shekyl-tor-control-client/src/binary.rs) | 0; the four `dev-` levers replace them, and Rust arms the schedules from its section; `tor-file` replaces the Tor override, and `discover_and_verify` keeps only its two discovered tiers |
 | the carrier global | `rg -n -e 'set_carrier_development' src` → more than 2 | 0; the relay reads `dev-relay-cover` |
-| `tools::set_max_concurrency` from the daemon | [`src/daemon/main.cpp:310-311`](../../src/daemon/main.cpp) | gone with `main.cpp`'s parse |
+| `tools::set_max_concurrency` from the daemon | the two lines of `main.cpp` at `d26148535e`, recorded in the audit §2 | gone with `main.cpp`'s parse (commit (b)) |
 | the C++ notify path and its process-wide `SIGCHLD` change (DC-F12) | [`src/common/notify.cpp:52`](../../src/common/notify.cpp) splits a command string on whitespace; [`src/common/spawn.cpp:124`](../../src/common/spawn.cpp) sets `SIGCHLD` to ignored for the whole process; the daemon is their only user (`src/cryptonote_core/cryptonote_core.cpp:53`, `src/cryptonote_core/blockchain.cpp:72` include `notify.h`), with `tests/unit_tests/notify.cpp` | `src/common/notify.{h,cpp}`, `src/common/spawn.{h,cpp}` and `tests/unit_tests/notify.cpp` deleted with their CMake entries; `rg -n -e 'tools::Notify' -e 'tools::spawn' -e 'SIGCHLD' src tests` → 0 (the runner is Rust's, DC-Q14, and tests itself) |
 | the C++ signal owner and orchestration (DC-Q13) | [`src/daemon/daemon.cpp:272`](../../src/daemon/daemon.cpp) installs `tools::signal_handler`, whose Windows handler stops only on Ctrl-C and Ctrl-Break ([`src/common/util.h:193-201`](../../src/common/util.h), DC-F13); `Daemon::run`, `t_internals` and `main.cpp`'s body orchestrate the start | `rg -n -e 'signal_handler::install' src/daemon` → 0; the orchestration replaced by the remnant's `run(snapshot)` and `stop()`; `main.cpp` is one call |
 | `utils/conf/shekyld.conf` | the file exists; cited at [`docs/USER_GUIDE.md:131-133`](../USER_GUIDE.md) | gone |

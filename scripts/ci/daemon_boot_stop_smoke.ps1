@@ -15,8 +15,9 @@
 # logger was initialised, so it exercised less than it claimed.
 #
 # Written for PowerShell 7 and runnable on any platform, so it can be run by
-# hand against a Linux build. The spellings are today's; the cutover moves
-# them to INPUT_GRAMMAR.md's names in the same change that renames them.
+# hand against a Linux build. The spellings are INPUT_GRAMMAR.md's: the
+# daemon parses its arguments in Rust from the configuration cutover's
+# commit (b) on.
 #
 # Rule 47: every check below asserts its own subject. A daemon that never
 # answers is a failure, not a skipped check; a store that is missing is a
@@ -65,13 +66,13 @@ $store = Join-Path (Join-Path (Join-Path $dataDir 'fake') 'lmdb') 'data.mdb'
 
 $psi = [System.Diagnostics.ProcessStartInfo]::new($Daemon)
 foreach ($a in @(
-        '--regtest', '--offline', '--non-interactive',
-        '--fixed-difficulty', '1',
+        '--network', 'regtest',
+        '--clearnet', 'off', '--tor', 'off',
+        '--dev-difficulty', '1',
         '--data-dir', $dataDir,
-        '--rpc-bind-ip', '127.0.0.1',
-        '--rpc-bind-port', "$rpcPort",
+        '--rpc-admin-listen', "127.0.0.1:$rpcPort",
         '--log-file', $logFile,
-        '--log-level', '1')) {
+        '--log-level', 'warn')) {
     $psi.ArgumentList.Add($a)
 }
 $psi.UseShellExecute = $false

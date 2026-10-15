@@ -202,6 +202,12 @@ pub struct Config {
     /// max_files)` with a directory under `~/.shekyl/logs/` rather than
     /// reaching for `FileSink::daily`.
     pub file_sink: Option<FileSink>,
+
+    /// An explicit `EnvFilter` directive. When set, it is the filter and
+    /// the environment is not read: the daemon's configuration owns its
+    /// filter (`INPUT_GRAMMAR.md` IG-13, `log-level` and `log-category`).
+    /// `None` keeps the `SHEKYL_LOG` precedence the wallet binaries use.
+    pub directive: Option<String>,
 }
 
 impl Config {
@@ -213,7 +219,16 @@ impl Config {
         Self {
             fallback_default,
             file_sink: None,
+            directive: None,
         }
+    }
+
+    /// The same configuration with an explicit filter directive, built by
+    /// [`crate::subsystem::directive`] or its words form.
+    #[must_use]
+    pub fn with_directive(mut self, directive: impl Into<String>) -> Self {
+        self.directive = Some(directive.into());
+        self
     }
 
     /// stderr + rotating file sink.
@@ -224,6 +239,7 @@ impl Config {
         Self {
             fallback_default,
             file_sink: Some(file_sink),
+            directive: None,
         }
     }
 }

@@ -79,6 +79,8 @@ mod sddl;
 #[cfg(windows)]
 mod sid;
 
+/// A lock-free write to standard error, for a panic hook.
+pub mod console;
 /// Who a descriptor grants write or read to (the daemon configuration's allowlist).
 pub mod dacl;
 /// The known-folder roots (IG-13).
