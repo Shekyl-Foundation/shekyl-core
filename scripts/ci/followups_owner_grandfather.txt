@@ -246,7 +246,6 @@ C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names (folded into
 Chore #4: platform-gate audit sweep — reduced scope after Chore #3 (V4 pre-audit).
 Restore semantic thread labels in the Rust subscriber ().
 Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw ().
-`removed_flags` shim sunset.
 `shekyl-daemon-rpc` staticlib: `tracing::*` calls silently dropped.
 Re-examine the `/FIiso646.h` deferral.
 MSVC / Windows build-debt cluster (migrated from `STRUCTURAL_TODO.md`, 2026-05-30).

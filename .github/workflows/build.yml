@@ -97,34 +97,12 @@ jobs:
           fi
           head="${{ github.sha }}"
 
-          # Any failure below leaves docs_only=false -> everything runs.
-          files=""
-          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
-            files="$(git diff --name-only "$base" "$head" 2>/dev/null || true)"
-          fi
-
-          if [ -z "$files" ]; then
-            echo "scope: no computable file list -- running everything (fail-closed)"
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          docs_only=true
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            # The domain registry lives under docs/ but IS a code input:
-            # shekyl-crypto-pq's tests/domain_registry.rs include_str!s it, so a
-            # TSV-only change must still run the Rust suite. Carve-out preserved
-            # from rust-audit-test.yml's own `paths` list.
-            case "$f" in
-              docs/design/CRYPTO_DOMAIN_REGISTRY.tsv) docs_only=false; break ;;
-              docs/*|*/README.md|README.md) ;;
-              *) docs_only=false; break ;;
-            esac
-          done <<< "$files"
-
-          echo "scope: docs_only=$docs_only over $(printf '%s' "$files" | wc -l) changed file(s)"
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          # The classifier is scripts/ci/change_scope.py: it fails closed
+          # (docs_only=false) on anything it cannot decide, and a crash of the
+          # script itself also writes false, so a broken scope runs everything
+          # rather than skipping the jobs that need this one.
+          python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
+            || echo "docs_only=false" >> "$GITHUB_OUTPUT"
 
   lint-rust-debug-macros:
     name: 'Lint: no debug macros in production Rust'
