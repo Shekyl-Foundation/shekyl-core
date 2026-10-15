@@ -817,21 +817,39 @@ pub fn pqc_auth_filler() -> PqcAuth {
 }
 
 /// A **real** BP+ over [`spend`]'s commitments for `outputs` outputs — the
-/// masks `2·G ‥ (N+1)·G`, every amount zero — made by the production
-/// prover (`Bulletproof::prove_plus`) from those known openings, so CEN-H19's
-/// batch in `form` admits the fixture and the rows a test is about are the
-/// ones that judge it. Fixtures whose subject is another rule may be
-/// constructed, provided the construction uses production paths
-/// (`50-testing.mdc`; slice 6's `fixture::signed` line): only the openings
-/// are a fixture's.
-///
-/// One proof per output count — every spend of `N` outputs carries the same
-/// commitments — proved once from a `ChaCha20Rng` seeded with `N` and
-/// memoized, so a fixture stays a pure function of its arguments. Past the
-/// prover's sixteen outputs no proof exists; the layout filler stands in,
-/// and CEN-H19's layout half refuses that count before the batch.
+/// masks `2·G ‥ (N+1)·G`, every amount zero ([`range_proof_over`] those
+/// openings). Past the prover's sixteen outputs no proof exists; the layout
+/// filler stands in, and CEN-H19's layout half refuses that count before
+/// the batch.
 #[must_use]
 pub fn range_proof_for(outputs: usize) -> BpPlus {
+    if !(1..=shekyl_wire::transaction::MAX_OUTPUTS).contains(&outputs) {
+        return bp_plus_layout_for(outputs);
+    }
+    let openings: Vec<(u64, u64)> = (0..u64::try_from(outputs).expect("fits"))
+        .map(|i| (FIRST_MASK_SCALAR + i, 0))
+        .collect();
+    range_proof_over(&openings)
+}
+
+/// A **real** BP+ over commitments `mask·G + amount·H`, one per
+/// `(mask, amount)` opening, made by the production prover
+/// (`Bulletproof::prove_plus`) — so CEN-H19's batch in `form` admits the
+/// fixture and the rows a test is about are the ones that judge it.
+/// Fixtures whose subject is another rule may be constructed, provided the
+/// construction uses production paths (`50-testing.mdc`; slice 6's
+/// `fixture::signed` line): only the openings are a fixture's. The
+/// commitments are [`multiple_of_g`]`(mask)` for a zero amount and
+/// [`mask_committing`]`(mask, amount)` otherwise, the fixtures' own.
+///
+/// Proved once per opening list from a `ChaCha20Rng` seeded with the list
+/// and memoized, so a fixture stays a pure function of its arguments.
+///
+/// # Panics
+///
+/// On no openings or more than sixteen: the prover has no proof for them.
+#[must_use]
+pub fn range_proof_over(openings: &[(u64, u64)]) -> BpPlus {
     use std::collections::BTreeMap;
     use std::sync::{Mutex, OnceLock};
 
@@ -840,25 +858,36 @@ pub fn range_proof_for(outputs: usize) -> BpPlus {
     use shekyl_bulletproofs::Bulletproof;
     use shekyl_curve_primitives::Commitment;
 
-    static PROVED: OnceLock<Mutex<BTreeMap<usize, BpPlus>>> = OnceLock::new();
-    if !(1..=shekyl_wire::transaction::MAX_OUTPUTS).contains(&outputs) {
-        return bp_plus_layout_for(outputs);
-    }
+    /// Proofs made so far, keyed by their openings.
+    type Proved = Mutex<BTreeMap<Vec<(u64, u64)>, BpPlus>>;
+    static PROVED: OnceLock<Proved> = OnceLock::new();
     let proved = PROVED.get_or_init(Mutex::default);
-    if let Some(bp) = proved.lock().expect("not poisoned").get(&outputs) {
+    if let Some(bp) = proved.lock().expect("not poisoned").get(openings) {
         return bp.clone();
     }
-    let first = FIRST_MASK_SCALAR;
-    let openings = (0..u64::try_from(outputs).expect("fits"))
-        .map(|i| Commitment::new(Scalar::from(first + i), 0))
+    let mut seed = [0u8; 32];
+    for (i, (mask, amount)) in openings.iter().enumerate() {
+        for (j, byte) in mask
+            .to_le_bytes()
+            .iter()
+            .chain(&amount.to_le_bytes())
+            .enumerate()
+        {
+            seed[(i * 16 + j) % 32] ^= byte;
+        }
+    }
+    let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+    let commitments = openings
+        .iter()
+        .map(|(mask, amount)| Commitment::new(Scalar::from(*mask), *amount))
         .collect::<Vec<_>>();
-    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(outputs as u64);
-    let proof = Bulletproof::prove_plus(&mut rng, openings).expect("at most sixteen outputs prove");
+    let proof =
+        Bulletproof::prove_plus(&mut rng, commitments).expect("one to sixteen openings prove");
     let bp = BpPlus::from_bytes(&proof.serialize()).expect("a proof's bytes are a wire Bp+");
     proved
         .lock()
         .expect("not poisoned")
-        .insert(outputs, bp.clone());
+        .insert(openings.to_vec(), bp.clone());
     bp
 }
 
@@ -956,6 +985,7 @@ pub fn balanced_emission(
     {
         pqc_auths.push(slot);
         base.commitments = vec![mask_committing(2, reward), multiple_of_g(3)];
+        p.bulletproofs = vec![range_proof_over(&[(2, reward), (3, 0)])];
         p.pseudo_outs = vec![multiple_of_g(5)];
     }
     tx

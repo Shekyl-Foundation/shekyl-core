@@ -33,6 +33,7 @@
 //! | `Fault::View(store error)` | **halt**: the batch aborts, the error is the reply, the actor is over |
 //! | `Fault::Corrupt` | `WriteBatch::refuse_corrupt` arms the halt (SI-10) and its `InvariantViolated` — carrying the validator's value — is the reply; the batch aborts; **terminal** |
 //! | `Fault::Stale(Seed { .. })` | a **driver defect** in replay (RD-Q5): the reply carries the claim, the expectation, and the validator's `Retry`; the writer stays up so a later caller can re-`form` |
+//! | `Fault::Stale(Target { .. })` | a **driver defect** in replay (the target ledger and the store described different chains, `target` module docs): surfaced with the claim, the expectation and the `Retry`; the writer stays up |
 //! | `Fault::Stale(RuleSet { .. })` | a **driver defect** (the schedule handed the two stages different sets): surfaced; the writer stays up |
 //! | the source's height for an `Extend` is not `tip + 1` on the batch's view | a **driver defect** ([`RunFault::HeightClaim`]): surfaced before the rule set is chosen under the wrong height; the writer stays up |
 //! | a parent-side read observes a hole ([`shekyl_chain_rules::Corrupt::HoleBelowTip`]) | `refuse_corrupt` arms SI-7 and the writer **halts**, the same class a rule raises |
@@ -60,8 +61,8 @@ use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
     recorded, validate, ArchivalDelta, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian,
-    Fault, HeaderView, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale,
-    StructurallyValid, Verdict, ViewRead, Weights,
+    Fault, HeaderRecord, HeaderView, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale,
+    StructurallyValid, Target, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
@@ -93,6 +94,7 @@ impl RunEnd {
             RunFault::Store(StoreError::InvariantViolated(row)) => Some(Self::Halted(*row)),
             RunFault::Store(_) => Some(Self::StoreFaulted),
             RunFault::StaleSeed { .. }
+            | RunFault::StaleTarget { .. }
             | RunFault::StaleRuleSet { .. }
             | RunFault::HeightClaim { .. }
             | RunFault::NoNextHeight { .. }
@@ -121,6 +123,20 @@ pub enum RunFault {
         claimed: BlockHash,
         /// What the store holds at the seed height.
         expected: BlockHash,
+        /// What the validator would allow next.
+        retry: Retry,
+    },
+    /// The driver's target claim disagreed with the target the store's
+    /// headers derive (RD-Q5's class: a defect — the ledger and the store
+    /// described different chains).
+    #[error("driver defect: target claim at height {height} was {claimed}, the chain derives {expected} ({retry:?})")]
+    StaleTarget {
+        /// The connecting height.
+        height: BlockHeight,
+        /// What the driver claimed.
+        claimed: Target,
+        /// What the store's headers derive.
+        expected: Target,
         /// What the validator would allow next.
         retry: Retry,
     },
@@ -324,6 +340,27 @@ pub struct TipEncodings {
 #[derive(Clone, Copy, Debug)]
 pub struct HashAt {
     /// The height asked for.
+    pub height: BlockHeight,
+}
+
+/// The header record at a height — identity, header, cumulative difficulty
+/// — for the driver's target claim when its ledger lacks a height the
+/// LWMA-1 window reads (`target` module docs). `None` above the tip.
+#[derive(Clone, Copy, Debug)]
+pub struct HeaderAt {
+    /// The height asked for.
+    pub height: BlockHeight,
+}
+
+/// Re-derive CEN-D4's target for `height` over the writer's own view, when
+/// the driver's target ledger observed a corrupt window in records the
+/// store supplied (`target` module docs). The writer acts on its own
+/// observation, never on the driver's: a corrupt chain halts it through
+/// `refuse_corrupt`, exactly as `validate` would have one step later; a
+/// consistent one replies `Ok`, and the ledger was the defect.
+#[derive(Clone, Copy, Debug)]
+pub struct ObserveTarget {
+    /// The connecting height whose window is re-read.
     pub height: BlockHeight,
 }
 
@@ -612,6 +649,18 @@ impl Message<Apply> for Connector {
                             retry,
                         })
                     }
+                    Err(Fault::Stale(Stale::Target {
+                        claimed,
+                        expected,
+                        retry,
+                    })) => {
+                        return Err(RunFault::StaleTarget {
+                            height,
+                            claimed,
+                            expected,
+                            retry,
+                        })
+                    }
                     Err(Fault::Stale(Stale::RuleSet { .. })) => {
                         return Err(RunFault::StaleRuleSet { height })
                     }
@@ -829,6 +878,52 @@ impl Message<HashAt> for Connector {
             AtHeight::Recorded(info) => Some(info.hash),
             AtHeight::AboveTip => None,
         })
+    }
+}
+
+impl Message<ObserveTarget> for Connector {
+    type Reply = Result<(), RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: ObserveTarget,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let rule_set = self.rules.in_force(msg.height);
+        self.writer.write(|batch| {
+            let view = batch.chain_view();
+            match shekyl_chain_rules::target_claim(&view, msg.height, &rule_set) {
+                Ok(_) => Ok(()),
+                Err(Fault::View(e)) => Err(RunFault::Store(e)),
+                Err(Fault::Corrupt(observed)) => {
+                    Err(RunFault::Store(batch.refuse_corrupt(observed)))
+                }
+                Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
+            }
+        })
+    }
+}
+
+impl Message<HeaderAt> for Connector {
+    type Reply = Result<Option<HeaderRecord>, RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: HeaderAt,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let read = self.writer.read()?;
+        let AtHeight::Recorded(info) = read.block_info(msg.height)? else {
+            return Ok(None);
+        };
+        let AtHeight::Recorded(body) = read.block(msg.height)? else {
+            return Ok(None);
+        };
+        Ok(Some(HeaderRecord {
+            hash: info.hash,
+            header: body.block.header,
+            cumulative_difficulty: info.cumulative_difficulty,
+        }))
     }
 }
 

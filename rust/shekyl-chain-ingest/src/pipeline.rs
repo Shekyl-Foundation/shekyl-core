@@ -68,7 +68,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::connector::{
-    Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, Inject, Rewind, RunFault,
+    Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, HeaderAt, Inject,
+    ObserveTarget, Rewind, RunFault,
 };
 use crate::grader::Observations;
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
@@ -76,6 +77,7 @@ use crate::schedule::ChainRules;
 use crate::seed::{SeedClaim, SeedLedger};
 use crate::sequencer::{SequenceError, Sequencer};
 use crate::source::{IngestEvent, Injection, SequenceNo, Sequenced, ServeCredit, Source};
+use crate::target::TargetLedger;
 use crate::trace::Trace;
 
 /// Knobs with a rationale each (rule 75; module docs).
@@ -612,6 +614,26 @@ pub enum PipelineFault<SrcF, SubF> {
         /// The height whose hash was needed.
         seed_height: BlockHeight,
     },
+    /// No target could be claimed for `height`: the block at a height the
+    /// LWMA-1 window reads is neither read nor recorded.
+    #[error(
+        "no target for height {height}: the header at {header_height} is neither read nor recorded"
+    )]
+    HeaderUnknown {
+        /// The connecting height.
+        height: BlockHeight,
+        /// The height whose header was needed.
+        header_height: BlockHeight,
+    },
+    /// The target ledger observed a corrupt window the store's own view does
+    /// not hold: a defect in the ledger, never a property of the chain.
+    #[error("target ledger defect at height {height}: {corrupt}")]
+    TargetLedger {
+        /// The connecting height.
+        height: BlockHeight,
+        /// What the ledger's derivation observed.
+        corrupt: shekyl_chain_rules::Corrupt,
+    },
     /// A store read outside the actor failed.
     #[error(transparent)]
     Store(#[from] StoreError),
@@ -730,6 +752,7 @@ where
         trace: &trace,
         cfg,
         ledger: SeedLedger::new(),
+        targets: TargetLedger::new(),
         form_at,
         next_seq: SequenceNo::FIRST,
         checkpoint_at: trace.checkpoint().map(|(h, _)| h),
@@ -769,6 +792,8 @@ where
     trace: &'a Arc<Trace>,
     cfg: PipelineConfig,
     ledger: SeedLedger,
+    /// The headers the next target claim reads (`target` module docs).
+    targets: TargetLedger,
     /// The height the next `Extend` connects at.
     form_at: BlockHeight,
     /// The sequence number the next event must carry.
@@ -889,6 +914,23 @@ where
         self.form_at = next_height(Some(height));
         self.ledger.record(height, candidate.block.hash());
         let seed = self.claim_seed(height).await?;
+        let in_force = self.rules.in_force(height);
+        let target = match self.claim_target(height, &in_force).await? {
+            Ok(target) => target,
+            // CEN-D6 on the claim's own derivation: `validate` would refuse
+            // the block on the same headers, so that refusal is its verdict
+            // and it is not formed (`target` module docs).
+            Err(refused) => {
+                drop(permit);
+                self.in_flight.spawn_blocking(move || Sequenced {
+                    seq,
+                    event: Ok((height, Err(refused))),
+                });
+                return Ok(());
+            }
+        };
+        self.targets.extend(height, &candidate.block, target);
+        self.targets.forget_below_window_of(height);
         if seed != BlockHash::NULL && self.pinned != Some(seed) {
             let substrate = Arc::clone(&self.substrate);
             tokio::task::spawn_blocking(move || substrate.pin_seed(&seed)).await?;
@@ -896,10 +938,16 @@ where
         }
         let substrate = Arc::clone(&self.substrate);
         let metrics = Arc::clone(self.metrics);
-        let in_force = self.rules.in_force(height);
         self.in_flight.spawn_blocking(move || {
             let started = std::time::Instant::now();
-            let verdict = form(*candidate, &in_force, &*substrate, seed, FormAttempt::FIRST);
+            let verdict = form(
+                *candidate,
+                &in_force,
+                &*substrate,
+                seed,
+                target,
+                FormAttempt::FIRST,
+            );
             metrics.block_formed(started.elapsed());
             drop(permit);
             Sequenced {
@@ -943,6 +991,47 @@ where
             self.ledger.forget_below(seed_height);
         }
         Ok(seed)
+    }
+
+    /// The target for a block connecting at `connecting` under `rule_set`:
+    /// the ledger's derivation, after the store has answered every height
+    /// the ledger's window lacks (`target` module docs). `Err(refused)` is
+    /// CEN-D6 on the derivation itself.
+    async fn claim_target(
+        &mut self,
+        connecting: BlockHeight,
+        rule_set: &shekyl_chain_rules::RuleSet,
+    ) -> Result<Verdict<shekyl_chain_rules::Target>, PipelineFault<Src::Fault, S::Fault>> {
+        for height in self.targets.missing_for(connecting) {
+            let recorded = self
+                .connector
+                .ask(HeaderAt { height })
+                .await
+                .map_err(collapse)?;
+            let Some(record) = recorded else {
+                return Err(PipelineFault::HeaderUnknown {
+                    height: connecting,
+                    header_height: height,
+                });
+            };
+            self.targets.record(height, record);
+        }
+        match self.targets.claim(connecting, rule_set) {
+            Ok(verdict) => Ok(verdict),
+            // The window holds a record the store supplied that breaks
+            // SI-10. The writer re-derives over its own view and halts on
+            // its own observation; if it does not, the ledger was wrong.
+            Err(corrupt) => {
+                self.connector
+                    .ask(ObserveTarget { height: connecting })
+                    .await
+                    .map_err(collapse)?;
+                Err(PipelineFault::TargetLedger {
+                    height: connecting,
+                    corrupt,
+                })
+            }
+        }
     }
 
     /// Wait for one worker, then take every other one already finished, so
@@ -1116,6 +1205,7 @@ where
         self.report.weights.retract_above(to);
         self.report.emission.retract_above(to);
         self.ledger.rewind_to(to);
+        self.targets.rewind_to(to);
         self.form_at = next_height(Some(to));
         Ok(())
     }

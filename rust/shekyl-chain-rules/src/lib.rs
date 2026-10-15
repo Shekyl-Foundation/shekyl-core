@@ -191,7 +191,7 @@ pub use rules::block_weight::{
     Weights,
 };
 pub use rules::body::ArchivalKey;
-pub use rules::difficulty::{target_claim, Target};
+pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
 };

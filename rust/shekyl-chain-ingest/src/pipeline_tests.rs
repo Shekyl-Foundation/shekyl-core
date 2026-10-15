@@ -62,17 +62,33 @@ fn substrate() -> Arc<MockSubstrate> {
 }
 
 /// Form one candidate at `height` under GENESIS with the mock substrate,
-/// claiming `seed`.
+/// claiming `seed` and the target the production ledger derives over the
+/// candidate's parents (`parents`, oldest first, from height 0).
 fn formed(
     height: u64,
     candidate: Candidate,
     seed: BlockHash,
+    parents: &[&shekyl_wire::Block],
 ) -> (shekyl_types::BlockHeight, Verdict<StructurallyValid>) {
+    let mut ledger = crate::target::TargetLedger::new();
+    for (at, parent) in parents.iter().enumerate() {
+        let at = h(u64::try_from(at).expect("small"));
+        let target = ledger
+            .claim(at, &RuleSet::GENESIS)
+            .expect("consistent")
+            .expect("a target");
+        ledger.extend(at, parent, target);
+    }
+    let target = ledger
+        .claim(h(height), &RuleSet::GENESIS)
+        .expect("consistent")
+        .expect("a target");
     let verdict = form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         seed,
+        target,
         FormAttempt::FIRST,
     )
     .expect("mock substrate forms");
@@ -116,7 +132,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
             store: open_store(&path),
             rules: GENESIS_RULES,
         });
-        let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+        let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
         let applied = first
             .actor
             .ask(Apply(vec![(h0, f0)]))
@@ -142,7 +158,12 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     });
     let connector = joined.actor.clone();
 
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let err = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -154,7 +175,12 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
 
     // Over: the same message again is refused with the recorded end, and
     // so is a rewind — the latch is the writer's, not each handler's.
-    let (h1b, f1b) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1b, f1b) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let again = connector
         .ask(Apply(vec![(h1b, f1b)]))
         .await
@@ -206,7 +232,12 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     assert!(!connector.is_alive());
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(!connector.is_alive(), "nothing revived the actor");
-    let (h1c, f1c) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1c, f1c) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     assert!(matches!(
         connector
             .ask(Apply(vec![(h1c, f1c)]))
@@ -362,10 +393,15 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
         store: open_store(&path),
         rules: GENESIS_RULES,
     });
-    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
     let wrong = BlockHash::from_bytes([0xee; 32]);
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), wrong);
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        wrong,
+        &[&chain[0].0],
+    );
     let err = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -388,7 +424,12 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     assert!(again.is_ok(), "reads are unaffected");
     // The writer stays up: a later Apply with the store's seed connects.
     // Replay treats StaleSeed as run-ending; E3 re-forms on this actor.
-    let (h1b, f1b) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1b, f1b) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let applied = connector
         .ask(Apply(vec![(h1b, f1b)]))
         .await
@@ -413,9 +454,14 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
         store: open_store(&path),
         rules: GENESIS_RULES,
     });
-    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
-    let (_, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (_, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let err = connector
         .ask(Apply(vec![(h(5), f1)]))
         .await
@@ -432,7 +478,12 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
     }
     // Nothing connected under the claim, and the writer stays up: the same
     // block under its real height connects.
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let applied = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -454,7 +505,7 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
         store: open_store(&path),
         rules: GENESIS_RULES,
     });
-    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
     let refused = InvalidBlock::new(CenRow::A1, Locus::Block);
     let applied = connector
@@ -464,7 +515,12 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     assert_eq!(applied.refused, Some((h(1), refused)));
     assert!(applied.connected.is_empty());
     connector.ask(Digest).await.expect("writer is up");
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let applied = connector
         .ask(Apply(vec![(h1, f1)]))
         .await

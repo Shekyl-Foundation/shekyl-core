@@ -155,6 +155,8 @@ pub mod sequencer;
 pub mod snapshot_json;
 pub mod source;
 pub mod substrate;
+#[cfg(feature = "pipeline")]
+pub mod target;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;

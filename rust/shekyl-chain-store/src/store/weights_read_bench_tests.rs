@@ -107,7 +107,20 @@ fn judge<'b, 'id>(
             AtHeight::AboveTip => panic!("the seed height is below the tip"),
         },
     };
-    let formed = match form(candidate, &RULES, substrate, seed, FormAttempt::FIRST) {
+    let target = match shekyl_chain_rules::target_claim(view, connecting, &RULES) {
+        Ok(Ok(target)) => target,
+        Ok(Err(refused)) => panic!("the bench chain derives a target: {refused}"),
+        Err(Fault::View(fault)) => return Err(fault),
+        Err(other) => panic!("the bench chain's headers are a chain: {other:?}"),
+    };
+    let formed = match form(
+        candidate,
+        &RULES,
+        substrate,
+        seed,
+        target,
+        FormAttempt::FIRST,
+    ) {
         Ok(Ok(formed)) => formed,
         Ok(Err(refused)) => panic!("the bench chain satisfies every stateless rule: {refused}"),
         Err(never) => match never {},

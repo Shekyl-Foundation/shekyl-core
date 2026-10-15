@@ -158,6 +158,25 @@ pub fn target_claim<'id, H: HeaderView<'id>>(
     D4::target(view, connecting, rule_set, &mut unrecorded)
 }
 
+/// The work through a block connecting at `connecting` under `target`: the
+/// parent's cumulative difficulty on `view` plus the target — D4's own
+/// step (`validate` records it on the verdict). A caller that keeps a
+/// header chain ahead of connect (the ingest driver's target ledger)
+/// extends it with this, so its next [`target_claim`] reads the work the
+/// validator will record, not a second spelling of the sum.
+///
+/// # Errors
+///
+/// The view's fault; [`Fault::Corrupt`] on a hole at the parent or an
+/// overflow (SI-10's belt).
+pub fn cumulative_difficulty_after<'id, H: HeaderView<'id>>(
+    view: &H,
+    connecting: BlockHeight,
+    target: Target,
+) -> Result<CumulativeDifficulty, Fault<H::Fault>> {
+    D4::cumulative_after(view, connecting, target)
+}
+
 /// CEN-D6: a zero next-block difficulty rejects the block. Held by the
 /// [`Target`] type: this is its one constructor.
 pub(crate) struct D6;
