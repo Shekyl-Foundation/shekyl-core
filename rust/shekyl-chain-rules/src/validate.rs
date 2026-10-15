@@ -281,6 +281,13 @@ pub fn validate<'id, V: ChainView<'id>>(
             Err(refused) => return Ok(Err(refused)),
         }
     }
+    // CEN-H19's verification half (slice 6 Q9; ruling R3): every listed
+    // proof in one batch whose weights are derived from the batch, recorded
+    // only once the batch has decided. After the slot loop, so the layout
+    // half and I4's cap have bounded the proof work; before L1, as the
+    // C++'s CT semantics run before its spent-key insertion. A failed batch
+    // re-verifies each proof alone to name the slot (`rules::range_proof`).
+    judge_block!(cx, view, coverage; H19);
     // CEN-L1 spans the slots — a key image twice among the block's inputs —
     // and runs once every slot has passed: each slot's view is the chain
     // before the block, so this is the only place the repeat is visible to
@@ -434,8 +441,10 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    also where the C++ caller runs these arms
     //    (`ver_non_input_consensus`, then `ver_mixed_ct_semantics`, then
     //    `check_tx_inputs`). Pulling I1 or I4 ahead of H21 would hide the
-    //    class failure. H19's verification half is the later `validate`
-    //    fold (slice 6 commit 8), so this call stays unrecorded.
+    //    class failure. H19's verification half is `validate`'s block fold
+    //    (`rules::range_proof`), which records the row once the batch has
+    //    decided, so this call stays unrecorded: a pass here is the layout
+    //    alone.
     // 3. The stateless input-path rows, and 4.J's stateless rows: J2 (the
     //    serve credit's pass records against its vins, after H20 has
     //    required the region), J11 and J12 (the bond post's key, hint and

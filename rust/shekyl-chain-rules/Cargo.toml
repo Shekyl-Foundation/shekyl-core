@@ -58,6 +58,13 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # `HYBRID_SCHEME_ID_MULTISIG`) rather than restated as `1` and `2`. Already
 # in the closure through shekyl-ct-balance; this names the edge.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# CEN-H19's verification half: the block's Bulletproof+ batch, verified with
+# `verify_batch` (weights derived from the batch, ruling R3) over the proofs
+# `shekyl_wire::BpPlus::to_bulletproof` reassembles. Already in this crate's
+# closure through `shekyl-wire`; `shekyl-curve-io` is the commitment type the
+# verifier reads (already reached through the same edge). No store.
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 # Optional: the `harness` feature's `fixture::point_at` only (see the
 # feature's note). Never enabled on the production surface.
 curve25519-dalek = { version = "4", optional = true }
@@ -142,6 +149,13 @@ shekyl-consensus = { path = "../shekyl-consensus" }
 # `shekyl-crypto-pq` and `shekyl-logging`, so already in `Cargo.lock` —
 # this adds no package to the supply chain (`17-dependency-discipline`).
 trybuild = "1"
+# H19's fold tests (`rules/range_proof_tests.rs`) need real proofs to batch:
+# `Bulletproof::prove_plus` over `shekyl_curve_primitives::Commitment`
+# openings, drawn from a seeded `ChaCha20Rng` so a failure replays. Both are
+# already in the lockfile (the first through `shekyl-bulletproofs`, the second
+# a workspace dependency); test-only.
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+rand_chacha = { workspace = true }
 
 [lints]
 workspace = true

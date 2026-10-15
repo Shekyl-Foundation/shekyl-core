@@ -833,11 +833,12 @@ fn h19_the_canonical_layout_is_one_proof_sized_to_the_outputs() {
 }
 
 /// Through `tx_form`: a spend whose proof is sized for two outputs but
-/// carries one is refused under H19 — a refusal on a row the registry still
-/// holds `pending` (its verification half is slice 6's), so the row is not
-/// in any passing coverage.
+/// carries one is refused under H19, and a canonical layout passes without
+/// recording the row — `tx_form` judges the layout alone; the row is
+/// recorded by `validate`'s fold once the block's batch has decided
+/// (`rules::range_proof`).
 #[test]
-fn h19_a_non_canonical_layout_is_refused_and_the_row_is_not_yet_recorded() {
+fn h19_a_non_canonical_layout_is_refused_and_the_layout_alone_does_not_record() {
     use crate::harness::fixture::bp_plus_layout_for;
     let mut tx = listed(KI);
     if let Ct::Fcmp {

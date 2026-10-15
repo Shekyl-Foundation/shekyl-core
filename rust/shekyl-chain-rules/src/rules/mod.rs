@@ -97,6 +97,7 @@ pub(crate) mod difficulty;
 pub(crate) mod header;
 pub(crate) mod miner;
 pub(crate) mod pow;
+pub(crate) mod range_proof;
 pub use pow::seed_height;
 pub(crate) mod reward;
 pub(crate) mod timestamps;

@@ -487,10 +487,11 @@ const BP_PLUS_MAX_ROUNDS: usize = 6 + shekyl_wire::transaction::MAX_OUTPUTS.ilog
 /// layout check when a proof is present).
 ///
 /// The **verification** half — the range proof itself, one batch verify
-/// over the block — is the `validate` fold (slice 6 commit 8, Q9). Until
-/// that fold lands the row stays `pending`, and `tx_form` runs this layout
-/// check through [`crate::rules::run_tx_unrecorded`]: a refusal is H19's, a
-/// pass is not coverage.
+/// over the block with weights derived from the batch — is the `validate`
+/// fold (`rules::range_proof`, slice 6 Q9, ruling R3), the `BlockRule` this
+/// type also implements. The fold records the row; `tx_form` runs this
+/// layout check through [`crate::rules::run_tx_unrecorded`], so a refusal
+/// here is H19's and a pass is the layout alone, never coverage.
 pub(crate) struct H19;
 
 impl Rule for H19 {

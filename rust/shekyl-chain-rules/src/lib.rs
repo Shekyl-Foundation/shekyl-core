@@ -91,7 +91,11 @@
 //! * **Pool admission** (DRS-E5): the *same* [`tx_form`] / [`tx_against`]
 //!   over a `PoolView` the pool defines by decorating a `ChainView` with its
 //!   unconfirmed set. There is no second validator
-//!   (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §9.1).
+//!   (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §9.1). The one block-scoped row
+//!   a transaction must also pass is CEN-H19's range proof, which
+//!   [`validate`] folds over the block; the pool verifies it as a batch of
+//!   one through the same body (`shekyl_bulletproofs::verify_batch`), as the
+//!   submit engine does.
 //! * **Replay** (DRS-E2): every C++-accepted block through [`validate`]. A
 //!   disagreement is routed through `shekyl_chain_store::conformance::grade`
 //!   keyed by [`Row::as_str`] — where a Rust refusal of a canonical block on
