@@ -17,7 +17,9 @@ anywhere or any file under `docs/`, AND nothing the skipped jobs compile or
 run reads it. "Reads it" is computed from the tree, not listed by hand:
 
 - every path-shaped string literal (no whitespace: a message that mentions
-  `docs/FOLLOWUPS.md` in a sentence reads nothing) in the consumer files
+  `docs/FOLLOWUPS.md` in a sentence reads nothing; this is safe only because
+  no prose path contains whitespace, which the selftest asserts, so the day
+  one does the gate fails instead of narrowing silently) in the consumer files
   (below) that contains a `docs/` path names that path, or the directory under it, as an input:
   `include_str!("../../../docs/test_vectors/X.json")`, a runtime
   `join("../../docs/test_vectors")`, a CMake define pointing at a vector;
@@ -248,6 +250,13 @@ def selftest():
     if "docs/design/CRYPTO_DOMAIN_REGISTRY.tsv" not in inputs.exact:
         print("WRONG: the scan did not find the domain registry's include_str!")
         bad += 1
+    # The whitespace exclusion narrows what counts as an input. It is safe
+    # only while no prose path contains whitespace; assert that here, so a
+    # path with a space fails the gate instead of skipping a build quietly.
+    spaced = [p for p in git("ls-files").splitlines() if is_prose(p) and WHITESPACE.search(p)]
+    if spaced:
+        print(f"WRONG: prose paths contain whitespace, so a read of one would be missed: {spaced[:5]}")
+        bad += 1
     # A sentence that mentions a document reads nothing (external/CMakeLists.txt
     # and the staking sim name docs/FOLLOWUPS.md in messages).
     if inputs.reads("docs/FOLLOWUPS.md"):
@@ -258,7 +267,7 @@ def selftest():
     if got:
         print("WRONG: a docs file plus a .rs file was called docs-only")
         bad += 1
-    print(f"selftest: {len(SELFTEST) + 3 - bad} of {len(SELFTEST) + 3} hold")
+    print(f"selftest: {len(SELFTEST) + 4 - bad} of {len(SELFTEST) + 4} hold")
     return 1 if bad else 0
 
 
