@@ -105,16 +105,21 @@ def consumer_files():
 # A whole-line comment quotes paths in prose ("see `../README.md`") without
 # reading them. Dropping those lines keeps a quoted mention from counting as an
 # input; a trailing comment on a code line stays, which only widens the set.
-# Comment syntax follows the file type: in Rust `#` opens an attribute
-# (`#![doc = include_str!(…)]`), never a comment.
+# Comment syntax follows the file type. In Rust `#` opens an attribute
+# (`#![doc = include_str!(…)]`), and a doc comment (`///`, `//!`, `/** */`,
+# `/*! */`) holds doctests that are compiled and run, so a doctest's
+# `include_str!` is a read: only a plain `//` line comment is dropped there.
+RUST_COMMENT = re.compile(r"^\s*//(?![/!])")
 C_LIKE = re.compile(r"^\s*(?://|/\*|\*)")
 HASH = re.compile(r"^\s*#")
-C_LIKE_SUFFIXES = (".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".inl", ".ipp")
+C_LIKE_SUFFIXES = (".c", ".cc", ".cpp", ".h", ".hpp", ".inl", ".ipp")
 HASH_SUFFIXES = (".cmake", ".txt", ".sh", ".py", ".ps1", ".yml", ".yaml", ".toml", ".mk")
 
 
 def code_text(path):
-    if path.endswith(C_LIKE_SUFFIXES):
+    if path.endswith(".rs"):
+        comment = RUST_COMMENT
+    elif path.endswith(C_LIKE_SUFFIXES):
         comment = C_LIKE
     elif path.endswith(HASH_SUFFIXES) or os.path.basename(path) in ("Makefile", "CMakeLists.txt"):
         comment = HASH
@@ -129,16 +134,23 @@ def crate_root(path):
     while d:
         if os.path.isfile(os.path.join(d, "Cargo.toml")):
             return d
-        d = os.path.dirname(d)
+        parent = os.path.dirname(d)
+        if parent == d:  # an absolute path's root is its own parent
+            break
+        d = parent
     return os.path.dirname(path)
 
 
 def read_text(path):
+    """A consumer's text. A file that cannot be read may be source that
+    names a document, so it raises and the run fails closed. A binary file
+    (a NUL in its first 8 KiB: test corpora, fixtures) holds no literal a
+    compiler resolves, so it is empty text, not an error."""
     try:
         with open(path, "rb") as f:
             raw = f.read()
-    except OSError:
-        return ""
+    except OSError as e:
+        raise RuntimeError(f"cannot read consumer {path}: {e}") from e
     if b"\0" in raw[:8192]:
         return ""
     return raw.decode("utf-8", errors="replace")
@@ -262,12 +274,34 @@ def selftest():
     if inputs.reads("docs/FOLLOWUPS.md"):
         print("WRONG: a prose mention of docs/FOLLOWUPS.md counted as a read")
         bad += 1
+    # A doctest in a Rust doc comment is compiled: its include_str! is a read,
+    # while a plain // comment that quotes a path is not.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "lib.rs")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write('/// let s = include_str!("../docs/doctest_input.md");\n'
+                    '// see "../docs/plain_comment.md"\n')
+        probe = Inputs([src])
+        if not probe.reads("docs/doctest_input.md"):
+            print("WRONG: a doctest's include_str! of a document was not counted as a read")
+            bad += 1
+        if probe.reads("docs/plain_comment.md"):
+            print("WRONG: a path quoted in a plain // comment counted as a read")
+            bad += 1
+        # An unreadable consumer fails closed rather than counting as empty.
+        try:
+            Inputs([os.path.join(tmp, "missing.rs")])
+            print("WRONG: an unreadable consumer was read as empty")
+            bad += 1
+        except RuntimeError:
+            pass
     # A mixed change is decided by its one code file.
     got, _ = classify(["docs/design/TOR_SUPERVISOR.md", "rust/shekyl-tor/src/lib.rs"], inputs)
     if got:
         print("WRONG: a docs file plus a .rs file was called docs-only")
         bad += 1
-    print(f"selftest: {len(SELFTEST) + 4 - bad} of {len(SELFTEST) + 4} hold")
+    print(f"selftest: {len(SELFTEST) + 7 - bad} of {len(SELFTEST) + 7} hold")
     return 1 if bad else 0
 
 
