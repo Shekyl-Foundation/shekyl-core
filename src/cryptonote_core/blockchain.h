@@ -129,7 +129,7 @@ namespace cryptonote
      *
      * @return true on success, false if any initialization steps fail
      */
-    bool init(BlockchainDB* db, const network_type nettype = MAINNET, bool offline = false, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0);
+    bool init(BlockchainDB* db, const network_type nettype = MAINNET, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0);
 
     /**
      * @brief Uninitializes the blockchain state
@@ -1125,7 +1125,6 @@ namespace cryptonote
 
 
     network_type m_nettype;
-    bool m_offline;
     difficulty_type m_fixed_difficulty;
 
     std::atomic<bool> m_cancel;

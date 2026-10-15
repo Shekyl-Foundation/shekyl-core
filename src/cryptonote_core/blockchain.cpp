@@ -274,7 +274,7 @@ uint64_t Blockchain::get_current_blockchain_height() const
 //------------------------------------------------------------------
 //FIXME: possibly move this into the constructor, to avoid accidentally
 //       dereferencing a null BlockchainDB pointer
-bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline, const cryptonote::test_options *test_options, difficulty_type fixed_difficulty)
+bool Blockchain::init(BlockchainDB* db, const network_type nettype, const cryptonote::test_options *test_options, difficulty_type fixed_difficulty)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -298,55 +298,12 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   m_db = db;
 
   m_nettype = test_options != NULL ? FAKECHAIN : nettype;
-  m_offline = offline;
   m_fixed_difficulty = fixed_difficulty;
 
-  if (shekyl_archival_settlement_epoch_override_present())
-  {
-    // Same shape as the SEEDHASH_EPOCH_* gate below: the settlement-epoch
-    // schedule is consensus (epoch close boundaries, serve-credit epochs,
-    // bond join epochs, emission claim windows all derive from it), and
-    // SHEKYL_SETTLEMENT_EPOCH_BLOCKS is the fakechain-only lever that
-    // makes epoch-close e2e coverage affordable. A node inheriting it
-    // from a leaked environment would close epochs at wrong heights and
-    // fork every public peer — refuse on the lever's PRESENCE, before
-    // any question of its validity.
-    //
-    // This gate runs BEFORE anything touches the DB: arming must precede
-    // the process's first epoch arithmetic, and on a fresh datadir the
-    // genesis add below reaches it (add_block →
-    // process_archival_epoch_close_at_height) — arming after that latches
-    // the genesis schedule first and the arm refuses as ArmedTooLate
-    // (caught live by the PR-4c emission e2e's first daemon spawn).
-    if (m_nettype != FAKECHAIN)
-    {
-      MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS / SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS override active on a public network: the settlement schedule and the reorg cap are consensus-critical and the overrides are fakechain-only (regtest) levers; refusing to start. Unset them to run this node.");
-      return false;
-    }
-    // FAKECHAIN: arm the override. An unarmed process ignores the lever
-    // wholesale, so this is the single gate a regtest schedule passes
-    // through — and an invalid value refuses loudly here instead of
-    // silently running the genesis schedule until the harness times out.
-    const uint8_t arm_rc = shekyl_archival_settlement_epoch_arm_regtest();
-    if (arm_rc != SHEKYL_ARCHIVAL_SEB_ARM_OK)
-    {
-      // The two refusals have different remedies, so they get different
-      // messages: a bad value is the operator's to fix, while a late arm
-      // means this gate ran after something already latched the schedule —
-      // a daemon-side initialization-order defect the operator cannot fix
-      // by editing the variable.
-      const char *raw = getenv("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
-      const char *raw_cap = getenv("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS");
-      if (arm_rc == SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE)
-        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " could not be armed: the settlement-epoch schedule had already latched before this gate ran. The value is fine; this is an initialization-order defect in the daemon (arming must precede every epoch-arithmetic call, including the genesis add). Refusing to start — please report it.");
-      else if (arm_rc == SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP)
-        MERROR("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS=" << (raw_cap ? raw_cap : "?") << " is not a valid override: expected an integer between 1 and the genesis reorg depth; refusing to start. Fix the value or unset the variable.");
-      else
-        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override: expected an integer strictly above the reorg cap in force (" << (raw_cap ? raw_cap : "the genesis reorg depth") << ") and at most the genesis settlement-epoch length — a fakechain whose epoch is not above its reorg cap is a configuration mainnet cannot reach; refusing to start. Lower SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS with the epoch, fix the value, or unset the variable.");
-      return false;
-    }
-    MWARNING("regtest schedule override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks and the reorg cap is " << shekyl_archival_reorg_depth_blocks() << " instead of the genesis pins — epoch closes, serve-credit windows, emission claims and the reorg depth computed under this schedule are valid only among fakechain nodes running the same override");
-  }
+  // The settlement schedule's regtest levers are the Rust configuration's
+  // (`dev-settlement-epoch-blocks`, `dev-archival-reorg-depth`): recorded
+  // and armed by the Rust main() before this core exists, refused there on
+  // every network but regtest (IG-8). Nothing here reads an environment.
 
   // if the blockchain is new, add the genesis block
   // this feels kinda kludgy to do it this way, but can be looked at later.
@@ -412,25 +369,10 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   }
 
   {
-    if (shekyl_pow_randomx_v2_seed_epoch_overridden())
-    {
-      // The seed-epoch schedule is consensus; SEEDHASH_EPOCH_* is a
-      // fakechain-only lever (regtest daemons and test fixtures both run
-      // nettype FAKECHAIN). Fail closed on every public network, not just
-      // mainnet: a node that inherits the lever from a leaked environment
-      // (shared systemd template, container base layer) computes wrong
-      // seedheights and silently rejects every block its peers accept —
-      // and on testnet/stagenet that forks the genesis-rehearsal
-      // infrastructure exactly when it matters most. The lever's
-      // legitimate use, fast epochs for local development, is what
-      // FAKECHAIN exists for.
-      if (m_nettype != FAKECHAIN)
-      {
-        MERROR("SEEDHASH_EPOCH_* override active on a public network: the RandomX seed-epoch schedule is consensus-critical and the override is a fakechain-only (regtest) lever; refusing to start. Unset SEEDHASH_EPOCH_BLOCKS / SEEDHASH_EPOCH_LAG to run this node.");
-        return false;
-      }
-      MWARNING("SEEDHASH_EPOCH_* override active on fakechain: the RandomX seed-epoch schedule differs from mainnet defaults — blocks produced under this schedule validate only among fakechain nodes running the same override, and captured vectors will not match mainnet seedheights");
-    }
+    // The seed-epoch schedule's regtest levers are the Rust configuration's
+    // (`dev-pow-seed-epoch-blocks`, `dev-pow-seed-epoch-lag`): recorded by
+    // the Rust main() before this core exists, refused on every network but
+    // regtest (IG-8). Nothing here reads an environment.
     if (m_nettype == FAKECHAIN)
     {
       // Datadir schedule pin: persisted epoch-derived state (bond join

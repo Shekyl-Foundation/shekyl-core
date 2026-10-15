@@ -24,12 +24,12 @@ use std::sync::Arc;
 use shekyl_daemon_config::announce;
 use shekyl_daemon_config::sections::{build, log_location_writable, DaemonConfig, Tor};
 use shekyl_daemon_config::{choosers, file, marker, paths, resolve, Lock, Platform, TABLE};
-use shekyl_options::{read_cli, read_file, Diagnostic, Kind, Value};
+use shekyl_options::{read_cli, read_file, Code, Diagnostic, Kind, Source, Value};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 
 use crate::entry::{ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylStringList};
 use crate::options::DaemonOptions;
-use crate::{help, legacy, network, signals, tor};
+use crate::{help, network, signals, tor};
 use shekyl_daemon_rpc::options::OptionsHandle;
 
 /// A configuration refusal.
@@ -159,14 +159,28 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     lines.push(announce::posture(&config));
     announce_all(&config.logging.file, &lines);
 
-    // The environment levers today's C++ reads, set for it (legacy).
-    for (key, value) in legacy::environment(&config) {
-        std::env::set_var(key, value);
-    }
-
     // Step 6: what the owners read at their build, before the remnant
-    // binds the seam.
+    // binds the seam. The schedule levers are recorded here, before the
+    // core whose first epoch arithmetic would latch them exists; a value
+    // the owner refuses is the row's refusal (§6).
     network::record(&config);
+    let dev = &config.dev;
+    if let Err(rule) = shekyl_ffi::pow_randomx_ffi::record_seed_epoch(
+        dev.pow_seed_epoch_blocks,
+        dev.pow_seed_epoch_lag,
+    ) {
+        return refuse(&[owner_refusal(&resolved, "dev-pow-seed-epoch-blocks", &rule)]);
+    }
+    if let Err(rule) = shekyl_ffi::archival_ffi::arm_settlement_schedule(
+        dev.settlement_epoch_blocks,
+        dev.archival_reorg_depth,
+    ) {
+        return refuse(&[owner_refusal(
+            &resolved,
+            "dev-settlement-epoch-blocks",
+            &rule,
+        )]);
+    }
 
     // The one signal owner, the RPC section for the remnant's one start,
     // and the remnant on a thread of its own.
@@ -380,6 +394,19 @@ fn supervise(
         tracing::error!(target: "daemon", "the run thread ended by a panic");
     }
     status
+}
+
+/// A value its owner refuses at its own start (§6): the row's range
+/// refusal, at the source the value came from, with the owner's rule.
+fn owner_refusal(resolved: &resolve::Resolved, row: &str, rule: &str) -> Diagnostic {
+    let value = resolved
+        .get(row)
+        .map_or_else(|| "unset".to_owned(), Value::render);
+    let source = resolved.source(row).cloned().unwrap_or(Source::Default);
+    Diagnostic::new(Code::ValueRange, source)
+        .option(row)
+        .param("value", value)
+        .param("rule", rule)
 }
 
 fn note_stop(requested: std::io::Result<&'static str>) {

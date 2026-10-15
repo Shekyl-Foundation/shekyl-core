@@ -208,6 +208,12 @@ namespace cryptonote
 
 
   //-----------------------------------------------------------------------------------------------------------------------
+  // The connector byte the Rust sync verdicts take for a zone.
+  inline std::uint32_t sync_connector_of(epee::net_utils::connector_id zone)
+  {
+    return zone == epee::net_utils::connector_id::tor ? SHEKYL_CONNECTOR_TOR : SHEKYL_CONNECTOR_CLEARNET;
+  }
+  //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
     t_cryptonote_protocol_handler<t_core>::t_cryptonote_protocol_handler(t_core& rcore, nodetool::i_p2p_endpoint<connection_context>* p_net_layout, bool offline):m_core(rcore),
                                                                                                               m_p2p(p_net_layout),
@@ -1733,15 +1739,16 @@ skip:
       {
         for (const auto zone : counted->zones)
         {
-          const unsigned int max_out_peers = get_max_out_peers(zone);
           const unsigned syncing = counted->n_syncing[zone];
           const unsigned synced = counted->n_synced[zone];
           const boost::uuids::uuid drop_id = counted->some_synced[zone];
-          MTRACE("[" << epee::net_utils::connector_id_to_string(zone) << "] " << syncing << " syncing, " << synced << " synced, " << max_out_peers << " max out peers");
-          if (synced + syncing >= max_out_peers && syncing < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && drop_id != boost::uuids::nil_uuid())
+          MTRACE("[" << epee::net_utils::connector_id_to_string(zone) << "] " << syncing << " syncing, " << synced << " synced");
+          // Whether the outbound slots are full with too few syncing is the
+          // dialer's to say: it holds the target (DAEMON_CONFIG_CUTOVER.md §4.2).
+          if (shekyl_sync_room_for_syncing_peer(sync_connector_of(zone), syncing, synced) && drop_id != boost::uuids::nil_uuid())
           {
-            if (!m_p2p->for_connection(drop_id, [this, syncing, synced, max_out_peers](cryptonote_connection_context& ctx, uint32_t){
-              MINFO(ctx << "dropping synced peer, " << syncing << " syncing, " << synced << " synced, " << max_out_peers << " max out peers");
+            if (!m_p2p->for_connection(drop_id, [this, syncing, synced](cryptonote_connection_context& ctx, uint32_t){
+              MINFO(ctx << "dropping synced peer, " << syncing << " syncing, " << synced << " synced");
               drop_connection(ctx, false, false);
             }))
               MDEBUG("Failed to find peer we wanted to drop");
@@ -2542,11 +2549,9 @@ skip:
     const uint64_t height = m_core.get_current_blockchain_height();
     if (target && target <= height)
       return false;
-    const size_t n_out_peers = static_cast<size_t>(shekyl_seam_board_count(
+    const std::uint32_t n_out_peers = static_cast<std::uint32_t>(shekyl_seam_board_count(
         static_cast<std::uint32_t>(zone), SHEKYL_DIRECTION_OUTBOUND));
-    if (n_out_peers >= get_max_out_peers(zone))
-      return false;
-    return true;
+    return shekyl_sync_wants_more_outbound(sync_connector_of(zone), n_out_peers);
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>

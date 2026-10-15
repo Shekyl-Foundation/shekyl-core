@@ -165,6 +165,9 @@ pub mod link_ffi;
 /// The notify runner: the owner of the three notify commands
 /// (`DAEMON_CONFIG_CUTOVER.md` §2.10); the C++ event sites push facts to it.
 pub mod notify_ffi;
+/// The chain-sync heuristics that read the outbound target
+/// (`DAEMON_CONFIG_CUTOVER.md` §4.2): decided here, the C++ hands over counts.
+pub mod sync_ffi;
 
 // The published board. Counts are integers. Address walks receive a
 // snapshot whose row is the id, the handshake flag, and the endpoint.

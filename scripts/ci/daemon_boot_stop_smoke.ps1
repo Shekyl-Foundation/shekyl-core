@@ -61,8 +61,8 @@ $listener.Stop()
 $dataDir = Join-Path ([System.IO.Path]::GetTempPath()) ("shekyld-smoke-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $dataDir | Out-Null
 $logFile = Join-Path $dataDir 'shekyld.log'
-# Regtest is FAKECHAIN: the store lives under `fake`, then the LMDB directory.
-$store = Join-Path (Join-Path (Join-Path $dataDir 'fake') 'lmdb') 'data.mdb'
+# The store lives in the data directory on every network (DAEMON_CONFIG_CUTOVER.md §2.6).
+$store = Join-Path (Join-Path $dataDir 'lmdb') 'data.mdb'
 
 $psi = [System.Diagnostics.ProcessStartInfo]::new($Daemon)
 foreach ($a in @(

@@ -313,9 +313,10 @@ namespace cryptonote
     const size_t max_txpool_weight = static_cast<size_t>(snapshot.txpool_weight_max);
     const bool keep_alt_blocks = false;
 
+    // The network selects the default data subdirectory in the Rust
+    // configuration (DAEMON_CONFIG_CUTOVER.md §2.6); the folder is used as
+    // given on every network, FAKECHAIN included.
     boost::filesystem::path folder(m_config_folder);
-    if (m_nettype == FAKECHAIN)
-      folder /= "fake";
 
     // make sure the data directory exists, and try to lock it
     CHECK_AND_ASSERT_MES (boost::filesystem::exists(folder) || boost::filesystem::create_directories(folder), false,
@@ -352,19 +353,6 @@ namespace cryptonote
     blockchain_db_sync_mode sync_mode = db_defaultsync;
     bool sync_on_blocks = true;
     uint64_t sync_threshold = 1;
-
-    // Nothing is wiped on any network (DAEMON_CONFIG_CUTOVER.md §2.6, R3): a
-    // harness that wants a fresh chain uses a fresh data directory. The arm
-    // below is commit (e2)'s to delete with the other regtest arms.
-    if (false)
-    {
-      // reset the db by removing the database file before opening it
-      if (!db->remove_data_file(filename))
-      {
-        MERROR("Failed to remove data file in " << filename);
-        return false;
-      }
-    }
 
     try
     {
@@ -416,7 +404,7 @@ namespace cryptonote
       0
     };
     const difficulty_type fixed_difficulty = snapshot.fixed_difficulty;
-    r = m_blockchain_storage.init(db.release(), m_nettype, m_offline, regtest ? &regtest_test_options : test_options, fixed_difficulty);
+    r = m_blockchain_storage.init(db.release(), m_nettype, regtest ? &regtest_test_options : test_options, fixed_difficulty);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize blockchain storage");
 
     r = m_mempool.init(max_txpool_weight, m_nettype == FAKECHAIN);
@@ -1386,7 +1374,7 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::check_block_rate()
   {
-    if (m_offline || m_nettype == FAKECHAIN || m_target_blockchain_height > get_current_blockchain_height() || m_target_blockchain_height == 0)
+    if (m_offline || m_target_blockchain_height > get_current_blockchain_height() || m_target_blockchain_height == 0)
     {
       MDEBUG("Not checking block rate, offline or syncing");
       return true;

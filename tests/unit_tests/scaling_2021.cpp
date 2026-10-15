@@ -173,7 +173,7 @@ private:
   bc.reset(new cryptonote::Blockchain(txpool)); \
   const cryptonote::test_options test_options = {window}; \
   cryptonote::Blockchain *blockchain = bc.get(); \
-  bool r = blockchain->init(new TestDB(), cryptonote::FAKECHAIN, true, &test_options, 0); \
+  bool r = blockchain->init(new TestDB(), cryptonote::FAKECHAIN, &test_options, 0); \
   ASSERT_TRUE(r)
 
 #define PREFIX() PREFIX_WINDOW(TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
@@ -184,7 +184,7 @@ private:
   bc.reset(new cryptonote::Blockchain(txpool)); \
   const cryptonote::test_options test_options = {window}; \
   cryptonote::Blockchain *blockchain = bc.get(); \
-  bool r = blockchain->init(dbptr, cryptonote::FAKECHAIN, true, &test_options, 0); \
+  bool r = blockchain->init(dbptr, cryptonote::FAKECHAIN, &test_options, 0); \
   ASSERT_TRUE(r)
 
 #define PREFIX_WINDOW_DB(window,dbtype) \
@@ -193,7 +193,7 @@ private:
   bc.reset(new cryptonote::Blockchain(txpool)); \
   const cryptonote::test_options test_options = {window}; \
   cryptonote::Blockchain *blockchain = bc.get(); \
-  bool r = blockchain->init(new dbtype(), cryptonote::FAKECHAIN, true, &test_options, 0); \
+  bool r = blockchain->init(new dbtype(), cryptonote::FAKECHAIN, &test_options, 0); \
   ASSERT_TRUE(r)
 
 // `fee_2021_scaling.relay_fee` and the whole of `tests/unit_tests/fee.cpp`

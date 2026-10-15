@@ -296,15 +296,14 @@ int main(int argc, char* argv[])
   }
 
   // The validator claims seeds on the mainnet schedule at every nettype and
-  // reads no environment (RD-F19). A chain mined under a SEEDHASH_EPOCH_*
-  // override is invisible as such in its own data under a fixed target, so
-  // the one place the override can be seen is the environment it is set
-  // in — this process's is the daemon's in the recipe that runs both from
-  // one shell. First evidence, not proof: the recipe still states the
-  // daemon's environment.
+  // reads no environment (RD-F19). A chain mined under a seed-epoch lever
+  // (`dev-pow-seed-epoch-blocks`, a regtest row of the daemon's
+  // configuration) is invisible as such in its own data under a fixed
+  // target; this process records no lever, so the check below holds by
+  // construction and stays as the statement of the requirement.
   if (shekyl_pow_randomx_v2_seed_epoch_overridden())
   {
-    LOG_ERROR("SEEDHASH_EPOCH_* is set in this environment: a chain mined under a seed-epoch override is not one the validator's schedule can replay (RD-F19); unset it, and harvest only from a daemon that ran without it");
+    LOG_ERROR("a seed-epoch lever is recorded in this process: a chain mined under a seed-epoch override is not one the validator's schedule can replay (RD-F19); unset it, and harvest only from a daemon that ran without it");
     return 1;
   }
 

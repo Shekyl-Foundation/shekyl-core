@@ -296,19 +296,17 @@ fn verify_compares_names_exactly_where_the_platform_does() {
     ));
 }
 
-/// The first thing a developer tries: `SHEKYL_TOR_BINARY` pointed at the
-/// `tor` inside a full extracted Expert Bundle. Its directory carries
-/// `pluggable_transports/`, and the override tier is gated like any other.
+/// The first thing a developer tries: `tor-file` pointed at the `tor`
+/// inside a full extracted Expert Bundle. Its directory carries
+/// `pluggable_transports/`, and a named file is gated like any other.
 #[test]
-fn verify_refuses_a_full_extracted_bundle_through_the_override() {
+fn verify_refuses_a_full_extracted_bundle_named_by_tor_file() {
     let (dir, exe) = staged(&LINUX_FILES);
     let transports = dir.path().join("pluggable_transports");
     std::fs::create_dir(&transports).unwrap();
     std::fs::write(transports.join("lyrebird"), b"transport").unwrap();
 
-    let chosen = candidate_from(Some(exe.clone().into_os_string()), None, None, "tor")
-        .expect("the override is the candidate");
-    match verify_candidate(&chosen, &pin_for(&LINUX_FILES, false).pin()) {
+    match verify_candidate(&exe, &pin_for(&LINUX_FILES, false).pin()) {
         Err(TorBinaryError::UnexpectedEntry { name, .. }) => {
             assert_eq!(name, OsString::from("pluggable_transports"));
         }
@@ -522,29 +520,6 @@ fn beside(dir: &Path) -> PathBuf {
     exe
 }
 
-#[test]
-fn candidate_override_wins_even_over_an_existing_beside_binary() {
-    let dir = tempfile::tempdir().unwrap();
-    beside(dir.path());
-    let chosen = candidate_from(
-        Some(OsString::from("/explicit/override/tor")),
-        Some(dir.path()),
-        None,
-        "tor",
-    );
-    // The override is returned verbatim — even though it does not exist —
-    // so a typo surfaces as *its* error, never a silent fallback.
-    assert_eq!(chosen, Some(PathBuf::from("/explicit/override/tor")));
-}
-
-#[test]
-fn candidate_empty_override_is_treated_as_unset() {
-    let dir = tempfile::tempdir().unwrap();
-    let exe = beside(dir.path());
-    let chosen = candidate_from(Some(OsString::new()), Some(dir.path()), None, "tor");
-    assert_eq!(chosen, Some(exe));
-}
-
 /// Tier 2 is `<exe_dir>/tor/tor`. A `tor` file directly beside the
 /// executable — the layout before the bundle had a directory of its own —
 /// is not a candidate: its directory is the executable's and could never
@@ -553,14 +528,11 @@ fn candidate_empty_override_is_treated_as_unset() {
 fn candidate_beside_is_the_tor_directory_not_a_tor_file() {
     let dir = tempfile::tempdir().unwrap();
     write_executable(&dir.path().join("tor"), b"flat");
-    assert_eq!(candidate_from(None, Some(dir.path()), None, "tor"), None);
+    assert_eq!(candidate_from(Some(dir.path()), None, "tor"), None);
 
     let dir = tempfile::tempdir().unwrap();
     let exe = beside(dir.path());
-    assert_eq!(
-        candidate_from(None, Some(dir.path()), None, "tor"),
-        Some(exe)
-    );
+    assert_eq!(candidate_from(Some(dir.path()), None, "tor"), Some(exe));
 }
 
 /// The system tier is consulted when nothing is beside the executable, and
@@ -572,12 +544,12 @@ fn candidate_well_known_yields_to_beside() {
     write_executable(&wk, b"staged");
 
     let empty_beside = tempfile::tempdir().unwrap();
-    let chosen = candidate_from(None, Some(empty_beside.path()), Some(&wk), "tor");
+    let chosen = candidate_from(Some(empty_beside.path()), Some(&wk), "tor");
     assert_eq!(chosen, Some(wk.clone()));
 
     let beside_dir = tempfile::tempdir().unwrap();
     let exe = beside(beside_dir.path());
-    let chosen = candidate_from(None, Some(beside_dir.path()), Some(&wk), "tor");
+    let chosen = candidate_from(Some(beside_dir.path()), Some(&wk), "tor");
     assert_eq!(chosen, Some(exe));
 }
 
@@ -604,7 +576,7 @@ fn well_known_candidate_is_version_exact_from_the_pin() {
 #[test]
 fn candidate_none_when_nothing_is_found() {
     let empty = tempfile::tempdir().unwrap();
-    assert_eq!(candidate_from(None, Some(empty.path()), None, "tor"), None);
+    assert_eq!(candidate_from(Some(empty.path()), None, "tor"), None);
 }
 
 /// The compiled disposition is self-consistent: a pinned target's

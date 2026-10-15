@@ -269,22 +269,6 @@ pub unsafe extern "C" fn shekyl_dial_take_handshake_nonce(connector: u32, nonce:
     }
 }
 
-/// The connector's outbound target as the dialer holds it: the cap the
-/// C++ pushed, or the compiled default before any push (`--out-peers`'s
-/// default on clearnet, the hidden-cap floor on Tor). Read for the
-/// descriptor reservation and the operator's `out_peers` readback. An
-/// unknown connector is 0.
-#[no_mangle]
-pub extern "C" fn shekyl_dialer_out_target(connector: u32) -> u32 {
-    let Some(connector) = connector_from_index(connector) else {
-        return 0;
-    };
-    if let Some(dialer) = dialer() {
-        return u32::try_from(dialer.target(connector)).unwrap_or(u32::MAX);
-    }
-    default_target(connector)
-}
-
 /// The core's tip: height, cumulative difficulty (low and high 64 bits)
 /// and top block id. The dialer's next handshake carries this snapshot.
 /// Called wherever the tip changes, and once at start.

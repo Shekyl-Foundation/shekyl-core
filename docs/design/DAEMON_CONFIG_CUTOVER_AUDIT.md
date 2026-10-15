@@ -353,6 +353,39 @@ of its own, for the same reason as the negative one.
   `do_background_mining` and `ignore_battery` with the background-mining
   options (a 3.57 change, recorded in its note); the miner's own
   background thread stays, the mining lane's (§10).
+- **The regtest arms, the environment levers and the reverse pulls (commit
+  (e2), §2.6, §4.2).** The `/fake` subdirectory, the wipe on start and
+  `check_block_rate`'s FAKECHAIN skip are gone: the network selects the
+  default data subdirectory in the Rust configuration and FAKECHAIN
+  conforms to production (a regtest store is now `<data-dir>/lmdb`; the
+  Windows smoke's path follows). `Blockchain::init` loses its `offline`
+  parameter and the member nothing read. The schedule levers reach their
+  owners from the `dev-` rows, recorded by the Rust `main()` at step 6
+  before the core whose first epoch arithmetic latches them exists:
+  `pow_randomx_ffi::record_seed_epoch` (a value off the power-of-two
+  schedule is the row's `config.value.range` refusal, where the C clamps
+  silently substituted the mainnet value) and
+  `archival_ffi::arm_settlement_schedule` through a typed
+  `arm_settlement_epoch_override(blocks, reorg_cap)`. The daemon reads no
+  environment: `legacy.rs` is gone, the chain's two environment gates with
+  it (a lever off its networks is refused by the row's network rule, IG-8),
+  and the exports `shekyl_archival_settlement_epoch_override_present` and
+  `shekyl_archival_settlement_epoch_arm_regtest` with their four codes.
+  The retention crate's environment-reading arm stays for the wallet engine
+  and its regtest harness, which are the engine lane's (FOLLOWUPS: the
+  wallet engine's settlement lever). `SHEKYL_TOR_BINARY` is gone from the
+  Tor binary discovery: `tor-file` names a binary (IG-Q41), nothing is read
+  from the environment, and the full-bundle refusal test names a file
+  instead. The reverse pulls `shekyl_dialer_out_target`,
+  `shekyl_p2p_default_out_peers` and
+  `shekyl_relay_zone_min_provisioned_out_peers` are gone with the protocol
+  handler's copy of the target (`m_max_out_peers`, `set_max_out_peers`,
+  `get_max_out_peers`): the two sync heuristics that compared counts
+  against it hand their counts to `shekyl_sync_room_for_syncing_peer` and
+  `shekyl_sync_wants_more_outbound` (`shekyl-ffi/src/sync_ffi.rs`, a gate
+  surface), which read the dialer's target at use time. `m_require_ipv4`,
+  the data-directory port suffix and `RPC_LOGIN` were already zero at
+  (c2).
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test

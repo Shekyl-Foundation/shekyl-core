@@ -180,10 +180,12 @@
 #define MAX_RPC_CONTENT_LENGTH                          1048576 // 1 MB
 
 
-// P2P_DEFAULT_CONNECTIONS_COUNT is gone: the default outbound connection count
-// is Rust-owned and reached through `shekyl_p2p_default_out_peers()`
-// (`shekyl/shekyl_ffi.h`). Every relay-privacy measurement simulates the
-// deployed out-degree, so a value C++ could move on its own left those
+// P2P_DEFAULT_CONNECTIONS_COUNT is gone: the outbound connection count is
+// Rust-owned (`shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS`, the
+// dialer's target) and no C++ reads it; the sync heuristics that compared
+// against it hand their counts to `shekyl_sync_*` (`shekyl/shekyl_ffi.h`,
+// DAEMON_CONFIG_CUTOVER.md §4.2). Every relay-privacy measurement simulates
+// the deployed out-degree, so a value C++ could move on its own left those
 // instruments free to describe a network the daemon no longer runs -- F-7's
 // failure mode one layer down. See DAEMON_RELAY_PRIVACY.md §70.
 #define P2P_DEFAULT_HANDSHAKE_INTERVAL                  60           //secondes

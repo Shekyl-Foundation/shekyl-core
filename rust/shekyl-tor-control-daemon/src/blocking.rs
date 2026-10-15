@@ -41,8 +41,9 @@ use crate::ephemeral::{
 /// path beyond argument passing).
 pub struct BlockingDaemonTorConfig {
     /// Explicit `tor` binary path, or `None` to run the standard discovery
-    /// order (`SHEKYL_TOR_BINARY` env → `tor/` beside the executable →
-    /// `/opt/shekyl/<version>-<target>/`).
+    /// order (`tor/` beside the executable, then
+    /// `/opt/shekyl/<version>-<target>/`; nothing is read from the
+    /// environment).
     /// Either way the SP-T0c pin gate verifies tor's whole directory before
     /// anything spawns.
     pub tor_binary_override: Option<PathBuf>,

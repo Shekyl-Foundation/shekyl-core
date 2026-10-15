@@ -5,7 +5,6 @@
 
 //! Epoch-close, failure-window, prune, and emission-epoch snapshot types.
 
-use super::codes::*;
 use shekyl_archival_retention::{
     claim_window_floor, effective_settlement_epoch_blocks, epoch_close_compute,
     epoch_close_due_at_height, failure_window_slashable, good_through, prune_below_epoch_at_height,
@@ -250,40 +249,33 @@ pub extern "C" fn shekyl_archival_reorg_depth_blocks() -> u64 {
     shekyl_archival_retention::effective_archival_reorg_depth_blocks()
 }
 
-/// True iff `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is present in the process
-/// environment at all (no validation, no schedule latch). Drives the
-/// daemon's fail-closed public-network refusal: the settlement-epoch
-/// schedule is consensus, and on a non-FAKECHAIN net the *presence* of the
-/// lever is the operator error to refuse on (`Blockchain::init`, next to
-/// the `SEEDHASH_EPOCH_*` gate) — before any question of the value's
-/// validity.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_settlement_epoch_override_present() -> bool {
-    shekyl_archival_retention::settlement_epoch_override_present()
-}
-
-/// Arm the regtest schedule levers — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
-/// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` — for the daemon's FAKECHAIN
-/// startup path, latching the validated pair (or the genesis pins when
-/// unset). An unarmed process ignores the levers entirely, so arming is the
-/// single gate a regtest schedule passes through; the epoch is parsed
-/// against the cap, so `SEB ≤ cap` is refused here
-/// (`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q2 item 5).
+/// Arms the settlement schedule from the daemon's `dev-` rows
+/// (`DAEMON_CONFIG_CUTOVER.md` §4.2): the Rust `main()` calls this at
+/// step 6, before the core whose first epoch arithmetic latches the
+/// schedule exists. `None` is the genesis pin. The daemon refuses to start
+/// on `Err`, naming the row.
 ///
-/// Returns a **cause code**, not a bool: the refusals need different
-/// remedies and sending an operator after the wrong one costs real
-/// debugging time (a levered daemon dying on
-/// [`SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE`] is a daemon-side
-/// initialization-order defect, never a bad value).
-#[no_mangle]
-pub extern "C" fn shekyl_archival_settlement_epoch_arm_regtest() -> u8 {
+/// # Errors
+/// The owner's refusal as text: a value outside its range, or a schedule
+/// already latched.
+pub fn arm_settlement_schedule(blocks: Option<u64>, reorg_cap: Option<u64>) -> Result<u64, String> {
     use shekyl_archival_retention::SettlementEpochOverrideError as E;
-    match shekyl_archival_retention::arm_settlement_epoch_override_for_regtest() {
-        Ok(_) => SHEKYL_ARCHIVAL_SEB_ARM_OK,
-        Err(E::Invalid { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID,
-        Err(E::InvalidReorgCap { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP,
-        Err(E::ArmedTooLate { .. }) => SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE,
-    }
+    use shekyl_archival_retention::{ARCHIVAL_REORG_DEPTH_BLOCKS, SETTLEMENT_EPOCH_BLOCKS};
+    // The rule in the row's terms: the error's own text names the
+    // environment variables the wallet engine still reads.
+    shekyl_archival_retention::arm_settlement_epoch_override(blocks, reorg_cap).map_err(|e| match e {
+        E::Invalid {
+            floor, reorg_cap, ..
+        } => format!(
+            "an integer from {floor} to {SETTLEMENT_EPOCH_BLOCKS}, strictly above the archival reorg depth of {reorg_cap}"
+        ),
+        E::InvalidReorgCap { .. } => {
+            format!("an integer from 1 to {ARCHIVAL_REORG_DEPTH_BLOCKS}")
+        }
+        E::ArmedTooLate { latched } => format!(
+            "the settlement schedule had already latched at {latched} blocks before the daemon recorded the row"
+        ),
+    })
 }
 
 /// Returns `1` and writes the settlement epoch whose close is processed at
@@ -657,4 +649,21 @@ pub struct ShekylArchivalEmissionEpochSnapshot {
     /// Claimant `P`'s index into `bonds`, or `SIZE_MAX` when `P` has no
     /// serve-credit row in `E` (its work is then zero by construction).
     pub claimant_bond_idx: usize,
+}
+
+#[cfg(test)]
+mod arm_tests {
+    use super::arm_settlement_schedule;
+
+    /// The daemon's refusal names the row's rule, not an environment
+    /// variable. The latch is process-wide, so this test arms nothing
+    /// that could succeed; the refusals come before the latch.
+    #[test]
+    fn a_settlement_lever_off_its_range_is_refused_in_the_rows_terms() {
+        let e = arm_settlement_schedule(Some(40), None).unwrap_err();
+        assert!(e.starts_with("an integer from 721 to 10000"), "{e}");
+        assert!(!e.contains("SHEKYL_"), "{e}");
+        let e = arm_settlement_schedule(None, Some(0)).unwrap_err();
+        assert!(e.starts_with("an integer from 1 to "), "{e}");
+    }
 }

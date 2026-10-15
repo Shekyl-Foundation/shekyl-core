@@ -2609,37 +2609,6 @@ uint64_t shekyl_archival_settlement_epoch_blocks(void);
 /// regtest lever beside the epoch's). Read only to report the schedule.
 uint64_t shekyl_archival_reorg_depth_blocks(void);
 
-/// True iff SHEKYL_SETTLEMENT_EPOCH_BLOCKS or SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS
-/// is present in the environment at all (no validation, no schedule latch).
-/// Drives Blockchain::init's
-/// fail-closed public-network refusal: the schedule is consensus, and on a
-/// non-FAKECHAIN net the lever's presence is the operator error to refuse
-/// on, before any question of the value's validity.
-bool shekyl_archival_settlement_epoch_override_present(void);
-
-/// Arm the regtest schedule levers, SHEKYL_SETTLEMENT_EPOCH_BLOCKS and
-/// SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS (FAKECHAIN startup path only),
-/// latching the validated pair (or the genesis pins when unset). The epoch
-/// is parsed against the cap: SEB <= cap is refused. An unarmed process
-/// ignores the levers entirely.
-///
-/// Returns one of SHEKYL_ARCHIVAL_SEB_ARM_* below, because the refusals
-/// need different remedies.
-uint8_t shekyl_archival_settlement_epoch_arm_regtest(void);
-
-/// Armed (or the variables are unset and the genesis pins latched).
-#define SHEKYL_ARCHIVAL_SEB_ARM_OK                   0
-/// SHEKYL_SETTLEMENT_EPOCH_BLOCKS is not an integer strictly above the reorg
-/// cap in force and at most the genesis pin — an operator input error: fix
-/// the value, lower SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS with it, or unset it.
-#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID          1
-/// The schedule already latched before the call — an initialization-order
-/// defect in the daemon, NOT a bad value.
-#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE         2
-/// SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS is not an integer in 1..=the genesis
-/// reorg depth — an operator input error.
-#define SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP 3
-
 /// Returns 1 and writes the settlement epoch whose close is processed at
 /// `block_height`; 0 (no write) at height 0 or non-boundary heights.
 uint8_t shekyl_archival_epoch_close_due(
@@ -3455,17 +3424,6 @@ std::uint8_t shekyl_relay_zone_note_achieved_out(std::uint8_t connector, std::ui
 //! public below-floor bit is a targeting oracle, §16.3). False until the
 //! first note for `connector`: no data is never a fabricated zero.
 bool shekyl_relay_zone_floor_snapshot(std::uint8_t connector, std::uint32_t* out_achieved, std::uint32_t* out_floor, bool* out_below);
-
-//! The outbound floor the embargo provisioning assumes (F-8b): counts below
-//! this put real fluff first-passage above the provisioned value.
-std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
-
-//! Outbound connections a node opens per zone by default. Rust-owned (rule
-//! 20); replaces `#define P2P_DEFAULT_CONNECTIONS_COUNT`. This is the degree
-//! the relay-privacy measurements are taken AT; the floor above is derived
-//! FROM those measurements. Same value today, opposite derivations -- do not
-//! substitute one for the other.
-std::uint32_t shekyl_p2p_default_out_peers();
 
 //! Inbound safety-bound decision (PWD-I7). Rust observes the process and
 //! decides. C++ passes `reserved` — descriptors it has promised but not
@@ -4410,9 +4368,13 @@ void shekyl_dialer_handshake_verdict(std::uint64_t id, int accepted);
 /// The inbound handshake's self-connection check: 1 when `nonce` (32 bytes)
 /// is one this node put in flight on `connector`, erasing it; 0 otherwise.
 int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t* nonce);
-/// The connector's outbound target as the dialer holds it: the pushed cap,
-/// or the compiled default before any push. 0 for an unknown connector.
-std::uint32_t shekyl_dialer_out_target(std::uint32_t connector);
+/// The chain-sync heuristics that read the outbound target, decided in Rust
+/// (DAEMON_CONFIG_CUTOVER.md §4.2): the handler hands its counts over.
+/// Whether to drop a synced peer on `connector` to make room for a syncing
+/// one: the outbound slots are full and fewer than the search count sync.
+bool shekyl_sync_room_for_syncing_peer(std::uint32_t connector, std::uint32_t syncing, std::uint32_t synced);
+/// Whether to look for more outbound peers to sync from on `connector`.
+bool shekyl_sync_wants_more_outbound(std::uint32_t connector, std::uint32_t outbound);
 /// The core's tip: the dialer's next handshake carries it. Called wherever
 /// the tip changes, and once at start.
 void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,

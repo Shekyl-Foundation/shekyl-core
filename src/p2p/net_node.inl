@@ -457,7 +457,6 @@ namespace nodetool
       zone.second.m_net_server.get_config_object().m_invoke_timeout = std::chrono::milliseconds{P2P_DEFAULT_INVOKE_TIMEOUT};
       const std::uint32_t connector = zone.first == epee::net_utils::connector_id::tor ? SHEKYL_CONNECTOR_TOR : SHEKYL_CONNECTOR_CLEARNET;
       CHECK_AND_ASSERT_MES(zone.second.m_net_server.bind(connector), false, "Failed to bind the seam");
-      m_payload_handler.set_max_out_peers(zone.first, shekyl_dialer_out_target(connector));
     }
 
     /* One relay, after every connector zone exists. Its identity (which

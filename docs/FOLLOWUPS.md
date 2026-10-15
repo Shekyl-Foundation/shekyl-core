@@ -1215,6 +1215,10 @@ Default. Lands before genesis if it should exist at launch.
 - **Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw ().**
   - Target: pre-genesis
 
+- **The wallet engine's settlement-schedule lever still reads the environment.** The daemon arms the schedule from its `dev-settlement-epoch-blocks` and `dev-archival-reorg-depth` rows (`DAEMON_CONFIG_CUTOVER.md` §4.2) and reads no environment; the wallet engine (`shekyl-engine-core` `lifecycle/assemble.rs`) and its regtest harness (`regtest_e2e.rs`) still arm through `arm_settlement_epoch_override_for_regtest`, which reads `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`, and the harness spawns the daemon with those variables and the old spellings. Blocked on the engine lane: the daemon-configuration cutover does not change a wallet reader (rule 15, every consumer served first); the harness's launcher is commit (f)'s. Falsify by `rg -n 'env::var\("SHEKYL_SETTLEMENT' rust` returning nothing.
+  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §4
+  - Target: pre-genesis
+
 - **`shekyl-daemon-rpc` staticlib: `tracing::*` calls silently dropped.** [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   - Target: pre-genesis
 
