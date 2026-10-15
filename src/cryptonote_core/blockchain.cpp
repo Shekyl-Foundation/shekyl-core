@@ -2320,7 +2320,9 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       reject_block_internal(bvc);
       return false;
     }
-    if (fc_verdict == SHEKYL_FORK_CHOICE_SWITCH)
+    // Both switch arms take this path; the discard stays keyed on
+    // is_a_checkpoint below until DEL-009 deletes the C++ switch (E5-Q5).
+    if (fc_verdict == SHEKYL_FORK_CHOICE_SWITCH || fc_verdict == SHEKYL_FORK_CHOICE_FORCED_SWITCH)
     {
       // C2-R1b F-1(a): pre-check the whole rollback against the prune
       // watermark BEFORE the switch mutates anything -- a mid-pop refusal
