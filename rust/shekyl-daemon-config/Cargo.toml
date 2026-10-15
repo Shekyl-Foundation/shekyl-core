@@ -21,6 +21,8 @@ shekyl-logging = { path = "../shekyl-logging" }
 # The network marker is two TOML keys; parsed with the reader the
 # workspace already pins (DAEMON_CONFIG_CUTOVER_AUDIT.md §4).
 toml = { version = "0.8", default-features = false, features = ["parse"] }
+# A mining address is checked against the network at construction.
+shekyl-address = { path = "../shekyl-address" }
 
 [target.'cfg(unix)'.dependencies]
 # Safe wrappers for the data-directory lock (`flock`) and the account's
@@ -34,6 +36,8 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
 tempfile = "3"
+# A valid v3 onion for the operator-Tor tests.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 
 [lints]
 workspace = true

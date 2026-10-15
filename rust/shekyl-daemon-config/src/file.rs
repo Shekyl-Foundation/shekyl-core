@@ -378,6 +378,24 @@ mod tests {
     }
 
     #[test]
+    fn a_path_that_opens_but_cannot_be_read_is_unreadable() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("c.toml");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let e = open(&dir, true).unwrap_err();
+        assert!(
+            matches!(e.code, Code::FileUnreadable | Code::FilePermissions),
+            "{e}"
+        );
+        assert_eq!(
+            e.get("path")
+                .map(|p| p.starts_with(&*dir.display().to_string())),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn a_world_writable_file_is_refused_at_the_file_itself() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("c.toml");

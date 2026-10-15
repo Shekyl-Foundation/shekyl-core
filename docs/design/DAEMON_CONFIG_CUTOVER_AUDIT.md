@@ -184,3 +184,44 @@ and a tokio child's `wait()` still returns its status.
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test
   that no job runs is not counted as coverage.
+
+## 8. The §6 rows and their tests (commit (a))
+
+Every row of the brief's §6 that commit (a) can refuse has a test that
+refuses it with its code, named here. A row only Windows can exercise names
+where it runs; a `cfg(windows)` test no job runs is not counted. The rows an
+owner refuses at its own start, and the runtime rows, are commits (c) and
+(d)'s.
+
+| §6 row | Test |
+| --- | --- |
+| a named config file is missing | `shekyl-daemon-config` `file::tests::a_missing_default_file_is_the_defaults_and_a_missing_named_file_refuses` |
+| the file cannot be opened or read | `file::tests::a_path_that_opens_but_cannot_be_read_is_unreadable` |
+| the file, or a directory above it, can be written outside the allowlist | Unix: `file::tests::a_writable_file_or_directory_is_refused_naming_the_place_and_the_principal` (the rule on described trees), `file::tests::a_world_writable_file_is_refused_at_the_file_itself` (a real file). Windows: the DACL walk in `shekyl-win-sec::dacl`, run by the Windows job's cutover case (§5.2 of the brief, a directory granting Users write) |
+| the file holds a secret and can be read outside the allowlist | `file::tests::a_secret_is_readable_only_by_owner_and_root`; Windows as above |
+| a symbolic link whose target fails either check | `file::tests::a_symbolic_link_is_judged_by_its_target` |
+| the file is not valid TOML | `shekyl-options` `input::tests::invalid_toml_and_a_repeated_key_name_their_line` |
+| an unknown name, on either surface | `shekyl-options` `table::tests::a_misspelled_name_is_refused_with_the_nearest_public_name`, `input::tests::an_unknown_key_in_the_file_offers_the_nearest_name_with_its_line` |
+| a REJECTED or RESERVED name | `shekyl-options` `table::tests::rejected_and_reserved_names_are_refused_with_their_reasons` |
+| a value its kind refuses | `shekyl-options` `kind::tests`: quantities and units, integers, endpoints, origins (`*`), commands, `a_path_is_absolute_only`; `input::tests::a_non_utf8_argument_is_refused_by_position` |
+| a value on a surface its row forbids | `shekyl-options` `input::tests::a_missing_value_and_a_file_only_secret_on_the_cli_are_refused`, `input::tests::a_file_value_carries_its_line_and_cli_only_rows_are_refused_there` |
+| a `dev-` option on a network its row does not name | `resolve::tests::a_development_lever_is_refused_off_its_networks_and_always_on_mainnet` |
+| no account home and no explicit paths | `sections::tests::no_home_refuses_each_path_that_needs_it_and_not_an_explicit_one`, `paths::tests::the_root_is_the_account_home_and_no_home_refuses` |
+| the data directory cannot be created, or is not a directory | `lock::tests::a_data_directory_that_is_a_file_is_unusable` |
+| the data directory is locked by another daemon | Unix: `lock::tests::the_lock_is_taken_once_and_refused_to_a_second_holder`. Windows: the job's second-daemon case (brief §5.2) |
+| the marker names another network | `marker::tests::another_network_refuses_naming_both_and_the_fix` |
+| the marker names this network with a different network id | `marker::tests::the_same_network_with_another_id_is_a_regenesis_refusal` |
+| a daemon store with no marker | `marker::tests::a_store_with_no_marker_is_never_marked_after_the_fact` |
+| the log location cannot be written | `sections::tests::the_log_location_is_created_or_refused` |
+| the ban file cannot be read, or a line does not parse | `sections::tests::the_ban_file_is_read_at_parse_and_a_bad_line_is_named` |
+| a listener cannot bind | the owner's start, commit (c) |
+| a runtime change its constructor refuses; a set for a row not marked runtime | commit (d) |
+| `service` outside the SCM, on Linux, FreeBSD or macOS, or with a bad root | `service` is a reserved row until RT-W14, refused by `table::tests::rejected_and_reserved_names_are_refused_with_their_reasons`; the missing root by `paths::tests::the_service_root_is_program_data_or_a_refusal`; the three cases are RT-W14's to test when the row goes live |
+
+Cross-row refusals the types make (`INPUT_GRAMMAR.md` §4), beyond §6:
+`sections::tests::an_operator_tor_needs_its_socks_and_an_onion_needs_its_listener`,
+`a_connector_that_is_off_cannot_carry_its_endpoints_or_its_peers`,
+`socks_credentials_need_each_other_and_their_endpoint`,
+`advertise_takes_one_endpoint_per_family`,
+`a_mining_address_is_checked_against_the_network`,
+`positional_words_make_a_client_that_needs_an_admin_endpoint`.

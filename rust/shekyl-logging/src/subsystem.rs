@@ -184,6 +184,32 @@ pub fn directive(base: Level, overrides: &[(Subsystem, Level)]) -> String {
     parts.join(",")
 }
 
+/// The five level words the grammar spells (`log-level`, `log-category`).
+#[must_use]
+pub fn level_from_word(word: &str) -> Option<Level> {
+    match word {
+        "error" => Some(Level::ERROR),
+        "warn" => Some(Level::WARN),
+        "info" => Some(Level::INFO),
+        "debug" => Some(Level::DEBUG),
+        "trace" => Some(Level::TRACE),
+        _ => None,
+    }
+}
+
+/// [`directive`] from the grammar's words: a base level and
+/// `(subsystem, level)` pairs. `None` when a word is not a level or a
+/// subsystem, which the table refuses before this is reached.
+#[must_use]
+pub fn directive_from_words(base: &str, overrides: &[(&str, &str)]) -> Option<String> {
+    let base = level_from_word(base)?;
+    let mut pairs = Vec::with_capacity(overrides.len());
+    for (subsystem, level) in overrides {
+        pairs.push((Subsystem::from_name(subsystem)?, level_from_word(level)?));
+    }
+    Some(directive(base, &pairs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +262,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_words_build_the_same_directive_and_an_unknown_word_is_none() {
+        assert_eq!(
+            directive_from_words("warn", &[("p2p", "debug")]),
+            Some(directive(Level::WARN, &[(Subsystem::P2p, Level::DEBUG)]))
+        );
+        assert_eq!(directive_from_words("loud", &[]), None);
+        assert_eq!(directive_from_words("warn", &[("net", "debug")]), None);
+        assert_eq!(directive_from_words("warn", &[("p2p", "verbose")]), None);
     }
 
     #[test]

@@ -15,6 +15,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod announce;
 pub mod file;
 pub mod lock;
 pub mod marker;
@@ -22,6 +23,7 @@ pub mod network;
 pub mod paths;
 pub mod platform;
 pub mod resolve;
+pub mod sections;
 pub mod table;
 
 pub use lock::Lock;
@@ -29,4 +31,5 @@ pub use marker::{MarkerOutcome, NetworkId};
 pub use network::Network;
 pub use platform::{Platform, RunMode};
 pub use resolve::{choosers, resolve, Resolved};
+pub use sections::{build, Clearnet, DaemonConfig, Tor};
 pub use table::{LEVELS, NETWORKS, TABLE};

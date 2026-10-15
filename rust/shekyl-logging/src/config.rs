@@ -235,3 +235,45 @@ impl Default for Config {
         Self::stderr_only(Level::INFO)
     }
 }
+
+/// The split of one disk budget into a rotation (`log-size-max`, IG-Q19:
+/// the budget is the operator's, the rotation inside it is this crate's).
+pub const FILES_WITHIN_BUDGET: u32 = 8;
+
+impl FileSink {
+    /// A size-rolling sink whose live file and archives together never
+    /// exceed `budget_bytes`: [`FILES_WITHIN_BUDGET`] files of an equal
+    /// share each. A budget too small for that many files of at least one
+    /// byte is still honoured: the share floors at one byte.
+    pub fn within_budget(
+        directory: impl Into<PathBuf>,
+        filename_prefix: impl Into<String>,
+        budget_bytes: u64,
+    ) -> Self {
+        let share = (budget_bytes / u64::from(FILES_WITHIN_BUDGET)).max(1);
+        Self::size_rolling(directory, filename_prefix, share, FILES_WITHIN_BUDGET)
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn a_budget_is_split_into_equal_shares_that_sum_within_it() {
+        let sink = FileSink::within_budget("/var/log", "shekyld", 1 << 30);
+        match sink.rotation {
+            Rotation::Size {
+                max_bytes,
+                max_files,
+            } => {
+                assert_eq!(max_files, FILES_WITHIN_BUDGET);
+                assert!(max_bytes * u64::from(max_files) <= 1 << 30);
+                assert_eq!(max_bytes, (1 << 30) / u64::from(FILES_WITHIN_BUDGET));
+            }
+            other => panic!("not size-rolling: {other:?}"),
+        }
+        let tiny = FileSink::within_budget("/var/log", "shekyld", 3);
+        assert!(matches!(tiny.rotation, Rotation::Size { max_bytes: 1, .. }));
+    }
+}

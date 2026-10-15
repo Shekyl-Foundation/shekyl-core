@@ -1045,6 +1045,16 @@ mod tests {
     }
 
     #[test]
+    fn a_path_is_absolute_only() {
+        assert!(matches!(
+            Kind::Path.parse_text("/etc/shekyl"),
+            Ok(Value::Path(_))
+        ));
+        assert_eq!(code(Kind::Path.parse_text("etc/shekyl")), Code::ValueSyntax);
+        assert_eq!(code(Kind::Path.parse_text("./x")), Code::ValueSyntax);
+    }
+
+    #[test]
     fn a_secret_never_shows_its_text() {
         let v = Kind::Secret
             .parse_file(&toml::Value::String("hunter2".into()))
