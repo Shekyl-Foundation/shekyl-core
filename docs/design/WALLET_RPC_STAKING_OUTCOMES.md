@@ -3,7 +3,8 @@
 **Status:** OPEN — Round 0, questions **POSED 2026-10-15**; nothing is
 ruled. Each question carries a default, its reason, what the alternative
 changes, and a falsifier. **No code until the questions are ruled.** One
-dependency on the bond lane is open (§1.1).
+dependency on the bond lane is open (§1.1), recorded in FOLLOWUPS and
+blocked on a bond-lane Round 0.
 
 **Ground:** `shekyl-core` `dev` at `a0d3ebcb1` (the #1076 merge, after
 #1075), with the daemon RPC at `CORE_RPC_VERSION` 3.54 (#1057). Every
@@ -52,12 +53,19 @@ Nothing in `staking_info` names a record in flight, refused or stuck:
   projected through the transfer queries (`project.rs:197`,
   `queries.rs:547`). Pending records never pass through that journal.
 
-### 1.1 Dependency: a bond post is signed long before it is sent — OPEN, the bond lane's decision
+### 1.1 Dependency: the bond-post delay does not decorrelate the funding transfer from the bond — OPEN, blocked on a bond-lane Round 0
+
+Recorded in `docs/FOLLOWUPS.md` as "The bond-post delay does not
+decorrelate the funding transfer from the bond", owned by the bond lane
+(`ARCHIVAL_BOND_WI3_DISPATCH.md`). It is blocked on a bond-lane Round 0
+on the delay's anchor, the window, and signing at the due time (Rick,
+2026-10-15).
 
 **What the code does.**
 
-- The post is assembled and signed at `anchor_t0`, the daemon's claimed
-  tip (`engine/bond_orchestrator.rs:555-557`).
+- The delay is measured from the stake request. The post is assembled
+  and signed at that request, `anchor_t0`, the daemon's claimed tip
+  (`engine/bond_orchestrator.rs:555-557`).
 - Its reference is `min(ledger synced height, curve-tree ingested tip) −
   REF_ANCHOR_AGE` (6) (`bond_orchestrator.rs:455-461`). So the reference
   is at most `anchor_t0 − 6`.
@@ -85,19 +93,28 @@ Nothing in `staking_info` names a record in flight, refused or stuck:
   (`engine/transaction_submitter.rs:270`), so the driver resends the same
   bytes on every due tick until the 900-block alarm
   (`pscan/dispatch.rs:820-839`, `:601-610`).
-- **Posts that do land are fingerprinted.** `REF_ANCHOR_AGE` is
+- **The reference reveals the signing time.** `REF_ANCHOR_AGE` is
   privacy-canonical, so that "the on-wire reference age does not
   fingerprint the wallet" (`reference.rs:75-84`). A post sent `offset`
   blocks after signing carries reference age `offset + 6` instead of 6.
-  The post stands apart from an ordinary send, and its reference age
-  shows every node the drawn offset.
+  It shows every node when it was signed, which is the stake request,
+  and so the drawn offset. The delay therefore does not hide the request
+  it starts from.
+- **The funding-to-bond spacing guard is unwired.** `MIN_COLD_START_SPACING`
+  (one settlement epoch between the principal's funding transfer and the
+  bond post) is `#[allow(dead_code)]`, "inert until cold-start spacing
+  check is wired" (`engine/stake_timing.rs:192-203`).
 - **Today the C++ daemon hides all of this.** It answers every kind-5
   JoinMarket post `JoinMarketUnsupported` before any reference check
   (the FOLLOWUPS row "The five bonded regtest walks are decided dark…").
   The defect appears at `DEL-008`.
 
-**Confirmed by a dispatch unit test (a probe, not committed).** A post
-with offset 300:
+**Shown by a dispatch unit test**, committed `#[ignore]`d with its
+reason pointing at the FOLLOWUPS row:
+`a_bond_post_sent_past_its_proof_lifetime_is_resent_unchanged_to_the_horizon`
+(`engine/pscan/dispatch_tests.rs`). It asserts the defect, so it passes
+while the defect stands and the bond lane's round inverts or replaces it.
+A post with offset 300:
 
 - is not sent one block before it is due;
 - at its first send, carries a reference whose age is at least 306,
@@ -107,22 +124,28 @@ with offset 300:
 - then stops, with the record held as `Dispatched` and nine attempts
   counted.
 
-**The decision is the bond lane's.** The two shapes:
+**Inputs to the bond lane's Round 0.** This round decides none of
+them; they are what it found:
 
-- **Sign at the due time.** The reference age is the canonical 6 at
-  broadcast, and the offset stays private. But assembly moves to the
-  due tick, where the secrets must be re-derived inside the actor:
-  `CB-2`'s seed discipline (`EMISSION_CLAIM_BUILDER.md`, "CB-2
+- **The delay's anchor.** It is measured from the stake request. The
+  funding transfer is what the delay is meant to separate the bond from,
+  and `MIN_COLD_START_SPACING`, the guard that measures from it, is
+  unwired.
+- **The window.** 600 blocks, against a proof lifetime of 94.
+- **Signing at the due time.** The reference age at broadcast becomes
+  the canonical 6 and stops showing when the post was signed. Assembly
+  moves to the due tick, where the secrets must be re-derived inside the
+  actor: `CB-2`'s seed discipline (`EMISSION_CLAIM_BUILDER.md`, "CB-2
   no-seed-re-borrow").
-- **Bound the offset to the proof lifetime.** This keeps one signing at
-  `anchor_t0`, but shrinks the decorrelation window from 600 to 94
-  blocks, and the reference age still shows the offset.
+- **Bounding the offset to the proof lifetime.** One signing at
+  `anchor_t0` is kept, but the window shrinks from 600 to 94 blocks, and
+  the reference age still shows the offset.
 
 **How this round depends on it.** The expiry mechanism of WR-Q3 works
-under either shape. It needs only each record's reference height, and it
-also covers the defect as it stands. Until the bond lane decides, most
-stakes on the Rust daemon would end as `expired`, and the reason sentence
-must not blame the user.
+whatever that round decides. It needs only each record's reference
+height, and it also covers the defect as it stands. Until that round
+lands, most stakes on the Rust daemon would end as `expired`, and the
+reason sentence must not blame the user.
 
 ---
 
@@ -732,8 +755,8 @@ The ruled shape is proved against a real daemon (regtest), not mocks.
   need a daemon that admits a kind-5 JoinMarket post. That is the Rust
   daemon at the cutover. The named blocker is the FOLLOWUPS row "The five
   bonded regtest walks are decided dark…", and the fixtures for those
-  rows land with the walks it un-darkens. Until the bond lane settles
-  §1.1, an expiry is what most stakes on that daemon will show.
+  rows land with the walks it un-darkens. Until the bond lane's Round 0
+  on §1.1 lands, an expiry is what most stakes on that daemon will show.
 - **Without a daemon:** the state projection (WR-Q1), the outcome write
   (WR-Q2) and the expiry release (WR-Q3) are tested against sealed state
   with a fixed clock and frontier. They are projections of durable state
@@ -745,8 +768,8 @@ The ruled shape is proved against a real daemon (regtest), not mocks.
 - No wallet-contract removal. `JoinMarketUnsupported` stays enumerated
   until `DEL-008` deletes it (the FOLLOWUPS row "The five bonded regtest
   walks are decided dark…").
-- No change to when or how a bond post is signed. That is the bond
-  lane's decision (§1.1).
+- No change to when or how a bond post is signed. That belongs to the
+  bond lane's Round 0 (§1.1).
 - No byte-identical resubmit for claims, drains or exits. That stays
   leg 4's.
 - No change to the dispatcher's resend policy or alarm horizon, except as
