@@ -23,6 +23,7 @@ mod drive;
 mod endpoint;
 mod hub;
 mod loopback;
+mod post;
 mod registry;
 
 pub use connection::{
@@ -32,8 +33,9 @@ pub use connection::{
 pub use dial::{Channel, Dial};
 pub use drive::{drive_inbound, drive_inbound_async};
 pub use endpoint::{admit, connector_from_index, direction_from_index, Endpoint, TOR_HOST_MAX};
-pub use hub::{Attached, Hub, Post, SyncPayload};
+pub use hub::{Attached, Hub};
 pub use loopback::Loopback;
+pub use post::{Post, SyncPayload};
 pub use registry::{Board, Row};
 pub use shekyl_transport_layer::{
     deadline_after, BanLeft, CloseCause, CloseKind, ConnectorId, Direction, Ipv4Subnet, ListedBan,
