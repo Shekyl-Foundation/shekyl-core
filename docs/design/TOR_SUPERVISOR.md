@@ -645,13 +645,14 @@ diagnostic. No figure is set before its row lands.
 | `TSR-M8` | the monotonic clock across suspend on Windows and macOS | suspend handling |
 | `TSR-M9` | no onion address in the daemon Tor's log events at `notice` | the log category |
 | `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage | the tombstone delete bound |
+| `TSR-M11` | on Windows, whether a killed and reaped `tor.exe` has released its `DataDirectory` files (`lock`, `state`, `tor.log`) when the reap returns. One run of #1083's live tests left a directory that could not be removed at drop, and could be removed later with no tor running; the cause was not found | whether a respawn into the kept directory (`TSR-Q1`) waits for the directory's files before it launches |
 
 The Windows and Linux stop-path figures (closing our end, and the parent's
 `abort()`, each exiting Tor within about 20 ms; C4, C5) are evidence for the
 stop path, not a bound.
 
-**Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
-`TSR-M10` need only today's managed Tor and a SOCKS self-dial, and are measured
+**Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, and `TSR-M9` to
+`TSR-M11` need only today's managed Tor and a SOCKS self-dial, and are measured
 before the first production commit. `TSR-M2` and `TSR-M8` need the supervisor
 or the suspend apparatus, and are measured on the implementation branch before
 its PR leaves draft.
