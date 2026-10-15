@@ -97,6 +97,18 @@ pub trait PassVerifyingKey: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 
     /// The envelope's width: the canonical length of [`Self::Signature`].
     const ENVELOPE_LEN: usize;
 
+    /// That width is within the widest envelope [`ExpectedShard::new`]
+    /// checks its ceilings against. Evaluated where a `K`'s envelope is
+    /// added to a checked ceiling ([`ExpectedShard::max_response_len`]), so
+    /// a scheme wider than `WIDEST_ENVELOPE_LEN` fails to compile there
+    /// instead of overflowing at run time: the widest is computed from the
+    /// schemes by hand, and this is what makes a new one meet it.
+    #[doc(hidden)]
+    const WITHIN_WIDEST: () = assert!(
+        Self::ENVELOPE_LEN <= WIDEST_ENVELOPE_LEN,
+        "a scheme's envelope is wider than WIDEST_ENVELOPE_LEN; add it there"
+    );
+
     /// Parse an envelope as this scheme's canonical signature. `None` for
     /// anything else, another scheme's signature included.
     fn parse_envelope(envelope: &[u8]) -> Option<Self::Signature>;
@@ -121,7 +133,9 @@ pub const RECEIPT_ENVELOPE_LEN: usize = <FnDsaHybridPublicKey as PassVerifyingKe
 
 /// The widest envelope any scheme has. [`ExpectedShard::new`] checks its
 /// ceilings against this one, so an expectation that was built can be read
-/// under either scheme without a second overflow check.
+/// under either scheme without a second overflow check. A scheme it leaves
+/// out does not compile as a fetch target
+/// ([`PassVerifyingKey::WITHIN_WIDEST`]).
 const WIDEST_ENVELOPE_LEN: usize = if IDENTITY_ENVELOPE_LEN > RECEIPT_ENVELOPE_LEN {
     IDENTITY_ENVELOPE_LEN
 } else {
@@ -380,7 +394,9 @@ impl ExpectedShard {
     /// is held to end exactly where the envelope begins.
     #[must_use]
     pub fn max_response_len<K: PassVerifyingKey>(&self) -> u64 {
-        // Cannot overflow: `new` checked the widest envelope.
+        // Cannot overflow: `new` checked the widest envelope, and `K`'s is
+        // within it, at compile time.
+        let () = K::WITHIN_WIDEST;
         self.max_frame_len + u64::try_from(K::ENVELOPE_LEN).expect("envelope fits")
     }
 }

@@ -6676,3 +6676,33 @@ are brought to the maintainer for ruling before anything lands.
 
 ---
 
+
+## 2026-10-14 — Bundle verifier review: the section's window, an unanswered draw count; decode-once deferred
+
+**Decision (maintainer, 2026-10-14; recorded on PR #1076).** Three
+questions from the post-merge review of the bundle verifier, recorded in
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
+§13.9:
+
+1. **`SCS-P41`, ruled as built.** The window `h < h_incl ≤ h + W₂` is
+   part of a section's form: `check_section` and
+   `check_section_until_switch` refuse an out-of-window reference before
+   the budget (CEN-J31), so one such reference cannot switch the budget
+   off. A section holds at most `W₂` references.
+2. **`SCS-P42`, ruled as built.** No draw count for a block below the
+   including one is the view's failure (`BundleUnanswered::DrawCount`),
+   not a verdict. §9.6's sentence that refused the bundle is reversed.
+3. **`SCS-P43`, deferred (rule 21).** Decoding each receipt key once
+   reopens when `BA-T33`'s floor run shows receipt verification is a
+   material share of block connect time; the decoded key's size per
+   persona is measured against the resident cost on the floor device
+   first. If built, the decoded form lives inside
+   `FnDsaHybridPublicKey`, so `DrawableEpoch::receipt_key` and `SO-D12`'s
+   increment 2 are unaffected.
+
+The SH-2 pre-flight audit is archived to `docs/completed/` in the same
+PR (rule 95). On PR #1075, the same day: BP6 (the pool checks a
+JoinMarket's receipt key) and `RejectCause::JoinMarketUnsupported` are
+accepted.
+
+---

@@ -53,9 +53,10 @@ const _: fn() = || {
 /// # Secrets
 ///
 /// Both halves are on the heap, each at one address for the signer's life,
-/// and both are wiped there on drop: the Ed25519 seed by its buffer, the
-/// decoded FN-DSA key by the crate's `Zeroize` run on it in place, after
-/// which the crate's own `ZeroizeOnDrop` runs too. Moving the signer moves
+/// and both are wiped there on drop, each by its own type: the Ed25519 seed
+/// by its buffer, the decoded FN-DSA key by the crate's `ZeroizeOnDrop`,
+/// which runs where the key lies when its heap slot drops. The signer adds
+/// no wipe of its own. Moving the signer moves
 /// two pointers. There is no `Clone`, no encoding, no accessor for either
 /// half, and `Debug` prints nothing of them.
 ///
@@ -82,8 +83,7 @@ pub struct FnDsaHybridSigner {
 /// moving the key out of the `Option` — one more 118,640-byte stack copy,
 /// which nothing wipes (`FN_DSA_HYBRID.md` `FND-3`, `FND-23`). So the type
 /// keeps a state it never occupies after [`FnDsaHybridSigner::new`]: the
-/// decode refuses a `None`, and the wipe zeroizes the key in place and
-/// leaves it `Some`.
+/// decode refuses a `None`, and nothing empties the slot before it drops.
 ///
 /// [`Self::key_mut`] therefore answers with an error for the empty slot and
 /// does not panic. The workspace aborts on panic, and a signing path that
@@ -97,8 +97,9 @@ impl DecodedFnDsaKey {
     /// # Errors
     ///
     /// [`CryptoError::InvalidKeyMaterial`] if the slot is empty, which no
-    /// path reaches today: a signer with no decoded key has no key material
-    /// to sign with, and says so with the error an undecodable key gets.
+    /// path but a test reaches: a signer with no decoded key has no key
+    /// material to sign with, and says so with the error an undecodable key
+    /// gets.
     fn key_mut(&mut self) -> Result<&mut SigningKey1024, CryptoError> {
         self.0
             .as_mut()
@@ -111,15 +112,6 @@ impl DecodedFnDsaKey {
     #[cfg(test)]
     fn slot(&self) -> &Option<SigningKey1024> {
         &self.0
-    }
-
-    /// The crate's `Zeroize`, in place. `Option::zeroize` takes the value
-    /// out, which is two copies of the context on the dropping frame
-    /// (`FN_DSA_HYBRID.md` `FND-22`).
-    fn wipe(&mut self) {
-        if let Some(key) = self.0.as_mut().as_mut() {
-            key.zeroize();
-        }
     }
 }
 
@@ -183,12 +175,6 @@ impl FnDsaHybridSigner {
             sign_decoded_key(key, rng, inner)
         })
     }
-
-    /// Wipe the decoded key where it lies. Drop calls this; it is a method
-    /// so the wipe can be observed without reading freed memory.
-    fn wipe(&mut self) {
-        self.fn_dsa.wipe();
-    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -208,26 +194,19 @@ impl FnDsaHybridSigner {
     }
 }
 
-impl Drop for FnDsaHybridSigner {
-    fn drop(&mut self) {
-        self.wipe();
-        // `ed25519` wipes itself when its own drop runs, after this.
-    }
-}
-
-// A marker, and it wipes nothing: `ZeroizeOnDrop` has no methods. The wipe
-// is the `Drop` impl above, which runs the crate's `Zeroize` on the decoded
-// key in place; the Ed25519 seed is wiped by its own buffer's drop. This
-// impl asserts that promise to the type system, so the signer meets a
-// `ZeroizeOnDrop` bound and reads as what it is, a type that wipes itself.
+// A marker, and it wipes nothing: `ZeroizeOnDrop` has no methods. Each of
+// the two things the signer holds wipes itself where it lies when it drops:
+// the decoded key by the crate's derived `ZeroizeOnDrop` (asserted at the
+// top of this module), in its heap slot; the Ed25519 seed by its
+// `HeapSecret`. This impl asserts that promise to the type system, so the
+// signer meets a `ZeroizeOnDrop` bound and reads as what it is.
 //
 // Written by hand and not derived because the derive would call `zeroize` on
 // each field, and for the key's slot that is `Option::zeroize`, which takes
 // the value out: two copies of a 118,640-byte context on the stack of
 // whatever frame the signer is dropped in (`FN_DSA_HYBRID.md` `FND-22`).
 //
-// Held by `the_signer_is_wiped_on_drop` (the bound) and
-// `drop_wipes_the_held_key_in_place` (what the `Drop` impl's wipe does).
+// Held by `the_signer_is_wiped_on_drop` (the bound).
 impl ZeroizeOnDrop for FnDsaHybridSigner {}
 
 impl std::fmt::Debug for FnDsaHybridSigner {
@@ -278,7 +257,7 @@ mod tests {
 
     use fn_dsa::{SigningKey1024, FN_DSA_LOGN_1024};
 
-    use crate::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_CARRIER};
+    use crate::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE};
 
     use super::super::HybridEd25519FnDsa;
 
@@ -300,7 +279,7 @@ mod tests {
         let scheme = HybridEd25519FnDsa;
         let mut signer = FnDsaHybridSigner::new(&sk).expect("a generated key decodes");
         let messages: [&[u8]; 3] = [b"", b"message", &[0xA5; 112]];
-        for domain in [SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_CARRIER] {
+        for domain in [SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE] {
             for message in messages {
                 for seed_byte in [0u8, 0x33, 0xFF] {
                     let seed = [seed_byte; 32];
@@ -364,7 +343,7 @@ mod tests {
             .verify(&pk, D, b"message", &signature)
             .expect("control verifies");
         assert!(scheme
-            .verify(&pk, SCHEME_DOMAIN_WITNESS_CARRIER, b"message", &signature)
+            .verify(&pk, SCHEME_DOMAIN_WITNESS_BUNDLE, b"message", &signature)
             .is_err());
         assert!(scheme.verify(&pk, D, b"massage", &signature).is_err());
         let (other_pk, _) =
@@ -453,13 +432,14 @@ mod tests {
         assert_eq!(before, after);
     }
 
-    /// The wipe drop performs reaches the decoded key. Observed through the
-    /// one field of it the crate lets a caller read: the degree, 1024
-    /// (`logn` = 10) in a decoded key and zero once the crate's `Zeroize`
-    /// has run over the structure. That derive covers every field, the
-    /// secret basis and the working buffers among them.
+    /// The crate's `Zeroize`, the wipe its `ZeroizeOnDrop` runs when the
+    /// slot drops, reaches the decoded key where it lies. Observed through
+    /// the one field of it the crate lets a caller read: the degree, 1024
+    /// (`logn` = 10) in a decoded key and zero once the wipe has run over the
+    /// structure. That derive covers every field, the secret basis and the
+    /// working buffers among them.
     #[test]
-    fn drop_wipes_the_held_key_in_place() {
+    fn the_crates_wipe_reaches_the_held_key_in_place() {
         let (_, sk) = keypair();
         let mut signer = FnDsaHybridSigner::new(&sk).expect("decodes");
         let address = std::ptr::from_ref(signer.fn_dsa.slot());
@@ -467,15 +447,13 @@ mod tests {
             signer.fn_dsa.slot().as_ref().map(SigningKey1024::get_logn)
         };
         assert_eq!(degree(&signer), Some(FN_DSA_LOGN_1024));
-        signer.wipe();
+        wipe_in_place(&mut signer);
         assert_eq!(degree(&signer), Some(0), "the crate's wipe ran on the key");
         assert_eq!(
             address,
             std::ptr::from_ref(signer.fn_dsa.slot()),
             "and it ran where the key lies"
         );
-        // Idempotent: drop wipes again, and the crate's own drop after it.
-        signer.wipe();
     }
 
     /// The slot's empty state is not reachable through the signer, so it is
@@ -489,7 +467,7 @@ mod tests {
         signer.sign(D, b"message").expect("control: it signs");
         // Wiped first, so that taking the key out leaves no key bytes in
         // the value this test drops on its own stack.
-        signer.wipe();
+        wipe_in_place(&mut signer);
         drop(Box::new(signer.fn_dsa.0.take()));
         assert!(matches!(
             signer.sign(D, b"message"),
@@ -497,9 +475,18 @@ mod tests {
         ));
     }
 
+    /// The crate's `Zeroize` on the held key, in its slot: what the key's own
+    /// drop runs, without dropping it.
+    fn wipe_in_place(signer: &mut FnDsaHybridSigner) {
+        if let Some(key) = signer.fn_dsa.0.as_mut().as_mut() {
+            key.zeroize();
+        }
+    }
+
     /// The promise the `ZeroizeOnDrop` marker makes, as a bound: the signer,
-    /// and both things it holds, are wiped on drop. `drop_wipes_the_held_key_in_place`
-    /// shows the wipe itself.
+    /// and both things it holds, are wiped on drop.
+    /// `the_crates_wipe_reaches_the_held_key_in_place` shows the key's wipe
+    /// itself.
     #[test]
     fn the_signer_is_wiped_on_drop() {
         fn wiped_on_drop<T: ZeroizeOnDrop>() {}

@@ -87,8 +87,8 @@ fn the_first_receipt_builds_the_key_and_the_second_reuses_it() {
 }
 
 /// A receipt secret that does not decode refuses at the first signature
-/// with the scheme's typed error, and the slot remembers it: later
-/// requests get the same error and hold no key.
+/// with `StakeEngineError::ReceiptKeyUndecodable`, and the slot remembers
+/// it: later requests get the same error and hold no key.
 #[test]
 fn a_corrupted_receipt_key_refuses_at_the_first_signature() {
     let mut persona = HeldPersona::hold(bundle_with_a_corrupted_receipt_key(SLOT), true);

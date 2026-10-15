@@ -609,21 +609,21 @@ mod tests {
         assert_ne!(pk_a, pk_b);
         let scheme = HybridEd25519FnDsa;
         let sig = scheme
-            .sign(&sk_a, SCHEME_DOMAIN_WITNESS_CARRIER, b"set commitment")
+            .sign(&sk_a, SCHEME_DOMAIN_WITNESS_BUNDLE, b"bundle commitment")
             .expect("sign");
         scheme
             .verify(
                 &pk_a,
-                SCHEME_DOMAIN_WITNESS_CARRIER,
-                b"set commitment",
+                SCHEME_DOMAIN_WITNESS_BUNDLE,
+                b"bundle commitment",
                 &sig,
             )
             .expect("verifies under its own key");
         assert!(scheme
             .verify(
                 &pk_b,
-                SCHEME_DOMAIN_WITNESS_CARRIER,
-                b"set commitment",
+                SCHEME_DOMAIN_WITNESS_BUNDLE,
+                b"bundle commitment",
                 &sig
             )
             .is_err());
@@ -635,7 +635,7 @@ mod tests {
         let scheme = HybridEd25519FnDsa;
         let sig = scheme.sign(&sk, D, b"message").expect("sign");
         assert!(scheme
-            .verify(&pk, SCHEME_DOMAIN_WITNESS_CARRIER, b"message", &sig)
+            .verify(&pk, SCHEME_DOMAIN_WITNESS_BUNDLE, b"message", &sig)
             .is_err());
         assert!(scheme.verify(&pk, D, b"massage", &sig).is_err());
     }
