@@ -82,10 +82,6 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md)
   - Target: pre-genesis
 
-- **Run `BA-T33`'s floor arm: sign, verify and key generation under hybrid scheme 3 on the floor device.** The x86 figures count AVX2 code the floor never runs, and the vectors' agreement on aarch64 was shown under emulation, not on hardware (`FN_DSA_HYBRID.md` `FND-9`). Blocked on a floor-device session, which is a shared-estate claim. Falsify by a capture under `docs/benchmarks/` naming the revision, with `kat_fn_dsa_hybrid_v1` passing on the device in the same session.
-  - Owner: [`FN_DSA_HYBRID.md`](design/FN_DSA_HYBRID.md)
-  - Target: pre-genesis
-
 - **The wallet RPC shows a staker no terminal bond rejection and no stalled reservation, and gives no way to release one (rule 82).** A terminal rejection of a bond post, `JoinMarketUnsupported` included, reaches the user only as a wallet log line and as `staking_info`'s pending amount dropping to zero. A post whose submission keeps faulting is resubmitted until `DISPATCH_ALARM_HORIZON_BLOCKS` (900 blocks) and then held, with its funding reservation, past the horizon; nothing releases it while the outcome stays ambiguous, and no RPC lets the user see or release it (`rust/shekyl-engine-core/src/engine/pscan/dispatch.rs`). The operator alarm board (`OA-1`) has no wallet-RPC consumer. Ruled 2026-10-14 on PR #1075.
   - Owner: `WI-RPC` — [`wallet_rpc.yaml`](api/wallet_rpc.yaml); the alarm board it would read is `OA-1`
   - Target: pre-genesis
