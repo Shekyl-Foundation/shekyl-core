@@ -311,8 +311,8 @@ impl std::fmt::Display for VanguardsWarning {
 /// Selection must be **unpredictable** (an adversary who could predict our
 /// draw could bias toward landing in the set), so the production impl
 /// ([`OsVanguardRng`]) pulls from the OS CSPRNG; tests use a seeded
-/// generator. Modeled on the `challenge_coverage` sim's local-PRNG
-/// precedent rather than pulling a `rand` dependency.
+/// generator. Modeled on the economics sim's local PRNG (`rng.rs`)
+/// rather than pulling a `rand` dependency.
 pub trait VanguardRng {
     /// The next 64 random bits.
     ///
