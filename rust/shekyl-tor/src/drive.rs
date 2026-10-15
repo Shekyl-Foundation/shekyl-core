@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -37,6 +38,62 @@ use tokio::sync::{mpsc, oneshot};
 /// connection does.
 fn span_ns(elapsed: Duration) -> u64 {
     u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// How often a failing Tor SOCKS proxy is named in the log: once a minute
+/// at most, never once per dial (Rick, 2026-10-14). A dead proxy fails
+/// every dial in turn, and a line per dial would bury the one fact.
+const PROXY_WARN_EVERY: Duration = Duration::from_secs(60);
+
+/// When the proxy was last named, and how many failures went unnamed since.
+struct ProxyWarn {
+    last: Option<Instant>,
+    unnamed: u64,
+}
+
+impl ProxyWarn {
+    const fn new() -> Self {
+        Self {
+            last: None,
+            unnamed: 0,
+        }
+    }
+
+    /// `Some(unnamed)` when a warning is due at `now`, with the failures
+    /// since the last one; `None` while the last is under a minute old.
+    fn due(&mut self, now: Instant) -> Option<u64> {
+        match self.last {
+            Some(last) if now.saturating_duration_since(last) < PROXY_WARN_EVERY => {
+                self.unnamed = self.unnamed.saturating_add(1);
+                None
+            }
+            _ => {
+                self.last = Some(now);
+                Some(std::mem::take(&mut self.unnamed))
+            }
+        }
+    }
+}
+
+static PROXY_WARN: std::sync::Mutex<ProxyWarn> = std::sync::Mutex::new(ProxyWarn::new());
+
+/// This node's own Tor SOCKS proxy failed: the TCP connect to it, or an
+/// exchange it closed without a reply. Its own close kind, not
+/// `LocalClose`: it names the proxy, never the onion.
+fn proxy_unavailable(proxy: SocketAddr, why: &'static str) -> CloseCause {
+    let due = PROXY_WARN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .due(Instant::now());
+    if let Some(unnamed) = due {
+        tracing::warn!(
+            %proxy,
+            why,
+            failed_dials_since_last_warning = unnamed,
+            "tor's SOCKS proxy is unavailable; dials through it fail until it returns"
+        );
+    }
+    CloseCause::new(CloseKind::ProxyUnavailable)
 }
 
 /// A Tor channel. `onion` is the dialed host. Inbound has none: the zone
@@ -203,11 +260,18 @@ where
         settle(reserved, CloseCause::new(CloseKind::LocalClose), &on_cause);
         return;
     }
+    tracing::debug!(
+        conn = reserved.id().get(),
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "tor dial armed"
+    );
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async move {
         let dialed = Instant::now();
         let Ok(mut stream) = TcpStream::connect(proxy).await else {
-            return Err(CloseCause::new(CloseKind::LocalClose));
+            return Err(proxy_unavailable(proxy, "the TCP connect to it failed"));
         };
         let proxy_connect_ns = span_ns(dialed.elapsed());
         match socks_connect(
@@ -228,9 +292,15 @@ where
                 }
                 Err(CloseCause::proxy_refused(u16::from(reply)))
             }
+            Err(SocksError::Io(_)) => {
+                drop(stream.shutdown().await);
+                Err(proxy_unavailable(
+                    proxy,
+                    "it closed the SOCKS exchange without a reply",
+                ))
+            }
             Err(
-                SocksError::Io(_)
-                | SocksError::Malformed
+                SocksError::Malformed
                 | SocksError::AuthRejected { .. }
                 | SocksError::AuthFailed { .. },
             ) => {
@@ -314,6 +384,14 @@ where
         ignore(owner.deregister());
         return CloseCause::new(CloseKind::LocalClose);
     }
+    tracing::debug!(
+        conn,
+        outbound,
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "tor gap armed"
+    );
 
     let StreamEnds {
         session: bytes,
@@ -343,13 +421,28 @@ where
     let gate = node_gate();
     let mut writer = tokio::spawn(async move {
         let mut stall = shekyl_capped_stream::WriteStall::new(conn);
+        // Cold first contact (Rick, 2026-10-13): the dialler's SOCKS success
+        // to its first bytes on the wire, the handshake request. The same
+        // line on the responder is its first reply.
+        let mut first_write = true;
         let cause = write_capped(
             &mut write,
             &writer_queue,
             &overfull_write,
             &gate,
             &mut stall,
-            |plain| Ok(Cow::Borrowed(plain)),
+            |plain| {
+                if first_write {
+                    first_write = false;
+                    tracing::debug!(
+                        conn,
+                        outbound,
+                        first_write_ns = span_ns(channel_at.elapsed()),
+                        "tor first bytes written"
+                    );
+                }
+                Ok(Cow::Borrowed(plain))
+            },
         )
         .await;
         tracing::info!(conn, stall = %stall, "write stall");
@@ -357,20 +450,70 @@ where
     });
     let gate = node_gate();
     let inbound_close = inbound.clone();
+    // Cold first contact: the responder's accept to its first bytes read,
+    // the dialler's handshake request; on the dialler, the first reply.
+    let mut first_read = true;
+    // The gap measures the peer's silence (Rick, 2026-10-14): it ends at
+    // the peer's first complete handshake frame, read here, not at the
+    // strand's verdict, which is this node's own work.
+    let mut handshake = shekyl_levin::HandshakeFrame::new(if outbound {
+        shekyl_levin::HandshakeKind::Response
+    } else {
+        shekyl_levin::HandshakeKind::Request
+    });
+    let frame_in = Arc::new(AtomicBool::new(false));
+    let frame_seen = Arc::clone(&frame_in);
     let read_fut = read_capped(&mut read, inbound, &overfull, &gate, conn, |chunk| {
+        if first_read {
+            first_read = false;
+            tracing::debug!(
+                conn,
+                outbound,
+                first_read_ns = span_ns(channel_at.elapsed()),
+                "tor first bytes read"
+            );
+        }
+        if !handshake.complete() && handshake.feed(chunk) {
+            frame_in.store(true, Ordering::Release);
+            tracing::debug!(
+                conn,
+                outbound,
+                handshake_frame_ns = span_ns(channel_at.elapsed()),
+                "tor handshake frame received; the gap ends"
+            );
+        }
         Ok(vec![chunk.to_vec()])
     });
     tokio::pin!(read_fut);
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let mut hold = Some(hold);
     let mut gap_open = true;
+    let mut gap = shekyl_capped_stream::SilenceGap::new();
+    let mut verdict_open = true;
     loop {
+        // Buffered input first: a frame that arrived before the deadline is
+        // read even when this task resumes after it, and only then is the
+        // gap's wake looked at (`SilenceGap`).
         tokio::select! {
             biased;
-            result = &mut gap_rx, if gap_open => {
-                gap_open = false;
-                ignore(owner.deregister());
+            read_cause = &mut read_fut => {
+                if gap_open {
+                    ignore(owner.deregister());
+                }
+                return stop(
+                    &inbound_close,
+                    hold.take(),
+                    WriteJoin::Pending(&mut writer),
+                    read_cause,
+                )
+                .await;
+            }
+            result = &mut gap_rx, if verdict_open => {
+                verdict_open = false;
                 if result.is_err() {
+                    if gap_open {
+                        ignore(owner.deregister());
+                    }
                     return stop(
                         &inbound_close,
                         hold.take(),
@@ -386,8 +529,12 @@ where
                     "tor session established"
                 );
             }
-            result = wake.as_mut(), if gap_open => {
+            result = std::future::poll_fn(|cx| gap.poll(&frame_seen, wake.as_mut(), cx)), if gap_open => {
+                gap_open = false;
                 ignore(owner.deregister());
+                let Some(result) = result else {
+                    continue;
+                };
                 let kind = match result {
                     Ok(_) => CloseKind::LevinHandshakeTimeout,
                     Err(_) => CloseKind::LocalClose,
@@ -398,18 +545,6 @@ where
                     hold.take(),
                     WriteJoin::Pending(&mut writer),
                     cause,
-                )
-                .await;
-            }
-            read_cause = &mut read_fut => {
-                if gap_open {
-                    ignore(owner.deregister());
-                }
-                return stop(
-                    &inbound_close,
-                    hold.take(),
-                    WriteJoin::Pending(&mut writer),
-                    read_cause,
                 )
                 .await;
             }
@@ -465,6 +600,23 @@ fn ignore<E>(result: Result<(), E>) {
 
 #[cfg(test)]
 mod tests {
+    use super::{ProxyWarn, PROXY_WARN_EVERY};
+
+    /// The proxy is named on its first failure, then not again for a
+    /// minute however many dials fail, and the next warning counts them.
+    #[test]
+    fn a_failing_proxy_is_named_once_a_minute_with_the_dials_in_between() {
+        let start = std::time::Instant::now();
+        let mut warn = ProxyWarn::new();
+        assert_eq!(warn.due(start), Some(0));
+        for i in 1..=50u32 {
+            let at = start + PROXY_WARN_EVERY * i / 51;
+            assert_eq!(warn.due(at), None, "dial {i} within the minute");
+        }
+        assert_eq!(warn.due(start + PROXY_WARN_EVERY), Some(50));
+        assert_eq!(warn.due(start + PROXY_WARN_EVERY * 3 / 2), None);
+    }
+
     use super::*;
 
     #[tokio::test]

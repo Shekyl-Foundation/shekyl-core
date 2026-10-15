@@ -4027,6 +4027,7 @@ name = "shekyl-clearnet"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-levin",
  "shekyl-net-address",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
@@ -4236,6 +4237,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-peerlist",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
@@ -4248,6 +4250,24 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "shekyl-dialer"
+version = "3.1.0"
+dependencies = [
+ "shekyl-capped-stream",
+ "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-onion-v3",
+ "shekyl-peer-policy",
+ "shekyl-peerlist",
+ "shekyl-relay-privacy",
+ "shekyl-seam",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+ "tempfile",
  "tracing",
 ]
 
@@ -4523,6 +4543,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
+ "shekyl-dialer",
  "shekyl-difficulty",
  "shekyl-draw-rng",
  "shekyl-economics",
@@ -4535,6 +4556,7 @@ dependencies = [
  "shekyl-onion-v3",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
+ "shekyl-peerlist",
  "shekyl-pow-randomx",
  "shekyl-proofs",
  "shekyl-relay",
@@ -4546,6 +4568,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-tor",
  "shekyl-tor-control-daemon",
+ "shekyl-transport-layer",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
@@ -4615,6 +4638,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-net-address",
  "shekyl-p2p-transport",
+ "shekyl-peer-bounds",
  "shekyl-portable-storage",
  "shekyl-rpc-types",
  "thiserror",
@@ -4804,6 +4828,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-peer-bounds"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-peer-policy"
 version = "3.1.0"
 
@@ -4813,10 +4841,12 @@ version = "3.1.0"
 dependencies = [
  "shekyl-draw-rng",
  "shekyl-net-address",
+ "shekyl-peer-bounds",
  "shekyl-peerlist",
  "shekyl-relay-privacy",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
+ "tracing",
 ]
 
 [[package]]
@@ -5016,6 +5046,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5131,6 +5162,7 @@ name = "shekyl-tor"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-levin",
  "shekyl-net-address",
  "shekyl-onion-v3",
  "shekyl-peer-policy",

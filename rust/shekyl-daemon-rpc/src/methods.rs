@@ -12,7 +12,7 @@
 //! That is what lets one unit test with an in-memory [`ChainFacts`] pin a
 //! method's behaviour for every transport at once.
 
-use crate::core::TxSlot;
+use crate::core::{P2pRead, TxSlot};
 use serde::Deserialize;
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
@@ -23,7 +23,8 @@ use shekyl_rpc_types::{
 };
 use shekyl_rpc_types::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
-    GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
+    GetPeerListRequest, GetPeerListResponse, P2pReply, Peer, SyncInfoPeer, SyncInfoResponse,
+    SyncSpan,
 };
 use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
 use shekyl_types::{ArchivalLength, BlockHeight, ChainCount};
@@ -1320,16 +1321,22 @@ pub fn get_net_stats(facts: &dyn P2pFacts) -> Result<GetNetStatsResponse, RpcFau
 }
 
 /// `get_connections` (JSON-RPC, admin-only): the live p2p connections.
-pub fn get_connections(facts: &dyn P2pFacts) -> Result<GetConnectionsResponse, RpcFault> {
+/// A daemon started offline answers `offline` alone (Rick,
+/// 2026-10-14): it has no connections by configuration, and an empty list
+/// would read as a running node with none.
+pub fn get_connections(facts: &dyn P2pFacts) -> Result<P2pReply<GetConnectionsResponse>, RpcFault> {
+    if facts.p2p_state()? == P2pRead::Offline {
+        return Ok(P2pReply::Offline);
+    }
     let snapshot = facts.connections()?;
-    Ok(GetConnectionsResponse {
+    Ok(P2pReply::Running(GetConnectionsResponse {
         status: RpcStatus::ok(),
         connections: snapshot
             .connections
             .iter()
             .map(|c| project_connection(c, snapshot.now))
             .collect(),
-    })
+    }))
 }
 
 /// `/get_peer_list` (admin-only): the white and gray peerlists.
@@ -1338,11 +1345,17 @@ pub fn get_connections(facts: &dyn P2pFacts) -> Result<GetConnectionsResponse, R
 /// applied **here**, because it is a property of the request rather than of
 /// the peerlist, and the facts export reports each entry's blocked state
 /// without deciding what to do about it.
+///
+/// A daemon started offline answers `offline` alone: it has no peer
+/// lists by configuration.
 pub fn get_peer_list(
     request: &GetPeerListRequest,
     facts: &dyn P2pFacts,
-) -> Result<GetPeerListResponse, RpcFault> {
-    let entries = facts.peer_list(request.public_only)?;
+) -> Result<P2pReply<GetPeerListResponse>, RpcFault> {
+    let entries = match facts.peer_list(request.public_only)? {
+        P2pRead::Offline => return Ok(P2pReply::Offline),
+        P2pRead::Running(entries) => entries,
+    };
     let mut white_list = Vec::new();
     let mut gray_list = Vec::new();
     for e in entries {
@@ -1353,7 +1366,6 @@ pub fn get_peer_list(
             host: e.host,
             ip: e.ip,
             port: e.port,
-            last_seen: e.last_seen,
         };
         if e.white {
             white_list.push(peer);
@@ -1361,11 +1373,11 @@ pub fn get_peer_list(
             gray_list.push(peer);
         }
     }
-    Ok(GetPeerListResponse {
+    Ok(P2pReply::Running(GetPeerListResponse {
         status: RpcStatus::ok(),
         white_list,
         gray_list,
-    })
+    }))
 }
 
 /// `sync_info` (JSON-RPC, admin-only): where this node is in its download.
@@ -1375,12 +1387,21 @@ pub fn get_peer_list(
 /// with each other — the C++ handler read the chain, the connection list and
 /// the queue in three separate acquisitions too, and closing that would mean
 /// holding a p2p lock across a chain read.
-pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoResponse, RpcFault> {
+///
+/// A daemon started offline answers `offline` alone: it downloads
+/// from no peer, so it has no sync to report.
+pub fn sync_info(
+    chain: &dyn ChainFacts,
+    p2p: &dyn P2pFacts,
+) -> Result<P2pReply<SyncInfoResponse>, RpcFault> {
+    if p2p.p2p_state()? == P2pRead::Offline {
+        return Ok(P2pReply::Offline);
+    }
     let tip = chain.chain_tip()?;
     let connections = p2p.connections()?;
     let queue = p2p.sync_spans()?;
     let height = tip.chain_height.to_raw();
-    Ok(SyncInfoResponse {
+    Ok(P2pReply::Running(SyncInfoResponse {
         status: RpcStatus::ok(),
         height,
         // The same member `get_version` and `get_info` report: the core's
@@ -1408,7 +1429,7 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
             })
             .collect(),
         overview: render_overview(&queue.spans, height),
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -2061,10 +2082,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v31` = 3.54). A bump that
+        // Head of the `get_version` chain (`_v33` = 3.56). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v31.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v33.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2893,7 +2914,8 @@ pub(crate) mod tests {
         pub net: Result<NetStats, FactsFault>,
         pub connections: Result<ConnectionsSnapshot, FactsFault>,
         pub spans: Result<SyncSpansSnapshot, FactsFault>,
-        pub peers: Result<Vec<crate::core::PeerFacts>, FactsFault>,
+        pub peers: Result<P2pRead<Vec<crate::core::PeerEntry>>, FactsFault>,
+        pub state: Result<P2pRead<()>, FactsFault>,
         pub asked_public_only: AtomicBool,
     }
 
@@ -2912,7 +2934,8 @@ pub(crate) mod tests {
                     connections: Vec::new(),
                 }),
                 spans: Ok(SyncSpansSnapshot { spans: Vec::new() }),
-                peers: Ok(Vec::new()),
+                peers: Ok(P2pRead::Running(Vec::new())),
+                state: Ok(P2pRead::Running(())),
                 asked_public_only: AtomicBool::new(false),
             }
         }
@@ -2928,9 +2951,15 @@ pub(crate) mod tests {
         fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault> {
             self.spans.clone()
         }
-        fn peer_list(&self, public_only: bool) -> Result<Vec<crate::core::PeerFacts>, FactsFault> {
+        fn peer_list(
+            &self,
+            public_only: bool,
+        ) -> Result<P2pRead<Vec<crate::core::PeerEntry>>, FactsFault> {
             self.asked_public_only.store(public_only, Ordering::SeqCst);
             self.peers.clone()
+        }
+        fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
+            self.state.clone()
         }
     }
 
@@ -2989,7 +3018,10 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let res = get_connections(&facts).expect("connections");
+        let res = get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs");
         let c = &res.connections[0];
 
         assert_eq!(c.live_time, 600);
@@ -3026,7 +3058,11 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts).expect("connections").connections[0];
+        let c = &get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs")
+            .connections[0];
         assert_eq!(c.state, ConnectionState::Unknown);
         assert_eq!(c.height, None);
         assert_eq!(c.support_flags, None);
@@ -3047,7 +3083,11 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts).expect("connections").connections[0];
+        let c = &get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs")
+            .connections[0];
         assert_eq!(c.live_time, 0);
         assert_eq!(c.avg_download, 0);
         assert_eq!(c.avg_upload, 0);
@@ -3065,7 +3105,11 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts).expect("connections").connections[0];
+        let c = &get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs")
+            .connections[0];
         assert_eq!(c.live_time, 0);
         assert_eq!(c.recv_idle_time, 0);
         assert_eq!(c.send_idle_time, 0);
@@ -3086,7 +3130,11 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts).expect("connections").connections[0];
+        let c = &get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs")
+            .connections[0];
         assert_eq!(c.ip, "");
         assert_eq!(c.port, "");
         assert_eq!(c.address, "abcdefghijklmnop.onion:18080");
@@ -3114,21 +3162,20 @@ pub(crate) mod tests {
     /// split comes from the entry's own flag.
     #[test]
     fn the_peer_list_splits_by_list_and_filters_blocked_on_request() {
-        let peer = |n: u64, white: bool, blocked: bool| crate::core::PeerFacts {
+        let peer = |n: u64, white: bool, blocked: bool| crate::core::PeerEntry {
             host: format!("192.0.2.{n}"),
-            last_seen: 1_750_000_000 + n,
             ip: 0,
             port: 18080,
             white,
             blocked,
         };
         let facts = FakeP2p {
-            peers: Ok(vec![
+            peers: Ok(P2pRead::Running(vec![
                 peer(1, true, false),
                 peer(2, true, true),
                 peer(3, false, false),
                 peer(4, false, true),
-            ]),
+            ])),
             ..FakeP2p::default()
         };
 
@@ -3139,7 +3186,9 @@ pub(crate) mod tests {
             },
             &facts,
         )
-        .expect("peer list");
+        .expect("peer list")
+        .into_running()
+        .expect("P2P runs");
         assert_eq!(hidden.white_list.len(), 1);
         assert_eq!(hidden.gray_list.len(), 1);
         assert_eq!(hidden.white_list[0].host, "192.0.2.1");
@@ -3153,13 +3202,52 @@ pub(crate) mod tests {
             },
             &facts,
         )
-        .expect("peer list");
+        .expect("peer list")
+        .into_running()
+        .expect("P2P runs");
         assert_eq!(shown.white_list.len(), 2);
         assert_eq!(shown.gray_list.len(), 2);
         assert!(
             !facts.asked_public_only.load(Ordering::SeqCst),
             "public_only reaches the facts call, which chooses a different p2p read"
         );
+    }
+
+    /// **A daemon started offline answers `offline` alone on all three
+    /// methods** (Rick, 2026-10-14), and reads no connection, span or chain
+    /// for it: every other fact here is a fault, so a read would refuse.
+    #[test]
+    fn an_offline_daemon_answers_the_state_on_every_p2p_method() {
+        let off = FakeP2p {
+            connections: Err(FactsFault::Internal),
+            spans: Err(FactsFault::Internal),
+            peers: Ok(P2pRead::Offline),
+            state: Ok(P2pRead::Offline),
+            ..FakeP2p::default()
+        };
+        assert_eq!(get_connections(&off).expect("a state"), P2pReply::Offline);
+        assert_eq!(
+            get_peer_list(&GetPeerListRequest::default(), &off).expect("a state"),
+            P2pReply::Offline
+        );
+        assert_eq!(
+            sync_info(&facts(false, 0), &off).expect("a state"),
+            P2pReply::Offline
+        );
+    }
+
+    /// An online daemon whose P2P state cannot be read is a fault on every
+    /// method, never an empty reply.
+    #[test]
+    fn an_unreadable_p2p_state_is_a_fault_not_an_empty_reply() {
+        let broken = FakeP2p {
+            peers: Err(FactsFault::NullHandle),
+            state: Err(FactsFault::NotReady),
+            ..FakeP2p::default()
+        };
+        assert!(get_connections(&broken).is_err());
+        assert!(get_peer_list(&GetPeerListRequest::default(), &broken).is_err());
+        assert!(sync_info(&facts(false, 0), &broken).is_err());
     }
 
     /// The lifetime average, including the two inputs that would divide by
@@ -3275,7 +3363,10 @@ pub(crate) mod tests {
         };
 
         let behind = facts(false, 1_234_600);
-        let res = sync_info(&behind, &p2p).expect("sync info");
+        let res = sync_info(&behind, &p2p)
+            .expect("sync info")
+            .into_running()
+            .expect("P2P runs");
         assert_eq!(res.height, 1_234_567);
         assert_eq!(res.target_height, Nullable::value(1_234_600));
         assert_eq!(
@@ -3288,13 +3379,19 @@ pub(crate) mod tests {
         assert_eq!(res.spans[0].speed, 75, "0.75 becomes a percentage");
 
         let synced = facts(true, 1_234_600);
-        let res = sync_info(&synced, &p2p).expect("sync info");
+        let res = sync_info(&synced, &p2p)
+            .expect("sync info")
+            .into_running()
+            .expect("P2P runs");
         assert_eq!(res.target_height, Nullable::value(1_234_600));
 
         // No target is `null` on this method too, the same encoding as
         // `get_version` and `get_info` (RK-Q7).
         for synchronized in [true, false] {
-            let res = sync_info(&facts(synchronized, 0), &p2p).expect("sync info");
+            let res = sync_info(&facts(synchronized, 0), &p2p)
+                .expect("sync info")
+                .into_running()
+                .expect("P2P runs");
             assert_eq!(res.target_height, Nullable::NULL);
             assert_eq!(
                 serde_json::to_value(&res).unwrap()["target_height"],

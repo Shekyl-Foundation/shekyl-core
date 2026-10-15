@@ -87,7 +87,6 @@ set(unit_tests_sources
   stall_detection_calibration.cpp
   stack_trace.cpp
   test_tx_utils.cpp
-  test_peerlist.cpp
   test_protocol_pack.cpp
   threadpool.cpp
   util.cpp

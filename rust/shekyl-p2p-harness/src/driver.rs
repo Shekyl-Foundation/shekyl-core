@@ -95,6 +95,27 @@ pub fn record_goldens(epee_bin: &Path, dir: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Re-record the goldens from the seam: one parity transcript per seed,
+/// peer and host, in the shape [`record_goldens`] wrote from the epee host.
+///
+/// The epee host is deleted (D13), so after a ruled wire change this is
+/// how the goldens are re-recorded in the same pull request
+/// (`P2P_DIFFERENTIAL_HARNESS.md`, "Goldens"). A golden re-recorded
+/// without a ruling behind it is a regression hidden, not fixed: the
+/// caller cites the ruling, and the diff of the files is the review.
+pub fn record_goldens_from_seam(dir: &Path) -> Result<(), Error> {
+    fs::create_dir_all(dir)?;
+    for seed in all_seeds() {
+        let plan = script(seed)?;
+        let seam = crate::run_seam(seed)?;
+        let peer = crate::compare::parity_transcript(&seam.peer, &plan);
+        let host = crate::compare::parity_transcript(&seam.host, &plan);
+        peer.write(&dir.join(format!("seed-{seed}-peer.txt")))?;
+        host.write(&dir.join(format!("seed-{seed}-host.txt")))?;
+    }
+    Ok(())
+}
+
 /// The seam against goldens already recorded from the epee host.
 ///
 /// Compares the parity projection of each side. A send-over suffix and

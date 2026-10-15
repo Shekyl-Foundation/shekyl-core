@@ -123,8 +123,8 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.36: `get_info` drops `tx_prune_height` — the
 /// C++ tx-data prune whose watermark it reported is deleted (LMDB v15; the
 /// uniform discard is S-PRUNE, which will report its own frontier when it
-/// exists). 3.35: `pruning_seed` leaves `get_peer_list`,
-/// `get_connections` and `sync_info.peers`, and `next_needed_pruning_seed`
+/// exists). 3.35: the stripe seed leaves `get_peer_list`,
+/// `get_connections` and `sync_info.peers`, and the next-needed stripe
 /// leaves `sync_info`; the `prune_blockchain` method is deleted (REJECTED in
 /// the registry, `PDM-Q7`) — the stripe engine is gone, so every value was
 /// 0 and the field was a gossiped self-asserted attribute (`PWD-I1`'s shape).
@@ -157,7 +157,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `= 26` is textually identical whoever writes it. 3.33 is the
 /// `get_output_histogram` deletion on this branch; 3.34 the
 /// `get_curve_tree_path` removal, chained after it on merge; 3.35 the
-/// `pruning_seed` deletion; 3.36 the `tx_prune_height` deletion; 3.37 the
+/// stripe-seed deletion; 3.36 the `tx_prune_height` deletion; 3.37 the
 /// coinbase-nonce bound; 3.38 the per-connector socket counts and the
 /// permanent-ban flag; 3.39 `get_transactions`' `archival_len`; 3.40
 /// `get_version` and `sync_info` stop encoding synchronization as
@@ -176,8 +176,13 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// Peers. 3.49 its connection counts come from the seam board. 3.50 its pool
 /// count is split by broadcast state. 3.51 it refuses on a broken supply
 /// invariant. 3.52 its duplicate wire names retire. 3.53 its
-/// amounts are decimal strings. 3.54 it stops repeating the network.
-pub const CORE_RPC_VERSION_MINOR: u32 = 54;
+/// amounts are decimal strings. 3.54 it stops repeating the network. 3.55
+/// `get_peer_list` entries lose `last_seen`: the Rust peer lists carry no
+/// clock, and the listing is read from them. 3.56 a daemon started offline
+/// reports that state: `get_info`'s Peers part is `"p2p": "offline"` with
+/// no count (and `"p2p": "running"` with its counts), and `get_peer_list`,
+/// `get_connections` and `sync_info` answer `offline` alone.
+pub const CORE_RPC_VERSION_MINOR: u32 = 56;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -203,6 +208,10 @@ impl RpcStatus {
     pub const OK: &'static str = "OK";
     /// `"BUSY"` — the core is not ready to answer.
     pub const BUSY: &'static str = "BUSY";
+    /// `"offline"` — the daemon was started offline (`--offline`), so
+    /// a method about peers or connections has nothing to report: a state,
+    /// never an empty list (Rick, 2026-10-14; 3.56).
+    pub const OFFLINE: &'static str = "offline";
 
     /// The success status.
     #[must_use]
@@ -214,6 +223,18 @@ impl RpcStatus {
     #[must_use]
     pub fn is_ok(&self) -> bool {
         self.0 == Self::OK
+    }
+
+    /// The status of a reply from a daemon started offline.
+    #[must_use]
+    pub fn offline() -> Self {
+        Self(Self::OFFLINE.to_owned())
+    }
+
+    /// Whether the daemon answered that it is offline.
+    #[must_use]
+    pub fn is_offline(&self) -> bool {
+        self.0 == Self::OFFLINE
     }
 }
 
@@ -568,11 +589,13 @@ mod tests {
         // 3.44 drops `hard_forks`. 3.43 was already the native shard view;
         // both branches had written 43, so the deletion took the next minor.
         // 3.53 writes `get_info`'s amounts as decimal strings.
-        // 3.54 retires the network's four names from `get_info`.
-        assert_eq!(CORE_RPC_VERSION, 196_662);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 54);
+        // 3.54 retires the network's four names from `get_info`. 3.55 drops
+        // `last_seen` from `get_peer_list`: the Rust lists carry no clock.
+        // 3.56 reports offline as a state, never a zero.
+        assert_eq!(CORE_RPC_VERSION, 196_664);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 56);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 54);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 56);
     }
 
     #[test]

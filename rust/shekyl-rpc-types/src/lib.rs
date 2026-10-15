@@ -108,13 +108,14 @@ pub use identity::{
     IdentityRefusal, VersionUnreadable,
 };
 pub use info::{
-    GetInfoResponse, GetInfoShapeError, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
-    InfoIdentity, InfoPeers, InfoPool, InfoStatus,
+    GetInfoResponse, GetInfoShapeError, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth,
+    InfoHost, InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, StatusConnections,
 };
 pub use nullable::Nullable;
 pub use p2p::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
-    GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
+    GetPeerListRequest, GetPeerListResponse, P2pReply, P2pRunningReply, Peer, SyncInfoPeer,
+    SyncInfoResponse, SyncSpan,
 };
 pub use transactions::{
     GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
