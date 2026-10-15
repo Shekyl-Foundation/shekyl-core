@@ -5,12 +5,14 @@
 
 //! The secret per-block draw on production's count and selection (ESR-13).
 //!
-//! [`crate::secret_draw`] (ESR-11) runs the same one-epoch experiment.
-//! Both call the owners in `shekyl-archival-retention`: `draw_count` and
-//! `draw_horizon` for the count and its 32-bit carry, `select_draw` for
-//! every draw (ESR-11 had its own `f64` rule and sampler until ESR-14).
-//! The rule's two callers, [`count_at`] and [`capped_at`], live in ESR-11's
-//! module and are shared.
+//! ESR-11 ([`crate::secret_draw`]) ran the same one-epoch experiment with
+//! a reveal lag only; its loop is deleted (§5.22), and `Timing::esr11()`
+//! is that experiment on this loop. The owners in
+//! `shekyl-archival-retention` are called for everything the chain
+//! computes: `draw_count` and `draw_horizon` for the count and its 32-bit
+//! carry, `select_draw` for every draw. The rule's two callers,
+//! [`count_at`] and [`capped_at`], live in ESR-11's module and are shared,
+//! with the evidence set's shape and the `(m, n)` figures.
 //!
 //! The model, its cells, its bar and its predictions were fixed before this
 //! file existed (`docs/design/ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.17).
@@ -619,6 +621,25 @@ pub fn cell(spec: CellSpec) -> Cell {
     }
 }
 
+/// ESR-11's experiment on this loop: every `(D, dropout)` of the evidence
+/// set at `Timing::esr11()`, the cells `--secret-draw` runs.
+#[must_use]
+pub fn esr11_timing_specs() -> Vec<CellSpec> {
+    EVIDENCE_PAIRS
+        .into_iter()
+        .flat_map(|pairs| {
+            EVIDENCE_DROPOUT_PERMILLE
+                .into_iter()
+                .map(move |dropout_permille| CellSpec {
+                    group: Group::Esr11Timing,
+                    pairs,
+                    dropout_permille,
+                    timing: Timing::esr11(),
+                })
+        })
+        .collect()
+}
+
 /// The cells of the evidence set at one pair count, in table order (§5.17).
 #[must_use]
 pub fn evidence_specs(pairs: u32) -> Vec<CellSpec> {
@@ -668,39 +689,54 @@ pub const fn bar_timing() -> Timing {
     Timing::bundle(HONEST_MARGIN_BLOCKS, Lag::Honest, 0)
 }
 
-/// Whether the bar holds: the largest short share over seeds, at maturity,
-/// at the bar's dropout and [`bar_timing`], is at most
-/// [`SHORT_BAR_PERMILLE`]. `None` if that cell is not in `cells`.
+/// Whether the bar holds at `timing`: the largest short share over seeds,
+/// at maturity and the bar's dropout, is at most [`SHORT_BAR_PERMILLE`].
+/// `None` if that cell is not in `cells`. The bar is graded at
+/// [`bar_timing`]; `--secret-draw` runs ESR-11's experiment and grades it
+/// at `Timing::esr11()`.
 #[must_use]
-pub fn bar_holds(cells: &[Cell]) -> Option<bool> {
+pub fn bar_holds(cells: &[Cell], timing: Timing) -> Option<bool> {
     let maturity = EVIDENCE_PAIRS[EVIDENCE_PAIRS.len() - 1];
     cells
         .iter()
         .find(|c| {
             c.spec.pairs == maturity
                 && c.spec.dropout_permille == BAR_DROPOUT_PERMILLE
-                && c.spec.timing == bar_timing()
+                && c.spec.timing == timing
         })
         .map(|c| c.short_permille[2] <= SHORT_BAR_PERMILLE)
 }
 
+/// The timings a report grades the bar at, in the order printed.
+fn bar_timings() -> [Timing; 2] {
+    [bar_timing(), Timing::esr11()]
+}
+
+/// A bar timing as the bar line names it.
+fn bar_timing_phrase(timing: Timing) -> String {
+    if timing == Timing::esr11() {
+        "ESR-11 timing".to_owned()
+    } else {
+        format!(
+            "M = {}, p_reorg = {}, {}",
+            timing.margin,
+            f64::from(timing.reorg_permille) / 1000.0,
+            match timing.lag {
+                Lag::Honest => "honest lag",
+                Lag::Lazy => "lazy lag",
+            }
+        )
+    }
+}
+
 /// The `(m, n)` figures, as ESR-11 prints them.
 ///
-/// These are ESR-11's own lines, taken from its renderer run on no cells:
-/// the function takes no run, so nothing a cell measures can reach them.
+/// These are ESR-11's own lines: its renderer takes no run, so nothing a
+/// cell measures can reach them.
 #[must_use]
 pub fn window_lines() -> String {
-    let mut all = String::new();
-    secret_draw::render_summary(&mut all, &[]).expect("String sink is infallible");
     let mut lines = String::new();
-    for line in all
-        .lines()
-        .skip_while(|line| !line.starts_with("(m, n) = "))
-        .take_while(|line| !line.starts_with("bar ("))
-    {
-        lines.push_str(line);
-        lines.push('\n');
-    }
+    secret_draw::render_window_figures(&mut lines).expect("String sink is infallible");
     lines
 }
 
@@ -822,20 +858,29 @@ pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::f
         DEFAULT_LATENCY.1
     )?;
     out.write_str(&window_lines())?;
-    let verdict = match bar_holds(&report.cells) {
-        Some(true) => "HOLDS",
-        Some(false) => "FAILS",
-        None => "not run",
+    // One line per bar timing the report ran. A report that ran neither
+    // says so at the bar's own timing.
+    let graded: Vec<(Timing, bool)> = bar_timings()
+        .into_iter()
+        .filter_map(|timing| bar_holds(&report.cells, timing).map(|holds| (timing, holds)))
+        .collect();
+    let line = |out: &mut dyn std::fmt::Write, timing: Timing, verdict: &str| {
+        writeln!(
+            out,
+            "bar (max over seeds <= {:.1} % short at {} % dropout, D = {}, {}): {verdict}",
+            SHORT_BAR_PERMILLE / 10.0,
+            BAR_DROPOUT_PERMILLE / 10,
+            EVIDENCE_PAIRS[EVIDENCE_PAIRS.len() - 1],
+            bar_timing_phrase(timing),
+        )
     };
-    writeln!(
-        out,
-        "bar (max over seeds <= {:.1} % short at {} % dropout, D = {}, M = {}, p_reorg = 0, honest \
-         lag): {verdict}",
-        SHORT_BAR_PERMILLE / 10.0,
-        BAR_DROPOUT_PERMILLE / 10,
-        EVIDENCE_PAIRS[EVIDENCE_PAIRS.len() - 1],
-        HONEST_MARGIN_BLOCKS,
-    )
+    if graded.is_empty() {
+        return line(out, bar_timing(), "not run");
+    }
+    for (timing, holds) in graded {
+        line(out, timing, if holds { "HOLDS" } else { "FAILS" })?;
+    }
+    Ok(())
 }
 
 /// The machine-readable evidence set (`main` writes it).
@@ -847,7 +892,6 @@ pub fn evidence_json(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secret_draw::InFlight;
     use shekyl_archival_retention::{draw_count, draw_horizon};
 
     use crate::secret_draw::clearing_read_failure;
@@ -1278,13 +1322,6 @@ mod tests {
         assert!(lines.contains("false slash over the bond's life"));
         assert!(lines.contains(&format!("<= {:.4}", clearing_read_failure())));
         assert!(!lines.contains("bar ("));
-        // ESR-11 prints the same lines over cells of its own.
-        let cells = [secret_draw::cell(64, 300, InFlight::Unrevealed)];
-        let mut theirs = String::new();
-        secret_draw::render_summary(&mut theirs, &cells).expect("String sink is infallible");
-        for line in lines.lines() {
-            assert!(theirs.contains(line), "ESR-11 does not print: {line}");
-        }
         assert!(lines.lines().count() >= 10, "the retry table is included");
     }
 
@@ -1331,7 +1368,7 @@ mod tests {
         let over = SHORT_BAR_PERMILLE + 1.0;
         let under = SHORT_BAR_PERMILLE;
         let bar = BAR_DROPOUT_PERMILLE;
-        assert_eq!(bar_holds(&[]), None);
+        assert_eq!(bar_holds(&[], bar_timing()), None);
         // Other cells over the bar do not fail it.
         let others = [
             with_max(D, bar, bar_timing(), over),
@@ -1339,13 +1376,15 @@ mod tests {
             with_max(maturity, bar, Timing::bundle(0, Lag::Honest, 0), over),
             with_max(maturity, bar, Timing::esr11(), over),
         ];
-        assert_eq!(bar_holds(&others), None);
+        assert_eq!(bar_holds(&others, bar_timing()), None);
+        // The same cells grade ESR-11's timing: its maturity cell is over.
+        assert_eq!(bar_holds(&others, Timing::esr11()), Some(false));
         let mut cells = others.to_vec();
         cells.push(with_max(maturity, bar, bar_timing(), under));
-        assert_eq!(bar_holds(&cells), Some(true));
+        assert_eq!(bar_holds(&cells, bar_timing()), Some(true));
         cells.pop();
         cells.push(with_max(maturity, bar, bar_timing(), over));
-        assert_eq!(bar_holds(&cells), Some(false));
+        assert_eq!(bar_holds(&cells, bar_timing()), Some(false));
     }
 
     /// Bites against: a row dropped from the table, a row printed without
@@ -1482,5 +1521,50 @@ mod tests {
             rows[2].contains("  0%") && rows[3].contains(" 30%"),
             "{out}"
         );
+    }
+
+    /// Bites against: an epoch of no pairs, which is not an epoch, being
+    /// run.
+    #[test]
+    #[should_panic(expected = "at least one pair")]
+    fn zero_pairs_is_refused() {
+        let _ = run_epoch(0, 0, Timing::esr11(), 1);
+    }
+
+    /// Bites against: the short share not rising with dropout at ESR-11's
+    /// timing, the monotonicity ESR-11's loop was held to.
+    #[test]
+    fn more_dropout_leaves_more_pairs_short() {
+        let short = |dropout_permille| {
+            cell(CellSpec {
+                group: Group::Esr11Timing,
+                pairs: D,
+                dropout_permille,
+                timing: Timing::esr11(),
+            })
+            .short_permille[0]
+        };
+        let (none, some, many) = (short(0), short(100), short(300));
+        assert!(none < some && some < many, "{none} {some} {many}");
+    }
+
+    /// ESR-11's experiment at full size on this loop: the six
+    /// `(D, dropout)` cells at ESR-11's timing, eight seeds each, every
+    /// draw a production `select_draw`. The nightly lane runs it.
+    #[test]
+    #[ignore = "6 cells x 8 seeds at ESR-11's timing, ~1.3M draws per maturity cell, each a production select_draw; run with --release --ignored; nightly economics-sim-ignored"]
+    fn the_esr11_timing_set_runs_and_the_table_renders() {
+        let report = Report {
+            cells: esr11_timing_specs().into_iter().map(cell).collect(),
+        };
+        assert_eq!(report.cells.len(), 6);
+        let mut out = String::new();
+        render_summary(&mut out, &report).expect("String sink is infallible");
+        assert_eq!(out.matches("ESR-11 timing): ").count(), 1, "{out}");
+        assert!(
+            !out.contains("not run"),
+            "the bar is graded at ESR-11's timing: {out}"
+        );
+        assert!(out.contains("(m, n) = ("));
     }
 }
