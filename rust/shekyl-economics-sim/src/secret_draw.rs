@@ -3,50 +3,39 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The secret per-block draw (ESR-11): one settlement epoch of the
-//! serve-credit design in which each block's producer draws pairs from a
-//! seed only it knows, and a draw is *issued* only when that seed is
-//! revealed.
+//! The secret per-block draw's analytic side, and the count rule's two
+//! callers (ESR-11's record).
 //!
-//! The model, its scale, its one bar and its predictions were fixed before
-//! this file existed (`docs/design/ECONOMICS_SIM_PRODUCTION_REBASE.md`
-//! §5.13). What is simulated:
+//! ESR-11 (`docs/design/ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.13 to
+//! §5.15) simulated one settlement epoch of the serve-credit design: each
+//! block's producer draws pairs from a seed only it knows, and a draw is
+//! *issued* only when that seed is revealed. That loop is deleted
+//! (2026-10-15, §5.22): ESR-13 ([`crate::secret_draw_production`]) runs the
+//! same epoch under `Timing::esr11()`, on the same production rule and
+//! selection, and the two agreed within seed noise on every cell. §5.14
+//! reports that loop's run.
 //!
-//! - **Dropout.** Each block is unrevealed with a fixed probability. An
-//!   unrevealed block issues nothing: no passes and no misses.
-//! - **Reveal lag.** A revealed block's seed lands a uniform `0..=W₂`
-//!   blocks after it. Its draws are visible to every later block.
-//! - **Selection.** Production's, called: each draw is `select_draw` of
-//!   `shekyl-archival-retention` over which pairs are visibly short of
-//!   [`COUNTED_DRAWS`] issued draws, on a per-block seed from the run's
-//!   generator. Its weighting and its 256-attempt cap are whatever
-//!   production's are.
-//! - **Count per block.** Production's rule, called: `draw_horizon` and
-//!   `draw_count` of `shekyl-archival-retention`, with their 32-bit carry.
-//!   A base rate of one draw per pair per epoch plus a top-up that spreads
-//!   the visible shortfall over a horizon, capped. Every input is an
-//!   issued count; no outcome is read. The shortfall passed in is net of
-//!   the draws in flight, under the reading the run was asked for.
+//! What stays here, and ESR-13 calls:
 //!
-//! The epoch length, `W₂`, the shard length and the failure window are
-//! production's too. What the module models is what production cannot
-//! know: who reveals, and when (§4 of the same document).
-//!
-//! The read itself is not modelled. Every revealed draw is issued whether or
-//! not it passed, which is the design's own rule; pass and miss enter only
-//! through the `(m, n)` re-check, analytically.
-
-use core::convert::Infallible;
+//! - **The count rule's callers.** [`count_at`] and [`capped_at`]: the
+//!   shortfall net of what is in flight, and `draw_count` / `draw_target`
+//!   of `shekyl-archival-retention` at the horizon, with no copy of the
+//!   cap.
+//! - **The evidence set's shape.** [`EVIDENCE_PAIRS`],
+//!   [`EVIDENCE_DROPOUT_PERMILLE`], [`SEEDS`], and the bar
+//!   ([`SHORT_BAR_PERMILLE`] at [`BAR_DROPOUT_PERMILLE`]).
+//! - **The `(m, n)` re-check**, analytically: the read itself is not
+//!   simulated; pass and miss enter through [`window_check`], the retry
+//!   mixture ([`retry_row`]) and the clearing figures, rendered by
+//!   [`render_window_figures`].
 
 use serde::Serialize;
 
 use shekyl_archival_retention::{
-    draw_count, draw_horizon, draw_target, select_draw, CHALLENGE_RESPONSE_BLOCKS,
-    FAILURE_WINDOW_M, FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS,
+    draw_count, draw_horizon, draw_target, CHALLENGE_RESPONSE_BLOCKS, FAILURE_WINDOW_M,
+    FAILURE_WINDOW_N, SETTLEMENT_EPOCH_BLOCKS,
 };
-use shekyl_types::SHARD_LENGTH;
 
-use crate::challenge_coverage::SplitMix64;
 use crate::mn_feasibility::{
     default_sources, false_slash_bound, max_holder_exposure, FeasibilityTargets, BOND_LIFE_EPOCHS,
 };
@@ -64,102 +53,6 @@ pub const SHORT_BAR_PERMILLE: f64 = 30.0;
 
 /// The dropout the bar is stated at, in per-mille of blocks.
 pub const BAR_DROPOUT_PERMILLE: u32 = 100;
-
-/// How "draws issued in the last `W₂` blocks" is read (§5.13).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum InFlight {
-    /// Draws of blocks in the last `W₂` whose seed is not yet revealed.
-    Unrevealed,
-    /// Every draw of the last `W₂` blocks, revealed or not.
-    AllRecent,
-}
-
-impl InFlight {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Unrevealed => "A (unrevealed only)",
-            Self::AllRecent => "B (all recent)",
-        }
-    }
-}
-
-/// One simulated epoch.
-#[derive(Debug, Clone, Serialize)]
-pub struct DrawRun {
-    pub pairs: u32,
-    pub dropout_permille: u32,
-    pub in_flight: InFlight,
-    pub seed: u64,
-    /// Draws made by every block, revealed or not.
-    pub drawn: u64,
-    /// Draws whose seed was revealed: the issued draws.
-    pub issued: u64,
-    /// Pairs by final issued count: `[0, 1, 2, ≥ 3]`.
-    pub issued_hist: [u32; 4],
-    /// Largest per-block draw count in the epoch.
-    pub max_per_block: u64,
-    /// Blocks whose count was held down by the cap.
-    pub capped_blocks: u64,
-    /// Issued draws answered by pairs that ended short: reads served in an
-    /// epoch that settles NonObservation.
-    pub unpaid_reads: u64,
-}
-
-impl DrawRun {
-    /// Pairs that end short of [`COUNTED_DRAWS`] issued draws.
-    #[must_use]
-    pub fn short_pairs(&self) -> u32 {
-        self.issued_hist[0] + self.issued_hist[1] + self.issued_hist[2]
-    }
-
-    /// Share of pairs that end short, in per-mille.
-    #[must_use]
-    pub fn short_permille(&self) -> f64 {
-        f64::from(self.short_pairs()) * 1000.0 / f64::from(self.pairs)
-    }
-
-    /// Mean draws per block over the epoch, revealed or not.
-    #[must_use]
-    pub fn mean_per_block(&self) -> f64 {
-        self.drawn as f64 / SETTLEMENT_EPOCH_BLOCKS as f64
-    }
-
-    /// Issued draws per pair.
-    #[must_use]
-    pub fn issued_per_pair(&self) -> f64 {
-        self.issued as f64 / f64::from(self.pairs)
-    }
-}
-
-/// The pairs' visible issued counts, and how far they are from full.
-struct Pairs {
-    visible: Vec<u8>,
-    /// `Σ max(0, COUNTED_DRAWS − visible)`.
-    shortfall: u64,
-}
-
-impl Pairs {
-    fn new(pairs: u32) -> Self {
-        Self {
-            visible: vec![0; pairs as usize],
-            shortfall: u64::from(pairs) * u64::from(COUNTED_DRAWS),
-        }
-    }
-
-    /// Whether the pair at `index` is visibly short.
-    fn is_short(&self, index: u64) -> bool {
-        self.visible[index as usize] < COUNTED_DRAWS
-    }
-
-    /// A draw of `pair` becomes visible.
-    fn reveal(&mut self, pair: u32) {
-        let p = pair as usize;
-        if self.visible[p] < COUNTED_DRAWS {
-            self.shortfall -= 1;
-        }
-        self.visible[p] = self.visible[p].saturating_add(1);
-    }
-}
 
 /// The count rule's two inputs that the run derives: `u`, the visible
 /// shortfall less what is in flight and never below zero, and the horizon.
@@ -190,186 +83,8 @@ pub fn capped_at(pairs: u32, shortfall: u64, in_flight: u64, h: u64) -> bool {
         .capped
 }
 
-/// Simulate one epoch.
-///
-/// # Panics
-///
-/// If `pairs` is zero or `dropout_permille` exceeds 1000: neither is an
-/// epoch.
-#[must_use]
-pub fn run_epoch(pairs: u32, dropout_permille: u32, in_flight: InFlight, seed: u64) -> DrawRun {
-    assert!(pairs > 0, "a settlement epoch needs at least one pair");
-    assert!(dropout_permille <= 1000, "dropout is a share of blocks");
-    let seb = SETTLEMENT_EPOCH_BLOCKS;
-    let w2 = CHALLENGE_RESPONSE_BLOCKS;
-    let mut rng = SplitMix64::seeded(seed);
-    let mut state = Pairs::new(pairs);
-
-    // Per block: its draws, and the block at which they become visible
-    // (`None` for a block that never reveals).
-    let mut draws: Vec<Vec<u32>> = Vec::with_capacity(seb as usize);
-    let mut reveal_at: Vec<Option<u64>> = Vec::with_capacity(seb as usize);
-    // Blocks whose seed lands in block `i`.
-    let mut landing: Vec<Vec<u32>> = vec![Vec::new(); (seb + w2 + 1) as usize];
-
-    let mut unrevealed_recent: u64 = 0;
-    let mut all_recent: u64 = 0;
-    let mut carry = 0u32;
-    let (mut drawn, mut issued, mut max_per_block, mut capped_blocks) = (0u64, 0u64, 0u64, 0u64);
-
-    for h in 0..seb + w2 + 1 {
-        // Seeds that landed in block `h − 1` are visible from `h`.
-        if h > 0 {
-            for &block in &std::mem::take(&mut landing[(h - 1) as usize]) {
-                let count = draws[block as usize].len() as u64;
-                for &pair in &draws[block as usize] {
-                    state.reveal(pair);
-                }
-                issued += count;
-                // Still inside the recent window when it landed, by
-                // construction: the lag is at most `W₂`.
-                unrevealed_recent -= count;
-            }
-        }
-        // The block `W₂ + 1` back leaves the window. If its seed never
-        // landed, its draws stop counting as in flight.
-        if h > w2 {
-            let old = (h - w2 - 1) as usize;
-            if old < draws.len() {
-                let count = draws[old].len() as u64;
-                all_recent -= count;
-                let landed = reveal_at[old].is_some_and(|at| at < h);
-                if !landed {
-                    unrevealed_recent -= count;
-                }
-            }
-        }
-        if h >= seb {
-            continue;
-        }
-
-        let pending = match in_flight {
-            InFlight::Unrevealed => unrevealed_recent,
-            InFlight::AllRecent => all_recent,
-        };
-        let (count, next) = count_at(pairs, state.shortfall, pending, h, carry);
-        capped_blocks += u64::from(capped_at(pairs, state.shortfall, pending, h));
-        carry = next;
-
-        // Production's selection, called: each draw is `select_draw` on
-        // this block's seed, over which pairs are visibly short now.
-        let seed = rng.bytes32();
-        let mut block_hash = [0u8; 32];
-        block_hash[..8].copy_from_slice(&h.to_le_bytes());
-        let block_draws: Vec<u32> = (0..count)
-            .map(|j| {
-                let draw = u32::try_from(j).expect("a block's draws fit the wire's u32");
-                // The short read cannot fail here, and the type says so: the
-                // `Err` arm is uninhabited, so the `let` is irrefutable.
-                let Ok(picked) = select_draw(&seed, &block_hash, draw, u64::from(pairs), |i| {
-                    Ok::<_, Infallible>(state.is_short(i))
-                });
-                let picked = picked.expect("the set is not empty");
-                picked.index as u32
-            })
-            .collect();
-        drawn += count;
-        max_per_block = max_per_block.max(count);
-        unrevealed_recent += count;
-        all_recent += count;
-
-        let revealed = rng.below(1000) >= u64::from(dropout_permille);
-        let at = revealed.then(|| h + rng.below(w2 + 1));
-        if let Some(at) = at {
-            landing[at as usize].push(h as u32);
-        }
-        draws.push(block_draws);
-        reveal_at.push(at);
-    }
-
-    let mut issued_hist = [0u32; 4];
-    let mut unpaid_reads = 0u64;
-    for &v in &state.visible {
-        issued_hist[usize::from(v.min(COUNTED_DRAWS))] += 1;
-        if v < COUNTED_DRAWS {
-            unpaid_reads += u64::from(v);
-        }
-    }
-    DrawRun {
-        pairs,
-        dropout_permille,
-        in_flight,
-        seed,
-        drawn,
-        issued,
-        issued_hist,
-        max_per_block,
-        capped_blocks,
-        unpaid_reads,
-    }
-}
-
-/// One cell of the evidence table: a `(D, dropout, reading)` over seeds.
-#[derive(Debug, Clone, Serialize)]
-pub struct Cell {
-    pub pairs: u32,
-    pub dropout_permille: u32,
-    pub in_flight: InFlight,
-    pub seeds: u32,
-    /// Pairs short of [`COUNTED_DRAWS`], per-mille: mean, min, max.
-    pub short_permille: [f64; 3],
-    /// Seeds whose short share exceeds [`SHORT_BAR_PERMILLE`].
-    pub seeds_over_bar: u32,
-    /// Issued draws per pair: mean over seeds.
-    pub issued_per_pair: f64,
-    /// Draws per block, revealed or not: mean over seeds, and the largest
-    /// single block in any seed.
-    pub mean_per_block: f64,
-    pub max_per_block: u64,
-    /// Blocks held down by the cap, summed over seeds.
-    pub capped_blocks: u64,
-    /// Bytes a producer fetches for one won block at the mean count.
-    pub fetch_bytes_per_block: f64,
-    /// Reads answered in pair-epochs that settle NonObservation, per pair:
-    /// mean over seeds.
-    pub unpaid_reads_per_pair: f64,
-    /// The per-seed runs the cell summarises.
-    pub runs: Vec<DrawRun>,
-}
-
 /// Seeds per cell (§5.13).
 pub const SEEDS: u64 = 8;
-
-/// Run one cell.
-#[must_use]
-pub fn cell(pairs: u32, dropout_permille: u32, in_flight: InFlight) -> Cell {
-    let runs: Vec<DrawRun> = (1..=SEEDS)
-        .map(|seed| run_epoch(pairs, dropout_permille, in_flight, seed))
-        .collect();
-    let n = runs.len() as f64;
-    let shorts: Vec<f64> = runs.iter().map(DrawRun::short_permille).collect();
-    let mean = |f: &dyn Fn(&DrawRun) -> f64| runs.iter().map(f).sum::<f64>() / n;
-    let mean_per_block = mean(&DrawRun::mean_per_block);
-    Cell {
-        pairs,
-        dropout_permille,
-        in_flight,
-        seeds: runs.len() as u32,
-        short_permille: [
-            shorts.iter().sum::<f64>() / n,
-            shorts.iter().copied().fold(f64::INFINITY, f64::min),
-            shorts.iter().copied().fold(f64::NEG_INFINITY, f64::max),
-        ],
-        seeds_over_bar: shorts.iter().filter(|s| **s > SHORT_BAR_PERMILLE).count() as u32,
-        issued_per_pair: mean(&DrawRun::issued_per_pair),
-        mean_per_block,
-        max_per_block: runs.iter().map(|r| r.max_per_block).max().unwrap_or(0),
-        capped_blocks: runs.iter().map(|r| r.capped_blocks).sum(),
-        fetch_bytes_per_block: mean_per_block * SHARD_LENGTH.to_raw() as f64,
-        unpaid_reads_per_pair: mean(&|r| r.unpaid_reads as f64 / f64::from(r.pairs)),
-        runs,
-    }
-}
 
 /// The `(m, n)` re-check at one observation rate (§5.13).
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -541,90 +256,13 @@ pub const EVIDENCE_PAIRS: [u32; 2] = [4_096, 324_000];
 /// The dropouts the evidence set runs at, in per-mille.
 pub const EVIDENCE_DROPOUT_PERMILLE: [u32; 3] = [0, 100, 300];
 
-/// The evidence set: every `(D, dropout, reading)` cell.
-#[must_use]
-pub fn evidence_cells() -> Vec<Cell> {
-    let mut cells = Vec::new();
-    for pairs in EVIDENCE_PAIRS {
-        for in_flight in [InFlight::Unrevealed, InFlight::AllRecent] {
-            for dropout in EVIDENCE_DROPOUT_PERMILLE {
-                cells.push(cell(pairs, dropout, in_flight));
-            }
-        }
-    }
-    cells
-}
-
-/// Whether the bar holds: the largest short share over seeds, in the
-/// maturity cell at the bar's dropout under reading `in_flight`, is at most
-/// [`SHORT_BAR_PERMILLE`]. `None` if the cell is not in `cells`.
-#[must_use]
-pub fn bar_holds(cells: &[Cell], in_flight: InFlight) -> Option<bool> {
-    let maturity = EVIDENCE_PAIRS[EVIDENCE_PAIRS.len() - 1];
-    cells
-        .iter()
-        .find(|c| {
-            c.pairs == maturity
-                && c.dropout_permille == BAR_DROPOUT_PERMILLE
-                && c.in_flight == in_flight
-        })
-        .map(|c| c.short_permille[2] <= SHORT_BAR_PERMILLE)
-}
-
-/// Render the human-readable table into `out`. `main` performs the write.
+/// Render the `(m, n)` re-check, the retry mixture and the clearing figures
+/// into `out`. No run reaches them: the function takes none.
 ///
 /// # Errors
 ///
 /// The sink's.
-pub fn render_summary(out: &mut impl std::fmt::Write, cells: &[Cell]) -> std::fmt::Result {
-    writeln!(
-        out,
-        "secret draw (ESR-11): SEB={SETTLEMENT_EPOCH_BLOCKS} W2={CHALLENGE_RESPONSE_BLOCKS} \
-         counted={COUNTED_DRAWS} selection=select_draw count rule=draw_count \
-         seeds={SEEDS} shard={} B",
-        SHARD_LENGTH.to_raw()
-    )?;
-    writeln!(
-        out,
-        "{:>7} {:<20} {:>5} | {:>22} {:>4} | {:>7} {:>9} {:>6} {:>7} | {:>9} {:>8} | {:>6} {:>10} {:>7}",
-        "D",
-        "in-flight reading",
-        "drop",
-        "short % mean/min/max",
-        ">bar",
-        "iss/pr",
-        "draws/blk",
-        "max",
-        "capped",
-        "fetch MB",
-        "unpd/pr",
-        "obs",
-        "false-slash",
-        "epochs"
-    )?;
-    for c in cells {
-        let w = window_check(c.short_permille[0]);
-        writeln!(
-            out,
-            "{:>7} {:<20} {:>4}% | {:>6.2} {:>6.2} {:>6.2}    {:>4} | {:>7.3} {:>9.2} {:>6} {:>7} | {:>9.1} {:>8.4} | {:>6.3} {:>10.2e} {:>7.2}",
-            c.pairs,
-            c.in_flight.label(),
-            c.dropout_permille / 10,
-            c.short_permille[0] / 10.0,
-            c.short_permille[1] / 10.0,
-            c.short_permille[2] / 10.0,
-            c.seeds_over_bar,
-            c.issued_per_pair,
-            c.mean_per_block,
-            c.max_per_block,
-            c.capped_blocks,
-            c.fetch_bytes_per_block / 1.0e6,
-            c.unpaid_reads_per_pair,
-            w.observation_rate,
-            w.false_slash_bound,
-            w.epochs_to_m_misses,
-        )?;
-    }
+pub fn render_window_figures(out: &mut impl std::fmt::Write) -> std::fmt::Result {
     let w = window_check(0.0);
     writeln!(
         out,
@@ -685,28 +323,7 @@ pub fn render_summary(out: &mut impl std::fmt::Write, cells: &[Cell]) -> std::fm
             "the window does not clear the per-archiver budget even with independent tries"
         )?,
     }
-    for in_flight in [InFlight::Unrevealed, InFlight::AllRecent] {
-        let verdict = match bar_holds(cells, in_flight) {
-            Some(true) => "HOLDS",
-            Some(false) => "FAILS",
-            None => "not run",
-        };
-        writeln!(
-            out,
-            "bar (max over seeds <= {:.1} % short at {} % dropout, D = {}), reading {}: {verdict}",
-            SHORT_BAR_PERMILLE / 10.0,
-            BAR_DROPOUT_PERMILLE / 10,
-            EVIDENCE_PAIRS[EVIDENCE_PAIRS.len() - 1],
-            in_flight.label(),
-        )?;
-    }
     Ok(())
-}
-
-/// The machine-readable evidence set (`main` writes it).
-#[must_use]
-pub fn evidence_json(cells: &[Cell]) -> String {
-    serde_json::to_string_pretty(cells).expect("Cell is serializable")
 }
 
 #[cfg(test)]
@@ -714,77 +331,6 @@ mod tests {
     use super::*;
 
     const D: u32 = 4_096;
-
-    #[test]
-    #[should_panic(expected = "at least one pair")]
-    fn zero_pairs_is_refused() {
-        let _ = run_epoch(0, 0, InFlight::Unrevealed, 1);
-    }
-
-    #[test]
-    fn a_run_is_a_function_of_its_seed() {
-        let a = run_epoch(D, 100, InFlight::Unrevealed, 3);
-        let b = run_epoch(D, 100, InFlight::Unrevealed, 3);
-        assert_eq!(a.issued_hist, b.issued_hist);
-        assert_eq!((a.drawn, a.issued), (b.drawn, b.issued));
-        let c = run_epoch(D, 100, InFlight::Unrevealed, 4);
-        assert_ne!(
-            (a.issued_hist, a.drawn),
-            (c.issued_hist, c.drawn),
-            "a different seed is a different epoch"
-        );
-    }
-
-    #[test]
-    fn every_draw_of_a_revealed_block_is_issued_and_none_of_an_unrevealed_one() {
-        // No dropout: every draw is issued, and the pairs' issued counts sum
-        // to the draws. This is the conservation the short share rests on.
-        let all = run_epoch(D, 0, InFlight::Unrevealed, 1);
-        assert_eq!(all.issued, all.drawn);
-        // Total dropout: draws are still made (the count is public and
-        // nobody knows the block will not reveal), and nothing is issued.
-        let none = run_epoch(D, 1000, InFlight::Unrevealed, 1);
-        assert!(none.drawn > 0);
-        assert_eq!(none.issued, 0);
-        assert_eq!(none.issued_hist, [D, 0, 0, 0]);
-        assert_eq!(none.unpaid_reads, 0);
-    }
-
-    #[test]
-    fn issued_counts_account_for_every_issued_draw() {
-        // Rebuild the issued total from the histogram's low buckets and the
-        // unpaid reads: pairs at 1 and 2 issued hold exactly those reads.
-        let r = run_epoch(D, 300, InFlight::Unrevealed, 2);
-        assert_eq!(
-            r.unpaid_reads,
-            u64::from(r.issued_hist[1]) + 2 * u64::from(r.issued_hist[2])
-        );
-        assert_eq!(r.issued_hist.iter().sum::<u32>(), D);
-        assert!(r.issued <= r.drawn);
-        assert!(r.issued >= r.unpaid_reads + 3 * u64::from(r.issued_hist[3]));
-    }
-
-    #[test]
-    fn no_block_draws_more_than_the_cap_allows() {
-        // The cap is production's: its count at a shortfall no epoch
-        // reaches. The carry can add at most one draw to it.
-        let (cap, _) = draw_count(
-            u64::from(D),
-            u64::MAX,
-            draw_horizon(0, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS),
-            SETTLEMENT_EPOCH_BLOCKS,
-            0,
-        )
-        .expect("positive operands");
-        for dropout in [0, 300, 1000] {
-            let r = run_epoch(D, dropout, InFlight::Unrevealed, 5);
-            assert!(
-                r.max_per_block <= cap + 1,
-                "dropout {dropout}: {} over a cap of {cap}",
-                r.max_per_block
-            );
-        }
-    }
 
     /// The cap flag is production's own answer at the run's inputs. It
     /// does not take the block's carry: that carry can add a draw, and the
@@ -796,13 +342,6 @@ mod tests {
             "an empty shortfall is under the cap"
         );
         assert!(capped_at(D, u64::MAX, 0, 0));
-    }
-
-    #[test]
-    fn more_dropout_leaves_more_pairs_short() {
-        let short = |d| cell(D, d, InFlight::Unrevealed).short_permille[0];
-        let (none, some, many) = (short(0), short(100), short(300));
-        assert!(none < some && some < many, "{none} {some} {many}");
     }
 
     #[test]
@@ -909,15 +448,5 @@ mod tests {
         assert!(per_pair <= budget);
         assert!(max_holder_exposure(per_pair) > budget);
         assert!(!clears_at_read_failure(x));
-    }
-
-    #[test]
-    #[ignore = "the full evidence set: 12 cells x 8 seeds, ~1.3M draws per maturity run, each a production select_draw, about 3 minutes; run with --release --ignored; nightly economics-sim-ignored"]
-    fn the_evidence_set_runs_and_the_table_renders() {
-        let cells = evidence_cells();
-        assert_eq!(cells.len(), 12);
-        let mut out = String::new();
-        render_summary(&mut out, &cells).expect("String sink is infallible");
-        assert!(out.contains("bar (max over seeds"));
     }
 }

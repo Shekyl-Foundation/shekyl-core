@@ -163,7 +163,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **I4** `ρ` / `g_max` | **DEFERRED** | deferred to its own round with the blocker named; parameter ownership unresolved | No — blocked |
 | **I5** Q-10 write-back obligation | **BLOCKED** | discharge gated on I4 | No — blocked |
 | **I6** Shi et al. sub-attacks closed | **N/A** | verification row: closed by rules ruled in I2, no separate artifact | n/a |
-| **I7** per-host **inbound** admission | **DELETED** — the mechanism is removed, not completed | **Deleted 2026-09-22.** `has_too_many_connections`, the `--max-connections-per-ip` descriptor, the `max_connections` member, `HostInboundCap` / `InboundZone` and the four `shekyl_host_inbound_*` FFI exports are all gone; `is_host_limit` is the total-ceiling check and nothing else. The flag is retired by name through `REMOVED_FLAGS` (`src/common/removed_flags.cpp`), so a config carrying it gets a named message rather than a parse error. **Four independent reasons, three of them measurements:** a host is not an operator (no `k` works under CGNAT); PWD-E4's inverted ratio (~3c/address for an attacker, impossible for a CGNAT subscriber); the only measured inbound adversary opens **one** edge per victim, which a cap of 1 admits in full; and the white list is already defended at the **promotion boundary**. The residual job — slots — is the total ceiling six lines above the deleted call. *Records-was: "PARTIAL … the NUMBER is owed to the maintainer" — the number is dissolved by the deletion, and the residual safety bound is derived from the descriptor limit (`InboundCeiling`); a policy ceiling below it is PWD-B1* | **n/a — minted 2026-09-21, after the alpha.8 ruling.** The forward cut is behaviour-preserving and carries no wire change; the NUMBER is owed to the maintainer (I7 §*Owed*) |
+| **I7** per-host **inbound** admission | **DELETED** — the mechanism is removed, not completed | **Deleted 2026-09-22.** `has_too_many_connections`, the `--max-connections-per-ip` descriptor, the `max_connections` member, `HostInboundCap` / `InboundZone` and the four `shekyl_host_inbound_*` FFI exports are all gone; `is_host_limit` is the total-ceiling check and nothing else. The flag is retired by name through `REMOVED_FLAGS` (`src/common/removed_flags.cpp`), so a config carrying it gets a named message rather than a parse error. **Four independent reasons, three of them measurements:** a host is not an operator (no `k` works under CGNAT); PWD-E4's inverted ratio (~3c/address for an attacker, impossible for a CGNAT subscriber); the only measured inbound adversary opens **one** edge per victim, which a cap of 1 admits in full; and the white list is already defended at the **promotion boundary**. The residual job — slots — is the total ceiling six lines above the deleted call. *Records-was: "PARTIAL … the NUMBER is owed to the maintainer" — the number is dissolved by the deletion, and the residual safety bound is derived from the descriptor limit (`InboundCeiling`); there is no policy ceiling below it (`INPUT_GRAMMAR.md` IG-Q40)* | **n/a — minted 2026-09-21, after the alpha.8 ruling.** The forward cut is behaviour-preserving and carries no wire change. **Closed 2026-10-14** (Rick, IG-Q40): the operator inbound cap is deleted, so no number is owed |
 | **I8** *what is this inbound connection to me?* | **OPEN — routed** | minted 2026-09-21 with PWD-I7's re-diagnosis: the accepting-side category `is_same_host` cannot answer. **No code lands here by design** — separating the nouns needs a total ceiling plus an eviction policy with a protection set, and rule 20 makes migrating a subsystem a planning activity with its own round. Tier 1 (local self-classification, no wire) is separable and could land alone | **n/a — not ruled.** The trade (door refusal → eviction preference) is judged right and argued in the row; the protection set must be designed against a named adversary, and must not become a reachability ranking (§80.4's sorting one axis over) |
 | **A1** archival submission path | **NOT RULED** | a question in the dispatch brief with no ruling in this deliverable; the census narrowed it to a falsifiable claim | n/a — unruled decision, not a status |
 | **E1** node determines its own endpoint | NOT IMPLEMENTED | no endpoint-determination mechanism in `src/p2p/` or `shekyl-levin` | **NO — deferred to alpha.9.** Changes what a node *claims* using existing fields, not wire shape; largest of the nine, with no mechanism at all. Until it lands the advertised port stays operator-configured — a known, documented, testnet-acceptable state. *(Sweep proposed Yes.)* |
@@ -185,7 +185,8 @@ decision** (see the updates above) — **39** as of those mints:
 | | |
 |---|---|
 | IMPLEMENTED | 14 *(B5 this PR; B3/B3a/B4 #675; B6 #677; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
-| PARTIAL | 2 *(B9 the outbound cap; I7 the inbound one — both are a shipped mechanism whose NUMBER is unruled)* |
+| PARTIAL | 1 *(B9 the outbound cap, a shipped mechanism whose NUMBER is unruled)* |
+| CLOSED, no number owed | 1 *(I7, 2026-10-14: the operator inbound cap is deleted)* |
 | NOT IMPLEMENTED | 12 *(the sweep's 11, plus B11 on 2026-10-11. Not a fresh recount of the rows)* |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 2 *(the sweep's 3, minus B11. I4 and E8 remain. Not a fresh recount of the rows)* |
@@ -196,13 +197,10 @@ decision** (see the updates above) — **39** as of those mints:
 | never ruled / not ruled | 1 (A1) |
 | OPEN — routed to its own round | 1 *(I8 — minted with no implementation by design; rule 20 makes the eviction subsystem a planning activity)* |
 
-**14 of 39 are ruled and unbuilt** on the sweep's formula (12 NOT IMPLEMENTED + 2 PARTIAL), which now includes B11 and is not a fresh recount. **I8 is
+**13 of 39 are ruled and unbuilt** on the sweep's formula (12 NOT IMPLEMENTED + 1 PARTIAL), which now includes B11 and is not a fresh recount. **I8 is
 not among them** — it is not yet ruled, so it is neither built nor unbuilt in
-this figure's sense; it changes the denominator only. Six of those fourteen are
+this figure's sense; it changes the denominator only. Six of those thirteen are
 the transport cluster, which Rick has ruled out of alpha.8.
-*(The label fits thirteen of them. **I7 is the inverse case** — mechanism built,
-number unruled — and is counted here only because this figure's stated formula
-is "NOT IMPLEMENTED + PARTIAL". Read it as "not finished", not as "unbuilt".)*
 *(This read 18 at the #665 ruling. E7 and E9 landed 2026-09-09; B7 landed in
 #674; B6 landed in #677; B10 was already implemented and is scored that way
 below; B3/B3a/B4 land here. The figure is re-tallied from the rows, not
@@ -2118,10 +2116,19 @@ original P2P-2 decision set** — the mechanism is inherited Monero-lineage code
 with an inherited default, and it had no row anywhere. Cluster I owns it
 because per-host admission policy is this cluster's subject.
 
-**Status: PARTIAL.** The mechanism is present and, as of this row, Rust-owned.
-The **number** is not ruled — see *Owed to the maintainer* below. This is the
-same split PWD-B9 carries for the outbound cap, and for the same reason: a
-mechanism can ship while its value is still a question.
+**Status: CLOSED 2026-10-14 (Rick).** The per-host mechanism is deleted, and
+no inbound number is owed: the operator inbound cap is deleted
+([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) IG-Q40,
+[`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §1.1), so the
+descriptor safety bound (`InboundCeiling`) is the only inbound bound. The
+floor-device measurement of 2026-09-22 found 119 idle inbound connections
+costing about 360 KiB in total on the Pi 4, with the daemon's memory peak
+at startup and independent of connection count. Per-session cost under an
+adversary, measured on the Rust path as Ruling B
+([`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) §97) requires, is
+PWD-B12's and PWD-B1's. The unbounded cases (Windows, an unlimited or
+unreadable limit, an unreadable count) are PWD-B1's. Which peers keep a
+slot is PWD-I8's.
 
 #### What this row is, in one paragraph
 
@@ -2851,15 +2858,10 @@ problem solved.
 
 #### Owed to the maintainer — questions, not decisions
 
-1. ~~**The number.**~~ **DISSOLVED 2026-09-21 by the diagnosis above, and this
-   is recorded rather than deleted because the dissolution is the finding.**
-   The question was "what is `k`, and is it derived from an inbound ceiling?".
-   Both halves stop being parameters owed once the nouns are separated: `k`
-   was pricing a quantity that does not answer the admission question, and
-   **the in-peers figure stops being a number to guess and becomes a capacity
-   ceiling whose value follows from the eviction design** — a question with a
-   derivable answer rather than a provisioning guess. *Nothing is owed on this
-   line until PWD-I8's round runs.* What replaces it is question 4.
+1. ~~**The number.**~~ **CLOSED 2026-10-14 (Rick, IG-Q40).** There is no
+   per-host `k` and no operator inbound count: the descriptor safety bound
+   is the only inbound bound, and which peers hold a slot is the eviction
+   design's (PWD-I8, question 4).
 2. **Ratification of the posture: is Tor load-bearing for NAT'd inbound
    reachability?** **As of the correction above, it cannot be** — not because
    of a default, but because `cryptonote_protocol_handler.inl:452` refuses
