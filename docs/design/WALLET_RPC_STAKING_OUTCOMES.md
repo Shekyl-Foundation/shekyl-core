@@ -2,7 +2,8 @@
 
 **Status:** OPEN — Round 0, questions **POSED 2026-10-15**; nothing is
 ruled. Each question carries a default, its reason, what the alternative
-changes, and a falsifier. **No code until the questions are ruled.**
+changes, and a falsifier. **No code until the questions are ruled.** One
+dependency on the bond lane is open (§1.1).
 
 **Ground:** `shekyl-core` `dev` at `a0d3ebcb1` (the #1076 merge, after
 #1075), with the daemon RPC at `CORE_RPC_VERSION` 3.54 (#1057). Every
@@ -51,6 +52,78 @@ Nothing in `staking_info` names a record in flight, refused or stuck:
   projected through the transfer queries (`project.rs:197`,
   `queries.rs:547`). Pending records never pass through that journal.
 
+### 1.1 Dependency: a bond post is signed long before it is sent — OPEN, the bond lane's decision
+
+**What the code does.**
+
+- The post is assembled and signed at `anchor_t0`, the daemon's claimed
+  tip (`engine/bond_orchestrator.rs:555-557`).
+- Its reference is `min(ledger synced height, curve-tree ingested tip) −
+  REF_ANCHOR_AGE` (6) (`bond_orchestrator.rs:455-461`). So the reference
+  is at most `anchor_t0 − 6`.
+- It is first sent at `anchor_t0 + bond_post_offset_blocks`. The offset
+  is drawn uniformly over 0 to 600 inclusive
+  (`engine/stake_engine/actor.rs:154-170`; `shekyl-standoff/src/draw.rs:31-36`,
+  `:80`, `:96-98`). The guard keeps the first draw of a distinct pair
+  and discards the second, which only probes the entropy source
+  (`engine/stake_engine/helpers.rs:455-463`, `:487-503`), so the offset
+  stays uniform.
+- Both daemons refuse a reference older than
+  `FCMP_REFERENCE_BLOCK_MAX_AGE` (100): `src/cryptonote_core/blockchain.cpp:3615-3621`
+  and `shekyl-chain-rules/src/rules/tx_against.rs:320-324`. A proof built
+  at the canonical anchor stays submittable for `PROOF_VALIDITY_HORIZON`
+  (94) blocks (`shekyl-curve-tree/src/reference.rs:95-106`).
+
+**What follows.**
+
+- **Most posts are dead on arrival.** Any offset over 94 sends a
+  reference already past the window. That is 506 of the 601 equally
+  likely offsets, about 84 %.
+- **The answer is not final.** The Rust daemon answers a too-old
+  reference `StaleRoot` (`shekyl-daemon-rpc/src/submit/engine.rs:374`).
+  The wallet classes `StaleRoot` as retryable
+  (`engine/transaction_submitter.rs:270`), so the driver resends the same
+  bytes on every due tick until the 900-block alarm
+  (`pscan/dispatch.rs:820-839`, `:601-610`).
+- **Posts that do land are fingerprinted.** `REF_ANCHOR_AGE` is
+  privacy-canonical, so that "the on-wire reference age does not
+  fingerprint the wallet" (`reference.rs:75-84`). A post sent `offset`
+  blocks after signing carries reference age `offset + 6` instead of 6.
+  The post stands apart from an ordinary send, and its reference age
+  shows every node the drawn offset.
+- **Today the C++ daemon hides all of this.** It answers every kind-5
+  JoinMarket post `JoinMarketUnsupported` before any reference check
+  (the FOLLOWUPS row "The five bonded regtest walks are decided dark…").
+  The defect appears at `DEL-008`.
+
+**Confirmed by a dispatch unit test (a probe, not committed).** A post
+with offset 300:
+
+- is not sent one block before it is due;
+- at its first send, carries a reference whose age is at least 306,
+  against a `MAX_AGE` of 100;
+- answered `StaleRoot` each time, is resent with identical bytes at every
+  tick until `at + 900`;
+- then stops, with the record held as `Dispatched` and nine attempts
+  counted.
+
+**The decision is the bond lane's.** The two shapes:
+
+- **Sign at the due time.** The reference age is the canonical 6 at
+  broadcast, and the offset stays private. But assembly moves to the
+  due tick, where the secrets must be re-derived inside the actor:
+  `CB-2`'s seed discipline (`EMISSION_CLAIM_BUILDER.md`, "CB-2
+  no-seed-re-borrow").
+- **Bound the offset to the proof lifetime.** This keeps one signing at
+  `anchor_t0`, but shrinks the decorrelation window from 600 to 94
+  blocks, and the reference age still shows the offset.
+
+**How this round depends on it.** The expiry mechanism of WR-Q3 works
+under either shape. It needs only each record's reference height, and it
+also covers the defect as it stands. Until the bond lane decides, most
+stakes on the Rust daemon would end as `expired`, and the reason sentence
+must not blame the user.
+
 ---
 
 ## 2. What happens to each kind today
@@ -65,17 +138,37 @@ The four kinds live in one sealed block, `PendingPostBlock`
 - There is no `Confirmed` arm. Confirmation removes the record, and the
   reservation goes with it (`:100-103`).
 
-| Kind | Record | Sent by | Terminal rejection | Ambiguous or retryable | Past the horizon |
+| Kind | Record | Sent by | Terminal rejection | Ambiguous or retryable (`StaleRoot` included) | Past the horizon |
 | --- | --- | --- | --- | --- | --- |
-| Stake (bond post) | `PendingBondPost` (`:138-177`) | the dispatch driver, every sweep tick (`pscan/dispatch.rs:521-842`) | record removed, reservation released, one log line (`dispatch.rs:794-819`) | resubmitted byte-identical on the next due tick (`:820-839`) | resubmits stop; one log alarm per session (`:601-610`, `:719-735`); record and reservation held |
-| Emission claim | `PendingEmissionClaim` (`:209-224`) | the claim seam, once (`claim_dispatch.rs:422-435`) | **held**: any submit failure leaves the record live | held | one log alarm per session (`dispatch.rs:566-599`, `:696-717`); held |
-| Drain | `PendingDrain` (`:252-266`) | the drain seam, once (`drain_dispatch.rs:255`) | **held** | held | as the claim |
-| Exit (`Release`) | `PendingRelease` (`:296-309`) | the release seam, once (`release_dispatch.rs:655-669`) | **removed at the seam** on a definite first-send `RejectedTerminal` (`:304-310`, `:633-669`; #601) | held; the user already sees `-29522 UNSTAKE_FATE_UNKNOWN` from `unstake` (`shekyl-wallet-contract/src/error.rs:339`) | as the claim |
+| Stake (bond post) | `PendingBondPost` (`:138-177`) | the dispatch driver, every sweep tick (`pscan/dispatch.rs:521-842`) | record removed, reservation released, one log line (`dispatch.rs:794-819`) | resent byte-identical on the next due tick (`:820-839`) | resends stop; one log alarm per session (`:601-610`, `:719-735`); record and reservation held |
+| Emission claim | `PendingEmissionClaim` (`:209-224`) | the claim seam, once (`claim_dispatch.rs:422-435`) | **held**: any submit failure leaves the record live | held; never resent | one log alarm per session (`dispatch.rs:566-599`, `:696-717`); held |
+| Drain | `PendingDrain` (`:252-266`) | the drain seam, once (`drain_dispatch.rs:255`) | **held** | held; never resent | as the claim |
+| Exit (`Release`) | `PendingRelease` (`:296-309`) | the release seam, once (`release_dispatch.rs:655-669`) | **removed at the seam** on a definite first-send `RejectedTerminal` (`:304-310`, `:633-669`; #601) | held; never resent (`:728-736` pins `StaleRoot` as held); the user already sees `-29522 UNSTAKE_FATE_UNKNOWN` from `unstake` (`shekyl-wallet-contract/src/error.rs:339`) | as the claim |
+
+**Every kind carries a reference, and none re-proves.**
+
+- All four are FCMP++ spends anchored `REF_ANCHOR_AGE` behind the
+  wallet's tip:
+  - the stake and the exit through `anchored_reference_block`
+    (`bond_orchestrator.rs:443-461`; `release_dispatch.rs:503-506`);
+  - the drain "exactly as a bond post is" (`drain_dispatch.rs:20-24`);
+  - the claim through `claim_reference_height`
+    (`claim_orchestrator.rs:25-30`).
+- No kind rebuilds its proof after sealing. The stake resends the same
+  bytes; the other three send once and hold.
+- So every record has an **end date**: `reference_height +
+  FCMP_REFERENCE_BLOCK_MAX_AGE`, inclusive. After it, no block on any
+  chain can include the transaction.
+- The transaction carries its reference as a block hash
+  (`rv.referenceBlock`, resolved to a height at `blockchain.cpp:3600-3601`).
+  Assembly has the height in hand (`reference.height`,
+  `release_dispatch.rs:506`) but does not store it.
 
 **The horizon.** `DISPATCH_ALARM_HORIZON_BLOCKS` is 900: the reorg-deep
 confirmation floor (720) plus 25 % (`dispatch.rs:185-216`). It bounds how
-long the driver waits for a confirmation before it alarms. It says
-nothing about whether the transaction can still land (WR-Q3).
+long the driver waits for a confirmation before it alarms. It is not the
+end date, and it says nothing about whether the transaction can still
+land.
 
 **Alarm memory.** Both alarm-once sets are in memory only, and a restart
 re-raises them (`dispatch.rs:428-436`). So is the set that holds
@@ -91,8 +184,11 @@ cadence driver:
 - registered and invoked each tick with an empty body
   (`engine/cadence/mod.rs:172-175`);
 - described in `ENGINE_CADENCE_DRIVER.md:331-342`;
-- owed in the FOLLOWUPS row "Drain/claim/release dispatch driver — terminal-reject prune + byte-identical resubmit remain" of `docs/FOLLOWUPS.md`, which marks the prune a security
-  item that must land together with byte-identical resubmit.
+- owed in the FOLLOWUPS row "Drain/claim/release dispatch driver —
+  terminal-reject prune + byte-identical resubmit remain", which marks
+  the prune a security item and says never to land resubmit alone. Its
+  security note names the reference age window as "the only other bound"
+  on the replay channel.
 
 ### 2.1 Findings at source
 
@@ -108,11 +204,15 @@ cadence driver:
   measured from `receive_time` (`src/cryptonote_core/tx_pool.cpp:1080`).
   A byte-identical resend to a node that still holds the transaction does
   not reset it. Only re-admission after eviction, or a relay-method
-  upgrade, does (`tx_pool.cpp:498-512`). Every re-admission anywhere
-  starts a new clock, so there is no network-wide bound.
+  upgrade, does (`tx_pool.cpp:498-512`). The pool is not what ends a
+  transaction; its reference window is (§2).
 - **The dispatcher's clock is not one the RPC has.** The driver judges
   against the sweep's claimed daemon count (`pscan/task.rs:435-437`).
   `staking_info` reads only sealed files (`engine/staking_read.rs:417-450`).
+- **The scan frontier is already reorg-deep.** The P-scan's ingest
+  ceiling trails the tip by `ARCHIVAL_REORG_DEPTH_BLOCKS`
+  (`config/consensus_constants.json:26`); its sealed frontier is
+  `PScanState::synced_height` (`shekyl-engine-state/src/pscan_state.rs:481-484`).
 - **The response type's contract has drifted.**
   - `pscan_synced_height`: documented as `null` in Rust
     (`types.rs:792-797`), as absent in `wallet_rpc.yaml:2813-2818`, and
@@ -134,8 +234,10 @@ one entry per live pending record, in no meaningful order.
 - **`state`**, one of:
   - `pending`: sealed, not yet sent;
   - `dispatched`, with `dispatched_at_height` and `attempts`;
-  - `stalled`, with `dispatched_at_height`: past the horizon, funds still
-    held.
+  - `expired`, with `funds_return_at`: the end date has passed, so the
+    transaction can never be mined. The funds are still held until the
+    scan has made that final (WR-Q3);
+  - `stalled`: reachable only in the one case below.
 - **No per-record handle.** See WR-Q5.
 
 An empty list means nothing is in flight. No field is absent or `null` to
@@ -144,18 +246,36 @@ that ignores unknown keys; a reader that refuses unknown keys must update
 in the same change.
 
 **Every arm comes from sealed state.** `pending` and `dispatched` are the
-record's `PendingPostState`. `stalled` is computed: `Dispatched { at }`
-with `clock ≥ at + DISPATCH_ALARM_HORIZON_BLOCKS`. It is never read from
-the in-memory alarm sets (§2). It therefore survives a restart, which the
-log alarm does not.
+record's `PendingPostState`. `expired` is computed from the record's
+durable reference height (WR-Q3) against a clock (sub-question (a)). No
+state is read from the in-memory alarm sets (§2), so each one survives a
+restart, which the log alarm does not.
 
-**Sub-question (a), the clock.** The dispatcher's clock is the sweep's
-claimed count, which the RPC does not read.
+**Where `stalled` remains reachable.** If WR-Q3 and WR-Q4 are ruled as
+posed, every kind ends by confirmation, rejection or expiry, and no
+ordinary flow reaches `stalled`. One state remains:
 
-| Candidate | Disagrees with the log alarm by | Cost |
+- a claim, drain or exit past its funds-return point whose reserved
+  inputs are **partly** spent.
+
+The record's own transaction spends all of its inputs or none, so a part
+spent means another transaction spent some. The reservation stall alarm
+already names this anomaly (`dispatch.rs:696-717`). Default: hold the
+record, report `stalled`, and keep the alarm. Releasing the unspent rest
+is a separate question if it ever occurs.
+
+If WR-Q4 is ruled (b), `stalled` stays reachable for every claim, drain
+and exit past the 900-block horizon, as today.
+
+**Sub-question (a), the clock.** `expired` begins when the tip passes the
+end date. The dispatcher's clock is the sweep's claimed count, which the
+RPC does not read. (`funds_return_at` needs no clock; it is a frontier
+height, WR-Q3.)
+
+| Candidate | Disagrees with the dispatcher by | Cost |
 | --- | --- | --- |
 | **The wallet ledger's synced height**, the one `get_wallet_info` reports (`queries.rs:258-259`) — **default** | the gap between two reads of one daemon's claimed tip on two cadences: about one sweep interval | none; already read under the same guard in `get_wallet_info` |
-| The sealed P-scan frontier (`pscan_synced_height`) | the reorg depth: the frontier trails the tip by 720 blocks (`config/consensus_constants.json:26`) | none, but `stalled` would appear 720 blocks late |
+| The sealed P-scan frontier (`pscan_synced_height`) | the reorg depth: the frontier trails the tip by 720 blocks (§2.1) | none, but `expired` would appear 720 blocks late |
 | A persisted last-tick count in the pending block | none | a schema bump, and a seal on every tick |
 | A daemon read inside `staking_info` | none at read time | a network call in a read-only method that today makes none |
 
@@ -165,7 +285,7 @@ carries a count is the bug class `HEIGHT_SEMANTICS.md` exists to stop.
 
 - Default: convert to the tip height, `count − 1`, and name it
   `dispatched_at_height`. Every other height on this response is a
-  height.
+  height, `funds_return_at` included.
 - Alternative: carry the count and name it `dispatched_at_count`.
 
 **Sub-question (c), closed or open strings.** The contract already
@@ -175,8 +295,8 @@ would refuse the whole `staking_info` reply over one display field
 
 - Default: `kind` and `state` are open strings with documented values,
   for the same reason.
-- Alternative: closed enums. A new kind, such as a cancel (WR-Q3), would
-  then break every older client's balance reading.
+- Alternative: closed enums. A new kind or state would then break every
+  older client's balance reading.
 
 **Sub-question (d), the existing rule-43 breaches.** Default: fix both in
 the same change, because they sit in the same response type.
@@ -203,12 +323,13 @@ idle is the shape rule 43 forbids. It also puts slot ordinals on
 **Falsifier.**
 - A `staking_info` reply with no `in_flight` key, or with `null` in its
   place, must fail to decode.
-- A test seals a `Dispatched` record, advances the ledger clock past
-  `at + 900`, restarts the engine, and reads `stalled`.
+- A test seals a `Dispatched` record with reference height `r`, advances
+  the ledger clock past `r + 100`, restarts the engine, and reads
+  `expired` with `funds_return_at == r + 100 + 720`.
 - `rg -n 'alarmed_this_session|alarmed_reservations' rust/shekyl-wallet-rpc`
   must return nothing.
 
-### WR-Q2 — How is a terminal rejection reported, when the record is gone?
+### WR-Q2 — How is an ending reported, when the record is gone?
 
 Today removal is the whole effect (`dispatch.rs:799-803`). Nothing durable
 remains to report, and dispatch runs on a background tick, so no RPC call
@@ -220,22 +341,27 @@ scoped as WR-Q4 rules. `staking_info` reports these as a second
 list, `outcomes`, each entry with:
 
 - **`kind`**;
-- **`outcome`: `rejected`** — the only value this round defines;
-- **`reason`**: a user sentence chosen from `TerminalErrorKind`, never
-  the enum name (rule 81). The table starts from the sentence already
-  shipped for one cause, `STAKING_UNAVAILABLE_ON_THIS_DAEMON`
-  (`dispatch.rs:53-56`). Every other kind gets a row before the commit
-  lands;
-- **`at_height`**: the tip height when the rejection was observed;
-- **`funds`: `released`** — true by construction, since removal is the
+- **`outcome`**: `rejected` (a terminal verdict) or `expired` (the end
+  date passed and the scan has made it final, WR-Q3);
+- **`reason`**: a user sentence, never an enum name (rule 81).
+  - For `rejected`, chosen from `TerminalErrorKind`. The table starts
+    from the sentence already shipped for one cause,
+    `STAKING_UNAVAILABLE_ON_THIS_DAEMON` (`dispatch.rs:53-56`). Every
+    other kind gets a row before the commit lands.
+  - For `expired`, one sentence that does not blame the user, because
+    under §1.1 the cause is usually the wallet's own timing: for example,
+    "The stake was not accepted in time and has been withdrawn. Its funds
+    are spendable again."
+- **`at_height`**: the tip height when the outcome was written;
+- **`funds`: `returned`** — true by construction, since removal is the
   release.
 
 **How it is written.** The outcome is written in the same `mutate`
-closure that removes the record (`dispatch.rs:800-802`): one seal, so the
-two cannot disagree after a crash. The removal-ordering contract
-(`pending_post_block.rs:105-112`) is unaffected. A terminal rejection
-never carries a match, so the phantom-GC bridge it protects never applies
-to a rejected post.
+closure that removes the record (`dispatch.rs:800-802` for a rejection;
+the expiry release of WR-Q3 for an expiry): one seal, so the two cannot
+disagree after a crash. The removal-ordering contract
+(`pending_post_block.rs:105-112`) is unaffected. A rejected post never
+carries a match, and an expired one cannot gain one (WR-Q3).
 
 **How it is cleared.**
 - Cleared by the next successful seal of the same kind for the same
@@ -248,114 +374,142 @@ to a rejected post.
   case WR-Q5's opaque-handle alternative exists for.
 
 **Cost.** A persisted change: `PENDING_POST_VERSION` 12 → 13,
-refuse-not-migrate, schema snapshot (rule 42). A v12 file is refused and
-re-assembled, as every earlier bump was.
+refuse-not-migrate, schema snapshot (rule 42), shared with WR-Q3's
+reference-height field. A v12 file is refused and re-assembled, as every
+earlier bump was.
 
 **Alternative.** Report the outcome only in the response of the call that
 triggered it. This fails for the stake: dispatch is a background tick and
-no call is waiting. It works for the exit, which already does it (`-29522`
-and the seam's synchronous refusal).
+no call is waiting. It works for the exit's first send, which already
+does it (`-29522` and the seam's synchronous refusal).
 
 **Falsifier.** The armed tripwire
 `e2e_the_cxx_daemon_answers_join_market_unsupported`
 (`engine/regtest_e2e.rs:3481`) already drives a terminal rejection end to
 end against the real C++ daemon. Extend it: after the rejection,
-`staking_info` shows `outcomes[0].kind == "stake"`, `reason` is the
-shipped sentence, `funds == "released"` and `in_flight` is empty. After a
-restart it still does.
+`staking_info` shows `outcomes[0].outcome == "rejected"` for
+`kind == "stake"`, `reason` is the shipped sentence,
+`funds == "returned"` and `in_flight` is empty. After a restart it still
+does.
 
-### WR-Q3 — Can a user end a stalled stake, and on what terms?
+### WR-Q3 — How does a stake that will never land end?
 
-**Why freeing the inputs is never final.**
+**Default: automatic expiry release.**
 
-1. **The horizon bounds waiting, not landing.** The 900 blocks are a
-   confirmation-delay bound derived from the reorg depth
-   (`dispatch.rs:185-216`).
-2. **The pool forgets slowly and unevenly.** Each node keeps the
-   transaction three days from its own admission, and re-admission
-   anywhere restarts that clock (§2.1).
-3. **The signed bytes stay valid until one of their inputs is spent.**
-   Any node that saw them can broadcast them later. A hostile node can
-   hold them on purpose.
-4. **Freeing the record can lose a real bond.** The pending record is the
-   bridge that stops the open-time phantom GC from dropping a bond the
-   scan has not yet matched (`engine/stake_persist.rs:187-231`). Remove
-   it while the bond can still land, and a later open can see "no record,
-   covered absence" and drop the slot. The cursor is then burned, and the
-   slot can never be re-adopted (`:211-214`). The bond would sit on chain
-   with no wallet slot to serve or exit it.
+- A record's **end date** is `reference_height +
+  FCMP_REFERENCE_BLOCK_MAX_AGE`, inclusive (§2).
+- Once the staking scan's sealed frontier reaches `end date +
+  ARCHIVAL_REORG_DEPTH_BLOCKS`, the record is removed, and its
+  reservation with it.
+- An `expired, funds returned` outcome (WR-Q2) is written in the same
+  atomic save.
+- The release runs in the dispatch tick, which already holds the scan's
+  accrual (`pscan/task.rs:426-437`). It runs after the confirmation
+  retire in the same pass, so a post that did land is retired as
+  confirmed first.
+- **Fee:** none. **Finality:** by construction. **User action:** none.
 
-**Option (a) — free the inputs.** The record is removed after the
-horizon, and coin selection may use the inputs again.
+**Why the phantom-slot cleanup is then safe.**
 
-- **Fee:** none.
-- **Finality:** never.
-- **What it really does:** makes the user's next send the transaction
-  that loses a race, and exposes a late bond to the phantom GC (point 4).
+The cleanup (`engine/stake_persist.rs:187-231`) drops a bonded slot when
+covered scan evidence shows no bond and no pending record bridges it. It
+is airtight only while no real bond can be missing from the evidence.
 
-**Option (b) — cancel by spending.** The wallet spends the post's
-reserved inputs in a transaction of its own. The stake ends only when
-that spend is reorg-deep (`ARCHIVAL_REORG_DEPTH_BLOCKS`, 720). From then
-on, the bond can never land.
+- No block above the end date can include the post: both daemons refuse
+  a reference older than `MAX_AGE` (§1.1).
+- Every block at or below the end date is inside the sealed frontier,
+  which is itself reorg-deep (§2.1). It was scanned with the persona
+  watched, since the pending record kept it live.
+- So if the post landed, the scan holds its match, the confirmation
+  retire ran first, and the record left as confirmed. If it did not, no
+  bond exists and none can.
 
-- **Fee:** one transaction.
-- **Finality:** 720 blocks after the cancel confirms.
-- **Shape:** the stake record is **not** removed when the cancel is
-  sealed. It moves to a new state arm, `Cancelling`, which carries the
-  cancel's bytes.
-  - The reservation and the phantom-GC bridge both stay in place.
-  - No second record reserves the same inputs; the seal classifier would
-    refuse one as `InputRaced` (`pending_post_block.rs:341-366`).
-  - The record is removed only when the cancel's inputs are seen spent,
-    reorg-deep.
-  - This is a schema change (v13, with WR-Q2's).
-- **Destination:**
-  - **Default:** the principal address, through the existing drain
-    builder. The destination is the wallet's own principal address and
-    never caller-supplied (`drain_dispatch.rs:28-31`). The drain is
-    designed to be byte-identical to a principal transfer; the test that
-    shows it, `e2e_drain_wire_shape_matches_a_real_transfer`, is dark
-    until `DEL-008` (the FOLLOWUPS row "The five bonded regtest walks are decided dark…"). Funds return to the spendable balance,
-    which is what a user who cancels expects.
-  - **Alternative:** a `P`→`P` self-spend that keeps the funds staking
-    side, for a user who means to stake again. No such builder exists
-    today; it would be new, with its own decorrelation question.
-  - Either destination spends inputs whose key images the bond post
-    already published (WR-Q5).
+A slot the cleanup drops after the release is a stake that never
+happened. That is the case the cleanup exists for.
 
-**Default: (b), offered only from `stalled`.**
-- A verb `cancel_stake`, acting on the active persona like every other
-  staking action; no slot parameter (WR-Q5).
-- The response says, in plain words:
-  - that the stake ends when the cancel is final, about a day after it
-    confirms;
-  - that it costs one fee;
-  - that the cancel can be seen to come from the same funds (WR-Q5).
-- (a) is rejected: it cannot be made final, and point 4 makes it unsafe
-  as well as weak.
+**Sub-question (a), how the reference height becomes durable.**
+
+- **Default:** a new field, `reference_height: BlockHeight`, on each
+  pending record that WR-Q4 brings under expiry. It is written at
+  assembly, where the height is already in hand (`reference.height`).
+  Schema v12 → v13, refuse old files (rule 42), shared with WR-Q2.
+- **Alternative:** recover it from `tx_bytes`. The transaction carries a
+  block **hash** (`rv.referenceBlock`), so this parses the RCT section on
+  every tick and resolves the hash through the wallet's own chain view.
+  That view can reorg or prune, so it can fail to answer, and an
+  unanswerable end date would hold funds forever. No schema change.
+
+**Sub-question (b), the finality margin.** The release condition, as
+given, is `frontier ≥ end date + 720`. The frontier itself already trails
+the tip by 720 (§2.1), so the funds return when the tip is about
+`end date + 1,440`, roughly two days.
+
+- Default: as given.
+- Alternative: `frontier ≥ end date`. Blocks at or below the frontier are
+  already reorg-deep, so this is still final under the scan's own model,
+  and it returns funds 720 blocks (about a day) sooner.
+
+**Sub-question (c), stop dead re-sends.** A bond post answered `StaleRoot`
+past its end date is an expiry, not a retry.
+
+- **Default:** the driver sends nothing whose end date has passed. There
+  is no first send if the post is due after its end date (under §1.1,
+  most are), and no resend after it.
+- **Why:**
+  - Every such send is wasted traffic.
+  - It is an observable pattern: one origin re-offering the same dead
+    bytes on every tick until the 900-block alarm.
+- **What follows for the horizon:** the 900-block alarm horizon then no
+  longer governs bond posts, since their end date always comes first.
+  Its bond-post use retires (rule 15). The operator signal becomes the
+  `expired` outcome.
 
 **Wargames.**
 
-| Case | Under (a) | Under (b) |
-| --- | --- | --- |
-| The bond lands after the user acts | The user's next send loses the race and is `TerminalRejected` in the transfer journal. The bond lands with no pending record; an open before the scan matches it can drop the slot for good (point 4) | If the bond lands before the cancel, the scan matches it and the record retires as a confirmed stake; the cancel is a double spend and dies with the record. The user is staked, consistently |
-| The cancel is reorged out, shallower than 720 | — | The record stays `Cancelling` with its reservation. Either transaction may land on the new chain: the bond ends as a confirmed stake, or the cancel as a cancelled one. Nothing is freed early |
-| A hostile node holds the bond and broadcasts it after the user acts | The bond lands whenever the node chooses; same as row one | Before the cancel is final: as row one. After it: the bytes spend a spent input and can never be mined |
+| Case | Outcome |
+| --- | --- |
+| The post lands late | It can land only at or below its end date. The scan matches it before the frontier passes the end date, and the confirmation retire removes the record as a confirmed stake. Expiry never fires |
+| A reorg near the end date | The release waits for a frontier that is itself reorg-deep, plus the margin of sub-question (b). A reorg within that depth changes nothing; one deeper is outside the wallet's finality model everywhere |
+| A hostile node holds the bytes and broadcasts them later | After the end date, every daemon refuses them for their reference age. Before it, they can land only as the user's own stake, which the scan retires as confirmed |
+| The scan stalls | The frontier does not advance, the funds are not returned, and the state stays `expired` with its `funds_return_at`. Nothing is released early |
+
+**Rejected alternatives.**
+
+- **Free the inputs at the 900-block horizon — REJECTED.**
+  - It is never final: the horizon bounds waiting, not landing
+    (`dispatch.rs:185-216`).
+  - The user's next send becomes the transaction that loses a race.
+  - It removes the pending record while a bond can still land. That
+    record is the bridge that stops the phantom-slot cleanup from
+    dropping a real bond, and a dropped slot can never be re-adopted
+    (`stake_persist.rs:211-214`). The bond would sit on chain with no
+    slot to serve or exit it.
+  - Expiry gives the same release with none of these costs.
+- **Cancel by spending the reserved inputs, through a `Cancelling` state
+  arm — REJECTED.**
+  - It costs a fee.
+  - It is an on-chain linkage event: the cancel spends inputs whose key
+    images the post already published, so it shows observers that a
+    stake attempt was withdrawn.
+  - It is unneeded: the reference window ends every post by itself, for
+    free and with the same finality.
 
 **Falsifier.**
-- A ruling for (a) must survive this test: remove the record of a post
-  whose bond later lands, open the wallet before the scan's match, and
-  observe the slot kept. Point 4 predicts it is dropped.
-- For (b): `rg -n 'Cancelling' rust/shekyl-engine-state/src/pending_post_block.rs`
-  hits, and a regtest fixture confirms a cancel, buries it 720 deep, and
-  then reads `in_flight` empty and the bytes of the bond refused by the
-  daemon as a double spend.
+- A sealed post with reference height `r` and an unchanged frontier below
+  `r + 100 + 720` stays in `in_flight` as `expired`. A frontier at
+  `r + 100 + 720` removes it, writes `outcomes[0].outcome == "expired"`
+  in the same seal, and releases its gindexes.
+- A post matched by the scan at or below `r + 100` is retired as
+  confirmed, and no `expired` outcome is written.
+- A due tick past `r + 100` sends nothing.
+  `rg -n 'reference_height' rust/shekyl-engine-state/src/pending_post_block.rs`
+  hits on each kind WR-Q4 brings under expiry.
 
-**Blocked fixture.** No bond post can land on the C++ daemon: it answers
-every kind-5 JoinMarket post `JoinMarketUnsupported`, and the five bonded
-regtest walks are decided dark until `DEL-008` (the FOLLOWUPS row "The five bonded regtest walks are decided dark…"). The
-late-landing rows of the wargame cannot run against a real daemon until
-then. The rejection path can, and it is WR-Q2's falsifier.
+**Blocked fixture.** No bond post can land on the C++ daemon, which
+answers every kind-5 JoinMarket post `JoinMarketUnsupported` (the
+FOLLOWUPS row "The five bonded regtest walks are decided dark…"). The
+late-landing and expiry rows run against a real daemon at `DEL-008`. The
+rejection path runs now, and it is WR-Q2's falsifier.
 
 ### WR-Q4 — Does one surface cover claims, drains and exits?
 
@@ -363,45 +517,64 @@ The kinds do not fail the same way (§2).
 
 - **A stake** rejected terminally is removed.
 - **An exit** rejected on its one send is removed at the seam.
-- **A claim or a drain** rejected terminally is **held**. It looks exactly
-  like a stall, because the prune that would remove it is leg 4's empty
-  body.
+- **A claim or a drain** rejected terminally is **held**, because the
+  prune that would remove it is leg 4's empty body.
 
-So a `rejected` outcome for a claim or a drain cannot exist until leg 4
-lands.
+**Per kind, the reference and its `StaleRoot` handling (§2):**
 
-**Option (a) — this round takes on leg 4.** Every kind gets the same
-`rejected` outcome, written in the same seal as the removal.
-- **Cost:** the FOLLOWUPS row "Drain/claim/release dispatch driver — terminal-reject prune + byte-identical resubmit remain" requires the prune to land **together with**
-  byte-identical resubmit, because the retained copy of a rejected claim
-  or exit is a replay channel. So (a) is both halves, not the prune
-  alone.
-- It also needs the claim and drain seams to keep the verdict, which they
-  return to the caller and do not persist today.
+| Kind | Carries an FCMP++ reference | On `StaleRoot` |
+| --- | --- | --- |
+| Claim | yes (`claim_orchestrator.rs:25-30`) | the seam returns the error; the record is held; never resent or re-proved (`claim_dispatch.rs:422-435`) |
+| Drain | yes (`drain_dispatch.rs:20-24`) | as the claim |
+| Exit | yes (`release_dispatch.rs:503-506`) | held; never resent or re-proved (`:728-736`) |
+
+Each carries a reference, and none re-proves. So the end date of WR-Q3 is
+also leg 4's missing proof: past it, the held transaction is dead,
+whatever its verdict was.
+
+**Option (a) — this round takes on leg 4's prune and resubmit.**
+- Every kind gets a `rejected` outcome on a terminal verdict.
+- **Cost:** the FOLLOWUPS row requires the prune to land together with
+  byte-identical resubmit. The claim and drain seams must also persist
+  the verdict, which they return to the caller and do not keep today.
 
 **Option (b) — report what the state allows.**
 - Claims, drains and exits appear in `in_flight` as `pending`,
   `dispatched` or `stalled`.
-- Stakes, plus exits rejected at the seam, appear in `outcomes`.
-- A claim or drain that was rejected shows as `stalled` once past the
-  horizon. The response says what that may mean: "this may have been
-  refused; your funds are held until the wallet can tell".
-- `outcomes` gains those kinds when leg 4 lands, with no further wire
-  change.
-- **Cost:** a rejected claim or drain shows as stalled for up to 900
-  blocks, about 30 h, and then stays stalled.
+- `outcomes` gains them when leg 4 lands.
+- **Cost:** a rejected claim or drain shows as `stalled`, and stays
+  held, indefinitely.
 
-**Default: (b).** It keeps this round to the read surface and the stake.
-It also does not open a security item from a UX round. One list, keyed by
-kind, carries every kind; what each kind can say is set by what its state
-records, and the response says so.
+**Option (c) — expiry release for every kind, in this round.**
+- WR-Q3's mechanism applies to all four kinds: each record gets its
+  `reference_height`, and each is released, with `expired, funds
+  returned`, once the frontier passes its end date plus the margin.
+- **Why it is safe to land alone:**
+  - It is the prune half, by proof, and it adds no resubmit. So it keeps
+    the FOLLOWUPS row's "never land resubmit alone".
+  - The row's security note names the reference age window as the only
+    other bound on the replay channel. Past the end date the retained
+    copy cannot be mined by anyone, so pruning it then loses nothing.
+- **What leg 4 keeps:** byte-identical resubmit within the lifetime, and
+  an earlier prune on a definite terminal verdict.
+- **Cost:**
+  - the schema field on all four kinds (one v13 bump, shared);
+  - a rejected claim, drain or exit holds its funds until about two days
+    after it was built, then returns them. The outcome says `expired`,
+    not `rejected`.
+
+**Default: (c).** The end date changes the default. Every kind can now
+end with a reported outcome and returned funds, and this round does not
+take on resubmit, the half of leg 4 that is a security item. `stalled`
+shrinks to the one anomaly of WR-Q1.
 
 **Falsifier.**
-- Under (b): a sealed, dispatched drain past the horizon reads
-  `kind == "drain"`, `state == "stalled"`, and no `outcomes` entry for
-  it.
-- When leg 4 lands, the same fixture after a terminal rejection must
-  read an `outcomes` entry. Leg 4's own commit carries that test.
+- Under (c): a sealed, dispatched drain with reference height `r` reads
+  `kind == "drain"`, `state == "expired"` once the clock passes
+  `r + 100`, and leaves `in_flight` with an `outcomes` entry `expired`
+  once the frontier reaches the release point.
+- `rg -n 'reference_height'` hits on `PendingEmissionClaim`,
+  `PendingDrain` and `PendingRelease`.
 
 ### WR-Q5 — What does the response reveal, and to whom?
 
@@ -426,10 +599,16 @@ behind HTTP basic auth or a loopback bind (`shekyl-wallet-rpc/src/auth.rs:6-10`)
   stakes it is already derivable from `staking_info`:
   `bonded_principal_pending` is that count times the bond floor
   (`staking_read.rs:236-251`). Claims, drains and exits are new.
-- **Timing.** `dispatched_at_height` reveals when the wallet first sent
-  the record. A `pending` entry must reveal nothing about when it will
-  be sent. Default: the wire never carries `anchor_t0`, the offset, or
-  the due count, because those are the decorrelation plan.
+- **Timing.**
+  - `dispatched_at_height` reveals when the wallet first sent the record.
+  - `funds_return_at` reveals the reference height, and so roughly when
+    the record was built. For a sent record, every node that saw the
+    bytes already knows that. For a stake that expired before it was
+    sent (§1.1), it tells the caller when the wallet signed.
+  - Default: acceptable for this audience, which is the wallet's owner.
+    The alternative is to coarsen `funds_return_at` to the epoch.
+  - The wire never carries `anchor_t0`, the offset or the due count. A
+    `pending` entry reveals nothing about when it will be sent.
 - **No persona.** Persona ids, transaction bytes and funding gindexes
   never reach the wire.
 
@@ -439,30 +618,31 @@ behind HTTP basic auth or a loopback bind (`shekyl-wallet-rpc/src/auth.rs:6-10`)
   (`types.rs:770`). But every staking action refuses a `p_slot`
   parameter (`handlers.rs:393-403`), and `stake` says "the user never
   names a slot" (`lifecycle.rs:836-838`, rule 81).
-- Default: no slot and no handle on these entries. `cancel_stake` and
-  `acknowledge_staking_outcome` act on the active persona.
+- Default: no slot and no handle on these entries.
+  `acknowledge_staking_outcome` acts on the active persona.
 - Alternative: an opaque handle, random and persisted in the record at
   seal time, never derived from the persona or the bytes. It costs a
   schema field. It is needed only if a wallet must act on a record of a
   persona that is not active, which includes acknowledging that persona's
   outcome (WR-Q2).
 
-**Linkage, said to the user.** A broadcast post publishes the key images
-of its inputs to every node that saw it in a pool. Any later spend of
-those inputs links back to the stake attempt: a cancel, a drain, or an
-ordinary send after option (a). This is true whatever this round decides.
+**Linkage, said to the user.** A broadcast record publishes the key
+images of its inputs to every node that saw it in a pool. When its funds
+come back, any later spend of them links back to the attempt. Expiry adds
+no transaction of its own, but it cannot undo what was published.
 
-- Default: `cancel_stake`'s response says, in plain words, "Anyone who
-  saw this stake can tell that the cancel spends the same funds."
-- The same sentence goes on any later release path.
+- Default: the `expired` and `rejected` outcomes for a record that was
+  sent carry, in plain words: "Anyone who saw this attempt can link a
+  later spend of these funds to it."
 
-**Logs.** Nothing new is logged. Each stall already has its log alarm
-(§2).
+**Logs.** Nothing new is logged. The anomaly that stays `stalled`
+already has its log alarm (§2).
 
 **Falsifier.**
 - `rg -n 'p_slot|persona|anchor_t0|offset|gindex' ` over the
   `in_flight` and `outcomes` wire types returns nothing.
-- A decode test refuses a `cancel_stake` request carrying `p_slot`.
+- A decode test refuses an `acknowledge_staking_outcome` request carrying
+  `p_slot`.
 
 ---
 
@@ -472,19 +652,26 @@ The ruled shape is proved against a real daemon (regtest), not mocks.
 
 - **Now:** the terminal rejection, end to end. The #1075 tripwire already
   drives it against the C++ daemon (WR-Q2's falsifier).
-- **At `DEL-008`:** a dispatched stake, a stall, a late landing and a
-  cancel all need a daemon that admits a kind-5 JoinMarket. That is the
-  Rust daemon at the cutover. The named blocker is the FOLLOWUPS row "The five bonded regtest walks are decided dark…", and the
-  fixtures for those rows land with the walks it un-darkens.
-- **Without a daemon:** the stall projection (WR-Q1) and the outcome
-  write (WR-Q2) are tested against sealed state with a fixed clock. They
-  are projections of durable state and need no network to be right.
+- **At `DEL-008`:** a dispatched stake, a late landing and an expiry all
+  need a daemon that admits a kind-5 JoinMarket post. That is the Rust
+  daemon at the cutover. The named blocker is the FOLLOWUPS row "The five
+  bonded regtest walks are decided dark…", and the fixtures for those
+  rows land with the walks it un-darkens. Until the bond lane settles
+  §1.1, an expiry is what most stakes on that daemon will show.
+- **Without a daemon:** the state projection (WR-Q1), the outcome write
+  (WR-Q2) and the expiry release (WR-Q3) are tested against sealed state
+  with a fixed clock and frontier. They are projections of durable state
+  and need no network to be right.
 
 ## 5. What this round does not do
 
 - No C++.
 - No wallet-contract removal. `JoinMarketUnsupported` stays enumerated
-  until `DEL-008` deletes it (the FOLLOWUPS row "The five bonded regtest walks are decided dark…").
-- No change to the dispatcher's alarm horizon, resubmit policy or alarm
-  wording.
-- No leg-4 body, unless WR-Q4 rules (a).
+  until `DEL-008` deletes it (the FOLLOWUPS row "The five bonded regtest
+  walks are decided dark…").
+- No change to when or how a bond post is signed. That is the bond
+  lane's decision (§1.1).
+- No byte-identical resubmit for claims, drains or exits. That stays
+  leg 4's.
+- No change to the dispatcher's resend policy or alarm horizon, except as
+  WR-Q3 (c) is ruled.
