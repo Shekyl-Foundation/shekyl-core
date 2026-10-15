@@ -243,8 +243,8 @@ socket held neither end, and EOF followed the kill within 7 ms.
 launch code, found by the same Windows run: the default torrc is not
 foreclosed, so a `torrc` in Tor's default location is read; and the cleared
 environment (TB-7) kills `tor.exe`, which needs `SystemRoot`. Both are fixed by
-the launcher fix, a separate change with no PR at this commit; this round
-depends on it. §4.7's launch passes `-f` and `--defaults-torrc`, each naming an
+the launcher fix, a separate change, #1083; this round depends on it.
+§4.7's launch passes `--torrc-file` (`-f`'s long form) and `--defaults-torrc`, each naming an
 empty file, and on Windows sets `SystemRoot` from the operating system, never
 from our environment. **On Linux the default location is world-writable.** The
 pinned Linux bundle's compiled-in defaults sit under `/var/tmp/dist/tor/`: with
@@ -451,7 +451,7 @@ through the same path (C5).
   and Tor is its only child today. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` is the
   strict form, and it is not in stable `std`; reopen when it is.
 
-The launch also passes `-f`, `--defaults-torrc`, `GeoIPFile` and
+The launch also passes `--torrc-file`, `--defaults-torrc`, `GeoIPFile` and
 `GeoIPv6File`, each naming an empty file, and on Windows sets `SystemRoot`
 from the operating system (`TSR-F17`).
 
