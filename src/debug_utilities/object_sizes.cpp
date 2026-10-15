@@ -31,7 +31,7 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/blockchain.h"
 #include "p2p/p2p_protocol_defs.h"
-#include "p2p/net_peerlist.h"
+#include "p2p/p2p_protocol_defs.h"
 #include "p2p/net_node.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "blockchain_db/lmdb/db_lmdb.h"

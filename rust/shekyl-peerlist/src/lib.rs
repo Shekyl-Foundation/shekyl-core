@@ -49,37 +49,35 @@
 
 #![deny(unsafe_code)]
 
+pub mod address_file;
 mod index;
 mod outcome;
 mod partition;
 mod peerlist;
 mod sample;
+mod validity;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
-pub use outcome::{DialOutcome, ListName, Refusal, Source};
+pub use outcome::{DialOutcome, ListName, Refusal, SessionRow, Source};
 
-pub use peerlist::{BanQuery, NoBans, Peerlist, Snapshot};
-pub use shekyl_net_address::NetworkAddress;
+pub use partition::{DiscloseEarly, DiscloseEarlyEnd};
+pub use peerlist::{BanQuery, NoBans, Peerlist, SeatCensus, Settled, Snapshot};
+pub use shekyl_net_address::{Host, NetworkAddress};
 /// A daemon connection. The type is `shekyl_relay_privacy::ConnectionId`;
 /// re-exported so a peerlist session and a stem source are one id. F4 moves
 /// that vocabulary; this re-export does not.
 pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
-pub use shekyl_transport_layer::{connector_for, ConnectorId};
+pub use shekyl_transport_layer::{connector_for, CloseCause, CloseKind, ConnectorId, Direction};
+pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 
-/// `DISCLOSE_COUNT`: how many white addresses one disclosure sample
-/// carries, and the most a received message may carry (D3, Rick,
-/// 2026-10-09). A protocol constant: the same on every node and every
-/// connector, not tied to the outbound target. Replaces
-/// `P2P_DEFAULT_PEERS_IN_HANDSHAKE` and `P2P_MAX_PEERS_IN_HANDSHAKE`
-/// (both 250, `cryptonote_config.h:193` to `:194`).
-///
-/// **Assumption** (`DAEMON_RELAY_PRIVACY.md` §97): the interim outbound
-/// target carried over, derived on the Rust path after PR-3 from intake
-/// diversity, honest fill and per-reply exposure.
-pub const DISCLOSE_COUNT: usize = 12;
+/// The disclosure count (D3): how many white addresses one disclosure
+/// sample carries, and the most a received message may carry. Shared
+/// with the frame layer through `shekyl-peer-bounds`, which holds its
+/// derivation note.
+pub use shekyl_peer_bounds::DISCLOSE_COUNT;
 
 /// The most distinct addresses one session may put into gray in any
 /// 24-hour span (D-S1, Rick, 2026-10-09): twice the sample, so an honest
@@ -112,14 +110,14 @@ pub const fn white_diversity_floor() -> usize {
 /// re-derived on the Rust path after PR-3 with the floor.
 pub const WHITE_REFILL_LINE: usize = white_diversity_floor() + DISCLOSE_COUNT;
 
-/// Gray capacity per connector. The C++ value
-/// (`P2P_LOCAL_GRAY_PEERLIST_LIMIT`, `cryptonote_config.h:183`), moved
-/// with the crate and not re-derived (brief §2, §14).
+/// Gray capacity per connector. The C++ value (`P2P_LOCAL_GRAY_PEERLIST_LIMIT`
+/// in `cryptonote_config.h`, deleted with the C++ peerlist 2026-10-13),
+/// moved with the crate and not re-derived (brief §2, §14).
 pub const GRAY_CAP: usize = 5000;
 
-/// White capacity per connector. The C++ value
-/// (`P2P_LOCAL_WHITE_PEERLIST_LIMIT`, `cryptonote_config.h:182`), moved
-/// with the crate and not re-derived.
+/// White capacity per connector. The C++ value (`P2P_LOCAL_WHITE_PEERLIST_LIMIT`
+/// in `cryptonote_config.h`, deleted with the C++ peerlist 2026-10-13),
+/// moved with the crate and not re-derived.
 pub const WHITE_CAP: usize = 1000;
 
 /// Nanoseconds in one hour.
@@ -133,6 +131,14 @@ pub const EXPIRATION_PERIOD_NANOS: u64 = 24 * HOUR_NANOS;
 /// The disclosure window: one cached sample per connector for this long
 /// (D3). The same 24 hours as the expiry.
 pub const DISCLOSE_WINDOW_NANOS: u64 = 24 * HOUR_NANOS;
+
+/// How long `--p2p-disclose-early` holds on each connector from the moment the
+/// flag reaches the lists at startup (Rick, 2026-10-13, PR-3 brief revision
+/// 3 §2.6): 24 hours. Its own constant, not [`DISCLOSE_WINDOW_NANOS`],
+/// though both are a day; a restart starts it again. The flag also ends,
+/// per connector, the first time that connector's white count reaches
+/// [`white_diversity_floor`], and once ended stays ended for the run.
+pub const P2P_DISCLOSE_EARLY_SPAN_NANOS: u64 = 24 * HOUR_NANOS;
 
 /// The span over which a session's distinct admitted addresses are
 /// counted against [`SESSION_INTAKE_CAP`] (D-S1).

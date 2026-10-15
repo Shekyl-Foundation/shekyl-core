@@ -120,6 +120,11 @@ one; stated plainly, as the round asks:
 
 ## 4. The two questions this note opened, and how they were ruled
 
+- **Q1 — SUPERSEDED 2026-10-09 (Rick), deleted in PR-3 (2026-10-13):** the
+  handshake carries no address field on any connector; a node's own
+  address reaches peers only as one uniform member of its disclosure
+  sample (`P2P_3_SLICE_3_DIALER_BRIEF.md`, "Handshake address"). The
+  field, `derive_advertised_endpoint` and its test are gone. *Records-was:*
 - **Q1 — address type discipline. RULED YES, implemented.** The field stays
   `network_address` (no new codec, wire-compatible with `peerlist_entry.adr`)
   and never-read-the-advertised-host is **structural, not prose**:

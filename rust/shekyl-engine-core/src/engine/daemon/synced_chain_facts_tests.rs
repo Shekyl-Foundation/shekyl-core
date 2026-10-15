@@ -253,19 +253,22 @@ fn has_peers_is_healths_word_whatever_status_says() {
         .to_reply();
         let status = reply.node.shown().expect("the document shows Status");
         assert_eq!(
-            (
-                status.outgoing_connections_count,
-                status.incoming_connections_count
-            ),
-            (0, 0),
+            status.connections,
+            shekyl_rpc_types::StatusConnections::Running {
+                outgoing: 0,
+                incoming: 0
+            },
             "the fixture's Status counts are zero, as a restricted daemon's are"
         );
-        assert_eq!(health_from_get_info(&reply).has_peers, has_peers);
+        assert_eq!(
+            health_from_get_info(&reply).p2p.has_peers(),
+            Some(has_peers)
+        );
 
         reply.node = shekyl_rpc_types::Hidden::Withheld;
         reply.peers = shekyl_rpc_types::Hidden::Withheld;
         let health = health_from_get_info(&reply);
-        assert_eq!(health.has_peers, has_peers, "Status withheld");
+        assert_eq!(health.p2p.has_peers(), Some(has_peers), "Status withheld");
         assert_eq!(health.height, 77);
     }
 }

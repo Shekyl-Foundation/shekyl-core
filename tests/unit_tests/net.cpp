@@ -60,7 +60,6 @@
 #include "net/socks.h"
 #include "net/parse.h"
 #include "net/tor_address.h"
-#include "p2p/net_peerlist_boost_serialization.h"
 #include "serialization/keyvalue_serialization.h"
 #include "storages/portable_storage.h"
 
@@ -437,111 +436,6 @@ TEST(tor_address, epee_serialize_unknown)
     EXPECT_EQ(net::tor_address{}, command.tor);
     EXPECT_STRNE(v3_onion, command.tor.host_str());
     EXPECT_EQ(0u, command.tor.port());
-}
-
-TEST(tor_address, boost_serialize_v2)
-{
-    std::string buffer{};
-    {
-        const net::tor_address tor = MONERO_UNWRAP(net::tor_address::make(v2_onion, 10));
-        EXPECT_FALSE(tor.is_unknown());
-        EXPECT_NE(net::tor_address{}, tor);
-        EXPECT_STREQ(v2_onion, tor.host_str());
-        EXPECT_EQ(10u, tor.port());
-
-        std::ostringstream stream{};
-        {
-            boost::archive::portable_binary_oarchive archive{stream};
-            archive << tor;
-        }
-        buffer = stream.str();
-    }
-
-    net::tor_address tor{};
-    {
-        EXPECT_TRUE(tor.is_unknown());
-        EXPECT_EQ(net::tor_address{}, tor);
-        EXPECT_STREQ(net::tor_address::unknown_str(), tor.host_str());
-        EXPECT_EQ(0u, tor.port());
-
-        std::istringstream stream{buffer};
-        boost::archive::portable_binary_iarchive archive{stream};
-        archive >> tor;
-    }
-    EXPECT_FALSE(tor.is_unknown());
-    EXPECT_NE(net::tor_address{}, tor);
-    EXPECT_STREQ(v2_onion, tor.host_str());
-    EXPECT_EQ(10u, tor.port());
-}
-
-TEST(tor_address, boost_serialize_v3)
-{
-    std::string buffer{};
-    {
-        const net::tor_address tor = MONERO_UNWRAP(net::tor_address::make(v3_onion, 10));
-        EXPECT_FALSE(tor.is_unknown());
-        EXPECT_NE(net::tor_address{}, tor);
-        EXPECT_STREQ(v3_onion, tor.host_str());
-        EXPECT_EQ(10u, tor.port());
-
-        std::ostringstream stream{};
-        {
-            boost::archive::portable_binary_oarchive archive{stream};
-            archive << tor;
-        }
-        buffer = stream.str();
-    }
-
-    net::tor_address tor{};
-    {
-        EXPECT_TRUE(tor.is_unknown());
-        EXPECT_EQ(net::tor_address{}, tor);
-        EXPECT_STREQ(net::tor_address::unknown_str(), tor.host_str());
-        EXPECT_EQ(0u, tor.port());
-
-        std::istringstream stream{buffer};
-        boost::archive::portable_binary_iarchive archive{stream};
-        archive >> tor;
-    }
-    EXPECT_FALSE(tor.is_unknown());
-    EXPECT_NE(net::tor_address{}, tor);
-    EXPECT_STREQ(v3_onion, tor.host_str());
-    EXPECT_EQ(10u, tor.port());
-}
-
-TEST(tor_address, boost_serialize_unknown)
-{
-    std::string buffer{};
-    {
-        const net::tor_address tor{};
-        EXPECT_TRUE(tor.is_unknown());
-        EXPECT_EQ(net::tor_address::unknown(), tor);
-        EXPECT_STREQ(net::tor_address::unknown_str(), tor.host_str());
-        EXPECT_EQ(0u, tor.port());
-
-        std::ostringstream stream{};
-        {
-            boost::archive::portable_binary_oarchive archive{stream};
-            archive << tor;
-        }
-        buffer = stream.str();
-    }
-
-    net::tor_address tor{};
-    {
-        EXPECT_TRUE(tor.is_unknown());
-        EXPECT_EQ(net::tor_address{}, tor);
-        EXPECT_STREQ(net::tor_address::unknown_str(), tor.host_str());
-        EXPECT_EQ(0u, tor.port());
-
-        std::istringstream stream{buffer};
-        boost::archive::portable_binary_iarchive archive{stream};
-        archive >> tor;
-    }
-    EXPECT_TRUE(tor.is_unknown());
-    EXPECT_EQ(net::tor_address::unknown(), tor);
-    EXPECT_STREQ(net::tor_address::unknown_str(), tor.host_str());
-    EXPECT_EQ(0u, tor.port());
 }
 
 TEST(get_network_address, onion)

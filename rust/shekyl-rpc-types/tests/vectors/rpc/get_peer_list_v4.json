@@ -3,7 +3,6 @@
     {
       "host": "abcdefghijklmnop.onion:18080",
       "ip": 0,
-      "last_seen": 1750000003,
       "port": 0
     }
   ],
@@ -12,15 +11,12 @@
     {
       "host": "10.32.0.7",
       "ip": 117448714,
-      "last_seen": 1750000001,
       "port": 18080
     },
     {
       "host": "2001:db8::1",
       "ip": 0,
-      "last_seen": 1750000002,
-      "port": 18081,
-      "pruning_seed": 384
+      "port": 18081
     }
   ]
 }

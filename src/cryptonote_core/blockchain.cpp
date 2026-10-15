@@ -5949,6 +5949,19 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
   if (long_term_effective_median_block_weight)
     *long_term_effective_median_block_weight = m_long_term_effective_median_block_weight;
 
+  // Every tip change passes here (init, add, pop, switch): the Rust dialer's
+  // next handshake carries this snapshot. The height is the block count, as
+  // get_payload_sync_data reports it.
+  if (db_height > 0)
+  {
+    const crypto::hash top = m_db->top_block_hash();
+    const difficulty_type wide = m_db->get_block_cumulative_difficulty(db_height - 1);
+    shekyl_core_publish_tip(db_height,
+        (wide & 0xffffffffffffffff).convert_to<uint64_t>(),
+        ((wide >> 64) & 0xffffffffffffffff).convert_to<uint64_t>(),
+        reinterpret_cast<const std::uint8_t*>(top.data));
+  }
+
   return true;
 }
 //------------------------------------------------------------------
@@ -6155,7 +6168,14 @@ bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
       }
     }
     else
+    {
       m_db->batch_abort();
+      // The abort is a tip change back to the committed chain. The weight
+      // limit, the relay floor ring and the tip the dialer announces were
+      // set by the blocks it discards; they are recomputed from the chain.
+      CHECK_AND_ASSERT_THROW_MES(update_next_cumulative_weight_limit(),
+          "Error updating next cumulative weight limit after a batch abort");
+    }
     success = true;
   }
   catch (const std::exception &e)

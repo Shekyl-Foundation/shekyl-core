@@ -154,12 +154,25 @@ pub struct SyncSpansSnapshot {
     pub spans: Vec<SyncSpanFacts>,
 }
 
-/// One peerlist entry, copied out of the C++ view.
+/// A P2P read from a daemon that may have been started offline
+/// (Rick, 2026-10-14). [`P2pRead::Offline`] carries nothing: the daemon has no
+/// peers, connections or lists by configuration, and nothing stands in for
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PeerFacts {
+pub enum P2pRead<T> {
+    /// P2P runs; what was read.
+    Running(T),
+    /// The daemon was started offline.
+    Offline,
+}
+
+/// One peerlist entry, copied out of the Rust peer lists' export. No
+/// clock: the lists carry none (3.55). Named apart from
+/// [`crate::info_facts::PeerFacts`], `get_info`'s Peers state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerEntry {
     /// Already resolved per address arm by the adapter.
     pub host: String,
-    pub last_seen: u64,
     /// The ipv4 address packed as `epee`'s `ipv4_network_address::ip()`
     /// returns it: the four octets in **network** order. On a little-endian
     /// host that means 10.32.0.7 is `0x0700_200a`, which is the value in the
@@ -459,8 +472,6 @@ impl CoreRpc {
             public_outgoing_sockets: 0,
             tor_incoming_sockets: 0,
             tor_outgoing_sockets: 0,
-            white_peerlist_size: 0,
-            grey_peerlist_size: 0,
         };
         // SAFETY: live handle; `pod` is a valid out pointer for the call.
         let rc = unsafe { ffi::shekyl_rpc_info_peers(self.handle, &raw mut pod) };
@@ -670,33 +681,33 @@ impl CoreRpc {
         }
     }
 
-    /// The peerlist (`shekyl_rpc_peer_list`), white entries then gray, copied
-    /// out before the owner is released.
-    pub fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, i32> {
-        if self.handle.is_null() {
-            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
-        }
+    /// The peerlist (`shekyl_rpc_peer_list`, exported by `shekyl-ffi` from
+    /// the Rust peer lists), white entries then gray, copied out before the
+    /// owner is released. No core handle: the lists are the dialer's.
+    pub fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, i32> {
         let mut rows: *const ffi::PeerFactsFfi = std::ptr::null();
         let mut len: usize = 0;
         let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
         // SAFETY: as `connections` above.
         unsafe {
             let rc = ffi::shekyl_rpc_peer_list(
-                self.handle,
                 u8::from(public_only),
                 &raw mut rows,
                 &raw mut len,
                 &raw mut owner,
             );
+            if rc == ffi::SHEKYL_RPC_FACTS_OFFLINE {
+                // Nothing was written, the owner included.
+                return Ok(P2pRead::Offline);
+            }
             if rc != ffi::SHEKYL_RPC_FACTS_OK {
                 return Err(rc);
             }
             let mut peers = Vec::with_capacity(len);
             if !rows.is_null() {
                 for e in std::slice::from_raw_parts(rows, len) {
-                    peers.push(PeerFacts {
+                    peers.push(PeerEntry {
                         host: borrowed_string(e.host, e.host_len),
-                        last_seen: e.last_seen,
                         ip: e.ip,
                         port: e.port,
                         white: e.white != 0,
@@ -705,22 +716,35 @@ impl CoreRpc {
                 }
             }
             ffi::shekyl_rpc_peer_list_free(owner);
-            Ok(peers)
+            Ok(P2pRead::Running(peers))
         }
     }
 
-    /// The two compile-time peerlist capacities
-    /// (`shekyl_rpc_peerlist_limits`), as `(white, gray)`.
-    ///
-    /// Not restated in Rust: a duplicated constant is drift waiting to
-    /// happen, and these are p2p configuration the C++ owns.
-    pub fn peerlist_limits() -> (u32, u32) {
-        let mut white: u32 = 0;
-        let mut gray: u32 = 0;
-        // SAFETY: two valid out pointers; the export takes no handle and
-        // writes two compile-time constants.
-        unsafe { ffi::shekyl_rpc_peerlist_limits(&raw mut white, &raw mut gray) };
-        (white, gray)
+    /// How many addresses the clearnet white and gray lists hold
+    /// (`shekyl_rpc_peerlist_sizes`, exported by `shekyl-ffi` from the Rust
+    /// peer lists), as `(white, gray)`. No core handle: the lists are the
+    /// dialer's. [`P2pRead::Offline`] for a daemon started offline.
+    pub fn peerlist_sizes() -> Result<P2pRead<(u64, u64)>, i32> {
+        let mut white: u64 = 0;
+        let mut gray: u64 = 0;
+        // SAFETY: two valid out pointers.
+        let rc = unsafe { ffi::shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) };
+        match rc {
+            ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running((white, gray))),
+            ffi::SHEKYL_RPC_FACTS_OFFLINE => Ok(P2pRead::Offline),
+            fault => Err(fault),
+        }
+    }
+
+    /// Whether P2P runs (`shekyl_rpc_p2p_state`, exported by `shekyl-ffi`
+    /// from what the p2p layer recorded when it read `--offline`).
+    pub fn p2p_state() -> Result<P2pRead<()>, i32> {
+        // SAFETY: no arguments; reads one atomic.
+        match unsafe { ffi::shekyl_rpc_p2p_state() } {
+            ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running(())),
+            ffi::SHEKYL_RPC_FACTS_OFFLINE => Ok(P2pRead::Offline),
+            fault => Err(fault),
+        }
     }
 
     /// The dynamic base-fee estimate (`shekyl_rpc_fee_estimate`).

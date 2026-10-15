@@ -42,6 +42,8 @@
 //! (PWD-B6) and `COMMAND_PING` (1003) is deleted (PWD-B10); a Q/S-flagged
 //! either is unknown dispatch.
 
+use shekyl_peer_bounds::DISCLOSE_COUNT;
+
 use crate::header::{Flags, DEFAULT_MAX_PACKET_SIZE};
 use crate::{
     Error, COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, HASH_SIZE,
@@ -60,20 +62,22 @@ pub const FLAGS_DEFINED: Flags = Flags::from_bits(
         | Flags::COMPRESSED.bits(),
 );
 
-/// `P2P_MAX_PEERS_IN_HANDSHAKE` (`cryptonote_config.h`).
-pub const P2P_MAX_PEERS_IN_HANDSHAKE: u64 = 250;
+/// What the largest `peerlist_entry` this codec writes adds to a message
+/// that already carries one — its bytes inside the array, without the
+/// array's own envelope: a Tor v3 address (the 62-byte `.onion` host and a
+/// port) with its KV tags, and nothing else. No stripe seed (`PDM-Q7`)
+/// and no `last_seen` (PR-3, Rick, 2026-10-13: a field always sent as 0
+/// and ignored on receipt is a sentinel and a peer-controlled slot).
+/// Pinned by `tests/handshake_bounds.rs`, which encodes the messages and
+/// asserts this number, so the bound and the encoding cannot drift apart.
+pub const PEERLIST_ENTRY_MAX_ENCODED_BYTES: u64 = 98;
 
-/// Portable-storage over-bound for one `peerlist_entry` (IPv6 / Tor v3
-/// address + `last_seen` + pruning seed + KV tags). 256 bytes is several
-/// times a typical IPv4 entry.
-const PEERLIST_ENTRY_BOUND: u64 = 256;
-
-/// Handshake / timed-sync map header + `basic_node_data` + `CORE_SYNC_DATA`
-/// plus (handshake only) a 32-byte nonce. Combined with
-/// [`P2P_MAX_PEERS_IN_HANDSHAKE`] × [`PEERLIST_ENTRY_BOUND`] this reconstructs
-/// the inherited 65536 envelope rather than inventing a tighter number
-/// without a measured encoding.
-const HANDSHAKE_FIXED_OVERHEAD: u64 = 1536;
+/// The largest handshake or timed-sync message with its entries taken
+/// off: the storage header, `basic_node_data`, `CORE_SYNC_DATA` with every
+/// optional field present, the list's own envelope where there is one,
+/// and the request's 32-byte nonce. Pinned by `tests/handshake_bounds.rs`
+/// the same way.
+pub const HANDSHAKE_FIXED_MAX_BYTES: u64 = 258;
 
 /// `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT`
 /// (`cryptonote_protocol_handler.h`).
@@ -89,8 +93,13 @@ const fn hash_list_cap(count: u64) -> u64 {
     count.saturating_mul(48).saturating_add(256)
 }
 
+/// A handshake or timed-sync frame holds at most [`DISCLOSE_COUNT`]
+/// entries (the lists send that many and refuse more, D3), each at most
+/// [`PEERLIST_ENTRY_MAX_ENCODED_BYTES`], beside a fixed part of at most
+/// [`HANDSHAKE_FIXED_MAX_BYTES`]. Derived, not inherited: the 65536
+/// envelope the C++ reconstructed from 250 entries is gone with the C++.
 const CAP_HANDSHAKE: u64 =
-    P2P_MAX_PEERS_IN_HANDSHAKE * PEERLIST_ENTRY_BOUND + HANDSHAKE_FIXED_OVERHEAD;
+    DISCLOSE_COUNT as u64 * PEERLIST_ENTRY_MAX_ENCODED_BYTES + HANDSHAKE_FIXED_MAX_BYTES;
 
 /// Four-byte `uint32` support-flags field plus a portable-storage section
 /// envelope. Inherited cap was 4096; the field is four bytes.
@@ -125,7 +134,7 @@ const CAP_COMPACT_MISSING_TX: u64 = 1024 * 1024;
 /// There is no pool-cardinality bound on the framing seam.
 const CAP_TXPOOL_COMPLEMENT: u64 = 1024 * 1024 * 4;
 
-const _: () = assert!(CAP_HANDSHAKE == 65_536);
+const _: () = assert!(CAP_HANDSHAKE < 65_536);
 const _: () = assert!(CAP_REQUEST_GET_OBJECTS == 5_056);
 const _: () = assert!(CAP_REQUEST_CHAIN == 1_200_256);
 const _: () = assert!(CAP_NEW_COMPACT_BLOCK == 4 * 1024 * 1024);
@@ -368,10 +377,16 @@ mod tests {
     }
 
     #[test]
-    fn handshake_reconstructs_the_inherited_envelope() {
+    fn handshake_and_timed_sync_are_bounded_by_the_disclosure_count() {
+        let cap =
+            DISCLOSE_COUNT as u64 * PEERLIST_ENTRY_MAX_ENCODED_BYTES + HANDSHAKE_FIXED_MAX_BYTES;
         assert_eq!(
             ingress_payload_cap(COMMAND_HANDSHAKE, Flags::RESPONSE).unwrap(),
-            65_536
+            cap
+        );
+        assert_eq!(
+            ingress_payload_cap(COMMAND_TIMED_SYNC, Flags::RESPONSE).unwrap(),
+            cap
         );
     }
 

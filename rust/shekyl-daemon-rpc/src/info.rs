@@ -46,12 +46,12 @@
 
 use shekyl_economics::{project_at_tip, EconomicParams, TipOperands};
 use shekyl_rpc_types::{
-    GetInfoResponse, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost, InfoIdentity,
-    InfoPeers, InfoPool, InfoStatus, RpcStatus,
+    GetInfoResponse, HashHex, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
+    InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, RpcStatus, StatusConnections,
 };
 
 use crate::chain_facts::FactsFault;
-use crate::info_facts::{InfoFacts, PoolScope, SessionCounts};
+use crate::info_facts::{InfoFacts, PeerFacts, PoolScope};
 use crate::methods::{RpcFault, StoreFault};
 
 /// What a caller is shown: which parts its grants select, and whether it is
@@ -142,12 +142,28 @@ pub fn get_info(
     //
     // Everywhere else a hub that is not up is a fault and refuses the
     // reply: `false` and zero would be answers nobody gave.
+    //
+    // Offline is then a state on every part (Rick, 2026-10-14): Health
+    // carries no `has_peers` and Status no connection count, because the
+    // node has neither by configuration.
     let sessions = if chain.offline {
-        SessionCounts::NONE
+        None
     } else {
-        facts.sessions()?
+        Some(facts.sessions()?)
     };
-    let has_peers = sessions.has_peers();
+    let health_p2p = match sessions {
+        None => HealthP2p::Offline,
+        Some(sessions) => HealthP2p::Running {
+            has_peers: sessions.has_peers(),
+        },
+    };
+    let connections = match sessions {
+        None => StatusConnections::Offline,
+        Some(sessions) => StatusConnections::Running {
+            outgoing: sessions.outbound,
+            incoming: sessions.inbound,
+        },
+    };
     // The pool. Every caller is told how many entries this node has
     // broadcast. How many it holds and has not yet broadcast is host-only,
     // so it is counted only on the host axis; both are then one pool state.
@@ -179,8 +195,7 @@ pub fn get_info(
             // Handshaken sessions on every connector, per direction: the
             // same sessions `has_peers` is about, from the same snapshot.
             // A socket before its handshake is in Peers' socket counts.
-            outgoing_connections_count: sessions.outbound,
-            incoming_connections_count: sessions.inbound,
+            connections,
             alt_blocks_count: status.alt_blocks_count,
             rpc_connections_count: rpc_connections,
         })
@@ -188,16 +203,31 @@ pub fn get_info(
         Hidden::Withheld
     };
 
+    // Peers says first whether P2P runs (Rick, 2026-10-14). A daemon
+    // started offline reports that state and no count. The state and
+    // Health's `offline` both come from the daemon's configuration, read
+    // in two places; if they disagree, one of the reads is wrong, and the
+    // reply refuses rather than carry both.
     let peers = if disclosure.peers {
-        let peers = facts.peers()?;
-        Hidden::Shown(InfoPeers {
-            public_incoming_socket_count: peers.public_incoming_sockets,
-            public_outgoing_socket_count: peers.public_outgoing_sockets,
-            tor_incoming_socket_count: peers.tor_incoming_sockets,
-            tor_outgoing_socket_count: peers.tor_outgoing_sockets,
-            white_peerlist_size: peers.white_peerlist_size,
-            grey_peerlist_size: peers.grey_peerlist_size,
-        })
+        let state = match facts.peers()? {
+            PeerFacts::Offline => InfoP2p::Offline,
+            PeerFacts::Running(peers) => InfoP2p::Running(InfoPeers {
+                public_incoming_socket_count: peers.public_incoming_sockets,
+                public_outgoing_socket_count: peers.public_outgoing_sockets,
+                tor_incoming_socket_count: peers.tor_incoming_sockets,
+                tor_outgoing_socket_count: peers.tor_outgoing_sockets,
+                white_peerlist_size: peers.white_peerlist_size,
+                grey_peerlist_size: peers.grey_peerlist_size,
+            }),
+        };
+        if matches!(state, InfoP2p::Offline) != chain.offline {
+            tracing::error!(
+                offline = chain.offline,
+                "get_info refused: the P2P state disagrees with the core's offline flag"
+            );
+            return Err(RpcFault::Facts(FactsFault::Inconsistent));
+        }
+        Hidden::Shown(state)
     } else {
         Hidden::Withheld
     };
@@ -239,9 +269,8 @@ pub fn get_info(
                 .into(),
             synchronized: chain.synchronized,
             busy_syncing: chain.busy_syncing,
-            offline: chain.offline,
             following_degraded: chain.following_degraded,
-            has_peers,
+            p2p: health_p2p,
         },
         identity: InfoIdentity {
             protocol_version: chain.protocol_version,

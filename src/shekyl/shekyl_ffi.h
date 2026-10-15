@@ -4274,6 +4274,7 @@ struct ShekylOwnedBuffer {
 constexpr std::uint32_t SHEKYL_SEAM_ESTABLISHED = 1;
 constexpr std::uint32_t SHEKYL_SEAM_DELIVER = 2;
 constexpr std::uint32_t SHEKYL_SEAM_CLOSED = 3;
+constexpr std::uint32_t SHEKYL_SEAM_HANDSHAKE = 4;
 constexpr std::uint32_t SHEKYL_CONNECTOR_CLEARNET = 0;
 constexpr std::uint32_t SHEKYL_CONNECTOR_TOR = 1;
 constexpr std::uint32_t SHEKYL_DIRECTION_INBOUND = 0;
@@ -4402,12 +4403,130 @@ int shekyl_seam_session_established(std::uint64_t id);
 int shekyl_seam_session_connector(std::uint64_t id);
 /// 1 when a hub is bound.
 int shekyl_seam_is_bound(void);
-/// 1 when `(kind, reply)` on `connector` should stop dials to that address.
-/// 0 otherwise, including an unknown kind. An unknown connector does not
-/// count a proxy reply.
-int shekyl_close_implicates_address(std::uint8_t kind, std::uint16_t reply, std::uint8_t connector);
-/// 1 when `id`'s row holds a cause, and writes it. 0 when it does not.
-int shekyl_seam_session_cause(std::uint64_t id, std::uint8_t* kind_out, std::uint16_t* reply_out);
+/// What `shekyl_peerlist_admit_received` answers. Each situation has its
+/// own code; the caller closes the session on REFUSE and on nothing else.
+/// REFUSE: the list broke a rule.
+constexpr int SHEKYL_PEERLIST_REFUSE = 0;
+/// ADMITTED: an outbound session's list passed every rule.
+constexpr int SHEKYL_PEERLIST_ADMITTED = 1;
+/// INBOUND: the peer opened the session; nothing was read or admitted.
+// 2 was SHEKYL_PEERLIST_INBOUND, retired 2026-10-13: every exchange is an
+// exchange (PR-3 brief §2.5); an inbound list is admitted or refused like
+// any other. The number is not reused.
+/// NO_SESSION: the board holds no such session; nothing was admitted.
+constexpr int SHEKYL_PEERLIST_NO_SESSION = 3;
+/// NO_HUB: no hub is bound; nothing was admitted.
+constexpr int SHEKYL_PEERLIST_NO_HUB = 4;
+/// BAD_ARGUMENT: a null pointer with a non-zero count; nothing was admitted.
+constexpr int SHEKYL_PEERLIST_BAD_ARGUMENT = 5;
+/// The outbound handshake's result, posted by the Rust dialer as kind
+/// SHEKYL_SEAM_HANDSHAKE after `established` and ahead of any frame. The
+/// strand reads these fields and accepts or refuses the sync payload in
+/// that turn; it does not parse a Levin response.
+struct shekyl_seam_handshake_result {
+  std::uint8_t keep;
+  std::uint8_t _pad[3];
+  std::uint32_t support_flags;
+  std::uint64_t current_height;
+  std::uint64_t cumulative_difficulty;
+  std::uint64_t cumulative_difficulty_top64;
+  std::uint8_t top_id[32];
+};
+/// The strand's verdict on the handshake posted for `id`: 1 accepted the
+/// sync payload, 0 refused it. The dialer closes a confirm dial and a
+/// refused dial; a kept and accepted dial stays.
+void shekyl_dialer_handshake_verdict(std::uint64_t id, int accepted);
+/// The inbound handshake's self-connection check: 1 when `nonce` (32 bytes)
+/// is one this node put in flight on `connector`, erasing it; 0 otherwise.
+int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t* nonce);
+/// `--out-peers` and the anonymity zones' cap: the connector's outbound
+/// target. 0 on success; -1 for a positive cap below the F-8b floor, which
+/// is refused, or an unknown connector. Lowering a cap closes kept
+/// sessions only.
+int shekyl_dialer_set_out_peers(std::uint32_t connector, std::uint32_t cap);
+/// The connector's outbound target as the dialer holds it: the pushed cap,
+/// or the compiled default before any push. 0 for an unknown connector.
+std::uint32_t shekyl_dialer_out_target(std::uint32_t connector);
+/// The core's tip: the dialer's next handshake carries it. Called wherever
+/// the tip changes, and once at start.
+void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
+    std::uint64_t cumulative_difficulty_top64, const std::uint8_t* top_id);
+/// The tip the core last published (see shekyl_core_publish_tip): 1 and the
+/// fields written, 0 and nothing written before the first publish. A null
+/// out pointer is skipped.
+int shekyl_core_published_tip(std::uint64_t* out_height, std::uint64_t* out_cumulative_difficulty,
+    std::uint64_t* out_cumulative_difficulty_top64, std::uint8_t* out_top_id);
+/// An operator-named address (`--add-peer`), into gray whatever its range:
+/// 1 newly entered, 0 already sat or refused, -1 not an address or no dialer.
+int shekyl_peerlist_admit_operator(const shekyl_seam_address* entry);
+/// This node's own dialable address on `connector`; null clears it. 0, or
+/// -1 with no dialer or an unknown connector.
+int shekyl_peerlist_set_own_address(std::uint32_t connector, const shekyl_seam_address* entry);
+/// A closed network (`--add-exclusive-node`): the dialer's candidate
+/// population is exactly these `count` entries, admitted as operator-named.
+/// 0, or -1 with no dialer or a null pointer with a non-zero count.
+int shekyl_dialer_set_exclusive(const shekyl_seam_address* entries, std::size_t count);
+/// The disclosure sample for a response on `session` (the socket id): up to
+/// `cap` entries written to `out`, returning how many. Zero below the white
+/// diversity floor, for an unknown session, or with no dialer.
+std::size_t shekyl_peerlist_disclose(std::uint64_t session, shekyl_seam_address* out, std::size_t cap);
+/// `--allow-local-ip`, as the Rust peer lists' constructor input. Returns
+/// `allow`, so the line that read the flag reads it through this call.
+bool shekyl_peerlist_allow_local_ip(bool allow);
+/// `--p2p-disclose-early` (PR-3 brief revision 3 §2.6): the peer lists disclose
+/// below the white diversity floor, fresh per request, until 24 hours pass
+/// or a connector's white reaches the floor. 0, or SHEKYL_DIALER_DEFERRED
+/// when held for the dialer's build. The option is the one C++ exception
+/// to "no new daemon option"; the daemon-config slice deletes it.
+int shekyl_peerlist_disclose_early(void);
+/// Recorded for the dialer's build: a push made before the seam binds takes
+/// effect when the dialer is built.
+constexpr int SHEKYL_DIALER_DEFERRED = 2;
+/// The address file (`<data dir>/p2pstate.bin`), named once at start: its
+/// addresses enter gray, and the dialer writes it every thirty minutes and
+/// at stop. 0, SHEKYL_DIALER_DEFERRED, or -1 for a null or non-UTF-8 path.
+int shekyl_dialer_open_address_file(const char* path);
+/// Which network this process dials, for seed admission. `nettype` is
+/// `cryptonote::network_type` (0 mainnet, 1 testnet, 2 stagenet, 3
+/// fakechain). Called once from `core::init`, after that choice is
+/// settled and before any connector starts. Stagenet and fakechain admit
+/// no compiled seeds. This is not `shekyl_network_id`: that derivation is
+/// pure, and `get_config` builds every network's id on first use, so a
+/// record taken there would always end on stagenet. Returns 0, or -1 when
+/// `nettype` is not one of those four (the record is unchanged).
+int shekyl_dialer_note_network(std::uint8_t nettype);
+/// One `get_peer_list` entry, from the Rust peer lists (RK-5a's export,
+/// moved to Rust 2026-10-13). `host` is the ip string for IPv4, the bare
+/// host for IPv6, the whole `host:port` for Tor (`port` 0 there); `ip` is
+/// the IPv4 address with its octets in network order, else 0. No clock.
+struct shekyl_rpc_peer_facts {
+  const char* host;
+  std::size_t host_len;
+  std::uint32_t ip;
+  std::uint16_t port;
+  std::uint8_t white;    // 1 white, 0 gray
+  std::uint8_t blocked;  // 1 when the transport layer bans the host now
+};
+static_assert(sizeof(shekyl_rpc_peer_facts) == 24, "peer facts layout is pinned on both sides");
+/// White then gray entries in one array; `public_only` nonzero lists the
+/// clearnet lists alone. 0; 1 (offline, nothing written); or -1 for a null
+/// out pointer or no lists online. Release `*out_owner` with shekyl_rpc_peer_list_free.
+int shekyl_rpc_peer_list(std::uint8_t public_only, const shekyl_rpc_peer_facts** out,
+    std::size_t* out_len, void** out_owner);
+void shekyl_rpc_peer_list_free(void* owner);
+/// Clearnet white and gray list sizes. 0; 1 (offline, nothing written); or -1.
+int shekyl_rpc_peerlist_sizes(std::uint64_t* out_white, std::uint64_t* out_gray);
+/// Whether P2P runs: 0 running, 1 offline, -2 before it is recorded.
+int shekyl_rpc_p2p_state(void);
+/// Record --offline where the p2p layer reads it; returns `offline`.
+bool shekyl_p2p_record_offline(bool offline);
+/// The close kind's name for a log line, from the Rust table; static, never freed.
+const char* shekyl_close_kind_name(std::uint8_t kind);
+/// A peerlist a peer sent over session `session` (the socket id), as it
+/// arrived: `count` entries, none dropped or rewritten. Rust reads the
+/// session's connector and direction from the board, applies every
+/// acceptance rule, and answers one of the SHEKYL_PEERLIST_* codes above.
+int shekyl_peerlist_admit_received(std::uint64_t session, const shekyl_seam_address* entries, std::size_t count);
 
 /// Copy the process hub's board through `visit`, one fixed-size row per
 /// call. There is one hub. A missing hub, or a board with no rows, visits
@@ -4455,25 +4574,6 @@ void shekyl_bans_clear(void);
 int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
 void shekyl_executor_release(std::uint64_t handle);
 
-/// Spans and the transport-runtime budget. The caller supplies every
-/// number. The five deadlines are the measured spans; `workers` and
-/// `blocking` stay the structural floor until the thread-budget leg.
-/// `shutdown_timeout_ns` is the longest of the armed deadlines.
-/// `network_id` is 16 bytes. Field order matches the Rust `repr(C)`
-/// struct.
-struct shekyl_zone_params {
-  const std::uint8_t* network_id;
-  std::uint64_t clearnet_dial_within_ns;
-  std::uint64_t clearnet_handshake_within_ns;
-  std::uint64_t clearnet_gap_within_ns;
-  std::uint64_t tor_dial_within_ns;
-  std::uint64_t tor_gap_within_ns;
-  std::uint64_t send_queue_bytes;
-  std::uint64_t shutdown_timeout_ns;
-  std::size_t workers;
-  std::size_t blocking;
-};
-
 /// Bind clearnet. Writes the bound ports. `ipv6` and `proxy_host` may be
 /// null. `encrypt` nonzero is the clearnet channel option on; zero is off.
 /// Returns 0, or -1 when the bind fails.
@@ -4481,14 +4581,14 @@ int shekyl_zone_listen_clearnet(
     const char* ipv4, std::uint16_t port,
     const char* ipv6, std::uint16_t port_v6, int use_ipv6,
     const char* proxy_host, std::uint16_t proxy_port, int encrypt,
-    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling,
     int* out_port, int* out_port_v6);
 /// Bind the Tor forward listener. `extra` may be null. Returns 0, or -1
 /// when the bind fails.
 int shekyl_zone_listen_tor(
     const char* socks_host, std::uint16_t socks_port,
     const char* extra, std::uint16_t extra_port,
-    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling,
     int* out_port);
 /// The SOCKS proxy the Tor connector dials through, for a tor zone with no
 /// inbound listener. `shekyl_zone_listen_tor` installs it for zones that
@@ -4496,7 +4596,7 @@ int shekyl_zone_listen_tor(
 /// does not parse.
 int shekyl_zone_set_tor_proxy(
     const char* socks_host, std::uint16_t socks_port,
-    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling);
+    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling);
 /// Replace the ceiling later accepts use. Returns 0, or -1 when `ceiling`
 /// is null, not a known decision, or the seam is unbound.
 int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
@@ -4545,7 +4645,8 @@ std::uint64_t shekyl_recv_mark_ms(std::uint64_t recv_ms, std::uint64_t started_m
 /// genesis block hash). Fakechain's genesis pin is mainnet's today, so the
 /// two ids match until fakechain has its own genesis. Returns 0, or -1 when
 /// `out` is null or `nettype` is not one of those four. This function does
-/// not state the bytes.
+/// not state the bytes, and it does not choose the dialer's seeds
+/// (`shekyl_dialer_note_network` does, from the network the daemon chose).
 int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 
 } // extern "C"
