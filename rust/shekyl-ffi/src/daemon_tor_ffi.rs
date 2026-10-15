@@ -318,9 +318,10 @@ pub unsafe extern "C" fn shekyl_daemon_tor_publish(
 }
 
 /// Is the ephemeral tor still up? `false` when never started, already shut
-/// down, or died — per PWD-E7 there is no respawn, so a death means the
-/// overlay inbound posture is gone for this boot (the caller logs; the node
-/// continues on its other zones).
+/// down, or died. There is no respawn until the supervisor of
+/// `docs/design/TOR_SUPERVISOR.md` lands, so today a death means the overlay
+/// inbound posture is gone for this boot (the caller logs; the node continues
+/// on its other zones).
 #[no_mangle]
 pub extern "C" fn shekyl_daemon_tor_is_alive() -> bool {
     lock_slot()
