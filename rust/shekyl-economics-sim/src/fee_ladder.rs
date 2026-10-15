@@ -43,7 +43,6 @@ use core::fmt::Write as _;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::Serialize;
-use shekyl_chain_rules::REFERENCE_BLOCK_MAX_AGE;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
@@ -84,21 +83,6 @@ const _: () = assert!(
 /// are still modes. 240 blocks = the FL-C4a stationary gate, i.e. the
 /// best candidate the sweep found; nothing ships it.
 const FL_R18_MIN_DWELL_BLOCKS: u64 = 240;
-
-/// Quote-to-broadcast lags for the FL-R18 rejection-race measurement
-/// (§4.5b), in blocks at the 120 s target. STATED, not assumed:
-/// * **1** — the floor case: estimate fetched, transaction built and
-///   broadcast inside one block.
-/// * **3** (≈ 6 min) — the realistic case: FCMP++ proving at the rule-76
-///   device floor, a human confirmation step, and the Dandelion++ stem
-///   embargo before the transaction reaches a miner's pool.
-/// * **25** (≈ 50 min) — a signing session left open, or a wallet that
-///   quotes, waits on a second signer, then broadcasts.
-/// * **100** — the PROTOCOL's own ceiling, not a guess:
-///   `FCMP_REFERENCE_BLOCK_MAX_AGE` (100) is the oldest reference a
-///   proof may carry at admission, so no conforming transaction can be
-///   quoted more than 100 blocks before it is submitted.
-const RACE_LAGS: [u64; 4] = [1, 3, 25, REFERENCE_BLOCK_MAX_AGE.to_raw()];
 
 /// Blocks per day at the 120 s target — the unit §10.14.4's C10-6/7/8
 /// report in, beside blocks. `BLOCKS_PER_YEAR / 365` would silently
@@ -1477,43 +1461,8 @@ fn dwell_scenario(
 // Feedback map (FL-C7) — on the SERVED (quantized) ladder
 // ---------------------------------------------------------------------------
 
-/// FL-R18's thin-margin line, in thousandths of `served/floor`.
-///
-/// The race was measured against the 2% acceptance buffer admission had
-/// then (`served * 100 < floor * 98`). FL-R23 set the slack to zero and
-/// production names no margin to import, so `1_020` stays as that round's
-/// threshold and its counts stay with it
-/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4, D6).
-const FL_R18_THIN_MARGIN_MILLI: u64 = 1_020;
-
-/// The two factors of FL-R18's acceptance comparison: a quote was refused
-/// when `served * NUM < floor * DEN`, which is `needed - needed/50`.
-const FL_R18_ACCEPT_NUM: u128 = 100;
-const FL_R18_ACCEPT_DEN: u128 = 98;
-
 #[derive(Serialize)]
 pub struct FeedbackResult {
-    /// FL-R18 rejection-race (§4.5b): quotes issued along the trace, and
-    /// how many would be REFUSED at admission `RACE_LAGS[i]` blocks later
-    /// because the relay floor rose above the quoted (already
-    /// floor-clamped) economy rung. The count applies
-    /// [`FL_R18_ACCEPT_NUM`] / [`FL_R18_ACCEPT_DEN`], the 2% buffer
-    /// admission had when FL-R18 was measured. FL-R23 has since set the
-    /// slack to zero and added a lookback
-    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, Appendix A2, D6).
-    pub race_quotes: u64,
-    pub race_refused: [u64; 4],
-    /// The race's REAL governing quantity (§4.5b). With the median held,
-    /// the relay floor is monotonically non-increasing (reward decay only
-    /// shrinks `R`), so `race_refused` is structurally zero and proves
-    /// nothing on its own. What decides a refusal is the MARGIN a quote
-    /// carries over the floor it was clamped against: `served/floor` in
-    /// thousandths, minimised over the trace. Under the buffer FL-R18
-    /// measured, a quote survived a median contraction of factor `f` iff
-    /// `f² ≤ (served/floor)·(100/98)`, and a margin below
-    /// [`FL_R18_THIN_MARGIN_MILLI`] was that round's thin line. FL-R23
-    /// removed the buffer (§4, D6); the line stays so the counts stay.
-    pub race_margin_min_milli: u64,
     /// Chain age and median of the swept state (§1.8 interior grid;
     /// PR #614 review — feedback was previously pinned to (age 4, zone)).
     pub age_years: u64,
@@ -1599,23 +1548,16 @@ fn feedback_scenario(
     mode: LadderMode,
     params: &EconomicParams,
 ) -> FeedbackResult {
-    // ONE per-block evaluation, returning everything the trace needs from
-    // it: the standard rung that drives the demand loop, and the SERVED
-    // economy rung (clamped up to the relay floor, §5.2) with the floor
-    // it was clamped against. The rejection race previously recomputed
-    // the economy rung from RAW `C`, which is not what any stateful mode
-    // serves — and it could not simply re-apply the band, because
-    // `HysteresisCq::step` and `RateLimitedCq::step` ADVANCE state and a
-    // second call per block would double-step them. Returning the served
-    // values from the single stepping site fixes both (PR #634 review,
-    // Bugbot + Copilot, same defect).
+    // ONE per-block evaluation: the served standard rung that drives the
+    // demand loop. `HysteresisCq::step` and `RateLimitedCq::step` ADVANCE
+    // state, so each block steps them exactly once, here.
     let step_at = |v_avg: u64,
                    ag: u64,
                    height: u64,
                    hyst: &mut HysteresisCq,
                    rl: &mut RateLimitedCq,
                    grid: &mut GridArm|
-     -> (u64, u64, u64) {
+     -> u64 {
         let base = base_block_reward(ag, params).expect("base along trace");
         let c = correction_factor(v_avg, ag, height, params).c_scaled;
         let c = match mode {
@@ -1625,9 +1567,7 @@ fn feedback_scenario(
             m if m.grid_period().is_some() => grid.step(height, c),
             _ => c,
         };
-        let ladder = served_ladder(base, median, c);
-        let floor_now = relay_floor(base, median, c);
-        (ladder[1].max(1), ladder[0].max(floor_now), floor_now)
+        served_ladder(base, median, c)[1].max(1)
     };
     // The reference fee is history-free and anchored at the trace's START
     // state — it defines the demand curve, so it must not move with the
@@ -1640,8 +1580,7 @@ fn feedback_scenario(
         &mut HysteresisCq { prev: 0 },
         &mut RateLimitedCq::new(1),
         &mut GridArm::inert(),
-    )
-    .0;
+    );
 
     let eps = eps_milli as f64 / 1000.0;
     let blocks: u64 = 30_000;
@@ -1657,8 +1596,6 @@ fn feedback_scenario(
     let mut fee_max = 0u64;
     let mut v_min = u64::MAX;
     let mut v_max = 0u64;
-    let mut served_economy: Vec<u64> = Vec::with_capacity(blocks as usize);
-    let mut floors: Vec<u64> = Vec::with_capacity(blocks as usize);
     let mut tail_fees = BTreeSet::new();
     let mut tail_transitions = 0u64;
     let mut tail_transitions_at_anchor = 0u64;
@@ -1679,13 +1616,7 @@ fn feedback_scenario(
     let mut ag = st.ag;
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
-        // FL-R18 rejection race: the served economy rung and its
-        // quote-time floor come from the SAME stepping call as the fee,
-        // so the margin is measured on the map the mode actually serves.
-        let (fee, economy, floor_now) =
-            step_at(v_avg, ag, st.height + t, &mut hyst, &mut rl, &mut grid);
-        served_economy.push(economy);
-        floors.push(floor_now);
+        let fee = step_at(v_avg, ag, st.height + t, &mut hyst, &mut rl, &mut grid);
         ag = advance_traced_state(ag, v_avg, params);
         // The registered §1.7 model has NO saturation (PR #614 review: a
         // hidden 10 000 clamp is a capacity bound the register never
@@ -1724,31 +1655,6 @@ fn feedback_scenario(
             last_tail_fee = Some(fee);
         }
     }
-    // FL-R18's refusal count, under the 2% buffer that round's admission
-    // had (`served * FL_R18_ACCEPT_NUM < floor * FL_R18_ACCEPT_DEN`).
-    // Not the slack production admits at: `RELAY_ADMISSION_SLACK_BP` is 0
-    // (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4, D6).
-    let mut race_refused = [0u64; 4];
-    for (i, &lag) in RACE_LAGS.iter().enumerate() {
-        let lag = lag as usize;
-        for h in 0..served_economy.len().saturating_sub(lag) {
-            if u128::from(served_economy[h]) * FL_R18_ACCEPT_NUM
-                < u128::from(floors[h + lag]) * FL_R18_ACCEPT_DEN
-            {
-                race_refused[i] += 1;
-            }
-        }
-    }
-
-    let race_margin_min_milli = served_economy
-        .iter()
-        .zip(floors.iter())
-        .map(|(&sv, &fl)| {
-            u64::try_from(u128::from(sv) * 1000 / u128::from(fl.max(1))).unwrap_or(u64::MAX)
-        })
-        .min()
-        .unwrap_or(0);
-
     // Late-half inter-transition gaps.
     let late: Vec<u64> = transition_blocks
         .iter()
@@ -1777,9 +1683,6 @@ fn feedback_scenario(
     let (grid_max_depth, grid_mean_depth, grid_fallbacks) = grid.depth_stats();
 
     FeedbackResult {
-        race_quotes: served_economy.len() as u64,
-        race_refused,
-        race_margin_min_milli,
         age_years: st.height / BLOCKS_PER_YEAR,
         median,
         elasticity_milli: eps_milli,
@@ -1821,11 +1724,6 @@ pub struct NSweepPoint {
     pub n: u64,
     pub oscillating_cells: u64,
     pub worst_tail_transitions: u64,
-    /// Cells whose served economy rung sits within 2% of the relay floor
-    /// (§4.5b's thin-margin measure) under this `N` — so the claim that a
-    /// dwell floor worsens the rejection race is MEASURED rather than
-    /// asserted (PR #634 review).
-    pub thin_margin_cells: u64,
 }
 
 /// §10 — one grid period `P`, for one grid arm, over the SAME feedback
@@ -1843,9 +1741,6 @@ pub struct GridSweepPoint {
     /// worst 24 transitions; the served un-banded map leaves 1 161.
     pub oscillating_cells: u64,
     pub worst_tail_transitions: u64,
-    /// §4.5b's thin-margin measure, carried so a grid's effect on the
-    /// rejection race is measured on the same axis FL-R18 used.
-    pub thin_margin_cells: u64,
     /// §10.12.3(a) per-cell diff against the RULED banded reference
     /// (`corrected-quantized-pow2-ceil-hysteresis`, same sweep): cells
     /// this arm leaves oscillating that the reference does not. C10-1's
@@ -2326,7 +2221,6 @@ pub fn report() -> FeeLadderReport {
     for n in [60u64, 120, 240, 480, 720] {
         let mut oscillating = 0u64;
         let mut worst_transitions = 0u64;
-        let mut thin_margin_cells = 0u64;
         for &(_age, st) in &states {
             let d_boundary = boundary_demand(st, &params);
             for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
@@ -2346,9 +2240,6 @@ pub fn report() -> FeeLadderReport {
                                 oscillating += 1;
                                 worst_transitions = worst_transitions.max(fb.tail_transitions);
                             }
-                            if fb.race_margin_min_milli < FL_R18_THIN_MARGIN_MILLI {
-                                thin_margin_cells += 1;
-                            }
                         }
                     }
                 }
@@ -2358,7 +2249,6 @@ pub fn report() -> FeeLadderReport {
             n,
             oscillating_cells: oscillating,
             worst_tail_transitions: worst_transitions,
-            thin_margin_cells,
         });
     }
 
@@ -2473,7 +2363,6 @@ pub fn report() -> FeeLadderReport {
     for (mode, cells) in swept {
         let mut oscillating = 0u64;
         let mut worst_transitions = 0u64;
-        let mut thin_margin_cells = 0u64;
         let mut extra_cells = 0u64;
         let mut extra_cells_worst_transitions = 0u64;
         let mut extra_cells_off_anchor_transitions = 0u64;
@@ -2522,16 +2411,12 @@ pub fn report() -> FeeLadderReport {
             } else if reference.contains(&key) {
                 recovered_cells += 1;
             }
-            if fb.race_margin_min_milli < FL_R18_THIN_MARGIN_MILLI {
-                thin_margin_cells += 1;
-            }
         }
         grid_sweep.push(GridSweepPoint {
             mode: mode.name(),
             period: mode.grid_period().unwrap_or(0),
             oscillating_cells: oscillating,
             worst_tail_transitions: worst_transitions,
-            thin_margin_cells,
             extra_cells,
             extra_cells_worst_transitions,
             extra_cells_off_anchor_transitions,
@@ -2725,8 +2610,8 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     for p in &r.n_sweep {
         let _ = writeln!(
             out,
-            "fee-ladder: FL-R18 n={} oscillating_cells={} worst_transitions={} thin_margin_cells={}",
-            p.n, p.oscillating_cells, p.worst_tail_transitions, p.thin_margin_cells
+            "fee-ladder: FL-R18 n={} oscillating_cells={} worst_transitions={}",
+            p.n, p.oscillating_cells, p.worst_tail_transitions
         );
     }
     // §10 C10-3 (cost) and FL-D8, aggregated over the dwell grid. Both
@@ -2859,12 +2744,11 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     for p in &r.grid_sweep {
         let _ = writeln!(
             out,
-            "fee-ladder: FL-R3 {} period={} oscillating_cells={} worst_transitions={} thin_margin_cells={} extra_vs_banded={} extra_worst_transitions={} extra_off_anchor_transitions={} recovered_vs_banded={}",
+            "fee-ladder: FL-R3 {} period={} oscillating_cells={} worst_transitions={} extra_vs_banded={} extra_worst_transitions={} extra_off_anchor_transitions={} recovered_vs_banded={}",
             p.mode,
             p.period,
             p.oscillating_cells,
             p.worst_tail_transitions,
-            p.thin_margin_cells,
             p.extra_cells,
             p.extra_cells_worst_transitions,
             p.extra_cells_off_anchor_transitions,
