@@ -37,13 +37,14 @@
 //!   code is library reuse; sharing a process, control session, data
 //!   directory, or onion key is the forbidden crossover). Every
 //!   instance-identifying input here is a parameter.
-//! - **No respawn loop.** One incarnation per daemon boot: the C++ consumer's
-//!   zone/proxy configuration is init-time static, so a respawned tor's
-//!   auto-bound SOCKS port could not be consumed anyway. Death is exposed
-//!   loudly ([`ephemeral::DaemonTorControl::is_alive`] /
+//! - **No respawn loop, until the supervisor lands.** One incarnation per
+//!   daemon boot today. `docs/design/TOR_SUPERVISOR.md` (`TSR-`, ratified
+//!   2026-10-15) replaces this crate's one-incarnation handle with a
+//!   supervisor that respawns, keeping the onion within a boot; the Rust dial
+//!   path already reads the SOCKS address at each dial. Until its increments
+//!   land, death is exposed loudly
+//!   ([`ephemeral::DaemonTorControl::is_alive`] /
 //!   [`ephemeral::DaemonTorControl::wait_death`]) rather than papered over.
-//!   Reopen when the consumer can take a dynamic SOCKS address (the PWD-E7
-//!   piece 3 wiring is the named re-evaluation site).
 
 pub mod blocking;
 mod data_dir;
