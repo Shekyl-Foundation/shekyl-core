@@ -448,7 +448,7 @@ pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Va
 
 fn default_health() -> DaemonHealth {
     DaemonHealth {
-        has_peers: true,
+        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         height: 0,
         synchronized: true,
     }

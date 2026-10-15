@@ -857,6 +857,28 @@ fn print_height_renders_the_remote_reply() {
     assert_eq!(text, "42");
 }
 
+/// **A daemon started offline prints the state** on every peer
+/// command (Rick, 2026-10-14): not an empty table, and not a request
+/// failure.
+#[test]
+fn an_offline_daemon_prints_the_state_on_every_peer_command() {
+    let off = r#"{"status":"offline"}"#;
+    let rpc_off =
+        serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": { "status": "offline" } })
+            .to_string();
+    for (args, reply) in [
+        (&["print_peer_list"][..], off.to_owned()),
+        (&["print_peer_list_stats"][..], off.to_owned()),
+        (&["print_connections"][..], rpc_off.clone()),
+        (&["sync_info"][..], rpc_off.clone()),
+    ] {
+        let address = one_shot(reply);
+        let (code, text) = run(args, Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{args:?}: {text}");
+        assert_eq!(text, "P2P: offline", "{args:?}");
+    }
+}
+
 #[test]
 fn non_ok_status_is_a_request_failure_with_the_status_as_reason() {
     let address = one_shot(typed_reply(&GetHeightResponse {
@@ -943,11 +965,13 @@ fn unknown_command_and_null_arguments_refuse() {
 // ── RK-5a: the ported format helpers ───────────────────────────────────
 //
 // Every expected string below was **printed by the C++ it replaces**, by
-// linking `get_human_readable_timespan`, `get_human_readable_bytes` and
-// `get_time_interval_string` into the unit-test binary and dumping them
-// for these inputs. They are transcriptions of an oracle's output, not a
-// reading of its source — which is the difference between a test that
-// pins the format and one that repeats whatever the port got wrong.
+// linking `get_human_readable_timespan` and `get_human_readable_bytes`
+// into the unit-test binary and dumping them for these inputs. They are
+// transcriptions of an oracle's output, not a reading of its source — which
+// is the difference between a test that pins the format and one that
+// repeats whatever the port got wrong. (The dotted `d.h.m.s` interval of
+// `get_time_interval_string` went with `print_pl`'s last-seen column,
+// 2026-10-13: the Rust peer lists carry no clock.)
 
 #[test]
 fn a_timespan_reads_the_way_the_daemon_has_always_printed_it() {
@@ -997,44 +1021,6 @@ fn bytes_read_in_base_two_units() {
     }
 }
 
-#[test]
-fn a_time_interval_is_the_dotted_dhms_form() {
-    for (seconds, expected) in [
-        (0u64, "d0.h0.m0.s0"),
-        (1, "d0.h0.m0.s1"),
-        (59, "d0.h0.m0.s59"),
-        (61, "d0.h0.m1.s1"),
-        (3661, "d0.h1.m1.s1"),
-        (90061, "d1.h1.m1.s1"),
-        (1_000_000, "d11.h13.m46.s40"),
-    ] {
-        assert_eq!(time_interval(seconds), expected, "{seconds}s");
-    }
-}
-
-/// A peer never seen reads "never", not an interval measured from 1970.
-#[test]
-fn a_peer_never_seen_has_no_interval() {
-    let peer = shekyl_rpc_types::Peer {
-        host: "10.32.0.7".to_owned(),
-        ip: 0x0700_200a,
-        port: 18080,
-        last_seen: 0,
-    };
-    let line = render_peer("white", &peer, 1_750_000_000);
-    assert!(line.contains("never"), "{line}");
-    assert!(line.contains("10.32.0.7:18080"), "{line}");
-
-    let seen = shekyl_rpc_types::Peer {
-        last_seen: 1_750_000_000 - 90061,
-        ..peer
-    };
-    assert!(
-        render_peer("gray", &seen, 1_750_000_000).contains("d1.h1.m1.s1"),
-        "a seen peer carries its interval"
-    );
-}
-
 /// The three address arms, rendered.
 ///
 /// The tor arm is the one the C++ got wrong: its `host` is the whole
@@ -1046,9 +1032,8 @@ fn a_peer_address_gains_a_port_only_when_it_has_one() {
         host: host.to_owned(),
         ip: 0,
         port,
-        last_seen: 1_750_000_000,
     };
-    let line = |p: &shekyl_rpc_types::Peer| render_peer("white", p, 1_750_000_000);
+    let line = |p: &shekyl_rpc_types::Peer| render_peer("white", p);
 
     assert!(line(&peer("10.32.0.7", 18080)).contains("10.32.0.7:18080"));
     assert!(line(&peer("2001:db8::1", 18081)).contains("2001:db8::1:18081"));
@@ -1074,14 +1059,12 @@ fn address_types_have_their_own_names() {
     assert_eq!(address_type_name(200), "invalid");
 }
 
-/// The capacities are a parameter now, so this can be tested against the
-/// values the daemon actually holds. Before the hoist it read
-/// `shekyl_rpc_peerlist_limits` directly, whose unit-test link stub
-/// answers **0** — so a test here would have asserted `0/0` and agreed
-/// with a number no daemon reports, which is precisely what `ffi.rs`'s
-/// comment prohibited and nothing enforced.
+/// The capacities are a parameter, so this is tested against the values
+/// the daemon holds: `shekyl-peerlist`'s caps, which the caller passes.
 #[test]
 fn the_peerlist_stats_report_real_capacities() {
+    assert_eq!(shekyl_peerlist::WHITE_CAP, 1000);
+    assert_eq!(shekyl_peerlist::GRAY_CAP, 5000);
     let out = render_peer_list_stats(7, 250, 1000, 5000);
     assert!(out.contains("White list size: 7/1000 (0.7%)"), "{out}");
     assert!(out.contains("Gray list size: 250/5000 (5%)"), "{out}");
@@ -1191,9 +1174,8 @@ fn info_reply(height: u64) -> String {
             target_height: shekyl_rpc_types::Nullable::NULL,
             synchronized: true,
             busy_syncing: false,
-            offline: false,
             following_degraded: false,
-            has_peers: true,
+            p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         },
         identity: InfoIdentity {
             protocol_version: 3,
@@ -1220,19 +1202,21 @@ fn info_reply(height: u64) -> String {
             free_space: 1 << 40,
             database_size: 1 << 30,
             version: "3.1.0-test".to_owned(),
-            outgoing_connections_count: 8,
-            incoming_connections_count: 3,
+            connections: shekyl_rpc_types::StatusConnections::Running {
+                outgoing: 8,
+                incoming: 3,
+            },
             alt_blocks_count: 0,
             rpc_connections_count: 1,
         }),
-        peers: Hidden::Shown(InfoPeers {
+        peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(InfoPeers {
             public_incoming_socket_count: 3,
             public_outgoing_socket_count: 8,
             tor_incoming_socket_count: 0,
             tor_outgoing_socket_count: 0,
             white_peerlist_size: 10,
             grey_peerlist_size: 20,
-        }),
+        })),
         host: Hidden::Shown(shekyl_rpc_types::InfoHost {
             tx_pool_unbroadcast_count: 0,
         }),
@@ -2049,6 +2033,37 @@ fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
         "no counts and no uptime clause: {out}"
     );
     assert!(!out.contains("(out)") && !out.contains("uptime"), "{out}");
+}
+
+/// **An offline daemon that withholds Status still says it is offline**
+/// (Copilot on #1056): the state is Health, which a restricted daemon
+/// discloses, and the counts it withholds are not the state. Not
+/// "connections not disclosed", and no uptime clause.
+#[test]
+fn an_offline_daemon_that_withholds_status_prints_the_state() {
+    let mut info: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_offline_v1.json"
+    ))
+    .unwrap();
+    let members = info.as_object_mut().unwrap();
+    assert_eq!(members["p2p"], "offline", "the vector is the offline one");
+    for key in STATUS_PART_KEYS {
+        members.remove(*key);
+    }
+    let address = route_server(vec![
+        ("/get_info", info.to_string()),
+        ("/mining_status", mining_reply(false, 0, false)),
+    ]);
+    let (code, out) = run(&["status"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(
+        out.trim_end().ends_with("P2P: offline"),
+        "the state, and no uptime clause: {out}"
+    );
+    assert!(
+        !out.contains("not disclosed") && !out.contains("uptime"),
+        "{out}"
+    );
 }
 
 /// A daemon that does show Status and reports no connections prints the

@@ -91,9 +91,13 @@ public:
     return top;
   }
   virtual void pop_block(cryptonote::block &blk, std::vector<cryptonote::transaction> &txs) override { blocks.pop_back(); }
+  // A batch is the blocks added since its start; an abort discards them.
+  virtual bool batch_start(uint64_t batch_num_blocks=0, uint64_t batch_bytes=0) override { batch_from = blocks.size(); return true; }
+  virtual void batch_abort() override { blocks.resize(batch_from); }
 
 private:
   std::vector<block_t> blocks;
+  size_t batch_from = 0;
 };
 
 static uint32_t lcg_seed = 0;
@@ -196,4 +200,88 @@ TEST(long_term_block_weight, a_block_contribution_is_bounded_to_the_17_10_band)
   EXPECT_EQ(zone, bc->get_next_long_term_block_weight(zone));
   EXPECT_EQ(zone * 10 / 17, bc->get_next_long_term_block_weight(zone / 10));
   EXPECT_EQ(zone + zone * 7 / 10, bc->get_next_long_term_block_weight(zone * 10));
+}
+
+// The Rust dialer's handshake carries the tip the core last published. The
+// publish sits in update_next_cumulative_weight_limit, which init, a block
+// added to the main chain, a pop, a rollback and a chain switch each call
+// (blockchain.cpp: the six call sites). This pins the publish at that
+// function, through the two of those entries this fixture can run: init,
+// and pop_blocks; a block added is the fixture's push plus the recompute
+// those callers make. The chain switch is pinned by reading, not run
+// (Rick, 2026-10-13): switch_to_alternative_blockchain reaches
+// update_next_cumulative_weight_limit at blockchain.cpp:1070, and
+// rollback_blockchain_switching at :1003, so both publish through the one
+// function this test exercises; no reorg fixture is needed. The height
+// published is the block count, as get_payload_sync_data reports it, and
+// the id is the top block's.
+TEST(long_term_block_weight, every_tip_change_publishes_the_tip_the_dialer_announces)
+{
+  PREFIX();
+  const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+
+  const auto published = [](uint64_t& height, crypto::hash& top) {
+    uint64_t lo = 0, hi = 0;
+    return shekyl_core_published_tip(&height, &lo, &hi, reinterpret_cast<std::uint8_t*>(top.data)) == 1;
+  };
+  uint64_t height = 0;
+  crypto::hash top{};
+
+  // init: the genesis is the tip.
+  ASSERT_TRUE(published(height, top));
+  EXPECT_EQ(db->height(), height);
+  EXPECT_EQ(db->top_block_hash(), top);
+
+  // add: three blocks on the main chain, then the recompute every add makes.
+  push_blocks(db, 3, zone, zone);
+  ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
+  ASSERT_TRUE(published(height, top));
+  EXPECT_EQ(db->height(), height);
+  EXPECT_EQ(db->top_block_hash(), top);
+
+  // pop: through the entry a reorg and a rollback use.
+  ASSERT_TRUE(bc->pop_blocks(1));
+  ASSERT_TRUE(published(height, top));
+  EXPECT_EQ(db->height(), height);
+  EXPECT_EQ(db->top_block_hash(), top);
+}
+
+// An aborted batch is a tip change too (Copilot on #1056). The blocks a
+// batch connected publish their tip as each one is added; when a later
+// block's add fails, cleanup_handle_incoming_blocks aborts the batch, and
+// the tip the dialer announces must be the committed chain's again, not
+// the discarded blocks'.
+TEST(long_term_block_weight, an_aborted_batch_publishes_the_committed_tip_again)
+{
+  PREFIX();
+  const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+
+  const auto published = [](uint64_t& height, crypto::hash& top) {
+    uint64_t lo = 0, hi = 0;
+    return shekyl_core_published_tip(&height, &lo, &hi, reinterpret_cast<std::uint8_t*>(top.data)) == 1;
+  };
+  uint64_t height = 0;
+  crypto::hash top{};
+
+  push_blocks(db, 2, zone, zone);
+  ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
+  const uint64_t committed_height = db->height();
+  const crypto::hash committed_top = db->top_block_hash();
+
+  // Two blocks connect inside the batch, each publishing as it is added.
+  bap.txpool.lock();
+  ASSERT_TRUE(db->batch_start());
+  bc->m_batch_success = true;
+  push_blocks(db, 2, zone, zone);
+  ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
+  ASSERT_TRUE(published(height, top));
+  ASSERT_EQ(committed_height + 2, height);
+
+  // A later block's add fails, and the batch is aborted.
+  bc->m_batch_success = false;
+  ASSERT_TRUE(bc->cleanup_handle_incoming_blocks());
+  ASSERT_EQ(committed_height, db->height());
+  ASSERT_TRUE(published(height, top));
+  EXPECT_EQ(committed_height, height);
+  EXPECT_EQ(committed_top, top);
 }

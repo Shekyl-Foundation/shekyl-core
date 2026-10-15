@@ -51,17 +51,15 @@ impl SupportFlags {
 /// `nodetool::basic_node_data` (`p2p_protocol_defs.h`).
 ///
 /// There is deliberately no node identifier here (the PWD-I1 amendment,
-/// `SHEKYL_P2P_PROTOCOL.md`): the handshake announces WHERE — an address
-/// that absorbs the old `my_port` — never WHO.
+/// `SHEKYL_P2P_PROTOCOL.md`), and no address either (ruled 2026-10-09):
+/// the handshake carries no address field on any connector. A node's own
+/// dialable address reaches peers only as one uniform member of its
+/// disclosure sample. A peer that still sends `address` is decoded with
+/// the key ignored; nothing is ever emitted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BasicNodeData {
     /// `network_id` POD-as-blob (`boost::uuids::uuid`, 16 bytes).
     pub network_id: [u8; 16],
-    /// The announced address: port-only on the public zone (host zeroed —
-    /// the receiver never reads it, combining the port with the host it
-    /// observed on the socket), the zone self-address on serving anonymity
-    /// zones, the zone's unknown sentinel for dialer-only nodes.
-    pub address: NetworkAddress,
     /// `KV_SERIALIZE_OPT` default 0.
     pub support_flags: SupportFlags,
 }
@@ -70,7 +68,6 @@ impl PortableMap for BasicNodeData {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
         section.insert("network_id", Value::Bytes(self.network_id.to_vec()));
-        section.insert("address", Value::Object(self.address.to_section()?));
         get::insert_opt_u32(&mut section, "support_flags", self.support_flags.bits(), 0);
         Ok(section)
     }
@@ -78,7 +75,6 @@ impl PortableMap for BasicNodeData {
     fn from_section(section: &Section) -> Result<Self, Error> {
         Ok(Self {
             network_id: get::blob(section, "network_id")?,
-            address: NetworkAddress::from_section(get::object(section, "address")?)?,
             support_flags: SupportFlags::from_bits(get::opt_u32(section, "support_flags", 0)?),
         })
     }
@@ -86,9 +82,9 @@ impl PortableMap for BasicNodeData {
 
 /// `cryptonote::CORE_SYNC_DATA`.
 ///
-/// Carries no `pruning_seed`: the stripe engine is deleted (`PDM-Q7`), and
+/// Carries no stripe seed: the stripe engine is deleted (`PDM-Q7`), and
 /// the field was a self-asserted, durable, address-keyed attribute on the
-/// wire — the shape `PWD-I1` forbids. A peer that still sends the key is
+/// wire — the shape `PWD-I1` forbids. An unknown key a peer sends is
 /// decoded with the key ignored; nothing is ever emitted.
 ///
 /// Carries no `top_version` either: the block version is the constant 1, so
@@ -141,29 +137,27 @@ impl PortableMap for CoreSyncData {
 
 /// `nodetool::peerlist_entry`.
 ///
-/// The address and a freshness stamp, nothing else: `peer_id` went with
-/// `PWD-I1`, `pruning_seed` with `PDM-Q7` (the stripe engine is deleted).
-/// A gossiped entry carrying either key decodes with the key ignored.
+/// The address, nothing else: `peer_id` went with `PWD-I1`, the stripe
+/// seed with `PDM-Q7` (the stripe engine is deleted), and `last_seen` with
+/// PR-3 (Rick, 2026-10-13): a field always sent as 0 and ignored on
+/// receipt is a sentinel and a peer-controlled slot. A gossiped entry
+/// carrying an unknown key decodes with the key ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerlistEntry {
     /// `network_address` union.
     pub adr: NetworkAddress,
-    /// `KV_SERIALIZE_OPT` default 0.
-    pub last_seen: i64,
 }
 
 impl PortableMap for PeerlistEntry {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
         section.insert("adr", Value::Object(self.adr.to_section()?));
-        get::insert_opt_i64(&mut section, "last_seen", self.last_seen, 0);
         Ok(section)
     }
 
     fn from_section(section: &Section) -> Result<Self, Error> {
         Ok(Self {
             adr: NetworkAddress::from_section(get::object(section, "adr")?)?,
-            last_seen: get::opt_i64(section, "last_seen", 0)?,
         })
     }
 }

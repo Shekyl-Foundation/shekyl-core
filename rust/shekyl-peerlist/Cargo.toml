@@ -23,10 +23,14 @@ conformance = []
 
 [dependencies]
 shekyl-net-address = { path = "../shekyl-net-address" }
+# The disclosure count, shared with the frame layer.
+shekyl-peer-bounds = { path = "../shekyl-peer-bounds" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+# The p2p-disclose-early flag's end is logged where it is decided (rule 82).
+tracing = "0.1"
 
 [dev-dependencies]
 shekyl-peerlist = { path = ".", features = ["conformance"] }

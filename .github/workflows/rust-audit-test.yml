@@ -189,6 +189,14 @@ jobs:
         run: |
           python3 scripts/ci/check_test_only_features.py --selftest
           python3 scripts/ci/check_test_only_features.py
+      # Same placement reason: reads `cargo metadata`. The measurement build's
+      # lifted Tor spans (Rick, 2026-10-14) reach a binary only through the
+      # SHEKYL_MEASUREMENT_SPANS CMake option, default OFF; no Cargo edge and
+      # no release path may turn them on.
+      - name: the measurement spans never reach a release build
+        run: |
+          python3 scripts/ci/check_measurement_spans.py --selftest
+          python3 scripts/ci/check_measurement_spans.py
       # Same placement reason as the step above: this reads `cargo tree`.
       # shekyl-chain-rules (DRS-E6) must reach neither `redb` nor
       # `shekyl-chain-store` anywhere in its resolved graph, normal or dev

@@ -127,6 +127,8 @@ public:
   size_t get_connections_count();
   size_t get_out_connections_count();
   size_t get_in_connections_count();
+  /// The installed commands handler, for the seam's post adapter.
+  levin_commands_handler<t_connection_context>* commands_handler() const { return m_pcommands_handler; }
   void set_handler(levin_commands_handler<t_connection_context>* handler, void (*destroy)(levin_commands_handler<t_connection_context>*) = NULL);
 
   async_protocol_handler_config():m_pcommands_handler(NULL), m_pcommands_handler_destroy(NULL), m_initial_max_packet_size(LEVIN_INITIAL_MAX_PACKET_SIZE), m_max_packet_size(LEVIN_DEFAULT_MAX_PACKET_SIZE), m_invoke_timeout(LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED)

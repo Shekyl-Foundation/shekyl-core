@@ -15,16 +15,15 @@
 //! thread is the harness shape until then. The ceiling is the one the
 //! caller already resolved. This module does not resolve another.
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
-    connector_from_index, deadline_after, direction_from_index, drive_inbound, BanLeft, CloseCause,
-    CloseKind, ConnectorId, Direction, Endpoint, Hub, Ipv4Subnet, ListedBan, Post, SocketId,
-    TOR_HOST_MAX,
+    connector_from_index, direction_from_index, drive_inbound, CloseCause, CloseKind, ConnectorId,
+    Direction, Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
 };
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 
@@ -44,6 +43,8 @@ pub(crate) const POST_ESTABLISHED: u32 = 1;
 const POST_DELIVER: u32 = 2;
 /// `closed`.
 const POST_CLOSED: u32 = 3;
+/// The outbound handshake's result: `bytes` is one [`ShekylSeamHandshakeResult`].
+pub(crate) const POST_HANDSHAKE: u32 = 4;
 
 /// Clearnet. Matches [`ConnectorId::Clearnet`].
 pub const SHEKYL_CONNECTOR_CLEARNET: u32 = 0;
@@ -68,7 +69,7 @@ const _: () = {
     assert!(Direction::Outbound.index() == SHEKYL_DIRECTION_OUTBOUND as usize);
     assert!(ADDR_IPV4 == 1 && ADDR_IPV6 == 2 && ADDR_TOR == 4);
     assert!(TOR_HOST_MAX == 62);
-    assert!(POST_ESTABLISHED == 1 && POST_DELIVER == 2 && POST_CLOSED == 3);
+    assert!(POST_ESTABLISHED == 1 && POST_DELIVER == 2 && POST_CLOSED == 3 && POST_HANDSHAKE == 4);
 };
 
 /// One peer address, encoded for the adapter.
@@ -83,6 +84,45 @@ pub struct ShekylSeamAddress {
     pub len: u16,
     pub bytes: [u8; TOR_HOST_MAX],
 }
+
+/// What the outbound handshake's result post carries: the strand reads
+/// these fields and accepts or refuses the sync payload in that turn.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ShekylSeamHandshakeResult {
+    /// 1 for a kept dial, 0 for a confirm-and-close dial.
+    pub keep: u8,
+    pub _pad: [u8; 3],
+    /// The peer's support flags, zero included.
+    pub support_flags: u32,
+    /// The peer's `CORE_SYNC_DATA`.
+    pub current_height: u64,
+    pub cumulative_difficulty: u64,
+    pub cumulative_difficulty_top64: u64,
+    pub top_id: [u8; 32],
+}
+
+impl ShekylSeamHandshakeResult {
+    /// The struct's bytes in its C layout, written field by field so the
+    /// post carries no padding read from the stack.
+    fn to_bytes(self) -> [u8; 64] {
+        let mut out = [0u8; 64];
+        out[0] = self.keep;
+        out[4..8].copy_from_slice(&self.support_flags.to_ne_bytes());
+        out[8..16].copy_from_slice(&self.current_height.to_ne_bytes());
+        out[16..24].copy_from_slice(&self.cumulative_difficulty.to_ne_bytes());
+        out[24..32].copy_from_slice(&self.cumulative_difficulty_top64.to_ne_bytes());
+        out[32..64].copy_from_slice(&self.top_id);
+        out
+    }
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<ShekylSeamHandshakeResult>() == 64);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, support_flags) == 4);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, current_height) == 8);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, top_id) == 32);
+};
 
 /// What `established` carries upward.
 #[repr(C)]
@@ -162,9 +202,11 @@ pub(crate) fn process_sockets() -> shekyl_seam::Sockets {
     TABLE.get_or_init(shekyl_seam::Sockets::new).clone()
 }
 
-/// The clock ban deadlines and the bound hub share. A ban written before
-/// the seam is bound is still read against this origin after bind.
-fn process_clock() -> Arc<MonotonicClock> {
+/// The process's one clock (Rick, 2026-10-14): ban deadlines, the bound
+/// hub, the zone host's engine and the link gate all read this origin. A
+/// ban written before the seam is bound is still read against it after
+/// bind, and an engine `now` compares with a ban without an offset.
+pub(crate) fn process_clock() -> Arc<MonotonicClock> {
     static CLOCK: OnceLock<Arc<MonotonicClock>> = OnceLock::new();
     Arc::clone(CLOCK.get_or_init(|| Arc::new(MonotonicClock::new())))
 }
@@ -180,6 +222,7 @@ fn ban_now() -> Tick {
 /// only after that returns.
 fn store(next: Option<Hub>) {
     if let Some(current) = hub() {
+        crate::dialer_ffi::stop();
         current.shutdown();
     }
     *STATE.lock().expect("seam state") = next;
@@ -249,12 +292,15 @@ pub unsafe extern "C" fn shekyl_seam_bind(
         post,
     };
     let clock: Arc<dyn Clock + Send + Sync> = process_clock();
-    store(Some(Hub::new(
+    let hub = Hub::new(
         process_sockets(),
         ceiling,
         Arc::new(move |item: Post| post_one(&bound, item)),
         clock,
-    )));
+    );
+    // `store` stops the previous hub's dialer; this hub's is built after.
+    store(Some(hub.clone()));
+    crate::dialer_ffi::ensure_dialer(&hub);
     0
 }
 
@@ -291,11 +337,15 @@ pub extern "C" fn shekyl_seam_install_loopback() -> i32 {
     0
 }
 
-/// Dial through the installed dialer and wait until the handler is armed.
+/// Dial through the installed dialer and adopt the channel. The harness
+/// and the unit tests open sessions here; the daemon's dialer is
+/// `shekyl-dialer`, which runs the handshake between the two steps.
 ///
-/// `id` is zero and `cause_kind` is the D12 cause when the dial or the arm
-/// fails. The inbound pump runs on a thread this call starts; [`shekyl_seam_reap`]
-/// joins it.
+/// Returns as soon as the row exists, without waiting for the strand to
+/// arm its handler (the C++ dial path that needed the wait is deleted,
+/// 2026-10-13). `id` is zero and `cause_kind` is the D12 cause when the
+/// dial fails. The inbound pump runs on a thread this call starts;
+/// [`shekyl_seam_reap`] joins it.
 ///
 /// # Safety
 /// `addr` is readable.
@@ -329,18 +379,11 @@ pub unsafe extern "C" fn shekyl_seam_open(
     let hub_pump = hub.clone();
     let pump = thread::spawn(move || drive_inbound(&hub_pump, id, session));
     hub.track_pump(id, pump);
-    if hub.await_armed(id) {
-        ShekylSeamOpenResult {
-            id: id.get(),
-            cause_kind: 0,
-            _pad: 0,
-            reply_code: 0,
-        }
-    } else {
-        refused(
-            hub.cause(id)
-                .unwrap_or_else(|| CloseCause::new(CloseKind::LocalClose)),
-        )
+    ShekylSeamOpenResult {
+        id: id.get(),
+        cause_kind: 0,
+        _pad: 0,
+        reply_code: 0,
     }
 }
 
@@ -544,247 +587,10 @@ pub extern "C" fn shekyl_seam_inbound_held() -> u64 {
     hub().map(|hub| hub.inbound_held()).unwrap_or(0)
 }
 
-/// One ban, as `getbans` reads it. `text` is a host or `address/prefix`.
-/// `permanent` is 1 when the ban has no deadline. `remaining_ns` is
-/// time left on a deadline, and 0 when the ban is permanent.
-#[repr(C)]
-pub struct ShekylBanView {
-    /// 1 is a host, 2 is an IPv4 subnet.
-    pub kind: u8,
-    /// 1 when the ban has no deadline.
-    pub permanent: u8,
-    pub _pad: [u8; 6],
-    /// NUL-terminated. Unused bytes are zero.
-    pub text: [u8; 80],
-    /// Nanoseconds until the deadline. Zero when `permanent` is 1.
-    pub remaining_ns: u64,
-}
+#[path = "seam_ban_ffi.rs"]
+mod bans;
 
-const _: () = assert!(std::mem::size_of::<ShekylBanView>() == 96);
-
-const BAN_KIND_HOST: u8 = 1;
-const BAN_KIND_SUBNET: u8 = 2;
-
-fn c_text(text: *const c_char) -> Option<String> {
-    if text.is_null() {
-        return None;
-    }
-    let raw = unsafe { CStr::from_ptr(text) };
-    raw.to_str().ok().map(str::to_owned)
-}
-
-fn parse_subnet(text: &str) -> Option<Ipv4Subnet> {
-    let (addr, prefix) = text.split_once('/')?;
-    let addr: Ipv4Addr = addr.parse().ok()?;
-    let prefix: u8 = prefix.parse().ok()?;
-    Ipv4Subnet::new(addr, prefix)
-}
-
-fn fill_text(text: &str) -> Option<[u8; 80]> {
-    let bytes = text.as_bytes();
-    if bytes.len() >= 80 {
-        return None;
-    }
-    let mut out = [0u8; 80];
-    out[..bytes.len()].copy_from_slice(bytes);
-    Some(out)
-}
-
-/// Ban `text` for `duration_ns` from the process clock.
-///
-/// `subnet` nonzero reads `text` as `address/prefix`. Returns 0 when the
-/// duration fits, -1 when it does not, and -2 when `text` is not that
-/// address. A duration that is already covered by a later deadline is
-/// still 0: the list does not shorten.
-///
-/// When a hub is bound, the ban closes the sockets the list drops.
-///
-/// # Safety
-/// `text` is a NUL-terminated string.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_ban_for(text: *const c_char, subnet: i32, duration_ns: u64) -> i32 {
-    let Some(text) = c_text(text) else {
-        return -2;
-    };
-    let now = ban_now();
-    let Some(until) = deadline_after(now, duration_ns) else {
-        return -1;
-    };
-    if subnet != 0 {
-        let Some(prefix) = parse_subnet(&text) else {
-            return -2;
-        };
-        if let Some(hub) = hub() {
-            let _closed = hub.ban_subnet(prefix, until);
-        } else {
-            let _closed = process_sockets().ban_subnet(prefix, until, now);
-        }
-    } else {
-        let Some(host) = text.parse::<IpAddr>().ok() else {
-            return -2;
-        };
-        if let Some(hub) = hub() {
-            let _closed = hub.ban_host(host, until);
-        } else {
-            let _closed = process_sockets().ban_host(host, until, now);
-        }
-    }
-    0
-}
-
-/// Ban `text` until it is lifted. No deadline is stored.
-///
-/// `subnet` nonzero reads `text` as `address/prefix`. Returns 0 when the
-/// ban is stored or was already permanent, and -2 when `text` is not that
-/// address. A bound hub closes the sockets the new ban drops.
-///
-/// # Safety
-/// `text` is a NUL-terminated string.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_ban_permanent(text: *const c_char, subnet: i32) -> i32 {
-    let Some(text) = c_text(text) else {
-        return -2;
-    };
-    if subnet != 0 {
-        let Some(prefix) = parse_subnet(&text) else {
-            return -2;
-        };
-        if let Some(hub) = hub() {
-            let _closed = hub.ban_subnet_permanent(prefix);
-        } else {
-            let _closed = process_sockets().ban_subnet_permanent(prefix);
-        }
-    } else {
-        let Some(host) = text.parse::<IpAddr>().ok() else {
-            return -2;
-        };
-        if let Some(hub) = hub() {
-            let _closed = hub.ban_host_permanent(host);
-        } else {
-            let _closed = process_sockets().ban_host_permanent(host);
-        }
-    }
-    0
-}
-
-/// Lift a host or subnet ban. Returns 0 when an entry was removed, -1
-/// when there was none, and -2 when `text` is not that address.
-/// Open sockets stay open.
-///
-/// # Safety
-/// `text` is a NUL-terminated string.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_ban_lift(text: *const c_char, subnet: i32) -> i32 {
-    let Some(text) = c_text(text) else {
-        return -2;
-    };
-    let removed = if subnet != 0 {
-        let Some(prefix) = parse_subnet(&text) else {
-            return -2;
-        };
-        process_sockets().lift_subnet(prefix)
-    } else {
-        let Some(host) = text.parse::<IpAddr>().ok() else {
-            return -2;
-        };
-        process_sockets().lift_host(host)
-    };
-    if removed {
-        0
-    } else {
-        -1
-    }
-}
-
-/// Time left on the longest ban that covers `host`. Returns 1 and writes
-/// `out` for a deadline, 2 for a permanent ban (`out` is left unchanged),
-/// 0 when the host is not banned, and -2 when `host` is not an address.
-///
-/// # Safety
-/// `host` is a NUL-terminated string. `out` is writable when non-null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_ban_remaining_ns(host: *const c_char, out: *mut u64) -> i32 {
-    let Some(host) = c_text(host) else {
-        return -2;
-    };
-    let Some(host) = host.parse::<IpAddr>().ok() else {
-        return -2;
-    };
-    match process_sockets().remaining(host, ban_now()) {
-        Some(BanLeft::Remaining { nanos }) => {
-            if !out.is_null() {
-                unsafe { *out = nanos };
-            }
-            1
-        }
-        Some(BanLeft::Permanent) => 2,
-        None => 0,
-    }
-}
-
-/// Copy bans still in force. `*count` is how many there are. When `cap`
-/// is smaller, the buffer receives the first `cap` and the return is -1.
-/// A null `out` with `cap` 0 only writes the count.
-///
-/// # Safety
-/// `out` is writable for `cap` entries when non-null. `count` is writable.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_bans_copy(
-    out: *mut ShekylBanView,
-    cap: usize,
-    count: *mut usize,
-) -> i32 {
-    if count.is_null() {
-        return -1;
-    }
-    let rows = process_sockets().listed(ban_now());
-    let views: Vec<ShekylBanView> = rows.iter().filter_map(ban_view).collect();
-    unsafe { *count = views.len() };
-    if out.is_null() {
-        return if cap == 0 { 0 } else { -1 };
-    }
-    let n = cap.min(views.len());
-    unsafe {
-        std::ptr::copy_nonoverlapping(views.as_ptr(), out, n);
-    }
-    if n == views.len() {
-        0
-    } else {
-        -1
-    }
-}
-
-/// Drop every ban. Open sockets stay open.
-///
-/// The list is process-global and outlives one `node_server`. The daemon
-/// lifts entries one at a time. A test process calls this so a fresh
-/// server is not born inside the previous server's bans.
-#[no_mangle]
-pub extern "C" fn shekyl_bans_clear() {
-    process_sockets().clear_bans();
-}
-
-fn ban_view(row: &ListedBan) -> Option<ShekylBanView> {
-    let (kind, text, left) = match row {
-        ListedBan::Host { host, left } => (BAN_KIND_HOST, host.to_string(), *left),
-        ListedBan::Subnet { subnet, left } => (
-            BAN_KIND_SUBNET,
-            format!("{}/{}", subnet.network(), subnet.prefix_len()),
-            *left,
-        ),
-    };
-    let (permanent, remaining_ns) = match left {
-        BanLeft::Permanent => (1, 0),
-        BanLeft::Remaining { nanos } => (0, nanos),
-    };
-    Some(ShekylBanView {
-        kind,
-        permanent,
-        _pad: [0; 6],
-        text: fill_text(&text)?,
-        remaining_ns,
-    })
-}
+pub use bans::ShekylBanView;
 
 fn endpoint_from_c(addr: &ShekylSeamAddress, inbound: bool) -> Option<Endpoint> {
     let _ = connector_from_index(u32::from(addr.connector))?;
@@ -933,11 +739,44 @@ fn post_one(bound: &Bound, item: Post) {
                 );
             }
         }
+        Post::HandshakeResult {
+            id,
+            connector,
+            keep,
+            support_flags,
+            sync,
+        } => {
+            let observed = routing_c(connector);
+            let result = ShekylSeamHandshakeResult {
+                keep: u8::from(keep),
+                _pad: [0; 3],
+                support_flags,
+                current_height: sync.current_height,
+                cumulative_difficulty: sync.cumulative_difficulty,
+                cumulative_difficulty_top64: sync.cumulative_difficulty_top64,
+                top_id: sync.top_id,
+            };
+            let bytes = result.to_bytes();
+            unsafe {
+                (bound.post)(
+                    bound.ctx.get(),
+                    id.get(),
+                    POST_HANDSHAKE,
+                    &raw const observed,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    std::ptr::null(),
+                );
+            }
+        }
         Post::Closed {
             id,
             connector,
             cause,
         } => {
+            // The dialer hears every close: a kept session leaves its
+            // count, a dial awaiting its verdict fails.
+            crate::dialer_ffi::on_closed(id);
             let observed = routing_c(connector);
             unsafe {
                 (bound.post)(

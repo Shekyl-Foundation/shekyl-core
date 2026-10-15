@@ -218,6 +218,9 @@ pub(crate) enum AlarmReason {
     /// impossible and no wallet action can fix it — the alarm rung
     /// carries the decision to the operator (§2.6 invariant 2).
     DaemonPeerless,
+    /// Past horizon and the daemon was started offline (`--offline`): it
+    /// relays nothing by configuration, which only the operator can change.
+    DaemonOffline,
 }
 
 /// One kernel decision for one held tx. Rung 3 (rebuild) is
@@ -257,8 +260,16 @@ pub(crate) fn escape_ladder_step(
     //
     // Both facts are the fields of [`DaemonHealth`]. The ladder does not
     // keep a second reading of them.
-    if !health.has_peers {
-        return WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless);
+    // An offline daemon relays nothing by configuration: its own alarm,
+    // not "peerless", which is a running node that has found nobody.
+    match health.p2p {
+        shekyl_rpc_types::HealthP2p::Offline => {
+            return WatchdogStep::OperatorAlarm(AlarmReason::DaemonOffline);
+        }
+        shekyl_rpc_types::HealthP2p::Running { has_peers: false } => {
+            return WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless);
+        }
+        shekyl_rpc_types::HealthP2p::Running { has_peers: true } => {}
     }
     if !health.synchronized {
         return WatchdogStep::Wait(WaitReason::DaemonSyncing);

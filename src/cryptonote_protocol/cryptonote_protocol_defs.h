@@ -175,9 +175,9 @@ namespace cryptonote
     uint64_t cumulative_difficulty;
     uint64_t cumulative_difficulty_top64;
     crypto::hash  top_id;
-    // No pruning_seed (PDM-Q7, 2026-09-21): the stripe engine is deleted and
-    // the handshake carries no self-asserted storage posture. A peer that
-    // still sends the key is read with the key ignored.
+    // No stripe seed (PDM-Q7, 2026-09-21): the stripe engine is deleted and
+    // the handshake carries no self-asserted storage posture. An unknown
+    // key is read with the key ignored.
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE(current_height)
