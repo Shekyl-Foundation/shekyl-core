@@ -108,7 +108,8 @@ fn a6_a_block_blob_the_wire_cannot_parse_is_refused() {
 /// tighter than the census value — `READ_LEN_CAP`, `10^6`
 /// (`shekyl-wire/src/lib.rs`) — so the census property holds a fortiori;
 /// the two numbers are one field's two undocumented bounds (FOLLOWUPS,
-/// *CEN-A7's per-block transaction-count bound*). The control count reaches
+/// *CEN-A7's per-block transaction-count bound*), and this test asserts
+/// only the census value, not the provisional cap. The control count reaches
 /// the hash read and fails there instead, so the assertion tells the cap
 /// from a short blob.
 #[test]
@@ -122,7 +123,7 @@ fn a7_a_transaction_hash_count_above_the_bound_is_refused_before_any_hash_is_rea
         write_varint(n, &mut out).expect("writing to a Vec is infallible");
         Block::from_bytes(&out).expect_err("no hash follows the count")
     };
-    for n in [1_000_001, (1u64 << 28) + 1, u64::MAX] {
+    for n in [(1u64 << 28) + 1, u64::MAX] {
         let refused = with_count(n);
         assert_eq!(refused.kind(), io::ErrorKind::Other, "count {n}");
         assert!(
