@@ -750,6 +750,24 @@ pub type Verdict<T> = Result<T, InvalidBlock>;
 
 **Two stages since slice 2 (2026-09-19; `CHAIN_RULES_SLICE_2.md` §4.2,
 Q1/Q8/Q9 as ruled).** The partition is view-dependence and nothing else.
+**Every stateless rule is `form`'s** (#1081's review, item 1, 2026-10-15):
+the header rows, the longhash, CEN-D1 against a **claimed target**, then
+`tx_form` at the miner slot and every listed slot, then CEN-H19's batch.
+`form` runs on the pipeline's parallel workers; `validate` runs inside the
+write transaction on the single connect actor and judges only what reads
+the chain (the header ladder's view-bound rows, B5, B4, G1, `tx_against` at
+every slot, L1, G7/G9/G10, the reward chain, the archival transition).
+CEN-D1 needs D4's target, which is chain-derived, so the target is a
+**claim** beside the seed: the caller derives it from the header chain
+ahead of connect through `target_claim` (the one derivation, as
+`seed_height` is the seed's), `form` judges D1 against it before any body
+work — a block short of its proof-of-work costs RandomX and nothing more —
+and `validate` and `alt_against` re-derive D4 over their view, a mismatch
+being `Stale::Target` with the token's retry bound. D1 is recorded once,
+in `form`; D1b stays where D4 derives the target. The refusal order follows:
+every stateless row precedes every view-bound row, so a block wrong in
+both is named by the stateless row (a coinbase whose extra does not parse
+is CEN-I19's at the miner slot, where the C++ names B4).
 
 ```rust
 /// The world a block is judged in, not the chain: a clock (CEN-C1) and a
@@ -764,8 +782,14 @@ pub trait Substrate {
 /// caller CLAIMS the rule set in force and the seed at `seedheight(h)`.
 pub fn form<S: Substrate>(
     candidate: Candidate, rule_set: &RuleSet, substrate: &S,
-    seed: BlockHash, attempt: FormAttempt,
+    seed: BlockHash, target: Target, attempt: FormAttempt,
 ) -> Result<Verdict<StructurallyValid>, S::Fault>;
+
+/// CEN-D4's target for `connecting` over `view`'s headers: the claim's one
+/// derivation, which `validate` and `alt_against` run again to verify it.
+pub fn target_claim<'id, H: HeaderView<'id>>(
+    view: &H, connecting: BlockHeight, rule_set: &RuleSet,
+) -> Result<Verdict<Target>, Fault<H::Fault>>;
 
 /// View-bound — inside the transaction C2-R8 Q3 projects the view from.
 /// Verifies the claims first; a refuted claim is a `Fault::Stale`, never a
@@ -1006,7 +1030,7 @@ H2, H8, H12, H13, H23 (`by_construction`); **H19 `implemented`
 (2026-10-15)** in two halves on one type: its **layout** half is a
 `TxRule` that `tx_form` runs through `run_tx_unrecorded` (a refusal is
 H19's, a pass is the layout alone), and its **verification** half is the
-`BlockRule` `validate` folds over the block, which records the row — the
+`FormRule` `form` folds over the block, which records the row — the
 next paragraph; H24 is bucket 3 — no registry row. Its
 falsifier asserts the residue predicate and that `tx_form` still accepts
 the offsets fixture, indexed from the census cell. The crypto rows call
@@ -1038,16 +1062,17 @@ Q9; ruling R3, 2026-10-15).** `rules/range_proof.rs`. Every listed
 transaction's proof, in block order (transaction order, then proof order;
 the layout half admits one proof per transaction), is verified with its
 transaction's output commitments as carried, in **one**
-`shekyl_bulletproofs::verify_batch`. `validate` runs it as `H19`'s
-`BlockRule` after the slot loop and before L1. After the slot loop, so
-H19's layout half and CEN-I4's input cap have refused before any proof
-work is spent. Before L1, as the C++ runs its CT semantics
-(`verCtSemanticsSimple`) before the spent-key insertion that refuses a
-repeat. `run` records H19 only once the batch has decided. A block with no
-proof (coinbase-only, or serve credits only) records it vacuously, which
-`ChainValid::mint` requires of an `implemented` row. The fold reads no
-view; by slice 2's partition it could sit in `form`. It sits in `validate`
-because the rows that bound its cost run in `validate`'s slot loop.
+`shekyl_bulletproofs::verify_batch`. `form` runs it as `H19`'s `FormRule`,
+last: after CEN-D1 has refused a block short of its proof-of-work (so such
+a block costs no proof work — a probe counts the batch not run), and after
+every slot's `tx_form` (so H19's layout half and CEN-I4's input cap have
+bounded the work). It reads no view, so it runs on the parallel workers,
+not on the single writer (#1081's review, item 1). `run_form` records H19
+only once the batch has decided. A block with no proof (coinbase-only, or
+serve credits only) records it vacuously, which `ChainValid::mint`
+requires of an `implemented` row. Every view-bound row, L1 included, runs
+later, in `validate`; the C++ also runs its CT semantics
+(`verCtSemanticsSimple`) before the spent-key insertion.
 
 *The weights are derived, not drawn (R3, Rick: "I prefer derived, coherent
 inputs").* A batch verify sums every proof's verification equation, each

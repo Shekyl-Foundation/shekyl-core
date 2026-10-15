@@ -689,8 +689,13 @@ binding condition), neither band reading a header; then the definitions
 over the stitched chain — D3's seed, C3's window, D4's target (D6 the
 zero guard; **D5** records its row only when that derivation produced a
 target, beside D4/D6/D7 — a D6 refusal is D4's verdict and records no
-D5), `cumulative_after`, D1b — and the header predicates, three segments
-shared with `validate`: **A2**; C1, C2, D1; E1, F4, F5, F6. `validate`
+D5) and its check against the target `form` judged CEN-D1 against
+(`Stale::Target` on a mismatch, never a verdict), `cumulative_after`,
+D1b — and the header predicates, three segments shared with `validate`:
+**A2**; C1, C2; E1, F4, F5, F6. CEN-D1 is `form`'s since #1081's review
+(item 1): it runs before any body work against a claimed target, so an
+alt arrival's `form` takes the target claim the stitched chain derives
+(`target_claim`). `validate`
 inserts B5, B4 and G1 between those segments; the alt tier does not. A2
 (`topology.rs`) is a `HeaderRule` since 2026-10-12 and the ladder's first
 predicate, as it is `validate`'s: on the store's path
@@ -702,14 +707,14 @@ would otherwise mint an `AltValid` for a chain the block is not on
 about the construction is not the function's contract). F4–F6
 (`miner.rs`) are `HeaderRule`s since a4: they read `cx.connecting` and
 nothing else of the chain, so the re-bounded files are seven, `E5-14`'s
-five plus `miner.rs` and `topology.rs` (15 rules read: 7 `BlockRule` +
-8 `HeaderRule`). No
+five plus `miner.rs` and `topology.rs` (14 rules read since D1 and H19
+moved to `form`: 7 `BlockRule` + 7 `HeaderRule`). No
 attestation step, no B5, no body rule, no slot loop. K1a is the store's
 (`AltChain` construction; registered `held_by_store` in the census-arms
 commit, `E5-18`). The row set is pinned by
 `alt_tests::the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else`
-(form's rows + {A2, C1, C2, C3, D1, D1b, D3, D4, D5, D6, D7, E1, E2, F4,
-F5, F6, K1b, K4}, and `covers_landed` false; K4 is the tier itself — recorded
+(form's rows — D1 among them — + {A2, C1, C2, C3, D1b, D3, D4, D5, D6,
+D7, E1, E2, F4, F5, F6, K1b, K4}, and `covers_landed` false; K4 is the tier itself — recorded
 by `alt_against` after the last header predicate, so an `AltValid` carries
 it iff every step ran, and registered `enforced_at` that site with the
 row-set pin as its test, census-arms commit). `AltValid<'id, V>` carries the block, its derived height, cumulative
