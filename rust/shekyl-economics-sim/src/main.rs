@@ -114,15 +114,22 @@ fn main() {
     }
 
     if std::env::args().any(|a| a == "--secret-draw") {
-        // ESR-11 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.13): the secret
-        // per-block draw at 0 / 10 / 30 % producer dropout — pairs short of
-        // three issued draws, draws per block, fetch volume, and the
-        // failure window re-checked. JSON to stdout, table to stderr.
-        let cells = secret_draw::evidence_cells();
+        // ESR-11's experiment (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.13)
+        // on ESR-13's loop at ESR-11's timing (§5.22): the secret per-block
+        // draw at 0 / 10 / 30 % producer dropout, pairs short of three
+        // issued draws, draws per block, and the failure window
+        // re-checked. JSON to stdout, table to stderr.
+        let report = secret_draw_production::Report {
+            cells: secret_draw_production::esr11_timing_specs()
+                .into_iter()
+                .map(secret_draw_production::cell)
+                .collect(),
+        };
         let mut summary = String::new();
-        secret_draw::render_summary(&mut summary, &cells).expect("String sink is infallible");
+        secret_draw_production::render_summary(&mut summary, &report)
+            .expect("String sink is infallible");
         eprint!("{summary}");
-        println!("{}", secret_draw::evidence_json(&cells));
+        println!("{}", secret_draw_production::evidence_json(&report));
         return;
     }
 
