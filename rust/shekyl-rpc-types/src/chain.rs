@@ -185,7 +185,9 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.57: `option_set` and `option_show` (RT-O23…RT-O27); the JSON-RPC
 /// error object gains `data`, and `-26` is a configuration refusal.
 /// `/set_limit`, `/get_limit`, `/set_log_level` and `/set_log_categories`
-/// are gone (`DAEMON_CONFIG_CUTOVER.md` §2.7).
+/// are gone (`DAEMON_CONFIG_CUTOVER.md` §2.7), and `/start_mining` no longer
+/// takes `do_background_mining` or `ignore_battery` (§4.2: background
+/// mining's options and runtime arguments).
 pub const CORE_RPC_VERSION_MINOR: u32 = 57;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;

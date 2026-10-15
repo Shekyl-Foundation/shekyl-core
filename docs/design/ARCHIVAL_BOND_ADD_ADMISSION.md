@@ -147,7 +147,7 @@ column, at the pin:
   [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) (2026-09-17) says
   of `frozen_segment_count` that *"bond admission reads it to decide which
   `shard_id`s are admissible"*. Its three consumers are the **D2 escalation
-  operand** (`src/cryptonote_core/blockchain.cpp:1503`, and its own comment
+  operand** (`src/cryptonote_core/blockchain.cpp:1502`, and its own comment
   names it as such), the **coverage RPC**
   (`src/rpc/archival_shard_coverage.cpp:34`), and the **freeze / pop-revert**
   path (`src/blockchain_db/lmdb/db_lmdb.cpp:7997`). **None is bond admission.**

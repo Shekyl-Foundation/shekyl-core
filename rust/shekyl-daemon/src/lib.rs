@@ -32,13 +32,17 @@ pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
 #[must_use]
 pub fn main(entry: &ShekylDaemonEntry) -> i32 {
     shekyl_ffi::panic_hook::install();
-    let host = Host {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    run::main(entry, &args, &host())
+}
+
+/// This machine's platform facts and the network id derivation.
+pub(crate) fn host() -> Host {
+    Host {
         platform: shekyl_daemon_config::Platform {
             home: shekyl_ffi::platform::account_home(),
             program_data: shekyl_ffi::platform::program_data(),
         },
         network_id_of: shekyl_ffi::network_id_ffi::network_id_of,
-    };
-    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    run::main(entry, &args, &host)
+    }
 }

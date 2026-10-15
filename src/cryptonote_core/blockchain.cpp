@@ -218,7 +218,7 @@ namespace
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_db(), m_tx_pool(tx_pool), m_timestamps_and_difficulties_height(0), m_reset_timestamps_and_difficulties_height(true), m_current_block_cumul_weight_limit(0), m_current_block_cumul_weight_median(0),
-  m_max_prepare_blocks_threads(4), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_show_time_stats(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
+  m_max_prepare_blocks_threads(4), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
   m_long_term_block_weights_window(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
   m_long_term_effective_median_block_weight(0),
   m_long_term_block_weights_cache_tip_hash(crypto::null_hash),
@@ -487,8 +487,7 @@ bool Blockchain::store_blockchain()
   }
 
   TIME_MEASURE_FINISH(save);
-  if(m_show_time_stats)
-    MINFO("Blockchain stored OK, took: " << save << " ms");
+  MDEBUG("Blockchain stored OK, took: " << save << " ms");
   return true;
 }
 //------------------------------------------------------------------
@@ -3058,9 +3057,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
   TIME_MEASURE_START(a);
   bool res = check_tx_inputs(tx, tvc, &max_used_block_height);
   TIME_MEASURE_FINISH(a);
-  if(m_show_time_stats)
   {
-    MINFO("HASH: " <<  get_transaction_hash(tx) << " I/O: " << tx.vin.size() << "/" << tx.vout.size() << " H: " << max_used_block_height << " ms: " << a + m_fake_scan_time << " B: " << get_object_blobsize(tx) << " W: " << get_transaction_weight(tx));
+    MDEBUG("HASH: " <<  get_transaction_hash(tx) << " I/O: " << tx.vin.size() << "/" << tx.vout.size() << " H: " << max_used_block_height << " ms: " << a + m_fake_scan_time << " B: " << get_object_blobsize(tx) << " W: " << get_transaction_weight(tx));
   }
   if (!res)
     return false;
@@ -5857,9 +5855,8 @@ leave:
   }
 
   MINFO("+++++ BLOCK SUCCESSFULLY ADDED" << std::endl << "id:\t" << id << std::endl << "PoW:\t" << proof_of_work << std::endl << "HEIGHT " << new_height-1 << ", difficulty:\t" << current_diffic << std::endl << "block reward: " << print_money(fee_summary + base_reward) << "(" << print_money(base_reward) << " + " << print_money(fee_summary) << "), coinbase_weight: " << coinbase_weight << ", cumulative weight: " << cumulative_block_weight << ", " << block_processing_time << "(" << target_calculating_time << "/" << longhash_calculating_time << ")ms");
-  if(m_show_time_stats)
   {
-    MINFO("Height: " << new_height << " coinbase weight: " << coinbase_weight << " cumm: "
+    MDEBUG("Height: " << new_height << " coinbase weight: " << coinbase_weight << " cumm: "
         << cumulative_block_weight << " p/t: " << block_processing_time << " ("
         << target_calculating_time << "/" << longhash_calculating_time << "/"
         << t1 << "/" << t2 << "/" << t3 << "/" << t_exists << "/" << t_pool
@@ -6406,7 +6403,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   TIME_MEASURE_FINISH(prepare);
   m_fake_pow_calc_time = prepare / blocks_entry.size();
 
-  if (blocks_entry.size() > 1 && threads > 1 && m_show_time_stats)
+  if (blocks_entry.size() > 1 && threads > 1)
     MDEBUG("Prepare blocks took: " << prepare << " ms");
 
 #define PREPARE_QUIT(m, verdict) \

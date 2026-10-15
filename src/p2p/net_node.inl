@@ -98,14 +98,6 @@ namespace nodetool
   //-----------------------------------------------------------------------------------
   inline bool append_net_address(std::vector<epee::net_utils::network_address> & seed_nodes, std::string const & addr, uint16_t default_port);
   //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::init_options(boost::program_options::options_description& desc)
-  {
-    // What this object still reads until the snapshot carries it (commit
-    // (e)). Every other p2p option is the Rust owners' section.
-    command_line::add_arg(desc, arg_no_sync);
-    command_line::add_arg(desc, arg_pad_transactions);
-  }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::init_config()
@@ -372,27 +364,6 @@ namespace nodetool
     return true;
   }
   //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::handle_command_line(
-      const boost::program_options::variables_map& vm
-    )
-  {
-    // What this object still reads until the snapshot carries it (commit
-    // (e)): the network, offline, and the sync lever. The connectors, the
-    // peers, the bans, the link bounds and the relay's posture are the Rust
-    // owners' (DAEMON_CONFIG_CUTOVER.md §3), read from their sections.
-    bool testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
-    bool stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-    m_nettype = testnet ? cryptonote::TESTNET : stagenet ? cryptonote::STAGENET : cryptonote::MAINNET;
-
-    (void)m_network_zones[epee::net_utils::connector_id::clearnet];
-    m_offline = command_line::get_arg(vm, cryptonote::arg_offline);
-
-    if (command_line::has_arg(vm, arg_no_sync))
-      m_payload_handler.set_no_sync(true);
-
-    return true;
-  }
   //-----------------------------------------------------------------------------------
   inline bool append_net_address(
       std::vector<epee::net_utils::network_address> & seed_nodes
@@ -446,10 +417,18 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::init(const boost::program_options::variables_map& vm)
+  bool node_server<t_payload_net_handler>::init(const ShekylDaemonSnapshot& snapshot)
   {
-    bool res = handle_command_line(vm);
-    CHECK_AND_ASSERT_MES(res, false, "Failed to handle command line");
+    // What this object reads from the snapshot (DAEMON_CONFIG_CUTOVER.md
+    // §2.9): the network, offline, and the sync lever. The connectors, the
+    // peers, the bans, the link bounds and the relay's posture are the Rust
+    // owners' (§3), read from their sections.
+    m_nettype = static_cast<cryptonote::network_type>(snapshot.network);
+    (void)m_network_zones[epee::net_utils::connector_id::clearnet];
+    m_offline = snapshot.offline;
+    if (!snapshot.sync)
+      m_payload_handler.set_no_sync(true);
+    bool res = true;
 
     {
       const auto id = cryptonote::get_config(m_nettype).NETWORK_ID;
@@ -491,7 +470,9 @@ namespace nodetool
         registries.push_back(cryptonote::levin::connector_registry{
           connector, zone.second.m_net_server.get_config_shared()});
       }
-      const bool pad_txs = command_line::get_arg(vm, arg_pad_transactions);
+      // `pad-transactions` is the relay lane's (INPUT_GRAMMAR.md §5, IG-Q4):
+      // today's default, off, until that lane decides.
+      const bool pad_txs = false;
       m_notifier = cryptonote::levin::notify{
         public_zone.m_net_server.get_io_context(),
         std::move(registries),

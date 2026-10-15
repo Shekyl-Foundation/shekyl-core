@@ -4591,10 +4591,9 @@ struct ShekylDaemonSnapshot {
   const char* client_endpoint;
 };
 
-/// The remnant's `run`: `noexcept`, returns the exit status. The legacy
-/// argument vector is the rendering of today's spellings, parsed until
-/// commit (e) of the cutover deletes the C++ readers.
-typedef int (*ShekylDaemonRunFn)(const ShekylDaemonSnapshot* snapshot, int argc, const char* const* argv);
+/// The remnant's `run`: `noexcept`, returns the exit status. The snapshot is
+/// the whole of what the remnant reads; it parses nothing.
+typedef int (*ShekylDaemonRunFn)(const ShekylDaemonSnapshot* snapshot);
 /// The remnant's `stop`: requests the stop `run` waits for; `noexcept`.
 typedef void (*ShekylDaemonStopFn)(void);
 
@@ -4616,6 +4615,12 @@ void shekyl_daemon_request_stop(void);
 /// Runs the daemon and returns its exit status: 2 a configuration refusal,
 /// 1 a runtime failure, `run`'s status otherwise; a panic aborts.
 int32_t shekyl_daemon_main(const ShekylDaemonEntry* entry);
+/// A snapshot for a C++ test binary, from a test argument list (the program
+/// first) through the one real parse: no lock, no marker, no logging. 0 and
+/// `*out` set; 2 with the refusal on standard error; 1 for a null argument.
+/// Released with `shekyl_daemon_snapshot_free`.
+int32_t shekyl_daemon_snapshot_parse(int argc, const char* const* argv, ShekylDaemonSnapshot** out);
+void shekyl_daemon_snapshot_free(ShekylDaemonSnapshot* snapshot);
 
 } // extern "C"
 

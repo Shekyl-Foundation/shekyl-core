@@ -30,7 +30,7 @@
 
 #include <atomic>
 #include <memory>
-#include <boost/program_options.hpp>
+#include "shekyl/shekyl_ffi.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
@@ -41,9 +41,7 @@ struct t_internals;
 
 class Daemon final {
 public:
-  static void init_options(boost::program_options::options_description & option_spec);
-
-  explicit Daemon(boost::program_options::variables_map const & vm);
+  explicit Daemon(const ShekylDaemonSnapshot& snapshot);
   ~Daemon();
 
   Daemon(Daemon const &) = delete;

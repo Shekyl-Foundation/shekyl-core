@@ -45,7 +45,6 @@
 #include "cryptonote_basic/events.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
-#include "daemon/command_line_args.h"
 #include "daemon/command_server.h"
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
@@ -90,14 +89,14 @@ struct t_internals {
   // The core the Rust RPC serves; the listeners are Rust's.
   std::unique_ptr<cryptonote::core_rpc_server> rpc;
 
-  explicit t_internals(boost::program_options::variables_map const & vm)
+  explicit t_internals(const ShekylDaemonSnapshot& snapshot)
     : core(nullptr)
-    , protocol{core, nullptr, command_line::get_arg(vm, cryptonote::arg_offline)}
+    , protocol{core, nullptr, snapshot.offline}
     , p2p{protocol}
   {
     // === core ===
     MGINFO("Initializing core...");
-    if (!core.init(vm, nullptr))
+    if (!core.init(snapshot, nullptr))
     {
       throw std::runtime_error("Failed to initialize core");
     }
@@ -105,7 +104,7 @@ struct t_internals {
 
     // === protocol ===
     MGINFO("Initializing cryptonote protocol...");
-    if (!protocol.init(vm))
+    if (!protocol.init())
     {
       throw std::runtime_error("Failed to initialize cryptonote protocol.");
     }
@@ -113,7 +112,7 @@ struct t_internals {
 
     // === p2p ===
     MGINFO("Initializing p2p server...");
-    if (!p2p.init(vm))
+    if (!p2p.init(snapshot))
     {
       throw std::runtime_error("Failed to initialize p2p server.");
     }
@@ -156,15 +155,8 @@ struct t_internals {
   }
 };
 
-void Daemon::init_options(boost::program_options::options_description & option_spec)
-{
-  cryptonote::core::init_options(option_spec);
-  t_node_server::init_options(option_spec);
-  cryptonote::core_rpc_server::init_options(option_spec);
-}
-
-Daemon::Daemon(boost::program_options::variables_map const & vm)
-  : mp_internals(new t_internals{vm})
+Daemon::Daemon(const ShekylDaemonSnapshot& snapshot)
+  : mp_internals(new t_internals{snapshot})
 {
 }
 

@@ -30,10 +30,10 @@
 
 #pragma once 
 
-#include <boost/program_options.hpp>
 #include <boost/logic/tribool_fwd.hpp>
 #include <atomic>
 #include "cryptonote_basic.h"
+#include "shekyl/shekyl_ffi.h"
 #include "verification_context.h"
 #include "difficulty.h"
 #include "math_helper.h"
@@ -62,14 +62,13 @@ namespace cryptonote
   public: 
     miner(i_miner_handler* phandler, const get_block_hash_t& gbh);
     ~miner();
-    bool init(const boost::program_options::variables_map& vm, network_type nettype);
-    static void init_options(boost::program_options::options_description& desc);
+    bool init(const ShekylDaemonSnapshot& snapshot, network_type nettype);
     bool set_block_template(const block& bl, const difficulty_type& diffic, uint64_t height, uint64_t block_reward);
     bool on_block_chain_update();
     // `adr_str` is the caller's original encoded address, retained for
     // display: since the fork-(ii) address layout, an address cannot be
     // re-encoded from `account_public_address` alone (no msg_sign_pk).
-    bool start(const account_public_address& adr, const std::string& adr_str, size_t threads_count, bool do_background = false, bool ignore_battery = false);
+    bool start(const account_public_address& adr, const std::string& adr_str, size_t threads_count);
     uint64_t get_speed() const;
     uint32_t get_threads_count() const;
     void send_stop_signal();

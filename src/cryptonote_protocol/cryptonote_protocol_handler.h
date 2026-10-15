@@ -34,7 +34,6 @@
 
 #pragma once
 
-#include <boost/program_options/variables_map.hpp>
 #include <string>
 
 #include "byte_slice.h"
@@ -103,7 +102,7 @@ namespace cryptonote
     END_INVOKE_MAP2()
 
     bool on_idle();
-    bool init(const boost::program_options::variables_map& vm);
+    bool init();
     bool deinit();
     void set_p2p_endpoint(nodetool::i_p2p_endpoint<connection_context>* p2p);
     //bool process_handshake_data(const blobdata& data, cryptonote_connection_context& context);

@@ -567,13 +567,11 @@ bool t_rpc_command_executor::print_transaction_pool_stats() {
   return run_rust_console({"print_pool_stats"});
 }
 
-bool t_rpc_command_executor::start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype, bool do_background_mining, bool ignore_battery) {
+bool t_rpc_command_executor::start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype) {
   cryptonote::COMMAND_RPC_START_MINING::request req;
   cryptonote::COMMAND_RPC_START_MINING::response res;
   req.miner_address = address;
   req.threads_count = num_threads;
-  req.do_background_mining = do_background_mining;
-  req.ignore_battery = ignore_battery;
   
   std::string fail_message = "Mining did not start";
 

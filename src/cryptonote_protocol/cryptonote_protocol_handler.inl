@@ -226,7 +226,7 @@ namespace cryptonote
   }
   //-----------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  bool t_cryptonote_protocol_handler<t_core>::init(const boost::program_options::variables_map& vm)
+  bool t_cryptonote_protocol_handler<t_core>::init()
   {
     m_sync_timer.pause();
     m_sync_timer.reset();
@@ -239,8 +239,10 @@ namespace cryptonote
     m_sync_download_chain_size = 0;
     m_sync_download_objects_size = 0;
 
-    m_block_download_max_size = command_line::get_arg(vm, cryptonote::arg_block_download_max_size);
-    m_span_time = command_line::get_arg(vm, cryptonote::arg_span_limit);
+    // `block-download-max-size` and `span-limit` are the chain-sync lane's
+    // (INPUT_GRAMMAR.md §5, IG-Q4): today's defaults until that lane decides.
+    m_block_download_max_size = 0;
+    m_span_time = 2;
 
     return true;
   }
@@ -1197,10 +1199,6 @@ namespace cryptonote
 
       const crypto::hash last_block_hash = cryptonote::get_block_hash(b);
       context.m_last_known_hash = last_block_hash;
-
-      if (!m_core.get_test_drop_download() || !m_core.get_test_drop_download_height()) { // DISCARD BLOCKS for testing
-        return 1;
-      }
     }
 
     try_add_next_blocks(context);

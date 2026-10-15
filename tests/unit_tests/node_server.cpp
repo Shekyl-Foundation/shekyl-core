@@ -61,7 +61,7 @@ public:
   void safesyncmode(const bool){}
   virtual uint64_t get_current_blockchain_height() const final {return 1;}
   void set_target_blockchain_height(uint64_t) {}
-  bool init(const boost::program_options::variables_map& vm) {return true ;}
+  bool init() {return true ;}
   bool deinit(){return true;}
   bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const { return true; }
   // The blocks this core already has. Empty by default, so every test that
@@ -379,25 +379,34 @@ namespace
   //
   // TEST(node_server, bind_same_p2p_port) deliberately does not use this: a
   // listener is its subject.
-  boost::program_options::variables_map offline_node_vm(const boost::filesystem::path& node_dir, std::vector<std::string> extra_args)
+  /// The snapshot the real Rust parse builds from a test argument list
+  /// (DAEMON_CONFIG_CUTOVER.md §2.9, rule 26 B2), in the grammar's
+  /// spellings; freed with the holder.
+  struct test_snapshot
   {
-    std::vector<std::string> args{"--data-dir", node_dir.string(), "--offline"};
+    ShekylDaemonSnapshot *snapshot = nullptr;
+    explicit test_snapshot(const std::vector<std::string>& args)
+    {
+      std::vector<const char*> argv;
+      argv.push_back("unit_tests");
+      for (const auto& a : args)
+        argv.push_back(a.c_str());
+      const int rc = shekyl_daemon_snapshot_parse(static_cast<int>(argv.size()), argv.data(), &snapshot);
+      if (rc != 0 || snapshot == nullptr)
+        throw std::runtime_error("the test snapshot could not be built (status " + std::to_string(rc) + ")");
+    }
+    ~test_snapshot() { shekyl_daemon_snapshot_free(snapshot); }
+    test_snapshot(const test_snapshot&) = delete;
+    test_snapshot& operator=(const test_snapshot&) = delete;
+    const ShekylDaemonSnapshot& get() const { return *snapshot; }
+  };
+
+  /// An offline node at `node_dir`: both connectors off, then `extra_args`.
+  std::vector<std::string> offline_node_args(const boost::filesystem::path& node_dir, std::vector<std::string> extra_args)
+  {
+    std::vector<std::string> args{"--data-dir", node_dir.string(), "--clearnet", "off", "--tor", "off"};
     args.insert(args.end(), extra_args.begin(), extra_args.end());
-
-    boost::program_options::options_description options_description{};
-    cryptonote::core::init_options(options_description);
-    Server::init_options(options_description);
-
-    boost::program_options::variables_map vm;
-    boost::program_options::store(
-      boost::program_options::command_line_parser(args).options(options_description).run(), vm);
-    // Production startup notifies (src/daemon/main.cpp), and so does every
-    // other `init(vm)` site in this file. No option in `core::init_options` or
-    // `Server::init_options` currently carries a notifier or `required()`, so
-    // this is behaviour-neutral today — it is here so the harness keeps
-    // matching production when one does, rather than diverging silently.
-    boost::program_options::notify(vm);
-    return vm;
+    return args;
   }
 }
 
@@ -427,7 +436,8 @@ TEST(ban, subnet)
       boost::filesystem::remove_all(node_dir);
     });
 
-  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {})));
+  const test_snapshot offline(offline_node_args(node_dir, {}));
+  ASSERT_TRUE(server.init(offline.get()));
   cprotocol.set_p2p_endpoint(&server);
 
   ASSERT_TRUE(server.block_subnet(MAKE_IPV4_SUBNET(1,2,3,4,24), 10));
@@ -1239,15 +1249,14 @@ namespace
     }
     bool init()
     {
-      boost::program_options::options_description desc_options("Command line options");
-      cryptonote::core::init_options(desc_options);
-      Server::init_options(desc_options);
-      const char* argv[2] = {nullptr, nullptr};
-      boost::program_options::variables_map vm;
-      boost::program_options::store(
-        boost::program_options::parse_command_line(1, argv, desc_options), vm);
-      boost::program_options::notify(vm);
-      return server->init(vm);
+      // The defaults: mainnet, both connectors on; the harness binds no
+      // seam and starts no zone, so nothing dials. The relay's posture is
+      // the daemon's Rust main()'s to record; this harness records it, as
+      // levin.cpp's does, so the init does not depend on an earlier test.
+      shekyl_relay_posture_record(
+        (std::uint32_t{1} << SHEKYL_CONNECTOR_CLEARNET) | (std::uint32_t{1} << SHEKYL_CONNECTOR_TOR), false);
+      const test_snapshot defaults(std::vector<std::string>{});
+      return server->init(defaults.get());
     }
   };
 }

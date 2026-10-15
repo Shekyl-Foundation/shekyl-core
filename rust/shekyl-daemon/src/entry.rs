@@ -22,9 +22,13 @@
 //! advertised endpoints are not a field: their reader is Rust, the peer
 //! lists' own entry (§2.8), where the handshake's port check will read it
 //! (Rick, 2026-10-15); no C++ reads them. The
-//! legacy argument vector `run` also takes is not a field: it is the
-//! rendering of today's spellings the remnant parses until commit (e)
-//! deletes the C++ readers, and it goes with them.
+//! snapshot is the whole of what the remnant reads: it parses nothing.
+//!
+//! **A test's snapshot.** The C++ test binaries construct the remnant too;
+//! [`shekyl_daemon_snapshot_parse`] builds a snapshot from a test argument
+//! list through the one real parse (rule 26 B2), taking no lock, writing
+//! no marker and starting no logging, and
+//! [`shekyl_daemon_snapshot_free`] releases it.
 //!
 //! **One stop path.** [`shekyl_daemon_request_stop`] is how the remnant
 //! asks for a stop — the console's `exit` and the RPC's `stop_daemon` —
@@ -81,10 +85,9 @@ pub struct ShekylDaemonSnapshot {
 pub const SNAPSHOT_FIELDS: u32 = 11;
 
 /// The remnant's `run`: constructs core, the protocol handler, the node
-/// server and the RPC from the snapshot, parses the legacy argument vector
-/// for the readers commit (e) deletes, runs until stopped, and returns the
-/// exit status. `noexcept`: every C++ exception is caught inside it.
-pub type RunFn = extern "C" fn(*const ShekylDaemonSnapshot, c_int, *const *const c_char) -> c_int;
+/// server and the RPC from the snapshot, runs until stopped, and returns
+/// the exit status. `noexcept`: every C++ exception is caught inside it.
+pub type RunFn = extern "C" fn(*const ShekylDaemonSnapshot) -> c_int;
 
 /// The remnant's `stop`: requests the stop `run` is waiting for and
 /// returns at once. `noexcept`.
@@ -141,6 +144,75 @@ pub unsafe extern "C" fn shekyl_daemon_main(entry: *const ShekylDaemonEntry) -> 
 #[no_mangle]
 pub extern "C" fn shekyl_daemon_request_stop() {
     crate::signals::request_stop();
+}
+
+/// A snapshot for a C++ test binary, from `argc` arguments (the program
+/// first) through the real parse: the table, the file, the sections and
+/// the platform roots, as a start does, but no lock, no marker and no
+/// logging. Writes the snapshot's address to `out` and returns 0; a
+/// refusal is printed to standard error and returns 2; a null argument
+/// returns 1. The snapshot and what it points at live until
+/// [`shekyl_daemon_snapshot_free`].
+///
+/// # Safety
+///
+/// `argv` points at `argc` NUL-terminated strings and `out` at a writable
+/// pointer slot.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_daemon_snapshot_parse(
+    argc: c_int,
+    argv: *const *const c_char,
+    out: *mut *mut ShekylDaemonSnapshot,
+) -> i32 {
+    if argv.is_null() || out.is_null() || argc < 1 {
+        return crate::run::EXIT_FAILED;
+    }
+    let Ok(count) = usize::try_from(argc) else {
+        return crate::run::EXIT_FAILED;
+    };
+    // SAFETY: the caller's contract above.
+    let args: Vec<std::ffi::OsString> = unsafe { std::slice::from_raw_parts(argv, count) }
+        .iter()
+        .map(|&p| {
+            if p.is_null() {
+                std::ffi::OsString::new()
+            } else {
+                // SAFETY: each pointer is NUL-terminated by the contract.
+                std::ffi::OsString::from(
+                    unsafe { std::ffi::CStr::from_ptr(p) }
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            }
+        })
+        .collect();
+    match crate::run::snapshot_for_tests(&args, &crate::host()) {
+        Ok(leased) => {
+            // SAFETY: `out` is writable by the contract.
+            unsafe { *out = Box::into_raw(leased).cast::<ShekylDaemonSnapshot>() };
+            0
+        }
+        Err(status) => status,
+    }
+}
+
+/// Releases a snapshot [`shekyl_daemon_snapshot_parse`] built. A null is
+/// ignored.
+///
+/// # Safety
+///
+/// `snapshot` is null or was returned by `shekyl_daemon_snapshot_parse`
+/// and is freed once.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_daemon_snapshot_free(snapshot: *mut ShekylDaemonSnapshot) {
+    if snapshot.is_null() {
+        return;
+    }
+    // SAFETY: the caller's contract: the pointer is the one `Box::into_raw`
+    // of a `Leased` produced, whose first member is the snapshot.
+    drop(unsafe { Box::from_raw(snapshot.cast::<crate::run::Leased>()) });
 }
 
 #[cfg(test)]

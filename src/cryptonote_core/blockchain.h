@@ -809,7 +809,6 @@ namespace cryptonote
      *
      * @param stats the new time stats setting
      */
-    void set_show_time_stats(bool stats) { m_show_time_stats = stats; }
 
     /**
      * @brief get difficulty target
@@ -1083,7 +1082,6 @@ namespace cryptonote
 
     std::atomic<bool> m_following_degraded{false}; //!< C2-R1b F-1(a): switch refused at the prune watermark
     blockchain_db_sync_mode m_db_sync_mode;
-    bool m_show_time_stats;
     bool m_db_default_sync;
     bool m_db_sync_on_blocks;
     uint64_t m_db_sync_threshold;

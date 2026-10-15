@@ -56,6 +56,7 @@
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/block_ingest.h"
 #include "cryptonote_protocol/enums.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
@@ -564,26 +565,24 @@ struct get_test_options {
 template<class t_test_class>
 inline bool do_replay_events_get_core(std::vector<test_event_entry>& events, cryptonote::core *core)
 {
-  boost::program_options::options_description desc("Allowed options");
-  cryptonote::core::init_options(desc);
-  boost::program_options::variables_map vm;
-  const char *fixed_diff_argv[] = {"core_tests", "--fixed-difficulty=1"};
-  bool r = command_line::handle_error_helper(desc, [&]()
+  // The snapshot the real Rust parse builds from a test argument list
+  // (DAEMON_CONFIG_CUTOVER.md §2.9, rule 26 B2): regtest, a fixed
+  // difficulty of 1, the platform's default data directory.
+  const char *argv[] = {"core_tests", "--network", "regtest", "--dev-difficulty", "1"};
+  ShekylDaemonSnapshot *snapshot = nullptr;
+  if (shekyl_daemon_snapshot_parse(5, argv, &snapshot) != 0 || snapshot == nullptr)
   {
-    boost::program_options::store(boost::program_options::parse_command_line(2, fixed_diff_argv, desc), vm);
-    boost::program_options::notify(vm);
-    return true;
-  });
-  if (!r)
+    MERROR("Failed to build the test snapshot");
     return false;
+  }
 
   auto & c = *core;
 
-  // FIXME: make sure that vm has arg_testnet_on set to true or false if
-  // this test needs for it to be so.
   get_test_options<t_test_class> gto;
 
-  if (!c.init(vm, &gto.test_options))
+  const bool initialised = c.init(*snapshot, &gto.test_options);
+  shekyl_daemon_snapshot_free(snapshot);
+  if (!initialised)
   {
     MERROR("Failed to init core");
     return false;

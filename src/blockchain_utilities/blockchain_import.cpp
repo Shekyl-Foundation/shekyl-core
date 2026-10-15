@@ -45,6 +45,7 @@
 #include "serialization/json_utils.h" // dump_json()
 #include "include_base_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "blockchain_utilities/daemon_network_args.h"
 #include "cryptonote_basic/block_ingest.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY

@@ -33,14 +33,11 @@
 // two functions, `run` and `stop`, and returns its status. Rust reads the
 // arguments, the configuration file, takes the lock, checks the marker,
 // starts logging, makes the announcements and owns every signal; `run`
-// receives the snapshot of the values whose reader is still C++, plus the
-// rendering of today's spellings the readers below parse until commit (e)
-// of the cutover deletes them with this parse.
+// receives the snapshot of the values whose reader is still C++ and parses
+// nothing.
 
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/operations.hpp>
-#include "common/command_line.h"
-#include "common/removed_flags.h"
 #include "common/scoped_message_writer.h"
 #include "common/util.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -51,7 +48,6 @@
 #include "p2p/net_node.h"
 #include "string_tools_lexical.h"
 #include "rpc/core_rpc_server.h"
-#include "daemon/command_line_args.h"
 #include "cryptonote_config.h"
 #include "version.h"
 #ifdef STACK_TRACE
@@ -71,7 +67,6 @@
 #include <string>
 #include <vector>
 
-namespace po = boost::program_options;
 namespace bf = boost::filesystem;
 
 namespace {
@@ -90,13 +85,12 @@ bool isFat32(const wchar_t* root_path)
 #endif
 
 // The remnant's `run`: `noexcept`, every C++ exception caught and turned
-// into a status. Parses the legacy argument vector Rust rendered for the C++
-// readers that survive until commit (e), takes what C++ still reads from the
-// snapshot, runs the client command or the daemon, and returns.
-int remnant_run(const ShekylDaemonSnapshot* snapshot, int argc, const char* const* argv) noexcept
+// into a status. Takes what C++ still reads from the snapshot, runs the
+// client command or the daemon, and returns.
+int remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept
 {
   try {
-    if (snapshot == nullptr || argv == nullptr || argc < 1)
+    if (snapshot == nullptr)
       return 1;
     if (shekyl_daemon_snapshot_field_count() != SHEKYL_DAEMON_SNAPSHOT_FIELDS)
     {
@@ -110,40 +104,6 @@ int remnant_run(const ShekylDaemonSnapshot* snapshot, int argc, const char* cons
 #ifdef __linux__
     prctl(PR_SET_DUMPABLE, 0);
 #endif
-    epee::string_tools::set_module_name_and_folder(argv[0]);
-
-    // The option descriptions the C++ readers still parse (deleted in (e)).
-    po::options_description all_options("All");
-    po::options_description hidden_options("Hidden");
-    po::options_description visible_options("Options");
-    po::options_description core_settings("Settings");
-    po::positional_options_description positional_options;
-    {
-      command_line::add_arg(visible_options, command_line::arg_help);
-      command_line::add_arg(visible_options, command_line::arg_version);
-      command_line::add_arg(visible_options, daemon_args::arg_os_version);
-      command_line::add_arg(visible_options, daemon_args::arg_config_file);
-      command_line::add_arg(core_settings, daemon_args::arg_log_file);
-      command_line::add_arg(core_settings, daemon_args::arg_log_level);
-      command_line::add_arg(core_settings, daemon_args::arg_max_log_file_size);
-      command_line::add_arg(core_settings, daemon_args::arg_max_log_files);
-      command_line::add_arg(core_settings, daemon_args::arg_max_concurrency);
-      command_line::add_arg(visible_options, daemon_args::arg_non_interactive);
-      daemonize::Daemon::init_options(core_settings);
-      command_line::add_arg(hidden_options, daemon_args::arg_command);
-      visible_options.add(core_settings);
-      all_options.add(visible_options);
-      all_options.add(hidden_options);
-      positional_options.add(daemon_args::arg_command.name, -1);
-    }
-
-    po::variables_map vm;
-    po::store(
-      po::command_line_parser(argc, argv)
-        .options(all_options).positional(positional_options).run()
-    , vm
-    );
-    po::notify(vm);
 
     const bool testnet = snapshot->network == 1;
     const bool stagenet = snapshot->network == 2;
@@ -207,7 +167,7 @@ int remnant_run(const ShekylDaemonSnapshot* snapshot, int argc, const char* cons
     MGINFO("Shekyl '" << SHEKYL_RELEASE_NAME << "' (v" << SHEKYL_VERSION_FULL << ")");
 
     MINFO("Constructing daemon.");
-    daemonize::Daemon daemon{vm};
+    daemonize::Daemon daemon{*snapshot};
     return daemon.run(snapshot->console) ? 0 : 1;
   }
   catch (std::exception const & ex)

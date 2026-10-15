@@ -59,11 +59,6 @@ namespace nodetool
     // this flag is not a custody preference; taking it is opting into a
     // durable address. The default posture (no flag) is an ephemeral per-boot
     // onion the daemon publishes itself; see arg_no_ephemeral_tor below.
-    const command_line::arg_descriptor<bool> arg_no_sync = {"no-sync", "Don't synchronize the blockchain with other peers", false};
-
-    const command_line::arg_descriptor<bool> arg_pad_transactions = {
-      "pad-transactions", "Pad relayed transactions to help defend against traffic volume analysis", false
-    };
 
 
 }

@@ -186,7 +186,7 @@ transactions a block until `ρ` crosses) is a property of it. The daemon does
 not run that comparison. Its live rule lists one body past the median in
 every block that has the demand, whatever the fee, so the median can move
 without the fee ever covering the penalty. The block version is the constant
-1 (`src/cryptonote_core/blockchain.cpp:1605` writes
+1 (`src/cryptonote_core/blockchain.cpp:1604` writes
 `CURRENT_BLOCK_MAJOR_VERSION`), and the scan is `decide_listed_body`: there
 is no `version >= 5` arm left to take. The one live observation agrees and
 cannot discriminate: the `median-full` capture stopped one transaction past

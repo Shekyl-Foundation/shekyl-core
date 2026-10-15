@@ -150,7 +150,7 @@ What crosses the FFI after the cutover, and nothing else:
    process; the file is never deleted. There is no lock today:
    `tools::file_locker` ([`src/common/util.h:101-105`](../../src/common/util.h))
    has no caller, and the comment at
-   [`src/cryptonote_core/cryptonote_core.cpp:487`](../../src/cryptonote_core/cryptonote_core.cpp)
+   line 487 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`
    says "try to lock it" over code that only creates the directory.
 4. Under the lock, Rust checks the network marker (§2.6), writing it when
    the directory holds no daemon store.
@@ -287,9 +287,9 @@ subdirectory, the default log file name, the seed list, and the network id
 derived from genesis. FAKECHAIN conforms to production. Deleted outright:
 the managed Tor skip ([`src/p2p/net_node.inl:617`](../../src/p2p/net_node.inl),
 [`:719`](../../src/p2p/net_node.inl)), the database wipe on start
-([`src/cryptonote_core/cryptonote_core.cpp:523-531`](../../src/cryptonote_core/cryptonote_core.cpp)),
+(lines 523 to 531 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`),
 and `check_block_rate`'s regtest skip
-([`src/cryptonote_core/cryptonote_core.cpp:1628`](../../src/cryptonote_core/cryptonote_core.cpp)).
+(line 1628 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`).
 A harness that wants a fresh chain uses a fresh `data-dir`.
 
 The marker (IG-Q17, DC-Q15) is `shekyld.network` at the data directory's
@@ -414,7 +414,7 @@ C++ keeps today's defaults as constants until their lanes decide.
 | --- | --- | --- |
 | the resolved data directory | core (the LMDB environment) | `data-dir` |
 | the network | core, the miner, the console client | `network` |
-| offline, derived from both connectors being off | core ([`src/cryptonote_core/cryptonote_core.cpp:1559`](../../src/cryptonote_core/cryptonote_core.cpp)), the protocol handler | `clearnet`, `tor` (IG-Q3) |
+| offline, derived from both connectors being off | core (line 1559 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`), the protocol handler | `clearnet`, `tor` (IG-Q3) |
 | the fixed difficulty | core | `dev-difficulty` |
 | the pool's weight bound | core | `txpool-weight-max` |
 | sync on or off | the protocol handler | `dev-sync` |
@@ -489,8 +489,8 @@ deleted in every case.
 
 | File | Sites | Options |
 | --- | --- | --- |
-| [`src/daemon/main.cpp:102-120`](../../src/daemon/main.cpp), declared in lines 38 to 141 of `src/daemon/command_line_args.h` at `d26148535e` and [`src/common/command_line.cpp:71-72`](../../src/common/command_line.cpp) | 13 | `help`, `version`, `os-version`, `config-file`, `log-file`, `log-level`, `max-log-file-size`, `max-log-files`, `max-concurrency`, `proxy`, `non-interactive`, `daemon_command`, `carrier-development` |
-| [`src/cryptonote_core/cryptonote_core.cpp:237-260`](../../src/cryptonote_core/cryptonote_core.cpp), declared [`:74-188`](../../src/cryptonote_core/cryptonote_core.cpp) | 20 | `data-dir`, `testnet`, `stagenet`, `regtest`, `keep-fakechain`, `fixed-difficulty`, `prep-blocks-threads`, `show-time-stats`, `block-sync-size`, `test-drop-download`, `test-drop-download-height`, `test-dbg-lock-sleep`, `offline`, `block-download-max-size`, `span-limit`, `max-txpool-weight`, `block-notify`, `reorg-notify`, `block-rate-notify`, `keep-alt-blocks` |
+| lines 102 to 120 of `src/daemon/main.cpp` at `d26148535e`, declared in lines 38 to 141 of `src/daemon/command_line_args.h` at `d26148535e` and [`src/common/command_line.cpp:71-72`](../../src/common/command_line.cpp) | 13 | `help`, `version`, `os-version`, `config-file`, `log-file`, `log-level`, `max-log-file-size`, `max-log-files`, `max-concurrency`, `proxy`, `non-interactive`, `daemon_command`, `carrier-development` |
+| lines 237 to 260 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`, declared [`:74-188`](../../src/cryptonote_core/cryptonote_core.cpp) | 20 | `data-dir`, `testnet`, `stagenet`, `regtest`, `keep-fakechain`, `fixed-difficulty`, `prep-blocks-threads`, `show-time-stats`, `block-sync-size`, `test-drop-download`, `test-drop-download-height`, `test-dbg-lock-sleep`, `offline`, `block-download-max-size`, `span-limit`, `max-txpool-weight`, `block-notify`, `reorg-notify`, `block-rate-notify`, `keep-alt-blocks` |
 | [`src/cryptonote_basic/miner.cpp:278-286`](../../src/cryptonote_basic/miner.cpp), declared [`:92-98`](../../src/cryptonote_basic/miner.cpp) | 7 | `start-mining`, `mining-threads`, `bg-mining-enable`, `bg-mining-ignore-battery`, `bg-mining-min-idle-interval`, `bg-mining-idle-threshold`, `bg-mining-miner-target` |
 | [`src/blockchain_db/blockchain_db.cpp:199-203`](../../src/blockchain_db/blockchain_db.cpp) | 2 | `db-sync-mode`, `db-salvage` |
 | [`src/p2p/net_node.inl:105-133`](../../src/p2p/net_node.inl), declared lines 87 to 153 of `src/p2p/net_node.cpp` at `d26148535e` | 26 | `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6`, `p2p-ignore-ipv4`, `p2p-external-port`, `allow-local-ip`, `add-peer`, `add-priority-node` and `seed-node` (both gone on PR-3), `add-exclusive-node`, `tx-proxy`, `anonymous-inbound`, `no-ephemeral-tor`, `ban-list`, `no-sync`, `no-igd`, `igd`, `out-peers`, `in-peers`, `tos-flag`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `pad-transactions`, `clearnet-transport-encrypt`; and PR-3's `p2p-disclose-early` (`arg_p2p_disclose_early`, `src/p2p/net_node.cpp` line 131 at `d26148535e` at `fce0a2fa`) |
@@ -524,7 +524,7 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | the test and debug levers | `rg -n -e 'test_drop_download' -e 'g_test_dbg_lock_sleep' -e 'show_time_stats' src contrib/epee/include/syncobj.h` → more than 10 | 0 |
 | background mining's options and runtime arguments | `rg -n -e 'do_background_mining' -e 'ignore_battery' -e 'bg_mining' src` → more than 10 | 0 for the options and the `start_mining` arguments; the miner's background thread is the mining lane's (§10) |
 | the network booleans and `keep-fakechain` | `rg -n -e 'arg_testnet_on' -e 'arg_stagenet_on' -e 'arg_regtest_on' -e 'keep_fakechain' src` → more than 20 | 0 in daemon-linked code; the utilities' copies are re-homed (§9) |
-| the three regtest arms | the FAKECHAIN tests at [`src/p2p/net_node.inl:617`](../../src/p2p/net_node.inl), [`:719`](../../src/p2p/net_node.inl), [`src/cryptonote_core/cryptonote_core.cpp:523`](../../src/cryptonote_core/cryptonote_core.cpp), [`:1628`](../../src/cryptonote_core/cryptonote_core.cpp) | gone; [`:484`](../../src/cryptonote_core/cryptonote_core.cpp) (the `/fake` subdirectory) becomes the params row; [`:631`](../../src/cryptonote_core/cryptonote_core.cpp) (the pool's flag) is the pool lane's and is listed, not deleted |
+| the three regtest arms | the FAKECHAIN tests at [`src/p2p/net_node.inl:617`](../../src/p2p/net_node.inl), [`:719`](../../src/p2p/net_node.inl), line 523 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`, [`:1628`](../../src/cryptonote_core/cryptonote_core.cpp) | gone; [`:484`](../../src/cryptonote_core/cryptonote_core.cpp) (the `/fake` subdirectory) becomes the params row; [`:631`](../../src/cryptonote_core/cryptonote_core.cpp) (the pool's flag) is the pool lane's and is listed, not deleted |
 | the data-directory port suffix | `rg -n -F -e 'm_config_folder + "/" + public_zone.m_port' src/p2p/net_node.inl` → 1 | 0 |
 | `Blockchain::m_offline` and its parameter | [`src/cryptonote_core/blockchain.cpp:302`](../../src/cryptonote_core/blockchain.cpp), [`src/cryptonote_core/blockchain.h:1145`](../../src/cryptonote_core/blockchain.h) | 0 |
 | the undefined `extern nodetool::arg_offline` | line 507 of `src/p2p/net_node.h` at `d26148535e` | 0 |
@@ -596,7 +596,7 @@ The cutover's edit of the job's script (`scripts/ci/daemon_boot_stop_smoke.ps1`,
   error and prints it with the timeout message.
 - **The store check moves with the store.** The script looks for the
   store under `fake\lmdb\data.mdb`, a path the regtest branch at
-  [`src/cryptonote_core/cryptonote_core.cpp:484`](../../src/cryptonote_core/cryptonote_core.cpp)
+  line 484 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`
   makes. Under DC-Q5 an explicit data directory is used as given and the
   network subdirectory is row data for the default layout only, so the
   check asserts the store at the path the cutover gives it. It also
@@ -700,7 +700,7 @@ exit status is 2.
    Windows host.** Today an elevated daemon's default data directory is
    under `%ProgramData%`, which any local user may create first, and the
    daemon loads `shekyl.conf` from it unasked
-   ([`src/daemon/main.cpp:178-216`](../../src/daemon/main.cpp)): the
+   (lines 178 to 216 of `src/daemon/main.cpp` at `d26148535e`): the
    planted file can set the proxy (exposing the node's traffic origin) or
    the log path (an administrator's file write). Route: the auto-load and
    the elevation branch are deleted; a pre-created directory carries a

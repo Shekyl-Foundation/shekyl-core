@@ -40,7 +40,7 @@ needs, so the supervisor adds no path around it:
 | tell dials where to go | `ZoneDial::dial_tor` reads `tor_proxy` at each dial (`rust/shekyl-ffi/src/zone_ffi.rs:170-178`) | the `Option<SocketAddr>` becomes the supervisor's published route |
 | stop the dialer drawing while Tor is down | `Dialer::choose` plans, then draws (`rust/shekyl-dialer/src/owner/mod.rs:574-601`, the draw at `:685-686`) | the plan reads the connector's link before it draws; the owner loop parks on the link |
 | learn whether outbound works | every dial ends in a `CloseCause` that keeps the SOCKS reply (`rust/shekyl-transport-layer/src/cause.rs:202-246`) | each outcome is also evidence to the supervisor; no separate client probe |
-| prove the onion is reachable end to end | the self-connection nonce: an inbound handshake carrying a nonce this node put in flight on this zone is recognised and dropped (`src/p2p/net_node.inl:988-1001`) | a probe nonce kind; the probe is a dialer dial of our own onion |
+| prove the onion is reachable end to end | the self-connection nonce: an inbound handshake carrying a nonce this node put in flight on this zone is recognised and dropped (`src/p2p/net_node.inl:969-982`) | a probe nonce kind; the probe is a dialer dial of our own onion |
 | tell peers our address | `Dialer::set_own_addresses` (`rust/shekyl-dialer/src/owner/mod.rs:237`) → the partition's own member of the disclosure sample (`rust/shekyl-peerlist/src/partition.rs:521-535`) | called once per boot: the onion does not change at a respawn (`TSR-Q1`) |
 | keep inbound working across a respawn | the forward listener is bound by the zone host on loopback, not by Tor (`shekyl_zone_listen_tor`) | nothing: a republished onion targets the same port |
 

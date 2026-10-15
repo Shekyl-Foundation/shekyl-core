@@ -104,7 +104,7 @@ data directory
 and `p2pstate.bin`
 ([`src/cryptonote_config.h:217`](../../src/cryptonote_config.h)), which PR-3
 made the Rust dialer's address file under the same name
-([`src/p2p/net_node.inl:139`](../../src/p2p/net_node.inl)). The marker
+([`src/p2p/net_node.inl:123`](../../src/p2p/net_node.inl)). The marker
 treats either as a store.
 
 ## 4. Dependencies (§9 item 4, rule 17)
@@ -331,6 +331,28 @@ of its own, for the same reason as the negative one.
   three `arg_*_notify` descriptors, `m_block_rate_notify`, `m_reorg_notify`
   and `set_reorg_notify`, the `notify` unit test and its `test_notifier`
   helper are deleted; the runner's file joins the FFI signature gate.
+- **The remnant reads the snapshot and parses nothing (commit (e1), §2.9,
+  §4.2).** `core::init`, `miner::init`, `node_server::init` and `Daemon`
+  take the eleven-field snapshot; the protocol handler's `init()` takes
+  nothing; `run(snapshot)` has no argument vector. Lane-owned knobs the
+  grammar does not port (`INPUT_GRAMMAR.md` §5, IG-Q4) are today's
+  defaults as named constants beside their readers, each comment naming
+  its lane. The fakechain wipe on start is off (§2.6, R3); its arm goes
+  with the other regtest arms in (e2). The `show-time-stats` lever's
+  timing prints are debug-level log lines, selected by `log-level` and
+  `log-category` as every other diagnostic is. The C++ test binaries
+  construct the remnant from a snapshot the real parse builds
+  (`shekyl_daemon_snapshot_parse`, `shekyl_daemon_snapshot_free`, in
+  `shekyl-daemon`'s entry, rule 26 B2): `core_tests` links the daemon
+  image for it, as `unit_tests` does; `node_server.cpp`'s non-offline
+  fixture records the relay's posture itself, as `levin.cpp`'s does, so
+  it no longer depends on an earlier test having recorded one. The
+  blockchain utilities keep `testnet`, `stagenet`, `regtest` and
+  `data-dir` in `src/blockchain_utilities/daemon_network_args.h` until
+  the grammar's Part B rules each tool (§9, §10). `/start_mining` loses
+  `do_background_mining` and `ignore_battery` with the background-mining
+  options (a 3.57 change, recorded in its note); the miner's own
+  background thread stays, the mining lane's (§10).
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test

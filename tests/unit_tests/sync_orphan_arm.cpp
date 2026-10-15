@@ -85,7 +85,7 @@ public:
   void on_synchronized(){}
   void safesyncmode(const bool){}
   void set_target_blockchain_height(uint64_t) {}
-  bool init(const boost::program_options::variables_map& vm) { return true; }
+  bool init() { return true; }
   bool deinit(){ return true; }
   bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const
   { ids.push_back(crypto::null_hash); current_height = chain_height; return true; }

@@ -37,7 +37,6 @@
 #include "cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "file_io_utils.h"
-#include "common/command_line.h"
 #include "common/util.h"
 #include "string_tools.h"
 #include "storages/portable_storage_template_helper.h"
@@ -89,13 +88,6 @@ namespace cryptonote
 
   namespace
   {
-    const command_line::arg_descriptor<std::string> arg_start_mining =    {"start-mining", "Specify wallet address to mining for", "", true};
-    const command_line::arg_descriptor<uint32_t>      arg_mining_threads =  {"mining-threads", "Specify mining threads count", 0, true};
-    const command_line::arg_descriptor<bool>        arg_bg_mining_enable =  {"bg-mining-enable", "enable background mining", true, true};
-    const command_line::arg_descriptor<bool>        arg_bg_mining_ignore_battery =  {"bg-mining-ignore-battery", "if true, assumes plugged in when unable to query system power status", false, true};    
-    const command_line::arg_descriptor<uint64_t>    arg_bg_mining_min_idle_interval_seconds =  {"bg-mining-min-idle-interval", "Specify min lookback interval in seconds for determining idle state", miner::BACKGROUND_MINING_DEFAULT_MIN_IDLE_INTERVAL_IN_SECONDS, true};
-    const command_line::arg_descriptor<uint16_t>     arg_bg_mining_idle_threshold_percentage =  {"bg-mining-idle-threshold", "Specify minimum avg idle percentage over lookback interval", miner::BACKGROUND_MINING_DEFAULT_IDLE_THRESHOLD_PERCENTAGE, true};
-    const command_line::arg_descriptor<uint16_t>     arg_bg_mining_miner_target_percentage =  {"bg-mining-miner-target", "Specify maximum percentage cpu use by miner(s)", miner::BACKGROUND_MINING_DEFAULT_MINING_TARGET_PERCENTAGE, true};
   }
 
 
@@ -275,50 +267,25 @@ namespace cryptonote
       m_threads.push_back(boost::thread(m_attrs, boost::bind(&miner::worker_thread, this)));
   }
   //-----------------------------------------------------------------------------------------------------
-  void miner::init_options(boost::program_options::options_description& desc)
+  bool miner::init(const ShekylDaemonSnapshot& snapshot, network_type nettype)
   {
-    command_line::add_arg(desc, arg_start_mining);
-    command_line::add_arg(desc, arg_mining_threads);
-    command_line::add_arg(desc, arg_bg_mining_enable);
-    command_line::add_arg(desc, arg_bg_mining_ignore_battery);    
-    command_line::add_arg(desc, arg_bg_mining_min_idle_interval_seconds);
-    command_line::add_arg(desc, arg_bg_mining_idle_threshold_percentage);
-    command_line::add_arg(desc, arg_bg_mining_miner_target_percentage);
-  }
-  //-----------------------------------------------------------------------------------------------------
-  bool miner::init(const boost::program_options::variables_map& vm, network_type nettype)
-  {
-    if(command_line::has_arg(vm, arg_start_mining))
+    // The two mining rows (DAEMON_CONFIG_CUTOVER.md §2.9): the address the
+    // table admitted, checked here against the network, and the thread
+    // count, 0 for the machine's own.
+    if (snapshot.mine_address != nullptr)
     {
+      const std::string address(snapshot.mine_address);
       address_parse_info info;
-      if(!cryptonote::get_account_address_from_str(info, nettype, command_line::get_arg(vm, arg_start_mining)) || info.is_subaddress)
+      if(!cryptonote::get_account_address_from_str(info, nettype, address) || info.is_subaddress)
       {
-        LOG_ERROR("Target account address " << command_line::get_arg(vm, arg_start_mining) << " has wrong format, starting daemon canceled");
+        LOG_ERROR("Target account address " << address << " has wrong format, starting daemon canceled");
         return false;
       }
       m_mine_address = info.address;
-      m_mine_address_str = command_line::get_arg(vm, arg_start_mining);
-      m_threads_total = 1;
+      m_mine_address_str = address;
+      m_threads_total = snapshot.mine_threads == 0 ? 1 : snapshot.mine_threads;
       m_do_mining = true;
-      if(command_line::has_arg(vm, arg_mining_threads))
-      {
-        m_threads_total = command_line::get_arg(vm, arg_mining_threads);
-      }
     }
-
-    // Background mining parameters
-    // Let init set all parameters even if background mining is not enabled, they can start later with params set
-    if(command_line::has_arg(vm, arg_bg_mining_enable))
-      set_is_background_mining_enabled( command_line::get_arg(vm, arg_bg_mining_enable) );
-    if(command_line::has_arg(vm, arg_bg_mining_ignore_battery))
-      set_ignore_battery( command_line::get_arg(vm, arg_bg_mining_ignore_battery) );      
-    if(command_line::has_arg(vm, arg_bg_mining_min_idle_interval_seconds))
-      set_min_idle_seconds( command_line::get_arg(vm, arg_bg_mining_min_idle_interval_seconds) );
-    if(command_line::has_arg(vm, arg_bg_mining_idle_threshold_percentage))
-      set_idle_threshold( command_line::get_arg(vm, arg_bg_mining_idle_threshold_percentage) );
-    if(command_line::has_arg(vm, arg_bg_mining_miner_target_percentage))
-      set_mining_target( command_line::get_arg(vm, arg_bg_mining_miner_target_percentage) );
-
     return true;
   }
   //-----------------------------------------------------------------------------------------------------
@@ -341,7 +308,7 @@ namespace cryptonote
     return m_threads_total;
   }
   //-----------------------------------------------------------------------------------------------------
-  bool miner::start(const account_public_address& adr, const std::string& adr_str, size_t threads_count, bool do_background, bool ignore_battery)
+  bool miner::start(const account_public_address& adr, const std::string& adr_str, size_t threads_count)
   {
     m_block_reward = 0;
     m_mine_address = adr;
@@ -371,8 +338,6 @@ namespace cryptonote
 
     m_stop = false;
     m_thread_index = 0;
-    set_is_background_mining_enabled(do_background);
-    set_ignore_battery(ignore_battery);
     
     for(size_t i = 0; i != m_threads_total; i++)
     {
@@ -468,7 +433,7 @@ namespace cryptonote
   {
     if(m_do_mining)
     {
-      start(m_mine_address, m_mine_address_str, m_threads_total, get_is_background_mining_enabled(), get_ignore_battery());
+      start(m_mine_address, m_mine_address_str, m_threads_total);
     }
   }
   //-----------------------------------------------------------------------------------------------------

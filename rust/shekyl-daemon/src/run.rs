@@ -15,7 +15,7 @@
 //! lock is released last. A refusal exits with 2, a runtime failure with
 //! 1, and `run`'s status becomes the exit status otherwise.
 
-use std::ffi::{c_char, c_int, CStr, CString, OsStr, OsString};
+use std::ffi::{c_char, CStr, CString, OsString};
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -53,6 +53,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         Some((p, rest)) => (p.clone(), rest.to_vec()),
         None => (OsString::from("shekyld"), Vec::new()),
     };
+    let program = program.to_string_lossy().into_owned();
     let cli = match read_cli(&TABLE, rest.iter().cloned()) {
         Ok(cli) => cli,
         Err(ds) => return refuse(&ds),
@@ -63,12 +64,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     if cli.given.iter().any(|g| g.row.name == "help") {
         print!(
             "{}",
-            help::render(
-                &TABLE,
-                &program.to_string_lossy(),
-                &release_name,
-                &version_full
-            )
+            help::render(&TABLE, &program, &release_name, &version_full)
         );
         return 0;
     }
@@ -121,7 +117,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
 
     // Client mode: no lock, no marker, no log file, no announcement.
     if config.is_client() {
-        return call_run(entry, &config, &program);
+        return call_run(entry, &config);
     }
 
     // The lock, the marker, the log location.
@@ -190,7 +186,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     // The options handle: the resolved values, the runtime rows' owners
     // behind the RPC's two methods (§2.7).
     let options: OptionsHandle = Arc::new(DaemonOptions::new(resolved.clone(), network));
-    let status = supervise(entry, &config, &program, &pool, network_id, options);
+    let status = supervise(entry, &config, &pool, network_id, options);
     pool.shutdown_background();
     drop(lock);
     status
@@ -215,7 +211,6 @@ enum Reached {
 fn supervise(
     entry: &ShekylDaemonEntry,
     config: &DaemonConfig,
-    program: &OsStr,
     pool: &shekyl_runtime::Pool,
     network_id: [u8; 16],
     options: OptionsHandle,
@@ -235,7 +230,7 @@ fn supervise(
     // Step 6: the managed Tor's start, overlapping the core's construction;
     // awaited at step 8.
     let tor_start = tor::begin(&config.tor, &config.data_dir, pool.handle());
-    let data = SnapshotData::new(config, program);
+    let data = SnapshotData::new(config);
     let (done_tx, mut done_rx) = tokio::sync::oneshot::channel::<i32>();
     let thread = std::thread::Builder::new()
         .name("shekyld-run".to_owned())
@@ -457,11 +452,10 @@ pub(crate) struct SnapshotData {
     console: bool,
     command: Vec<CString>,
     client_endpoint: Option<CString>,
-    argv: Vec<CString>,
 }
 
 impl SnapshotData {
-    pub(crate) fn new(config: &DaemonConfig, program: &OsStr) -> Self {
+    pub(crate) fn new(config: &DaemonConfig) -> Self {
         let c = |s: &str| CString::new(s.replace('\0', "")).expect("no NUL after the filter");
         Self {
             data_dir: c(&config.data_dir.display().to_string()),
@@ -475,7 +469,6 @@ impl SnapshotData {
             console: config.session.console,
             command: config.session.command.iter().map(|w| c(w)).collect(),
             client_endpoint: config.session.client_endpoint.map(|e| c(&e.to_string())),
-            argv: legacy::argv(program, config).iter().map(|a| c(a)).collect(),
         }
     }
 
@@ -502,8 +495,14 @@ impl SnapshotData {
     /// Calls `run` with pointers into this data, which outlives the call.
     fn call(&self, run: crate::entry::RunFn) -> i32 {
         let command: Vec<*const c_char> = self.command.iter().map(|w| w.as_ptr()).collect();
-        let argv: Vec<*const c_char> = self.argv.iter().map(|a| a.as_ptr()).collect();
-        let snapshot = ShekylDaemonSnapshot {
+        let snapshot = self.snapshot(&command);
+        run(&raw const snapshot)
+    }
+
+    /// The snapshot over this data and `command`, the pointers to its
+    /// command words; both must outlive every read of the result.
+    fn snapshot(&self, command: &[*const c_char]) -> ShekylDaemonSnapshot {
+        ShekylDaemonSnapshot {
             data_dir: self.data_dir.as_ptr(),
             network: self.network,
             offline: self.offline,
@@ -524,40 +523,88 @@ impl SnapshotData {
                 .client_endpoint
                 .as_ref()
                 .map_or(std::ptr::null(), |e| e.as_ptr()),
-        };
-        let argc = c_int::try_from(argv.len()).unwrap_or(c_int::MAX);
-        run(&raw const snapshot, argc, argv.as_ptr())
+        }
     }
 }
 
-fn call_run(entry: &ShekylDaemonEntry, config: &DaemonConfig, program: &OsStr) -> i32 {
+/// A snapshot leased to a C++ test binary: the structure first, so its
+/// address is the lease's, then what it points at.
+#[repr(C)]
+pub(crate) struct Leased {
+    snapshot: ShekylDaemonSnapshot,
+    _command: Vec<*const c_char>,
+    _data: Box<SnapshotData>,
+}
+
+// SAFETY: the pointers are into `_data`, which the lease owns and never
+// mutates; the C++ reads them from any thread it likes.
+#[allow(unsafe_code)]
+unsafe impl Send for Leased {}
+
+/// The real parse for a C++ test binary (`shekyl_daemon_snapshot_parse`):
+/// the arguments through the table, the file and the sections, with the
+/// platform's roots; no lock, marker or logging. `Err` is the exit status
+/// a start would have given, the refusals printed.
+pub(crate) fn snapshot_for_tests(args: &[OsString], host: &Host) -> Result<Box<Leased>, i32> {
+    let rest = args.get(1..).unwrap_or(&[]);
+    let cli = read_cli(&TABLE, rest.iter().cloned()).map_err(|ds| refuse(&ds))?;
+    let (network, mode) = choosers(&cli);
+    let (config_path, named) = match cli.given.iter().find(|g| g.row.name == "config-file") {
+        Some(g) => match &g.value {
+            Value::Path(p) => (p.clone(), true),
+            _ => return Err(EXIT_FAILED),
+        },
+        None => (
+            paths::config_file_default(&host.platform, mode, network).map_err(|d| refuse(&[d]))?,
+            false,
+        ),
+    };
+    let opened = file::open(&config_path, named).map_err(|d| refuse(&[d]))?;
+    let given = match &opened {
+        Some(config_file) => {
+            read_file(&TABLE, &config_path, &config_file.text).map_err(|ds| refuse(&ds))?
+        }
+        None => Vec::new(),
+    };
+    let resolved = resolve(&TABLE, network, cli, given).map_err(|ds| refuse(&ds))?;
+    let file_read = opened.as_ref().map(|f| f.path.as_path());
+    let config =
+        build(&resolved, network, mode, &host.platform, file_read).map_err(|ds| refuse(&ds))?;
+    let data = Box::new(SnapshotData::new(&config));
+    let command: Vec<*const c_char> = data.command.iter().map(|w| w.as_ptr()).collect();
+    let snapshot = data.snapshot(&command);
+    Ok(Box::new(Leased {
+        snapshot,
+        _command: command,
+        _data: data,
+    }))
+}
+
+fn call_run(entry: &ShekylDaemonEntry, config: &DaemonConfig) -> i32 {
     let Some(run) = entry.run else {
         eprintln!("shekyld: the entry has no run");
         return EXIT_FAILED;
     };
-    SnapshotData::new(config, program).call(run)
+    SnapshotData::new(config).call(run)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+    use std::ffi::c_int;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
-    static LAST_ARGC: AtomicI32 = AtomicI32::new(-1);
+    static RUNS: AtomicUsize = AtomicUsize::new(0);
     /// The RPC section, the owners' records and the signal owner's request
     /// are process-global: the tests that drive them run one at a time.
     static SERIAL: Mutex<()> = Mutex::new(());
     static STOPS: AtomicUsize = AtomicUsize::new(0);
     static RUN_RETURNS: Mutex<i32> = Mutex::new(0);
 
-    extern "C" fn fake_run(
-        snapshot: *const ShekylDaemonSnapshot,
-        argc: c_int,
-        _argv: *const *const c_char,
-    ) -> c_int {
+    extern "C" fn fake_run(snapshot: *const ShekylDaemonSnapshot) -> c_int {
         assert!(!snapshot.is_null());
-        LAST_ARGC.store(argc, Ordering::SeqCst);
+        RUNS.fetch_add(1, Ordering::SeqCst);
         *RUN_RETURNS.lock().unwrap()
     }
 
@@ -568,11 +615,7 @@ mod tests {
     static STOP_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     /// A remnant that runs until its `stop` is called, as the daemon does.
-    extern "C" fn blocking_run(
-        snapshot: *const ShekylDaemonSnapshot,
-        _argc: c_int,
-        _argv: *const *const c_char,
-    ) -> c_int {
+    extern "C" fn blocking_run(snapshot: *const ShekylDaemonSnapshot) -> c_int {
         assert!(!snapshot.is_null());
         while !STOP_ARMED.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -638,13 +681,14 @@ mod tests {
     fn client_mode_calls_run_without_a_lock_and_returns_its_status() {
         let d = tempfile::tempdir().unwrap();
         *RUN_RETURNS.lock().unwrap() = 7;
+        let runs_before = RUNS.load(Ordering::SeqCst);
         let status = main(
             &entry(),
             &args(&["--rpc-admin-listen", "127.0.0.1:4444", "status"]),
             &host(d.path()),
         );
         assert_eq!(status, 7);
-        assert!(LAST_ARGC.load(Ordering::SeqCst) > 1);
+        assert_eq!(RUNS.load(Ordering::SeqCst), runs_before + 1);
         assert!(
             !d.path().join(".shekyl").join("shekyld.lock").exists(),
             "a client takes no lock"
@@ -670,7 +714,7 @@ mod tests {
         let (network, mode) = choosers(&cli);
         let resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
         let config = build(&resolved, network, mode, &host(d.path()).platform, None).unwrap();
-        let data = SnapshotData::new(&config, OsStr::new("shekyld"));
+        let data = SnapshotData::new(&config);
         assert_eq!(
             data.command_words(),
             vec!["status".to_owned(), "extra".to_owned()]
@@ -722,7 +766,6 @@ mod tests {
         let status = supervise(
             &entry,
             &config,
-            OsStr::new("shekyld"),
             &pool,
             [3u8; 16],
             Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),

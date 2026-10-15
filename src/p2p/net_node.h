@@ -39,7 +39,6 @@
 #include <boost/thread.hpp>
 #include <optional>
 #include <boost/program_options/options_description.hpp>
-#include <boost/program_options/variables_map.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <chrono>
 #include <functional>
@@ -167,11 +166,10 @@ namespace nodetool
     {}
     virtual ~node_server();
 
-    static void init_options(boost::program_options::options_description& desc);
 
     bool run();
     network_zone& add_zone(epee::net_utils::connector_id zone);
-    bool init(const boost::program_options::variables_map& vm);
+    bool init(const ShekylDaemonSnapshot& snapshot);
     bool deinit();
     bool send_stop_signal();
     t_payload_net_handler& get_payload_object();
@@ -248,9 +246,6 @@ namespace nodetool
     bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
 
     bool parse_peer_from_string(epee::net_utils::network_address& pe, const std::string& node_addr, uint16_t default_port = 0);
-    bool handle_command_line(
-        const boost::program_options::variables_map& vm
-      );
     bool idle_worker();
     bool handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context);
     bool get_local_node_data(epee::net_utils::connector_id zone_type, basic_node_data& node_data, const network_zone& zone) const;
@@ -316,11 +311,8 @@ namespace nodetool
     cryptonote::network_type m_nettype;
   };
 
-    extern const command_line::arg_descriptor<bool> arg_no_sync;
 
-    extern const command_line::arg_descriptor<bool>        arg_offline;
 
-    extern const command_line::arg_descriptor<bool> arg_pad_transactions;
 }
 
 POP_WARNINGS
