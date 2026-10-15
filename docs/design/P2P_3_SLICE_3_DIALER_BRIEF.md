@@ -381,7 +381,7 @@ up and the address is still gray.
 
 **The clock (Rick, 2026-10-08).** The outbound handshake's only clock
 is each connector's transport gap, from channel established to the
-peer's first complete Levin frame (Rick, 2026-10-14;
+peer's first complete handshake frame (Rick, 2026-10-14;
 [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D3, and D11 item 5),
 armed by the connector with D9's values: clearnet 1.430 s and Tor
 37.4 s, in `shekyl-transport-layer::spans`, labelled `CppPath` and

@@ -683,19 +683,111 @@ mod tests {
         drop(engine);
     }
 
-    /// A first Levin frame of `body` bytes: a handshake request's header
-    /// and its body.
-    fn levin_frame(body: usize) -> Vec<u8> {
+    /// A Levin frame of `command` with `flags` and a `body`-byte body.
+    fn frame(command: u32, flags: shekyl_levin::Flags, body: usize) -> Vec<u8> {
         let head = shekyl_levin::BucketHead {
             payload_len: u64::try_from(body).expect("small"),
-            expect_response: 1,
-            command: 1001,
-            flags: shekyl_levin::Flags::REQUEST,
+            expect_response: u8::from(flags.contains(shekyl_levin::Flags::REQUEST)),
+            command,
+            flags,
             protocol_version: shekyl_levin::PROTOCOL_VERSION_1,
         };
         let mut out = head.write().to_vec();
         out.extend(std::iter::repeat_n(7u8, body));
         out
+    }
+
+    /// The handshake request an inbound peer opens with.
+    fn levin_frame(body: usize) -> Vec<u8> {
+        frame(
+            shekyl_levin::COMMAND_HANDSHAKE,
+            shekyl_levin::Flags::REQUEST,
+            body,
+        )
+    }
+
+    /// A support-flags request: a complete frame that is not a handshake.
+    fn support_flags_frame() -> Vec<u8> {
+        frame(
+            shekyl_levin::COMMAND_REQUEST_SUPPORT_FLAGS,
+            shekyl_levin::Flags::REQUEST,
+            10,
+        )
+    }
+
+    /// One dialed session, with what it needs kept alive.
+    struct DialedPeer {
+        engine: EngineService<MonotonicClock>,
+        listener: Listener<MonotonicClock>,
+        session: super::Session,
+        seen: Arc<Mutex<Vec<CloseCause>>>,
+    }
+
+    /// Dial an onion through a fake SOCKS proxy to a peer that writes
+    /// `reply` and then holds the connection open, silent, for 2 s.
+    fn dial_peer_that_writes(gap: Tick, reply: Vec<u8>) -> DialedPeer {
+        let engine = EngineService::start(MonotonicClock::new());
+        let pool = runtime(budget(), &name()).expect("runtime");
+        let recorded = causes();
+        let proxy_port = pool.handle().clone().block_on(async {
+            let dest = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("dest");
+            let dest_port = dest.local_addr().expect("addr").port();
+            let proxy = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .await
+                .expect("proxy");
+            let proxy_port = proxy.local_addr().expect("addr").port();
+            tokio::spawn(async move {
+                let (mut sock, _) = dest.accept().await.expect("accept");
+                sock.write_all(&reply).await.expect("reply");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            });
+            tokio::spawn(async move {
+                let (mut sock, _) = proxy.accept().await.expect("proxy");
+                let mut greeting = [0u8; 3];
+                sock.read_exact(&mut greeting).await.expect("greet");
+                sock.write_all(&[0x05, 0x00]).await.expect("method");
+                let mut head = [0u8; 5];
+                sock.read_exact(&mut head).await.expect("head");
+                let mut name = vec![0u8; usize::from(head[4]) + 2];
+                sock.read_exact(&mut name).await.expect("name");
+                let mut upstream =
+                    TcpStream::connect(SocketAddr::from((Ipv4Addr::LOCALHOST, dest_port)))
+                        .await
+                        .expect("upstream");
+                sock.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                    .await
+                    .expect("reply");
+                match tokio::io::copy_bidirectional(&mut sock, &mut upstream).await {
+                    Ok(_) | Err(_) => {}
+                }
+            });
+            proxy_port
+        });
+        let mut listener = listen(
+            pool,
+            &engine.handle(),
+            &Sockets::new(),
+            &config(
+                SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
+                Vec::new(),
+                InboundCeiling::Bounded(4),
+                Tick::new(5_000_000_000),
+                gap,
+                recorded.sink,
+            ),
+        )
+        .expect("listen");
+        listener.dial(onion());
+        let handle = listener.runtime_handle().clone();
+        let session = handle.block_on(next_session(&mut listener.sessions));
+        DialedPeer {
+            engine,
+            listener,
+            session,
+            seen: recorded.seen,
+        }
     }
 
     fn no_gap_timeout(seen: &Mutex<Vec<CloseCause>>) -> bool {
@@ -724,9 +816,8 @@ mod tests {
     }
 
     /// The gap measures the peer's silence (Rick, 2026-10-14): the peer's
-    /// first complete Levin frame ends it, and a strand verdict that is
-    /// slow after that frame (here, never given) does not time the peer
-    /// out. *Records-was:* the strand's verdict ended the gap, so this
+    /// handshake frame ends it, and a strand verdict that is slow after
+    /// that frame (here, never given) does not time the peer out. *Records-was:* the strand's verdict ended the gap, so this
     /// node's own slowness timed out a peer that had spoken.
     #[test]
     fn a_complete_frame_ends_the_gap_while_the_verdict_is_slow() {
@@ -747,10 +838,96 @@ mod tests {
         std::thread::sleep(Duration::from_millis(900));
         assert!(
             no_gap_timeout(&seen),
-            "the gap fired after the peer's first complete frame"
+            "the gap fired after the peer's handshake frame"
         );
         client.write_all(b"still").expect("write");
         assert_eq!(read_bytes(&handle, &mut session, 5), b"still");
+        listener.shutdown();
+        drop(engine);
+    }
+
+    /// **A complete frame that is not the handshake does not end the gap**
+    /// (Copilot on #1056). An inbound peer that sends a support-flags
+    /// request and stops had held its session with no deadline at all; it
+    /// is still silent, and the gap times it out.
+    #[test]
+    fn an_inbound_peer_that_sends_support_flags_and_stops_is_timed_out() {
+        let (engine, mut listener, seen) = start(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            InboundCeiling::Bounded(4),
+            Tick::new(300_000_000),
+        );
+        let mut client = StdStream::connect(listener.forward_addr().socket()).expect("connect");
+        client.write_all(&support_flags_frame()).expect("write");
+        let handle = listener.runtime_handle().clone();
+        let mut session = handle.block_on(next_session(&mut listener.sessions));
+        // Bounded: with the defect the session stays open, and the test
+        // fails instead of waiting for ever.
+        let cause = handle.block_on(async {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while session.recv().await.is_some() {}
+            })
+            .await
+            .expect("the gap closes the session");
+            session.close_cause()
+        });
+        assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+        assert_eq!(
+            wait_kind(&seen, CloseKind::LevinHandshakeTimeout).kind(),
+            CloseKind::LevinHandshakeTimeout
+        );
+        drop(client);
+        listener.shutdown();
+        drop(engine);
+    }
+
+    /// On a session this node dialed, the peer's handshake response ends
+    /// the gap.
+    #[test]
+    fn a_dialed_peer_s_handshake_response_ends_the_gap() {
+        let response = frame(
+            shekyl_levin::COMMAND_HANDSHAKE,
+            shekyl_levin::Flags::RESPONSE,
+            40,
+        );
+        let len = response.len();
+        let DialedPeer {
+            engine,
+            listener,
+            mut session,
+            seen,
+        } = dial_peer_that_writes(Tick::new(300_000_000), response);
+        let handle = listener.runtime_handle().clone();
+        assert_eq!(read_bytes(&handle, &mut session, len).len(), len);
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(
+            no_gap_timeout(&seen),
+            "the gap fired after the peer's handshake response"
+        );
+        listener.shutdown();
+        drop(engine);
+    }
+
+    /// A dialed peer that answers with a handshake *request* has not
+    /// answered: the gap still times it out.
+    #[test]
+    fn a_dialed_peer_s_handshake_request_does_not_end_the_gap() {
+        let DialedPeer {
+            engine,
+            listener,
+            mut session,
+            seen,
+        } = dial_peer_that_writes(Tick::new(300_000_000), levin_frame(40));
+        let handle = listener.runtime_handle().clone();
+        let cause = handle.block_on(async {
+            while session.recv().await.is_some() {}
+            session.close_cause()
+        });
+        assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+        assert_eq!(
+            wait_kind(&seen, CloseKind::LevinHandshakeTimeout).kind(),
+            CloseKind::LevinHandshakeTimeout
+        );
         listener.shutdown();
         drop(engine);
     }

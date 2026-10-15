@@ -182,8 +182,8 @@ pub use compress::{
 pub use error::Error;
 pub use fragment::{fragmented_notify, noise_notify};
 pub use header::{
-    BucketHead, FirstFrame, Flags, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
-    LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
+    BucketHead, Flags, HandshakeFrame, HandshakeKind, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE,
+    INITIAL_MAX_PACKET_SIZE, LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
 pub use ingress::{
     ingress_payload_cap, DefinedCommand, FLAGS_DEFINED, HANDSHAKE_FIXED_MAX_BYTES,

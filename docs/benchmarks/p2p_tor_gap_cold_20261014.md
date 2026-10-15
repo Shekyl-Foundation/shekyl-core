@@ -255,3 +255,15 @@ largest four are 46.91 s, 18.69 s, 15.50 s, 6.60 s. The p99 is rank
 sample 72). The 31 s first ruled is struck as a miscount: it doubled
 15.50 s, rank 187, about p98.9 (Rick, 2026-10-14). The inbound gap's
 pooled p99 is 27.69 s, inside 37.4 s.
+
+**What the gap ends at, and what these runs measured.** The gap now ends
+at the peer's first complete handshake frame, not at any first frame
+(Copilot on #1056: a support-flags request had ended it on an inbound
+session, which then held its slot with no deadline). In these runs the
+two are the same frame. The dialer sends its handshake request before
+anything else, so the responder's first frame from it is that request;
+and the dialer accepts only the handshake response as its first whole
+message, so every counted session's first frame from the responder was
+that response. The derivation bounds the frame the gap ends at. The
+Tor driver's debug line for that moment is now `handshake_frame_ns`, where
+these runs read `first_frame_ns`.

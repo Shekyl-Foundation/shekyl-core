@@ -5,7 +5,7 @@
 
 //! The handshake gap measures the peer's silence (Rick, 2026-10-14).
 //!
-//! The gap ends at the peer's first complete Levin frame, which the
+//! The gap ends at the peer's first complete handshake frame, which the
 //! connector's reader marks in a shared flag. The strand's verdict is this
 //! node's own work and never ends it. When the gap's wake fires, the frame
 //! may already sit in the socket: a driver that resumes after the deadline
@@ -55,7 +55,7 @@ impl<W> SilenceGap<W> {
         }
     }
 
-    /// `Ready(None)`: the peer's first complete frame arrived, and the gap
+    /// `Ready(None)`: the peer's handshake frame arrived, and the gap
     /// is over. `Ready(Some(wake))`: the wake fired, and one IO driver turn
     /// later no frame had been read. Poll the reader before this in the
     /// same pass, and stop polling this once it is ready.

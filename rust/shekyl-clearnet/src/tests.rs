@@ -715,19 +715,97 @@ where
     (cause, seen)
 }
 
-/// A first Levin frame of `body` bytes: a handshake request's header and
-/// its body.
-fn levin_frame(body: usize) -> Vec<u8> {
+/// A Levin frame of `command` with `flags` and a `body`-byte body.
+fn frame(command: u32, flags: shekyl_levin::Flags, body: usize) -> Vec<u8> {
     let head = shekyl_levin::BucketHead {
         payload_len: u64::try_from(body).expect("small"),
-        expect_response: 1,
-        command: 1001,
-        flags: shekyl_levin::Flags::REQUEST,
+        expect_response: u8::from(flags.contains(shekyl_levin::Flags::REQUEST)),
+        command,
+        flags,
         protocol_version: shekyl_levin::PROTOCOL_VERSION_1,
     };
     let mut out = head.write().to_vec();
     out.extend(std::iter::repeat_n(7u8, body));
     out
+}
+
+/// The handshake response a dialed peer answers with.
+fn levin_frame(body: usize) -> Vec<u8> {
+    frame(
+        shekyl_levin::COMMAND_HANDSHAKE,
+        shekyl_levin::Flags::RESPONSE,
+        body,
+    )
+}
+
+/// The handshake request an inbound peer opens with.
+fn handshake_request(body: usize) -> Vec<u8> {
+    frame(
+        shekyl_levin::COMMAND_HANDSHAKE,
+        shekyl_levin::Flags::REQUEST,
+        body,
+    )
+}
+
+/// A support-flags request: a complete frame that is not a handshake.
+fn support_flags_frame() -> Vec<u8> {
+    frame(
+        shekyl_levin::COMMAND_REQUEST_SUPPORT_FLAGS,
+        shekyl_levin::Flags::REQUEST,
+        10,
+    )
+}
+
+/// One plain inbound connection under a `gap`: the accept loop, as the
+/// zone host runs it, and a client socket that has written `opening`.
+struct AcceptedPeer {
+    engine: EngineService<MonotonicClock>,
+    pool: shekyl_runtime::Pool,
+    session: shekyl_capped_stream::Session,
+    // Dropping `gap` is a local close. The hub holds it in production.
+    gap: Option<tokio::sync::oneshot::Sender<()>>,
+    client: StdStream,
+    seen: Arc<Mutex<Vec<CloseKind>>>,
+}
+
+fn accept_peer_that_writes(gap: Tick, opening: &[u8]) -> AcceptedPeer {
+    let engine = EngineService::start(MonotonicClock::new());
+    let pool = runtime(harness_budget(), &name("sk-clearnet-in")).expect("runtime");
+    let recorded = causes();
+    let (admitted_tx, mut admitted_rx) = mpsc::unbounded_channel();
+    let inbound = super::Inbound {
+        sockets: Sockets::new(),
+        ceiling: || InboundCeiling::Bounded(4),
+        kind: ChannelChoice::Plain,
+        network_id: ID,
+        handshake_within: Tick::new(2_000_000_000),
+        gap_within: Some(gap),
+        tally: Arc::new(super::zero_tally()),
+        on_cause: Arc::clone(&recorded.sink),
+        send_queue_bytes: 65_536,
+        admitted: admitted_tx,
+        backoff: Duration::from_millis(1),
+    };
+    let handle = engine.handle();
+    let addr = pool.block_on(async {
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(super::accept_inbound(listener, inbound, handle));
+        addr
+    });
+    let mut client = connect(addr);
+    client.write_all(opening).expect("opening");
+    let admitted = pool.block_on(async { admitted_rx.recv().await.expect("admitted") });
+    AcceptedPeer {
+        engine,
+        pool,
+        session: admitted.session,
+        gap: admitted.gap,
+        client,
+        seen: recorded.seen,
+    }
 }
 
 fn read_bytes(
@@ -749,8 +827,8 @@ fn read_bytes(
 }
 
 /// The gap measures the peer's silence (Rick, 2026-10-14): the peer's
-/// first complete Levin frame ends it, and a strand verdict that is slow
-/// after that frame (here, never given) does not time the peer out.
+/// handshake frame ends it, and a strand verdict that is slow after that
+/// frame (here, never given) does not time the peer out.
 /// *Records-was:* the strand's verdict ended the gap.
 #[test]
 fn a_complete_frame_ends_the_gap_while_the_verdict_is_slow() {
@@ -772,11 +850,73 @@ fn a_complete_frame_ends_the_gap_while_the_verdict_is_slow() {
             .lock()
             .expect("causes")
             .contains(&CloseKind::LevinHandshakeTimeout),
-        "the gap fired after the peer's first complete frame"
+        "the gap fired after the peer's handshake frame"
     );
     drop(dialled.gap.take());
     dialled.pool.shutdown(Duration::from_millis(50));
     drop(dialled.engine);
+}
+
+/// **A complete frame that is not the handshake does not end the gap**
+/// (Copilot on #1056). A dialed peer that answers with a support-flags
+/// request and stops has not answered: the gap times it out.
+#[test]
+fn a_dialed_peer_that_sends_support_flags_and_stops_is_timed_out() {
+    let (cause, seen) = dial_against(Tick::new(200_000_000), move |mut sock| {
+        sock.write_all(&support_flags_frame()).expect("frame");
+        std::thread::sleep(Duration::from_secs(2));
+        drop(sock);
+    });
+    assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+    assert!(seen.contains(&CloseKind::LevinHandshakeTimeout));
+}
+
+/// An inbound peer's handshake request ends the gap.
+#[test]
+fn an_inbound_peer_s_handshake_request_ends_the_gap() {
+    let request = handshake_request(40);
+    let mut peer = accept_peer_that_writes(Tick::new(300_000_000), &request);
+    assert_eq!(
+        read_bytes(&peer.pool, &mut peer.session, request.len()),
+        request
+    );
+    std::thread::sleep(Duration::from_millis(900));
+    assert!(
+        !peer
+            .seen
+            .lock()
+            .expect("causes")
+            .contains(&CloseKind::LevinHandshakeTimeout),
+        "the gap fired after the inbound peer's handshake request"
+    );
+    drop(peer.client);
+    drop(peer.gap.take());
+    peer.pool.shutdown(Duration::from_millis(50));
+    drop(peer.engine);
+}
+
+/// **An inbound peer that sends a support-flags request and stops is timed
+/// out** (Copilot on #1056): the strand answers that request before any
+/// handshake, and the session had then held an admission slot with no
+/// deadline at all.
+#[test]
+fn an_inbound_peer_that_sends_support_flags_and_stops_is_timed_out() {
+    let mut peer = accept_peer_that_writes(Tick::new(200_000_000), &support_flags_frame());
+    // Bounded: with the defect the session stays open, and the test fails
+    // instead of waiting for ever.
+    let cause = peer.pool.block_on(async {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while peer.session.recv().await.is_some() {}
+        })
+        .await
+        .expect("the gap closes the session");
+        peer.session.close_cause()
+    });
+    assert_eq!(cause.kind(), CloseKind::LevinHandshakeTimeout);
+    drop(peer.client);
+    drop(peer.gap.take());
+    peer.pool.shutdown(Duration::from_millis(50));
+    drop(peer.engine);
 }
 
 /// A complete header with part of the body it declares is not a frame: the

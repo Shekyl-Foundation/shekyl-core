@@ -20,6 +20,7 @@ use shekyl_capped_stream::{
     accept_error_is_transient, node_gate, read_capped, write_capped, ByteQueue, InboundEnd,
     Overfull, QueueHold, StreamEnds,
 };
+use shekyl_levin::{HandshakeFrame, HandshakeKind};
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::NetworkId;
 use shekyl_peer_policy::InboundCeiling;
@@ -414,8 +415,8 @@ struct ChannelOpen {
 }
 
 enum GapEnd {
-    /// The peer's first complete Levin frame arrived: the gap ends.
-    FirstFrame,
+    /// The peer's handshake frame arrived: the gap ends.
+    HandshakeFrame,
     Dropped,
     Timeout,
     Closed,
@@ -464,7 +465,7 @@ where
 /// each poll of the outer select would drop a wake the slot had stored.
 ///
 /// The gap measures the peer's silence (Rick, 2026-10-14): it ends at the
-/// peer's first complete Levin frame (`frame`, set by the reader), and a
+/// peer's first complete handshake frame (`frame`, set by the reader), and a
 /// fired wake waits one IO driver turn for it (`SilenceGap`). The strand's
 /// verdict is this node's own work and only logs here.
 async fn watch_gap<C: Clock>(watch: Option<GapWatch<C>>, frame: Arc<AtomicBool>) -> GapEnd {
@@ -486,7 +487,7 @@ async fn watch_gap<C: Clock>(watch: Option<GapWatch<C>>, frame: Arc<AtomicBool>)
             }
         }
         match ready!(gap.poll(&frame, wake.as_mut(), cx)) {
-            None => Poll::Ready(GapEnd::FirstFrame),
+            None => Poll::Ready(GapEnd::HandshakeFrame),
             Some(Ok(wake)) => {
                 tracing::debug!(
                     owner = ?watch.owner.id(),
@@ -571,12 +572,17 @@ where
     }
     let inbound_close = inbound.clone();
     let frame = Arc::new(AtomicBool::new(false));
+    let handshake = match job.role {
+        Role::Responder => HandshakeKind::Request,
+        Role::Initiator => HandshakeKind::Response,
+    };
     let read_fut = read_half(
         read,
         recv,
         inbound,
         Arc::clone(&overfull),
         conn,
+        HandshakeFrame::new(handshake),
         Arc::clone(&frame),
     );
     tokio::pin!(read_fut);
@@ -601,8 +607,8 @@ where
             end = gap_fut.as_mut(), if gap_open => {
                 gap_open = false;
                 match end {
-                    GapEnd::FirstFrame => {
-                        tracing::debug!(conn, "clearnet first frame received; the gap ends");
+                    GapEnd::HandshakeFrame => {
+                        tracing::debug!(conn, "clearnet handshake frame received; the gap ends");
                     }
                     GapEnd::Dropped | GapEnd::Closed => {
                         return end_connection(
@@ -803,20 +809,20 @@ async fn read_half(
     inbound: shekyl_capped_stream::InboundEnd,
     overfull: Arc<Overfull>,
     conn: u64,
+    mut handshake: HandshakeFrame,
     frame: Arc<AtomicBool>,
 ) -> CloseCause {
     // The responder's timestamps (Rick, 2026-10-14): first byte read.
     let mut first_read = true;
-    // The peer's first complete Levin frame, over the plaintext the seam
-    // hands up: it ends the handshake gap.
-    let mut first_frame = shekyl_levin::FirstFrame::new();
+    // The peer's handshake frame, over the plaintext the seam hands up: it
+    // ends the handshake gap.
     read_capped(&mut read, inbound, &overfull, &node_gate(), conn, |chunk| {
         if first_read {
             first_read = false;
             tracing::debug!(conn, "clearnet first bytes read");
         }
         let plain = seam.push(chunk).map_err(|_| CloseKind::RecordRejected)?;
-        if !first_frame.complete() && plain.iter().any(|piece| first_frame.feed(piece)) {
+        if !handshake.complete() && plain.iter().any(|piece| handshake.feed(piece)) {
             frame.store(true, Ordering::Release);
         }
         Ok(plain)

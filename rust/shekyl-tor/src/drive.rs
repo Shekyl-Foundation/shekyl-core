@@ -469,9 +469,13 @@ where
     // the dialler's handshake request; on the dialler, the first reply.
     let mut first_read = true;
     // The gap measures the peer's silence (Rick, 2026-10-14): it ends at
-    // the peer's first complete Levin frame, read here, not at the strand's
-    // verdict, which is this node's own work.
-    let mut first_frame = shekyl_levin::FirstFrame::new();
+    // the peer's first complete handshake frame, read here, not at the
+    // strand's verdict, which is this node's own work.
+    let mut handshake = shekyl_levin::HandshakeFrame::new(if outbound {
+        shekyl_levin::HandshakeKind::Response
+    } else {
+        shekyl_levin::HandshakeKind::Request
+    });
     let frame_in = Arc::new(AtomicBool::new(false));
     let frame_seen = Arc::clone(&frame_in);
     let read_fut = read_capped(&mut read, inbound, &overfull, &gate, conn, |chunk| {
@@ -484,13 +488,13 @@ where
                 "tor first bytes read"
             );
         }
-        if !first_frame.complete() && first_frame.feed(chunk) {
+        if !handshake.complete() && handshake.feed(chunk) {
             frame_in.store(true, Ordering::Release);
             tracing::debug!(
                 conn,
                 outbound,
-                first_frame_ns = span_ns(channel_at.elapsed()),
-                "tor first frame received; the gap ends"
+                handshake_frame_ns = span_ns(channel_at.elapsed()),
+                "tor handshake frame received; the gap ends"
             );
         }
         Ok(vec![chunk.to_vec()])

@@ -317,9 +317,15 @@ The Tor connector is `shekyl-tor`. The stream is the channel: no Noise,
 no handshake on the blocking pool. It uses the same byte cap and the
 same socket copy as clearnet. The gap is an arm of that wait. The gap
 measures the peer's silence (Rick, 2026-10-14). It ends at the peer's
-first complete Levin frame, on both connectors, and never at
-`session_established`, which is this node's own work. A peer that sends
-no complete frame inside the gap is the Levin handshake timeout. Each
+first complete handshake frame, on both connectors: its
+`COMMAND_HANDSHAKE` request on a session it opened, its response on one
+this node dialed (`shekyl_levin::HandshakeFrame`). It never ends at
+`session_established`, which is this node's own work, and a complete
+frame of any other command does not end it: the strand answers a
+support-flags request before any handshake, and a peer that sent one
+and stopped would otherwise have held an admission slot with no
+deadline at all. A peer that sends no complete handshake frame inside
+the gap is the Levin handshake timeout. Each
 driver polls its reader before the gap's wake. A fired wake then waits
 one IO driver turn for the reader (`SilenceGap` in
 `shekyl-capped-stream`), so a frame that arrived before the deadline
