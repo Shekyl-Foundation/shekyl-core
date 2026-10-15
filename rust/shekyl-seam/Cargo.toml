@@ -14,6 +14,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The first-frame timestamp of the transport diagnosis (2026-10-14).
+tracing = "0.1"
 shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }

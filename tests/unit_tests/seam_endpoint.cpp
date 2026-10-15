@@ -166,6 +166,25 @@ namespace
     return opened.id;
   }
 
+  // `open` returns before the strand has created the handler: the wait for
+  // arming went with the C++ dial path (2026-10-13). A test that reads the
+  // link waits for it here, with the mutex released between looks so the
+  // strand can insert it.
+  bool wait_for_link(pool& ex, std::uint64_t id)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      {
+        std::lock_guard<std::mutex> lock(ex.mu);
+        if (ex.links.count(id) == 1)
+          return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+  }
+
   // `closed` posts destruction onto the strand. Stopping the context before
   // that post runs abandons the handler, and destroying it drops the link
   // after the config is gone.
@@ -221,11 +240,11 @@ TEST(seam_endpoint, connect_from_the_executor_completes_at_the_floor)
   shekyl_executor_release(handle);
 }
 
-// The dial cap reads `shekyl_seam_board_count`. This is that integer, and
-// the one-row snapshot `release_outbound` walks, on a dial whose handshake
-// has not finished. `try_to_connect_and_handshake_with_new_peer` is private
-// and the board is the process hub, so the comparison itself is not driven
-// from a second fake board.
+// The outbound count the C++ still reads (`get_outgoing_connections_count`,
+// for the descriptor reservation) is `shekyl_seam_board_count`. This is that
+// integer, and the one-row snapshot it walks, on a dial whose handshake has
+// not finished. The board is the process hub, so the comparison itself is
+// not driven from a second fake board.
 TEST(seam_endpoint, an_unestablished_clearnet_dial_counts_before_the_handshake)
 {
   commands cmds;
@@ -333,14 +352,8 @@ TEST(seam_endpoint, two_connections_keep_distinct_registry_keys)
   ASSERT_NE(second, 0u);
   ASSERT_NE(first, second);
 
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-  while (std::chrono::steady_clock::now() < deadline)
-  {
-    std::lock_guard<std::mutex> lock(ex.mu);
-    if (ex.links.count(first) == 1 && ex.links.count(second) == 1)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
+  ASSERT_TRUE(wait_for_link(ex, first));
+  ASSERT_TRUE(wait_for_link(ex, second));
 
   {
     std::lock_guard<std::mutex> lock(ex.mu);
@@ -353,6 +366,11 @@ TEST(seam_endpoint, two_connections_keep_distinct_registry_keys)
     EXPECT_EQ(left_id, shekyl::seam_connection_id(first));
     EXPECT_EQ(right_id, shekyl::seam_connection_id(second));
   }
+  // The link registers with the config when it arms, a strand turn after
+  // it is created, so the count follows the links.
+  const auto counted = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (ex.config.get_connections_count() != 2 && std::chrono::steady_clock::now() < counted)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   EXPECT_EQ(ex.config.get_connections_count(), 2u);
 
   shekyl_seam_close(first);
@@ -436,6 +454,7 @@ TEST(seam_endpoint, a_second_established_does_not_replace_the_link)
 
   const std::uint64_t id = open_clearnet(1);
   ASSERT_NE(id, 0u);
+  ASSERT_TRUE(wait_for_link(ex, id));
   link_t* first = nullptr;
   {
     std::lock_guard<std::mutex> lock(ex.mu);

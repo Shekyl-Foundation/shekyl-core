@@ -539,9 +539,10 @@ impl GetInfoDocument {
                 target_height: self.target_height.into(),
                 synchronized: self.synchronized,
                 busy_syncing: false,
-                offline: false,
                 following_degraded: false,
-                has_peers: self.has_peers,
+                p2p: shekyl_rpc_types::HealthP2p::Running {
+                    has_peers: self.has_peers,
+                },
             },
             identity: InfoIdentity {
                 protocol_version: 3,
@@ -568,19 +569,21 @@ impl GetInfoDocument {
                 free_space: 1 << 40,
                 database_size: 1 << 30,
                 version: "test".to_owned(),
-                outgoing_connections_count: 0,
-                incoming_connections_count: 0,
+                connections: shekyl_rpc_types::StatusConnections::Running {
+                    outgoing: 0,
+                    incoming: 0,
+                },
                 alt_blocks_count: 0,
                 rpc_connections_count: 1,
             }),
-            peers: Hidden::Shown(InfoPeers {
+            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(InfoPeers {
                 public_incoming_socket_count: 0,
                 public_outgoing_socket_count: 0,
                 tor_incoming_socket_count: 0,
                 tor_outgoing_socket_count: 0,
                 white_peerlist_size: 0,
                 grey_peerlist_size: 0,
-            }),
+            })),
             // The wallet is never the daemon's host administrator.
             host: Hidden::Withheld,
             restricted: false,
@@ -620,7 +623,7 @@ impl GetInfoDocument {
 /// every caller, and this reads nothing else.
 pub(crate) fn health_from_get_info(info: &GetInfoResponse) -> DaemonHealth {
     DaemonHealth {
-        has_peers: info.health.has_peers,
+        p2p: info.health.p2p,
         height: info.health.height,
         synchronized: info.health.synchronized,
     }

@@ -229,3 +229,115 @@ mod tests {
         assert_eq!(BucketHead::read(&bytes), Err(Error::BadSignature));
     }
 }
+
+/// Which handshake frame a session waits for: the request on a session
+/// the peer opened, the response on one this node dialed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandshakeKind {
+    /// The peer opened the session; its `COMMAND_HANDSHAKE` request ends
+    /// the wait.
+    Request,
+    /// This node dialed; the peer's `COMMAND_HANDSHAKE` response ends it.
+    Response,
+}
+
+impl HandshakeKind {
+    fn matches(self, head: &BucketHead) -> bool {
+        let request = head.flags.contains(Flags::REQUEST);
+        let response = head.flags.contains(Flags::RESPONSE);
+        head.command == crate::COMMAND_HANDSHAKE
+            && match self {
+                Self::Request => request && !response && head.expects_response(),
+                Self::Response => response && !request,
+            }
+    }
+}
+
+/// Whether the peer's first complete handshake frame has arrived, fed the
+/// bytes as they are read. The transport's handshake gap measures the
+/// peer's silence up to this point (Rick, 2026-10-14), so it disarms here
+/// and not on the strand's verdict, which is this node's own work. A frame
+/// is the [`HEADER_SIZE`]-byte header and the `payload_len` bytes it
+/// declares.
+///
+/// Only the handshake frame of the expected [`HandshakeKind`] counts. A
+/// complete frame of any other command is read past: a peer that sends a
+/// support-flags request, or anything else, and never its handshake stays
+/// under the gap (Copilot on #1056: one such frame had disarmed it, and
+/// the session then held an admission slot with no deadline at all). A
+/// header whose signature is not [`LEVIN_SIGNATURE`] ends the tracking:
+/// the gap stays armed, and the strand closes the connection on the bad
+/// signature as before.
+#[derive(Debug)]
+pub struct HandshakeFrame {
+    kind: HandshakeKind,
+    head: [u8; HEADER_SIZE],
+    have: usize,
+    /// The frame being read: its body bytes still to come, and whether it
+    /// is the handshake frame.
+    body: Option<(u64, bool)>,
+    complete: bool,
+    bad: bool,
+}
+
+impl HandshakeFrame {
+    /// A tracker of `kind` that has seen no byte.
+    #[must_use]
+    pub fn new(kind: HandshakeKind) -> Self {
+        Self {
+            kind,
+            head: [0; HEADER_SIZE],
+            have: 0,
+            body: None,
+            complete: false,
+            bad: false,
+        }
+    }
+
+    /// Feed the next `bytes` read from the peer. Returns whether the
+    /// handshake frame has arrived, now or before; once true it stays true.
+    pub fn feed(&mut self, mut bytes: &[u8]) -> bool {
+        while !self.complete && !self.bad {
+            let (left, handshake) = match self.body {
+                Some(body) => body,
+                None => {
+                    let take = (HEADER_SIZE - self.have).min(bytes.len());
+                    self.head[self.have..self.have + take].copy_from_slice(&bytes[..take]);
+                    self.have += take;
+                    bytes = &bytes[take..];
+                    if self.have < HEADER_SIZE {
+                        return false;
+                    }
+                    self.have = 0;
+                    match BucketHead::read(&self.head) {
+                        Ok(head) => (head.payload_len, self.kind.matches(&head)),
+                        Err(_) => {
+                            self.bad = true;
+                            return false;
+                        }
+                    }
+                }
+            };
+            let take = usize::try_from(left).map_or(bytes.len(), |left| left.min(bytes.len()));
+            bytes = &bytes[take..];
+            let left = left.saturating_sub(u64::try_from(take).unwrap_or(left));
+            if left > 0 {
+                self.body = Some((left, handshake));
+                return false;
+            }
+            self.body = None;
+            if handshake {
+                self.complete = true;
+            } else if bytes.is_empty() {
+                return false;
+            }
+        }
+        self.complete
+    }
+
+    /// Whether the handshake frame has arrived.
+    #[must_use]
+    pub const fn complete(&self) -> bool {
+        self.complete
+    }
+}

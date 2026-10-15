@@ -143,6 +143,16 @@ jobs:
           # meta-tests cannot be skipped by a name that lacks the prefix.
           cargo test -p shekyl-chain-store codec::snapshot_tests --no-fail-fast
 
+      - name: Run peerlist address_file::snapshot module
+        working-directory: rust
+        run: |
+          # The peer lists' address file (`shekyl-peerlist/src/address_file.rs`):
+          # one `.snap` of a fixture set's encoding, the round trip, and the
+          # meta-test that reads this file and checks that THIS filter
+          # selects its module and that the paired-bump step below names
+          # the snapshot directory, the source and the constant.
+          cargo test -p shekyl-peerlist address_file::snapshot --no-fail-fast
+
   enforce-version-bump:
     name: "Enforce paired block_version bump"
     runs-on: ubuntu-latest
@@ -298,6 +308,58 @@ jobs:
             echo "::endgroup::"
           fi
 
+          # Peer lists' address file (P2P-3 slice 1 increment 3). One
+          # format, one constant: if the snapshot under the crate's
+          # schemas/ directory changed, the VALUE of ADDRESS_FILE_VERSION
+          # must be greater at the PR head than at its base. A file of
+          # another version is dropped whole, so a format that moved
+          # without the bump would be read as the old one.
+          PL_SNAP_DIR="rust/shekyl-peerlist/schemas/"
+          PL_SRC="rust/shekyl-peerlist/src/address_file.rs"
+          PL_CONST="ADDRESS_FILE_VERSION"
+          # Prints the decimal value declared at revision $1, or nothing.
+          # The value is the verdict; the pipe only shapes it (rule 46).
+          pl_version_at() {
+            git show "$1:${PL_SRC}" \
+              | sed -nE "s/^pub const ${PL_CONST}: u32 = ([0-9_]+);.*/\1/p" \
+              | tr -d '_'
+          }
+          PL_TOUCHED=$(echo "${CHANGED}" | grep -F "${PL_SNAP_DIR}" | grep -E '\.snap$' || true)
+          if [ -n "${PL_TOUCHED}" ]; then
+            echo "::group::peerlist: snapshot changed, checking ${PL_CONST} bump"
+            echo "${PL_TOUCHED}" | sed 's/^/  snapshot:  /'
+            echo "  source:    ${PL_SRC}"
+            echo "  constant:  ${PL_CONST}"
+            HEAD_V=""
+            if git cat-file -e "${HEAD_SHA}:${PL_SRC}" 2>/dev/null; then
+              HEAD_V=$(pl_version_at "${HEAD_SHA}")
+            fi
+            if [ -z "${HEAD_V}" ]; then
+              echo "::error file=${PL_SRC}::${PL_CONST} not parsable at the PR head"
+              echo "  FATAL: expected exactly one line of the form"
+              echo "    pub const ${PL_CONST}: u32 = <decimal>;"
+              echo "  at column 0 of ${PL_SRC}. The gate cannot compare what it cannot read."
+              FAIL=1
+            elif ! git cat-file -e "${BASE_SHA}:${PL_SRC}" 2>/dev/null; then
+              echo "  OK: ${PL_SRC} is born in this PR (${PL_CONST} = ${HEAD_V}); nothing older to bump from."
+            else
+              BASE_V=$(pl_version_at "${BASE_SHA}")
+              if [ -z "${BASE_V}" ]; then
+                echo "::error file=${PL_SRC}::${PL_CONST} not parsable at the PR base"
+                echo "  FATAL: ${PL_SRC} exists at ${BASE_SHA} but declares no readable ${PL_CONST}."
+                FAIL=1
+              elif [ "${HEAD_V}" -le "${BASE_V}" ]; then
+                echo "::error file=${PL_SRC}::${PL_CONST} not bumped alongside the address-file snapshot (base ${BASE_V}, head ${HEAD_V})"
+                echo "  FATAL: ${PL_SNAP_DIR} changed — the address file's bytes moved —"
+                echo "  but ${PL_CONST} is ${HEAD_V} at head and ${BASE_V} at base. Bump in the same PR."
+                FAIL=1
+              else
+                echo "  OK: ${PL_CONST} ${BASE_V} → ${HEAD_V}."
+              fi
+            fi
+            echo "::endgroup::"
+          fi
+
           if [ "${FAIL}" -ne 0 ]; then
             cat <<'EOF'
 
@@ -316,6 +378,10 @@ jobs:
                `rust/shekyl-chain-store/src/codec/schema_version.rs` and:
                  UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store \
                    codec::snapshot_tests
+               For the peer lists' address file, bump `ADDRESS_FILE_VERSION`
+               in `rust/shekyl-peerlist/src/address_file.rs` and:
+                 UPDATE_SNAPSHOTS=1 cargo test -p shekyl-peerlist \
+                   address_file::snapshot
             3. If no, revert the change to the block struct / codec.
 
           EOF

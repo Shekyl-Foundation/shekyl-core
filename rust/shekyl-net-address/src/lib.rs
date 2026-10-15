@@ -48,7 +48,31 @@ pub enum NetworkAddress {
     },
 }
 
+/// The host half of an address: what one machine, or one onion service,
+/// is known by whatever port it names.
+///
+/// Two addresses with one host are the same peer on two ports. The dialer
+/// holds one outbound session per host and draws a host no more often for
+/// advertising many ports.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Host {
+    /// An IPv4 or IPv6 address.
+    Ip(IpAddr),
+    /// An onion hostname, including `.onion`.
+    Onion(String),
+}
+
 impl NetworkAddress {
+    /// The host this address names, without the port.
+    #[must_use]
+    pub fn host(&self) -> Host {
+        match self {
+            Self::Ipv4 { ip, .. } => Host::Ip(IpAddr::V4(*ip)),
+            Self::Ipv6 { ip, .. } => Host::Ip(IpAddr::V6(*ip)),
+            Self::Tor { host, .. } => Host::Onion(host.clone()),
+        }
+    }
+
     /// The IP, when this address has one. An onion name does not.
     #[must_use]
     pub fn ip(&self) -> Option<IpAddr> {

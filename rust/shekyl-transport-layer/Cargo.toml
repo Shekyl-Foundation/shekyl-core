@@ -12,6 +12,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# The cold-first-contact measurement build only (Rick, 2026-10-14): the
+# Tor gap deadline lifted to 120 s, the dial's bound in every build, so the
+# gap's distribution is read uncensored. Never a runtime option, never in a
+# release build: only CMake's SHEKYL_MEASUREMENT_SPANS turns it on, and
+# scripts/ci/check_measurement_spans.py holds that.
+measurement-spans = []
+
 [dependencies]
 shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
