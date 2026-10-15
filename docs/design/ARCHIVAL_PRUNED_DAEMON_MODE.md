@@ -348,7 +348,7 @@ discards under this predicate like any other, so a settlement read of a
 pass record after its shard's boundary is band 2 (the SO contact, F26);
 and S-PRUNE **cannot** discard a shard while a live verifier still
 derives `R_k` from its frozen segment (Q6 item 4 row 1) — moot before the
-cutover, since the redb store is not the production daemon until E3, and
+cutover, since the redb store is not the production daemon until the store flip (DRS-X), and
 stated so the sequencing is the mechanism rather than a guard.
 
 **Reversion (rule 21).** Shape reverts to OPEN — a block-count horizon on

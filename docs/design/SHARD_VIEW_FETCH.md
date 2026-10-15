@@ -5,7 +5,7 @@
 `SV-D4`…`SV-D8` **PROPOSED** with defaults, built as proposed and reopened on
 review. `SV-D10` **PROPOSED 2026-10-10** (byte-derived texture layer; default
 not now). `SV-D9` is the blocker: the daemon has no facts source for the view
-until the `DRS-E3` store cutover, and the RPC says so with its own code.
+until the store flip (`DRS-X`), and the RPC says so with its own code.
 Landing order §4: steps 1, 2a, 2b, 3 and 4 **landed** (2026-10-08/09).
 2c's serve read landed 2026-10-10: `StoreShardProvider` over a
 `BodyStoreReader`, the writer owned by `StakeEngine` (`WSS-Q1`(a)).
@@ -257,7 +257,7 @@ and never mistakes it for a miss (`23-disposition-visibility`: say what is,
 not what might be). The scheduler is linked into the daemon image with no
 production caller: **STAGED**, consumer named below.
 
-**What lifts it.** The `DRS-E3` cutover (`DAEMON_REDB_STORE.md`: swap the
+**What lifts it.** The store flip, `DRS-X` (`DAEMON_REDB_STORE.md`: swap the
 source, drop the grader) makes `shekyl-chain-store` the daemon's live store,
 and with it: a shard-range read over the cumulative archival length (the
 `SHT-Q2` boundary function `shard_of` applied to a prefix sum the store
@@ -346,7 +346,7 @@ branch.
 
 **What a viewer shows today.** Every shipped daemon answers `SV-D9`'s
 `ARCHIVAL_SKELETON_ABSENT`, so every viewer shows *not offered by this
-daemon* until the `DRS-E3` cutover. The states below it are built and
+daemon* until the store flip (`DRS-X`). The states below it are built and
 tested against a fake daemon, not yet reached from a real one.
 
 A fetch against the serve reads the tx-range frame from `P`'s body store
