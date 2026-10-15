@@ -334,8 +334,7 @@ tests are `#[ignore]`d for cost, and until this date no CI lane ran them: on
 PR #1009 both fixtures drifted at `783053554` and were regenerated two
 commits later, found by a fresh-clone run and not by CI. The nightly
 `economics-sim-ignored` job (`.github/workflows/nightly.yml`) now runs them,
-with the full-scale challenge-coverage reproduction and the secret draw's
-evidence set. Nightly runs after merge, so it is not the pre-push gate: a
+with the secret draw at ESR-11's timing. Nightly runs after merge, so it is not the pre-push gate: a
 change to any lever a fold calls still runs
 `cargo test --locked --release -p shekyl-economics-sim -- --ignored matches_the_committed_fixture`
 from a fresh clone before it is pushed.
@@ -417,13 +416,11 @@ defect.
 | The ArticMine transliteration's KAT inputs (R30) | The 300 000 in the inherited-ladder tests is an input of the C++ `scaling_2021` vectors, fixed with them; importing the zone would move a KAT with the config | `fee_ladder.rs` tests |
 | The secret draw's reveal lag and dropout (ESR-11) | Who reveals a block's seed, and when, is behaviour production cannot know. ESR-13 runs ESR-11's epoch at `Timing::esr11()` on production's `draw_count`, `draw_horizon` and `select_draw`; ESR-11's own loop was deleted at `f58531716` (§5.22). ESR-11's analytic functions are called: the `(m, n)` re-check, the retry mixture and the clearing figures, the evidence set's shape, and the count rule's callers `count_at` / `capped_at` | `secret_draw.rs`, `secret_draw_production.rs`; `--secret-draw` |
 | The secret draw on production's count and selection: producer dropout, filing lag, inclusion latency, loss to a reorg, and each block's seed and hash (ESR-13) | The count, the horizon and the selection are production's and are called. What decides whether a block's bundle is admitted is the behaviour of producers and of the chain, which has no owner to call; the seed and the block hash are the generator's bytes because no block is built. `M` is challenger policy, not consensus | `secret_draw_production.rs`; §5.17 fixes the model before the run |
-| The public urn and its even-spread schedule (`challenge_coverage.rs`, R21) | records-was — instrument that justified the secret draw; no production owner by design. `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn. The module is deleted in the PR that retires §7.1 and §8 of the challenge design | `challenge_coverage.rs`; its full-scale reproduction stays in the nightly lane with this reason beside it |
 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs`, R22) | Production's rule is a predicate over one window, not a probability. The closed forms are the analysis of that predicate and are cross-checked against the predicate-backed kernel by test | Stated at each form |
 | The ArticMine transliteration (`fee_ladder.rs`, D7) | The inherited ladder is reproduced as the thing the Shekyl ladder is measured against. It has no production owner because production does not run it | `fee_ladder.rs`; its KAT inputs are the row above |
 | Maturity operands (`MATURITY_D = 324_000`, 40 000 projected pairs; D13) | Assumptions about a network that does not exist yet, not values of the chain | Named as assumptions where they are defined |
 | Gate-7's locked supply counts one shard per `blocks_per_shard` blocks (`engine.rs`, D1) | The partition is by archival bytes (`shard_of`), and the engine fold carries no byte fold to read it from. The default cadence is one shard per `SETTLEMENT_EPOCH_BLOCKS`; the sim's own stage-2 baseline closes 229,864 shards in ten years, one per eleven blocks, so the default understates the locked supply by a factor near 900. **Not a neutral choice:** a gate-7 figure is a floor on the lock, not an estimate of it | Stated at `ArchivalLockModel::blocks_per_shard`. Moving gate-7 onto the byte fold moves its committed figures and is its own step, with its predictions written first |
 | The A3 and A4 base paths score through the plateau curve (`population.rs`, `stranding.rs`, D3) | Credited work is linear in production; the curve is kept there for counterfactuals only. The two base paths predate that and still read `curve_milli` | `distribution.rs` and OQ-4 name themselves counterfactual; `redistribution.rs` is linear. Re-basing A3 and A4 moves both narration fixtures and is its own step, with its predictions written first |
-| The FL-R18 rejection race and its thin-margin count (`fee_ladder.rs`, D6) | records-was — the instrument that measured the race under the admission rule of its round: a 2 % acceptance buffer and no lookback. FL-R23 set the slack to zero and admits against the minimum floor over a lookback; production names no margin for the served rung, so the 1.020 threshold has nothing to import. `fee_floor.rs` is the instrument for the rule as it stands and calls `RELAY_ADMISSION_SLACK_BP` and `RELAY_FLOOR_LOOKBACK`. Its feedback map keeps the volume window as a float running sum of fractional demand, converted on each block; the window production reads sums whole transactions (FL-R24). That sum is part of what the instrument records, and is not changed | Stated at `FeedbackResult::race_refused`; `FEE_LADDER_ROUND.md` quotes its counts as that round's |
 | Demand does not respond to the fee or to congestion | A schedule is a number of transactions per block, the same whatever they cost or however long they wait: no elasticity, no rung escalation, no resubmission after expiry. What the chain fails to carry expires; it is not deterred | Stated at the head of this document beside the result it governs |
 
 ## 5. Predictions, written before any run (2026-10-02)
@@ -2151,8 +2148,8 @@ constant that no caller passes.
 | Status | Rows |
 | --- | --- |
 | Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R10, R11, R13, R15, R16, R17, R18, R19, R23, D5, N1, N2, N3; text: D9, D10, D11, D12, N4 |
-| Closed by deletion | R2, R31, D8 |
-| Closed by a §4 declaration | 1, 2, 3, R29; **in ESR-8:** R21, R22, D1, D3, D6, D7, D13; R26 (the nearest arm; the ceiling arm imports); R30 (the KAT zone; the bond imports) |
+| Closed by deletion | R2, R31, D8; R21 and D6 (2026-10-15, the instruments of superseded designs) |
+| Closed by a §4 declaration | 1, 2, 3, R29; **in ESR-8:** R22, D1, D3, D7, D13; R26 (the nearest arm; the ceiling arm imports); R30 (the KAT zone; the bond imports) |
 | Staking-excepted (ruled 2026-10-03) | D4 |
 | **Open** | none |
 
@@ -2173,7 +2170,7 @@ ESR-8 did.
 | R17 | `BandedCurveParams::from_plateau_value(8_000)` (`population.rs:43`) | `shekyl_archival_retention::reward_arithmetic::ARCHIVAL_PROVISIONAL_CURVE` | Closed: `reward_curve()` returns the constant |
 | R18 | `AGE_WEIGHT_MILLI = 1_000` (`population.rs:56`); production's is 2 000. Declared inert in its own comment, not in §4 | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI`, or a §4 row saying why the sim's differs | Closed by import (1 000 → 2 000). No figure moved, which is the inertness its comment claimed |
 | R19 | `N_HARD_BOUND = 25` (`mn_feasibility.rs:55`) | A new `pub` export: the bound exists in production only as a const-assert over a private constant (`failure_window.rs`) | Closed: `FAILURE_WINDOW_N_GATHER_BOUND`, a named `pub` constant the assert now reads |
-| R21 | The exact-min urn and its even-spread schedule (`challenge_coverage.rs`). **Its production owner no longer exists**: `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn | A decision (below) | Closed by the §4 row the direction worded |
+| R21 | The exact-min urn and its even-spread schedule (`challenge_coverage.rs`). **Its production owner no longer exists**: `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn | A decision (below) | Deleted 2026-10-15: the urn it reproduced was superseded by the secret draw and its production code deleted 2026-10-10. The module was last at `4de99d1e1b` |
 | R22 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs:136`). Cross-checked against the predicate-backed kernel by test; no production counterpart to import | A §4 row | Closed by its §4 row |
 | R23 | `1.0 + SLASH_GRACE_EPOCHS` (`cartel.rs:249`) | A new `pub` export of `SLASH_SETTLEMENT_TIP_LAG_EPOCHS`, private today | Closed: the constant is `pub` and `cartel.rs` reads it |
 
@@ -2184,7 +2181,7 @@ ESR-8 did.
 | D1 | One shard per `SETTLEMENT_EPOCH_BLOCKS` blocks (`engine.rs:83`), called a model parameter where it is defined | `shekyl_types::archival::shard_of`, or a §4 row | §4 row. The row says the default understates the lock by a factor near 900; moving gate-7 onto the byte fold is a separate step (`FOLLOWUPS.md`) |
 | D3 | The A3 and A4 base paths still score through the plateau curve; credited work is linear in production | A §4 row, or the linear owner | §4 row. Re-basing A3 and A4 on linear work is a separate step (`FOLLOWUPS.md`) |
 | D5 | Proof-response widths as literals (`proxy.rs:92`) | `shekyl_fcmp::tree` constants, which needs a new dependency | Closed by import: `RESPONSE_BYTES` is built from `shekyl_fcmp::tree`'s widths and `CHALLENGED_LEAF_LEN`, and a const-assert holds it at 6 784 |
-| D6 | The retired 2 % relay buffer, as `* 98` and `< 1020` (`fee_ladder.rs:1717`, `:2329`, `:2505`), in a file that also asserts the slack is 0 | `relay_floor_admits` | §4 row, records-was. Production has no margin constant to import; the comment that called the 2 % buffer admission's is corrected |
+| D6 | The retired 2 % relay buffer, as `* 98` and `< 1020` (`fee_ladder.rs:1717`, `:2329`, `:2505`), in a file that also asserts the slack is 0 | `relay_floor_admits` | Deleted 2026-10-15: the race measured admission under FL-R19, which FL-R23 superseded and production runs. The race code was last at `4de99d1e1b` |
 | D7 | The ArticMine transliteration (`fee_ladder.rs:198-210`). §4 declares its KAT inputs, not the transliteration | A §4 row | §4 row |
 | D9–D12 | Stale citations, "8 scenarios" where there are nine, "~35 days" for an epoch, a dated representative run | Text | Text fixed: line numbers into C++ replaced by the function named; the scenario count is read from the run; the always-empty `stuffing_profitable` field is deleted; "one epoch" is "25,000 blocks"; the 2026-07-30 figure is labelled a test input |
 | D13 | Maturity operands as literals (`MATURITY_D = 324_000`, 40 000 projected pairs) | A §4 row naming them as assumptions | §4 row |
@@ -2210,12 +2207,8 @@ the report should name is a question for the lane that owns the window.
 Relayed review direction, matching what this pass recommended. It is
 recorded as direction, not as a signed ruling.
 
-1. **R21.** `challenge_coverage.rs` stays, with a §4 row: "records-was —
-   instrument that justified the secret draw; no production owner by
-   design". The nightly lane keeps
-   `full_scale_maturity_reproduces_doc_figures`, with that reason beside
-   it. The module is deleted in the PR that retires the challenge
-   design's §7.1 and §8.
+1. **R21.** `challenge_coverage.rs` was deleted 2026-10-15, with its
+   nightly test; the urn it reproduced is superseded by the secret draw.
 2. **R10.** The folds call `price_emission`. Where its signature does
    not fit a fold, that is a finding about `price_emission` and the fix
    is there, not a third copy in the sim. Built; see below.
