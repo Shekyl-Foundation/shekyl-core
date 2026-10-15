@@ -459,9 +459,13 @@ Measured on Linux (2026-10-15, x86_64, the pinned 15.0.24 bundle staged to its
 four pinned files, cleared environment with the loader path only): the
 inherited socket answered `GETINFO version` (`250-version=0.4.9.13`) with no
 `AUTHENTICATE`; `net/listeners/control` was empty; `config-file` and
-`config-defaults-file` named the empty file; closing our end exited Tor in
-15–19 ms (C4); a parent's `abort()` left Tor gone within 6–16 ms of the
-parent's reap (C5). macOS is measured the same way once a host is set up.
+`config-defaults-file` named the empty file; over three runs, closing our end
+exited Tor in 2–19 ms (C4) and a parent's `abort()` left Tor gone within
+6–28 ms of the parent's reap (C5). The harness is
+`scripts/tor/validate_owning_fd_launch.py` in the Foundation's development
+repository: it verifies the staged files against `config/tor_pins.json`
+first, and runs on Linux and macOS. macOS is measured with it once a host is
+set up.
 `AvoidDiskWrites 1` and these join the closed option list, whose test fails
 first, which is its purpose. Discovery and the pin gate run at every spawn
 (`TSR-F6`).
