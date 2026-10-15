@@ -271,13 +271,13 @@ pub(crate) fn tip_reading_from_info(info: &GetInfoResponse) -> TipReading {
     // Ordered most-specific first, so the reported cause is the one an
     // operator can act on: "offline" is actionable, "never synchronized" is
     // the symptom it would also produce.
-    let cause = if info.health.offline {
+    let cause = if health.p2p.is_offline() {
         Some(NotFollowing::Offline)
     } else if info.health.following_degraded {
         Some(NotFollowing::Degraded)
     } else if !health.synchronized {
         Some(NotFollowing::NeverSynchronized)
-    } else if !health.has_peers {
+    } else if health.p2p.has_peers() == Some(false) {
         Some(NotFollowing::NoPeers)
     } else {
         None
@@ -437,6 +437,20 @@ mod tests {
             }
         }
         doc
+    }
+
+    /// The overlay that makes [`reply`]'s document an offline daemon's: the
+    /// daemon says so in Health, and its Peers part is the state offline
+    /// with no count (3.56), which the decoder holds equal to `offline`.
+    fn offline_overlay(height: u64) -> serde_json::Value {
+        json!({
+            "height": height, "status": "OK", "synchronized": true, "offline": true,
+            "p2p": "offline", "has_peers": null,
+            "outgoing_connections_count": null, "incoming_connections_count": null,
+            "public_incoming_socket_count": null, "public_outgoing_socket_count": null,
+            "tor_incoming_socket_count": null, "tor_outgoing_socket_count": null,
+            "white_peerlist_size": null, "grey_peerlist_size": null
+        })
     }
 
     /// What [`refresh_tip_once`] reads from the reply [`reply`] builds: a
@@ -706,9 +720,7 @@ mod tests {
     async fn a_reply_that_stopped_following_clears_a_held_tip() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
-        let rpc = CannedRpc::replying(&reply(&json!({
-            "height": 9_001, "status": "OK", "synchronized": true, "offline": true
-        })));
+        let rpc = CannedRpc::replying(&reply(&offline_overlay(9_001)));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
             TipReading::NotFollowing(NotFollowing::Offline)
@@ -854,11 +866,8 @@ mod tests {
 
     #[test]
     fn an_offline_daemon_is_not_following() {
-        let info = json!({
-            "height": 9_001, "status": "OK", "synchronized": true, "offline": true
-        });
         assert_eq!(
-            reading_of(&info),
+            reading_of(&offline_overlay(9_001)),
             TipReading::NotFollowing(NotFollowing::Offline)
         );
     }

@@ -92,6 +92,22 @@ TEST(removed_flags, hide_my_port_directs_the_operator_to_the_derived_replacement
   }
 }
 
+TEST(removed_flags, an_empty_name_is_not_a_removed_flag)
+{
+  // The table is a std::array sized by hand. When a row was deleted and the
+  // size was not (PR-3, 2026-10-13: 25 declared, 24 rows), the last element
+  // was value-initialised: an empty name, the first reason. find_removed("")
+  // matched it, and an empty token read as a removed daemonizer flag. The
+  // size now says 24; this is what keeps the next deletion honest.
+  for (const char *token : {"", "--", "="})
+  {
+    bool handled = true;
+    const std::string msg = removed_flag_message(token, handled);
+    EXPECT_FALSE(handled) << "an empty name is nobody's removed flag; token '" << token << "'";
+    EXPECT_TRUE(msg.empty()) << "nothing should be printed for it; got: " << msg;
+  }
+}
+
 TEST(removed_flags, a_flag_that_was_never_removed_is_not_claimed)
 {
   // Negative control. Without it the assertions above would also pass on a

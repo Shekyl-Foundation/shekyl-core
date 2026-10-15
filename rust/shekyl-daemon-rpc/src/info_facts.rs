@@ -104,8 +104,18 @@ pub struct InfoStatusFacts {
     pub version: String,
 }
 
-/// Per-connector transport and peerlist detail. Read only for a caller who
-/// is shown Peers.
+/// The Peers part's facts: whether P2P runs, and when it does, its counts
+/// (Rick, 2026-10-14). [`InfoPeersFacts`] is reached only through
+/// [`PeerFacts::Running`]; a daemon started offline has no counts to
+/// read, and [`PeerFacts::Offline`] carries nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerFacts {
+    Running(InfoPeersFacts),
+    Offline,
+}
+
+/// Per-connector transport and peerlist detail of a daemon whose P2P runs.
+/// Read only for a caller who is shown Peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InfoPeersFacts {
     pub public_incoming_sockets: u64,
@@ -161,7 +171,9 @@ pub trait InfoFacts: Send + Sync {
     /// Status facts. Called only on behalf of a caller who is shown Status.
     fn status(&self) -> Result<InfoStatusFacts, FactsFault>;
     /// Peers facts. Called only on behalf of a caller who is shown Peers.
-    fn peers(&self) -> Result<InfoPeersFacts, FactsFault>;
+    /// [`PeerFacts::Offline`] for a daemon started offline; an online
+    /// daemon with no peer lists is a fault.
+    fn peers(&self) -> Result<PeerFacts, FactsFault>;
     /// The node's sessions, per direction, from one snapshot of the seam
     /// board. Read for every caller of an online node: Health's `has_peers`
     /// is whether there is one, and Health is never withheld. Not read for
@@ -340,16 +352,24 @@ impl InfoFacts for FfiInfoFacts {
         })
     }
 
-    fn peers(&self) -> Result<InfoPeersFacts, FactsFault> {
+    fn peers(&self) -> Result<PeerFacts, FactsFault> {
+        // The two list sizes come from the Rust peer lists, not the core,
+        // and are read first: a daemon started offline answers that
+        // there, and no count is read for it.
+        let (white_peerlist_size, grey_peerlist_size) =
+            match crate::core::CoreRpc::peerlist_sizes().map_err(FactsFault::from_code)? {
+                crate::core::P2pRead::Offline => return Ok(PeerFacts::Offline),
+                crate::core::P2pRead::Running(sizes) => sizes,
+            };
         let pod = self.core.info_peers().map_err(FactsFault::from_code)?;
-        Ok(InfoPeersFacts {
+        Ok(PeerFacts::Running(InfoPeersFacts {
             public_incoming_sockets: pod.public_incoming_sockets,
             public_outgoing_sockets: pod.public_outgoing_sockets,
             tor_incoming_sockets: pod.tor_incoming_sockets,
             tor_outgoing_sockets: pod.tor_outgoing_sockets,
-            white_peerlist_size: pod.white_peerlist_size,
-            grey_peerlist_size: pod.grey_peerlist_size,
-        })
+            white_peerlist_size,
+            grey_peerlist_size,
+        }))
     }
 
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {

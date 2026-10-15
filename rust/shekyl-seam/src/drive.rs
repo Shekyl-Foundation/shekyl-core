@@ -41,7 +41,18 @@ pub async fn drive_inbound_async(
     id: shekyl_transport_layer::SocketId,
     mut session: Session,
 ) {
+    let mut first = true;
     while let Some(frame) = session.recv().await {
+        if first {
+            first = false;
+            // The responder's timestamps (Rick, 2026-10-14): the first frame
+            // handed to the hub, after the reader and before the strand.
+            tracing::debug!(
+                seam_id = id.get(),
+                bytes = frame.len(),
+                "first frame posted to the hub"
+            );
+        }
         if !hub.deliver_async(id, frame).await {
             return;
         }

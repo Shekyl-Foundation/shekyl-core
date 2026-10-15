@@ -232,10 +232,12 @@ pub(crate) enum TxSubmitOutcome {
 /// [`SyncedChainFacts`]: super::super::daemon::synced_chain_facts::SyncedChainFacts
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DaemonHealth {
-    /// Whether the daemon has a peer it can relay through: `get_info`'s
-    /// `has_peers`, from Health. Not a count, and not derived from one: the
-    /// counts are Status, which a daemon may zero or withhold.
-    pub has_peers: bool,
+    /// Whether the daemon runs P2P, and when it does, whether it has a peer
+    /// it can relay through: `get_info`'s Health (`offline`, `has_peers`).
+    /// Not a count, and not derived from one: the counts are Status, which
+    /// a daemon may withhold. An offline daemon is a state of its own, not
+    /// a daemon with no peers (Rick, 2026-10-14).
+    pub p2p: shekyl_rpc_types::HealthP2p,
     /// The daemon's current chain height.
     pub height: u64,
     /// The daemon's own `synchronized` flag: the protocol's predicate, as
