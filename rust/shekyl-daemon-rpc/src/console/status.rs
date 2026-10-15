@@ -157,22 +157,21 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     // is Health, which every caller is told: a daemon that withholds Status
     // still says it is offline.
     let status = info.node.shown();
-    let connections = match (&info.health.p2p, status.map(|status| &status.connections)) {
-        (shekyl_rpc_types::HealthP2p::Offline, _) => "P2P: offline".to_owned(),
-        (
-            shekyl_rpc_types::HealthP2p::Running { .. },
-            Some(shekyl_rpc_types::StatusConnections::Running { outgoing, incoming }),
-        ) => format!("{outgoing}(out)+{incoming}(in) connections"),
-        (shekyl_rpc_types::HealthP2p::Running { .. }, None) => {
-            "connections not disclosed".to_owned()
+    // Not decodable: Health and Status are both read against the reply's
+    // `offline` (`P2pDisagreesWithOffline`, `ConnectionsDisagreeWithOffline`).
+    // The state wins over a count, so a running health with an offline
+    // connection block is still offline.
+    let connections = match (
+        info.health.p2p.is_offline(),
+        status.map(|status| &status.connections),
+    ) {
+        (true, _) | (false, Some(shekyl_rpc_types::StatusConnections::Offline)) => {
+            "P2P: offline".to_owned()
         }
-        // Not decodable: Health and Status are both read against the
-        // reply's `offline` (`P2pDisagreesWithOffline`,
-        // `ConnectionsDisagreeWithOffline`). The state wins over a count.
-        (
-            shekyl_rpc_types::HealthP2p::Running { .. },
-            Some(shekyl_rpc_types::StatusConnections::Offline),
-        ) => "P2P: offline".to_owned(),
+        (false, Some(shekyl_rpc_types::StatusConnections::Running { outgoing, incoming })) => {
+            format!("{outgoing}(out)+{incoming}(in) connections")
+        }
+        (false, None) => "connections not disclosed".to_owned(),
     };
     let mining_text = match &mining {
         MiningReadout::Unavailable => "mining info unavailable".to_owned(),
