@@ -201,7 +201,8 @@ pub use rules::{recorded, recorded_header};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
 pub use tree_growth::{
-    grow, ChunkHash, FrontierFault, GrowFault, LayerWrite, TreeFrontier, TreeGrowth,
+    grow, rebuild_right_edge, ChunkHash, FrontierFault, GrowFault, LayerWrite, RightEdgeSpan,
+    TreeFrontier, TreeGrowth,
 };
 pub use trust::Trust;
 pub use validate::{form, tx_against, tx_form, validate};

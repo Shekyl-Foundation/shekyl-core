@@ -99,6 +99,7 @@ mod at_index;
 mod chain_reads;
 mod connect;
 mod curve_reads;
+mod edge;
 mod error;
 mod grow;
 mod halt;
@@ -123,8 +124,8 @@ pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use connect::Connected;
 pub use error::{
-    AccrualFault, AltCannot, CellFault, EngineError, ErrorClass, LeafCountFault, LeafDensity,
-    PoolCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
+    AccrualFault, AltCannot, CellFault, EdgeFault, EngineError, ErrorClass, LeafCountFault,
+    LeafDensity, PoolCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
@@ -750,6 +751,10 @@ mod conformance_tests;
 #[cfg(test)]
 #[path = "pop_tests.rs"]
 mod pop_tests;
+
+#[cfg(test)]
+#[path = "edge_tests.rs"]
+mod edge_tests;
 
 #[cfg(test)]
 #[path = "prune_tests.rs"]

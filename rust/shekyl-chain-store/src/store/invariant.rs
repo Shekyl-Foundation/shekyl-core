@@ -49,6 +49,19 @@ pub enum StoreInvariant {
     /// once per connect and is the root the verdict derived
     /// (`ValidatedBlock::root_after`, DRS-E3 `CTW-Q1`).
     RootRewritten,
+    /// **SI-5** — after a pop, the tree's right edge is what its children
+    /// say: every layer's last chunk, rebuilt from its stored children with
+    /// the rules crate's arithmetic, equals the stored chunk, and the rebuilt
+    /// top equals the live root `curve_tree_roots[tip + 1]`
+    /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.3). A pop only trims leaves at the end,
+    /// so these chunks are the only ones it can change. SI-12 compares the
+    /// summary with the same root, but both come back from one undo log; a
+    /// pre-image journaled wrong is visible here and not there. Armed by
+    /// [`WriteBatch::pop_many`](super::WriteBatch::pop_many) after its pops.
+    RightEdgeDiverged {
+        /// Where the rebuild and the stored tree first disagree.
+        observed: EdgeFault,
+    },
     /// **SI-6** — the undo log's top entry is the tip height, and a pop
     /// consumes exactly that entry.
     ///
@@ -423,6 +436,17 @@ pub enum SlashFault {
     },
 }
 
+/// Where an SI-5 rebuild first disagrees with the stored tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgeFault {
+    /// The chunk rebuilt at `layer` (`0` is the leaf chunk) is not the
+    /// stored last chunk of that layer.
+    Chunk { layer: u8 },
+    /// Every stored last chunk matched its rebuild, and the rebuilt top is
+    /// not the live root.
+    Root,
+}
+
 /// What an SI-11 observation was. A length comparison does not know which
 /// position is missing, and a walk knows the position and not the table's
 /// length. The writer has two more, and neither of them is a length: the
@@ -454,6 +478,7 @@ impl StoreInvariant {
             Self::TipMismatch => 2,
             Self::TxHashNotFresh => 3,
             Self::RootRewritten => 4,
+            Self::RightEdgeDiverged { .. } => 5,
             Self::UndoLogIncoherent { .. } => 6,
             Self::WorkNotIncreasing { .. } => 10,
             Self::LeavesNotDense { .. } => 11,
@@ -543,6 +568,18 @@ impl core::fmt::Display for StoreInvariant {
                 LeafDensity::Occupied => f.write_str(
                     "a leaf position the drain is writing already holds a row; the append would \
                      overlap the dense range, rebuild from the block corpus",
+                ),
+            },
+            Self::RightEdgeDiverged { observed } => match observed {
+                EdgeFault::Chunk { layer } => write!(
+                    f,
+                    "after a pop, curve_tree_layers' last chunk at layer {layer} is not the chunk \
+                     its stored children rebuild to; a pre-image was journaled wrong, rebuild from \
+                     the block corpus"
+                ),
+                EdgeFault::Root => f.write_str(
+                    "after a pop, the tree's rebuilt top is not the live root at \
+                     curve_tree_roots[tip + 1]; rebuild from the block corpus",
                 ),
             },
             Self::SummaryRootDiverged => f.write_str(
@@ -682,6 +719,7 @@ impl core::error::Error for StoreInvariant {
             | Self::IdNotFresh
             | Self::LeavesNotDense { .. }
             | Self::SummaryRootDiverged
+            | Self::RightEdgeDiverged { .. }
             | Self::ServeCreditWithoutBond { .. }
             | Self::PoolEntryUnpaired { .. }
             | Self::PositionMapsNotBijective

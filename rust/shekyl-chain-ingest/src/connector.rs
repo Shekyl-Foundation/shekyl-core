@@ -628,18 +628,15 @@ impl Message<Rewind> for Connector {
     async fn handle(&mut self, msg: Rewind, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let to = msg.to;
         self.writer.write(|batch| {
-            let mut popped = 0u64;
-            loop {
-                let tip = batch.chain_view().tip()?.map(|t| t.height);
-                match tip {
-                    Some(tip) if tip > to => {
-                        batch.pop()?;
-                        popped += 1;
-                    }
-                    Some(tip) if tip == to => return Ok(Rewound { popped }),
-                    other => return Err(RunFault::RewindTarget { to, tip: other }),
-                }
-            }
+            let tip = batch.chain_view().tip()?.map(|t| t.height);
+            let popped = match tip {
+                Some(tip) if tip >= to => tip.to_raw() - to.to_raw(),
+                other => return Err(RunFault::RewindTarget { to, tip: other }),
+            };
+            // One run of pops, then SI-5 over the tree they left
+            // (`pop_many`): the belt is the run's, not each pop's.
+            batch.pop_many(popped)?;
+            Ok(Rewound { popped })
         })
     }
 }
