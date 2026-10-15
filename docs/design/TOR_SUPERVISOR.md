@@ -232,7 +232,12 @@ reap on Unix, the process handle on Windows). That is §4.2's "child exited"
 input, which §2 records as missing today. Both inputs stay, and either one is
 a process fault. Tor holds its own end inheritable, so a child Tor spawned (a
 pluggable transport) could inherit it; that is moot while bridges are out of
-scope (§5), and it reopens with them.
+scope (§5), and it reopens with them. Reproduced on Linux (2026-10-15, the
+pinned 15.0.24 `linux-x86_64` bundle): Tor's end carries no close-on-exec flag
+inside Tor (`fdinfo` flags `04002`); with a copy leaked into a concurrent child
+that lived 5 s, the wait on Tor's process returned within 12 ms of the kill and
+our read saw EOF only after 5.0 s; a concurrent spawn that was not handed the
+socket held neither end, and EOF followed the kill within 7 ms.
 
 **TSR-F17 (high; Tor lane; fixed in its own change).** Two defects in landed
 launch code, found by the same Windows run: the default torrc is not
@@ -241,7 +246,16 @@ environment (TB-7) kills `tor.exe`, which needs `SystemRoot`. Both are fixed by
 the launcher fix, a separate change with no PR at this commit; this round
 depends on it. §4.7's launch passes `-f` and `--defaults-torrc`, each naming an
 empty file, and on Windows sets `SystemRoot` from the operating system, never
-from our environment.
+from our environment. **On Linux the default location is world-writable.** The
+pinned Linux bundle's compiled-in defaults sit under `/var/tmp/dist/tor/`: with
+no `-f`, Tor reads `/var/tmp/dist/tor/etc/tor/torrc` and `torrc-defaults`, and
+`/var/tmp` is writable by every local user, so any of them can supply our
+Tor's configuration. With `-f` and `--defaults-torrc` foreclosed, Tor still
+tries to open `GeoIPFile` and `GeoIPv6File` at their compiled-in defaults,
+`/var/tmp/dist/tor/share/tor/geoip` and `geoip6`, and would parse a file
+planted there. The launch therefore also passes `GeoIPFile` and `GeoIPv6File`,
+each naming the empty file; with them, Tor opens only that file (measured
+2026-10-15). This joins the launcher fix's scope.
 
 ## 4. Design
 
@@ -437,8 +451,17 @@ through the same path (C5).
   and Tor is its only child today. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` is the
   strict form, and it is not in stable `std`; reopen when it is.
 
-The launch also passes `-f` and `--defaults-torrc`, each naming an empty file,
-and on Windows sets `SystemRoot` from the operating system (`TSR-F17`).
+The launch also passes `-f`, `--defaults-torrc`, `GeoIPFile` and
+`GeoIPv6File`, each naming an empty file, and on Windows sets `SystemRoot`
+from the operating system (`TSR-F17`).
+
+Measured on Linux (2026-10-15, x86_64, the pinned 15.0.24 bundle staged to its
+four pinned files, cleared environment with the loader path only): the
+inherited socket answered `GETINFO version` (`250-version=0.4.9.13`) with no
+`AUTHENTICATE`; `net/listeners/control` was empty; `config-file` and
+`config-defaults-file` named the empty file; closing our end exited Tor in
+15–19 ms (C4); a parent's `abort()` left Tor gone within 6–16 ms of the
+parent's reap (C5). macOS is measured the same way once a host is set up.
 `AvoidDiskWrites 1` and these join the closed option list, whose test fails
 first, which is its purpose. Discovery and the pin gate run at every spawn
 (`TSR-F6`).
@@ -619,9 +642,9 @@ diagnostic. No figure is set before its row lands.
 | `TSR-M9` | no onion address in the daemon Tor's log events at `notice` | the log category |
 | `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage | the tombstone delete bound |
 
-The Windows run's stop-path figures (closing our end, and the parent's
-`abort()`, each exiting Tor in about 20 ms; C4, C5) are evidence for the stop
-path, not a bound.
+The Windows and Linux stop-path figures (closing our end, and the parent's
+`abort()`, each exiting Tor within about 20 ms; C4, C5) are evidence for the
+stop path, not a bound.
 
 **Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
 `TSR-M10` need only today's managed Tor and a SOCKS self-dial, and are measured
