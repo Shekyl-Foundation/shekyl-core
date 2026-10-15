@@ -26,6 +26,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     # `WaitNamedPipeW`, for the client's bounded busy-wait (WP-W2).
     "Win32_System_Pipes",
+    # The daemon configuration (DAEMON_CONFIG_CUTOVER.md §2.4, §2.5, DC-N1):
+    # the known-folder roots, `CoTaskMemFree` for their strings, and the
+    # `OVERLAPPED` the file lock passes.
+    "Win32_UI_Shell",
+    "Win32_System_Com",
+    "Win32_System_IO",
 ] }
 # The self-hosted listener (WP-W2) is built on tokio's named-pipe support, so
 # the crate that holds the `unsafe` `create_with_security_attributes_raw` call

@@ -189,6 +189,9 @@ pub mod peer_policy_ffi;
 // per-boot overlay inbound (managed tor, in-memory key, DiscardPK) here.
 pub mod daemon_tor_ffi;
 
+/// The account's home from the operating system's account interface (IG-13).
+pub mod platform;
+
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
 // `shekyl_log_install_tracing_forwarder`, …) are compiled into

@@ -79,6 +79,13 @@ mod sddl;
 #[cfg(windows)]
 mod sid;
 
+/// Who a descriptor grants write or read to (the daemon configuration's allowlist).
+pub mod dacl;
+/// The known-folder roots (IG-13).
+pub mod known_folder;
+/// An exclusive file lock on an open handle.
+pub mod lock;
+
 #[cfg(windows)]
 pub use disk::free_bytes_available;
 #[cfg(windows)]

@@ -185,3 +185,7 @@ harness = false
 [[bench]]
 name = "block_connect_verify"
 harness = false
+
+[target.'cfg(windows)'.dependencies]
+# The known-folder roots for the daemon configuration (IG-13).
+shekyl-win-sec = { path = "../shekyl-win-sec" }

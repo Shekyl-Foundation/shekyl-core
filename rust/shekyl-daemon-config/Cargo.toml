@@ -18,6 +18,22 @@ shekyl-options = { path = "../shekyl-options" }
 # The log subsystems `log-category` keys are checked against (IG-9: by
 # reference to the owner).
 shekyl-logging = { path = "../shekyl-logging" }
+# The network marker is two TOML keys; parsed with the reader the
+# workspace already pins (DAEMON_CONFIG_CUTOVER_AUDIT.md §4).
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+
+[target.'cfg(unix)'.dependencies]
+# Safe wrappers for the data-directory lock (`flock`) and the account's
+# effective uid; the crate shekyl-engine-prefs already pins for `fsync`.
+rustix = { version = "1", features = ["fs", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+# The Win32 security calls (the DACL allowlist, the file lock) live where
+# the workspace keeps its Windows `unsafe`.
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true
