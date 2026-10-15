@@ -438,7 +438,9 @@ one is wanted.
 
 x86_64 development host, 2026-10-12. Stack: the smallest thread stack each
 step ran on, by a ladder of 8 KiB steps from 16 KiB, so each figure is an
-upper bound on the need; `a_held_key_signs_on_a_small_stack` holds the
+upper bound on the need. The ladder is `examples/fn_dsa_stack_ladder.rs`;
+the floor device's figures, by the same tool, are in
+[`ba_t33_fn_dsa_floor_device_20261015.md`](../benchmarks/ba_t33_fn_dsa_floor_device_20261015.md); `a_held_key_signs_on_a_small_stack` holds the
 bounds. Instructions: gungraun 0.19.3, the draw pinned, two runs identical.
 Time: criterion, the production entry.
 

@@ -14,8 +14,10 @@ across signatures, verifies in **0.57 ms**, and generates a seeded key in
 which the receipt key is 9.8 %. The scheme-3 vectors, signing included,
 give the pinned bytes on this hardware; until now that agreement was shown
 only under emulation. Every step of the run exited 0, the device held 1.8
-GHz on every core through the timed benches, and the stack each operation
-needs on aarch64 is at or below what the x86 ladder finds.
+GHz on every core through the timed benches, and no scheme-3 operation
+needs more stack on aarch64 than the x86 ladder finds; a whole persona
+slot's derivation needs slightly more, 16 KiB optimized and 8 KiB
+unoptimized.
 
 ## What was run
 
@@ -109,9 +111,10 @@ same revision, from the rehearsal.
 | `persona` (one slot) | 320 KiB | 752 KiB | 304 KiB | 744 KiB |
 
 16 KiB is the ladder's first rung. The floor needs no more than the
-development host for any scheme-3 operation. The one figure above it is the
-whole persona slot, optimized, by 16 KiB: that derivation runs at engine
-assembly, inside the blocking pool's 2 MiB threads.
+development host for any scheme-3 operation. The whole persona slot needs
+more in both profiles, by 16 KiB optimized and 8 KiB unoptimized; that
+derivation runs at engine assembly, inside the blocking pool's 2 MiB
+threads.
 
 ## The receipt key at engine assembly (`FND-12`)
 
