@@ -682,3 +682,57 @@ async fn a_tampered_witness_on_an_alt_row_fails_promotion_k5b() {
     x.close().await;
     y.close().await;
 }
+
+#[tokio::test]
+async fn a_recorded_block_offered_as_an_alternative_is_already_held() {
+    // Relayed twice: a block on x's own chain below the tip arrives as if
+    // it were an alternative. It is held already — never stored as an alt
+    // row as well, where a later switch demoting it would meet its own row.
+    let mut x = with_prefix("switch-recorded-x", PREFIX).await;
+    let own = x.mine(3).await;
+    assert!(matches!(
+        x.offer(&own[1]).await.expect("offer"),
+        Offered::AlreadyHeld
+    ));
+    assert_eq!(x.alt_blocks_held().await.expect("al6"), 0);
+    x.close().await;
+}
+
+#[tokio::test]
+async fn a_stale_or_mismatched_plan_is_a_driver_defect_and_the_writer_stays_up() {
+    let mut x = with_prefix("switch-plan-x", PREFIX).await;
+    let mut y = with_prefix("switch-plan-y", PREFIX).await;
+    x.mine(3).await;
+    y.idle();
+    let b = y.mine(4).await;
+    let plan = offer_branch(&x, &b).await;
+    let before = x.digest().await.expect("d");
+
+    // The promoted blocks are not the alternative chain's entries.
+    let mut short = plan.clone();
+    short.promoted.pop();
+    assert!(matches!(
+        x.reorganize(&short, &bodies(&b)).await,
+        Err(RunFault::PlanMismatch { .. })
+    ));
+    // A demoted block formed with a witness its height row does not hold
+    // (CEN-K5b's demoted direction).
+    let mut witnessed = plan.clone();
+    witnessed.demoted[0].candidate.attestation_witness =
+        Some(shekyl_types::archival::AttestationWitness::new(vec![0x5E; 8]).expect("non-empty"));
+    assert!(matches!(
+        x.reorganize(&witnessed, &bodies(&b)).await,
+        Err(RunFault::PlanMismatch { .. })
+    ));
+    assert_eq!(x.digest().await.expect("d"), before, "nothing moved");
+
+    // The tip moves between the plan and the switch: the plan is stale.
+    x.mine(1).await;
+    assert!(matches!(
+        x.reorganize(&plan, &bodies(&b)).await,
+        Err(RunFault::StalePlan { .. })
+    ));
+    assert_eq!(x.mine(1).await.len(), 1, "a driver defect is not a halt");
+    x.close().await;
+    y.close().await;
+}

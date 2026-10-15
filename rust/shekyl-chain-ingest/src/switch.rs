@@ -92,7 +92,8 @@ pub enum Offered {
         /// The first unheld hash on the walk.
         at: BlockHash,
     },
-    /// The store already holds the block as an alternative (CEN-K3).
+    /// The store already holds the block — as an alternative (CEN-K3) or
+    /// on the recorded chain.
     AlreadyHeld,
     /// Stored; the incumbent stays (K6: not strictly heavier, no
     /// checkpoint names it).
@@ -321,6 +322,12 @@ fn offer(
     if tip.is_some_and(|t| t.hash == parent) {
         return Err(RunFault::NotAlternative { parent });
     }
+    // A block the recorded chain already holds is held: as an alt row too
+    // it would sit in both tables, and the next switch that demoted it
+    // would meet its own row.
+    if snap.height_of(&hash)?.is_some() {
+        return Ok(Offered::AlreadyHeld);
+    }
     let chain = match AltChain::build(&snap, &parent) {
         Ok(chain) => chain,
         Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked { at }))) => {
@@ -485,12 +492,14 @@ fn switch(
     let entries = chain.entries().to_vec();
     let alt_tip_height = chain.parent().height;
     // K6, re-derived on the actor: the caller carries formed blocks, not
-    // the verdict.
-    let alternative = entries
-        .last()
-        .expect("an alternative chain has at least the offered block")
-        .block
-        .cumulative_difficulty();
+    // the verdict. An alternative tip the recorded chain holds is no
+    // alternative chain at all.
+    let Some(last) = entries.last() else {
+        return Err(RunFault::PlanMismatch {
+            reason: "the plan's alternative tip is a recorded block",
+        });
+    };
+    let alternative = last.block.cumulative_difficulty();
     let checkpoint = trust.anchors().expected_at(alt_tip_height) == Some(msg.alt_tip);
     let verdict = fork_choice(recorded_work(&snap, tip.height)?, alternative, checkpoint);
     let keep_demoted = match verdict {
@@ -528,6 +537,7 @@ fn switch(
     // way; their rows are written only on the difficulty arm (K7).
     let depth = tip.height.to_raw() - root.height.to_raw();
     let mut demoted = Vec::new();
+    let mut witnesses = Vec::new();
     let mut returned = Vec::new();
     for offset in 1..=depth {
         let height = BlockHeight::from_raw(root.height.to_raw() + offset);
@@ -536,18 +546,21 @@ fn switch(
             AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
         };
         demoted.push((height, recorded_hash(&snap, height)?));
+        witnesses.push(candidate.attestation_witness.clone());
         returned.extend(candidate.transactions);
     }
     let expected_demoted = if keep_demoted { demoted.len() } else { 0 };
+    // CEN-K5b's other direction: a demoted row carries the witness its
+    // height row held, so the formed block must carry that one.
     if msg.demoted.len() != expected_demoted
-        || msg
-            .demoted
-            .iter()
-            .zip(&demoted)
-            .any(|(formed, (_, hash))| formed.hash() != *hash)
+        || msg.demoted.iter().zip(demoted.iter().zip(&witnesses)).any(
+            |(formed, ((_, hash), witness))| {
+                formed.hash() != *hash || formed.candidate().attestation_witness != *witness
+            },
+        )
     {
         return Err(RunFault::PlanMismatch {
-            reason: "the demoted blocks are not the recorded chain above the fork point",
+            reason: "the demoted blocks are not the recorded chain above the fork point (identity or witness)",
         });
     }
 
@@ -575,6 +588,13 @@ fn switch(
     let outcome: Result<SwitchDone, Stop> = store.write(|batch| {
         batch.pop_many(depth)?;
         for admitted in demoted_rows {
+            // A recorded block can already sit in the alt table (a replay
+            // `Apply` connects without consulting it); the row written now
+            // is the tier's verdict over the recorded block, so it replaces
+            // the older one.
+            if batch.has_alt_block(&admitted.hash())? {
+                batch.remove_alt_block(&admitted.hash())?;
+            }
             batch.insert_alt_block(admitted)?;
         }
         let view = batch.chain_view();

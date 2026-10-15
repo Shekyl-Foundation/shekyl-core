@@ -165,12 +165,15 @@ impl E2 {
         trust: &Trust,
         coverage: &mut RuleCoverage,
     ) -> Verdict<()> {
-        // The floor is the last anchor the recorded chain has reached —
-        // the census row's "last anchor preceding the current height"
-        // (`is_alternative_block_allowed`), not the table's last entry: an
+        // The floor is the last anchor the recorded chain has reached — the
+        // census row's "last anchor preceding the current height", read as
+        // at or below the recorded tip — not the table's last entry: an
         // anchor above the tip is no floor yet, and treating it as one
         // would refuse the very alternative block it names (CEN-K6's
-        // checkpoint arm, DRS-E5 a5).
+        // checkpoint arm, DRS-E5 a5). The C++ (`is_alternative_block_allowed`
+        // over `get_current_blockchain_height()`, the block count) also
+        // counts an anchor at `tip + 1`; the two differ only there, where
+        // this floor admits the alternative block that anchor names.
         let Some(anchor) = trust.anchors().last_at_or_below(fork.recorded_tip().height) else {
             // No anchored chain: no floor to stand on and no cap to bind.
             coverage.insert(Self::ROW);
