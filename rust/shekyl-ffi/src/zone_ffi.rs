@@ -483,7 +483,9 @@ pub fn start_clearnet(
         .map_err(|e| ZoneStart::Channel(format!("{e:?}")))?;
     let tally = Arc::new(zero_tally());
     let listeners = host.handle.block_on(async {
-        let mut bound = Vec::with_capacity(listen.len());
+        // No reserve: the section's listen list is a handful, and a raw
+        // `with_capacity` is a boundary reserve the SA-R-7 ratchet counts.
+        let mut bound = Vec::new();
         for addr in listen {
             bound.push(
                 TcpListener::bind(*addr)
@@ -493,7 +495,7 @@ pub fn start_clearnet(
         }
         Ok::<_, ZoneStart>(bound)
     })?;
-    let mut locals = Vec::with_capacity(listeners.len());
+    let mut locals = Vec::new();
     for listener in &listeners {
         locals.push(listener.local_addr().map_err(|error| {
             ZoneStart::Bind {
