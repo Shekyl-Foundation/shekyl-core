@@ -7,8 +7,8 @@
 //!
 //! The dialer is `shekyl-dialer`'s, built over the seam hub when the zone
 //! host starts, and its owner loops start when each connector is ready.
-//! Nothing here is a dial: the C++ asks four things of this file and
-//! tells it three.
+//! Nothing here is a dial. The C++ asks this file for what the dialer
+//! already decided, and tells it what changed.
 //!
 //! Asked: the self-connection nonce query the inbound handshake makes
 //! ([`shekyl_dial_take_handshake_nonce`]); the disclosure sample for the
@@ -19,7 +19,9 @@
 //! ([`shekyl_core_publish_tip`]); `--out-peers`
 //! ([`shekyl_dialer_set_out_peers`]); an operator-named address
 //! ([`shekyl_peerlist_admit_operator`]); this node's own address on a
-//! connector ([`shekyl_peerlist_set_own_address`]).
+//! connector ([`shekyl_peerlist_set_own_address`]); the network the
+//! daemon chose ([`shekyl_dialer_note_network`]), which selects the
+//! compiled seeds.
 
 use std::ffi::{c_char, CStr};
 use std::path::{Path, PathBuf};
@@ -45,7 +47,9 @@ static DIALER: Mutex<Option<Arc<Dialer>>> = Mutex::new(None);
 /// The core's latest published tip. `None` until the first publish.
 static TIP: Mutex<Option<SyncPayload>> = Mutex::new(None);
 
-/// Which network's seeds to admit, from the network-id derivation.
+/// Which network's seeds to admit. `None` until
+/// [`shekyl_dialer_note_network`], and `None` for stagenet and fakechain,
+/// which have no compiled seeds.
 static NETWORK: Mutex<SeedNetwork> = Mutex::new(SeedNetwork::None);
 
 /// The outbound caps the C++ set before the dialer existed: the command
@@ -186,7 +190,9 @@ pub(crate) fn set_network_id(network_id: [u8; 16]) {
     }
 }
 
-/// The derived network, recorded where the C++ asks for its network id.
+/// The daemon's chosen network, mapped onto the seed list that network
+/// admits. Stagenet and fakechain admit none. An id derivation must not
+/// call this: [`crate::network_id_ffi::shekyl_network_id`] is pure.
 pub(crate) fn note_network(network: DaemonNetwork) {
     let seeds_of = match network {
         DaemonNetwork::Mainnet => SeedNetwork::Mainnet,
@@ -194,6 +200,23 @@ pub(crate) fn note_network(network: DaemonNetwork) {
         DaemonNetwork::Stagenet | DaemonNetwork::Fakechain => SeedNetwork::None,
     };
     *NETWORK.lock().expect("network") = seeds_of;
+}
+
+/// Records the network this process dials. `nettype` is
+/// `cryptonote::network_type`. Returns 0, or -1 when `nettype` is not one
+/// of the four networks, leaving the record unchanged.
+///
+/// `shekyl_network_id` does not call this. `cryptonote::get_config`
+/// initializes the mainnet, testnet, and stagenet ids on first use,
+/// whichever network was asked for, so a record taken there would always
+/// end on stagenet and clearnet would admit no seeds.
+#[no_mangle]
+pub extern "C" fn shekyl_dialer_note_network(nettype: u8) -> i32 {
+    let Some(net) = DaemonNetwork::from_cryptonote(nettype) else {
+        return -1;
+    };
+    note_network(net);
+    0
 }
 
 /// Start the owner loop for `connector` on a thread of its own, as an
@@ -862,5 +885,98 @@ mod tests {
             .map(|(address, _aim, _nonce)| address);
         assert_eq!(drawn, Some(address(6)));
         unbind();
+    }
+
+    /// `get_config` builds the mainnet, testnet, and stagenet ids, in that
+    /// order, on first use. Those derivations must leave the noted seed
+    /// network where the daemon put it. Fakechain shares mainnet's id and
+    /// still admits no seeds. An unrecognized code does not move a record.
+    #[test]
+    fn a_noted_network_survives_every_id_derivation() {
+        const DERIVATION_ORDER: [DaemonNetwork; 3] = [
+            DaemonNetwork::Mainnet,
+            DaemonNetwork::Testnet,
+            DaemonNetwork::Stagenet,
+        ];
+        /// The first byte past `cryptonote::FAKECHAIN`.
+        const UNRECOGNIZED_NETTYPE: u8 = DaemonNetwork::Fakechain.to_cryptonote() + 1;
+
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                note_network(DaemonNetwork::Stagenet);
+            }
+        }
+        let _restore = Restore;
+        let recorded = || *NETWORK.lock().expect("network");
+
+        assert_eq!(recorded(), SeedNetwork::None);
+
+        let derive_each_static = || {
+            for network in DERIVATION_ORDER {
+                let mut out = [0u8; 16];
+                assert_eq!(
+                    crate::network_id_ffi::shekyl_network_id(
+                        network.to_cryptonote(),
+                        out.as_mut_ptr()
+                    ),
+                    0
+                );
+            }
+        };
+
+        assert_eq!(
+            shekyl_dialer_note_network(DaemonNetwork::Mainnet.to_cryptonote()),
+            0
+        );
+        derive_each_static();
+        assert_eq!(recorded(), SeedNetwork::Mainnet);
+        assert_eq!(seeds(recorded()), seeds(SeedNetwork::Mainnet));
+
+        assert_eq!(
+            shekyl_dialer_note_network(DaemonNetwork::Testnet.to_cryptonote()),
+            0
+        );
+        derive_each_static();
+        assert_eq!(recorded(), SeedNetwork::Testnet);
+        assert_eq!(seeds(recorded()), seeds(SeedNetwork::Testnet));
+
+        assert_eq!(
+            shekyl_dialer_note_network(DaemonNetwork::Stagenet.to_cryptonote()),
+            0
+        );
+        derive_each_static();
+        assert_eq!(recorded(), SeedNetwork::None);
+        assert!(seeds(recorded()).is_empty());
+
+        assert_eq!(
+            shekyl_dialer_note_network(DaemonNetwork::Fakechain.to_cryptonote()),
+            0
+        );
+        let mut mainnet_id = [0u8; 16];
+        let mut fakechain_id = [0u8; 16];
+        assert_eq!(
+            crate::network_id_ffi::shekyl_network_id(
+                DaemonNetwork::Mainnet.to_cryptonote(),
+                mainnet_id.as_mut_ptr()
+            ),
+            0
+        );
+        assert_eq!(
+            crate::network_id_ffi::shekyl_network_id(
+                DaemonNetwork::Fakechain.to_cryptonote(),
+                fakechain_id.as_mut_ptr()
+            ),
+            0
+        );
+        assert_eq!(mainnet_id, fakechain_id);
+        assert_eq!(recorded(), SeedNetwork::None);
+
+        assert_eq!(
+            shekyl_dialer_note_network(DaemonNetwork::Mainnet.to_cryptonote()),
+            0
+        );
+        assert_eq!(shekyl_dialer_note_network(UNRECOGNIZED_NETTYPE), -1);
+        assert_eq!(recorded(), SeedNetwork::Mainnet);
     }
 }

@@ -13,6 +13,12 @@
 //! [`DaemonNetwork::from_cryptonote`]. Fakechain's pin is mainnet's genesis
 //! today, so the two ids match; a genesis of fakechain's own rotates only
 //! fakechain. Any other byte is refused.
+//!
+//! The derivation records nothing. `cryptonote::get_config` builds the
+//! mainnet, testnet, and stagenet ids on first use, whichever network was
+//! asked for, so a side effect here would always end on stagenet. The
+//! dialer's seeds are recorded by [`crate::dialer_ffi::shekyl_dialer_note_network`]
+//! from the network the daemon actually chose.
 
 use shekyl_p2p_transport::network_id_from_genesis;
 use shekyl_rpc_types::{genesis_hash_for, DaemonNetwork};
@@ -27,7 +33,6 @@ pub extern "C" fn shekyl_network_id(nettype: u8, out: *mut u8) -> i32 {
     let Some(net) = DaemonNetwork::from_cryptonote(nettype) else {
         return -1;
     };
-    crate::dialer_ffi::note_network(net);
     let id = network_id_from_genesis(&genesis_hash_for(net));
     // The caller asked for 16 bytes and `id` is `[u8; 16]`.
     unsafe { std::ptr::copy_nonoverlapping(id.as_ptr(), out, id.len()) };

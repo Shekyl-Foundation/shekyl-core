@@ -4482,6 +4482,15 @@ constexpr int SHEKYL_DIALER_DEFERRED = 2;
 /// addresses enter gray, and the dialer writes it every thirty minutes and
 /// at stop. 0, SHEKYL_DIALER_DEFERRED, or -1 for a null or non-UTF-8 path.
 int shekyl_dialer_open_address_file(const char* path);
+/// Which network this process dials, for seed admission. `nettype` is
+/// `cryptonote::network_type` (0 mainnet, 1 testnet, 2 stagenet, 3
+/// fakechain). Called once from `core::init`, after that choice is
+/// settled and before any connector starts. Stagenet and fakechain admit
+/// no compiled seeds. This is not `shekyl_network_id`: that derivation is
+/// pure, and `get_config` builds every network's id on first use, so a
+/// record taken there would always end on stagenet. Returns 0, or -1 when
+/// `nettype` is not one of those four (the record is unchanged).
+int shekyl_dialer_note_network(std::uint8_t nettype);
 /// One `get_peer_list` entry, from the Rust peer lists (RK-5a's export,
 /// moved to Rust 2026-10-13). `host` is the ip string for IPv4, the bare
 /// host for IPv6, the whole `host:port` for Tor (`port` 0 there); `ip` is
@@ -4632,7 +4641,8 @@ std::uint64_t shekyl_recv_mark_ms(std::uint64_t recv_ms, std::uint64_t started_m
 /// genesis block hash). Fakechain's genesis pin is mainnet's today, so the
 /// two ids match until fakechain has its own genesis. Returns 0, or -1 when
 /// `out` is null or `nettype` is not one of those four. This function does
-/// not state the bytes.
+/// not state the bytes, and it does not choose the dialer's seeds
+/// (`shekyl_dialer_note_network` does, from the network the daemon chose).
 int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 
 } // extern "C"
