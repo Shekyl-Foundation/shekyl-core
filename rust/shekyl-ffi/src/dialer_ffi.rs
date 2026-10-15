@@ -25,9 +25,9 @@ use std::ffi::{c_char, CStr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use shekyl_dialer::{seeds, Dialer, LoadError, SeedNetwork, Shared};
+use shekyl_dialer::{seeds, Dialer, HubBans, LoadError, SeedNetwork, Shared};
 use shekyl_levin::SupportFlags;
-use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
+use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_rpc_types::DaemonNetwork;
 use shekyl_seam::{connector_from_index, Hub, SocketId, SyncPayload};
@@ -137,8 +137,8 @@ pub(crate) fn ensure_dialer(hub: &Hub) -> Arc<Dialer> {
         open_file(&dialer, &path);
     }
     for address in &deferred.operator {
-        match dialer.admit_operator(address, now, &mut SecureRelayRng) {
-            Ok(_) | Err(_) => {}
+        if let Err(refusal) = dialer.admit_operator(address, now, &mut SecureRelayRng) {
+            tracing::warn!("operator address {address:?} was not admitted: {refusal:?}");
         }
     }
     if let Some(list) = deferred.exclusive {
@@ -215,6 +215,7 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
         Ok(owner) => owner,
         Err(err) => {
             tracing::error!("the dialer's wake for {connector:?} could not register: {err:?}");
+            dialer.release_owner(connector);
             return false;
         }
     };
@@ -229,20 +230,22 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
         let network = *NETWORK.lock().expect("network");
         let now = dialer.hub().now();
         for seed in seeds(network) {
-            match dialer.admit_operator(&seed, now, &mut SecureRelayRng) {
-                Ok(_) | Err(_) => {}
+            if let Err(refusal) = dialer.admit_operator(&seed, now, &mut SecureRelayRng) {
+                tracing::warn!("{connector:?}: seed {seed:?} was not admitted: {refusal:?}");
             }
         }
     }
     let name = format!("p2p-dial-{connector:?}").to_lowercase();
+    let running = Arc::clone(&dialer);
     let spawned = std::thread::Builder::new().name(name).spawn(move || {
-        dialer.run(connector, &owner, &mut SecureRelayRng);
-        match owner.deregister() {
-            Ok(()) | Err(_) => {}
+        running.run(connector, &owner, &mut SecureRelayRng);
+        if let Err(err) = owner.deregister() {
+            tracing::warn!("{connector:?}: the dialer's wake did not deregister: {err:?}");
         }
     });
-    if spawned.is_err() {
-        tracing::error!("the dialer's thread for {connector:?} could not start");
+    if let Err(err) = spawned {
+        tracing::error!("the dialer's thread for {connector:?} could not start: {err}");
+        dialer.release_owner(connector);
         return false;
     }
     true
@@ -595,15 +598,6 @@ pub unsafe extern "C" fn shekyl_peerlist_disclose(
         }
     }
     written
-}
-
-/// The transport layer's bans, asked through the hub.
-struct HubBans<'a>(&'a Hub);
-
-impl shekyl_peerlist::BanQuery for HubBans<'_> {
-    fn is_banned(&mut self, host: std::net::IpAddr, _now: Tick) -> bool {
-        self.0.is_banned(host)
-    }
 }
 
 /// One list address, encoded for the adapter. `None` for an onion host

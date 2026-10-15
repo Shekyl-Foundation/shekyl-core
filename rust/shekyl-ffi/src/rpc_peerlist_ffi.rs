@@ -23,22 +23,12 @@
 
 use std::ffi::c_void;
 
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use shekyl_peerlist::{BanQuery, ConnectorId, ListName, NetworkAddress, Peerlist, Tick};
-use shekyl_seam::Hub;
+use shekyl_dialer::HubBans;
+use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, Peerlist};
 
 use crate::dialer_ffi::dialer;
-
-/// The transport layer's bans, asked through the hub.
-struct HubBans<'a>(&'a Hub);
-
-impl BanQuery for HubBans<'_> {
-    fn is_banned(&mut self, host: IpAddr, _now: Tick) -> bool {
-        self.0.is_banned(host)
-    }
-}
 
 /// The facts codes the RPC's exports share (`rpc_facts_ffi.h`).
 const FACTS_OK: i32 = 0;
@@ -279,6 +269,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::sync::PoisonError;
 
+    use shekyl_peerlist::Tick;
     use shekyl_seam::CloseCause;
 
     use super::*;

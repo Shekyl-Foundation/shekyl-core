@@ -17,13 +17,14 @@
 //! The session's connector is read from the seam board by the session id.
 //! The C++ passes neither it nor the direction.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 
+use shekyl_dialer::HubBans;
 use shekyl_peerlist::{
     BanQuery, ConnectionId, ConnectorId, NetworkAddress, Peerlist, RefusedSet, SessionRow, Tick,
 };
-use shekyl_seam::{Hub, SocketId};
+use shekyl_seam::SocketId;
 
 use crate::legacy_util::slice_from_typed_ptr;
 use crate::seam_ffi::{hub, ShekylSeamAddress, ADDR_IPV4, ADDR_IPV6, ADDR_TOR};
@@ -78,15 +79,6 @@ pub extern "C" fn shekyl_peerlist_allow_local_ip(allow: bool) -> bool {
         *refused = wanted;
     }
     allow
-}
-
-/// The bans the transport layer holds, asked through the hub.
-struct HubBans(Hub);
-
-impl BanQuery for HubBans {
-    fn is_banned(&mut self, host: IpAddr, _now: Tick) -> bool {
-        self.0.is_banned(host)
-    }
 }
 
 /// The peerlist's name for a seam session. The board's id is the socket
@@ -210,7 +202,7 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_received(
         session_of(id),
         entries,
         now,
-        &mut HubBans(hub),
+        &mut HubBans(&hub),
     )
 }
 

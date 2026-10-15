@@ -3,9 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The dialer's owner: one loop per connector that wakes, plans, draws,
-//! dials, runs the Levin handshake, adopts the channel and reports the
-//! outcome (dialer brief, "The fill", "The dial", "`DialOutcome`").
+//! The dialer's owner: one loop per connector that wakes, plans and draws.
+//! The handshake module opens the channel, reads the response, adopts the
+//! session and posts the result (dialer brief, "The fill", "The dial",
+//! "`DialOutcome`").
 //!
 //! The loop runs on a thread of its own. Its wake is a timing-engine owner
 //! (Rick, 2026-10-13): each gap is armed on the engine and the thread
@@ -13,38 +14,29 @@
 //! no second one. `Hub::dial_channel` blocks that thread while the
 //! connector opens the channel, and the handshake reads the channel's
 //! frames on it. No p2p io worker is held.
-//!
-//! The handshake owner holds the close cause itself: a channel that ends
-//! before a well-formed response reports the cause the connector stored on
-//! the session, and nothing reads a registry row that the strand may have
-//! reaped. The handshake's only clock is the connector's transport gap,
-//! armed before `dial_channel` returns; when it fires the connector closes
-//! the session and the read below returns. A channel that fails before it
-//! is adopted is dropped: the session's drop closes the queue, and the
-//! owner's outcome carries the cause it saw.
+
+mod address;
+mod handshake;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
-use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
-use shekyl_levin::{
-    invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
-    PortableMap, Received, SupportFlags, COMMAND_HANDSHAKE,
-};
 use shekyl_peerlist::{
-    white_diversity_floor, BanQuery, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome,
-    Direction, Host, NetworkAddress, Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick,
-    WHITE_REFILL_LINE,
+    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome, Host,
+    NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
 };
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
-use shekyl_seam::{drive_inbound, Endpoint, Hub, SocketId, SyncPayload};
+use shekyl_seam::{Hub, SocketId, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 
+use self::address::live_sessions;
+use self::handshake::Attempt;
 use crate::attempts::Attempts;
+use crate::bans::HubBans;
 use crate::candidate::CandidateFilter;
 use crate::fill::{plan, Census, DialAim, DrawList};
 use crate::memory::FailedAddresses;
@@ -118,15 +110,6 @@ pub struct Dialer {
     owners: Mutex<[bool; ConnectorId::COUNT]>,
 }
 
-/// The transport layer's bans, asked through the hub.
-struct HubBans<'a>(&'a Hub);
-
-impl BanQuery for HubBans<'_> {
-    fn is_banned(&mut self, host: IpAddr, _now: Tick) -> bool {
-        self.0.is_banned(host)
-    }
-}
-
 /// The peerlist's name for a seam session: the socket id, little-endian,
 /// in the first eight bytes.
 #[must_use]
@@ -134,60 +117,6 @@ pub fn session_of(id: SocketId) -> ConnectionId {
     let mut bytes = [0u8; 16];
     bytes[..8].copy_from_slice(&id.get().to_le_bytes());
     ConnectionId(bytes)
-}
-
-/// The seam endpoint a list address dials.
-fn endpoint_of(address: &NetworkAddress) -> Option<Endpoint> {
-    match address {
-        NetworkAddress::Ipv4 { ip, port } => Some(Endpoint::Clearnet {
-            ip: IpAddr::V4(*ip),
-            port: *port,
-            direction: Direction::Outbound,
-        }),
-        NetworkAddress::Ipv6 { ip, port } => Some(Endpoint::Clearnet {
-            ip: IpAddr::V6(*ip),
-            port: *port,
-            direction: Direction::Outbound,
-        }),
-        NetworkAddress::Tor { host, port } => {
-            shekyl_onion_v3::v3_pubkey(host).map(|key| Endpoint::Tor { key, port: *port })
-        }
-    }
-}
-
-/// The list address of a board row, when the row has one.
-fn address_of(endpoint: &Endpoint) -> Option<NetworkAddress> {
-    match endpoint {
-        Endpoint::Clearnet {
-            ip: IpAddr::V4(ip),
-            port,
-            ..
-        } => Some(NetworkAddress::Ipv4 {
-            ip: *ip,
-            port: *port,
-        }),
-        Endpoint::Clearnet {
-            ip: IpAddr::V6(ip),
-            port,
-            ..
-        } => Some(NetworkAddress::Ipv6 {
-            ip: *ip,
-            port: *port,
-        }),
-        Endpoint::Tor { key, port } => Some(NetworkAddress::Tor {
-            host: shekyl_onion_v3::v3_onion_hostname(key),
-            port: *port,
-        }),
-        Endpoint::TorInbound => None,
-    }
-}
-
-/// How one attempt ended on the owner's thread.
-enum Attempt {
-    /// A total outcome, before any adopt.
-    Done(DialOutcome),
-    /// Adopted and posted; the strand's verdict completes it.
-    Posted(SocketId),
 }
 
 impl Dialer {
@@ -233,13 +162,21 @@ impl Dialer {
     }
 
     /// Claim `connector`'s owner loop. `true` the first time; `false` when
-    /// it already has one, and the caller starts nothing. The claim holds
-    /// for the dialer's life: a loop ends only with the dialer.
+    /// it already has one, and the caller starts nothing. A loop ends only
+    /// with the dialer. A start that fails after this claim releases it
+    /// with [`Self::release_owner`]: a failed start is not a running loop,
+    /// and the other path that asks for the same connector must be able
+    /// to take it.
     #[must_use]
     pub fn claim_owner(&self, connector: ConnectorId) -> bool {
         let mut owners = self.owners.lock().expect("owners");
         let slot = &mut owners[connector.index()];
         !std::mem::replace(slot, true)
+    }
+
+    /// Give back a claim that never became a running loop.
+    pub fn release_owner(&self, connector: ConnectorId) {
+        self.owners.lock().expect("owners")[connector.index()] = false;
     }
 
     /// The network every handshake names. Set once, when the zone host
@@ -301,10 +238,13 @@ impl Dialer {
         tracing::info!("{connector:?}: this node's own address(es) are {addresses:?}");
         let mut shared = self.shared();
         if let Some(first) = addresses.first() {
-            // An address of another connector is refused there and kept here
-            // for the filter only.
-            match shared.lists.set_own_address(connector, Some(first.clone())) {
-                Ok(()) | Err(_) => {}
+            // An address of another connector is refused by the lists and
+            // kept here for the filter only. The filter skips every address
+            // in the vec; the lists store one, the disclosure member.
+            if let Err(refusal) = shared.lists.set_own_address(connector, Some(first.clone())) {
+                tracing::warn!(
+                    "{connector:?}: own address {first:?} is not stored on the lists ({refusal:?}); the dial filter still skips it"
+                );
             }
         }
         shared.own[connector.index()] = addresses;
@@ -324,16 +264,16 @@ impl Dialer {
     ) {
         let mut shared = self.shared();
         for address in &addresses {
-            // Already seated, or refused as banned: the population is the
-            // declaration either way.
-            match shared.lists.admit_gray(
+            // Already seated: the population is the declaration either way.
+            // A refusal is not "already seated" and is said.
+            if let Err(refusal) = shared.lists.admit_gray(
                 address,
                 Source::Operator,
                 now,
                 &mut HubBans(&self.hub),
                 rng,
             ) {
-                Ok(_) | Err(_) => {}
+                tracing::warn!("closed-network address {address:?} was not admitted: {refusal:?}");
             }
         }
         shared.exclusive = if addresses.is_empty() {
@@ -534,22 +474,9 @@ impl Dialer {
             if owner.arm(deadline).is_err() {
                 break;
             }
-            let Ok(wake) = owner.wait_wake() else {
+            if owner.wait_wake().is_err() {
                 break;
-            };
-            // The same fields the Tor driver logs at its gap (Rick,
-            // 2026-10-14): a wake delivered to the wrong home shows here.
-            tracing::debug!(
-                "{connector:?} wake: owner {:?} got {:?} class {:?} generation {:?} deadline {} fired_at {} now {}; armed {}",
-                owner.id(),
-                wake.owner,
-                wake.class,
-                wake.generation,
-                wake.deadline.get(),
-                wake.fired_at.get(),
-                owner.clock().now().get(),
-                deadline.get()
-            );
+            }
             if self.stop.load(Ordering::Acquire) {
                 break;
             }
@@ -560,7 +487,7 @@ impl Dialer {
                 continue;
             };
             tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
-            match self.attempt(connector, &address, aim, &nonce, rng) {
+            match self.exchange(connector, &address, aim, &nonce, rng) {
                 Attempt::Done(outcome) => {
                     tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
                     let mut shared = self.shared();
@@ -615,7 +542,7 @@ impl Dialer {
             }
         }
         let nonce = self.nonces.mint(connector, rng);
-        match self.attempt(connector, address, aim, &nonce, rng) {
+        match self.exchange(connector, address, aim, &nonce, rng) {
             Attempt::Done(outcome) => {
                 let mut shared = self.shared();
                 Self::record(&mut shared, connector, &outcome, self.hub.now(), rng);
@@ -636,44 +563,90 @@ impl Dialer {
     }
 
     /// One wake's plan and draw. `None` when this wake dials nothing.
-    /// The nonce is in flight until it is dropped; the owner loop hands
-    /// it to the attempt. Public so a test can read the draw without
-    /// running the loop.
+    ///
+    /// The lists are demoted and expired once ([`Peerlist::settle`]), then
+    /// counted and drawn from that view. A stranded connector re-admits its
+    /// configured addresses and dials nothing this wake; the next wake draws
+    /// from what was admitted. The nonce is minted after the lists lock
+    /// drops: it does not depend on the lists, and the nonce set is its own
+    /// lock. It stays in flight until it is dropped. Public so a test can
+    /// read the draw without running the loop.
     pub fn choose<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         rng: &mut R,
     ) -> Option<(NetworkAddress, DialAim, InFlightNonce)> {
         let now = self.hub.now();
-        let board = self.hub.board();
-        let mut sessions = BTreeSet::new();
-        let mut outbound_hosts: BTreeSet<Host> = BTreeSet::new();
-        for row in board.rows() {
-            if row.connector() != connector {
-                continue;
-            }
-            if let Some(address) = address_of(&row.endpoint()) {
-                if row.direction() == Direction::Outbound {
-                    outbound_hosts.insert(address.host());
-                }
-                sessions.insert(address);
-            }
-        }
-        let hub = &self.hub;
+        let (sessions, outbound_hosts) = live_sessions(&self.hub, connector);
         let mut shared = self.shared();
-        let shared = &mut *shared;
-        let target = shared.targets[connector.index()];
-        let exclusive = shared.exclusive.clone();
-        let own = shared.own[connector.index()].clone();
-        let attempts = &shared.attempts[connector.index()];
-        let memory = &shared.memory;
+        let wake = plan_wake(
+            &mut shared,
+            &self.hub,
+            connector,
+            &sessions,
+            &outbound_hosts,
+            now,
+            rng,
+        );
+        let (address, aim) = match wake {
+            Wake::Recover => {
+                re_admit(&mut shared, &self.hub, connector, now, rng);
+                return None;
+            }
+            Wake::Idle => return None,
+            Wake::Drawn { address, aim } => (address, aim),
+        };
+        drop(shared);
+        Some((address, aim, self.nonces.mint(connector, rng)))
+    }
+}
+
+/// What one settled wake decided.
+enum Wake {
+    /// No kept session, nothing in flight, and no drawable candidate.
+    /// The caller re-admits the configured population and dials nothing.
+    Recover,
+    /// This wake dials nothing.
+    Idle,
+    /// An attempt was begun. The nonce is minted after the lists lock drops.
+    Drawn {
+        address: NetworkAddress,
+        aim: DialAim,
+    },
+}
+
+/// Settle once, count once, and either recover, idle, or begin one attempt.
+fn plan_wake<R: RelayRng + ?Sized>(
+    shared: &mut Shared,
+    hub: &Hub,
+    connector: ConnectorId,
+    sessions: &BTreeSet<NetworkAddress>,
+    outbound_hosts: &BTreeSet<Host>,
+    now: Tick,
+    rng: &mut R,
+) -> Wake {
+    let index = connector.index();
+    let target = shared.targets[index];
+    let own = shared.own[index].clone();
+    let exclusive = shared.exclusive.clone();
+    let wake = {
+        let Shared {
+            lists,
+            attempts,
+            memory,
+            ..
+        } = &mut *shared;
+        let kept = attempts[index].kept_count();
+        let in_flight = attempts[index].in_flight();
+        let mut bans = HubBans(hub);
+        let mut settled = lists.settle(connector, now, &mut bans, rng);
         let mut filter = CandidateFilter {
             own: &own,
-            sessions: &sessions,
-            outbound_hosts: &outbound_hosts,
-            attempts,
+            sessions,
+            outbound_hosts,
+            attempts: &attempts[index],
             failed: memory,
-            bans: &mut HubBans(hub),
+            bans: &mut bans,
             now,
         };
         let mut eligible = |address: &NetworkAddress| {
@@ -682,263 +655,118 @@ impl Dialer {
                 .is_none_or(|population| population.contains(address))
                 && filter.admits(address)
         };
-        let lists = &mut shared.lists;
-        let white = lists.white_count(connector, now, &mut HubBans(hub), rng);
-        let white_candidates =
-            lists.white_candidates(connector, now, &mut HubBans(hub), &mut eligible, rng);
-        let gray = lists.gray_count(connector);
-        let gray_candidates = lists.gray_candidates(connector, &mut eligible);
+        let seats = settled.census(&mut eligible);
         let census = Census {
-            kept: attempts.kept_count(),
-            in_flight: attempts.in_flight(),
+            kept,
+            in_flight,
             target,
-            white,
-            white_candidates,
-            gray,
-            gray_candidates,
+            white: seats.white,
+            white_candidates: seats.white_candidates,
+            gray: seats.gray,
+            gray_candidates: seats.gray_candidates,
         };
-        // Recovery (Rick, 2026-10-14). A connector with a target that has
-        // no kept session, nothing in flight and no drawable candidate is
-        // stranded: its lists cannot get it a peer. It re-admits its
-        // configured addresses to gray as operator-named, under normal
-        // admission: the closed network's list when one is declared, else
-        // the compiled seeds and `--add-peer`. This wake dials nothing; the
-        // next draws from what was admitted.
+        // A connector with a target, no kept session, nothing in flight and
+        // no drawable candidate cannot get itself a peer. Recovery re-admits
+        // after this borrow ends; this wake dials nothing.
         let stranded = target > 0
-            && census.kept == 0
-            && census.in_flight == 0
-            && white_candidates == 0
-            && gray_candidates == 0;
+            && kept == 0
+            && in_flight == 0
+            && census.white_candidates == 0
+            && census.gray_candidates == 0;
         if stranded {
-            let population: Vec<NetworkAddress> = match &exclusive {
-                Some(population) => population.iter().cloned().collect(),
-                None => shared.configured.clone(),
-            };
-            let mut admitted = 0usize;
-            for address in population
-                .iter()
-                .filter(|address| Peerlist::connector_of(address) == Some(connector))
-            {
-                if let Ok(true) =
-                    lists.admit_gray(address, Source::Operator, now, &mut HubBans(hub), rng)
-                {
-                    admitted += 1;
+            Wake::Recover
+        } else {
+            match plan(&census, white_diversity_floor(), WHITE_REFILL_LINE) {
+                None => {
+                    tracing::debug!("{connector:?} wake: no rule applies ({census:?})");
+                    Wake::Idle
                 }
-            }
-            if !shared.stranded[connector.index()] {
-                shared.stranded[connector.index()] = true;
-                tracing::info!(
-                    "{connector:?}: no kept session, nothing in flight and no drawable candidate; re-admitted {admitted} configured address(es) to gray"
-                );
-            }
-            return None;
-        }
-        if shared.stranded[connector.index()] {
-            shared.stranded[connector.index()] = false;
-            tracing::info!(
-                "{connector:?}: no longer stranded; a candidate is drawable or a dial is in flight"
-            );
-        }
-        let Some(plan) = plan(&census, white_diversity_floor(), WHITE_REFILL_LINE) else {
-            tracing::debug!("{connector:?} wake: no rule applies ({census:?})");
-            if gray > 0 && gray_candidates == 0 {
-                // Every gray seat is held back: say why, per seat.
-                for (address, list) in lists.snapshot() {
-                    if list != shekyl_peerlist::ListName::Gray
-                        || Peerlist::connector_of(&address) != Some(connector)
-                    {
-                        continue;
-                    }
-                    let outside = exclusive
-                        .as_ref()
-                        .is_some_and(|population| !population.contains(&address));
-                    tracing::debug!(
-                        "{connector:?} gray {address:?}: {:?}{}",
-                        filter.check(&address),
-                        if outside {
-                            ", outside the declared population"
-                        } else {
-                            ""
+                Some(chosen) => {
+                    let drawn = match chosen.list {
+                        DrawList::Gray => settled.draw_gray(&mut eligible, rng),
+                        DrawList::White => settled.draw_white(&mut eligible, rng),
+                    };
+                    match drawn {
+                        Some(address) => Wake::Drawn {
+                            address,
+                            aim: chosen.aim,
+                        },
+                        None => {
+                            tracing::debug!(
+                                "{connector:?} wake: {:?} chose {:?}, nothing drawn ({census:?})",
+                                chosen.rule,
+                                chosen.list
+                            );
+                            Wake::Idle
                         }
-                    );
+                    }
                 }
             }
-            return None;
-        };
-        let drawn = match plan.list {
-            DrawList::Gray => lists.draw_gray_where(connector, &mut eligible, rng),
-            DrawList::White => {
-                lists.draw_white_where(connector, now, &mut HubBans(hub), &mut eligible, rng)
-            }
-        };
-        let Some(address) = drawn else {
-            tracing::debug!(
-                "{connector:?} wake: {:?} chose {:?}, nothing drawn ({census:?})",
-                plan.rule,
-                plan.list
-            );
-            return None;
-        };
-        if !shared.attempts[connector.index()].begin(&address, plan.aim) {
-            tracing::debug!("{connector:?} wake: {address:?} already has an attempt");
-            return None;
         }
-        let nonce = self.nonces.mint(connector, rng);
-        Some((address, plan.aim, nonce))
+    };
+    match wake {
+        Wake::Recover => Wake::Recover,
+        Wake::Idle => {
+            note_recovered(shared, connector);
+            Wake::Idle
+        }
+        Wake::Drawn { address, aim } => {
+            note_recovered(shared, connector);
+            if shared.attempts[index].begin(&address, aim) {
+                Wake::Drawn { address, aim }
+            } else {
+                tracing::debug!("{connector:?} wake: {address:?} already has an attempt");
+                Wake::Idle
+            }
+        }
     }
+}
 
-    /// Dial, handshake, adopt, post. Every end path is an [`Attempt`].
-    fn attempt<R: RelayRng + ?Sized>(
-        &self,
-        connector: ConnectorId,
-        address: &NetworkAddress,
-        aim: DialAim,
-        nonce: &InFlightNonce,
-        rng: &mut R,
-    ) -> Attempt {
-        let failed =
-            |cause: CloseCause| Attempt::Done(DialOutcome::DialFailed(address.clone(), cause));
-        let Some(endpoint) = endpoint_of(address) else {
-            return failed(CloseCause::new(CloseKind::LocalClose));
-        };
-        let (Some(snapshot), Some(network_id)) = ((self.snapshot)(), self.network_id()) else {
-            tracing::debug!(
-                "{connector:?} dial {address:?} not made: no published tip or network id yet"
-            );
-            return failed(CloseCause::new(CloseKind::LocalClose));
-        };
-        let channel = match self.hub.dial_channel(&endpoint) {
-            Ok(channel) => channel,
-            Err(cause) => return failed(cause),
-        };
-        let connected_at = std::time::Instant::now();
-        let request = HandshakeRequest {
-            node_data: BasicNodeData {
-                network_id,
-                support_flags: SupportFlags::from_bits(self.support_flags),
-            },
-            payload_data: CoreSyncData {
-                current_height: snapshot.current_height,
-                cumulative_difficulty: snapshot.cumulative_difficulty,
-                cumulative_difficulty_top64: snapshot.cumulative_difficulty_top64,
-                top_id: snapshot.top_id,
-            },
-            nonce: *nonce.bytes(),
-        };
-        let Ok(payload) = request.store() else {
-            drop(channel);
-            return failed(CloseCause::new(CloseKind::LocalClose));
-        };
-        if let Err(kind) = channel
-            .session
-            .try_send(invoke(COMMAND_HANDSHAKE, &payload))
+/// Re-admit the closed network, or the configured seeds and `--add-peer`,
+/// as operator-named gray. Already seated is quiet. A refusal is said.
+fn re_admit<R: RelayRng + ?Sized>(
+    shared: &mut Shared,
+    hub: &Hub,
+    connector: ConnectorId,
+    now: Tick,
+    rng: &mut R,
+) {
+    let population: Vec<NetworkAddress> = match &shared.exclusive {
+        Some(population) => population.iter().cloned().collect(),
+        None => shared.configured.clone(),
+    };
+    let mut admitted = 0usize;
+    for address in population
+        .iter()
+        .filter(|address| Peerlist::connector_of(address) == Some(connector))
+    {
+        match shared
+            .lists
+            .admit_gray(address, Source::Operator, now, &mut HubBans(hub), rng)
         {
-            let cause = CloseCause::new(kind);
-            drop(channel);
-            return failed(cause);
+            Ok(true) => admitted += 1,
+            Ok(false) => {}
+            Err(refusal) => tracing::warn!(
+                "{connector:?}: configured address {address:?} was not re-admitted: {refusal:?}"
+            ),
         }
-        // Cold first contact (Rick, 2026-10-13): the dialler's own share of
-        // SOCKS success to the handshake request on the wire; the writer
-        // logs the wire moment as "tor first bytes written".
-        tracing::debug!(
-            "{connector:?} dial {address:?}: handshake queued {} ns after the channel opened",
-            u64::try_from(connected_at.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    }
+    let index = connector.index();
+    if !shared.stranded[index] {
+        shared.stranded[index] = true;
+        tracing::info!(
+            "{connector:?}: no kept session, nothing in flight and no drawable candidate; re-admitted {admitted} configured address(es) to gray"
         );
-
-        let mut channel = channel;
-        let response = match read_response(&mut channel.session) {
-            Ok(response) => response,
-            Err(Rejected::Closed) => return failed(channel.session.close_cause()),
-            Err(Rejected::ByLevin) => {
-                let cause = CloseCause::new(CloseKind::LevinHandshakeRejected);
-                drop(channel);
-                return failed(cause);
-            }
-        };
-        if response.node_data.network_id != network_id {
-            let cause = CloseCause::new(CloseKind::LevinHandshakeRejected);
-            drop(channel);
-            return failed(cause);
-        }
-
-        let id = channel.open.id();
-        let now = self.hub.now();
-        let addresses: Vec<NetworkAddress> = response
-            .local_peerlist_new
-            .iter()
-            .map(|entry| entry.adr.clone())
-            .collect();
-        let admitted = self.shared().lists.admit_received_list(
-            &addresses,
-            SessionRow {
-                id: session_of(id),
-                connector,
-            },
-            now,
-            &mut HubBans(&self.hub),
-            rng,
-        );
-        if admitted.is_err() {
-            drop(channel);
-            return Attempt::Done(DialOutcome::PeerlistRefused(address.clone()));
-        }
-
-        let attached =
-            match self
-                .hub
-                .adopt(channel.open, channel.session, channel.endpoint, channel.gap)
-            {
-                Ok(attached) => attached,
-                Err(cause) => return failed(cause),
-            };
-        let keep = aim == DialAim::Keep;
-        self.hub.post_handshake_result(
-            id,
-            connector,
-            keep,
-            response.node_data.support_flags.bits(),
-            SyncPayload {
-                current_height: response.payload_data.current_height,
-                cumulative_difficulty: response.payload_data.cumulative_difficulty,
-                cumulative_difficulty_top64: response.payload_data.cumulative_difficulty_top64,
-                top_id: response.payload_data.top_id,
-            },
-        );
-        let hub = self.hub.clone();
-        let session = attached.session;
-        let pump = std::thread::spawn(move || drive_inbound(&hub, id, session));
-        self.hub.track_pump(id, pump);
-        Attempt::Posted(id)
     }
 }
 
-/// Why no well-formed handshake response was read.
-enum Rejected {
-    /// The connector closed the session; its cause is on the session.
-    Closed,
-    /// The peer sent something that is not the handshake response.
-    ByLevin,
-}
-
-/// Read frames until one whole `COMMAND_HANDSHAKE` response decodes.
-fn read_response(
-    session: &mut shekyl_capped_stream::Session,
-) -> Result<HandshakeResponse, Rejected> {
-    let mut reader = BucketReader::new();
-    loop {
-        let Some(frame) = session.recv_blocking() else {
-            return Err(Rejected::Closed);
-        };
-        if reader.feed(&frame).is_err() {
-            return Err(Rejected::ByLevin);
-        }
-        // The first whole message decides: the response, or not ours.
-        match reader.next_message() {
-            Ok(None) => {}
-            Ok(Some(Received::Response { command, payload })) if command == COMMAND_HANDSHAKE => {
-                return HandshakeResponse::load(&payload).map_err(|_| Rejected::ByLevin);
-            }
-            Ok(Some(_)) | Err(_) => return Err(Rejected::ByLevin),
-        }
+/// The connector drew, or a dial is in flight, after a stranded wake.
+fn note_recovered(shared: &mut Shared, connector: ConnectorId) {
+    let index = connector.index();
+    if shared.stranded[index] {
+        shared.stranded[index] = false;
+        tracing::info!(
+            "{connector:?}: no longer stranded; a candidate is drawable or a dial is in flight"
+        );
     }
 }
