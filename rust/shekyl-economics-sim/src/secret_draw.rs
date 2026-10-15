@@ -12,8 +12,8 @@
 //! *issued* only when that seed is revealed. That loop is deleted
 //! (2026-10-15, §5.22): ESR-13 ([`crate::secret_draw_production`]) runs the
 //! same epoch under `Timing::esr11()`, on the same production rule and
-//! selection, and the two agreed within seed noise on every cell. §5.14 is
-//! the record of ESR-11's run.
+//! selection, and the two agreed within seed noise on every cell. §5.14
+//! reports that loop's run.
 //!
 //! What stays here, and ESR-13 calls:
 //!

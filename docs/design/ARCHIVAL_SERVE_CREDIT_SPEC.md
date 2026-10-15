@@ -1486,27 +1486,25 @@ witness.
 
 ## 12. What the sim says
 
-The ESR-11 run of 2026-10-07, model and predictions fixed before it
+`cargo run --release -p shekyl-economics-sim -- --secret-draw`
 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
 §5.13, results §5.14). 324,000 pairs, eight seeds per cell, the count
-rule and weighting of §4, a reveal lag uniform on `0..=W₂`, and each
-block independently unrevealed with the stated probability.
-`cargo run --release -p shekyl-economics-sim -- --secret-draw` runs the
-same experiment on ESR-13's loop, which agrees with these figures within
-seed noise (§5.22 there).
+rule and selection of §4 as production computes them, a reveal lag
+uniform on `0..=W₂`, and each block independently unrevealed with the
+stated probability.
 
 | Dropout | Pairs short of 3 issued: mean (min – max) | Draws per pair, drawn / issued | Draws per block, mean / max | Fetch per won block |
 | --- | --- | --- | --- | --- |
-| 0 % | 0.46 % (0.45 – 0.48) | 3.61 / 3.61 | 117.1 / 172 | 351 MB |
-| 10 % | 1.10 % (1.03 – 1.18) | 3.92 / 3.53 | 127.1 / 208 | 381 MB |
-| 30 % | 3.83 % (3.65 – 3.95) | 4.81 / 3.36 | 155.9 / 292 | 468 MB |
+| 0 % | 0.46 % (0.43 – 0.47) | 3.61 / 3.61 | 117.1 / 172 | 351 MB |
+| 10 % | 1.07 % (1.00 – 1.13) | 3.91 / 3.53 | 126.8 / 208 | 380 MB |
+| 30 % | 3.70 % (3.48 – 3.82) | 4.78 / 3.37 | 154.8 / 292 | 465 MB |
 
 - **The provisional bar holds.** At most 3 % short at 10 % dropout: the
-  largest share over eight seeds is 1.18 %.
+  largest share over eight seeds is 1.13 %.
 - **"In flight" is unrevealed draws only** (`SCS-P9`). The other reading —
   every draw of the last `W₂` blocks, revealed or not — double-counts
-  draws already in the visible counts. Under it the run reads
-  1.40 / 2.63 / 6.21 % short.
+  draws already in the visible counts. Under it the run read
+  1.40 / 2.63 / 6.21 % short (at `6681692ed9`).
 - **`(m, n)`.** An honest pair at a 0.30 per-read failure misses an
   observed epoch with probability 0.216 under 2-of-3. At `(11, 13)` the
   false-slash bound over the bond's life is `2.85 × 10⁻⁴` per pair, and
@@ -1559,7 +1557,7 @@ seed noise (§5.22 there).
   mining-class box, not the floor device, and does not gate
   (`SCS-P10`; [`BENCHMARK_ALIGNMENT.md`](BENCHMARK_ALIGNMENT.md) `BA-T30`).
 - **Unpaid service.** A pair that settles NonObservation served the epoch
-  for nothing: 0.46 % / 1.10 % / 3.83 % of pair-epochs. Separately, an
+  for nothing: 0.46 % / 1.07 % / 3.70 % of pair-epochs. Separately, an
   observed epoch settles Missed for an honest pair at 0.216 under the
   0.30 read failure, which is the 2-of-3 rule's cost and is much larger.
   Neither is priced in currency.
@@ -1624,7 +1622,7 @@ epoch's open (§4.3), so no epoch's counts depend on the one before.
 | --- | --- | --- |
 | V1 | Full-pair weight 1/16 | A better setting is measured |
 | V2 | Count rule of §4.3: base 1 per pair per epoch, catch-up by 70 %, minimum horizon 200, cap 3 × nominal | Same |
-| V3 | Bar: at most 3 % of pairs short of 3 at 10 % producer dropout | The sim or testnet exceeds it. The sim reads 1.18 % |
+| V3 | Bar: at most 3 % of pairs short of 3 at 10 % producer dropout | The sim or testnet exceeds it. The sim reads 1.13 % |
 | V4 | Consecutive reads of a draw are at least 30 blocks apart. Challenger scheduling, not consensus | `BA-T31` shows the unread share still falling, or already flat, at a different spacing |
 | V5 | Filing margin `M = 30` blocks before the end of `W₂`. Challenger policy, not consensus (`SCS-P18`) | Measured inclusion latency and the natural reorg tail give a different figure; or testnet shows honest bundles lost at a meaningful rate, which also reopens the window |
 | V6 | Section budget multiple `c = 2` (`SCS-P20`) | It binds on the first build; or section bytes, propagation to Tor peers, the orphan rate or `BA-T33` say otherwise |
