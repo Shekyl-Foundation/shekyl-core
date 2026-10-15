@@ -49,7 +49,7 @@ int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out);
 // callers want a tip and not identity, and widening the tip would move its
 // layout twins, its seeded fill indices and its size pin for every one of
 // them. The precedent is the narrow exports below
-// (`shekyl_rpc_fee_grace_blocks_max`, `shekyl_rpc_peerlist_limits`).
+// (`shekyl_rpc_fee_grace_blocks_max`).
 //
 // The rules digest is NOT here: it is compiled into the Rust image from
 // `config/`, so the handler reads its own constant and never asks C++ for it.
@@ -410,32 +410,6 @@ int shekyl_rpc_sync_spans(core_rpc_handle* h,
     const shekyl_rpc_sync_span_facts** out, size_t* out_len, void** out_owner);
 void shekyl_rpc_sync_spans_free(void* owner);
 
-// One peerlist entry, white or gray.
-//
-// The three address arms differ in what `host` means — the ip string for
-// ipv4, `host_str()` for ipv6, the whole `str()` for anything else — so the
-// adapter resolves them here, where the epee type dispatch has to live, and
-// the caller has no branch left to get wrong.
-typedef struct shekyl_rpc_peer_facts {
-    const char*  host;
-    size_t       host_len;
-    uint64_t     last_seen;
-    uint32_t     ip;                   // ipv4 only, octets in network order; else 0
-    uint16_t     port;                 // 0 for the address arms that carry none
-    uint8_t      white;                // 1 = white list, 0 = gray
-    // Filled unconditionally, so the `include_blocked` policy is the caller's
-    // to apply. The C++ skipped the check when the request asked to include
-    // blocked peers; this takes the host-blocked lock once per entry either
-    // way, which is the price of moving a request policy out of the facts.
-    uint8_t      blocked;
-} shekyl_rpc_peer_facts;
-
-// `public_only` selects `get_public_peerlist` over `get_peerlist`; it is a
-// different p2p call, not a filter, so it cannot move to the caller. Release
-// `*out_owner` with `shekyl_rpc_peer_list_free`.
-int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
-    const shekyl_rpc_peer_facts** out, size_t* out_len, void** out_owner);
-void shekyl_rpc_peer_list_free(void* owner);
 
 // ── RK-5b: the header remainder's two non-header facts ──────────────────────
 
@@ -462,17 +436,16 @@ int shekyl_rpc_fee_estimate(core_rpc_handle* h, uint64_t grace_blocks,
 // C++ configuration that must not get a second definition in Rust.
 uint64_t shekyl_rpc_fee_grace_blocks_max(void);
 
-// ── Constants the console renders with ──────────────────────────────────────
+// ── A constant the console renders with ─────────────────────────────────────
 //
-// Neither takes a handle, and that is what makes them usable: `shekyld
-// <command>` runs this same binary against a *remote* daemon, with no core to
-// ask, so anything the renderer needs from C++ configuration has to be
-// reachable without one. They cross rather than being restated in Rust
-// because a duplicated constant is the drift this cutover deletes rather than
-// synchronizes.
+// It takes no handle, and that is what makes it usable: `shekyld <command>`
+// runs this same binary against a *remote* daemon, with no core to ask, so
+// anything the renderer needs from C++ configuration has to be reachable
+// without one. It crosses rather than being restated in Rust because a
+// duplicated constant is the drift this cutover deletes rather than
+// synchronizes. (The two peerlist capacities crossed here until the lists
+// moved to Rust, 2026-10-13; the console reads `shekyl-peerlist`'s now.)
 
-// The two peerlist capacities `print_peer_list_stats` reports a fraction of.
-void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray);
 
 // ── RK-5c: `get_info` ──────────────────────────────────────────────────────
 //
@@ -547,8 +520,6 @@ typedef struct shekyl_rpc_info_peers_facts {
     uint64_t public_outgoing_sockets;
     uint64_t tor_incoming_sockets;
     uint64_t tor_outgoing_sockets;
-    uint64_t white_peerlist_size;
-    uint64_t grey_peerlist_size;
 } shekyl_rpc_info_peers_facts;
 
 int shekyl_rpc_info_peers(core_rpc_handle* h, shekyl_rpc_info_peers_facts* out);

@@ -466,6 +466,13 @@ namespace cryptonote
     bool r = handle_command_line(vm);
     CHECK_AND_ASSERT_MES(r, false, "Failed to handle command line");
 
+    // Seeds follow the network just settled, including FAKECHAIN. The id
+    // derivation is pure (`get_config` builds every network's id on first
+    // use), so it cannot carry this record.
+    CHECK_AND_ASSERT_MES(
+      shekyl_dialer_note_network(static_cast<std::uint8_t>(m_nettype)) == 0,
+      false, "Failed to record the dialer's network");
+
     std::string db_sync_mode = command_line::get_arg(vm, cryptonote::arg_db_sync_mode);
     bool db_salvage = command_line::get_arg(vm, cryptonote::arg_db_salvage) != 0;
     uint64_t blocks_threads = command_line::get_arg(vm, arg_prep_blocks_threads);

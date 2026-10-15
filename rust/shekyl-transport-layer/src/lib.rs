@@ -30,6 +30,7 @@ mod cause;
 mod clock;
 mod declaration;
 mod dial;
+pub mod spans;
 
 pub use admission::{
     CloseResult, Direction, ObservedEndpoint, OpenError, OpenSocket, SocketId, Sockets,

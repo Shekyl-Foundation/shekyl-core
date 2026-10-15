@@ -635,10 +635,16 @@ mod tests {
     #[test]
     fn ingress_admit_maps_the_three_codes() {
         let mut cap = 0u64;
-        // Handshake (1001) + REQUEST: admitted at the derived envelope.
+        // Handshake (1001) + REQUEST: admitted at the envelope derived from
+        // the disclosure count (PR-3: `DISCLOSE_COUNT` largest entries beside
+        // the largest fixed part; `shekyl-levin` pins the parts).
         let rc = unsafe { shekyl_levin_ingress_admit(1001, 0x1, &raw mut cap) };
         assert_eq!(rc, SHEKYL_LEVIN_OK);
-        assert_eq!(cap, 65_536);
+        assert_eq!(
+            cap,
+            shekyl_peerlist::DISCLOSE_COUNT as u64 * shekyl_levin::PEERLIST_ENTRY_MAX_ENCODED_BYTES
+                + shekyl_levin::HANDSHAKE_FIXED_MAX_BYTES
+        );
 
         // Compact announce (2008) keeps the inherited 4 MiB envelope.
         let rc = unsafe { shekyl_levin_ingress_admit(2008, 0x1, &raw mut cap) };

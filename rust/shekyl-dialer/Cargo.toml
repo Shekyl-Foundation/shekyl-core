@@ -1,0 +1,44 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-dialer"
+description = "The outbound dialer: which address to dial next and why, the pending attempts, the failed-address memory and the self-connection nonces. Over shekyl-peerlist; the C++ reaches it only through shekyl-ffi (P2P_3_SLICE_3_DIALER_BRIEF.md)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-peerlist = { path = "../shekyl-peerlist" }
+# The seam: the hub's dial, adopt and posts, and the session the handshake
+# reads. The C++ reaches this crate only through shekyl-ffi.
+shekyl-seam = { path = "../shekyl-seam" }
+shekyl-capped-stream = { path = "../shekyl-capped-stream" }
+# The handshake's codec and the Levin bucket reader.
+shekyl-levin = { path = "../shekyl-levin" }
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+# The wake is an owner of the daemon's one timing engine.
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+# The two outbound targets of the composition table.
+shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
+# A failed address-file write is logged, not lost.
+tracing = "0.1"
+# The RNG seam the draws are generic over.
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+
+[dev-dependencies]
+# The seeded reference generator, for the tests only.
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+# The owner's test rig: a hub over the loopback dialer, with a manual clock.
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+# A directory of its own for each address-file test.
+tempfile = "3"
+
+[lints]
+workspace = true

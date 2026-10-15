@@ -25,8 +25,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Change scope: see build.yml's `changes` job for why this is a job-level
+  # `if:` and not a `paths` filter (a skipped required check still reports;
+  # a filtered workflow never does). A documentation-only change does not
+  # rebuild the Rust workspace for analysis; scripts/ci/change_scope.py
+  # decides, and fails closed. The weekly schedule and a manual dispatch
+  # carry no base, so they always analyse.
+  changes:
+    name: 'Change scope (codeql)'
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          base=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            base="${{ github.event.merge_group.base_sha }}"
+          fi
+          head="${{ github.sha }}"
+          if [ -z "$base" ]; then
+            echo "scope: ${{ github.event_name }} carries no base; analysing (fail-closed)"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
+            || echo "docs_only=false" >> "$GITHUB_OUTPUT"
+
   analyze-rust:
     name: Analyze Rust
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

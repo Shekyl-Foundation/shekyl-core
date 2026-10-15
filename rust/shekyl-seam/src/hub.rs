@@ -29,54 +29,11 @@ use shekyl_transport_layer::{
 use crate::connection::{
     AdvertisedEndpoint, ChainLength, Connection, HeightMessage, RedialRefusal,
 };
-use crate::dial::Dial;
+use crate::dial::{Channel, Dial};
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
+use crate::post::{Post, SyncPayload};
 use crate::registry::{Board, Row};
-
-/// What the strand is asked to run. The post returns before the strand does.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Post {
-    /// Create the handler. The channel already exists.
-    Established {
-        /// The admission id.
-        id: SocketId,
-        /// The endpoint the adapter writes before arming the handler.
-        endpoint: Endpoint,
-    },
-    /// One delivery. The handler parses these bytes.
-    Deliver {
-        /// The admission id.
-        id: SocketId,
-        /// The connector this id was established on. The adapter keeps one
-        /// binding per connector and routes by this; a post without it went
-        /// to the clearnet binding, which dropped every Tor delivery.
-        connector: ConnectorId,
-        /// One whole message.
-        bytes: Vec<u8>,
-    },
-    /// The socket is gone. Destroy the handler when its call count is zero.
-    Closed {
-        /// The admission id.
-        id: SocketId,
-        /// The connector this id was established on, as on `Deliver`.
-        connector: ConnectorId,
-        /// The cause that won.
-        cause: CloseCause,
-    },
-}
-
-impl Post {
-    /// The admission id this post names.
-    #[must_use]
-    pub const fn id(&self) -> SocketId {
-        match self {
-            Self::Established { id, .. } | Self::Deliver { id, .. } | Self::Closed { id, .. } => {
-                *id
-            }
-        }
-    }
-}
 
 /// A channel the hub has posted `established` for.
 pub struct Attached {
@@ -259,7 +216,10 @@ impl Hub {
         self.wake();
     }
 
-    fn now(&self) -> Tick {
+    /// This hub's clock. The peer lists read it for a received list, so
+    /// one process has one notion of when.
+    #[must_use]
+    pub fn now(&self) -> Tick {
         self.clock.now()
     }
 
@@ -267,18 +227,54 @@ impl Hub {
         self.dial.read().expect("seam dial").clone()
     }
 
-    /// Ask the installed dialer for a channel and post `established`.
+    /// Ask the installed dialer for a channel. No row, no post.
     ///
-    /// No dialer is [`CloseKind::LocalClose`]. The caller drives
-    /// [`crate::drive_inbound`] on the returned session.
-    pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
+    /// The channel is admitted and built, and its gap deadline, when it
+    /// has one, is already armed by the connector. Nothing here writes
+    /// the board or tells the adapter: the outbound dialer holds the
+    /// channel through the handshake and calls [`Self::adopt`] only on a
+    /// well-formed response. A channel that is never adopted leaves no
+    /// trace in the registry.
+    ///
+    /// No dialer is [`CloseKind::LocalClose`].
+    pub fn dial_channel(&self, endpoint: &Endpoint) -> Result<Channel, CloseCause> {
         let dial = self
             .current_dial()
             .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let ceiling = self.lock().ceiling;
         let now = self.now();
-        let channel = dial.connect(endpoint, ceiling, now)?;
+        dial.connect(endpoint, ceiling, now)
+    }
+
+    /// [`Self::dial_channel`], then [`Self::adopt`]: a channel and its
+    /// `established` post in one call.
+    ///
+    /// The seam tests and the harness use this. The outbound dialer does
+    /// not: it runs the handshake between the two. The caller drives
+    /// [`crate::drive_inbound`] on the returned session.
+    pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
+        let channel = self.dial_channel(endpoint)?;
         self.adopt(channel.open, channel.session, channel.endpoint, channel.gap)
+    }
+
+    /// Post the outbound handshake's result for `id`. The caller has
+    /// adopted the channel; this is the first post after its
+    /// `established`, ahead of any frame the pump will deliver.
+    pub fn post_handshake_result(
+        &self,
+        id: SocketId,
+        connector: ConnectorId,
+        keep: bool,
+        support_flags: u32,
+        sync: SyncPayload,
+    ) {
+        (self.post)(Post::HandshakeResult {
+            id,
+            connector,
+            keep,
+            support_flags,
+            sync,
+        });
     }
 
     /// Register a channel the connector already admitted.
