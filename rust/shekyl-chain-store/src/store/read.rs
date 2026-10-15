@@ -1000,6 +1000,28 @@ impl ReadSnapshot<'_> {
         self.get_property::<ArchivalLastSlashEpochCell>()
     }
 
+    /// Every catalogued table's rows as stored bytes, by table name, in key
+    /// order — the whole file at the byte level, for a **differential**: two
+    /// stores that should hold the same state compared table by table, so a
+    /// difference names its table (`DRS_E5_POOL_ALT_PRUNE.md` a6's
+    /// self-differential: a store that switched A → B against one that
+    /// connected B directly). Not a consensus read and not a digest: no
+    /// rule reads it, and it carries no domain-separated commitment. A
+    /// table absent from the file is absent from the map.
+    ///
+    /// # Errors
+    ///
+    /// Engine errors.
+    pub fn table_rows(&self) -> Result<BTreeMap<&'static str, super::undo::RawRows>, StoreError> {
+        let mut out = BTreeMap::new();
+        for target in crate::schema::undo_targets() {
+            if let Some(rows) = target.raw_rows(&self.txn)? {
+                out.insert(target.name(), rows);
+            }
+        }
+        Ok(out)
+    }
+
     /// **SAL-13.** The recorded block at `height` as the candidate it was:
     /// the block, every listed transaction's whole wire bytes (`pruned ‖
     /// pqc_auths ‖ prunable`, [`TxRecord::wire_bytes`]) in the header's

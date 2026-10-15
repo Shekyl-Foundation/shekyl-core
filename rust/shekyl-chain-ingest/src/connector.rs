@@ -725,6 +725,22 @@ impl Message<AnchorForTests> for Connector {
     }
 }
 
+/// Every table of the store as stored bytes (`ReadSnapshot::table_rows`) —
+/// a differential's read, not a consensus one.
+#[derive(Clone, Copy, Debug)]
+pub struct TableRows;
+
+impl Message<TableRows> for Connector {
+    type Reply = Result<
+        std::collections::BTreeMap<&'static str, shekyl_chain_store::store::RawRows>,
+        RunFault,
+    >;
+
+    async fn handle(&mut self, _: TableRows, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        Ok(self.writer.read()?.table_rows()?)
+    }
+}
+
 impl Message<Digest> for Connector {
     type Reply = Result<crate::trace::Digest, RunFault>;
 

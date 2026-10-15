@@ -221,6 +221,11 @@ pub fn ordinal_of(name: &str) -> Option<TableOrdinal> {
         .map(TableOrdinal)
 }
 
+/// Every table as the journal replays into it, in catalogue order.
+pub(crate) fn undo_targets() -> &'static [&'static dyn UndoTarget] {
+    UNDO_TARGETS
+}
+
 /// The table `ordinal` names, as the journal replays into it.
 #[must_use]
 pub(crate) fn undo_target(ordinal: TableOrdinal) -> Option<&'static dyn UndoTarget> {

@@ -47,7 +47,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kameo::actor::{ActorRef, Spawn};
+use kameo::actor::ActorRef;
 use shekyl_block_template::{
     build, EmissionOperands, MinerKeys, Template, TemplateContext, TemplateError,
 };
@@ -71,7 +71,7 @@ use zeroize::Zeroizing;
 use crate::connector::{
     AltBlocksHeld, Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector, ConnectorArgs,
     Digest, HashAt, OfferAlt, Offered, PlannedBlock, Reorganize, Rewind, Rewound, RootAt, RunFault,
-    SwitchPlan, Switched, TemplateFacts,
+    SwitchPlan, Switched, TableRows, TemplateFacts,
 };
 use crate::schedule::ChainRules;
 use crate::test_support::{cleanup, open_store, open_store_under, tmp};
@@ -141,6 +141,16 @@ impl Substrate for FreeHash {
     fn longhash(&self, _: &[u8], _: &BlockHash) -> Result<PowHash, Self::Fault> {
         Ok(PowHash::from_bytes([0; 32]))
     }
+}
+
+/// Where a timed switch spent its time ([`Scenario::reorganize_timed`]).
+#[derive(Clone, Copy, Debug)]
+pub struct ReorgTiming {
+    /// Forming the demoted and promoted blocks — the RandomX, off the actor.
+    pub form: std::time::Duration,
+    /// The [`Reorganize`] message: the plan held to the store, the demoted
+    /// blocks through the cheap tier, the write closure.
+    pub switch: std::time::Duration,
 }
 
 /// One mined block: what the template priced and what the validator
@@ -224,11 +234,30 @@ impl std::fmt::Display for StepOutcome {
     }
 }
 
+/// The connector actor's task handle.
+type ConnectorTask = tokio::task::JoinHandle<
+    Result<(Connector, kameo::error::ActorStopReason), kameo::error::PanicError>,
+>;
+
+/// Spawn a connector whose task the caller keeps.
+fn spawn_connector(args: ConnectorArgs) -> (ActorRef<Connector>, ConnectorTask) {
+    let prepared = kameo::actor::PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
+    let actor = prepared.actor_ref().clone();
+    let task = prepared.spawn(args);
+    (actor, task)
+}
+
 /// The driver. Owns the connector (and through it the store) and the
 /// clock; every block it mines pays the harness miner.
 pub struct Scenario<P> {
     path: PathBuf,
     connector: ActorRef<Connector>,
+    /// The connector's task, joined on [`close`](Self::close) and
+    /// [`reopen`](Self::reopen) so the store it owns is dropped before the
+    /// file is touched (`test_support::JoinedConnector`'s reason).
+    task: Option<ConnectorTask>,
+    /// How this driver's store is opened, again on [`reopen`](Self::reopen).
+    opener: Box<dyn Fn(&std::path::Path) -> ChainStore + Send + Sync>,
     substrate: Clocked<P>,
     /// The harness miner (`shekyl-harness-wallet`): the one wallet the
     /// rules fixture, the store's tests and this driver all pay, so a
@@ -274,7 +303,7 @@ where
     /// test can mine: slice 8's reinstate measurement
     /// (`archival_slash_tests`, the open interval only a slash writes).
     pub fn open_under(name: &str, pow: P, rules: ChainRules) -> Self {
-        Self::open_under_with(name, pow, rules, |path| {
+        Self::open_under_with(name, pow, rules, move |path| {
             open_store_under(
                 path,
                 &rules.in_force(BlockHeight::from_raw(0)),
@@ -287,16 +316,18 @@ where
         name: &str,
         pow: P,
         rules: ChainRules,
-        store: impl FnOnce(&std::path::Path) -> ChainStore,
+        store: impl Fn(&std::path::Path) -> ChainStore + Send + Sync + 'static,
     ) -> Self {
         let path = tmp(name);
-        let connector = Connector::spawn(ConnectorArgs {
+        let (connector, task) = spawn_connector(ConnectorArgs {
             store: store(&path),
             rules,
         });
         Self {
             path,
             connector,
+            task: Some(task),
+            opener: Box::new(store),
             substrate: Clocked::new(pow),
             wallet: MinerWallet::harness(),
             miner: {
@@ -464,6 +495,20 @@ where
         plan: &SwitchPlan,
         bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
     ) -> Result<Switched, RunFault> {
+        self.reorganize_timed(plan, bodies)
+            .await
+            .map(|(switched, _)| switched)
+    }
+
+    /// [`Self::reorganize`], reporting how long the forming (step 1, the
+    /// RandomX) and the [`Reorganize`] message (the judging, the closure)
+    /// each took — the switch PR's cap-depth measurement.
+    pub async fn reorganize_timed(
+        &self,
+        plan: &SwitchPlan,
+        bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
+    ) -> Result<(Switched, ReorgTiming), RunFault> {
+        let started = std::time::Instant::now();
         let form_at = |candidate: Candidate, at: &PlannedBlock| {
             form(
                 candidate,
@@ -493,7 +538,10 @@ where
                 form_at(candidate, &p.at)
             })
             .collect();
-        self.connector
+        let formed = started.elapsed();
+        let started = std::time::Instant::now();
+        let switched = self
+            .connector
             .ask(Reorganize {
                 tip: plan.tip,
                 alt_tip: plan.alt_tip,
@@ -501,7 +549,14 @@ where
                 promoted,
             })
             .await
-            .map_err(handler_error)
+            .map_err(handler_error)?;
+        Ok((
+            switched,
+            ReorgTiming {
+                form: formed,
+                switch: started.elapsed(),
+            },
+        ))
     }
 
     /// Pop the chain back to `to`.
@@ -549,9 +604,40 @@ where
 
     /// Stop the connector, release the store, remove the file.
     pub async fn close(self) {
-        self.connector.stop_gracefully().await.expect("stop");
-        self.connector.wait_for_shutdown().await;
+        let _already_stopped = self.connector.stop_gracefully().await.is_err();
+        if let Some(task) = self.task {
+            drop(task.await.expect("the connector task joins"));
+        }
         cleanup(&self.path);
+    }
+
+    /// Stop the connector and release the store, run `edit` on the file —
+    /// a test's out-of-band change, made where no writer is live — and
+    /// start a fresh connector over the reopened store. The clock, the
+    /// wallet and the template counter carry over.
+    pub async fn reopen(&mut self, edit: impl FnOnce(&std::path::Path)) {
+        let _already_stopped = self.connector.stop_gracefully().await.is_err();
+        if let Some(task) = self.task.take() {
+            drop(task.await.expect("the connector task joins"));
+        }
+        edit(&self.path);
+        let (connector, task) = spawn_connector(ConnectorArgs {
+            store: (self.opener)(&self.path),
+            rules: self.rules,
+        });
+        self.task = Some(task);
+        self.connector = connector;
+    }
+
+    /// Every table of the store as stored bytes (`TableRows`), for a
+    /// differential against another driver's store.
+    pub async fn table_rows(
+        &self,
+    ) -> Result<
+        std::collections::BTreeMap<&'static str, shekyl_chain_store::store::RawRows>,
+        RunFault,
+    > {
+        self.connector.ask(TableRows).await.map_err(handler_error)
     }
 
     /// The template for `facts`, listing `listed`, at clock `now`.

@@ -160,6 +160,9 @@ pub mod substrate;
 /// held to the store that connected the winner directly.
 #[cfg(all(test, feature = "pipeline"))]
 mod switch_tests;
+/// DRS-E5 a6: the switch at the genesis cap, timed (ignored lane).
+#[cfg(all(test, feature = "pipeline"))]
+mod switch_timing_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;
@@ -171,7 +174,7 @@ pub use connector::{
     AltBlocksHeld, Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject,
     Injected, IssueDraws, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
     PopBeyondReorgCap, Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan,
-    Switched, TemplateFacts,
+    Switched, TableRows, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

@@ -139,7 +139,7 @@ pub use prune::{Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
 pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};
-pub use undo::Restorable;
+pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
 pub use write::WriteBatch;
 
