@@ -291,7 +291,7 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   it.
 - **Service mode is new Rust work, not a revival.** The inherited daemonizer
   was deleted in V3.1 and its five flags retired
-  ([`removed_flags.cpp:74-78`](../../src/common/removed_flags.cpp)); none of
+  (lines 74 to 78 of `src/common/removed_flags.cpp` at `d26148535e`); none of
   it is restored (rule 15).
 - **Installation needs elevation once**, so the service is an opt-in step;
   run-as-me keeps working with none.

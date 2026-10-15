@@ -38,7 +38,6 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/thread.hpp>
 #include <optional>
-#include <boost/program_options/options_description.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <chrono>
 #include <functional>

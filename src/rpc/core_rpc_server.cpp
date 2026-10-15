@@ -87,13 +87,6 @@ namespace
 namespace cryptonote
 {
 
-  //-----------------------------------------------------------------------------------
-  void core_rpc_server::init_options(boost::program_options::options_description& desc)
-  {
-    // The RPC reads its section in Rust (DAEMON_CONFIG_CUTOVER.md §2.3):
-    // nothing of it is a C++ option.
-    (void)desc;
-  }
   //------------------------------------------------------------------------------------------------------------------------------
   core_rpc_server::core_rpc_server(
       core& cr

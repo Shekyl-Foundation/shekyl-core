@@ -33,8 +33,6 @@
 #include <memory>
 #include <vector>
 
-#include <boost/program_options/options_description.hpp>
-#include <boost/program_options/variables_map.hpp>
 
 #include "net/net_utils_base.h"
 #include "net/jsonrpc_structs.h"
@@ -71,7 +69,6 @@ namespace cryptonote
       );
     ~core_rpc_server();
 
-    static void init_options(boost::program_options::options_description& desc);
     network_type nettype() const { return m_core.get_nettype(); }
     // Core access for the Rust submit shims (daemon_submit_ffi.cpp), which
     // resolve pool/blockchain/protocol from the same handle the Axum

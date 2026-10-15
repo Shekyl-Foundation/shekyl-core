@@ -71,6 +71,5 @@ target_link_libraries(rpc
     version
     ${Boost_REGEX_LIBRARY}
     ${Boost_THREAD_LIBRARY}
-    ${Boost_PROGRAM_OPTIONS_LIBRARY}
   PRIVATE
     ${EXTRA_LIBRARIES})

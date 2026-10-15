@@ -33,7 +33,6 @@
 #include <ctime>
 
 #include <boost/function.hpp>
-#include <boost/program_options/options_description.hpp>
 
 #include "cryptonote_basic/fwd.h"
 #include "cryptonote_core/i_core_events.h"

@@ -173,7 +173,7 @@ users on `dev`: `scripts/bench/drs_bench.py:328` and
 
 **Priority nodes — DELETED (Rick, 2026-10-11; outright, 2026-10-13).**
 `--add-priority-node` is deleted in PR-3. *Records-was:* "as a retired
-flag refused by name (`REMOVED_FLAGS`, `src/common/removed_flags.cpp:70`)";
+flag refused by name (`REMOVED_FLAGS`, line 70 of `src/common/removed_flags.cpp` at `d26148535e`)";
 Rick's ruling of 2026-10-13 removes that row too, since pre-genesis there
 is no backward compatibility and the cutover deletes the shim. The deletion takes
 `m_priority_peers` (`net_node.h:767`), its parse (`net_node.inl:558`),

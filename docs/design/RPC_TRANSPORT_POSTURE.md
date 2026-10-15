@@ -282,7 +282,7 @@ claimed and no slice of this round carried out, is
 [`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-13's: per-connection grants replace
 it, in RT-W10.*
 
-[`command_line_args.h:102-106`](../../src/daemon/command_line_args.h) offers
+lines 102 to 106 of `src/daemon/command_line_args.h` at `d26148535e` offers
 exactly what §1 excludes: "Allow other users to use the node as a remote
 (restricted RPC mode, view-only commands) **and advertise it over P2P**." The
 restricted-RPC second listener it drives is wired at

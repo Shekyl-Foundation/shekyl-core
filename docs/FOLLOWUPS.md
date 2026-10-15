@@ -1215,10 +1215,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw ().**
   - Target: pre-genesis
 
-- **`removed_flags` shim sunset.** Deleted, not ported, by the daemon-configuration cutover (DC-Q4: no backward compatibility pre-genesis); this row goes with the files. Blocked on the cutover landing — falsify by `rg -n -e 'removed_flags' src tests` returning nothing.
-  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §4
-  - Target: pre-genesis
-
 - **`shekyl-daemon-rpc` staticlib: `tracing::*` calls silently dropped.** [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   - Target: pre-genesis
 

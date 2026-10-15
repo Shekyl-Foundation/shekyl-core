@@ -38,7 +38,6 @@ set(unit_tests_sources
   checkpoints.cpp
   command_line.cpp
   crypto.cpp
-  daemon_default_data_dir.cpp
   daemon_rpc_client.cpp
   daemon_submit_ffi_roundtrip.cpp
   daemon_submit_shims.cpp

@@ -34,7 +34,6 @@
 #include <cstring>
 #include <string>
 #include <exception>
-#include <boost/program_options.hpp>
 #include "common/command_line.h"
 #include "crypto/hash.h"
 #include "cryptonote_basic/blobdatatype.h"
