@@ -143,7 +143,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T5** 8-byte prefix stays | **INTERIM** (as of 2026-09-25) | The encrypting path uses `prefix_for` (`prefix.rs`). The plaintext path still starts with `LEVIN_SIGNATURE`. That start is deleted at the flip; it is not a finished wire | n/a |
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
 | **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
-| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages and the record after one rekey in each direction. The transport keys and their rekey (`ck'`, `k'`) are pinned from that transcript's chaining key in `shekyl-noise` (`split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys`); the initial chaining key is the hash of the protocol name, pinned beside `SymmetricState`. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis: `C5F5E2DD59B35341`, `6940EC7597D7601B`, `42BBA1CC92D3E180` | No — follows T1 |
+| **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages and the record after one rekey in each direction. The transport keys and their rekey (`ck'`, `k'`) are pinned from that transcript's chaining key in `shekyl-noise` (`split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys`); the initial chaining key is the hash of the protocol name, pinned beside `SymmetricState`. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis, recorded in `network_id_ffi.rs` (`each_genesis_derives_its_recorded_id_and_prefix`) | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | **the surface is *every* dispatch, invoke and notify** — not the four p2p invokes; all four invoke routes and all nine `HANDLE_NOTIFY_T2` entries (`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`) are still unguarded, so transaction floods spend no tokens and PWD-B12's memory bound rests on a charge that is not happening. *Records-was: this cell read “the decision names four unguarded invoke handlers” until 2026-10-07 — the same scope error §PWD-B1 records making twice, restated in the status table where a grep reader meets it first.* **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
 | **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
@@ -3585,16 +3585,13 @@ genesis block, so the id is that hash:
 >   already holds, before any socket opens. C++ states no byte.
 
 **The three prefixes, computed rather than promised.** `prefix_for` of the
-id above is not `const`. The table is the KAT of
-`network_id_from_genesis(genesis_hash_for(net))` and of `prefix_for` of that
-id. A regenesis moves the hash, both columns move, and the KAT fails until
-it is re-recorded with the new genesis:
-
-| Network | `network_id` | Prefix |
-| --- | --- | --- |
-| mainnet | `49CDEE7DEA1A61291C56ABD4DE5E0364` | `C5F5E2DD59B35341` |
-| testnet | `5E0BADE97EA2938CB49E8F6E90F15D4E` | `6940EC7597D7601B` |
-| stagenet | `E7E770405F898E6157E5A76ECFDA38CF` | `42BBA1CC92D3E180` |
+id above is not `const`. Each network's id and prefix are recorded in one
+place, the KAT `each_genesis_derives_its_recorded_id_and_prefix` in
+`rust/shekyl-ffi/src/network_id_ffi.rs`, which checks
+`network_id_from_genesis(genesis_hash_for(net))` and `prefix_for` of that id
+against them. A regenesis moves the hash, both values move, and the KAT fails
+until they are re-recorded with the new genesis. This document does not
+repeat the bytes: it did once, and every regenesis left its copy behind.
 
 **Pairwise distinct — observed, not assumed.** Truncating a 32-byte digest to 8
 bytes cannot *guarantee* distinctness by construction, so the claim "different
@@ -3865,10 +3862,9 @@ after them because it governs every vector added later:
    directions of the check: a connection opening with another network's prefix
    is **dropped at the framing layer, before any Noise processing**, and one
    opening with this network's prefix **proceeds to the transport handshake**. Its inputs
-   are the three derived prefixes — mainnet `C5F5E2DD59B35341`, testnet
-   `6940EC7597D7601B`, stagenet `42BBA1CC92D3E180` — so a cross-pair (dial
-   mainnet with the testnet prefix) is a real, runnable case rather than a
-   synthetic one.
+   are the three derived prefixes, as the KAT in `network_id_ffi.rs` records
+   them, so a cross-pair (dial mainnet with the testnet prefix) is a real,
+   runnable case rather than a synthetic one.
 
    > **This vector asserts a *discriminated* early rejection, and that does not
    > violate the rule below.** The rule governs values moved into a **binding**;
