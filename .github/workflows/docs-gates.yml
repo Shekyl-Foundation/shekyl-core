@@ -226,6 +226,16 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_owners.py --selftest
 
+      - name: Change-scope classifier selftest
+        # scripts/ci/change_scope.py decides which changes skip the builds,
+        # the Rust suite and the CodeQL Rust analysis (build.yml,
+        # rust-audit-test.yml, codeql.yml). Its selftest pins the cases a
+        # wrong `true` would let through against this tree: the domain
+        # registry, the test vectors, a markdown file a Rust test reads, a
+        # crate README compiled into rustdoc, and any source file.
+        if: '!cancelled()'
+        run: python3 scripts/ci/change_scope.py --selftest
+
       - name: Relay production code does not name a connector
         # shekyl-relay and shekyl-relay-privacy read declaration cells. Any
         # ConnectorId:: or NetworkColumn:: variant may appear only in their
