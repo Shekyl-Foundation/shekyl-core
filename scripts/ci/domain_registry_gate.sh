@@ -342,7 +342,12 @@ count_pattern() {
 # site in rust/shekyl-bulletproofs/src/derived.rs (batch_weights_seed), the new
 # domain shekyl/bp-plus-batch-weights-v1. Its tests (src/tests/derived.rs) sit
 # under a tests/ directory and are outside the count.
-MECH1_EXPECTED=76
+# FCMP++ batch weights (2026-10-15, ruling R3 applied on #1081's review):
+# 76 -> 78. One production site in rust/shekyl-fcmp/src/proof.rs
+# (batch_weights_rng, which both verifies call under their own domain:
+# shekyl/fcmp-pp-batch-weights-v1, shekyl/fcmp-membership-only-batch-weights-v1)
+# and one inline #[cfg(test)] site in the same file's batch_weights_tests.
+MECH1_EXPECTED=78
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

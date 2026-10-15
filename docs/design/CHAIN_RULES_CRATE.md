@@ -1133,6 +1133,31 @@ admission, never a panic.
   `shekyl-bulletproofs`' KAT batch, so the fold's batch is exactly the
   documented encoding.
 
+*The same derivation for the spend proof (R3, applied 2026-10-15).*
+CEN-I15's body (`shekyl_fcmp::proof::verify`) and the emission backing
+path's membership-only verify fill three batch verifiers (Ed25519, Selene,
+Helios). They drew those batches' weights from `OsRng`; they now draw them
+from a `ChaCha20Rng` seeded by `cshake256_32`, under
+`shekyl/fcmp-pp-batch-weights-v1` and
+`shekyl/fcmp-membership-only-batch-weights-v1` respectively.
+
+- **The preimage** is every value the verify reads, length-framed and in
+  order: the proof bytes, the input count, the layer count, the tree
+  root, `signable_tx_hash`, the key images (full verify only), the PQC key
+  points and the pseudo-outputs.
+- **The audit came first.** In the vendored code the generator feeds
+  batch weights and nothing else:
+  - the SAL queues four `multiexp` statements per input, and the
+    membership-only spend auth one, each with one nonzero weight drawn;
+  - the root-blind proof of knowledge draws one weight;
+  - each circuit statement's verify draws its own;
+  - the inner-product verify reads no RNG.
+  Nothing inside the vendored code changed; the seed is set at the two
+  call sites, and neither entry point takes a caller's RNG.
+- **The wargame is H19's:** the prover knows the weights in advance, any
+  change re-derives them, and cancelling an invalid statement's error is
+  a `1/ℓ` event per attempt.
+
 *The cost on the Rust path (2026-10-15).* Shape data, not a floor (rule 76).
 Machine: dev box, i9-11950H (8C/16T), `--release`. The box was shared with
 other lanes: load average 15–21 on 16 threads during both runs. Each figure
