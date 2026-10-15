@@ -1,0 +1,687 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The switch — an alternative block's arrival, the fork choice, and the
+//! reorganization as one write closure (DRS-E5 a5,
+//! `DRS_E5_POOL_ALT_PRUNE.md` §2.3; CEN-K5, K5b, K6, K7).
+//!
+//! Two messages on the single writer, with the RandomX between them:
+//!
+//! 1. [`OfferAlt`] — a formed block whose parent is not the tip. The cheap
+//!    tier judges it over the stitched [`AltView`] (`alt_against`), AL1
+//!    stores the verdict, and the fork choice reads the two cumulative
+//!    difficulties and the checkpoint table (K6). A winning verdict comes
+//!    back as a [`SwitchPlan`]: the blocks the switch will judge, each with
+//!    its seed claim, for the caller to `form` off the actor (step 1 of
+//!    §2.3 — the M alt entries and, unless the verdict is the checkpoint's,
+//!    the N demoted blocks).
+//! 2. [`Reorganize`] — the formed blocks, with the tip the plan was made
+//!    against. On the actor, before any write: the plan is held to the
+//!    store (a tip that moved is a driver defect, never a switch); the cap
+//!    is checked (`E5-Q6`); each demoted block is judged by the cheap tier
+//!    over a snapshot taken here, where its history is exactly the chain
+//!    below it (SAL-13; a refusal is SI-27). Then one `store.write`: the
+//!    pops and SI-5 (`pop_many`), the demoted rows from their verdicts
+//!    (K7; the checkpoint arm discards them), every alt entry through the
+//!    full `validate` and `connect` (K5; K5b's witness travels in the alt
+//!    row), and the alt rows removed. A promotion verdict aborts the
+//!    transaction — the store is the pre-switch chain — and the failing alt
+//!    suffix is removed in a write of its own.
+//!
+//! The listed bodies of an alt block are not the alt row's (`AltValid`'s
+//! `into_candidate`: the bodies are the pool's to hold until promotion), so
+//! the caller supplies them with the formed blocks; the pool is that caller
+//! from PR-b on. The demoted blocks' bodies come back as
+//! [`SwitchDone::returned`], which the caller drops until PR-b (`E5-Q10`).
+//!
+//! Not here: the arrival router's other arms beyond answering an orphan or
+//! a held hash, the orphan policy, and A1/A4's Rust holder — the DRS-X
+//! Round 0 designs them with the live sources.
+
+use std::collections::BTreeSet;
+
+use kameo::message::{Context, Message};
+use shekyl_chain_rules::{
+    alt_against, seed_height, validate, CenRow, Fault, InvalidBlock, Stale, StructurallyValid, Tip,
+    Trust,
+};
+use shekyl_chain_store::store::{
+    AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
+};
+use shekyl_difficulty::{fork_choice, ForkChoiceVerdict};
+use shekyl_types::archival::AttestationWitness;
+use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use shekyl_wire::{Block, Transaction};
+
+use super::{Connector, RunFault};
+use crate::schedule::ChainRules;
+use shekyl_chain_rules::AtHeight;
+
+/// A switch deeper than the cap in force: refused **locally**, before any
+/// pop and before any RandomX (`E5-Q6`). Never a verdict against the alt
+/// block, never peer-punishable (C2-R1 Q1c F-1(a)): the block stays stored.
+///
+/// The cap is a **policy** limit and `PopBelowFloor` is a **capability**
+/// limit; two independent operands earn two refusals (`E5-Q6`'s ruling,
+/// the discriminator SLK-2 applied a third time).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PopBeyondReorgCap {
+    /// Blocks the switch would pop: the recorded tip's height less the
+    /// fork point's.
+    pub depth: BlockCount,
+    /// `RuleSet::reorg_cap` in force at the alternative tip's height.
+    pub cap: BlockCount,
+}
+
+/// A formed block whose parent is not the recorded tip — an alternative
+/// arrival (module docs, message 1).
+#[derive(Debug)]
+pub struct OfferAlt(pub StructurallyValid);
+
+/// What an [`OfferAlt`] did.
+#[derive(Debug)]
+pub enum Offered {
+    /// The cheap tier refused the block — a verdict; nothing was stored.
+    Refused(InvalidBlock),
+    /// The block's parent chain reaches no recorded block (CEN-K2's
+    /// orphan, `AltCannot::Unlinked`); nothing was stored. `at` is the
+    /// first hash neither table holds.
+    Unlinked {
+        /// The first unheld hash on the walk.
+        at: BlockHash,
+    },
+    /// The store already holds the block as an alternative (CEN-K3).
+    AlreadyHeld,
+    /// Stored; the incumbent stays (K6: not strictly heavier, no
+    /// checkpoint names it).
+    Held {
+        /// The block's height on its chain.
+        height: BlockHeight,
+    },
+    /// Stored, and the fork choice switches — but the fork is deeper than
+    /// the cap (`E5-Q6`): a local outcome, the block stays stored.
+    BeyondCap(PopBeyondReorgCap),
+    /// Stored, and the fork choice switches: form what the plan names and
+    /// send [`Reorganize`].
+    SwitchDue(SwitchPlan),
+}
+
+/// One block a switch will judge, with what `form` needs beside the
+/// substrate: the height (which rule set) and the seed claim (CEN-D3) on
+/// the chain the block is on.
+#[derive(Clone, Debug)]
+pub struct PlannedBlock {
+    /// The height the block sits at on its chain.
+    pub height: BlockHeight,
+    /// The block's identity.
+    pub hash: BlockHash,
+    /// The seed the honest producer claimed: the identity at
+    /// `seed_height(height)` on the block's own chain, or the null hash
+    /// below the first epoch.
+    pub seed: BlockHash,
+}
+
+/// A recorded block the switch will demote.
+#[derive(Clone, Debug)]
+pub struct PlannedDemotion {
+    /// Height, identity, seed claim.
+    pub at: PlannedBlock,
+    /// The block as recorded, with its listed bodies and witness
+    /// (`ReadSnapshot::candidate_at`, SAL-13).
+    pub candidate: shekyl_chain_rules::Candidate,
+}
+
+/// An alt entry the switch will promote. The block and witness are the
+/// alt row's; the listed bodies are the caller's (module docs).
+#[derive(Clone, Debug)]
+pub struct PlannedPromotion {
+    /// Height, identity, seed claim.
+    pub at: PlannedBlock,
+    /// The block as the alt row holds it.
+    pub block: Block,
+    /// The witness the alt row carries (CEN-K5b).
+    pub witness: Option<AttestationWitness>,
+}
+
+/// What [`Offered::SwitchDue`] asks the caller to form.
+#[derive(Clone, Debug)]
+pub struct SwitchPlan {
+    /// The recorded tip the plan was made against.
+    pub tip: Tip,
+    /// The fork point: the recorded block the alternative chain leaves from.
+    pub root: Tip,
+    /// The alternative chain's tip — the offered block.
+    pub alt_tip: BlockHash,
+    /// The fork choice's arm: `ForcedSwitch` discards the demoted chain
+    /// (K7), so its blocks are not formed.
+    pub verdict: ForkChoiceVerdict,
+    /// The recorded blocks above the fork point, ascending.
+    pub demoted: Vec<PlannedDemotion>,
+    /// The alt entries, ascending, ending at the offered block.
+    pub promoted: Vec<PlannedPromotion>,
+}
+
+/// The formed blocks a [`SwitchPlan`] named, back to the actor (module
+/// docs, message 2).
+#[derive(Debug)]
+pub struct Reorganize {
+    /// The plan's tip; the switch refuses if the store's tip moved.
+    pub tip: Tip,
+    /// The plan's alternative tip.
+    pub alt_tip: BlockHash,
+    /// The demoted blocks, formed, ascending; empty when the plan's verdict
+    /// is `ForcedSwitch`.
+    pub demoted: Vec<StructurallyValid>,
+    /// The alt entries, formed, ascending.
+    pub promoted: Vec<StructurallyValid>,
+}
+
+/// A switch that landed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SwitchDone {
+    /// The blocks popped, ascending by height.
+    pub demoted: Vec<(BlockHeight, BlockHash)>,
+    /// Whether the demoted blocks were kept as alt rows (`Switch`) or
+    /// discarded (`ForcedSwitch`, K7).
+    pub demoted_kept: bool,
+    /// The blocks connected, ascending.
+    pub promoted: Vec<(BlockHeight, BlockHash)>,
+    /// The demoted blocks' listed transactions, in chain order — the
+    /// pool's from PR-b; dropped by the one caller until then (`E5-Q10`).
+    pub returned: Vec<Transaction>,
+    /// The census rows the promoted blocks' verdicts exercised.
+    pub exercised: BTreeSet<&'static str>,
+}
+
+/// What a [`Reorganize`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Switched {
+    /// The switch landed.
+    Done(SwitchDone),
+    /// A promoted block failed `validate` (K5): the transaction rolled
+    /// back, the main chain is the pre-switch chain, and the failing alt
+    /// suffix — the refused block and every alt entry above it — was
+    /// removed.
+    Refused {
+        /// Where the refused block sits on the alternative chain.
+        at: BlockHeight,
+        /// The refused block.
+        hash: BlockHash,
+        /// The verdict.
+        refused: InvalidBlock,
+        /// The alt rows removed with it, ascending.
+        removed: Vec<BlockHash>,
+    },
+    /// The fork is deeper than the cap (`E5-Q6`): local, nothing popped.
+    BeyondCap(PopBeyondReorgCap),
+    /// A pop met the undo floor (`StoreCannot::PopBelowFloor`): this node
+    /// cannot follow the heavier chain. F-1 fail-stop, local — never a
+    /// verdict, never peer-punishable; nothing moved.
+    BelowFloor {
+        /// The tip the pop met.
+        tip: u64,
+        /// The persisted undo floor.
+        floor: u64,
+    },
+}
+
+/// **AL6.** How many alternative blocks the store holds — the alt table's
+/// one metric (`E5-Q7`: PoW bounds the table, this measures it) and how a
+/// caller sees K7's arm: a difficulty switch leaves the demoted blocks
+/// held, a checkpoint-forced one does not.
+#[derive(Clone, Copy, Debug)]
+pub struct AltBlocksHeld;
+
+impl Message<AltBlocksHeld> for Connector {
+    type Reply = Result<u64, RunFault>;
+
+    async fn handle(
+        &mut self,
+        _: AltBlocksHeld,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.writer.read()?.alt_block_count()?)
+    }
+}
+
+/// Why a switch's write closure stopped, carried out of `store.write` so a
+/// verdict and a local limit roll back without becoming faults.
+enum Stop {
+    Fault(RunFault),
+    Refused {
+        index: usize,
+        at: BlockHeight,
+        hash: BlockHash,
+        refused: InvalidBlock,
+    },
+    BelowFloor {
+        tip: u64,
+        floor: u64,
+    },
+}
+
+impl From<StoreError> for Stop {
+    fn from(e: StoreError) -> Self {
+        match e {
+            StoreError::Cannot(StoreCannot::PopBelowFloor { tip, floor }) => {
+                Self::BelowFloor { tip, floor }
+            }
+            other => Self::Fault(RunFault::Store(other)),
+        }
+    }
+}
+
+impl From<RunFault> for Stop {
+    fn from(f: RunFault) -> Self {
+        Self::Fault(f)
+    }
+}
+
+impl Message<OfferAlt> for Connector {
+    type Reply = Result<Offered, RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: OfferAlt,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let (rules, trust) = (self.rules, self.trust);
+        self.writer
+            .with_store(|store| offer(store, rules, trust, msg.0))
+    }
+}
+
+impl Message<Reorganize> for Connector {
+    type Reply = Result<Switched, RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: Reorganize,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let (rules, trust) = (self.rules, self.trust);
+        self.writer
+            .with_store(|store| switch(store, rules, trust, msg))
+    }
+}
+
+/// The offer's body, under the run's `trust`.
+fn offer(
+    store: &ChainStore,
+    rules: ChainRules,
+    trust: Trust,
+    formed: StructurallyValid,
+) -> Result<Offered, RunFault> {
+    let hash = formed.hash();
+    let parent = formed.candidate().block.header.previous;
+    let snap = store.begin_read()?;
+    let tip = snap.tip()?.recorded;
+    if tip.is_some_and(|t| t.hash == parent) {
+        return Err(RunFault::NotAlternative { parent });
+    }
+    let chain = match AltChain::build(&snap, &parent) {
+        Ok(chain) => chain,
+        Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked { at }))) => {
+            return Ok(Offered::Unlinked { at })
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let height = chain.candidate_height();
+    let in_force = rules.in_force(height);
+    let view = AltView::new(&snap, chain);
+    let admitted = match alt_against(formed, &view, &in_force, &trust) {
+        Ok(Ok(admitted)) => admitted,
+        Ok(Err(refused)) => return Ok(Offered::Refused(refused)),
+        Err(fault) => return Err(snapshot_fault(store, height, fault)),
+    };
+    drop(view);
+    let alternative = admitted.cumulative_difficulty();
+    let inserted: Result<(), StoreError> = store.write(|batch| batch.insert_alt_block(admitted));
+    match inserted {
+        Ok(()) => {}
+        Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::AlreadyHeld))) => {
+            return Ok(Offered::AlreadyHeld)
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let tip = tip.expect("an alternative chain links to a recorded block");
+    let current = recorded_work(&snap, tip.height)?;
+    // K6: the comparison's one implementation; the checkpoint arm is the
+    // release's pin at the block's height naming this block.
+    let checkpoint = trust.anchors().expected_at(height) == Some(hash);
+    let verdict = fork_choice(current, alternative, checkpoint);
+    if verdict == ForkChoiceVerdict::KeepCurrent {
+        return Ok(Offered::Held { height });
+    }
+    drop(snap);
+    // A fresh snapshot: the plan's alternative chain includes the row just
+    // written.
+    let snap = store.begin_read()?;
+    match plan(&snap, rules, tip, hash, verdict)? {
+        Ok(plan) => Ok(Offered::SwitchDue(plan)),
+        Err(beyond) => Ok(Offered::BeyondCap(beyond)),
+    }
+}
+
+/// The plan for switching from `tip` onto the alternative chain ending at
+/// `alt_tip`, or the cap's refusal (`E5-Q6`), read on `snap`.
+fn plan(
+    snap: &ReadSnapshot<'_>,
+    rules: ChainRules,
+    tip: Tip,
+    alt_tip: BlockHash,
+    verdict: ForkChoiceVerdict,
+) -> Result<Result<SwitchPlan, PopBeyondReorgCap>, RunFault> {
+    let chain = AltChain::build(snap, &alt_tip)?;
+    let root = chain.root();
+    if let Err(beyond) = within_cap(rules, &chain, tip) {
+        return Ok(Err(beyond));
+    }
+    let entries = chain.entries();
+    let seed_on_alt = |height: BlockHeight| -> Result<BlockHash, RunFault> {
+        match seed_height(height) {
+            None => Ok(BlockHash::NULL),
+            Some(at) if at <= root.height => recorded_hash(snap, at),
+            Some(at) => {
+                let index = usize::try_from(at.to_raw() - root.height.to_raw() - 1)
+                    .expect("an alt chain's length fits usize");
+                Ok(entries[index].id)
+            }
+        }
+    };
+    let mut demoted = Vec::new();
+    let mut height = root.height;
+    while height < tip.height {
+        height = height.checked_add(BlockCount::ONE).expect("below the tip");
+        let candidate = match snap.candidate_at(height)? {
+            AtHeight::Recorded(candidate) => candidate,
+            AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
+        };
+        let seed = match seed_height(height) {
+            None => BlockHash::NULL,
+            Some(at) => recorded_hash(snap, at)?,
+        };
+        demoted.push(PlannedDemotion {
+            at: PlannedBlock {
+                height,
+                hash: recorded_hash(snap, height)?,
+                seed,
+            },
+            candidate,
+        });
+    }
+    let mut promoted = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let height = entry.block.height();
+        let witness = entry
+            .block
+            .attestation_witness()
+            .map(|bytes| AttestationWitness::new(bytes.to_vec()))
+            .transpose()
+            .expect("an alt row's witness was held well-formed when it was read (AL4)");
+        promoted.push(PlannedPromotion {
+            at: PlannedBlock {
+                height,
+                hash: entry.id,
+                seed: seed_on_alt(height)?,
+            },
+            block: entry.block.block().clone(),
+            witness,
+        });
+    }
+    Ok(Ok(SwitchPlan {
+        tip,
+        root,
+        alt_tip,
+        verdict,
+        demoted,
+        promoted,
+    }))
+}
+
+/// `E5-Q6`: the depth `chain` would pop from `tip`, against the cap in
+/// force at the alternative tip's height.
+fn within_cap(rules: ChainRules, chain: &AltChain, tip: Tip) -> Result<(), PopBeyondReorgCap> {
+    let depth = BlockCount::from_raw(tip.height.to_raw() - chain.root().height.to_raw());
+    let cap = rules.in_force(chain.parent().height).reorg_cap();
+    if depth > cap {
+        return Err(PopBeyondReorgCap { depth, cap });
+    }
+    Ok(())
+}
+
+/// The switch's body, under the run's `trust`.
+fn switch(
+    store: &ChainStore,
+    rules: ChainRules,
+    trust: Trust,
+    msg: Reorganize,
+) -> Result<Switched, RunFault> {
+    let snap = store.begin_read()?;
+    // The plan is held to the store before anything is judged.
+    let tip = snap.tip()?.recorded;
+    if tip != Some(msg.tip) {
+        return Err(RunFault::StalePlan {
+            planned: msg.tip,
+            tip,
+        });
+    }
+    let tip = msg.tip;
+    let chain = match AltChain::build(&snap, &msg.alt_tip) {
+        Ok(chain) => chain,
+        Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked { .. }))) => {
+            return Err(RunFault::PlanMismatch {
+                reason: "the plan's alternative tip is not held",
+            })
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if let Err(beyond) = within_cap(rules, &chain, tip) {
+        return Ok(Switched::BeyondCap(beyond));
+    }
+    let root = chain.root();
+    let entries = chain.entries().to_vec();
+    let alt_tip_height = chain.parent().height;
+    // K6, re-derived on the actor: the caller carries formed blocks, not
+    // the verdict.
+    let alternative = entries
+        .last()
+        .expect("an alternative chain has at least the offered block")
+        .block
+        .cumulative_difficulty();
+    let checkpoint = trust.anchors().expected_at(alt_tip_height) == Some(msg.alt_tip);
+    let verdict = fork_choice(recorded_work(&snap, tip.height)?, alternative, checkpoint);
+    let keep_demoted = match verdict {
+        ForkChoiceVerdict::KeepCurrent => {
+            return Err(RunFault::PlanMismatch {
+                reason: "the fork choice keeps the incumbent",
+            })
+        }
+        ForkChoiceVerdict::Switch => true,
+        ForkChoiceVerdict::ForcedSwitch => false,
+    };
+
+    // The promoted blocks are the alt entries, in order, each with the
+    // witness its row carries (K5b).
+    if msg.promoted.len() != entries.len() {
+        return Err(RunFault::PlanMismatch {
+            reason: "the promoted blocks are not the alternative chain's entries",
+        });
+    }
+    for (formed, entry) in msg.promoted.iter().zip(&entries) {
+        let witness = formed
+            .candidate()
+            .attestation_witness
+            .as_ref()
+            .map(AttestationWitness::as_bytes);
+        if formed.hash() != entry.id || witness != entry.block.attestation_witness() {
+            return Err(RunFault::PlanMismatch {
+                reason: "a promoted block is not its alt row (identity or witness)",
+            });
+        }
+    }
+
+    // The demoted blocks: the recorded chain above the fork point, read
+    // before the closure (SAL-13). Their bodies return to the pool either
+    // way; their rows are written only on the difficulty arm (K7).
+    let depth = tip.height.to_raw() - root.height.to_raw();
+    let mut demoted = Vec::new();
+    let mut returned = Vec::new();
+    for offset in 1..=depth {
+        let height = BlockHeight::from_raw(root.height.to_raw() + offset);
+        let candidate = match snap.candidate_at(height)? {
+            AtHeight::Recorded(candidate) => candidate,
+            AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
+        };
+        demoted.push((height, recorded_hash(&snap, height)?));
+        returned.extend(candidate.transactions);
+    }
+    let expected_demoted = if keep_demoted { demoted.len() } else { 0 };
+    if msg.demoted.len() != expected_demoted
+        || msg
+            .demoted
+            .iter()
+            .zip(&demoted)
+            .any(|(formed, (_, hash))| formed.hash() != *hash)
+    {
+        return Err(RunFault::PlanMismatch {
+            reason: "the demoted blocks are not the recorded chain above the fork point",
+        });
+    }
+
+    // SAL-13 / CEN-K7: each demoted block through the cheap tier, over the
+    // chain below it on this snapshot. A refusal is a recorded block that
+    // fails its own rules — SI-27, the writer halts.
+    let mut demoted_rows = Vec::with_capacity(msg.demoted.len());
+    for (formed, (height, _)) in msg.demoted.into_iter().zip(&demoted) {
+        let parent = recorded_hash(&snap, BlockHeight::from_raw(height.to_raw() - 1))?;
+        let below = AltChain::build(&snap, &parent)?;
+        let view = AltView::new(&snap, below);
+        match alt_against(formed, &view, &rules.in_force(*height), &trust) {
+            Ok(Ok(admitted)) => demoted_rows.push(admitted),
+            Ok(Err(_refused)) => {
+                let height = *height;
+                let halted: Result<(), RunFault> =
+                    store.write(|batch| Err(RunFault::Store(batch.refuse_demotion(height))));
+                return Err(halted.expect_err("SI-27 halts the writer"));
+            }
+            Err(fault) => return Err(snapshot_fault(store, *height, fault)),
+        }
+    }
+
+    // The closure: pops and SI-5, the demoted rows, promotion, removes.
+    let outcome: Result<SwitchDone, Stop> = store.write(|batch| {
+        batch.pop_many(depth)?;
+        for admitted in demoted_rows {
+            batch.insert_alt_block(admitted)?;
+        }
+        let view = batch.chain_view();
+        let mut done = SwitchDone {
+            demoted: demoted.clone(),
+            demoted_kept: keep_demoted,
+            ..SwitchDone::default()
+        };
+        for (index, (formed, entry)) in msg.promoted.into_iter().zip(&entries).enumerate() {
+            let height = entry.block.height();
+            let in_force = rules.in_force(height);
+            match validate(formed, &view, &in_force, &trust) {
+                Ok(Ok(valid)) => {
+                    let hash = valid.block().hash();
+                    done.exercised
+                        .extend(valid.coverage().iter().map(CenRow::as_str));
+                    batch.connect(valid, in_force)?;
+                    done.promoted.push((height, hash));
+                }
+                Ok(Err(refused)) => {
+                    return Err(Stop::Refused {
+                        index,
+                        at: height,
+                        hash: entry.id,
+                        refused,
+                    })
+                }
+                Err(fault) => return Err(Stop::Fault(super::validate_fault(batch, height, fault))),
+            }
+        }
+        for entry in &entries {
+            batch.remove_alt_block(&entry.id)?;
+        }
+        done.returned = returned;
+        Ok(done)
+    });
+    match outcome {
+        Ok(done) => Ok(Switched::Done(done)),
+        Err(Stop::Fault(fault)) => Err(fault),
+        Err(Stop::BelowFloor { tip, floor }) => Ok(Switched::BelowFloor { tip, floor }),
+        Err(Stop::Refused {
+            index,
+            at,
+            hash,
+            refused,
+        }) => {
+            // K5: the failing alt suffix leaves the store, in its own write
+            // — the switch's transaction rolled back with everything in it.
+            let removed: Vec<BlockHash> = entries[index..].iter().map(|e| e.id).collect();
+            let cleared: Result<(), StoreError> = store.write(|batch| {
+                for id in &removed {
+                    batch.remove_alt_block(id)?;
+                }
+                Ok(())
+            });
+            cleared?;
+            Ok(Switched::Refused {
+                at,
+                hash,
+                refused,
+                removed,
+            })
+        }
+    }
+}
+
+/// The identity recorded at `height`, which the caller has bounded by the
+/// tip; above it is a store that lost a row it just named.
+fn recorded_hash(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<BlockHash, RunFault> {
+    match snap.block_info(height)? {
+        AtHeight::Recorded(info) => Ok(info.hash),
+        AtHeight::AboveTip => unreachable!("the caller bounded the height by the tip"),
+    }
+}
+
+/// The recorded cumulative difficulty at `height` (the incumbent's work).
+fn recorded_work(
+    snap: &ReadSnapshot<'_>,
+    height: BlockHeight,
+) -> Result<shekyl_difficulty::CumulativeDifficulty, RunFault> {
+    match snap.block_info(height)? {
+        AtHeight::Recorded(info) => Ok(info.cumulative_difficulty),
+        AtHeight::AboveTip => unreachable!("the tip is recorded"),
+    }
+}
+
+/// A fault the cheap tier raised over a snapshot view. A corrupt read halts
+/// the writer through a batch that arms it, as `validate`'s does through
+/// the connect batch; the rest map as `Apply`'s.
+fn snapshot_fault(store: &ChainStore, height: BlockHeight, fault: Fault<StoreError>) -> RunFault {
+    match fault {
+        Fault::View(e) => RunFault::Store(e),
+        Fault::Corrupt(observed) => {
+            let halted: Result<(), RunFault> =
+                store.write(|batch| Err(RunFault::Store(batch.refuse_corrupt(observed))));
+            halted.expect_err("a corrupt read halts the writer")
+        }
+        Fault::Stale(Stale::Seed {
+            claimed,
+            expected,
+            retry,
+        }) => RunFault::StaleSeed {
+            height,
+            claimed,
+            expected,
+            retry,
+        },
+        Fault::Stale(Stale::RuleSet { .. }) => RunFault::StaleRuleSet { height },
+    }
+}

@@ -69,8 +69,9 @@ use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
 use crate::connector::{
-    Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector, ConnectorArgs, HashAt, Rewind,
-    Rewound, RootAt, RunFault, TemplateFacts,
+    AltBlocksHeld, Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector, ConnectorArgs,
+    Digest, HashAt, OfferAlt, Offered, PlannedBlock, Reorganize, Rewind, Rewound, RootAt, RunFault,
+    SwitchPlan, Switched, TemplateFacts,
 };
 use crate::schedule::ChainRules;
 use crate::test_support::{cleanup, open_store, open_store_under, tmp};
@@ -165,6 +166,21 @@ pub struct Mined {
     /// (`Applied::archival`). The witness the archival scenarios read,
     /// because the store does not write it until the E4 writer lands.
     pub archival: ArchivalDelta,
+    /// The seed the producer claimed (CEN-D3) — what a second driver needs
+    /// to `form` this block when it arrives there as an alternative.
+    pub seed: BlockHash,
+}
+
+impl Mined {
+    /// The block as a candidate: the template's block and listed bodies,
+    /// no witness (the driver mints no attestation records).
+    #[must_use]
+    pub fn candidate(&self) -> Candidate {
+        Candidate::new(
+            self.template.block.clone(),
+            self.template.transactions.clone(),
+        )
+    }
 }
 
 impl shekyl_harness_spender::MinedBlock for Mined {
@@ -396,7 +412,96 @@ where
             emission,
             weights,
             archival,
+            seed,
         })
+    }
+
+    /// Advance the driver's clock by one block interval without mining, so
+    /// two drivers that mined the same prefix build different blocks from
+    /// here on — how a test makes a second branch.
+    pub fn idle(&self) {
+        self.substrate.tick();
+    }
+
+    /// How many alternative blocks the store holds (`AltBlocksHeld`, AL6).
+    pub async fn alt_blocks_held(&self) -> Result<u64, RunFault> {
+        self.connector
+            .ask(AltBlocksHeld)
+            .await
+            .map_err(handler_error)
+    }
+
+    /// The logical-state digest of the store (`Digest`).
+    pub async fn digest(&self) -> Result<crate::trace::Digest, RunFault> {
+        self.connector.ask(Digest).await.map_err(handler_error)
+    }
+
+    /// Offer `mined` — a block another driver mined on another branch — as
+    /// an alternative arrival: formed here under this driver's substrate
+    /// with the seed its producer claimed, then [`OfferAlt`].
+    pub async fn offer(&self, mined: &Mined) -> Result<Offered, RunFault> {
+        let formed = form(
+            mined.candidate(),
+            &self.rules.in_force(mined.height),
+            &self.substrate,
+            mined.seed,
+            FormAttempt::FIRST,
+        )
+        .expect("the driver's substrate does not fault")
+        .expect("a block another driver connected forms");
+        self.connector
+            .ask(OfferAlt(formed))
+            .await
+            .map_err(handler_error)
+    }
+
+    /// Carry out `plan` (DRS-E5 §2.3 step 1, then [`Reorganize`]): form the
+    /// demoted blocks unless the verdict is the checkpoint's, and the alt
+    /// entries from their rows' blocks and witnesses with the listed bodies
+    /// `bodies` holds by block hash — the pool's role from PR-b on.
+    pub async fn reorganize(
+        &self,
+        plan: &SwitchPlan,
+        bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
+    ) -> Result<Switched, RunFault> {
+        let form_at = |candidate: Candidate, at: &PlannedBlock| {
+            form(
+                candidate,
+                &self.rules.in_force(at.height),
+                &self.substrate,
+                at.seed,
+                FormAttempt::FIRST,
+            )
+            .expect("the driver's substrate does not fault")
+            .expect("a block its plan names forms")
+        };
+        let demoted = if plan.verdict == shekyl_difficulty::ForkChoiceVerdict::ForcedSwitch {
+            Vec::new()
+        } else {
+            plan.demoted
+                .iter()
+                .map(|d| form_at(d.candidate.clone(), &d.at))
+                .collect()
+        };
+        let promoted = plan
+            .promoted
+            .iter()
+            .map(|p| {
+                let listed = bodies.get(&p.at.hash).cloned().unwrap_or_default();
+                let candidate = Candidate::new(p.block.clone(), listed)
+                    .with_attestation_witness(p.witness.clone());
+                form_at(candidate, &p.at)
+            })
+            .collect();
+        self.connector
+            .ask(Reorganize {
+                tip: plan.tip,
+                alt_tip: plan.alt_tip,
+                demoted,
+                promoted,
+            })
+            .await
+            .map_err(handler_error)
     }
 
     /// Pop the chain back to `to`.

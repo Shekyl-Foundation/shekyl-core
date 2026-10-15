@@ -56,14 +56,14 @@
 use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_chain_rules::AltValid;
 use shekyl_store_codec::{Canonical, Coded};
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::codec::AltBlock;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::ALT_BLOCKS;
 
 use super::alt_reads::{self, key, AltEntry, ALT_BLOCKS_CELL};
-use super::error::{AltCannot, EngineError, StoreError};
+use super::error::{AltCannot, EngineError, StoreError, StoreInvariant};
 use super::keyed::check_row;
 use super::write::WriteBatch;
 use super::AltView;
@@ -117,6 +117,18 @@ impl WriteBatch<'_, '_> {
             .insert(key, encoded.as_encoded())
             .map_err(EngineError::Storage)?;
         Ok(())
+    }
+
+    /// **SI-27.** Halt the writer for the recorded block at `height` the
+    /// cheap tier refused when a switch demoted it (the register row; the
+    /// switch judges before its write, so this batch has done no chain
+    /// work and the height is noted here for the halt to name). Returns
+    /// the error the caller replies with; the batch commits nothing.
+    pub fn refuse_demotion(&self, height: BlockHeight) -> StoreError {
+        self.journal().note_height(height.to_raw());
+        self.poison().arm(StoreInvariant::DemotedBlockRefused {
+            height: height.to_raw(),
+        })
     }
 
     /// **AL2.** Remove the alt block under `id`. Its witness leaves with it —

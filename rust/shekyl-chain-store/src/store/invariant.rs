@@ -62,6 +62,18 @@ pub enum StoreInvariant {
         /// Where the rebuild and the stored tree first disagree.
         observed: EdgeFault,
     },
+    /// **SI-27** — a recorded block passes its own cheap tier. When a
+    /// switch demotes the block at `height`, `alt_against` judges it over
+    /// the chain below it on a snapshot taken before the switch's write;
+    /// a refusal means the store holds a chain that fails its own rules —
+    /// the tier is a subset of `validate`, over the same history, under the
+    /// same rule set by height, and the local clock only moves the
+    /// future-time limit in the block's favour (`DRS_E5_POOL_ALT_PRUNE.md`
+    /// §2.3). Armed by [`WriteBatch::refuse_demotion`](super::WriteBatch::refuse_demotion).
+    DemotedBlockRefused {
+        /// The recorded height the tier refused.
+        height: u64,
+    },
     /// **SI-6** — the undo log's top entry is the tip height, and a pop
     /// consumes exactly that entry.
     ///
@@ -479,6 +491,7 @@ impl StoreInvariant {
             Self::TxHashNotFresh => 3,
             Self::RootRewritten => 4,
             Self::RightEdgeDiverged { .. } => 5,
+            Self::DemotedBlockRefused { .. } => 27,
             Self::UndoLogIncoherent { .. } => 6,
             Self::WorkNotIncreasing { .. } => 10,
             Self::LeavesNotDense { .. } => 11,
@@ -582,6 +595,11 @@ impl core::fmt::Display for StoreInvariant {
                      curve_tree_roots[tip + 1]; rebuild from the block corpus",
                 ),
             },
+            Self::DemotedBlockRefused { height } => write!(
+                f,
+                "the recorded block at height {height} fails the cheap tier over the chain below \
+                 it; the store holds a chain that fails its own rules, rebuild from the block corpus"
+            ),
             Self::SummaryRootDiverged => f.write_str(
                 "the grown curve_tree_meta root is not the live root at curve_tree_roots[tip + 1]; \
                  the summary and the recorded root disagree, rebuild from the block corpus",
@@ -720,6 +738,7 @@ impl core::error::Error for StoreInvariant {
             | Self::LeavesNotDense { .. }
             | Self::SummaryRootDiverged
             | Self::RightEdgeDiverged { .. }
+            | Self::DemotedBlockRefused { .. }
             | Self::ServeCreditWithoutBond { .. }
             | Self::PoolEntryUnpaired { .. }
             | Self::PositionMapsNotBijective

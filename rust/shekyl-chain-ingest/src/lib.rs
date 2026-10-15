@@ -155,6 +155,11 @@ pub mod sequencer;
 pub mod snapshot_json;
 pub mod source;
 pub mod substrate;
+/// DRS-E5 a5 (`DRS_E5_POOL_ALT_PRUNE.md` §2.3): the switch through the
+/// production stack — two drivers, two branches, the store that switched
+/// held to the store that connected the winner directly.
+#[cfg(all(test, feature = "pipeline"))]
+mod switch_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;
@@ -163,8 +168,10 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject, Injected,
-    IssueDraws, Rewind, Rewound, RunEnd, RunFault, TemplateFacts,
+    AltBlocksHeld, Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject,
+    Injected, IssueDraws, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
+    PopBeyondReorgCap, Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan,
+    Switched, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

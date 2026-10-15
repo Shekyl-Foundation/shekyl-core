@@ -74,6 +74,13 @@ use shekyl_units::AtomicUnits;
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 
+#[path = "switch.rs"]
+mod switch;
+pub use switch::{
+    AltBlocksHeld, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
+    PopBeyondReorgCap, Reorganize, SwitchDone, SwitchPlan, Switched,
+};
+
 /// Why the writer is over: store-terminal faults only. `Copy` data, so it
 /// can be repeated on every later `Apply` / `Rewind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +106,9 @@ impl RunEnd {
             | RunFault::RewindTarget { .. }
             | RunFault::InjectOffRegtest { .. }
             | RunFault::IssueOffRegtest { .. }
+            | RunFault::NotAlternative { .. }
+            | RunFault::StalePlan { .. }
+            | RunFault::PlanMismatch { .. }
             | RunFault::Over(_) => None,
         }
     }
@@ -182,6 +192,32 @@ pub enum RunFault {
         epoch: SettlementEpoch,
         /// The rules the connector runs under.
         rules: ChainRules,
+    },
+    /// An [`OfferAlt`] for a block whose parent is the recorded tip: an
+    /// extension, which is an [`Apply`]'s. A driver defect; the writer
+    /// stays up.
+    #[error("driver defect: block offered as an alternative extends the tip {parent:?}")]
+    NotAlternative {
+        /// The block's parent, the recorded tip.
+        parent: BlockHash,
+    },
+    /// A [`Reorganize`] whose plan was made against a tip the store no longer
+    /// holds. A driver defect (the plan is stale), never a switch; the
+    /// writer stays up.
+    #[error("driver defect: switch planned against tip {planned:?}, the store's tip is {tip:?}")]
+    StalePlan {
+        /// The plan's tip.
+        planned: shekyl_chain_rules::Tip,
+        /// The store's tip now.
+        tip: Option<shekyl_chain_rules::Tip>,
+    },
+    /// A [`Reorganize`] whose formed blocks are not the ones the store's plan
+    /// names, or whose fork choice no longer switches. A driver defect;
+    /// the writer stays up.
+    #[error("driver defect: the switch's blocks do not match its plan ({reason})")]
+    PlanMismatch {
+        /// Which part disagreed.
+        reason: &'static str,
     },
     /// The writer is over: a store-terminal fault was already replied.
     #[error("the writer is over: {0:?}")]
@@ -492,6 +528,21 @@ impl Writer {
         self.latch(result)
     }
 
+    /// The store for one operation that reads a snapshot and then writes —
+    /// the switch, which judges on a snapshot before its write closure and
+    /// keeps the verdicts alive through it (`switch.rs`). The same latch as
+    /// [`Self::write`]: refused once over, armed by a terminal fault.
+    fn with_store<R, F>(&mut self, f: F) -> Result<R, RunFault>
+    where
+        F: FnOnce(&ChainStore) -> Result<R, RunFault>,
+    {
+        if let Some(end) = self.over {
+            return Err(RunFault::Over(end));
+        }
+        let result = f(&self.store);
+        self.latch(result)
+    }
+
     /// Arm the latch on a terminal fault; the first stands.
     fn latch<R>(&mut self, result: Result<R, RunFault>) -> Result<R, RunFault> {
         if let Some(end) = result.as_ref().err().and_then(RunEnd::of) {
@@ -511,6 +562,11 @@ impl Writer {
 pub struct Connector {
     writer: Writer,
     rules: ChainRules,
+    /// What the run takes on the release's word — `rules.trust()`, read
+    /// once at start. A field rather than a call so a test can reach the
+    /// checkpoint arm of the fork choice with a fixture table no regtest
+    /// run carries ([`AnchorForTests`]).
+    trust: shekyl_chain_rules::Trust,
 }
 
 impl Actor for Connector {
@@ -521,6 +577,7 @@ impl Actor for Connector {
         Ok(Self {
             writer: Writer::live(args.store),
             rules: args.rules,
+            trust: args.rules.trust(),
         })
     }
 
@@ -541,6 +598,7 @@ impl Message<Apply> for Connector {
 
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let rules = self.rules;
+        let trust = self.trust;
         self.writer.write(|batch| {
             let view = batch.chain_view();
             let mut applied = Applied::default();
@@ -569,7 +627,7 @@ impl Message<Apply> for Connector {
                     }
                 };
                 let in_force = rules.in_force(height);
-                match validate(formed, &view, &in_force, &rules.trust()) {
+                match validate(formed, &view, &in_force, &trust) {
                     Ok(Ok(valid)) => {
                         let hash = valid.block().hash();
                         let root_after = valid.block().root_after();
@@ -590,31 +648,7 @@ impl Message<Apply> for Connector {
                         applied.refused = Some((height, refused));
                         break;
                     }
-                    Err(Fault::View(e)) => return Err(RunFault::Store(e)),
-                    // SI-10: the refusal arms the halt and *is* the error —
-                    // `ChainStore::write` makes an `InvariantViolated` win
-                    // over anything else the closure returns, so the row
-                    // (which carries the validator's `Corrupt` value) is
-                    // what the caller sees, with no second wrapper to drift
-                    // from it.
-                    Err(Fault::Corrupt(observed)) => {
-                        return Err(RunFault::Store(batch.refuse_corrupt(observed)))
-                    }
-                    Err(Fault::Stale(Stale::Seed {
-                        claimed,
-                        expected,
-                        retry,
-                    })) => {
-                        return Err(RunFault::StaleSeed {
-                            height,
-                            claimed,
-                            expected,
-                            retry,
-                        })
-                    }
-                    Err(Fault::Stale(Stale::RuleSet { .. })) => {
-                        return Err(RunFault::StaleRuleSet { height })
-                    }
+                    Err(fault) => return Err(validate_fault(batch, height, fault)),
                 }
             }
             Ok(applied)
@@ -652,7 +686,7 @@ impl Message<Inject> for Connector {
                 rules: self.rules,
             });
         }
-        let at = self.writer.inject(self.rules.trust(), credit)?;
+        let at = self.writer.inject(self.trust, credit)?;
         Ok(Injected { at })
     }
 }
@@ -671,7 +705,23 @@ impl Message<IssueDraws> for Connector {
                 rules: self.rules,
             });
         }
-        self.writer.issue_draws(self.rules.trust(), &msg)
+        self.writer.issue_draws(self.trust, &msg)
+    }
+}
+
+/// Replace the run's trust with a fixture table — test-only, so the fork
+/// choice's checkpoint arm (CEN-K6/K7) can be reached on a regtest chain,
+/// which no release anchors.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub struct AnchorForTests(pub shekyl_chain_rules::Trust);
+
+#[cfg(test)]
+impl Message<AnchorForTests> for Connector {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: AnchorForTests, _ctx: &mut Context<Self, Self::Reply>) {
+        self.trust = msg.0;
     }
 }
 
@@ -766,6 +816,35 @@ impl Message<TemplateFacts> for Connector {
                 medians,
             })
         })
+    }
+}
+
+/// A `validate` fault on the connect batch, as the connector's reply — one
+/// mapping for `Apply` and the switch's promotion.
+fn validate_fault(
+    batch: &WriteBatch<'_, '_>,
+    height: BlockHeight,
+    fault: Fault<StoreError>,
+) -> RunFault {
+    match fault {
+        Fault::View(e) => RunFault::Store(e),
+        // SI-10: the refusal arms the halt and *is* the error —
+        // `ChainStore::write` makes an `InvariantViolated` win over
+        // anything else the closure returns, so the row (which carries the
+        // validator's `Corrupt` value) is what the caller sees, with no
+        // second wrapper to drift from it.
+        Fault::Corrupt(observed) => RunFault::Store(batch.refuse_corrupt(observed)),
+        Fault::Stale(Stale::Seed {
+            claimed,
+            expected,
+            retry,
+        }) => RunFault::StaleSeed {
+            height,
+            claimed,
+            expected,
+            retry,
+        },
+        Fault::Stale(Stale::RuleSet { .. }) => RunFault::StaleRuleSet { height },
     }
 }
 
