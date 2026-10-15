@@ -72,7 +72,7 @@ pub enum StoreInvariant {
     /// §2.3). Armed by [`WriteBatch::refuse_demotion`](super::WriteBatch::refuse_demotion).
     DemotedBlockRefused {
         /// The recorded height the tier refused.
-        height: u64,
+        height: shekyl_types::BlockHeight,
     },
     /// **SI-6** — the undo log's top entry is the tip height, and a pop
     /// consumes exactly that entry.

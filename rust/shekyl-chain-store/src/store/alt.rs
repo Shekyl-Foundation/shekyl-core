@@ -126,9 +126,8 @@ impl WriteBatch<'_, '_> {
     /// the error the caller replies with; the batch commits nothing.
     pub fn refuse_demotion(&self, height: BlockHeight) -> StoreError {
         self.journal().note_height(height.to_raw());
-        self.poison().arm(StoreInvariant::DemotedBlockRefused {
-            height: height.to_raw(),
-        })
+        self.poison()
+            .arm(StoreInvariant::DemotedBlockRefused { height })
     }
 
     /// **AL2.** Remove the alt block under `id`. Its witness leaves with it —

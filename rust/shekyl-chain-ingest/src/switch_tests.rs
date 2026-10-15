@@ -291,7 +291,7 @@ async fn a_demoted_block_the_tier_refuses_halts_the_writer_si27() {
         .await
         .expect_err("SI-27 halts");
     let want = shekyl_chain_store::store::StoreInvariant::DemotedBlockRefused {
-        height: a[0].height.to_raw(),
+        height: a[0].height,
     };
     assert!(
         matches!(&err, RunFault::Store(shekyl_chain_store::store::StoreError::InvariantViolated(row)) if *row == want),
@@ -533,7 +533,7 @@ async fn the_self_differential_holds_at_the_cap_depth_with_a_spend() {
 
 /// Rewrite the undo row at `height` so the `archival_budget_accruing`
 /// pre-image it would restore is one atomic unit off.
-fn corrupt_accrual_preimage(path: &std::path::Path, height: u64) {
+fn corrupt_accrual_preimage(path: &std::path::Path, height: BlockHeight) {
     use redb::ReadableTable;
     use shekyl_chain_store::codec::Canonical;
     use shekyl_chain_store::codec::{UndoEntry, UndoLog};
@@ -546,7 +546,7 @@ fn corrupt_accrual_preimage(path: &std::path::Path, height: u64) {
             .open_table(shekyl_chain_store::schema::UNDO_LOG)
             .expect("t");
         let mut log: UndoLog = undo
-            .get(height)
+            .get(height.to_raw())
             .expect("get")
             .expect("the height has a journal row")
             .value()
@@ -566,7 +566,7 @@ fn corrupt_accrual_preimage(path: &std::path::Path, height: u64) {
             .expect("the connect replaced an accruing row");
         let value = u64::from_le_bytes((**entry).try_into().expect("eight bytes")) + 1;
         *entry = value.to_le_bytes().to_vec().into_boxed_slice();
-        undo.insert(height, log.encoded().as_encoded())
+        undo.insert(height.to_raw(), log.encoded().as_encoded())
             .expect("plant");
     }
     txn.commit().expect("commit");
@@ -588,7 +588,7 @@ async fn a_corrupted_undo_row_makes_the_differential_fail() {
     let a = x.mine(3).await;
     y.idle();
     let b = y.mine(4).await;
-    let lowest = a[0].height.to_raw();
+    let lowest = a[0].height;
     x.reopen(|path| corrupt_accrual_preimage(path, lowest))
         .await;
     let plan = offer_branch(&x, &b).await;
