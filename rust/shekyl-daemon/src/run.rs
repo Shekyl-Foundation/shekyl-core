@@ -761,6 +761,8 @@ mod tests {
             "--log-file",
             log.to_str().unwrap(),
         ]);
+        // The stop counter is process-global: the delta is this test's.
+        let stops_before = STOPS.load(Ordering::SeqCst);
         let status = main(&entry(), &a, &host(d.path()));
         assert_eq!(status, 0);
         assert!(data.join("shekyld.lock").is_file());
@@ -771,7 +773,7 @@ mod tests {
         assert!(text.contains("posture:"), "{text}");
         assert_eq!(
             STOPS.load(Ordering::SeqCst),
-            0,
+            stops_before,
             "run finished on its own; no stop was sent"
         );
         // The lock was released at the end: it can be taken again.
