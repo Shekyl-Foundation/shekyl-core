@@ -5160,6 +5160,7 @@ dependencies = [
  "shekyl-onion-v3",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

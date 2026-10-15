@@ -878,7 +878,17 @@ fn empty_config_path(data_dir: &Path) -> PathBuf {
 /// The option names on that command are a closed list
 /// (`the_managed_launch_surface_is_the_typed_options`). A new flag fails there first,
 /// including one that would open non-anonymous serving. There is no second builder.
-fn managed_tor_command(managed: &ManagedTor, port_file: &Path) -> tokio::process::Command {
+#[cfg_attr(
+    not(windows),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "fallible on Windows only, where SystemRoot comes from a system call"
+    )
+)]
+fn managed_tor_command(
+    managed: &ManagedTor,
+    port_file: &Path,
+) -> Result<tokio::process::Command, ControlError> {
     // The witness type guarantees this path passed the hash-pin gate and is canonical
     // (the file hashed is the file named — no exec-time PATH re-search or cwd drift).
     let mut cmd = tokio::process::Command::new(managed.tor_binary.as_path());
@@ -888,14 +898,27 @@ fn managed_tor_command(managed: &ManagedTor, port_file: &Path) -> tokio::process
     // which makes the pin a check on the wrong thing. Everything tor needs from us it gets
     // as an argument below.
     cmd.env_clear();
-    // And at most one variable goes back in: on Linux, the loader's search path, set to
-    // the directory the gate checked. The bundle's `tor` has no `RPATH`, so without this
-    // it takes libevent and OpenSSL from the system. The directory is a field of the
-    // witness — the parent of the canonical path, one absolute loader entry — so the
-    // place that was checked is the place that is loaded from. There is no branch:
-    // a witness that could not name that directory is not constructed.
+    // And at most one variable goes back in, and never from the parent's environment,
+    // which whoever starts us can set.
+    //
+    // On Linux, the loader's search path, set to the directory the gate checked. The
+    // bundle's `tor` has no `RPATH`, so without this it takes libevent and OpenSSL from
+    // the system. The directory is a field of the witness — the parent of the canonical
+    // path, one absolute loader entry — so the place that was checked is the place that
+    // is loaded from. There is no branch: a witness that could not name that directory
+    // is not constructed.
     #[cfg(target_os = "linux")]
     cmd.env("LD_LIBRARY_PATH", managed.tor_binary.library_dir());
+    // On Windows, `SystemRoot`, taken from the OS. Without it the pinned `tor.exe`
+    // (0.4.9.13) aborts at startup with `0xC0000409`, "subsystem crypto (at 7)
+    // initialization failed"; restoring this one variable is enough (the TSR-Q7 Windows
+    // run, 2026-10-15). A system call that cannot name the directory fails the spawn
+    // rather than falling back to the inherited value.
+    #[cfg(windows)]
+    cmd.env(
+        "SystemRoot",
+        system_windows_directory().ok_or(ControlError::Spawn)?,
+    );
     cmd.arg("--DataDirectory")
         .arg(&managed.data_dir)
         .arg("--ControlPort")
@@ -980,7 +1003,33 @@ fn managed_tor_command(managed: &ManagedTor, port_file: &Path) -> tokio::process
     if managed.disable_network {
         cmd.arg("--DisableNetwork").arg("1");
     }
-    cmd
+    Ok(cmd)
+}
+
+/// The system's Windows directory, from `GetSystemWindowsDirectoryW`: the value the managed
+/// tor gets as `SystemRoot`. It is the system-wide directory, not a per-user one under
+/// Terminal Services (which is what `GetWindowsDirectoryW` would return), and it reads no
+/// environment. `None` if the call fails.
+#[cfg(windows)]
+fn system_windows_directory() -> Option<std::ffi::OsString> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
+
+    // SAFETY: a null buffer with a size of zero writes nothing; the call returns the size
+    // the buffer needs, terminating null included, or 0 on failure.
+    let needed = unsafe { GetSystemWindowsDirectoryW(std::ptr::null_mut(), 0) };
+    if needed == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; usize::try_from(needed).ok()?];
+    // SAFETY: `buf` holds `needed` u16s and the call writes at most `needed`, including the
+    // terminating null. On success it returns the length written, excluding that null.
+    let written = unsafe { GetSystemWindowsDirectoryW(buf.as_mut_ptr(), needed) };
+    if written == 0 || written >= needed {
+        return None;
+    }
+    buf.truncate(usize::try_from(written).ok()?);
+    Some(std::ffi::OsString::from_wide(&buf))
 }
 
 /// Spawn a **managed** `tor` (DQ-T0.1): the caller's `DataDirectory`, `ControlPort
@@ -1018,7 +1067,7 @@ async fn spawn_managed_tor(
         .await
         .map_err(|_| ControlError::Spawn)?;
 
-    let mut cmd = managed_tor_command(&managed, &port_file);
+    let mut cmd = managed_tor_command(&managed, &port_file)?;
     let mut child = cmd.spawn().map_err(|_| ControlError::Spawn)?;
 
     // Bounded startup: wait for tor to become driveable — its control-port file *and* its
@@ -1478,6 +1527,7 @@ mod tests {
             exit_observer: None,
         };
         managed_tor_command(&managed, &dir.path().join("control_port"))
+            .expect("the launch command")
             .as_std()
             .get_args()
             .map(|arg| {
@@ -1552,7 +1602,8 @@ mod tests {
             disable_network: false,
             exit_observer: None,
         };
-        let cmd = managed_tor_command(&managed, &dir.path().join("control_port"));
+        let cmd = managed_tor_command(&managed, &dir.path().join("control_port"))
+            .expect("the launch command");
         let args: Vec<&std::ffi::OsStr> = cmd.as_std().get_args().collect();
         let empty = data_dir.join("empty");
         for option in [
@@ -1572,6 +1623,42 @@ mod tests {
             );
         }
         assert_eq!(empty_config_path(&data_dir), empty);
+    }
+
+    /// TB-7 part 2, as the command is built: the environment is exactly the one
+    /// variable this platform needs, from its source, and nothing else. On Linux
+    /// the loader path is the witness's directory; on Windows `SystemRoot` is the
+    /// OS's own answer; elsewhere nothing is set. (That the parent's environment
+    /// is cleared is `managed_tor_child_inherits_no_environment`, which spawns.)
+    #[test]
+    fn the_managed_launch_environment_is_exact() {
+        let dir = tempfile::tempdir().expect("fixture directory");
+        let managed = ManagedTor {
+            tor_binary: VerifiedTorBinary::unchecked_for_test(dir.path().join("tor")),
+            data_dir: dir.path().join("data"),
+            socks_port: SocksPort::Auto,
+            disable_network: false,
+            exit_observer: None,
+        };
+        let cmd = managed_tor_command(&managed, &dir.path().join("control_port"))
+            .expect("the launch command");
+        let envs: Vec<(&std::ffi::OsStr, Option<&std::ffi::OsStr>)> =
+            cmd.as_std().get_envs().collect();
+        #[cfg(target_os = "linux")]
+        let expected = vec![(
+            std::ffi::OsStr::new("LD_LIBRARY_PATH"),
+            Some(managed.tor_binary.library_dir().as_os_str()),
+        )];
+        #[cfg(windows)]
+        let system_root = system_windows_directory().expect("GetSystemWindowsDirectoryW");
+        #[cfg(windows)]
+        let expected = vec![(
+            std::ffi::OsStr::new("SystemRoot"),
+            Some(system_root.as_os_str()),
+        )];
+        #[cfg(not(any(target_os = "linux", windows)))]
+        let expected: Vec<(&std::ffi::OsStr, Option<&std::ffi::OsStr>)> = Vec::new();
+        assert_eq!(envs, expected);
     }
 
     /// Set in the re-executed copy of this test binary, to the directory the shim
@@ -1606,6 +1693,7 @@ mod tests {
                 exit_observer: None,
             };
             let status = managed_tor_command(&managed, &dir.join("control_port"))
+                .expect("the launch command")
                 .spawn()
                 .expect("spawn the shim")
                 .wait()

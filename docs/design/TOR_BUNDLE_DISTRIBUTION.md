@@ -104,7 +104,7 @@ said about a row on its own.
 | **TB-4** | **A target's Tor disposition is a type with no third state.** `Pinned(pin)` or `Unavailable { reason }`; a build target with neither does not compile. Today `CURRENT_PIN: Option<TorPin> = None` cannot tell "not pinned yet" from "ruled unavailable". TB-2 applies to `Pinned` targets only. An `Unavailable` target starts, warns that managed Tor does not exist on this platform, and names the remedy | Rick, 2026-10-06 |
 | **TB-5** | **FreeBSD is `Unavailable`: the operator installs tor and attaches it.** `pkg install tor`, then `--tx-proxy` for outbound and an operator-provisioned onion service with `--anonymous-inbound` for inbound (PWD-E7's second posture, with its durable-address warning). Shekyl ships a user guide for it. Carrying a tor in the FreeBSD artifact is a later look, not this round | **Rick, 2026-10-06**: "users there will have to install their own"; a guide at least, incorporation into our package to be looked at |
 | **TB-6** | **Every artifact that carries `shekyld` carries the pinned bundle, and the bundle's tarball is checked before it is opened.** The property: the Expert Bundle tarball enters the build as a pinned input, its digest is compared with TB-9's file before anything is extracted from it, and a difference fails the build, whatever does the fetching. It is not a download in the packaging step, so the archives, the zip and the installer carry it as well as the `.deb` and `.rpm`, and the build is offline and reproducible from that point. The mechanism is the implementing change's to choose: a gitian `files:` entry records an input's hash and does not refuse a wrong one, whereas the depends system both fetches and checks (`$(package)_sha256_hash`). Placement: a directory of its own beside the executable in archives (TB-7 is why it cannot share one), under `/opt/shekyl/<bundle_version>-<bundle_target>/` in system packages, never in `/usr/local/bin`, where it would shadow a distribution's tor. Only `tor` and the libraries it loads are shipped — the pluggable transports are 30 MiB Shekyl does not use | Rick, 2026-10-06 |
-| **TB-7** | **The pin covers every file in tor's directory, the directory holds nothing else, and the launcher lets nothing else in.** Three parts. (1) Each pinned file has its own digest through the same canonicalize-then-hash gate: on Linux `tor`, `libevent-2.1.so.7`, `libssl.so.3`, `libcrypto.so.3`; on macOS `tor` and `libevent-2.1.7.dylib`; on Windows `tor.exe`. (2) The launcher clears the environment and sets at most one variable, the library path on Linux, to the verified binary's own directory. (3) **The tor directory contains exactly the pinned files and nothing else**: no other entry, no subdirectory, names compared without regard to case on Windows. It is an allowlist, not a scan for library-looking names, because the loader does not confine itself to names a scan would think of or to the top level — §2 findings 10 to 12. It is also why the bundle needs a directory of its own. Three negative tests, each of which must refuse: a planted file at the top level, a planted `glibc-hwcaps/<level>/libz.so.1`, and a planted `VERSION.DLL` | Rick, 2026-10-06 (part 3 in this form is his amendment at ratification) |
+| **TB-7** | **The pin covers every file in tor's directory, the directory holds nothing else, and the launcher lets nothing else in.** Three parts. (1) Each pinned file has its own digest through the same canonicalize-then-hash gate: on Linux `tor`, `libevent-2.1.so.7`, `libssl.so.3`, `libcrypto.so.3`; on macOS `tor` and `libevent-2.1.7.dylib`; on Windows `tor.exe`. (2) The launcher clears the environment and sets at most one variable, never from the parent's environment: on Linux the library path, to the verified binary's own directory; on Windows `SystemRoot`, from the OS (`GetSystemWindowsDirectoryW`). (3) **The tor directory contains exactly the pinned files and nothing else**: no other entry, no subdirectory, names compared without regard to case on Windows. It is an allowlist, not a scan for library-looking names, because the loader does not confine itself to names a scan would think of or to the top level — §2 findings 10 to 12. It is also why the bundle needs a directory of its own. Three negative tests, each of which must refuse: a planted file at the top level, a planted `glibc-hwcaps/<level>/libz.so.1`, and a planted `VERSION.DLL` | Rick, 2026-10-06 (part 3 in this form is his amendment at ratification; part 2's Windows variable, 2026-10-15, from the TSR-Q7 Windows run) |
 | **TB-8** | **The `PATH` tier is deleted for a `Pinned` target.** A `tor` found on `PATH` has its libraries elsewhere and cannot pass a four-file pin, and `PATH` is the widest check-to-exec window the resolver has. The override, beside-the-executable and `/opt/shekyl` tiers remain | Rick, 2026-10-06 |
 | **TB-9** | **The pins are one data file.** `build.rs` reads it and emits constants: the pin stays compiled in and is never read at runtime. The file is the only source for what the packaging side needs — tarball digest, per-file digests, bundle and tor versions, target label, the `Unavailable` dispositions — and the build recipe and the packaging check read it, they do not copy it. Two gates: the packaging job hashes the files it is about to pack against the file and fails on a difference (a test edits a digest and sees the build fail), and the file's set of targets equals the set of compiled arms | Rick, 2026-10-06 |
 | **TB-10** | **Re-pin to tor 0.4.9.13** with the digests in §4, in the change that first ships the bundle. `linux-aarch64` stays on the alpha line under DQ-T0.5's existing ruling and reopen criterion | Rick, 2026-10-06 |
@@ -189,8 +189,14 @@ file meanwhile, with that as the stated reason.
      canonical directory carried by the witness) and
      `control::actor::managed_tor_command` (cleared environment, the loader
      path from the witness). The cleared environment applies on every
-     platform; whether a Windows `tor.exe` starts without `SystemRoot` is
-     TB-11's launch test to establish.
+     platform. A Windows `tor.exe` does not start without `SystemRoot`: the
+     pinned 0.4.9.13 aborts within about 0.1 s with `0xC0000409`, "subsystem
+     crypto (at 7) initialization failed", and restoring that one variable
+     is enough (the TSR-Q7 Windows run, 2026-10-15). The launcher sets it
+     from `GetSystemWindowsDirectoryW`, never from the parent's environment,
+     and a failed call fails the spawn. `the_managed_launch_environment_is_exact`
+     asserts each platform's whole environment; the Windows job in
+     `build.yml` runs it there.
      The launcher also names every file tor would otherwise find by itself:
      `--torrc-file`, `--defaults-torrc`, `GeoIPFile` and `GeoIPv6File` all
      name one zero-length file it writes in the `DataDirectory`. Without them
@@ -279,9 +285,11 @@ that probe as the answer.
 ## 6. What breaks first if this is wrong
 
 - **TB-7's environment clearing** removes variables tor itself may read. The
-  managed launch passes everything as arguments today (data directory, control
-  port, SOCKS port, log), so nothing is expected to be lost; the crate's live
-  lifecycle tests are where a dependence on the environment would show.
+  managed launch passes everything as arguments (data directory, control
+  port, SOCKS port, log, configuration files). The one dependence found so
+  far is Windows `SystemRoot`, which the launcher sets from the OS; the
+  crate's live lifecycle tests on each platform are where another would
+  show.
 - **The empty GeoIP table** maps no address to a country. Nothing the
   launch configures asks for one; a future typed knob that selects or
   excludes nodes by country (`{cc}` in `ExcludeNodes`) would silently match
