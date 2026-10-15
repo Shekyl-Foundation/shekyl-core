@@ -18,11 +18,11 @@ use curve25519_dalek::scalar::Scalar;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
-use shekyl_bulletproofs::{batch_weights_seed, BatchEntry, Bulletproof};
+use shekyl_bulletproofs::{batch_weights_seed, Bulletproof};
 use shekyl_curve_primitives::Commitment;
 use shekyl_wire::{BpPlus, Ct, Transaction};
 
-use super::gather;
+use super::ListedProofs;
 
 thread_local! {
     /// How many times this thread ran the fold's batch (`H19`'s
@@ -226,11 +226,8 @@ fn synthetic(tag: u8) -> Transaction {
 #[test]
 fn h19_the_seed_of_a_fixed_block_is_pinned() {
     let seed_of = |listed: Vec<Transaction>| {
-        let gathered = gather(&candidate(listed)).expect("one proof per body");
-        let entries: Vec<BatchEntry<'_>> = gathered
-            .iter()
-            .map(|tx| tx.entry().expect("reassembled"))
-            .collect();
+        let gathered = ListedProofs::assemble(&candidate(listed)).expect("one proof per body");
+        let entries = gathered.entries().expect("reassembled");
         batch_weights_seed(&entries)
     };
     let block = vec![synthetic(0x00), serve_credit_only([7; 32]), synthetic(0xA5)];

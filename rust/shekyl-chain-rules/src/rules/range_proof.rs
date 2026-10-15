@@ -24,6 +24,11 @@
 //! cap have bounded the work). Every view-bound row, L1 included, runs
 //! later, in `validate`.
 //!
+//! F14 — the block's weight at most twice the effective median — is one of
+//! those rows. The median is a chain fact and grows with the chain, so
+//! there is no stateless proof-count ceiling to apply before the batch: an
+//! overweight block that met its claimed target still pays for it.
+//!
 //! # The batch, and the locus
 //!
 //! The batch is every listed transaction's proof, in block order —
@@ -44,6 +49,10 @@
 //! batch and goes straight to the walk, where that proof fails alone, so
 //! the refusal is always the first bad transaction in block order whichever
 //! way its proof is bad.
+//!
+//! [`ListedProofs`] is that assembly. The fold and any measurement of the
+//! fold call it; a second walk over `bulletproofs` would disagree with the
+//! fold the moment a transaction carried more than one proof.
 
 use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
 use shekyl_curve_io::CompressedPoint;
@@ -54,15 +63,41 @@ use crate::rules::tx::H19;
 use crate::rules::{FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 
-/// One listed transaction's proof as the verifier reads it, or `None` if it
-/// does not reassemble.
-struct Listed {
+/// Whether [`ListedProofs::batch_outcome`] ran the block's batch.
+///
+/// Three answers, because "did it verify" is not a boolean: a proof that
+/// does not reassemble never enters the batch, and an empty list verifies
+/// vacuously.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BatchOutcome {
+    /// Every reassembled proof verified under the batch's derived weights.
+    /// An empty list is this: there was nothing to refuse.
+    Verified,
+    /// The batch ran, and the weighted sum was not the identity.
+    Failed,
+    /// A proof did not reassemble from the wire, so the batch was not run.
+    Unassembled,
+}
+
+/// The proofs CEN-H19 batches, in block order.
+///
+/// A transaction with no proof is absent. More than one proof on a
+/// transaction is the layout refusal ([`ListedProofs::assemble`] returns
+/// it). A proof that does not reassemble stays in the list: the batch is
+/// not run, and the locus walk names that transaction.
+pub struct ListedProofs {
+    proofs: Vec<ListedProof>,
+}
+
+/// One listed transaction's proof as the verifier reads it, or `None` when
+/// the wire bytes do not reassemble.
+struct ListedProof {
     slot: TxSlot,
     proof: Option<Bulletproof>,
     commitments: Vec<CompressedPoint>,
 }
 
-impl Listed {
+impl ListedProof {
     fn entry(&self) -> Option<BatchEntry<'_>> {
         self.proof.as_ref().map(|proof| BatchEntry {
             proof,
@@ -77,23 +112,103 @@ impl Listed {
     }
 }
 
+impl ListedProofs {
+    /// The block's proofs in block order — transaction order, then proof
+    /// order — each with its transaction's output commitments as carried.
+    ///
+    /// # Errors
+    ///
+    /// More than one proof on a listed transaction. The layout half refused
+    /// that in `tx_form`; the refusal is total here because a caller can
+    /// assemble a candidate the layout half has not seen.
+    pub fn assemble(candidate: &Candidate) -> Verdict<Self> {
+        let mut proofs = Vec::new();
+        for (n, tx) in candidate.transactions.iter().enumerate() {
+            let slot = TxSlot::Listed(n);
+            let Ct::Fcmp {
+                base,
+                prunable: Some(prunable),
+                ..
+            } = &tx.ct
+            else {
+                continue;
+            };
+            let bp = match prunable.bulletproofs.as_slice() {
+                [] => continue,
+                [bp] => bp,
+                _ => return Err(InvalidBlock::new(H19::ROW, Locus::Tx { slot })),
+            };
+            proofs.push(ListedProof {
+                slot,
+                proof: bp.to_bulletproof(),
+                commitments: base
+                    .commitments
+                    .iter()
+                    .map(|c| CompressedPoint::from(*c))
+                    .collect(),
+            });
+        }
+        Ok(Self { proofs })
+    }
+
+    /// How many proofs the block lists.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.proofs.len()
+    }
+
+    /// No listed transaction carried a proof.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.proofs.is_empty()
+    }
+
+    /// How many commitments each proof carries, in block order.
+    pub fn commitment_counts(&self) -> impl Iterator<Item = usize> + '_ {
+        self.proofs.iter().map(|proof| proof.commitments.len())
+    }
+
+    /// The batch, when every proof reassembled. The seed is derived over
+    /// the whole slice inside `verify_batch`.
+    pub(crate) fn entries(&self) -> Option<Vec<BatchEntry<'_>>> {
+        self.proofs.iter().map(ListedProof::entry).collect()
+    }
+
+    /// Whether these proofs verify as one derived-weight batch.
+    #[must_use]
+    pub fn batch_outcome(&self) -> BatchOutcome {
+        match self.entries() {
+            Some(batch) if verify_batch(&batch) => BatchOutcome::Verified,
+            Some(_) => BatchOutcome::Failed,
+            None => BatchOutcome::Unassembled,
+        }
+    }
+
+    /// The first transaction whose proof fails as a batch of one.
+    ///
+    /// `None` when every proof verifies alone — the weight-zero case the
+    /// fold refuses at the block.
+    pub(crate) fn first_failing_alone(&self) -> Option<TxSlot> {
+        self.proofs
+            .iter()
+            .find(|proof| !proof.verifies_alone())
+            .map(|proof| proof.slot)
+    }
+}
+
 impl H19 {
     /// The fold's verdict over a candidate's listed transactions (module
     /// docs). Pure in the candidate: no view, no entropy.
     pub(crate) fn verify_block(candidate: &Candidate) -> Verdict<()> {
-        let listed = gather(candidate)?;
+        let listed = ListedProofs::assemble(candidate)?;
 
-        // The batch, when every proof reassembled. The seed is derived over
-        // the whole slice inside `verify_batch`, before any proof is
-        // accumulated.
-        let batch: Option<Vec<BatchEntry<'_>>> = listed.iter().map(Listed::entry).collect();
-        if batch.is_some_and(|batch| verify_batch(&batch)) {
+        if listed.batch_outcome() == BatchOutcome::Verified {
             return Ok(());
         }
 
         // The locus walk: the first transaction whose proof fails alone.
-        if let Some(bad) = listed.iter().find(|tx| !tx.verifies_alone()) {
-            return Err(InvalidBlock::new(Self::ROW, Locus::Tx { slot: bad.slot }));
+        if let Some(slot) = listed.first_failing_alone() {
+            return Err(InvalidBlock::new(Self::ROW, Locus::Tx { slot }));
         }
         // Unreachable but for a weight of zero. A failed batch has a proof
         // whose verification term is not the identity — a valid proof's term
@@ -102,39 +217,6 @@ impl H19 {
         // Refused at the block, never admitted and never a panic.
         Err(InvalidBlock::new(Self::ROW, Locus::Block))
     }
-}
-
-/// The block's proofs in block order — transaction order, then proof order —
-/// each with its transaction's output commitments as carried.
-fn gather(candidate: &Candidate) -> Verdict<Vec<Listed>> {
-    let mut listed = Vec::new();
-    for (n, tx) in candidate.transactions.iter().enumerate() {
-        let slot = TxSlot::Listed(n);
-        let Ct::Fcmp {
-            base,
-            prunable: Some(prunable),
-            ..
-        } = &tx.ct
-        else {
-            continue;
-        };
-        let bp = match prunable.bulletproofs.as_slice() {
-            [] => continue,
-            [bp] => bp,
-            // The layout half refused this in `tx_form`; total here.
-            _ => return Err(InvalidBlock::new(H19::ROW, Locus::Tx { slot })),
-        };
-        listed.push(Listed {
-            slot,
-            proof: bp.to_bulletproof(),
-            commitments: base
-                .commitments
-                .iter()
-                .map(|c| CompressedPoint::from(*c))
-                .collect(),
-        });
-    }
-    Ok(listed)
 }
 
 impl FormRule for H19 {

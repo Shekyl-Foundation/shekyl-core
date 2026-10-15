@@ -195,6 +195,7 @@ pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
 };
+pub use rules::range_proof::{BatchOutcome, ListedProofs};
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
