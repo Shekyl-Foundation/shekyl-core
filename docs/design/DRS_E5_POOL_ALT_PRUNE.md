@@ -1387,7 +1387,12 @@ Not E5's; found while reading the census at the pin.
 - **CEN-A5 / A6 / A7** are bucket 4 with class `none`: whether they are
   rows at all is a census question.
 - **CEN-J1** may be satisfied by a landed slice-8 row; worth a re-read.
-- **CEN-H19-verify** is unblocked by E6 slice 8.
+- **CEN-H19's verification half is a block fold, not a `tx_form` row**
+  (landed 2026-10-15, [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §4.6).
+  `tx_form` / `tx_against` judge only the proof's layout, so a pool that
+  admits on those two alone admits a bad range proof. PR-b's door must also
+  call `shekyl_bulletproofs::verify_batch` over the transaction's proof as a
+  batch of one, the body the submit engine already calls.
 
 ---
 
