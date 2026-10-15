@@ -526,6 +526,7 @@ stale_through = [
   { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
   { through = "ee87fc633", note = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved. The clearnet path set holds cause.rs; clearnet closes are unchanged." },
   { through = "b096e8c77", note = "spans.rs changes the Tor spans and the shutdown wait only; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
+  { through = "58ad7eac8", note = "spans.rs changes the Tor gap and its provenance comment and adds a derivation test; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -600,8 +601,9 @@ stale_through = [
   { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
 ]
 cleared = [
-  { through = "ee87fc633", reason = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved." },
-  { through = "b096e8c77", reason = "The spans themselves: TOR_DIAL_WITHIN_NANOS 120 s and TOR_GAP_WITHIN_NANOS 31 s from the rerun (this ledger's current rows), SHUTDOWN_TIMEOUT_NANOS following the dial, TOR_SPANS_BASIS RustPath, and the measurement feature lifting the gap alone. The values are the capture's; nothing else on these paths changed." },
+  { through = "ee87fc633", reason = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, clo  { through = "b096e8c77", reason = "The spans themselves: TOR_DIAL_WITHIN_NANOS 120 s and TOR_GAP_WITHIN_NANOS 31 s from the rerun (this ledger's current rows), SHUTDOWN_TIMEOUT_NANOS following the dial, TOR_SPANS_BASIS RustPath, and the measurement feature lifting the gap alone. The values are the capture's; nothing else on these paths changed." },
+  { through = "58ad7eac8", reason = "The Tor gap corrected to 37.4 s, 2 x the pooled p99 of 18.69 s (rank 188 of 189 per D9), rounded up to 100 ms (Rick, 2026-10-14; 31 s struck as a miscount of rank 187). The capture is unchanged; this applies its derivation correctly. A derivation test is added. The dial, the shutdown wait and the I/O are unchanged." },
+ ledger's current rows), SHUTDOWN_TIMEOUT_NANOS following the dial, TOR_SPANS_BASIS RustPath, and the measurement feature lifting the gap alone. The values are the capture's; nothing else on these paths changed." },
 ]
 
 [[constant]]
