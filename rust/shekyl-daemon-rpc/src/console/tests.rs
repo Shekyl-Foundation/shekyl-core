@@ -2060,7 +2060,10 @@ fn an_offline_daemon_that_withholds_status_prints_the_state() {
         out.trim_end().ends_with("P2P: offline"),
         "the state, and no uptime clause: {out}"
     );
-    assert!(!out.contains("not disclosed") && !out.contains("uptime"), "{out}");
+    assert!(
+        !out.contains("not disclosed") && !out.contains("uptime"),
+        "{out}"
+    );
 }
 
 /// A daemon that does show Status and reports no connections prints the
