@@ -3912,7 +3912,9 @@ version = "0.1.0"
 dependencies = [
  "curve25519-dalek",
  "hex-literal",
+ "rand_chacha 0.3.1",
  "rand_core 0.6.4",
+ "shekyl-crypto-hash",
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-primitives",

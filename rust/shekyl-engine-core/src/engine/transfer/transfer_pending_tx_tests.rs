@@ -2266,12 +2266,11 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
 /// surface-A `pqc_auths` slot, tested there; SA-2b, SIGNATURE_ALIGNMENT.md §2.2.)
 #[tokio::test]
 async fn join_market_bond_post_verifies_over_real_tree() {
-    use rand_core::OsRng;
     use shekyl_archival_retention::{
         verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
         BondPostError, BondTerm,
     };
-    use shekyl_bulletproofs::Bulletproof;
+    use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
     use shekyl_curve_io::CompressedPoint;
     use shekyl_curve_primitives::Commitment;
     use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
@@ -2314,9 +2313,11 @@ async fn join_market_bond_post_verifies_over_real_tree() {
         .collect();
     let bp = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
         .expect("bulletproof_plus deserializes");
-    let mut rng = OsRng;
     assert!(
-        bp.verify(&mut rng, &bp_commitments),
+        verify_batch(&[BatchEntry {
+            proof: &bp,
+            commitments: &bp_commitments,
+        }]),
         "BP+ verifier must accept the bond-post range proof"
     );
 

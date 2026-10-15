@@ -338,7 +338,11 @@ count_pattern() {
 # the attempt byte under the registered nonce label
 # (shekyl/archival-challenge-nonce-v1) and asserts it matches no row. No
 # production site and no new domain.
-MECH1_EXPECTED=75
+# CEN-H19 verification half (2026-10-15, ruling R3): 75 -> 76. One production
+# site in rust/shekyl-bulletproofs/src/derived.rs (batch_weights_seed), the new
+# domain shekyl/bp-plus-batch-weights-v1. Its tests (src/tests/derived.rs) sit
+# under a tests/ directory and are outside the count.
+MECH1_EXPECTED=76
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2
