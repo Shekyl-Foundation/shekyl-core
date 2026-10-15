@@ -415,7 +415,7 @@ defect.
 | The fee-floor instrument's floor at `SCALE` resolution (Appendix A R29) | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
 | The fee-ladder instrument's nearest-pow2 rule (R26) | An alternative the instrument measures against the owner's ceiling snap; it has no owner because it was not chosen | `fee_ladder.rs`; the ceiling arm calls `quantize_pow2_ceil` |
 | The ArticMine transliteration's KAT inputs (R30) | The 300 000 in the inherited-ladder tests is an input of the C++ `scaling_2021` vectors, fixed with them; importing the zone would move a KAT with the config | `fee_ladder.rs` tests |
-| The secret draw's reveal lag and dropout (ESR-11) | Who reveals a block's seed, and when, is behaviour production cannot know. The count per block, its horizon and the selection were the sim's own `f64` rule and sampler when §5.13 was written, because no owner existed; since ESR-14 they are production's `draw_count`, `draw_horizon` and `select_draw`, as in the next row. `SETTLEMENT_EPOCH_BLOCKS`, `CHALLENGE_RESPONSE_BLOCKS`, `SHARD_LENGTH` and the failure-window `(m, n)` are production's | `secret_draw.rs`; §5.13 fixes the model before the run, §5.20 the move onto the owners |
+| The secret draw's reveal lag and dropout (ESR-11) | **records-was for the loop:** ESR-11's epoch simulation (§5.13 to §5.15) is deleted (2026-10-15, §5.22). ESR-13 runs that epoch at `Timing::esr11()` on the same production rule and selection, and the two agreed within seed noise on every cell. **Live:** the `(m, n)` re-check, the retry mixture and the clearing figures, which simulate no read; the evidence set's shape; and the count rule's callers `count_at` / `capped_at`, which ESR-13 calls | `secret_draw.rs`; `--secret-draw` is ESR-13's loop at ESR-11's timing |
 | The secret draw on production's count and selection: producer dropout, filing lag, inclusion latency, loss to a reorg, and each block's seed and hash (ESR-13) | The count, the horizon and the selection are production's and are called. What decides whether a block's bundle is admitted is the behaviour of producers and of the chain, which has no owner to call; the seed and the block hash are the generator's bytes because no block is built. `M` is challenger policy, not consensus | `secret_draw_production.rs`; §5.17 fixes the model before the run |
 | The public urn and its even-spread schedule (`challenge_coverage.rs`, R21) | records-was — instrument that justified the secret draw; no production owner by design. `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn. The module is deleted in the PR that retires §7.1 and §8 of the challenge design | `challenge_coverage.rs`; its full-scale reproduction stays in the nightly lane with this reason beside it |
 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs`, R22) | Production's rule is a predicate over one window, not a probability. The closed forms are the analysis of that predicate and are cross-checked against the predicate-backed kernel by test | Stated at each form |
@@ -1837,6 +1837,64 @@ clippy. The nightly lane's job has three hours.
 **Not decided here**, as §5.20 said: ESR-11's epoch loop and ESR-13's
 "ESR-11 timing" arm now model one epoch on one rule. Which stays is the
 maintainer's.
+
+### 5.22 ESR-11's loop deleted (2026-10-15)
+
+**Why.** Since ESR-14 both `secret_draw.rs` (ESR-11) and
+`secret_draw_production.rs` (ESR-13) called production's `draw_count`,
+`draw_horizon` and `select_draw`, and ESR-13's `Timing::esr11()`, a
+uniform lag over `0..=W₂` with no latency and no loss, is ESR-11's
+experiment on ESR-13's loop. Two loops running one experiment drift
+apart the next time one is changed. ESR-11's loop is deleted; its
+analytic functions and the shared `count_at` / `capped_at` stay.
+
+**The comparison, made before the deletion** at `7f0e77afef` from the
+runs captured for §5.21: ESR-11's loop under reading A against ESR-13 at
+ESR-11's timing, short of 3 as mean (min–max) and seeds over the bar.
+
+| D | Dropout | ESR-11's loop | ESR-13 at ESR-11's timing |
+| --- | --- | --- | --- |
+| 4 096 | 0 % | 0.49 % (0.34–0.63), 0 | 0.45 % (0.29–0.54), 0 |
+| 4 096 | 10 % | 1.10 % (0.93–1.20), 0 | 1.08 % (0.85–1.27), 0 |
+| 4 096 | 30 % | 3.81 % (3.52–4.08), 8 | 3.69 % (3.37–4.08), 8 |
+| 324 000 | 0 % | 0.45 % (0.44–0.48), 0 | 0.46 % (0.43–0.47), 0 |
+| 324 000 | 10 % | 1.09 % (1.04–1.13), 0 | 1.07 % (1.00–1.13), 0 |
+| 324 000 | 30 % | 3.87 % (3.59–4.15), 8 | 3.70 % (3.48–3.82), 8 |
+
+Issued draws per pair and the largest block agree to three figures in
+every cell; the verdict is the same in every cell.
+
+**The 30 % gap has a cause, and it is not the reveal timing.** ESR-13 is
+lower at 30 % for both `D`, and lower at 10 % for both. The two loops
+consume their generator differently per block (ESR-11: a 32-byte seed,
+the dropout roll, a lag roll when revealed; ESR-13: a seed and a hash,
+then dropout, lag, latency and loss rolls), so the same eight seeds
+realise different dropout, and each loop's realisation is shared across
+`D`. Replicating the generators: at 30 % ESR-11's seeds leave a mean of
+3 025 blocks unrevealed per epoch (30.25 %) and ESR-13's 2 958 (29.58 %);
+at 10 %, 995 against 984. A lighter realised dropout in ESR-13, the same
+for both `D`, is the pattern in the table. The one timing difference,
+that ESR-13 lands a lag-0 reveal in the next block where ESR-11 counted
+it in its own, touches 1 block in 501 by one block, and does not show.
+ESR-13's form is production's: a seed revealed in a block can reach
+later blocks only. §5.14 stays as the record of ESR-11's run.
+
+**What moved.** `--secret-draw` runs ESR-13's loop at ESR-11's timing on
+the evidence set's six `(D, dropout)` cells, through ESR-13's renderer.
+The nightly lane's test is
+`secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders`
+in place of `secret_draw::tests::the_evidence_set_runs_and_the_table_renders`.
+ESR-11's loop tests go with their subject: `a_run_is_a_function_of_its_seed`
+(ESR-13 has its own); `every_draw_of_a_revealed_block_is_issued_and_none_of_an_unrevealed_one`
+(ESR-13: `with_the_margin_and_no_reorg_every_filed_block_s_draws_are_issued`,
+`a_lost_bundle_issues_nothing_and_leaves_no_draw_to_miss`,
+`a_lazy_producer_with_no_margin_is_always_late`);
+`issued_counts_account_for_every_issued_draw` (ESR-13:
+`with_the_margin_and_no_reorg_every_filed_block_s_draws_are_issued`);
+`no_block_draws_more_than_the_cap_allows` (ESR-13:
+`the_count_is_production_s_on_a_hand_checked_sequence`);
+`zero_pairs_is_refused` and `more_dropout_leaves_more_pairs_short`, whose
+subjects ESR-13 did not test, are added to ESR-13 at ESR-11's timing.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 

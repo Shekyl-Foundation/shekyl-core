@@ -1486,12 +1486,14 @@ witness.
 
 ## 12. What the sim says
 
-`cargo run --release -p shekyl-economics-sim -- --secret-draw`, model and
-predictions fixed before the run
+The ESR-11 run of 2026-10-07, model and predictions fixed before it
 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
 §5.13, results §5.14). 324,000 pairs, eight seeds per cell, the count
 rule and weighting of §4, a reveal lag uniform on `0..=W₂`, and each
 block independently unrevealed with the stated probability.
+`cargo run --release -p shekyl-economics-sim -- --secret-draw` runs the
+same experiment on ESR-13's loop, which agrees with these figures within
+seed noise (§5.22 there).
 
 | Dropout | Pairs short of 3 issued: mean (min – max) | Draws per pair, drawn / issued | Draws per block, mean / max | Fetch per won block |
 | --- | --- | --- | --- | --- |
