@@ -377,22 +377,18 @@ mod tests {
         assert!(e.render().contains("shekyld-mainnet.toml"));
     }
 
+    /// A file the account cannot open is refused before any directory is
+    /// judged, naming the file and the operating system's error.
     #[test]
-    fn a_path_that_opens_but_cannot_be_read_is_unreadable() {
+    fn a_file_that_cannot_be_opened_is_unreadable() {
         let d = tempfile::tempdir().unwrap();
-        let dir = d.path().join("c.toml");
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let e = open(&dir, true).unwrap_err();
-        assert!(
-            matches!(e.code, Code::FileUnreadable | Code::FilePermissions),
-            "{e}"
-        );
-        assert_eq!(
-            e.get("path")
-                .map(|p| p.starts_with(&*dir.display().to_string())),
-            Some(true)
-        );
+        let p = d.path().join("c.toml");
+        std::fs::write(&p, "").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let e = open(&p, true).unwrap_err();
+        assert_eq!(e.code, Code::FileUnreadable, "{e}");
+        assert_eq!(e.get("path"), Some(p.display().to_string().as_str()));
+        assert!(e.get("error").is_some_and(|m| !m.is_empty()));
     }
 
     #[test]

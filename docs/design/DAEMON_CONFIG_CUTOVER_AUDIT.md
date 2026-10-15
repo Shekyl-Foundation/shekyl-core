@@ -196,7 +196,7 @@ owner refuses at its own start, and the runtime rows, are commits (c) and
 | §6 row | Test |
 | --- | --- |
 | a named config file is missing | `shekyl-daemon-config` `file::tests::a_missing_default_file_is_the_defaults_and_a_missing_named_file_refuses` |
-| the file cannot be opened or read | `file::tests::a_path_that_opens_but_cannot_be_read_is_unreadable` |
+| the file cannot be opened or read | `file::tests::a_file_that_cannot_be_opened_is_unreadable` |
 | the file, or a directory above it, can be written outside the allowlist | Unix: `file::tests::a_writable_file_or_directory_is_refused_naming_the_place_and_the_principal` (the rule on described trees), `file::tests::a_world_writable_file_is_refused_at_the_file_itself` (a real file). Windows: the DACL walk in `shekyl-win-sec::dacl`, run by the Windows job's cutover case (§5.2 of the brief, a directory granting Users write) |
 | the file holds a secret and can be read outside the allowlist | `file::tests::a_secret_is_readable_only_by_owner_and_root`; Windows as above |
 | a symbolic link whose target fails either check | `file::tests::a_symbolic_link_is_judged_by_its_target` |
