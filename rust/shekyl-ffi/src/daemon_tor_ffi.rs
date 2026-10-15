@@ -301,6 +301,10 @@ pub unsafe extern "C" fn shekyl_daemon_tor_publish(
 
     match instance.publish(virtual_port, local_port, max_streams, OnionPow::Enabled) {
         Ok(service_id) => {
+            // This node's own onion is one uniform member of the Tor
+            // disclosure population (ruled 2026-10-09); it reaches the
+            // lists here, with no C++ in between.
+            crate::dialer_ffi::note_own_onion(service_id.as_str(), virtual_port);
             // SAFETY: caller contract for `out_service_id`.
             unsafe { write_c_string(service_id.as_str(), out_service_id, out_service_id_len) };
             RC_OK

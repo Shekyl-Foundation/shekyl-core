@@ -68,10 +68,9 @@ shekyld [options] [command]
 | `--rpc-restricted-bind-port <port>` | Separate restricted RPC listener |
 | `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
 | `--p2p-bind-port <port>` | P2P listen port |
-| `--add-peer <ip:port>` | Add a persistent peer |
-| `--add-priority-node <ip:port>` | Always try to connect to this peer |
-| `--add-exclusive-node <ip:port>` | Connect only to these peers |
-| `--seed-node <ip:port>` | Connect to a seed node for initial peer discovery |
+| `--add-peer <ip:port>` | Name a peer as a dial candidate; it is dialled like any other |
+| `--p2p-disclose-early` | For the first nodes of a new network: below the floor of 48 peers this node discloses its known peers and its own address, on each connector until that connector reaches the floor or 24 hours pass. While it holds, this node is recognisable. Leave it off on an established network. |
+| `--add-exclusive-node <addr:port>` | Declare a closed network: dial these peers and no other address, the compiled seeds and every address learned from a peer included. Name only peers you control |
 | `--out-peers <n>` | Maximum outbound connections |
 | `--in-peers <n>` | Maximum inbound connections |
 | `--no-igd` | Disable UPnP port forwarding |

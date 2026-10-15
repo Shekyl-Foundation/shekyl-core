@@ -64,6 +64,13 @@ where
     owner
         .arm(deadline)
         .map_err(|_| CloseKind::TransportHandshakeFailed)?;
+    tracing::debug!(
+        conn,
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "clearnet handshake armed"
+    );
     let fired = Arc::new(AtomicBool::new(false));
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let mut prefix = [0u8; PREFIX_LEN];
@@ -151,6 +158,13 @@ where
     owner
         .arm(deadline)
         .map_err(|_| CloseKind::TransportHandshakeFailed)?;
+    tracing::debug!(
+        conn,
+        owner = ?owner.id(),
+        armed_at = now.get(),
+        deadline = deadline.get(),
+        "clearnet handshake armed"
+    );
     let fired = Arc::new(AtomicBool::new(false));
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     tally.queue();

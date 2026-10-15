@@ -79,7 +79,7 @@ use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
 };
 
-use crate::core::{ConnectionsSnapshot, CoreRpc, PeerFacts, SyncSpansSnapshot};
+use crate::core::{ConnectionsSnapshot, CoreRpc, P2pRead, PeerEntry, SyncSpansSnapshot};
 use crate::ffi;
 
 /// What this daemon **is**: the two identity facts a client checks at
@@ -346,7 +346,11 @@ pub trait P2pFacts: Send + Sync {
     fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault>;
     /// The peerlist, white entries then gray. `public_only` selects a
     /// different p2p call, not a filter over one result.
-    fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, FactsFault>;
+    /// [`P2pRead::Offline`] for a daemon started offline.
+    fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault>;
+    /// Whether P2P runs, from the daemon's configuration: read before a
+    /// method that reads no peer list answers about peers or connections.
+    fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault>;
 }
 
 /// The dynamic base-fee estimate: three priced tiers and the quantization mask.
@@ -465,10 +469,14 @@ impl P2pFacts for FfiP2pFacts {
         self.core.sync_spans().map_err(FactsFault::from_code)
     }
 
-    fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, FactsFault> {
+    fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault> {
         self.core
             .peer_list(public_only)
             .map_err(FactsFault::from_code)
+    }
+
+    fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
+        CoreRpc::p2p_state().map_err(FactsFault::from_code)
     }
 }
 
