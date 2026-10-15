@@ -935,8 +935,6 @@ namespace cryptonote
      time_t start_time;
 
      bool m_offline;
-
-     std::shared_ptr<tools::Notify> m_block_rate_notify;
    };
 }
 

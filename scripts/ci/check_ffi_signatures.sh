@@ -71,6 +71,8 @@ SURFACES=(
   "daemon_entry:rust/shekyl-daemon/src/entry.rs"
   # The one RPC start and its stop (DAEMON_CONFIG_CUTOVER.md §2.3).
   "daemon_rpc:rust/shekyl-daemon-rpc/src/ffi_exports.rs"
+  # The notify runner's three pushes (DAEMON_CONFIG_CUTOVER.md §2.10).
+  "notify:rust/shekyl-ffi/src/notify_ffi.rs"
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
 )
 

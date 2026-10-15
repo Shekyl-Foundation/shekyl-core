@@ -4516,6 +4516,20 @@ void shekyl_zone_session_established(std::uint64_t id);
 /// The operator's link budget is set from Rust only (`p2p-upload-max`,
 /// `p2p-download-max`, at start and through `option_set`); the C++ reads
 /// its counters.
+
+/// The notify runner (DAEMON_CONFIG_CUTOVER.md §2.10): each event site
+/// pushes its facts and returns at once; the Rust runner fills the
+/// configured command's placeholders and runs it. A new block at `height`
+/// with its 32-byte `hash` (null is ignored).
+void shekyl_notify_block(std::uint64_t height, const std::uint8_t* hash);
+/// A reorganization: the height of the first block of the new chain, the
+/// new chain's block count, the blocks added and the blocks removed; the
+/// runner renders `{split-height}` and `{height}` from these.
+void shekyl_notify_reorg(std::uint64_t first_new, std::uint64_t count,
+    std::uint64_t added, std::uint64_t removed);
+/// A block-rate warning: `observed` blocks in a window of `window_s`
+/// seconds where `expected` were due.
+void shekyl_notify_block_rate(std::uint32_t window_s, std::uint64_t observed, std::uint64_t expected);
 /// Bytes and packets the budget has moved. A null pointer is skipped.
 void shekyl_link_totals(std::uint64_t* bytes_down, std::uint64_t* packets_down,
     std::uint64_t* bytes_up, std::uint64_t* packets_up);

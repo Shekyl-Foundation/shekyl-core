@@ -133,7 +133,7 @@ answer before commit (f) writes the Ctrl-Break case.
 [`rust/shekyl-tor-control-client/tests/dc_f12_sigchld_ignored.rs`](../../rust/shekyl-tor-control-client/tests/dc_f12_sigchld_ignored.rs)
 spawns a tokio child under the default disposition and gets its status,
 then makes the call `tools::spawn` makes
-([`src/common/spawn.cpp:124`](../../src/common/spawn.cpp)) and spawns a
+(line 124 of `src/common/spawn.cpp` at `d26148535e`) and spawns a
 second. On Linux at the pin the second `wait()` returns at once with
 `ECHILD` ("No child processes"): the kernel reaped the child itself. The
 managed Tor's reaper reads that error as a wedge, so
@@ -143,8 +143,11 @@ cleanly
 The test reproduces the syscall, not the C++ path, because a Rust test
 cannot link `tools::spawn` and the defect is the disposition, whoever sets
 it. It is a binary of its own because a disposition is process-wide.
-Commit (d) adds the positive twin: the Rust runner's children are reaped
-and a tokio child's `wait()` still returns its status.
+Commit (d) added the positive twin,
+[`rust/shekyl-ffi/tests/dc_f12_runner_reaps_its_children.rs`](../../rust/shekyl-ffi/tests/dc_f12_runner_reaps_its_children.rs):
+the Rust runner runs one command of each kind and awaits each, and a tokio
+child spawned afterwards still returns its status from `wait()`. A binary
+of its own, for the same reason as the negative one.
 
 ## 7. Decisions the implementation takes inside the brief
 
@@ -282,6 +285,31 @@ and a tokio child's `wait()` still returns its status.
   `option_set` and `option_show` in place of its four methods.
   `CORE_RPC_VERSION` is 3.57: the two methods, the JSON-RPC error's `data`
   member under code `-26`, and the four routes gone.
+- **The notify runner (commit (d), §2.10, DC-Q14).** The runner
+  ([`rust/shekyl-ffi/src/notify_ffi.rs`](../../rust/shekyl-ffi/src/notify_ffi.rs))
+  is installed by the Rust `main()` from the notify section beside the RPC
+  configure, before the core exists, and its children run on the signal
+  owner's runtime, so they are awaited by the process that spawned them and
+  no disposition changes. The C++ event sites push facts and return:
+  `shekyl_notify_block(height, hash)` from the main-chain add and from each
+  promoted block of a reorganization (the `BlockNotifyCallback` vector,
+  `add_block_notify` and the core's `hash_notify` go: the runner is the
+  only registrant there was), `shekyl_notify_reorg(first_new, count, added,
+  removed)` and `shekyl_notify_block_rate(window_s, observed, expected)`.
+  The glossary terms are rendered in Rust from those facts: `{split-height}`
+  is `first_new - 1`, the last block both chains share, and `{height}` on a
+  reorganization is `count - 1`, the new tip; `{window}` is in seconds where
+  the C++ passed minutes. A `{name}` is replaced wherever it appears in an
+  argument, the program's path included (IG-Q5: braces are the only
+  syntax). The child gets a cleared environment, a null standard input and
+  a null standard output and error, so a command's own output never
+  interleaves with the daemon's; an operator who wants the output redirects
+  it in the command. One command per kind is in flight; an event that
+  arrives while one runs is dropped, and the completed command's log line
+  carries the count. `src/common/notify.{h,cpp}`, `spawn.{h,cpp}`, the
+  three `arg_*_notify` descriptors, `m_block_rate_notify`, `m_reorg_notify`
+  and `set_reorg_notify`, the `notify` unit test and its `test_notifier`
+  helper are deleted; the runner's file joins the FFI signature gate.
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test

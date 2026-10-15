@@ -68,7 +68,6 @@ set(unit_tests_sources
   multiexp.cpp
   net.cpp
   node_server.cpp
-  notify.cpp
   parse_amount.cpp
   peer_policy_drop_verdict.cpp
   peer_policy_block_ingest.cpp
@@ -235,6 +234,3 @@ add_test(
   NAME    unit_tests
   COMMAND unit_tests --data-dir "${TEST_DATA_DIR}")
 
-monero_add_minimal_executable(test_notifier test_notifier.cpp)
-target_link_libraries(test_notifier ${EXTRA_LIBRARIES})
-set_property(TARGET test_notifier PROPERTY FOLDER "tests")

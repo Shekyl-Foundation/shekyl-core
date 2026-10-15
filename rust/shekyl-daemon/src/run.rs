@@ -229,6 +229,9 @@ fn supervise(
         return EXIT_FAILED;
     };
     let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(config.rpc.clone(), options);
+    // Step 6: the notify runner, installed before the core that pushes to
+    // it exists; its children run on the signal owner's runtime (§2.10).
+    shekyl_ffi::notify_ffi::install(&config.notify, pool.handle().clone());
     // Step 6: the managed Tor's start, overlapping the core's construction;
     // awaited at step 8.
     let tor_start = tor::begin(&config.tor, &config.data_dir, pool.handle());

@@ -143,7 +143,7 @@ rcgen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
-tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["macros", "net", "process", "rt", "sync", "time"] }
 zeroize = { workspace = true }
 libc = "0.2"
 dalek-ff-group = "0.5"

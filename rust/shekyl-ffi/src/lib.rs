@@ -162,6 +162,9 @@ pub mod rpc_peerlist_ffi;
 
 // Operator link rates and the byte-stamp clock the stall check reads.
 pub mod link_ffi;
+/// The notify runner: the owner of the three notify commands
+/// (`DAEMON_CONFIG_CUTOVER.md` §2.10); the C++ event sites push facts to it.
+pub mod notify_ffi;
 
 // The published board. Counts are integers. Address walks receive a
 // snapshot whose row is the id, the handshake flag, and the endpoint.

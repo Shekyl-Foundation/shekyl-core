@@ -35,11 +35,9 @@ set(common_sources
   expect.cpp
   util.cpp
   i18n.cpp
-  notify.cpp
   password.cpp
   perf_timer.cpp
   removed_flags.cpp
-  spawn.cpp
   threadpool.cpp
   aligned.c
   timings.cc

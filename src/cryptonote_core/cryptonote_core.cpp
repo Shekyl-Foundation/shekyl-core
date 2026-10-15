@@ -50,7 +50,6 @@ using namespace epee;
 #include "fcmp/ct_types.h"
 #include "blockchain_db/blockchain_db.h"
 #include "fcmp/ct_semantics.h"
-#include "common/notify.h"
 #include "tx_verification_utils.h"
 #include "version.h"
 #include "shekyl/shekyl_ffi.h"
@@ -157,31 +156,6 @@ namespace cryptonote
   , "Set maximum txpool weight in bytes."
   , DEFAULT_TXPOOL_MAX_WEIGHT
   };
-  static const command_line::arg_descriptor<std::string> arg_block_notify = {
-    "block-notify"
-  , "Run a program for each new block, '%s' will be replaced by the block hash"
-  , ""
-  };
-  static const command_line::arg_descriptor<std::string> arg_reorg_notify = {
-    "reorg-notify"
-  , "Run a program for each reorg, '%s' will be replaced by the split height, "
-    "'%h' will be replaced by the new blockchain height, '%n' will be "
-    "replaced by the number of new blocks in the new chain, and '%d' will be "
-    "replaced by the number of blocks discarded from the old chain"
-  , ""
-  };
-  static const command_line::arg_descriptor<std::string> arg_block_rate_notify = {
-    "block-rate-notify"
-  , "Run a program when the block rate undergoes large fluctuations. This might "
-    "be a sign of large amounts of hash rate going on and off the Shekyl network, "
-    "and thus be of potential interest in predicting attacks. %t will be replaced "
-    "by the number of minutes for the observation window, %b by the number of "
-    "blocks observed within that window, and %e by the number of blocks that was "
-    "expected in that window. It is suggested that this notification is used to "
-    "automatically increase the number of confirmations required before a payment "
-    "is acted upon."
-  , ""
-  };
   static const command_line::arg_descriptor<bool> arg_keep_alt_blocks  = {
     "keep-alt-blocks"
   , "Keep alternative blocks on restart"
@@ -254,9 +228,6 @@ namespace cryptonote
     command_line::add_arg(desc, arg_block_download_max_size);
     command_line::add_arg(desc, arg_span_limit);
     command_line::add_arg(desc, arg_max_txpool_weight);
-    command_line::add_arg(desc, arg_block_notify);
-    command_line::add_arg(desc, arg_reorg_notify);
-    command_line::add_arg(desc, arg_block_rate_notify);
     command_line::add_arg(desc, arg_keep_alt_blocks);
 
     miner::init_options(desc);
@@ -577,49 +548,6 @@ namespace cryptonote
 
     m_blockchain_storage.set_user_options(blocks_threads,
         sync_on_blocks, sync_threshold, sync_mode);
-
-    try
-    {
-      if (!command_line::is_arg_defaulted(vm, arg_block_notify))
-      {
-        struct hash_notify
-        {
-          tools::Notify cmdline;
-
-          void operator()(std::uint64_t, epee::span<const block> blocks) const
-          {
-            for (const block& bl : blocks)
-              cmdline.notify("%s", epee::string_tools::pod_to_hex(get_block_hash(bl)).c_str(), NULL);
-          }
-        };
-
-        m_blockchain_storage.add_block_notify(hash_notify{{command_line::get_arg(vm, arg_block_notify).c_str()}});
-      }
-    }
-    catch (const std::exception &e)
-    {
-      MERROR("Failed to parse block notify spec: " << e.what());
-    }
-
-    try
-    {
-      if (!command_line::is_arg_defaulted(vm, arg_reorg_notify))
-        m_blockchain_storage.set_reorg_notify(std::shared_ptr<tools::Notify>(new tools::Notify(command_line::get_arg(vm, arg_reorg_notify).c_str())));
-    }
-    catch (const std::exception &e)
-    {
-      MERROR("Failed to parse reorg notify spec: " << e.what());
-    }
-
-    try
-    {
-      if (!command_line::is_arg_defaulted(vm, arg_block_rate_notify))
-        m_block_rate_notify.reset(new tools::Notify(command_line::get_arg(vm, arg_block_rate_notify).c_str()));
-    }
-    catch (const std::exception &e)
-    {
-      MERROR("Failed to parse block rate notify spec: " << e.what());
-    }
 
     const cryptonote::test_options regtest_test_options = {
       0
@@ -1663,12 +1591,7 @@ namespace cryptonote
       {
         MWARNING("There were " << b << (b == max_blocks_checked ? " or more" : "") << " blocks in the last " << seconds[n] / 60 << " minutes, there might be large hash rate changes, or we might be partitioned, cut off from the Shekyl network or under attack, or your computer's time is off. Or it could be just sheer bad luck.");
 
-        std::shared_ptr<tools::Notify> block_rate_notify = m_block_rate_notify;
-        if (block_rate_notify)
-        {
-          auto expected = seconds[n] / SHEKYL_DAA_TARGET_SECONDS;
-          block_rate_notify->notify("%t", std::to_string(seconds[n] / 60).c_str(), "%b", std::to_string(b).c_str(), "%e", std::to_string(expected).c_str(), NULL);
-        }
+        shekyl_notify_block_rate(seconds[n], b, seconds[n] / SHEKYL_DAA_TARGET_SECONDS);
 
         break; // no need to look further
       }

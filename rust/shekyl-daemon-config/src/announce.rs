@@ -30,7 +30,12 @@ pub fn effective_configuration(
         Some(p) => format!("config-file={} (cli)", p.display()),
         None => format!("config-file=none-at:{} (default)", default_path.display()),
     });
-    for row in table.rows.iter().filter(|r| r.is_live()) {
+    // The config-file row is the first part above, with the path's fate.
+    for row in table
+        .rows
+        .iter()
+        .filter(|r| r.is_live() && r.name != "config-file")
+    {
         if let Some((value, source)) = resolved.values.get(row.name) {
             let shown = match source {
                 Source::Cli => "cli".to_owned(),

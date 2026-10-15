@@ -69,7 +69,6 @@
 #include "cryptonote_basic/drop_verdict.h"
 #include "cryptonote_basic/block_ingest.h"
 #include "common/perf_timer.h"
-#include "common/notify.h"
 #include "common/varint.h"
 #include "time_helper.h"
 
@@ -1173,10 +1172,10 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     m_db->remove_alt_block(cryptonote::get_block_hash(bei.bl));
   }
 
-  std::shared_ptr<tools::Notify> reorg_notify = m_reorg_notify;
-  if (reorg_notify)
-    reorg_notify->notify("%s", std::to_string(split_height).c_str(), "%h", std::to_string(m_db->height()).c_str(),
-        "%n", std::to_string(m_db->height() - split_height).c_str(), "%d", std::to_string(discarded_blocks).c_str(), NULL);
+  // The Rust notify runner renders the glossary terms from these facts
+  // (DAEMON_CONFIG_CUTOVER.md §2.10): the first block of the new chain, the
+  // new count, the blocks added and the blocks discarded.
+  shekyl_notify_reorg(split_height, m_db->height(), m_db->height() - split_height, discarded_blocks);
 
   const uint64_t new_height = m_db->height();
   const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(new_height));
@@ -1203,12 +1202,14 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     send_miner_notifications(new_height, seedhash, prev_id,
                              m_db->get_block_already_generated_coins(new_height - 1));
 
-  for (const auto& notifier : m_block_notifiers)
+  // Each promoted block goes to the Rust notify runner (DAEMON_CONFIG_CUTOVER.md
+  // §2.10), which owns the command and drops the push when none is set.
   {
-    std::size_t notify_height = split_height;
+    std::uint64_t notify_height = split_height;
     for (const auto& bei: alt_chain)
     {
-      notifier(notify_height, {std::addressof(bei.bl), 1});
+      const crypto::hash promoted = get_block_hash(bei.bl);
+      shekyl_notify_block(notify_height, reinterpret_cast<const std::uint8_t*>(promoted.data));
       ++notify_height;
     }
   }
@@ -5881,9 +5882,8 @@ leave:
   // send miner notifications to switch as soon as possible
   send_miner_notifications(new_height, seedhash, id, already_generated_coins);
 
-  // then send block notifications
-  for (const auto& notifier: m_block_notifiers)
-    notifier(new_height - 1, {std::addressof(bl), 1});
+  // then the block event, to the Rust notify runner
+  shekyl_notify_block(new_height - 1, reinterpret_cast<const std::uint8_t*>(id.data));
 
   shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
 
@@ -6534,15 +6534,6 @@ void Blockchain::set_txpool_notify(TxpoolNotifyCallback&& notify)
 {
   std::lock_guard<decltype(m_txpool_notifier_mutex)> lg(m_txpool_notifier_mutex);
   m_txpool_notifier = notify;
-}
-
-void Blockchain::add_block_notify(BlockNotifyCallback&& notify)
-{
-  if (notify)
-  {
-    CRITICAL_REGION_LOCAL(m_blockchain_lock);
-    m_block_notifiers.push_back(std::move(notify));
-  }
 }
 
 void Blockchain::add_miner_notify(MinerNotifyCallback&& notify)
