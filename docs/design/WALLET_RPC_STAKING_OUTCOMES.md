@@ -236,8 +236,10 @@ one entry per live pending record, in no meaningful order.
   - `dispatched`, with `dispatched_at_height` and `attempts`;
   - `expired`, with `funds_return_at`: the end date has passed, so the
     transaction can never be mined. The funds are still held until the
-    scan has made that final (WR-Q3);
-  - `stalled`: reachable only in the one case below.
+    staking scan reaches `funds_return_at`, which is the end date itself
+    (WR-Q3). It is a scan height, comparable with `pscan_synced_height`
+    in the same response;
+  - `stalled`: reachable only in the two cases below.
 - **No per-record handle.** See WR-Q5.
 
 An empty list means nothing is in flight. No field is absent or `null` to
@@ -252,17 +254,25 @@ state is read from the in-memory alarm sets (§2), so each one survives a
 restart, which the log alarm does not.
 
 **Where `stalled` remains reachable.** If WR-Q3 and WR-Q4 are ruled as
-posed, every kind ends by confirmation, rejection or expiry, and no
-ordinary flow reaches `stalled`. One state remains:
+posed, every kind ends by confirmation, rejection or expiry, except in
+two cases where the scan cannot tell whether the record landed (WR-Q3,
+"How each kind counts as landed"):
 
-- a claim, drain or exit past its funds-return point whose reserved
-  inputs are **partly** spent.
+- **A partly spent reservation.** A claim, drain or exit past its end
+  date whose reserved inputs are **partly** spent. The record's own
+  transaction spends all of its inputs or none, so a part spent means
+  another transaction spent some. The reservation stall alarm already
+  names this anomaly (`dispatch.rs:696-717`).
+- **An empty reservation.** The Q11 zero-fee emission claim holds no fee
+  inputs, so `remove_settled` never settles it
+  (`pending_post_block.rs:987-1001`), and nothing else shows whether it
+  landed (the FOLLOWUPS row "Q11 zero-fee-input emission claim has no
+  settlement evidence"). Releasing it as `expired` could report a claim
+  that was in fact mined.
 
-The record's own transaction spends all of its inputs or none, so a part
-spent means another transaction spent some. The reservation stall alarm
-already names this anomaly (`dispatch.rs:696-717`). Default: hold the
-record, report `stalled`, and keep the alarm. Releasing the unspent rest
-is a separate question if it ever occurs.
+Default for both: hold the record, report `stalled`, and keep the alarm.
+Releasing the unspent rest of a partial reservation, or the empty claim
+once a claim-match observation exists, is a separate question.
 
 If WR-Q4 is ruled (b), `stalled` stays reachable for every claim, drain
 and exit past the 900-block horizon, as today.
@@ -325,7 +335,7 @@ idle is the shape rule 43 forbids. It also puts slot ordinals on
   place, must fail to decode.
 - A test seals a `Dispatched` record with reference height `r`, advances
   the ledger clock past `r + 100`, restarts the engine, and reads
-  `expired` with `funds_return_at == r + 100 + 720`.
+  `expired` with `funds_return_at == r + 100`.
 - `rg -n 'alarmed_this_session|alarmed_reservations' rust/shekyl-wallet-rpc`
   must return nothing.
 
@@ -398,15 +408,18 @@ does.
 
 - A record's **end date** is `reference_height +
   FCMP_REFERENCE_BLOCK_MAX_AGE`, inclusive (§2).
-- Once the staking scan's sealed frontier reaches `end date +
-  ARCHIVAL_REORG_DEPTH_BLOCKS`, the record is removed, and its
-  reservation with it.
+- Once the staking scan's sealed frontier reaches the end date, the
+  record is removed, and its reservation with it. The frontier already
+  trails the tip by `ARCHIVAL_REORG_DEPTH_BLOCKS` (720): the sweep
+  ceiling is that far behind (`pscan/start.rs:93-95`), so every block at
+  or below it is final under the wallet's own model. `funds_return_at`
+  is the end date.
 - An `expired, funds returned` outcome (WR-Q2) is written in the same
   atomic save.
 - The release runs in the dispatch tick, which already holds the scan's
-  accrual (`pscan/task.rs:426-437`). It runs after the confirmation
-  retire in the same pass, so a post that did land is retired as
-  confirmed first.
+  accrual (`pscan/task.rs:426-437`). It runs last in the tick's one
+  `mutate` pass (`dispatch.rs:539`), after both retires, so a record that
+  did land leaves as landed first (below).
 - **Fee:** none. **Finality:** by construction. **User action:** none.
 
 **Why the phantom-slot cleanup is then safe.**
@@ -427,6 +440,30 @@ is airtight only while no real bond can be missing from the evidence.
 A slot the cleanup drops after the release is a stake that never
 happened. That is the case the cleanup exists for.
 
+**How each kind counts as landed before expiry.** Both retires and the
+expiry read the same evidence: one accrual, one frontier, one reorg depth
+(`pscan/task.rs:426-437`).
+
+| Kind | Landed means | Retire | Runs before expiry |
+| --- | --- | --- | --- |
+| Stake | the scan holds a reorg-deep JoinMarket match for the persona | `remove_confirmed` (`dispatch.rs:549`) | yes, same pass |
+| Claim, drain, exit | every reserved input is gone from the scan's live funding set | `remove_settled` (`dispatch.rs:561`; `pending_post_block.rs:1003-1043`) | yes, same pass |
+
+At expiry the frontier is at or past the end date, and a record's
+transaction can only have landed at or below it. So if it landed:
+
+- a stake's match is inside the frontier, and `remove_confirmed` has
+  already removed it;
+- a claim's, drain's or exit's inputs were spent inside the frontier, are
+  gone from live funding, and `remove_settled` has already removed it.
+
+What reaches expiry has every reserved input still live, which means it
+did not land. Two cases reach neither branch, and they stay `stalled`
+(WR-Q1): a reservation **partly** spent (another transaction spent some
+of its inputs), and the **empty** reservation of the Q11 zero-fee claim,
+which `remove_settled` never settles and which expiry must therefore not
+release.
+
 **Sub-question (a), how the reference height becomes durable.**
 
 - **Default:** a new field, `reference_height: BlockHeight`, on each
@@ -439,15 +476,17 @@ happened. That is the case the cleanup exists for.
   That view can reorg or prune, so it can fail to answer, and an
   unanswerable end date would hold funds forever. No schema change.
 
-**Sub-question (b), the finality margin.** The release condition, as
-given, is `frontier ≥ end date + 720`. The frontier itself already trails
-the tip by 720 (§2.1), so the funds return when the tip is about
-`end date + 1,440`, roughly two days.
+**Sub-question (b), the finality margin.**
 
-- Default: as given.
-- Alternative: `frontier ≥ end date`. Blocks at or below the frontier are
-  already reorg-deep, so this is still final under the scan's own model,
-  and it returns funds 720 blocks (about a day) sooner.
+- **Default:** `frontier ≥ end date`. The safety argument above needs
+  every block at or below the end date to be final and scanned, and a
+  frontier at the end date already gives both, since it trails the tip by
+  720. The funds return when the tip is about `end date + 720`, roughly a
+  day after the end date.
+- **Alternative:** `frontier ≥ end date + 720`. This counts the same
+  margin twice and holds the funds about a day longer. It buys protection
+  only against a reorg deeper than the wallet's finality model, which
+  that model rules out everywhere else.
 
 **Sub-question (c), stop dead re-sends.** A bond post answered `StaleRoot`
 past its end date is an expiry, not a retry.
@@ -469,9 +508,24 @@ past its end date is an expiry, not a retry.
 | Case | Outcome |
 | --- | --- |
 | The post lands late | It can land only at or below its end date. The scan matches it before the frontier passes the end date, and the confirmation retire removes the record as a confirmed stake. Expiry never fires |
-| A reorg near the end date | The release waits for a frontier that is itself reorg-deep, plus the margin of sub-question (b). A reorg within that depth changes nothing; one deeper is outside the wallet's finality model everywhere |
+| A reorg near the end date | The release waits for a frontier that is itself reorg-deep. A reorg within that depth changes nothing; one deeper is outside the wallet's finality model everywhere |
+| The consensus age limit changes | The end date is `reference_height + FCMP_REFERENCE_BLOCK_MAX_AGE` read **now**, while the record was signed under the limit in force **then**. A **raised** limit makes the computed end date too early: the wallet would release, and let the phantom-slot cleanup drop, a bond that can still land. That is the stuck-funds case the cleanup exists to prevent. A **lowered** limit only holds funds longer. The limit is a consensus constant (`config/consensus_constants.json:5`); raising it makes a different chain. The sentinels that pin it today sit in other modules (`reference.rs:69`, `tx_against.rs:71`) and say nothing about this one. See the invariant below |
 | A hostile node holds the bytes and broadcasts them later | After the end date, every daemon refuses them for their reference age. Before it, they can land only as the user's own stake, which the scan retires as confirmed |
 | The scan stalls | The frontier does not advance, the funds are not returned, and the state stays `expired` with its `funds_return_at`. Nothing is released early |
+
+**Invariant: the end date assumes the age limit never rises.**
+
+- **Default:** the expiry module carries its own compile-time sentinel,
+  `FCMP_REFERENCE_BLOCK_MAX_AGE == 100`, whose message names this round
+  and says what raising the limit breaks. A test next to it fails if the
+  limit changes without the module being revisited. Changing the limit
+  then fails the build here, beside the sentinels that already fail
+  elsewhere.
+- **Alternative, if the limit ever becomes per-era:** store the limit in
+  force at signing beside `reference_height`, and compute each record's
+  end date from its own limit. That adds a field the single-era chain
+  does not need today (rule 21: reopen when a per-era limit is
+  proposed).
 
 **Rejected alternatives.**
 
@@ -495,10 +549,16 @@ past its end date is an expiry, not a retry.
     free and with the same finality.
 
 **Falsifier.**
-- A sealed post with reference height `r` and an unchanged frontier below
-  `r + 100 + 720` stays in `in_flight` as `expired`. A frontier at
-  `r + 100 + 720` removes it, writes `outcomes[0].outcome == "expired"`
-  in the same seal, and releases its gindexes.
+- A sealed post with reference height `r` and a frontier below `r + 100`
+  stays in `in_flight` as `expired`. A frontier at `r + 100` removes it,
+  writes `outcomes[0].outcome == "expired"` in the same seal, and
+  releases its gindexes.
+- A drain whose inputs are all absent from live funding at that frontier
+  is retired as settled, and no `expired` outcome is written. One with
+  part of its inputs absent stays `stalled`. A zero-fee claim with no
+  reserved inputs stays `stalled`.
+- Changing `fcmp_reference_block_max_age` fails the expiry module's own
+  sentinel.
 - A post matched by the scan at or below `r + 100` is retired as
   confirmed, and no `expired` outcome is written.
 - A due tick past `r + 100` sends nothing.
@@ -548,7 +608,7 @@ whatever its verdict was.
 **Option (c) — expiry release for every kind, in this round.**
 - WR-Q3's mechanism applies to all four kinds: each record gets its
   `reference_height`, and each is released, with `expired, funds
-  returned`, once the frontier passes its end date plus the margin.
+  returned`, once the frontier reaches its end date.
 - **Why it is safe to land alone:**
   - It is the prune half, by proof, and it adds no resubmit. So it keeps
     the FOLLOWUPS row's "never land resubmit alone".
@@ -559,14 +619,30 @@ whatever its verdict was.
   an earlier prune on a definite terminal verdict.
 - **Cost:**
   - the schema field on all four kinds (one v13 bump, shared);
-  - a rejected claim, drain or exit holds its funds until about two days
-    after it was built, then returns them. The outcome says `expired`,
+  - a rejected claim, drain or exit holds its funds until about a day
+    after its end date, then returns them. The outcome says `expired`,
     not `rejected`.
 
 **Default: (c).** The end date changes the default. Every kind can now
 end with a reported outcome and returned funds, and this round does not
 take on resubmit, the half of leg 4 that is a security item. `stalled`
-shrinks to the one anomaly of WR-Q1.
+shrinks to the two cases of WR-Q1.
+
+**The exit's "fate unknown" gets an end.** Today `unstake`'s
+`-29522 UNSTAKE_FATE_UNKNOWN` has no way to resolve. Its message tells
+the user the record is held "until it settles" and not to retry blindly
+(`shekyl-wallet-contract/src/error.rs:945-949`). The contract adds that
+the record waits for "the recovery slice (FOLLOWUPS dispatch-driver
+prune+resubmit)" (`wallet_rpc.yaml:1344-1353`).
+
+- Under (c) it resolves: by `funds_return_at`, `outcomes` holds a
+  definite answer for the exit — landed (the exit settles), `expired`
+  with the funds returned, or, for the partly spent anomaly, `stalled`.
+- **Default:** the error's text and its contract entry say so in plain
+  words, for example "Check `staking_info`: by the height it names, this
+  exit will either have completed or been withdrawn with its funds
+  returned." A user then has somewhere to look, and a time to look by
+  (rule 82).
 
 **Falsifier.**
 - Under (c): a sealed, dispatched drain with reference height `r` reads
