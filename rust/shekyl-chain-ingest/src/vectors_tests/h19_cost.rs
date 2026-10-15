@@ -11,6 +11,13 @@
 //! `cargo test --release -p shekyl-chain-ingest --features pipeline --lib
 //! h19_batch_cost_at_the_captured_densities -- --ignored --nocapture`.
 
+// Test-only by its parent (`vectors_tests`, gated at `lib.rs`). The inner
+// attribute is this file's own declaration of that fact, for the
+// debug-macro lint (`build.yml`), which scans each file for its own
+// marker. The lines it prints are the measurement's report, not
+// production output.
+#![cfg(test)]
+
 use std::time::Instant;
 
 use shekyl_chain_rules::{BatchOutcome, ListedProofs};
