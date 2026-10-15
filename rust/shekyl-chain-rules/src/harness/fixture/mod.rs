@@ -843,11 +843,15 @@ pub fn range_proof_for(outputs: usize) -> BpPlus {
 /// [`mask_committing`]`(mask, amount)` otherwise, the fixtures' own.
 ///
 /// Proved once per opening list from a `ChaCha20Rng` seeded with the list
-/// and memoized, so a fixture stays a pure function of its arguments.
+/// and memoized, so a fixture stays a pure function of its arguments. The
+/// memo is held across the prove, so two threads that miss on the same
+/// list share one proof rather than each proving it.
 ///
 /// # Panics
 ///
-/// On no openings or more than sixteen: the prover has no proof for them.
+/// On no openings or more than [`shekyl_bulletproofs::MAX_COMMITMENTS`]:
+/// the prover has no proof for them. That check runs before the memo is
+/// locked, so a count the prover refuses does not poison it.
 #[must_use]
 pub fn range_proof_over(openings: &[(u64, u64)]) -> BpPlus {
     use std::collections::BTreeMap;
@@ -855,40 +859,51 @@ pub fn range_proof_over(openings: &[(u64, u64)]) -> BpPlus {
 
     use curve25519_dalek::scalar::Scalar;
     use rand_chacha::rand_core::SeedableRng;
-    use shekyl_bulletproofs::Bulletproof;
+    use shekyl_bulletproofs::{Bulletproof, MAX_COMMITMENTS};
     use shekyl_curve_primitives::Commitment;
+
+    if openings.is_empty() || openings.len() > MAX_COMMITMENTS {
+        panic!(
+            "the prover proves 1..={MAX_COMMITMENTS} openings, not {}",
+            openings.len()
+        );
+    }
+
+    /// One opening is two `u64`s. Folded, little-endian, into the prover seed.
+    const OPENING_WIDTH: usize = (u64::BITS as usize / 8) * 2;
+    /// A `ChaCha20Rng` seed.
+    const PROVER_SEED_LEN: usize = 32;
 
     /// Proofs made so far, keyed by their openings.
     type Proved = Mutex<BTreeMap<Vec<(u64, u64)>, BpPlus>>;
     static PROVED: OnceLock<Proved> = OnceLock::new();
-    let proved = PROVED.get_or_init(Mutex::default);
-    if let Some(bp) = proved.lock().expect("not poisoned").get(openings) {
-        return bp.clone();
-    }
-    let mut seed = [0u8; 32];
-    for (i, (mask, amount)) in openings.iter().enumerate() {
-        for (j, byte) in mask
-            .to_le_bytes()
-            .iter()
-            .chain(&amount.to_le_bytes())
-            .enumerate()
-        {
-            seed[(i * 16 + j) % 32] ^= byte;
-        }
-    }
-    let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
-    let commitments = openings
-        .iter()
-        .map(|(mask, amount)| Commitment::new(Scalar::from(*mask), *amount))
-        .collect::<Vec<_>>();
-    let proof =
-        Bulletproof::prove_plus(&mut rng, commitments).expect("one to sixteen openings prove");
-    let bp = BpPlus::from_bytes(&proof.serialize()).expect("a proof's bytes are a wire Bp+");
-    proved
+    let mut memo = PROVED
+        .get_or_init(Mutex::default)
         .lock()
-        .expect("not poisoned")
-        .insert(openings.to_vec(), bp.clone());
-    bp
+        .expect("not poisoned");
+    memo.entry(openings.to_vec())
+        .or_insert_with(|| {
+            let mut seed = [0u8; PROVER_SEED_LEN];
+            for (i, (mask, amount)) in openings.iter().enumerate() {
+                for (j, byte) in mask
+                    .to_le_bytes()
+                    .iter()
+                    .chain(&amount.to_le_bytes())
+                    .enumerate()
+                {
+                    seed[(i * OPENING_WIDTH + j) % PROVER_SEED_LEN] ^= byte;
+                }
+            }
+            let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+            let commitments = openings
+                .iter()
+                .map(|(mask, amount)| Commitment::new(Scalar::from(*mask), *amount))
+                .collect::<Vec<_>>();
+            let proof = Bulletproof::prove_plus(&mut rng, commitments)
+                .expect("1..=MAX_COMMITMENTS openings prove");
+            BpPlus::from_bytes(&proof.serialize()).expect("a proof's bytes are a wire Bp+")
+        })
+        .clone()
 }
 
 /// A BP+ with the **canonical layout** for `outputs` outputs — `|L| = |R|
