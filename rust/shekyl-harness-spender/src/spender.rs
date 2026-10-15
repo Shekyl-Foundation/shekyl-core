@@ -450,7 +450,14 @@ impl Spender {
         recipient: &Recipient,
     ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(sourced, connecting, fee, bond, recipient, RangeProof::AsProved)
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            bond,
+            recipient,
+            RangeProof::AsProved,
+        )
     }
 
     /// A spend of several blocks' coinbases in **one** transaction, listed
