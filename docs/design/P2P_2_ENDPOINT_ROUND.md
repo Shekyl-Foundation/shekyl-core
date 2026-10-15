@@ -181,7 +181,7 @@ that check is empty exactly where job 1 is needed.**
 
 | Available | Where | Used? |
 |---|---|---|
-| `UPNP_GetExternalIPAddress` | `external/miniupnp/miniupnpc/upnpcommands.h:77` | **zero occurrences in the tree** |
+| `UPNP_GetExternalIPAddress` | line 77 of `external/miniupnp/miniupnpc/upnpcommands.h` at `d26148535e` (the submodule left with UPnP, `DAEMON_CONFIG_CUTOVER.md` §4.2) | **zero occurrences in the tree** |
 | `UPNP_AddAnyPortMapping` (returns `reservedPort`) | `upnpcommands.h:160` | unused |
 | `UPNP_GetSpecificPortMappingEntry` | `upnpcommands.h:237` | unused |
 | IGD `controlURL` + `servicetype` in scope | `net_node.inl:3228`, used at `:3239` | used only to add a mapping |

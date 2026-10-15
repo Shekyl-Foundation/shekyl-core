@@ -114,23 +114,27 @@ progress. Let it run until you see "SYNCHRONIZED OK" in the output.
 
 ### Configuration file
 
-Instead of passing flags on the command line, you can write them in a config
-file. The syntax is `optionname=value`, one per line. Boolean flags use
-`optionname=1`.
+Instead of passing options on the command line, you can write them in a
+configuration file. The file is TOML; each key is an option's name, spelled
+as on the command line without the leading dashes, and a switch is `true`
+or `false`. The daemon reads `/etc/shekyl/shekyld-<network>.toml` by
+default (`shekyld-mainnet.toml` on mainnet; on Windows the file sits in the
+daemon's root), and `--config-file /path/to/file.toml` names another. The
+network itself is always given on the command line, because it chooses the
+file. A file that anyone but root and the daemon's account can write is
+refused.
 
-```
-# shekyld.conf
-data-dir=/var/lib/shekyl
-log-file=/var/log/shekyl/shekyld.log
-log-level=0
-# RPC defaults to loopback. For your own wallet on another machine you
-# control, bind a view-only second listener (not a public remote node):
-# rpc-restricted-bind-port=11030
+```toml
+# /etc/shekyl/shekyld-mainnet.toml
+data-dir = "/var/lib/shekyl"
+log-file = "/var/log/shekyl/shekyld.log"
+log-level = "warn"
+# RPC listens on loopback. For your own wallet on another machine you
+# control, add a view-only listener (not a public remote node):
+# rpc-view-listen = ["127.0.0.1:11030"]
 ```
 
-Load a config file with `--config-file /path/to/shekyld.conf`. See
-[`utils/conf/shekyld.conf`](../utils/conf/shekyld.conf) for a minimal
-example.
+Every option's name, kind and default is in `shekyld --help`.
 
 ### Key daemon flags
 
@@ -1267,7 +1271,7 @@ Behavior changes to be aware of when upgrading:
 | **Block** | A bundle of transactions added to the blockchain roughly every 2 minutes. |
 | **Block height** | The sequential number of a block, starting from 0. |
 | **Block reward** | New SKL created and given to the miner who finds a valid block. |
-| **Config file** | A text file (`shekyld.conf`) containing daemon options in `name=value` format, loaded with `--config-file`. |
+| **Config file** | A TOML file (`/etc/shekyl/shekyld-<network>.toml` by default) holding daemon options under their command-line names, or another file named with `--config-file`. |
 | **Console** | The interactive command prompt inside `shekyld` when running in foreground mode. |
 | **Daemon** | The background program (`shekyld`) that connects to the Shekyl network and maintains the blockchain. |
 | **Difficulty** | A measure of how hard mining puzzles are. Adjusts automatically to target ~2-minute blocks. |

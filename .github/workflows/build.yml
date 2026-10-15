@@ -44,7 +44,7 @@ env:
   # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
   # which is why the Rust workflow never needed this; these jobs run in bare
   # ubuntu containers, which do not.
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -241,7 +241,7 @@ jobs:
           # No system zstd: Levin compression is the Rust-pinned vendored
           # libzstd inside the linked shekyl image (PR #411). Installing a
           # host libzstd would reintroduce the dual-lib story we deleted.
-          brew install --quiet cmake boost openssl libpgm miniupnpc libunwind-headers ccache
+          brew install --quiet cmake boost openssl libpgm libunwind-headers ccache
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0

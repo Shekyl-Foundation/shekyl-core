@@ -128,7 +128,7 @@ shekyld --testnet
 # port; admin stays on the main RPC. RPC is operator-to-operator — this is
 # not a public remote node (shekyld does not advertise RPC over P2P).
 shekyld --non-interactive --rpc-restricted-bind-port 11030 \
-        --config-file /etc/shekyl/shekyld.conf
+        --config-file /etc/shekyl/shekyld-mainnet.toml
 
 # Use a custom data directory
 shekyld --data-dir /mnt/ssd/shekyl-data

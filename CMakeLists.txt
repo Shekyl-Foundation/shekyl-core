@@ -487,7 +487,6 @@ if(NOT MANUAL_SUBMODULES)
     endfunction ()
     
     message(STATUS "Checking submodules")
-    check_submodule(external/miniupnp)
     check_submodule(external/rapidjson)
     # external/randomx (tevador v1) is a gitlink-only pin for the
     # restated v1 fallback (RANDOMX_V1_FALLBACK.md). Nothing in
@@ -603,7 +602,7 @@ if(OSSFUZZ)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DOSSFUZZ")
 endif()
 
-# Check if we're on FreeBSD so we can exclude the local miniupnpc (it should be installed from ports instead)
+# Check if we're on FreeBSD.
 # CMAKE_SYSTEM_NAME checks are commonly known, but specifically taken from libsdl's CMakeLists
 if(CMAKE_SYSTEM_NAME MATCHES "kFreeBSD.*|FreeBSD")
   set(FREEBSD TRUE)
