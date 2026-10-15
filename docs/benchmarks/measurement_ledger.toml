@@ -531,6 +531,8 @@ stale_through = [
   { through = "b096e8c77", note = "spans.rs changes the Tor spans and the shutdown wait only; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
   { through = "58ad7eac8", note = "spans.rs changes the Tor gap and its provenance comment and adds a derivation test; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
   { through = "189f8104a", note = "The gap ends at the peer's first complete handshake frame, where it ended at any first complete frame: a frame of another command no longer disarms it. The dial, the handshake and their I/O are unchanged; in the clearnet legs the peer's first frame was its handshake. Not re-measured." },
+  { through = "cf144a645", note = "The gap and dial timeout arms stop logging the wake's identity fields at debug; the timeout and its close kind are unchanged. Logging only. Not re-measured." },
+  { through = "db6e11e07", note = "Tests, the seam post and the ban view move into files of their own; no code path changes. Not re-measured." },
 ]
 
 [[constant]]
@@ -609,6 +611,8 @@ cleared = [
   { through = "b096e8c77", reason = "The spans themselves: TOR_DIAL_WITHIN_NANOS 120 s and TOR_GAP_WITHIN_NANOS 31 s from the rerun (this ledger's current rows), SHUTDOWN_TIMEOUT_NANOS following the dial, TOR_SPANS_BASIS RustPath, and the measurement feature lifting the gap alone. The values are the capture's; nothing else on these paths changed." },
   { through = "58ad7eac8", reason = "The Tor gap corrected to 37.4 s, 2 x the pooled p99 of 18.69 s (rank 188 of 189 per D9), rounded up to 100 ms (Rick, 2026-10-14; 31 s struck as a miscount of rank 187). The capture is unchanged; this applies its derivation correctly. A derivation test is added. The dial, the shutdown wait and the I/O are unchanged." },
   { through = "189f8104a", reason = "The gap ends at the peer's first complete handshake frame instead of its first complete frame (Copilot on #1056). In the capture the two are the same frame: the dialer sends its handshake request first and accepts only the response as its first message, so every counted session's first frame was its handshake (the record says so). The capture still prices this tree; the dial and the I/O are unchanged." },
+  { through = "cf144a645", reason = "The Tor dial and gap timeout arms drop their debug lines naming the wake; the deadlines, the timeout and its close kind are unchanged, so the capture still prices this tree." },
+  { through = "db6e11e07", reason = "The Tor listener tests and the seam's post and ban types move into files of their own; no code path changes." },
 ]
 
 [[constant]]
