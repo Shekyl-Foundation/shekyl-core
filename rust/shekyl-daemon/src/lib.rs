@@ -18,6 +18,7 @@ pub mod entry;
 pub mod help;
 pub mod legacy;
 pub mod network;
+pub mod options;
 pub mod run;
 pub mod signals;
 pub mod tor;

@@ -171,17 +171,13 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/get_transaction_pool",              on_get_transaction_pool,         COMMAND_RPC_GET_TRANSACTION_POOL),
         DJSON("/get_transaction_pool_hashes",       on_get_transaction_pool_hashes,  COMMAND_RPC_GET_TRANSACTION_POOL_HASHES),
         DJSON("/get_transaction_pool_stats",        on_get_transaction_pool_stats,   COMMAND_RPC_GET_TRANSACTION_POOL_STATS),
-        DJSON("/get_limit",                         on_get_limit,                    COMMAND_RPC_GET_LIMIT),
         // Restricted-only endpoints (Rust checks restriction before calling)
         DJSON("/start_mining",                      on_start_mining,                 COMMAND_RPC_START_MINING),
         DJSON("/stop_mining",                       on_stop_mining,                  COMMAND_RPC_STOP_MINING),
         DJSON("/mining_status",                     on_mining_status,                COMMAND_RPC_MINING_STATUS),
         DJSON("/save_bc",                           on_save_bc,                      COMMAND_RPC_SAVE_BC),
         DJSON("/set_log_hash_rate",                 on_set_log_hash_rate,            COMMAND_RPC_SET_LOG_HASH_RATE),
-        DJSON("/set_log_level",                     on_set_log_level,                COMMAND_RPC_SET_LOG_LEVEL),
-        DJSON("/set_log_categories",                on_set_log_categories,           COMMAND_RPC_SET_LOG_CATEGORIES),
         DJSON("/stop_daemon",                       on_stop_daemon,                  COMMAND_RPC_STOP_DAEMON),
-        DJSON("/set_limit",                         on_set_limit,                    COMMAND_RPC_SET_LIMIT),
         DJSON("/pop_blocks",                        on_pop_blocks,                   COMMAND_RPC_POP_BLOCKS),
     };
     return t;

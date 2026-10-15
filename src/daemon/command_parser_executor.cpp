@@ -192,35 +192,6 @@ bool t_command_parser_executor::print_blockchain_info(const std::vector<std::str
   return m_executor.print_blockchain_info(start_index, end_index);
 }
 
-bool t_command_parser_executor::set_log_level(const std::vector<std::string>& args)
-{
-  if(args.size() > 1)
-  {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  if (args.empty())
-  {
-    return m_executor.set_log_categories("+");
-  }
-
-  uint16_t l = 0;
-  if(epee::string_tools::get_xtype_from_string(l, args[0]))
-  {
-    if(4 < l)
-    {
-      std::cout << "Invalid syntax: Wrong number range, use: set_log <log_level_number_0-4>. For more details, use the help command." << std::endl;
-      return true;
-    }
-    return m_executor.set_log_level(l);
-  }
-  else
-  {
-    return m_executor.set_log_categories(args.front());
-  }
-}
-
 bool t_command_parser_executor::print_height(const std::vector<std::string>& args) 
 {
   if (!args.empty()) {
@@ -480,72 +451,6 @@ bool t_command_parser_executor::print_status(const std::vector<std::string>& arg
   }
 
   return m_executor.print_status();
-}
-
-bool t_command_parser_executor::set_limit(const std::vector<std::string>& args)
-{
-  if(args.size()>1) {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  if(args.size()==0) {
-    return m_executor.get_limit();
-  }
-  int64_t limit;
-  try {
-      limit = std::stoll(args[0]);
-  }
-  catch(const std::exception& ex) {
-      std::cout << "Invalid syntax: Failed to parse limit. For more details, use the help command." << std::endl;
-      return true;
-  }
-
-  return m_executor.set_limit(limit, limit);
-}
-
-bool t_command_parser_executor::set_limit_up(const std::vector<std::string>& args)
-{
-  if(args.size()>1) {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  if(args.size()==0) {
-    return m_executor.get_limit_up();
-  }
-  int64_t limit;
-  try {
-      limit = std::stoll(args[0]);
-  }
-  catch(const std::exception& ex) {
-      std::cout << "Invalid syntax: Failed to parse limit. For more details, use the help command." << std::endl;
-      return true;
-  }
-
-  return m_executor.set_limit(0, limit);
-}
-
-bool t_command_parser_executor::set_limit_down(const std::vector<std::string>& args)
-{
-  if(args.size()>1) {
-    std::cout << "Invalid syntax: Too many parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  if(args.size()==0) {
-    return m_executor.get_limit_down();
-  }
-  int64_t limit;
-  try {
-      limit = std::stoll(args[0]);
-  }
-  catch(const std::exception& ex) {
-      std::cout << "Invalid syntax: Failed to parse limit. For more details, use the help command." << std::endl;
-      return true;
-  }
-
-  return m_executor.set_limit(limit, 0);
 }
 
 

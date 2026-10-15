@@ -116,6 +116,7 @@ impl std::error::Error for StoreFault {}
 pub struct RpcRefusal {
     pub code: i64,
     pub message: String,
+    pub data: Option<serde_json::Value>,
 }
 
 impl RpcRefusal {
@@ -127,6 +128,7 @@ impl RpcRefusal {
         Self {
             code: CORE_RPC_ERROR_CODE_WRONG_PARAM,
             message: message.to_owned(),
+            data: None,
         }
     }
 }
@@ -349,6 +351,7 @@ pub fn get_block(
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
                 message: "Internal error: coinbase transaction in the block has the wrong type"
                     .to_owned(),
+                data: None,
             }))
         }
         Err(other) => return Err(RpcFault::Facts(other)),
@@ -367,6 +370,7 @@ pub fn get_block(
                 "Internal error: can't get block by hash. Hash = {}.",
                 request.hash
             ),
+            data: None,
         }));
     };
 
@@ -465,6 +469,7 @@ fn too_big_height(height: BlockHeight, chain: ChainCount) -> RpcFault {
             height.to_raw(),
             newest_block(chain).to_raw(),
         ),
+        data: None,
     })
 }
 
@@ -494,6 +499,7 @@ pub fn get_block_header_by_height(
                     "Internal error: can't get block by height. Height = {}.",
                     height.to_raw()
                 ),
+                data: None,
             }))
         }
         Err(other) => return Err(RpcFault::Facts(other)),
@@ -817,6 +823,7 @@ fn pow_hash_or_refuse(requested: bool, restricted: bool) -> Result<bool, RpcFaul
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_RESTRICTED,
             message: "fill_pow_hash is not available on the restricted listener".to_owned(),
+            data: None,
         }));
     }
     Ok(requested)
@@ -946,6 +953,7 @@ pub fn get_last_block_header(
             message: "Core is busy: this node is not synchronized, so it has \
                       no chain tip to report."
                 .to_owned(),
+            data: None,
         }));
     }
     // `chain_height` is the count; the tip's own height is one below it
@@ -980,6 +988,7 @@ pub fn get_last_block_header(
         message: "Core is busy: the chain advanced on every attempt to read \
                   its tip."
             .to_owned(),
+        data: None,
     }))
 }
 
@@ -999,6 +1008,7 @@ pub fn get_block_header_by_hash(
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_RESTRICTED,
             message: "Too many block headers requested in restricted mode".to_owned(),
+            data: None,
         }));
     }
     let mut block_headers = Vec::with_capacity(request.hashes.len());
@@ -1043,6 +1053,7 @@ pub fn get_block_headers_range(
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
             message: "Invalid start/end heights.".to_owned(),
+            data: None,
         }));
     }
     // The span, not the endpoints, is what the cap bounds — and it is computed
@@ -1059,6 +1070,7 @@ pub fn get_block_headers_range(
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_RESTRICTED,
             message: "Too many block headers requested.".to_owned(),
+            data: None,
         }));
     }
     let mut headers = Vec::new();
@@ -1102,6 +1114,7 @@ pub fn get_fee_estimate(
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_WRONG_PARAM,
             message: format!("grace_blocks must not exceed {ceiling}"),
+            data: None,
         }));
     }
     let estimate = facts.fee_estimate(request.grace_blocks)?;
@@ -2082,10 +2095,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v33` = 3.56). A bump that
+        // Head of the `get_version` chain (`_v34` = 3.57). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v33.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v34.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2206,6 +2219,7 @@ pub(crate) mod tests {
                 message: "Requested block height: 9000000 greater than current top block \
                           height: 1234566"
                     .to_owned(),
+                data: None,
             })
         );
     }
@@ -2449,6 +2463,7 @@ pub(crate) mod tests {
             RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
                 message: format!("Internal error: can't get block by hash. Hash = {unknown}."),
+                data: None,
             })
         );
     }
@@ -2465,6 +2480,7 @@ pub(crate) mod tests {
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
                 message: "Internal error: coinbase transaction in the block has the wrong type"
                     .to_owned(),
+                data: None,
             })
         );
     }
@@ -2548,6 +2564,7 @@ pub(crate) mod tests {
                 message: "Requested block height: 9000000 greater than current top block \
                           height: 1234609"
                     .to_owned(),
+                data: None,
             })
         );
     }
@@ -2565,6 +2582,7 @@ pub(crate) mod tests {
             RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
                 message: "Internal error: can't get block by height. Height = 5.".to_owned(),
+                data: None,
             })
         );
     }

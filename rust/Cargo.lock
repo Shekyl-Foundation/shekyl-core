@@ -4271,6 +4271,7 @@ dependencies = [
  "shekyl-daemon-config",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-options",
  "shekyl-peerlist",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",

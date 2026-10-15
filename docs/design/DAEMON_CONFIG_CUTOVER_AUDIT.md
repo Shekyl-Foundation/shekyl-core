@@ -256,6 +256,32 @@ and a tokio child's `wait()` still returns its status.
   then have no caller. [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.12 asks
   that those deletions go to Rick before they are cut; they are listed in
   commit (e)'s message and removed there only with his word.
+- **The runtime rows (commit (d), §2.7, `RPC_CHANNEL.md` §6.4).** The
+  options handle
+  ([`rust/shekyl-daemon/src/options.rs`](../../rust/shekyl-daemon/src/options.rs))
+  holds the resolved map under one lock. A set's build runs `TABLE.live`
+  first, the runtime mark second and the constructor last, so a secret or a
+  command row is refused as startup-only (`config.runtime.startup-only`)
+  and never as a surface fault; a collection's text is split on whitespace,
+  the inverse of `Value::render`, so `log-category` takes `p2p=trace
+  sync=info` and `none`. The apply is one step per owner: the link budget
+  takes both rates in one call (`link_ffi::set_limits`), and the logging
+  owner's typed apply (`shekyl_logging::subsystem::apply`) takes the base
+  level and the overrides and cannot fail on its input, the subscriber's
+  handle held from `init` for the life of the process; it also records the
+  directive the C reader `shekyl_log_get_categories` reports. The audit line
+  names the admin listener as the caller until RT-W10 names connections.
+  `source` on the wire is one of the four words, a file source with no
+  path or line (rule 37). The in-process console arm reaches the handle
+  through the crate's recorded configure, since it holds the core and not
+  the server's state; `print_net_stats` reads the two rate rows of
+  `option_show` back through their constructors and prints `no limit` for
+  `unlimited`. The link exports `shekyl_link_set_up`, `shekyl_link_set_down`,
+  `shekyl_link_get_up` and `shekyl_link_get_down` go with their callers:
+  the bounds are set from Rust only. The Python framework gains
+  `option_set` and `option_show` in place of its four methods.
+  `CORE_RPC_VERSION` is 3.57: the two methods, the JSON-RPC error's `data`
+  member under code `-26`, and the four routes gone.
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test
@@ -291,7 +317,7 @@ owner refuses at its own start, and the runtime rows, are commits (c) and
 | the log location cannot be written | `sections::tests::the_log_location_is_created_or_refused` |
 | the ban file cannot be read, or a line does not parse | `sections::tests::the_ban_file_is_read_at_parse_and_a_bad_line_is_named` |
 | a listener cannot bind | RPC: `shekyl-daemon-rpc` `bind::tests::wildcard_binds_are_refused`, `bind::tests::network_binds_are_refused`, `bind::tests::the_seam_refuses_before_binding` (the refusals); a bound socket in use is `bind_listener`'s error, logged by `shekyl_daemon_rpc_start`, which returns -1 and the remnant's `run` 1; `shekyl-daemon` `run::tests::a_stop_request_from_the_remnant_runs_the_one_stop_path` covers the wait that start completes. The zone host: `shekyl-ffi` `zone_ffi::tests::a_clearnet_endpoint_already_bound_is_refused_with_its_address` (the refusal names the endpoint; `network::start` logs it and the daemon stops with 1) |
-| a runtime change its constructor refuses; a set for a row not marked runtime | commit (d) |
+| a runtime change its constructor refuses; a set for a row not marked runtime | `shekyl-daemon` `options::tests::refusals_carry_their_codes_and_nothing_applies_beside_one` (startup-only, unknown, rejected and a syntax refusal in one request, nothing applied); the RT-O25 property `options::tests::every_runtime_row_round_trips_its_shown_text_through_set`; the logging owner's apply, `shekyl-logging` `tests/runtime_reload.rs`; the RPC's framing, `shekyl-daemon-rpc` `options::tests::a_refused_pair_refuses_the_whole_set_and_reports_every_refusal` and `handlers::json_rpc::tests::restricted_method_list_matches_the_specification` |
 | `service` outside the SCM, on Linux, FreeBSD or macOS, or with a bad root | `service` is a reserved row until RT-W14, refused by `table::tests::rejected_and_reserved_names_are_refused_with_their_reasons`; the missing root by `paths::tests::the_service_root_is_program_data_or_a_refusal`; the three cases are RT-W14's to test when the row goes live |
 
 Cross-row refusals the types make (`INPUT_GRAMMAR.md` §4), beyond §6:

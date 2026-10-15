@@ -13,8 +13,8 @@ use crate::ctl_client;
 ///
 /// **A bridged leg, on purpose** (§2.1.1): `/mining_status` is RK-7's and is
 /// still served from the C++ table (`core_rpc_ffi.cpp:180`). Required fields
-/// for the reason [`GetLimitReplyProvisional`] gives — a defaulted `active`
-/// would report a mining daemon as idle.
+/// (no `#[serde(default)]`): a renamed field is an error naming it, where a
+/// defaulted `active` would report a mining daemon as idle.
 #[derive(serde::Deserialize)]
 struct MiningStatusProvisional {
     status: shekyl_rpc_types::RpcStatus,

@@ -1109,25 +1109,31 @@ fn net_stats_reply(status: &str) -> String {
     })
 }
 
-/// `print_net_stats` over its two legs — the native `/get_net_stats` and
-/// the bridged `/get_limit`.
+/// An `option_show` reply carrying the two rate rows `print_net_stats`
+/// reads, as the daemon serializes them (RT-O25).
+fn option_show_rates(down: &str, up: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":"0","result":{{"options":[{{"name":"p2p-download-max","source":"default","runtime":true,"value":"{down}"}},{{"name":"p2p-upload-max","source":"runtime","runtime":true,"value":"{up}"}}]}}}}"#
+    )
+}
+
+/// `print_net_stats` over its two legs: the native `/get_net_stats` and
+/// `option_show`'s two rate rows (`RPC_CHANNEL.md` §6.4, in place of
+/// `/get_limit`).
 ///
-/// The command the §2.1.1 note calls covered, finally covered.
-///
-/// The byte counts come from the native leg and the two limits from the
-/// **bridged** one, so the assertions below cannot both hold unless both
-/// legs arrived. The limits are also asymmetric (8 down, 4 up) because a
-/// single number would pass a renderer that read one field twice — the
-/// defect a missing `#[serde(default)]` cannot catch. Elapsed time is
-/// wall-clock here (`unix_now`), so the averages are deliberately not
-/// asserted; what this test owns is the leg, not the arithmetic.
+/// The byte counts come from one leg and the two limits from the other, so
+/// the assertions below cannot both hold unless both legs arrived. The
+/// limits are asymmetric (8 down, 4 up) because a single number would pass
+/// a renderer that read one row twice. Elapsed time is wall-clock here
+/// (`unix_now`), so the averages are deliberately not asserted; what this
+/// test owns is the leg, not the arithmetic.
 #[test]
-fn net_stats_renders_the_bridged_limits_beside_the_native_counters() {
+fn net_stats_renders_the_option_show_limits_beside_the_native_counters() {
     let address = route_server(vec![
         ("/get_net_stats", net_stats_reply("OK")),
         (
-            "/get_limit",
-            r#"{"status":"OK","limit_up":4,"limit_down":8}"#.to_owned(),
+            "json_rpc:option_show",
+            option_show_rates("8KiB/s", "4KiB/s"),
         ),
     ]);
     let (code, out) = run(&["print_net_stats"], Some(&address));
@@ -1138,24 +1144,48 @@ fn net_stats_renders_the_bridged_limits_beside_the_native_counters() {
     assert!(out.contains("limit of 4.00 kB/s"), "{out}");
 }
 
-/// A `/get_limit` reply missing a field is **named**, not defaulted.
-///
-/// This is the assertion that makes `GetLimitReplyProvisional`'s missing
-/// `#[serde(default)]` load-bearing rather than a style choice. With the
-/// attribute this test goes green while printing a limit of `0 B/s` — a
-/// number the daemon never sent — so the failure it guards against is
-/// precisely a passing run. RK-8 renaming the field gets an error naming
-/// it instead of four confident zeros.
+/// `unlimited` is a bound of none, printed as such and never as a limit of
+/// zero bytes.
 #[test]
-fn a_get_limit_reply_missing_a_field_is_refused_rather_than_defaulted() {
+fn net_stats_prints_an_unlimited_direction_as_no_limit() {
     let address = route_server(vec![
         ("/get_net_stats", net_stats_reply("OK")),
-        ("/get_limit", r#"{"status":"OK","limit_up":4}"#.to_owned()),
+        (
+            "json_rpc:option_show",
+            option_show_rates("unlimited", "4KiB/s"),
+        ),
+    ]);
+    let (code, out) = run(&["print_net_stats"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("Received 4096 bytes"), "{out}");
+    assert!(out.contains("average 0 B/s, no limit"), "{out}");
+    assert!(!out.contains("limit of 0 B/s"), "{out}");
+    assert!(out.contains("limit of 4.00 kB/s"), "{out}");
+}
+
+/// A reply missing a rate row, or carrying text that is not a rate, is
+/// **named**, not defaulted: the row's own constructor reads the text back,
+/// so a daemon that renamed the row or changed its syntax gets an error
+/// naming it instead of a confident zero.
+#[test]
+fn an_option_show_reply_without_a_rate_is_refused_rather_than_defaulted() {
+    let only_down = r#"{"jsonrpc":"2.0","id":"0","result":{"options":[{"name":"p2p-download-max","source":"default","runtime":true,"value":"8KiB/s"}]}}"#;
+    let address = route_server(vec![
+        ("/get_net_stats", net_stats_reply("OK")),
+        ("json_rpc:option_show", only_down.to_owned()),
     ]);
     let (code, out) = run(&["print_net_stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-    assert!(out.contains("malformed get_limit reply"), "{out}");
-    assert!(out.contains("limit_down"), "{out}");
+    assert!(out.contains("did not answer p2p-upload-max"), "{out}");
+
+    let address = route_server(vec![
+        ("/get_net_stats", net_stats_reply("OK")),
+        ("json_rpc:option_show", option_show_rates("8KiB/s", "fast")),
+    ]);
+    let (code, out) = run(&["print_net_stats"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("not a rate"), "{out}");
+    assert!(!out.contains("limit of 0 B/s"), "{out}");
 }
 
 /// A complete `/get_info` reply, as the daemon serializes it. The shared
@@ -2184,12 +2214,11 @@ fn the_alt_chain_share_uses_the_build_t() {
     );
 }
 
-/// A route the daemon no longer serves is a request failure, not a zero.
-///
-/// The other half of §2.1.1: the acceptor answers `404` for an unrouted
-/// path, which is what a daemon that dropped `/get_limit` would do.
+/// A method the daemon does not serve is a request failure, not a zero: the
+/// acceptor answers `404` for an unrouted path, so a daemon without
+/// `option_show` fails `print_net_stats` loudly.
 #[test]
-fn a_bridged_route_the_daemon_stopped_serving_fails_loudly() {
+fn a_method_the_daemon_does_not_serve_fails_loudly() {
     let address = route_server(vec![("/get_net_stats", net_stats_reply("OK"))]);
     let (code, out) = run(&["print_net_stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");

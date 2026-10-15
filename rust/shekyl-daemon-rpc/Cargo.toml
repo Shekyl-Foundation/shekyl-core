@@ -34,6 +34,7 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # The RPC section the one start call reads (DAEMON_CONFIG_CUTOVER.md §2.3).
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+shekyl-options = { path = "../shekyl-options" }
 # The two peerlist capacities `print_pl_stats` reports a fraction of.
 shekyl-peerlist = { path = "../shekyl-peerlist" }
 # Typed identities (TxHash / BlockHash / BlockHeight) per rule 18.

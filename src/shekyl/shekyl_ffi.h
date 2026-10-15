@@ -4513,14 +4513,9 @@ int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t work
 void shekyl_executor_release(std::uint64_t handle);
 void shekyl_zone_session_established(std::uint64_t id);
 
-/// The operator's link budget, in KiB/s. A negative value removes that
-/// direction's bucket. Zero or positive installs one. The default is
-/// unlimited, which is the absence of a bucket.
-void shekyl_link_set_up(std::int64_t kbps);
-void shekyl_link_set_down(std::int64_t kbps);
-/// The rate in KiB/s, or -1 when that direction is unlimited.
-std::int64_t shekyl_link_get_up(void);
-std::int64_t shekyl_link_get_down(void);
+/// The operator's link budget is set from Rust only (`p2p-upload-max`,
+/// `p2p-download-max`, at start and through `option_set`); the C++ reads
+/// its counters.
 /// Bytes and packets the budget has moved. A null pointer is skipped.
 void shekyl_link_totals(std::uint64_t* bytes_down, std::uint64_t* packets_down,
     std::uint64_t* bytes_up, std::uint64_t* packets_up);

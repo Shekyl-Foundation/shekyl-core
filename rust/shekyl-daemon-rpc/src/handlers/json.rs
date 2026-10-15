@@ -290,7 +290,6 @@ json_handler!(get_alt_blocks_hashes, "/get_alt_blocks_hashes");
 json_handler!(get_transaction_pool, "/get_transaction_pool");
 json_handler!(get_transaction_pool_hashes, "/get_transaction_pool_hashes");
 json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");
-json_handler!(get_limit, "/get_limit");
 
 /// `/get_info` (alias `/getinfo`) — served natively (RK-5c,
 /// `docs/design/DAEMON_RPC_KV_GET_INFO.md`). The body is ignored, as the C++
@@ -386,10 +385,7 @@ json_handler!(stop_mining, "/stop_mining");
 json_handler!(mining_status, "/mining_status");
 json_handler!(save_bc, "/save_bc");
 json_handler!(set_log_hash_rate, "/set_log_hash_rate");
-json_handler!(set_log_level, "/set_log_level");
-json_handler!(set_log_categories, "/set_log_categories");
 json_handler!(stop_daemon, "/stop_daemon");
-json_handler!(set_limit, "/set_limit");
 json_handler!(pop_blocks, "/pop_blocks");
 
 /// `/get_net_stats` — process start plus the global throttle counters

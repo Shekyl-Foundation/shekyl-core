@@ -182,7 +182,11 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// reports that state: `get_info`'s Peers part is `"p2p": "offline"` with
 /// no count (and `"p2p": "running"` with its counts), and `get_peer_list`,
 /// `get_connections` and `sync_info` answer `offline` alone.
-pub const CORE_RPC_VERSION_MINOR: u32 = 56;
+/// 3.57: `option_set` and `option_show` (RT-O23…RT-O27); the JSON-RPC
+/// error object gains `data`, and `-26` is a configuration refusal.
+/// `/set_limit`, `/get_limit`, `/set_log_level` and `/set_log_categories`
+/// are gone (`DAEMON_CONFIG_CUTOVER.md` §2.7).
+pub const CORE_RPC_VERSION_MINOR: u32 = 57;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -591,11 +595,13 @@ mod tests {
         // 3.53 writes `get_info`'s amounts as decimal strings.
         // 3.54 retires the network's four names from `get_info`. 3.55 drops
         // `last_seen` from `get_peer_list`: the Rust lists carry no clock.
-        // 3.56 reports offline as a state, never a zero.
-        assert_eq!(CORE_RPC_VERSION, 196_664);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 56);
+        // 3.56 reports offline as a state, never a zero. 3.57 adds
+        // `option_set` / `option_show` and the error object's `data`, and
+        // retires the four runtime endpoints (DAEMON_CONFIG_CUTOVER §2.7).
+        assert_eq!(CORE_RPC_VERSION, 196_665);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 57);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 56);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 57);
     }
 
     #[test]

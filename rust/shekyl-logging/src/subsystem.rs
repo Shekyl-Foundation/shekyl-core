@@ -210,6 +210,21 @@ pub fn directive_from_words(base: &str, overrides: &[(&str, &str)]) -> Option<St
     Some(directive(base, &pairs))
 }
 
+/// Applies a base level and per-subsystem overrides to the live filter: the
+/// runtime owner of `log-level` and `log-category` (IG-12,
+/// `DAEMON_CONFIG_CUTOVER.md` §2.7). The directive is [`directive`]'s, so
+/// it is always one the filter accepts, and the swap goes through the
+/// handle the one `init` registered for the life of the process. The apply
+/// therefore cannot fail on its input; the only failure is a process with no
+/// subscriber, which is reported to standard error and leaves the filter as
+/// it was, so a caller that built its values first stays all or nothing.
+pub fn apply(base: Level, overrides: &[(Subsystem, Level)]) {
+    let directive = directive(base, overrides);
+    if let Err(reason) = crate::ffi::reload_directive(directive) {
+        eprintln!("shekyl-logging: the runtime log change was not applied: {reason}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

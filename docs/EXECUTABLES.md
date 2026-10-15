@@ -111,10 +111,6 @@ launchd, Task Scheduler, or the GUI wallet's Tauri sidecar), run with
 | `unban <ip>` | Remove a ban |
 | `flush_txpool [txid]` | Remove transactions from the pool |
 | `pop_blocks <n>` | Remove the top N blocks (for recovery) |
-| `set_log <level>` | Change log level at runtime |
-| `limit [up\|down] [kB/s]` | View or set bandwidth limits |
-| `out_peers <n>` | Change max outbound peers |
-| `in_peers <n>` | Change max inbound peers |
 | `version` | Print daemon version |
 | `save` | Force a blockchain save |
 | `exit` / `stop_daemon` | Shut down the daemon |

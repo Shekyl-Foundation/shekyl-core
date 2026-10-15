@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Daemon RPC: `option_set` and `option_show` at `CORE_RPC_VERSION` 3.57** (`RPC_CHANNEL.md` §6.4, RT-O23…RT-O27; `DAEMON_CONFIG_CUTOVER.md` §2.7). `option_set` takes name and value pairs in the input grammar's syntax, builds every value through the option table's own constructor and applies all or nothing; it accepts the four runtime rows (`p2p-upload-max`, `p2p-download-max`, `log-level`, `log-category`) and refuses any other as startup-only. `option_show` lists each row the caller may see with its source and whether it is runtime; a secret row carries no value. A refusal is JSON-RPC error `-26` whose `data` lists every diagnostic. `/set_log_level`, `/set_log_categories`, `/get_limit` and `/set_limit` are gone, with the console words `set_log`, `limit`, `limit_up` and `limit_down`; `print_net_stats` reads the rate rows of `option_show` and prints `no limit` for an unlimited direction. The Python framework's `option_set` and `option_show` replace its four methods.
+
 ## [3.1.0-alpha.10] - 2026-10-15
 
 - **Economics sim: ESR-11's secret-draw loop is deleted** (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.22). Since ESR-14 it and ESR-13's loop ran one experiment on one rule; ESR-13 at `Timing::esr11()` agrees with it within seed noise on every cell, and the remaining 30 % gap is the two generators realising different dropout, shown by replication. `--secret-draw` now runs ESR-13's loop at ESR-11's timing, and the nightly lane names `the_esr11_timing_set_runs_and_the_table_renders`. ESR-11's analytic functions and the shared `count_at` / `capped_at` stay.

@@ -36,6 +36,7 @@ use tokio::sync::{oneshot, watch};
 use crate::bind::{bind_listener, BoundListener};
 use crate::conn_limit::ConnLimits;
 use crate::core::CoreRpc;
+use crate::options::{OptionsAbsent, OptionsHandle};
 use crate::server::{serve_presets, ServerConfig};
 
 /// Structural floor, the same pair the transport runtime is built with.
@@ -51,6 +52,7 @@ fn daemon_rpc_budget() -> RuntimeBudget {
 /// The section the start reads and the sender it completes.
 struct Pending {
     section: Rpc,
+    options: OptionsHandle,
     constructed: oneshot::Sender<Result<(), String>>,
 }
 
@@ -64,20 +66,34 @@ struct Running {
 
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
+/// The options handle the last `configure` recorded, for the in-process
+/// console arm, which has the core and not the server's state.
+static OPTIONS: Mutex<Option<OptionsHandle>> = Mutex::new(None);
+
+/// The options handle the daemon configured, or the absent handle before
+/// any was.
+pub(crate) fn options() -> OptionsHandle {
+    slot(&OPTIONS)
+        .clone()
+        .unwrap_or_else(|| Arc::new(OptionsAbsent))
+}
 
 fn slot<T>(of: &'static Mutex<Option<T>>) -> MutexGuard<'static, Option<T>> {
     of.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Records the RPC section for the one start call and returns the receiver
-/// that call completes: `Ok(())` once every listener is bound and served,
-/// `Err` naming the refusal otherwise. The Rust `main()` calls this before
-/// the remnant is constructed; a second call before the start replaces the
-/// first, whose receiver then never completes.
-pub fn configure(section: Rpc) -> oneshot::Receiver<Result<(), String>> {
+/// Records the RPC section and the options handle (`option_set` and
+/// `option_show`'s owner, RT-O26) for the one start call and returns the
+/// receiver that call completes: `Ok(())` once every listener is bound and
+/// served, `Err` naming the refusal otherwise. The Rust `main()` calls this
+/// before the remnant is constructed; a second call before the start
+/// replaces the first, whose receiver then never completes.
+pub fn configure(section: Rpc, options: OptionsHandle) -> oneshot::Receiver<Result<(), String>> {
     let (constructed, rx) = oneshot::channel();
+    *slot(&OPTIONS) = Some(Arc::clone(&options));
     *slot(&PENDING) = Some(Pending {
         section,
+        options,
         constructed,
     });
     rx
@@ -96,6 +112,7 @@ pub fn configure(section: Rpc) -> oneshot::Receiver<Result<(), String>> {
 pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) -> i32 {
     let Some(Pending {
         section,
+        options,
         constructed,
     }) = slot(&PENDING).take()
     else {
@@ -103,7 +120,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) ->
         return -1;
     };
     // SAFETY: the caller's contract above.
-    match unsafe { start(&section, rpc_server_ptr) } {
+    match unsafe { start(&section, options, rpc_server_ptr) } {
         Ok(running) => {
             *slot(&RUNNING) = Some(running);
             // The receiver is gone only if the entry already gave up.
@@ -124,7 +141,11 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) ->
 /// # Safety
 ///
 /// As [`shekyl_daemon_rpc_start`].
-unsafe fn start(section: &Rpc, rpc_server_ptr: *mut c_void) -> Result<Running, String> {
+unsafe fn start(
+    section: &Rpc,
+    options: OptionsHandle,
+    rpc_server_ptr: *mut c_void,
+) -> Result<Running, String> {
     if rpc_server_ptr.is_null() {
         return Err("start called with a null core pointer".to_owned());
     }
@@ -152,6 +173,7 @@ unsafe fn start(section: &Rpc, rpc_server_ptr: *mut c_void) -> Result<Running, S
     let config = ServerConfig {
         cors_origins: section.cors_origins.clone(),
         conn_limits,
+        options,
         ..Default::default()
     };
     // Level-triggered: a stop that lands before any acceptor has polled is

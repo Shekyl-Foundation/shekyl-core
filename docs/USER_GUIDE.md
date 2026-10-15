@@ -231,8 +231,11 @@ so scripts can check it without parsing the output.
 | `bans` | List all banned peers |
 | `ban <ip> [seconds]` | Ban a peer |
 | `unban <ip>` | Remove a ban |
-| `limit_up <kB/s>` / `limit_down <kB/s>` | Set bandwidth limits |
-| `out_peers <n>` / `in_peers <n>` | Adjust peer count at runtime |
+
+Bandwidth limits and log settings change at runtime through the admin
+RPC's `option_set` and `option_show` (`p2p-upload-max`, `p2p-download-max`,
+`log-level`, `log-category`), with the same spellings as the command line
+and the configuration file; the console has no words for them.
 
 **Chain inspection**
 

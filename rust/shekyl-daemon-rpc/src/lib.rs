@@ -94,6 +94,7 @@ pub mod info;
 pub mod info_facts;
 pub mod methods;
 pub mod middleware;
+pub mod options;
 pub mod server;
 pub mod shard_view;
 pub mod submit;

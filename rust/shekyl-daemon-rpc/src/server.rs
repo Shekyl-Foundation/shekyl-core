@@ -33,6 +33,7 @@ use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
 use crate::core::CoreRpc;
 use crate::handlers::{binary, json, json_rpc, submit};
 use crate::middleware::DEFAULT_BODY_LIMIT;
+use crate::options::{OptionsAbsent, OptionsFacts};
 use crate::shard_view::{ShardViewFacts, SkeletonAbsent};
 use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
 
@@ -57,6 +58,9 @@ pub struct AppState {
     pub conn_tracker: Arc<ConnTracker>,
     /// What `request_archival_shard` reads (`shard_view::ShardViewFacts`).
     pub shard_view: Arc<dyn ShardViewFacts>,
+    /// What `option_set` and `option_show` read and write
+    /// (`options::OptionsFacts`, RT-O26); the composition root supplies it.
+    pub options: Arc<dyn OptionsFacts>,
 }
 
 pub struct ServerConfig {
@@ -69,6 +73,8 @@ pub struct ServerConfig {
     /// a `ViewDesk` (the daemon image, `SV-D9`) supplies it; the default is
     /// [`SkeletonAbsent`], a daemon that serves no shard view.
     pub shard_view: Arc<dyn ShardViewFacts>,
+    /// The options handle (RT-O26); the default serves no options.
+    pub options: Arc<dyn OptionsFacts>,
 }
 
 impl Default for ServerConfig {
@@ -78,6 +84,7 @@ impl Default for ServerConfig {
             cors_origins: Vec::new(),
             conn_limits: ConnLimits::default(),
             shard_view: Arc::new(SkeletonAbsent),
+            options: Arc::new(OptionsAbsent),
         }
     }
 }
@@ -172,7 +179,6 @@ pub(crate) enum Endpoint {
     GetTransactionPoolHashes,
     GetTransactionPoolStats,
     GetInfo,
-    GetLimit,
     GetBlocksByHeightBin,
     GetOIndexesBin,
     GetStemTallies,
@@ -182,11 +188,8 @@ pub(crate) enum Endpoint {
     SaveBc,
     GetPeerList,
     SetLogHashRate,
-    SetLogLevel,
-    SetLogCategories,
     StopDaemon,
     GetNetStats,
-    SetLimit,
     PopBlocks,
 }
 
@@ -258,11 +261,6 @@ pub(crate) const ROUTES: &[Route] = &[
         paths: &["/get_info", "/getinfo"],
         visibility: Visibility::Always,
     },
-    Route {
-        endpoint: Endpoint::GetLimit,
-        paths: &["/get_limit"],
-        visibility: Visibility::Always,
-    },
     // Binary endpoints.
     Route {
         endpoint: Endpoint::GetBlocksByHeightBin,
@@ -311,16 +309,6 @@ pub(crate) const ROUTES: &[Route] = &[
         visibility: Visibility::AdminOnly,
     },
     Route {
-        endpoint: Endpoint::SetLogLevel,
-        paths: &["/set_log_level"],
-        visibility: Visibility::AdminOnly,
-    },
-    Route {
-        endpoint: Endpoint::SetLogCategories,
-        paths: &["/set_log_categories"],
-        visibility: Visibility::AdminOnly,
-    },
-    Route {
         endpoint: Endpoint::StopDaemon,
         paths: &["/stop_daemon"],
         visibility: Visibility::AdminOnly,
@@ -328,11 +316,6 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         endpoint: Endpoint::GetNetStats,
         paths: &["/get_net_stats"],
-        visibility: Visibility::AdminOnly,
-    },
-    Route {
-        endpoint: Endpoint::SetLimit,
-        paths: &["/set_limit"],
         visibility: Visibility::AdminOnly,
     },
     Route {
@@ -396,7 +379,6 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
             get(json::get_transaction_pool_stats).post(json::get_transaction_pool_stats)
         }
         Endpoint::GetInfo => get(json::get_info).post(json::get_info),
-        Endpoint::GetLimit => get(json::get_limit).post(json::get_limit),
         Endpoint::GetBlocksByHeightBin => post(binary::get_blocks_by_height),
         Endpoint::GetOIndexesBin => post(binary::get_o_indexes),
         // Admin-only (listener selection is the row's `visibility`, not this
@@ -408,11 +390,8 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         Endpoint::SaveBc => get(json::save_bc).post(json::save_bc),
         Endpoint::GetPeerList => get(json::get_peer_list).post(json::get_peer_list),
         Endpoint::SetLogHashRate => get(json::set_log_hash_rate).post(json::set_log_hash_rate),
-        Endpoint::SetLogLevel => get(json::set_log_level).post(json::set_log_level),
-        Endpoint::SetLogCategories => get(json::set_log_categories).post(json::set_log_categories),
         Endpoint::StopDaemon => get(json::stop_daemon).post(json::stop_daemon),
         Endpoint::GetNetStats => get(json::get_net_stats).post(json::get_net_stats),
-        Endpoint::SetLimit => get(json::set_limit).post(json::set_limit),
         Endpoint::PopBlocks => get(json::pop_blocks).post(json::pop_blocks),
     }
 }
@@ -484,6 +463,7 @@ pub async fn serve_presets(
             restricted,
             conn_tracker: conn_tracker.clone(),
             shard_view: config.shard_view.clone(),
+            options: config.options.clone(),
         });
         build_router(state, &config.cors_origins)
     };
@@ -659,7 +639,6 @@ mod tests {
         "/get_transaction_pool_stats",
         "/get_info",
         "/getinfo",
-        "/get_limit",
         "/get_blocks_by_height.bin",
         "/getblocks_by_height.bin",
         "/get_o_indexes.bin",
@@ -676,11 +655,8 @@ mod tests {
         "/save_bc",
         "/get_peer_list",
         "/set_log_hash_rate",
-        "/set_log_level",
-        "/set_log_categories",
         "/stop_daemon",
         "/get_net_stats",
-        "/set_limit",
         "/pop_blocks",
     ];
 

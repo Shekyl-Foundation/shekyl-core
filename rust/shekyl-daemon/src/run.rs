@@ -19,6 +19,7 @@ use std::ffi::{c_char, c_int, CStr, CString, OsStr, OsString};
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::Arc;
 
 use shekyl_daemon_config::announce;
 use shekyl_daemon_config::sections::{build, log_location_writable, DaemonConfig, Tor};
@@ -27,7 +28,9 @@ use shekyl_options::{read_cli, read_file, Diagnostic, Kind, Value};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 
 use crate::entry::{ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylStringList};
+use crate::options::DaemonOptions;
 use crate::{help, legacy, network, signals, tor};
+use shekyl_daemon_rpc::options::OptionsHandle;
 
 /// A configuration refusal.
 pub const EXIT_REFUSED: i32 = 2;
@@ -184,7 +187,10 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
             return EXIT_FAILED;
         }
     };
-    let status = supervise(entry, &config, &program, &pool, network_id);
+    // The options handle: the resolved values, the runtime rows' owners
+    // behind the RPC's two methods (§2.7).
+    let options: OptionsHandle = Arc::new(DaemonOptions::new(resolved.clone()));
+    let status = supervise(entry, &config, &program, &pool, network_id, options);
     pool.shutdown_background();
     drop(lock);
     status
@@ -212,6 +218,7 @@ fn supervise(
     program: &OsStr,
     pool: &shekyl_runtime::Pool,
     network_id: [u8; 16],
+    options: OptionsHandle,
 ) -> i32 {
     let Some(run) = entry.run else {
         eprintln!("shekyld: the entry has no run");
@@ -221,7 +228,7 @@ fn supervise(
         eprintln!("shekyld: the entry has no stop");
         return EXIT_FAILED;
     };
-    let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(config.rpc.clone());
+    let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(config.rpc.clone(), options);
     // Step 6: the managed Tor's start, overlapping the core's construction;
     // awaited at step 8.
     let tor_start = tor::begin(&config.tor, &config.data_dir, pool.handle());
@@ -709,7 +716,14 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
             crate::entry::shekyl_daemon_request_stop();
         });
-        let status = supervise(&entry, &config, OsStr::new("shekyld"), &pool, [3u8; 16]);
+        let status = supervise(
+            &entry,
+            &config,
+            OsStr::new("shekyld"),
+            &pool,
+            [3u8; 16],
+            Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
+        );
         requester.join().unwrap();
         assert_eq!(status, 0, "run's status is the exit status");
         assert_eq!(

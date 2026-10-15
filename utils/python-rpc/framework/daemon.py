@@ -357,17 +357,28 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(get_output_distribution)
 
-    def set_log_level(self, level):
-        set_log_level = {
-            'level': level,
+    def option_set(self, options):
+        """`option_set`: `options` is a list of (name, value-text) pairs in
+        the input grammar's syntax (RPC_CHANNEL.md 6.4); all or nothing."""
+        option_set = {
+            'method': 'option_set',
+            'params': {
+                'options': [{'name': name, 'value': value} for (name, value) in options],
+            },
+            'jsonrpc': '2.0',
+            'id': '0'
         }
-        return self.rpc.send_request('/set_log_level', set_log_level)
+        return self.rpc.send_json_rpc_request(option_set)
 
-    def set_log_categories(self, categories = ''):
-        set_log_categories = {
-            'categories': categories,
+    def option_show(self, names = None):
+        """`option_show`: every row the caller may see, or the named rows."""
+        option_show = {
+            'method': 'option_show',
+            'params': {} if names is None else {'names': names},
+            'jsonrpc': '2.0',
+            'id': '0'
         }
-        return self.rpc.send_request('/set_log_categories', set_log_categories)
+        return self.rpc.send_json_rpc_request(option_show)
 
     def get_alt_blocks_hashes(self, client = ""):
         get_alt_blocks_hashes = {
@@ -429,18 +440,6 @@ class Daemon(object):
         get_net_stats = {
         }
         return self.rpc.send_request('/get_net_stats', get_net_stats)
-
-    def get_limit(self):
-        get_limit = {
-        }
-        return self.rpc.send_request('/get_limit', get_limit)
-
-    def set_limit(self, limit_down, limit_up):
-        set_limit = {
-            'limit_down': limit_down,
-            'limit_up': limit_up,
-        }
-        return self.rpc.send_request('/set_limit', set_limit)
 
     def out_peers(self, out_peers):
         out_peers = {

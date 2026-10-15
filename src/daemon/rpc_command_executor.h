@@ -96,10 +96,6 @@ public:
 
   bool print_blockchain_info(int64_t start_block_index, uint64_t end_block_index);
 
-  bool set_log_level(int8_t level);
-
-  bool set_log_categories(const std::string &categories);
-
   bool print_height();
 
   bool print_block_by_hash(crypto::hash block_hash, bool include_hex);
@@ -128,14 +124,6 @@ public:
   bool stop_daemon();
 
   bool print_status();
-
-  bool get_limit();
-
-  bool get_limit_up();
-
-  bool get_limit_down();
-
-  bool set_limit(int64_t limit_down, int64_t limit_up);
 
 
 

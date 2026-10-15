@@ -3,64 +3,23 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The operator's link budget at the C boundary.
+//! The operator's link budget at the C boundary: the counters the C++
+//! reads. The bounds themselves are set from Rust only ([`set_limits`]):
+//! at start from the P2P section, and at runtime by the options handle.
 //!
-//! Rates are KiB/s. The budget stores bytes per second. Activity is the
-//! monotonic instant of the last byte, not a grant. The stall check reads
-//! [`shekyl_monotonic_ms`] and [`shekyl_recv_mark_ms`] beside
-//! [`shekyl_link_activity`].
+//! Activity is the monotonic instant of the last byte, not a grant. The
+//! stall check reads [`shekyl_monotonic_ms`] and [`shekyl_recv_mark_ms`]
+//! beside [`shekyl_link_activity`].
 
 use shekyl_capped_stream::{monotonic_ms, node_gate, recv_mark_ms};
 
-/// The operator rate is KiB/s. The budget stores bytes per second.
-const BYTES_PER_KIB: u64 = 1024;
-
-fn store_rate(kbps: i64, set: impl Fn(Option<u64>)) {
-    if kbps < 0 {
-        set(None);
-    } else {
-        let kbps = u64::try_from(kbps).unwrap_or(0);
-        set(Some(kbps.saturating_mul(BYTES_PER_KIB)));
-    }
-}
-
-fn load_rate(rate: Option<u64>) -> i64 {
-    match rate {
-        None => -1,
-        Some(bytes) => i64::try_from(bytes / BYTES_PER_KIB).unwrap_or(i64::MAX),
-    }
-}
-
-/// `kbps` negative removes the up bucket. Zero or positive is KiB/s.
 /// The upload and download rate bounds in bytes per second, `None` for
 /// unlimited: `p2p-upload-max` and `p2p-download-max`, applied by the
-/// daemon's Rust `main()` from its section.
+/// daemon's Rust `main()` from its section and by `option_set` at runtime
+/// (`DAEMON_CONFIG_CUTOVER.md` §2.7). Both at once: one owner, one step.
 pub fn set_limits(up: Option<u64>, down: Option<u64>) {
     node_gate().set_up(up);
     node_gate().set_down(down);
-}
-
-#[no_mangle]
-pub extern "C" fn shekyl_link_set_up(kbps: i64) {
-    store_rate(kbps, |rate| node_gate().set_up(rate));
-}
-
-/// `kbps` negative removes the down bucket. Zero or positive is KiB/s.
-#[no_mangle]
-pub extern "C" fn shekyl_link_set_down(kbps: i64) {
-    store_rate(kbps, |rate| node_gate().set_down(rate));
-}
-
-/// The up rate in KiB/s, or -1 when that direction is unlimited.
-#[no_mangle]
-pub extern "C" fn shekyl_link_get_up() -> i64 {
-    load_rate(node_gate().rate_up())
-}
-
-/// The down rate in KiB/s, or -1 when that direction is unlimited.
-#[no_mangle]
-pub extern "C" fn shekyl_link_get_down() -> i64 {
-    load_rate(node_gate().rate_down())
 }
 
 /// Bytes and packets the budget has moved. Null pointers are skipped.

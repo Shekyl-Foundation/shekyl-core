@@ -58,6 +58,9 @@ const RESTRICTED_METHODS: &[&str] = &[
     "get_alternate_chains",
     "relay_tx",
     "sync_info",
+    // RT-O24: setting every runtime row is in `node`; until RT-W10 the view
+    // listener refuses it here.
+    "option_set",
     "flush_cache",
     "request_archival_shard",
 ];
@@ -195,6 +198,8 @@ enum NativeMethod {
     FeeEstimate,
     RequestArchivalShard,
     Info,
+    OptionSet,
+    OptionShow,
 }
 
 /// The names each native method answers to — every alias the C++ dispatch
@@ -225,6 +230,9 @@ fn native_method_for(method: &str) -> Option<NativeMethod> {
         // One spelling: the method was born in the Rust registry (3.31)
         // and never had a C++ alias.
         "request_archival_shard" => NativeMethod::RequestArchivalShard,
+        // RT-O23: the grammar's own words, one spelling each, no REST path.
+        "option_set" => NativeMethod::OptionSet,
+        "option_show" => NativeMethod::OptionShow,
         // RK-5c. One spelling on JSON-RPC, as the C++ table carried it; the
         // `/getinfo` alias is a REST path.
         "get_info" => NativeMethod::Info,
@@ -375,6 +383,30 @@ async fn native_method(
                 .await,
             ))
         }
+        NativeMethod::OptionSet => {
+            let pairs = match crate::options::option_set_request(params) {
+                Ok(pairs) => pairs,
+                Err(fault) => return Some(Err(fault)),
+            };
+            // The handle's set runs under its own lock and applies to the
+            // owners; neither touches the core, so no worker is taken.
+            Some(frame_native(crate::options::option_set(
+                state.options.as_ref(),
+                &pairs,
+            )))
+        }
+        NativeMethod::OptionShow => {
+            let names = match crate::options::option_show_request(params) {
+                Ok(names) => names,
+                Err(fault) => return Some(Err(fault)),
+            };
+            let disclosure = crate::info::Disclosure::from_listener(state.restricted);
+            Some(frame_native(crate::options::option_show(
+                state.options.as_ref(),
+                names.as_deref(),
+                disclosure,
+            )))
+        }
         NativeMethod::RequestArchivalShard => {
             let request = match crate::shard_view::request_archival_shard_request(params) {
                 Ok(request) => request,
@@ -428,7 +460,9 @@ fn native_fault(id: serde_json::Value, method: &str, fault: RpcFault) -> JsonRpc
         // A refusal is the method answering — a bad request, or a height
         // the chain does not hold. Normal traffic: it carries its own code
         // and message and is not logged as a daemon problem.
-        RpcFault::Refused(refusal) => JsonRpcResponse::error(id, refusal.code, refusal.message),
+        RpcFault::Refused(refusal) => {
+            JsonRpcResponse::error_with_data(id, refusal.code, refusal.message, refusal.data)
+        }
         // The store contradicted itself. The caller is told what
         // contradicted what: every operand is a public chain fact, and a
         // bare "Internal error" would send an operator to the wrong place.
@@ -557,6 +591,7 @@ mod tests {
         "sync_info",
         "flush_cache",
         "request_archival_shard",
+        "option_set",
     ];
 
     /// Every name the daemon serves natively, the method each belongs to,

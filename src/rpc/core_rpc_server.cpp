@@ -287,28 +287,6 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_set_log_level(const COMMAND_RPC_SET_LOG_LEVEL::request& req, COMMAND_RPC_SET_LOG_LEVEL::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(set_log_level);
-    if (req.level < 0 || req.level > 4)
-    {
-      res.status = "Error: log level not valid";
-      return true;
-    }
-    mlog_set_log_level(req.level);
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_set_log_categories(const COMMAND_RPC_SET_LOG_CATEGORIES::request& req, COMMAND_RPC_SET_LOG_CATEGORIES::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(set_log_categories);
-    mlog_set_log(req.categories.c_str());
-    res.categories = mlog_get_categories();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_transaction_pool(const COMMAND_RPC_GET_TRANSACTION_POOL::request& req, COMMAND_RPC_GET_TRANSACTION_POOL::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(get_transaction_pool);
@@ -1039,56 +1017,6 @@ namespace cryptonote
     {
       res.status = "Error retrieving alternate chains";
     }
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_limit(const COMMAND_RPC_GET_LIMIT::request& req, COMMAND_RPC_GET_LIMIT::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_limit);
-
-    res.limit_down = shekyl_link_get_down();
-    res.limit_up = shekyl_link_get_up();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_set_limit(const COMMAND_RPC_SET_LIMIT::request& req, COMMAND_RPC_SET_LIMIT::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(set_limit);
-    // -1 = unlimited
-    //  0 = do not modify
-
-    if (req.limit_down > 0)
-    {
-      shekyl_link_set_down(req.limit_down);
-    }
-    else if (req.limit_down < 0)
-    {
-      if (req.limit_down != -1)
-      {
-        res.status = "Invalid parameter";
-        return true;
-      }
-      shekyl_link_set_down(-1);
-    }
-
-    if (req.limit_up > 0)
-    {
-      shekyl_link_set_up(req.limit_up);
-    }
-    else if (req.limit_up < 0)
-    {
-      if (req.limit_up != -1)
-      {
-        res.status = "Invalid parameter";
-        return true;
-      }
-      shekyl_link_set_up(-1);
-    }
-
-    res.limit_down = shekyl_link_get_down();
-    res.limit_up = shekyl_link_get_up();
-    res.status = CORE_RPC_STATUS_OK;
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
