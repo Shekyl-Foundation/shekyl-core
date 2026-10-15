@@ -310,20 +310,6 @@ where
     let connected = tokio::select! {
         biased;
         result = wake.as_mut() => {
-            match &result {
-                Ok(wake) => tracing::debug!(
-                    owner = ?owner.id(),
-                    wake_owner = ?wake.owner,
-                    class = ?wake.class,
-                    generation = ?wake.generation,
-                    wake_deadline = wake.deadline.get(),
-                    fired_at = wake.fired_at.get(),
-                    armed_deadline = deadline.get(),
-                    now = owner.clock().now().get(),
-                    "clearnet dial fired"
-                ),
-                Err(err) => tracing::debug!(?err, "clearnet dial wait ended"),
-            }
             let kind = match result {
                 Ok(_) => CloseKind::TransportTimeout,
                 Err(_) => CloseKind::LocalClose,
@@ -488,19 +474,7 @@ async fn watch_gap<C: Clock>(watch: Option<GapWatch<C>>, frame: Arc<AtomicBool>)
         }
         match ready!(gap.poll(&frame, wake.as_mut(), cx)) {
             None => Poll::Ready(GapEnd::HandshakeFrame),
-            Some(Ok(wake)) => {
-                tracing::debug!(
-                    owner = ?watch.owner.id(),
-                    wake_owner = ?wake.owner,
-                    class = ?wake.class,
-                    generation = ?wake.generation,
-                    wake_deadline = wake.deadline.get(),
-                    fired_at = wake.fired_at.get(),
-                    now = watch.owner.clock().now().get(),
-                    "clearnet gap fired"
-                );
-                Poll::Ready(GapEnd::Timeout)
-            }
+            Some(Ok(_)) => Poll::Ready(GapEnd::Timeout),
             Some(Err(_)) => Poll::Ready(GapEnd::Closed),
         }
     })
