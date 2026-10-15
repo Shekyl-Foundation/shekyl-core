@@ -114,6 +114,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::H16,
                 CenRow::H17,
                 CenRow::H18,
+                // H19's block fold: nothing listed, so the batch is empty and
+                // the row records vacuously (`rules::range_proof`).
+                CenRow::H19,
                 CenRow::H20,
                 CenRow::H21,
                 CenRow::H22,
