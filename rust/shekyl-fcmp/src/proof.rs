@@ -957,7 +957,7 @@ fn batch_weights_rng(customization: &[u8], preimage: &[u8]) -> ChaCha20Rng {
 /// Each PQC key point in its compressed encoding, as the seed reads it.
 fn compressed(points: &[<Ed25519 as Ciphersuite>::G]) -> Vec<[u8; 32]> {
     use ciphersuite::group::GroupEncoding;
-    points.iter().map(|p| p.to_bytes()).collect()
+    points.iter().map(GroupEncoding::to_bytes).collect()
 }
 
 /// Verify an FCMP++ proof against public inputs.
