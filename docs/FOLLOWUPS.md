@@ -54,6 +54,10 @@ There is no V3.1 / V3.2 / V3.x release train.
   - Owner: [`RPC_CHANNEL.md`](design/RPC_CHANNEL.md) §6.4
   - Target: pre-genesis
 
+- **The C++ unit-test binary's logging suite races the levin suite's asynchronous emissions.** Run as one binary, `logging.no_logs` (and at times `logging.concurrent_emits_do_not_deadlock`) fails when an `MERROR("Levin payload decompression rejected …")` from `contrib/epee/src/levin_compression.cpp` arrives inside the test's stderr capture window: a levin handler is still running after its own test returned. `./unit_tests --gtest_filter='levin*:logging.*'` on `origin/dev` at `d26148535e` (2026-10-15): 3 of 4 runs fail; alone, `logging.no_logs` passes every time. The fix is isolation, not the assertion: the levin fixture joins or drains its handlers before its test returns, or the logging suite captures under a filter that drops other targets. Falsify by: ten consecutive full `unit_tests` runs with no logging failure.
+  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §13 item 7 (found by its gate run); the fix is the levin test fixture's
+  - Target: pre-genesis
+
 - **Carry SOCKS credentials on the dial, or make the four credential rows `reserved`.** The grammar admits `clearnet-socks-username`, `clearnet-socks-password`, `tor-socks-username` and `tor-socks-password`, but `shekyl-clearnet`'s and `shekyl-tor`'s proxy is a bare endpoint and `shekyl-socks` connects as `Isolation::Principal`, so a credential would be accepted and never sent. The sections refuse a given credential (`config.value.conflict`) until this is settled. On the Tor path a credential would displace the persona's isolation key, so that pair may be wrong by design rather than missing. Falsify by: a proxied dial that completes the RFC 1929 sub-negotiation with the configured pair, with a test on a fake proxy that refuses an unauthenticated connection; or the rows' visibility ruled `reserved`.
   - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §3 (the connector sections); the grammar lane for the rows' visibility
   - Target: pre-genesis
