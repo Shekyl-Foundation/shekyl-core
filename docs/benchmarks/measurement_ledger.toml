@@ -618,12 +618,12 @@ path_set = "tor-span"
 [[constant]]
 name = "tor_gap_within_ns"
 defined_in = "rust/shekyl-transport-layer/src/spans.rs"
-needle = "pub const TOR_GAP_WITHIN_NANOS: u64 = 31_000_000_000;"
+needle = "pub const TOR_GAP_WITHIN_NANOS: u64 = 37_400_000_000;"
 measured_by = ["BA-T8"]
 status = "current"
 capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
 capture_rev = "19863b044"
-rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; 2 x 15.50 s of the pooled outbound gap, n = 189 (rank 187; the nearest-rank p99 is 18.69 s, recorded in the derivation)). Reopen at 500 pooled Rust-path samples."
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; 2 x 18.69 s, the pooled outbound gap's p99, rank 188 of 189 per D9, rounded up to 37.4 s (Rick, 2026-10-14; the 31 s first ruled is struck as a miscount of rank 187)). Reopen at 500 pooled Rust-path samples."
 path_set = "tor-span"
 
 [[constant]]

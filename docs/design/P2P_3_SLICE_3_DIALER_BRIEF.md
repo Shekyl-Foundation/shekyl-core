@@ -380,11 +380,12 @@ next wake. Until `SessionAccepted` or `Confirmed`, the session may be
 up and the address is still gray.
 
 **The clock (Rick, 2026-10-08).** The outbound handshake's only clock
-is each connector's transport gap, from channel established to session
-established ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D3, and
-D11 item 5), armed by the connector with D9's values: clearnet 1.430 s
-and Tor 2.6 s, set today in `transport_spans` (`net_node.inl:3527`,
-`:3529`) and labelled `CppPath` in `DAEMON_RELAY_PRIVACY.md` §97. The
+is each connector's transport gap, from channel established to the
+peer's first complete Levin frame (Rick, 2026-10-14;
+[`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D3, and D11 item 5),
+armed by the connector with D9's values: clearnet 1.430 s and Tor
+37.4 s, in `shekyl-transport-layer::spans`, labelled `CppPath` and
+`RustPath` in `DAEMON_RELAY_PRIVACY.md` §97. The
 connector arms it when the channel exists. `dial_channel` returns that
 channel with the gap already armed. Adopting later does not start
 another clock. The 5 s Levin invoke timer

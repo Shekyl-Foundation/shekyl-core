@@ -34,11 +34,11 @@
 //! 112.7 s (p50 6.4 s, p90 65.3 s). A clearnet dial through a SOCKS
 //! proxy uses this clock.
 //!
-//! Tor gap 31 s: 2 × 15.50 s of the pooled outbound gap, the dialer's
-//! SOCKS success to the peer's first complete Levin frame (n = 189).
-//! 15.50 s is rank 187 of 189, about p98.9; the nearest-rank p99 is
-//! 18.69 s and the maximum 46.91 s, a single circuit. The inbound gap's
-//! pooled p99 was 27.69 s.
+//! Tor gap 37.4 s: 2 × 18.69 s, the pooled outbound gap's p99 (the
+//! dialer's SOCKS success to the peer's first complete Levin frame,
+//! n = 189), rounded up to 100 ms (D9: the p99 is rank ⌈0.99 n⌉, here
+//! 188 of 189). The maximum was 46.91 s, a single circuit. The inbound
+//! gap's pooled p99 was 27.69 s.
 //!
 //! Reopen both at 500 pooled Rust-path samples.
 //!
@@ -58,7 +58,7 @@ pub const CLEARNET_GAP_WITHIN_NANOS: u64 = 1_430_000_000;
 pub const TOR_DIAL_WITHIN_NANOS: u64 = 120_000_000_000;
 /// Tor gap: the longest silence a session keeps.
 #[cfg(not(feature = "measurement-spans"))]
-pub const TOR_GAP_WITHIN_NANOS: u64 = 31_000_000_000;
+pub const TOR_GAP_WITHIN_NANOS: u64 = 37_400_000_000;
 /// What the Tor spans were measured on: the Rust path.
 pub const TOR_SPANS_BASIS: shekyl_relay_privacy::AdmissibleBasis =
     shekyl_relay_privacy::AdmissibleBasis::RustPath;
@@ -102,6 +102,22 @@ mod tests {
         ] {
             assert!(SHUTDOWN_TIMEOUT_NANOS >= within);
         }
+    }
+
+    /// The Tor gap is 2 × the pooled outbound gap's p99, rank ⌈0.99 n⌉
+    /// of the 189 sessions in the rerun TSVs, rounded up to 100 ms (D9).
+    #[cfg(not(feature = "measurement-spans"))]
+    #[test]
+    fn the_tor_gap_is_twice_the_pooled_p99_rounded_up() {
+        const SESSIONS: u64 = 189;
+        const RANK: u64 = (99 * SESSIONS).div_ceil(100);
+        const P99_NANOS: u64 = 18_688_358_669;
+        const PRECISION_NANOS: u64 = 100_000_000;
+        assert_eq!(RANK, 188);
+        assert_eq!(
+            TOR_GAP_WITHIN_NANOS,
+            (2 * P99_NANOS).div_ceil(PRECISION_NANOS) * PRECISION_NANOS
+        );
     }
 
     /// Each clearnet span is 2 × (700 ms + its residual), rounded up to

@@ -2,7 +2,7 @@
 
 **Status: DERIVED (Rick, 2026-10-14, the close-out ruling for alpha.11).**
 The rerun's two TSVs set `TOR_DIAL_WITHIN_NANOS` at 120 s and
-`TOR_GAP_WITHIN_NANOS` at 31 s, both RustPath, in `spans.rs` and the
+`TOR_GAP_WITHIN_NANOS` at 37.4 s, both RustPath, in `spans.rs` and the
 measurement ledger (the derivation is the last section). Reopen at 500
 pooled Rust-path samples. Ruled by Rick, 2026-10-13: the Tor gap is
 re-derived from cold first contact, on two responders, before anything
@@ -245,12 +245,13 @@ samples.
 | Span | Value | From the pooled rows |
 | --- | --- | --- |
 | `TOR_DIAL_WITHIN_NANOS` | 120 s | Bounded by Tor's own SOCKS timeout (`SocksTimeout`, 2 minutes by default; the managed Tor does not set it), past which Tor fails the request itself. The distribution is censored there: 4 of 200 dials ran past 120 s; over the 189 sessions p50 6.39 s, p90 65.29 s, p99 112.66 s |
-| `TOR_GAP_WITHIN_NANOS` | 31 s | 2 × 15.50 s of the outbound gap (SOCKS success to the peer's first complete frame), n = 189 |
+| `TOR_GAP_WITHIN_NANOS` | 37.4 s | 2 × 18.69 s, the p99 of the outbound gap (SOCKS success to the peer's first complete frame), n = 189, rounded up to 100 ms |
 | `SHUTDOWN_TIMEOUT_NANOS` | 120 s | The longest armed deadline, the Tor dial |
 
 **The gap's percentile, stated exactly.** The pooled outbound gaps'
-largest four are 46.91 s, 18.69 s, 15.50 s, 6.60 s. 15.50 s is rank 187 of 189, about p98.9; the
-nearest-rank p99 (`ceil(0.99 × 189)` = rank 188) is 18.69 s, which would
-give 37.4 s, and the maximum is a single circuit (run B, sample 72). The
-ruling's value is 31 s. The inbound gap's pooled p99 is 27.69 s, inside
-it.
+largest four are 46.91 s, 18.69 s, 15.50 s, 6.60 s. The p99 is rank
+`ceil(0.99 × 189)` = 188, 18.69 s (18,688,358,669 ns); twice it is
+37.38 s, rounded up to 37.4 s. The maximum is a single circuit (run B,
+sample 72). The 31 s first ruled is struck as a miscount: it doubled
+15.50 s, rank 187, about p98.9 (Rick, 2026-10-14). The inbound gap's
+pooled p99 is 27.69 s, inside 37.4 s.
