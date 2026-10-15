@@ -395,6 +395,10 @@ members = [
     # from it.
     "shekyl-options",
 
+    # The daemon's configuration over shekyl-options (DAEMON_CONFIG_CUTOVER.md):
+    # the table, precedence, the file, the lock, the marker, the sections.
+    "shekyl-daemon-config",
+
     # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
     # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
     "shekyl-pow-randomx",

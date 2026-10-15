@@ -88,6 +88,7 @@
 pub mod config;
 pub mod ffi;
 pub mod filter;
+pub mod subsystem;
 
 mod appender;
 mod legacy;
