@@ -51,7 +51,7 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | Supervisor | One Rust owner holds the managed Tor's state; its inputs are the child, Tor's status and descriptor events, and an end-to-end probe of our own onion; *usable* is defined by the probe; every other component reads this owner and none reads Tor state on its own |
 | Start is iteration one | No separate bootstrap-failure path; capped backoff from the first launch; never gives up. A Tor-only node waits and announces (hop-0 fail-closed); a dual-posture node runs clearnet meanwhile |
 | Respawn (as amended by `TSR-Q1` and `TSR-Q3`) | On a process fault (§4.4): reap; the `DataDirectory` and the onion are kept; republish the same onion; the connector parks and resumes on the new route; each death and recovery announced; a crash loop reaches the cap loudly. Backoff with resume for an operator's Tor |
-| Teardown | Close the owning control connection, wait within `SHUTDOWN_GRACE` (5 s), kill and reap, **then** tombstone-rename the `DataDirectory`, delete off the runtime under a bound, sweep tombstones at start. `SIGTERM` and `DEL_ONION` dropped. One routine for stop and respawn |
+| Teardown (as amended by `TSR-Q1`) | One routine for stop and respawn: close the owning control connection, wait within `SHUTDOWN_GRACE` (5 s), kill and reap. `SIGTERM` and `DEL_ONION` dropped. The directory's disposition follows why it ran: at boot end it is tombstone-renamed **after** the reap, deleted off the runtime under a bound, and swept at the next start; at a respawn it is kept |
 | Launch | `__OwningControllerProcess=<daemon pid>` on the command line, `TAKEOWNERSHIP`, then `RESETCONF __OwningControllerProcess` |
 | Disk | `AvoidDiskWrites 1` on every platform; no memory-backed `DataDirectory` |
 | Requirements | The brief's items 3 to 7 (operator-fixable states, one log stream, suspend and resume, floor-device bounds, Windows first-class) are requirements of this round |
@@ -283,7 +283,7 @@ and is it about our link. One table drives both the address memory
 | Reply | About | Goes to |
 | --- | --- | --- |
 | `0x00` | — | link evidence (good) |
-| `0x05`, `0xF0`, `0xF1`, `0xF2`, and `0x04` | the destination | the address memory, as today |
+| `0x05`, `0xF0`, `0xF1`, `0xF2`, and `0x04` | the destination | the address memory, as today. **Residual** (`LV3_CONNECTION_OBJECT.md:1822`; `IMPLEMENTATION_INDEX.md:798`): an attacker on the directories responsible for a target's key can force reply `0x04`, and with `ExtendedErrors` on it forces `0xF0` (descriptor not found) instead; either buys only Tor's short backoff. It stays a residual under the dialer's failure memory (240 s, doubling to an hour, `rust/shekyl-dialer/src/memory.rs` lines 34-38 (#1056)): that attacker already makes the onion unreachable for everyone, and our memory only reflects it |
 | `0x01`, `0x02`, `0x03`, `0x06`; our SOCKS port refusing or closing without a reply (`ProxyUnavailable`, `rust/shekyl-transport-layer/src/cause.rs` lines 228-231 (#1056)) | our link | the supervisor |
 | `0xF3`, `0xF7` | neither, alone | the supervisor, as a rate: link-down is timeouts across **distinct** destinations with no success between them, never a count of replies |
 | `0x07`, `0x08`, `0xF4`, `0xF5`, `0xF6` | this node (we never send what draws these) | the defect log; never peer or link evidence |
@@ -381,8 +381,9 @@ expectation; `TSR-M3` verifies it before anything depends on it.
 - While the facet is not `Usable`, the owner loop waits on the link, not on its
   wake timer.
 - A Tor dial's outcome goes to the lists as today **and** to the supervisor as
-  evidence. Attribution follows `implicates_address`: what names the
-  destination is about the peer; everything else is about the link.
+  evidence. Attribution follows §4.2's reply table: the destination, our link
+  (with `0xF3` and `0xF7` judged as a rate across distinct destinations), or
+  this node's own defect, which is never evidence.
 - After a respawn the white list is intact (peers' onions did not change), so
   recovery is white re-contact, not discovery.
 
