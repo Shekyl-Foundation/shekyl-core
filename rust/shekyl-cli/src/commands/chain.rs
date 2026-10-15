@@ -32,14 +32,24 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
                 // `difficulty`, which is a wrong number past 2^64.
                 "wide_difficulty": HexU128(info.chain.difficulty),
                 "tx_count": info.chain.tx_count,
+                // Whether the daemon runs P2P at all: its configuration,
+                // told to every caller. The reply's decoder holds it equal
+                // to the Peers part's state (Rick, 2026-10-14).
+                "p2p": if info.health.p2p.is_offline() { "offline" } else { "running" },
             });
             // Status is wholly shown or wholly absent, and a restricted
             // daemon withholds it. A withheld part is not a zero, so the
             // keys stay off the object and the line below says the part
             // was not disclosed. A shown zero is a count.
+            // An offline daemon's Status carries no count: the `p2p` member
+            // above says why, and the line below prints the state.
             if let Some(status) = info.node.shown() {
-                body["outgoing_connections_count"] = json!(status.outgoing_connections_count);
-                body["incoming_connections_count"] = json!(status.incoming_connections_count);
+                if let shekyl_rpc_types::StatusConnections::Running { outgoing, incoming } =
+                    status.connections
+                {
+                    body["outgoing_connections_count"] = json!(outgoing);
+                    body["incoming_connections_count"] = json!(incoming);
+                }
             }
             Ok(body)
         }
@@ -94,6 +104,11 @@ fn difficulty_line(val: &Value) -> String {
 /// key absent is a withheld Status part: a zero would claim the node has
 /// no connections, which is a different fact.
 fn connections_line(val: &Value) -> String {
+    if p2p_is_off(val) {
+        // A daemon started offline has no connections by configuration;
+        // its state is the line, not a count of zero.
+        return "  P2P:          offline".to_owned();
+    }
     match (
         val.get("outgoing_connections_count")
             .and_then(Value::as_u64),
@@ -105,6 +120,11 @@ fn connections_line(val: &Value) -> String {
         }
         _ => "  Connections:  not disclosed".to_owned(),
     }
+}
+
+/// Whether the daemon said it runs offline.
+fn p2p_is_off(val: &Value) -> bool {
+    val.get("p2p").and_then(Value::as_str) == Some("offline")
 }
 
 /// A line for one of the chain's counts: the label, then the number.
@@ -471,6 +491,30 @@ mod tests {
                 "incoming_connections_count": 1,
             })),
             "  Connections:  3 out / 1 in"
+        );
+    }
+
+    /// **A daemon started offline prints that state** (Rick,
+    /// 2026-10-14): "P2P: offline", not "0 out / 0 in", even though its Status
+    /// part carries two zeros.
+    #[test]
+    fn an_offline_daemon_prints_the_state_not_a_zero() {
+        assert_eq!(
+            connections_line(&json!({
+                "p2p": "offline",
+                "outgoing_connections_count": 0,
+                "incoming_connections_count": 0,
+            })),
+            "  P2P:          offline"
+        );
+        assert_eq!(
+            connections_line(&json!({
+                "p2p": "running",
+                "outgoing_connections_count": 0,
+                "incoming_connections_count": 0,
+            })),
+            "  Connections:  0 out / 0 in",
+            "a running node with no connections is a count"
         );
     }
 }

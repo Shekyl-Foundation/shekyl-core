@@ -280,7 +280,7 @@ GetInfoResponse {
     #[serde(flatten)] economics: InfoEconomics,            // grant: chain; RK-D19
     #[serde(flatten)] pool:      InfoPool,                 // grant: pool
     #[serde(flatten)] node:      Hidden<InfoStatus>,       // grant: status
-    #[serde(flatten)] peers:     Hidden<InfoPeers>,        // grant: peers
+    #[serde(flatten)] peers:     Hidden<InfoP2p>,          // grant: peers; P2P state first (3.56)
     restricted: bool,                                      // transitional, RT-W10
 }
 ```
@@ -448,7 +448,7 @@ with the FFI shim as today's only implementation:
 | --- | --- | --- |
 | `InfoChainFacts` | above | DRS-E's store implementation reads the same set; `database_size` and `free_space` are the chain store's on-disk size and the volume's free space, whatever the store |
 | `PoolFacts` | the count of entries this node has broadcast; the count of entries it holds and has not yet broadcast | The broadcast count is read for every caller. The not-yet-broadcast count is made only with the host axis (RK-D24), and then both are counted under one hold of the pool's lock, so they are one pool state (`InfoFacts::pool_counts`, RK-Q10) |
-| `PeerFacts` | per-connector, per-direction session counts (feeding Health's `has_peers` and Status's two counts); peerlist sizes; per-connector socket counts | **Session counts from the seam board**, the one store; no subtraction. **Every read returns `Result<_, FactsFault>`, never a bare `u64`** (below). Whether `daemon-rpc` reads the hub directly or through new exports is an implementation detail for rule 25. **As built (commit 7, then RK-Q3's commit):** one export, `shekyl_seam_session_counts`, returns the handshaken rows in each direction from **one** copy of the board, and `InfoFacts::sessions` reads it. **A session is a handshaken row, for the counts as for `has_peers` (RK-Q3, ruled by Rick 2026-10-12; RK-Q4's filter).** `has_peers` is not stored: it is whether either count is non-zero, so in any reply that shows Status, `has_peers == (outgoing_connections_count + incoming_connections_count > 0)`, and a test holds every such reply to it. This commit first counted any row, handshake finished or not; that was changed before merge for three reasons. Peers' per-connector socket counts already report transport sockets, dials in flight included, so the session counts should not count sockets a second time. One reply should define a connection once, and any-row counts allowed `has_peers: false` beside a non-zero count. And a pre-handshake inbound row costs an outsider almost nothing, so counting it let anyone inflate this node's reported connectivity. It is made for every caller of an online node, because Health needs it; Status's two counts are projected from the same read and cost no second one. An offline node's counts are zero by configuration and the board is not read |
+| `PeerFacts` | per-connector, per-direction session counts (feeding Health's `has_peers` and Status's two counts); peerlist sizes; per-connector socket counts | **Session counts from the seam board**, the one store; no subtraction. **Every read returns `Result<_, FactsFault>`, never a bare `u64`** (below). Whether `daemon-rpc` reads the hub directly or through new exports is an implementation detail for rule 25. **As built (commit 7, then RK-Q3's commit):** one export, `shekyl_seam_session_counts`, returns the handshaken rows in each direction from **one** copy of the board, and `InfoFacts::sessions` reads it. **A session is a handshaken row, for the counts as for `has_peers` (RK-Q3, ruled by Rick 2026-10-12; RK-Q4's filter).** `has_peers` is not stored: it is whether either count is non-zero, so in any reply that shows Status, `has_peers == (outgoing_connections_count + incoming_connections_count > 0)`, and a test holds every such reply to it. This commit first counted any row, handshake finished or not; that was changed before merge for three reasons. Peers' per-connector socket counts already report transport sockets, dials in flight included, so the session counts should not count sockets a second time. One reply should define a connection once, and any-row counts allowed `has_peers: false` beside a non-zero count. And a pre-handshake inbound row costs an outsider almost nothing, so counting it let anyone inflate this node's reported connectivity. It is made for every caller of an online node, because Health needs it; Status's two counts are projected from the same read and cost no second one. An offline node has no counts: its parts carry the state offline (2026-10-14), and the board is not read |
 | `NodeFacts` | offline, busy syncing, following degraded | Health's, read for every caller |
 | `StatusFacts` | start time, free space, alt-block count, and the store's on-disk size | Read only for a caller who receives Status (RK-D24). The store's size is one of those reads. There is no exception |
 
@@ -601,6 +601,30 @@ the chain snapshot says `offline`, `has_peers` is `false` and the board
 is **not read**. It is a read avoided in the gather, on what the node was
 configured to be; the fault code is never mapped to `false`. When
 `offline` is not set, a missing hub is still the `HubAbsent` refusal.
+
+**Offline is a state on the Peers part, never a zero (Rick, 2026-10-14;
+`CORE_RPC_VERSION` 3.56).** The Peers part says first whether the
+daemon runs P2P: `"p2p": "running"` with its six counts, or `"p2p": "offline"`
+with none. The type is `InfoP2p::{Running(InfoPeers), Offline}`, and the
+decoder refuses `"off"` with any count, `"on"` without all six, a count
+with no `p2p`, and a `p2p` that disagrees with Health's `offline`; the
+handler refuses the same disagreement as `Inconsistent`. The state is
+read from what the p2p layer recorded when it read `--offline`
+(`shekyl_p2p_record_offline`, called where `net_node` reads the flag),
+never inferred from the dialer's absence. Both peer-list exports answer
+`FACTS_OFFLINE` and write nothing for it; an online daemon with no
+peer lists is still `NullHandle`. In the facts layer `PeerFacts::Offline`
+carries nothing and `InfoPeersFacts` is reached only through
+`PeerFacts::Running`, and the sizes export is read first, so no count
+is read for an offline daemon. Offline is a state on the other parts
+too: Health carries `offline: true` and no `has_peers`
+(`HealthP2p::{Offline, Running { has_peers }}`), and a shown Status
+carries no connection count (`StatusConnections::{Offline, Running {
+outgoing, incoming }}`). The decoder refuses `has_peers` beside
+`offline: true` and its absence beside `offline: false`, and connection
+counts that disagree with `offline` the same way. The regtest harness and
+the wallet's watchdog read the state: an offline daemon raises
+`DaemonOffline`, not `DaemonPeerless`.
 
 ### 4.3 Economics — RK-D19 — LANDED (amounts decimal since RK-Q2; the supply invariant refuses since RK-Q9)
 

@@ -154,6 +154,9 @@ pub(super) struct RegtestDaemon {
     /// judges the chain under a rule set naming that pair, not the
     /// production one).
     schedule: Option<RegtestSchedule>,
+    /// Whether this daemon was started offline (`--offline`). Its
+    /// `get_info` must then report that state, not a count of zero.
+    offline: bool,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
     /// `None` on the sink of a [`origin::StemSinkPair`], whose origin holds
     /// the one guard for both.
@@ -337,6 +340,7 @@ impl RegtestDaemon {
         install_wallet_tracing();
 
         let bin = Self::binary();
+        let offline = matches!(peering, Peering::Offline);
         let p2p_ports: &[u16] = match &peering {
             Peering::Offline => &[],
             Peering::Linked {
@@ -458,6 +462,7 @@ impl RegtestDaemon {
             rpc,
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
+            offline,
             _serial: serial,
         };
         daemon.await_ready().await;
@@ -483,7 +488,22 @@ impl RegtestDaemon {
                 .json_rpc_call::<GetInfoResponse>("get_info", None)
                 .await
             {
-                Ok(_) => return,
+                Ok(info) => {
+                    // The harness reads the P2P state, not a count: a daemon
+                    // started offline says so, and one whose P2P runs
+                    // reports its counts (Rick, 2026-10-14).
+                    let state = info
+                        .peers
+                        .shown()
+                        .expect("the harness's main listener is shown Peers");
+                    assert_eq!(
+                        matches!(state, shekyl_rpc_types::InfoP2p::Offline),
+                        self.offline,
+                        "get_info's P2P state must be the daemon's configuration; got {state:?}"
+                    );
+                    assert_eq!(info.health.p2p.is_offline(), self.offline);
+                    return;
+                }
                 Err(e) => last_err = format!("{e:?}"),
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -5797,35 +5817,19 @@ async fn ported_console_commands_answer_on_the_in_process_arm() {
 async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
     let mut daemon = RegtestDaemon::start_with_console().await;
 
-    let out = daemon.console("sync_info");
-    assert!(
-        out.contains("Height: 1") && out.contains("0 peers") && out.contains("0 spans"),
-        "sync_info must render against the live core; got:\n{out}"
-    );
-
-    let out = daemon.console("print_cn");
-    assert!(
-        out.contains("Remote Host") && out.contains("Livetime(sec)"),
-        "print_connections must render its header; got:\n{out}"
-    );
-
-    let out = daemon.console("print_pl");
-    assert!(
-        !out.contains("no reply") && !out.contains("failed"),
-        "print_peer_list must answer, even with an empty peerlist; got:\n{out}"
-    );
-
-    let out = daemon.console("print_pl_stats");
-    assert!(
-        out.contains("White list size: 0/") && out.contains("Gray list size: 0/"),
-        "print_pl_stats must report both capacities, which come from the C++ \
-         p2p constants over the FFI; got:\n{out}"
-    );
-    assert!(
-        !out.contains("size: 0/0"),
-        "a zero capacity means the constants export answered with nothing; \
-         got:\n{out}"
-    );
+    // This daemon runs `--offline`, so each peer command prints the state,
+    // not an empty table (Rick, 2026-10-14).
+    for command in ["sync_info", "print_cn", "print_pl", "print_pl_stats"] {
+        let out = daemon.console(command);
+        // The log tail echoes the command and carries the log line; the
+        // state is the line the console printed, and no table follows it.
+        assert!(
+            out.lines().any(|line| line.trim() == "P2P: offline")
+                && !out.contains("Remote Host")
+                && !out.contains("list size"),
+            "{command} must render the live core's P2P state; got:\n{out}"
+        );
+    }
 
     // The bridged leg. `/get_limit` is still C++; when RK-8 migrates it, this
     // is the assertion that notices if the leg is left naming a dead route.

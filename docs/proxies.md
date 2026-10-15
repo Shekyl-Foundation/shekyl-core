@@ -109,7 +109,7 @@ that will be incurred by the typical user.
 The first section (before the first `,`) indicates the network. Only `tor`
 is valid.
 
-This portion of the option tells `--add-node`, `--add-priority-node`, and
+This portion of the option tells the `--add-peer` and
 `--add-exclusive-node` options to use the specified proxy for those nodes. In
 other words, command-line specified hidden services are forwarded to their
 corresponding `--tx-proxy` server. Hidden services do **NOT** have to be
