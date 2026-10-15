@@ -170,7 +170,8 @@ WSS Round 1 ruled is 5 s absolute, local-daemon posture
 buffer's refetch at open). On the floor device the persona derivation alone
 reaches 5 s at about `k = 8` bonded slots: 11 × 466 ms = 5.13 s. The floor
 device is the node-and-wallet floor, not the staker floor, which is not yet
-set.
+set. [`FN_DSA_HYBRID.md`](../design/FN_DSA_HYBRID.md) `FND-25` records the
+linear, sequential derivation as an open design question.
 
 ## What this does not show
 
