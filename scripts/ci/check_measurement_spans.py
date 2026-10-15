@@ -20,8 +20,10 @@ compiler notices if a release path turns it on; this gate does.
   1. **Subject** — the feature exists in `shekyl-transport-layer`'s feature
      map, `spans.rs` switches on it, and `cmake/BuildRust.cmake` declares
      the `SHEKYL_MEASUREMENT_SPANS` option default `OFF` and passes the
-     feature only under it. Without this the other limbs pass vacuously
-     (rule 47).
+     feature only under it, with a cargo target directory of its own (in
+     the shared `rust/target` the measurement archive is the file another
+     build directory of the checkout links, never rebuilt without the
+     feature). Without this the other limbs pass vacuously (rule 47).
   2. **No Cargo edge** — no dependency edge of any kind, and no feature of
      any workspace package (`default` included), enables it. The only way
      in is the CMake option, on the command line of a measurement build.
@@ -82,6 +84,10 @@ def guarded(line):
     return f"--features {OWNER}/{FEATURE}" in line and "set(" in line
 
 
+def own_target_dir(line):
+    return "--target-dir" in line
+
+
 def scanned_files():
     out = []
     for entry in SCANNED:
@@ -111,6 +117,8 @@ def subject(metadata, fail):
         fail(f"cmake/BuildRust.cmake does not pass the feature under {OPTION}")
     if not re.search(rf"if\(\s*{OPTION}\s*\)", cmake):
         fail(f"cmake/BuildRust.cmake does not guard the feature with if({OPTION})")
+    if not any(own_target_dir(line) for line in cmake.splitlines() if guarded(line)):
+        fail("cmake/BuildRust.cmake builds the measurement feature into the shared cargo target directory")
 
 
 def run(metadata, files):
@@ -141,6 +149,8 @@ def selftest():
     assert not release_mentions(
         [("cmake/BuildRust.cmake", f"    set(_measurement --features {OWNER}/{FEATURE})")]
     ), "the guarded line is allowed"
+    assert not own_target_dir(f"    set(_measurement --features {OWNER}/{FEATURE})"), "a shared target dir is red"
+    assert own_target_dir(f"    set(_m --features {OWNER}/{FEATURE} --target-dir ${{_d}})"), "its own target dir"
     print("check_measurement_spans selftest: ok")
 
 
