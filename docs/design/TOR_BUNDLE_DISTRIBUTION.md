@@ -187,21 +187,27 @@ file meanwhile, with that as the stated reason.
      build instead of downloading inside it.
    - TB-7: `binary::verify_candidate` (exact contents, per-file digests, one
      canonical directory carried by the witness) and
-     `control::actor::managed_tor_command` (cleared environment, the loader
+     `control::launch::managed_tor_command` (cleared environment, the loader
      path from the witness). The cleared environment applies on every
      platform. A Windows `tor.exe` does not start without `SystemRoot`: the
      pinned 0.4.9.13 aborts within about 0.1 s with `0xC0000409`, "subsystem
      crypto (at 7) initialization failed", and restoring that one variable
-     is enough (the TSR-Q7 Windows run, 2026-10-15). The launcher sets it
-     from `GetSystemWindowsDirectoryW`, never from the parent's environment,
-     and a failed call fails the spawn. `the_managed_launch_environment_is_exact`
-     asserts each platform's whole environment; the Windows job in
-     `build.yml` runs it there.
+     is enough (observed on Windows, 2026-10-15). The launcher sets it
+     from `GetSystemWindowsDirectoryW`, never from the parent's environment.
+     A failed call is `ControlError::SystemDirectory` and carries the OS
+     code, not a path. `the_managed_launch_environment_is_exact` lists the
+     variables the command sets; it cannot see `env_clear`. The proof is
+     `managed_tor_child_inherits_no_environment`, which re-executes with a
+     poisoned `SystemRoot` on Windows and reads the environment the child
+     received. The Windows job in `build.yml` runs both, and clippy for
+     this crate.
      The launcher also names every file tor would otherwise find by itself:
-     `--torrc-file`, `--defaults-torrc`, `GeoIPFile` and `GeoIPv6File` all
-     name one zero-length file it writes in the `DataDirectory`. Without them
-     tor reads its compiled-in defaults, and the pinned Linux bundle's are
-     under `/var/tmp/dist/tor/` (`etc/tor/torrc`, `etc/tor/torrc-defaults`,
+     `--torrc-file`, `--defaults-torrc`, `--GeoIPFile` and `--GeoIPv6File`
+     all name one zero-length file, `blank`, which it writes in the
+     `DataDirectory`. The directory is owner-only, and the write does not
+     follow a symlink or a hard link. Without them tor reads its compiled-in
+     defaults, and the pinned Linux bundle's are under `/var/tmp/dist/tor/`
+     (`etc/tor/torrc`, `etc/tor/torrc-defaults`,
      `share/tor/geoip`, `share/tor/geoip6`), a path any local account can
      create; command-line options override only the keys they name. On
      Windows the torrc is under the user's `APPDATA`, found through the shell
