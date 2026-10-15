@@ -140,9 +140,10 @@ pub struct VisibleRow {
 /// Why `option_show` could not answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShowRefusal {
-    /// A name the table lacks; carries the diagnostic the startup parse
-    /// would give.
-    UnknownName(Refusal),
+    /// A name the table refuses: unknown, rejected, reserved, or a
+    /// development lever off its networks; carries the diagnostic the
+    /// startup parse would give.
+    Refused(Refusal),
     /// No handle was supplied: this daemon serves no options.
     Absent,
 }
@@ -297,9 +298,7 @@ pub fn option_show(
                 .map(|r| r.row)
                 .collect(),
         }),
-        Err(ShowRefusal::UnknownName(refusal)) => {
-            Err(RpcFault::Refused(config_refused(vec![refusal])))
-        }
+        Err(ShowRefusal::Refused(refusal)) => Err(RpcFault::Refused(config_refused(vec![refusal]))),
         Err(ShowRefusal::Absent) => Err(RpcFault::Refused(config_refused(vec![absent_refusal()]))),
     }
 }
@@ -392,7 +391,7 @@ mod tests {
                         match all.iter().find(|r| r.row.name == *name) {
                             Some(r) => picked.push(r.clone()),
                             None => {
-                                return Err(ShowRefusal::UnknownName(Refusal {
+                                return Err(ShowRefusal::Refused(Refusal {
                                     code: "config.name.unknown".to_owned(),
                                     option: Some(name.clone()),
                                     source: "runtime".to_owned(),

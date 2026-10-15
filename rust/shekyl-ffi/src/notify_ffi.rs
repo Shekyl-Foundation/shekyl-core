@@ -184,7 +184,10 @@ fn fill(command: &[String], fills: &[(&str, String)]) -> Vec<OsString> {
 }
 
 /// Runs one filled command to completion: no shell, no environment, a null
-/// standard input, and nothing of ours on its standard output or error.
+/// standard input, and nothing of ours on its standard output or error. On
+/// Windows the one variable a program needs to start, `SystemRoot`, is set
+/// from the OS and never from this process's environment, the rule the Tor
+/// launcher follows (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2).
 async fn run(argv: &[OsString]) -> std::io::Result<std::process::ExitStatus> {
     let (program, args) = argv.split_first().expect("a command has its program first");
     let mut cmd = tokio::process::Command::new(PathBuf::from(program));
@@ -194,6 +197,12 @@ async fn run(argv: &[OsString]) -> std::io::Result<std::process::ExitStatus> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(false);
+    #[cfg(windows)]
+    {
+        let root = shekyl_win_sec::system_dir::system_windows_directory()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        cmd.env("SystemRoot", root);
+    }
     cmd.status().await
 }
 

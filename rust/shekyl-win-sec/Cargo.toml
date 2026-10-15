@@ -26,6 +26,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     # `WaitNamedPipeW`, for the client's bounded busy-wait (WP-W2).
     "Win32_System_Pipes",
+    # `GetSystemWindowsDirectoryW`: the one variable a spawned child gets
+    # (`SystemRoot`), never from this process's environment.
+    "Win32_System_SystemInformation",
     # The daemon configuration (DAEMON_CONFIG_CUTOVER.md §2.4, §2.5, DC-N1):
     # the known-folder roots, `CoTaskMemFree` for their strings, and the
     # `OVERLAPPED` the file lock passes.

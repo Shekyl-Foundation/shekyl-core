@@ -65,13 +65,13 @@ configuration takes one network. Companion flags:
 - `--offline` — disable peer dialing (recommended for hermetic tests).
 
 **On-demand block generation.** The JSON-RPC method `generateblocks`
-exists (`src/rpc/core_rpc_server.h:143`,
+exists (`src/rpc/core_rpc_server.h:139`,
 `src/rpc/core_rpc_server.cpp:2234–2305`). It loops
 `getblocktemplate` → `find_nonce_for_given_block` (RandomX longhash) →
 `submitblock` for the requested count. The handler refuses with
 `CORE_RPC_ERROR_CODE_REGTEST_REQUIRED` outside `FAKECHAIN`
 (`src/rpc/core_rpc_server.cpp:2242–2246`), and the RPC map gates it on
-`!m_restricted` (`src/rpc/core_rpc_server.h:143`), so the integration
+`!m_restricted` (`src/rpc/core_rpc_server.h:139`), so the integration
 harness must connect to an unrestricted RPC port.
 
 **Proof-of-life tests.** The Python functional tests that

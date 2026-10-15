@@ -189,7 +189,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     };
     // The options handle: the resolved values, the runtime rows' owners
     // behind the RPC's two methods (§2.7).
-    let options: OptionsHandle = Arc::new(DaemonOptions::new(resolved.clone()));
+    let options: OptionsHandle = Arc::new(DaemonOptions::new(resolved.clone(), network));
     let status = supervise(entry, &config, &program, &pool, network_id, options);
     pool.shutdown_background();
     drop(lock);

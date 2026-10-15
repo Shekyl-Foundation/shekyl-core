@@ -79,7 +79,14 @@ pub fn resolve(
 ) -> Result<Resolved, Vec<Diagnostic>> {
     let mut faults = Vec::new();
     let mut values: BTreeMap<&'static str, (Value, Source)> = BTreeMap::new();
+    // A development lever off its networks is refused when given (below) and
+    // has no default either: on mainnet no `dev-` row exists (IG-8).
     for row in table.rows.iter().filter(|r| r.is_live()) {
+        if let Visibility::Dev { networks } = row.visibility {
+            if !networks.contains(&network.name()) {
+                continue;
+            }
+        }
         if let Default::Value(text) = row.default {
             let built = if row.kind.is_collection() || row.kind.is_switch() {
                 row.kind.parse_cli(&[text.to_owned()])
@@ -170,6 +177,30 @@ mod tests {
         .unwrap();
         let r = resolve(&TABLE, Network::Mainnet, cli, file).unwrap();
         assert!(matches!(r.get("p2p-peer"), Some(Value::List(v)) if v.len() == 1));
+    }
+
+    #[test]
+    fn a_development_lever_off_its_networks_has_no_default_value() {
+        let on_regtest = resolve(
+            &TABLE,
+            Network::Regtest,
+            shekyl_options::read_cli(&TABLE, args(&["--network", "regtest"])).unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(on_regtest.get("dev-sync"), Some(&Value::Word("on")));
+        let on_mainnet = resolve(
+            &TABLE,
+            Network::Mainnet,
+            shekyl_options::read_cli(&TABLE, args(&["--network", "mainnet"])).unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            !on_mainnet.values.keys().any(|k| k.starts_with("dev-")),
+            "{:?}",
+            on_mainnet.values.keys().collect::<Vec<_>>()
+        );
     }
 
     #[test]

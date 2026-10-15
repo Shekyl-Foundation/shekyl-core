@@ -285,6 +285,21 @@ of its own, for the same reason as the negative one.
   `option_set` and `option_show` in place of its four methods.
   `CORE_RPC_VERSION` is 3.57: the two methods, the JSON-RPC error's `data`
   member under code `-26`, and the four routes gone.
+- **`mine start` carries built values (commit (d), §2.7's last bullet).**
+  The Rust `/start_mining` handler builds `miner_address` through the
+  `mine-address` row and `threads_count` through `mine-threads` (`0` is the
+  grammar's `auto`) before the request is dispatched to C++; a refusal is
+  the IG-11 text in the REST error envelope with status 400, and the
+  address's network check stays the miner's, as at startup. The in-process
+  C++ console calls the C++ handler directly and bypasses this until R8
+  retires it; a remote console reaches the Rust handler.
+- **Development levers exist only on their networks, at every reader
+  (IG-8).** `resolve` gave every live row with a default value one,
+  including a `dev-` row off its networks, so the effective-configuration
+  line and `option_show` on mainnet printed `dev-sync=on (default)`, a
+  lever mainnet refuses. A `dev-` row off its networks now has no default
+  and is absent from both; `option_show` refuses it by name with
+  `config.dev.network`, the startup parse's own refusal.
 - **The notify runner (commit (d), §2.10, DC-Q14).** The runner
   ([`rust/shekyl-ffi/src/notify_ffi.rs`](../../rust/shekyl-ffi/src/notify_ffi.rs))
   is installed by the Rust `main()` from the notify section beside the RPC
@@ -304,7 +319,13 @@ of its own, for the same reason as the negative one.
   syntax). The child gets a cleared environment, a null standard input and
   a null standard output and error, so a command's own output never
   interleaves with the daemon's; an operator who wants the output redirects
-  it in the command. One command per kind is in flight; an event that
+  it in the command. On Windows the one variable a program needs to start,
+  `SystemRoot`, is set from `GetSystemWindowsDirectoryW`
+  (`shekyl-win-sec`'s `system_windows_directory`) and never from the
+  daemon's environment, the rule the Tor launcher follows
+  (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2); no Windows job runs a notify
+  command yet, so that line is compiled on the Windows job and not yet
+  exercised there. One command per kind is in flight; an event that
   arrives while one runs is dropped, and the completed command's log line
   carries the count. `src/common/notify.{h,cpp}`, `spawn.{h,cpp}`, the
   three `arg_*_notify` descriptors, `m_block_rate_notify`, `m_reorg_notify`

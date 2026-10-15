@@ -67,7 +67,7 @@ grep -rn "CORE_RPC_VERSION" rust/ src/ tests/ utils/ \
 
 | Hits | What they are |
 | --- | --- |
-| 1 | The producer: `rust/shekyl-daemon-rpc/src/methods.rs:129` fills `GetVersionResponse.version`. |
+| 1 | The producer: `rust/shekyl-daemon-rpc/src/methods.rs:130` fills `GetVersionResponse.version`. |
 | 2 | The producer's own unit test (`methods.rs:1852`, `:1873`) asserts the reply carries the constant. |
 | 4 | The constant's definition: `rust/shekyl-rpc-types/src/chain.rs:44`, `:80`, `:81`, `:82` (major, minor, the packing formula). |
 | 4 | The constant's pins: `chain.rs:383–386` (packed value, packing expression, major, minor — the 2026-09-04 merge-safety fix). |

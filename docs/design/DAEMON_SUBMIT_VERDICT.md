@@ -1787,11 +1787,11 @@ deletes clean. PR-5's re-grep remains the backstop.
 
 | Site | What | Disposition |
 | --- | --- | --- |
-| `src/rpc/core_rpc_server.cpp:1116-1215` | `on_send_raw_tx` | delete (PR-5) |
-| `src/rpc/core_rpc_server.h:117-118`, `:199` | route maps + declaration | delete |
+| `src/rpc/core_rpc_server.cpp:1044-1143` | `on_send_raw_tx` | delete (PR-5) |
+| `src/rpc/core_rpc_server.h:113-114`, `:199` | route maps + declaration | delete |
 | `src/rpc/core_rpc_server_commands_defs.h:561` | `COMMAND_RPC_SEND_RAW_TX` epee defs | delete |
-| `src/rpc/core_rpc_ffi.cpp:202-203` | `DJSON` legacy-route dispatch entries | delete |
-| `rust/shekyl-daemon-rpc/src/server.rs:91-96`, `handlers/json.rs:70` | axum proxy routes for the legacy endpoint | replaced by the native typed route (PR-3); deleted PR-5 |
+| `src/rpc/core_rpc_ffi.cpp:198-199` | `DJSON` legacy-route dispatch entries | delete |
+| `rust/shekyl-daemon-rpc/src/server.rs:98-103`, `handlers/json.rs:70` | axum proxy routes for the legacy endpoint | replaced by the native typed route (PR-3); deleted PR-5 |
 | `rust/shekyl-rpc-client/src/lib.rs:191-`, `:488-522` | `TxRelayResponse` + string-keyed `publish_transaction` | replaced by typed verdict (PR-4) |
 | `src/wallet/wallet2.cpp:196`, `:7681-7690` | legacy C++ wallet caller (`get_text_reason`, `commit_tx`) | ports to the new endpoint as a minimal epee marshaling shim (transport-only per rule 20); its richer error text comes from the verdict cause |
 | `tests/trezor/daemon.{h,cpp}:59-66`, `:36-38` | mock RPC daemon for trezor tests | follows wallet2's port |

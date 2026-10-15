@@ -87,6 +87,8 @@ pub mod dacl;
 pub mod known_folder;
 /// An exclusive file lock on an open handle.
 pub mod lock;
+#[cfg(windows)]
+pub mod system_dir;
 
 #[cfg(windows)]
 pub use disk::free_bytes_available;

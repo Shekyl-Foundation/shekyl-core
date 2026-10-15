@@ -19,23 +19,35 @@
 use std::sync::Mutex;
 
 use shekyl_daemon_config::resolve::Resolved;
-use shekyl_daemon_config::TABLE;
+use shekyl_daemon_config::{Network, TABLE};
 use shekyl_daemon_rpc::options::{
     OptionsFacts, Refusal, RowGrant, ShowRefusal, ShownRow, VisibleRow,
 };
-use shekyl_options::{Code, Diagnostic, Grant, Kind, Row, Source, Value};
+use shekyl_options::{Code, Diagnostic, Grant, Kind, Row, Source, Value, Visibility};
 
 /// The daemon's options handle.
 pub struct DaemonOptions {
     live: Mutex<Resolved>,
+    network: Network,
 }
 
 impl DaemonOptions {
-    /// A handle over the values the start resolved.
+    /// A handle over the values the start resolved, on `network`.
     #[must_use]
-    pub fn new(resolved: Resolved) -> Self {
+    pub fn new(resolved: Resolved, network: Network) -> Self {
         Self {
             live: Mutex::new(resolved),
+            network,
+        }
+    }
+
+    /// Whether a row exists on this network: a development lever only on
+    /// the networks its row names (IG-8).
+    fn exists(&self, row: &Row) -> bool {
+        match row.visibility {
+            Visibility::Dev { networks } => networks.contains(&self.network.name()),
+            Visibility::Public => true,
+            Visibility::Rejected { .. } | Visibility::Reserved { .. } => false,
         }
     }
 }
@@ -102,6 +114,10 @@ fn words_of(kind: &Kind, text: &str) -> Vec<String> {
 /// constructor.
 fn build(name: &str, text: &str) -> Result<(&'static Row, Value), Diagnostic> {
     let row = TABLE.live(name, &Source::Runtime)?;
+    // No runtime row is a development lever today, and the table gate
+    // keeps `dev-` rows off `option_set` by the runtime mark; a lever
+    // marked runtime later would be refused on a network its row does not
+    // name at the same place.
     if !row.runtime {
         return Err(Diagnostic::new(Code::RuntimeStartupOnly, Source::Runtime).option(name));
     }
@@ -215,13 +231,28 @@ impl OptionsFacts for DaemonOptions {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let rows: Vec<&'static Row> = match names {
-            None => TABLE.rows.iter().filter(|r| r.is_live()).collect(),
+            None => TABLE.rows.iter().filter(|r| self.exists(r)).collect(),
             Some(names) => {
                 let mut rows = Vec::with_capacity(names.len());
                 for name in names {
                     let row = TABLE
                         .live(name, &Source::Runtime)
-                        .map_err(|d| ShowRefusal::UnknownName(refusal(&d)))?;
+                        .map_err(|d| ShowRefusal::Refused(refusal(&d)))?;
+                    if !self.exists(row) {
+                        // Off its networks the lever does not exist: the
+                        // same refusal a startup parse gives (IG-8).
+                        let d = Diagnostic::new(Code::DevNetwork, Source::Runtime)
+                            .option(name)
+                            .param(
+                                "networks",
+                                match row.visibility {
+                                    Visibility::Dev { networks } => networks.join(", "),
+                                    _ => String::new(),
+                                },
+                            )
+                            .param("network", self.network.name());
+                        return Err(ShowRefusal::Refused(refusal(&d)));
+                    }
                     rows.push(row);
                 }
                 // Table order, whatever order the names came in.
@@ -248,7 +279,22 @@ mod tests {
     fn handle(args: &[&str]) -> DaemonOptions {
         let cli = read_cli(&TABLE, args.iter().map(std::ffi::OsString::from)).unwrap();
         let (network, _mode) = choosers(&cli);
-        DaemonOptions::new(resolve(&TABLE, network, cli, Vec::new()).unwrap())
+        DaemonOptions::new(resolve(&TABLE, network, cli, Vec::new()).unwrap(), network)
+    }
+
+    /// IG-8: on mainnet no development lever exists, so none is shown and a
+    /// named one is refused as off its networks; on regtest they are shown.
+    #[test]
+    fn development_levers_exist_only_on_their_networks() {
+        let mainnet = handle(&["--network", "mainnet"]);
+        let all = mainnet.show(None).unwrap();
+        assert!(all.iter().all(|v| !v.row.name.starts_with("dev-")));
+        let refused = mainnet.show(Some(&["dev-sync".to_owned()])).unwrap_err();
+        assert!(matches!(refused, ShowRefusal::Refused(r) if r.code == "config.dev.network"));
+        let regtest = handle(&["--network", "regtest"]);
+        let all = regtest.show(None).unwrap();
+        let sync = all.iter().find(|v| v.row.name == "dev-sync").unwrap();
+        assert_eq!(sync.row.value, Some(Some("on".to_owned())));
     }
 
     fn pair(name: &str, value: &str) -> (String, String) {
@@ -378,6 +424,6 @@ mod tests {
         assert_eq!(two[0].row.name, "log-level");
         assert_eq!(two[1].row.name, "p2p-upload-max");
         let unknown = h.show(Some(&["nope".to_owned()])).unwrap_err();
-        assert!(matches!(unknown, ShowRefusal::UnknownName(r) if r.code == "config.name.unknown"));
+        assert!(matches!(unknown, ShowRefusal::Refused(r) if r.code == "config.name.unknown"));
     }
 }

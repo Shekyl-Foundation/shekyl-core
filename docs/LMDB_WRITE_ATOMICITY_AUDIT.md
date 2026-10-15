@@ -844,7 +844,7 @@ one site read them: `db.get_hard_fork_version(height)` inside
 was about it and not about the table in general.
 
 **What the read-back is worth, per caller.** `pop_block_from_blockchain`
-(`src/cryptonote_core/blockchain.cpp:814`) is the only caller of
+(`src/cryptonote_core/blockchain.cpp:813`) is the only caller of
 `on_block_popped`, always with a literal `1` (`:846`), so the loop runs once
 and the multi-block arm is dead. It has four callers of its own:
 

@@ -34,7 +34,7 @@ a566a466. Round-state record: [`FEE_LADDER_ROUND.md`](FEE_LADDER_ROUND.md).
 ## §0 The question and its jurisdiction
 
 `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
-(`src/cryptonote_core/blockchain.cpp:4475-4508`) serves a four-rung fee
+(`src/cryptonote_core/blockchain.cpp:4476-4509`) serves a four-rung fee
 ladder (`Fl`/`Fn`/`Fm`/`Fh`) transliterated from ArticMine's Monero 2021
 scaling paper, cited by URL at `blockchain.cpp:4477`. The rungs are
 block-expansion price points: each is (approximately) the per-byte fee at
