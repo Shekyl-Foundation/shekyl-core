@@ -93,8 +93,8 @@ pub use serve_set::{
     Staleness, StalenessBound,
 };
 pub use shekyl_p_serve::{
-    sign_pass_transcript, sign_receipt_transcript, IdentityPassKey, PassKey, ServeCounterReader,
-    SignRefused, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
+    sign_pass_transcript, sign_receipt_transcript, PassKey, ServeCounterReader, SignRefused,
+    IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
 };
 #[cfg(any(test, feature = "test-signer"))]
 pub use signer::{signer_at_synced_tip, RefusingKey};

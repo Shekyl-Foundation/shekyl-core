@@ -568,7 +568,7 @@ the pin:
   (`rust/shekyl-p-serve/src/countersign.rs:74`). Whether the signing
   capability can go away while the listener stays up was the unwired
   remainder of `SH-2`. **Settled 2026-10-06**
-  ([`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md) §3 Q2): the
+  ([`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md) §3 Q2): the
   serving task's life is a subset of the stake actor's by *teardown
   order* (`tasks.shutdown()` before `drop(engine)`, pinned by test), and
   the key holds a **weak** actor handle, so the one case the order cannot

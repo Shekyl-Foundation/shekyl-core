@@ -105,10 +105,10 @@ receipt capability*; the rows they touch say what moved.
 | --- | --- | --- |
 | Live challenge mechanism | One beacon challenge per pair-epoch: the gate derives `h_fire` and the leaf index itself. No producer bounds how many blocks may challenge a pair; the gate names the secret-draw producer and the admission cutover as the blocker | `src/cryptonote_core/blockchain.cpp:4636-4641`, `:4724`, `:4757` |
 | The public urn | Deleted 2026-10-10. It had no production caller. `DrawablePair` stays, in its own module. The secret draw's hash side replaced the selection; the draw producer is not live. One C++ header comment still names `assign_epoch` as existing in Rust | was `rust/shekyl-archival-retention/src/challenge_assignment.rs` (grep for `challenge_assignment`: one doc comment, `drawable_pair.rs:8`); `rust/shekyl-archival-retention/src/drawable_pair.rs:17`; `src/cryptonote_core/blockchain.cpp:4636`; `src/blockchain_db/blockchain_db.h:2012` |
-| Drawable set | `DrawableSet::at_epoch_open` is built and has no caller outside its own tests. It enumerates tip bonds. The journal walk that recovers a Release or a slash is not built. The slash pass reads the slash log per draw to decide which draws count; it does not build the set. The `h_open(E)` value the verifier reads, `DrawableEpoch` (`D` and each pair's receipt key, one value, §9.6), is built as a type with its one constructor, which refuses a pair without a key; nothing builds it from the chain — that is `SO-D12`'s increment 2 — and its callers outside tests are the verifier and its fixture | `rust/shekyl-chain-rules/src/archival/drawable.rs:27`, `:44`, `:9-13`; `rust/shekyl-chain-rules/src/archival/slash.rs:361`; `rust/shekyl-archival-retention/src/held_at_height.rs:104`; `rust/shekyl-archival-retention/src/drawable_epoch.rs:82`, `:110`, `:186`, `:27-33`; `rust/shekyl-chain-rules/src/archival/bundle.rs:865` |
+| Drawable set | `DrawableSet::at_epoch_open` is built and has no caller outside its own tests. It enumerates tip bonds. The journal walk that recovers a Release or a slash is not built. The slash pass reads the slash log per draw to decide which draws count; it does not build the set. The `h_open(E)` value the verifier reads, `DrawableEpoch` (`D` and each pair's receipt key, one value, §9.6), is built as a type with its one constructor, which refuses a pair without a key; nothing builds it from the chain — that is `SO-D12`'s increment 2 — and its callers outside tests are the verifier and its fixture | `rust/shekyl-chain-rules/src/archival/drawable.rs:27`, `:44`, `:9-13`; `rust/shekyl-chain-rules/src/archival/slash.rs:361`; `rust/shekyl-archival-retention/src/held_at_height.rs:104`; `rust/shekyl-archival-retention/src/drawable_epoch.rs:82`, `:110`, `:186`, `:27-33`; `rust/shekyl-chain-rules/src/archival/bundle.rs:635` |
 | Assignment cache, membership check | Not in code | grep for `EpochAssignmentCache`, `is_assigned`: no hits |
 | Serve-credit acceptance | One C++ gate. The Rust validator has no rule for CEN-J8–J10, registered `pending`; their block-level successors, CEN-J29–J37, are the bundle verifier's refusals (next row) and are `pending` too | `src/cryptonote_core/blockchain.cpp:4593`, `:4603` (called `:3513`); `rust/shekyl-chain-rules/src/census.rs:538-540`, `:584-592` |
-| The bundle verifier (§9.1, §9.6) | Built and STAGED, merged 2026-10-13 (PR #1047): `check_section` (steps 1–2), `verify_bundle` (steps 3–8, in that order), `open_body`, `open_reference`, the view trait `BundleView`, the kept projection `Admitted` with every derived draw, and the typed refusals, each naming its census row. A rule set whose schedule has no response window refuses every bundle at step 3. The receipt check of step 8 calls `verify_receipt_transcript`, the one verification body it shares with the fetch client's receipt-key target; neither builds the 112-byte transcript or names the domain itself (*amended 2026-10-13 by the post-merge fix `aedc414ce6`: at the pin, step 8 built the transcript with `pass_countersignature_message` and verified inline, and the fetch target was the function's one caller — records-was*). A section whose reference count does not fit the root's 32-bit `n` is refused, not a panic: `bundle_root` returns `TooManyReferences { found }` and `check_section` maps it to `SectionRefused::TooManyReferences` under CEN-J29. The conversion is crate-private inside `bundle_root` (*amended 2026-10-13 by `28c46a9f99`: at the pin `bundle_root` `expect`ed the count to fit — records-was*). The section budget is read inside `check_section`: `D` is the largest `DrawableEpoch::len` among the section's epochs, an empty section is `Admitted` without a read, and a section with an unknown `D` is `Awaiting` for the whole section. An arrival with no view calls `check_section_until_switch`, which is the form check and waits. Nothing on the connect path calls any of it: no `Rule` type is bound, nothing implements `BundleView` on a store, and a test walks every non-test source of the crate to hold that. The wire types and the three hashes (`bundle_commitment`, `bundle_prunable_hash`, `bundle_root`), the section budget and the four labels of §16 are in `shekyl-archival-retention`, with this document's vectors pinned in its tests. `W₂ + L ≤` anchor depth is asserted on every issued rule set and `FakechainSchedule::new` refuses a pair that breaks it with a typed error | `rust/shekyl-chain-rules/src/archival/bundle.rs:412`, `:430`, `:470`, `:735`, `:782`, `:716`, `:201`, `:344`, `:193`, `:680`, `:602`, `:758-760`, `:864-880`, `:33-73`; `bundle_staging_tests.rs:129`; `rust/shekyl-archival-retention/src/attestation_wire.rs:524` (called `rust/shekyl-p-fetch/src/target.rs:176`, and by the verifier's step 8 as of commit `95e59533aa`: `rust/shekyl-chain-rules/src/archival/bundle.rs:913`); `rust/shekyl-archival-retention/src/bundle.rs:666`, `:684`, `:711-712`, `:757`, `:73`, `:76`, `:79` (vectors `bundle_tests.rs:445`, `:549`, `:589`; the count refusal as of commit `95e59533aa`: `rust/shekyl-archival-retention/src/bundle.rs:714`, `:732`, `:748-749`, mapped at `rust/shekyl-chain-rules/src/archival/bundle.rs:495`); `rust/shekyl-chain-rules/src/rule_set.rs:289`, `:341`, `:496`, `:717`; `census.rs:584-592` |
+| The bundle verifier (§9.1, §9.6) | Built and STAGED, merged 2026-10-13 (PR #1047): `check_section` (steps 1–2), `verify_bundle` (steps 3–8, in that order), `open_body`, `open_reference`, the view trait `BundleView`, the kept projection `Admitted` with every derived draw, and the typed refusals, each naming its census row. A rule set whose schedule has no response window refuses every bundle at step 3. The receipt check of step 8 calls `verify_receipt_transcript`, the one verification body it shares with the fetch client's receipt-key target; neither builds the 112-byte transcript or names the domain itself (*amended 2026-10-13 by the post-merge fix `aedc414ce6`: at the pin, step 8 built the transcript with `pass_countersignature_message` and verified inline, and the fetch target was the function's one caller — records-was*). A section whose reference count does not fit the root's 32-bit `n` is refused, not a panic: `bundle_root` returns `TooManyReferences { found }` and `check_section` maps it to `SectionRefused::TooManyReferences` under CEN-J29. The conversion is crate-private inside `bundle_root` (*amended 2026-10-13 by `28c46a9f99`: at the pin `bundle_root` `expect`ed the count to fit — records-was*). The section budget is read inside `check_section`: `D` is the largest `DrawableEpoch::len` among the section's epochs, an empty section is `Admitted` without a read, and a section with an unknown `D` is `Awaiting` for the whole section. An arrival with no view calls `check_section_until_switch`, which is the form check and waits. Nothing on the connect path calls any of it: no `Rule` type is bound, nothing implements `BundleView` on a store, and a test walks every non-test source of the crate to hold that. The wire types and the three hashes (`bundle_commitment`, `bundle_prunable_hash`, `bundle_root`), the section budget and the four labels of §16 are in `shekyl-archival-retention`, with this document's vectors pinned in its tests. `W₂ + L ≤` anchor depth is asserted on every issued rule set and `FakechainSchedule::new` refuses a pair that breaks it with a typed error | `rust/shekyl-chain-rules/src/archival/bundle_section.rs:246` (`check_section`), `:287` (`check_section_until_switch`), `:223` (`open_reference`); `rust/shekyl-chain-rules/src/archival/bundle.rs:34-78` (staged), `:206` (`BundleView`), `:485` (`Admitted`), `:504` (`open_body`), `:551-693` (`verify_bundle`); `rust/shekyl-chain-rules/src/archival/bundle_staging_tests.rs:135`; `rust/shekyl-archival-retention/src/attestation_wire.rs:524` (called `rust/shekyl-p-fetch/src/target.rs:176`, and by the verifier's step 8 (`rust/shekyl-chain-rules/src/archival/bundle.rs:680`)); `rust/shekyl-archival-retention/src/bundle.rs:666`, `:684`, `:711-712`, `:757`, `:73`, `:76`, `:79` (vectors `bundle_tests.rs:445`, `:549`, `:589`; the count refusal as of commit `95e59533aa`: `rust/shekyl-archival-retention/src/bundle.rs:714`, `:732`, `:748-749`, mapped at `rust/shekyl-chain-rules/src/archival/bundle.rs:581`); `rust/shekyl-chain-rules/src/rule_set.rs:289`, `:341`, `:496`, `:717`; `census.rs:584-592` |
 | Serve-credit dedup | Pair-epoch-wide: any earlier pass for `(P, s, E)` refuses the next | `src/cryptonote_core/blockchain.cpp:4650` |
 | Serve-credit vin record | Kept: `p_canonical_id`, `shard_id`, `settlement_epoch`, a 64-byte Ed25519 leg. Pruned: a segment path and a 3,309-byte ML-DSA leg. The signed preimage is over a leaf path | `rust/shekyl-archival-retention/src/wire.rs:59-64`, `:81-84`, `:379` |
 | Receipt (`SF-D8` v3) | On the live path `P` signs `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id ‖ delivery_digest`, 112 bytes, under `shekyl/archival-attestation-scheme-v3`, with the identity key under scheme 1. Carried on the block-level attestation record, a different record from the vin. Under `SCHEME_DOMAIN_RECEIPT` (scheme 3) the same transcript now has a signer, `sign_receipt_transcript`, reached from the stake actor by `SignReceiptTranscript` through the staged `ResidentReceiptKey`, and a verifier, `verify_receipt_transcript`, beside the bundle rule's own step 8. Nothing on the live path signs or verifies under it: the serving task is started with the identity capability and every production fetch target is built over the identity key (*The receipt capability*, below) | `rust/shekyl-archival-retention/src/pass_anchor.rs:64-65`, `:395`; `attestation_wire.rs:141-146`, `:524`; `rust/shekyl-crypto-pq/src/signature.rs:116`, `:124`; `rust/shekyl-p-serve/src/countersign.rs:340`, `:367-372`; `rust/shekyl-engine-core/src/engine/stake_engine/persona.rs:268-291`; `serving/receipt_key.rs:130`, `:178`; `serving/start.rs:257`; `rust/shekyl-daemon-image/src/shard_view.rs:95-103` |
@@ -116,16 +116,16 @@ receipt capability*; the rows they touch say what moved.
 | Anchor window | `L + 1` hashes for `[h − 720 − L, h − 720]`, keyed on the including block's predecessor. `L = 4`, depth 720. The relation `W₂ + L ≤` depth, which the bundle rule's anchor check rests on (§9.1), is a `const fn` on the schedule | `rust/shekyl-archival-retention/src/pass_anchor.rs:70`, `:73-74`, `:130`, `:108`; `config/consensus_constants.json:33`, `:37` |
 | Serving route | Single-pass serve, 400 / 404 / 503, refusal trailer, signature over the delivery digest as the last bytes. The envelope's width is the bound signer's: `PassKey<const W>` is instantiated at 3,385 bytes (scheme 1, live) and at 1,356 bytes (scheme 3, staged) | [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md); `rust/shekyl-p-serve/src/serve.rs:479`, `:1118`, `:1124`, `:1131`; `countersign.rs:148`, `:154`, `:226` |
 | `P`'s serving key | Wired. The serving task is given `ResidentPassKey`: a weak handle to the stake actor, which signs the transcript with the identity key (`hybrid_sign_sk`) at the identity width. The receipt key is derived into `ArchivalPKeys` (two HKDF labels); its signing capability is built and not selected (*The receipt capability*, below) | `rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:257`; `serving/pass_key.rs:70`, `:94`, `:107`; `stake_engine/persona.rs:232`; `rust/shekyl-crypto-pq/src/archival_p.rs:224`, `:229`, `:596-599`, `:773-776` |
-| Coinbase tag `0x0C` | Exists, and is required in every coinbase (CEN-I20, `implemented`): one 32-byte draw commitment, in a fixed place in the coinbase's tag order. Rust's coinbase writer draws it: the FFI the C++ template builder calls generates a fresh scheme-3 witness keypair and a fresh seed, commits to them with `draw_commit`, and discards both. Only the staged verifier reads it back as a commitment to open, through `BundleView::draw_commitment`; no connect path does | `rust/shekyl-wire/src/tx_extra/mod.rs:86` (`TX_EXTRA_TAG_DRAW_COMMITMENT`); `tx_extra/coinbase.rs:66` (`COINBASE_TAGS`); `rust/shekyl-chain-rules/src/rules/tx_extra.rs:111` (`I20`); `census.rs:529`; `rust/shekyl-ffi/src/tx_extra_codec_ffi.rs:372`; `rust/shekyl-ffi/src/archival_ffi/draw.rs:46-56`; `rust/shekyl-chain-rules/src/archival/bundle.rs:824` |
-| Witness key, witness seed ring | The witness key is generated per coinbase and discarded with its seed (previous row); nothing holds either, so no node can produce the bundle that opens its own `0x0C`. The seed ring of §4.2 and a bundle producer are not in code. `ChallengeDraw` carries a `seed` field for the challenge read, which has no caller outside tests. `SCHEME_DOMAIN_WITNESS_CARRIER` is a label with no signer and no verifier; `SCHEME_DOMAIN_WITNESS_BUNDLE` is checked by the verifier's step 5 and signed only by the test fixture | grep for `derive_witness_keypair`, `LABEL_WITNESS`, `WitnessRing`, `seed_ring`, `draw_seed`, `witness_key`: no hits; `rust/shekyl-ffi/src/archival_ffi/draw.rs:47-50`; `rust/shekyl-archival-fetch-sched/src/read.rs:392-394`, `:437`; `rust/shekyl-crypto-pq/src/signature.rs:128`, `:139`; `rust/shekyl-chain-rules/src/archival/bundle.rs:842-851`; `harness/bundle.rs:499` |
-| The draw's functions | Built, with this document's vectors pinned in the module: `select_draw`, `draw_commit`, `challenge_nonce`, `serve_credit_batch_commitment`, `draw_horizon`, `draw_target` (the exact capped target, PR #1058), `draw_count`. Callers outside tests: `draw_commit`, the coinbase writer's FFI; `challenge_nonce`, `ChallengeDraw::nonce` under `challenge_read` (itself uncalled outside tests) and the verifier's step 8; `select_draw`, the verifier's step 6 and the sim's production mode (`ESR-13`, §12); `draw_horizon` and `draw_count`, the sim's production mode. `serve_credit_batch_commitment` has none: superseded (§11.1) | `rust/shekyl-archival-retention/src/secret_draw.rs:83`, `:130`, `:142`, `:156`, `:179`, `:235`, `:286` (vectors `:332`, `:542`, `:563`); `lib.rs:229-234`; `rust/shekyl-ffi/src/archival_ffi/draw.rs:52`; `rust/shekyl-archival-fetch-sched/src/read.rs:407-408`, `:437`; `rust/shekyl-chain-rules/src/archival/bundle.rs:864`, `:913`; `rust/shekyl-economics-sim/src/secret_draw_production.rs:227`, `:235`, `:504` (its tests begin `:975`) |
+| Coinbase tag `0x0C` | Exists, and is required in every coinbase (CEN-I20, `implemented`): one 32-byte draw commitment, in a fixed place in the coinbase's tag order. Rust's coinbase writer draws it: the FFI the C++ template builder calls generates a fresh scheme-3 witness keypair and a fresh seed, commits to them with `draw_commit`, and discards both. Only the staged verifier reads it back as a commitment to open, through `BundleView::draw_commitment`; no connect path does | `rust/shekyl-wire/src/tx_extra/mod.rs:86` (`TX_EXTRA_TAG_DRAW_COMMITMENT`); `tx_extra/coinbase.rs:66` (`COINBASE_TAGS`); `rust/shekyl-chain-rules/src/rules/tx_extra.rs:111` (`I20`); `census.rs:529`; `rust/shekyl-ffi/src/tx_extra_codec_ffi.rs:372`; `rust/shekyl-ffi/src/archival_ffi/draw.rs:46-56`; `rust/shekyl-chain-rules/src/archival/bundle.rs:594` |
+| Witness key, witness seed ring | The witness key is generated per coinbase and discarded with its seed (previous row); nothing holds either, so no node can produce the bundle that opens its own `0x0C`. The seed ring of §4.2 and a bundle producer are not in code. `ChallengeDraw` carries a `seed` field for the challenge read, which has no caller outside tests. `SCHEME_DOMAIN_WITNESS_CARRIER` is a label with no signer and no verifier; `SCHEME_DOMAIN_WITNESS_BUNDLE` is checked by the verifier's step 5 and signed only by the test fixture | grep for `derive_witness_keypair`, `LABEL_WITNESS`, `WitnessRing`, `seed_ring`, `draw_seed`, `witness_key`: no hits; `rust/shekyl-ffi/src/archival_ffi/draw.rs:47-50`; `rust/shekyl-archival-fetch-sched/src/read.rs:392-394`, `:437`; `rust/shekyl-crypto-pq/src/signature.rs:128`, `:139`; `rust/shekyl-chain-rules/src/archival/bundle.rs:612-622`; `harness/bundle.rs:499` |
+| The draw's functions | Built, with this document's vectors pinned in the module: `select_draw`, `draw_commit`, `challenge_nonce`, `serve_credit_batch_commitment`, `draw_horizon`, `draw_target` (the exact capped target, PR #1058), `draw_count`. Callers outside tests: `draw_commit`, the coinbase writer's FFI; `challenge_nonce`, `ChallengeDraw::nonce` under `challenge_read` (itself uncalled outside tests) and the verifier's step 8; `select_draw`, the verifier's step 6 and the sim's production mode (`ESR-13`, §12); `draw_horizon` and `draw_count`, the sim's production mode. `serve_credit_batch_commitment` has none: superseded (§11.1) | `rust/shekyl-archival-retention/src/secret_draw.rs:83`, `:130`, `:142`, `:156`, `:179`, `:235`, `:286` (vectors `:332`, `:542`, `:563`); `lib.rs:229-234`; `rust/shekyl-ffi/src/archival_ffi/draw.rs:52`; `rust/shekyl-archival-fetch-sched/src/read.rs:407-408`, `:437`; `rust/shekyl-chain-rules/src/archival/bundle.rs:599`, `:673`, `:727`; `rust/shekyl-economics-sim/src/secret_draw_production.rs:227`, `:235`, `:504` (its tests begin `:975`) |
 | Coinbase transaction secret | Random per block and not retained. The Rust builder takes it from the caller and wipes it with the context; the C++ builder generates it | `rust/shekyl-block-template/src/lib.rs:193-196`; `src/cryptonote_core/cryptonote_tx_utils.cpp:81` |
 | Settlement fold | `settle_pair`: three of a pair's counted draws selected by the beacon, NonObservation below 3, Served at 2 passes among the three (`SERVE_THRESHOLD_PASSES`), else Missed (§9.3). The Rust slash pass calls it for every pair with a draw in the epoch | `rust/shekyl-archival-retention/src/settlement_select.rs:150` (`select_counted` `:75`); `rust/shekyl-types/src/archival/settlement.rs:25`, `:29`, `:70-78`; `rust/shekyl-chain-rules/src/archival/slash.rs:215`, `:270` |
 | Settlement rows | The Rust slash pass writes one per pair with a counted draw, ahead of the slash it decides. The issued-draw index and its digest (§10) have no block writer; a Fakechain-only door, `regtest_issue_draws`, is their one writer and is not journaled. The per-block draw state (`count`, `carry`, the shortfall, `revealed`) and the drawable set's digest are tables with view reads (`ChainView::block_draws`, `drawable_digest`) and have no writer at all: the store reads them and nothing in it writes them. The C++ store keeps the settlement table's handle with no writer; a revert and a prune delete remain | `rust/shekyl-types/src/archival/settlement.rs:147`; `rust/shekyl-chain-store/src/schema.rs:596`, `:749`, `:758`, `:768`, `:777`; `rust/shekyl-chain-store/src/store/archival_write.rs:357` (`write_settlements`), `:609` (`regtest_issue_draws`), `:599`; `store/archival_reads.rs:575`, `:587`; `rust/shekyl-chain-rules/src/view.rs:650`, `:656`; `rust/shekyl-chain-ingest/src/connector.rs:490`; `rust/shekyl-chain-store/src/archival_snapshot.rs:224` (`disposition`); `src/blockchain_db/lmdb/db_lmdb.cpp:1693`, `:6622`, `:6784` |
 | Slash fold | Rust: reads the settlement row; Missed is the only candidate. C++, consensus until `DEL-008`: reads "any pass" on the one-challenge beacon | `rust/shekyl-chain-rules/src/archival/slash.rs:410`, `:424`; `src/blockchain_db/lmdb/db_lmdb.cpp:5298`, `:5308` (`archival_challenge_failed_at_height`) |
 | Accrual | Rust: a pair earns for an epoch iff its settlement row is Served; the slash pass gathers, an epoch after the close (`ARCHIVAL_SETTLEMENT_WRITER.md` §15). C++, consensus until `DEL-008`: at the close, over the epoch's row gather, whose held-and-served set is the serve-credit rows themselves — "any pass" | `rust/shekyl-chain-rules/src/archival/close.rs:501`, `:514` (`Transition::gather`); `src/blockchain_db/lmdb/db_lmdb.cpp:7510` (`process_archival_epoch_close_at_height`), `:7266`, `:7327`, `:7371` |
 | Failure window | `m = 11`, `n = 13`. `BaselineObservation` is two-valued. The Rust slash pass gathers through `settlement_window_slashable`, which passes over a NonObservation row and an absent row. The C++ path marshals the two-valued form | `config/consensus_constants.json:46-47`; `rust/shekyl-archival-retention/src/failure_window.rs:374-380`, `:450`, `:453`, `:524`, `:561`; `rust/shekyl-chain-rules/src/archival/slash.rs:455`; `src/blockchain_db/lmdb/db_lmdb.cpp:5276` |
-| Signature schemes | The canonical encoding carries a scheme byte: 1 (Ed25519 + ML-DSA-65), 2 (multisig container), 3 (Ed25519 + FN-DSA-1024). `verify_pqc_auth` refuses 3. Scheme 3's consumers outside tests: the receipt key's generation in `ArchivalPKeys`; the coinbase FFI's per-block witness keypair; the staged signer chain (`sign_receipt_transcript`, the actor message, `ResidentReceiptKey`); the fetch client's receipt-key target; `verify_receipt_transcript`; and the bundle verifier's two checks. None of them is on the live path | `rust/shekyl-crypto-pq/src/signature.rs:66-67`, `:74`, `:521-541`; `multisig.rs:18`; `fn_dsa_hybrid.rs:157`, `:328`, `:399-413`; `archival_p.rs:773-776`; `rust/shekyl-ffi/src/archival_ffi/draw.rs:47`; `rust/shekyl-p-serve/src/countersign.rs:367`; `rust/shekyl-p-fetch/src/target.rs:87`, `:176`; `rust/shekyl-archival-retention/src/attestation_wire.rs:524`; `rust/shekyl-chain-rules/src/archival/bundle.rs:842-851`, `:913` |
+| Signature schemes | The canonical encoding carries a scheme byte: 1 (Ed25519 + ML-DSA-65), 2 (multisig container), 3 (Ed25519 + FN-DSA-1024). `verify_pqc_auth` refuses 3. Scheme 3's consumers outside tests: the receipt key's generation in `ArchivalPKeys`; the coinbase FFI's per-block witness keypair; the staged signer chain (`sign_receipt_transcript`, the actor message, `ResidentReceiptKey`); the fetch client's receipt-key target; `verify_receipt_transcript`; and the bundle verifier's two checks. None of them is on the live path | `rust/shekyl-crypto-pq/src/signature.rs:66-67`, `:74`, `:521-541`; `multisig.rs:18`; `fn_dsa_hybrid.rs:157`, `:328`, `:399-413`; `archival_p.rs:773-776`; `rust/shekyl-ffi/src/archival_ffi/draw.rs:47`; `rust/shekyl-p-serve/src/countersign.rs:367`; `rust/shekyl-p-fetch/src/target.rs:87`, `:176`; `rust/shekyl-archival-retention/src/attestation_wire.rs:524`; `rust/shekyl-chain-rules/src/archival/bundle.rs:612-622`, `:680-693` |
 | Bond record | Three key fields: the identity key (`hybrid_pubkey`), from which `p_canonical_id` is derived; the debit authorizer (`bond_spend_pk`); and the receipt key (`receipt_sign_pk`), mandatory, fixed-width, set once at JoinMarket connect from the one JoinMarket form (`post_kind` `5`) and never changed (FN-DSA increment 3, PR #1046, merged 2026-10-13). That it parses as a scheme-3 key is CEN-J28, `implemented` | `rust/shekyl-types/src/archival/bond.rs:339-358`; `rust/shekyl-archival-retention/src/id.rs:20`; `rust/shekyl-wire/src/transaction.rs:85-88`, `:97-105`; `rust/shekyl-chain-rules/src/census.rs:547` |
 | The receipt capability (§6.3, `FN_DSA_HYBRID.md` §9) | Built and STAGED, merged 2026-10-13 (PR #1049): `ResidentReceiptKey`, a `PassKey` at the receipt envelope's width, signs the 112-byte transcript through the actor message `SignReceiptTranscript` with the held persona's receipt key, decoded on the first signature and held (`HeldReceiptKey`); its pre-flight latches on an undecodable key. Nothing selects it: the serving task is started with `ResidentPassKey`, the host's key type is the identity width, the daemon's fetch targets are built over `hybrid_pubkey`, the constructor carries `expect(dead_code)`, and a test reads `start.rs` for its name. The switch is the settlement lane's cutover, in the change that wires a verifier for scheme-3 receipts | `rust/shekyl-engine-core/src/engine/stake_engine/serving/receipt_key.rs:130`, `:148-156`, `:178`, `:186-212`, `:645`; `stake_engine/persona.rs:268-291`; `stake_engine/types.rs:256`; `stake_engine/handle.rs:306`; `serving/start.rs:257`; `rust/shekyl-p-host/src/host.rs:59`, `:429`; `rust/shekyl-daemon-image/src/shard_view.rs:95-103` |
 | `RowStatus` | Six arms: `Pending`, `Implemented`, `EnforcedAt`, `ByConstruction`, `HeldByStore`, `HeldByCxx`. None for a row retired by ruling | `rust/shekyl-chain-rules/src/census.rs:62-156` |
@@ -816,15 +816,20 @@ own receipt. Each refusal is a typed verdict naming its census row.
 1. **Form.** The references are in strictly ascending `h`, so no `h`
    repeats. Each reference parses: its bitmap is exactly `⌈count / 8⌉`
    bytes for the `count` it states, with zero padding. The header root
-   recomputes from them (§7.3).
+   recomputes from them (§7.3). **Every reference names an `h` with
+   `h < h_incl ≤ h + W₂`**, step 3's window, refused under CEN-J31 at the
+   reference's position (`SCS-P41`). So a section holds at most `W₂`
+   references.
 2. **Budget.** The sum of `max(count, 1)` over the section, taken from
    the references' stated counts, is within the section budget (§7.4).
 
-Both are computed from the references and nothing else. The budget's
-value needs `D`, which is chain state; where that is not known at an
-alternative block's arrival, the sum is still taken and its comparison
-waits for the switch. A reference that understates its `count` to pass
-this sum is refused at step 3.
+Both are computed from the references, the including block's height and
+the rule set, and nothing else. The budget's value needs `D`, which is
+chain state; where that is not known at an alternative block's arrival,
+the sum is still taken and its comparison waits for the switch. Because
+the window is checked first, the only epochs the budget asks about are
+those of the `W₂` blocks below `h_incl`. A reference that understates its
+`count` to pass this sum is refused at step 3.
 
 **Each bundle**, naming `h`:
 
@@ -836,7 +841,7 @@ this sum is refused at step 3.
    schedule has no response window (`challenge_response_blocks()` is
    `None`: an epoch too short to hold one) refuses every bundle as
    outside the window (CEN-J31;
-   `rust/shekyl-chain-rules/src/archival/bundle.rs:797-803`).
+   `rust/shekyl-chain-rules/src/archival/bundle.rs:566-568`).
 4. **Commitment.**
    `cSHAKE256_32("shekyl/archival-draw-commit-v1", witness_pk ‖ seed)`
    equals `h`'s `0x0C`.
@@ -901,8 +906,11 @@ only the stateless checks run: the section's form, the root, and the
 budget where `D` is known at or below the fork point. Otherwise the budget
 waits for the switch. That comparison is `check_section`: it reads `D` as
 the largest `DrawableEpoch::len` among the section's epochs, and one
-unknown epoch waits the whole section. `check_section_until_switch` is
-the form alone, for an arrival that has no view. Everything else runs at
+unknown epoch waits the whole section. Every reference is inside the
+window before any `D` is read, so an unknown epoch is one opened above
+the fork point, never a reference to a block outside the window
+(`SCS-P41`). `check_section_until_switch` is the form and the window
+alone, for an arrival that has no view. Everything else runs at
 the switch, in the full validate over the switch's batch view. An
 alternative chain with an invalid bundle fails there and rolls back, at
 the cost of a heavier chain's proof of work. No bond state is rebuilt at
@@ -1092,24 +1100,27 @@ carries cannot without a change to this section.
 names no store type, writes nothing, and is tested against a fixture view.
 
 ```rust
-/// Form, then the budget. The cap is `section_budget` over the largest
-/// `DrawableEpoch::len` among these references' epochs, read from `view`.
-/// An empty section is `Admitted` and asks nothing. A section whose epoch
-/// has no `D` here is `Awaiting`: the charge is kept, the comparison is
-/// not a pass. The function takes no cap.
+/// Form and the window, then the budget. The cap is `section_budget` over
+/// the largest `DrawableEpoch::len` among these references' epochs, read
+/// from `view`. An empty section is `Admitted` and asks nothing. A section
+/// whose epoch has no `D` here is `Awaiting`: the charge is kept, the
+/// comparison is not a pass. The function takes no cap.
 pub fn check_section<V: BundleView>(
     refs: &[BundleRef],
     header_root: &[u8; 32],
+    h_incl: BlockHeight,
     view: &V,
-    schedule: SettlementSchedule,
+    rule_set: &RuleSet,
 ) -> Result<SectionStanding, SectionCheckFailed<V::Fault>>;
 
-/// The same form check at arrival, before this chain holds the epochs.
-/// An empty section is `Admitted`. Any other section whose form holds
-/// is `Awaiting`; the budget is `check_section`'s, at the switch.
+/// The same form and window checks at arrival, before this chain holds the
+/// epochs. An empty section is `Admitted`. Any other section that passes
+/// them is `Awaiting`; the budget is `check_section`'s, at the switch.
 pub fn check_section_until_switch(
     refs: &[BundleRef],
     header_root: &[u8; 32],
+    h_incl: BlockHeight,
+    rule_set: &RuleSet,
 ) -> Result<SectionStanding, SectionRefused>;
 
 /// Everything else, for one bundle. Receipts included.
@@ -1129,15 +1140,16 @@ draw `j` that failed. Three outcomes are not verdicts on a block:
 - **the body is not the one referenced**: its hash is not the reference's.
   The block committed to the reference, and a block whose body cannot be
   had is not connected. This is checked before anything else;
-- **the view could not answer** something it should hold: the drawable epoch of
-  `epoch(h)`, the hash at `h` or at an anchor, a drawn pair's key, or the
-  `0x0C` of a block it holds. Every coinbase carries exactly one `0x0C`
-  (CEN-I20), so a known block with none is the view's failure, not the
-  block's.
+- **the view could not answer** something it should hold: the draw count
+  of `h`, the drawable epoch of `epoch(h)`, the hash at `h` or at an
+  anchor, a drawn pair's key, or the `0x0C` of a block it holds. Every
+  coinbase carries exactly one `0x0C` (CEN-I20), so a known block with
+  none is the view's failure, not the block's. The draw count is the same
+  case (`SCS-P42`): step 3's window puts `h` below `h_incl`, so `h` is a
+  block of this chain and its count was written when it connected.
 
-`draw_count(h)` answering "no such block" does refuse the bundle: it names
-a block this chain does not have. A `0x0C` that the bundle's seed and
-witness key do not open is the refusal of step 4.
+A `0x0C` that the bundle's seed and witness key do not open is the
+refusal of step 4.
 
 **In this tree, STAGED.** The verifier merged on 2026-10-13 (PR #1047):
 `check_section`, `verify_bundle`, `open_body`, `open_reference`, the
@@ -1145,8 +1157,8 @@ bundle's types and hashes, and census rows CEN-J29 to J37, registered
 `pending` because the cutover is what wires it — no `Rule` type binds
 them, nothing implements `BundleView` on a store, and a test walks the
 crate's connect-path sources to hold that
-(`rust/shekyl-chain-rules/src/archival/bundle.rs:33-73`;
-`bundle_staging_tests.rs:129`). This section is the contract it is built
+(`rust/shekyl-chain-rules/src/archival/bundle.rs:34-78`;
+`rust/shekyl-chain-rules/src/archival/bundle_staging_tests.rs:135`). This section is the contract it is built
 to; §2 says what the tree holds, row by row. The cutover that calls it is
 the settlement lane's (`SO-D12`, `SCS-P31`).
 
@@ -1156,8 +1168,8 @@ the settlement lane's (`SO-D12`, `SCS-P31`).
 pub trait BundleView {
     type Fault;
 
-    /// `count(h)`, as written when `h` connected (§4.3). `None`: no such
-    /// block on this chain.
+    /// `count(h)`, as written when `h` connected (§4.3). `None`: the view
+    /// holds no count for `h`, which is its own failure (`SCS-P42`).
     fn draw_count(&self, h: BlockHeight) -> Result<Option<u32>, Self::Fault>;
     // A draw index `j` is 32 bits (§3), so a count is. A store that holds
     // it wider refuses a value that does not fit; it does not truncate.
@@ -1235,8 +1247,9 @@ impl DrawableEpoch {
   released or slashed.** That is why `SO-D12`'s Release journal stores the
   whole bond record: the receipt key is rebuilt as of `h_open(E)` with
   the holdings.
-- A key is stored per persona and returned per pair; the verifier decodes
-  a persona's key once per bundle.
+- A key is stored per persona and returned per pair. Each receipt's
+  verification decodes the key's FN-DSA half; decoding once is
+  `SCS-P43`, deferred until a floor measurement asks for it.
 
 **The kept projection.** What the verifier returns on success, and all the
 writer needs.
@@ -1714,6 +1727,20 @@ resolved here.
 | --- | --- | --- |
 | `SCS-P39` | The budget was to be checked "on references alone", but a reference held only the bitmap's bytes, which do not determine `count(h)` (13 bytes fit 97 to 104). The sum of draws was therefore not computable without the chain, and the padding bits were not checkable at all without it | **The kept part states `count` (4 bytes, after `h`).** A reference parses on its own; the section's form and its sum of draws are stateless; the header root covers the count and needs no length frame. Admission holds the stated count to `count(h)`. Amends `SCS-P17`'s kept part. Considered and not taken: leaving the reference as it was and calling the budget a stateful check, which would have left an alternative block's section unbounded until the switch for every bundle above the fork point |
 | `SCS-P40` | A zero-draw bundle is admissible (`SCS-P33`) and, charged by its draws, free. One block could carry up to `W₂` of them | **A bundle is charged `max(count, 1)`.** A section holds at most `c · (⌊9·D / SEB⌋ + 1)` bundles whatever their draws. Amends `SCS-P20`. Considered and not taken: refusing zero-draw bundles, which would reverse `SCS-P33`'s uniform rule; and a separate cap on the number of bundles, a second constant for what one charge already bounds |
+
+### 13.9 Posed on review and ruled, 2026-10-14
+
+A review of the merged verifier (`dev@4ba8b4c2e0`) found that two ruled
+texts disagree with each other or with the property they were ruled for,
+and that the tree does not do what a third says. **`SCS-P41` and `SCS-P42`
+are RULED as built** (PR #1076). **`SCS-P43` is DEFERRED** under rule 21,
+with its reopening criterion in the row.
+
+| # | Defect | Ruling |
+| --- | --- | --- |
+| `SCS-P41` | §9.1 ruled "one unknown epoch waits the whole section", and §13.8 justified `SCS-P39` by bounding an alternative section on arrival. `check_section` had no `h_incl`, so one reference to a block outside the window — above the including block, in an epoch nobody holds — turned the whole section to `Awaiting` and the budget was never compared, for that section's in-window references too. It was safe only if every caller also ran `verify_bundle` on every reference, which nothing in the API required | **RULED as built: the window is part of the section's form.** `check_section` and `check_section_until_switch` take `h_incl` and the rule set, and after order and root refuse a reference not inside `h < h_incl ≤ h + W₂` (`SectionRefused::OutsideWindow`, CEN-J31, at its position). It reads nothing of the chain, so it is as stateless as the rest of the form. An unknown epoch is then one opened above an alternative chain's fork point, the case `SCS-P23` designed `Awaiting` for, and §13.8's bound holds for every section whose epochs are known at the fork. **Two consequences, stated:** a section holds at most `W₂` references, which under the genesis schedule (500) binds before the budget does on a large network (584); and a section that is both over budget and holds an out-of-window reference is refused at CEN-J31, not J30, so the observable order of §9.1 changes for that case. Both functions take `&RuleSet` instead of a bare `SettlementSchedule`, so neither can be handed the process-wide override the validator may not read (`rule_set.rs`). Considered and not taken: a partial budget over the epochs that are known, which would refuse an honest alternative section whose larger `D` is above the fork |
+| `SCS-P42` | §9.6 ruled that `draw_count(h)` answering "no such block" refuses the bundle (`BundleInvalid::UnknownBlock`, CEN-J31). Step 3's window has by then put `h` below `h_incl`, so `h` is a block of the chain the view stands for and `None` can only be the view failing to answer. The `0x0C` arm already treats the same situation as not a verdict. Until the cutover writes `block_draws` for every block, a missed row would turn a store's hole into an invalid honest block | **RULED as built: no count for `h` is `BundleUnanswered::DrawCount`, not a verdict**, and `BundleInvalid::UnknownBlock` is deleted: no state of a conforming view produces it. §9.6's sentence that refused the bundle is reversed and replaced. CEN-J31 keeps the window and one-per-`h` refusals |
+| `SCS-P43` | §9.6 says the verifier decodes a persona's receipt key once per bundle. In the tree a scheme-3 public key holds bytes and its FN-DSA half is decoded on every verification, so every receipt pays a decode; and `DrawableEpoch::new` decodes each persona's key once to check it and discards the result | **DEFERRED (rule 21).** Reopen when `BA-T33`'s floor run shows receipt verification is a material share of block connect time. Measure first: the decoded key's size per persona against the resident cost on the floor device. If built, the decoded form can live inside `FnDsaHybridPublicKey`, in private fields, so each key is decoded once where `DrawableEpoch::new` already decodes it to check it; `DrawableEpoch::receipt_key`'s signature, and `SO-D12`'s increment 2, are unaffected. §9.6 states what the tree does until then |
 
 ---
 

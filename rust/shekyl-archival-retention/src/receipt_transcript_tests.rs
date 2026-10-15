@@ -10,7 +10,7 @@ use super::*;
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_RECEIPT,
-    SCHEME_DOMAIN_WITNESS_CARRIER,
+    SCHEME_DOMAIN_WITNESS_BUNDLE,
 };
 use shekyl_types::BlockHeight;
 
@@ -129,7 +129,7 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
 #[test]
 fn a_signature_under_another_domain_is_not_a_receipt() {
     let (public, secret) = receipt_keypair(7);
-    for domain in [SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_WITNESS_CARRIER] {
+    for domain in [SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_WITNESS_BUNDLE] {
         let signature = HybridEd25519FnDsa
             .sign(&secret, domain, &transcript())
             .expect("sign");

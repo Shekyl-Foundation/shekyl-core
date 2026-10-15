@@ -5,8 +5,9 @@
 `scripts/ci/check_test_only_features.py`'s governance-trigger limb). This
 file carries the source audit; the FOLLOWUPS row carries one sentence and a
 link (rule 95). Owner: the lane that lands F-7's structural gate — **not**
-S-TX. Every `file:line` below was read at `dev` `090f2e8f2`–`6c41bf820`;
-re-verify before acting on one.
+S-TX. The `file:line` cites in §2.1 and §5 were re-read on 2026-10-14;
+the rest were read at `dev` `090f2e8f2`–`6c41bf820`. Re-verify before
+acting on one.
 
 ## 1. The row this record serves
 
@@ -16,7 +17,7 @@ re-verify before acting on one.
 
 ### 2.1 Shape (a) — present in the archive via feature unification
 
-`sign_with_ml_dsa_seed` (deterministic PQ half from a fixed seed — precisely the symbol a production daemon should not link) sits in `shekyl-crypto-pq`'s `#[cfg(any(test, feature = "test-utils"))]` block (`rust/shekyl-crypto-pq/src/signature.rs:450`); `shekyl-ffi` enables the feature on a normal edge (`rust/shekyl-ffi/Cargo.toml:32`), so unification compiles it into the shipped archive, reachable from every Rust crate in that graph, not exported over C. *The remedy as written — separate test-only archive or cmake feature — addresses exactly this.* 
+`sign_with_ml_dsa_seed` (deterministic PQ half from a fixed seed — precisely the symbol a production daemon should not link) sits in `shekyl-crypto-pq`'s `#[cfg(any(test, feature = "test-utils"))]` block (`rust/shekyl-crypto-pq/src/signature.rs:399`); `shekyl-ffi` enables the feature on a normal edge (`rust/shekyl-ffi/Cargo.toml:32`), so unification compiles it into the shipped archive, reachable from every Rust crate in that graph, not exported over C. *The remedy as written — separate test-only archive or cmake feature — addresses exactly this.* 
 
 ### 2.2 Shape (b) — unconditional export, unconditional header
 
@@ -47,8 +48,8 @@ enablements since that round, which is how this was seen.
 
 Ruled 2026-10-12 on PR #1049: *"Raise FOLLOWUPS F-7's priority (the seams
 that mutate key material ship with shekyl-ffi)."* The row is now
-`pre-genesis, priority 1`. What the ruling rests on, read at the tree at
-that PR:
+`pre-genesis, priority 1`. What the ruling rests on, with every `file:line`
+re-read on 2026-10-14:
 
 **The edge.** `shekyl-ffi` enables `shekyl-crypto-pq/test-utils` on a
 **normal** dependency edge (`rust/shekyl-ffi/Cargo.toml:32`, under
@@ -66,10 +67,10 @@ key*:
 
 | Seam | Where | What it does |
 | --- | --- | --- |
-| `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs:220` (added by PR #1049) | Overwrites the header byte of a receipt secret key's FN-DSA half in place, making the key undecodable. Reads no key byte out |
-| `HybridEd25519FnDsa::sign_with_rng_seed` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs:361` | Sign with the FN-DSA half's draw taken from a caller-chosen seed: a deterministic Falcon signature, the thing two of which over one hashed point leak the key (`FN_DSA_HYBRID.md` §2) |
-| `FnDsaHybridSigner::sign_with_rng_seed` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid/signer.rs:179` | The same deterministic sign, over the key decoded once and held |
-| `HybridEd25519MlDsa::sign_with_ml_dsa_seed` | `rust/shekyl-crypto-pq/src/signature.rs:413` | Already §2.1's example |
+| `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs:246` (added by PR #1049) | Overwrites the header byte of a receipt secret key's FN-DSA half in place, making the key undecodable. Reads no key byte out |
+| `HybridEd25519FnDsa::sign_with_rng_seed` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs:387` | Sign with the FN-DSA half's draw taken from a caller-chosen seed: a deterministic Falcon signature, the thing two of which over one hashed point leak the key (`FN_DSA_HYBRID.md` §2) |
+| `FnDsaHybridSigner::sign_with_rng_seed` | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid/signer.rs:186` | The same deterministic sign, over the key decoded once and held |
+| `HybridEd25519MlDsa::sign_with_ml_dsa_seed` | `rust/shekyl-crypto-pq/src/signature.rs:424` | Already §2.1's example |
 
 **What "ships" means here, exactly.** These are compiled into
 `libshekyl_ffi.a`. None is `extern "C"` and no export names one, so C++

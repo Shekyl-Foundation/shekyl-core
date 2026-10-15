@@ -267,7 +267,7 @@ mod tests {
     use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
     use shekyl_crypto_pq::signature::{
         HybridSignature, SignatureScheme, SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_RECEIPT,
-        SCHEME_DOMAIN_WITNESS_CARRIER,
+        SCHEME_DOMAIN_WITNESS_BUNDLE,
     };
 
     use std::collections::{BTreeMap, BTreeSet};
@@ -314,8 +314,8 @@ mod tests {
         assert_eq!(bytes.len(), 1_356);
 
         // Not under another domain: the identity key's, or the other
-        // scheme-3 surface's.
-        for other in [SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_WITNESS_CARRIER] {
+        // scheme-3 surface's, the bundle witness's.
+        for other in [SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_WITNESS_BUNDLE] {
             assert!(scheme
                 .verify(&public, other, &message(), &signature)
                 .is_err());
@@ -350,8 +350,6 @@ mod tests {
         let identity_bytes = identity.to_canonical_bytes().expect("canonical");
         assert!(HybridSignature::from_canonical_bytes(&receipt_bytes).is_err());
         assert!(FnDsaHybridSignature::from_canonical_bytes(&identity_bytes).is_err());
-        assert_eq!(identity_bytes.len(), shekyl_p_serve_envelope_len());
-        assert_ne!(receipt_bytes.len(), shekyl_p_serve_envelope_len());
 
         // The live signer is what it was: the identity key, scheme 1, the
         // attestation domain, verified by the consensus verifier.
@@ -366,13 +364,6 @@ mod tests {
             &identity,
         )
         .expect("the identity signature verifies under bond_id");
-    }
-
-    /// The serving route's envelope width: the scheme-1 signature's
-    /// canonical length. A receipt does not fit it, which is why this
-    /// capability is not on the route (module docs).
-    fn shekyl_p_serve_envelope_len() -> usize {
-        HybridSignature::CANONICAL_LEN
     }
 
     /// Two personas' capabilities are not interchangeable: each signs with
@@ -549,8 +540,8 @@ mod tests {
 
     /// The same through the actor. Holding the corrupted key does not stop
     /// the actor from starting; the capability's refusal is the actor's
-    /// `ReceiptSign` error, identical on every call; the persona's identity
-    /// key and the other persona's receipt key are unaffected.
+    /// `ReceiptKeyUndecodable` error, identical on every call; the persona's
+    /// identity key and the other persona's receipt key are unaffected.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_corrupted_receipt_key_refuses_through_the_actor() {
         let bundles = BTreeMap::from([
