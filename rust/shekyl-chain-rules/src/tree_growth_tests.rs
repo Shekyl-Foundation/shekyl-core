@@ -115,7 +115,8 @@ fn grow_in_batches_equals_rebuild(batches: &[usize]) {
 /// children below each layer's last chunk, then the rebuild.
 fn right_edge_from(all: &[TreeLeaf], stored: &BTreeMap<(u8, u64), [u8; 32]>) -> Vec<[u8; 32]> {
     let span = RightEdgeSpan::of(all.len() as u64).expect("a non-empty tree");
-    let leaves = &all[span.leaves.start as usize..span.leaves.end as usize];
+    let at = |p: u64| usize::try_from(p).expect("a test tree fits usize");
+    let leaves = &all[at(span.leaves.start)..at(span.leaves.end)];
     let full: Vec<Vec<[u8; 32]>> = span
         .children
         .iter()
@@ -144,7 +145,10 @@ fn a_wrong_full_child_below_the_edge_moves_the_rebuilt_root() {
     let n = two_layers + 50;
     let all: Vec<TreeLeaf> = (0..n as u64).map(leaf).collect();
     let mut stored: BTreeMap<(u8, u64), [u8; 32]> = BTreeMap::new();
-    for w in grow(&TreeFrontier::EMPTY, &all).expect("grows").layer_writes {
+    for w in grow(&TreeFrontier::EMPTY, &all)
+        .expect("grows")
+        .layer_writes
+    {
         stored.insert((w.layer, w.chunk), w.hash);
     }
     let honest = right_edge_from(&all, &stored);
@@ -153,14 +157,21 @@ fn a_wrong_full_child_below_the_edge_moves_the_rebuilt_root() {
     // chunk's hash.
     stored.insert((1, 0), stored[&(1, 1)]);
     let tampered = right_edge_from(&all, &stored);
-    assert_ne!(honest.last(), tampered.last(), "a wrong full child must move the root");
+    assert_ne!(
+        honest.last(),
+        tampered.last(),
+        "a wrong full child must move the root"
+    );
 }
 
 #[test]
 fn a_wrong_leaf_under_the_edge_moves_the_leaf_chunk() {
     let all: Vec<TreeLeaf> = (0..45).map(leaf).collect();
     let mut stored: BTreeMap<(u8, u64), [u8; 32]> = BTreeMap::new();
-    for w in grow(&TreeFrontier::EMPTY, &all).expect("grows").layer_writes {
+    for w in grow(&TreeFrontier::EMPTY, &all)
+        .expect("grows")
+        .layer_writes
+    {
         stored.insert((w.layer, w.chunk), w.hash);
     }
     let honest = right_edge_from(&all, &stored);
