@@ -36,6 +36,21 @@ if (-not (Test-Path -LiteralPath $Daemon -PathType Leaf)) {
 }
 $Daemon = (Resolve-Path -LiteralPath $Daemon).Path
 
+# Whether this process has a console. A Ctrl-Break stop case needs one,
+# because GenerateConsoleCtrlEvent reaches only processes that share the
+# caller's console (DAEMON_CONFIG_CUTOVER.md §9, pre-flight item 5). Reported
+# on every run, so the answer is read off the job rather than assumed.
+if ($IsWindows) {
+    Add-Type -Namespace ShekylSmoke -Name Console -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
+[DllImport("kernel32.dll", SetLastError = true)] public static extern uint GetConsoleProcessList(uint[] list, uint count);
+'@
+    $consoleIds = [uint32[]]::new(64)
+    $attached = [ShekylSmoke.Console]::GetConsoleProcessList($consoleIds, 64)
+    $window = if ([ShekylSmoke.Console]::GetConsoleWindow() -eq [IntPtr]::Zero) { 'none' } else { 'present' }
+    Write-Host "runner console: $attached process(es) attached, window $window"
+}
+
 # A free loopback port: bind port 0, read what the OS chose, release it.
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
 $listener.Start()
