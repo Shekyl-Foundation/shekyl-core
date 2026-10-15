@@ -6168,7 +6168,14 @@ bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
       }
     }
     else
+    {
       m_db->batch_abort();
+      // The abort is a tip change back to the committed chain. The weight
+      // limit, the relay floor ring and the tip the dialer announces were
+      // set by the blocks it discards; they are recomputed from the chain.
+      CHECK_AND_ASSERT_THROW_MES(update_next_cumulative_weight_limit(),
+          "Error updating next cumulative weight limit after a batch abort");
+    }
     success = true;
   }
   catch (const std::exception &e)
