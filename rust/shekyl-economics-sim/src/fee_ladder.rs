@@ -698,6 +698,13 @@ pub struct DwellResult {
     pub min_dwell_started_in_ramp: [Option<u64>; SERVED_SLOTS],
 }
 
+/// The served maps the instrument compares.
+///
+/// The served ladder is [`Self::CorrectedRaw`]: the relay floor follows raw
+/// `C` (FL-R20). Every arm after it measures a mechanism FL-R21 deleted:
+/// the power-of-two quantizers, the hysteresis band, the dwell floor and
+/// the §10 grid instrument. They go with FL-R21's deletion sweep
+/// (`docs/FOLLOWUPS.md`, round 19).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LadderMode {
     /// Today's daemon output (no correction) — the churn baseline.
@@ -706,16 +713,8 @@ enum LadderMode {
     CorrectedRaw,
     /// `C` snapped to a power of two first.
     Quantized(SnapRule),
-    /// The ceiling snap behind the §7 hysteresis construction — the
-    /// RULED served map (FL-R3, round 17).
-    ///
-    /// The shipped daemon does not reach it yet: #640 review cycle 5
-    /// found the band unreachable on the served path, and restoring it
-    /// needs a grid-anchored previous value, which is its own round. So
-    /// this mode is the design's map and [`Self::Quantized`] with
-    /// [`SnapRule::Ceiling`] is what is served in the interim — measure
-    /// against this one when the question is what the ladder IS, and
-    /// against that one when it is what the daemon does today.
+    /// The ceiling snap behind the §7 hysteresis band (FL-R3, closed by
+    /// FL-R21).
     QuantizedHysteresis,
     /// The band plus a minimum-dwell floor of `n` blocks on the served
     /// value — examined for FL-R18 (c) and NOT ADOPTED; swept over

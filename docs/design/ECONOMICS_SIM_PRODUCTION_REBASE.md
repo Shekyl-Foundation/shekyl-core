@@ -205,7 +205,7 @@ tables has one cause. Each item names what would show it wrong.
 | **ESR-6** | The weight penalty (`paid_block_reward`) and a block-weight median enter the fold. The pure median fold is **exposed from `shekyl-chain-rules`**, not restated — see §3. What a block carries is the producer's fill rule, lifted from `fill_block_template` to `shekyl_block_template::Fill` and called. | With traffic above the penalty-free zone the median rises and the floor falls as `1/M²` — **amended by §5.6 before the run**: on an all-Standard chain, only once one more transaction's fee covers its penalty. |
 | **ESR-7** | A miner stuffer: transactions the miner includes in its own blocks. Two arms: the fee floor **unenforced** (the current system — zero fee, bounded only by the penalty) and **enforced** (a declared divergence, §4). | `--stage2` prints a stuffer row at zero fee beside the fee-path one. |
 | **ESR-8** | Restated constants become imports, or are declared in §4. ~~The dead stake schedule is deleted in its own commit (rule 15).~~ **Withdrawn 2026-10-03 (Rick):** staking is being built now, and the sim is the instrument for designing it. A staking surface the daemon does not read yet is not dead. The stake schedule, the stake ratio and `ActivityMetric.total_staked` stay. | Appendix A's restated-constant rows are each closed by an import, a deletion, or a §4 entry. Staking surfaces are excepted from deletion. **Re-censused 2026-10-11 (Appendix A2):** 26 rows closed, 11 restated and 10 dead-referent rows open. |
-| **ESR-9** | Every live passage that quotes a superseded figure or reads as history is replaced by the current one, with the history in git (ruled 2026-10-15). In scope: the documents that quote the old tables (§12.13–§12.14 rows); the FL-E1 note in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §11.7, re-measured before it is replaced; the staking-sim plan's clause that L11–L19 figures become records-was rows (§6, EUP-3's to restate before it runs); and Appendix A, which Appendix A2's re-census supersedes. | No current-tense sentence quotes a superseded figure, and no live section says records-was. |
+| **ESR-9** | Every live passage that quotes a superseded figure or reads as history is replaced by the current one, with the history in git (ruled 2026-10-15). In scope: the documents that quote the old tables (§12.13–§12.14 rows); the FL-E1 note in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §11.7, re-measured before it is replaced; the staking-sim plan's clause that L11–L19 figures become records-was rows (§6, EUP-3's to restate before it runs); and Appendix A, which Appendix A2's re-census supersedes; and the thin-margin counts that `FEE_LADDER_DERIVATION.md` (the arm table of §10.10) and `FEE_LADDER_ROUND.md` (round 16b) quote from a column the sim no longer prints. | No current-tense sentence quotes a superseded figure, and no live section says records-was. |
 
 The constant-fee closed form for the fee horizon (`onset.rs`, and the two
 tests that pin it) describes a fee the chain does not charge. It is
@@ -2233,8 +2233,8 @@ own cells and calls in its tests. That closes N1.
 This PR had made the same move inside `secret_draw.rs`: it deleted the
 `f64` rule and called the owners there. That change is withdrawn at the
 merge with `dev`. ESR-13 needs the module as it ran, and one arm on the
-owners is enough. `secret_draw.rs` and `challenge_coverage.rs` are
-`dev`'s, byte for byte.
+owners is enough. `secret_draw.rs` and `challenge_coverage.rs` were
+`dev`'s at that merge, byte for byte.
 
 One result from the withdrawn work stands as corroboration, and its code
 is in this branch's history at `2395057f41`. An epoch ran under either
