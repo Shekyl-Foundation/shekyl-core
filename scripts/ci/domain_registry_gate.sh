@@ -343,10 +343,11 @@ count_pattern() {
 # domain shekyl/bp-plus-batch-weights-v1. Its tests (src/tests/derived.rs) sit
 # under a tests/ directory and are outside the count.
 # FCMP++ batch weights (2026-10-15, ruling R3 applied on #1081's review):
-# 76 -> 78. One production site in rust/shekyl-fcmp/src/proof.rs
-# (batch_weights_rng, which both verifies call under their own domain:
-# shekyl/fcmp-pp-batch-weights-v1, shekyl/fcmp-membership-only-batch-weights-v1)
-# and one inline #[cfg(test)] site in the same file's batch_weights_tests.
+# 76 -> 78. One production site (`BatchWeights::seed`, which both verifies
+# call under their own domain: shekyl/fcmp-pp-batch-weights-v1,
+# shekyl/fcmp-membership-only-batch-weights-v1) and one #[cfg(test)] site.
+# Both live in rust/shekyl-fcmp/src/batch_weights.rs (moved out of proof.rs
+# with the statement; the count is unchanged).
 MECH1_EXPECTED=78
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then

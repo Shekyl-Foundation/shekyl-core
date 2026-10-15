@@ -27,8 +27,7 @@ use ciphersuite::{
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
 use ec_divisors::ScalarDecomposition;
 use helioselene::{Helios, Selene};
-use rand_chacha::ChaCha20Rng;
-use rand_core::{CryptoRng, OsRng, RngCore, SeedableRng};
+use rand_core::{CryptoRng, OsRng, RngCore};
 
 use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, PQC_LEAF_COMMITMENT_J, T};
 use shekyl_fcmp_proofs::{
@@ -49,6 +48,11 @@ use shekyl_fcmp_proofs::{
 /// `shekyl-crypto-pq` (e.g. fuzz harnesses that already depend on
 /// `shekyl-fcmp`).
 pub use shekyl_crypto_pq::key_image::KeyImage;
+
+use crate::batch_weights::{BatchKind, BatchWeights};
+pub use crate::batch_weights::{
+    FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION, FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION,
+};
 
 /// Errors during FCMP++ proof construction.
 #[derive(Debug, Error)]
@@ -877,83 +881,6 @@ impl ProveInputLeafChunk {
     }
 }
 
-/// The cSHAKE256 customization for a full FCMP++ verify's batch-weight seed
-/// (CEN-I15's body; ruling R3, 2026-10-15). Registered in
-/// `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 1; a change to
-/// [`batch_weights_preimage`]'s layout is a new domain (`-v2`).
-pub const FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION: &[u8] = b"shekyl/fcmp-pp-batch-weights-v1";
-
-/// The cSHAKE256 customization for a membership-only verify's batch-weight
-/// seed (the emission backing path). A separate domain from
-/// [`FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION`]: the two verifies read different
-/// statements (no key images here), so their seeds are separate messages.
-pub const FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION: &[u8] =
-    b"shekyl/fcmp-membership-only-batch-weights-v1";
-
-/// What a verify's batch weights are derived from: every value the verify
-/// reads, length-framed, in order.
-///
-/// ```text
-/// len_le4(proof) ‖ proof ‖ num_inputs_le4 ‖ layers_u8 ‖ tree_root ‖ signable_tx_hash
-///   ‖ n_le4 ‖ KI_1 … KI_n          (full verify only)
-///   ‖ n_le4 ‖ K_1 … K_n            (each PQC key point K = k·G_k, compressed)
-///   ‖ n_le4 ‖ C'_1 … C'_n          (pseudo-outputs)
-/// ```
-///
-/// The vendored verifiers read their RNG only for batch weights — one per
-/// statement queued on the Ed25519 verifier (`multiexp::BatchVerifier::queue`:
-/// four per input in the SAL, one in the membership-only spend auth), one for
-/// the root-blind proof of knowledge, and one in each circuit statement's
-/// verify (`generalized-bulletproofs`' arithmetic-circuit proof); the
-/// inner-product verify reads none. So, as for the BP+ batch
-/// (`shekyl-bulletproofs`' `derived.rs`), the weights can be a pure function
-/// of the statement: a prover who knows them in advance cannot use them,
-/// because changing any value the equations read re-derives every weight,
-/// and cancelling an invalid statement's error under fixed weights is a
-/// `1/ℓ` event per attempt.
-#[allow(clippy::too_many_arguments)]
-fn batch_weights_preimage(
-    proof: &ShekylFcmpProof,
-    layers: u8,
-    tree_root: &[u8; 32],
-    signable_tx_hash: &[u8; 32],
-    key_images: Option<&[KeyImage]>,
-    pqc_key_points: &[[u8; 32]],
-    pseudo_outs: &[[u8; 32]],
-) -> Vec<u8> {
-    let le4 = |n: usize| {
-        u32::try_from(n)
-            .expect("a proof and its input lists are bounded far below u32::MAX")
-            .to_le_bytes()
-    };
-    let mut preimage = Vec::with_capacity(proof.data.len() + 4 + 4 + 1 + 64 + 12 + 96 * 8);
-    preimage.extend_from_slice(&le4(proof.data.len()));
-    preimage.extend_from_slice(&proof.data);
-    preimage.extend_from_slice(&proof.num_inputs.to_le_bytes());
-    preimage.push(layers);
-    preimage.extend_from_slice(tree_root);
-    preimage.extend_from_slice(signable_tx_hash);
-    if let Some(key_images) = key_images {
-        preimage.extend_from_slice(&le4(key_images.len()));
-        for ki in key_images {
-            preimage.extend_from_slice(ki.as_bytes());
-        }
-    }
-    for list in [pqc_key_points, pseudo_outs] {
-        preimage.extend_from_slice(&le4(list.len()));
-        for item in list {
-            preimage.extend_from_slice(item);
-        }
-    }
-    preimage
-}
-
-/// The generator a verify's batch weights are drawn from: a [`ChaCha20Rng`]
-/// seeded with `cSHAKE256(customization, preimage)[..32]`.
-fn batch_weights_rng(customization: &[u8], preimage: &[u8]) -> ChaCha20Rng {
-    ChaCha20Rng::from_seed(shekyl_crypto_hash::cshake256_32(customization, preimage))
-}
-
 /// Each PQC key point in its compressed encoding, as the seed reads it.
 fn compressed(points: &[<Ed25519 as Ciphersuite>::G]) -> Vec<[u8; 32]> {
     use ciphersuite::group::GroupEncoding;
@@ -1040,19 +967,18 @@ pub fn verify(
         pqc_keys.iter().map(PqcKeyScalar::key_point).collect();
 
     // The batch weights, derived from every value this verify reads before
-    // any statement is queued (ruling R3; `batch_weights_preimage`).
-    let mut weights = batch_weights_rng(
-        FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION,
-        &batch_weights_preimage(
-            proof,
-            tree_depth,
-            tree_root,
-            &signable_tx_hash,
-            Some(key_images),
-            &compressed(&pqc_key_points),
-            pseudo_outs,
-        ),
-    );
+    // any statement is queued (ruling R3; `batch_weights`).
+    let pqc_key_bytes = compressed(&pqc_key_points);
+    let mut weights = BatchWeights {
+        proof,
+        layers: tree_depth,
+        tree_root,
+        signable_tx_hash: &signable_tx_hash,
+        kind: BatchKind::Full { key_images },
+        pqc_key_points: &pqc_key_bytes,
+        pseudo_outs,
+    }
+    .rng();
 
     // Both collections are length-validated to `num_inputs` above; zip them into the
     // single ordered per-input bundle the verifier takes, so alignment is structural.
@@ -1173,19 +1099,18 @@ pub fn verify_membership_only(
         pqc_keys.iter().map(PqcKeyScalar::key_point).collect();
 
     // The batch weights, derived from every value this verify reads before
-    // any statement is queued (ruling R3; `batch_weights_preimage`).
-    let mut weights = batch_weights_rng(
-        FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION,
-        &batch_weights_preimage(
-            proof,
-            tree_depth,
-            tree_root,
-            &signable_tx_hash,
-            None,
-            &compressed(&pqc_key_points),
-            pseudo_outs,
-        ),
-    );
+    // any statement is queued (ruling R3; `batch_weights`).
+    let pqc_key_bytes = compressed(&pqc_key_points);
+    let mut weights = BatchWeights {
+        proof,
+        layers: tree_depth,
+        tree_root,
+        signable_tx_hash: &signable_tx_hash,
+        kind: BatchKind::MembershipOnly,
+        pqc_key_points: &pqc_key_bytes,
+        pseudo_outs,
+    }
+    .rng();
 
     let mut rest = proof.data.as_slice();
     let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layers, &mut rest).map_err(|e| {
@@ -2344,203 +2269,5 @@ mod tests {
         )
         .expect("verify must not error");
         assert!(ok, "valid two-component proof must verify");
-    }
-}
-
-#[cfg(test)]
-mod batch_weights_tests {
-    //! The FCMP++ batch weights' seed (ruling R3, 2026-10-15): the preimage
-    //! pinned, every input kind committed to, the two verifies' domains
-    //! apart. That a real proof verifies under the derived weights, and a
-    //! flipped one does not, is `tests::prove_verify_roundtrip`'s; every
-    //! captured chain's spends verifying is `shekyl-chain-ingest`'s replay.
-
-    use super::*;
-
-    /// Fixed inputs: two inputs, three layers, each value a distinct byte
-    /// pattern. The seed reads bytes, never validity.
-    struct Inputs {
-        proof: ShekylFcmpProof,
-        layers: u8,
-        root: [u8; 32],
-        hash: [u8; 32],
-        key_images: Vec<[u8; 32]>,
-        pqc: Vec<[u8; 32]>,
-        pseudo: Vec<[u8; 32]>,
-    }
-
-    fn fixed() -> Inputs {
-        Inputs {
-            proof: ShekylFcmpProof {
-                data: (0..96u8).collect(),
-                num_inputs: 2,
-                tree_depth: 3,
-            },
-            layers: 3,
-            root: [0x11; 32],
-            hash: [0x22; 32],
-            key_images: vec![[0x33; 32], [0x34; 32]],
-            pqc: vec![[0x44; 32], [0x45; 32]],
-            pseudo: vec![[0x55; 32], [0x56; 32]],
-        }
-    }
-
-    fn preimage(i: &Inputs, with_key_images: bool) -> Vec<u8> {
-        let key_images: Vec<KeyImage> = i
-            .key_images
-            .iter()
-            .map(|ki| KeyImage::from_canonical_bytes(*ki))
-            .collect();
-        batch_weights_preimage(
-            &i.proof,
-            i.layers,
-            &i.root,
-            &i.hash,
-            with_key_images.then_some(key_images.as_slice()),
-            &i.pqc,
-            &i.pseudo,
-        )
-    }
-
-    fn seed(customization: &[u8], i: &Inputs, with_key_images: bool) -> [u8; 32] {
-        shekyl_crypto_hash::cshake256_32(customization, &preimage(i, with_key_images))
-    }
-
-    fn full(i: &Inputs) -> [u8; 32] {
-        seed(FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION, i, true)
-    }
-
-    fn membership_only(i: &Inputs) -> [u8; 32] {
-        seed(FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION, i, false)
-    }
-
-    /// The KAT: both seeds for the fixed inputs, pinned, and the full
-    /// preimage equal to its documented layout built by hand.
-    #[test]
-    fn the_seeds_of_fixed_inputs_are_pinned() {
-        let i = fixed();
-        let mut by_hand = 96u32.to_le_bytes().to_vec();
-        by_hand.extend(0..96u8);
-        by_hand.extend_from_slice(&2u32.to_le_bytes());
-        by_hand.push(3);
-        by_hand.extend_from_slice(&[0x11; 32]);
-        by_hand.extend_from_slice(&[0x22; 32]);
-        for list in [
-            [[0x33u8; 32], [0x34; 32]],
-            [[0x44; 32], [0x45; 32]],
-            [[0x55; 32], [0x56; 32]],
-        ] {
-            by_hand.extend_from_slice(&2u32.to_le_bytes());
-            for item in list {
-                by_hand.extend_from_slice(&item);
-            }
-        }
-        assert_eq!(preimage(&i, true), by_hand);
-        assert_eq!(
-            full(&i),
-            [
-                0x86, 0x11, 0x1a, 0x24, 0x8c, 0xea, 0xa4, 0x0b, 0x25, 0x56, 0xdd, 0x93, 0x04, 0x10,
-                0x9e, 0x2f, 0x10, 0x03, 0xc8, 0xa8, 0x56, 0xd1, 0xf1, 0xaf, 0xe2, 0x40, 0x53, 0xc6,
-                0x08, 0x26, 0xe3, 0x84,
-            ],
-            "the full verify's seed moved: a preimage change is a new domain (-v2), not a re-pin"
-        );
-        assert_eq!(
-            membership_only(&i),
-            [
-                0xa0, 0x2d, 0x99, 0x5d, 0x4e, 0x1b, 0x5a, 0xe1, 0xdc, 0x37, 0x84, 0x85, 0xf5, 0xad,
-                0x97, 0xf7, 0xd9, 0xa0, 0x5c, 0x3a, 0x22, 0x44, 0x38, 0x62, 0x92, 0x00, 0x23, 0xee,
-                0xcb, 0x99, 0x2c, 0x05,
-            ],
-            "the membership-only seed moved: a preimage change is a new domain (-v2)"
-        );
-    }
-
-    /// Every byte of `pick(i)` moves both seeds (the membership-only seed
-    /// does not read key images, so that kind is checked on the full seed
-    /// alone).
-    fn every_byte_moves(kind: &str, pick: fn(&mut Inputs) -> &mut [u8], key_image: bool) {
-        let base = fixed();
-        let (full_base, mo_base) = (full(&base), membership_only(&base));
-        let len = pick(&mut fixed()).len();
-        assert!(len > 0, "{kind}: no bytes to flip");
-        for at in 0..len {
-            let mut moved = fixed();
-            pick(&mut moved)[at] ^= 1;
-            assert_ne!(
-                full(&moved),
-                full_base,
-                "{kind} byte {at}: full seed did not move"
-            );
-            if !key_image {
-                assert_ne!(
-                    membership_only(&moved),
-                    mo_base,
-                    "{kind} byte {at}: membership-only seed did not move"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn every_proof_byte_moves_the_seed() {
-        every_byte_moves("proof", |i| i.proof.data.as_mut_slice(), false);
-    }
-
-    /// The proof's input count, every bit of it.
-    #[test]
-    fn the_input_count_moves_the_seed() {
-        let base = fixed();
-        for bit in 0..32 {
-            let mut moved = fixed();
-            moved.proof.num_inputs ^= 1 << bit;
-            assert_ne!(full(&moved), full(&base), "num_inputs bit {bit}");
-            assert_ne!(
-                membership_only(&moved),
-                membership_only(&base),
-                "num_inputs bit {bit}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_layer_count_moves_the_seed() {
-        every_byte_moves("layers", |i| core::slice::from_mut(&mut i.layers), false);
-    }
-
-    #[test]
-    fn every_tree_root_byte_moves_the_seed() {
-        every_byte_moves("tree root", |i| &mut i.root, false);
-    }
-
-    #[test]
-    fn every_signable_hash_byte_moves_the_seed() {
-        every_byte_moves("signable hash", |i| &mut i.hash, false);
-    }
-
-    #[test]
-    fn every_key_image_byte_moves_the_full_seed() {
-        every_byte_moves("key image", |i| &mut i.key_images[1], true);
-    }
-
-    #[test]
-    fn every_pqc_key_point_byte_moves_the_seed() {
-        every_byte_moves("pqc key point", |i| &mut i.pqc[1], false);
-    }
-
-    #[test]
-    fn every_pseudo_out_byte_moves_the_seed() {
-        every_byte_moves("pseudo-out", |i| &mut i.pseudo[1], false);
-    }
-
-    /// The two verifies are separate messages: the same inputs, less the key
-    /// images, seed differently under the two domains.
-    #[test]
-    fn the_two_verifies_seed_under_separate_domains() {
-        let i = fixed();
-        assert_ne!(
-            seed(FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION, &i, false),
-            membership_only(&i)
-        );
     }
 }
