@@ -31,6 +31,13 @@
 //! code may take and compare but never dereference. The figure is an upper
 //! bound on the need within one step, give or take one burn frame.
 //!
+//! The figure is the stack the call itself consumes below its caller. An
+//! operation's inputs (a key, a signature) are made before the measuring
+//! thread starts and owned by the operation on the heap, as a production
+//! caller's are: the stake actor holds its keys in heap-allocated bundles
+//! and passes references. Each child makes only the inputs its operation
+//! reads.
+//!
 //! ```text
 //! fn_dsa_stack_ladder                         every operation, one TSV line each
 //! fn_dsa_stack_ladder probe                   one child: print depths to overflow
@@ -56,7 +63,6 @@ use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSigner, HybridEd25519FnDsa};
 use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
-use shekyl_crypto_pq::CryptoError;
 
 const OPERATIONS: [&str; 6] = [
     "sign",
@@ -220,40 +226,61 @@ fn burn_to(top: usize, target: usize, operation: &mut dyn FnMut() -> bool) -> bo
     passed
 }
 
+/// The operation named `op`, with the inputs it reads made here and owned by
+/// the returned closure on the heap. Only what `op` reads is made, so a
+/// rung pays no setup it does not use. `None` for an unknown name or a
+/// setup that failed.
+fn operation(op: &str) -> Option<Box<dyn FnMut() -> bool + Send>> {
+    let keypair = || HybridEd25519FnDsa::keypair_from_seeds(&ED25519_SEED, &FN_DSA_SEED).ok();
+    let operation: Box<dyn FnMut() -> bool + Send> = match op {
+        "sign" => {
+            let (_, secret) = keypair()?;
+            Box::new(move || {
+                HybridEd25519FnDsa
+                    .sign(&secret, SCHEME_DOMAIN_RECEIPT, &MESSAGE)
+                    .is_ok()
+            })
+        }
+        "hold_key" => {
+            let (_, secret) = keypair()?;
+            Box::new(move || FnDsaHybridSigner::new(&secret).is_ok())
+        }
+        "sign_held" => {
+            let (_, secret) = keypair()?;
+            let mut held = FnDsaHybridSigner::new(&secret).ok()?;
+            Box::new(move || held.sign(SCHEME_DOMAIN_RECEIPT, &MESSAGE).is_ok())
+        }
+        "verify" => {
+            let (public, secret) = keypair()?;
+            let signature = HybridEd25519FnDsa
+                .sign(&secret, SCHEME_DOMAIN_RECEIPT, &MESSAGE)
+                .ok()?;
+            Box::new(move || {
+                HybridEd25519FnDsa
+                    .verify(&public, SCHEME_DOMAIN_RECEIPT, &MESSAGE, &signature)
+                    .is_ok()
+            })
+        }
+        "keygen" => {
+            Box::new(|| HybridEd25519FnDsa::keypair_from_seeds(&ED25519_SEED, &FN_DSA_SEED).is_ok())
+        }
+        "persona" => Box::new(|| {
+            derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
+                .is_ok()
+        }),
+        _ => return None,
+    };
+    Some(operation)
+}
+
 /// One child: `op` with `budget` bytes of stack left below it.
 fn rung(op: &str, depth: usize, budget: usize) -> ExitCode {
     let Some(target) = depth.checked_sub(budget) else {
         return ExitCode::FAILURE;
     };
-    let (public, secret) =
-        HybridEd25519FnDsa::keypair_from_seeds(&ED25519_SEED, &FN_DSA_SEED).expect("keygen");
-    let signature = HybridEd25519FnDsa
-        .sign(&secret, SCHEME_DOMAIN_RECEIPT, &MESSAGE)
-        .expect("sign");
-    let mut held = FnDsaHybridSigner::new(&secret).expect("the generated key decodes");
-
-    let mut operation = || -> bool {
-        let outcome: Result<(), CryptoError> = match op {
-            "sign" => HybridEd25519FnDsa
-                .sign(&secret, SCHEME_DOMAIN_RECEIPT, &MESSAGE)
-                .map(drop),
-            "hold_key" => FnDsaHybridSigner::new(&secret).map(drop),
-            "sign_held" => held.sign(SCHEME_DOMAIN_RECEIPT, &MESSAGE).map(drop),
-            "verify" => {
-                HybridEd25519FnDsa.verify(&public, SCHEME_DOMAIN_RECEIPT, &MESSAGE, &signature)
-            }
-            "keygen" => {
-                HybridEd25519FnDsa::keypair_from_seeds(&ED25519_SEED, &FN_DSA_SEED).map(drop)
-            }
-            "persona" => {
-                derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-                    .map(drop)
-            }
-            _ => Err(CryptoError::InvalidInput(format!(
-                "no operation named {op}"
-            ))),
-        };
-        outcome.is_ok()
+    let Some(mut operation) = operation(op) else {
+        eprintln!("no operation named {op}, or its setup failed");
+        return ExitCode::from(2);
     };
 
     let passed = std::thread::scope(|scope| {
@@ -262,7 +289,7 @@ fn rung(op: &str, depth: usize, budget: usize) -> ExitCode {
             .spawn_scoped(scope, || {
                 let anchor = 0_u8;
                 let top = address_of(&anchor);
-                burn_to(top, target, &mut operation)
+                burn_to(top, target, &mut *operation)
             })
             .map(std::thread::ScopedJoinHandle::join)
     });
