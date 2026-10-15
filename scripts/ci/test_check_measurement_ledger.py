@@ -496,9 +496,7 @@ def scenario_listening(results: Results) -> None:
         spec = '["src/hot", ":(exclude,glob)src/hot/*_tests.rs"]'
         write(root, "src/hot/a_tests.rs", "fn t() { /* not the cost */ }\n")
         commit(root, "tests: not budgeted")
-        covered = heard(cause, again)
         # The "shared" commit is still unheard. Hear it, then the test commit must not matter.
-        tip = sh(root, "rev-parse", "HEAD")
         # `shared` is HEAD~1 after the test commit. Hear every non-test commit explicitly.
         shared = sh(root, "rev-parse", "HEAD~1")
         results.expect(
@@ -512,7 +510,6 @@ def scenario_listening(results: Results) -> None:
             "the same path set still hears a change to an included file",
             "included: the budgeted file moves",
         )
-        del tip
 
         # Parallel tips. Neither is an ancestor of the other.
         results.expect(
