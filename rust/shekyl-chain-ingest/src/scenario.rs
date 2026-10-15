@@ -53,7 +53,7 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{
     form, seed_height, ArchivalDelta, Candidate, CenRow, FormAttempt, InvalidBlock, PaidEmission,
-    RuleSet, Substrate, Weights,
+    RuleSet, StructurallyValid, Substrate, Weights,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -146,7 +146,8 @@ impl Substrate for FreeHash {
 /// Where a timed switch spent its time ([`Scenario::reorganize_timed`]).
 #[derive(Clone, Copy, Debug)]
 pub struct ReorgTiming {
-    /// Forming the demoted and promoted blocks — the RandomX, off the actor.
+    /// Forming the demoted and promoted blocks — the RandomX, off the actor,
+    /// across every core the host offers.
     pub form: std::time::Duration,
     /// The [`Reorganize`] message: the plan held to the store, the demoted
     /// blocks through the cheap tier, the write closure.
@@ -509,35 +510,24 @@ where
         bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
         let started = std::time::Instant::now();
-        let form_at = |candidate: Candidate, at: &PlannedBlock| {
-            form(
-                candidate,
-                &self.rules.in_force(at.height),
-                &self.substrate,
-                at.seed,
-                FormAttempt::FIRST,
-            )
-            .expect("the driver's substrate does not fault")
-            .expect("a block its plan names forms")
-        };
-        let demoted = if plan.verdict == shekyl_difficulty::ForkChoiceVerdict::ForcedSwitch {
-            Vec::new()
-        } else {
-            plan.demoted
-                .iter()
-                .map(|d| form_at(d.candidate.clone(), &d.at))
-                .collect()
-        };
-        let promoted = plan
-            .promoted
-            .iter()
-            .map(|p| {
-                let listed = bodies.get(&p.at.hash).cloned().unwrap_or_default();
-                let candidate = Candidate::new(p.block.clone(), listed)
-                    .with_attestation_witness(p.witness.clone());
-                form_at(candidate, &p.at)
-            })
-            .collect();
+        let mut work: Vec<(Candidate, PlannedBlock)> = Vec::new();
+        if plan.verdict != shekyl_difficulty::ForkChoiceVerdict::ForcedSwitch {
+            work.extend(
+                plan.demoted
+                    .iter()
+                    .map(|d| (d.candidate.clone(), d.at.clone())),
+            );
+        }
+        let demoted_len = work.len();
+        work.extend(plan.promoted.iter().map(|p| {
+            let listed = bodies.get(&p.at.hash).cloned().unwrap_or_default();
+            let candidate =
+                Candidate::new(p.block.clone(), listed).with_attestation_witness(p.witness.clone());
+            (candidate, p.at.clone())
+        }));
+        let mut formed_all = self.form_parallel(work);
+        let promoted = formed_all.split_off(demoted_len);
+        let demoted = formed_all;
         let formed = started.elapsed();
         let started = std::time::Instant::now();
         let switched = self
@@ -557,6 +547,50 @@ where
                 switch: started.elapsed(),
             },
         ))
+    }
+
+    /// `form` every `(candidate, plan)` pair, in order, across the cores
+    /// this host offers — step 1 of the switch, which production runs on
+    /// its RandomX workers off the actor (`DRS_E5_POOL_ALT_PRUNE.md` §2.3).
+    fn form_parallel(&self, work: Vec<(Candidate, PlannedBlock)>) -> Vec<StructurallyValid> {
+        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let chunk = work.len().div_ceil(threads).max(1);
+        let substrate = &self.substrate;
+        let rules = self.rules;
+        let mut chunks: Vec<Vec<(Candidate, PlannedBlock)>> = Vec::new();
+        let mut rest = work;
+        while !rest.is_empty() {
+            let tail = rest.split_off(chunk.min(rest.len()));
+            chunks.push(rest);
+            rest = tail;
+        }
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = chunks
+                .into_iter()
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk
+                            .into_iter()
+                            .map(|(candidate, at)| {
+                                form(
+                                    candidate,
+                                    &rules.in_force(at.height),
+                                    substrate,
+                                    at.seed,
+                                    FormAttempt::FIRST,
+                                )
+                                .expect("the driver's substrate does not fault")
+                                .expect("a block its plan names forms")
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("a forming thread"))
+                .collect()
+        })
     }
 
     /// Pop the chain back to `to`.
