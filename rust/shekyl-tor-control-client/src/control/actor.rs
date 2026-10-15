@@ -2286,11 +2286,13 @@ mod live_tests {
                 rest.1.split_once('"').map(|(path, _)| path)
             } else if let Some(rest) = line.split_once("Parsing GEOIP ") {
                 geoip_parses += 1;
+                // Unquoted, and tor appends exactly one '.': strip that one, so a
+                // path that itself ends in '.' is still compared whole.
                 rest.1
                     .split_once(" file ")
-                    .map(|(_, path)| path.trim_end_matches('.'))
+                    .map(|(_, path)| path.strip_suffix('.').unwrap_or(path))
             } else if let Some(rest) = line.split_once("Failed to open GEOIP file ") {
-                Some(rest.1.trim_end_matches('.'))
+                Some(rest.1.strip_suffix('.').unwrap_or(rest.1))
             } else {
                 continue;
             };
