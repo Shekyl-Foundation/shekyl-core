@@ -1,7 +1,8 @@
 # `BA-T33` floor arm: hybrid scheme 3 on the floor device, 2026-10-15
 
-**State of this record: RUN COMPLETE, two sessions on 2026-10-15: 13:38Z
-to 15:09Z, and 16:22Z to 17:17Z for the stack and the `hold_key` arm.** An
+**State of this record: RUN COMPLETE, three sessions on 2026-10-15: 13:38Z
+to 15:09Z; 16:22Z to 17:17Z for the `hold_key` arm; 20:19Z to 21:03Z for
+the stack.** An
 observation, not a registered test: no pass lines were set before the run,
 and no constant budgets against these figures yet
 ([`FN_DSA_HYBRID.md`](../design/FN_DSA_HYBRID.md) `FND-10`). It closes
@@ -15,10 +16,10 @@ across signatures, verifies in **0.57 ms**, and generates a seeded key in
 which the receipt key is 9.8 %. The scheme-3 vectors, signing included,
 give the pinned bytes on this hardware; until now that agreement was shown
 only under emulation. Every step of both sessions exited 0, and the device
-held 1.8 GHz on every core through the timed benches. No operation needs
-more than 8 KiB of stack above the development host's figure on the floor:
-optimized, four need the same and two up to 8 KiB more; unoptimized, five
-of six need less.
+held 1.8 GHz on every core through the timed benches. Each scheme-3
+operation needs the same stack on the floor as on the development host
+optimized, and less unoptimized; a whole persona slot needs 8 KiB more
+optimized and 4 KiB more unoptimized.
 
 ## What was run
 
@@ -39,19 +40,23 @@ and once unoptimized, on the device. In order:
    criterion's defaults, with the device's temperature and clocks sampled
    every 5 s throughout (`ba_t33_fn_dsa_floor_device_20261015_env.tsv`).
 
-The second session ran at `7ccc42a7bc`, the same tree with the review of
-#1086 applied: the stack ladder measures below the platform's thread
-minimum, and the `hold_key` arm drops each signer outside its timed
-region. It built the ladder and the bench in both profiles and ran:
+The second session ran at `7ccc42a7bc`, with the `hold_key` arm dropping
+each signer outside its timed region:
 
-5. `fn_dsa_stack_ladder`, from the optimized and the unoptimized build.
-6. `cargo bench -p shekyl-crypto-pq --bench fn_dsa_hybrid -- --noplot
+5. `cargo bench -p shekyl-crypto-pq --bench fn_dsa_hybrid -- --noplot
    fn_dsa_hybrid_hold_key`, sampled the same way
    (`ba_t33_fn_dsa_floor_device_20261015_s2_env.tsv`).
 
-Each session's script was first rehearsed on the development host from the
-same archive, in a dry mode with shorter criterion samples, and that output
-was discarded.
+The third ran at `81e612327a`, with the stack ladder in its final form
+(§ Stack):
+
+6. `fn_dsa_stack_ladder`, from the optimized and the unoptimized build
+   (`ba_t33_fn_dsa_floor_device_20261015_s3_env.tsv`).
+
+The first two sessions' scripts were rehearsed on the development host from
+the same archive, in a dry mode with shorter criterion samples, and that
+output was discarded; the third ran a subset of the second's rehearsed
+steps.
 
 ## Conditions
 
@@ -62,7 +67,7 @@ was discarded.
 | Codegen | `RUSTFLAGS` and `CARGO_BUILD_RUSTFLAGS` unset; no cargo configuration file. The shipping configuration: no `target-cpu` |
 | Governor | `ondemand` on every core |
 | Clocks during the benches | 1.8 GHz on every core in all 23 samples of the first session and all 3 of the second |
-| Temperature | First session: 49.7 °C at the start, 66.7 °C after the builds, 56.0 to 60.4 °C during the benches. Second: 49.2 °C at the start, 67.7 °C after the builds, 56.5 to 57.5 °C during the bench |
+| Temperature | First session: 49.7 °C at the start, 66.7 °C after the builds, 56.0 to 60.4 °C during the benches. Second: 49.2 °C at the start, 67.7 °C after the builds, 56.5 to 57.5 °C during the bench. Third: 50.1 °C at the start, 65.2 °C after the builds, 53.6 °C at the end |
 | Throttle flags | Not read: `vcgencmd get_throttled` needs root there, and was refused |
 | Resident | The testnet daemon, running throughout and not touched; nothing else of note. Load average 0.50 at the start, 0.8 to 1.5 during the ladder and benches |
 
@@ -86,7 +91,7 @@ requested thread stack to the C library's minimum, which on aarch64 is
 about 132 KiB (§ Stack). The 256 KiB, 512 KiB and 1 MiB bounds are above it
 and hold. `a_held_key_signs_on_a_small_stack`'s 64 KiB optimized bound is
 below it, so that test ran on about 132 KiB and cannot fail here; the
-ladder measures the held sign at 24 KiB optimized on this device, within
+ladder measures the held sign at 12 KiB optimized on this device, within
 the bound.
 
 ## Time
@@ -118,7 +123,7 @@ decodes into a context on its own stack and never allocates one.
 
 ## Stack
 
-`fn_dsa_stack_ladder`, second session. A thread cannot be made small enough
+`fn_dsa_stack_ladder`, third session. A thread cannot be made small enough
 to measure these directly on this device: Rust raises a requested thread
 stack to the C library's minimum, and glibc's `PTHREAD_STACK_MIN` is 131,072
 bytes on aarch64 against 16,384 on x86_64, plus a page and the thread-local
@@ -127,24 +132,29 @@ test is what is left after burning stack down to it: a probe finds how deep
 a frame can go, and then, from 4 KiB in 4 KiB steps, a child burns stack
 until only the budget is left and runs the operation there. The first
 budget that completes is the figure, an upper bound within one step, give
-or take a 1 KiB burn frame. The development host's columns are the same
-tool at the same revision, from the rehearsal.
+or take a 1 KiB burn frame.
+
+The figure is the stack the call itself consumes below its caller. Each
+operation's inputs are made before the measuring thread starts and owned by
+the operation on the heap, as the stake actor's keys are, and each child
+makes only the inputs its operation reads. The development host's columns
+are the same tool at the same revision.
 
 | Operation | Floor, optimized | Floor, unoptimized | Dev host, optimized | Dev host, unoptimized |
 | --- | --- | --- | --- | --- |
-| `sign` (per call) | 252 KiB | 496 KiB | 252 KiB | 560 KiB |
-| `hold_key` | 364 KiB | 480 KiB | 364 KiB | 544 KiB |
-| `sign_held` | 24 KiB | 80 KiB | 20 KiB | 108 KiB |
-| `verify` | 28 KiB | 44 KiB | 28 KiB | 60 KiB |
-| `keygen` | 68 KiB | 304 KiB | 68 KiB | 356 KiB |
-| `persona` (one slot) | 300 KiB | 744 KiB | 292 KiB | 740 KiB |
+| `sign` (per call) | 240 KiB | 488 KiB | 240 KiB | 552 KiB |
+| `hold_key` | 352 KiB | 472 KiB | 352 KiB | 532 KiB |
+| `sign_held` | 12 KiB | 72 KiB | 12 KiB | 100 KiB |
+| `verify` | 16 KiB | 32 KiB | 16 KiB | 48 KiB |
+| `keygen` | 60 KiB | 296 KiB | 60 KiB | 348 KiB |
+| `persona` (one slot) | 296 KiB | 736 KiB | 288 KiB | 732 KiB |
 
-Optimized, the floor needs the same as the development host for four
-operations and more for two: the held sign by 4 KiB and the persona slot by
-8 KiB. Unoptimized, it needs less for every operation but the persona slot,
-which needs 4 KiB more. Every figure is far inside the 2 MiB threads the
-production callers run on: the actor's runtime threads for a sign, the
-blocking pool's for a persona derivation at engine assembly.
+Optimized, every scheme-3 operation needs the same stack on the floor as on
+the development host; unoptimized, each needs less. The whole persona slot
+needs more on the floor, by 8 KiB optimized and 4 KiB unoptimized. Every
+figure is far inside the 2 MiB threads the production callers run on: the
+actor's runtime threads for a sign, the blocking pool's for a persona
+derivation at engine assembly.
 
 ## The receipt key at engine assembly (`FND-12`)
 

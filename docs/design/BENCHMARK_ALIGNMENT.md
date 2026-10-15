@@ -283,7 +283,7 @@ BA-T5.
 | **BA-I101** | `wss-q1b/verify_edge_20260927T195848Z.txt` | Root read, worst case: 393.9 s unfrozen, 8.8 s frozen | not recorded in the file | [`WSS_Q1B_BENCH_SPEC.md`](WSS_Q1B_BENCH_SPEC.md) §7.3 | **Keep, tracked** |
 | **BA-I102** | `wss-q1b/verify_nominal_20260927T235515Z.json` | Root read, nominal density: 53.7 s unfrozen, 0.6 s frozen | floor | as BA-I101 | **Keep, tracked** |
 | **BA-I103** | `wss-q1b/verify_nominal_20260927T235515Z.txt` | Summary of BA-I102 | — | as BA-I101 | follows BA-I102 |
-| **BA-I106** | `ba_t33_fn_dsa_floor_device_20261015.md`, with its two sessions' `_env.tsv` and `_s2_env.tsv` | Hybrid scheme 3 on the floor: per-call sign 2.243 ms, held sign 1.698 ms, verify 568 µs, seeded key generation 45.68 ms, one persona slot's derivation 466 ms (criterion, n = 100 each); the stack each operation needs, by ladder; the scheme's vectors on the device | floor, shipping codegen, 1.8 GHz throughout | [`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) `FND-9`, `FND-12` | **Keep, tracked** (BA-T33's T3 arm) |
+| **BA-I106** | `ba_t33_fn_dsa_floor_device_20261015.md`, with its three sessions' `_env.tsv`, `_s2_env.tsv` and `_s3_env.tsv` | Hybrid scheme 3 on the floor: per-call sign 2.243 ms, held sign 1.698 ms, verify 568 µs, seeded key generation 45.68 ms, one persona slot's derivation 466 ms (criterion, n = 100 each); the stack each operation needs, by ladder; the scheme's vectors on the device | floor, shipping codegen, 1.8 GHz throughout | [`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) `FND-9`, `FND-12` | **Keep, tracked** (BA-T33's T3 arm) |
 
 ### 2.9 `shekyl-gui-wallet`
 
