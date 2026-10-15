@@ -355,11 +355,12 @@ async fn restrict_blank_file(file: &tokio::fs::File) -> Result<(), ControlError>
 
 #[cfg(windows)]
 async fn write_blank_file(path: &Path) -> Result<(), ControlError> {
-    // `create` without `truncate`: the link count is checked before any byte
-    // of an existing file is discarded.
+    // `truncate(false)`: the open itself must not discard an existing file.
+    // The link count is checked first, and only then is a sole link emptied.
     let file = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(false)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
         .await
