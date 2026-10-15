@@ -33,6 +33,62 @@ impl BanQuery for BanList {
     }
 }
 
+/// One connector's seats after a single demotion and expiry.
+///
+/// `white` and `gray` are seats. `white_candidates` and `gray_candidates`
+/// are hosts the draw could return: a host with many ports is one
+/// candidate. Outstanding gray is in `gray` and in neither candidate count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeatCensus {
+    /// White seats.
+    pub white: usize,
+    /// Hosts a white draw could return.
+    pub white_candidates: usize,
+    /// Gray seats, outstanding draws included.
+    pub gray: usize,
+    /// Hosts a gray draw could return.
+    pub gray_candidates: usize,
+}
+
+/// A partition that has already been demoted and expired.
+///
+/// Counts and draws on this view do not demote again. The borrow ends
+/// when the view drops, and the lists can be admitted to again.
+pub struct Settled<'a> {
+    partition: &'a mut Partition,
+}
+
+impl Settled<'_> {
+    /// The four counts, with `eligible` as the dialer's candidate filter.
+    pub fn census(&self, eligible: &mut dyn FnMut(&NetworkAddress) -> bool) -> SeatCensus {
+        SeatCensus {
+            white: self.partition.white_len(),
+            white_candidates: self.partition.candidate_hosts(true, eligible),
+            gray: self.partition.gray_len(),
+            gray_candidates: self.partition.candidate_hosts(false, eligible),
+        }
+    }
+
+    /// One gray candidate, remembered as an outstanding draw.
+    pub fn draw_gray<R: RelayRng + ?Sized>(
+        &mut self,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+        rng: &mut R,
+    ) -> Option<NetworkAddress> {
+        self.partition.draw_gray_candidate(eligible, rng)
+    }
+
+    /// One white candidate. A re-contact: not a promotion, and not a
+    /// second demotion.
+    pub fn draw_white<R: RelayRng + ?Sized>(
+        &self,
+        eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
+        rng: &mut R,
+    ) -> Option<NetworkAddress> {
+        self.partition.draw_white_candidate(eligible, rng)
+    }
+}
+
 /// No host is banned.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoBans;
@@ -359,6 +415,39 @@ impl Peerlist {
         partition.draw_white(rng)
     }
 
+    /// Demote banned white and expire stale white, once, and hand back
+    /// the partition. Every white read on the wake goes through here, so
+    /// a caller that settles and then draws does not demote again.
+    fn prepare<'a, R: RelayRng + ?Sized>(
+        &'a mut self,
+        connector: ConnectorId,
+        now: Tick,
+        bans: &mut dyn BanQuery,
+        rng: &mut R,
+    ) -> &'a mut Partition {
+        let partition = self.partition_mut(connector);
+        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
+        partition.expire(now, rng);
+        partition
+    }
+
+    /// One demotion and one expiry, then the counts and the draws.
+    ///
+    /// The dialer's wake asks this once. [`Self::white_count`],
+    /// [`Self::white_candidates`] and [`Self::draw_white_where`] each
+    /// prepare on their own for a caller that does only that one thing.
+    pub fn settle<'a, R: RelayRng + ?Sized>(
+        &'a mut self,
+        connector: ConnectorId,
+        now: Tick,
+        bans: &mut dyn BanQuery,
+        rng: &mut R,
+    ) -> Settled<'a> {
+        Settled {
+            partition: self.prepare(connector, now, bans, rng),
+        }
+    }
+
     /// One gray dial candidate of `connector`, remembered as an
     /// outstanding draw until [`Self::apply`] resolves it.
     ///
@@ -388,10 +477,8 @@ impl Peerlist {
         eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
         rng: &mut R,
     ) -> Option<NetworkAddress> {
-        let partition = self.partition_mut(connector);
-        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
-        partition.expire(now, rng);
-        partition.draw_white_candidate(eligible, rng)
+        self.prepare(connector, now, bans, rng)
+            .draw_white_candidate(eligible, rng)
     }
 
     /// How many hosts [`Self::draw_gray_where`] could return.
@@ -414,10 +501,8 @@ impl Peerlist {
         eligible: &mut dyn FnMut(&NetworkAddress) -> bool,
         rng: &mut R,
     ) -> usize {
-        let partition = self.partition_mut(connector);
-        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
-        partition.expire(now, rng);
-        partition.candidate_hosts(true, eligible)
+        self.prepare(connector, now, bans, rng)
+            .candidate_hosts(true, eligible)
     }
 
     /// The only writer of white and the only drop of an outstanding gray
@@ -462,10 +547,7 @@ impl Peerlist {
         bans: &mut dyn BanQuery,
         rng: &mut R,
     ) -> usize {
-        let partition = self.partition_mut(connector);
-        partition.demote_banned(&mut |ip, at| bans.is_banned(ip, at), now, rng);
-        partition.expire(now, rng);
-        partition.white_len()
+        self.prepare(connector, now, bans, rng).white_len()
     }
 
     /// Gray entries of `connector`, outstanding draws included. Drawing

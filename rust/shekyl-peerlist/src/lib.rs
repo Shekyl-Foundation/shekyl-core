@@ -63,7 +63,7 @@ pub mod conformance;
 pub use outcome::{DialOutcome, ListName, Refusal, SessionRow, Source};
 
 pub use partition::{DiscloseEarly, DiscloseEarlyEnd};
-pub use peerlist::{BanQuery, NoBans, Peerlist, Snapshot};
+pub use peerlist::{BanQuery, NoBans, Peerlist, SeatCensus, Settled, Snapshot};
 pub use shekyl_net_address::{Host, NetworkAddress};
 /// A daemon connection. The type is `shekyl_relay_privacy::ConnectionId`;
 /// re-exported so a peerlist session and a stem source are one id. F4 moves
