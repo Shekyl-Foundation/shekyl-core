@@ -8,7 +8,8 @@ use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
 use crate::harness::fixture::{candidate, candidate_on, coinbase, spendable_chain};
 use crate::harness::{
-    defined, formed, formed_on, formed_under, judged, Faulted, MockChain, MockSubstrate,
+    defined, expected_target, formed, formed_on, formed_under, judged, Faulted, MockChain,
+    MockSubstrate,
 };
 use crate::rule_set::RuleSetId;
 use crate::substrate::Substrate;
@@ -381,6 +382,7 @@ fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
         &RuleSet::GENESIS,
         &substrate,
         seed,
+        expected_target(&MockChain::default(), &RuleSet::GENESIS),
         FormAttempt::FIRST,
     )
     .expect("the mock substrate answers")
@@ -392,24 +394,42 @@ fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
     // The identity is derived here, once, and is the block's (slice 3 F8).
     assert_eq!(formed.hash(), formed.candidate().block.hash());
     // The stateless rows, and only those, are recorded before the view
-    // stage runs — the three version rows, the two definitions B6 (the
-    // identity) and D2 (the longhash), the coinbase's stateless shape
-    // (F1, F3, F7, F9, F10), and the body's pairing (G2, slice 7).
+    // stage runs: the three version rows, the two definitions B6 (the
+    // identity) and D2 (the longhash), D1 (the proof against the claimed
+    // target), the coinbase's stateless shape (F1, F3, F7, F9, F10), the
+    // body's pairing (G2, slice 7), every row `tx_form` records at the
+    // miner slot, and CEN-H19's batch (vacuous: nothing is listed). The
+    // transaction stage moved here from `validate` (#1081's review, item 1),
+    // so `tx_form`'s own coverage is the reference rather than a list.
+    let mut expected = crate::coverage::RuleCoverage::EMPTY;
+    for row in [
+        CenRow::B1,
+        CenRow::B2,
+        CenRow::B6,
+        CenRow::D1,
+        CenRow::D2,
+        CenRow::F1,
+        CenRow::F3,
+        CenRow::F7,
+        CenRow::F9,
+        CenRow::F10,
+        CenRow::G2,
+        CenRow::H19,
+    ] {
+        expected.insert(row);
+    }
+    let miner = crate::validate::tx_form(
+        &formed.candidate().block.miner_transaction,
+        crate::verdict::TxSlot::Miner,
+        &RuleSet::GENESIS,
+    )
+    .expect("the coinbase passes");
+    expected.union(&miner);
     assert_eq!(
         formed.coverage().iter().collect::<Vec<_>>(),
-        [
-            CenRow::B1,
-            CenRow::B2,
-            CenRow::B6,
-            CenRow::D2,
-            CenRow::F1,
-            CenRow::F3,
-            CenRow::F7,
-            CenRow::F9,
-            CenRow::F10,
-            CenRow::G2,
-        ]
+        expected.iter().collect::<Vec<_>>()
     );
+    assert!(!formed.coverage().contains(CenRow::B5), "no view-bound row");
 }
 
 #[test]
@@ -433,6 +453,7 @@ fn a_substrate_that_cannot_read_the_clock_is_a_fault_not_a_verdict() {
         &RuleSet::GENESIS,
         &NoClock,
         shekyl_types::BlockHash::NULL,
+        expected_target(&MockChain::default(), &RuleSet::GENESIS),
         FormAttempt::FIRST,
     );
     assert!(matches!(result, Err(Faulted)));
@@ -449,6 +470,7 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
         &admits_two,
         &MockSubstrate::default(),
         shekyl_types::BlockHash::NULL,
+        expected_target(&MockChain::default(), &admits_two),
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -471,6 +493,47 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
     });
 }
 
+/// A target claim the view's headers do not derive is `Stale::Target` at
+/// `validate` — a fault with the bounded retry, never a verdict. `form`
+/// judged CEN-D1 against the claim (the zero longhash satisfies any
+/// target), so only the view-bound check can catch it.
+#[test]
+fn a_target_claim_the_view_does_not_derive_is_stale_with_a_bounded_retry() {
+    let chain = spendable_chain();
+    let seven = RuleSet::fakechain(
+        core::num::NonZeroU128::new(7),
+        crate::FakechainSchedule::PRODUCTION,
+    );
+    let wrong = expected_target(&chain, &seven);
+    let right = expected_target(&chain, &RuleSet::GENESIS);
+    assert_ne!(wrong, right, "the fixture's claim must be wrong");
+    let formed = form(
+        candidate_on(&chain, Vec::new()),
+        &RuleSet::GENESIS,
+        &MockSubstrate::default(),
+        crate::harness::expected_seed(&chain),
+        wrong,
+        FormAttempt::FIRST,
+    )
+    .expect("no fault")
+    .expect("the zero longhash satisfies the claimed target");
+    assert_eq!(formed.target(), wrong);
+    chain.with_view(
+        |view| match validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+            Err(Fault::Stale(Stale::Target {
+                claimed,
+                expected,
+                retry,
+            })) => {
+                assert_eq!(claimed, wrong);
+                assert_eq!(expected, right);
+                assert_eq!(retry, Retry::Again(FormAttempt::FIRST.next_for_tests()));
+            }
+            other => panic!("expected Stale::Target, got {other:?}"),
+        },
+    );
+}
+
 #[test]
 fn the_last_attempt_is_terminal() {
     let admits_two = RuleSet::admitting_for_tests(2);
@@ -482,6 +545,7 @@ fn the_last_attempt_is_terminal() {
         &admits_two,
         &MockSubstrate::default(),
         shekyl_types::BlockHash::NULL,
+        expected_target(&MockChain::default(), &admits_two),
         last,
     )
     .expect("no fault")
@@ -506,7 +570,12 @@ fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
         crate::FakechainSchedule::PRODUCTION,
     );
     MockChain::default().with_view(|view| {
-        let formed = formed_under(candidate(Vec::new()), &seven, shekyl_types::BlockHash::NULL);
+        let formed = formed_under(
+            candidate(Vec::new()),
+            &seven,
+            shekyl_types::BlockHash::NULL,
+            expected_target(&MockChain::default(), &seven),
+        );
         let valid = judged(validate(formed, &view, &seven, &Trust::UNANCHORED))
             .expect("fakechain genesis mints");
         assert!(valid.coverage().covers_landed(&seven));
@@ -526,7 +595,12 @@ fn a_fakechain_set_is_stale_against_genesis_even_at_the_same_id() {
         crate::FakechainSchedule::PRODUCTION,
     );
     assert_eq!(seven.id(), RuleSet::GENESIS.id());
-    let formed = formed_under(candidate(Vec::new()), &seven, shekyl_types::BlockHash::NULL);
+    let formed = formed_under(
+        candidate(Vec::new()),
+        &seven,
+        shekyl_types::BlockHash::NULL,
+        expected_target(&MockChain::default(), &seven),
+    );
     MockChain::default().with_view(|view| {
         let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
             .expect_err("the set moved, even though the id did not");
@@ -554,7 +628,12 @@ fn two_fakechain_targets_are_distinct_sets() {
         core::num::NonZeroU128::new(7),
         crate::FakechainSchedule::PRODUCTION,
     );
-    let formed = formed_under(candidate(Vec::new()), &three, shekyl_types::BlockHash::NULL);
+    let formed = formed_under(
+        candidate(Vec::new()),
+        &three,
+        shekyl_types::BlockHash::NULL,
+        expected_target(&MockChain::default(), &three),
+    );
     MockChain::default().with_view(|view| {
         let fault = validate(formed, &view, &seven, &Trust::UNANCHORED)
             .expect_err("different Fixed targets");

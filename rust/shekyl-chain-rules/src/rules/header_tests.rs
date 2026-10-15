@@ -14,7 +14,7 @@ use crate::census::CenRow;
 use crate::fault::FormAttempt;
 use crate::harness::fixture::{candidate, candidate_on, recorded, root};
 use crate::harness::{
-    assert_refused, boundary_pair, defined, formed, formed_on, judged, MockChain,
+    assert_refused, boundary_pair, defined, expected_target, formed, judged, MockChain,
 };
 use crate::harness::{Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
@@ -49,6 +49,7 @@ fn judge_under(candidate: Candidate, rule_set: &RuleSet) -> Verdict<()> {
         rule_set,
         &MockSubstrate::default(),
         BlockHash::NULL,
+        expected_target(&MockChain::default(), rule_set),
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -74,7 +75,7 @@ fn check_alone<R: FormRule>(candidate: &Candidate, rule_set: &RuleSet) -> Verdic
 
 /// Run one view-bound rule on its own against `chain`.
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
-    let formed = formed_on(chain, candidate.clone());
+    let formed = crate::harness::token_for_one_rule(chain, candidate.clone());
     chain.with_view(|view| {
         defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),

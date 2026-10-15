@@ -384,7 +384,7 @@ pub fn coinbase(height: u64) -> Transaction {
 pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
     let n = u64::try_from(outputs).expect("an output count fits in u64");
     let prunable = (outputs > 0).then(|| Prunable {
-        bulletproofs: vec![bp_plus_layout_for(outputs)],
+        bulletproofs: vec![range_proof_for(outputs)],
         tree_depth: 0,
         fcmp_proof: vec![0xF0],
         pseudo_outs: vec![multiple_of_g(mask_scalar_sum(outputs))],
@@ -814,6 +814,52 @@ pub fn pqc_auth_filler() -> PqcAuth {
         hybrid_public_key: vec![0x5A; PQC_HYBRID_SINGLE_KEY_LEN],
         hybrid_signature: Vec::new(),
     }
+}
+
+/// A **real** BP+ over [`spend`]'s commitments for `outputs` outputs — the
+/// masks `2·G ‥ (N+1)·G`, every amount zero — made by the production
+/// prover (`Bulletproof::prove_plus`) from those known openings, so CEN-H19's
+/// batch in `form` admits the fixture and the rows a test is about are the
+/// ones that judge it. Fixtures whose subject is another rule may be
+/// constructed, provided the construction uses production paths
+/// (`50-testing.mdc`; slice 6's `fixture::signed` line): only the openings
+/// are a fixture's.
+///
+/// One proof per output count — every spend of `N` outputs carries the same
+/// commitments — proved once from a `ChaCha20Rng` seeded with `N` and
+/// memoized, so a fixture stays a pure function of its arguments. Past the
+/// prover's sixteen outputs no proof exists; the layout filler stands in,
+/// and CEN-H19's layout half refuses that count before the batch.
+#[must_use]
+pub fn range_proof_for(outputs: usize) -> BpPlus {
+    use std::collections::BTreeMap;
+    use std::sync::{Mutex, OnceLock};
+
+    use curve25519_dalek::scalar::Scalar;
+    use rand_chacha::rand_core::SeedableRng;
+    use shekyl_bulletproofs::Bulletproof;
+    use shekyl_curve_primitives::Commitment;
+
+    static PROVED: OnceLock<Mutex<BTreeMap<usize, BpPlus>>> = OnceLock::new();
+    if !(1..=shekyl_wire::transaction::MAX_OUTPUTS).contains(&outputs) {
+        return bp_plus_layout_for(outputs);
+    }
+    let proved = PROVED.get_or_init(Mutex::default);
+    if let Some(bp) = proved.lock().expect("not poisoned").get(&outputs) {
+        return bp.clone();
+    }
+    let first = FIRST_MASK_SCALAR;
+    let openings = (0..u64::try_from(outputs).expect("fits"))
+        .map(|i| Commitment::new(Scalar::from(first + i), 0))
+        .collect::<Vec<_>>();
+    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(outputs as u64);
+    let proof = Bulletproof::prove_plus(&mut rng, openings).expect("at most sixteen outputs prove");
+    let bp = BpPlus::from_bytes(&proof.serialize()).expect("a proof's bytes are a wire Bp+");
+    proved
+        .lock()
+        .expect("not poisoned")
+        .insert(outputs, bp.clone());
+    bp
 }
 
 /// A BP+ with the **canonical layout** for `outputs` outputs — `|L| = |R|

@@ -76,6 +76,15 @@ curve25519-dalek = { version = "4", optional = true }
 # rules crate does not already reach); never enabled on the production
 # surface.
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet", optional = true }
+# Optional: the `harness` feature's `fixture::range_proof_for`, a real BP+ over
+# the fixture spend's known openings made by the production prover, so the
+# fixture passes CEN-H19's batch in `form` and a test reaches the row it is
+# about. `shekyl-curve-primitives` is the opening type `prove_plus` takes;
+# `rand_chacha` seeds the proof so a fixture is a pure function of its
+# arguments. Both already in the lockfile; never enabled on the production
+# surface.
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives", optional = true }
+rand_chacha = { workspace = true, optional = true }
 
 [features]
 # The negative-fixture harness (`harness.rs`: `MockChain`, `MockSubstrate`,
@@ -98,7 +107,12 @@ shekyl-harness-wallet = { path = "../shekyl-harness-wallet", optional = true }
 # output paying the harness miner, so the store's and the ingest's tests
 # can spend a fixture block's coinbase through a real prover rather than
 # asserting over a filler no wallet could scan.
-harness = ["dep:curve25519-dalek", "dep:shekyl-harness-wallet"]
+harness = [
+  "dep:curve25519-dalek",
+  "dep:shekyl-harness-wallet",
+  "dep:shekyl-curve-primitives",
+  "dep:rand_chacha",
+]
 
 [build-dependencies]
 # Build-script only: read `config/consensus_constants.json` for the two

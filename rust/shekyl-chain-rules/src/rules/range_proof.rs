@@ -9,19 +9,20 @@
 //! is [`H19`]'s `TxRule` and runs in `tx_form`, unrecorded; this fold is
 //! what records the row.
 //!
-//! # Why a fold, and why here
+//! # Why a fold, and why `form`
 //!
 //! A batch verify is inherently multi-transaction and `tx_form` is
 //! per-transaction, so the batch cannot live in `tx_form` without
 //! abandoning the batch or smuggling block scope into a per-transaction
-//! rule (Q9's structural argument). It runs in `validate`, after the slot
-//! loop — so H19's layout half and CEN-I4's input cap have refused before
-//! any proof work is spent — and before L1 and the archival uniqueness
-//! passes, which is the C++'s order: the CT semantics (`verCtSemanticsSimple`
-//! over the block's transactions, `ct_semantics.cpp`) run before the
-//! spent-key insertion that refuses a repeat. The fold reads no view; by
-//! slice 2's partition it could sit in `form`, and it sits here because the
-//! rows that bound its cost run in `validate`'s slot loop.
+//! rule (Q9's structural argument): it is a block-level fold. It reads no
+//! chain state, so it runs in `form` — on the pipeline's parallel workers,
+//! outside the write transaction and off the single connect actor — as a
+//! `FormRule`, which records the row once the batch has decided. Inside
+//! `form` it runs last: after CEN-D1 has refused a block short of its
+//! proof-of-work (so such a block costs RandomX and no proof work), and
+//! after every slot's `tx_form` (so H19's layout half and CEN-I4's input
+//! cap have bounded the work). Every view-bound row, L1 included, runs
+//! later, in `validate`.
 //!
 //! # The batch, and the locus
 //!
@@ -49,11 +50,9 @@ use shekyl_curve_io::CompressedPoint;
 use shekyl_wire::Ct;
 
 use crate::block::Candidate;
-use crate::fault::ViewRead;
 use crate::rules::tx::H19;
-use crate::rules::{BlockContext, BlockRule, Rule};
+use crate::rules::{FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
-use crate::view::ChainView;
 
 /// One listed transaction's proof as the verifier reads it, or `None` if it
 /// does not reassemble.
@@ -138,12 +137,11 @@ fn gather(candidate: &Candidate) -> Verdict<Vec<Listed>> {
     Ok(listed)
 }
 
-impl BlockRule for H19 {
-    fn check<'id, V: ChainView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
-        Ok(Self::verify_block(cx.candidate()))
+impl FormRule for H19 {
+    fn check(cx: &FormContext<'_>) -> Verdict<()> {
+        #[cfg(test)]
+        range_proof_tests::BATCHES.with(|n| n.set(n.get() + 1));
+        Self::verify_block(cx.candidate)
     }
 }
 

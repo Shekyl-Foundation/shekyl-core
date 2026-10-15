@@ -133,6 +133,31 @@ impl fmt::Display for Target {
     }
 }
 
+/// The target CEN-D4 derives for a block connecting at `connecting`, over
+/// `view`'s headers below it: what a caller claims to
+/// [`form`](crate::form). The one derivation — `validate` and `alt_against`
+/// verify the claim by running it again over their view — so the claim and
+/// the check cannot spell the difficulty algorithm differently (the
+/// [`seed_height`](crate::seed_height) precedent).
+///
+/// `Ok(Err(refused))` is CEN-D6: the algorithm derived zero, which
+/// `validate` refuses on the same headers; a caller has no target to claim
+/// and that refusal is the block's verdict.
+///
+/// # Errors
+///
+/// The view's fault, or [`Fault::Corrupt`] on a hole below the parent or a
+/// non-monotone cumulative difficulty.
+pub fn target_claim<'id, H: HeaderView<'id>>(
+    view: &H,
+    connecting: BlockHeight,
+    rule_set: &RuleSet,
+) -> Result<Verdict<Target>, Fault<H::Fault>> {
+    // The derivation records D4/D6/D7 as it runs; a claim records nothing.
+    let mut unrecorded = RuleCoverage::EMPTY;
+    D4::target(view, connecting, rule_set, &mut unrecorded)
+}
+
 /// CEN-D6: a zero next-block difficulty rejects the block. Held by the
 /// [`Target`] type: this is its one constructor.
 pub(crate) struct D6;

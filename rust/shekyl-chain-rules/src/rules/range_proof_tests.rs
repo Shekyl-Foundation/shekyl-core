@@ -23,6 +23,13 @@ use shekyl_curve_primitives::Commitment;
 use shekyl_wire::{BpPlus, Ct, Transaction};
 
 use super::gather;
+
+thread_local! {
+    /// How many times this thread ran the fold's batch (`H19`'s
+    /// `FormRule::check`): the probe that shows a block refused on CEN-D1
+    /// in `form` never reaches the batch.
+    pub(super) static BATCHES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
 use crate::census::CenRow;
 use crate::harness::fixture::{candidate, listed, serve_credit_only};
 use crate::rules::tx::H19;
@@ -134,8 +141,8 @@ fn h19_refuses_one_broken_proof_among_good_ones_at_its_slot() {
 
 /// The refusal is the first bad transaction in block order whichever way
 /// its proof is bad: an equation failure ahead of an unreassemblable proof
-/// is named, and the reverse; the rules crate's own filler proof (unreduced
-/// scalars) is refused at its slot too.
+/// is named, and the reverse; the rules crate's layout filler (unreduced
+/// scalars, `bp_plus_layout_for`) is refused at its slot too.
 #[test]
 fn h19_names_the_first_bad_transaction_whichever_way_its_proof_is_bad() {
     refused_at(
@@ -146,7 +153,15 @@ fn h19_names_the_first_bad_transaction_whichever_way_its_proof_is_bad() {
         vec![valid(1), unreassemblable(2), broken(3)],
         TxSlot::Listed(1),
     );
-    refused_at(vec![listed([9; 32]), valid(2)], TxSlot::Listed(0));
+    let mut filler = listed([9; 32]);
+    if let Ct::Fcmp {
+        prunable: Some(prunable),
+        ..
+    } = &mut filler.ct
+    {
+        prunable.bulletproofs = vec![crate::harness::fixture::bp_plus_layout_for(2)];
+    }
+    refused_at(vec![filler, valid(2)], TxSlot::Listed(0));
 }
 
 /// A proof whose point does not decompress is sane-checked out of the
@@ -231,5 +246,117 @@ fn h19_the_seed_of_a_fixed_block_is_pinned() {
     assert_ne!(
         seed_of(vec![synthetic(0x00), synthetic(0xA5)]),
         seed_of(vec![synthetic(0xA5), synthetic(0x00)]),
+    );
+}
+
+/// CEN-D1 is judged in `form` before any body work: a block whose longhash
+/// misses the claimed target is refused on D1 and the batch never runs —
+/// the probe counts zero. The same block with a satisfying longhash runs
+/// it once. The claimed target is a fixed seven, so the all-`0xff`
+/// longhash misses it (`hash · 7 ≥ 2^256`).
+#[test]
+fn a_block_short_of_its_proof_of_work_is_refused_before_the_batch_runs() {
+    use crate::fault::FormAttempt;
+    use crate::harness::{expected_target, Faulted, MockSubstrate};
+    use crate::rule_set::RuleSet;
+    use shekyl_types::{BlockHash, PowHash};
+
+    #[allow(clippy::unnecessary_wraps, reason = "the substrate's fn-pointer shape")]
+    fn misses(_: &[u8], _: &BlockHash) -> Result<PowHash, Faulted> {
+        Ok(PowHash::from_bytes([0xff; 32]))
+    }
+    let seven = RuleSet::fakechain(
+        core::num::NonZeroU128::new(7),
+        crate::FakechainSchedule::PRODUCTION,
+    );
+    // Above genesis, so the fixed target applies (block 0's is always one).
+    let chain = crate::harness::fixture::spendable_chain();
+    let claim = expected_target(&chain, &seven);
+    assert_eq!(claim.difficulty().to_raw(), 7);
+    let block = || {
+        crate::harness::fixture::candidate_on(
+            &chain,
+            vec![crate::harness::fixture::listed(
+                crate::harness::fixture::point(1),
+            )],
+        )
+    };
+    let run = |substrate: &MockSubstrate| {
+        let before = BATCHES.with(core::cell::Cell::get);
+        let verdict = match crate::validate::form(
+            block(),
+            &seven,
+            substrate,
+            crate::harness::expected_seed(&chain),
+            claim,
+            FormAttempt::FIRST,
+        ) {
+            Ok(verdict) => verdict.map(|_formed| ()),
+            Err(Faulted) => unreachable!("the mock substrate never faults"),
+        };
+        (verdict, BATCHES.with(core::cell::Cell::get) - before)
+    };
+
+    let short = MockSubstrate {
+        longhash: misses,
+        ..MockSubstrate::default()
+    };
+    assert_eq!(
+        run(&short),
+        (Err(InvalidBlock::new(CenRow::D1, Locus::Block)), 0),
+        "refused on D1, the batch not run"
+    );
+    assert_eq!(
+        run(&MockSubstrate::default()),
+        (Ok(()), 1),
+        "a satisfying longhash reaches the batch once"
+    );
+}
+
+/// `form` refuses on CEN-H19 with no view in scope: the batch is a
+/// `FormRule` and `form` takes no `ChainView` parameter, which is the
+/// compile-shaped half of the claim — this call has only a substrate.
+#[test]
+fn form_refuses_a_bad_range_proof_with_no_view_in_scope() {
+    use crate::fault::FormAttempt;
+    use crate::harness::{expected_target, Faulted, MockChain, MockSubstrate};
+    use crate::rule_set::RuleSet;
+    use shekyl_types::BlockHash;
+
+    let mut bad = crate::harness::fixture::listed(crate::harness::fixture::point(2));
+    let mut good = crate::harness::fixture::listed(crate::harness::fixture::point(1));
+    if let Ct::Fcmp {
+        prunable: Some(prunable),
+        ..
+    } = &mut bad.ct
+    {
+        let mut bytes = prunable.bulletproofs[0]
+            .to_bulletproof()
+            .expect("real")
+            .serialize();
+        bytes[96] ^= 1;
+        prunable.bulletproofs = vec![BpPlus::from_bytes(&bytes).expect("a wire Bp+")];
+    }
+    // Distinct bodies: the good one keeps its proof, the bad one is broken.
+    good.prefix.unlock_time = 0;
+    let verdict = match crate::validate::form(
+        candidate(vec![good, bad]),
+        &RuleSet::GENESIS,
+        &MockSubstrate::default(),
+        BlockHash::NULL,
+        expected_target(&MockChain::default(), &RuleSet::GENESIS),
+        FormAttempt::FIRST,
+    ) {
+        Ok(verdict) => verdict.map(|_formed| ()),
+        Err(Faulted) => unreachable!("the mock substrate never faults"),
+    };
+    assert_eq!(
+        verdict,
+        Err(InvalidBlock::new(
+            CenRow::H19,
+            Locus::Tx {
+                slot: TxSlot::Listed(1)
+            }
+        ))
     );
 }
