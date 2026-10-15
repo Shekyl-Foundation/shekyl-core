@@ -69,7 +69,7 @@ The four kinds live in one sealed block, `PendingPostBlock`
 | --- | --- | --- | --- | --- | --- |
 | Stake (bond post) | `PendingBondPost` (`:138-177`) | the dispatch driver, every sweep tick (`pscan/dispatch.rs:521-842`) | record removed, reservation released, one log line (`dispatch.rs:794-819`) | resubmitted byte-identical on the next due tick (`:820-839`) | resubmits stop; one log alarm per session (`:601-610`, `:719-735`); record and reservation held |
 | Emission claim | `PendingEmissionClaim` (`:209-224`) | the claim seam, once (`claim_dispatch.rs:422-435`) | **held**: any submit failure leaves the record live | held | one log alarm per session (`dispatch.rs:566-599`, `:696-717`); held |
-| Drain | `PendingDrain` (`:252-266`) | the drain seam, once (`drain_dispatch.rs`) | **held** | held | as the claim |
+| Drain | `PendingDrain` (`:252-266`) | the drain seam, once (`drain_dispatch.rs:255`) | **held** | held | as the claim |
 | Exit (`Release`) | `PendingRelease` (`:296-309`) | the release seam, once (`release_dispatch.rs:655-669`) | **removed at the seam** on a definite first-send `RejectedTerminal` (`:304-310`, `:633-669`; #601) | held; the user already sees `-29522 UNSTAKE_FATE_UNKNOWN` from `unstake` (`shekyl-wallet-contract/src/error.rs:339`) | as the claim |
 
 **The horizon.** `DISPATCH_ALARM_HORIZON_BLOCKS` is 900: the reorg-deep
@@ -91,17 +91,17 @@ cadence driver:
 - registered and invoked each tick with an empty body
   (`engine/cadence/mod.rs:172-175`);
 - described in `ENGINE_CADENCE_DRIVER.md:331-342`;
-- owed in `docs/FOLLOWUPS.md:420`, which marks the prune a security item
-  that must land together with byte-identical resubmit.
+- owed in the FOLLOWUPS row "Drain/claim/release dispatch driver — terminal-reject prune + byte-identical resubmit remain" of `docs/FOLLOWUPS.md`, which marks the prune a security
+  item that must land together with byte-identical resubmit.
 
-### 2.1 Corrections to the brief, found at source
+### 2.1 Findings at source
 
-- **The cause type.** There is no wallet-contract `RejectCause`.
-  `RejectCause` is the daemon reply's type
-  (`shekyl-rpc-types/src/lib.rs:205`). The cause the dispatcher holds is
-  the engine's `TerminalErrorKind` (`engine/error/submit.rs:34`).
-- **Exits are not held forever on a terminal rejection.** The exit seam
-  prunes on a definite first-send refusal. Claims and drains are held.
+- **The cause type.** The cause the dispatcher holds is the engine's
+  `TerminalErrorKind` (`engine/error/submit.rs:34`). `RejectCause` is the
+  daemon reply's type (`shekyl-rpc-types/src/lib.rs:205`); the wallet
+  contract has no reject-cause type.
+- **The exit is the one kind pruned at its seam.** A definite first-send
+  refusal removes it (§2's table). Claims and drains are held.
 - **The pool's three-day clock is per node, from that node's admission.**
   `CRYPTONOTE_MEMPOOL_TX_LIVETIME` is three days
   (`src/cryptonote_config.h:104`), about 2,160 blocks at 120 s. Age is
@@ -113,9 +113,6 @@ cadence driver:
 - **The dispatcher's clock is not one the RPC has.** The driver judges
   against the sweep's claimed daemon count (`pscan/task.rs:435-437`).
   `staking_info` reads only sealed files (`engine/staking_read.rs:417-450`).
-- **The redaction citation.** The block treats the count of in-flight
-  posts as `P`-activity volume at `pending_post_block.rs:133-136`,
-  `:390-392` and `:444`.
 - **The response type's contract has drifted.**
   - `pscan_synced_height`: documented as `null` in Rust
     (`types.rs:792-797`), as absent in `wallet_rpc.yaml:2813-2818`, and
@@ -190,6 +187,12 @@ the same change, because they sit in the same response type.
 - `recovery_pending_reopen` loses `serde(default)` and is added to
   `wallet_rpc.yaml` as required.
 
+**Cost of the default.** Both tighten existing fields, which goes beyond
+additive. A Rust reader built from the new type refuses an older wallet
+RPC's reply: one that omits `pscan_synced_height` or
+`recovery_pending_reopen`. Wallet RPC and its clients ship together
+pre-genesis, so the cost falls on mixed builds only.
+
 The alternative is to name them in FOLLOWUPS against `WI-RPC` and leave
 them.
 
@@ -212,7 +215,8 @@ remains to report, and dispatch runs on a background tick, so no RPC call
 is waiting for the answer.
 
 **Default.** The pending block gains one durable **last outcome** per
-kind, scoped as WR-Q4 rules. `staking_info` reports these as a second
+`(kind, persona)`, the key every pending record set already uses,
+scoped as WR-Q4 rules. `staking_info` reports these as a second
 list, `outcomes`, each entry with:
 
 - **`kind`**;
@@ -238,6 +242,10 @@ to a rejected post.
   persona.
 - Or cleared by an explicit `acknowledge_staking_outcome { kind }`, which
   acts on the active persona as every staking action does (WR-Q5).
+- **What the no-handle default costs here.** An outcome for a persona
+  that is not active shows in `outcomes`, but no call can acknowledge it;
+  only that persona's next seal of the same kind clears it. This is the
+  case WR-Q5's opaque-handle alternative exists for.
 
 **Cost.** A persisted change: `PENDING_POST_VERSION` 12 → 13,
 refuse-not-migrate, schema snapshot (rule 42). A v12 file is refused and
@@ -305,8 +313,9 @@ on, the bond can never land.
   - **Default:** the principal address, through the existing drain
     builder. The destination is the wallet's own principal address and
     never caller-supplied (`drain_dispatch.rs:28-31`). The drain is
-    already byte-identical to a principal transfer (FOLLOWUPS row "The
-    five bonded regtest walks…"). Funds return to the spendable balance,
+    designed to be byte-identical to a principal transfer; the test that
+    shows it, `e2e_drain_wire_shape_matches_a_real_transfer`, is dark
+    until `DEL-008` (the FOLLOWUPS row "The five bonded regtest walks are decided dark…"). Funds return to the spendable balance,
     which is what a user who cancels expects.
   - **Alternative:** a `P`→`P` self-spend that keeps the funds staking
     side, for a user who means to stake again. No such builder exists
@@ -334,9 +343,9 @@ on, the bond can never land.
 | A hostile node holds the bond and broadcasts it after the user acts | The bond lands whenever the node chooses; same as row one | Before the cancel is final: as row one. After it: the bytes spend a spent input and can never be mined |
 
 **Falsifier.**
-- A test removes the record of a post whose bond later lands (option
-  (a)), opens the wallet before the scan's match, and observes the slot
-  dropped. This proves point 4 at source before the ruling.
+- A ruling for (a) must survive this test: remove the record of a post
+  whose bond later lands, open the wallet before the scan's match, and
+  observe the slot kept. Point 4 predicts it is dropped.
 - For (b): `rg -n 'Cancelling' rust/shekyl-engine-state/src/pending_post_block.rs`
   hits, and a regtest fixture confirms a cancel, buries it 720 deep, and
   then reads `in_flight` empty and the bytes of the bond refused by the
@@ -344,7 +353,7 @@ on, the bond can never land.
 
 **Blocked fixture.** No bond post can land on the C++ daemon: it answers
 every kind-5 JoinMarket post `JoinMarketUnsupported`, and the five bonded
-regtest walks are decided dark until `DEL-008` (FOLLOWUPS:93). The
+regtest walks are decided dark until `DEL-008` (the FOLLOWUPS row "The five bonded regtest walks are decided dark…"). The
 late-landing rows of the wargame cannot run against a real daemon until
 then. The rejection path can, and it is WR-Q2's falsifier.
 
@@ -363,7 +372,7 @@ lands.
 
 **Option (a) — this round takes on leg 4.** Every kind gets the same
 `rejected` outcome, written in the same seal as the removal.
-- **Cost:** FOLLOWUPS:420 requires the prune to land **together with**
+- **Cost:** the FOLLOWUPS row "Drain/claim/release dispatch driver — terminal-reject prune + byte-identical resubmit remain" requires the prune to land **together with**
   byte-identical resubmit, because the retained copy of a rejected claim
   or exit is a replay channel. So (a) is both halves, not the prune
   alone.
@@ -435,7 +444,8 @@ behind HTTP basic auth or a loopback bind (`shekyl-wallet-rpc/src/auth.rs:6-10`)
 - Alternative: an opaque handle, random and persisted in the record at
   seal time, never derived from the persona or the bytes. It costs a
   schema field. It is needed only if a wallet must act on a record of a
-  persona that is not active.
+  persona that is not active, which includes acknowledging that persona's
+  outcome (WR-Q2).
 
 **Linkage, said to the user.** A broadcast post publishes the key images
 of its inputs to every node that saw it in a pool. Any later spend of
@@ -464,7 +474,7 @@ The ruled shape is proved against a real daemon (regtest), not mocks.
   drives it against the C++ daemon (WR-Q2's falsifier).
 - **At `DEL-008`:** a dispatched stake, a stall, a late landing and a
   cancel all need a daemon that admits a kind-5 JoinMarket. That is the
-  Rust daemon at the cutover. The named blocker is FOLLOWUPS:93, and the
+  Rust daemon at the cutover. The named blocker is the FOLLOWUPS row "The five bonded regtest walks are decided dark…", and the
   fixtures for those rows land with the walks it un-darkens.
 - **Without a daemon:** the stall projection (WR-Q1) and the outcome
   write (WR-Q2) are tested against sealed state with a fixed clock. They
@@ -474,7 +484,7 @@ The ruled shape is proved against a real daemon (regtest), not mocks.
 
 - No C++.
 - No wallet-contract removal. `JoinMarketUnsupported` stays enumerated
-  until `DEL-008` deletes it (FOLLOWUPS:93).
+  until `DEL-008` deletes it (the FOLLOWUPS row "The five bonded regtest walks are decided dark…").
 - No change to the dispatcher's alarm horizon, resubmit policy or alarm
   wording.
 - No leg-4 body, unless WR-Q4 rules (a).
