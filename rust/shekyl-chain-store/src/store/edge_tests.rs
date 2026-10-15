@@ -44,7 +44,11 @@ fn chain(name: &str) -> (std::path::PathBuf, ChainStore) {
 }
 
 fn summary(store: &ChainStore) -> CurveTreeState {
-    store.begin_read().expect("read").curve_tree().expect("summary")
+    store
+        .begin_read()
+        .expect("read")
+        .curve_tree()
+        .expect("summary")
 }
 
 #[test]
@@ -55,7 +59,10 @@ fn a_run_of_pops_leaves_a_right_edge_its_children_rebuild_to() {
     let out: Result<usize, TestErr> = store.write(|batch| Ok(batch.pop_many(POPS)?.len()));
     assert_eq!(out, Ok(usize::try_from(POPS).expect("small")));
     let after = summary(&store);
-    assert!(after.leaf_count < before.leaf_count, "the pops trimmed the tree");
+    assert!(
+        after.leaf_count < before.leaf_count,
+        "the pops trimmed the tree"
+    );
     let snap = store.begin_read().expect("read");
     let live = snap
         .root_at(BlockHeight::from_raw(TIP - POPS + 1))
@@ -122,7 +129,12 @@ fn a_wrong_leaf_under_the_edge_halts_the_pop_run_at_the_leaf_chunk() {
         "SI-5 halts at the height the last pop worked at"
     );
     // Nothing landed: the tip is where it was.
-    let tip = store.begin_read().expect("read").tip().expect("tip").recorded;
+    let tip = store
+        .begin_read()
+        .expect("read")
+        .tip()
+        .expect("tip")
+        .recorded;
     assert_eq!(tip.map(|t| t.height.to_raw()), Some(TIP));
     drop(store);
     cleanup(&path);
@@ -150,7 +162,8 @@ fn a_summary_and_live_root_moved_together_fail_the_root_arm() {
                 .decode()
                 .expect("decodes");
             state.root = wrong;
-            meta.insert((), state.encoded().as_encoded()).expect("plant");
+            meta.insert((), state.encoded().as_encoded())
+                .expect("plant");
             txn.open_table(CURVE_TREE_ROOTS)
                 .expect("t")
                 .insert(TIP + 1, wrong.encoded().as_encoded())
