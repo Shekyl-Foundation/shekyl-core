@@ -153,17 +153,27 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     // Status is a part a daemon may withhold, and a restricted one does.
     // A withheld part is not a node with no connections and no uptime: the
     // line says the counts were not disclosed and leaves the uptime off.
+    // Offline is the state, not zero connections (Rick, 2026-10-14), and it
+    // is Health, which every caller is told: a daemon that withholds Status
+    // still says it is offline.
     let status = info.node.shown();
-    let connections = status.map_or_else(
-        || "connections not disclosed".to_owned(),
-        |status| match status.connections {
-            shekyl_rpc_types::StatusConnections::Running { outgoing, incoming } => {
-                format!("{outgoing}(out)+{incoming}(in) connections")
-            }
-            // Offline is the state, not zero connections (Rick, 2026-10-14).
-            shekyl_rpc_types::StatusConnections::Offline => "P2P: offline".to_owned(),
-        },
-    );
+    let connections = match (&info.health.p2p, status.map(|status| &status.connections)) {
+        (shekyl_rpc_types::HealthP2p::Offline, _) => "P2P: offline".to_owned(),
+        (
+            shekyl_rpc_types::HealthP2p::Running { .. },
+            Some(shekyl_rpc_types::StatusConnections::Running { outgoing, incoming }),
+        ) => format!("{outgoing}(out)+{incoming}(in) connections"),
+        (shekyl_rpc_types::HealthP2p::Running { .. }, None) => {
+            "connections not disclosed".to_owned()
+        }
+        // Not decodable: Health and Status are both read against the
+        // reply's `offline` (`P2pDisagreesWithOffline`,
+        // `ConnectionsDisagreeWithOffline`). The state wins over a count.
+        (
+            shekyl_rpc_types::HealthP2p::Running { .. },
+            Some(shekyl_rpc_types::StatusConnections::Offline),
+        ) => "P2P: offline".to_owned(),
+    };
     let mining_text = match &mining {
         MiningReadout::Unavailable => "mining info unavailable".to_owned(),
         MiningReadout::Syncing => "syncing".to_owned(),

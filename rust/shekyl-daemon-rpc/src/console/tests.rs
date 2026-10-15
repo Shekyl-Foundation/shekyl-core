@@ -2035,6 +2035,34 @@ fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
     assert!(!out.contains("(out)") && !out.contains("uptime"), "{out}");
 }
 
+/// **An offline daemon that withholds Status still says it is offline**
+/// (Copilot on #1056): the state is Health, which a restricted daemon
+/// discloses, and the counts it withholds are not the state. Not
+/// "connections not disclosed", and no uptime clause.
+#[test]
+fn an_offline_daemon_that_withholds_status_prints_the_state() {
+    let mut info: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_offline_v1.json"
+    ))
+    .unwrap();
+    let members = info.as_object_mut().unwrap();
+    assert_eq!(members["p2p"], "offline", "the vector is the offline one");
+    for key in STATUS_PART_KEYS {
+        members.remove(*key);
+    }
+    let address = route_server(vec![
+        ("/get_info", info.to_string()),
+        ("/mining_status", mining_reply(false, 0, false)),
+    ]);
+    let (code, out) = run(&["status"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(
+        out.trim_end().ends_with("P2P: offline"),
+        "the state, and no uptime clause: {out}"
+    );
+    assert!(!out.contains("not disclosed") && !out.contains("uptime"), "{out}");
+}
+
 /// A daemon that does show Status and reports no connections prints the
 /// zeros: that is a count, and it gets its uptime.
 #[test]
