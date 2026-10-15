@@ -21,13 +21,13 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use shekyl_daemon_config::announce;
-use shekyl_daemon_config::sections::{build, log_location_writable, DaemonConfig};
+use shekyl_daemon_config::sections::{build, log_location_writable, DaemonConfig, Tor};
 use shekyl_daemon_config::{choosers, file, marker, paths, resolve, Lock, Platform, TABLE};
 use shekyl_options::{read_cli, read_file, Diagnostic, Kind, Value};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 
 use crate::entry::{ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylStringList};
-use crate::{help, legacy, signals};
+use crate::{help, legacy, network, signals, tor};
 
 /// A configuration refusal.
 pub const EXIT_REFUSED: i32 = 2;
@@ -165,6 +165,10 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         std::env::set_var(key, value);
     }
 
+    // Step 6: what the owners read at their build, before the remnant
+    // binds the seam.
+    network::record(&config);
+
     // The one signal owner, the RPC section for the remnant's one start,
     // and the remnant on a thread of its own.
     signals::install_dispositions();
@@ -180,7 +184,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
             return EXIT_FAILED;
         }
     };
-    let status = supervise(entry, &config, &program, &pool);
+    let status = supervise(entry, &config, &program, &pool, network_id);
     pool.shutdown_background();
     drop(lock);
     status
@@ -207,6 +211,7 @@ fn supervise(
     config: &DaemonConfig,
     program: &OsStr,
     pool: &shekyl_runtime::Pool,
+    network_id: [u8; 16],
 ) -> i32 {
     let Some(run) = entry.run else {
         eprintln!("shekyld: the entry has no run");
@@ -217,6 +222,9 @@ fn supervise(
         return EXIT_FAILED;
     };
     let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(config.rpc.clone());
+    // Step 6: the managed Tor's start, overlapping the core's construction;
+    // awaited at step 8.
+    let tor_start = tor::begin(&config.tor, &config.data_dir, pool.handle());
     let data = SnapshotData::new(config, program);
     let (done_tx, mut done_rx) = tokio::sync::oneshot::channel::<i32>();
     let thread = std::thread::Builder::new()
@@ -257,14 +265,16 @@ fn supervise(
             }
         }
     });
+    let mut tor_control = None;
     let status = match reached {
         Reached::Finished(status) => status,
         Reached::StopRequested => {
             stop_path(stop);
             pool.block_on(&mut done_rx).unwrap_or(EXIT_FAILED)
         }
-        Reached::Constructed | Reached::RpcRefused => {
-            // Step 8 starts here once the owners read their sections.
+        Reached::RpcRefused => {
+            // The remnant's run throws and returns; a stop asked for
+            // meanwhile is honoured all the same.
             let finished = pool.block_on(async {
                 tokio::select! {
                     finished = &mut done_rx => Some(finished.unwrap_or(EXIT_FAILED)),
@@ -282,10 +292,85 @@ fn supervise(
                 }
             }
         }
+        Reached::Constructed => {
+            // Step 8: the managed Tor, awaited; then the zone host, its
+            // listeners and the dialer, each from its section; then the
+            // onion, which forwards to the zone host's loopback listener.
+            tor_control = match tor_start {
+                Some(handle) => match pool.block_on(handle) {
+                    Ok(Ok(control)) => Some(control),
+                    Ok(Err(not_running)) => {
+                        tracing::warn!(target: "global", "{not_running}");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::error!(target: "global", "the managed Tor's start task failed: {e}");
+                        None
+                    }
+                },
+                None => None,
+            };
+            let tor_socks = match (&config.tor, &tor_control) {
+                (Tor::Managed { .. }, Some(control)) => network::TorSocks::At {
+                    socks: control.socks_addr(),
+                    onion_listen: None,
+                    managed: true,
+                },
+                (Tor::Operator { socks, onion }, _) => network::TorSocks::At {
+                    socks: socks.endpoint,
+                    onion_listen: onion.as_ref().map(|o| o.listen),
+                    managed: false,
+                },
+                (Tor::Managed { .. } | Tor::Off, _) => network::TorSocks::None,
+            };
+            match network::start(config, network_id, tor_socks) {
+                Ok(started) => {
+                    if let (Some(control), Some(forward)) = (&tor_control, started.tor_forward) {
+                        let published = pool.block_on(tor::publish(
+                            control,
+                            config.network.p2p_port(),
+                            forward,
+                        ));
+                        tor::watch_death(control, published, pool.handle());
+                    }
+                    let finished = pool.block_on(async {
+                        tokio::select! {
+                            finished = &mut done_rx => Some(finished.unwrap_or(EXIT_FAILED)),
+                            requested = signals::stop_requested() => {
+                                note_stop(requested);
+                                None
+                            }
+                        }
+                    });
+                    match finished {
+                        Some(status) => status,
+                        None => {
+                            stop_path(stop);
+                            pool.block_on(&mut done_rx).unwrap_or(EXIT_FAILED)
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(target: "global", "the network could not start: {e}; stopping");
+                    stop_path(stop);
+                    let _status = pool.block_on(&mut done_rx);
+                    EXIT_FAILED
+                }
+            }
+        }
     };
-    // `run` ended: whatever stopped it, the RPC is stopped before the core
-    // it serves is gone (the remnant stops it too; the second is a no-op).
+    // `run` ended: whatever stopped it, the zone host and the RPC are
+    // stopped before the core they serve is gone (the remnant stops the RPC
+    // too; the second is a no-op), and the managed Tor is torn down.
+    network::stop();
     shekyl_daemon_rpc::ffi_exports::stop();
+    if let Some(control) = tor_control {
+        let exit = pool.block_on(control.shutdown());
+        tracing::info!(
+            target: "global",
+            "the managed Tor was torn down ({exit:?}); the address is gone, a restart mints a new one"
+        );
+    }
     if thread.join().is_err() {
         tracing::error!(target: "daemon", "the run thread ended by a panic");
     }
@@ -299,9 +384,12 @@ fn note_stop(requested: std::io::Result<&'static str>) {
     }
 }
 
-/// Step 9's order: the RPC, drained, then the remnant's `stop`; the lock
-/// is released by the caller after `run` has returned.
+/// Step 9's order: the dialer and the zone host, then the RPC, drained,
+/// then the remnant's `stop`, which returns at once; the managed Tor's
+/// teardown and the remnant's thread end in parallel after it, and the
+/// lock is released by the caller after `run` has returned.
 fn stop_path(stop: crate::entry::StopFn) {
+    network::stop();
     shekyl_daemon_rpc::ffi_exports::stop();
     stop();
 }
@@ -359,7 +447,6 @@ pub(crate) struct SnapshotData {
     console: bool,
     command: Vec<CString>,
     client_endpoint: Option<CString>,
-    advertised_port: u16,
     argv: Vec<CString>,
 }
 
@@ -378,12 +465,6 @@ impl SnapshotData {
             console: config.session.console,
             command: config.session.command.iter().map(|w| c(w)).collect(),
             client_endpoint: config.session.client_endpoint.map(|e| c(&e.to_string())),
-            advertised_port: match &config.clearnet {
-                shekyl_daemon_config::Clearnet::On { advertise, .. } => {
-                    advertise.first().map_or(0, std::net::SocketAddr::port)
-                }
-                shekyl_daemon_config::Clearnet::Off => 0,
-            },
             argv: legacy::argv(program, config).iter().map(|a| c(a)).collect(),
         }
     }
@@ -406,11 +487,6 @@ impl SnapshotData {
     #[cfg(test)]
     pub(crate) fn data_dir(&self) -> String {
         self.data_dir.to_string_lossy().into_owned()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn advertised_port(&self) -> u16 {
-        self.advertised_port
     }
 
     /// Calls `run` with pointers into this data, which outlives the call.
@@ -438,7 +514,6 @@ impl SnapshotData {
                 .client_endpoint
                 .as_ref()
                 .map_or(std::ptr::null(), |e| e.as_ptr()),
-            advertised_port: self.advertised_port,
         };
         let argc = c_int::try_from(argv.len()).unwrap_or(c_int::MAX);
         run(&raw const snapshot, argc, argv.as_ptr())
@@ -460,6 +535,9 @@ mod tests {
     use std::sync::Mutex;
 
     static LAST_ARGC: AtomicI32 = AtomicI32::new(-1);
+    /// The RPC section, the owners' records and the signal owner's request
+    /// are process-global: the tests that drive them run one at a time.
+    static SERIAL: Mutex<()> = Mutex::new(());
     static STOPS: AtomicUsize = AtomicUsize::new(0);
     static RUN_RETURNS: Mutex<i32> = Mutex::new(0);
 
@@ -565,15 +643,13 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_carries_the_twelve_values() {
+    fn the_snapshot_carries_the_eleven_values() {
         let d = tempfile::tempdir().unwrap();
         let args_v: Vec<OsString> = [
             "--network",
             "regtest",
             "--data-dir",
             d.path().to_str().unwrap(),
-            "--clearnet-advertise",
-            "8.8.8.8:1234",
             "status",
             "extra",
         ]
@@ -591,7 +667,6 @@ mod tests {
         );
         assert_eq!(data.client_endpoint().as_deref(), Some("127.0.0.1:11029"));
         assert_eq!(data.data_dir(), d.path().display().to_string());
-        assert_eq!(data.advertised_port(), 1234);
         assert_eq!(data.network, 3);
     }
 
@@ -600,8 +675,20 @@ mod tests {
     /// `stop` and returns `run`'s status: one stop path, whatever asked.
     #[test]
     fn a_stop_request_from_the_remnant_runs_the_one_stop_path() {
+        let _serial = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let d = tempfile::tempdir().unwrap();
-        let a = args(&["--network", "regtest", "--rpc-admin-listen", "none"]);
+        let a = args(&[
+            "--network",
+            "regtest",
+            "--clearnet",
+            "off",
+            "--tor",
+            "off",
+            "--rpc-admin-listen",
+            "none",
+        ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
         let (network, mode) = choosers(&cli);
         let resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
@@ -622,7 +709,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
             crate::entry::shekyl_daemon_request_stop();
         });
-        let status = supervise(&entry, &config, OsStr::new("shekyld"), &pool);
+        let status = supervise(&entry, &config, OsStr::new("shekyld"), &pool, [3u8; 16]);
         requester.join().unwrap();
         assert_eq!(status, 0, "run's status is the exit status");
         assert_eq!(
@@ -637,12 +724,21 @@ mod tests {
     /// process, so this is the only test that reaches it.
     #[test]
     fn a_daemon_start_locks_marks_logs_announces_and_runs_the_remnant() {
+        let _serial = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let d = tempfile::tempdir().unwrap();
         let data = d.path().join("data");
         let log = d.path().join("logs").join("shekyld-regtest.log");
+        // Offline: the subject is the lock, the marker, the log and the
+        // announcements, and a managed Tor would look for a binary here.
         let a = args(&[
             "--network",
             "regtest",
+            "--clearnet",
+            "off",
+            "--tor",
+            "off",
             "--data-dir",
             data.to_str().unwrap(),
             "--log-file",

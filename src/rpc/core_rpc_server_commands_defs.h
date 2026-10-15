@@ -859,58 +859,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
   
-  struct COMMAND_RPC_OUT_PEERS
-  {
-    struct request_t: public rpc_request_base
-    {
-      bool set;
-      uint32_t out_peers;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE_OPT(set, true)
-        KV_SERIALIZE(out_peers)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-    
-    struct response_t: public rpc_response_base
-    {
-      uint32_t out_peers;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(out_peers)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_IN_PEERS
-  {
-    struct request_t: public rpc_request_base
-    {
-      bool set;
-      uint32_t in_peers;
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE_OPT(set, true)
-        KV_SERIALIZE(in_peers)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      uint32_t in_peers;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(in_peers)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
     
 
   struct COMMAND_RPC_GETBANS

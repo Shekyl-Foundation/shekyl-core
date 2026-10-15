@@ -18,7 +18,7 @@
 
 use std::ffi::OsStr;
 
-use shekyl_daemon_config::sections::{Clearnet, DaemonConfig, Tor};
+use shekyl_daemon_config::sections::DaemonConfig;
 use shekyl_daemon_config::Network;
 
 /// The vector under construction.
@@ -53,74 +53,8 @@ pub fn argv(program: &OsStr, config: &DaemonConfig) -> Vec<String> {
         a.flag("non-interactive");
     }
     a.pair("max-txpool-weight", config.txpool_weight_max.to_string());
-    match &config.clearnet {
-        Clearnet::On {
-            listen,
-            socks,
-            advertise,
-        } => {
-            if let Some(v4) = listen.iter().find(|e| e.is_ipv4()) {
-                a.pair("p2p-bind-ip", v4.ip().to_string());
-                a.pair("p2p-bind-port", v4.port().to_string());
-            }
-            if let Some(v6) = listen.iter().find(|e| e.is_ipv6()) {
-                a.flag("p2p-use-ipv6");
-                a.pair("p2p-bind-ipv6-address", v6.ip().to_string());
-                a.pair("p2p-bind-port-ipv6", v6.port().to_string());
-            }
-            if listen.is_empty() {
-                a.pair("in-peers", "0".to_owned());
-            }
-            if let Some(socks) = socks {
-                a.pair("proxy", socks.endpoint.to_string());
-            }
-            if let Some(first) = advertise.first() {
-                a.pair("p2p-external-port", first.port().to_string());
-            }
-        }
-        // No clearnet option exists today (IG-F6); dial-only is the
-        // nearest spelling. Commit (c) closes this.
-        Clearnet::Off => a.pair("in-peers", "0".to_owned()),
-    }
-    match &config.tor {
-        Tor::Managed { .. } => {}
-        Tor::Off => a.flag("no-ephemeral-tor"),
-        Tor::Operator { socks, onion } => {
-            a.flag("no-ephemeral-tor");
-            a.pair("tx-proxy", format!("tor,{}", socks.endpoint));
-            if let Some(onion) = onion {
-                a.pair(
-                    "anonymous-inbound",
-                    format!("{}:{},{}", onion.host, onion.virtual_port, onion.listen),
-                );
-            }
-        }
-    }
-    for peer in &config.p2p.peers {
-        a.pair("add-peer", peer.to_string());
-    }
-    for peer in &config.p2p.closed_peers {
-        a.pair("add-exclusive-node", peer.to_string());
-    }
-    if config.p2p.local {
-        a.flag("allow-local-ip");
-    }
-    if config.p2p.disclose_early {
-        a.flag("p2p-disclose-early");
-    }
-    // Today's rates are integer kB/s; a rate under one kB/s rounds up to it.
-    if let Some(up) = config.p2p.upload_max {
-        a.pair("limit-rate-up", up.div_ceil(1024).max(1).to_string());
-    }
-    if let Some(down) = config.p2p.download_max {
-        a.pair("limit-rate-down", down.div_ceil(1024).max(1).to_string());
-    }
-    // The RPC reads its section (§2.3); the one spelling left is the cap
-    // the C++ inbound ceiling still reserves, until the ceiling is Rust's.
-    a.pair(
-        "rpc-max-connections",
-        config.rpc.connections_max.to_string(),
-    );
+    // The connectors, the peers, the link bounds, the RPC and the relay's
+    // cover read their sections in Rust; nothing of theirs is rendered.
     if let Some(address) = &config.mine.address {
         a.pair("start-mining", address.clone());
     }
@@ -132,12 +66,6 @@ pub fn argv(program: &OsStr, config: &DaemonConfig) -> Vec<String> {
     }
     if !config.dev.sync {
         a.flag("no-sync");
-    }
-    if config.dev.clearnet_encrypt {
-        a.flag("clearnet-transport-encrypt");
-    }
-    if config.dev.relay_cover {
-        a.flag("carrier-development");
     }
     a.0
 }
@@ -203,16 +131,29 @@ mod tests {
         assert!(v.contains(&"--non-interactive".to_owned()));
         assert!(!v.contains(&"--offline".to_owned()));
         assert_eq!(value_of(&v, "--data-dir"), Some("/srv/op/.shekyl"));
-        assert_eq!(value_of(&v, "--p2p-bind-ip"), Some("0.0.0.0"));
-        assert_eq!(value_of(&v, "--p2p-bind-port"), Some("11021"));
-        assert!(
-            !v.iter()
-                .any(|a| a.starts_with("--rpc-") && a != "--rpc-max-connections"),
-            "the RPC reads its section; nothing but the cap is rendered: {v:?}"
-        );
-        assert_eq!(value_of(&v, "--rpc-max-connections"), Some("25"));
-        assert!(!v.iter().any(|a| a == "--no-ephemeral-tor"));
-        assert!(!v.iter().any(|a| a == "--in-peers"));
+        // The connectors, the peers, the link, the RPC and the relay read
+        // their sections in Rust: none of their spellings is rendered.
+        for gone in [
+            "--p2p-",
+            "--rpc-",
+            "--in-peers",
+            "--out-peers",
+            "--tx-proxy",
+            "--add-",
+            "--limit-rate",
+            "--no-ephemeral-tor",
+            "--anonymous-inbound",
+            "--proxy",
+            "--allow-local-ip",
+            "--ban-list",
+            "--carrier-development",
+            "--clearnet-transport-encrypt",
+        ] {
+            assert!(
+                !v.iter().any(|a| a.starts_with(gone)),
+                "{gone} rendered: {v:?}"
+            );
+        }
     }
 
     #[test]
@@ -232,23 +173,11 @@ mod tests {
         ]);
         assert!(v.contains(&"--regtest".to_owned()));
         assert!(v.contains(&"--offline".to_owned()));
-        assert!(v.contains(&"--no-ephemeral-tor".to_owned()));
         assert!(v.contains(&"--no-sync".to_owned()));
         assert!(!v.contains(&"--non-interactive".to_owned()));
         assert_eq!(value_of(&v, "--fixed-difficulty"), Some("3"));
-        let v = render(&[
-            "--tor",
-            "operator",
-            "--tor-socks",
-            "127.0.0.1:9050",
-            "--p2p-upload-max",
-            "1KiB/s",
-            "--p2p-peer",
-            "8.8.8.8:11021",
-        ]);
-        assert_eq!(value_of(&v, "--tx-proxy"), Some("tor,127.0.0.1:9050"));
-        assert_eq!(value_of(&v, "--limit-rate-up"), Some("1"));
-        assert_eq!(value_of(&v, "--add-peer"), Some("8.8.8.8:11021"));
+        let v = render(&["--mine-threads", "2"]);
+        assert_eq!(value_of(&v, "--mining-threads"), Some("2"));
     }
 
     #[test]

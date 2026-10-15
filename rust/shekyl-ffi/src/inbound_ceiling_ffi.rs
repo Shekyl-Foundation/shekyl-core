@@ -53,6 +53,25 @@ pub struct ShekylInboundCeiling {
 ///
 /// `out` must be non-null and point at a writable [`ShekylInboundCeiling`]
 /// for the duration of the call. A null `out` returns without writing.
+/// The descriptors reserved beyond the p2p's own: the RPC connection cap
+/// and the dialers' outbound targets, recorded by the daemon's Rust
+/// `main()` before the remnant binds the seam (`DAEMON_CONFIG_CUTOVER.md`
+/// §4.2, the zone host's values). 0 until recorded, which is what a
+/// harness that binds without a daemon reserves.
+static RESERVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Records the descriptors reserved beyond the p2p's own.
+pub fn record_reserved(reserved: u64) {
+    RESERVED.store(reserved, std::sync::atomic::Ordering::Release);
+}
+
+/// The inbound ceiling for this process, from its descriptor limit and the
+/// recorded reservation, with nothing held yet: what the seam binds with.
+pub fn configured() -> InboundCeiling {
+    let reserved = RESERVED.load(std::sync::atomic::Ordering::Acquire);
+    InboundCeiling::resolve(observe_descriptors(), reserved, 0)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_inbound_ceiling_resolve(
     reserved: u64,

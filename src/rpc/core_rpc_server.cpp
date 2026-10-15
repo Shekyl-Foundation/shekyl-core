@@ -90,10 +90,9 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------
   void core_rpc_server::init_options(boost::program_options::options_description& desc)
   {
-    // The RPC reads its section in Rust (DAEMON_CONFIG_CUTOVER.md §2.3).
-    // The one spelling left is the cap the inbound ceiling reserves, until
-    // the ceiling is Rust's.
-    command_line::add_arg(desc, arg_rpc_max_connections);
+    // The RPC reads its section in Rust (DAEMON_CONFIG_CUTOVER.md §2.3):
+    // nothing of it is a C++ option.
+    (void)desc;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   core_rpc_server::core_rpc_server(
@@ -106,15 +105,6 @@ namespace cryptonote
   {}
   core_rpc_server::~core_rpc_server()
   {
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::init(const boost::program_options::variables_map& vm)
-  {
-    // One server, one preset: the admin and view presets are the Rust
-    // listeners' (served_routes), never this object's.
-    m_restricted = false;
-    m_rpc_max_connections = command_line::get_arg(vm, arg_rpc_max_connections);
-    return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::check_core_ready()
@@ -1102,26 +1092,6 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_out_peers(const COMMAND_RPC_OUT_PEERS::request& req, COMMAND_RPC_OUT_PEERS::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(out_peers);
-    if (req.set)
-      m_p2p.change_max_out_public_peers(req.out_peers);
-    res.out_peers = m_p2p.get_max_out_public_peers();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_in_peers(const COMMAND_RPC_IN_PEERS::request& req, COMMAND_RPC_IN_PEERS::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(in_peers);
-    if (req.set)
-      m_p2p.change_max_in_public_peers(req.in_peers);
-    res.in_peers = m_p2p.get_max_in_public_peers();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_pop_blocks(const COMMAND_RPC_POP_BLOCKS::request& req, COMMAND_RPC_POP_BLOCKS::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(pop_blocks);
@@ -1337,10 +1307,4 @@ namespace cryptonote
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
-  //------------------------------------------------------------------------------------------------------------------------------
-  const command_line::arg_descriptor<std::size_t> core_rpc_server::arg_rpc_max_connections = {
-      "rpc-max-connections"
-    , "Max RPC connections permitted"
-    , DEFAULT_RPC_MAX_CONNECTIONS
-  };
 }  // namespace cryptonote

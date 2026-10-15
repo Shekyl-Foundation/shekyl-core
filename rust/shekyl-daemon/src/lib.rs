@@ -17,8 +17,10 @@
 pub mod entry;
 pub mod help;
 pub mod legacy;
+pub mod network;
 pub mod run;
 pub mod signals;
+pub mod tor;
 
 pub use entry::{ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylStringList, SNAPSHOT_FIELDS};
 pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};

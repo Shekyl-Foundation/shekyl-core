@@ -275,6 +275,27 @@ pub const TABLE: Table = Table {
 mod tests {
     use super::*;
 
+    /// The relay's development cover carrier is a `dev-` lever: absent from
+    /// the public help (only `Public` rows render), refused on mainnet,
+    /// never an operator setting (COVER_TRAFFIC_RESTORATION.md §3.1). This
+    /// is the gate `scripts/ci/check_carrier_flag_hidden.sh` was for the
+    /// C++ flag.
+    #[test]
+    fn the_relay_cover_lever_is_a_dev_row_off_mainnet() {
+        let row = TABLE
+            .rows
+            .iter()
+            .find(|r| r.name == "dev-relay-cover")
+            .expect("the row");
+        match row.visibility {
+            shekyl_options::Visibility::Dev { networks } => {
+                assert!(!networks.contains(&"mainnet"), "{networks:?}");
+                assert!(!networks.is_empty());
+            }
+            other => panic!("dev-relay-cover is a dev row, not {other:?}"),
+        }
+    }
+
     #[test]
     fn the_table_has_no_defects() {
         assert_eq!(TABLE.defects(), Vec::<String>::new());

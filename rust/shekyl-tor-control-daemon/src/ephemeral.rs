@@ -383,6 +383,13 @@ impl DaemonTorControl {
         self.actor.wait_for_shutdown().await;
     }
 
+    /// A future that resolves when the control actor has stopped, owning
+    /// its handle, so a watcher can run on a runtime beside this control.
+    pub fn death_watch(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let actor = self.actor.clone();
+        async move { actor.wait_for_shutdown().await }
+    }
+
     /// Bounded teardown: graceful actor stop (which `DEL_ONION`s the published
     /// service and SIGTERM→wait→SIGKILL→reaps the child), then the exit
     /// telemetry, then the DataDirectory wipe. On a wedged actor, kill and

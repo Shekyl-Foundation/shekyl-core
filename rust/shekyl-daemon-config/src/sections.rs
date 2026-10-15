@@ -429,10 +429,18 @@ impl<'a> Reader<'a> {
             }
             return None;
         };
-        match (&username, &password) {
-            (Some(_), None) => self.requires(&user_key, &format!("`{pass_key}`")),
-            (None, Some(_)) => self.requires(&pass_key, &format!("`{user_key}`")),
-            _ => {}
+        // The dial path offers the proxy no authentication (`shekyl-clearnet`
+        // and `shekyl-tor` connect with `Isolation::Principal`), so a
+        // credential would be accepted and never sent: refused here, naming
+        // the fact, until the dial carries it (FOLLOWUPS, the SOCKS
+        // credentials row). The pair's need for each other is moot until then.
+        for key in [&user_key, &pass_key] {
+            if self.given(key) {
+                self.conflict(
+                    key,
+                    "the SOCKS dial sends no credentials; the proxy must accept an unauthenticated connection",
+                );
+            }
         }
         Some(Socks {
             endpoint,
@@ -798,6 +806,8 @@ pub fn read_ban_file(path: &Path) -> Result<Vec<Ban>, Diagnostic> {
     Ok(bans)
 }
 
+/// A ban names a host or an IPv4 subnet; the ban table is keyed by IP, so
+/// an onion line is refused rather than read and never applied.
 fn parse_ban(line: &str) -> Option<Ban> {
     if let Some((ip, prefix)) = line.split_once('/') {
         let ip: Ipv4Addr = ip.parse().ok()?;
@@ -808,7 +818,7 @@ fn parse_ban(line: &str) -> Option<Ban> {
         return Some(Ban::Host(ip));
     }
     match shekyl_options::Kind::PeerEndpoint(shekyl_options::PeerRule::Any).parse_text(line) {
-        Ok(Value::Peer(p)) => Some(Ban::Peer(p)),
+        Ok(Value::Peer(p @ PeerEndpoint::Ip(_))) => Some(Ban::Peer(p)),
         _ => None,
     }
 }
@@ -1011,29 +1021,48 @@ mod tests {
         ));
         assert_eq!(
             d,
-            vec![(Code::ValueRequires, "clearnet-socks-username".into())]
+            vec![(Code::ValueConflict, "clearnet-socks-username".into())],
+            "one reason: the dial sends no credentials"
         );
         let d = codes(build_from(&[], "clearnet-socks-password = \"p\"\n"));
         assert_eq!(
             d,
             vec![(Code::ValueConflict, "clearnet-socks-password".into())]
         );
-        let c = build_from(
+        // Both given: well-formed, and refused all the same, because the
+        // dial sends no credentials; the refusal names each key.
+        let d = codes(build_from(
+            &["--clearnet-socks", "127.0.0.1:1080"],
+            "clearnet-socks-username = \"u\"\nclearnet-socks-password = \"hunter2\"\n",
+        ));
+        assert_eq!(
+            d,
+            vec![
+                (Code::ValueConflict, "clearnet-socks-username".into()),
+                (Code::ValueConflict, "clearnet-socks-password".into())
+            ]
+        );
+        let d = build_from(
             &["--clearnet-socks", "127.0.0.1:1080"],
             "clearnet-socks-username = \"u\"\nclearnet-socks-password = \"hunter2\"\n",
         )
-        .unwrap();
-        let Clearnet::On {
-            socks: Some(socks), ..
-        } = c.clearnet
-        else {
-            panic!("no socks")
-        };
-        assert_eq!(socks.password.as_ref().map(Secret::expose), Some("hunter2"));
+        .unwrap_err();
         assert!(
-            !format!("{socks:?}").contains("hunter2"),
-            "a secret never prints"
+            !format!("{d:?}").contains("hunter2"),
+            "a secret never prints, not even in a refusal"
         );
+        let c = build_from(&["--clearnet-socks", "127.0.0.1:1080"], "").unwrap();
+        assert!(matches!(
+            c.clearnet,
+            Clearnet::On {
+                socks: Some(Socks {
+                    username: None,
+                    password: None,
+                    ..
+                }),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1118,6 +1147,15 @@ mod tests {
         let e = read_ban_file(&p).unwrap_err();
         assert_eq!(e.code, Code::BanFileLine);
         assert_eq!(e.get("line"), Some("2"));
+        // The ban table is keyed by IP: an onion line is refused, not read
+        // and silently never applied.
+        std::fs::write(
+            &p,
+            format!("8.8.8.8\n{}:11021\n", shekyl_onion_v3_hostname()),
+        )
+        .unwrap();
+        let e = read_ban_file(&p).unwrap_err();
+        assert_eq!((e.code, e.get("line")), (Code::BanFileLine, Some("2")));
         let e = read_ban_file(&d.path().join("missing")).unwrap_err();
         assert_eq!(e.code, Code::BanFileUnreadable);
     }

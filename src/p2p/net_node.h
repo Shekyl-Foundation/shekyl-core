@@ -69,42 +69,6 @@ DISABLE_VS_WARNINGS(4355)
 
 namespace nodetool
 {
-  struct proxy
-  {
-    // There is deliberately no covert/"noise" flag here. The configuration-B
-    // deletion removed the channel from configuration entirely; the rationale
-    // lives at the `disable_noise` compatibility shim in net_node.cpp and in
-    // docs/design/DAEMON_RELAY_PRIVACY.md §§25, 29-31, 41.
-    proxy()
-      : max_connections(-1),
-        address(),
-        zone(epee::net_utils::connector_id::tor)
-    {}
-
-    std::int64_t max_connections;
-    net::socks::endpoint address;
-    epee::net_utils::connector_id zone;
-  };
-
-  struct anonymous_inbound
-  {
-    anonymous_inbound()
-      : max_connections(-1),
-        local_ip(),
-        local_port(),
-        our_address(),
-        default_remote()
-    {}
-
-    std::int64_t max_connections;
-    std::string local_ip;
-    std::string local_port;
-    epee::net_utils::network_address our_address;
-    epee::net_utils::network_address default_remote;
-  };
-
-  std::optional<std::vector<proxy>> get_proxies(const boost::program_options::variables_map& vm);
-  std::optional<std::vector<anonymous_inbound>> get_anonymous_inbounds(const boost::program_options::variables_map& vm);
 
   // There is no announced node identifier of any kind. The eclipse-oracle
   // doctrine that once pinned the anon-zone `peer_id` sentinel is preserved
@@ -160,56 +124,20 @@ namespace nodetool
 
     struct network_zone
     {
-      network_zone()
-        : m_outbound(false),
-          m_net_server(),
-          m_bind_ip(),
-          m_bind_ipv6_address(),
-          m_port(),
-          m_port_ipv6(),
-          m_our_address(),
-          m_config{},
-          m_proxy_address(),
-          m_can_announce(false)
+      network_zone() : m_net_server(),
+          m_config{}
       {
         set_config_defaults();
       }
 
-      network_zone(boost::asio::io_context& public_service)
-        : m_outbound(false),
-          m_net_server(public_service),
-          m_bind_ip(),
-          m_bind_ipv6_address(),
-          m_port(),
-          m_port_ipv6(),
-          m_our_address(),
-          m_config{},
-          m_proxy_address(),
-          m_can_announce(false)
+      network_zone(boost::asio::io_context& public_service) : m_net_server(public_service),
+          m_config{}
       {
         set_config_defaults();
       }
 
-      //! This zone dials out: the clearnet zone, a `--tx-proxy` zone, or the
-      //! zone the managed Tor supplies SOCKS for. The dial itself is Rust's.
-      bool m_outbound;
       net_server m_net_server;
-      std::string m_bind_ip;
-      std::string m_bind_ipv6_address;
-      std::string m_port;
-      std::string m_port_ipv6;
-      epee::net_utils::network_address m_our_address; // in anonymity networks
       config m_config;
-      net::socks::endpoint m_proxy_address;
-      // This zone may announce an inbound endpoint (public port-only advert
-      // or the zone's self-address). Renamed from m_can_pingback: the
-      // back-ping that once verified announcements is deleted (PWD-B10);
-      // the flag's surviving job is the announcement itself.
-      bool m_can_announce;
-      //! True when an operator set this zone's inbound cap, including zero.
-      //! False leaves public inbound to `apply_inbound_ceiling` and leaves
-      //! an anonymity zone with no zone cap of its own.
-      bool m_inbound_cap_explicit = false;
 
     private:
       void set_config_defaults() noexcept
@@ -224,12 +152,6 @@ namespace nodetool
       }
     };
 
-    enum igd_t
-    {
-      no_igd,
-      igd,
-      delayed_igd,
-    };
 
   public:
     //! §55: stem-outcome tallies across every zone, as one JSON array.
@@ -239,10 +161,6 @@ namespace nodetool
 
     node_server(t_payload_net_handler& payload_handler)
       : m_payload_handler(payload_handler),
-        m_listening_port(0),
-        m_listening_port_ipv6(0),
-        m_external_port(0),
-        m_igd(no_igd),
         m_offline(false),
         m_network_id(),
         m_started_at(std::chrono::steady_clock::now())
@@ -253,26 +171,15 @@ namespace nodetool
 
     bool run();
     network_zone& add_zone(epee::net_utils::connector_id zone);
-    bool init(const boost::program_options::variables_map& vm, const std::string& proxy = {});
+    bool init(const boost::program_options::variables_map& vm);
     bool deinit();
     bool send_stop_signal();
-    uint32_t get_this_peer_port(){return m_listening_port;}
     t_payload_net_handler& get_payload_object();
 
     // debug functions
     bool log_connections();
 
 
-    uint32_t get_announced_port(epee::net_utils::connector_id zone) const;
-    //! \return This node's own dialable address on `zone`, or its placeholder —
-    //! the derived advertisement's observable (there is no dedicated flag,
-    //! and no identifier, so the announced value is the only witness). On an
-    //! anonymity zone run dialer-only it is the zone's CONSTANT unknown
-    //! sentinel: equal for every node, carrying no entropy, linking nothing.
-    epee::net_utils::network_address get_announced_address(epee::net_utils::connector_id zone) const;
-    //! Advertise a managed-tor publish result. A failed publish or an
-    //! unparseable service id leaves `zone.m_our_address` unchanged.
-    void apply_managed_onion_publish(network_zone& zone, int publish_rc, const char* service_id, std::uint16_t virtual_port);
     //! True when `address` is banned with no deadline.
     bool host_ban_is_permanent(const epee::net_utils::network_address &address) const;
     //! Bans still in force. `permanent` is 1 when the row has no deadline.
@@ -284,16 +191,6 @@ namespace nodetool
     //! cross-zone correlation oracle.
     bool detect_self_handshake(epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce);
 
-    void change_max_out_public_peers(size_t count);
-    uint32_t get_max_out_public_peers() const;
-    void change_max_in_public_peers(size_t count);
-    uint32_t get_max_in_public_peers() const;
-    //! When `--in-peers` was left unset, derive the public inbound ceiling
-    //! from the process descriptor budget and store it. `reserved_beyond_p2p`
-    //! is descriptors another subsystem has promised but not opened. An
-    //! explicit cap is left as stored. The probe counts descriptors open at
-    //! the call, so the daemon calls this again after RPC listeners bind.
-    bool apply_inbound_ceiling(std::uint64_t reserved_beyond_p2p);
     virtual bool block_host(epee::net_utils::network_address address, time_t seconds = P2P_IP_BLOCKTIME, bool add_only = false);
     virtual bool unblock_host(const epee::net_utils::network_address &address);
     virtual bool block_subnet(const epee::net_utils::ipv4_network_subnet &subnet, time_t seconds = P2P_IP_BLOCKTIME);
@@ -307,8 +204,6 @@ namespace nodetool
     virtual std::map<epee::net_utils::ipv4_network_subnet, time_t> get_blocked_subnets();
 
   private:
-    bool islimitup=false;
-    bool islimitdown=false;
 
     CHAIN_LEVIN_INVOKE_MAP2(p2p_connection_context); //move levin_commands_handler interface invoke(...) callbacks into invoke map
     CHAIN_LEVIN_NOTIFY_MAP2(p2p_connection_context); //move levin_commands_handler interface notify(...) callbacks into nothing
@@ -356,22 +251,6 @@ namespace nodetool
     bool handle_command_line(
         const boost::program_options::variables_map& vm
       );
-    //! PWD-E7 default posture: spawn a managed pinned tor, publish an
-    //! ephemeral per-boot onion, and wire the tor zone (inbound bind +
-    //! outbound SOCKS). Yields (no-op) when the operator configured the tor
-    //! zone themselves, opted out, is offline, or no pinned tor binary is
-    //! installed; a start failure logs loudly and continues with no tor zone
-    //! (ruled: never aborts the daemon). A bind failure of the loopback
-    //! forward listener erases the zone it inserted — leaving it would
-    //! fail-close originated txs onto a dead overlay. Called from init()
-    //! after m_config_folder is final and before zone iteration begins.
-    void add_ephemeral_tor_zone(const boost::program_options::variables_map& vm);
-    //! Idle-loop sweep for the ephemeral posture: on the alive->dead edge of
-    //! the managed tor, log ONCE that overlay inbound is gone for this boot
-    //! and that originated transactions now fail closed on the tor zone
-    //! (anonymity-zone selection deliberately never falls back to clearnet).
-    //! Per PWD-E7 there is no respawn; restart mints a new address.
-    bool check_ephemeral_tor_liveness();
     bool idle_worker();
     bool handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context);
     bool get_local_node_data(epee::net_utils::connector_id zone_type, basic_node_data& node_data, const network_zone& zone) const;
@@ -380,28 +259,7 @@ namespace nodetool
     bool peer_sync_idle_maker();
     bool do_peer_timed_sync(const epee::net_utils::connection_context_base& context);
 
-    void add_upnp_port_mapping_impl(uint32_t port, bool ipv6=false);
-    void add_upnp_port_mapping_v4(uint32_t port);
-    void add_upnp_port_mapping_v6(uint32_t port);
-    void add_upnp_port_mapping(uint32_t port, bool ipv4=true, bool ipv6=false);
-    void delete_upnp_port_mapping_impl(uint32_t port, bool ipv6=false);
-    void delete_upnp_port_mapping_v4(uint32_t port);
-    void delete_upnp_port_mapping_v6(uint32_t port);
-    void delete_upnp_port_mapping(uint32_t port);
     bool try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f);
-    template <class Container>
-    bool parse_peers_and_add_to_container(const boost::program_options::variables_map& vm, const command_line::arg_descriptor<std::vector<std::string> > & arg, Container& container);
-
-    bool set_max_out_peers(network_zone& zone, int64_t max);
-    bool set_max_in_peers(network_zone& zone, int64_t max);
-    //! Outbound caps on every zone, plus explicit inbound caps on zones
-    //! other than public, plus `reserved_beyond_p2p`.
-    std::uint64_t descriptor_reservations(std::uint64_t reserved_beyond_p2p) const;
-    bool set_tos_flag(const boost::program_options::variables_map& vm, int limit);
-
-    bool set_rate_up_limit(const boost::program_options::variables_map& vm, int64_t limit);
-    bool set_rate_down_limit(const boost::program_options::variables_map& vm, int64_t limit);
-    bool set_rate_limit(const boost::program_options::variables_map& vm, int64_t limit);
 
     size_t get_incoming_connections_count();
     size_t get_incoming_connections_count(epee::net_utils::connector_id connector);
@@ -421,16 +279,8 @@ namespace nodetool
   public:
 
   private:
-    std::string m_config_folder;
 
-    //! 0 until bind.
-    uint32_t m_listening_port{0};
-    uint32_t m_listening_port_ipv6{0};
-    uint32_t m_external_port{0};
-    igd_t m_igd;
     bool m_offline;
-    bool m_use_ipv6;
-    bool m_require_ipv4;
     //critical_section m_connections_lock;
     //connections_indexed_container m_connections;
 
@@ -440,20 +290,9 @@ namespace nodetool
 
     epee::math_helper::once_a_time_seconds<P2P_DEFAULT_HANDSHAKE_INTERVAL> m_peer_handshake_idle_maker_interval;
     epee::math_helper::once_a_time_seconds<3600, false> m_incoming_connections_interval;
-    epee::math_helper::once_a_time_seconds<60> m_ephemeral_tor_liveness_interval;
-    //! True while this boot's managed ephemeral tor is believed alive (set at
-    //! a successful start in add_ephemeral_tor_zone; cleared by the liveness
-    //! sweep on the death edge so the loss is logged exactly once).
-    bool m_ephemeral_tor_alive = false;
-    //! The published per-boot service id (56 base32 chars, no ".onion") --
-    //! empty when the posture is inactive or degraded to outbound-only.
-    std::string m_ephemeral_tor_service_id;
-
-    std::vector<epee::net_utils::network_address> m_exclusive_peers;
-    std::vector<nodetool::peerlist_entry> m_command_line_peers;
 
 
-    shekyl_inbound_ceiling transport_ceiling() const;
+
 
 
     /* A `std::map` provides constant iterators and key/value pointers even with
@@ -474,46 +313,14 @@ namespace nodetool
     //! An inbound count is unreadable without the window it was observed over:
     //! zero inbound after 40 seconds says nothing, zero after six hours does.
     std::chrono::steady_clock::time_point m_started_at;
-    //! What the last `apply_inbound_ceiling` reserved beyond p2p's own
-    //! sockets (the RPC connection budget). Kept so a re-derive triggered by
-    //! a p2p-side change does not have to rediscover it.
-    std::uint64_t m_reserved_beyond_p2p = 0;
-    //! Last decision `apply_inbound_ceiling` announced, so a second call
-    //! with the same result does not repeat the warning. Zero is not a kind.
-    std::uint32_t m_applied_ceiling_kind = 0;
-    std::uint32_t m_applied_ceiling_value = 0;
     cryptonote::network_type m_nettype;
   };
 
-    extern const command_line::arg_descriptor<std::string> arg_p2p_bind_ip;
-    extern const command_line::arg_descriptor<std::string> arg_p2p_bind_ipv6_address;
-    extern const command_line::arg_descriptor<std::string, false, true, 2> arg_p2p_bind_port;
-    extern const command_line::arg_descriptor<std::string, false, true, 2> arg_p2p_bind_port_ipv6;
-    extern const command_line::arg_descriptor<bool>        arg_p2p_use_ipv6;
-    extern const command_line::arg_descriptor<bool>        arg_p2p_ignore_ipv4;
-    extern const command_line::arg_descriptor<uint32_t>    arg_p2p_external_port;
-    extern const command_line::arg_descriptor<bool>        arg_p2p_allow_local_ip;
-    extern const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_peer;
-    extern const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_exclusive_node;
-    extern const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy;
-    extern const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound;
-    extern const command_line::arg_descriptor<bool> arg_no_ephemeral_tor;
-    extern const command_line::arg_descriptor<bool> arg_p2p_disclose_early;
-    extern const command_line::arg_descriptor<std::string> arg_ban_list;
     extern const command_line::arg_descriptor<bool> arg_no_sync;
 
-    extern const command_line::arg_descriptor<bool>        arg_no_igd;
-    extern const command_line::arg_descriptor<std::string> arg_igd;
     extern const command_line::arg_descriptor<bool>        arg_offline;
-    extern const command_line::arg_descriptor<int64_t>     arg_out_peers;
-    extern const command_line::arg_descriptor<int64_t>     arg_in_peers;
-    extern const command_line::arg_descriptor<int> arg_tos_flag;
 
-    extern const command_line::arg_descriptor<int64_t> arg_limit_rate_up;
-    extern const command_line::arg_descriptor<int64_t> arg_limit_rate_down;
-    extern const command_line::arg_descriptor<int64_t> arg_limit_rate;
     extern const command_line::arg_descriptor<bool> arg_pad_transactions;
-    extern const command_line::arg_descriptor<bool> arg_clearnet_transport_encrypt;
 }
 
 POP_WARNINGS

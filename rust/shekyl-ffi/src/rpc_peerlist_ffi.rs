@@ -18,7 +18,7 @@
 //! nothing: no count of zero and no empty listing, either of which would
 //! read as a running node with no peers. The state is read from what the
 //! p2p layer recorded when it read `--offline`
-//! ([`shekyl_p2p_record_offline`]), never inferred from the dialer's
+//! ([`record_offline`]), never inferred from the dialer's
 //! absence: an online daemon with no dialer is a fault, and says so.
 
 use std::ffi::c_void;
@@ -63,13 +63,10 @@ pub(crate) fn p2p_mode() -> P2pMode {
     }
 }
 
-/// Record whether this daemon was started offline, and return it. The
-/// p2p layer calls this where it reads `--offline`, so the record is the
-/// configuration itself.
-#[no_mangle]
-pub extern "C" fn shekyl_p2p_record_offline(offline: bool) -> bool {
+/// Records whether this daemon runs offline (both connectors off, IG-Q3),
+/// from the daemon's Rust `main()`: the record is the configuration itself.
+pub fn record_offline(offline: bool) {
     P2P_MODE.store(if offline { MODE_OFF } else { MODE_ON }, Ordering::Release);
-    offline
 }
 
 /// Whether this daemon runs P2P, for the RPC methods that read no peer
@@ -265,6 +262,7 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
 
 #[cfg(test)]
 mod tests {
+    use crate::seam_ffi::shekyl_seam_set_ceiling;
     use std::ffi::c_void;
     use std::net::Ipv4Addr;
     use std::sync::PoisonError;
@@ -297,18 +295,13 @@ mod tests {
             held: 0,
         };
         let mut ctx = 0u8;
-        let bound = unsafe {
-            shekyl_seam_bind(
-                (&raw mut ctx).cast::<c_void>(),
-                Some(no_post),
-                &raw const ceiling,
-            )
-        };
+        let bound = unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) };
         assert_eq!(bound, 0);
+        assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
     }
 
     fn unbind() {
-        unsafe { shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null()) };
+        unsafe { shekyl_seam_bind(std::ptr::null_mut(), None) };
     }
 
     fn v4(n: u8) -> NetworkAddress {
@@ -369,7 +362,7 @@ mod tests {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         unbind();
-        assert!(shekyl_p2p_record_offline(true));
+        record_offline(true);
         let sentinel_rows = std::ptr::dangling::<ShekylRpcPeerFacts>();
         let sentinel_owner = std::ptr::dangling_mut::<u8>().cast::<c_void>();
         let mut rows = sentinel_rows;
@@ -403,7 +396,7 @@ mod tests {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         unbind();
-        assert!(!shekyl_p2p_record_offline(false));
+        record_offline(false);
         let mut rows: *const ShekylRpcPeerFacts = std::ptr::null();
         let mut len = 0usize;
         let mut owner: *mut c_void = std::ptr::null_mut();
@@ -439,7 +432,7 @@ mod tests {
         let _bind = seam_bind_lock()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        shekyl_p2p_record_offline(false);
+        record_offline(false);
         unbind();
         bind();
         let dialer = dialer().expect("built at the bind");

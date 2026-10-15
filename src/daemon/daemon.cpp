@@ -113,8 +113,7 @@ struct t_internals {
 
     // === p2p ===
     MGINFO("Initializing p2p server...");
-    if (!p2p.init(vm,
-        command_line::get_arg(vm, daemon_args::arg_proxy)))
+    if (!p2p.init(vm))
     {
       throw std::runtime_error("Failed to initialize p2p server.");
     }
@@ -126,13 +125,8 @@ struct t_internals {
 
     // The one RPC handle. Rust binds and serves the RPC section at the
     // remnant's one start call in run() (DAEMON_CONFIG_CUTOVER.md §2.3);
-    // this object is the core it serves, and reads one option until the
-    // inbound ceiling is Rust's.
+    // this object is the core it serves and reads no option.
     rpc.reset(new cryptonote::core_rpc_server{core, p2p});
-    if (!rpc->init(vm))
-    {
-      throw std::runtime_error("Failed to initialize the RPC server.");
-    }
   }
 
   ~t_internals()
@@ -243,15 +237,6 @@ bool Daemon::run(bool interactive)
     // RPC listeners are open now, and each server has a connection budget
     // that is not yet open. Re-derive so both are inside the ceiling.
     // `init` already derived once, before these sockets existed.
-    std::uint64_t rpc_reserved = 0;
-    {
-      const std::uint64_t cap = static_cast<std::uint64_t>(mp_internals->rpc->get_rpc_max_connections());
-      if (rpc_reserved > std::numeric_limits<std::uint64_t>::max() - cap)
-        rpc_reserved = std::numeric_limits<std::uint64_t>::max();
-      else
-        rpc_reserved += cap;
-    }
-    mp_internals->p2p.apply_inbound_ceiling(rpc_reserved);
 
     // Every daemon runtime is on the ledger by here: the transport pool
     // is built at bind, Tor control at its start, and the RPC pools just

@@ -182,8 +182,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/set_log_categories",                on_set_log_categories,           COMMAND_RPC_SET_LOG_CATEGORIES),
         DJSON("/stop_daemon",                       on_stop_daemon,                  COMMAND_RPC_STOP_DAEMON),
         DJSON("/set_limit",                         on_set_limit,                    COMMAND_RPC_SET_LIMIT),
-        DJSON("/out_peers",                         on_out_peers,                    COMMAND_RPC_OUT_PEERS),
-        DJSON("/in_peers",                          on_in_peers,                     COMMAND_RPC_IN_PEERS),
         DJSON("/pop_blocks",                        on_pop_blocks,                   COMMAND_RPC_POP_BLOCKS),
     };
     return t;

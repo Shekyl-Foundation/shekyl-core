@@ -349,25 +349,6 @@ TEST(ban, limit)
   ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
 }
 
-TEST(node_server, managed_onion_is_advertised_only_after_publish)
-{
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-  cprotocol.set_p2p_endpoint(&server);
-
-  auto& zone = server.add_zone(epee::net_utils::connector_id::tor);
-  zone.m_config.m_net_config.max_in_connection_count = 8;
-  const char* service = "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd";
-  server.apply_managed_onion_publish(zone, 1, service, 18080);
-  ASSERT_EQ(server.get_announced_address(epee::net_utils::connector_id::tor).host_str(),
-    net::tor_address::unknown().host_str());
-
-  server.apply_managed_onion_publish(zone, SHEKYL_DAEMON_TOR_OK, service, 18080);
-  const auto expected = MONERO_UNWRAP(net::tor_address::make(std::string(service) + ".onion:18080"));
-  ASSERT_EQ(server.get_announced_address(epee::net_utils::connector_id::tor).host_str(), expected.host_str());
-}
-
 namespace
 {
   // A private --data-dir for a test that runs node_server::init. The
@@ -473,108 +454,6 @@ TEST(ban, subnet)
   ASSERT_TRUE(server.get_blocked_subnets().size() == 0);
 }
 
-TEST(ban, file_entries_are_permanent)
-{
-  [[maybe_unused]] ban_isolate isolate;
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-
-  const auto node_dir = create_node_dir();
-  ASSERT_TRUE(!node_dir.empty());
-  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
-      boost::filesystem::remove_all(node_dir);
-    });
-  const auto ban_path = node_dir / "banlist.txt";
-  ASSERT_TRUE(epee::file_io_utils::save_string_to_file(ban_path.string(), "1.2.3.4\n"));
-
-  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {"--ban-list", ban_path.string()})));
-  const auto rows = server.ban_list();
-  ASSERT_EQ(rows.size(), 1u);
-  ASSERT_EQ(rows[0].permanent, 1);
-  ASSERT_EQ(rows[0].remaining_ns, 0u);
-  ASSERT_TRUE(server.host_ban_is_permanent(MAKE_IPV4_ADDRESS(1,2,3,4)));
-}
-
-TEST(node_server, operator_onion_is_advertised)
-{
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-
-  const auto node_dir = create_node_dir();
-  ASSERT_TRUE(!node_dir.empty());
-  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
-      boost::filesystem::remove_all(node_dir);
-    });
-
-  const std::string onion =
-    "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion";
-  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {
-    // The count is omitted: an explicit count below the embargo floor
-    // refuses to start, and the count is not what this test observes.
-    "--tx-proxy", "tor,127.0.0.1:9050",
-    "--anonymous-inbound", onion + ":18080,127.0.0.1:38123,8",
-  })));
-  const auto announced = server.get_announced_address(epee::net_utils::connector_id::tor);
-  ASSERT_EQ(announced.host_str(), onion);
-  ASSERT_EQ(announced.as<net::tor_address>().port(), 18080);
-}
-
-TEST(node_server, exclusive_onion_does_not_require_tx_proxy)
-{
-  // The managed Tor supplies SOCKS after the command line. Refusing here was
-  // the default posture being unable to dial a named onion. A missing pin
-  // degrades inbound; it must not be what rejects the option.
-  const char *saved = std::getenv("SHEKYL_TOR_BINARY");
-  const std::string saved_copy = saved ? saved : std::string{};
-  ASSERT_EQ(::setenv("SHEKYL_TOR_BINARY", "/no/such/shekyl-tor", 1), 0);
-  auto restore = epee::misc_utils::create_scope_leave_handler([&]() {
-    if (saved)
-      ::setenv("SHEKYL_TOR_BINARY", saved_copy.c_str(), 1);
-    else
-      ::unsetenv("SHEKYL_TOR_BINARY");
-  });
-
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-
-  const auto node_dir = create_node_dir();
-  ASSERT_TRUE(!node_dir.empty());
-  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir]() {
-    boost::filesystem::remove_all(node_dir);
-  });
-
-  const std::string onion =
-    "vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion:12021";
-  std::vector<std::string> args{
-    "--data-dir", node_dir.string(),
-    "--p2p-bind-ip", "127.0.0.1",
-    "--p2p-bind-port", "48119",
-    "--no-igd",
-    "--add-exclusive-node", onion,
-  };
-  boost::program_options::options_description options_description{};
-  cryptonote::core::init_options(options_description);
-  Server::init_options(options_description);
-  boost::program_options::variables_map vm;
-  boost::program_options::store(
-    boost::program_options::command_line_parser(args).options(options_description).run(), vm);
-  boost::program_options::notify(vm);
-  ASSERT_TRUE(server.init(vm));
-
-  test_core offline_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> offline_protocol(offline_core, NULL);
-  Server offline(offline_protocol);
-  const auto offline_dir = create_node_dir();
-  ASSERT_TRUE(!offline_dir.empty());
-  auto auto_remove_offline = epee::misc_utils::create_scope_leave_handler([&offline_dir]() {
-    boost::filesystem::remove_all(offline_dir);
-  });
-  ASSERT_FALSE(offline.init(offline_node_vm(offline_dir, {"--add-exclusive-node", onion})));
-}
-
 TEST(ban, ignores_port)
 {
   [[maybe_unused]] ban_isolate isolate;
@@ -594,423 +473,8 @@ TEST(ban, ignores_port)
   ASSERT_FALSE(is_blocked(server,MAKE_IPV4_ADDRESS_PORT(1,2,3,4,6)));
 }
 
-TEST(ban, file_banlist)
-{
-  [[maybe_unused]] ban_isolate isolate;
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-  cprotocol.set_p2p_endpoint(&server);
-
-  const auto node_dir = create_node_dir();
-  ASSERT_TRUE(!node_dir.empty());
-  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
-      boost::filesystem::remove_all(node_dir);
-    });
-
-  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {
-    "--ban-list",
-    (unit_test::data_dir / "node" / "banlist_1.txt").string()
-  })));
-
-  // Test cases (look in the banlist_1.txt file)
-
-  // magicfolk
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(255,255,255,0,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(128,128,128,0,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(150,75,0,0,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(99,98,0,0,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(99,98,0,255,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(99,98,1,0,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(99,98,1,0,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(99,98,255,255,9999)) );
-  EXPECT_FALSE( is_blocked(server, MAKE_IPV4_ADDRESS_PORT(99,99,0,0,9999)) );
-
-  // personal enemies
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(1,2,3,4,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(6,7,8,9,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(1,0,0,7,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(1,0,0,7,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(100,98,1,13,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(100,98,1,0,9999)) );
-  EXPECT_TRUE(  is_blocked(server, MAKE_IPV4_ADDRESS_PORT(100,98,1,255,9999)) );
-  EXPECT_FALSE( is_blocked(server, MAKE_IPV4_ADDRESS_PORT(100,98,2,0,9999)) );
-  EXPECT_FALSE( is_blocked(server, MAKE_IPV4_ADDRESS_PORT(100,98,0,255,9999)) );
-
-  // angel
-  EXPECT_FALSE( is_blocked(server, MAKE_IPV4_ADDRESS_PORT(007,007,007,007,9999)) );
-
-  // random IP
-  EXPECT_FALSE( is_blocked(server, MAKE_IPV4_ADDRESS_PORT(145,036,205,235,9999)) );
-}
-
-TEST(node_server, bind_same_p2p_port)
-{
-  struct test_data_t
-  {
-    test_core pr_core;
-    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
-    std::unique_ptr<Server> server;
-
-    test_data_t(): cprotocol(pr_core, NULL)
-    {
-      server.reset(new Server(cprotocol));
-      cprotocol.set_p2p_endpoint(server.get());
-    }
-  };
-
-  const auto new_node = []() -> std::unique_ptr<test_data_t> {
-    test_data_t *d = new test_data_t;
-    return std::unique_ptr<test_data_t>(d);
-  };
-
-  const auto init = [](const std::unique_ptr<test_data_t>& server, const char* port) -> bool {
-    boost::program_options::options_description desc_options("Command line options");
-    cryptonote::core::init_options(desc_options);
-    Server::init_options(desc_options);
-
-    const char *argv[2] = {nullptr, nullptr};
-    boost::program_options::variables_map vm;
-    boost::program_options::store(boost::program_options::parse_command_line(1, argv, desc_options), vm);
-
-    /*
-    Reason for choosing '127.0.0.2' as the IP:
-
-    A TCP local socket address that has been bound is unavailable for some time after closing, unless the SO_REUSEADDR flag has been set.
-    That's why connections with automatically assigned source port 48080/58080 from previous test blocks the next to bind acceptor
-    so solution is to either set reuse_addr option for each socket in all tests
-    or use ip different from localhost for acceptors in order to not interfere with automatically assigned source endpoints
-
-    Relevant part about REUSEADDR from man:
-    https://www.man7.org/linux/man-pages/man7/ip.7.html
-
-    For Mac OSX, set the following alias, before running the test, or else it will fail:
-    sudo ifconfig lo0 alias 127.0.0.2
-    */
-    vm.find(nodetool::arg_p2p_bind_ip.name)->second   = boost::program_options::variable_value(std::string("127.0.0.2"), false);
-    vm.find(nodetool::arg_p2p_bind_port.name)->second = boost::program_options::variable_value(std::string(port), false);
-
-    boost::program_options::notify(vm);
-
-    return server->server->init(vm);
-  };
-
-  constexpr char port[] = "48080";
-  constexpr char port_another[] = "58080";
-
-  const auto node = new_node();
-  EXPECT_TRUE(init(node, port));
-
-  EXPECT_FALSE(init(new_node(), port));
-  EXPECT_TRUE(init(new_node(), port_another));
-}
-
 namespace nodetool { template class node_server<cryptonote::t_cryptonote_protocol_handler<test_core>>; }
 namespace cryptonote { template class t_cryptonote_protocol_handler<test_core>; }
-
-TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
-{
-  // F-8b: the relay embargo constant (`fluff_return_ms`) is derived from a
-  // fluff first-passage measured at outbound degree 12. A `--tx-proxy` count
-  // below that floor puts the zone's real first passage above the provisioned
-  // value — the embargo would be under-provisioned in the privacy-losing
-  // direction — so the parser must refuse it at startup, not warn and run.
-  const auto parse = [](const char* proxy_arg) {
-    boost::program_options::variables_map vm;
-    boost::program_options::store(
-      boost::program_options::command_line_parser({"--tx-proxy", proxy_arg})
-        .options([]{
-          boost::program_options::options_description options_description{};
-          Server::init_options(options_description);
-          return options_description;
-        }())
-        .run(),
-      vm
-    );
-    return nodetool::get_proxies(vm);
-  };
-
-  const std::int64_t floor_value = shekyl_relay_zone_min_provisioned_out_peers();
-  ASSERT_EQ(12, floor_value) << "the floor must match the degree fluff_return_ms was measured at";
-
-  // The parser carries the count; the floor is enforced where the cap is
-  // set, by the dialer (2026-10-13), so an under-floor count parses and
-  // then refuses init (1..=11 all land in the guarded range; 4 is the
-  // motivating operator practice).
-  const auto under = parse("tor,127.0.0.1:9050,4");
-  ASSERT_TRUE(under.has_value()) << "the parser carries the count";
-  EXPECT_EQ(4, under->front().max_connections);
-  // One server per init: a second init on the same server would refuse the
-  // proxy as listed twice, and pass the under-floor case for the wrong reason.
-  const auto init_with_proxy = [](const char* proxy_arg) -> bool {
-    test_core pr_core;
-    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-    Server server(cprotocol);
-    const auto node_dir = create_node_dir();
-    if (node_dir.empty())
-      return false;
-    auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
-        boost::filesystem::remove_all(node_dir);
-      });
-    return server.init(offline_node_vm(node_dir, {"--tx-proxy", proxy_arg}));
-  };
-  EXPECT_FALSE(init_with_proxy("tor,127.0.0.1:9050,4"))
-    << "an under-floor outbound count must refuse to start";
-  EXPECT_FALSE(init_with_proxy("tor,127.0.0.1:9050,11"))
-    << "one below the floor must still refuse";
-  EXPECT_TRUE(init_with_proxy("tor,127.0.0.1:9050,12"))
-    << "the floor itself is a valid count";
-
-  // At the floor and above: accepted, with the count preserved.
-  const auto at_floor = parse("tor,127.0.0.1:9050,12");
-  ASSERT_TRUE(at_floor.has_value()) << "the floor itself is a valid count";
-  ASSERT_EQ(1u, at_floor->size());
-  EXPECT_EQ(12, at_floor->front().max_connections);
-
-  // Omitted count: the default (-1 -> shekyl_p2p_default_out_peers()) resolves
-  // at or above the floor — today they are EQUAL (12), so "above by
-  // construction" would be false — and must keep parsing. The relation is
-  // asserted, not assumed: if the floor ever rises past the default, the
-  // default configuration itself becomes under-provisioned and this is the
-  // test that says so. Both sides are now Rust-owned constants reached through
-  // the FFI, so this is the one place their *relation* is checked at all.
-  const std::int64_t default_out_peers =
-    static_cast<std::int64_t>(shekyl_p2p_default_out_peers());
-  EXPECT_LE(floor_value, default_out_peers)
-    << "the default outbound count must satisfy the floor the embargo derivation assumes";
-  const auto omitted = parse("tor,127.0.0.1:9050");
-  ASSERT_TRUE(omitted.has_value());
-  EXPECT_EQ(-1, omitted->front().max_connections);
-}
-
-TEST(node_server, anonymity_zone_announces_the_constant_unknown_address)
-{
-  // Successor of the Q12-R-W3 sentinel-peer_id pin, for the identifier-free
-  // handshake (PWD-I1): nothing announced on an anonymity zone may carry
-  // entropy. The handshake carries no address since 2026-10-09; what this
-  // node would announce is `get_announced_address`, which reaches peers only
-  // as one member of the disclosure sample. A dialer-only tor zone's value
-  // there must be the zone's CONSTANT unknown sentinel — equal for every
-  // node, linking nothing. A per-node value (an onion, a random address)
-  // would correlate this node's hidden-service activity with its clearnet
-  // identity exactly as a random peer_id did.
-  struct test_data_t
-  {
-    test_core pr_core;
-    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
-    std::unique_ptr<Server> server;
-
-    test_data_t(): cprotocol(pr_core, NULL)
-    {
-      server.reset(new Server(cprotocol));
-      cprotocol.set_p2p_endpoint(server.get());
-    }
-  };
-
-  test_data_t data;
-
-  boost::program_options::options_description desc_options("Command line options");
-  cryptonote::core::init_options(desc_options);
-  Server::init_options(desc_options);
-
-  const char* argv[2] = {nullptr, nullptr};
-  boost::program_options::variables_map vm;
-  boost::program_options::store(
-    boost::program_options::parse_command_line(1, argv, desc_options), vm);
-
-  // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
-  vm.find(nodetool::arg_p2p_bind_ip.name)->second =
-    boost::program_options::variable_value(std::string("127.0.0.2"), false);
-  vm.find(nodetool::arg_p2p_bind_port.name)->second =
-    boost::program_options::variable_value(std::string("48085"), false);
-  // 12 outbound connections: the F-8b floor, so the zone is accepted.
-  //
-  // `find` is safe on an option absent from the command line because
-  // `make_semantic` gives every vector-valued arg_descriptor an empty
-  // `default_value` (src/common/command_line.h), so `store` inserts it into the
-  // map regardless. Were that not so this would dereference `end()` rather than
-  // fail an assertion — hence naming it here rather than relying on it quietly.
-  vm.find(nodetool::arg_tx_proxy.name)->second =
-    boost::program_options::variable_value(
-      std::vector<std::string>{"tor,127.0.0.1:9050,12"}, false);
-
-  boost::program_options::notify(vm);
-  ASSERT_TRUE(data.server->init(vm));
-
-  EXPECT_EQ(epee::net_utils::network_address{net::tor_address::unknown()},
-            data.server->get_announced_address(epee::net_utils::connector_id::tor))
-    << "a dialer-only anonymity zone must announce the constant unknown "
-       "sentinel: any per-node value correlates the hidden service with the "
-       "node's other identities";
-
-  // Negative control, and the port-only public advert pinned at unit level:
-  // the public zone announces ipv4 with the HOST HALF ZEROED — only the
-  // port is the claim — so the two zones' announcements must differ and the
-  // public one must carry no host.
-  const auto pub = data.server->get_announced_address(epee::net_utils::connector_id::clearnet);
-  ASSERT_EQ(epee::net_utils::ipv4_network_address::get_type_id(), pub.get_type_id());
-  EXPECT_EQ(0u, pub.as<epee::net_utils::ipv4_network_address>().ip())
-    << "the public advert is port-only; the host half must stay zeroed";
-  EXPECT_EQ(data.server->get_announced_port(epee::net_utils::connector_id::clearnet), pub.port());
-
-  data.server->deinit();
-}
-
-// `--add-peer` is an operator-supplied address this node has NEVER dialled, so
-// it is a candidate, not a verified peer. It must land in gray.
-//
-// This is tested at the node_server level on purpose. The peerlist-manager
-// tests construct `peerlist_types` or call the append methods directly, so
-// reverting the routing line to `append_with_peer_white` leaves every one of
-// them green — they cannot see which method the option path calls. The
-// security property here is about the CALL SITE, so the test has to start
-// where the operator's input does.
-TEST(node_server, add_peer_enters_gray_not_white)
-{
-  struct test_data_t
-  {
-    test_core pr_core;
-    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
-    std::unique_ptr<Server> server;
-
-    test_data_t(): cprotocol(pr_core, NULL)
-    {
-      server.reset(new Server(cprotocol));
-      cprotocol.set_p2p_endpoint(server.get());
-    }
-  };
-
-  test_data_t data;
-
-  boost::program_options::options_description desc_options("Command line options");
-  cryptonote::core::init_options(desc_options);
-  Server::init_options(desc_options);
-
-  const char* argv[2] = {nullptr, nullptr};
-  boost::program_options::variables_map vm;
-  boost::program_options::store(
-    boost::program_options::parse_command_line(1, argv, desc_options), vm);
-
-  // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
-  vm.find(nodetool::arg_p2p_bind_ip.name)->second =
-    boost::program_options::variable_value(std::string("127.0.0.2"), false);
-  vm.find(nodetool::arg_p2p_bind_port.name)->second =
-    boost::program_options::variable_value(std::string("48085"), false);
-  vm.find(nodetool::arg_p2p_add_peer.name)->second =
-    boost::program_options::variable_value(
-      std::vector<std::string>{"203.0.113.9:18080"}, false);
-
-  boost::program_options::notify(vm);
-  ASSERT_TRUE(data.server->init(vm));
-
-  // RFC 5737 documentation range, NOT loopback and NOT RFC1918: an
-  // operator-named address is admitted whatever its range, but a global
-  // one keeps this test independent of --allow-local-ip. The lists are the
-  // Rust dialer's; the listing export reads them, white then gray. The
-  // address is pushed before the first listen builds the dialer, so this
-  // also pins that an early push is held for the build.
-  const shekyl_rpc_peer_facts* rows = nullptr;
-  std::size_t len = 0;
-  void* owner = nullptr;
-  ASSERT_EQ(shekyl_rpc_peer_list(0, &rows, &len, &owner), 0);
-  bool in_gray = false;
-  bool in_white = false;
-  for (std::size_t i = 0; i < len; ++i)
-  {
-    const std::string host(rows[i].host, rows[i].host_len);
-    if (host != "203.0.113.9")
-      continue;
-    (rows[i].white ? in_white : in_gray) = true;
-  }
-  shekyl_rpc_peer_list_free(owner);
-
-  // The property: it is a candidate.
-  EXPECT_TRUE(in_gray) << "--add-peer must enter the gray list";
-  // The limb that actually pins the routing. Without it a change that put the
-  // entry in BOTH lists, or in white only, would still satisfy the assertion
-  // above or leave it unexercised -- and white is the list that is dialled
-  // preferentially and disclosed onward.
-  EXPECT_FALSE(in_white)
-    << "--add-peer must NOT enter the white list: it has never been dialled, "
-       "and white entries are disclosed to peers";
-
-  data.server->deinit();
-}
-
-TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
-{
-  // F-8b, the public-zone half: `--tx-proxy` counts are floored at the parser
-  // (test above), but the same outbound-degree quantity is also set by
-  // `--out-peers` at init and by the `out_peers` console/RPC command at
-  // runtime. The floor lives in the dialer, which both paths push the cap
-  // to (2026-10-13): init refuses to start, and the runtime path refuses
-  // the request and leaves the cap as it was — otherwise a NAT'd operator
-  // at `--out-peers 2` runs a fluff degree far below any point
-  // `fluff_return_ms` was measured at and the embargo is under-provisioned
-  // in the privacy-losing direction.
-  struct test_data_t
-  {
-    test_core pr_core;
-    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
-    std::unique_ptr<Server> server;
-
-    test_data_t(): cprotocol(pr_core, NULL)
-    {
-      server.reset(new Server(cprotocol));
-      cprotocol.set_p2p_endpoint(server.get());
-    }
-  };
-
-  const auto init_with_out_peers = [](test_data_t& d, const std::int64_t out_peers) -> bool {
-    boost::program_options::options_description desc_options("Command line options");
-    cryptonote::core::init_options(desc_options);
-    Server::init_options(desc_options);
-
-    const char* argv[2] = {nullptr, nullptr};
-    boost::program_options::variables_map vm;
-    boost::program_options::store(
-      boost::program_options::parse_command_line(1, argv, desc_options), vm);
-
-    // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
-    vm.find(nodetool::arg_p2p_bind_ip.name)->second =
-      boost::program_options::variable_value(std::string("127.0.0.2"), false);
-    vm.find(nodetool::arg_p2p_bind_port.name)->second =
-      boost::program_options::variable_value(std::string("48083"), false);
-    vm.find(nodetool::arg_out_peers.name)->second =
-      boost::program_options::variable_value(out_peers, false);
-
-    boost::program_options::notify(vm);
-    return d.server->init(vm);
-  };
-
-  // Init with an under-floor cap: refused at startup.
-  {
-    test_data_t data;
-    EXPECT_FALSE(init_with_out_peers(data, 4))
-      << "--out-peers below the floor must refuse to start, exactly as --tx-proxy does";
-  }
-
-  // Init at the floor: accepted; then the runtime path clamps an under-floor
-  // request and passes 0 (full outbound stop) and above-floor values through.
-  {
-    test_data_t data;
-    ASSERT_TRUE(init_with_out_peers(data, 12));
-    EXPECT_EQ(12u, data.server->get_max_out_public_peers());
-
-    data.server->change_max_out_public_peers(4);
-    EXPECT_EQ(12u, data.server->get_max_out_public_peers())
-      << "a runtime under-floor request is refused and the cap is unchanged";
-
-    data.server->change_max_out_public_peers(0);
-    EXPECT_EQ(0u, data.server->get_max_out_public_peers())
-      << "0 (no outbound at all) stays legal — loud isolation, not quiet degradation";
-
-    data.server->change_max_out_public_peers(24);
-    EXPECT_EQ(24u, data.server->get_max_out_public_peers());
-
-    data.server->deinit();
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Anonymity-zone address keying (fix/anon-zone-address-keying)
@@ -1467,9 +931,7 @@ namespace
   void bind_harness_hub()
   {
     static int ctx = 0;
-    shekyl_inbound_ceiling ceiling{};
-    shekyl_inbound_ceiling_resolve(0, 0, &ceiling);
-    shekyl_seam_bind(&ctx, arm_harness_post, &ceiling);
+    shekyl_seam_bind(&ctx, arm_harness_post);
     shekyl_seam_install_loopback();
   }
 
@@ -1514,7 +976,7 @@ namespace
       }
       // The relay puppet has no hub. Leaving this one bound would make
       // its sessions look absent. The zone's next listen installs its own.
-      shekyl_seam_bind(nullptr, nullptr, nullptr);
+      shekyl_seam_bind(nullptr, nullptr);
     }
 
     cryptonote::cryptonote_connection_context &ctx() { return endpoint.conns.front(); }
@@ -1567,7 +1029,7 @@ namespace
         shekyl_seam_close(socket_id);
         shekyl_seam_reap(socket_id);
       }
-      shekyl_seam_bind(nullptr, nullptr, nullptr);
+      shekyl_seam_bind(nullptr, nullptr);
     }
 
     bool receive(const std::vector<nodetool::peerlist_entry>& peers) const
@@ -1763,196 +1225,31 @@ TEST(tx_ingress, an_unsynchronised_node_ignores_the_batch)
   EXPECT_TRUE(h.endpoint.dropped.empty());
 }
 
-// The endpoint advertisement is DERIVED: no dedicated flag decides it, so the
-// only witness is the announced value itself. Operator influence remains and is
-// exercised below -- `--in-peers 0` suppresses the announcement BY DERIVATION,
-// which is the supported control and the second limb of this test.
-//
-// The middle limb is the defect this replaced. `check_incoming_connections`
-// has always treated "no inbound accepted" as "not advertising"; the
-// announcement site asked only whether `--hide-my-port` was set, so a node run
-// with `--in-peers 0` refused every inbound connection and still announced a
-// port to attract them. Nothing in the tree observed that, which is why the
-// two sites could diverge silently.
-TEST(node_server, announced_port_is_derived_from_listener_and_zone)
-{
-  struct test_data_t
-  {
-    test_core pr_core;
-    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
-    std::unique_ptr<Server> server;
-    test_data_t(): cprotocol(pr_core, NULL)
-    {
-      server.reset(new Server(cprotocol));
-      cprotocol.set_p2p_endpoint(server.get());
-    }
-  };
-
-  const auto announced = [](const std::string &port, const std::string &in_peers) {
-    test_data_t data;
-    boost::program_options::options_description desc_options("Command line options");
-    cryptonote::core::init_options(desc_options);
-    Server::init_options(desc_options);
-    const char* argv[2] = {nullptr, nullptr};
-    boost::program_options::variables_map vm;
-    boost::program_options::store(
-      boost::program_options::parse_command_line(1, argv, desc_options), vm);
-    vm.find(nodetool::arg_p2p_bind_ip.name)->second =
-      boost::program_options::variable_value(std::string("127.0.0.2"), false);
-    vm.find(nodetool::arg_p2p_bind_port.name)->second =
-      boost::program_options::variable_value(port, false);
-    if (!in_peers.empty())
-      vm.find(nodetool::arg_in_peers.name)->second =
-        boost::program_options::variable_value(int64_t(std::stoll(in_peers)), false);
-    boost::program_options::notify(vm);
-    if (!data.server->init(vm))
-      return uint32_t(0xffffffff);   // distinguishable from a real 0
-    return data.server->get_announced_port(epee::net_utils::connector_id::clearnet);
-  };
-
-  // Accepting inbound on a pingback-capable zone: announce the listening port.
-  EXPECT_EQ(48086u, announced("48086", ""))
-    << "a reachable node must advertise, and nothing but the facts decides it";
-
-  // The corrected divergence: no inbound accepted, so nothing to advertise.
-  EXPECT_EQ(0u, announced("48087", "0"))
-    << "a node that refuses every inbound connection must not announce a port "
-       "for peers to attract themselves to";
-}
-
-// ---------------------------------------------------------------------------
-// PWD-I7 — the inbound SAFETY bound
-//
-// `--in-peers` used to narrow its `-1` sentinel straight into a `uint32_t`,
-// so an unset flag meant a ceiling of UINT32_MAX and the check never fired.
-// That became the only inbound bound when the per-host cap was deleted.
-//
-// The replacement is a decision Rust returns from a descriptor probe.
-// These tests pin the C++ half: an unset `--in-peers` stores that decision,
-// and an explicit value — including `0` — is stored as given. `0` is a legal
-// operator choice meaning "refuse every inbound connection" and cannot
-// double as "unset", which is why the descriptor is signed.
-// ---------------------------------------------------------------------------
-
 namespace
 {
-  struct in_peers_fixture
+  struct init_fixture
   {
     test_core pr_core;
     cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
     std::unique_ptr<Server> server;
-
-    in_peers_fixture(): cprotocol(pr_core, NULL)
+    init_fixture(): cprotocol(pr_core, NULL)
     {
       server.reset(new Server(cprotocol));
       cprotocol.set_p2p_endpoint(server.get());
     }
-
-    // The PRODUCTION init path: the real descriptor through the real parser.
-    // `in_peers < 0` leaves the flag unset, so the sentinel stands.
-    bool init(const char* port, const int in_peers)
+    bool init()
     {
       boost::program_options::options_description desc_options("Command line options");
       cryptonote::core::init_options(desc_options);
       Server::init_options(desc_options);
-
       const char* argv[2] = {nullptr, nullptr};
       boost::program_options::variables_map vm;
       boost::program_options::store(
         boost::program_options::parse_command_line(1, argv, desc_options), vm);
-
-      // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
-      vm.find(nodetool::arg_p2p_bind_ip.name)->second =
-        boost::program_options::variable_value(std::string("127.0.0.2"), false);
-      vm.find(nodetool::arg_p2p_bind_port.name)->second =
-        boost::program_options::variable_value(std::string(port), false);
-      if (in_peers >= 0)
-        vm.find(nodetool::arg_in_peers.name)->second =
-          boost::program_options::variable_value(static_cast<std::int64_t>(in_peers), false);
-
       boost::program_options::notify(vm);
       return server->init(vm);
     }
   };
-}
-
-TEST(node_server, in_peers_sentinel_resolves_to_a_bounded_ceiling)
-{
-  // Red edit: make `apply_inbound_ceiling` return before storing a bounded
-  // decision, so the unset sentinel stays at the counter maximum. This fails.
-  in_peers_fixture d;
-  ASSERT_TRUE(d.init("48090", -1));
-
-  const uint32_t ceiling = d.server->get_max_in_public_peers();
-  EXPECT_NE(std::numeric_limits<uint32_t>::max(), ceiling)
-    << "an unset --in-peers must not resolve to an unbounded interval";
-  EXPECT_GT(ceiling, 0u)
-    << "a machine with a normal descriptor limit has inbound headroom";
-}
-
-TEST(node_server, in_peers_explicit_value_bypasses_the_derivation)
-{
-  // The operator's number is not a starting point for the bound -- it IS the
-  // bound. A derivation that overrode it would silently discard the one
-  // input that is a choice rather than a reading.
-  in_peers_fixture d;
-  ASSERT_TRUE(d.init("48091", 1));
-  EXPECT_EQ(1u, d.server->get_max_in_public_peers());
-}
-
-TEST(node_server, in_peers_above_the_descriptor_ceiling_is_refused)
-{
-  in_peers_fixture probe;
-  ASSERT_TRUE(probe.init("48094", -1));
-  const uint32_t derived = probe.server->get_max_in_public_peers();
-  if (derived == std::numeric_limits<uint32_t>::max())
-    return;
-  in_peers_fixture over;
-  EXPECT_FALSE(over.init("48095", static_cast<int>(derived) + 1));
-}
-
-TEST(node_server, in_peers_zero_is_a_choice_and_not_the_sentinel)
-{
-  // The reason the descriptor is SIGNED. `0` means "refuse every inbound
-  // connection", which is legal and distinct from "unset"; an unsigned type
-  // could not carry both and the sentinel would have to steal a real value.
-  in_peers_fixture d;
-  ASSERT_TRUE(d.init("48092", 0));
-  EXPECT_EQ(0u, d.server->get_max_in_public_peers())
-    << "--in-peers 0 must survive as itself, not be re-derived";
-}
-
-TEST(node_server, in_peers_ceiling_re_derives_when_the_outbound_reserve_changes)
-{
-  // The outbound cap is a TERM in the inbound ceiling's reservation, so a
-  // runtime `out_peers` change invalidates a ceiling derived against the old
-  // one. Without the re-derive, raising out_peers leaves inbound reserved
-  // against a smaller outbound budget and live outbound plus inbound can
-  // exceed the descriptor limit — the exhaustion the ceiling exists to stop.
-  //
-  // Red edit: drop the `apply_inbound_ceiling` call at the end of
-  // `change_max_out_public_peers`. The ceiling then does not move and the
-  // first expectation fails.
-  in_peers_fixture d;
-  ASSERT_TRUE(d.init("48093", -1));
-
-  const uint32_t before = d.server->get_max_in_public_peers();
-  ASSERT_GT(before, 0u) << "the derivation must have produced a real ceiling";
-
-  // Raise the outbound reserve. Every extra promised outbound descriptor is
-  // one fewer the process may spend on inbound.
-  const size_t raised = 256;
-  d.server->change_max_out_public_peers(raised);
-  const uint32_t after = d.server->get_max_in_public_peers();
-
-  EXPECT_LT(after, before)
-    << "raising the outbound reserve must lower the inbound ceiling";
-
-  // And back down again, to the floor (the dialer refuses below it): the
-  // reserve is recomputed, not ratcheted.
-  d.server->change_max_out_public_peers(12);
-  EXPECT_GT(d.server->get_max_in_public_peers(), after)
-    << "lowering the outbound reserve must return the headroom";
 }
 
 // The relay harness unbinds the process hub when it returns. A listen
@@ -1960,18 +1257,19 @@ TEST(node_server, in_peers_ceiling_re_derives_when_the_outbound_reserve_changes)
 // found no hub, and every later fixed port in this suite failed at once.
 // These two ports are otherwise unused here, so a leftover listener is
 // not what a red result is reporting.
-TEST(node_server, a_cleared_seam_is_bound_again_on_the_next_listen)
+TEST(node_server, a_cleared_seam_is_bound_again_on_the_next_init)
 {
   {
-    in_peers_fixture first;
-    ASSERT_TRUE(first.init("48096", -1));
+    init_fixture first;
+    ASSERT_TRUE(first.init());
     first.server->deinit();
   }
-  ASSERT_EQ(0, shekyl_seam_bind(nullptr, nullptr, nullptr));
+  ASSERT_EQ(0, shekyl_seam_bind(nullptr, nullptr));
   ASSERT_EQ(0, shekyl_seam_is_bound());
 
-  in_peers_fixture second;
-  ASSERT_TRUE(second.init("48097", -1))
-    << "the next listen installs the hub again";
+  init_fixture second;
+  ASSERT_TRUE(second.init())
+    << "the next init binds the hub again";
+  ASSERT_NE(0, shekyl_seam_is_bound());
   second.server->deinit();
 }

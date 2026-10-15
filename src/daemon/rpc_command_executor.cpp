@@ -853,73 +853,7 @@ bool t_rpc_command_executor::get_limit_down()
   return true;
 }
 
-bool t_rpc_command_executor::out_peers(bool set, uint32_t limit)
-{
-	cryptonote::COMMAND_RPC_OUT_PEERS::request req;
-	cryptonote::COMMAND_RPC_OUT_PEERS::response res;
-	
-	epee::json_rpc::error error_resp;
 
-	req.set = set;
-	req.out_peers = limit;
-	
-	std::string fail_message = "Unsuccessful";
-
-	if (m_is_rpc)
-	{
-		if (!m_rpc_client->rpc_request(req, res, "/out_peers", fail_message.c_str()))
-		{
-			return true;
-		}
-	}
-	else
-	{
-		if (!m_rpc_server->on_out_peers(req, res) || res.status != CORE_RPC_STATUS_OK)
-		{
-			tools::fail_msg_writer() << make_error(fail_message, res.status);
-			return true;
-		}
-	}
-
-	const std::string s = res.out_peers == (uint32_t)-1 ? "unlimited" : std::to_string(res.out_peers);
-	tools::msg_writer() << "Max number of out peers set to " << s << std::endl;
-
-	return true;
-}
-
-bool t_rpc_command_executor::in_peers(bool set, uint32_t limit)
-{
-	cryptonote::COMMAND_RPC_IN_PEERS::request req;
-	cryptonote::COMMAND_RPC_IN_PEERS::response res;
-
-	epee::json_rpc::error error_resp;
-
-	req.set = set;
-	req.in_peers = limit;
-
-	std::string fail_message = "Unsuccessful";
-
-	if (m_is_rpc)
-	{
-		if (!m_rpc_client->rpc_request(req, res, "/in_peers", fail_message.c_str()))
-		{
-			return true;
-		}
-	}
-	else
-	{
-		if (!m_rpc_server->on_in_peers(req, res) || res.status != CORE_RPC_STATUS_OK)
-		{
-			tools::fail_msg_writer() << make_error(fail_message, res.status);
-			return true;
-		}
-	}
-
-	const std::string s = res.in_peers == (uint32_t)-1 ? "unlimited" : std::to_string(res.in_peers);
-	tools::msg_writer() << "Max number of in peers set to " << s << std::endl;
-
-	return true;
-}
 
 bool t_rpc_command_executor::print_bans()
 {

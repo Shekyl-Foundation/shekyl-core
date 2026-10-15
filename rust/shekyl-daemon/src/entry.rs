@@ -16,9 +16,12 @@
 //! surface; the two `#[allow(unsafe_code)]` below are its only exceptions
 //! to the crate's rule, each on the one item the lint names.
 //!
-//! **Twelve fields.** [`SNAPSHOT_FIELDS`] pins the count and
+//! **Eleven fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
 //! [`shekyl_daemon_snapshot_field_count`] exports it for the C++ to assert;
 //! each later slice that moves a reader into Rust deletes its field. The
+//! advertised endpoints are not a field: their reader is Rust, the peer
+//! lists' own entry (§2.8), where the handshake's port check will read it
+//! (Rick, 2026-10-15); no C++ reads them. The
 //! legacy argument vector `run` also takes is not a field: it is the
 //! rendering of today's spellings the remnant parses until commit (e)
 //! deletes the C++ readers, and it goes with them.
@@ -71,14 +74,11 @@ pub struct ShekylDaemonSnapshot {
     /// The admin endpoint a client-mode command reaches, NUL-terminated,
     /// or null for a daemon start. Read by the C++ console client.
     pub client_endpoint: *const c_char,
-    /// The advertised clearnet port, or 0 for none; read by the handshake
-    /// (`DAEMON_CONFIG_CUTOVER_AUDIT.md` §2, the twelfth field).
-    pub advertised_port: u16,
 }
 
 /// The snapshot's field count. A gate asserts it against the definition
 /// above and the C++ asserts it against [`shekyl_daemon_snapshot_field_count`].
-pub const SNAPSHOT_FIELDS: u32 = 12;
+pub const SNAPSHOT_FIELDS: u32 = 11;
 
 /// The remnant's `run`: constructs core, the protocol handler, the node
 /// server and the RPC from the snapshot, parses the legacy argument vector

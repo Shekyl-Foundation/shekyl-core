@@ -187,8 +187,6 @@ pub(crate) enum Endpoint {
     StopDaemon,
     GetNetStats,
     SetLimit,
-    OutPeers,
-    InPeers,
     PopBlocks,
 }
 
@@ -338,16 +336,6 @@ pub(crate) const ROUTES: &[Route] = &[
         visibility: Visibility::AdminOnly,
     },
     Route {
-        endpoint: Endpoint::OutPeers,
-        paths: &["/out_peers"],
-        visibility: Visibility::AdminOnly,
-    },
-    Route {
-        endpoint: Endpoint::InPeers,
-        paths: &["/in_peers"],
-        visibility: Visibility::AdminOnly,
-    },
-    Route {
         endpoint: Endpoint::PopBlocks,
         paths: &["/pop_blocks"],
         visibility: Visibility::AdminOnly,
@@ -425,8 +413,6 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         Endpoint::StopDaemon => get(json::stop_daemon).post(json::stop_daemon),
         Endpoint::GetNetStats => get(json::get_net_stats).post(json::get_net_stats),
         Endpoint::SetLimit => get(json::set_limit).post(json::set_limit),
-        Endpoint::OutPeers => get(json::out_peers).post(json::out_peers),
-        Endpoint::InPeers => get(json::in_peers).post(json::in_peers),
         Endpoint::PopBlocks => get(json::pop_blocks).post(json::pop_blocks),
     }
 }
@@ -695,8 +681,6 @@ mod tests {
         "/stop_daemon",
         "/get_net_stats",
         "/set_limit",
-        "/out_peers",
-        "/in_peers",
         "/pop_blocks",
     ];
 

@@ -252,9 +252,13 @@ pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundC
 
 /// Install the post callback and the caller's ceiling.
 ///
-/// A null `post`, a null `ctx`, or a null `ceiling` clears the seam.
-/// Returns 0 when the seam is installed or cleared, and -1 when `ceiling`
-/// is not a known decision.
+/// A null `post` or a null `ctx` clears the seam. Returns 0.
+///
+/// The hub's inbound ceiling is this process's, resolved here from its
+/// descriptor limit and the reservation the daemon's Rust `main()`
+/// recorded (`inbound_ceiling_ffi::record_reserved`); nothing about it
+/// crosses from C++. A harness that wants another bound sets it after the
+/// bind with [`shekyl_seam_set_ceiling`].
 ///
 /// A previous binding is closed and its harness threads are joined before
 /// this call publishes the next one. `ctx` from that binding stays valid
@@ -263,30 +267,19 @@ pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundC
 /// # Safety
 /// `post` does not call back into the seam before it returns.
 /// `ctx` stays valid until the next bind returns, because shutdown still
-/// posts to the previous callback. `ceiling` is readable when non-null.
+/// posts to the previous callback.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_seam_bind(
-    ctx: *mut c_void,
-    post: Option<PostFn>,
-    ceiling: *const ShekylInboundCeiling,
-) -> i32 {
+pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>) -> i32 {
     let Some(post) = post else {
         store(None);
         return 0;
     };
-    if ctx.is_null() || ceiling.is_null() {
+    if ctx.is_null() {
         store(None);
-        return if ceiling.is_null() && !ctx.is_null() {
-            -1
-        } else {
-            0
-        };
+        return 0;
     }
-    let ceiling = unsafe { *ceiling };
-    let Some(ceiling) = ceiling_from_abi(ceiling) else {
-        store(None);
-        return -1;
-    };
+    let ceiling = crate::inbound_ceiling_ffi::configured();
+    tracing::info!(target: "p2p", ceiling = ?ceiling, "the inbound ceiling the seam binds with");
     let bound = Bound {
         ctx: Ctx(ctx),
         post,
@@ -587,8 +580,9 @@ pub extern "C" fn shekyl_seam_inbound_held() -> u64 {
     hub().map(|hub| hub.inbound_held()).unwrap_or(0)
 }
 
+/// The ban table's entries, as the C++ and the daemon's owners reach them.
 #[path = "seam_ban_ffi.rs"]
-mod bans;
+pub mod bans;
 
 pub use bans::ShekylBanView;
 

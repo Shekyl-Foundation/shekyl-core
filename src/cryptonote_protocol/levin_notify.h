@@ -82,20 +82,6 @@ namespace levin
     std::uint8_t connector;
   };
 
-  /*! Turn the noise carrier on for ENCRYPTED zones built after this call.
-      Development only; defaults off, and the default is shipped behaviour.
-
-      Runtime rather than `#ifdef` so the carrier's path is reachable by the
-      ordinary test suite: a compile-time gate makes the only configuration
-      that runs the carrier the one CI never builds. Not an operator switch —
-      `COVER_TRAFFIC_RESTORATION.md` §3.1 is the ruling, and enabling it under
-      today's embargo constants runs an encrypted zone's alpha below the
-      0.90 pin. Returns the previous value so a test can restore it. */
-  bool set_carrier_development(bool enabled) noexcept;
-
-  //! Whether the development carrier opt-in is currently set.
-  bool carrier_development_enabled() noexcept;
-
   //! Provides tx notification privacy
   class notify
   {
@@ -120,7 +106,7 @@ namespace levin
     explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::connector_id connector, bool pad_txs, i_core_events& core);
 
     //! One relay over every connector registry this node has.
-    explicit notify(boost::asio::io_context& service, std::vector<connector_registry> registries, std::uint32_t configured, bool pad_txs, i_core_events& core);
+    explicit notify(boost::asio::io_context& service, std::vector<connector_registry> registries, bool pad_txs, i_core_events& core);
 
     notify(const notify&) = delete;
     notify(notify&&) = default;

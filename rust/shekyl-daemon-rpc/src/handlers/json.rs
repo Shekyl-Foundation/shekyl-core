@@ -390,8 +390,6 @@ json_handler!(set_log_level, "/set_log_level");
 json_handler!(set_log_categories, "/set_log_categories");
 json_handler!(stop_daemon, "/stop_daemon");
 json_handler!(set_limit, "/set_limit");
-json_handler!(out_peers, "/out_peers");
-json_handler!(in_peers, "/in_peers");
 json_handler!(pop_blocks, "/pop_blocks");
 
 /// `/get_net_stats` — process start plus the global throttle counters

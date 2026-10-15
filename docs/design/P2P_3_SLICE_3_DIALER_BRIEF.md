@@ -34,6 +34,12 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-14):** src/p2p/net_node.inl — the line that reads `--offline` records it through `shekyl_p2p_record_offline`, one Rust call in place of the read, so an offline daemon reports offline from its configuration and never infers it from the dialer's absence; no line is added.
 
+**UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.inl — the configuration cutover's commit (c) (`DAEMON_CONFIG_CUTOVER.md` §5.2: "a line it edits there rather than deletes carries a dated UNFREEZE line in the dialer brief"): `init` binds the seam once and builds both zones, `handle_command_line` reads the network, offline and the sync lever, `check_incoming_connections` reports without the C++-owned port; every listen, push, ceiling, UPnP and managed-Tor line is deleted, not edited.
+
+**UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.h — the cutover's commit (c): `init` loses its proxy parameter and the zone struct its listen, proxy, announce and cap fields; the rest is deletion.
+
+**UNFREEZE (Rick, 2026-10-13):** src/cryptonote_protocol/levin_notify.cpp — the cutover's commit (c): `make_relay` and the `notify` constructors take no connector mask and no carrier flag; the relay's identity and `dev-relay-cover` are the posture the Rust `main()` records (`shekyl_relay_zone_new` reads it).
+
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol

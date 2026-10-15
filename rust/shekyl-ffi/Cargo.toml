@@ -130,6 +130,9 @@ shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-peerlist = { path = "../shekyl-peerlist" }
 shekyl-dialer = { path = "../shekyl-dialer" }
+# The sections the daemon's owners read (DAEMON_CONFIG_CUTOVER.md §3).
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+shekyl-options = { path = "../shekyl-options" }
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }

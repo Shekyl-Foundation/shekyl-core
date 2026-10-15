@@ -38,7 +38,7 @@ commits of it name them.
 ## 0. Why this slice is not a plain port — RECORD (pre-flight reasoning, 2026-10-08)
 
 RK-1…RK-5b each moved a method whose C++ handler was a thin reader. `get_info`
-is not. Its handler (`src/rpc/core_rpc_server.cpp:199-305`) holds policy:
+is not. Its handler (`src/rpc/core_rpc_server.cpp:189-295`) holds policy:
 
 - **A sentinel that reads as data.** `target_height = 0` when synchronized
   (`:208`), for every caller. `0` is also what the core reports when it has
@@ -57,7 +57,7 @@ is not. Its handler (`src/rpc/core_rpc_server.cpp:199-305`) holds policy:
   subtraction, no shared lock.
 - **Clearnet-only counts.** `get_public_connections_count` and
   `get_public_outgoing_connections_count` look up `connector_id::clearnet`
-  only (`src/p2p/net_node.inl:1250-1256`, `:2211-2217`). Tor sessions are not
+  only (`src/p2p/net_node.inl:685-691`, `:2211-2217`). Tor sessions are not
   counted.
 - **Torn reads.** The tip is read at `:205`; the cumulative difficulty,
   coins generated and economics are read later at `res.height - 1` with no
@@ -539,7 +539,7 @@ cannot say so. `shekyl_seam_board_count` returns `0` for a missing hub,
 when the count does not fit (`seam_board_ffi.rs:76-87`);
 `shekyl_seam_socket_count` returns `0` for a missing hub and for an
 index that is not a connector or a direction
-(`rust/shekyl-ffi/src/seam_ffi.rs:528-538`). Read through either, a daemon
+(`rust/shekyl-ffi/src/seam_ffi.rs:521-531`). Read through either, a daemon
 whose hub is not up would report `has_peers = false` — the false
 `DaemonPeerless` of §3.1, rebuilt one layer down (RK-D23: that `0` is not
 an answer). The session export can say so. It returns

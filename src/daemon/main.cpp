@@ -44,7 +44,6 @@
 #include "common/scoped_message_writer.h"
 #include "common/util.h"
 #include "cryptonote_core/cryptonote_core.h"
-#include "cryptonote_protocol/levin_notify.h"
 #include "cryptonote_basic/miner.h"
 #include "daemon/command_server.h"
 #include "daemon/daemon.h"
@@ -129,11 +128,9 @@ int remnant_run(const ShekylDaemonSnapshot* snapshot, int argc, const char* cons
       command_line::add_arg(core_settings, daemon_args::arg_max_log_file_size);
       command_line::add_arg(core_settings, daemon_args::arg_max_log_files);
       command_line::add_arg(core_settings, daemon_args::arg_max_concurrency);
-      command_line::add_arg(core_settings, daemon_args::arg_proxy);
       command_line::add_arg(visible_options, daemon_args::arg_non_interactive);
       daemonize::Daemon::init_options(core_settings);
       command_line::add_arg(hidden_options, daemon_args::arg_command);
-      command_line::add_arg(hidden_options, daemon_args::arg_carrier_development);
       visible_options.add(core_settings);
       all_options.add(visible_options);
       all_options.add(hidden_options);
@@ -208,18 +205,6 @@ int remnant_run(const ShekylDaemonSnapshot* snapshot, int argc, const char* cons
     }
 
     MGINFO("Shekyl '" << SHEKYL_RELEASE_NAME << "' (v" << SHEKYL_VERSION_FULL << ")");
-
-    if (command_line::get_arg(vm, daemon_args::arg_carrier_development))
-    {
-      cryptonote::levin::set_carrier_development(true);
-      MWARNING("--" << daemon_args::arg_carrier_development.name
-               << " is set: the Dandelion++ noise carrier is ARMED on every "
-                  "encrypted zone. This node now emits sustained cover traffic "
-                  "(~16 KiB/s, ~42 GB/month) it does not emit by default, and "
-                  "its traffic profile differs from an unarmed node's. This is "
-                  "a DEVELOPMENT switch for the COVER_TRAFFIC_RESTORATION.md "
-                  "§3.1c measurement, not an operator setting.");
-    }
 
     MINFO("Constructing daemon.");
     daemonize::Daemon daemon{vm};

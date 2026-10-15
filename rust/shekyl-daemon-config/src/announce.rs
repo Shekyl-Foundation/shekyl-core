@@ -108,6 +108,15 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
+    fn resolved_only(cli: &[&str], file: &str) -> Resolved {
+        let args: Vec<OsString> = cli.iter().map(OsString::from).collect();
+        let cli = shekyl_options::read_cli(&TABLE, args).unwrap();
+        let (network, _mode) = choosers(&cli);
+        let given =
+            shekyl_options::read_file(&TABLE, Path::new("/etc/shekyl/x.toml"), file).unwrap();
+        resolve(&TABLE, network, cli, given).unwrap()
+    }
+
     fn setup(cli: &[&str], file: &str) -> (Resolved, DaemonConfig) {
         let args: Vec<OsString> = cli.iter().map(OsString::from).collect();
         let cli = shekyl_options::read_cli(&TABLE, args).unwrap();
@@ -123,9 +132,12 @@ mod tests {
         (resolved, config)
     }
 
+    /// The line is rendered from the resolved values, before the sections
+    /// (which refuse a SOCKS credential the dial cannot send); a secret
+    /// row's value never prints.
     #[test]
     fn the_line_shows_every_value_with_its_source_and_never_a_secret() {
-        let (resolved, _) = setup(
+        let resolved = resolved_only(
             &[
                 "--network",
                 "regtest",

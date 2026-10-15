@@ -63,10 +63,6 @@ namespace cryptonote
     //! (public) listener.
     std::string stem_tallies_json() const;
 
-    // The one spelling the C++ still reads: the cap the inbound ceiling
-    // reserves, until the ceiling is Rust's (DAEMON_CONFIG_CUTOVER.md §2.3).
-    static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections;
-
     typedef epee::net_utils::connection_context_base connection_context;
 
     core_rpc_server(
@@ -76,11 +72,7 @@ namespace cryptonote
     ~core_rpc_server();
 
     static void init_options(boost::program_options::options_description& desc);
-    bool init(const boost::program_options::variables_map& vm);
     network_type nettype() const { return m_core.get_nettype(); }
-    // The RPC connection cap; what the inbound ceiling reserves for the
-    // RPC. Valid after init().
-    std::size_t get_rpc_max_connections() const { return m_rpc_max_connections; }
     // Core access for the Rust submit shims (daemon_submit_ffi.cpp), which
     // resolve pool/blockchain/protocol from the same handle the Axum
     // transport already holds. See DAEMON_SUBMIT_VERDICT.md §4.
@@ -103,8 +95,6 @@ namespace cryptonote
     bool on_stop_daemon(const COMMAND_RPC_STOP_DAEMON::request& req, COMMAND_RPC_STOP_DAEMON::response& res, const connection_context *ctx = NULL);
     bool on_get_limit(const COMMAND_RPC_GET_LIMIT::request& req, COMMAND_RPC_GET_LIMIT::response& res, const connection_context *ctx = NULL);
     bool on_set_limit(const COMMAND_RPC_SET_LIMIT::request& req, COMMAND_RPC_SET_LIMIT::response& res, const connection_context *ctx = NULL);
-    bool on_out_peers(const COMMAND_RPC_OUT_PEERS::request& req, COMMAND_RPC_OUT_PEERS::response& res, const connection_context *ctx = NULL);
-    bool on_in_peers(const COMMAND_RPC_IN_PEERS::request& req, COMMAND_RPC_IN_PEERS::response& res, const connection_context *ctx = NULL);
     bool on_pop_blocks(const COMMAND_RPC_POP_BLOCKS::request& req, COMMAND_RPC_POP_BLOCKS::response& res, const connection_context *ctx = NULL);
     
     //json_rpc
@@ -167,7 +157,6 @@ private:
     core& m_core;
     nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >& m_p2p;
     bool m_restricted;
-    std::size_t m_rpc_max_connections = 0;
   };
 }
 

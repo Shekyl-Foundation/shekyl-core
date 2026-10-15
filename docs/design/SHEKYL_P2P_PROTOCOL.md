@@ -2189,8 +2189,8 @@ PR's own edits shift `net_node.h` and `net_node.inl` below these points.
 
 | Anchor | What is there |
 | --- | --- |
-| `src/p2p/net_node.cpp:191` | `arg_max_connections_per_ip`, default `1` |
-| `src/p2p/net_node.h:449` | `max_connections(1)` in the constructor — the **second** copy of the number |
+| `src/p2p/net_node.cpp` line 191 (at the pin) | `arg_max_connections_per_ip`, default `1` |
+| `src/p2p/net_node.h` line 449 (at the pin) | `max_connections(1)` in the constructor — the **second** copy of the number |
 | `src/p2p/net_node.inl:678` | assignment from the argument |
 | `net_node.inl:3236` (at this round's pin; deleted since) | `has_too_many_connections` |
 | `net_node.inl:3238` (as above) | early `return false` for non-public zones |
@@ -2401,15 +2401,15 @@ A mismatched genesis lets the handshake **complete**; the divergence surfaces
 later, at block validation. The chain, re-read 2026-10-09:
 
 - peerlist entries arrive **only** through a `COMMAND_HANDSHAKE` response
-  (`src/p2p/net_node.inl:1377`, `handle_remote_peerlist`) or a
-  `COMMAND_TIMED_SYNC` response (`src/p2p/net_node.inl:1461`) — both inside
+  (`src/p2p/net_node.inl` line 1377 (at the pin), `handle_remote_peerlist`) or a
+  `COMMAND_TIMED_SYNC` response (`src/p2p/net_node.inl` line 1461 (at the pin)) — both inside
   the *response* handler, so both require a completed exchange;
 - `process_payload_sync_data`
   (`src/cryptonote_protocol/cryptonote_protocol_handler.inl:391`) returns
   true on every path. It records the peer's height and top id. It does not
   compare genesis. `CORE_SYNC_DATA` carries no block version and no pruning
   seed, so the handshake's "returned false, dropping connection" arms
-  (`net_node.inl:1387` and `:2796` at this round's pin; the outbound arm went with the C++ dial path 2026-10-13, the inbound arm is `src/p2p/net_node.inl:1598` today) do not fire;
+  (`net_node.inl:1387` and `:2796` at this round's pin; the outbound arm went with the C++ dial path 2026-10-13, the inbound arm is `src/p2p/net_node.inl` line 1598 (at the pin) today) do not fire;
 - therefore a genesis-forked peer's handshake completes, `:1377` runs, and its
   lists fill.
 
@@ -2417,14 +2417,14 @@ later, at block validation. The chain, re-read 2026-10-09:
 processed.** That is the opposite of the genesis-fork signature.
 
 **Discriminator 2 — the absence of `wrong network` is a POSITIVE result.** A
-`network_id` mismatch is checked at `src/p2p/net_node.inl:1370` and logged at
-`src/p2p/net_node.inl:1372`
+`network_id` mismatch is checked at `src/p2p/net_node.inl` line 1370 (at the pin) and logged at
+`src/p2p/net_node.inl` line 1372 (at the pin)
 — `"COMMAND_HANDSHAKE Failed, wrong network! … closing connection."` — in the
 **dialing** node's own response handler, at `LOG_WARNING_CC`. **Unlike the per-IP
 refusal, which is visible only on the refusing node**, this one is visible on
 the side that is being refused. Its absence from the refused node's log is
 therefore evidence, not a gap. (The accepting side logs its own variant at
-`src/p2p/net_node.inl:1557` (at this round's pin `:2754` and `:2757`), `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
+`src/p2p/net_node.inl` line 1557 (at the pin) (at this round's pin `:2754` and `:2757`), `WRONG NETWORK AGENT CONNECTED!`, at **`LOG_INFO_CC`** — so the
 two sides do **not** log at the same level, and "loud on both sides" would
 overstate it. The half this discriminator needs is the **refused** side, and
 that is the louder one: `LOG_WARNING_CC`, where the per-IP refusal reaches the
@@ -4368,7 +4368,7 @@ round owes:**
   **The set is empty because of what can reach the compressor, which is a
   narrower question than what is in the table.** All three call sites finalize
   as **notifications** — `levin_notify.cpp:437`, and
-  `src/p2p/net_node.inl:2186` / `:2503`, both via `finalize_notify(command)`.
+  `src/p2p/net_node.inl` line 2186 (at the pin) / `:2503`, both via `finalize_notify(command)`.
   **Every p2p command is an *invoke***: `COMMAND_HANDSHAKE`
   (`net_node.inl:1078`), `COMMAND_TIMED_SYNC` (`:1165`), `COMMAND_PING`
   (`:2581`) and `COMMAND_REQUEST_SUPPORT_FLAGS` (`:2623`) all go through
@@ -4511,7 +4511,7 @@ ordinary traffic rather than catching a flood, and its value is wrong.
 **RULED.** PWC-E2 records the absence against an enumerated frontier: **no
 token bucket, no per-peer counter, no minimum interval** guards any of the four
 invoke entry points — `handle_get_support_flags`, `handle_timed_sync`,
-`handle_handshake`, `handle_ping` (`src/p2p/net_node.inl:2170`, `:2646`,
+`handle_handshake`, `handle_ping` (`src/p2p/net_node.inl` lines 2170, 2646,
 `:2695`, `:2794` **as of this round's pin**; PWC-E2 cites the same four at the
 line numbers its own pin had, and the handlers are named here so the next
 drift is greppable rather than silent).
@@ -4681,7 +4681,7 @@ rather than the default. The bound itself is this row's, in Rust.
 ### PWD-B2 — jitter, and the discriminator is observability
 
 **RULED.** The five node-server idle makers are fixed-interval
-(`src/p2p/net_node.h:444-446`; five at this round's pin, three since PR-3 deleted the connections maker, the gray housekeeping and the peerlist store, 2026-10-13) and the three protocol-handler timers likewise
+(`src/p2p/net_node.h` lines 444 to 446 (at the pin); five at this round's pin, three since PR-3 deleted the connections maker, the gray housekeeping and the peerlist store, 2026-10-13) and the three protocol-handler timers likewise
 (PWC-E4).
 
 > **Ruled: a cadence a *path* observer can correlate across connections
@@ -5178,7 +5178,7 @@ Two things make it worse than ordinary dead weight, and both belong in the row:
   hazard the census exists to price.
 - **Two of the dead fields are dead *copies of live constants*, which makes
   them traps rather than merely inert.** The 60-second cadence is driven by
-  `once_a_time_seconds<P2P_DEFAULT_HANDSHAKE_INTERVAL>` (`src/p2p/net_node.h:444`) — a
+  `once_a_time_seconds<P2P_DEFAULT_HANDSHAKE_INTERVAL>` (`src/p2p/net_node.h` line 444 (at the pin)) — a
   **template argument from the constant**, not from the field — and
   `send_peerlist_sz`'s value was read directly from
   `P2P_DEFAULT_PEERS_IN_HANDSHAKE` at `net_node.inl:2655` (both deleted 2026-10-13). So an engineer who

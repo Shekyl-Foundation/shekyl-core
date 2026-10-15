@@ -65,13 +65,13 @@ configuration takes one network. Companion flags:
 - `--offline` — disable peer dialing (recommended for hermetic tests).
 
 **On-demand block generation.** The JSON-RPC method `generateblocks`
-exists (`src/rpc/core_rpc_server.h:153`,
+exists (`src/rpc/core_rpc_server.h:143`,
 `src/rpc/core_rpc_server.cpp:2234–2305`). It loops
 `getblocktemplate` → `find_nonce_for_given_block` (RandomX longhash) →
 `submitblock` for the requested count. The handler refuses with
 `CORE_RPC_ERROR_CODE_REGTEST_REQUIRED` outside `FAKECHAIN`
 (`src/rpc/core_rpc_server.cpp:2242–2246`), and the RPC map gates it on
-`!m_restricted` (`src/rpc/core_rpc_server.h:153`), so the integration
+`!m_restricted` (`src/rpc/core_rpc_server.h:143`), so the integration
 harness must connect to an unrestricted RPC port.
 
 **Proof-of-life tests.** The Python functional tests that
@@ -233,7 +233,7 @@ struct COMMAND_RPC_GET_BASE_FEE_ESTIMATE
 
 Internal C++ name: `COMMAND_RPC_GET_BASE_FEE_ESTIMATE` /
 `on_get_base_fee_estimate`. JSON-RPC method name on the wire:
-`get_fee_estimate` (`src/rpc/core_rpc_server.h:173–174`).
+`get_fee_estimate` (`core_rpc_server.h`, lines 173 to 174 at the audit's tree; served by Rust since).
 
 ### Filling logic
 

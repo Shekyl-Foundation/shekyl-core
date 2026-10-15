@@ -82,15 +82,18 @@ owner (§3 of the brief), is deleted (§4), keeps its C++ reader as a
 lane-owned constant (IG-Q4: `block-sync-size`, `span-limit`,
 `block-download-max-size`, `db-sync-mode`, `db-salvage`, `keep-alt-blocks`,
 `pad-transactions`, `prep-blocks-threads`), or is one of the snapshot's
-fields. The brief's eleven fields are all present, and one more reader
-exists: the handshake builds the node's announced clearnet address from
-`m_external_port`
-([`src/p2p/net_node.inl:429`](../../src/p2p/net_node.inl), used at
-[`:1930`](../../src/p2p/net_node.inl)). That is the C++ reader of the
-advertised address the brief anticipates, so **the snapshot has twelve
-fields**: the twelfth is the advertised clearnet port, from
-`clearnet-advertise`, absent when none is advertised. It goes when the
-handshake's address moves to Rust.
+fields. The brief's eleven fields are all present, and no other C++
+reader of configuration is live: `m_external_port` is read at the pin only
+by `get_announced_address`, which `get_announced_port` alone calls, and
+nothing but the unit tests calls that (the function's own comment says no
+handshake carries the address; the disclosure sample that does is Rust's).
+**The snapshot has eleven fields.** The advertised endpoints
+(`clearnet-advertise`) are not dropped: a peer's port is part of what is
+checked with it (the seam's `AdvertisedEndpoint` and `adopt_redial`,
+`rust/shekyl-seam/src/connection.rs`, which has no production caller yet
+because the C++ handshake carries no port), so the value's home is Rust —
+the peer lists' own entry (§2.8), where the handshake owner reads it
+(Rick, 2026-10-15).
 
 ## 3. The daemon-store set (§9 item 3)
 
@@ -198,15 +201,52 @@ and a tokio child's `wait()` still returns its status.
   sequence runs on the main thread outside the owner's `block_on`: the
   RPC's stop blocks on its own runtime's drain, and a runtime cannot be
   entered from inside another's `block_on`.
-- **The managed Tor at steps 6, 8 and 9.** Step 6 starts
-  `DaemonTorControl::start` on its own thread, so bootstrap overlaps the
-  core's construction; it is awaited before step 8. The zone host then
-  gets the SOCKS address, or, if bootstrap failed, today's degrade: the
-  Tor posture is unavailable for this boot and the posture line says so.
-  The onion is published after step 8, because it forwards to the zone
-  host's loopback listener. Step 9 runs the teardown in parallel with the
-  remnant's stop. A death between start and stop is logged once, as
-  today.
+- **The managed Tor at steps 6, 8 and 9** (`rust/shekyl-daemon/src/tor.rs`).
+  Step 6 spawns `DaemonTorControl::start` on the owner's runtime, so
+  discovery and bootstrap overlap the core's construction, and step 8
+  awaits it after the RPC rendezvous; nothing blocks the remnant's start
+  on a bootstrap. A Tor not found, not usable on this platform, or not
+  bootstrapped is today's degrade, one warning and a clearnet-only boot,
+  never a start refusal. The zone host's Tor forward listener is bound
+  first and the onion published to it, and only then is the onion this
+  node's own Tor address. Step 9 calls the remnant's `stop`, which
+  returns at once, tears the Tor down, then joins the run thread: the
+  parallel teardown. A death between start and stop is logged once from
+  a watcher on the owner's runtime (`death_watch`).
+- **Every network owner reads its section** (`rust/shekyl-daemon/src/network.rs`).
+  Two moments: `record` before the remnant is constructed, for what the
+  owners read at their build when the remnant's `init` binds the seam
+  (offline, `p2p-local` — which the lists read at their build and refuse
+  to change after — the relay's posture and `dev-relay-cover`, the
+  descriptors reserved for the inbound ceiling, the link bounds, the ban
+  file's entries); `start` at step 8, after the one RPC start, for the
+  zone host's listeners and dialers, this node's own addresses and the
+  dialer's peers. The seam binds with Rust's own ceiling
+  (`inbound_ceiling_ffi::configured`): the C++ `transport_ceiling`,
+  `apply_inbound_ceiling` and `descriptor_reservations` go, and with them
+  the inbound cap's runtime counters, the `/in_peers` and `/out_peers`
+  endpoints, their console words and their request structs, which had no
+  backend left. Both C++ zones are built whatever the posture: the zone
+  host decides which carries traffic, so no C++ reads the Tor posture.
+  The relay's identity is the recorded posture: `shekyl_relay_zone_new`
+  takes no mask and no flags, and refuses (null) when nothing is
+  recorded; `shekyl_relay_posture_record` is the C++ test harness's way
+  to record one. The two reverse pulls the protocol handler's sync
+  heuristics read (`shekyl_dialer_out_target`,
+  `shekyl_p2p_default_out_peers`) stay until commit (e) decides their
+  replacement.
+- **SOCKS credentials are refused.** The dial path offers a proxy no
+  authentication (`shekyl-clearnet`'s and `shekyl-tor`'s `proxy` is a bare
+  endpoint; `shekyl-socks` connects as `Isolation::Principal`), so a
+  `clearnet-socks-username`, `clearnet-socks-password`, `tor-socks-username`
+  or `tor-socks-password` would be accepted and never sent. The sections
+  refuse each given one with `config.value.conflict` naming the fact, until
+  the dial carries credentials (FOLLOWUPS: the SOCKS credentials row). Whether
+  those four rows should be `reserved` in the grammar is Rick's call; on the
+  Tor path a credential would also displace the persona isolation key.
+- **The ban file holds hosts and subnets.** The ban table is keyed by IP, so
+  an onion line is refused at parse (`config.ban-file.line`) rather than
+  read and never applied.
 - **The C++ Tor path.** Under the ruling in §0, `add_ephemeral_tor_zone`,
   `check_ephemeral_tor_liveness` and the C++ calls into
   `shekyl_daemon_tor_*` go. The Rust FFI exports `shekyl_daemon_tor_*`
@@ -250,7 +290,7 @@ owner refuses at its own start, and the runtime rows, are commits (c) and
 | a daemon store with no marker | `marker::tests::a_store_with_no_marker_is_never_marked_after_the_fact` |
 | the log location cannot be written | `sections::tests::the_log_location_is_created_or_refused` |
 | the ban file cannot be read, or a line does not parse | `sections::tests::the_ban_file_is_read_at_parse_and_a_bad_line_is_named` |
-| a listener cannot bind | RPC: `shekyl-daemon-rpc` `bind::tests::wildcard_binds_are_refused`, `bind::tests::network_binds_are_refused`, `bind::tests::the_seam_refuses_before_binding` (the refusals); a bound socket in use is `bind_listener`'s error, logged by `shekyl_daemon_rpc_start`, which returns -1 and the remnant's `run` 1; `shekyl-daemon` `run::tests::a_stop_request_from_the_remnant_runs_the_one_stop_path` covers the wait that start completes. The zone host's listeners: commit (c2) |
+| a listener cannot bind | RPC: `shekyl-daemon-rpc` `bind::tests::wildcard_binds_are_refused`, `bind::tests::network_binds_are_refused`, `bind::tests::the_seam_refuses_before_binding` (the refusals); a bound socket in use is `bind_listener`'s error, logged by `shekyl_daemon_rpc_start`, which returns -1 and the remnant's `run` 1; `shekyl-daemon` `run::tests::a_stop_request_from_the_remnant_runs_the_one_stop_path` covers the wait that start completes. The zone host: `shekyl-ffi` `zone_ffi::tests::a_clearnet_endpoint_already_bound_is_refused_with_its_address` (the refusal names the endpoint; `network::start` logs it and the daemon stops with 1) |
 | a runtime change its constructor refuses; a set for a row not marked runtime | commit (d) |
 | `service` outside the SCM, on Linux, FreeBSD or macOS, or with a bad root | `service` is a reserved row until RT-W14, refused by `table::tests::rejected_and_reserved_names_are_refused_with_their_reasons`; the missing root by `paths::tests::the_service_root_is_program_data_or_a_refusal`; the three cases are RT-W14's to test when the row goes live |
 

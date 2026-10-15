@@ -208,18 +208,6 @@ t_command_server::t_command_server(
     , "Get or set the download limit."
     );
     m_command_lookup.set_handler(
-      "out_peers"
-    , std::bind(&t_command_parser_executor::out_peers, &m_parser, p::_1)
-    , "out_peers <max_number>"
-    , "Set the <max_number> of out peers."
-    );
-    m_command_lookup.set_handler(
-      "in_peers"
-    , std::bind(&t_command_parser_executor::in_peers, &m_parser, p::_1)
-    , "in_peers <max_number>"
-    , "Set the <max_number> of in peers."
-    );
-    m_command_lookup.set_handler(
       "bans"
     , std::bind(&t_command_parser_executor::show_bans, &m_parser, p::_1)
     , "Show the currently banned IPs."

@@ -32,6 +32,14 @@ fn load_rate(rate: Option<u64>) -> i64 {
 }
 
 /// `kbps` negative removes the up bucket. Zero or positive is KiB/s.
+/// The upload and download rate bounds in bytes per second, `None` for
+/// unlimited: `p2p-upload-max` and `p2p-download-max`, applied by the
+/// daemon's Rust `main()` from its section.
+pub fn set_limits(up: Option<u64>, down: Option<u64>) {
+    node_gate().set_up(up);
+    node_gate().set_down(down);
+}
+
 #[no_mangle]
 pub extern "C" fn shekyl_link_set_up(kbps: i64) {
     store_rate(kbps, |rate| node_gate().set_up(rate));
