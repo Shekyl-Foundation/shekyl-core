@@ -863,6 +863,13 @@ async fn handshake(
     Ok((reader, writer, framer))
 }
 
+/// The zero-length file the managed tor is given as its `torrc`, its defaults `torrc` and
+/// both GeoIP files, so it reads none of the ones compiled into it. One path, used by the
+/// launch and by the spawn that creates the file.
+fn empty_config_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("empty")
+}
+
 /// Build the command line and environment the managed tor is launched with — the whole of
 /// it, so the launch a test inspects is the launch a user gets. Split from
 /// [`spawn_managed_tor`] for exactly that reason: `std::process::Command` has no getter
@@ -920,6 +927,25 @@ fn managed_tor_command(managed: &ManagedTor, port_file: &Path) -> tokio::process
         .kill_on_drop(true)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Every file tor would otherwise find by itself is named, and named as ours: a
+    // zero-length file in the DataDirectory, which `spawn_managed_tor` creates. With no
+    // `--torrc-file` tor loads its default torrc, and with no `--defaults-torrc` its
+    // default `torrc-defaults`. On Unix both sit under the compiled-in CONFDIR, which for
+    // the pinned Linux bundle is `/var/tmp/dist/tor/etc/tor`: any local account can create
+    // it. On Windows they sit under the user's `APPDATA`, found through the shell API, so
+    // the cleared environment does not move them. The GeoIP files are found the same way
+    // (`/var/tmp/dist/tor/share/tor/geoip`) and tor parses them whatever the torrc says, so
+    // they are named too. An empty GeoIP table maps no address to a country, which the
+    // launch never asks for; a future knob that selects nodes by country needs a real one.
+    let empty = empty_config_path(&managed.data_dir);
+    cmd.arg("--torrc-file")
+        .arg(&empty)
+        .arg("--defaults-torrc")
+        .arg(&empty)
+        .arg("--GeoIPFile")
+        .arg(&empty)
+        .arg("--GeoIPv6File")
+        .arg(&empty);
     // ---------------------------------------------------------------------------------
     // NON-ANONYMOUS SERVING IS HELD SHUT HERE, and this is one half of a two-half rule.
     //
@@ -931,9 +957,13 @@ fn managed_tor_command(managed: &ManagedTor, port_file: &Path) -> tokio::process
     //      asserts over every representable flag/PoW combination that it can never reach
     //      the wire.
     //   2. **torrc / config** — `HiddenServiceNonAnonymousMode` (which additionally
-    //      requires `SocksPort 0`) — foreclosed **by construction, right here**: the spawn
-    //      surface is the six typed options above and nothing else. There is no
-    //      `extra_args`, no `-f <torrc>`, no `+Option` append, no `--defaults-torrc`.
+    //      requires `SocksPort 0`) — foreclosed **by construction, right here**, by two
+    //      things together. The configuration files tor reads are named, and they are
+    //      ours and empty (`--torrc-file`, `--defaults-torrc`, and the two GeoIP files
+    //      beside them, above). Leaving those options out does not close this route:
+    //      tor then reads its compiled-in defaults. And every other
+    //      option is one of the typed ones above: there is no `extra_args` and no
+    //      `+Option` append.
     //
     // The two halves cannot see each other, which is the hazard worth naming. The
     // `OnionFlags` test does not fire when someone adds a knob here, and the rationale
@@ -981,6 +1011,12 @@ async fn spawn_managed_tor(
             return Err(ControlError::Spawn);
         }
     }
+    // The launch names this file as tor's torrc, defaults torrc and GeoIP files, and tor
+    // refuses a named torrc that does not exist. Written empty on every spawn, so whatever
+    // a previous run or anyone else left at the path is not what tor reads.
+    tokio::fs::write(empty_config_path(&managed.data_dir), b"")
+        .await
+        .map_err(|_| ControlError::Spawn)?;
 
     let mut cmd = managed_tor_command(&managed, &port_file);
     let mut child = cmd.spawn().map_err(|_| ControlError::Spawn)?;
@@ -1490,11 +1526,52 @@ mod tests {
             "--CookieAuthentication",
             "--SocksPort",
             "--Log",
+            "--torrc-file",
+            "--defaults-torrc",
+            "--GeoIPFile",
+            "--GeoIPv6File",
         ];
         assert_eq!(launch_option_names(false), base);
         let mut offline = base.to_vec();
         offline.push("--DisableNetwork");
         assert_eq!(launch_option_names(true), offline);
+    }
+
+    /// Each file tor would otherwise find from its compiled-in defaults is named,
+    /// and all four name the one empty file in the instance's own DataDirectory.
+    /// The live half, that tor then reads nothing else, is
+    /// `managed_tor_reads_no_configuration_but_its_own`.
+    #[test]
+    fn the_launch_names_its_own_empty_configuration() {
+        let dir = tempfile::tempdir().expect("fixture directory");
+        let data_dir = dir.path().join("data");
+        let managed = ManagedTor {
+            tor_binary: VerifiedTorBinary::unchecked_for_test(dir.path().join("tor")),
+            data_dir: data_dir.clone(),
+            socks_port: SocksPort::Auto,
+            disable_network: false,
+            exit_observer: None,
+        };
+        let cmd = managed_tor_command(&managed, &dir.path().join("control_port"));
+        let args: Vec<&std::ffi::OsStr> = cmd.as_std().get_args().collect();
+        let empty = data_dir.join("empty");
+        for option in [
+            "--torrc-file",
+            "--defaults-torrc",
+            "--GeoIPFile",
+            "--GeoIPv6File",
+        ] {
+            let at = args
+                .iter()
+                .position(|arg| *arg == option)
+                .unwrap_or_else(|| panic!("{option} is not on the launch"));
+            assert_eq!(
+                args.get(at + 1).map(Path::new),
+                Some(empty.as_path()),
+                "{option} names the instance's empty file"
+            );
+        }
+        assert_eq!(empty_config_path(&data_dir), empty);
     }
 
     /// Set in the re-executed copy of this test binary, to the directory the shim
@@ -2061,6 +2138,85 @@ mod live_tests {
 
         actor.stop_gracefully().await.expect("graceful stop");
         actor.wait_for_shutdown().await;
+    }
+
+    /// The managed tor reads no configuration but the launcher's own empty file:
+    /// no default `torrc`, no default `torrc-defaults`, no default GeoIP file.
+    ///
+    /// Without `--torrc-file` and `--defaults-torrc`, tor loads both from its
+    /// compiled-in `CONFDIR`, which for the pinned Linux bundle is
+    /// `/var/tmp/dist/tor/etc/tor` — creatable by any local account. Its GeoIP
+    /// files sit beside them under `share/tor`. Command-line options win only
+    /// for the keys the launcher names, so whatever else those files say is
+    /// merged in.
+    ///
+    /// The evidence is tor's own startup log, which names every configuration
+    /// file it reads or looks for and every GeoIP file it parses. A tor that
+    /// read its defaults says so (`Configuration file "…" not present` or
+    /// `Read configuration file "…"` naming another path), and that fails here
+    /// without planting anything at the host's real default paths. The test
+    /// also requires that all four reads are present and name the launcher's
+    /// file, so a log that stopped carrying these lines fails instead of
+    /// passing empty.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
+    async fn managed_tor_reads_no_configuration_but_its_own() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().to_path_buf();
+        let (readiness, _ready_rx) = BootstrapReadiness::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let actor = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
+                data_dir: data_dir.clone(),
+                socks_port: super::SocksPort::Fixed(free_port()),
+                disable_network: true,
+                exit_observer: None,
+            }),
+            events: EventSink::new(tx),
+            readiness,
+        });
+        // A handshake means tor has finished reading its configuration.
+        let reply = actor
+            .ask(Command::GetInfo(vec!["version".to_owned()]))
+            .await
+            .expect("GETINFO version against the actor-spawned tor");
+        assert_eq!(reply.status(), 250);
+        actor.stop_gracefully().await.expect("graceful stop");
+        actor.wait_for_shutdown().await;
+
+        let ours = super::empty_config_path(&data_dir);
+        let ours = ours.display().to_string();
+        let log = std::fs::read_to_string(data_dir.join("tor.log")).expect("tor's log");
+        let mut config_reads = 0;
+        let mut geoip_parses = 0;
+        for line in log.lines() {
+            let named = if let Some(rest) = line.split_once("Read configuration file \"") {
+                config_reads += 1;
+                rest.1.split_once('"').map(|(path, _)| path)
+            } else if let Some(rest) = line.split_once("Configuration file \"") {
+                rest.1.split_once('"').map(|(path, _)| path)
+            } else if let Some(rest) = line.split_once("Parsing GEOIP ") {
+                geoip_parses += 1;
+                rest.1
+                    .split_once(" file ")
+                    .map(|(_, path)| path.trim_end_matches('.'))
+            } else if let Some(rest) = line.split_once("Failed to open GEOIP file ") {
+                Some(rest.1.trim_end_matches('.'))
+            } else {
+                continue;
+            };
+            assert_eq!(
+                named,
+                Some(ours.as_str()),
+                "tor read a file the launcher did not name: {line}"
+            );
+        }
+        assert_eq!(
+            config_reads, 2,
+            "the torrc and the defaults torrc, both ours"
+        );
+        assert_eq!(geoip_parses, 2, "the IPv4 and IPv6 GeoIP files, both ours");
     }
 
     /// Reserve a free loopback port (bind `:0`, read it, drop). A small TOCTOU window

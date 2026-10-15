@@ -191,6 +191,17 @@ file meanwhile, with that as the stated reason.
      path from the witness). The cleared environment applies on every
      platform; whether a Windows `tor.exe` starts without `SystemRoot` is
      TB-11's launch test to establish.
+     The launcher also names every file tor would otherwise find by itself:
+     `--torrc-file`, `--defaults-torrc`, `GeoIPFile` and `GeoIPv6File` all
+     name one zero-length file it writes in the `DataDirectory`. Without them
+     tor reads its compiled-in defaults, and the pinned Linux bundle's are
+     under `/var/tmp/dist/tor/` (`etc/tor/torrc`, `etc/tor/torrc-defaults`,
+     `share/tor/geoip`, `share/tor/geoip6`), a path any local account can
+     create; command-line options override only the keys they name. On
+     Windows the torrc is under the user's `APPDATA`, found through the shell
+     API, which the cleared environment does not move. The live test is
+     `managed_tor_reads_no_configuration_but_its_own`: tor's own log must name
+     no configuration or GeoIP file but that one.
      Where the launcher sets the loader path, a directory whose own path
      holds `:`, `;` or `$` is refused: the loader reads that variable as a
      list and would search other directories than the one checked.
@@ -271,6 +282,10 @@ that probe as the answer.
   managed launch passes everything as arguments today (data directory, control
   port, SOCKS port, log), so nothing is expected to be lost; the crate's live
   lifecycle tests are where a dependence on the environment would show.
+- **The empty GeoIP table** maps no address to a country. Nothing the
+  launch configures asks for one; a future typed knob that selects or
+  excludes nodes by country (`{cc}` in `ExcludeNodes`) would silently match
+  nothing, and needs a real GeoIP file pinned beside tor.
 - **TB-2** turns an install mistake into a daemon that does not start. That is
   the intent, and TB-12 is what keeps it from reaching a platform that cannot
   satisfy it.
