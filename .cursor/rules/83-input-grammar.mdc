@@ -139,7 +139,7 @@ where, and what to do (rule 82). Machine output and logs carry the code.
 A configuration refusal exits with status 2; a runtime failure with 1.
 
 **IG-12 Runtime changes share the constructor.** A value that can also
-change while running (rates, log level, mining) is marked
+change while running (rates, log level and categories, mining) is marked
 runtime in its row (IG-9) and is built by the same constructor on both
 surfaces, with the same refusals. `option set <name> <value>` changes it:
 it refuses a row not marked runtime with a typed code, requires the
