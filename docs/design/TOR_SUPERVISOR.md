@@ -1,8 +1,8 @@
 # The managed Tor supervisor — the link under the Tor connector
 
-**Status: OPEN — Round 0, for ratification (2026-10-14). `TSR-Q1`,
-`TSR-Q2`, `TSR-Q3`, `TSR-Q4` and `TSR-Q6` RULED 2026-10-14 (Rick); `TSR-Q5`
-and `TSR-Q7` open.** Builds nothing. The brief is the daemon-configuration
+**Status: OPEN — Round 0, ready for ratification (2026-10-15). Every
+question is RULED: `TSR-Q1` to `TSR-Q4` and `TSR-Q6` on 2026-10-14, `TSR-Q5`
+and `TSR-Q7` on 2026-10-15 (Rick).** Builds nothing. The brief is the daemon-configuration
 lane's, carrying Rick's rulings of 2026-10-14; those and the rulings on this
 round's questions are §1. Nothing else here is ruled.
 Identifier families (registered at birth, rule 94): `TSR-F1…TSR-FN` findings,
@@ -52,7 +52,7 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | Start is iteration one | No separate bootstrap-failure path; capped backoff from the first launch; never gives up. A Tor-only node waits and announces (hop-0 fail-closed); a dual-posture node runs clearnet meanwhile |
 | Respawn (as amended by `TSR-Q1` and `TSR-Q3`) | On a process fault (§4.4): reap; the `DataDirectory` and the onion are kept; republish the same onion; the connector parks and resumes on the new route; each death and recovery announced; a crash loop reaches the cap loudly. Backoff with resume for an operator's Tor |
 | Teardown (as amended by `TSR-Q1`) | One routine for stop and respawn: close the owning control connection, wait within `SHUTDOWN_GRACE` (5 s), kill and reap. `SIGTERM` and `DEL_ONION` dropped. The directory's disposition follows why it ran: at boot end it is tombstone-renamed **after** the reap, deleted off the runtime under a bound, and swept at the next start; at a respawn it is kept |
-| Launch | `__OwningControllerProcess=<daemon pid>` on the command line, `TAKEOWNERSHIP`, then `RESETCONF __OwningControllerProcess` |
+| Launch (as amended by `TSR-Q7`) | Tor starts with `__OwningControllerFD`: an inherited socket that is already an authenticated, owning control connection (§4.7) |
 | Disk | `AvoidDiskWrites 1` on every platform; no memory-backed `DataDirectory` |
 | Requirements | The brief's items 3 to 7 (operator-fixable states, one log stream, suspend and resume, floor-device bounds, Windows first-class) are requirements of this round |
 | Acceptance | §7's matrix on Linux, Windows and macOS, then a seven-day soak on each, a Pi 4 as the Linux host. Nothing is called "24/7" before that |
@@ -60,6 +60,8 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | `TSR-Q2`: guards are per boot | Guards do not persist across boots, as today. Persisting them gains no reduction in expected exposure: a hostile guard exposes *f*·*B* boots in expectation either way, and persistence changes only the spread; the harm is per boot. It costs a guard file on disk and lets one hostile guard link every boot's onion. The one real re-roll attack, forcing respawns, is closed by `TSR-Q1` |
 | `TSR-Q3`: remedy by cause | §4.4, with the SOCKS reply classification of §4.2: only a process fault respawns |
 | `TSR-Q4`: Tor status in RPC | The unrestricted reply carries one boolean in Health, as `has_peers` does: this node can originate over an address-hiding connector now. State, cause, since and the respawn count are restricted Status fields; the RPC lane names them |
+| `TSR-Q5`: one probe per descriptor upload round (2026-10-15) | The `HS_DESC UPLOADED` events of one upload round are coalesced into one trigger, and after a jittered delay the probe runs once (§4.5). No deadline of our own and no evidence-age bookkeeping |
+| `TSR-Q7`: `__OwningControllerFD` on every platform (2026-10-15) | The launch hands Tor one end of a connected socket pair as its owning control connection; no control port, port file, cookie, `TAKEOWNERSHIP` or `RESETCONF` (§4.7) |
 | `TSR-Q6`: the private-network cases | Best effort, not a gate. The private network is chutney or a hand-built `TestingTorNetwork` from the pinned bundle, at the implementer's choice; it runs §7's two cases if it can be made to work, is never a latency source, and its absence blocks nothing |
 
 `TSR-F9` and `TSR-F10` propose amending parts of the brief's rulings; each
@@ -73,7 +75,7 @@ says which and why.
 | Death is logged once and nothing else happens; the proxy stays installed at the dead port. The one log line is `MERROR` under `net.p2p`, which the default filter sets to `FATAL`, so at the default level it is not shown either (`TSR-F11`) | `src/p2p/net_node.inl:71`, `:2297-2315`; `contrib/epee/src/mlog.cpp:127` |
 | Readiness is a `GETINFO status/bootstrap-phase` poll; no production code issues `SETEVENTS` | `rust/shekyl-tor-control-client/src/control/bootstrap.rs:10-11`; `rust/shekyl-tor-control-client/src/control/actor.rs:211-239` |
 | The event sink, once used, is an **unbounded** channel | `rust/shekyl-tor-control-client/src/control/actor.rs:202` |
-| Death is seen only as the control connection ending; no watcher on the child after spawn | `rust/shekyl-tor-control-client/src/control/actor.rs:1260-1266`, `:1306-1313` |
+| Death is seen only as the control connection ending; no watcher on the child after spawn (`TSR-F16`: that is not enough) | `rust/shekyl-tor-control-client/src/control/actor.rs:1260-1266`, `:1306-1313` |
 | Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs:97`, `:611-632`, `:783-798`; `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415` |
 | The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/actor.rs:874-954`, `:1485-1497` |
 | `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs:900-901` |
@@ -214,7 +216,32 @@ the sweep removes files as well as directories.
 in `config/tor_pins.json`; TB-11 makes a target pinned only with a launch test,
 and the digests are already verified (`TOR_BUNDLE_DISTRIBUTION.md` §4). §7's
 Windows and macOS cases are those launch tests: the change whose job passes
-them adopts that platform's pin and removes its `pending` marker.
+them adopts that platform's pin and removes its `pending` marker. Windows run
+of 2026-10-15 (the Windows development host): the pinned `tor.exe` imports 21
+libraries, all the operating system's (8 System32 libraries and 13 UCRT
+apisets), with no delay-loads. With `TSR-F17`'s `SystemRoot` fix, the Windows
+launch evidence TB-11 asks for is in hand; adopting the Windows pin waits only
+on that fix and on §7's Windows cases.
+
+**TSR-F16 (medium; Tor lane). A leaked copy of Tor's socket end hides Tor's
+death.** Measured on Windows (case C6b, 2026-10-15): with the handle leaked
+into a concurrent child, killing Tor left our read on the owning socket blocked
+for 30.3 s, until that child exited. EOF on the owning socket is therefore
+never the sole death signal: the supervisor also waits on Tor's process (the
+reap on Unix, the process handle on Windows). That is §4.2's "child exited"
+input, which §2 records as missing today. Both inputs stay, and either one is
+a process fault. Tor holds its own end inheritable, so a child Tor spawned (a
+pluggable transport) could inherit it; that is moot while bridges are out of
+scope (§5), and it reopens with them.
+
+**TSR-F17 (high; Tor lane; fixed in its own change).** Two defects in landed
+launch code, found by the same Windows run: the default torrc is not
+foreclosed, so a `torrc` in Tor's default location is read; and the cleared
+environment (TB-7) kills `tor.exe`, which needs `SystemRoot`. Both are fixed by
+the launcher fix, a separate change with no PR at this commit; this round
+depends on it. §4.7's launch passes `-f` and `--defaults-torrc`, each naming an
+empty file, and on Windows sets `SystemRoot` from the operating system, never
+from our environment.
 
 ## 4. Design
 
@@ -259,7 +286,7 @@ here.
 
 | Input | Source | Effect |
 | --- | --- | --- |
-| child exited | the exit observer | process fault |
+| child exited | a wait on Tor's process: the reap on Unix, the process handle on Windows (`TSR-F16`) | process fault |
 | control connection EOF, desync, or a reply past the reply bound | the control actor | process fault (a wedged Tor is a dead Tor) |
 | `BOOTSTRAP PROGRESS=` | `STATUS_CLIENT` | progress; resets the stall bound |
 | `BOOTSTRAP` with `WARNING`/`REASON` and `RECOMMENDATION=warn` | `STATUS_CLIENT` | named external cause (outbound blocked and kin). Tor sends `warn` from the tenth problem at a phase, so a few refused connections at startup raise nothing |
@@ -270,10 +297,10 @@ here.
 | `DANGEROUS_VERSION` | `STATUS_GENERAL` | announcement; a release question, not a runtime fault |
 | `DIR_ALL_UNREACHABLE` | `STATUS_GENERAL` | named external cause |
 | `TOO_MANY_CONNECTIONS` | `STATUS_GENERAL` | named local cause (the open-file limit), with the count |
-| `HS_DESC UPLOADED` / `FAILED REASON=` for our address | `HS_DESC` | inbound facet evidence |
+| `HS_DESC UPLOADED` / `FAILED REASON=` for our address | `HS_DESC` | `UPLOADED`: one upload round arms the probe (§4.5); `FAILED` across a round: Service-class evidence (§4.4) |
 | `NOTICE` / `WARN` / `ERR` | log events | the `tor` log category (§4.10) |
 | every Tor dial's outcome | the connector's dial path → the supervisor | by the SOCKS reply table below |
-| a stream accepted at our forward listener | the Tor connector's inbound accept (`adopt_tor`, `rust/shekyl-ffi/src/zone_ffi.rs` line 362 (#1056)) | inbound evidence: a peer fetched the descriptor and completed introduction and rendezvous, which is reachability, before Levin starts |
+| a stream accepted at our forward listener | the Tor connector's inbound accept (`adopt_tor`, `rust/shekyl-ffi/src/zone_ffi.rs` line 362 (#1056)) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous; it neither arms nor defers the probe |
 | a probe nonce arrived | the dialer's nonce set (§4.5) | inbound evidence |
 
 Each SOCKS reply answers two questions, not one: is it about the destination,
@@ -293,7 +320,7 @@ times and asserts the link stays up; the same count spread across distinct
 destinations takes it down.
 
 The supervisor sends one `SETEVENTS STATUS_GENERAL STATUS_CLIENT HS_DESC
-NETWORK_LIVENESS NOTICE WARN ERR` after `TAKEOWNERSHIP`, and nothing else sends
+NETWORK_LIVENESS NOTICE WARN ERR` as its first command, and nothing else sends
 `SETEVENTS` on that connection. SP-T0 §3b withdrew a `STATUS_CLIENT`
 subscription for the wallet because `SETEVENTS` is "a shared, replace-not-add
 resource the consumer also uses"; on the daemon the supervisor is the only
@@ -344,26 +371,27 @@ accept, end to end; it cannot be forged by anyone who has not seen the nonce,
 and only our own Tor carries it. The probe touches no list, no attempt count,
 no failure memory and no target.
 
-**What fires it.** Evidence is pushed, from where each event already
-happens; nothing polls. (a) The Tor connector's inbound accept: a stream at
-our forward listener proves reachability before Levin starts. (b)
-`HS_DESC UPLOADED` / `FAILED` for our address, which covers descriptor
-freshness that an inbound stream does not (a peer may hold a cached
-descriptor). (c) Every Tor dial's outcome, through §4.2's reply table.
+**What fires it (`TSR-Q5`, ruled 2026-10-15): one probe per descriptor
+upload round.** Tor re-uploads our descriptor on its own schedule, every 60 to
+120 minutes at random (`HS_SERVICE_NEXT_UPLOAD_TIME_MIN` and `_MAX`,
+lines 34 and 36 of Tor's own `hs_service.h`, in its `feature/hs` directory, at tag `tor-0.4.9.13`), and at once when it
+picks new introduction points, when the proof-of-work effort changes, or when
+the HSDir ring changes. Each upload reaches us as `HS_DESC UPLOADED`, one per
+HSDir. The events of one round are coalesced into one trigger; after a
+jittered delay the probe runs once. The delay keeps a hostile HSDir from
+seeing "upload, then an immediate fetch of the same descriptor" as a
+self-probe signature. There is no deadline of our own and no evidence-age
+bookkeeping: inbound accepts are display evidence only, and `HS_DESC FAILED`
+across a round is Service-class evidence (§4.4).
 
-There is one deadline: inbound evidence expires at *T*. Each inbound push
-moves *T* forward, and the probe runs only when *T* passes with nothing
-arriving. That timer is legitimate under "a timer exists only when no event
-will cause the action": inbound silence means either nobody wanted us or
-nobody could reach us, and no event ever tells the two apart. Outbound has no
-deadline: the dialer dials whenever it is below target, and live sessions end
-visibly when Tor's circuits do, so outbound evidence is always pushed. The
-span from a push to *T* is derived, not chosen: bounded above by the window in
-which a peer that fails to reach us forgets us (`FIRST_WINDOW_NANOS`, 240 s,
-`rust/shekyl-dialer/src/memory.rs` line 34 (#1056)), and below by the measured
-probe cost (`TSR-M3`), with jitter. Wargamed: a peer that keeps connecting to
-us keeps the probe asleep; its connections are real reachability, and (b)
-still covers the descriptor. Its timeout is not the dialer's 9.1 s Tor dial deadline:
+**Stated costs.** A failure Tor does not notice, and that causes no re-upload,
+is caught at the next scheduled upload, at most two hours later. The cadence is
+a Tor implementation constant, not specification: the re-pin procedure
+(`RELEASE_CHECKLIST.md`, "Bundled Tor pin current") re-checks it on every
+re-pin. The seven-day soak is the evidence on whether the two-hour window
+matters.
+
+Its timeout is not the dialer's 9.1 s Tor dial deadline:
 26 of 100 cold dials on the measurement host exceeded it in PR-3's run A.
 Residual, stated: our guard carries both ends of the probe's rendezvous, since
 one Tor process draws one guard set
@@ -389,12 +417,31 @@ expectation; `TSR-M3` verifies it before anything depends on it.
 
 ### 4.7 Launch and teardown
 
-Launch, per the ruled recipe: `__OwningControllerProcess=<pid>` on the command
-line, `TAKEOWNERSHIP`, `RESETCONF __OwningControllerProcess` (the
-specification's `TAKEOWNERSHIP` section). `AvoidDiskWrites 1`. Both join the
-closed option list, whose test fails first, which is its purpose. Discovery and
-the pin gate run at every spawn (`TSR-F6`). `TSR-Q7` poses the specification's
-other route, `__OwningControllerFD`.
+Launch (`TSR-Q7`, ruled 2026-10-15): Tor starts with `__OwningControllerFD`
+naming its end of a connected socket pair. Tor treats that socket as an owning
+control connection that is already authenticated, so the launch has no
+`ControlPort auto`, no port file, no cookie authentication, no `TAKEOWNERSHIP`
+and no `RESETCONF`, and no window between spawn and ownership. Parent death
+closes the socket, which covers what `__OwningControllerProcess` was for.
+Measured on Windows (2026-10-15): the inherited socket answered `GETINFO
+version` (`250-version=0.4.9.13`) with no `AUTHENTICATE` sent; Tor opened no
+control port of its own (`net/listeners/control` empty); closing our end
+exited Tor in about 20 ms (C4); and the parent's `abort()` exited Tor cleanly
+through the same path (C5).
+
+- **Unix:** a `socketpair`. Tor's end is marked inheritable in the child only,
+  in `pre_exec` (clearing `FD_CLOEXEC`), so no concurrent spawn can inherit it.
+- **Windows:** a connected loopback pair. Tor's end is marked inheritable only
+  around the spawn, and the flag is cleared on our copy right after it. The
+  daemon spawns no other process inside that window; this is a design rule,
+  and Tor is its only child today. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` is the
+  strict form, and it is not in stable `std`; reopen when it is.
+
+The launch also passes `-f` and `--defaults-torrc`, each naming an empty file,
+and on Windows sets `SystemRoot` from the operating system (`TSR-F17`).
+`AvoidDiskWrites 1` and these join the closed option list, whose test fails
+first, which is its purpose. Discovery and the pin gate run at every spawn
+(`TSR-F6`).
 
 Teardown, as ruled: close the owning control connection (Tor exits on its
 close and, in the specification's words, "does not wait a while for circuits
@@ -478,21 +525,11 @@ can do, not Tor's vocabulary. Bridges are out of scope; reopen when an operator
 reports a network that blocks Tor and the typed launch surface
 (`actor.rs:874-954`) has a reviewed bridge option.
 
-## 6. Questions for Rick
+## 6. Rejected alternatives
 
-**TSR-Q5. The probe is armed by evidence age**, as §4.5 sets out: inbound
-evidence is pushed from the connector's inbound accept, from `HS_DESC` and
-from dial outcomes; one deadline, "inbound evidence expires at *T*", fires the
-probe; outbound has no deadline.
+Every question of this round is ruled (§1).
 
-**TSR-Q7. `__OwningControllerFD`.** The specification's other route starts Tor
-with an already-open, authenticated, owning control connection on an inherited
-socket: no spawn-to-ownership window, no control-port file and no cookie. It
-needs socket inheritance under TB-7's cleared environment on Windows, which is
-unverified. *Default:* the ruled `__OwningControllerProcess` recipe; reopen
-with a measured Windows launch.
-
-### Rejected alternatives (Rick, 2026-10-14)
+### Ruled out (Rick, 2026-10-14 and 2026-10-15)
 
 - **A new identity per respawn** (fresh directory and fresh onion): a guard
   re-roll on demand for whoever can cause a respawn, a livelock on a slow
@@ -503,6 +540,11 @@ with a measured Windows launch.
   hands the cause of any other degradation a re-roll.
 - **Tor state, since and count in Health:** links an RPC endpoint to the
   onion's lifetime.
+- **A probe on a deadline of our own** (evidence age): bookkeeping that Tor's
+  upload rounds make unnecessary.
+- **`__OwningControllerProcess`, `TAKEOWNERSHIP` and `RESETCONF`:** a
+  control port, a cookie and a window between spawn and ownership, all of
+  which the inherited owning socket removes.
 
 ## 7. Acceptance
 
@@ -538,10 +580,11 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 | --- | --- | --- |
 | Re-roll our guard on demand | cause respawns from outside (introduction flood, descriptor refusal) so each draws fresh guards | §4.4; `TSR-Q1` (ruled): the directory, and its guards, are kept across a respawn; `TSR-M6` sizes the window before Tor's first `state` write |
 | Exhaust the daemon's memory through Tor | make Tor log in bursts | `TSR-F2`: bounded sink, counted drops |
-| Read the probe as a signature | the guard sees both ends of a periodic self-dial | §4.5: armed by evidence age, jittered; the residual is stated |
+| Read the probe as a signature | a hostile HSDir sees an upload followed at once by a fetch of the same descriptor; the guard sees both ends of the self-dial | §4.5: one probe per upload round, after a jittered delay; the guard residual is stated |
 | Link the RPC endpoint to the onion | read respawn timestamps and counts over RPC | `TSR-Q4` (ruled): only a boolean is unrestricted |
 | Plant in the parent directory | a symlink named under the sweep's prefix | `std::fs::remove_dir_all` does not follow a symlink; the parent is daemon-owned and the `DataDirectory` 0700; a test plants a symlink to an outside directory and asserts the target survives |
-| Outlive the daemon | the daemon dies between spawn and `TAKEOWNERSHIP`, or under `panic = "abort"` | `__OwningControllerProcess` covers the window; `TAKEOWNERSHIP` the rest; §7's `SIGKILL` case |
+| Outlive the daemon | the daemon dies, including under `panic = "abort"` | parent death closes the owning socket (C5, measured 2026-10-15); §7's `SIGKILL` case |
+| Hide Tor's death | hold a copy of Tor's socket end, so our read never sees EOF | `TSR-F16`: the supervisor also waits on Tor's process; the Windows inheritance window admits no other spawn (§4.7) |
 | Learn the onion from the log | Tor's log events in the daemon's log | `TSR-M9`; Tor's `SafeLogging` stays at its default |
 
 ## 9. What this deletes
@@ -555,6 +598,7 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 | The synchronous wipe in teardown and on drop | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415`; `data_dir.rs` `wipe`, `Drop` | the tombstone (§4.7) |
 | `EventSink::unsubscribed()` on the daemon's path | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:253` | §4.2 |
 | The FFI-installed `tor_proxy` | `rust/shekyl-ffi/src/zone_ffi.rs` (#1056) | the link (§4.1) |
+| The control port, its port file, cookie authentication and `TAKEOWNERSHIP` on the daemon's managed launch (the wallet's attached posture keeps its authentication) | `rust/shekyl-tor-control-client/src/control/actor.rs:894-899`, `:854-861` | the inherited owning socket (`TSR-Q7`, §4.7) |
 | The C++ start, liveness poll and teardown, and their FFI exports | `src/p2p/net_node.inl:892-946`, `:2292-2315`; `rust/shekyl-ffi/src/daemon_tor_ffi.rs:61`, `:142-341`; `blocking.rs` | the supervisor, started and stopped by the Rust `main()` (#1066); to Rick before they are cut |
 
 ## 10. Bounds to measure (FOLLOWUPS rows)
@@ -566,7 +610,7 @@ diagnostic. No figure is set before its row lands.
 | --- | --- | --- |
 | `TSR-M1` | bootstrap time, cold directory and kept directory | the stall bound |
 | `TSR-M2` | respawn to outbound usable, and to inbound reachable | the backoff base and cap |
-| `TSR-M3` | self-probe latency, and that it works at all | the probe interval floor and timeout |
+| `TSR-M3` | self-probe latency, and that it works at all | the probe's delay range and timeout |
 | `TSR-M4` | Tor's resident memory at 12 outbound plus inbound load, default and set `MaxMemInQueues` | `MaxMemInQueues` |
 | `TSR-M5` | Tor's file descriptors at load; the limit the child inherits | the descriptor budget |
 | `TSR-M6` | when Tor first writes `state` after bootstrap under `AvoidDiskWrites 1`, and whether a kill loses guard changes made since. A Tor killed before its first write leaves a respawn to sample new guards: that window is the re-roll still open to an attacker who can crash Tor early | whether the kept directory needs more than `TSR-Q1` gives it |
@@ -574,6 +618,10 @@ diagnostic. No figure is set before its row lands.
 | `TSR-M8` | the monotonic clock across suspend on Windows and macOS | suspend handling |
 | `TSR-M9` | no onion address in the daemon Tor's log events at `notice` | the log category |
 | `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage | the tombstone delete bound |
+
+The Windows run's stop-path figures (closing our end, and the parent's
+`abort()`, each exiting Tor in about 20 ms; C4, C5) are evidence for the stop
+path, not a bound.
 
 **Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
 `TSR-M10` need only today's managed Tor and a SOCKS self-dial, and are measured
