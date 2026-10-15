@@ -304,19 +304,39 @@ add_dependencies(shekyl_ffi shekyl_rust)
 # so `rust/shekyl-daemon-image` builds both crates into one staticlib with a
 # unified Cargo graph (one dispatcher; see that crate's docs).
 
+# The cold-first-contact measurement build only (Rick, 2026-10-14): the
+# Tor gap deadline lifted to 120 s, the dial's bound. Never on in a release build;
+# scripts/ci/check_measurement_spans.py fails any release path that sets it.
+option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor gap deadline to 120 s" OFF)
+set(_measurement_features "")
+set(_daemon_image_dir "${RUST_BUILD_DIR}")
+if(SHEKYL_MEASUREMENT_SPANS)
+    # Its own cargo target directory, inside this build directory. In the
+    # shared rust/target, the measurement archive would be the file another
+    # build directory of the same checkout links: its sources are older than
+    # the archive, so the generator never runs cargo to rebuild it without
+    # the feature, and a release daemon keeps the 120 s gap. Selecting the
+    # crate as well lets the command line name its feature; cargo unifies it
+    # into the daemon image's graph.
+    set(_measurement_target_dir "${CMAKE_BINARY_DIR}/cargo-measurement")
+    set(_measurement_features -p shekyl-transport-layer --features shekyl-transport-layer/measurement-spans --target-dir ${_measurement_target_dir})
+    string(REPLACE "${RUST_SOURCE_DIR}/target" "${_measurement_target_dir}" _daemon_image_dir "${RUST_BUILD_DIR}")
+    message(WARNING "SHEKYL_MEASUREMENT_SPANS is ON: this daemon is a measurement build, not a release")
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MSVC)
-    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${RUST_BUILD_DIR}/libshekyl_daemon_image.a")
+    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${_daemon_image_dir}/libshekyl_daemon_image.a")
 elseif(MSVC)
-    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${RUST_BUILD_DIR}/shekyl_daemon_image.lib")
+    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${_daemon_image_dir}/shekyl_daemon_image.lib")
 else()
-    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${RUST_BUILD_DIR}/libshekyl_daemon_image.a")
+    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${_daemon_image_dir}/libshekyl_daemon_image.a")
 endif()
 
 add_custom_command(
     OUTPUT ${SHEKYL_DAEMON_IMAGE_LIBRARY}
     COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
         ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-        -p shekyl-daemon-image
+        -p shekyl-daemon-image ${_measurement_features}
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
     DEPENDS ${_shekyl_rust_deps}
     COMMENT "${_rust_comment} (shekyl-daemon-image: shekyl-ffi + shekyl-daemon-rpc)"

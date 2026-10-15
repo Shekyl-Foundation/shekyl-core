@@ -278,7 +278,12 @@ members = [
     # The peer lists (P2P_3_SLICE_1_PEERLIST_BRIEF.md): gray, white, the
     # one door between them, the cached disclosure sample, ban demotion,
     # the per-session intake cap. Data only: no socket, no dial, no FFI.
+    "shekyl-peer-bounds",
     "shekyl-peerlist",
+    # The outbound dialer: the fill rule, the wake spacing, the failed-address
+    # memory and the self-connection nonces, over `shekyl-peerlist`
+    # (P2P-3 slice 3). The C++ reaches it only through `shekyl-ffi`.
+    "shekyl-dialer",
     # SOCKS5 CONNECT, no authentication. Clearnet's --proxy and the Tor
     # connector share it. It does not know which connector is calling.
     "shekyl-socks",

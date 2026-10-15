@@ -182,8 +182,8 @@ jobs:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
     # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
     # against their committed fixtures (150 s and 100 s in release), the
-    # full-scale challenge-coverage reproduction, and the secret draw's
-    # evidence set. This job is the lane that invokes them. Before it none
+    # full-scale challenge-coverage reproduction, and the secret draw at
+    # ESR-11's timing on ESR-13's loop. This job is the lane that invokes them. Before it none
     # did: on PR #1009 the sim's share calls moved onto a function that is
     # zero at height 0 (783053554), both narrations drifted, and CI stayed
     # green until a fresh clone ran the tests by hand two commits later
@@ -253,7 +253,7 @@ jobs:
           run_tests='stage2::tests::stage2_narration_matches_the_committed_fixture
           stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
           challenge_coverage::tests::full_scale_maturity_reproduces_doc_figures
-          secret_draw::tests::the_evidence_set_runs_and_the_table_renders'
+          secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders'
           helpers='record::tests::regen_baseline_fixture
           stage2::tests::regen_stage2_narration_fixtures'
           run_tests=$(printf '%s\n' "$run_tests" | sed 's/^ *//')
@@ -328,7 +328,7 @@ jobs:
               'economics-sim-ignored': {
                 title: 'nightly economics-sim ignored tests RED',
                 lines: [
-                  'The `economics-sim-ignored` job failed. It runs four `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `full_scale_maturity_reproduces_doc_figures` and `the_evidence_set_runs_and_the_table_renders`.',
+                  'The `economics-sim-ignored` job failed. It runs four `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `full_scale_maturity_reproduces_doc_figures` and `the_esr11_timing_set_runs_and_the_table_renders`.',
                   'If a narration drifted: regenerate with `regen_stage2_narration_fixtures` only if the sim change is intended; otherwise the sim drifted from its record.',
                   'If the job stopped before running anything, the crate\'s ignored set changed: decide in `nightly.yml` whether the new test is run or is a regeneration helper.',
                 ],

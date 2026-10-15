@@ -200,7 +200,7 @@ round exists to close, and because **PWD-I1 may or may not discharge it** (see
 PWD-E5).
 
 - **Adversary:** any peer that has completed one handshake. Our `peer_id` is in the handshake *response* (`:2799`, via `get_local_node_data`) and in `handle_ping`'s reply (`:2809`).
-- **Access:** gossip. `sanitize_peerlist` filters address and pruning seed only (`:2090-2115`); the merge predicate is address-only (`:2147`). Nothing inspects `id`. On address collision the gray record is **replaced including its id** (`src/p2p/net_peerlist.h:420-424`), so any gray entry can be retargeted; white is protected (`:406-408`).
+- **Access:** gossip. `sanitize_peerlist` filters address and pruning seed only (`:2090-2115`); the merge predicate is address-only (`:2147`). Nothing inspects `id`. On address collision the gray record is **replaced including its id** (`net_peerlist.h:420-424 at this round's pin; the C++ peerlist is deleted (2026-10-13)`), so any gray entry can be retargeted; white is protected (`:406-408`).
 - **Delta:** gray housekeeping dials the address and handshakes successfully — reading the *real* peer id into `pi` at `:1393-1394` — then **discards it and promotes `pe.id`, the gossiped value** (`:3167`). The honest address enters white carrying our own id, and `is_peer_used`'s self-check then skips it at every selection (`:1445`, `:1703`, `:1769`). Correction requires that peer to dial us and complete pingback.
 
 The observed value is in a local variable one line above the store of the
@@ -563,6 +563,13 @@ than its title suggests.
 > that the seam row "tor control unavailable" below splits into a refused start
 > and a runtime degrade. The code behaves as this section describes until the
 > refusal lands, which `TB-12` orders last.
+>
+> **Amended 2026-10-15 (ratified by Rick, not yet implemented):**
+> [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) (`TSR-`) makes the managed Tor a
+> supervised owner: a Tor that fails or dies is retried with capped backoff
+> and never given up, and a respawn within a boot keeps the onion. The seam
+> rows "Restart" and "tor control unavailable" below say so; the code behaves
+> as before until the supervisor lands.
 
 **RULED by Rick, 2026-09-07.** PWD-E1/E2 answer the clearnet question — a
 candidate endpoint proposed by NAT, IGD or an operator, and a verifier that
@@ -593,7 +600,10 @@ daemon-held key would have to be persisted by the daemon, giving it its first
 long-lived on-disk secret and escalating the peerlist-store question from
 privacy into integrity. Ephemeral-per-boot removes that entirely: **no
 persisted secret, no durable join key, no store-encryption escalation.** The
-key is minted at startup, lives in memory, and dies with the process.
+key is minted at startup, lives in memory, and dies with the process. Within
+a boot the daemon holds the hs-id seed in secure memory, so a respawned Tor
+republishes the same onion (`TOR_SUPERVISOR.md` `TSR-Q1`); Tor still
+retains no copy (`DiscardPK`).
 
 **Behaviour at every seam, both postures** — required because both are
 supported, so no seam may be defined in only one:
@@ -602,8 +612,8 @@ supported, so no seam may be defined in only one:
 |---|---|---|
 | Where the address comes from | `ADD_ONION` reply `ServiceID`, read from our own control connection | the flag's parsed string |
 | Verification | **none needed, and none admissible to add** — see below | none today; unchanged |
-| Restart | new key, **new address** | same address, from `torrc` |
-| tor control unavailable | no address ⇒ no overlay inbound; the node is outbound-only on that zone | unaffected — needs only SOCKS |
+| Restart | a daemon restart: new key, **new address**. A respawn of the managed Tor within a boot keeps the key and the address (`TOR_SUPERVISOR.md` `TSR-Q1`) | same address, from `torrc` |
+| tor control unavailable | the supervisor retries with capped backoff and never gives up (`TOR_SUPERVISOR.md` §1, §4.4); meanwhile the Tor connector is parked and a Tor-only node sends nothing | unaffected — needs only SOCKS |
 | First run vs later | identical; there is no "later" state | identical |
 
 **Why the overlay case needs no verifier, stated as a property rather than an

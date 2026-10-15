@@ -260,7 +260,7 @@ implements first.)*
 
 **Drift looks like.** A white list that accepts an inbound peer after a
 back-ping (the inbound-derived endpoint is routed to **gray** at
-`src/p2p/net_node.inl:2925`, `append_with_peer_gray`, with `last_seen = 0` —
+`net_node.inl:2925` at this document's pin (`append_with_peer_gray` went with the C++ peerlist, 2026-10-13), with `last_seen = 0` —
 "an unverified claim has never been seen"); anchors persisted as a separate
 trusted file; a `PeerEntry` with a trust or score field; promotion implemented
 as a copy so an address is in both lists.

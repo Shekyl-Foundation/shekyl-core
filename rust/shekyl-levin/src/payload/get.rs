@@ -53,14 +53,6 @@ pub(crate) fn opt_u32(section: &Section, key: &'static str, default: u32) -> Res
     }
 }
 
-pub(crate) fn opt_i64(section: &Section, key: &'static str, default: i64) -> Result<i64, Error> {
-    match section.get(key) {
-        None => Ok(default),
-        Some(Value::Int64(v)) => Ok(*v),
-        Some(_) => Err(mismatch(key, "int64")),
-    }
-}
-
 pub(crate) fn blob<const N: usize>(section: &Section, key: &'static str) -> Result<[u8; N], Error> {
     match require(section, key)? {
         Value::Bytes(b) => <[u8; N]>::try_from(b.as_slice()).map_err(|_| Error::InvalidLength {
@@ -94,12 +86,6 @@ pub(crate) fn object<'a>(section: &'a Section, key: &'static str) -> Result<&'a 
 pub(crate) fn insert_opt_u32(section: &mut Section, key: &'static str, value: u32, default: u32) {
     if value != default {
         section.insert(key, Value::UInt32(value));
-    }
-}
-
-pub(crate) fn insert_opt_i64(section: &mut Section, key: &'static str, value: i64, default: i64) {
-    if value != default {
-        section.insert(key, Value::Int64(value));
     }
 }
 

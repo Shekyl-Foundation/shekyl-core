@@ -423,7 +423,10 @@ command on that mailbox, not a side channel. The home stamps
 is nanoseconds since that instant. The clock is `Clone`, and a clone
 keeps the origin. The service constructs one clock and clones it to
 each home. A home that called `MonotonicClock::new` itself would report
-lateness from a different zero.
+lateness from a different zero. In the daemon the engine's clock is
+itself a clone of the process clock in `shekyl-ffi` (Rick, 2026-10-14).
+The seam hub, every ban deadline, the zone host's engine and the link
+gate read one origin, so an engine `now` compares with a ban directly.
 
 **After close.** Each handle holds a closed flag. `register`, `arm`,
 `clear`, and `deregister` check it and return `EngineError::Closed`
