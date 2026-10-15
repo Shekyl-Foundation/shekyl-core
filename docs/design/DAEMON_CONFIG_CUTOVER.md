@@ -158,9 +158,16 @@ What crosses the FFI after the cutover, and nothing else:
    announcements: the effective-configuration line, every `dev-` lever set,
    and the posture line (Tor-only, clearnet-only, offline), to the log and
    to standard error whatever the level (IG-14).
-6. Rust installs the one signal handler and starts the managed Tor's
-   bootstrap, if the Tor posture is `Managed`. Nothing that serves peers or
-   clients starts yet.
+6. Rust installs the one signal handler and, if the Tor posture is
+   `Managed`, starts the managed Tor's supervisor (Rick, 2026-10-14): one
+   Rust owner of the state machine `Bootstrapping`, `Usable`, `Degraded`,
+   `Restarting`, where *usable* is defined by a self-dial probe. Start is
+   the supervisor's first iteration, with no separate bootstrap-failure
+   path: a bootstrap that does not finish is capped backoff, retried
+   forever, never a start refusal. The SOCKS endpoint is a value the
+   supervisor publishes, never configuration. The Tor lane's Round 0 is
+   `docs/design/TOR_SUPERVISOR.md` (draft #1077): §3.2 the state machine,
+   §3.8 the launch. Nothing that serves peers or clients starts yet.
 7. Rust fills the snapshot (§2.9) and calls the remnant's `run(snapshot)`
    on a thread of its own. C++ constructs core, which publishes its tip
    (`shekyl_core_publish_tip`), then the protocol handler and what remains
@@ -171,9 +178,11 @@ What crosses the FFI after the cutover, and nothing else:
 9. Stop is Rust's, and there is one stop path, fed by the POSIX signals,
    every Windows console event (Ctrl-C, Ctrl-Break, window close, logoff,
    shutdown), and the SCM's stop and pre-shutdown controls (DC-F13). The
-   handler stops the dialer and the zone host, stops the RPC, calls the remnant's `stop()`,
-   joins the `run` thread, stops the managed Tor, and releases the lock
-   last. `run` and `stop` are `noexcept` and catch every C++ exception;
+   handler stops the dialer and the zone host, then stops the RPC. Then two
+   stops run in parallel (Rick, 2026-10-14): the remnant's `stop()` with
+   the join of the `run` thread, and the managed Tor supervisor's
+   teardown (`docs/design/TOR_SUPERVISOR.md` §3.7, draft #1077). The lock
+   is released last, after both. `run` and `stop` are `noexcept` and catch every C++ exception;
    `run` returns its status to Rust, which becomes the exit status.
 
 `tools::signal_handler::install` in `Daemon::run`
