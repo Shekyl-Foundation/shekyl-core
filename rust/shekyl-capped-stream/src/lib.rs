@@ -19,6 +19,7 @@
 
 mod accept;
 mod copy;
+mod gap;
 mod gate;
 mod queue;
 mod session;
@@ -26,6 +27,7 @@ mod stall;
 
 pub use accept::accept_error_is_transient;
 pub use copy::{read_capped, refund_unsent, write_all_counted, write_capped, READ_CHUNK_BYTES};
+pub use gap::SilenceGap;
 pub use gate::{node_gate, LinkGate};
 pub use queue::{ByteQueue, CloseReason, Overfull, PushError};
 pub use session::{

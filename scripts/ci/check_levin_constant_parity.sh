@@ -33,10 +33,11 @@
 # drift. Remaining twice-defined constants: framing values in levin_base.h,
 # advertised support flags (`cryptonote_config.h` vs `SupportFlags` in
 # types.rs, added PWD-B6 so a dropped bit cannot silently diverge), and
-# the PWD-B3 ingress table inputs (`P2P_MAX_PEERS_IN_HANDSHAKE`,
-# `BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`,
+# the PWD-B3 ingress table inputs (`BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`,
 # `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT`) copied into
-# rust/shekyl-levin/src/ingress.rs.
+# rust/shekyl-levin/src/ingress.rs. The handshake cap's input is
+# `DISCLOSE_COUNT`, Rust-owned since the P2P-3 cutover (2026-10-13): the C++
+# `P2P_MAX_PEERS_IN_HANDSHAKE` is deleted, so there is no copy to compare.
 
 set -euo pipefail
 
@@ -190,12 +191,8 @@ compare "P2P_SUPPORT_FLAG_ZSTD_COMPRESSION" \
 compare "P2P_SUPPORT_FLAGS" \
   "$flags_cpp" "$(rust_support_flag ADVERTISED)"
 
-# PWD-B3: handshake / hash-list cap inputs. Handshake's 65536 is derived
-# from P2P_MAX_PEERS_IN_HANDSHAKE; a silent C++ bump would reconstruct the
-# wrong envelope.
-compare "P2P_MAX_PEERS_IN_HANDSHAKE" \
-  "$(cpp_define P2P_MAX_PEERS_IN_HANDSHAKE "$config_h")" \
-  "$(rust_const P2P_MAX_PEERS_IN_HANDSHAKE "$rust_ingress")"
+# PWD-B3: the hash-list cap inputs. (The handshake cap is derived in Rust
+# from DISCLOSE_COUNT and the entry's pinned encoding; no C++ copy exists.)
 compare "BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT" \
   "$(cpp_define BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT "$config_h")" \
   "$(rust_const BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT "$rust_ingress")"

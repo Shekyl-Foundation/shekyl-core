@@ -200,6 +200,13 @@ The six deferred invariants are not transcript fields, so they are
 not in the files. Recorded at `88a202195`. Option-off goldens;
 re-recorded at the flip per §Goldens. The epee host is deleted
 with that server. CI runs `check-goldens` on these files.
+**Re-recorded 2026-10-13 (PR-3), from the seam:** the handshake carries
+no `address` (ruled 2026-10-09), so every handshake is 44 bytes
+shorter. `record-goldens DIR` now runs the seeds against the seam and
+writes the parity scope; the diff of the committed files was checked
+to be exactly the removed entry in 46 seed files, the shorter length
+prefix in the close-mid-header seed, and nothing in the other four.
+*Records-was: `record-goldens EPEE_HOST DIR`.*
 
 After cutover, in CI, the same peer runs every seed against the Rust
 transport. Each run checks the goldens (the peer still sees the same

@@ -514,6 +514,8 @@ stale_through = [
   { through = "4bc4ad7380", note = "A doc comment in declaration.rs names the hidden stem slot's pin in place of the own-edge draw (PR-1, #1018). No code changed in these paths. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime gained a thread-start hook parameter at this commit (a ThreadStart, since reshaped into ThreadHooks on runtime_with_thread_hooks; the two-argument runtime came back at da7b70c8cf, heard below). The clearnet tests passed the empty hook, so their runtime threads started exactly as before; no production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "da7b70c8cf", note = "SH-3: the ordinary runtime constructor is a budget and a name again. The clearnet tests call it with the same two arguments they had before the hook parameter (the serving runtime alone uses ThreadHooks through runtime_with_thread_hooks), so their runtime threads start as before. No production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "3081ba830b", note = "The failed-address predicate (implicates_address) answers true only for an onion dial with a destination-naming proxy reply; every clearnet cause is false. It runs after a dial has ended and decides whether the address is remembered. The clearnet dial, handshake, and gap waits do the same I/O. Not re-measured." },
+  { through = "3a0d211d80", note = "The failed-address predicate reads the destination_authenticated cell of the connector declaration in place of matching the connector. Clearnet still answers false for every cause. It runs after a dial has ended. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "e3a167bac2", note = "RT-W9 step 1 (PR #1038): the record layer (aead.rs, channel.rs) and the handshake's symmetric state move out of shekyl-p2p-transport into a new crate, shekyl-noise, which this path set now names so that later changes to that code are heard here. A refactor: the same functions run in the same order on the same bytes, the pinned handshake vectors are untouched and their test is byte-identical. Split now returns a named struct instead of the caller taking the chaining key out of the state, which is one move of three 32-byte values per handshake. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "482da291c5", note = "RT-W9 step 2 at this commit: SymmetricState::mix_key_and_hash for the hybridXK static-KEM tokens, and a three-output HKDF beside the two-output one. A has_key accessor landed with no caller. The P2P handshake and the clearnet connector call none of them. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "edcae056fc", note = "RT-W9 step 1 review (PR #1038): SymmetricState::into_halves owns the initiator/responder key order, and the hash, HKDF and AEAD stay crate-private. The same HKDF still feeds the same two record directions; the pinned handshake vectors are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
@@ -521,12 +523,22 @@ stale_through = [
   { through = "d03aeb2e0f", note = "RT-W9 step 1 review (PR #1038): the split yields two Directions, and the length-prefixed framer stays in shekyl-p2p-transport. The same HKDF still feeds the same two record directions; the pinned handshake vectors and the post-rekey record are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "4ae7de867a", note = "RT-W9 step 2 (PR #1039): has_key is gone and the two HKDF functions are one. The two-output bytes are unchanged, and the P2P handshake still uses two outputs. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "7813b29af9", note = "RT-W9 step 2: Direction counts the ciphertexts it has opened (one saturating add of a u64 on each successful open, none on a failed tag) and exposes the count, for the RPC handshake's pending session to gate on. The P2P record path opens through Direction, so that add is on it, twice per record. It is one integer add beside two AEAD operations; no I/O changed. Dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "b57c18478e", note = "PR-3 (#1056): the spans moved from the C++ transport_spans to shekyl-transport-layer::spans, the same numbers with the same provenance comment; the connectors read them from the zone host as before. The outbound cap and its floor moved to the dialer; the dial path is the Rust dialer, whose deadlines these are. Not re-measured: Ruling B measures them again on the Rust path after the cutover." },
+  { through = "fbfc1fff5", note = "PR-3 diagnosis instrumentation: debug lines at the clearnet dial, the handshake, the first bytes read and the gap's wake, each a tracing call beside the existing I/O. The dial, handshake and gap waits do the same I/O. Not re-measured." },
+  { through = "dc9130534", note = "PR-3 fix 2 (Rick, 2026-10-14): the gap now ends at the peer's first complete Levin frame, not at this node's handshake verdict, and a fired wake waits one IO driver turn for the reader before it times the peer out. This changes what the gap span bounds: the capture measured channel to verdict, which includes this node's own handshake work, so it overstates the peer's silence the gap now measures. The span stays as it is until the cold-first-contact rerun measures channel to first frame. The dial is unchanged. Not re-measured." },
+  { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
+  { through = "ee87fc633", note = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved. The clearnet path set holds cause.rs; clearnet closes are unchanged." },
+  { through = "b096e8c77", note = "spans.rs changes the Tor spans and the shutdown wait only; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
+  { through = "58ad7eac8", note = "spans.rs changes the Tor gap and its provenance comment and adds a derivation test; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
+  { through = "189f8104a", note = "The gap ends at the peer's first complete handshake frame, where it ended at any first complete frame: a frame of another command no longer disarms it. The dial, the handshake and their I/O are unchanged; in the clearnet legs the peer's first frame was its handshake. Not re-measured." },
+  { through = "cf144a645", note = "The gap and dial timeout arms stop logging the wake's identity fields at debug; the timeout and its close kind are unchanged. Logging only. Not re-measured." },
+  { through = "db6e11e07", note = "Tests, the seam post and the ban view move into files of their own; no code path changes. Not re-measured." },
 ]
 
 [[constant]]
 name = "clearnet_dial_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.clearnet_dial_within_ns = 1415000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const CLEARNET_DIAL_WITHIN_NANOS: u64 = 1_415_000_000;"
 measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
@@ -538,8 +550,8 @@ path_set = "clearnet-span"
 
 [[constant]]
 name = "clearnet_handshake_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.clearnet_handshake_within_ns = 1426000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const CLEARNET_HANDSHAKE_WITHIN_NANOS: u64 = 1_426_000_000;"
 measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
@@ -551,8 +563,8 @@ path_set = "clearnet-span"
 
 [[constant]]
 name = "clearnet_gap_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.clearnet_gap_within_ns = 1430000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const CLEARNET_GAP_WITHIN_NANOS: u64 = 1_430_000_000;"
 measured_by = ["BA-T8"]
 status = "stale"
 stale_since = "d25731a18"
@@ -584,45 +596,56 @@ stale_through = [
   { through = "4bc4ad7380", note = "A doc comment in declaration.rs names the hidden stem slot's pin in place of the own-edge draw (PR-1, #1018). No code changed in these paths. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime gained a thread-start hook parameter at this commit (a ThreadStart, since reshaped into ThreadHooks on runtime_with_thread_hooks; the two-argument runtime came back at da7b70c8cf, heard below). shekyl-tor's tests passed the empty hook, so their runtime threads started exactly as before; no production path in this set changed. The dial and the gap wait are unchanged. Not re-measured." },
   { through = "da7b70c8cf", note = "SH-3: the ordinary runtime constructor is a budget and a name again. shekyl-tor's tests call it with the same two arguments they had before the hook parameter (the serving runtime alone uses ThreadHooks through runtime_with_thread_hooks), so their runtime threads start as before. No production path in this set changed. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "3081ba830b", note = "The failed-address predicate (implicates_address) no longer counts DialFailed or LevinHandshakeRejected on an onion dial; the five destination-naming replies still count. It runs after a dial has ended. The Tor dial and the gap wait are unchanged. Not re-measured." },
+  { through = "3a0d211d80", note = "The failed-address predicate reads the destination_authenticated cell, and on Tor a rejected Levin handshake counts again beside the five destination-naming replies. It runs after a dial has ended. The Tor dial and the gap wait are unchanged. Not re-measured." },
+  { through = "b57c18478e", note = "PR-3 (#1056): the spans moved from the C++ transport_spans to shekyl-transport-layer::spans, the same numbers with the same provenance comment; the connectors read them from the zone host as before. The outbound cap and its floor moved to the dialer; the dial path is the Rust dialer, whose deadlines these are. Not re-measured: Ruling B measures them again on the Rust path after the cutover." },
+  { through = "8359ef531", note = "Cold first contact instrumented: the Tor driver logs its first bytes read and written and the gap's end, each a tracing call beside the existing I/O. The dial and the gap wait do the same I/O. Not re-measured." },
+  { through = "e32770626", note = "The Tor gap logs what it armed and the wake it received. Logging only; the dial and the gap wait do the same I/O. Not re-measured." },
+  { through = "05c1aeb93", note = "The Tor gap's wake line names the wake's owner. Logging only; the dial and the gap wait are unchanged. Not re-measured." },
+  { through = "fbfc1fff5", note = "PR-3 diagnosis instrumentation: one more debug line set on the Tor driver's wake and close. Logging only; the dial and the gap wait do the same I/O. Not re-measured." },
+  { through = "dc9130534", note = "PR-3 fix 2 (Rick, 2026-10-14): the gap now ends at the peer's first complete Levin frame, not at this node's handshake verdict, and a fired wake waits one IO driver turn for the reader before it times the peer out. This changes what the gap span bounds: the capture measured channel to verdict, which includes this node's own handshake work, so it overstates the peer's silence the gap now measures. The span stays as it is until the cold-first-contact rerun measures channel to first frame. The dial is unchanged. Not re-measured." },
+  { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
+]
+cleared = [
+  { through = "ee87fc633", reason = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved." },
+  { through = "b096e8c77", reason = "The spans themselves: TOR_DIAL_WITHIN_NANOS 120 s and TOR_GAP_WITHIN_NANOS 31 s from the rerun (this ledger's current rows), SHUTDOWN_TIMEOUT_NANOS following the dial, TOR_SPANS_BASIS RustPath, and the measurement feature lifting the gap alone. The values are the capture's; nothing else on these paths changed." },
+  { through = "58ad7eac8", reason = "The Tor gap corrected to 37.4 s, 2 x the pooled p99 of 18.69 s (rank 188 of 189 per D9), rounded up to 100 ms (Rick, 2026-10-14; 31 s struck as a miscount of rank 187). The capture is unchanged; this applies its derivation correctly. A derivation test is added. The dial, the shutdown wait and the I/O are unchanged." },
+  { through = "189f8104a", reason = "The gap ends at the peer's first complete handshake frame instead of its first complete frame (Copilot on #1056). In the capture the two are the same frame: the dialer sends its handshake request first and accepts only the response as its first message, so every counted session's first frame was its handshake (the record says so). The capture still prices this tree; the dial and the I/O are unchanged." },
+  { through = "cf144a645", reason = "The Tor dial and gap timeout arms drop their debug lines naming the wake; the deadlines, the timeout and its close kind are unchanged, so the capture still prices this tree." },
+  { through = "db6e11e07", reason = "The Tor listener tests and the seam's post and ban types move into files of their own; no code path changes." },
 ]
 
 [[constant]]
 name = "tor_dial_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.tor_dial_within_ns = 9100000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const TOR_DIAL_WITHIN_NANOS: u64 = 120_000_000_000;"
 measured_by = ["BA-T8"]
-status = "stale"
-stale_since = "57d756bca"
-carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
-capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
-capture_rev = "572ed17c3"
-rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
+status = "current"
+capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
+capture_rev = "19863b044"
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; bounded by Tor's own SOCKS timeout; censored there, 4 of 200 dials past it). Reopen at 500 pooled Rust-path samples."
 path_set = "tor-span"
 
 [[constant]]
 name = "tor_gap_within_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.tor_gap_within_ns = 2600000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const TOR_GAP_WITHIN_NANOS: u64 = 37_400_000_000;"
 measured_by = ["BA-T8"]
-status = "stale"
-stale_since = "57d756bca"
-carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
-capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
-capture_rev = "572ed17c3"
-rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
+status = "current"
+capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
+capture_rev = "19863b044"
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; 2 x 18.69 s, the pooled outbound gap's p99, rank 188 of 189 per D9, rounded up to 37.4 s (Rick, 2026-10-14; the 31 s first ruled is struck as a miscount of rank 187)). Reopen at 500 pooled Rust-path samples."
 path_set = "tor-span"
 
 [[constant]]
 name = "tor_shutdown_timeout_ns"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.shutdown_timeout_ns = 9100000000ull;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const SHUTDOWN_TIMEOUT_NANOS: u64 = TOR_DIAL_WITHIN_NANOS;"
 measured_by = ["BA-T8"]
-status = "stale"
-stale_since = "57d756bca"
-carrier = "BA-T8 (BA-G7). Takes the Tor dial figure; the connector and transport have changed since the capture, and no change has been reviewed for cost."
-capture = "docs/benchmarks/p2p_tor_dial_floor_20260929.tsv"
-capture_rev = "572ed17c3"
-rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
+status = "current"
+capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
+capture_rev = "19863b044"
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; takes the Tor dial figure). Reopen at 500 pooled Rust-path samples."
 path_set = "tor-span"
 
 [[path_set]]
@@ -634,8 +657,8 @@ spec = [
 
 [[constant]]
 name = "transport_workers"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.workers = 2;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const WORKERS: usize = 2;"
 measured_by = ["BA-T11"]
 status = "unmeasured"
 carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."
@@ -643,8 +666,8 @@ path_set = "transport-budget"
 
 [[constant]]
 name = "transport_blocking"
-defined_in = "src/p2p/net_node.inl"
-needle = "spans.blocking = 1;"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const BLOCKING: usize = 1;"
 measured_by = ["BA-T11"]
 status = "unmeasured"
 carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."

@@ -1142,9 +1142,8 @@ two. Every route they replace is a REST path today.
     passes §6.1's line for that grant: a client needs it to decide whether
     it can use the node now, and it says nothing lasting about the node.
     No row does today.
-  - `status` — this node's rate limits, inbound cap and log settings
-    (`p2p-upload-max`, `p2p-download-max`, `p2p-inbound-max`, `log-level`,
-    `log-category`). `/get_limit` sits in `status` today, so its readers
+  - `status` — this node's rate limits and log settings
+    (`p2p-upload-max`, `p2p-download-max`, `log-level`, `log-category`). `/get_limit` sits in `status` today, so its readers
     keep the rate limits at the same grant.
   - `peers` — the peer, closed-peer and ban rows.
   - **`config`, the default** — every other row, including everything
@@ -1162,11 +1161,8 @@ two. Every route they replace is a REST path today.
   same day: IG-9's `view` field becomes the row's disclosing grant, with a
   Grant column in `INPUT_GRAMMAR.md` §5 carrying the `status` assignments
   listed above, and IG-12 and IG-Q38 move `option set` from the admin
-  grant to `node`. Until #1074 merges, `dev`'s grammar still says
-  `view` and admin; the two PRs are one decision and merge together.
-  *From the tree:* the direction named rate limits, the
-  inbound cap and log level; `log-category` is placed beside `log-level`
-  here, since today one filter holds both
+  grant to `node`. *From the tree:* `log-category` is placed beside
+  `log-level` here, since today one filter holds both
   ([`filter.rs:107-131`](../../rust/shekyl-logging/src/filter.rs)).
 - **Who may call `option_show`:** like `get_info`, any connection holding
   `health`; each row is present only when the connection holds the row's
@@ -1198,26 +1194,17 @@ two. Every route they replace is a REST path today.
   given twice, an unknown name and an empty list are each refused. The
   reply lists each row it set, in the shape `option_show` uses, with
   source `runtime`.
-- **Build, check, apply, under RT-O27's one lock.** *Refined by Rick
-  on PR #1066, 2026-10-14; relayed to this record by the daemon-config
-  lane, `DAEMON_CONFIG_CUTOVER.md` §2.7 there.* The rows go to different
-  owners: the link limiter, the zone host's admission and
-  `shekyl-logging`. A value can be refused for two reasons, its own
-  invariants and the owner's live state, so not every refusal lives in the
-  constructor. `p2p-inbound-max` has both: it must be at least 1, and it
-  must not exceed the descriptor ceiling, which is runtime state
-  ([`net_node.inl:3229`](../../src/p2p/net_node.inl);
-  `InboundCeiling::resolve(snapshot, reserved, inbound_held)`,
-  [`inbound_ceiling.rs:98`](../../rust/shekyl-peer-policy/src/inbound_ceiling.rs)).
-  A set therefore runs three steps:
-  1. **build**: every value through its constructor, value-only
-     invariants;
-  2. **check**: each owner tests its built value against its live state,
-     with no side effect, and may refuse;
-  3. **apply**: each owner takes the checked value and **cannot fail**.
+- **Build, then apply, under RT-O27's one lock.** *Ruled by Rick on PR
+  #1066, 2026-10-14, with the inbound-cap ruling (`INPUT_GRAMMAR.md`
+  IG-Q40); `DAEMON_CONFIG_CUTOVER.md` §2.7 there.* The rows go to two
+  owners: the link limiter and `shekyl-logging`. No runtime row's validity
+  depends on its owner's live state, so every refusal is the
+  constructor's, and a set runs two steps:
+  1. **build**: every value through its constructor;
+  2. **apply**: each owner takes the built value and **cannot fail**.
 
-  Every refusal, from either of the first two steps, is reported before
-  anything is applied, so the set is all or nothing. **What all or
+  Every refusal is reported before anything is applied, so the set is all
+  or nothing. **What all or
   nothing promises:** every row of a request is applied or none is, and no
   reply and no `option_show` ever sees part of a request, since both run
   under the lock. Each owner applies all of its own rows from one request
@@ -1230,33 +1217,19 @@ two. Every route they replace is a REST path today.
   One configuration snapshot read by every owner was weighed and is not
   used: it would make the live value the snapshot's rather than the
   owner's (DC-Q16), and couple every subsystem to one shared object.
-  **The check reads a moment's state.** The inbound ceiling can move
-  between check and apply as descriptors are taken and released. That
-  cannot make the applied cap unsafe: the transport layer's ceiling bounds
-  admission whatever the cap (`INPUT_GRAMMAR.md` §5, the `p2p-inbound-max`
-  row). The check exists so that an operator is told a cap would have no
-  effect. The startup parse
-  runs the same check against the state at startup: one rule on both
-  surfaces (IG-12). *From the tree:* today `/in_peers` keeps the old cap
-  when the new one exceeds the ceiling, writes a log line and still
-  answers `OK` (`net_node.inl:3229-3233`,
-  [`core_rpc_server.cpp:1176-1184`](../../src/rpc/core_rpc_server.cpp)),
-  so the caller has to notice the unchanged value. The check step makes
-  that a refusal. *Also from the tree:* the logging owner does not meet
-  step 3 yet. Its runtime path swaps the filter through a reload handle whose
+  The startup parse runs the same constructors: one rule on both
+  surfaces (IG-12). *From the tree:* the logging owner does not meet
+  step 2 yet. Its runtime path swaps the filter through a reload handle whose
   `reload` returns a `Result`
   ([`ffi.rs:639`](../../rust/shekyl-logging/src/ffi.rs)), and the handle
   is reached only through the FFI module. The implementing PR gives the
   owner a Rust interface that holds the handle for the life of the process.
-  PR #1069 (every log sink queued, so a log call never blocks) is in
-  flight and merges before the daemon-config cutover's PR-3; it changes the
-  sinks and leaves the filter and the reload path as they are, so this
-  finding stands on both trees and the interface is built on its result.
-- **What a change does to traffic already running** (same refinement).
-  Lowering `p2p-inbound-max` below the current inbound count refuses new
-  inbound until the count falls under the cap, and never cuts an existing
-  session; the audit line records the count at the change. A rate limit
-  takes effect on the next transfer and never aborts one in flight.
+  PR #1069 (every log sink queued, so a log call never blocks) changed
+  the sinks and left the filter and the reload path as they are, so this
+  finding stands and the interface is built on its result.
+- **What a change does to traffic already running** (same ruling). A
+  rate limit takes effect on the next transfer and never aborts one in
+  flight.
 - **`option_show`** takes an optional `{"names": [...]}`. With no names, it
   returns every row the caller may see, in table order. Each row carries
   `name`, `source` (`default`, `file`, `cli` or `runtime`), `runtime`
@@ -1275,14 +1248,13 @@ two. Every route they replace is a REST path today.
   a value is valid input to `option_set` and builds the same value. A
   property test over every runtime row holds this. **Every runtime row's
   default is a value**, written as text like any other: `unlimited` for a
-  rate, and `none` for `p2p-inbound-max` (no operator cap) and
-  `log-category` (no per-category overrides). So `option_show` never
+  rate, and `none` for `log-category` (no per-category overrides). So `option_show` never
   prints `null` for a runtime row, and the property needs no special
   case. `null` appears only on a row that is not runtime and has no
   value, and `option_set` refuses such rows anyway. *Found against the
-  grammar:* on `dev` both rows default to unset with no way to write it
-  (`INPUT_GRAMMAR.md` §5), so an operator who set either could not return
-  it to its default without a restart. The spelling `none` is the
+  grammar:* `log-category` defaulted to unset with no way to write it
+  (`INPUT_GRAMMAR.md` §5), so an operator who set it could not return it
+  to its default without a restart. The spelling `none` is the
   grammar's, ruled the same day as IG-Q39 in PR #1074. For `log-category`,
   the inherited runtime path reads an empty category list as "logging off"
   ([`filter.rs:155-162`](../../rust/shekyl-logging/src/filter.rs)), an
@@ -1332,7 +1304,7 @@ its handler, and fixes its callers in the same PR.
 | Today | Grant today (§6.1) | After |
 |---|---|---|
 | `/set_limit` | `node` | `option_set` on `p2p-upload-max`, `p2p-download-max` |
-| `/in_peers` | `node` | `option_set` on `p2p-inbound-max` |
+| `/in_peers` | `node` | deleted with its option (`INPUT_GRAMMAR.md` IG-Q40); the descriptor safety bound is the only inbound bound |
 | `/out_peers` | `node` | deleted with its option; the outbound degree is a protocol constant |
 | `/set_log_level`, `/set_log_categories` | `node` | `option_set` on `log-level`, `log-category` |
 | `/get_limit` | `status` | `option_show`; the rate-limit rows are `status` (RT-O24) |

@@ -7,7 +7,7 @@
 //!
 //! `properties` is one `&str → &[u8]` table holding values of **different
 //! types and different jurisdictions**: engine bookkeeping (`version`,
-//! `pruning_seed`) sits next to chain state (`total_burned`,
+//! the stripe seed) sits next to chain state (`total_burned`,
 //! `total_bonded_atomic`). LMDB's schema does not tell them apart and the
 //! C++ reads each cell by string at every call site. Here a cell is a
 //! **type**: its key, its value codec and its scope are declared once, and

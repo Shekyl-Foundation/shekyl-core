@@ -244,7 +244,7 @@ fn release_confirmed_absent_clears_only_the_named_tx() {
 
 fn healthy() -> DaemonHealth {
     DaemonHealth {
-        has_peers: true,
+        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         height: 10_000,
         synchronized: true,
     }
@@ -335,7 +335,7 @@ fn health_gates_the_ladder() {
     let past = CFG.escape_horizon_blocks;
 
     let behind = DaemonHealth {
-        has_peers: true,
+        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
         height: 5_000,
         synchronized: false,
     };
@@ -345,7 +345,7 @@ fn health_gates_the_ladder() {
     );
 
     let peerless = DaemonHealth {
-        has_peers: false,
+        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: false },
         height: 6_000,
         synchronized: true,
     };
@@ -353,6 +353,22 @@ fn health_gates_the_ladder() {
         escape_ladder_step(&h, past, peerless, CFG),
         WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless)
     );
+
+    // An offline daemon is its own alarm, not "peerless": it relays
+    // nothing by configuration, and only the operator can change that
+    // (Rick, 2026-10-14). It outranks the sync wait, as peerless does.
+    for synchronized in [true, false] {
+        let offline = DaemonHealth {
+            p2p: shekyl_rpc_types::HealthP2p::Offline,
+            height: 6_000,
+            synchronized,
+        };
+        assert_eq!(
+            escape_ladder_step(&h, past, offline, CFG),
+            WatchdogStep::OperatorAlarm(AlarmReason::DaemonOffline),
+            "synchronized {synchronized}"
+        );
+    }
 }
 
 /// **§3.1's defect, pinned shut** (RK-D14). A held send, past its
@@ -383,11 +399,11 @@ fn a_restricted_daemon_with_peers_reaches_the_probe_not_the_peerless_alarm() {
         reply.restricted = true;
         let status = reply.node.shown().expect("the document shows Status");
         assert_eq!(
-            (
-                status.outgoing_connections_count,
-                status.incoming_connections_count
-            ),
-            (0, 0),
+            status.connections,
+            shekyl_rpc_types::StatusConnections::Running {
+                outgoing: 0,
+                incoming: 0
+            },
             "the reply's counts are zero, as a restricted daemon writes them"
         );
         if status_withheld {
@@ -402,7 +418,7 @@ fn a_restricted_daemon_with_peers_reaches_the_probe_not_the_peerless_alarm() {
             &h,
             past,
             DaemonHealth {
-                has_peers: health.has_peers,
+                p2p: health.p2p,
                 height: health.height,
                 synchronized: health.synchronized,
             },
@@ -511,7 +527,7 @@ fn behind_and_peerless_alarms_peerless_not_syncing() {
     let h = held(0);
     let past = CFG.escape_horizon_blocks;
     let behind_and_peerless = DaemonHealth {
-        has_peers: false,
+        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: false },
         height: 5_000,
         synchronized: false,
     };
@@ -541,7 +557,7 @@ fn the_ladder_and_the_constructor_read_the_same_flag() {
         (1_000_000, false),
     ] {
         let health = DaemonHealth {
-            has_peers: true,
+            p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
             height,
             synchronized,
         };

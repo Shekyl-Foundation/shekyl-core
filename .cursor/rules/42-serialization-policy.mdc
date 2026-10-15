@@ -4,6 +4,7 @@ globs:
   - rust/shekyl-engine-state/**
   - rust/shekyl-engine-file/**
   - rust/shekyl-chain-store/**
+  - rust/shekyl-peerlist/**
 ---
 
 # Serialization policy
@@ -120,6 +121,19 @@ The chain store's pairing is one row, deliberately:
 | Store | Version constant | Source file |
 |---|---|---|
 | every `codec::Canonical` impl in `shekyl-chain-store` | `SCHEMA_VERSION` | `rust/shekyl-chain-store/src/codec/schema_version.rs` |
+
+The peer lists' address file is the third tree, and the smallest:
+
+| File | Version constant | Source file |
+|---|---|---|
+| the address file `shekyl-peerlist` writes (`schemas/address_file.snap` pins a fixture set's encoding) | `ADDRESS_FILE_VERSION` | `rust/shekyl-peerlist/src/address_file.rs` |
+
+A file of any other version is dropped whole, not migrated: the lists
+refill from the compiled seeds and from peers. The same workflow enforces
+the pairing — a changed `.snap` under `rust/shekyl-peerlist/schemas/`
+requires `ADDRESS_FILE_VERSION` to be numerically greater at the PR head.
+Regenerate with
+`UPDATE_SNAPSHOTS=1 cargo test -p shekyl-peerlist address_file::snapshot`.
 
 `SCHEMA_VERSION` is sealed into a fresh store's first transaction and any
 other value on reopen is a refusal, not a migration. Its declaration carries
