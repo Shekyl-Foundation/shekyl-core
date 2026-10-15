@@ -92,8 +92,9 @@ authenticated listener is the channel's, not a plaintext one.
 `ListenAddr` ([`server.rs`](../../rust/shekyl-wallet-rpc/src/server.rs))
 and `AuthConfig` ([`auth.rs`](../../rust/shekyl-wallet-rpc/src/auth.rs))
 are L1's current surface (symbols, not line anchors — the lines moved
-within this round). [`rpc_args.cpp:92-99`](../../src/rpc/rpc_args.cpp)
-is L2/L3's.
+within this round). L2/L3's is the daemon's RPC section, `rpc-admin-listen`
+and `rpc-view-listen`, loopback only
+([`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §2.3; RT-14).
 
 ### 2.1 Explicitly out of scope
 
@@ -154,9 +155,8 @@ answers, so it may bind a wildcard
 Binding a specific address is a decision about a network the operator can see;
 binding a wildcard is standing consent to networks they cannot. Refusing it is
 not administering the operator's network — it is declining to let them consent
-on behalf of their future self. That is also why this is a refusal and not the
-daemon's one-time `--confirm-external-bind`
-([`rpc_args.cpp:168`](../../src/rpc/rpc_args.cpp)): an acknowledgement given
+on behalf of their future self. That is also why this is a refusal and not a
+one-time acknowledgement flag: an acknowledgement given
 today cannot cover an interface that appears later.
 
 Note `::` also captures IPv4 via dual-stack on most platforms, so refusing it
@@ -349,12 +349,9 @@ epee stack is a materially larger lift than adding it to `axum`, and the
 daemon RPC has a Rust migration ahead of it. Hardening the C++ path now may be
 work that is deleted.
 
-Note L2/L3 are currently **ahead** of L1 on bind safety:
-[`rpc_args.cpp:92-99`](../../src/rpc/rpc_args.cpp) already defaults to
-`127.0.0.1`/`::1` and already has `--confirm-external-bind` (checked at
-[`:168`](../../src/rpc/rpc_args.cpp)) — which `shekyl-wallet-rpc` lacked
-entirely until RT-W1, and which RT-W1 now exceeds (refusal, not
-confirmation).
+Note L2/L3 and L1 now agree in kind: the daemon's listeners are loopback
+only by RT-14 ([`RPC_CHANNEL.md`](RPC_CHANNEL.md)), the refusal RT-W1 gave
+`shekyl-wallet-rpc`.
 
 *Needs a ruling.* Either harden C++ now, or hold L2/L3 behind the Rust
 migration and land RT-1/RT-2 there as a small C++ change in the interim.
@@ -398,11 +395,11 @@ again.)
   plan that waits looks like a plan that is careful. A constraint earns a
   place in a slicing table only with the command that demonstrated it.
 - **RT-O3 — §6: harden now. RULED 2026-08-21.** RT-W2 lands RT-1 and RT-2
-  on the daemon's `rpc_args` at the two confirm gates —
-  [`rpc_args.cpp:168`](../../src/rpc/rpc_args.cpp) (IPv4) and
-  [`:196`](../../src/rpc/rpc_args.cpp) (IPv6). `--confirm-external-bind` is
-  a confirmation gate, not a refusal — with the flag, `0.0.0.0` binds — so
-  the daemon is ahead in defaults and weaker in kind. Small, no epee TLS
+  on the daemon's `rpc_args` at its two confirm gates (IPv4 and IPv6;
+  `rpc_args` is deleted by the configuration cutover, whose listeners are
+  loopback only, RT-14). `--confirm-external-bind` was
+  a confirmation gate, not a refusal — with the flag, `0.0.0.0` bound — so
+  the daemon was ahead in defaults and weaker in kind. Small, no epee TLS
   surface, and it survives the Rust RPC migration as a spec requirement
   rather than as code to port (rule 20 permits a C++ refusal; it forbids a
   C++ TLS implementation).

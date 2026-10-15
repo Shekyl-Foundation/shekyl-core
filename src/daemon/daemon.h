@@ -52,7 +52,6 @@ public:
   Daemon & operator=(Daemon &&);
 
   bool run(bool interactive = false);
-  void stop();
 
 private:
   void stop_p2p();

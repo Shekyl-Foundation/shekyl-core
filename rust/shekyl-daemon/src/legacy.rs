@@ -17,7 +17,6 @@
 //! moves those readers to their Rust owners and closes both.
 
 use std::ffi::OsStr;
-use std::net::SocketAddr;
 
 use shekyl_daemon_config::sections::{Clearnet, DaemonConfig, Tor};
 use shekyl_daemon_config::Network;
@@ -33,15 +32,6 @@ impl Args {
     fn pair(&mut self, name: &str, value: String) {
         self.0.push(format!("--{name}"));
         self.0.push(value);
-    }
-
-    fn listener(&mut self, ip_flag: &str, ipv6_flag: &str, port_flag: &str, endpoint: &SocketAddr) {
-        if endpoint.is_ipv6() {
-            self.pair(ipv6_flag, endpoint.ip().to_string());
-        } else {
-            self.pair(ip_flag, endpoint.ip().to_string());
-        }
-        self.pair(port_flag, endpoint.port().to_string());
     }
 }
 
@@ -125,28 +115,8 @@ pub fn argv(program: &OsStr, config: &DaemonConfig) -> Vec<String> {
     if let Some(down) = config.p2p.download_max {
         a.pair("limit-rate-down", down.div_ceil(1024).max(1).to_string());
     }
-    if let Some(admin) = config.rpc.admin_listen.first() {
-        a.listener(
-            "rpc-bind-ip",
-            "rpc-bind-ipv6-address",
-            "rpc-bind-port",
-            admin,
-        );
-    }
-    if let Some(view) = config.rpc.view_listen.first() {
-        a.listener(
-            "rpc-restricted-bind-ip",
-            "rpc-restricted-bind-ipv6-address",
-            "rpc-restricted-bind-port",
-            view,
-        );
-    }
-    if !config.rpc.cors_origins.is_empty() {
-        a.pair(
-            "rpc-access-control-origins",
-            config.rpc.cors_origins.join(","),
-        );
-    }
+    // The RPC reads its section (§2.3); the one spelling left is the cap
+    // the C++ inbound ceiling still reserves, until the ceiling is Rust's.
     a.pair(
         "rpc-max-connections",
         config.rpc.connections_max.to_string(),
@@ -235,7 +205,11 @@ mod tests {
         assert_eq!(value_of(&v, "--data-dir"), Some("/srv/op/.shekyl"));
         assert_eq!(value_of(&v, "--p2p-bind-ip"), Some("0.0.0.0"));
         assert_eq!(value_of(&v, "--p2p-bind-port"), Some("11021"));
-        assert_eq!(value_of(&v, "--rpc-bind-port"), Some("11029"));
+        assert!(
+            !v.iter()
+                .any(|a| a.starts_with("--rpc-") && a != "--rpc-max-connections"),
+            "the RPC reads its section; nothing but the cap is rendered: {v:?}"
+        );
         assert_eq!(value_of(&v, "--rpc-max-connections"), Some("25"));
         assert!(!v.iter().any(|a| a == "--no-ephemeral-tor"));
         assert!(!v.iter().any(|a| a == "--in-peers"));

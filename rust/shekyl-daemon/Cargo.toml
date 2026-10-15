@@ -17,6 +17,8 @@ publish = false
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
 shekyl-options = { path = "../shekyl-options" }
 shekyl-logging = { path = "../shekyl-logging" }
+# The RPC owner: its section is recorded before the remnant starts it once.
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # The platform probes, the panic hook and the network id's one derivation.
 shekyl-ffi = { path = "../shekyl-ffi" }
 # The one runtime constructor (D14); the signal owner runs on it.

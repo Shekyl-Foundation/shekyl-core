@@ -4204,6 +4204,7 @@ name = "shekyl-daemon"
 version = "3.1.0"
 dependencies = [
  "shekyl-daemon-config",
+ "shekyl-daemon-rpc",
  "shekyl-ffi",
  "shekyl-logging",
  "shekyl-options",
@@ -4264,6 +4265,7 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-tree",
+ "shekyl-daemon-config",
  "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-peerlist",

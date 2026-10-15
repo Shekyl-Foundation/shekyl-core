@@ -22,6 +22,11 @@
 //! legacy argument vector `run` also takes is not a field: it is the
 //! rendering of today's spellings the remnant parses until commit (e)
 //! deletes the C++ readers, and it goes with them.
+//!
+//! **One stop path.** [`shekyl_daemon_request_stop`] is how the remnant
+//! asks for a stop — the console's `exit` and the RPC's `stop_daemon` —
+//! so every trigger reaches the one owner in [`crate::signals`] and the
+//! stop runs in §2.2 step 9's order. The remnant never stops itself.
 
 use std::ffi::{c_char, c_int};
 
@@ -126,6 +131,16 @@ pub unsafe extern "C" fn shekyl_daemon_main(entry: *const ShekylDaemonEntry) -> 
     // SAFETY: the caller's contract above.
     let entry = unsafe { &*entry };
     crate::main(entry)
+}
+
+/// Asks for a stop, from the remnant: the console's `exit` and the RPC's
+/// `stop_daemon`. Returns at once; the stop runs in step 9's order from the
+/// one owner. A request before the owner waits is kept for it; a second
+/// request is a no-op.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn shekyl_daemon_request_stop() {
+    crate::signals::request_stop();
 }
 
 #[cfg(test)]

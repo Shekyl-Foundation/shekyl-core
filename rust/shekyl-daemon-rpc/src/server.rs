@@ -60,7 +60,6 @@ pub struct AppState {
 }
 
 pub struct ServerConfig {
-    pub restricted: bool,
     pub body_limit: usize,
     /// Allow-list from `--rpc-access-control-origins`. Empty = CORS default-deny.
     pub cors_origins: Vec<String>,
@@ -75,7 +74,6 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            restricted: false,
             body_limit: DEFAULT_BODY_LIMIT,
             cors_origins: Vec::new(),
             conn_limits: ConnLimits::default(),
@@ -472,57 +470,45 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
         .with_state(state)
 }
 
-/// Serve the daemon RPC on the listeners that passed the bind seam — **one
-/// server, N sockets**: one [`ConnTracker`] (the caps are per server, as the
-/// flags say, and `get_info` counts every family), one submit engine, one
-/// router, and one `axum::serve` per socket. Only a [`BoundListener`] is
-/// accepted, so a socket that skipped the refusal cannot be served.
-///
-/// Returns when every acceptor has drained after `shutdown` turns true (or
-/// its sender is dropped). A `watch` rather than a `Notify`: `wait_for` is
-/// level-triggered, so a stop that lands before an acceptor has been polled
-/// is still observed — `notify_waiters` stored no permit and lost it.
-pub async fn serve_listeners(
+/// Serves the RPC section's two listener sets on one core: `admin` at the
+/// admin preset (every route) and `view` at the view preset (the routes
+/// `served_routes(true)` admits), with one submit engine and ONE connection
+/// tracker between them: the cap is per daemon, as the section says, and
+/// `get_info` must count every socket. A tracker per listener made a cap of
+/// N admit 2N — the same mistake `submit/gate.rs` records for the F39
+/// verification cap ("one cap per daemon, not per listener"), re-made here
+/// once already. An empty set serves nothing; both empty is a daemon with no
+/// RPC, which returns once the stop arrives.
+pub async fn serve_presets(
     core: Arc<CoreRpc>,
     config: ServerConfig,
-    listeners: Vec<BoundListener>,
+    admin: Vec<BoundListener>,
+    view: Vec<BoundListener>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let submit_engine = Arc::new(SubmitEngine::new(
         FfiSubmitShim::new(core.clone()),
         DaemonTxVerifier,
     ));
-    // ONE tracker per server, shared by every socket: the caps are per
-    // server, as the flags say, and `get_info` must count every family. A
-    // tracker per listener made `--rpc-max-connections N` admit 2N — the
-    // same mistake `submit/gate.rs` records for the F39 verification cap
-    // ("one cap per daemon, not per listener"), re-made here once already.
     let conn_tracker = ConnTracker::new(config.conn_limits);
-    let state = Arc::new(AppState {
-        core,
-        submit_engine,
-        restricted: config.restricted,
-        conn_tracker: conn_tracker.clone(),
-        shard_view: config.shard_view.clone(),
-    });
-    let app = build_router(state, &config.cors_origins);
-    info!(
-        target: "global",
-        "shekyl-daemon-rpc ({}) starting",
-        if config.restricted {
-            "restricted"
-        } else {
-            "unrestricted"
-        }
-    );
+    let router_at = |restricted: bool| {
+        let state = Arc::new(AppState {
+            core: core.clone(),
+            submit_engine: submit_engine.clone(),
+            restricted,
+            conn_tracker: conn_tracker.clone(),
+            shard_view: config.shard_view.clone(),
+        });
+        build_router(state, &config.cors_origins)
+    };
     // Surface the CORS posture at startup. Default-deny is intentional (a
     // browser cannot reach an unconfigured daemon cross-origin), but it changed
     // from the old permissive reflection, so make it observable rather than a
     // silent "my web UI stopped working after upgrade".
     if config.cors_origins.is_empty() {
         info!(
-            "RPC CORS: default-deny (no --rpc-access-control-origins set; browser \
-             clients cannot make cross-origin requests to this daemon)"
+            "RPC CORS: default-deny (no rpc-cors-origin set; browser clients \
+             cannot make cross-origin requests to this daemon)"
         );
     } else {
         info!(
@@ -532,17 +518,39 @@ pub async fn serve_listeners(
     }
     if config.conn_limits != ConnLimits::default() {
         info!(
-            "RPC connection caps: total={}, per-public-ip={}, per-private-ip={} (0 = unlimited)",
-            config.conn_limits.max_total(),
-            config.conn_limits.max_per_public_ip(),
-            config.conn_limits.max_per_private_ip()
+            "RPC connection cap: {} (0 = unlimited)",
+            config.conn_limits.max_total()
         );
     }
 
-    serve_bound(app, conn_tracker, listeners, shutdown).await
+    serve_bound(
+        vec![
+            (Preset::Admin, router_at(false), admin),
+            (Preset::View, router_at(true), view),
+        ],
+        conn_tracker,
+        shutdown,
+    )
+    .await
 }
 
-/// The lifecycle half of [`serve_listeners`], independent of the core so it
+/// The preset a listener set serves, named in its startup line.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Preset {
+    Admin,
+    View,
+}
+
+impl Preset {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::View => "view",
+        }
+    }
+}
+
+/// The lifecycle half of [`serve_presets`], independent of the core so it
 /// can be tested as one: one `axum::serve` per bound socket, every accepted
 /// connection admitted through the shared tracker, and every acceptor
 /// stopped by the same level-triggered signal — including one that has not
@@ -553,22 +561,26 @@ pub async fn serve_listeners(
 /// returned once every acceptor has finished
 /// ([`first_error_stops_the_rest`]).
 pub(crate) async fn serve_bound(
-    app: Router,
+    sets: Vec<(Preset, Router, Vec<BoundListener>)>,
     conn_tracker: Arc<ConnTracker>,
-    listeners: Vec<BoundListener>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (fail_tx, fail_rx) = watch::channel(false);
     let mut serves = tokio::task::JoinSet::new();
-    for bound in listeners {
+    for (preset, app, bound) in sets.into_iter().flat_map(|(preset, app, listeners)| {
+        listeners
+            .into_iter()
+            .map(move |bound| (preset, app.clone(), bound))
+    }) {
         // The operator's startup line, in the category the daemon shows at
         // default verbosity (`global=info`, where the C++ `MGINFO` this
         // replaced lived); this crate's own target is filtered to errors
         // there, and a bound socket must not need --log-level 1 to be seen.
         info!(
             target: "global",
-            "shekyl-daemon-rpc listening on {}",
-            bound.local_addr()
+            "shekyl-daemon-rpc listening on {} ({} preset)",
+            bound.local_addr(),
+            preset.name()
         );
         let (_, listener) = bound.into_parts();
         // Every accepted connection is admitted through (and accounted in)
@@ -577,7 +589,7 @@ pub(crate) async fn serve_bound(
         let mut stop = shutdown.clone();
         let mut fail = fail_rx.clone();
         serves.spawn(
-            axum::serve(listener, app.clone())
+            axum::serve(listener, app)
                 .with_graceful_shutdown(async move {
                     // Either signal is a stop, and either outcome of each is
                     // too (the value turned true, or its sender is gone).
@@ -954,7 +966,7 @@ mod tests {
 
 #[cfg(test)]
 mod lifecycle_tests {
-    use super::{first_error_stops_the_rest, serve_bound};
+    use super::{first_error_stops_the_rest, serve_bound, Preset};
     use crate::bind::bind_listener;
     use crate::conn_limit::{ConnLimits, ConnTracker};
     use std::time::Duration;
@@ -975,6 +987,58 @@ mod lifecycle_tests {
         axum::Router::new().route("/", axum::routing::get(|| async { "ok" }))
     }
 
+    /// One request over a bound socket; the status line's code.
+    async fn status_of(addr: std::net::SocketAddr, path: &str) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply).await.unwrap();
+        reply
+            .split_whitespace()
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .expect("a status line")
+    }
+
+    /// Each listener set serves its own router and no other's: a path the
+    /// admin router carries answers on the admin socket and is absent on the
+    /// view socket, through one `serve_bound` over both sets (the shape the
+    /// one RPC start builds from its section, §2.3).
+    #[tokio::test]
+    async fn each_preset_serves_its_own_router_on_its_own_sockets() {
+        let admin_listener = bind_listener("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let view_listener = bind_listener("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let admin_addr = admin_listener.local_addr();
+        let view_addr = view_listener.local_addr();
+        let admin = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .route("/admin_only", axum::routing::get(|| async { "secret" }));
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let serving = tokio::spawn(serve_bound(
+            vec![
+                (Preset::Admin, admin, vec![admin_listener]),
+                (Preset::View, router(), vec![view_listener]),
+            ],
+            ConnTracker::new(ConnLimits::default()),
+            rx,
+        ));
+        assert_eq!(status_of(admin_addr, "/admin_only").await, 200);
+        assert_eq!(status_of(view_addr, "/admin_only").await, 404);
+        assert_eq!(status_of(view_addr, "/").await, 200);
+        tx.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(5), serving)
+            .await
+            .expect("stops")
+            .expect("joins")
+            .expect("a clean stop is Ok");
+    }
+
     /// The stop is level-triggered: a waiter that did not exist when the
     /// stop was sent still stops — the ordering that once hung
     /// `shekyl_daemon_rpc_stop`, when a `Notify` stored no permit for a
@@ -993,9 +1057,8 @@ mod lifecycle_tests {
         tokio::time::timeout(
             Duration::from_secs(5),
             serve_bound(
-                router(),
+                vec![(Preset::Admin, router(), listeners)],
                 ConnTracker::new(ConnLimits::default()),
-                listeners,
                 rx,
             ),
         )
@@ -1042,9 +1105,8 @@ mod lifecycle_tests {
             let listeners = two_loopback_listeners().await;
             let (tx, rx) = tokio::sync::watch::channel(false);
             let serving = tokio::spawn(serve_bound(
-                router(),
+                vec![(Preset::Admin, router(), listeners)],
                 ConnTracker::new(ConnLimits::default()),
-                listeners,
                 rx,
             ));
             tokio::time::sleep(Duration::from_millis(50)).await;

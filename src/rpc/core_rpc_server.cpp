@@ -53,7 +53,6 @@ using namespace epee;
 #include "crypto/hash.h"
 #include "rpc/archival_claim_source.h"
 #include "rpc/archival_shard_coverage.h"
-#include "rpc/rpc_args.h"
 #include "core_rpc_server_error_codes.h"
 #include "p2p/net_node.h"
 #include "version.h"
@@ -91,15 +90,10 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------
   void core_rpc_server::init_options(boost::program_options::options_description& desc)
   {
-    command_line::add_arg(desc, arg_rpc_bind_port);
-    command_line::add_arg(desc, arg_rpc_restricted_bind_port);
-    command_line::add_arg(desc, arg_restricted_rpc);
-    // Daemon inbound RPC is Axum plaintext: no --rpc-login / --rpc-ssl*.
-    cryptonote::rpc_args::init_options(desc, /*any_cert_option=*/false, /*include_listener_tls_auth=*/false);
-    command_line::add_arg(desc, arg_rpc_max_connections_per_public_ip);
-    command_line::add_arg(desc, arg_rpc_max_connections_per_private_ip);
+    // The RPC reads its section in Rust (DAEMON_CONFIG_CUTOVER.md §2.3).
+    // The one spelling left is the cap the inbound ceiling reserves, until
+    // the ceiling is Rust's.
     command_line::add_arg(desc, arg_rpc_max_connections);
-    command_line::add_arg(desc, arg_rpc_response_soft_limit);
   }
   //------------------------------------------------------------------------------------------------------------------------------
   core_rpc_server::core_rpc_server(
@@ -108,56 +102,18 @@ namespace cryptonote
     )
     : m_core(cr)
     , m_p2p(p2p)
-    , disable_rpc_ban(false)
+    , m_restricted(false)
   {}
   core_rpc_server::~core_rpc_server()
   {
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::init(
-      const boost::program_options::variables_map& vm
-      , const bool restricted
-      , const std::string& port
-    )
+  bool core_rpc_server::init(const boost::program_options::variables_map& vm)
   {
-    m_restricted = restricted;
-
-    // Daemon: no inbound login/ssl flags. The connection-cap flags are read
-    // below and handed to the Rust listener, which validates
-    // (ConnLimits::checked) and enforces them.
-    auto rpc_config = cryptonote::rpc_args::process(vm, /*any_cert_option=*/false, /*include_listener_tls_auth=*/false);
-    if (!rpc_config)
-      return false;
-
-    std::string bind_ip_str = rpc_config->bind_ip;
-    std::string bind_ipv6_str = rpc_config->bind_ipv6_address;
-    if (restricted)
-    {
-      const auto restricted_rpc_port_arg = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
-      const bool has_restricted_rpc_port_arg = !command_line::is_arg_defaulted(vm, restricted_rpc_port_arg);
-      if (has_restricted_rpc_port_arg && port == command_line::get_arg(vm, restricted_rpc_port_arg))
-      {
-        bind_ip_str = rpc_config->restricted_bind_ip;
-        bind_ipv6_str = rpc_config->restricted_bind_ipv6_address;
-      }
-    }
-    m_rpc_bind_ip = bind_ip_str;
-    // Two fields on purpose: the family's enable and its address are separate
-    // signals. An explicitly empty --rpc-bind-ipv6-address with --rpc-use-ipv6
-    // set must reach Rust as the empty string and be refused there, not be
-    // mistaken for "off" and silently dropped.
-    m_rpc_bind_ipv6 = bind_ipv6_str;
-    m_rpc_use_ipv6 = rpc_config->use_ipv6;
-    m_access_control_origins = rpc_config->access_control_origins;
-    disable_rpc_ban = rpc_config->disable_rpc_ban;
-
-    // Connection-limit args go to the Rust Axum listener as given; it
-    // validates them (ConnLimits::checked) where it enforces them, and logs
-    // the reason if they contradict each other.
+    // One server, one preset: the admin and view presets are the Rust
+    // listeners' (served_routes), never this object's.
+    m_restricted = false;
     m_rpc_max_connections = command_line::get_arg(vm, arg_rpc_max_connections);
-    m_rpc_max_connections_per_public_ip = command_line::get_arg(vm, arg_rpc_max_connections_per_public_ip);
-    m_rpc_max_connections_per_private_ip = command_line::get_arg(vm, arg_rpc_max_connections_per_private_ip);
-
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
@@ -166,24 +122,6 @@ namespace cryptonote
     if(!m_p2p.get_payload_object().is_synchronized())
     {
       return false;
-    }
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::add_host_fail(const connection_context *ctx, unsigned int score)
-  {
-    if(!ctx || !ctx->m_remote_address.is_blockable() || disable_rpc_ban)
-      return false;
-
-    CRITICAL_REGION_LOCAL(m_host_fails_score_lock);
-    uint64_t fails = m_host_fails_score[ctx->m_remote_address.host_str()] += score;
-    MDEBUG("Host " << ctx->m_remote_address.host_str() << " fail score=" << fails);
-    if(fails > RPC_IP_FAILS_BEFORE_BLOCK)
-    {
-      auto it = m_host_fails_score.find(ctx->m_remote_address.host_str());
-      CHECK_AND_ASSERT_MES(it != m_host_fails_score.end(), false, "internal error");
-      it->second = RPC_IP_FAILS_BEFORE_BLOCK/2;
-      m_p2p.block_host(ctx->m_remote_address);
     }
     return true;
   }
@@ -436,9 +374,10 @@ namespace cryptonote
   bool core_rpc_server::on_stop_daemon(const COMMAND_RPC_STOP_DAEMON::request& req, COMMAND_RPC_STOP_DAEMON::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(stop_daemon);
-    // FIXME: replace back to original m_p2p.send_stop_signal() after
-    // investigating why that isn't working quite right.
-    m_p2p.send_stop_signal();
+    // The one stop owner (DAEMON_CONFIG_CUTOVER.md §2.2 step 9) stops the
+    // RPC, drained, before the remnant; a stop from here would end run()
+    // under the handler answering this request.
+    shekyl_daemon_request_stop();
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1399,53 +1338,9 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  const command_line::arg_descriptor<std::string, false, true, 2> core_rpc_server::arg_rpc_bind_port = {
-      "rpc-bind-port"
-    , "Port for RPC server"
-    , std::to_string(config::RPC_DEFAULT_PORT)
-    , {{ &cryptonote::arg_testnet_on, &cryptonote::arg_stagenet_on }}
-    , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
-        if (testnet_stagenet[0] && defaulted)
-          return std::to_string(config::testnet::RPC_DEFAULT_PORT);
-        else if (testnet_stagenet[1] && defaulted)
-          return std::to_string(config::stagenet::RPC_DEFAULT_PORT);
-        return val;
-      }
-    };
-
-  const command_line::arg_descriptor<std::string> core_rpc_server::arg_rpc_restricted_bind_port = {
-      "rpc-restricted-bind-port"
-    , "Port for restricted RPC server"
-    , ""
-    };
-
-  const command_line::arg_descriptor<bool> core_rpc_server::arg_restricted_rpc = {
-      "restricted-rpc"
-    , "Restrict RPC to view only commands and do not return privacy sensitive data in RPC calls"
-    , false
-    };
-
-  const command_line::arg_descriptor<std::size_t> core_rpc_server::arg_rpc_max_connections_per_public_ip = {
-      "rpc-max-connections-per-public-ip"
-    , "Max RPC connections per public IP permitted"
-    , DEFAULT_RPC_MAX_CONNECTIONS_PER_PUBLIC_IP
-  };
-
-  const command_line::arg_descriptor<std::size_t> core_rpc_server::arg_rpc_max_connections_per_private_ip = {
-      "rpc-max-connections-per-private-ip"
-    , "Max RPC connections per private and localhost IP permitted"
-    , DEFAULT_RPC_MAX_CONNECTIONS_PER_PRIVATE_IP
-  };
-
   const command_line::arg_descriptor<std::size_t> core_rpc_server::arg_rpc_max_connections = {
       "rpc-max-connections"
     , "Max RPC connections permitted"
     , DEFAULT_RPC_MAX_CONNECTIONS
-  };
-
-  const command_line::arg_descriptor<std::size_t> core_rpc_server::arg_rpc_response_soft_limit = {
-      "rpc-response-soft-limit"
-    , "Max response bytes that can be queued, enforced at next response attempt"
-    , DEFAULT_RPC_SOFT_LIMIT_SIZE
   };
 }  // namespace cryptonote

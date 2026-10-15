@@ -442,7 +442,7 @@ Option<PqcAuthHash>, prunable_hash }` at `rust/shekyl-chain-rules/src/block.rs:5
 `txs_prunable_hash = #7`; `SCHEMA_VERSION = 5`; `challenge_leaf_index` still
 the sixth preimage field at `rust/shekyl-archival-retention/src/wire.rs:353`;
 `CRYPTONOTE_MAX_TX_SIZE = 1000000`; `on_prune_blockchain` the only
-`pruning_seed` RPC route at `src/rpc/core_rpc_server.cpp:1429-1442`. The
+`pruning_seed` RPC route in `core_rpc_server.cpp` at that tree (lines 1429 to 1442 there). The
 prior stamp's checks were re-run at the same tree and are unchanged:
 `cargo test -p shekyl-chain-store` 242 + 8 doctests green;
 `check_chain_rules_coverage.py --describe` consensus implemented 6 /

@@ -82,11 +82,9 @@ namespace {
 // `restricted` check added to either handler later would otherwise be born
 // dead exactly as the eleven were.
 //
-// The address is left default-constructed. `network_address::is_blockable()`
-// is false for one, which keeps `add_host_fail`'s per-host RPC ban scoring
-// the no-op it has always been on this path: this context asserts "an RPC
-// client asked", never "this particular peer asked", and a context shared by
-// every caller must not accumulate a ban score against one empty address.
+// The address is left default-constructed: this context asserts "an RPC
+// client asked", never "this particular peer asked", and a context shared
+// by every caller must not carry an address anything could score against.
 const core_rpc_server::connection_context* rpc_origin()
 {
     static const core_rpc_server::connection_context ctx{};

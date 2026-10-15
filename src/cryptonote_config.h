@@ -203,8 +203,6 @@
 #define P2P_SUPPORT_FLAG_ZSTD_COMPRESSION               0x02
 #define P2P_SUPPORT_FLAGS                               (P2P_SUPPORT_FLAG_ZSTD_COMPRESSION)
 
-#define RPC_IP_FAILS_BEFORE_BLOCK                       3
-
 // Shekyl protocol version. Single integer, independent of software version.
 // See docs/VERSIONING.md for the full scheme.
 //   3 = FCMP++ curve tree, hybrid PQC (Ed25519+ML-DSA-65, X25519+ML-KEM-768)

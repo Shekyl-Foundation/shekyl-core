@@ -63,13 +63,9 @@ namespace cryptonote
     //! (public) listener.
     std::string stem_tallies_json() const;
 
-    static const command_line::arg_descriptor<std::string, false, true, 2> arg_rpc_bind_port;
-    static const command_line::arg_descriptor<std::string> arg_rpc_restricted_bind_port;
-    static const command_line::arg_descriptor<bool> arg_restricted_rpc;
-    static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections_per_public_ip;
-    static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections_per_private_ip;
+    // The one spelling the C++ still reads: the cap the inbound ceiling
+    // reserves, until the ceiling is Rust's (DAEMON_CONFIG_CUTOVER.md §2.3).
     static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections;
-    static const command_line::arg_descriptor<std::size_t> arg_rpc_response_soft_limit;
 
     typedef epee::net_utils::connection_context_base connection_context;
 
@@ -80,29 +76,11 @@ namespace cryptonote
     ~core_rpc_server();
 
     static void init_options(boost::program_options::options_description& desc);
-    bool init(
-        const boost::program_options::variables_map& vm,
-        const bool restricted,
-        const std::string& port
-      );
+    bool init(const boost::program_options::variables_map& vm);
     network_type nettype() const { return m_core.get_nettype(); }
-    // The operator's --rpc-bind-ip (or --rpc-restricted-bind-ip) as given,
-    // unparsed; valid after init(). Rust parses, classifies and binds it.
-    const std::string& get_rpc_bind_ip() const { return m_rpc_bind_ip; }
-    // --rpc-bind-ipv6-address (or the restricted twin), as given; meaningful
-    // when get_rpc_use_ipv6(). Passed to Rust verbatim — an empty value
-    // included, so Rust refuses it rather than C++ dropping the family.
-    const std::string& get_rpc_bind_ipv6() const { return m_rpc_bind_ipv6; }
-    bool get_rpc_use_ipv6() const { return m_rpc_use_ipv6; }
-    const std::vector<std::string>& get_access_control_origins() const {
-      return m_access_control_origins;
-    }
-    // Connection caps (0 = unlimited). Passed to the Rust Axum listener via
-    // shekyl_daemon_rpc_start, which validates (ConnLimits::checked) and
-    // enforces them; valid after init() runs.
+    // The RPC connection cap; what the inbound ceiling reserves for the
+    // RPC. Valid after init().
     std::size_t get_rpc_max_connections() const { return m_rpc_max_connections; }
-    std::size_t get_rpc_max_connections_per_public_ip() const { return m_rpc_max_connections_per_public_ip; }
-    std::size_t get_rpc_max_connections_per_private_ip() const { return m_rpc_max_connections_per_private_ip; }
     // Core access for the Rust submit shims (daemon_submit_ffi.cpp), which
     // resolve pool/blockchain/protocol from the same handle the Axum
     // transport already holds. See DAEMON_SUBMIT_VERDICT.md §4.
@@ -182,7 +160,6 @@ namespace cryptonote
 private:
     bool check_core_busy();
     bool check_core_ready();
-    bool add_host_fail(const connection_context *ctx, unsigned int score = 1);
 
     //utils
     bool get_block_template(const account_public_address &address, const cryptonote::blobdata &extra_nonce, size_t &reserved_offset, cryptonote::difficulty_type &difficulty, uint64_t &height, uint64_t &expected_reward, block &b, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, epee::json_rpc::error &error_resp);
@@ -190,21 +167,7 @@ private:
     core& m_core;
     nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >& m_p2p;
     bool m_restricted;
-    epee::critical_section m_host_fails_score_lock;
-    std::map<std::string, uint64_t> m_host_fails_score;
-    bool disable_rpc_ban;
-    // The operator's bind strings as given (the restricted variant uses its
-    // own flags); recorded unparsed in init(). Rust parses and binds.
-    std::string m_rpc_bind_ip;
-    std::string m_rpc_bind_ipv6; // as given; see get_rpc_bind_ipv6()
-    bool m_rpc_use_ipv6 = false;
-    // CORS allow-list from --rpc-access-control-origins (empty = deny).
-    std::vector<std::string> m_access_control_origins;
-    // Connection caps (0 = unlimited); set in init(), enforced by the Rust
-    // Axum listener.
     std::size_t m_rpc_max_connections = 0;
-    std::size_t m_rpc_max_connections_per_public_ip = 0;
-    std::size_t m_rpc_max_connections_per_private_ip = 0;
   };
 }
 

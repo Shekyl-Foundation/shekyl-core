@@ -469,13 +469,15 @@ already exists; only the flag is missing — surfacing the signal is
 mechanical, not a verification rewrite.)
 
 **The RPC reply collapses it.** `on_send_raw_transaction`
-(`src/rpc/core_rpc_server.cpp:1334–1368`) maps the verification context to
+(`core_rpc_server.cpp`, lines 1334 to 1368 at the audit's tree; the handler
+is gone with the C++ submit path, `DAEMON_SUBMIT_VERDICT.md`) maps the
+verification context to
 the reply: it sets dedicated booleans only for `double_spend`, `invalid_input`,
 `invalid_output`, `too_big`, `overspend`, `fee_too_low`, `too_few_outputs`,
 `tx_extra_too_big`, and `nonzero_unlock_time`. A generic
 `m_verifivation_failed` (which a stale root produces) yields
 `status == "Failed"` with **no flag set and an empty `reason`** — the specific
-cause is only `LOG_PRINT_L0`'d server-side (line 1361), never propagated to
+cause is only logged server-side, never propagated to
 the client.
 
 ### Why this matters and why it is deferrable

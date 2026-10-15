@@ -169,6 +169,35 @@ and a tokio child's `wait()` still returns its status.
   `main.cpp` parses `argv` today. The renderer is one Rust module, deleted
   in commit (e) with the readers; the snapshot gate counts the twelve
   fields, not the rendering.
+- **The RPC start is the step 7 to 8 rendezvous.** The Rust `main()`
+  records the RPC section (`shekyl_daemon_rpc::ffi_exports::configure`)
+  before the remnant is constructed, and waits on the receiver that
+  `shekyl_daemon_rpc_start(core)` completes: `Ok` once every admin and
+  view listener is bound and served, `Err` with the refusal otherwise,
+  in which case the remnant's `run` throws and returns 1. The start is
+  the last act of §2.2 step 7, so its completion is the one signal that
+  the core exists; no second export is needed for it. One server, one
+  connection tracker, two routers: `rpc-admin-listen` at the admin
+  preset, `rpc-view-listen` at the view preset
+  (`rust/shekyl-daemon-rpc/src/server.rs`, `serve_presets`). The C++
+  `core_rpc_server` is one object with no preset of its own
+  (`caller_is_restricted` is always false; Rust's `served_routes` is the
+  only gate), and `rpc_args.{h,cpp}` and the dead RPC scorer
+  (`add_host_fail`, `disable_rpc_ban`, `RPC_IP_FAILS_BEFORE_BLOCK`) go
+  with it: deleting `rpc_args` leaves the scorer's one input a constant.
+- **One stop path, from the remnant too.** Rust holds the RPC handle, so
+  a `run` that returned before the RPC was stopped would destroy the core
+  under a serving handler. The two triggers inside the remnant, the
+  console's `exit` and the RPC's `stop_daemon`, therefore ask the one
+  owner through `shekyl_daemon_request_stop()` (the third export of
+  `entry.rs`), observed by the same `select!` as the signals; the stop
+  then runs in step 9's order: the RPC drained, then the remnant's
+  `stop`. `shekyl_daemon_rpc_stop()` stays as the remnant's own call
+  before it destroys the core, a no-op when the owner already stopped
+  the RPC, so the path where `run` ends first is safe too. The stop
+  sequence runs on the main thread outside the owner's `block_on`: the
+  RPC's stop blocks on its own runtime's drain, and a runtime cannot be
+  entered from inside another's `block_on`.
 - **The managed Tor at steps 6, 8 and 9.** Step 6 starts
   `DaemonTorControl::start` on its own thread, so bootstrap overlaps the
   core's construction; it is awaited before step 8. The zone host then
@@ -221,7 +250,7 @@ owner refuses at its own start, and the runtime rows, are commits (c) and
 | a daemon store with no marker | `marker::tests::a_store_with_no_marker_is_never_marked_after_the_fact` |
 | the log location cannot be written | `sections::tests::the_log_location_is_created_or_refused` |
 | the ban file cannot be read, or a line does not parse | `sections::tests::the_ban_file_is_read_at_parse_and_a_bad_line_is_named` |
-| a listener cannot bind | the owner's start, commit (c) |
+| a listener cannot bind | RPC: `shekyl-daemon-rpc` `bind::tests::wildcard_binds_are_refused`, `bind::tests::network_binds_are_refused`, `bind::tests::the_seam_refuses_before_binding` (the refusals); a bound socket in use is `bind_listener`'s error, logged by `shekyl_daemon_rpc_start`, which returns -1 and the remnant's `run` 1; `shekyl-daemon` `run::tests::a_stop_request_from_the_remnant_runs_the_one_stop_path` covers the wait that start completes. The zone host's listeners: commit (c2) |
 | a runtime change its constructor refuses; a set for a row not marked runtime | commit (d) |
 | `service` outside the SCM, on Linux, FreeBSD or macOS, or with a bad root | `service` is a reserved row until RT-W14, refused by `table::tests::rejected_and_reserved_names_are_refused_with_their_reasons`; the missing root by `paths::tests::the_service_root_is_program_data_or_a_refusal`; the three cases are RT-W14's to test when the row goes live |
 

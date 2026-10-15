@@ -165,7 +165,8 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         std::env::set_var(key, value);
     }
 
-    // The one signal owner, and the remnant on a thread of its own.
+    // The one signal owner, the RPC section for the remnant's one start,
+    // and the remnant on a thread of its own.
     signals::install_dispositions();
     let budget = RuntimeBudget {
         workers: NonZeroUsize::MIN,
@@ -179,6 +180,34 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
             return EXIT_FAILED;
         }
     };
+    let status = supervise(entry, &config, &program, &pool);
+    pool.shutdown_background();
+    drop(lock);
+    status
+}
+
+/// What the first wait reached: the remnant's one RPC start completed
+/// (§2.2 step 7's last act), that start was refused, `run` ended on its
+/// own, or a stop was requested first.
+enum Reached {
+    Constructed,
+    RpcRefused,
+    Finished(i32),
+    StopRequested,
+}
+
+/// Steps 7 to 9: the remnant's `run` on its own thread, the wait for its
+/// RPC start, and the one stop path. Returns the exit status.
+///
+/// The waits run on `pool`; the stop sequence runs on this thread, outside
+/// any async context, because the RPC's stop blocks on its own runtime's
+/// drain and a runtime cannot be entered from inside another's `block_on`.
+fn supervise(
+    entry: &ShekylDaemonEntry,
+    config: &DaemonConfig,
+    program: &OsStr,
+    pool: &shekyl_runtime::Pool,
+) -> i32 {
     let Some(run) = entry.run else {
         eprintln!("shekyld: the entry has no run");
         return EXIT_FAILED;
@@ -187,7 +216,8 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         eprintln!("shekyld: the entry has no stop");
         return EXIT_FAILED;
     };
-    let data = SnapshotData::new(&config, &program);
+    let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(config.rpc.clone());
+    let data = SnapshotData::new(config, program);
     let (done_tx, mut done_rx) = tokio::sync::oneshot::channel::<i32>();
     let thread = std::thread::Builder::new()
         .name("shekyld-run".to_owned())
@@ -203,25 +233,77 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
             return EXIT_FAILED;
         }
     };
-    let status = pool.block_on(async {
+
+    // Step 7: the remnant constructs core, the protocol handler and
+    // net_node, and calls the RPC start once; its completion is the signal
+    // that the core exists for step 8.
+    let reached = pool.block_on(async {
         tokio::select! {
-            finished = &mut done_rx => finished.unwrap_or(EXIT_FAILED),
-            requested = signals::stop_requested() => {
-                match requested {
-                    Ok(by) => tracing::warn!(target: "daemon", "stop requested by {by}"),
-                    Err(e) => tracing::error!(target: "daemon", "the signal owner failed: {e}; stopping"),
+            built = &mut constructed => match built {
+                Ok(Ok(())) => Reached::Constructed,
+                Ok(Err(refusal)) => {
+                    tracing::error!(target: "daemon", "the RPC did not start: {refusal}");
+                    Reached::RpcRefused
                 }
-                stop();
-                done_rx.await.unwrap_or(EXIT_FAILED)
+                Err(_replaced) => {
+                    tracing::error!(target: "daemon", "the RPC section was replaced before the start");
+                    Reached::RpcRefused
+                }
+            },
+            finished = &mut done_rx => Reached::Finished(finished.unwrap_or(EXIT_FAILED)),
+            requested = signals::stop_requested() => {
+                note_stop(requested);
+                Reached::StopRequested
             }
         }
     });
+    let status = match reached {
+        Reached::Finished(status) => status,
+        Reached::StopRequested => {
+            stop_path(stop);
+            pool.block_on(&mut done_rx).unwrap_or(EXIT_FAILED)
+        }
+        Reached::Constructed | Reached::RpcRefused => {
+            // Step 8 starts here once the owners read their sections.
+            let finished = pool.block_on(async {
+                tokio::select! {
+                    finished = &mut done_rx => Some(finished.unwrap_or(EXIT_FAILED)),
+                    requested = signals::stop_requested() => {
+                        note_stop(requested);
+                        None
+                    }
+                }
+            });
+            match finished {
+                Some(status) => status,
+                None => {
+                    stop_path(stop);
+                    pool.block_on(&mut done_rx).unwrap_or(EXIT_FAILED)
+                }
+            }
+        }
+    };
+    // `run` ended: whatever stopped it, the RPC is stopped before the core
+    // it serves is gone (the remnant stops it too; the second is a no-op).
+    shekyl_daemon_rpc::ffi_exports::stop();
     if thread.join().is_err() {
         tracing::error!(target: "daemon", "the run thread ended by a panic");
     }
-    pool.shutdown_background();
-    drop(lock);
     status
+}
+
+fn note_stop(requested: std::io::Result<&'static str>) {
+    match requested {
+        Ok(by) => tracing::warn!(target: "daemon", "stop requested by {by}"),
+        Err(e) => tracing::error!(target: "daemon", "the signal owner failed: {e}; stopping"),
+    }
+}
+
+/// Step 9's order: the RPC, drained, then the remnant's `stop`; the lock
+/// is released by the caller after `run` has returned.
+fn stop_path(stop: crate::entry::StopFn) {
+    shekyl_daemon_rpc::ffi_exports::stop();
+    stop();
 }
 
 /// Prints each refusal and returns the refusal status.
@@ -395,6 +477,26 @@ mod tests {
         STOPS.fetch_add(1, Ordering::SeqCst);
     }
 
+    static STOP_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// A remnant that runs until its `stop` is called, as the daemon does.
+    extern "C" fn blocking_run(
+        snapshot: *const ShekylDaemonSnapshot,
+        _argc: c_int,
+        _argv: *const *const c_char,
+    ) -> c_int {
+        assert!(!snapshot.is_null());
+        while !STOP_ARMED.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        0
+    }
+
+    extern "C" fn arming_stop() {
+        STOPS.fetch_add(1, Ordering::SeqCst);
+        STOP_ARMED.store(true, Ordering::SeqCst);
+    }
+
     const RELEASE: &CStr = c"Test";
     const VERSION: &CStr = c"3.1.0-test";
 
@@ -491,6 +593,44 @@ mod tests {
         assert_eq!(data.data_dir(), d.path().display().to_string());
         assert_eq!(data.advertised_port(), 1234);
         assert_eq!(data.network, 3);
+    }
+
+    /// The remnant's own request — the console's `exit`, the RPC's
+    /// `stop_daemon` — reaches the one owner, which calls the remnant's
+    /// `stop` and returns `run`'s status: one stop path, whatever asked.
+    #[test]
+    fn a_stop_request_from_the_remnant_runs_the_one_stop_path() {
+        let d = tempfile::tempdir().unwrap();
+        let a = args(&["--network", "regtest", "--rpc-admin-listen", "none"]);
+        let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+        let (network, mode) = choosers(&cli);
+        let resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
+        let config = build(&resolved, network, mode, &host(d.path()).platform, None).unwrap();
+        let entry = ShekylDaemonEntry {
+            run: Some(blocking_run),
+            stop: Some(arming_stop),
+            ..entry()
+        };
+        let budget = RuntimeBudget {
+            workers: NonZeroUsize::MIN,
+            blocking: NonZeroUsize::MIN,
+        };
+        let pool =
+            shekyl_runtime::runtime(budget, &ThreadName::new("test-signals").unwrap()).unwrap();
+        let before = STOPS.load(Ordering::SeqCst);
+        let requester = std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            crate::entry::shekyl_daemon_request_stop();
+        });
+        let status = supervise(&entry, &config, OsStr::new("shekyld"), &pool);
+        requester.join().unwrap();
+        assert_eq!(status, 0, "run's status is the exit status");
+        assert_eq!(
+            STOPS.load(Ordering::SeqCst),
+            before + 1,
+            "the owner called the remnant's stop exactly once"
+        );
+        pool.shutdown_background();
     }
 
     /// The one test that starts a daemon: logging installs once per

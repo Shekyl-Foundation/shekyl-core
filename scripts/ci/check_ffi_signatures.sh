@@ -69,6 +69,8 @@ SURFACES=(
   # The daemon's entry types and the snapshot field-count export
   # (DAEMON_CONFIG_CUTOVER.md §2.9); the C++ reads the snapshot these define.
   "daemon_entry:rust/shekyl-daemon/src/entry.rs"
+  # The one RPC start and its stop (DAEMON_CONFIG_CUTOVER.md §2.3).
+  "daemon_rpc:rust/shekyl-daemon-rpc/src/ffi_exports.rs"
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
 )
 

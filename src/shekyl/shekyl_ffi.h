@@ -1609,40 +1609,15 @@ ShekylSignResult shekyl_sign_fcmp_transaction(
     const uint8_t* tree_root_ptr,
     uint8_t tree_depth);
 
-/// Opaque handle to the Axum-based daemon RPC server.
-typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
+/// The remnant's one RPC start (DAEMON_CONFIG_CUTOVER.md §2.3): serves the
+/// RPC section the Rust main() recorded on this core; every listener is
+/// Rust's. 0, or -1 with the refusal logged. `rpc_server_ptr` must stay
+/// alive until `shekyl_daemon_rpc_stop` has returned.
+int32_t shekyl_daemon_rpc_start(void* rpc_server_ptr);
 
-/// Start the Axum daemon RPC server on a dedicated Tokio runtime.
-/// rpc_server_ptr: pointer to an initialized core_rpc_server.
-/// bind_host / bind_port: the operator's --rpc-bind-ip / --rpc-bind-port
-///   values as given.
-/// bind_host_v6: the operator's --rpc-bind-ipv6-address (or the restricted
-///   twin) when --rpc-use-ipv6 is set; NULL otherwise. Rust parses both
-///   families, classifies them, and binds a second socket on this handle
-///   when the v6 address is distinct — C++ does not start a second server.
-///   Wildcard and network binds are refused (RPC_TRANSPORT_POSTURE.md RT-1/RT-2).
-///   C++ composes and validates nothing.
-/// restricted: true to block admin-only endpoints.
-/// cors_origins: optional comma-separated allow-list from
-///   --rpc-access-control-origins; NULL or empty = CORS default-deny.
-/// max_connections / max_connections_per_public_ip /
-///   max_connections_per_private_ip: concurrent-connection caps enforced by the
-///   Rust listener (0 = unlimited), validated there.
-/// Returns an opaque handle, or NULL on failure; parse/cap/bind refusals are
-/// logged with their reason by the Rust side before NULL is returned.
-ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
-    void* rpc_server_ptr,
-    const char* bind_host,
-    const char* bind_port,
-    const char* bind_host_v6,
-    bool restricted,
-    const char* cors_origins,
-    uint64_t max_connections,
-    uint64_t max_connections_per_public_ip,
-    uint64_t max_connections_per_private_ip);
-
-/// Gracefully stop the Axum daemon RPC server and free the handle.
-void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
+/// Stops the RPC if it runs, drained; the remnant calls it before the core
+/// is destroyed. A no-op when the Rust stop path already stopped it.
+void shekyl_daemon_rpc_stop(void);
 
 /// Copy the thread-ledger report into `buf`, NUL-terminated.
 /// Always returns the report's full length, excluding the NUL. A null
@@ -4694,6 +4669,10 @@ struct ShekylDaemonEntry {
 
 /// The snapshot's field count, from the Rust definition.
 uint32_t shekyl_daemon_snapshot_field_count();
+/// Asks the one stop owner for a stop (§2.2 step 9): the console's `exit`
+/// and the RPC's `stop_daemon`. Returns at once; the remnant never stops
+/// itself.
+void shekyl_daemon_request_stop(void);
 /// Runs the daemon and returns its exit status: 2 a configuration refusal,
 /// 1 a runtime failure, `run`'s status otherwise; a panic aborts.
 int32_t shekyl_daemon_main(const ShekylDaemonEntry* entry);
