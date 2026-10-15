@@ -371,7 +371,7 @@ fn tx_entry_points_record_the_landed_rows() {
 // --- the two stages ---------------------------------------------------------
 
 #[test]
-fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
+fn form_carries_the_clock_the_seed_the_target_and_the_attempt_it_was_given() {
     let seed = shekyl_types::BlockHash::from_bytes([0x5e; 32]);
     let substrate = MockSubstrate {
         clock: shekyl_types::Timestamp::from_raw(1_700_000_777),
@@ -389,6 +389,10 @@ fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
     .expect("a well-formed candidate passes the stateless stage");
     assert_eq!(formed.judged_at(), substrate.clock);
     assert_eq!(formed.seed(), seed);
+    assert_eq!(
+        formed.target(),
+        expected_target(&MockChain::default(), &RuleSet::GENESIS)
+    );
     assert_eq!(formed.attempt(), FormAttempt::FIRST);
     assert_eq!(formed.rule_set_id(), RuleSetId::GENESIS);
     // The identity is derived here, once, and is the block's (slice 3 F8).

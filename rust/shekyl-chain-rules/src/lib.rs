@@ -80,7 +80,7 @@
 //! # Consumers
 //!
 //! * **Block connect** (S-CHAIN-W): [`form`] outside the write transaction
-//!   — the ingest driver supplies the [`Substrate`] and its seed and
+//!   — the ingest driver supplies the [`Substrate`] and its seed, target and
 //!   rule-set claims — then [`validate`] inside it, over the store's
 //!   projected `ChainView<'id>`; the `ChainValid<'id, V>` it mints is the
 //!   only thing `connect` accepts, branded with both the batch `'id` and

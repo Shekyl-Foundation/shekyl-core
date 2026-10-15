@@ -206,7 +206,8 @@ pub fn form<S: Substrate>(
 /// Returns, in order of what happened:
 ///
 /// * `Err(Fault::Stale(_))` — a claim `form` was given does not hold against
-///   this view: the seed (CEN-D3) or the rule set. Not a judgement about
+///   this view: the seed (CEN-D3), the target (CEN-D4) or the rule set.
+///   Not a judgement about
 ///   the block; the payload says whether the driver may redo `form`.
 /// * `Err(Fault::View(fault))` — the view's substrate failed before a
 ///   verdict was reached. Not a judgement about the block; the caller halts.

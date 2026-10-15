@@ -14,8 +14,8 @@
 //! The rules are named here, in three contiguous segments, and nowhere
 //! else. [`judge_header_ladder`] runs them in order for the alt tier.
 //! `validate` calls the same three functions and inserts its chain-state
-//! rules between them: B5 after the parent link, B4 after the clock and
-//! the proof, G1 after the anchor and the coinbase. Those three are
+//! rules between them: B5 after the parent link, B4 after the clock (the
+//! proof, CEN-D1, is `form`'s), G1 after the anchor and the coinbase. Those three are
 //! `BlockRule`s; they are not members of this ladder, and a segment cannot
 //! name one — [`run_header`](crate::rules::run_header) takes a
 //! [`HeaderRule`](crate::rules::HeaderRule).
