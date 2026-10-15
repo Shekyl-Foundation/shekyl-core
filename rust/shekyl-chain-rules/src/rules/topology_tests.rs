@@ -3,16 +3,20 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Negative fixtures for CEN-A2 (`CHAIN_RULES_SLICE_1.md` §7).
+//! Negative fixtures for CEN-A2 (`CHAIN_RULES_SLICE_1.md` §7), and the
+//! falsifiers of the two 4.A rows the wire holds by construction (A6, A7).
 
 use super::*;
 use crate::block::Candidate;
 use crate::census::CenRow;
-use crate::harness::fixture::{candidate_on, root};
+use crate::harness::fixture::{candidate_on, chain_of, root};
 use crate::harness::{assert_refused, defined, formed_on, FaultingView, MockChain};
 use crate::rules::BlockContext;
 use crate::verdict::{Locus, Verdict};
 use shekyl_types::BlockHash;
+use shekyl_wire::varint::write_varint;
+use shekyl_wire::Block;
+use std::io;
 
 fn check_on(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
@@ -74,4 +78,57 @@ fn cen_a2_reads_the_context_tip_not_the_view() {
         A2::check(&BlockContext::for_tests(&formed, chain.tip(), None), &view),
         Ok(Ok(()))
     );
+}
+
+// --- the wire invariants (A6, A7): held by `shekyl_wire::Block` ------------
+
+/// CEN-A6's falsifier: a block blob the wire cannot parse is no block. A
+/// fixture block round-trips through [`Block::from_bytes`]; every proper
+/// prefix of its blob, and the blob with one trailing byte (§12 exact
+/// consumption), is refused — so nothing malformed becomes a [`Candidate`].
+#[test]
+fn a6_a_block_blob_the_wire_cannot_parse_is_refused() {
+    let block = candidate_on(&chain_of(3), Vec::new()).block;
+    let blob = block.serialize();
+    assert_eq!(Block::from_bytes(&blob).expect("round-trips"), block);
+    for len in 0..blob.len() {
+        assert!(
+            Block::from_bytes(&blob[..len]).is_err(),
+            "a {len}-byte prefix of a {}-byte block must not parse",
+            blob.len()
+        );
+    }
+    let mut trailing = blob;
+    trailing.push(0);
+    assert!(Block::from_bytes(&trailing).is_err());
+}
+
+/// CEN-A7's falsifier: a block claiming more than `2^28` transaction hashes
+/// is refused at the count, before any hash is read. The wire's cap is
+/// tighter than the census value — `READ_LEN_CAP`, `10^6`
+/// (`shekyl-wire/src/lib.rs`) — so the census property holds a fortiori;
+/// the two numbers are one field's two undocumented bounds (FOLLOWUPS,
+/// *CEN-A7's per-block transaction-count bound*). The control count reaches
+/// the hash read and fails there instead, so the assertion tells the cap
+/// from a short blob.
+#[test]
+fn a7_a_transaction_hash_count_above_the_bound_is_refused_before_any_hash_is_read() {
+    let blob = candidate_on(&chain_of(3), Vec::new()).block.serialize();
+    // No listed transactions: the blob ends in the count, `varint(0)`.
+    let (count, head) = blob.split_last().expect("non-empty");
+    assert_eq!(*count, 0);
+    let with_count = |n: u64| {
+        let mut out = head.to_vec();
+        write_varint(n, &mut out).expect("writing to a Vec is infallible");
+        Block::from_bytes(&out).expect_err("no hash follows the count")
+    };
+    for n in [1_000_001, (1u64 << 28) + 1, u64::MAX] {
+        let refused = with_count(n);
+        assert_eq!(refused.kind(), io::ErrorKind::Other, "count {n}");
+        assert!(
+            refused.to_string().contains("transaction-hash count"),
+            "count {n} is refused at the count: {refused}"
+        );
+    }
+    assert_eq!(with_count(1).kind(), io::ErrorKind::UnexpectedEof);
 }
