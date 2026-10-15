@@ -1,7 +1,8 @@
 # Shekyl input grammar — the rules and every binary's names
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
-2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14.
+2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
+IG-Q41, the Tor binary, 2026-10-15.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -122,7 +123,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | config | — | the TOML file of option values |
 | data | — | the per-network directory holding the daemon's stores and state |
 | log | — | the daemon's log sink |
-| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic, recipients, constants | a file path (value term) |
+| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic, recipients, constants, tor | a file path (value term) |
 | dir | data, wallet, create, recipients | a directory path (value term) |
 | level | log | a log severity: `error`, `warn`, `info`, `debug`, `trace` |
 | category | log | a log category, owned by `shekyl-logging` |
@@ -233,6 +234,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | (`tx-proxy` `user:pass@`) | `tor-socks-username`, `tor-socks-password` | secret | unset | file |  |  | N; today parsed and never handed to Rust (IG-F11) |
 | (`anonymous-inbound` onion) | `tor-onion` | peer-endpoint, onion only | unset | both |  |  | R; `tor = operator` only; one onion: a second onion on one node is a second identity an observer can link to the first, and it offers peers nothing the first does not |
 | (`anonymous-inbound` bind) | `tor-onion-listen` | endpoint | unset | both |  |  | R; required with `tor-onion` |
+| (`SHEKYL_TOR_BINARY`, environment) | `tor-file` | path | derived: `tor/tor` beside the executable, else the version-exact bundle directory under `/opt/shekyl/` (Unix) | both |  |  | N; `tor = managed` only, unconstructible otherwise; verified against the pin as the discovered binary is, with no fall-through to discovery (IG-Q41) |
 | (`tx-proxy` / `anonymous-inbound` `,N`) | — | | | |  |  | – (R5) |
 | `proxy` | `clearnet-socks` | endpoint | unset | both |  |  | R |
 | (`proxy` `user:pass@`) | `clearnet-socks-username`, `clearnet-socks-password` | secret | unset | file |  |  | N |
@@ -709,3 +711,5 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 **IG-Q39 — runtime defaults are values — RULED 2026-10-14** (with RPC_CHANNEL §6.4, RT-O25 and RT-O27). Every runtime row's default is writable as a value: a rate takes `unlimited`, and `log-category` takes `none` (no per-category overrides); an empty category list never means logging off. What `option show` prints is valid input to `option set` and builds the same value, and no row is both runtime and a secret.
 
 **IG-Q40 — the inbound cap — RULED 2026-10-14** (Rick; the same ruling is in [`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §1.1). `p2p-inbound-max` is deleted, and `in-peers` is an X row (§5) whose reopener is a byte quota for metered links. The descriptor safety bound (`InboundCeiling`, [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D4 and D8) is the only inbound bound and is unchanged; the daemon does not raise its own descriptor limit. What an operator pays is bytes, which the rate rows bound; which peers keep a slot is eviction (PWD-I8); handshake cost follows the accept rate (`P2P_TRANSPORT_LAYER.md` D10.3) and the onion proof-of-work. The unbounded cases (Windows, an unlimited or unreadable limit, an unreadable count) behave as today and are PWD-B1's, and their warnings name nothing the operator can set. The runtime set is four rows: `p2p-upload-max`, `p2p-download-max`, `log-level` and `log-category`.
+
+**IG-Q41 — the Tor binary — RULED 2026-10-15** (Rick, on TSR-F8; the same ruling is in [`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §1.1). `SHEKYL_TOR_BINARY` was an environment input, which IG-13 refuses. It becomes the config key `tor-file`, accepted only with `tor = managed`, whose default is today's location: `tor/tor` beside the running executable, else the version-exact bundle directory under `/opt/shekyl/` on Unix. A set value changes where the binary is looked for, never whether it is verified: it passes the same pin gate, and its failure never falls through to discovery. The environment tier leaves the shared discovery function, so the wallet binaries lose it too; their override is the wallet's settings file.
