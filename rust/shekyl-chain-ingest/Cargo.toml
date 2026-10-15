@@ -141,6 +141,11 @@ shekyl-harness-spender = { path = "../shekyl-harness-spender" }
 # The persona's keys (`derive_archival_p_keys`) and the emission claim's
 # assembly (`emission_assembly.rs`, also behind `harness` above).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# CEN-H19's cost instrument (`vectors_tests::h19_batch_cost_at_the_captured_densities`):
+# the captured blocks' proofs batched with the validator's own verify. Both
+# already in the closure through `shekyl-chain-rules`; test-only.
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 # The archival body fixtures (`test_support::{serve_credit_body,
 # emission_claim_body}`, slice 7 commit 7): the kept-half and emission-vin
 # codecs, so the mutation family's duplicates carry keys the validator's

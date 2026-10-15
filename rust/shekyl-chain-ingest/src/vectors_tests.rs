@@ -993,3 +993,109 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
         "the mutations no captured chain can carry, with why"
     );
 }
+
+/// CEN-H19's verification cost on the Rust path, at the captured chains'
+/// own densities: every block's proofs gathered as the fold gathers them
+/// (one per listed transaction that carries one, with its output
+/// commitments as carried) and verified in one derived-weight batch,
+/// timed per block. Prints, per chain, how many blocks carry proofs, how
+/// many proofs and outputs each such block holds, and the batch's median
+/// and worst wall time per proof-carrying block. Also asserts every captured
+/// block's batch verifies: a C++-accepted proof the Rust verifier refused
+/// would be an E2 finding.
+///
+/// A measurement, not a gate: wall time on a shared box. Run in release:
+/// `cargo test --release -p shekyl-chain-ingest --features pipeline --lib
+/// h19_batch_cost_at_the_captured_densities -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement: run --release with --ignored --nocapture"]
+fn h19_batch_cost_at_the_captured_densities() {
+    use shekyl_bulletproofs::{verify_batch, BatchEntry};
+    use shekyl_curve_io::CompressedPoint;
+    use shekyl_wire::Ct;
+    use std::time::Instant;
+
+    const RUNS: usize = 7;
+    for (dir, manifest) in captured_chains() {
+        let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus");
+        let mut reader =
+            CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+        let (mut blocks, mut proofs_per_block, mut outputs, mut times) =
+            (0usize, Vec::new(), Vec::new(), Vec::new());
+        // A chain carrying a retired keyless JoinMarket is read up to it, as
+        // the replay reads it (`retired_keyless_join`).
+        let stop = retired_keyless_join(&manifest.shape).map(|r| r.at);
+        loop {
+            let sequenced = match reader.next() {
+                Ok(Some(sequenced)) => sequenced,
+                Ok(None) => break,
+                Err(fault) if stop.is_some() => {
+                    println!("h19-cost {}: read up to {stop:?} ({fault})", manifest.shape);
+                    break;
+                }
+                Err(fault) => panic!("read the corpus: {fault}"),
+            };
+            let IngestEvent::Extend(candidate) = sequenced.event else {
+                continue;
+            };
+            blocks += 1;
+            let gathered: Vec<_> = candidate
+                .transactions
+                .iter()
+                .filter_map(|tx| match &tx.ct {
+                    Ct::Fcmp {
+                        base,
+                        prunable: Some(prunable),
+                        ..
+                    } => prunable.bulletproofs.first().map(|bp| {
+                        (
+                            bp.to_bulletproof().expect("a captured proof reassembles"),
+                            base.commitments
+                                .iter()
+                                .map(|c| CompressedPoint::from(*c))
+                                .collect::<Vec<_>>(),
+                        )
+                    }),
+                    _ => None,
+                })
+                .collect();
+            if gathered.is_empty() {
+                continue;
+            }
+            let batch: Vec<BatchEntry<'_>> = gathered
+                .iter()
+                .map(|(proof, commitments)| BatchEntry { proof, commitments })
+                .collect();
+            let mut runs: Vec<u128> = (0..RUNS)
+                .map(|_| {
+                    let started = Instant::now();
+                    assert!(verify_batch(&batch), "a captured block's batch verifies");
+                    started.elapsed().as_micros()
+                })
+                .collect();
+            runs.sort_unstable();
+            times.push(runs[RUNS / 2]);
+            proofs_per_block.push(gathered.len());
+            outputs.extend(gathered.iter().map(|(_, c)| c.len()));
+        }
+        times.sort_unstable();
+        let median = times.get(times.len() / 2).copied().unwrap_or(0);
+        let worst = times.last().copied().unwrap_or(0);
+        let total: u128 = times.iter().sum();
+        println!(
+            "h19-cost {}: {blocks} blocks, {} carry proofs (proofs/block max {}), outputs/proof {:?}; \
+             batch per proof-carrying block median {median} µs, max {worst} µs; \
+             whole chain {total} µs = {} µs/block",
+            manifest.shape,
+            times.len(),
+            proofs_per_block.iter().max().copied().unwrap_or(0),
+            {
+                let mut o = outputs.clone();
+                o.sort_unstable();
+                o.dedup();
+                o
+            },
+            total / u128::try_from(blocks.max(1)).expect("fits"),
+        );
+    }
+}

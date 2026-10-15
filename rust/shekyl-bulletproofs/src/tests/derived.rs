@@ -305,3 +305,61 @@ fn an_insane_proof_fails_the_batch_and_alone() {
     assert!(!verify_batch(&[entry(&insane)]));
     assert!(verify_batch(&[entry(&good)]));
 }
+
+/// The batch's cost curve, as context for the per-block figures the H19
+/// fold pays (`shekyl-chain-ingest`'s `h19_batch_cost_at_the_captured_densities`
+/// measures the captured chains' own densities): `n` two-output proofs in one
+/// batch, and one proof over `m` outputs, median of seven runs each. The
+/// seed's cSHAKE is inside every figure.
+///
+/// A measurement, not a gate: run `cargo test --release -p
+/// shekyl-bulletproofs batch_cost_curve -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement: run --release with --ignored --nocapture"]
+fn batch_cost_curve() {
+    use std::time::Instant;
+    const RUNS: usize = 7;
+    let median = |batch: &[BatchEntry<'_>]| {
+        let mut runs: Vec<u128> = (0..RUNS)
+            .map(|_| {
+                let started = Instant::now();
+                assert!(verify_batch(batch));
+                started.elapsed().as_micros()
+            })
+            .collect();
+        runs.sort_unstable();
+        runs[RUNS / 2]
+    };
+    let proven = |outputs: usize| {
+        let openings = (0..outputs)
+            .map(|_| Commitment::new(Scalar::random(&mut OsRng), OsRng.next_u64()))
+            .collect::<Vec<_>>();
+        let proof = Bulletproof::prove_plus(&mut OsRng, openings.clone()).expect("proves");
+        let commitments: Vec<CompressedPoint> = openings
+            .iter()
+            .map(|c| CompressedPoint::from(c.calculate().compress()))
+            .collect();
+        (proof, commitments)
+    };
+
+    let two = (0..16).map(|_| proven(2)).collect::<Vec<_>>();
+    for n in [1usize, 2, 4, 8, 16] {
+        let batch: Vec<BatchEntry<'_>> = two[..n]
+            .iter()
+            .map(|(proof, commitments)| BatchEntry { proof, commitments })
+            .collect();
+        let micros = median(&batch);
+        println!(
+            "bp-batch n={n:>2} x 2 outputs: {micros} µs ({} µs/proof)",
+            micros / n as u128
+        );
+    }
+    for m in [2usize, 4, 8, 16] {
+        let (proof, commitments) = proven(m);
+        let micros = median(&[BatchEntry {
+            proof: &proof,
+            commitments: &commitments,
+        }]);
+        println!("bp-batch n= 1 x {m:>2} outputs: {micros} µs");
+    }
+}

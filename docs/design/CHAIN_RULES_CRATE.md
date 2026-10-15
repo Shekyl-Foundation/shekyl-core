@@ -1133,6 +1133,48 @@ admission, never a panic.
   `shekyl-bulletproofs`' KAT batch, so the fold's batch is exactly the
   documented encoding.
 
+*The cost on the Rust path (2026-10-15).* Shape data, not a floor (rule 76).
+Machine: dev box, i9-11950H (8C/16T), `--release`. The box was shared with
+other lanes: load average 15–21 on 16 threads during both runs. Each figure
+is a median of seven runs, with the seed's cSHAKE inside it.
+
+At the captured chains' own densities: every block's proofs gathered as the
+fold gathers them and verified in one batch
+(`shekyl-chain-ingest` `vectors_tests::h19_batch_cost_at_the_captured_densities`).
+
+| chain | blocks read | blocks with proofs | proofs / block, max | batch per such block | over the chain |
+| --- | --- | --- | --- | --- | --- |
+| `spend-1in-2out` | 82 | 1 | 1 | 5.4 ms | 65 µs / block |
+| `spend-depth3` | 762 | 1 | 1 | 5.2 ms | 6 µs / block |
+| `bond-post` | 98 (read to its retired keyless join, as the replay reads it) | 1 | 1 | 3.5 ms | 35 µs / block |
+| `emission-claim` | 98 (as above) | 1 | 1 | 3.3 ms | 33 µs / block |
+| `median-full` | 215 | 3 | 23 | median 45.8 ms, max 59.3 ms | 533 µs / block |
+| `limit-full` | 214 | 2 | 45 | 98.3 ms (the 45-proof block), 11.1 ms (the other) | 511 µs / block |
+
+Every proof is a two-output proof. The four older chains carry at most one
+proof-bearing transaction a block, which was slice 6's measured basis. The
+two fill chains reach 23 and 45 proofs a block.
+
+The batch's curve (`shekyl-bulletproofs` `tests::derived::batch_cost_curve`,
+the same machine and load):
+
+- `n` two-output proofs in one batch: 4.7 ms for 1, 7.4 ms for 2, 12.9 ms
+  for 4, 23.7 ms for 8 and 46.4 ms for 16. The per-proof cost falls from
+  4.7 ms to 2.9 ms; the 45-proof block above is 2.2 ms a proof.
+- One proof over `m` outputs: 4.7 ms for 2, 8.1 ms for 4, 14.8 ms for 8
+  and 28.0 ms for 16.
+
+An invalid block also pays the locus walk, one batch of one per proof: at
+`limit-full`'s density that is about 45 × 4.7 ms beside the 98 ms batch.
+For scale, GAP-7's dev-box per-transaction admission term is 22.8 ms at
+shape 1/2 (`shekyl-ffi` `benches/block_connect_verify.rs`, an uncontended
+run), so the range proof is the smaller per-transaction term. That bench
+timed the same verifier with an `OsRng` weight at 2.82 ms per two-output
+proof, so contention likely accounts for most of the gap to this run's
+4.7 ms. Re-run both instruments on a quiet box before quoting either as a
+dev-box absolute. This record
+does not discharge GAP-7's floor measurement.
+
 The conversion ban (G2) covers the crate's own fault tokens: no `From`/`Into`
 between `Stale`/`Fault` and `InvalidBlock`, no arm mapping one onto the other
 (`check_store_error_conversion_ban.py`, clauses 1 and 3, with the qualified
