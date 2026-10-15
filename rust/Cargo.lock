@@ -4709,6 +4709,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-options"
+version = "3.1.0"
+dependencies = [
+ "shekyl-onion-v3",
+ "strsim",
+ "toml 0.8.23",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-p-fetch"
 version = "3.1.0"
 dependencies = [
