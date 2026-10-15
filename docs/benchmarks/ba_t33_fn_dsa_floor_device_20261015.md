@@ -119,12 +119,58 @@ threads.
 ## The receipt key at engine assembly (`FND-12`)
 
 One persona slot's derivation is 466 ms on the floor; the receipt key's
-seeded generation is 45.7 ms of it, **9.8 %**. Engine assembly derives the
-lookahead set, two slots, plus a first-stake intent slot when there is one:
-**0.93 to 1.40 s per wallet open for a staker**, of which the receipt key
-is 91 to 137 ms. Only stakers pay it, inside the blocking unit that already
-runs the rest of each slot's derivation. The bond watch's probe window
-derives identity public keys alone and does not pay it.
+seeded generation is 45.7 ms of it, **9.8 %**, about a tenth of each slot.
+The rest is the ML-KEM-768 and two ML-DSA-65 key generations and the HKDF
+expands, not measured separately.
+
+Engine assembly derives one full persona key set for every slot in the
+bonded set and in the three slots from the cursor, one after another. The
+slot set is `StakingBlock::derive_forward_slots`
+(`rust/shekyl-engine-state/src/staking_block.rs:341-349`):
+
+```rust
+let cursor = self.monotone_current_slot_from_record();
+let mut slots: BTreeSet<u32> = self.bonded_slots.iter().copied().collect();
+for offset in 0..=lookahead {
+    if let Some(slot) = cursor.checked_add(offset) {
+        slots.insert(slot);
+    }
+}
+```
+
+called with `ARCHIVAL_PERSONA_LOOKAHEAD`, which is 2
+(`rust/shekyl-engine-core/src/engine/stake_engine/types.rs:64`), so
+`0..=lookahead` is the cursor and the two slots after it. Assembly adds the
+first-stake intent slot and derives every slot in turn
+(`rust/shekyl-engine-core/src/engine/lifecycle/assemble.rs:443-461`):
+
+```rust
+let mut slots = staking.derive_forward_slots(ARCHIVAL_PERSONA_LOOKAHEAD);
+// ...
+if let Some(intent) = first_stake_intent {
+    slots.insert(intent.slot().to_raw());
+}
+
+let mut bundles = std::collections::BTreeMap::new();
+for &slot in &slots {
+    let keys = derive_archival_p_keys(master_seed, derivation_network, seed_format, slot)
+```
+
+For a staker with `k` bonded slots that is `k + 3` derivations, the intent
+slot adding nothing when it is inside the lookahead. On the floor device a
+staker's wallet open spends **(k + 3) × 466 ms** deriving persona keys:
+**1.40 s with none bonded**, of which the receipt key is 45.7 ms per slot.
+Only stakers pay it. The bond watch's probe window derives identity public
+keys alone and does not pay it.
+
+**An observation against the wallet-open budget.** The open-edge budget
+WSS Round 1 ruled is 5 s absolute, local-daemon posture
+(`docs/design/WALLET_SIDE_STORE.md`, decision log, 2026-09-19;
+`docs/design/WSS_Q1B_BENCH_SPEC.md` §1, the quantity there being the held
+buffer's refetch at open). On the floor device the persona derivation alone
+reaches 5 s at about `k = 8` bonded slots: 11 × 466 ms = 5.13 s. The floor
+device is the node-and-wallet floor, not the staker floor, which is not yet
+set.
 
 ## What this does not show
 
