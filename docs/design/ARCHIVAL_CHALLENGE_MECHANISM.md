@@ -1886,7 +1886,7 @@ escapes `#[cfg(test)]`, or any FFI surface that accepts holdings from outside
 the decode all re-open this item at its full weight.
 
 **UPDATE 2026-10-06 (SH-2 resident-key pre-flight,
-[`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md) §4) — the hazard
+[`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md) §4) — the hazard
 moved one type outward and is NOT discharged.** `ServeSet::from_connected_record`
 no longer exists; `ServeSet` is sealed (`pub(crate)` constructors, minted only
 by `PinnedServeSet::acquire`). What `acquire` consumes is `ReportedSet`
@@ -1919,7 +1919,7 @@ interval claim holds.
 The reopen criterion above is unchanged: a second production pinner, a
 test-support constructor that escapes `#[cfg(test)]`, or an FFI surface that
 accepts a reported set from outside the process each re-open this item at
-full weight. Record: [`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md)
+full weight. Record: [`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md)
 §4.
 
 **4. A new load-bearing invariant, in the same class as the vanguards

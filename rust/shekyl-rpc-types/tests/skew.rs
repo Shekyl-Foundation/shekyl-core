@@ -152,6 +152,7 @@ fn unrecognized_never_appears_on_the_authoring_side_of_a_known_cause() {
         RejectCause::StaleRoot,
         RejectCause::ReferenceTooRecent,
         RejectCause::ReferenceNotFound,
+        RejectCause::JoinMarketUnsupported,
     ];
     for cause in known {
         let json = serde_json::to_string(&cause).expect("serialize cause");

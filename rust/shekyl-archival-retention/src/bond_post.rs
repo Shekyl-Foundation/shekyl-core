@@ -6,8 +6,12 @@
 //! JoinMarket bond-post semantic verify (gate-4 §3.2–3.5).
 //!
 //! Structural bounds (hybrid pubkey length) and `P_canonical_id` hint checks stay
-//! in C++ consensus glue; this module covers post-kind, holdings, term rigidity,
-//! floor equality, and record-existence (via `record_exists` from LMDB).
+//! in C++ consensus glue; this module covers post-kind, the JoinMarket's endpoint,
+//! holdings, term rigidity, floor equality, and record-existence
+//! (via `record_exists` from LMDB). The receipt key is not this module's:
+//! CEN-J28 and the pool's credit arm both call
+//! `FnDsaHybridPublicKey::from_receipt_sign_pk`, and this verifier does not
+//! read the key.
 //!
 //! Two rules here are about the transaction or the block rather than the vin, so
 //! they sit outside the per-kind verifiers as free predicates:
@@ -222,6 +226,7 @@ pub fn verify_reinstate_bond_post(
 /// the next challenge), but the **all-zero key is refused**: the bond record
 /// stores "no endpoint" as the zero key and cannot tell the two apart, so a
 /// zero key would connect as a bonded persona that advertises nothing.
+/// The receipt key is not judged here (CEN-J28, and the pool's credit arm).
 pub fn verify_join_market_bond_post(
     vin: &ArchivalBondPostVin,
     record_exists: bool,

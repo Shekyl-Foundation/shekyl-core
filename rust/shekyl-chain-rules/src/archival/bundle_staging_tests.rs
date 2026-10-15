@@ -47,10 +47,13 @@ fn every_refusal_names_its_census_row() {
         .row(),
         CenRow::J30
     );
-    let rows: [(B, CenRow, Option<u32>); 11] = [
+    assert_eq!(
+        SectionRefused::OutsideWindow { position: 0 }.row(),
+        CenRow::J31
+    );
+    let rows: [(B, CenRow, Option<u32>); 10] = [
         (B::OutsideWindow, CenRow::J31, None),
         (B::AlreadyRevealed, CenRow::J31, None),
-        (B::UnknownBlock, CenRow::J31, None),
         (B::BodyMalformed, CenRow::J32, None),
         (B::Count, CenRow::J32, None),
         (B::RecordCount, CenRow::J32, None),
@@ -105,7 +108,10 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 /// - `harness.rs` and `harness/`: the fixture that implements
 ///   `BundleView` for these tests — `cfg(test)` or the `harness` feature,
 ///   never on the production surface.
-/// - `archival/bundle.rs`: the module under test.
+/// - `archival/bundle.rs` and `archival/bundle_section.rs`: the module
+///   under test. The section file is exempt only while it still holds
+///   the section checker; the test asserts that, so deleting the file or
+///   emptying it is red.
 /// - `census.rs`: the registry's comment on the nine `pending` rows names
 ///   the functions as the rows' refusals. It is held to a narrower check
 ///   instead: no `implemented`, `enforced_at` or `by_construction` entry
@@ -161,6 +167,20 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         );
     }
 
+    // Exempt from the walk, and held to still being the section checker.
+    // A file that no longer holds these names is not the module under test,
+    // and an exemption that outlives the checker would hide a call site.
+    let section = src.join("archival").join("bundle_section.rs");
+    let section_text = std::fs::read_to_string(&section).expect("archival/bundle_section.rs");
+    assert!(
+        section_text.contains("pub fn check_section<"),
+        "archival/bundle_section.rs no longer holds the section checker"
+    );
+    assert!(
+        section_text.contains("fn inside_window"),
+        "archival/bundle_section.rs no longer holds the window the verifier shares"
+    );
+
     let exporting = [src.join("archival").join("mod.rs"), src.join("lib.rs")];
     for file in &files {
         let text = std::fs::read_to_string(file).expect("a readable source file");
@@ -201,6 +221,7 @@ fn connect_path_sources(src: &Path) -> Vec<PathBuf> {
         src.join("harness.rs"),
         src.join("census.rs"),
         src.join("archival").join("bundle.rs"),
+        src.join("archival").join("bundle_section.rs"),
     ];
     let exempt_dir = src.join("harness");
     let mut files = Vec::new();

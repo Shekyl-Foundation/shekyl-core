@@ -922,19 +922,21 @@ async fn coherence_get_height_failure_emits_protocol_error_then_returns_io() {
     );
 }
 
-// ── Coherence: malformed block → Malformed + DaemonMalformed ──
+// ── Coherence: malformed fetch → DaemonProtocol + DaemonProtocolError ──
 
-/// Persistent malformed block at scan height 1 (the first block
-/// the producer fetches against an empty-snapshot ledger). The
-/// scanner rejects the block with `InvalidScannableBlock`; the
-/// producer emits one `DaemonMalformed { InvalidBlockStructure }`
-/// and returns `LocalRefreshError::Malformed`.
+/// A block the daemon persistently answers malformed at scan height 1
+/// (the first block the producer fetches against an empty-snapshot
+/// ledger). The fetch is classified on the RPC side: every attempt
+/// fails, the retry budget runs out, the producer emits at least one
+/// `DaemonProtocolError` and returns `LocalRefreshError::DaemonProtocol`.
 ///
-/// Pins the §5.4.6 coherence contract on the `Malformed` branch
-/// from the scanner-rejection path: removing the emission at
-/// line 729 would fail this assertion.
+/// Pins the §5.4.6 coherence contract on that branch: removing the
+/// `DaemonProtocolError` emission from the fetch retry would fail the
+/// last assertion. The scanner-side path (a block served whole that the
+/// scanner refuses, `DaemonMalformed` then `Malformed`) is not what this
+/// test drives; the body says why.
 #[tokio::test(start_paused = true)]
-async fn coherence_malformed_block_emits_daemon_malformed_then_returns_malformed() {
+async fn coherence_malformed_fetch_emits_daemon_protocol_then_returns_daemon_protocol() {
     let refresh = make_local_refresh();
     let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
     // Mark height 1 as persistently malformed: every fetch at

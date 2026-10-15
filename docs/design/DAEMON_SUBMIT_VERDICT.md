@@ -168,6 +168,12 @@ pub enum RejectCause {
     /// Reference block hash unknown to this daemon (typically: daemon not
     /// yet synced to it). Sync-gated retry (§2.5).
     ReferenceNotFound,
+    /// A JoinMarket bond post this daemon cannot admit: its C++ commit
+    /// step has no decoder for the receipt-key form (FND-20). Phases A–C
+    /// passed; Phase D's mutable re-checks do not run, because the shim
+    /// returns before `shekyl_submit_commit_tx`. Deleted with the C++
+    /// commit shim (DEL-008).
+    JoinMarketUnsupported,
     /// Forward-compat catch-all: a cause this client build does not know.
     #[serde(other)]
     Unrecognized,
@@ -339,6 +345,7 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 | `Rejected{ReferenceTooRecent}` | Timed backoff (min-age is 5 blocks; the wallet built too close to the tip), then resubmit-same-bytes. |
 | `Rejected{ReferenceNotFound}` | Sync-gated: consult daemon health context (§5.2). If the daemon is behind, wait for sync and resubmit-same-bytes; if the daemon is synced and still does not know the reference, treat as `StaleRoot`. Own-daemon-gated branching per §7.2. |
 | `Rejected{Unrecognized}` | Release + one-shot rebuild (the F28 loop-breaker applies). |
+| `Rejected{JoinMarketUnsupported}` | Terminal release, no rebuild. Phases A–C passed. Phase D's mutable re-checks do not run: the C++ commit shim cannot reparse these bytes and returns before `shekyl_submit_commit_tx` (`ffi_shim.rs`, FND-20). The capability refusal is the verdict, including when a key-image or fee race would also have refused — retrying the same bytes against this daemon fails the same way. Identity short-circuits (`AlreadyInChain`, the owner's `AlreadyInPool`) return before commit and are not this cause. The pending stake is withdrawn and its funding is spendable again; staking resumes against a daemon that admits a JoinMarket. Deleted with the C++ commit shim (`DEL-008`). |
 | `Err(RpcError)` | The ambiguous case. Hold locks, TTL, resubmit-same-bytes; the next definite verdict resolves. |
 
 **Idempotent resubmission is the status query.** Under identity-first
@@ -1360,11 +1367,14 @@ called at `:3614`; funding spend inputs run the regular K battery over
 | BP3 | Bond record does not already exist (DB) | `:4207-4208`, consumed at `bond_post.rs:73-75` | **B fact + D re-check** — a bond-post block landing during C flips it; conflict → `DoubleSpendConflict` (claim-slot leg) |
 | BP4 | Economic battery: post-kind, holdings-shape consistency, credit/debit exclusivity, debit == 0, **bond-floor equality** | `:4212-4226` → `verify_join_market_bond_post`, `bond_post.rs:40-78`; floor per `bond_floor.rs:19-30` | **C** — already Rust (`shekyl-archival-retention`), native call; violations → `Malformed` |
 | BP5 | `pqc_auths[i].hybrid_public_key == bond.hybrid_public_key` | `:3620-3626` | **A** — structural cross-field check; `Malformed` |
+| BP6 | A JoinMarket's `receipt_sign_pk` parses as a scheme-3 key (`FnDsaHybridPublicKey::from_receipt_sign_pk`) | none: the C++ decoder has no JoinMarket form that carries one (`FN_DSA_HYBRID.md` `FND-20`); the connect-side row is CEN-J28 (`shekyl-chain-rules` `rules/tx_inputs.rs`) | **C** — `verify_credit_arm` calls `FnDsaHybridPublicKey::from_receipt_sign_pk`, the predicate CEN-J28 runs, after BP5 and before the BP3 record fact and `verify_join_market_bond_post`. The key rides on `BondArm::Credit`, so the arm cannot be built without one. A key that does not parse is `Malformed` and never the claim-slot conflict. J14's function does not read the key |
 
 **PR-4b closure (the BP rows are wired).** `verifier.rs::verify_bond_post`
 runs the battery natively for the **JoinMarket** kind: O6 → the bond CT
 balance (`verify_bond_post_ct_balance`, the `(credit, debit) → BondTerm`
 conversion at the battery edge mirroring the FFI boundary's) → BP2 → BP5 →
+BP6 (`FnDsaHybridPublicKey::from_receipt_sign_pk` in `verify_credit_arm`,
+before the record fact) →
 BP3+BP4 (`verify_join_market_bond_post` over the Phase-B
 `bond_record_exists` fact; `RecordExists → DoubleSpendConflict`, all else
 `Malformed`) → Bp+ → the **funding-arm K12** (FCMP++ over the `ToKey`

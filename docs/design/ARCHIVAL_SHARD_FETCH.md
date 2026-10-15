@@ -1028,7 +1028,7 @@ Loopback tests inject a test key. Production composition
 (`shekyl-p-host` / SH-2) passes the persona hybrid signing secret.
 The callback (`shekyl_p_serve::PassSigner`; `shekyl_p_host::{PassKey,
 HostSigner}`) and the envelope LANDED by (a). **UPDATE 2026-10-06: SH-2
-LANDED** ([`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md)) —
+LANDED** ([`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md)) —
 `engine-core` binds `ResidentPassKey`, which signs *inside* the stake
 actor (`SignPassTranscript`) with the held persona's `hybrid_sign_sk`
 through a weak actor handle; the secret never leaves the actor, and
@@ -1038,12 +1038,13 @@ deleted (`RefusingKey` survives as a test fixture on the dev-only
 asks for is `engine-core`'s `serving::round_trip_tests`: the resident
 key behind a real `PServeEndpoint`, fetched by the real `PFetchClient`,
 verified under the bond identity. The unsigned HTTP half is not a
-substitute for a countersigned loopback test. *Pending re-key (Slice C
-Round 0 ruling, 2026-10-07, not yet on `dev`):* the pass receipt moves to
-a **separate FN-DSA-1024 receipt key** carried in the bond record, with
-the identity staying ML-DSA-65 and the receipt signature algorithm-tagged;
-the in-actor shape, the weak handle and the loopback harness survive, and
-`SH2_RESIDENT_KEY_AUDIT.md` §6 names what changes.
+substitute for a countersigned loopback test. *The receipt key (Slice C
+Round 0 ruling, 2026-10-07):* the bond record carries a **separate
+FN-DSA-1024 receipt key**, and the identity stays ML-DSA-65. A second
+capability, `ResidentReceiptKey`, signs with it in the same in-actor
+shape, behind the same weak handle and loopback harness. It is built and
+not selected: `ResidentPassKey` is what the serving task holds.
+Selection is owned by `FN_DSA_HYBRID.md` §9.4.
 
 **Named residency: the serving host becomes a hot signer.** Every
 read now costs a hybrid signature with `P`'s identity secret, so that
@@ -1845,7 +1846,7 @@ Named attacker objectives this round's rulings are evaluated against:
 - ~~SH-2 remainder (the wallet actually constructing
   `PersonaServingHost` and passing the persona hybrid signing secret
   into the `SF-D13` callback)~~ — **LANDED 2026-10-06**
-  ([`SH2_RESIDENT_KEY_AUDIT.md`](SH2_RESIDENT_KEY_AUDIT.md)): production
+  ([`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md)): production
   countersignature is wired (`ResidentPassKey`, in-actor sign). What this
   did **not** close is end-to-end *onion* integration — the first real
   descriptor publish is still the `IMPLEMENTATION_INDEX.md` SH-2b-2
