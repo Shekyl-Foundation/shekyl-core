@@ -480,7 +480,7 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    also where the C++ caller runs these arms
     //    (`ver_non_input_consensus`, then `ver_mixed_ct_semantics`, then
     //    `check_tx_inputs`). Pulling I1 or I4 ahead of H21 would hide the
-    //    class failure. H19's verification half is `validate`'s block fold
+    //    class failure. H19's verification half is `form`'s block fold
     //    (`rules::range_proof`), which records the row once the batch has
     //    decided, so this call stays unrecorded: a pass here is the layout
     //    alone.

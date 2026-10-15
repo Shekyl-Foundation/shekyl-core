@@ -967,9 +967,12 @@ Fakechain `Fixed`), CEN-D1b at `D1b::record` — all derived once in
 of a claim**, recorded at `D3::verify_seed`, whose failure is `Fault::Stale`.
 `Stale::RuleSet` compares the `RuleSet` by value: a Fakechain `Fixed`
 target reuses `RuleSetId::GENESIS`, so the id is not the set. Stage
-membership: `form` runs B1, B2, B7 and derives B6 and D2;
-`validate` verifies D3, derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
-D1, **B4** (slice 8 row 10, 2026-10-06: `rules::attestation::B4` over
+membership: `form` runs B1, B2, G2, F1, F3, F7, F9, F10, derives B6 and
+D2, judges CEN-D1 against the claimed target, runs `tx_form` at every
+slot, then CEN-H19's batch; `validate` verifies the claims (the rule set,
+D3's seed, and the target — a mismatch is `Stale::Target`, not a second
+D1), derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
+**B4** (slice 8 row 10, 2026-10-06: `rules::attestation::B4` over
 `Candidate::attestation_witness`, always in coverage — **`None` is the
 empty preimage against the header's `attestation_root`**, never a
 vacuous pass and never a gap; `Some(w)` is the recompute over the
@@ -986,8 +989,8 @@ predecessor, and a stored bond hybrid key that is not canonical, are
 `Corrupt` — `HoleBelowTip` on the block row and `BondHybridKeyMalformed`
 on `archival_bond` — because a conforming writer cannot produce either,
 so neither is a B4 refusal; a persona with no record stays the refusal),
-E1, then the slot loop, F4–F6,
-G1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
+E1, F4–F6, G1, then the slot loop. `StructurallyValid` carries the clock
+reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
 leg go stale silently, so the instant is carried, not forgotten.
 
@@ -1071,7 +1074,11 @@ not on the single writer (#1081's review, item 1). `run_form` records H19
 only once the batch has decided. A block with no proof (coinbase-only, or
 serve credits only) records it vacuously, which `ChainValid::mint`
 requires of an `implemented` row. Every view-bound row, L1 included, runs
-later, in `validate`; the C++ also runs its CT semantics
+later, in `validate`. F14's cap — weight at most twice the effective
+median — is one of them: the median is derived from the chain and grows
+with it, so there is no stateless ceiling on how many proofs the batch
+may hold, and an overweight block that met its claimed target still pays
+for the batch. The C++ also runs its CT semantics
 (`verCtSemanticsSimple`) before the spent-key insertion.
 
 *The weights are derived, not drawn (R3, Rick: "I prefer derived, coherent
@@ -1105,7 +1112,7 @@ seed is computed over the whole batch before any proof is accumulated
   block's seed. `verify_batch` derives its seed from the slice it is
   given, so the only way to verify part of a batch is to call it on that
   part, under that part's own seed.
-- **One body, three callers.** The `validate` fold (the whole block). The
+- **One body, three callers.** The `form` fold (the whole block). The
   submit engine's N8 leg (`shekyl-daemon-rpc`, a batch of one). The pool
   door (PR-b, a batch of one). The wire-to-verifier reassembly has one
   copy, `shekyl_wire::BpPlus::to_bulletproof`. The `OsRng` verify surfaces
@@ -1190,7 +1197,7 @@ is a median of seven runs, with the seed's cSHAKE inside it.
 
 At the captured chains' own densities: every block's proofs gathered as the
 fold gathers them and verified in one batch
-(`shekyl-chain-ingest` `vectors_tests::h19_batch_cost_at_the_captured_densities`).
+(`shekyl-chain-ingest` `vectors_tests::h19_cost::h19_batch_cost_at_the_captured_densities`).
 
 | chain | blocks read | blocks with proofs | proofs / block, max | batch per such block | over the chain |
 | --- | --- | --- | --- | --- | --- |

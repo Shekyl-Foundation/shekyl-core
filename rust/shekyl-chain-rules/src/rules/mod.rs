@@ -217,7 +217,9 @@ pub(crate) struct BlockContext<'a> {
     /// `connecting.is_zero()`, not a second genesis signal. C1 reads the
     /// height; C2 reads the window.
     pub(crate) mtp_window: Option<MtpWindow>,
-    /// D4's target. D1 compares `formed.pow()` against it.
+    /// D4's target, derived here. `form` already judged CEN-D1 against the
+    /// caller's claim of it; a mismatch with this derivation is
+    /// `Stale::Target`, not a second proof check.
     pub(crate) target: Target,
     /// What this node takes on the release's word — the anchors (E1 reads
     /// them at anchored heights); from slice 6, the posture the 4.I rows

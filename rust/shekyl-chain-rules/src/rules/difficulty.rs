@@ -22,7 +22,8 @@
 //! D4 is not a predicate on the candidate: nothing about a candidate fails
 //! "what is the next difficulty". It is a **definition** in B6's shape
 //! (slice 1 Q5): derived once per validation at [`D4::target`], recorded
-//! there, and carried on the verdict — D1 compares against it, and the
+//! there, and carried on the verdict. `form` judged CEN-D1 against the
+//! caller's claim of this target; a mismatch here is `Stale::Target`. The
 //! store persists the cumulative work it implies (Q5) so `connect` derives
 //! `cumulative_difficulty` instead of being handed it.
 //!
