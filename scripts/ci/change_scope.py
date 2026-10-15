@@ -16,8 +16,9 @@ A changed file is documentation when it is prose, that is `.md` or `.mdc`
 anywhere or any file under `docs/`, AND nothing the skipped jobs compile or
 run reads it. "Reads it" is computed from the tree, not listed by hand:
 
-- every string literal in the consumer files (below) that contains a
-  `docs/` path names that path, or the directory under it, as an input:
+- every path-shaped string literal (no whitespace: a message that mentions
+  `docs/FOLLOWUPS.md` in a sentence reads nothing) in the consumer files
+  (below) that contains a `docs/` path names that path, or the directory under it, as an input:
   `include_str!("../../../docs/test_vectors/X.json")`, a runtime
   `join("../../docs/test_vectors")`, a CMake define pointing at a vector;
 - a prose file outside `docs/` is an input when a consumer literal resolves
@@ -29,8 +30,8 @@ run reads it. "Reads it" is computed from the tree, not listed by hand:
 Consumers are the files the skipped jobs build or run: everything under
 `rust/`, `src/`, `tests/`, `cmake/` and `contrib/`, every `CMakeLists.txt`,
 and each `scripts/` file the consuming workflows invoke by path (read from
-those workflow files). The documentation gates' own scripts are not
-consumers: those gates always run.
+those workflow files), except this classifier, which reads no document. The
+documentation gates' own scripts are not consumers: those gates always run.
 
 A source file is never documentation, however small the edit: a doc-comment
 change inside a `.rs` file can break a build or a doctest.
@@ -53,6 +54,7 @@ import subprocess
 import sys
 
 PROSE_SUFFIXES = (".md", ".mdc")
+SELF = "scripts/ci/change_scope.py"
 CONSUMER_DIRS = ("rust/", "src/", "tests/", "cmake/", "contrib/")
 CONSUMING_WORKFLOWS = (
     ".github/workflows/build.yml",
@@ -63,6 +65,7 @@ CONSUMING_WORKFLOWS = (
 # miss here only widens what counts as an input (fail-closed).
 LITERAL = re.compile(r'"([^"\n]*)"')
 DOCS_IN_LITERAL = re.compile(r'(?:^|[/"\s(])(docs/[^"\n]*)')
+WHITESPACE = re.compile(r"\s")
 # Where a literal stops being a fixed path: a format placeholder or a glob.
 PATH_STOP = re.compile(r'[{}*$%<>?\[\]]')
 
@@ -87,6 +90,8 @@ def consumer_files():
     out = []
     for p in tracked:
         if is_prose(p):
+            continue
+        if p == SELF:
             continue
         if p.startswith(CONSUMER_DIRS) or p == "CMakeLists.txt" or p.endswith("/CMakeLists.txt") or p in scripts:
             out.append(p)
@@ -148,6 +153,8 @@ class Inputs:
             here = os.path.dirname(path)
             root = crate_root(path)
             for lit in LITERAL.findall(code_text(path)):
+                if WHITESPACE.search(lit):
+                    continue
                 if lit.endswith(PROSE_SUFFIXES) and not PATH_STOP.search(lit):
                     rel = lit.lstrip("/")
                     for base in {here, root}:
@@ -241,12 +248,17 @@ def selftest():
     if "docs/design/CRYPTO_DOMAIN_REGISTRY.tsv" not in inputs.exact:
         print("WRONG: the scan did not find the domain registry's include_str!")
         bad += 1
+    # A sentence that mentions a document reads nothing (external/CMakeLists.txt
+    # and the staking sim name docs/FOLLOWUPS.md in messages).
+    if inputs.reads("docs/FOLLOWUPS.md"):
+        print("WRONG: a prose mention of docs/FOLLOWUPS.md counted as a read")
+        bad += 1
     # A mixed change is decided by its one code file.
     got, _ = classify(["docs/design/TOR_SUPERVISOR.md", "rust/shekyl-tor/src/lib.rs"], inputs)
     if got:
         print("WRONG: a docs file plus a .rs file was called docs-only")
         bad += 1
-    print(f"selftest: {len(SELFTEST) + 2 - bad} of {len(SELFTEST) + 2} hold")
+    print(f"selftest: {len(SELFTEST) + 3 - bad} of {len(SELFTEST) + 3} hold")
     return 1 if bad else 0
 
 
