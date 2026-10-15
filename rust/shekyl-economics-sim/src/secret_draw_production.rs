@@ -689,20 +689,44 @@ pub const fn bar_timing() -> Timing {
     Timing::bundle(HONEST_MARGIN_BLOCKS, Lag::Honest, 0)
 }
 
-/// Whether the bar holds: the largest short share over seeds, at maturity,
-/// at the bar's dropout and [`bar_timing`], is at most
-/// [`SHORT_BAR_PERMILLE`]. `None` if that cell is not in `cells`.
+/// Whether the bar holds at `timing`: the largest short share over seeds,
+/// at maturity and the bar's dropout, is at most [`SHORT_BAR_PERMILLE`].
+/// `None` if that cell is not in `cells`. The bar is graded at
+/// [`bar_timing`]; `--secret-draw` runs ESR-11's experiment and grades it
+/// at `Timing::esr11()`.
 #[must_use]
-pub fn bar_holds(cells: &[Cell]) -> Option<bool> {
+pub fn bar_holds(cells: &[Cell], timing: Timing) -> Option<bool> {
     let maturity = EVIDENCE_PAIRS[EVIDENCE_PAIRS.len() - 1];
     cells
         .iter()
         .find(|c| {
             c.spec.pairs == maturity
                 && c.spec.dropout_permille == BAR_DROPOUT_PERMILLE
-                && c.spec.timing == bar_timing()
+                && c.spec.timing == timing
         })
         .map(|c| c.short_permille[2] <= SHORT_BAR_PERMILLE)
+}
+
+/// The timings a report grades the bar at, in the order printed.
+fn bar_timings() -> [Timing; 2] {
+    [bar_timing(), Timing::esr11()]
+}
+
+/// A bar timing as the bar line names it.
+fn bar_timing_phrase(timing: Timing) -> String {
+    if timing == Timing::esr11() {
+        "ESR-11 timing".to_owned()
+    } else {
+        format!(
+            "M = {}, p_reorg = {}, {}",
+            timing.margin,
+            f64::from(timing.reorg_permille) / 1000.0,
+            match timing.lag {
+                Lag::Honest => "honest lag",
+                Lag::Lazy => "lazy lag",
+            }
+        )
+    }
 }
 
 /// The `(m, n)` figures, as ESR-11 prints them.
@@ -834,20 +858,29 @@ pub fn render_summary(out: &mut impl std::fmt::Write, report: &Report) -> std::f
         DEFAULT_LATENCY.1
     )?;
     out.write_str(&window_lines())?;
-    let verdict = match bar_holds(&report.cells) {
-        Some(true) => "HOLDS",
-        Some(false) => "FAILS",
-        None => "not run",
+    // One line per bar timing the report ran. A report that ran neither
+    // says so at the bar's own timing.
+    let graded: Vec<(Timing, bool)> = bar_timings()
+        .into_iter()
+        .filter_map(|timing| bar_holds(&report.cells, timing).map(|holds| (timing, holds)))
+        .collect();
+    let line = |out: &mut dyn std::fmt::Write, timing: Timing, verdict: &str| {
+        writeln!(
+            out,
+            "bar (max over seeds <= {:.1} % short at {} % dropout, D = {}, {}): {verdict}",
+            SHORT_BAR_PERMILLE / 10.0,
+            BAR_DROPOUT_PERMILLE / 10,
+            EVIDENCE_PAIRS[EVIDENCE_PAIRS.len() - 1],
+            bar_timing_phrase(timing),
+        )
     };
-    writeln!(
-        out,
-        "bar (max over seeds <= {:.1} % short at {} % dropout, D = {}, M = {}, p_reorg = 0, honest \
-         lag): {verdict}",
-        SHORT_BAR_PERMILLE / 10.0,
-        BAR_DROPOUT_PERMILLE / 10,
-        EVIDENCE_PAIRS[EVIDENCE_PAIRS.len() - 1],
-        HONEST_MARGIN_BLOCKS,
-    )
+    if graded.is_empty() {
+        return line(out, bar_timing(), "not run");
+    }
+    for (timing, holds) in graded {
+        line(out, timing, if holds { "HOLDS" } else { "FAILS" })?;
+    }
+    Ok(())
 }
 
 /// The machine-readable evidence set (`main` writes it).
@@ -1335,7 +1368,7 @@ mod tests {
         let over = SHORT_BAR_PERMILLE + 1.0;
         let under = SHORT_BAR_PERMILLE;
         let bar = BAR_DROPOUT_PERMILLE;
-        assert_eq!(bar_holds(&[]), None);
+        assert_eq!(bar_holds(&[], bar_timing()), None);
         // Other cells over the bar do not fail it.
         let others = [
             with_max(D, bar, bar_timing(), over),
@@ -1343,13 +1376,15 @@ mod tests {
             with_max(maturity, bar, Timing::bundle(0, Lag::Honest, 0), over),
             with_max(maturity, bar, Timing::esr11(), over),
         ];
-        assert_eq!(bar_holds(&others), None);
+        assert_eq!(bar_holds(&others, bar_timing()), None);
+        // The same cells grade ESR-11's timing: its maturity cell is over.
+        assert_eq!(bar_holds(&others, Timing::esr11()), Some(false));
         let mut cells = others.to_vec();
         cells.push(with_max(maturity, bar, bar_timing(), under));
-        assert_eq!(bar_holds(&cells), Some(true));
+        assert_eq!(bar_holds(&cells, bar_timing()), Some(true));
         cells.pop();
         cells.push(with_max(maturity, bar, bar_timing(), over));
-        assert_eq!(bar_holds(&cells), Some(false));
+        assert_eq!(bar_holds(&cells, bar_timing()), Some(false));
     }
 
     /// Bites against: a row dropped from the table, a row printed without
@@ -1525,7 +1560,11 @@ mod tests {
         assert_eq!(report.cells.len(), 6);
         let mut out = String::new();
         render_summary(&mut out, &report).expect("String sink is infallible");
-        assert_eq!(out.matches("ESR-11 timing").count(), 6, "{out}");
+        assert_eq!(out.matches("ESR-11 timing): ").count(), 1, "{out}");
+        assert!(
+            !out.contains("not run"),
+            "the bar is graded at ESR-11's timing: {out}"
+        );
         assert!(out.contains("(m, n) = ("));
     }
 }
