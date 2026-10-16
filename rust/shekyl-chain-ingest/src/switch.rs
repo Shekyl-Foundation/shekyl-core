@@ -122,6 +122,11 @@ pub struct PlannedBlock {
     /// `seed_height(height)` on the block's own chain, or the null hash
     /// below the first epoch.
     pub seed: BlockHash,
+    /// The proof-of-work hash this node recorded for the block when it
+    /// first judged it, under the seed it was recorded under — `block_pow`
+    /// for a demoted block, the alt row's for a promoted one. The caller
+    /// forms through it (`substrate::Recalled`) instead of hashing again.
+    pub recorded: shekyl_chain_rules::ProvenPow,
 }
 
 /// A recorded block the switch will demote.
@@ -410,11 +415,16 @@ fn plan(
             None => BlockHash::NULL,
             Some(at) => recorded_hash(snap, at)?,
         };
+        let recorded = match snap.recorded_pow(height)? {
+            AtHeight::Recorded(pow) => pow.proven(),
+            AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
+        };
         demoted.push(PlannedDemotion {
             at: PlannedBlock {
                 height,
                 hash: recorded_hash(snap, height)?,
                 seed,
+                recorded,
             },
             candidate,
         });
@@ -433,6 +443,7 @@ fn plan(
                 height,
                 hash: entry.id,
                 seed: seed_on_alt(height)?,
+                recorded: entry.block.pow().proven(),
             },
             block: entry.block.block().clone(),
             witness,

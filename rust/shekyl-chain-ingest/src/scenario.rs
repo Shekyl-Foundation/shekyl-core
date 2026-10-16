@@ -552,10 +552,20 @@ where
     /// `form` every `(candidate, plan)` pair, in order, across the cores
     /// this host offers — step 1 of the switch, which production runs on
     /// its RandomX workers off the actor (`DRS_E5_POOL_ALT_PRUNE.md` §2.3).
+    ///
+    /// Through [`Recalled`](crate::substrate::Recalled): every block a plan
+    /// names was hashed when this node first judged it, and the plan
+    /// carries that record, so a switch calls RandomX only where a seed
+    /// claim differs from the recorded one (ruling 3, 2026-10-15).
     fn form_parallel(&self, work: Vec<(Candidate, PlannedBlock)>) -> Vec<StructurallyValid> {
         let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         let chunk = work.len().div_ceil(threads).max(1);
-        let substrate = &self.substrate;
+        let recalled = crate::substrate::Recalled::new(
+            &self.substrate,
+            work.iter()
+                .map(|(_, at)| (at.hash, at.recorded.seed(), at.recorded.pow())),
+        );
+        let substrate = &recalled;
         let rules = self.rules;
         let mut chunks: Vec<Vec<(Candidate, PlannedBlock)>> = Vec::new();
         let mut rest = work;

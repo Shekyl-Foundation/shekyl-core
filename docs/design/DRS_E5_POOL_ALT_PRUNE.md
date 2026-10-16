@@ -856,7 +856,9 @@ deletion.
 // 0. the cap (E5-Q6): depth > rule_set.reorg_cap() refuses here, locally,
 //    before any RandomX — PopBeyondReorgCap, never a verdict
 // 1. form what the switch judges: the M alt entries and, unless the verdict
-//    is ForcedSwitch, the N demoted blocks (N + M RandomX hashes, off the actor)
+//    is ForcedSwitch, the N demoted blocks — off the actor, through the PoW
+//    this node recorded when it first judged each (block_pow, the alt row):
+//    no RandomX unless a seed claim differs from the recorded one
 // 2. SAL-13: each demoted block judged by the cheap tier — alt_against over
 //    an AltView on a ReadSnapshot taken here, where its history is exactly
 //    the chain below it; a refusal is SI-27 and the writer halts
@@ -899,9 +901,23 @@ store-integrity fault: the tier is a subset of `validate`, evaluated over
 the same history under the same rule set by height, and the one input that
 differs — the local clock — only moves the future-time limit in the
 block's favour, so a refusal means the store holds a chain that fails its
-own rules. The cost is measured, not estimated: the M alt entries are
-hashed at arrival and again at the switch, and recomputing them is simpler
-than storing formed results.
+own rules.
+
+**The switch does not re-hash what this node already hashed (ruled
+2026-10-15).** Measured first: at the genesis cap the re-form was 1 441
+RandomX hashes — 114 s on 16 threads, 684 s on one — against a store
+share of 21 s. Every one had been computed when the block was first
+judged, so the proof-of-work hash is recorded beside the block as a
+derived fact, as its cumulative difficulty is: `block_pow[h]` at
+`connect`, and the alt row's PoW field at AL1 (`RecordedPow`, seed ‖ pow;
+layout 26). The switch forms through a substrate that answers from that
+record (`substrate::Recalled`) keyed by **(block identity, seed)**, never
+identity alone, so a seed claim that differs from the recorded one
+recomputes and then meets CEN-D3 as it would without a record; ordinary
+arrivals use the plain substrate. The record is written only by this node,
+after D2 computed it and D1 accepted it, under the store-integrity belts
+the recorded cumulative difficulty sits under; a peer cannot reach it, and
+a corrupted value can touch only a block this node already accepted once.
 
 **SI-5 recomputes the tree's right edge (ruled 2026-10-15).** After the
 pops — the switch's and `Rewind`'s — the store rebuilds each layer's last

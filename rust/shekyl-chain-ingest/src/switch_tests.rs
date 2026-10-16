@@ -896,3 +896,106 @@ async fn a_new_release_anchor_refuses_the_pending_alternative_at_offer_and_si27_
     x.close().await;
     y.close().await;
 }
+
+/// A longhash probe: every call is counted, and every target is satisfied
+/// (the free hash), so a test can see how many times a step asked RandomX.
+#[derive(Clone)]
+struct CountingPow(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl CountingPow {
+    fn new() -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+    }
+
+    fn calls(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl shekyl_chain_rules::Substrate for CountingPow {
+    type Fault = std::convert::Infallible;
+
+    fn local_clock(&self) -> Result<shekyl_types::Timestamp, Self::Fault> {
+        Ok(crate::scenario::CLOCK_START)
+    }
+
+    fn longhash(&self, _: &[u8], _: &BlockHash) -> Result<shekyl_types::PowHash, Self::Fault> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(shekyl_types::PowHash::from_bytes([0; 32]))
+    }
+}
+
+/// Two drivers under the levered set (cap 10): `x` holds 30 blocks and the
+/// probe, `y` mines the 11-block branch rooted at 19 that pops exactly the
+/// cap. Returns `x`, its probe, `y` and the branch, offered up to the plan.
+async fn at_the_cap_with_a_probe(
+    name: &str,
+) -> (
+    Scenario<CountingPow>,
+    CountingPow,
+    Scenario<CountingPow>,
+    Vec<Mined>,
+    crate::SwitchPlan,
+) {
+    let probe = CountingPow::new();
+    let mut x = Scenario::open_under(&format!("{name}-x"), probe.clone(), levered());
+    let mut y = Scenario::open_under(&format!("{name}-y"), CountingPow::new(), levered());
+    x.mine(30).await;
+    y.mine(20).await;
+    y.idle();
+    let b = y.mine(LEVERED_CAP + 1).await;
+    let (last, held) = b.split_last().expect("a branch");
+    for mined in held {
+        assert!(matches!(
+            x.offer(mined).await.expect("offer"),
+            Offered::Held { .. }
+        ));
+    }
+    let Offered::SwitchDue(plan) = x.offer(last).await.expect("offer") else {
+        panic!("the heavier tip did not name a switch");
+    };
+    (x, probe, y, b, plan)
+}
+
+#[tokio::test]
+async fn a_switch_at_the_cap_calls_randomx_zero_times() {
+    // Ruling 3 (2026-10-15): every block the switch re-judges was hashed
+    // when this node first judged it — the demoted ones at connect, the
+    // promoted ones at arrival — and the plan carries those records. The
+    // switch's forming asks RandomX nothing.
+    let (x, probe, y, b, plan) = at_the_cap_with_a_probe("switch-recall").await;
+    assert_eq!(
+        plan.demoted.len(),
+        usize::try_from(LEVERED_CAP).expect("small")
+    );
+    let before = probe.calls();
+    let switched = x.reorganize(&plan, &bodies(&b)).await.expect("switch");
+    assert!(matches!(switched, Switched::Done(_)), "{switched:?}");
+    assert_eq!(
+        probe.calls() - before,
+        0,
+        "N + M = {} blocks re-formed through their recorded PoW",
+        plan.demoted.len() + plan.promoted.len()
+    );
+    x.close().await;
+    y.close().await;
+}
+
+#[tokio::test]
+async fn a_seed_claim_that_differs_from_the_recorded_one_recomputes() {
+    // The record is keyed by (identity, seed): a claim under another seed
+    // is not the recorded computation, so it goes to RandomX — once — and
+    // then to CEN-D3, which refuses the claim as it would without a record.
+    let (x, probe, y, b, mut plan) = at_the_cap_with_a_probe("switch-recall-seed").await;
+    plan.promoted[0].at.seed = BlockHash::from_bytes([0x5D; 32]);
+    let before = probe.calls();
+    let out = x.reorganize(&plan, &bodies(&b)).await;
+    assert_eq!(
+        probe.calls() - before,
+        1,
+        "only the mismatched claim recomputes"
+    );
+    assert!(matches!(out, Err(RunFault::StaleSeed { .. })), "{out:?}");
+    x.close().await;
+    y.close().await;
+}

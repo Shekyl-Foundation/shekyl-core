@@ -46,6 +46,10 @@ pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -
             height,
             block_weight: BlockWeight::from_raw(300 + raw),
             cumulative_difficulty: CumulativeDifficulty::from_raw(1_000 + u128::from(raw)),
+            pow: crate::codec::RecordedPow {
+                seed: shekyl_types::BlockHash::NULL,
+                pow: shekyl_types::PowHash::from_bytes([0; 32]),
+            },
         },
         block,
         witness,

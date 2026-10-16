@@ -45,7 +45,7 @@ use shekyl_types::BlockHash;
 use shekyl_wire::Transaction;
 
 use crate::archival;
-use crate::block::{Candidate, Derived, StructurallyValid, ValidatedBlock};
+use crate::block::{Candidate, Derived, ProvenPow, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
@@ -341,6 +341,7 @@ pub fn validate<'id, V: ChainView<'id>>(
     // `cx` borrows `formed`. The derived scalars above are `Copy`.
     drop(cx);
     let hash = formed.hash();
+    let pow = ProvenPow::computed(formed.seed(), formed.pow());
     let (candidate, _stateless) = formed.into_parts();
     let block = ValidatedBlock::derive(
         candidate,
@@ -353,6 +354,7 @@ pub fn validate<'id, V: ChainView<'id>>(
             weights,
             emission: paid,
             archival,
+            pow,
         },
     );
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))

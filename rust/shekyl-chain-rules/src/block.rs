@@ -347,6 +347,8 @@ impl fmt::Debug for StructurallyValid {
 ///     weights: todo!(),
 ///     emission: todo!(),
 ///     archival: todo!(),
+///     attestation_witness: todo!(),
+///     pow: todo!(),
 /// };
 /// ```
 #[derive(Debug, PartialEq, Eq)]
@@ -394,6 +396,50 @@ pub struct ValidatedBlock {
     /// have passed B4: the empty set against the mined root when `None`,
     /// the recompute and every countersignature when `Some`.
     attestation_witness: Option<AttestationWitness>,
+    /// The PoW `form` computed under its seed, accepted by this verdict
+    /// (CEN-D1/D2/D3). `connect` records it beside the block.
+    pow: ProvenPow,
+}
+
+/// The proof-of-work hash this node computed for a block (CEN-D2) under
+/// the seed it was claimed and checked under (CEN-D3), and that the
+/// verdict carrying it accepted (CEN-D1). A derived fact, recorded beside
+/// the block as its cumulative difficulty is (`DRS_E5_POOL_ALT_PRUNE.md`,
+/// 2026-10-15 ruling 3), so a switch can re-judge a block this node
+/// already hashed without hashing it again. Only `form` produces one; a
+/// verdict carries it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProvenPow {
+    seed: BlockHash,
+    pow: PowHash,
+}
+
+impl ProvenPow {
+    /// What `form` computed: the hash under the seed it was claimed under.
+    pub(crate) const fn computed(seed: BlockHash, pow: PowHash) -> Self {
+        Self { seed, pow }
+    }
+
+    /// The seed the hash was computed under.
+    #[must_use]
+    pub const fn seed(&self) -> BlockHash {
+        self.seed
+    }
+
+    /// The RandomX longhash of the block's PoW preimage under [`Self::seed`].
+    #[must_use]
+    pub const fn pow(&self) -> PowHash {
+        self.pow
+    }
+
+    /// The pair as a store reads it back: a recorded fact this node wrote.
+    /// Not a proof — a substrate that answers from it is trusting its own
+    /// store, under the store-integrity belts the recorded cumulative
+    /// difficulty sits under.
+    #[must_use]
+    pub const fn recorded(seed: BlockHash, pow: PowHash) -> Self {
+        Self { seed, pow }
+    }
 }
 
 /// What `validate` derived for a block beyond its bytes — the values a
@@ -415,6 +461,8 @@ pub(crate) struct Derived {
     pub(crate) emission: PaidEmission,
     /// The archival transition (DRS-E4, CEN-L7).
     pub(crate) archival: ArchivalDelta,
+    /// The PoW `form` computed, under the seed D3 checked (CEN-D1/D2).
+    pub(crate) pow: ProvenPow,
 }
 
 impl ValidatedBlock {
@@ -447,6 +495,7 @@ impl ValidatedBlock {
             weights,
             emission,
             archival,
+            pow,
         } = derived;
         Self {
             hash,
@@ -464,7 +513,14 @@ impl ValidatedBlock {
             emission,
             archival,
             attestation_witness,
+            pow,
         }
+    }
+
+    /// The PoW this verdict accepted, under its seed (CEN-D1/D2/D3).
+    #[must_use]
+    pub const fn pow(&self) -> ProvenPow {
+        self.pow
     }
 
     /// The candidate's attestation-witness sidecar, as CEN-B4 judged it

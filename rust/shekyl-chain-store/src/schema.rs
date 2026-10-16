@@ -168,9 +168,9 @@ use shekyl_units::AtomicUnits;
 use crate::codec::{
     AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo, BondRecord, Coded,
     CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx,
-    Present, PropertyCellBytes, RMarket, RuleSetInForce, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
-    UndoLog, Unshaped,
+    Present, PropertyCellBytes, RMarket, RecordedPow, RuleSetInForce, SettlementRow,
+    SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::ids::IssuedDrawTuple;
 use crate::lmdb_order::LmdbHashKey;
@@ -444,6 +444,15 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          with a re-walk when it settles (SO-D8d layer 2, SO-D10g): the store's guard that the \
          set a draw's index was resolved against has not drifted. The set itself is never \
          stored. Absent from LMDB for the reason archival_block_draws is",
+    ),
+    (
+        "block_pow",
+        "the proof-of-work hash this node computed for each recorded block, under the seed it \
+         was checked under (DRS-E5, 2026-10-15 ruling 3): a derived fact recorded beside the \
+         block as its cumulative difficulty is, so a reorganization re-judges a block this node \
+         already hashed without RandomX. The C++ kept a transient precompute table and no \
+         per-block record, so LMDB never holds it. Out of the digest domain: a function of the \
+         block the digest's hashes already fold",
     ),
 ];
 
@@ -781,6 +790,16 @@ tables! {
     /// (ordinal 41).
     pub const ARCHIVAL_DRAWABLE_DIGEST: TableDefinition<u64, Coded<DrawableDigest>> =
         TableDefinition::new("archival_drawable_digest");
+
+    /// `block_pow` — **Rust-only** ([`RUST_ONLY_TABLES`]); height → the
+    /// [`RecordedPow`] the verdict carried: the proof-of-work hash this
+    /// node computed under the block's seed and accepted, written by
+    /// `connect` beside `block_info` (insert-once, SI-2's handle) and
+    /// reversed by `pop` through the journal. Read by the switch to re-form
+    /// a block without hashing it again (`DRS_E5_POOL_ALT_PRUNE.md`
+    /// 2026-10-15 ruling 3). Appended last (ordinal 42).
+    pub const BLOCK_POW: TableDefinition<u64, Coded<RecordedPow>> =
+        TableDefinition::new("block_pow");
 }
 
 #[cfg(test)]
@@ -857,6 +876,8 @@ mod tests {
             ("archival_issued_digest", 39),
             ("archival_block_draws", 40),
             ("archival_drawable_digest", 41),
+            // Layout 26 (DRS-E5 switch PR): the recorded proof-of-work.
+            ("block_pow", 42),
         ];
         for &(name, index) in pinned {
             assert_eq!(

@@ -167,7 +167,7 @@ pub use archival::{
     BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge,
     SectionCheckFailed, SectionRefused, SectionStanding,
 };
-pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
+pub use block::{Candidate, ProvenPow, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};

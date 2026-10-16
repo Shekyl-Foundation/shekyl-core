@@ -1022,6 +1022,38 @@ impl ReadSnapshot<'_> {
         Ok(out)
     }
 
+    /// The proof-of-work hash this node recorded for the block at `height`
+    /// (`block_pow`, written by `connect`), under the seed it was computed
+    /// under. [`AtHeight::AboveTip`] past the tip.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a recorded height with no row or an undecodable one; engine
+    /// errors.
+    pub fn recorded_pow(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<crate::codec::RecordedPow>, StoreError> {
+        match self.tip_row()? {
+            Some((tip, _)) if height.to_raw() <= tip => {}
+            _ => return Ok(AtHeight::AboveTip),
+        }
+        chain_reads::cell(
+            &self.txn,
+            crate::schema::BLOCK_POW,
+            height.to_raw(),
+            "block_pow",
+        )
+        .map_err(chain_reads::ReadFault::into_plain)?
+        .map(AtHeight::Recorded)
+        .ok_or_else(|| {
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key: "block_pow",
+                fault: CellFault::Absent,
+            })
+        })
+    }
+
     /// **SAL-13.** The recorded block at `height` as the candidate it was:
     /// the block, every listed transaction's whole wire bytes (`pruned ‖
     /// pqc_auths ‖ prunable`, [`TxRecord::wire_bytes`]) in the header's
