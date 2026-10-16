@@ -90,6 +90,34 @@ the Foundation's hosts showed what that costs once Tor is not optional.
     A listing of the tor directory's top level shows a `glibc-hwcaps` entry
     and no library. A rule that looks for library files at the top level
     passes this.
+13. **OpenSSL inside the managed tor reads a configuration file from a path
+    any local account can create.** Every Expert Bundle checked (2026-10-16:
+    `linux-x86_64`, both macOS targets and `windows-x86_64` at 15.0.24 and
+    15.0.25, and `linux-aarch64` 16.0a13) compiles in `OPENSSLDIR`
+    `/var/tmp/dist/openssl/ssl`, with its modules and engines directories
+    beside it. On Unix `/var/tmp` is world-writable and `dist` does not
+    exist; on Windows the same string is a drive-relative path, under the
+    current drive's root, and `OSSL_WINCTX` is undefined, so no registry
+    setting replaces it. Tor initialises OpenSSL without
+    `OPENSSL_INIT_NO_LOAD_CONFIG` (`crypto_openssl_mgt.c`, identical at
+    `tor-0.4.9.13` and `tor-0.4.9.14`), so OpenSSL reads `openssl.cnf` there
+    whenever `OPENSSL_CONF` is unset. A configuration can name a provider or
+    engine module by absolute path, and OpenSSL loads it into tor. Given a
+    configuration that names a missing provider module, with diagnostics on,
+    the pinned tor aborts at start on Linux x86 and on Windows (both builds,
+    `0xC0000409`), while a merely malformed file is ignored. On Windows `C:\`
+    lets any authenticated user create a directory, and a new `C:\var`
+    inherits Modify for all of them, so any local user can write
+    `C:\var\tmp\dist\openssl\ssl\openssl.cnf`; with `OPENSSL_CONF` unset, a
+    file placed at that default in a sandbox did not load, for a reason not
+    yet traced, so the default stays a live risk. Nothing was planted at a
+    real path. TB-7 part 2 closes it by naming the launcher's blank file in
+    `OPENSSL_CONF`. The bundles also compile in `MODULESDIR` and `ENGINESDIR`
+    under the same root; the launch reaches neither (no configuration names
+    a module, no provider is loaded by name, `HardwareAccel` is off).
+    **Reopen** when a typed option adds hardware acceleration or a named
+    provider: the launch then names an absolute directory it owns
+    (`AccelDir`, `OPENSSL_MODULES`).
 
 ## 3. The rulings
 
@@ -104,7 +132,7 @@ said about a row on its own.
 | **TB-4** | **A target's Tor disposition is a type with no third state.** `Pinned(pin)` or `Unavailable { reason }`; a build target with neither does not compile. Today `CURRENT_PIN: Option<TorPin> = None` cannot tell "not pinned yet" from "ruled unavailable". TB-2 applies to `Pinned` targets only. An `Unavailable` target starts, warns that managed Tor does not exist on this platform, and names the remedy | Rick, 2026-10-06 |
 | **TB-5** | **FreeBSD is `Unavailable`: the operator installs tor and attaches it.** `pkg install tor`, then `--tx-proxy` for outbound and an operator-provisioned onion service with `--anonymous-inbound` for inbound (PWD-E7's second posture, with its durable-address warning). Shekyl ships a user guide for it. Carrying a tor in the FreeBSD artifact is a later look, not this round | **Rick, 2026-10-06**: "users there will have to install their own"; a guide at least, incorporation into our package to be looked at |
 | **TB-6** | **Every artifact that carries `shekyld` carries the pinned bundle, and the bundle's tarball is checked before it is opened.** The property: the Expert Bundle tarball enters the build as a pinned input, its digest is compared with TB-9's file before anything is extracted from it, and a difference fails the build, whatever does the fetching. It is not a download in the packaging step, so the archives, the zip and the installer carry it as well as the `.deb` and `.rpm`, and the build is offline and reproducible from that point. The mechanism is the implementing change's to choose: a gitian `files:` entry records an input's hash and does not refuse a wrong one, whereas the depends system both fetches and checks (`$(package)_sha256_hash`). Placement: a directory of its own beside the executable in archives (TB-7 is why it cannot share one), under `/opt/shekyl/<bundle_version>-<bundle_target>/` in system packages, never in `/usr/local/bin`, where it would shadow a distribution's tor. Only `tor` and the libraries it loads are shipped — the pluggable transports are 30 MiB Shekyl does not use | Rick, 2026-10-06 |
-| **TB-7** | **The pin covers every file in tor's directory, the directory holds nothing else, and the launcher lets nothing else in.** Three parts. (1) Each pinned file has its own digest through the same canonicalize-then-hash gate: on Linux `tor`, `libevent-2.1.so.7`, `libssl.so.3`, `libcrypto.so.3`; on macOS `tor` and `libevent-2.1.7.dylib`; on Windows `tor.exe`. (2) The launcher clears the environment and sets at most one variable, never from the parent's environment: on Linux the library path, to the verified binary's own directory; on Windows `SystemRoot`, from the OS (`GetSystemWindowsDirectoryW`). (3) **The tor directory contains exactly the pinned files and nothing else**: no other entry, no subdirectory, names compared without regard to case on Windows. It is an allowlist, not a scan for library-looking names, because the loader does not confine itself to names a scan would think of or to the top level — §2 findings 10 to 12. It is also why the bundle needs a directory of its own. Three negative tests, each of which must refuse: a planted file at the top level, a planted `glibc-hwcaps/<level>/libz.so.1`, and a planted `VERSION.DLL` | Rick, 2026-10-06 (part 3 in this form is his amendment at ratification; part 2's Windows variable, 2026-10-15, from the TSR-Q7 Windows run) |
+| **TB-7** | **The pin covers every file in tor's directory, the directory holds nothing else, and the launcher lets nothing else in.** Three parts. (1) Each pinned file has its own digest through the same canonicalize-then-hash gate: on Linux `tor`, `libevent-2.1.so.7`, `libssl.so.3`, `libcrypto.so.3`; on macOS `tor` and `libevent-2.1.7.dylib`; on Windows `tor.exe`. (2) The launcher clears the environment and then sets a closed set, each value from a trusted source and none from the parent's environment: `OPENSSL_CONF` on every platform, to the launcher's blank file in the data directory; on Linux the library path, to the verified binary's own directory; on Windows `SystemRoot`, from the OS (`GetSystemWindowsDirectoryW`). Every Expert Bundle's OpenSSL compiles in `OPENSSLDIR` `/var/tmp/dist/openssl/ssl` and tor does not opt out of OpenSSL's configuration loading, so without `OPENSSL_CONF` a file any local account can create there could make OpenSSL load a module into tor (§2 finding 13). (3) **The tor directory contains exactly the pinned files and nothing else**: no other entry, no subdirectory, names compared without regard to case on Windows. It is an allowlist, not a scan for library-looking names, because the loader does not confine itself to names a scan would think of or to the top level — §2 findings 10 to 12. It is also why the bundle needs a directory of its own. Three negative tests, each of which must refuse: a planted file at the top level, a planted `glibc-hwcaps/<level>/libz.so.1`, and a planted `VERSION.DLL` | Rick, 2026-10-06 (part 3 in this form is his amendment at ratification; part 2's Windows variable, 2026-10-15, from the TSR-Q7 Windows run; part 2 amended 2026-10-16 from "at most one variable" to the closed set, adding `OPENSSL_CONF`) |
 | **TB-8** | **The `PATH` tier is deleted for a `Pinned` target.** A `tor` found on `PATH` has its libraries elsewhere and cannot pass a four-file pin, and `PATH` is the widest check-to-exec window the resolver has. The override, beside-the-executable and `/opt/shekyl` tiers remain | Rick, 2026-10-06 |
 | **TB-9** | **The pins are one data file.** `build.rs` reads it and emits constants: the pin stays compiled in and is never read at runtime. The file is the only source for what the packaging side needs — tarball digest, per-file digests, bundle and tor versions, target label, the `Unavailable` dispositions — and the build recipe and the packaging check read it, they do not copy it. Two gates: the packaging job hashes the files it is about to pack against the file and fails on a difference (a test edits a digest and sees the build fail), and the file's set of targets equals the set of compiled arms | Rick, 2026-10-06 |
 | **TB-10** | **Re-pin to tor 0.4.9.13** with the digests in §4, in the change that first ships the bundle. `linux-aarch64` stays on the alpha line under DQ-T0.5's existing ruling and reopen criterion | Rick, 2026-10-06 |
@@ -187,9 +215,13 @@ file meanwhile, with that as the stated reason.
      build instead of downloading inside it.
    - TB-7: `binary::verify_candidate` (exact contents, per-file digests, one
      canonical directory carried by the witness) and
-     `control::launch::managed_tor_command` (cleared environment, the loader
-     path from the witness). The cleared environment applies on every
-     platform. A Windows `tor.exe` does not start without `SystemRoot`: the
+     `control::launch::managed_tor_command` (cleared environment, then the
+     closed set of `control::launch::LaunchEnvironment`: `OPENSSL_CONF` naming
+     the launcher's blank file everywhere, the loader path from the witness
+     on Linux, `SystemRoot` on Windows). The cleared environment applies on
+     every platform. `openssl_reads_only_the_launchers_configuration` proves
+     the pinned tor's OpenSSL reads the file `OPENSSL_CONF` names, and that
+     the launch starts with the blank file there. A Windows `tor.exe` does not start without `SystemRoot`: the
      pinned 0.4.9.13 aborts within about 0.1 s with `0xC0000409`, "subsystem
      crypto (at 7) initialization failed", and restoring that one variable
      is enough (observed on Windows, 2026-10-15). The launcher sets it

@@ -648,15 +648,32 @@ diagnostic. No figure is set before its row lands.
 | `TSR-M8` | the monotonic clock across suspend on Windows and macOS | suspend handling |
 | `TSR-M9` | no onion address in the daemon Tor's log events at `notice` | the log category |
 | `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage | the tombstone delete bound |
-| `TSR-M11` | on Windows, whether a killed and reaped `tor.exe` has released its `DataDirectory` files (`lock`, `state`, `tor.log`) when the reap returns. One run of #1083's live tests left a directory that could not be removed at drop, and could be removed later with no tor running; the cause was not found | whether a respawn into the kept directory (`TSR-Q1`) waits for the directory's files before it launches |
+| `TSR-M11` | on Windows, whether a killed and reaped `tor.exe` has released its `DataDirectory` files (`lock`, `state`, `tor.log`) when the reap returns. **Measured 2026-10-16** (Windows 11 23H2, Defender real-time protection on; the pinned 15.0.24 `tor.exe`, launched as #1083 does): 0 failures in 400, by kill and by owner-close, each followed at once by the tombstone rename and by a recursive delete. Every file is released by the time `WaitForSingleObject` returns | a respawn into the kept directory (`TSR-Q1`) and the tombstone rename (§4.7) do not wait for the directory's files once the reap has returned |
+
+**`TSR-M6`, what is established (2026-10-16; mechanisms from an x86 diagnostic
+and the floor device's dry run, timings to come from the floor run).** Under
+`AvoidDiskWrites 1` Tor defers its periodic `state` write: none within 240 s of
+bootstrap while it reported 20 entry guards; with `AvoidDiskWrites 0` it wrote
+them within 34 s. Every clean exit saves `state` with every guard, under either
+setting: `SIGTERM`, `SIGNAL SHUTDOWN`, and the end of the owning connection
+(Tor's `lost_owning_controller` raises `SIGTERM`, and `tor_cleanup` saves
+`state`; measured at 0.1 s to exit). A kill does not. So the teardown §4.7
+rules keeps a live Tor's guards in its kept directory, and the re-roll this row
+measures is a Tor that crashes before its deferred write: the respawn then
+samples new guards. The same exit-time save explains the macOS run's leftover
+temporary directories holding only `state`: kameo 0.20's
+`ActorRef::wait_for_shutdown` returns when the mailbox closes, before the run
+loop calls `on_stop` and reaps Tor, so a test's `TempDir` could drop while Tor
+was still saving on its way out. The client's live tests now wait for the reap
+before the drop.
 
 The Windows and Linux stop-path figures (closing our end, and the parent's
 `abort()`, each exiting Tor within about 20 ms; C4, C5) are evidence for the
 stop path, not a bound.
 
-**Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, and `TSR-M9` to
-`TSR-M11` need only today's managed Tor and a SOCKS self-dial, and are measured
-before the first production commit. `TSR-M2` and `TSR-M8` need the supervisor
+**Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
+`TSR-M10` need only today's managed Tor and a SOCKS self-dial, and are measured
+before the first production commit; `TSR-M11` is measured (above). `TSR-M2` and `TSR-M8` need the supervisor
 or the suspend apparatus, and are measured on the implementation branch before
 its PR leaves draft.
 
