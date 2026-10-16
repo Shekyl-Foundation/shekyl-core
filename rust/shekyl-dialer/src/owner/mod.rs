@@ -588,8 +588,13 @@ impl Dialer {
     /// One dial of `address` with `aim`, outside the wake loop: the draw
     /// of that address, the pending entry, the nonce, the handshake, the
     /// adopt and the post, or the total outcome. Returns the adopted id
-    /// when the strand's verdict is still owed. The owner loop does this
-    /// after its own draw; a test does it directly.
+    /// when the strand's verdict is still owed. The owner loop draws
+    /// through [`Self::choose`]; a test dials one named address here.
+    ///
+    /// Readiness comes first, as in [`Self::choose`]. A connector that
+    /// cannot dial returns [`None`] before any draw: a draw it cannot dial
+    /// ends as `DialFailed(LocalClose)`, and the list rule drops a drawn
+    /// gray address.
     ///
     /// A gray address is drawn here, so the outcome resolves an
     /// outstanding draw as the lists require. A white address is a
@@ -602,6 +607,13 @@ impl Dialer {
         aim: DialAim,
         rng: &mut R,
     ) -> Option<SocketId> {
+        if let Err(missing) = self.readiness(connector) {
+            tracing::debug!(
+                "{connector:?} dial {address:?} not made: {}",
+                missing.describe()
+            );
+            return None;
+        }
         {
             let mut shared = self.shared();
             if shared.lists.is_gray(address) {

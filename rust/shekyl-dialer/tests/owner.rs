@@ -358,7 +358,9 @@ fn a_refused_peerlist_is_peerlist_refused_with_no_row() {
 fn a_dial_that_cannot_open_is_dial_failed_with_the_cause() {
     let posts = Arc::new(Mutex::new(VecDeque::new()));
     let queue = Arc::clone(&posts);
-    // No dialer installed on this hub: every dial is LocalClose.
+    // No connector is installed on this hub: a dial that is made is
+    // LocalClose. The tip is published, so the failure is that missing
+    // connector. Without a tip the dial would return before the draw.
     let hub = Hub::new(
         Sockets::new(),
         InboundCeiling::Bounded(8),
@@ -369,7 +371,14 @@ fn a_dial_that_cannot_open_is_dial_failed_with_the_cause() {
         hub.clone(),
         RefusedSet::NON_GLOBAL,
         SupportFlags::ADVERTISED.bits(),
-        Arc::new(|| None),
+        Arc::new(|| {
+            Some(SyncPayload {
+                current_height: 10,
+                cumulative_difficulty: 100,
+                cumulative_difficulty_top64: 0,
+                top_id: [1; 32],
+            })
+        }),
     );
     dialer.set_network_id(NETWORK);
     // The link is usable: the plan draws only then (TSR-F1).

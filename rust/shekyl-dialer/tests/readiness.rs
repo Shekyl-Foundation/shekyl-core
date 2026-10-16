@@ -11,8 +11,9 @@
 //! is missing the owner loop waits on the change, not on its timer.
 //!
 //! Each wake here is [`Dialer::wake`], what the owner loop runs when its timer
-//! fires. The hub has no connector installed, so a dial that is made fails at
-//! once as a local close, as a dial through a dead proxy does.
+//! fires. [`Dialer::dial`] is the named draw, and it reads the same gate. The
+//! hub has no connector installed, so a dial that is made fails at once as a
+//! local close, as a dial through a dead proxy does.
 
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
@@ -20,7 +21,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use shekyl_dialer::{Dialer, NotReady, SnapshotSource, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
+use shekyl_dialer::{
+    DialAim, Dialer, NotReady, SnapshotSource, WAKE_BASE_NANOS, WAKE_JITTER_NANOS,
+};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
@@ -126,6 +129,22 @@ fn a_connector_whose_link_is_down_keeps_its_gray_list() {
     );
     assert_eq!(wakes(&dialer, WAKES), 0, "no wake dialed");
     assert_eq!(gray(&dialer), before, "gray is unchanged, seat for seat");
+}
+
+/// A named dial is the other draw. It reads the same gate, so a down
+/// link costs nothing: removing the check in [`Dialer::dial`] draws the
+/// address, the dial fails locally, and the address leaves gray.
+#[test]
+fn a_direct_dial_draws_nothing_while_the_link_is_down() {
+    let dialer = dialer(&ManualClock::new(Tick::new(1)), tip());
+    dialer.set_network_id([7; 16]);
+    take_link_down(&dialer);
+    let before = gray(&dialer);
+    let address = before.iter().next().expect("a gray address").clone();
+    assert!(dialer
+        .dial(CLEARNET, &address, DialAim::Keep, &mut SplitMix64::new(4))
+        .is_none());
+    assert_eq!(gray(&dialer), before, "an unready dial does not draw");
 }
 
 /// The control: the same wakes over a usable link dial, and each failed
