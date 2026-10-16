@@ -8,11 +8,12 @@
 //! typed [`ValidatedBlock`] coming out inside a `ChainValid`.
 
 use core::fmt;
+use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::archival::AttestationWitness;
 use shekyl_types::{
-    BlockHash, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
+    BlockHash, BlockHeight, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
 };
 
 use shekyl_wire::{Block, BlockHeader, Transaction};
@@ -25,6 +26,8 @@ use crate::rule_set::{RuleSet, RuleSetId};
 use crate::rules::block_weight::Weights;
 use crate::rules::difficulty::Target;
 use crate::rules::reward::PaidEmission;
+use crate::verdict::TxSlot;
+use crate::view::{AtHeight, HeaderView};
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
 ///
@@ -119,6 +122,18 @@ pub struct Candidate {
 }
 
 impl Candidate {
+    /// Every distinct `reference_block` the listed bodies name — the
+    /// references a caller claims to `form` ([`ReferenceClaims`]). The
+    /// miner transaction names none (CEN-H15: a coinbase carries no
+    /// membership proof), so a coinbase-only block names nothing.
+    #[must_use]
+    pub fn proof_references(&self) -> BTreeSet<BlockHash> {
+        self.transactions
+            .iter()
+            .filter_map(crate::rules::tx_against::proof_reference)
+            .collect()
+    }
+
     /// Assemble a candidate from the block as received and the listed
     /// bodies, in listed order, with no attestation witness — the shape of
     /// every block whose attestation set is empty, which is every block a
@@ -160,9 +175,19 @@ impl Candidate {
 /// * `seed` — the block id the caller **claimed** sits at the seed height
 ///   (CEN-D3). `validate` verifies it against the committing view and
 ///   returns [`Stale::Seed`](crate::Stale::Seed) on a mismatch.
+/// * `target` — the difficulty the caller **claimed** CEN-D4 derives for
+///   the connecting height, a function of the headers below it alone.
+///   `form` judges CEN-D1 against it, before any body work, so a block
+///   short of its proof-of-work costs RandomX and nothing more. `validate`
+///   and `alt_against` derive D4 over their view and return
+///   [`Stale::Target`](crate::Stale::Target) on a mismatch.
 /// * `pow` — the RandomX longhash under that seed (CEN-D2), computed here
 ///   because it is the most expensive call in the validator and this stage
 ///   runs outside the write transaction.
+/// * `coverage` — every stateless row, the transactions' included: `form`
+///   runs `tx_form` at the miner slot and every listed slot, and CEN-H19's
+///   batch over the listed proofs, so the view-bound stage judges only what
+///   reads the chain.
 /// * `judged_at` — the wall clock at `form`. **This makes the verdict
 ///   time-dependent**: a `StructurallyValid`, and the `ChainValid` minted
 ///   from it, is no longer a pure function of `(candidate, view, rule_set)`.
@@ -187,6 +212,7 @@ impl Candidate {
 ///     seed: todo!(),
 ///     pow: todo!(),
 ///     attempt: todo!(),
+///     references: todo!(),
 /// };
 /// ```
 ///
@@ -199,8 +225,12 @@ pub struct StructurallyValid {
     judged_at: Timestamp,
     hash: BlockHash,
     seed: BlockHash,
+    target: Target,
     pow: PowHash,
     attempt: FormAttempt,
+    /// Per listed slot, what its proof was verified against — `None` for a
+    /// slot with nothing to verify or no claim to verify it under.
+    references: Vec<Option<VerifiedReference>>,
 }
 
 impl StructurallyValid {
@@ -217,8 +247,10 @@ impl StructurallyValid {
         judged_at: Timestamp,
         hash: BlockHash,
         seed: BlockHash,
+        target: Target,
         pow: PowHash,
         attempt: FormAttempt,
+        references: Vec<Option<VerifiedReference>>,
     ) -> Self {
         Self {
             candidate,
@@ -227,8 +259,22 @@ impl StructurallyValid {
             judged_at,
             hash,
             seed,
+            target,
             pow,
             attempt,
+            references,
+        }
+    }
+
+    /// What the listed transaction at `slot` had its proof verified
+    /// against in `form`, if anything: `None` at the miner slot, at a slot
+    /// with no proof, and at a slot whose reference the caller did not
+    /// claim.
+    #[must_use]
+    pub fn verified_reference(&self, slot: TxSlot) -> Option<VerifiedReference> {
+        match slot {
+            TxSlot::Listed(n) => self.references.get(n).copied().flatten(),
+            TxSlot::Miner | TxSlot::Lone => None,
         }
     }
 
@@ -283,6 +329,14 @@ impl StructurallyValid {
         self.seed
     }
 
+    /// The target the caller claimed and `form` judged CEN-D1 against.
+    /// `validate` and `alt_against` derive CEN-D4 over their view and
+    /// return [`Stale::Target`](crate::Stale::Target) on a mismatch.
+    #[must_use]
+    pub const fn target(&self) -> Target {
+        self.target
+    }
+
     /// The longhash under the claimed seed (CEN-D2) — what CEN-D1 compares
     /// against the target once the seed is verified.
     #[must_use]
@@ -314,8 +368,10 @@ impl fmt::Debug for StructurallyValid {
             .field("coverage", &self.coverage)
             .field("judged_at", &self.judged_at)
             .field("seed", &self.seed)
+            .field("target", &self.target)
             .field("pow", &self.pow)
             .field("attempt", &self.attempt)
+            .field("references", &self.references)
             .finish()
     }
 }
@@ -347,6 +403,8 @@ impl fmt::Debug for StructurallyValid {
 ///     weights: todo!(),
 ///     emission: todo!(),
 ///     archival: todo!(),
+///     attestation_witness: todo!(),
+///     pow: todo!(),
 /// };
 /// ```
 #[derive(Debug, PartialEq, Eq)]
@@ -394,6 +452,191 @@ pub struct ValidatedBlock {
     /// have passed B4: the empty set against the mined root when `None`,
     /// the recompute and every countersignature when `Some`.
     attestation_witness: Option<AttestationWitness>,
+    /// The PoW `form` computed under its seed, accepted by this verdict
+    /// (CEN-D1/D2/D3). `connect` records it beside the block.
+    pow: ProvenPow,
+}
+
+/// What a caller claims the chain holds at one `reference_block` — the
+/// block's recorded height and the curve-tree root **at** that height
+/// (CEN-I12's anchor). CEN-B5 holds every connected block's header
+/// `curve_tree_root` to `root_at(height)`, so the root at a reference is a
+/// fact of the header chain, and a caller that keeps the header chain ahead
+/// of connect (the ingest driver's target ledger, the switch's stitched
+/// view) can claim it the way it claims the seed and the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReferenceClaim {
+    /// The reference block's height on the chain the block connects onto.
+    pub height: BlockHeight,
+    /// The curve-tree root at that height — the anchor the proof was built
+    /// over.
+    pub root: CurveTreeRoot,
+}
+
+/// The claims `form` is handed for a block: one per distinct
+/// `reference_block` hash its transactions name (`CHAIN_RULES_CRATE.md`
+/// §4.6, the third claim). A reference with no claim is not verified in
+/// `form`; `validate` then either refuses it on CEN-I10/I11 or, when those
+/// pass, faults [`Stale::Reference`](crate::Stale::Reference) — there is no
+/// second verify site.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReferenceClaims {
+    claims: BTreeMap<BlockHash, ReferenceClaim>,
+}
+
+impl ReferenceClaims {
+    /// No claims: every proof-bearing transaction is left for `validate`
+    /// to fault.
+    pub const EMPTY: Self = Self {
+        claims: BTreeMap::new(),
+    };
+
+    /// Claim `(height, root)` for the block `reference` names.
+    pub fn insert(&mut self, reference: BlockHash, height: BlockHeight, root: CurveTreeRoot) {
+        self.claims
+            .insert(reference, ReferenceClaim { height, root });
+    }
+
+    /// The claim for `reference`, if the caller made one.
+    #[must_use]
+    pub fn get(&self, reference: &BlockHash) -> Option<ReferenceClaim> {
+        self.claims.get(reference).copied()
+    }
+
+    /// The claims for `candidate` from a lookup by identity: one per
+    /// reference the listed bodies name ([`Candidate::proof_references`])
+    /// that `lookup` answers. A reference it does not answer is not
+    /// claimed. The shape for a caller holding its chain by hash — a
+    /// switch plan's header map, a test's mock chain.
+    #[must_use]
+    pub fn gather(
+        candidate: &Candidate,
+        mut lookup: impl FnMut(&BlockHash) -> Option<ReferenceClaim>,
+    ) -> Self {
+        candidate
+            .proof_references()
+            .into_iter()
+            .filter_map(|reference| lookup(&reference).map(|claim| (reference, claim)))
+            .collect()
+    }
+
+    /// The claims for `candidate`, connecting at `connecting`, read off
+    /// `view`'s headers across CEN-I11's window
+    /// ([`admissible_references`](crate::admissible_references)): each
+    /// header in the window whose identity a listed body names is claimed
+    /// at its height with its header's `curve_tree_root` — the root at
+    /// that height by CEN-B5, so a header chain is a chain of anchors. A
+    /// block naming no reference reads nothing. A reference the window
+    /// does not hold is not claimed, and `validate` refuses it on
+    /// CEN-I10/I11 rather than faulting `Stale::Reference`.
+    ///
+    /// The production shape: the ingest driver's ledger ahead of connect,
+    /// the switch's stitched view.
+    ///
+    /// # Errors
+    ///
+    /// The view's own fault; a window height the view answers `AboveTip`
+    /// for is left unclaimed, not reported — `validate` names what is
+    /// wrong with it.
+    pub fn from_headers<'id, V: HeaderView<'id>>(
+        view: &V,
+        connecting: BlockHeight,
+        candidate: &Candidate,
+    ) -> Result<Self, V::Fault> {
+        let named = candidate.proof_references();
+        if named.is_empty() {
+            return Ok(Self::EMPTY);
+        }
+        let Some((oldest, newest)) = crate::rules::tx_against::admissible_references(connecting)
+        else {
+            return Ok(Self::EMPTY);
+        };
+        let mut claims = Self::EMPTY;
+        for raw in oldest.to_raw()..=newest.to_raw() {
+            let height = BlockHeight::from_raw(raw);
+            let AtHeight::Recorded(record) = view.header_at(height)? else {
+                continue;
+            };
+            if named.contains(&record.hash) {
+                claims.insert(record.hash, height, record.header.curve_tree_root);
+            }
+        }
+        Ok(claims)
+    }
+
+    /// How many references are claimed.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.claims.len()
+    }
+
+    /// Whether no reference is claimed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.claims.is_empty()
+    }
+}
+
+impl FromIterator<(BlockHash, ReferenceClaim)> for ReferenceClaims {
+    fn from_iter<I: IntoIterator<Item = (BlockHash, ReferenceClaim)>>(iter: I) -> Self {
+        Self {
+            claims: iter.into_iter().collect(),
+        }
+    }
+}
+
+/// What one transaction's proof was verified against in `form`: the
+/// reference it names and the claim it was verified under. Carried on the
+/// [`StructurallyValid`] token per listed slot; `validate` compares it with
+/// the context the chain yields (CEN-I10's height, CEN-I12's anchor) and
+/// faults on a disagreement rather than verifying again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerifiedReference {
+    /// The `reference_block` the transaction names.
+    pub reference: BlockHash,
+    /// The claim the proof verified against.
+    pub claim: ReferenceClaim,
+}
+
+/// The proof-of-work hash this node computed for a block (CEN-D2) under
+/// the seed it was claimed and checked under (CEN-D3), and that the
+/// verdict carrying it accepted (CEN-D1). A derived fact, recorded beside
+/// the block as its cumulative difficulty is (`DRS_E5_POOL_ALT_PRUNE.md`,
+/// 2026-10-15 ruling 3), so a switch can re-judge a block this node
+/// already hashed without hashing it again. Only `form` produces one; a
+/// verdict carries it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProvenPow {
+    seed: BlockHash,
+    pow: PowHash,
+}
+
+impl ProvenPow {
+    /// What `form` computed: the hash under the seed it was claimed under.
+    pub(crate) const fn computed(seed: BlockHash, pow: PowHash) -> Self {
+        Self { seed, pow }
+    }
+
+    /// The seed the hash was computed under.
+    #[must_use]
+    pub const fn seed(&self) -> BlockHash {
+        self.seed
+    }
+
+    /// The RandomX longhash of the block's PoW preimage under [`Self::seed`].
+    #[must_use]
+    pub const fn pow(&self) -> PowHash {
+        self.pow
+    }
+
+    /// The pair as a store reads it back: a recorded fact this node wrote.
+    /// Not a proof — a substrate that answers from it is trusting its own
+    /// store, under the store-integrity belts the recorded cumulative
+    /// difficulty sits under.
+    #[must_use]
+    pub const fn recorded(seed: BlockHash, pow: PowHash) -> Self {
+        Self { seed, pow }
+    }
 }
 
 /// What `validate` derived for a block beyond its bytes — the values a
@@ -415,6 +658,8 @@ pub(crate) struct Derived {
     pub(crate) emission: PaidEmission,
     /// The archival transition (DRS-E4, CEN-L7).
     pub(crate) archival: ArchivalDelta,
+    /// The PoW `form` computed, under the seed D3 checked (CEN-D1/D2).
+    pub(crate) pow: ProvenPow,
 }
 
 impl ValidatedBlock {
@@ -447,6 +692,7 @@ impl ValidatedBlock {
             weights,
             emission,
             archival,
+            pow,
         } = derived;
         Self {
             hash,
@@ -464,7 +710,14 @@ impl ValidatedBlock {
             emission,
             archival,
             attestation_witness,
+            pow,
         }
+    }
+
+    /// The PoW this verdict accepted, under its seed (CEN-D1/D2/D3).
+    #[must_use]
+    pub const fn pow(&self) -> ProvenPow {
+        self.pow
     }
 
     /// The candidate's attestation-witness sidecar, as CEN-B4 judged it

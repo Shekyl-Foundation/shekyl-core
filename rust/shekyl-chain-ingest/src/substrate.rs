@@ -90,7 +90,7 @@ pub struct ProductionSubstrate {
 
 impl ProductionSubstrate {
     /// A substrate over `caches` (the replay driver's own store, or the
-    /// daemon's at E3), recording into `metrics` — the same `Arc` the
+    /// daemon's at the store flip, DRS-X), recording into `metrics` — the same `Arc` the
     /// pipeline is given (module docs). Callers that form in parallel clone
     /// the value: the store is shared, derivation is de-duplicated inside
     /// it, and each worker's `compute_hash` gets its own scratchpad.
@@ -144,6 +144,67 @@ impl Substrate for ProductionSubstrate {
         let started = Instant::now();
         let outcome = self.caches.pin_canonical(&seedhash);
         self.record_cache(outcome, started);
+    }
+}
+
+/// A substrate that answers [`Substrate::longhash`] from the proof-of-work
+/// hashes this node already recorded, and asks `inner` for anything else
+/// (`DRS_E5_POOL_ALT_PRUNE.md`, 2026-10-15 ruling 3). The switch forms the
+/// blocks it re-judges through one — every demoted block and every
+/// promoted one was hashed when this node first judged it — and ordinary
+/// arrivals use the plain substrate.
+///
+/// Keyed by **(block identity, seed)**, never by identity alone: a seed
+/// claim that differs from the one the hash was recorded under always
+/// recomputes, so a wrong claim meets RandomX and then CEN-D3, exactly as
+/// it would without the record. The identity is read off the PoW preimage
+/// (`shekyl_wire::identity_of_pow_blob`), so nothing beside the blob the
+/// rule hands over is trusted. The trait's contract already permits it:
+/// "the implementor may cache by it".
+///
+/// What the record is trusted for: it was written by this node, after D2
+/// computed it and D1 accepted it, under the store-integrity belts the
+/// recorded cumulative difficulty sits under; no peer can reach it, and a
+/// corrupted value can only touch a block this node already accepted once.
+pub struct Recalled<'a, P> {
+    inner: &'a P,
+    recorded: std::collections::HashMap<(BlockHash, BlockHash), PowHash>,
+}
+
+impl<'a, P> Recalled<'a, P> {
+    /// `inner`, answering from `recorded` — `(identity, seed, pow)` triples
+    /// the store holds — where the key matches.
+    pub fn new(
+        inner: &'a P,
+        recorded: impl IntoIterator<Item = (BlockHash, BlockHash, PowHash)>,
+    ) -> Self {
+        Self {
+            inner,
+            recorded: recorded
+                .into_iter()
+                .map(|(identity, seed, pow)| ((identity, seed), pow))
+                .collect(),
+        }
+    }
+}
+
+impl<P: Substrate> Substrate for Recalled<'_, P> {
+    type Fault = P::Fault;
+
+    fn local_clock(&self) -> Result<Timestamp, P::Fault> {
+        self.inner.local_clock()
+    }
+
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, P::Fault> {
+        let identity = shekyl_wire::identity_of_pow_blob(pow_blob);
+        match self.recorded.get(&(identity, *seed)) {
+            Some(pow) => Ok(*pow),
+            None => self.inner.longhash(pow_blob, seed),
+        }
+    }
+
+    fn pin_seed(&self, seed: &BlockHash) {
+        self.inner.pin_seed(seed);
     }
 }
 

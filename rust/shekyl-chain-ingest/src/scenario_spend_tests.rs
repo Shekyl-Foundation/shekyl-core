@@ -40,12 +40,15 @@ const AT: u64 = FIRST_SPEND_HEIGHT + 1;
 /// The rows a block of real spends is judged under beyond the coinbase-only
 /// set (`scenario_tests::JUDGES_EVERY_BLOCK`): the listed form's H4, the
 /// per-slot sequence `tx_against` runs on a spend (I7, I10–I13, I15, I17,
-/// I18), the chain-arm G1 before the slot loop and L1 after it. I13 and
-/// I15 are the rows the flip of `CHAIN_RULES_SLICE_6.md` §5 row 6 turned
-/// on (2026-10-08): a real spend's declared depth admitted at its
-/// reference, and its membership proof verified there.
-const JUDGES_A_SPENDING_BLOCK: [CenRow; 11] = [
+/// I18), the chain-arm G1 before the slot loop, and after it the block's
+/// range-proof batch (H19's verification half) and L1. I13 and I15 are the
+/// rows the flip of `CHAIN_RULES_SLICE_6.md` §5 row 6 turned on
+/// (2026-10-08): a real spend's declared depth admitted at its reference,
+/// and its membership proof verified there. H19 records once the batch over
+/// both spends' proofs has decided.
+const JUDGES_A_SPENDING_BLOCK: [CenRow; 12] = [
     CenRow::H4,
+    CenRow::H19,
     CenRow::G1,
     CenRow::I7,
     CenRow::I10,
@@ -136,29 +139,31 @@ async fn l1_refuses_a_twin_spend_listed_behind_the_first() {
 /// A body moved after it was signed: the first spend's prefix touched
 /// (`unlock_time`, a field no view-bound row reads) and listed behind the
 /// untouched one. Its key image doubles the first's, so L1 would refuse it
-/// too — but the slot loop runs first, and the first row in the spend's
-/// `tx_against` sequence that binds the prefix refuses at `Listed(1)`: a
+/// too — but the per-slot rows run first, and the first row in the
+/// spend's sequence that binds the prefix refuses at `Listed(1)`: a
 /// per-transaction row behind a passing body is seen before the
 /// block-level row, the C++'s order (`add_spent_key` is the last check).
-/// That row is CEN-I15, at the transaction: the membership proof is
-/// verified over the prefix hash (`FCMP_PLUS_PLUS.md` §7 step 4), so a
-/// moved prefix fails the proof before the signature sequence is reached.
-/// *Records-was:* until the flip (slice 6 row 6, 2026-10-08) I15 was
-/// staged off the spend class and the refusing row was I18 at input 0 —
-/// the signature no longer covering its message. The signature's own
-/// binding stays witnessed on the signature sequence in the rules crate;
-/// the mutation family's `ForgedSignature` flips the signature and leaves
-/// the body.
+/// That row is CEN-I18, at input 0: since 2026-10-16 `form` runs the
+/// signature sequence at every listed slot before the verify rows
+/// (`CHAIN_RULES_CRATE.md` §4.6), and the signing preimage binds the
+/// prefix (CEN-I17), so the signature no longer covers its message before
+/// the membership proof — which binds the prefix hash too — is verified.
+/// *Records-was:* from the flip (slice 6 row 6, 2026-10-08) to 2026-10-16
+/// the row was CEN-I15 at the transaction, `validate` verifying the proof
+/// ahead of the signatures; before the flip, I18 at input 0 as now. The
+/// proof's own binding stays witnessed by the mutation family and the
+/// rules crate; `ForgedSignature` flips the signature and leaves the body.
 #[tokio::test]
 async fn a_moved_body_listed_behind_its_twin_is_refused_per_slot_before_l1_can() {
-    let (mut scenario, _mined, a, _b) = matured("spend-moved-i15").await;
+    let (mut scenario, _mined, a, _b) = matured("spend-moved-i18").await;
     let mut moved = a.clone();
     moved.prefix.unlock_time += 1;
     refused_at(
         scenario.mine_listing(vec![a, moved]).await,
-        CenRow::I15,
-        Locus::Tx {
+        CenRow::I18,
+        Locus::Input {
             slot: TxSlot::Listed(1),
+            input: 0,
         },
     );
     scenario.close().await;
@@ -192,6 +197,69 @@ async fn i7_refuses_a_respend_at_the_slot_behind_a_fresh_spend() {
         scenario.mine_listing(vec![fresh, respend]).await,
         CenRow::I7,
         SECOND_SLOT_FIRST_INPUT,
+    );
+    scenario.close().await;
+}
+
+/// CEN-H19's verification half on the production stack (slice 6 Q9's
+/// fixture): a driven block listing two wallet-built spends, the second's
+/// range proof one bit off what its prover made, is refused on H19 at that
+/// transaction; the same two spends unflipped connect, with H19 recorded —
+/// the positive control. The flip is made before the wallet signs
+/// (`Spender::spend_coinbase_breaking_range_proof`), so every other row
+/// passes the body: flipped after, it is CEN-I18's refusal in the slot loop
+/// and never reaches the batch.
+#[tokio::test]
+async fn h19_refuses_a_flipped_range_proof_and_the_unflipped_block_connects() {
+    let (mut scenario, mined, a, b) = matured("spend-h19-flip").await;
+    let flipped = Spender::over(&mined).spend_coinbase_breaking_range_proof(
+        scenario.wallet(),
+        h(1),
+        h(AT),
+        Family::Main.fee(),
+    );
+    refused_at(
+        scenario.mine_listing(vec![a.clone(), flipped]).await,
+        CenRow::H19,
+        Locus::Tx {
+            slot: TxSlot::Listed(1),
+        },
+    );
+    let two = scenario
+        .mine_listing(vec![a, b])
+        .await
+        .unwrap_or_else(|outcome| panic!("the unflipped spends connect: {outcome}"));
+    assert!(
+        two.judged_by.contains(&CenRow::H19),
+        "the batch decided the unflipped block"
+    );
+    scenario.close().await;
+}
+
+/// The locus: one bad proof among good ones, in the middle of three listed
+/// spends, and the refusal names that transaction — the batch fails, and
+/// each proof re-verified alone under its own derived seed finds it.
+#[tokio::test]
+async fn h19_names_the_bad_proof_among_good_ones() {
+    let mut scenario = Scenario::open("spend-h19-locus");
+    let mined = scenario.mine(AT + 1).await;
+    let at = AT + 1;
+    let listed = {
+        let spender = Spender::over(&mined);
+        let wallet = scenario.wallet();
+        let fee = Family::Main.fee();
+        vec![
+            spender.spend_coinbase(wallet, h(0), h(at), fee),
+            spender.spend_coinbase_breaking_range_proof(wallet, h(1), h(at), fee),
+            spender.spend_coinbase(wallet, h(2), h(at), fee),
+        ]
+    };
+    refused_at(
+        scenario.mine_listing(listed).await,
+        CenRow::H19,
+        Locus::Tx {
+            slot: TxSlot::Listed(1),
+        },
     );
     scenario.close().await;
 }

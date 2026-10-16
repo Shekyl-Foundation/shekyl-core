@@ -9,15 +9,20 @@
 //! # Two stages, one property
 //!
 //! [`form`] is **stateless**: the candidate, a `RuleSet`, a
-//! [`Substrate`] (clock, longhash) and a seed claim in; a
+//! [`Substrate`] (clock, longhash), a seed claim and a target claim in; a
 //! [`StructurallyValid`] out. It runs outside the exclusive write
-//! transaction, in parallel with other blocks, and it is where the expensive
-//! call lives. [`validate`] is **view-bound**: a `StructurallyValid`, a
+//! transaction, in parallel with other blocks, and it is where every
+//! stateless judgement lives: the header rows, the longhash, CEN-D1 against
+//! the claimed target, every transaction's `tx_form` and CEN-H19's batch.
+//! [`validate`] is **view-bound**: a `StructurallyValid`, a
 //! `ChainView<'id>` and the rule set in force in; a `ChainValid<'id, V>` out.
 //! It runs inside the transaction C2-R8 Q3 projects the view from, and it
-//! verifies the claims `form` was given — the seed, the rule set — against
-//! that view before judging anything (`CHAIN_RULES_SLICE_2.md` §4.2, Q1/Q8).
-//! The partition is view-dependence and nothing else (Q9).
+//! verifies the claims `form` was given — the seed, the target, the rule
+//! set — against that view before judging anything
+//! (`CHAIN_RULES_SLICE_2.md` §4.2, Q1/Q8). The partition is view-dependence
+//! and nothing else (Q9). Since #1081's review (item 1) the transactions
+//! sit on the stateless side of it too: nothing that reads no chain state
+//! runs on the single writer.
 //!
 //! Both are generic over their substrate (`S: Substrate`, `V: ChainView<'id>`,
 //! never `&dyn`), so DRS-E5's pool decorator and the daemon's verifier
@@ -33,11 +38,12 @@
 //! # The pipeline
 //!
 //! `form` runs the stateless block rules in census order through
-//! [`rules::run_form`]; `validate` checks the two claims, then runs the
-//! view-bound block rules through [`rules::run`], then judges each
-//! transaction by form and against the view, unions the coverages (the
-//! stateless stage's included), and mints the `ChainValid` only after the
-//! last rule passed. Coverage is never complete for any rule set until
+//! [`rules::run_form`], the longhash, CEN-D1 against the claimed target, then
+//! [`tx_form`] at the miner slot and every listed slot, then CEN-H19's batch;
+//! `validate` checks the three claims, then runs the view-bound block rules
+//! through [`rules::run`], then judges each transaction against the view
+//! ([`tx_against`]), unions the coverages (the stateless stage's included),
+//! and mints the `ChainValid` only after the last rule passed. Coverage is never complete for any rule set until
 //! every row has landed, so no verdict minted before then can be mistaken
 //! for parity evidence.
 
@@ -45,7 +51,10 @@ use shekyl_types::BlockHash;
 use shekyl_wire::Transaction;
 
 use crate::archival;
-use crate::block::{Candidate, Derived, StructurallyValid, ValidatedBlock};
+use crate::block::{
+    Candidate, Derived, ProvenPow, ReferenceClaims, StructurallyValid, ValidatedBlock,
+    VerifiedReference,
+};
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
@@ -54,9 +63,11 @@ use crate::rule_set::RuleSet;
 use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::body::{G1, G10, G2, G7, G9};
+use crate::rules::difficulty::Target;
 use crate::rules::header::{B1, B2, B5, B6};
 use crate::rules::miner::{Emission, F1, F10, F3, F7, F9};
-use crate::rules::pow::D2;
+use crate::rules::pow::{D1, D2};
+use crate::rules::proofs::judge_proofs;
 use crate::rules::reward;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
@@ -106,15 +117,22 @@ macro_rules! judge_block {
 /// The stateless stage: judge a candidate on every rule decidable without
 /// the chain, and establish what the view-bound stage will read.
 ///
-/// `rule_set` and `seed` are the caller's **claims** — the rules in force
-/// at the height this block will connect at, and the block id at the seed
-/// height (CEN-D3) — read from whatever snapshot the caller has. `validate`
-/// verifies both against the committing view and returns a
-/// [`Stale`] fault, not a refusal, if either moved (a reorg at least
-/// `SEEDHASH_EPOCH_LAG` deep between the stages, or a rule-set boundary).
+/// `rule_set`, `seed` and `target` are the caller's **claims** — the rules
+/// in force at the height this block will connect at, the block id at the
+/// seed height (CEN-D3), and the target CEN-D4 derives from the headers
+/// below that height ([`target_claim`](crate::target_claim), the one
+/// derivation) — read from whatever header chain the caller has, ahead of
+/// connect. `validate` verifies all three against the committing view and
+/// returns a [`Stale`] fault, not a refusal, if any moved (a reorg between
+/// the stages, or a rule-set boundary).
 /// `attempt` is which try this is: a driver starts at
 /// [`FormAttempt::FIRST`] and may only try again with the attempt a `Stale`
 /// hands back (`fault.rs`: the bound is the type).
+///
+/// Order: the stateless header rows, the identity, the longhash, CEN-D1
+/// against the claimed target — so a block short of its proof-of-work
+/// costs RandomX and no body work — then `tx_form` at every slot, then
+/// CEN-H19's batch.
 ///
 /// Returns `Err(fault)` if the substrate could not answer — the clock, the
 /// verifier — which is not a judgement about the block; `Ok(Err(refused))`
@@ -124,6 +142,8 @@ pub fn form<S: Substrate>(
     rule_set: &RuleSet,
     substrate: &S,
     seed: BlockHash,
+    target: Target,
+    references: &ReferenceClaims,
     attempt: FormAttempt,
 ) -> Result<Verdict<StructurallyValid>, S::Fault> {
     // Read the clock once, before any rule: every stateless judgement is
@@ -147,9 +167,70 @@ pub fn form<S: Substrate>(
     let hash = B6::identity(&candidate.block, &mut coverage);
     let pow = D2::longhash(substrate, &candidate, seed, &mut coverage)?;
 
+    // CEN-D1 against the claimed target, before any body work: a block
+    // short of its proof-of-work costs RandomX and nothing more. The claim
+    // is verified where D4 derives the target (`validate`, `alt_against`).
+    if let Err(refused) = D1::judge(pow, target, &mut coverage) {
+        return Ok(Err(refused));
+    }
+
+    // The transactions on their own (census 4.H and the stateless 4.I and
+    // 4.J rows): the miner slot, then every listed slot in order, each
+    // refusal written at its slot. Nothing here reads the chain, so it runs
+    // on the parallel stage, not inside the write transaction.
+    let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
+    let listed = candidate
+        .transactions
+        .iter()
+        .enumerate()
+        .map(|(n, tx)| (TxSlot::Listed(n), tx));
+    let mut verified = Vec::with_capacity(candidate.transactions.len());
+    for (slot, tx) in core::iter::once(miner).chain(listed) {
+        match judge_slot_stateless(tx, slot, rule_set, references, &mut coverage) {
+            Ok(reference) => {
+                if slot != TxSlot::Miner {
+                    verified.push(reference);
+                }
+            }
+            Err(refused) => return Ok(Err(refused)),
+        }
+    }
+
+    // CEN-H19's verification half: every listed proof in one batch whose
+    // weights are derived from the batch (`rules::range_proof`), after each
+    // transaction's layout and CEN-I4's input cap have bounded the work.
+    judge_form!(FormContext::new(&candidate, rule_set), coverage; H19);
+
     Ok(Ok(StructurallyValid::new(
-        candidate, *rule_set, coverage, clock, hash, seed, pow, attempt,
+        candidate, *rule_set, coverage, clock, hash, seed, target, pow, attempt, verified,
     )))
+}
+
+/// One slot's whole stateless judgement, in order: [`tx_form`] (4.H and
+/// the stateless 4.I/4.J rows), then the signatures (CEN-I17/I18,
+/// `judge_signatures` — a definition and the cheapest verification), then
+/// the proofs over the caller's claims (CEN-I15, J26, J27's verify half,
+/// `judge_proofs` — the expensive verification, last). Every one reads
+/// the transaction alone; since 2026-10-16 none of them runs inside the
+/// write transaction. A transaction wrong in two of these rows is named by
+/// the earlier one — a bad signature over a bad proof is CEN-I18's.
+///
+/// Yields what the slot's proof was verified against, for `validate`'s
+/// comparison.
+fn judge_slot_stateless(
+    tx: &Transaction,
+    slot: TxSlot,
+    rule_set: &RuleSet,
+    references: &ReferenceClaims,
+    coverage: &mut RuleCoverage,
+) -> Verdict<Option<VerifiedReference>> {
+    coverage.union(&tx_form(tx, slot, rule_set)?);
+    // The class again, cheaply (`tx_form` derived it into its own
+    // coverage; H5/H6 were recorded there).
+    let mut scratch = RuleCoverage::EMPTY;
+    let cx = rules::TxContext::derive(tx, slot, &mut scratch)?;
+    judge_signatures(&cx, coverage)?;
+    judge_proofs(&cx, references, coverage)
 }
 
 /// The view-bound stage: judge a [`StructurallyValid`] against the chain it
@@ -162,7 +243,8 @@ pub fn form<S: Substrate>(
 /// Returns, in order of what happened:
 ///
 /// * `Err(Fault::Stale(_))` — a claim `form` was given does not hold against
-///   this view: the seed (CEN-D3) or the rule set. Not a judgement about
+///   this view: the seed (CEN-D3), the target (CEN-D4) or the rule set.
+///   Not a judgement about
 ///   the block; the payload says whether the driver may redo `form`.
 /// * `Err(Fault::View(fault))` — the view's substrate failed before a
 ///   verdict was reached. Not a judgement about the block; the caller halts.
@@ -175,9 +257,8 @@ pub fn form<S: Substrate>(
 ///   stateless stage's included.
 ///
 /// The miner transaction and each listed transaction are judged by
-/// [`tx_form`] (at their slot) then [`tx_against`]; a refusal from the
-/// latter is re-homed from [`TxSlot::Lone`] to the slot the transaction
-/// occupies.
+/// [`tx_against`] at their slot; `form` already judged each by [`tx_form`].
+/// Every refusal is written at the slot the transaction occupies.
 ///
 /// The verdict inherits the view's brand *and* its type. Judged against one
 /// view, it cannot be connected under another — the store's `connect` takes
@@ -238,15 +319,17 @@ pub fn validate<'id, V: ChainView<'id>>(
     // View-bound block-level predicates (4.A–4.G). The header rules are the
     // ladder's three segments, written once and shared with the alt tier.
     // Between them, the C++'s insertion points: B5 after the parent link;
-    // B4 (the attestation set) after D1 and before the coinbase rows, where
-    // `verify_block_attestation` runs — so a coinbase extra that does not
-    // parse is B4's refusal, not I20's (slice 8 §4); G1 before the slot
-    // loop, the only place it has a witness on a spend (slice 7 Q8).
+    // B4 (the attestation set) after the clock and before the coinbase
+    // rows, where `verify_block_attestation` runs; G1 before the slot loop,
+    // the only place it has a witness on a spend (slice 7 Q8). A coinbase
+    // extra that does not parse no longer reaches B4 through both stages:
+    // the miner slot's `tx_form` (CEN-I19) refuses it in `form`. The C++
+    // names B4 there; one refusal either way, the row differs.
     if let Err(refused) = header_ladder::parent_link(&cx, view, &mut coverage)? {
         return Ok(Err(refused));
     }
     judge_block!(cx, view, coverage; B5);
-    if let Err(refused) = header_ladder::clock_and_proof(&cx, view, &mut coverage)? {
+    if let Err(refused) = header_ladder::clock(&cx, view, &mut coverage)? {
         return Ok(Err(refused));
     }
     judge_block!(cx, view, coverage; B4);
@@ -273,10 +356,17 @@ pub fn validate<'id, V: ChainView<'id>>(
         .enumerate()
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
     for (slot, tx) in core::iter::once(miner).chain(listed) {
-        // Both stages refuse at the slot they were given (slice 6 commit 4
-        // gave `tx_against` the slot `tx_form` already had), so the locus
-        // arrives named and nothing is re-homed.
-        match judge_tx(tx, slot, view, rule_set).map_err(Fault::from)? {
+        // `form` judged each transaction on its own (`tx_form`); what is
+        // left is what reads the chain. The slot is the transaction's
+        // position, so the locus arrives named and nothing is re-homed.
+        match tx_against(
+            tx,
+            slot,
+            view,
+            rule_set,
+            formed.verified_reference(slot),
+            formed.attempt(),
+        )? {
             Ok(tx_coverage) => coverage.union(&tx_coverage),
             Err(refused) => return Ok(Err(refused)),
         }
@@ -341,6 +431,7 @@ pub fn validate<'id, V: ChainView<'id>>(
     // `cx` borrows `formed`. The derived scalars above are `Copy`.
     drop(cx);
     let hash = formed.hash();
+    let pow = ProvenPow::computed(formed.seed(), formed.pow());
     let (candidate, _stateless) = formed.into_parts();
     let block = ValidatedBlock::derive(
         candidate,
@@ -353,6 +444,7 @@ pub fn validate<'id, V: ChainView<'id>>(
             weights,
             emission: paid,
             archival,
+            pow,
         },
     );
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
@@ -434,8 +526,10 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    also where the C++ caller runs these arms
     //    (`ver_non_input_consensus`, then `ver_mixed_ct_semantics`, then
     //    `check_tx_inputs`). Pulling I1 or I4 ahead of H21 would hide the
-    //    class failure. H19's verification half is the later `validate`
-    //    fold (slice 6 commit 8), so this call stays unrecorded.
+    //    class failure. H19's verification half is `form`'s block fold
+    //    (`rules::range_proof`), which records the row once the batch has
+    //    decided, so this call stays unrecorded: a pass here is the layout
+    //    alone.
     // 3. The stateless input-path rows, and 4.J's stateless rows: J2 (the
     //    serve credit's pass records against its vins, after H20 has
     //    required the region), J11 and J12 (the bond post's key, hint and
@@ -447,8 +541,9 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    key, the signable hash and the reward commit set, after H22 has
     //    required the shape — the C++ emission arm's byte-only checks, in
     //    its order; `rules::tx_emission`). The cap does not have to precede
-    //    the shape rules to bound proof work: I15 and the H19 batch verify
-    //    run after `tx_form` returns, so I4 has already refused.
+    //    the shape rules to bound proof work: `form` runs the H19 batch after
+    //    every slot's `tx_form`, and I15 runs in `form` (`judge_proofs`),
+    //    so I4 has already refused.
     judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
@@ -490,7 +585,9 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     slot: TxSlot,
     view: &V,
     rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
+    verified: Option<VerifiedReference>,
+    attempt: FormAttempt,
+) -> Result<Verdict<RuleCoverage>, Fault<V::Fault>> {
     // The rule set reaches the archival rows here: J15's reorg cap and
     // settlement schedule, J16's current epoch at the connecting height
     // (`judge_bond_post`), J23's close heights and J25's schedule
@@ -546,7 +643,7 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    let reference = match judge_reference(&cx, view, &mut coverage)? {
+    let reference = match judge_reference(&cx, view, verified, attempt, &mut coverage)? {
         Ok(reference) => reference,
         Err(refused) => return Ok(Err(refused)),
     };
@@ -560,33 +657,12 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    // The signature sequence: I17 yields every input's signing hash, I18
-    // verifies each signature over it (`verify_transaction_pqc_auth`, the
-    // last check of the C++'s `check_tx_inputs`, `blockchain.cpp:4277`).
-    match judge_signatures(&cx, &mut coverage) {
-        Ok(()) => {}
-        Err(refused) => return Ok(Err(refused)),
-    }
+    // The signature sequence (CEN-I17/I18) and the proofs (I15, J26, J27's
+    // verify) ran in `form` — nothing they read is the chain's
+    // (2026-10-16). What this stage holds for them is above: the context
+    // the chain yields, compared with the claim the proof was verified
+    // under.
     Ok(Ok(coverage))
-}
-
-/// [`tx_form`] then [`tx_against`] at one slot, coverages unioned. Both
-/// stages name the slot they were given, so a refusal's locus is left as
-/// the callee wrote it.
-fn judge_tx<'id, V: ChainView<'id>>(
-    tx: &Transaction,
-    slot: TxSlot,
-    view: &V,
-    rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
-    let mut coverage = match tx_form(tx, slot, rule_set) {
-        Ok(coverage) => coverage,
-        Err(refused) => return Ok(Err(refused)),
-    };
-    Ok(tx_against(tx, slot, view, rule_set)?.map(|against| {
-        coverage.union(&against);
-        coverage
-    }))
 }
 
 #[cfg(test)]

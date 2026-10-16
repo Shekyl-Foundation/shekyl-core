@@ -17,10 +17,14 @@
 use super::*;
 use crate::block::Candidate;
 use crate::fault::FormAttempt;
+use crate::harness::fixture::signed;
 use crate::harness::fixture::{
-    self, anchored_on, candidate, candidate_on, listed, listed_on, point_at, spend, spendable_chain,
+    self, anchored_on, candidate, candidate_on, listed, listed_on, point, point_at, spend,
+    spendable_chain,
 };
-use crate::harness::{assert_refused, defined, formed_on, judged, Faulted, MockSubstrate};
+use crate::harness::{
+    assert_refused, defined, expected_target, formed_on, judged, Faulted, MockChain, MockSubstrate,
+};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
@@ -29,9 +33,18 @@ use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_
 use shekyl_types::{BlockHash, KeyImage};
 use shekyl_wire::{BondPost, BondPostKind, Holdings};
 
-/// Three distinct listed bodies, the header declaring exactly them.
+/// Three distinct listed bodies, the header declaring exactly them. Their
+/// key images are points (CEN-H11), so `form`'s transaction stage admits
+/// them and the stage's verdict is G2's to give.
+/// Three signed bodies: `form` runs the signature sequence (CEN-I17/I18)
+/// at every listed slot since 2026-10-16, so a body it admits is a signed
+/// one. Unanchored — the reference rows are `validate`'s.
 fn three_bodies() -> Candidate {
-    candidate(vec![listed([1; 32]), listed([2; 32]), listed([3; 32])])
+    candidate(vec![
+        signed(listed(point(1))),
+        signed(listed(point(2))),
+        signed(listed(point(3))),
+    ])
 }
 
 fn check(candidate: &Candidate) -> Verdict<()> {
@@ -45,6 +58,8 @@ fn form_judges(candidate: Candidate) -> Verdict<RuleCoverage> {
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         BlockHash::NULL,
+        expected_target(&MockChain::default(), &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => Ok(*formed.coverage()),
@@ -147,7 +162,7 @@ fn check_alone_on<R: BlockRule>(
     chain: &crate::harness::MockChain,
     candidate: &Candidate,
 ) -> Verdict<()> {
-    let formed = formed_on(chain, candidate.clone());
+    let formed = crate::harness::token_for_one_rule(chain, candidate.clone());
     chain.with_view(|view| {
         defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),

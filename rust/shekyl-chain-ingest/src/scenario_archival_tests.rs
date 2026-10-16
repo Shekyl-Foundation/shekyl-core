@@ -101,7 +101,7 @@ use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
 use shekyl_chain_store::store::{StoreCannot, StoreError};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::Transaction;
 
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
 use crate::connector::{ArchivalState, CheckpointState, Inject, Injected, RunFault};
@@ -224,19 +224,22 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     );
 
     // CEN-J27 on the pipeline: the honest join with one byte of its
-    // funding-spend FCMP++ proof flipped. The prunable region is outside
-    // the prefix, so the post rows (J13–J15, which read the post and the
-    // view) admit the body as before; the funding half is the first row
-    // that reads what changed, and it refuses at the transaction before
-    // the signatures (I18, whose preimage also covers the prunable) are
-    // asked. The block does not connect.
-    let mut corrupt_funding_proof = honest.clone();
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut corrupt_funding_proof.ct
-    {
-        p.fcmp_proof[0] ^= 0x01;
-    }
+    // funding-spend FCMP++ proof flipped — wallet-made, the flip signed
+    // over (the spender flips before it signs), so the signatures verify
+    // and the funding half is the only row that reads what changed. It
+    // refuses at the transaction in `form`, against the driver's reference
+    // claim, before any post row reads the view (2026-10-16; until then
+    // the post rows J13–J15 ran first in `validate` and the proof was
+    // flipped after signing, which the signature sequence — now ahead of
+    // every view-bound row — would refuse as I18). The block does not
+    // connect.
+    let corrupt_funding_proof = spender.spend_coinbase_posting_breaking_membership_proof(
+        scenario.wallet(),
+        BlockHeight::ZERO,
+        connecting,
+        FEE,
+        Some(&persona.join(complete_tree(), ENDPOINT)),
+    );
     refused_at(
         scenario.mine_listing(vec![corrupt_funding_proof]).await,
         CenRow::J27,

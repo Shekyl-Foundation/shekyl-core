@@ -750,6 +750,94 @@ pub type Verdict<T> = Result<T, InvalidBlock>;
 
 **Two stages since slice 2 (2026-09-19; `CHAIN_RULES_SLICE_2.md` §4.2,
 Q1/Q8/Q9 as ruled).** The partition is view-dependence and nothing else.
+**Every stateless rule is `form`'s** (#1081's review, item 1, 2026-10-15):
+the header rows, the longhash, CEN-D1 against a **claimed target**, then
+`tx_form` at the miner slot and every listed slot, then CEN-H19's batch.
+`form` runs on the pipeline's parallel workers; `validate` runs inside the
+write transaction on the single connect actor and judges only what reads
+the chain (the header ladder's view-bound rows, B5, B4, G1, `tx_against` at
+every slot, L1, G7/G9/G10, the reward chain, the archival transition).
+CEN-D1 needs D4's target, which is chain-derived, so the target is a
+**claim** beside the seed: the caller derives it from the header chain
+ahead of connect through `target_claim` (the one derivation, as
+`seed_height` is the seed's), `form` judges D1 against it before any body
+work — a block short of its proof-of-work costs RandomX and nothing more —
+and `validate` and `alt_against` re-derive D4 over their view, a mismatch
+being `Stale::Target` with the token's retry bound. D1 is recorded once,
+in `form`; D1b stays where D4 derives the target. The refusal order follows:
+every stateless row precedes every view-bound row, so a block wrong in
+both is named by the stateless row (a coinbase whose extra does not parse
+is CEN-I19's at the miner slot, where the C++ names B4).
+
+**Every verification that needs no store runs in `form` — the third
+claim (2026-10-16, the switch PR's round 3).** Measured first: on the
+floor device a cap-depth switch whose promoted blocks each list one spend
+held the write transaction for 109.6 s, almost all of it spend-proof
+verification inside `validate`. The proof needs the chain for one fact —
+the root at the reference block (CEN-I12's anchor) — and that fact is a
+header fact: CEN-B5 holds every connected block's `curve_tree_root` to
+`root_at(height)`, so a caller that keeps the header chain ahead of
+connect can claim it as it claims the seed and the target. So:
+
+- `form` takes `references: &ReferenceClaims` — per distinct
+  `reference_block` the listed bodies name, the block's `(height, root)`
+  (`ReferenceClaims::from_headers` reads them off any `HeaderView` across
+  CEN-I11's window, `admissible_references`; `ReferenceClaims::gather`
+  from a lookup by identity) — and runs, per slot after `tx_form` and
+  before CEN-H19's batch: the signature sequence CEN-I17/I18
+  (`judge_signatures`) and the verify rows CEN-I15, J26 and J27's verify
+  half (`judge_proofs`: `I15::verify` over `to_key_slots` against the
+  claimed root and the body's declared depth). A reference with no claim
+  is not verified; a declared depth the verifier cannot size (`0`, past a
+  `u8`) is not verified either — that is CEN-I13's refusal, `validate`'s.
+  The token carries what each slot's proof was verified against
+  (`StructurallyValid::verified_reference`).
+- `validate`'s reference path (`judge_reference`) keeps CEN-I10/I11/I13's
+  steps and the I12 anchor read, and **compares** the chain's `(height,
+  root)` with the token's claim. Agreement is the normal case; a claim for
+  another height or root, or no claim where the chain holds the reference
+  in the window, is `Stale::Reference { slot, reference, claims: Box<ReferenceMismatch { claimed, expected }>, retry }`
+  — a fault, never a verdict, and **there is no fallback verify in
+  `validate`**: the probe `validate_verifies_no_proof_and_no_signature_and_form_verifies_both`
+  (`shekyl-chain-store`, thread-local counters in `rules::proofs::probes`)
+  holds `form`'s deltas positive and `validate`'s zero on a real spend.
+  CEN-J25's verify stays on the writer (its operands are the gathered
+  closes, chain facts).
+- `tx_against` takes `verified: Option<VerifiedReference>` and the
+  attempt, and returns `Fault` (the comparison is a stage's fault, not a
+  `ViewRead`). **The pool's call** (b1) must therefore run `tx_form` →
+  `judge_signatures` → `judge_proofs` over its own claims first and hand
+  the result in; a `None` on a proof-bearing body that passes I10/I11 is
+  `Stale::Reference`.
+- The three claim sources: the ingest sequencer's `TargetLedger` (its
+  window widened to the wider of LWMA-1's and I11's), the switch plan's
+  header chain (`SwitchPlan::headers`, the stitched view as the plan read
+  it; `SwitchPlan::references_for`), and the store fixtures' view.
+  Demoted blocks are formed with no claims: the cheap tier compares none
+  and the chain verified their proofs when it connected them.
+
+Refusal order changes with it: the signature sequence precedes every
+view-bound row, so a listed body wrong in both is I18's (a bond post whose
+slot key was swapped after signing was J13's; the mis-keyed-but-signed
+post is still J13's, `signed_as`); the verify rows precede I13 where a
+claim is supplied, so a filler proof declared at a depth the verifier can
+size is I15's/J26's/J27's in `form`, and one declared at `0` stays I13's.
+
+*Wargame (claim source = header chain).* (1) An alt entry whose header
+lies about its root: promotion runs B5 on that entry before any
+successor's claim over it is compared, so the lie is B5's refusal and the
+successor is never judged. (2) A driver that claims a root for a
+reference outside the window: `judge_proofs` verifies against it, I11
+refuses in `validate` — the verify was wasted, the verdict is the rule's.
+(3) A driver that claims the wrong root for an in-window reference: the
+proof fails against it (I15, `form`'s refusal) or, forged to pass, meets
+the comparison and faults; either way nothing with a wrong anchor
+connects. (4) A reorg between the stages: the chain's `(height, root)` at
+the reference moved, the comparison faults with a bounded retry, and the
+re-`form` claims off the new chain — the seed's shape. (5) The claim
+cannot widen what the chain accepts: `validate` still reads its own
+record for the anchor and refuses I10/I11/I13 on its own facts; the claim
+only decides *where* the verify ran.
 
 ```rust
 /// The world a block is judged in, not the chain: a clock (CEN-C1) and a
@@ -764,8 +852,30 @@ pub trait Substrate {
 /// caller CLAIMS the rule set in force and the seed at `seedheight(h)`.
 pub fn form<S: Substrate>(
     candidate: Candidate, rule_set: &RuleSet, substrate: &S,
-    seed: BlockHash, attempt: FormAttempt,
+    seed: BlockHash, target: Target, references: &ReferenceClaims, attempt: FormAttempt,
 ) -> Result<Verdict<StructurallyValid>, S::Fault>;
+
+/// The third claim: per distinct `reference_block` the listed bodies name,
+/// its `(height, root)` — `from_headers` across CEN-I11's window of any
+/// `HeaderView`; `gather` from a lookup by identity (2026-10-16).
+pub struct ReferenceClaim { pub height: BlockHeight, pub root: CurveTreeRoot }
+pub struct ReferenceClaims { /* BTreeMap<BlockHash, ReferenceClaim> */ }
+impl ReferenceClaims {
+    pub const EMPTY: Self;
+    pub fn from_headers<'id, V: HeaderView<'id>>(view: &V, connecting: BlockHeight, candidate: &Candidate) -> Result<Self, V::Fault>;
+    pub fn gather(candidate: &Candidate, lookup: impl FnMut(&BlockHash) -> Option<ReferenceClaim>) -> Self;
+}
+/// CEN-I11's window as `(oldest, newest)` — the one home of both edges.
+pub fn admissible_references(connecting: BlockHeight) -> Option<(BlockHeight, BlockHeight)>;
+/// What a listed slot's proof was verified against, on the token.
+pub struct VerifiedReference { pub reference: BlockHash, pub claim: ReferenceClaim }
+impl StructurallyValid { pub fn verified_reference(&self, slot: TxSlot) -> Option<VerifiedReference>; }
+
+/// CEN-D4's target for `connecting` over `view`'s headers: the claim's one
+/// derivation, which `validate` and `alt_against` run again to verify it.
+pub fn target_claim<'id, H: HeaderView<'id>>(
+    view: &H, connecting: BlockHeight, rule_set: &RuleSet,
+) -> Result<Verdict<Target>, Fault<H::Fault>>;
 
 /// View-bound — inside the transaction C2-R8 Q3 projects the view from.
 /// Verifies the claims first; a refuted claim is a `Fault::Stale`, never a
@@ -802,7 +912,12 @@ impl AnchorConflict { pub const fn remedy(&self) -> Remedy; }
 pub enum Remedy { RefuseToRun /* at genesis */, PopTo(ChainCount) /* stop at max(h − 2, 1) blocks; the tip is count.tip() */ }
 
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
-pub enum Stale { Seed { claimed, expected, retry: Retry }, RuleSet { formed_under: RuleSet, in_force: RuleSet, retry } }
+pub enum Stale {
+    Seed { claimed, expected, retry: Retry }, RuleSet { formed_under: RuleSet, in_force: RuleSet, retry },
+    Target { claimed: Target, expected: Target, retry },                                   // #1081
+    Reference { slot: TxSlot, reference: BlockHash, claims: Box<ReferenceMismatch>, retry }, // 2026-10-16: the chain's (height, root) at the reference against the token's claim
+}
+pub struct ReferenceMismatch { pub claimed: Option<ReferenceClaim>, pub expected: ReferenceClaim }
 pub enum Retry { Again(FormAttempt), Exhausted }          // MAX_FORM_ATTEMPTS = 3
 pub enum Corrupt {
     CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow,   // ZeroTarget deleted 2026-09-20 (RD-F17): zero is CEN-D6's verdict
@@ -845,13 +960,18 @@ pub fn tx_form(tx: &shekyl_wire::Transaction, slot: TxSlot, rule_set: &RuleSet) 
 /// Stateful per-tx rules (4.I). The pool passes its `PoolView` decorator here.
 /// Takes the SLOT it judges at, as `tx_form` does (slice 6 commit 4: deriving
 /// at `Lone` and re-homing the locus afterwards put the coinbase through H5
-/// at the wrong slot; `Locus::rehome` is deleted). The fault widens to
-/// `ViewRead<V::Fault>` (slice 6 commit 5): I12 reads a per-height record,
-/// and a root missing at a height I10 just found recorded is
-/// `Corrupt::HoleBelowTip`, never a verdict.
+/// at the wrong slot; `Locus::rehome` is deleted). The fault is a `Fault`
+/// (2026-10-16; `ViewRead` from slice 6 commit 5 until then): I12 reads a
+/// per-height record, and a root missing at a height I10 just found
+/// recorded is `Corrupt::HoleBelowTip`, never a verdict; and the comparison
+/// of that record with `verified` — what `form`'s `judge_proofs` verified
+/// the slot's proof against — faults `Stale::Reference`. The caller runs
+/// `tx_form` → `judge_signatures` → `judge_proofs` first; nothing here
+/// verifies a proof or a signature.
 pub fn tx_against<'id, V: ChainView<'id>>(
     tx: &shekyl_wire::Transaction, slot: TxSlot, view: &V, rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>>;
+    verified: Option<VerifiedReference>, attempt: FormAttempt,
+) -> Result<Verdict<RuleCoverage>, Fault<V::Fault>>;
 ```
 
 Generic over `V: ChainView<'id>` (not `&dyn`) so E5's decorator implements the
@@ -943,9 +1063,12 @@ Fakechain `Fixed`), CEN-D1b at `D1b::record` — all derived once in
 of a claim**, recorded at `D3::verify_seed`, whose failure is `Fault::Stale`.
 `Stale::RuleSet` compares the `RuleSet` by value: a Fakechain `Fixed`
 target reuses `RuleSetId::GENESIS`, so the id is not the set. Stage
-membership: `form` runs B1, B2, B7 and derives B6 and D2;
-`validate` verifies D3, derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
-D1, **B4** (slice 8 row 10, 2026-10-06: `rules::attestation::B4` over
+membership: `form` runs B1, B2, G2, F1, F3, F7, F9, F10, derives B6 and
+D2, judges CEN-D1 against the claimed target, runs `tx_form` at every
+slot, then CEN-H19's batch; `validate` verifies the claims (the rule set,
+D3's seed, and the target — a mismatch is `Stale::Target`, not a second
+D1), derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
+**B4** (slice 8 row 10, 2026-10-06: `rules::attestation::B4` over
 `Candidate::attestation_witness`, always in coverage — **`None` is the
 empty preimage against the header's `attestation_root`**, never a
 vacuous pass and never a gap; `Some(w)` is the recompute over the
@@ -962,8 +1085,8 @@ predecessor, and a stored bond hybrid key that is not canonical, are
 `Corrupt` — `HoleBelowTip` on the block row and `BondHybridKeyMalformed`
 on `archival_bond` — because a conforming writer cannot produce either,
 so neither is a B4 refusal; a persona with no record stays the refusal),
-E1, then the slot loop, F4–F6,
-G1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
+E1, F4–F6, G1, then the slot loop. `StructurallyValid` carries the clock
+reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
 leg go stale silently, so the instant is carried, not forgotten.
 
@@ -1002,16 +1125,12 @@ slice 8 row 9; and from 4.B, B4 in `rules/attestation.rs`, slice 8 row
 bond post's funding half) in `judge_reference`, PR #1003, 2026-10-08 —
 *records-was:* I13's predicate and I15's body were live under J21/J26
 from 2026-10-06 with their Spend-class rows `pending` until the flip;
-H2, H8, H12, H13, H23 (`by_construction`); H19 is a
-`TxRule` whose **layout** half runs through `run_tx_unrecorded` (scope
-applies, a pass is not coverage) until **H19-verify** lands the BP+
-verification as a `validate` fold over a driven block listing two spends
-(slice 6 Q9, the one-bad-proof-among-good fixture) and switches the call to
-`run_tx` — **owned, since slice 6 closed as record 2026-10-08 with the row
-still deferred, by this section and the FOLLOWUPS row *CEN-H19's
-verification half…*, which carries the falsifier** (the deferral's record
-is `CHAIN_RULES_SLICE_6.md` §5 row 8, `docs/completed/`); H24 is bucket 3
-— no registry row. Its
+H2, H8, H12, H13, H23 (`by_construction`); **H19 `implemented`
+(2026-10-15)** in two halves on one type: its **layout** half is a
+`TxRule` that `tx_form` runs through `run_tx_unrecorded` (a refusal is
+H19's, a pass is the layout alone), and its **verification** half is the
+`FormRule` `form` folds over the block, which records the row — the
+next paragraph; H24 is bucket 3 — no registry row. Its
 falsifier asserts the residue predicate and that `tx_form` still accepts
 the offsets fixture, indexed from the census cell. The crypto rows call
 the bodies the C++ already marshals to (`shekyl-ct-balance`,
@@ -1036,6 +1155,178 @@ for one shape). **The trigger: a third re-made assembly makes extraction
 into a builder crate (the `shekyl-archival-bond-builder` shape) the
 answer, not a fourth re-making.** Reopen at the row that would re-make a
 third; the re-evaluation is that row's design round.
+
+**CEN-H19's verification half: the block's Bulletproof+ batch (slice 6
+Q9; ruling R3, 2026-10-15).** `rules/range_proof.rs`. Every listed
+transaction's proof, in block order (transaction order, then proof order;
+the layout half admits one proof per transaction), is verified with its
+transaction's output commitments as carried, in **one**
+`shekyl_bulletproofs::verify_batch`. `form` runs it as `H19`'s `FormRule`,
+last: after CEN-D1 has refused a block short of its proof-of-work (so such
+a block costs no proof work — a probe counts the batch not run), and after
+every slot's `tx_form` (so H19's layout half and CEN-I4's input cap have
+bounded the work). It reads no view, so it runs on the parallel workers,
+not on the single writer (#1081's review, item 1). `run_form` records H19
+only once the batch has decided. A block with no proof (coinbase-only, or
+serve credits only) records it vacuously, which `ChainValid::mint`
+requires of an `implemented` row. Every view-bound row, L1 included, runs
+later, in `validate`. F14's cap — weight at most twice the effective
+median — is one of them: the median is derived from the chain and grows
+with it, so there is no stateless ceiling on how many proofs the batch
+may hold, and an overweight block that met its claimed target still pays
+for the batch. The C++ also runs its CT semantics
+(`verCtSemanticsSimple`) before the spent-key insertion.
+
+*The weights are derived, not drawn (R3, Rick: "I prefer derived, coherent
+inputs").* A batch verify sums every proof's verification equation, each
+scaled by a per-proof weight, and checks the sum is the identity. The
+inherited verifier drew the weights from the caller's `OsRng`, which made
+the verdict a property of one node's entropy. `verify_batch` seeds a
+`ChaCha20Rng` with `cSHAKE256("shekyl/bp-plus-batch-weights-v1",
+preimage)[..32]`, where
+
+```text
+preimage = n_le4 ‖ entry_1 ‖ … ‖ entry_n
+entry    = len_le4(proof) ‖ proof ‖ m_le4 ‖ C_1 ‖ … ‖ C_m
+```
+
+`proof` is the wire `BpPlus` bytes and `C_i` the 32-byte commitments.
+Every count and length is framed, so the encoding is injective, and it
+covers **every value the batch equation reads**: the generators are fixed,
+and the transcript is a function of the proof and the commitments. The
+seed is computed over the whole batch before any proof is accumulated
+(registry: `CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 1).
+
+- **The RNG feeds the weights and nothing else.** This was checked before
+  the code was written. The vendored verifier reads it once per proof, as
+  `verifier_weight = Scalar::random(rng)`
+  (`rust/shekyl-bulletproofs/src/plus/weighted_inner_product.rs:343`). It
+  is drawn before the proof's sanity checks, so draw `k` is always proof
+  `k`'s. `the_rng_feeds_one_weight_per_proof_and_nothing_else` counts the
+  bytes drawn.
+- **The batch is the whole block.** No subset is ever verified under a
+  block's seed. `verify_batch` derives its seed from the slice it is
+  given, so the only way to verify part of a batch is to call it on that
+  part, under that part's own seed.
+- **One body, three callers.** The `form` fold (the whole block). The
+  submit engine's N8 leg (`shekyl-daemon-rpc`, a batch of one). The pool
+  door (PR-b, a batch of one). The wire-to-verifier reassembly has one
+  copy, `shekyl_wire::BpPlus::to_bulletproof`. The `OsRng` verify surfaces
+  (`Bulletproof::verify`, `batch_verify`, `BatchVerifier`) are not
+  public: no caller can reach an entropy-weighted verify.
+
+*The wargame (R3).* The block's producer knows every weight in advance,
+because the producer built the batch. That knowledge does not help:
+
+- Changing any proof or commitment re-derives every weight.
+- For an invalid batch to pass, the derived weights must cancel the
+  invalid proofs' error terms. For fixed bytes that happens with
+  probability about `1/ℓ` (`ℓ ≈ 2^252`), and each attempt is a fresh
+  cSHAKE output, so grinding is infeasible.
+- This is the Fiat–Shamir argument the proofs' own challenges rest on (the
+  BP+ transcript is a hash of the statement for the same reason).
+
+The submit engine's batch of one admits what a block's batch admits,
+except with probability about `1/ℓ`.
+
+*The locus.* A failed batch says that some proof is bad, not which one.
+The fold then re-verifies each proof as a batch of one under the same
+derivation (each proof's own seed) and refuses `InvalidBlock(H19)` at the
+first transaction whose proof fails alone. Only an invalid block pays for
+the walk. A proof that does not reassemble (an unreduced scalar) skips the
+batch, and the same walk finds it, so the refusal names the first bad
+transaction in block order whichever way its proof is bad. If every proof
+passed alone after the batch failed, some derived weight would have to be
+zero (probability `1/ℓ`). That case refuses at `Locus::Block`: never an
+admission, never a panic.
+
+*The witnesses.*
+
+- `shekyl-chain-ingest` (`scenario_spend_tests`):
+  - Slice 6 Q9's fixture: a driven block listing two wallet-built spends,
+    the second's proof one bit off, is refused on H19 at `Listed(1)`. The
+    same two spends, unflipped, connect with H19 recorded.
+  - A three-spend block with the bad proof in the middle names
+    `Listed(1)`.
+  - The flip is made **before the wallet signs**
+    (`Spender::spend_coinbase_breaking_range_proof`). The PQC signing
+    preimage binds the prunable region by its hash, so a proof flipped
+    after signing is CEN-I18's refusal in the slot loop and never reaches
+    the batch.
+  - With the fold neutered, both tests fail.
+- The captured chains replay their C++-accepted proofs through the fold
+  (`vectors_tests`).
+- `shekyl-chain-rules` (`range_proof_tests`) holds the verdicts without a
+  view. It also pins the fold's seed for a fixed candidate. The pin equals
+  `shekyl-bulletproofs`' KAT batch, so the fold's batch is exactly the
+  documented encoding.
+
+*The same derivation for the spend proof (R3, applied 2026-10-15).*
+CEN-I15's body (`shekyl_fcmp::proof::verify`) and the emission backing
+path's membership-only verify fill three batch verifiers (Ed25519, Selene,
+Helios). They drew those batches' weights from `OsRng`; they now draw them
+from a `ChaCha20Rng` seeded by `cshake256_32`, under
+`shekyl/fcmp-pp-batch-weights-v1` and
+`shekyl/fcmp-membership-only-batch-weights-v1` respectively.
+
+- **The preimage** is every value the verify reads, length-framed and in
+  order: the proof bytes, the input count, the layer count, the tree
+  root, `signable_tx_hash`, the key images (full verify only), the PQC key
+  points and the pseudo-outputs.
+- **The audit came first.** In the vendored code the generator feeds
+  batch weights and nothing else:
+  - the SAL queues four `multiexp` statements per input, and the
+    membership-only spend auth one, each with one nonzero weight drawn;
+  - the root-blind proof of knowledge draws one weight;
+  - each circuit statement's verify draws its own;
+  - the inner-product verify reads no RNG.
+  Nothing inside the vendored code changed; the seed is set at the two
+  call sites, and neither entry point takes a caller's RNG.
+- **The wargame is H19's:** the prover knows the weights in advance, any
+  change re-derives them, and cancelling an invalid statement's error is
+  a `1/ℓ` event per attempt.
+
+*The cost on the Rust path (2026-10-15).* Shape data, not a floor (rule 76).
+Machine: dev box, i9-11950H (8C/16T), `--release`. The box was shared with
+other lanes: load average 15–21 on 16 threads during both runs. Each figure
+is a median of seven runs, with the seed's cSHAKE inside it.
+
+At the captured chains' own densities: every block's proofs gathered as the
+fold gathers them and verified in one batch
+(`shekyl-chain-ingest` `vectors_tests::h19_cost::h19_batch_cost_at_the_captured_densities`).
+
+| chain | blocks read | blocks with proofs | proofs / block, max | batch per such block | over the chain |
+| --- | --- | --- | --- | --- | --- |
+| `spend-1in-2out` | 82 | 1 | 1 | 5.4 ms | 65 µs / block |
+| `spend-depth3` | 762 | 1 | 1 | 5.2 ms | 6 µs / block |
+| `bond-post` | 98 (read to its retired keyless join, as the replay reads it) | 1 | 1 | 3.5 ms | 35 µs / block |
+| `emission-claim` | 98 (as above) | 1 | 1 | 3.3 ms | 33 µs / block |
+| `median-full` | 215 | 3 | 23 | median 45.8 ms, max 59.3 ms | 533 µs / block |
+| `limit-full` | 214 | 2 | 45 | 98.3 ms (the 45-proof block), 11.1 ms (the other) | 511 µs / block |
+
+Every proof is a two-output proof. The four older chains carry at most one
+proof-bearing transaction a block, which was slice 6's measured basis. The
+two fill chains reach 23 and 45 proofs a block.
+
+The batch's curve (`shekyl-bulletproofs` `tests::derived::batch_cost_curve`,
+the same machine and load):
+
+- `n` two-output proofs in one batch: 4.7 ms for 1, 7.4 ms for 2, 12.9 ms
+  for 4, 23.7 ms for 8 and 46.4 ms for 16. The per-proof cost falls from
+  4.7 ms to 2.9 ms; the 45-proof block above is 2.2 ms a proof.
+- One proof over `m` outputs: 4.7 ms for 2, 8.1 ms for 4, 14.8 ms for 8
+  and 28.0 ms for 16.
+
+An invalid block also pays the locus walk, one batch of one per proof: at
+`limit-full`'s density that is about 45 × 4.7 ms beside the 98 ms batch.
+For scale, GAP-7's dev-box per-transaction admission term is 22.8 ms at
+shape 1/2 (`shekyl-ffi` `benches/block_connect_verify.rs`, an uncontended
+run), so the range proof is the smaller per-transaction term. That bench
+timed the same verifier with an `OsRng` weight at 2.82 ms per two-output
+proof, so contention likely accounts for most of the gap to this run's
+4.7 ms. Re-run both instruments on a quiet box before quoting either as a
+dev-box absolute. This record
+does not discharge GAP-7's floor measurement.
 
 The conversion ban (G2) covers the crate's own fault tokens: no `From`/`Into`
 between `Stale`/`Fault` and `InvalidBlock`, no arm mapping one onto the other
@@ -1270,6 +1561,21 @@ flipped, none per block: the alt tier's K1b, K4, D5, E2 `enforced_at`
 (`at-open 1 → 5`) and the store's K1a, K2, K3, K8 `held_by_store` (the
 `held-by-store` term added by that commit). The denominator did not move;
 the per-block reading fell from `E − 19` to `E − 27`. Policy unchanged.
+**At `dev` `a0d3ebcb1` (2026-10-15; `check_chain_rules_coverage.py` on that
+tree):** `consensus: implemented 127 / validator-enforced 161   held-by-cxx 2
+at-open 5   by-construction 16   held-by-store 4   enforced 163   ratified
+139 / enforced 163`. The denominator moved up by ten after the a4 line:
+CEN-J28 was minted `implemented` (2026-10-12, FN-DSA increment 3), and
+CEN-J29–J37, the bundle's nine admission rows, were minted `pending` the
+same day. **At `dev` `dd916a870` (2026-10-15, after #1080's census
+re-class, R4):** `consensus: implemented 134 / validator-enforced 161
+held-by-cxx 2   at-open 5   by-construction 22   held-by-store 5   enforced
+163   ratified 139 / enforced 163` — seven rows re-classed (B3, A3, A6, A7,
+L11, L12, L16), six to `by_construction` and one to `held_by_store`; the
+denominator did not move. **After CEN-H19's verification half (PR #1081,
+measured on that base):** `consensus: implemented 135 / validator-enforced
+161`, every other term unchanged. H19 flipped and 4.H is complete
+(`23 / 23`). Policy unchanged.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.

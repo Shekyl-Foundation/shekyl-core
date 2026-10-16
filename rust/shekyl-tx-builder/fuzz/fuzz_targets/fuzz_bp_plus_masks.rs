@@ -50,6 +50,9 @@ fuzz_target!(|data: &[u8]| {
         })
         .collect();
 
-    let valid = proof.verify(&mut OsRng, &compressed);
+    let valid = shekyl_bulletproofs::verify_batch(&[shekyl_bulletproofs::BatchEntry {
+        proof: &proof,
+        commitments: &compressed,
+    }]);
     assert!(valid, "BP+ proof generated from valid masks/amounts must verify");
 });

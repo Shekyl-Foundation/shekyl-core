@@ -80,7 +80,7 @@
 //! # Consumers
 //!
 //! * **Block connect** (S-CHAIN-W): [`form`] outside the write transaction
-//!   — the ingest driver supplies the [`Substrate`] and its seed and
+//!   — the ingest driver supplies the [`Substrate`] and its seed, target and
 //!   rule-set claims — then [`validate`] inside it, over the store's
 //!   projected `ChainView<'id>`; the `ChainValid<'id, V>` it mints is the
 //!   only thing `connect` accepts, branded with both the batch `'id` and
@@ -91,7 +91,11 @@
 //! * **Pool admission** (DRS-E5): the *same* [`tx_form`] / [`tx_against`]
 //!   over a `PoolView` the pool defines by decorating a `ChainView` with its
 //!   unconfirmed set. There is no second validator
-//!   (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §9.1).
+//!   (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §9.1). The one block-scoped row
+//!   a transaction must also pass is CEN-H19's range proof, which
+//!   [`validate`] folds over the block; the pool verifies it as a batch of
+//!   one through the same body (`shekyl_bulletproofs::verify_batch`), as the
+//!   submit engine does.
 //! * **Replay** (DRS-E2): every C++-accepted block through [`validate`]. A
 //!   disagreement is routed through `shekyl_chain_store::conformance::grade`
 //!   keyed by [`Row::as_str`] — where a Rust refusal of a canonical block on
@@ -167,13 +171,16 @@ pub use archival::{
     BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge,
     SectionCheckFailed, SectionRefused, SectionStanding,
 };
-pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
+pub use block::{
+    Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,
+    ValidatedBlock, VerifiedReference,
+};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};
 pub use fault::{
-    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, Retry, SettlementCheck, Stale,
-    ViewRead, MAX_FORM_ATTEMPTS,
+    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, ReferenceMismatch, Retry,
+    SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,
 };
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
@@ -187,21 +194,26 @@ pub use rules::block_weight::{
     Weights,
 };
 pub use rules::body::ArchivalKey;
-pub use rules::difficulty::Target;
+pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
 };
+#[cfg(any(test, feature = "harness"))]
+pub use rules::proofs::probes;
+pub use rules::range_proof::{BatchOutcome, ListedProofs};
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
 pub use rules::tx_against::{
-    newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE,
+    admissible_references, newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE,
+    REFERENCE_BLOCK_MIN_AGE,
 };
 pub use rules::{recorded, recorded_header};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
 pub use tree_growth::{
-    grow, ChunkHash, FrontierFault, GrowFault, LayerWrite, TreeFrontier, TreeGrowth,
+    grow, rebuild_right_edge, ChunkHash, FrontierFault, GrowFault, LayerWrite, RightEdgeSpan,
+    TreeFrontier, TreeGrowth,
 };
 pub use trust::Trust;
 pub use validate::{form, tx_against, tx_form, validate};

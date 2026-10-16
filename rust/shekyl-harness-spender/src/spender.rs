@@ -54,6 +54,26 @@ struct Located {
     gindex: u64,
 }
 
+/// How a built spend departs from what its prover made — each departure
+/// applied **before** the slots are signed, so every signature covers it
+/// and only the row the departure violates can refuse the body. Since
+/// 2026-10-16 the signature sequence runs ahead of every other row
+/// (`CHAIN_RULES_CRATE.md` §4.6), so a body edited *after* signing is
+/// CEN-I18's whatever else is wrong with it; a wallet-made negative
+/// fixture is built here, signed last.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Twist {
+    /// The range proof one bit off (CEN-H19's negative fixture).
+    break_range_proof: bool,
+    /// The membership proof one bit off (CEN-I15's / CEN-J27's negative
+    /// fixture).
+    break_membership_proof: bool,
+    /// The body names this `reference_block` while its path and proof were
+    /// built against the real reference (CEN-I10's and CEN-I11's negative
+    /// fixtures: a block the chain never held, or one too young).
+    reference: Option<BlockHash>,
+}
+
 /// The wallet-side tree over a chain's mined blocks, and the facts a
 /// spend of one of its coinbases needs (crate docs).
 pub struct Spender {
@@ -243,6 +263,95 @@ impl Spender {
         self.spend_coinbase_posting(wallet, height, connecting, fee, None)
     }
 
+    /// [`Self::spend_coinbase`] with its range proof one bit off what the
+    /// prover made, signed **after** the flip: the wallet-made body of a
+    /// producer who lists a bad range proof under valid signatures. Every
+    /// other row passes it — the membership proof is over the prefix, the
+    /// signatures cover the flipped prunable region — so CEN-H19's
+    /// verification half is the only row that can refuse it. A proof
+    /// flipped after signing is CEN-I18's refusal, at the slot loop, and
+    /// never reaches the batch.
+    #[must_use]
+    pub fn spend_coinbase_breaking_range_proof(
+        &self,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+    ) -> Transaction {
+        let sourced = vec![self.source_coinbase(wallet, height, connecting)];
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            None,
+            wallet.recipient(),
+            Twist {
+                break_range_proof: true,
+                ..Twist::default()
+            },
+        )
+    }
+
+    /// [`Self::spend_coinbase`] naming `reference` as its `reference_block`
+    /// — the path and the proof built against the real reference, the
+    /// body signed **after** the name moved, so every signature covers it:
+    /// the wallet-made body of a producer who anchors on a block the chain
+    /// never held (CEN-I10) or one too young (CEN-I11). A reference moved
+    /// after signing is CEN-I18's refusal, at the slot loop, since the
+    /// signing preimage covers it.
+    #[must_use]
+    pub fn spend_coinbase_referencing(
+        &self,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        reference: BlockHash,
+    ) -> Transaction {
+        let sourced = vec![self.source_coinbase(wallet, height, connecting)];
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            None,
+            wallet.recipient(),
+            Twist {
+                reference: Some(reference),
+                ..Twist::default()
+            },
+        )
+    }
+
+    /// [`Self::spend_coinbase_posting`] with its membership proof one bit
+    /// off what the prover made, signed **after** the flip: the wallet-made
+    /// body of a producer whose funding proof does not verify under valid
+    /// signatures. On a spend the row is CEN-I15's; on a bond post the
+    /// funding half's, CEN-J27 — the first row that reads what changed. A
+    /// proof flipped after signing is CEN-I18's refusal.
+    #[must_use]
+    pub fn spend_coinbase_posting_breaking_membership_proof(
+        &self,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        bond: Option<&PostedBond<'_>>,
+    ) -> Transaction {
+        let sourced = vec![self.source_coinbase(wallet, height, connecting)];
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            bond,
+            wallet.recipient(),
+            Twist {
+                break_membership_proof: true,
+                ..Twist::default()
+            },
+        )
+    }
+
     /// [`Self::spend_coinbase`] with an archival bond post riding it
     /// (DRS-E4 commit 4; the ingest's `scenario_archival`): the post is the prefix's one
     /// extra input, its term sits on the side its kind fixes — a credit is a
@@ -415,7 +524,7 @@ impl Spender {
         recipient: &Recipient,
     ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(sourced, connecting, fee, bond, recipient)
+        Self::spend_sourced(sourced, connecting, fee, bond, recipient, Twist::default())
     }
 
     /// A spend of several blocks' coinbases in **one** transaction, listed
@@ -457,7 +566,14 @@ impl Spender {
             "each spent coinbase has its own key image"
         );
         let inputs: Vec<Sourced> = pairs.into_iter().map(|(_, source)| source).collect();
-        let tx = Self::spend_sourced(inputs, connecting, fee, None, wallet.recipient());
+        let tx = Self::spend_sourced(
+            inputs,
+            connecting,
+            fee,
+            None,
+            wallet.recipient(),
+            Twist::default(),
+        );
         let spent_heights: Vec<BlockHeight> = tx
             .prefix
             .inputs
@@ -503,12 +619,13 @@ impl Spender {
         fee: u64,
         bond: Option<&PostedBond<'_>>,
         recipient: &Recipient,
+        twist: Twist,
     ) -> Transaction {
         // Inputs in strict-descending key-image order (CEN-I5), as the
         // engine's `sign_bridge` orders them before signing; the prefix
         // hash, the signer's inputs and the pseudo-outs all follow it.
         sourced.sort_by(|a, b| b.key_image.as_bytes().cmp(a.key_image.as_bytes()));
-        let tree = sourced[0].tree.clone();
+        let mut tree = sourced[0].tree.clone();
         assert!(
             sourced
                 .iter()
@@ -517,6 +634,11 @@ impl Spender {
                     && s.tree.tree_depth == tree.tree_depth),
             "every input's path is assembled against the one reference"
         );
+        // The name moves after the path was assembled against the real
+        // reference, before signing (`Twist::reference`).
+        if let Some(reference) = twist.reference {
+            tree.reference_block = reference;
+        }
         let spend_inputs: Vec<SpendInput> = sourced.iter().map(|s| s.input.clone()).collect();
         let key_images: Vec<shekyl_types::KeyImage> = sourced.iter().map(|s| s.key_image).collect();
         let amount: u64 = spend_inputs
@@ -618,7 +740,7 @@ impl Spender {
             &extra,
         )
         .expect("the prefix hashes");
-        let signed = sign_transaction_with_terms(
+        let mut signed = sign_transaction_with_terms(
             tx_prefix_hash,
             &spend_inputs,
             &outputs,
@@ -628,6 +750,20 @@ impl Spender {
             &tree,
         )
         .expect("sign the spend");
+        if twist.break_range_proof {
+            // Bit 0 of `r1`'s low byte: after `A ‖ A1 ‖ B`, so every point
+            // still decompresses and the scalar stays reduced. Before
+            // `open_spend`, so every signature covers the flipped proof
+            // (CEN-I17 binds the prunable region by its hash) and only the
+            // range proof's own equation can refuse the body.
+            signed.bulletproof_plus[96] ^= 1;
+        }
+        if twist.break_membership_proof {
+            // The proof's first byte, before `open_spend` for the same
+            // reason: the signatures cover the flipped proof, and only the
+            // membership verify can refuse the body.
+            signed.fcmp_proof[0] ^= 1;
+        }
         // One revealed key per spend input, each derived from its own
         // output's shared secret at its own index (the signer's derivation).
         // `open_spend` hashes these keys, signs the spend slots, and refuses
@@ -672,6 +808,9 @@ impl Spender {
             .iter()
             .map(|pk| PqcKeyScalar::from_pqc_public_key(pk))
             .collect();
+        // A proof flipped on purpose is the one object this check must
+        // not vouch for: the caller asked for a body the verifier refuses
+        // (by a failed verify or a failed decode — either is the row's).
         let verified = proof::verify(
             &ShekylFcmpProof {
                 data: open.fcmp_proof().to_vec(),
@@ -684,12 +823,17 @@ impl Spender {
             tree.tree_root.as_bytes(),
             open.layers(),
             tx_prefix_hash.to_bytes(),
-        )
-        .expect("verify runs");
-        assert!(
-            verified,
-            "the spend verifies against the wallet-side root at the reference height"
         );
+        match verified {
+            Ok(true) => assert!(
+                !twist.break_membership_proof,
+                "a flipped membership proof must not verify"
+            ),
+            Ok(false) | Err(_) => assert!(
+                twist.break_membership_proof,
+                "the spend verifies against the wallet-side root at the reference height: {verified:?}"
+            ),
+        }
         // The bond slot, when present, is signed by the persona's key over
         // its own payload. A plain spend seals with no extra signature.
         let extra_signatures = match bond {

@@ -19,11 +19,13 @@ use shekyl_units::AtomicUnits;
 use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::fault::FormAttempt;
+use crate::harness::expected_references;
 use crate::harness::fixture::{
     candidate, candidate_on, chain_of, listed_on, point_at, spendable_chain,
 };
 use crate::harness::{
-    assert_refused, defined, expected_seed, judged, Faulted, MockChain, MockSubstrate,
+    assert_refused, defined, expected_seed, expected_target, judged, Faulted, MockChain,
+    MockSubstrate,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::block_weight::{EffectiveMedian, Medians, Weights};
@@ -432,11 +434,14 @@ fn f17_a_fee_sum_that_does_not_fit_is_refused_at_the_block() {
 // ---------------------------------------------------------------------------
 
 fn validated_on(chain: &MockChain, candidate: Candidate) -> Verdict<(Weights, PaidEmission)> {
+    let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

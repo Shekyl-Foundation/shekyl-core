@@ -10,11 +10,12 @@
 
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
+use shekyl_chain_rules::harness::expected_references;
 use shekyl_chain_rules::harness::fixture::{
     anchored_on, point_at, recorded_with_work, root, spend, spendable_chain,
 };
 use shekyl_chain_rules::harness::{
-    assert_refused, expected_seed, judged, MockChain, MockSubstrate,
+    assert_refused, expected_seed, expected_target, judged, MockChain, MockSubstrate,
 };
 use shekyl_chain_rules::{
     form, validate, Candidate, CenRow, ChainView, FormAttempt, Locus, RuleSet, Trust,
@@ -153,11 +154,14 @@ fn context<'a>(
 /// the chain expects. Returns the rows that judged the candidate.
 fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
     let candidate = Candidate::new(template.block, template.transactions);
+    let references = expected_references(chain, &candidate);
     let formed = form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     )
     .expect("the default substrate never faults")
@@ -570,11 +574,14 @@ fn the_builders_c1_refusal_is_the_validators() {
         clock: behind,
         ..MockSubstrate::default()
     };
+    let references = expected_references(&chain, &candidate);
     let formed = form(
         candidate,
         &RuleSet::GENESIS,
         &substrate,
         expected_seed(&chain),
+        expected_target(&chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     )
     .expect("no fault")

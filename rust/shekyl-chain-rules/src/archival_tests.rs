@@ -38,7 +38,7 @@ use crate::harness::assert_refused;
 use crate::harness::fixture::{candidate_on, chain_of, listed, recorded, root};
 use crate::rules::miner::closed_shards_before;
 use crate::view::RecordedBlock;
-use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
+use shekyl_archival_retention::{holds_shard_at, ARCHIVAL_BOND_FLOOR_ATOMIC};
 use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN;
 use shekyl_types::archival::BadInterval;
 use shekyl_types::archival::{HeldShard, SlashLogEntry, SlashedHolding};
@@ -281,6 +281,67 @@ fn a_complete_tree_slash_demotes_the_record_to_an_empty_compact_one() {
     assert_eq!(slash.entry.holding, SlashedHolding::CompleteTree);
     assert_eq!(record.holdings, emptied());
     assert_eq!(record.bonded_total, AtomicUnits::ZERO);
+}
+
+/// CEN-L16's falsifier: the as-of-height holdings question is answered by
+/// `holds_shard_at` over the record and the slash-log rows strictly above
+/// the asked height, and the store contributes only those rows (A2). The
+/// row the verdict logs here is what the fold reads back, so a slash that
+/// carried too little to reconstruct the tenure would fail below. Not held
+/// at tip: held at `h` iff a logged slash above `h` removed the shard and
+/// `h`'s epoch is after the tenure's add epoch.
+#[test]
+fn l16_the_slash_the_verdict_logs_is_what_the_held_at_height_fold_reads() {
+    let schedule = SettlementSchedule::GENESIS;
+    let shard = ShardId::from_raw(3);
+    let at_epoch = |e: u64| BlockHeight::from_raw(schedule.open_height(e));
+    let mut record = record_holding(&[3], 2);
+    let before = record.clone();
+    let slashed_in = at_epoch(6);
+    let slash = apply_slash(
+        persona(P1),
+        &mut record,
+        shard,
+        SettlementEpoch::from_raw(6),
+    )
+    .expect("held");
+    let logged = [slash.entry];
+
+    // Held at tip before the slash: from the epoch after the add epoch on.
+    assert!(holds_shard_at(schedule, &before, shard, at_epoch(4), &[]));
+    assert!(!holds_shard_at(schedule, &before, shard, at_epoch(2), &[]));
+
+    // After it the record alone says not held; the logged row restores the
+    // tenure below the slash, bounded by the add epoch it journaled.
+    assert!(!holds_shard_at(schedule, &record, shard, at_epoch(4), &[]));
+    assert!(holds_shard_at(
+        schedule,
+        &record,
+        shard,
+        at_epoch(4),
+        &logged
+    ));
+    assert!(!holds_shard_at(
+        schedule,
+        &record,
+        shard,
+        at_epoch(2),
+        &logged
+    ));
+    // At or above the slash height A2 returns no row, and the answer is no.
+    assert!(!holds_shard_at(schedule, &record, shard, slashed_in, &[]));
+    // Another shard's slash says nothing about this one.
+    let other = SlashLogEntry {
+        shard: ShardId::from_raw(5),
+        ..slash.entry
+    };
+    assert!(!holds_shard_at(
+        schedule,
+        &record,
+        shard,
+        at_epoch(4),
+        &[other]
+    ));
 }
 
 // ---- shard close heights: exemption 1 (the search) and 3 (the cut) ------

@@ -5,8 +5,9 @@ ruled. Each question carries a default, its reason, what the alternative
 changes, and a falsifier. **No code until the questions are ruled**
 ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
 
-**Ground:** `shekyl-core` `dev` at `d26148535` (the #1078 merge). Every
-`file:line` below was read at that commit. Paths under `engine/` are in
+**Ground:** `shekyl-core` `dev` at `0419e6780` (the #1082 merge, after
+the wallet-RPC round, #1079, merged ruled). Every `file:line` below was
+read at that commit. Paths under `engine/` are in
 `rust/shekyl-engine-core/src/engine/`.
 
 **Identifier family:** `BD-Q1…BD-Q5` (the questions), registered in
@@ -18,8 +19,9 @@ the Rust daemon starts accepting bond posts and the defect goes live.
 Until then the C++ daemon refuses every kind-5 JoinMarket post before any
 reference check, which hides it. The deadline binds BD-Q3. The window
 (BD-Q4) can be argued after BD-Q3 is ruled (§1.2). The wallet-RPC round
-([`WALLET_RPC_STAKING_OUTCOMES.md`](WALLET_RPC_STAKING_OUTCOMES.md), PR
-#1079) proceeds in parallel; §6 lists what passes between them.
+([`WALLET_RPC_STAKING_OUTCOMES.md`](WALLET_RPC_STAKING_OUTCOMES.md),
+`WR-Q1…WR-Q5`) is ruled and not yet built; §6 lists what passes between
+the two rounds.
 
 **The design intent (Rick, 2026-10-15):** the delay jitters the bond
 funding appearing on chain against the archival bond appearing, so the
@@ -42,7 +44,7 @@ bonded `P` service is hard to connect to its funding transaction.
 | `anchor_t0` is the daemon-claimed tip at the request. The reference is `min(synced tip, ingested tip) − REF_ANCHOR_AGE` (6). | `engine/bond_orchestrator.rs:443-461`, `:555-557` |
 | The signed bytes are sealed with `anchor_t0` and the offset; `due = anchor_t0 + offset`. | `engine/bond_orchestrator.rs:662-670`; `engine/pscan/dispatch.rs:265-272` |
 | Every send, first or retry, re-sends the sealed bytes. | `engine/pscan/dispatch.rs:763-769`; `ARCHIVAL_BOND_WI3_DISPATCH.md:328-329` (§3.6: "never re-drawn for existing bytes") |
-| A reference older than `MAX_AGE` (100) is refused. A proof built at the canonical anchor is submittable for `PROOF_VALIDITY_HORIZON` (94) blocks. | `shekyl-curve-tree/src/reference.rs:95-106`; `shekyl-chain-rules/src/rules/tx_against.rs:320-324` |
+| A reference older than `MAX_AGE` (100) is refused. A proof built at the canonical anchor is submittable for `PROOF_VALIDITY_HORIZON` (94) blocks. | `shekyl-curve-tree/src/reference.rs:95-106`; `shekyl-chain-rules/src/rules/tx_against.rs:319-341` |
 | `REF_ANCHOR_AGE` is privacy-canonical, so "the on-wire reference age does not fingerprint the wallet". | `shekyl-curve-tree/src/reference.rs:75-84` |
 | The Rust daemon answers a too-old reference `StaleRoot`; the wallet classes it retryable and resends the same bytes until the 900-block alarm. | `shekyl-daemon-rpc/src/submit/engine.rs:374`; `engine/transaction_submitter.rs:270`; `engine/pscan/dispatch.rs:213-216`, `:825-831` |
 | `600` is a self-declared provisional sentinel; its multi-event derivation is void. | `shekyl-standoff/src/draw.rs:71-80`; `ARCHIVAL_BOND_WI4_MEASUREMENT.md` §13.1, `:796-806` |
@@ -54,7 +56,9 @@ bonded `P` service is hard to connect to its funding transaction.
   past the window: 506 of the 601 equally likely offsets, about 84 %.
   Each is resent unchanged until the alarm. The ignored test
   `a_bond_post_sent_past_its_proof_lifetime_is_resent_unchanged_to_the_horizon`
-  on #1079 (`engine/pscan/dispatch_tests.rs`) shows it.
+  (`engine/pscan/dispatch_tests.rs:1293`) shows it. WR-Q3 (ruled, not
+  built) stops any send past a record's end date and releases the funds
+  there. That bounds the waste; the post still never lands.
 - **The post shows when it was signed.** A post sent `offset` blocks after
   signing carries reference age `offset + 6`. Any node can subtract and
   recover the request height. The delay hides nothing about the event it
@@ -291,7 +295,10 @@ That is a persisted-schema change: a planned state (or kind) in the
 pending-post block, the posture added, `anchor_t0` replaced by the anchor
 rule. `PENDING_POST_VERSION` (12, `pending_post_block.rs:94`) bumps under
 rule 42 with its snapshot (`shekyl-engine-state/schemas/pending_post_block.snap`).
-A mismatched seal fails closed, as today (`:91-93`).
+WR-Q2 and WR-Q3 already take v13 for a durable `reference_height` (ruled,
+not built). This change takes the next version, or shares that bump if
+the two slices land together. A mismatched seal fails closed, as today
+(`:91-93`).
 
 **The states.** W1 (preflight, nothing durable) and W2 (`bonded_slots`
 written, no record) stay. The new **planned** state (durable plan and
@@ -319,7 +326,10 @@ discipline (§3.3) and seal-before-send are kept.
 post would land, but the reference age stays `offset + 6`. The request
 height is still public, and for an instant staker so is the funding
 block (§1.2). Reopen if the reference age stops being visible on chain:
-it is not, because the daemon checks it (`tx_against.rs:320-324`).
+it is not, because the daemon checks it
+(`shekyl-chain-rules/src/rules/tx_against.rs:319-341`), and the
+transaction names its reference block (`WALLET_RPC_STAKING_OUTCOMES.md`
+WR-Q3).
 
 **What the alternative (sign at the request) keeps.** The defect.
 
@@ -384,9 +394,14 @@ floor (BD-Q5).
   is on the economic axis, so the staking sim's homeostasis check runs
   before the ruling, in verification mode against the production lever,
   not as an analytical bound.
-- **What the user sees.** `staking_info` shows a planned stake with the
-  date it will be posted by. The field is WR-Q1's (`in_flight`), and
-  whether the response carries the due is WR-Q5's (§6).
+- **What the user sees.** Under WR-Q1 and WR-Q5 as ruled, a planned stake
+  is an `in_flight` entry in state `pending`, and "a `pending` entry
+  reveals nothing about when it will be sent". With a one-epoch window a
+  user sees `pending`, with no date, for up to 13.9 days. That is
+  acceptable at `600` (20 hours). At one epoch it reads as stuck (rule 82),
+  so the choice of window reopens part of WR-Q5. Whether the owner gets a
+  post-by bound, and in what form, is relayed to that round (§6), not
+  decided here.
 
 **Set once, not shrunk later.** The window is wallet-side and
 golden-vector-pinned (`shekyl-standoff/src/draw.rs:59-70`, `:78`). A later change
@@ -478,7 +493,7 @@ the bond posts in the window wherever the window sits, so none is known.
 
 Tests that land with the implementation of the rulings:
 
-- **Replace** #1079's ignored test. A post due at `a + s` is signed at its
+- **Replace** the ignored test (`engine/pscan/dispatch_tests.rs:1293`). A post due at `a + s` is signed at its
   first send and carries reference age 6. With `StaleRoot` it is re-signed
   at `REBUILD_AT`, not resent to the alarm.
 - **Instant staker:** a request at `a` produces a post whose reference
@@ -495,22 +510,33 @@ Tests that land with the implementation of the rulings:
 
 ---
 
-## 6. What passes to the wallet-RPC round (#1079)
+## 6. What passes to the wallet-RPC round
 
-Each carry is recorded in both documents (rule 26 A5).
+The wallet-RPC round is ruled (`WR-Q1…WR-Q5`, merged in #1079) and not yet
+built. Each carry below is recorded in both documents (rule 26 A5).
+`WALLET_RPC_STAKING_OUTCOMES.md` §1.1 points here.
 
-- **§1.1 there points here.** The FOLLOWUPS row "The bond-post delay does
-  not decorrelate the funding transfer from the bond" is owned by this
-  round.
-- **WR-Q1 (`in_flight`)** gains a state for a planned, unsigned stake with
-  its post-by date, if BD-Q3 is ruled.
-- **WR-Q3 (expiry)** keys on a record's reference height. A planned stake
-  has none until it is signed, so its ending needs its own rule. An
-  unsigned plan can also be withdrawn by dropping the record: no byte of
-  it was ever sent, so it cannot land later. That differs from the
-  cancel-by-spending WR-Q3 rejects. Which one applies is WR-Q3's to rule.
-- **WR-Q5 (what the response reveals)** decides whether `staking_info`
-  carries the due height.
+- **The FOLLOWUPS row** "The bond-post delay does not decorrelate the
+  funding transfer from the bond" is owned by this round.
+- **WR-Q1 (`in_flight`).** A planned, unsigned stake is "sealed, not yet
+  sent", so it fits the ruled `pending` state. No new state is needed
+  unless BD-Q4's cost forces one.
+- **WR-Q3 (release at the end date).** The end date is `reference_height
+  + MAX_AGE`, and the reference height is written at assembly. A planned
+  stake has no reference until it is signed at due, so it cannot expire
+  before then. Two cases need WR-Q3's rule:
+  - **A plan that cannot be signed at due**: funding spent elsewhere, or a
+    posture refused. It needs an outcome (WR-Q2) and a release.
+  - **Withdrawing a plan by dropping the record.** No byte of it was ever
+    sent, so no bond can land later. That removes both objections WR-Q3
+    makes to freeing the inputs ("removes the pending record while a bond
+    can still land") and to cancelling by spending (a fee and an on-chain
+    linkage event). Whether the owner may withdraw a plan is WR-Q3's to
+    rule.
+- **WR-Q5 (what the response reveals).** The wire carries no due count,
+  and a `pending` entry says nothing about when it will be sent. At a
+  one-epoch window that leaves the user up to 13.9 days with no date
+  (BD-Q4). Whether the owner sees a post-by bound is WR-Q5's to reopen.
 
 ---
 

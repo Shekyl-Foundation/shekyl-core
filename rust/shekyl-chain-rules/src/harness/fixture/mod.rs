@@ -384,7 +384,7 @@ pub fn coinbase(height: u64) -> Transaction {
 pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
     let n = u64::try_from(outputs).expect("an output count fits in u64");
     let prunable = (outputs > 0).then(|| Prunable {
-        bulletproofs: vec![bp_plus_layout_for(outputs)],
+        bulletproofs: vec![range_proof_for(outputs)],
         tree_depth: 0,
         fcmp_proof: vec![0xF0],
         pseudo_outs: vec![multiple_of_g(mask_scalar_sum(outputs))],
@@ -578,10 +578,32 @@ pub struct Claimant<'a> {
 /// `claimant.identity` and is signed by `claimant.sign` — so the body
 /// passes CEN-J20 and CEN-I18 as the claimant's own would. Re-signing an
 /// already-signed body is the same two passes again over the same bytes;
-/// a caller may anchor first ([`anchored_at`]) and claim after.
+/// a caller may anchor first ([`anchored_at`]) and claim after. On a body
+/// with no emission vin the claimant's slot is the bond post's
+/// ([`signed_as`]).
 #[must_use]
 pub fn signed_claiming(tx: Transaction, claimant: &Claimant<'_>) -> Transaction {
     signed_with(tx, Some(claimant))
+}
+
+/// [`signed`] with the bond-post slot keyed **and signed** by `persona`,
+/// whatever persona the post itself names: a validly signed post under
+/// the wrong key — CEN-J13's refusal alone, with CEN-I18 passing. The
+/// other shape of a mis-keyed post, the slot's key swapped after signing,
+/// fails I18 before J13 is read (the signature no longer verifies under
+/// the key the slot carries), and since 2026-10-16 I18 runs in `form`,
+/// ahead of every view-bound row.
+#[must_use]
+pub fn signed_as(tx: Transaction, persona: &FixturePersona) -> Transaction {
+    let seed = archival::identity_seed_of(persona.tag);
+    let sign = |hash: &SigningPayloadHash| fixture_signature(&seed, hash);
+    signed_with(
+        tx,
+        Some(&Claimant {
+            identity: persona.identity.clone(),
+            sign: &sign,
+        }),
+    )
 }
 
 fn signed_with(mut tx: Transaction, claimant: Option<&Claimant<'_>>) -> Transaction {
@@ -598,11 +620,18 @@ fn signed_with(mut tx: Transaction, claimant: Option<&Claimant<'_>>) -> Transact
         .enumerate()
         .map(|(index, input)| fixture_signing_seed(index, input))
         .collect();
+    // The claimant's slot: the emission vin's, else the bond post's.
     let emission_slot = claimant.and_then(|_| {
         tx.prefix
             .inputs
             .iter()
             .position(|input| matches!(input, Input::ArchivalRewardEmission { .. }))
+            .or_else(|| {
+                tx.prefix
+                    .inputs
+                    .iter()
+                    .position(|input| matches!(input, Input::BondPost(_)))
+            })
     });
     // Pass 1 — the public keys, which the message binds. The key only:
     // deriving it by signing a dummy message would make a signature and
@@ -816,6 +845,96 @@ pub fn pqc_auth_filler() -> PqcAuth {
     }
 }
 
+/// A **real** BP+ over [`spend`]'s commitments for `outputs` outputs — the
+/// masks `2·G ‥ (N+1)·G`, every amount zero ([`range_proof_over`] those
+/// openings). Past the prover's sixteen outputs no proof exists; the layout
+/// filler stands in, and CEN-H19's layout half refuses that count before
+/// the batch.
+#[must_use]
+pub fn range_proof_for(outputs: usize) -> BpPlus {
+    if !(1..=shekyl_wire::transaction::MAX_OUTPUTS).contains(&outputs) {
+        return bp_plus_layout_for(outputs);
+    }
+    let openings: Vec<(u64, u64)> = (0..u64::try_from(outputs).expect("fits"))
+        .map(|i| (FIRST_MASK_SCALAR + i, 0))
+        .collect();
+    range_proof_over(&openings)
+}
+
+/// A **real** BP+ over commitments `mask·G + amount·H`, one per
+/// `(mask, amount)` opening, made by the production prover
+/// (`Bulletproof::prove_plus`) — so CEN-H19's batch in `form` admits the
+/// fixture and the rows a test is about are the ones that judge it.
+/// Fixtures whose subject is another rule may be constructed, provided the
+/// construction uses production paths (`50-testing.mdc`; slice 6's
+/// `fixture::signed` line): only the openings are a fixture's. The
+/// commitments are [`multiple_of_g`]`(mask)` for a zero amount and
+/// [`mask_committing`]`(mask, amount)` otherwise, the fixtures' own.
+///
+/// Proved once per opening list from a `ChaCha20Rng` seeded with the list
+/// and memoized, so a fixture stays a pure function of its arguments. The
+/// memo is held across the prove, so two threads that miss on the same
+/// list share one proof rather than each proving it.
+///
+/// # Panics
+///
+/// On no openings or more than [`shekyl_bulletproofs::MAX_COMMITMENTS`]:
+/// the prover has no proof for them. That check runs before the memo is
+/// locked, so a count the prover refuses does not poison it.
+#[must_use]
+pub fn range_proof_over(openings: &[(u64, u64)]) -> BpPlus {
+    use std::collections::BTreeMap;
+    use std::sync::{Mutex, OnceLock};
+
+    use curve25519_dalek::scalar::Scalar;
+    use rand_chacha::rand_core::SeedableRng;
+    use shekyl_bulletproofs::{Bulletproof, MAX_COMMITMENTS};
+    use shekyl_curve_primitives::Commitment;
+
+    if openings.is_empty() || openings.len() > MAX_COMMITMENTS {
+        panic!(
+            "the prover proves 1..={MAX_COMMITMENTS} openings, not {}",
+            openings.len()
+        );
+    }
+
+    /// One opening is two `u64`s. Folded, little-endian, into the prover seed.
+    const OPENING_WIDTH: usize = (u64::BITS as usize / 8) * 2;
+    /// A `ChaCha20Rng` seed.
+    const PROVER_SEED_LEN: usize = 32;
+
+    /// Proofs made so far, keyed by their openings.
+    type Proved = Mutex<BTreeMap<Vec<(u64, u64)>, BpPlus>>;
+    static PROVED: OnceLock<Proved> = OnceLock::new();
+    let mut memo = PROVED
+        .get_or_init(Mutex::default)
+        .lock()
+        .expect("not poisoned");
+    memo.entry(openings.to_vec())
+        .or_insert_with(|| {
+            let mut seed = [0u8; PROVER_SEED_LEN];
+            for (i, (mask, amount)) in openings.iter().enumerate() {
+                for (j, byte) in mask
+                    .to_le_bytes()
+                    .iter()
+                    .chain(&amount.to_le_bytes())
+                    .enumerate()
+                {
+                    seed[(i * OPENING_WIDTH + j) % PROVER_SEED_LEN] ^= byte;
+                }
+            }
+            let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
+            let commitments = openings
+                .iter()
+                .map(|(mask, amount)| Commitment::new(Scalar::from(*mask), *amount))
+                .collect::<Vec<_>>();
+            let proof = Bulletproof::prove_plus(&mut rng, commitments)
+                .expect("1..=MAX_COMMITMENTS openings prove");
+            BpPlus::from_bytes(&proof.serialize()).expect("a proof's bytes are a wire Bp+")
+        })
+        .clone()
+}
+
 /// A BP+ with the **canonical layout** for `outputs` outputs — `|L| = |R|
 /// = 6 + ⌈log₂ outputs⌉` (CEN-H19's layout half) — and filler scalars.
 /// It proves nothing; it is the shape the layout rule accepts, for
@@ -910,6 +1029,7 @@ pub fn balanced_emission(
     {
         pqc_auths.push(slot);
         base.commitments = vec![mask_committing(2, reward), multiple_of_g(3)];
+        p.bulletproofs = vec![range_proof_over(&[(2, reward), (3, 0)])];
         p.pseudo_outs = vec![multiple_of_g(5)];
     }
     tx

@@ -81,7 +81,6 @@
 //! untested, unreachable battery.
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
-use rand_core::OsRng;
 
 use shekyl_archival_retention::{
     cold_authority_pin, emission_vin_verify_auth, emission_vin_verify_backing,
@@ -93,7 +92,7 @@ use shekyl_archival_retention::{
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
     HoldingsKind, RewardCommit, ShardSet,
 };
-use shekyl_bulletproofs::Bulletproof;
+use shekyl_bulletproofs::{verify_batch, BatchEntry};
 use shekyl_crypto_pq::error::PqcVerifyError;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_crypto_pq::signature::verify_pqc_auth;
@@ -105,10 +104,9 @@ use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::SigningPayloadHash;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 use shekyl_wire::transaction::{
-    BondPost as WireBondPost, BondPostKind as WireBondPostKind, BpPlus, Ct, CtBase, Holdings,
-    Input, PqcAuth, Prunable, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
+    BondPost as WireBondPost, BondPostKind as WireBondPostKind, Ct, CtBase, Holdings, Input,
+    PqcAuth, Prunable, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
 };
-use shekyl_wire::varint::write_varint;
 
 use crate::submit::facts::SubmitFacts;
 use crate::submit::phase_a::{ParsedSubmission, SubmitTxKind};
@@ -977,12 +975,20 @@ fn check_commitment_masks(base: &CtBase) -> Result<(), VerifyReject> {
 /// (bulletproofs_plus.cc). L/R round-count statics
 /// (`n_bulletproof_plus_amounts`) are enforced structurally by the WIP
 /// verifier's round check; unreduced-scalar rejection (`is_reduced`) by
-/// `read_scalar` in the wire conversion.
+/// `read_scalar` in the wire conversion ([`BpPlus::to_bulletproof`]).
+///
+/// The verify is the validator's body ([`shekyl_bulletproofs::verify_batch`],
+/// CEN-H19, ruling R3) over a batch of one: the weights are derived from this
+/// proof and its commitments, not drawn from the node's entropy. A proof
+/// admitted here is admitted by a block's batch except with probability
+/// about `1/ℓ`, and the reverse.
+///
+/// [`BpPlus::to_bulletproof`]: shekyl_wire::BpPlus::to_bulletproof
 fn verify_bpplus_leg(base: &CtBase, prunable: &Prunable) -> Result<(), VerifyReject> {
     let [bp_wire] = prunable.bulletproofs.as_slice() else {
         return Err(VerifyReject::malformed("N8: bulletproofs.len() != 1"));
     };
-    let Some(bp) = bulletproof_from_wire(bp_wire) else {
+    let Some(bp) = bp_wire.to_bulletproof() else {
         return Err(VerifyReject::malformed("N8: Bp+ wire conversion"));
     };
     let bp_commitments: Vec<CompressedPoint> = base
@@ -990,38 +996,13 @@ fn verify_bpplus_leg(base: &CtBase, prunable: &Prunable) -> Result<(), VerifyRej
         .iter()
         .map(|c| CompressedPoint::from(*c))
         .collect();
-    if !bp.verify(&mut OsRng, &bp_commitments) {
+    if !verify_batch(&[BatchEntry {
+        proof: &bp,
+        commitments: &bp_commitments,
+    }]) {
         return Err(VerifyReject::malformed("N8: Bp+ range proof refused"));
     }
     Ok(())
-}
-
-/// Reassemble a [`Bulletproof`] from the wire [`BpPlus`].
-///
-/// The two layouts are byte-identical
-/// (`A‖A1‖B‖r1‖s1‖d1‖vec(L)‖vec(R)`; the round-trip is pinned by
-/// shekyl-tx-builder's mapping test), so the conversion is
-/// serialize-then-`read_plus`. `read_plus` enforces reduced scalars —
-/// the C++ `is_reduced(r1/s1/d1)` parity — and caps L/R at the maximal
-/// round count, so a `None` here is the C++ battery's reject, not a
-/// marshalling loss.
-fn bulletproof_from_wire(bp: &BpPlus) -> Option<Bulletproof> {
-    let mut bytes = Vec::with_capacity((6 + bp.l.len() + bp.r.len()) * 32 + 4);
-    bytes.extend_from_slice(&bp.a);
-    bytes.extend_from_slice(&bp.a1);
-    bytes.extend_from_slice(&bp.b);
-    bytes.extend_from_slice(&bp.r1);
-    bytes.extend_from_slice(&bp.s1);
-    bytes.extend_from_slice(&bp.d1);
-    write_varint(bp.l.len(), &mut bytes).ok()?;
-    for point in &bp.l {
-        bytes.extend_from_slice(point);
-    }
-    write_varint(bp.r.len(), &mut bytes).ok()?;
-    for point in &bp.r {
-        bytes.extend_from_slice(point);
-    }
-    Bulletproof::read_plus(&mut bytes.as_slice()).ok()
 }
 
 /// K12 proper: marshal the parsed submission into [`proof::verify`]'s

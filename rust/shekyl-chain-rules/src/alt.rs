@@ -80,7 +80,7 @@ use core::marker::PhantomData;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, BlockWeight};
 
-use crate::block::{Candidate, StructurallyValid};
+use crate::block::{Candidate, ProvenPow, StructurallyValid};
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, Stale};
 use crate::header_ladder::{self, HeaderFacts};
@@ -206,6 +206,7 @@ pub struct AltValid<'id, V> {
     block_weight: BlockWeight,
     rule_set: RuleSet,
     coverage: RuleCoverage,
+    pow: ProvenPow,
     _brand: Brand<'id>,
     _view: PhantomData<fn(V) -> V>,
 }
@@ -219,11 +220,19 @@ impl<V> core::fmt::Debug for AltValid<'_, V> {
             .field("block_weight", &self.block_weight)
             .field("rule_set", &self.rule_set)
             .field("coverage", &self.coverage)
+            .field("pow", &self.pow)
             .finish_non_exhaustive()
     }
 }
 
 impl<'id, V> AltValid<'id, V> {
+    /// The PoW the tier computed under its seed and accepted (CEN-D1/D2/D3
+    /// over the stitched chain). AL1 records it in the alt row.
+    #[must_use]
+    pub const fn pow(&self) -> ProvenPow {
+        self.pow
+    }
+
     /// The block as received: header, miner transaction, listed bodies
     /// and the attestation witness beside it.
     #[must_use]
@@ -304,7 +313,7 @@ impl<'id, V> AltValid<'id, V> {
 /// [`Fault::View`] on the view's own fault; [`Fault::Corrupt`] when the
 /// stitched chain is not the chain it claims (a hole below the parent, a
 /// non-monotone cumulative difficulty); [`Fault::Stale`] when `formed`'s
-/// rule set or seed is not this view's.
+/// rule set, seed or target is not this view's.
 pub fn alt_against<'id, H: AltChainView<'id>>(
     formed: StructurallyValid,
     alt_view: &H,
@@ -357,6 +366,7 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
     K4::record(&mut coverage);
 
     let hash = formed.hash();
+    let pow = ProvenPow::computed(formed.seed(), formed.pow());
     let block_weight = block_weight(context.formed.candidate());
     drop(context);
     let (candidate, _stateless) = formed.into_parts();
@@ -368,6 +378,7 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
         block_weight,
         rule_set: *rule_set,
         coverage,
+        pow,
         _brand: PhantomData,
         _view: PhantomData,
     }))
