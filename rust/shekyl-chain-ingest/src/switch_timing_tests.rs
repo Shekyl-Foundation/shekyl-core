@@ -166,6 +166,15 @@ async fn production_cap_switch_timing_free_hash_coinbase_only() {
 
 #[tokio::test]
 #[ignore = "measurement: the switch at the genesis cap; run --release -- --ignored --nocapture"]
+async fn production_cap_switch_timing_free_hash_with_spends() {
+    // Since the switch forms through the recorded PoW it makes no RandomX
+    // call, so this run measures the switch the floor device runs, without
+    // the hours RandomX would spend building the two chains first.
+    timed("free-spends", || FreeHash, true).await;
+}
+
+#[tokio::test]
+#[ignore = "measurement: the switch at the genesis cap; run --release -- --ignored --nocapture"]
 async fn production_cap_switch_timing_randomx_coinbase_only() {
     timed("randomx-coinbase", randomx, false).await;
 }
