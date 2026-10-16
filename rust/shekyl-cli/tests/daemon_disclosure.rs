@@ -31,7 +31,7 @@ fn create_with(daemon_address: Option<&str>) -> Output {
         .arg(dir.path().join("seed"))
         .arg("--password-file")
         .arg(dir.path().join("missing"));
-    shekyl_tor_control_client::spawn_lock::output(&mut cmd).expect("spawn shekyl-cli")
+    cmd.output().expect("spawn shekyl-cli")
 }
 
 #[test]

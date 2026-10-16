@@ -28,7 +28,9 @@ fn write_password(dir: &Path) -> std::path::PathBuf {
 }
 
 fn run(args: &[&str]) -> (i32, String, String) {
-    let output = shekyl_tor_control_client::spawn_lock::output(Command::new(bin()).args(args))
+    let output = Command::new(bin())
+        .args(args)
+        .output()
         .expect("spawn shekyl-cli");
     let code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
@@ -305,7 +307,7 @@ impl SpawnedDaemon {
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let child = shekyl_tor_control_client::spawn_lock::spawn(&mut child);
+        let child = child.spawn();
         match child {
             Ok(child) => Self { child, data_dir },
             Err(error) => {

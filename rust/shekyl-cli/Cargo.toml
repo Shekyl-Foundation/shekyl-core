@@ -57,10 +57,6 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 [dev-dependencies]
 proptest = "1"
 tempfile = "3"
-# The integration tests' spawns take the process-wide spawn lock
-# (`TOR_SUPERVISOR.md` §4.7): this crate reaches the managed-tor launcher
-# through `shekyl-engine-core`, which already depends on it.
-shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 
 [lints]
 workspace = true
