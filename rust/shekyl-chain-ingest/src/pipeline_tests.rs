@@ -610,7 +610,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     assert_eq!(report.connected.len(), n_us + 1);
 
     // Plant: block_info[50].cumulative_difficulty below block 49's.
-    plant_work(&path, 50, 1);
+    plant_work(&path, h(50), 1);
 
     // The next block, through the pipeline, from a store that already holds
     // the chain (the seed claim asks the store for block 0).
@@ -648,13 +648,13 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
 
 /// Rewrite `block_info[height].cumulative_difficulty` in the store at
 /// `path`, the way the SI-10 test plants its decrease.
-fn plant_work(path: &std::path::Path, height: u64, work: u128) {
+fn plant_work(path: &std::path::Path, height: shekyl_types::BlockHeight, work: u128) {
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     {
         let mut infos = txn.open_table(BLOCK_INFO).expect("t");
         let mut row: BlockInfo = infos
-            .get(height)
+            .get(height.to_raw())
             .expect("g")
             .expect("row")
             .value()
@@ -662,7 +662,7 @@ fn plant_work(path: &std::path::Path, height: u64, work: u128) {
             .expect("decodes");
         row.cumulative_difficulty = CumulativeDifficulty::from_raw(work);
         infos
-            .insert(height, row.encoded().as_encoded())
+            .insert(height.to_raw(), row.encoded().as_encoded())
             .expect("plant");
     }
     txn.commit().expect("commit");
@@ -691,7 +691,7 @@ async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
     )
     .await
     .expect("the first three blocks replay");
-    plant_work(&path, 2, u128::MAX);
+    plant_work(&path, h(2), u128::MAX);
 
     let rest = corpus_from(h(3), &chain[3..]);
     let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
@@ -761,7 +761,7 @@ async fn a_zero_derived_target_is_refused_and_the_next_extend_does_not_strand_it
     .expect("the first N + 1 blocks replay");
     // One unit of work per block: a conforming window (SI-10 holds), slow.
     for height in 0..=n {
-        plant_work(&path, height, u128::from(height) + 1);
+        plant_work(&path, h(height), u128::from(height) + 1);
     }
 
     let rest = corpus_from(h(n + 1), &chain[n_us + 1..]);
