@@ -25,22 +25,28 @@
 //! (rust-lang/rust#114854). Reopen when that is stable.
 
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, PoisonError};
 
 static SPAWN: Mutex<()> = Mutex::new(());
 
-/// Hold the spawn lock until the guard drops.
+/// Run `spawn` with the spawn lock held, and release it when `spawn` returns.
 ///
-/// **Hold it across the spawn call and nothing else**: never across a wait for the
-/// child. It is process-wide, and a managed launch takes it on an async worker, so a
+/// **Put the spawn call in `spawn` and nothing else**: never a wait for the child.
+/// The lock is process-wide, and a managed launch takes it on an async worker, so a
 /// holder that waits for a child to finish stalls every other spawn and that worker.
 /// [`spawn`], [`output`] and [`status`] keep to this for a `std` command; a `tokio`
-/// command takes the guard around its own `spawn()`.
+/// command, or a spawn that must do something else under the lock (the launch marks
+/// tor's end inheritable around its spawn), passes a closure here.
 ///
-/// A panic while it was held does not poison it for later spawns: the lock guards no
-/// data, only the window.
-pub fn hold() -> MutexGuard<'static, ()> {
-    SPAWN.lock().unwrap_or_else(PoisonError::into_inner)
+/// The closure form is what `scripts/ci/check_spawn_sites_take_the_lock.py` reads: a
+/// process start is under the lock when it sits inside a `spawn_lock::` call. A guard
+/// held in a variable cannot be checked that way, so there is none.
+///
+/// Not reentrant: `spawn` must not call into this module again. A panic while it was
+/// held does not poison it for later spawns: the lock guards no data, only the window.
+pub fn with<T>(spawn: impl FnOnce() -> T) -> T {
+    let _spawning = SPAWN.lock().unwrap_or_else(PoisonError::into_inner);
+    spawn()
 }
 
 /// `cmd.spawn()` under the lock.
@@ -49,8 +55,7 @@ pub fn hold() -> MutexGuard<'static, ()> {
 ///
 /// The spawn's own error.
 pub fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
-    let _spawning = hold();
-    cmd.spawn()
+    with(|| cmd.spawn())
 }
 
 /// What `cmd.output()` does, with only the spawn under the lock: stdin is closed,

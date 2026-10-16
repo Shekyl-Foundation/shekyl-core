@@ -365,12 +365,20 @@ impl ControlPair {
         cmd: &mut Command,
     ) -> Result<(Child, ControlRead, ControlWrite), ControlError> {
         let Self { ours, tors } = self;
-        let child = {
-            let _spawning = crate::spawn_lock::hold();
-            let spawned = spawn_inheriting(cmd, &tors);
-            drop(tors);
-            spawned?
-        };
+        // Unix: tor's end reaches this child alone, through `pre_exec`. Windows: it is
+        // inheritable only inside this closure, which holds the spawn lock, so no other
+        // Rust spawn can start while it is.
+        let spawned = crate::spawn_lock::with(|| -> Result<Child, ControlError> {
+            #[cfg(windows)]
+            set_inheritable(&tors, true)?;
+            let spawned = cmd.spawn().map_err(|_| ControlError::Spawn);
+            // Cleared whatever the spawn did; our copy is closed next regardless.
+            #[cfg(windows)]
+            set_inheritable(&tors, false)?;
+            spawned
+        });
+        drop(tors);
+        let child = spawned?;
         let (read, write) = into_halves(ours)?;
         Ok((child, read, write))
     }
@@ -420,32 +428,17 @@ impl ControlPair {
             cmd.args(["-n", &(seconds + 1).to_string(), "127.0.0.1"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null());
-            let _spawning = crate::spawn_lock::hold();
-            set_inheritable(&self.tors, true)?;
-            let spawned = cmd.spawn();
-            set_inheritable(&self.tors, false)?;
+            let spawned = crate::spawn_lock::with(|| -> Result<_, ControlError> {
+                set_inheritable(&self.tors, true)?;
+                let spawned = cmd.spawn();
+                set_inheritable(&self.tors, false)?;
+                Ok(spawned)
+            })?;
             spawned.map_err(|_| ControlError::Spawn)?
         };
         leak.sleeper.send(sleeper).ok();
         Ok(())
     }
-}
-
-#[cfg(unix)]
-fn spawn_inheriting(cmd: &mut Command, _tors: &OurEnd) -> Result<Child, ControlError> {
-    cmd.spawn().map_err(|_| ControlError::Spawn)
-}
-
-/// Mark tor's end inheritable, spawn, and clear the mark, all under the spawn lock the
-/// caller holds.
-#[cfg(windows)]
-fn spawn_inheriting(cmd: &mut Command, tors: &OurEnd) -> Result<Child, ControlError> {
-    set_inheritable(tors, true)?;
-    let spawned = cmd.spawn().map_err(|_| ControlError::Spawn);
-    // Cleared whatever the spawn did; the caller closes the handle next regardless.
-    let cleared = set_inheritable(tors, false);
-    let child = spawned?;
-    cleared.map(|()| child)
 }
 
 #[cfg(windows)]
@@ -964,6 +957,45 @@ mod tests {
             .expect("EOF, not a wait on our own copy")
             .expect("read");
         assert_eq!(eof, 0);
+    }
+
+    /// The launch's spawn waits for the spawn lock: while another holder has it, the
+    /// launch starts no child, and it does once the lock is free. On Windows this is
+    /// what keeps tor's inheritable end out of every other spawn. The gate
+    /// (`check_spawn_sites_take_the_lock.py`) checks the code; this checks the
+    /// behaviour (Copilot on #1091).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_launch_spawns_only_under_the_spawn_lock() {
+        /// Long enough for an unlocked spawn to have happened.
+        const HELD: std::time::Duration = std::time::Duration::from_millis(300);
+        /// Long enough for the spawn once the lock is free.
+        const FREED: std::time::Duration = std::time::Duration::from_secs(10);
+        let runtime = tokio::runtime::Handle::current();
+        let (spawned_tx, spawned_rx) = std::sync::mpsc::channel();
+        let launcher = crate::spawn_lock::with(|| {
+            let launcher = std::thread::spawn(move || {
+                let _runtime = runtime.enter();
+                let pair = ControlPair::new().expect("control pair");
+                let mut cmd = Command::new("/bin/sh");
+                cmd.args(["-c", "exit 0"]);
+                inherit_in_the_child_only(&mut cmd, pair.tor_end());
+                spawned_tx
+                    .send(pair.spawn(&mut cmd).map(|(child, _, _)| child))
+                    .ok();
+            });
+            assert!(
+                spawned_rx.recv_timeout(HELD).is_err(),
+                "the launch spawned while another holder had the lock"
+            );
+            launcher
+        });
+        let mut child = spawned_rx
+            .recv_timeout(FREED)
+            .expect("the launch spawns once the lock is free")
+            .expect("spawn");
+        child.wait().await.expect("the child exits");
+        launcher.join().expect("the launching thread");
     }
 
     /// Tor's end reaches the child it is meant for, and no other. The first child is

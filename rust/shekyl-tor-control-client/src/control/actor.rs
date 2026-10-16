@@ -115,9 +115,9 @@ pub(crate) type ControlWrite = Pin<Box<dyn AsyncWrite + Send>>;
 /// descriptor event is one line of a few hundred bytes, and a log event carries one
 /// tor log message, which tor formats into a buffer of about ten kilobytes. So a full
 /// queue of the events the supervisor subscribes to holds at most about 2.5 MiB. The
-/// framer's own ceiling per reply ([`ORDINARY_REPLY_BYTES`], 256 KiB) puts the
-/// absolute bound at 64 MiB, which only a tor sending replies no subscribed event has
-/// could reach. A consumer that keeps up never fills it; one that stalls loses the
+/// framer holds every event to [`ORDINARY_REPLY_BYTES`] (256 KiB), even while a bulk
+/// command's allowance is armed, which puts the absolute bound at 64 MiB whatever tor
+/// sends. A consumer that keeps up never fills it; one that stalls loses the
 /// newest events and can read how many from [`EventReceiver::dropped`].
 pub const EVENT_QUEUE_EVENTS: usize = 256;
 
@@ -776,8 +776,8 @@ pub enum DeathSignal {
 /// process exits first, it tells the actor ([`ChildExited`]), which stops. When the
 /// actor stops, `on_stop` sends the request with the death signal it saw first (if
 /// any), and the watcher runs the bounded shutdown, reports [`TorExit`] and ends. If
-/// the actor goes away without `on_stop` (a kill or a panic), the request's sender is
-/// dropped and the watcher kills and reaps the child itself.
+/// the actor goes away without `on_stop` (a panic, or the runtime ending), the
+/// request's sender is dropped and the watcher kills and reaps the child at once.
 struct ChildWatch {
     stop: oneshot::Sender<Option<DeathSignal>>,
     task: JoinHandle<()>,
@@ -787,7 +787,12 @@ impl ChildWatch {
     /// Start watching `child` on behalf of `actor`.
     fn start(child: TorChild, actor: WeakActorRef<TorControlClient>) -> Self {
         let (stop, requested) = oneshot::channel();
-        let task = tokio::spawn(watch_child(child, actor, requested));
+        let notify = move || async move {
+            if let Some(actor) = actor.upgrade() {
+                actor.tell(ChildExited).await.ok();
+            }
+        };
+        let task = tokio::spawn(watch_child(child, notify, requested));
         Self { stop, task }
     }
 
@@ -803,37 +808,55 @@ impl ChildWatch {
 struct ChildExited;
 
 /// Watch the managed child until the actor asks to finish (`TSR-F16`).
-async fn watch_child(
+///
+/// `notify` runs once, when the process wait sees the child exit; the actor's watch
+/// passes one that tells the actor [`ChildExited`].
+///
+/// Two ways to be asked to finish, two different shutdowns:
+/// - **`on_stop` sends the request** with the death signal it saw first, if any. A tor
+///   still running gets the bounded graceful shutdown.
+/// - **The request's sender is dropped**: the actor went away without `on_stop` (a
+///   panic, or the runtime ending). Nothing waits for a graceful exit there, and a
+///   caller that gave up on a wedged actor may already be starting the next tor in the
+///   same directory, so the child is killed and reaped at once, as `kill_on_drop` would
+///   have.
+async fn watch_child<N, F>(
     child: TorChild,
-    actor: WeakActorRef<TorControlClient>,
+    notify: N,
     mut requested: oneshot::Receiver<Option<DeathSignal>>,
-) {
+) where
+    N: FnOnce() -> F,
+    F: std::future::Future<Output = ()>,
+{
     let TorChild {
         mut child,
         exit_observer,
     } = child;
+    let mut notify = Some(notify);
     let mut exited: Option<Option<std::process::ExitStatus>> = None;
-    let death = loop {
+    let request = loop {
         tokio::select! {
             status = child.wait(), if exited.is_none() => {
                 exited = Some(status.ok());
                 // The actor stops on this and then asks the watcher to finish. An actor
                 // already gone has dropped its request, which ends the loop next.
-                if let Some(actor) = actor.upgrade() {
-                    actor.tell(ChildExited).await.ok();
+                if let Some(notify) = notify.take() {
+                    notify().await;
                 }
             }
-            // A dropped sender (the actor went away without `on_stop`) is a request with
-            // no death signal: kill, reap, report.
-            death = &mut requested => break death.ok().flatten(),
+            request = &mut requested => break request,
         }
     };
-    let exit = match exited {
-        Some(status) => TorExit::Died {
+    let exit = match (exited, request) {
+        (Some(status), Ok(death)) => TorExit::Died {
             first: death.unwrap_or(DeathSignal::ProcessExited),
             status,
         },
-        None => {
+        (Some(status), Err(_)) => TorExit::Died {
+            first: DeathSignal::ProcessExited,
+            status,
+        },
+        (None, Ok(death)) => {
             let shutdown = shut_down(&mut child).await;
             match death {
                 // The connection ended first and the process was still there: a dead tor
@@ -847,6 +870,10 @@ async fn watch_child(
                 },
                 None => shutdown,
             }
+        }
+        (None, Err(_)) => {
+            kill_and_reap(&mut child).await;
+            TorExit::Killed
         }
     };
     if let Some(tx) = exit_observer {
@@ -1538,6 +1565,48 @@ mod tests {
     // covered by the live-Tor KATs (item 5); these pin the pure pieces — the wire
     // formatting and the content-free error rendering — in the unit gate.
 
+    /// The actor went away without `on_stop`, so the watcher's stop request was dropped:
+    /// the child is killed and reaped at once, not given the graceful window a stop gets.
+    /// A tor that ignores `SIGTERM` is reaped well inside `SHUTDOWN_GRACE` (Copilot on
+    /// #1091). Through a graceful shutdown this would take the whole window.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dropped_stop_request_kills_the_child_at_once() {
+        use tokio::io::AsyncBufReadExt;
+        let mut cmd = tokio::process::Command::new("/bin/sh");
+        cmd.args([
+            "-c",
+            "trap '' TERM; echo ignoring; while :; do sleep 0.1; done",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true);
+        let mut child = crate::spawn_lock::with(|| cmd.spawn()).expect("spawn the child");
+        // Only once the trap is in place does a graceful stop take the whole window.
+        let mut said = String::new();
+        tokio::io::BufReader::new(child.stdout.take().expect("the child's stdout"))
+            .read_line(&mut said)
+            .await
+            .expect("the child says it ignores SIGTERM");
+        assert_eq!(said.trim(), "ignoring");
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let (stop, requested) = oneshot::channel::<Option<DeathSignal>>();
+        let watcher = tokio::spawn(watch_child(
+            TorChild {
+                child,
+                exit_observer: Some(exit_tx),
+            },
+            || async {},
+            requested,
+        ));
+        drop(stop);
+        let exit = timeout(SHUTDOWN_GRACE / 5, exit_rx)
+            .await
+            .expect("reaped well inside the grace window")
+            .expect("the exit is reported");
+        assert_eq!(exit, TorExit::Killed);
+        watcher.await.expect("the watcher ends");
+    }
+
     #[test]
     fn getinfo_renders_space_separated_keys() {
         let cmd = Command::GetInfo(vec![
@@ -1847,10 +1916,7 @@ mod live_tests {
             .arg("warn stderr")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let child = {
-            let _spawning = crate::spawn_lock::hold();
-            cmd.spawn().expect("spawn tor")
-        };
+        let child = crate::spawn_lock::spawn(&mut cmd).expect("spawn tor");
         // Guard the wait: if wait_for_control_port times out (panics), the child is
         // killed on unwind rather than orphaned. Disarmed once the port is ready.
         let guard = KillOnDrop(Some(child));

@@ -342,6 +342,9 @@ fn status_fields(rest: &str) -> (Severity, Fields) {
     (severity, fields)
 }
 
+/// The highest `PROGRESS=`: it is a percentage.
+const MAX_PROGRESS: u8 = 100;
+
 /// The action is the status event's second positional field.
 const STATUS_ACTION: usize = 1;
 
@@ -398,7 +401,10 @@ fn bootstrap(fields: &Fields) -> Bootstrap {
         },
     });
     Bootstrap {
-        progress: fields.number("PROGRESS"),
+        // A percentage: a number above 100 is malformed, as `bootstrap` reads it.
+        progress: fields
+            .number("PROGRESS")
+            .filter(|progress| *progress <= MAX_PROGRESS),
         tag: fields.text("TAG"),
         problem,
     }
@@ -578,8 +584,17 @@ fn unquote(raw: &str) -> String {
 ///
 /// [`RoundMark::FirstUploaded`] is the probe's one trigger per round. A round in which
 /// no upload succeeded ends with `uploaded == 0`, which is §4.4's Service-class
-/// evidence. An upload whose end never arrives keeps its round open; the trigger has
-/// already fired by then if any other upload succeeded.
+/// evidence.
+///
+/// **A round whose ends do not all arrive still ends.** Tor starts every upload of a
+/// round in one pass of its main loop, before any HSDir can have answered (tor
+/// 0.4.9.13, `run_upload_descriptor_event` → `upload_descriptor_to_all`), so an
+/// `UPLOAD` that arrives once the open round's uploads have begun to end belongs to the
+/// next round: the open one ends there, counting the uploads that never reported in
+/// `unfinished`, and the next one starts and can trigger again. An end that is lost
+/// (the bounded event sink drops events when its consumer falls behind) leaves the
+/// round open until then; a consumer that sees the sink drop events calls
+/// [`Self::resync`] to end it at once.
 ///
 /// Only an upload's own end closes it. A `FAILED` that carries a descriptor id is a
 /// fetch's (the self-probe fetches our own descriptor), and closes nothing. An
@@ -600,12 +615,15 @@ pub enum RoundMark {
     Started,
     /// The first upload of this round succeeded: the probe's trigger.
     FirstUploaded,
-    /// Every upload the round began has ended.
+    /// The round ended: every upload it began has ended, the next round began, or the
+    /// consumer resynchronised.
     Ended {
         /// Uploads that succeeded.
         uploaded: u32,
         /// Uploads that failed.
         failed: u32,
+        /// Uploads that began and reported no end.
+        unfinished: u32,
     },
 }
 
@@ -640,13 +658,17 @@ impl UploadRounds {
         };
         match event.action {
             HsDescAction::Upload => {
-                let started = !self.in_round();
-                self.open.push(hsdir);
-                if started {
-                    vec![RoundMark::Started]
-                } else {
-                    Vec::new()
+                let mut marks = Vec::new();
+                // The open round's uploads have begun to end, so this one is the next
+                // round's: tor starts a round's uploads before any of them ends.
+                if self.in_round() && self.uploaded + self.failed > 0 {
+                    marks.push(self.end());
                 }
+                if !self.in_round() {
+                    marks.push(RoundMark::Started);
+                }
+                self.open.push(hsdir);
+                marks
             }
             HsDescAction::Uploaded => self.close(hsdir, true),
             HsDescAction::Failed if event.descriptor_id.is_none() => self.close(hsdir, false),
@@ -670,15 +692,30 @@ impl UploadRounds {
             self.failed += 1;
         }
         if self.open.is_empty() {
-            marks.push(RoundMark::Ended {
-                uploaded: self.uploaded,
-                failed: self.failed,
-            });
-            self.uploaded = 0;
-            self.failed = 0;
-            self.triggered = false;
+            marks.push(self.end());
         }
         marks
+    }
+
+    /// End the open round now, after the event sink dropped events: the ends that were
+    /// lost will not arrive, and the next round must be able to trigger. `None` when no
+    /// round is open.
+    pub fn resync(&mut self) -> Option<RoundMark> {
+        self.in_round().then(|| self.end())
+    }
+
+    /// Report the open round as ended and start counting the next from nothing.
+    fn end(&mut self) -> RoundMark {
+        let mark = RoundMark::Ended {
+            uploaded: self.uploaded,
+            failed: self.failed,
+            unfinished: u32::try_from(self.open.len()).unwrap_or(u32::MAX),
+        };
+        self.open.clear();
+        self.uploaded = 0;
+        self.failed = 0;
+        self.triggered = false;
+        mark
     }
 }
 
@@ -1180,7 +1217,8 @@ mod tests {
             rounds.observe(&round_event(Uploaded, 1, false)),
             [RoundMark::Ended {
                 uploaded: 2,
-                failed: 1
+                failed: 1,
+                unfinished: 0
             }]
         );
         assert!(!rounds.in_round());
@@ -1195,7 +1233,8 @@ mod tests {
                 RoundMark::FirstUploaded,
                 RoundMark::Ended {
                     uploaded: 1,
-                    failed: 0
+                    failed: 0,
+                    unfinished: 0
                 }
             ]
         );
@@ -1210,9 +1249,98 @@ mod tests {
             rounds.observe(&round_event(Failed, 1, false)),
             [RoundMark::Ended {
                 uploaded: 0,
-                failed: 1
+                failed: 1,
+                unfinished: 0
             }]
         );
+    }
+
+    /// An upload whose end never arrives does not wedge the coalescer: the next batch
+    /// of uploads ends the incomplete round and can trigger again (Copilot on #1091).
+    #[test]
+    fn an_incomplete_round_ends_at_the_next_batch_and_the_next_round_triggers() {
+        use HsDescAction::{Upload, Uploaded};
+        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        assert_eq!(
+            rounds.observe(&round_event(Upload, 1, true)),
+            [RoundMark::Started]
+        );
+        assert!(rounds.observe(&round_event(Upload, 2, true)).is_empty());
+        assert_eq!(
+            rounds.observe(&round_event(Uploaded, 1, false)),
+            [RoundMark::FirstUploaded]
+        );
+        // HSDir 2 never reports. The next round's first upload ends this one.
+        assert_eq!(
+            rounds.observe(&round_event(Upload, 3, true)),
+            [
+                RoundMark::Ended {
+                    uploaded: 1,
+                    failed: 0,
+                    unfinished: 1
+                },
+                RoundMark::Started
+            ]
+        );
+        assert_eq!(
+            rounds.observe(&round_event(Uploaded, 3, false)),
+            [
+                RoundMark::FirstUploaded,
+                RoundMark::Ended {
+                    uploaded: 1,
+                    failed: 0,
+                    unfinished: 0
+                }
+            ]
+        );
+    }
+
+    /// After the sink drops events, `resync` ends the open round at once, and the next
+    /// batch starts a round that triggers. Nothing is open after it.
+    #[test]
+    fn resync_ends_a_round_whose_ends_were_lost() {
+        use HsDescAction::{Upload, Uploaded};
+        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        assert_eq!(rounds.resync(), None, "nothing open");
+        rounds.observe(&round_event(Upload, 1, true));
+        rounds.observe(&round_event(Upload, 2, true));
+        assert_eq!(
+            rounds.resync(),
+            Some(RoundMark::Ended {
+                uploaded: 0,
+                failed: 0,
+                unfinished: 2
+            })
+        );
+        assert!(!rounds.in_round());
+        assert_eq!(
+            rounds.observe(&round_event(Upload, 1, true)),
+            [RoundMark::Started]
+        );
+        assert_eq!(
+            rounds.observe(&round_event(Uploaded, 1, false)),
+            [
+                RoundMark::FirstUploaded,
+                RoundMark::Ended {
+                    uploaded: 1,
+                    failed: 0,
+                    unfinished: 0
+                }
+            ]
+        );
+    }
+
+    /// `PROGRESS=` is a percentage: 100 reads, 101 and 255 are malformed, as
+    /// `bootstrap::parse_bootstrap_progress` reads them (Copilot on #1091).
+    #[test]
+    fn progress_above_one_hundred_is_malformed() {
+        for (raw, read) in [("100", Some(100)), ("101", None), ("255", None)] {
+            let (_, status) = client(&format!("STATUS_CLIENT NOTICE BOOTSTRAP PROGRESS={raw}"));
+            let ClientStatus::Bootstrap(bootstrap) = status else {
+                panic!("bootstrap");
+            };
+            assert_eq!(bootstrap.progress, read, "PROGRESS={raw}");
+        }
     }
 
     /// A fetch's `FAILED` (it carries a descriptor id), another address's events, and
