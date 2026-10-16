@@ -4960,7 +4960,6 @@ dependencies = [
 name = "shekyl-rpc-client"
 version = "0.1.0"
 dependencies = [
- "curve25519-dalek",
  "hex",
  "serde",
  "serde_json",
