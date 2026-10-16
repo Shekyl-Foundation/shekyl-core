@@ -249,8 +249,8 @@ pub fn clearing_correlation() -> Option<f64> {
     Some(lo)
 }
 
-/// The pair counts the evidence set runs at: the genesis set
-/// `--challenge-coverage` uses, and maturity.
+/// The pair counts the evidence set runs at: a genesis set of 4,096 pairs,
+/// and maturity.
 pub const EVIDENCE_PAIRS: [u32; 2] = [4_096, 324_000];
 
 /// The dropouts the evidence set runs at, in per-mille.

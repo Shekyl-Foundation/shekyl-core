@@ -994,25 +994,39 @@ fn main() {
     /// How long a launch gets to either write its control-port file or exit.
     const LAUNCH_VERDICT_WINDOW: std::time::Duration = std::time::Duration::from_secs(30);
 
+    /// How a launch ended within [`LAUNCH_VERDICT_WINDOW`].
+    enum LaunchVerdict {
+        CameUp,
+        Exited,
+        TimedOut,
+    }
+
     /// `true` when the launched tor wrote its control-port file (it came up),
-    /// `false` when it exited first. The child is reaped either way, before
-    /// the caller's temporary directory can drop.
+    /// `false` when it exited first. The child is killed and reaped on every
+    /// verdict, a timeout included, before this returns or panics, so the
+    /// caller's temporary directory never drops under a live tor.
     async fn launch_comes_up(mut cmd: Command, port_file: &Path) -> bool {
         let mut child = cmd.spawn().expect("spawn the managed tor");
-        let came_up = tokio::select! {
-            _ = child.wait() => false,
+        let verdict = tokio::select! {
+            _ = child.wait() => LaunchVerdict::Exited,
             () = async {
                 while !port_file.exists() {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
-            } => true,
-            () = tokio::time::sleep(LAUNCH_VERDICT_WINDOW) => {
-                panic!("the managed tor neither came up nor exited within {LAUNCH_VERDICT_WINDOW:?}")
-            }
+            } => LaunchVerdict::CameUp,
+            () = tokio::time::sleep(LAUNCH_VERDICT_WINDOW) => LaunchVerdict::TimedOut,
         };
         child.start_kill().ok();
         child.wait().await.ok();
-        came_up
+        match verdict {
+            LaunchVerdict::CameUp => true,
+            LaunchVerdict::Exited => false,
+            LaunchVerdict::TimedOut => {
+                panic!(
+                    "the managed tor neither came up nor exited within {LAUNCH_VERDICT_WINDOW:?}"
+                )
+            }
+        }
     }
 
     /// OpenSSL inside the managed tor reads the file `OPENSSL_CONF` names, and
