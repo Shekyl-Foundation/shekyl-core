@@ -46,7 +46,7 @@
 //! after the block it is attributed to, and the trace's rows already carry
 //! it. A refusal is a **recorded verdict**: the writer stays up;
 //! this driver ends the run (an honest chain that refuses is a
-//! disagreement; E3 and the mutation family keep the same actor and decide
+//! disagreement; the live daemon (DRS-X) and the mutation family keep the same actor and decide
 //! for themselves). A store halt is a fault.
 
 use std::collections::{BTreeMap, BTreeSet};

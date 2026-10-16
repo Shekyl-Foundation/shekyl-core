@@ -12,14 +12,14 @@
 //! (corpus │  (stateless; real     (restore the  (one actor; owns    (digest/grader,
 //!  now,   │   RandomX per worker)  source order; the ChainStore;     checkpoint,
 //!  p2p at │                        Rewind is a   one write closure   metrics)
-//!  E3)    │                        barrier)      per handler)
+//!  DRS-X) │                        barrier)      per handler)
 //! ```
 //!
 //! DRS-E2's replay driver is this pipeline with a corpus [`Source`] and a
-//! grader sink; E3's cutover swaps the source for the p2p feed and drops the
-//! grader. There is no second connect path — a harness that admitted blocks
-//! through code production never runs is the C++ defect (`core_tests` /
-//! `chaingen`) this crate exists not to reproduce.
+//! grader sink; the store flip (DRS-X) swaps the source for the p2p feed
+//! and drops the grader. There is no second connect path — a harness that
+//! admitted blocks through code production never runs is the C++ defect
+//! (`core_tests` / `chaingen`) this crate exists not to reproduce.
 //!
 //! # What lives here
 //!
