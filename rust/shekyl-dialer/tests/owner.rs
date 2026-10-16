@@ -26,7 +26,7 @@ use shekyl_levin::{
 };
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{ConnectorId, Direction, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{Hub, Post, SocketId, SyncPayload};
+use shekyl_seam::{Hub, Post, Route, SocketId, SyncPayload};
 use shekyl_timing_engine::ManualClock;
 use shekyl_transport_layer::Sockets;
 
@@ -84,6 +84,11 @@ fn rig() -> Rig {
         }),
     ));
     dialer.set_network_id(NETWORK);
+    // The link is usable: the plan draws only then (TSR-F1).
+    dialer
+        .hub()
+        .links()
+        .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1));
     Rig { hub, posts, dialer }
 }
 
@@ -361,6 +366,11 @@ fn a_dial_that_cannot_open_is_dial_failed_with_the_cause() {
         Arc::new(|| None),
     );
     dialer.set_network_id(NETWORK);
+    // The link is usable: the plan draws only then (TSR-F1).
+    dialer
+        .hub()
+        .links()
+        .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1));
     let mut rng = SplitMix64::new(8);
     dialer
         .admit_operator(&peer(1), Tick::new(1), &mut rng)

@@ -36,7 +36,7 @@ pub use candidate::{CandidateFilter, Skip};
 pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan, IN_FLIGHT_BOUND};
 pub use memory::FailedAddresses;
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
-pub use owner::{session_of, Dialer, Shared, SnapshotSource};
+pub use owner::{session_of, Dialer, NotReady, Shared, SnapshotSource};
 pub use pace::{next_wake_nanos, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
 pub use seeds::{seeds, SeedNetwork};
 pub use store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};

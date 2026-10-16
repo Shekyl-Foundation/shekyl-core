@@ -27,13 +27,14 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_seam::{
     connector_from_index, drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial,
-    Direction, Endpoint, Hub, SocketId,
+    Direction, DownCause, Endpoint, Hub, Route, SocketId,
 };
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 use shekyl_tor::{
     accept_inbound as accept_tor_inbound, dial_one as dial_tor, Admitted as TorAdmitted,
     Inbound as TorInbound,
 };
+use shekyl_tor_control_daemon::TorDeath;
 use shekyl_transport_layer::spans;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -60,7 +61,6 @@ struct Host {
     /// gap sender lives on the connection row there.
     hub: Hub,
     clearnet: Mutex<Option<ClearnetReady>>,
-    tor_proxy: Mutex<Option<SocketAddr>>,
     clearnet_tx: mpsc::UnboundedSender<ClearnetAdmitted>,
     tor_tx: mpsc::UnboundedSender<TorAdmitted>,
     shutdown_timeout: Duration,
@@ -74,10 +74,11 @@ struct Host {
     on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
 }
 
+/// The clearnet listener's channel choice and handshake tally. Its route is
+/// the hub's clearnet link.
 struct ClearnetReady {
     kind: shekyl_clearnet::ChannelChoice,
     tally: Arc<shekyl_clearnet::HandshakeTally>,
-    proxy: Option<SocketAddr>,
 }
 
 static HOST: LazyLock<Mutex<Option<Arc<Host>>>> = LazyLock::new(|| Mutex::new(None));
@@ -124,9 +125,13 @@ impl ZoneDial {
             .map(|ready| ClearnetReady {
                 kind: ready.kind,
                 tally: Arc::clone(&ready.tally),
-                proxy: ready.proxy,
             })
             .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
+        let proxy = match self.host.hub.links().get(ConnectorId::Clearnet).route {
+            Some(Route::Direct) => None,
+            Some(Route::Socks(proxy)) => Some(proxy),
+            None => return Err(CloseCause::new(CloseKind::LocalClose)),
+        };
         let address = match ip {
             IpAddr::V4(ip) => NetworkAddress::Ipv4 { ip, port },
             IpAddr::V6(ip) => NetworkAddress::Ipv6 { ip, port },
@@ -135,7 +140,7 @@ impl ZoneDial {
         let (on_cause, fail_rx) = failure_slot();
         let dial = ClearnetDial {
             address,
-            proxy: ready.proxy,
+            proxy,
             sockets: self.host.sockets.clone(),
             kind: ready.kind,
             network_id: self.host.network_id,
@@ -170,12 +175,11 @@ impl ZoneDial {
     }
 
     fn dial_tor(&self, key: &[u8; 32], port: u16) -> Result<Channel, CloseCause> {
-        let proxy = self
-            .host
-            .tor_proxy
-            .lock()
-            .expect("tor proxy")
-            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
+        // The route is read from the link at each dial. A link that fell
+        // after the plan read it still costs this one draw (`TSR-F1`).
+        let Some(Route::Socks(proxy)) = self.host.hub.links().get(ConnectorId::Tor).route else {
+            return Err(CloseCause::new(CloseKind::LocalClose));
+        };
         let address = NetworkAddress::Tor {
             host: shekyl_onion_v3::v3_onion_hostname(key),
             port,
@@ -300,7 +304,6 @@ fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, (
         sockets: process_sockets(),
         hub: hub.clone(),
         clearnet: Mutex::new(None),
-        tor_proxy: Mutex::new(None),
         clearnet_tx,
         tor_tx,
         shutdown_timeout: Duration::from_nanos(spans::SHUTDOWN_TIMEOUT_NANOS),
@@ -536,9 +539,15 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
     *host.clearnet.lock().expect("clearnet") = Some(ClearnetReady {
         kind,
         tally: Arc::clone(&tally),
-        proxy,
     });
     spawn_clearnet(&host, bound_v4, kind, Arc::clone(&tally));
+    // The listener is up: clearnet's outbound is usable. Its route is
+    // direct, or the operator's `--proxy`.
+    let route = proxy.map_or(Route::Direct, Route::Socks);
+    host.hub
+        .links()
+        .publish_usable(ConnectorId::Clearnet, route, host.hub.now());
+    tracing::info!("the clearnet zone dials {route:?}");
     crate::dialer_ffi::start_connector(ConnectorId::Clearnet, &host.engine);
     if let Some(listener) = bound_v6 {
         spawn_clearnet(&host, listener, kind, tally);
@@ -609,8 +618,7 @@ pub unsafe extern "C" fn shekyl_zone_listen_tor(
     let Ok(socks_ip) = socks_host.parse::<IpAddr>() else {
         return -1;
     };
-    *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
-    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks_ip}:{socks_port}");
+    install_tor_route(&host, SocketAddr::new(socks_ip, socks_port));
     crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     let extra = match c_str(extra) {
         Some(text) => {
@@ -695,10 +703,41 @@ pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
     let Ok(socks_ip) = socks_host.parse::<IpAddr>() else {
         return -1;
     };
-    *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
-    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks_ip}:{socks_port}");
+    install_tor_route(&host, SocketAddr::new(socks_ip, socks_port));
     crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     0
+}
+
+/// Publish the Tor link usable through `socks`, until the supervisor owns
+/// the route (`TOR_SUPERVISOR.md` §4.1). When `socks` is the managed Tor's,
+/// that Tor's death publishes the link down, so the dialer stops drawing
+/// onions it cannot reach (`TSR-F1`). An operator's Tor (`--tx-proxy`)
+/// stays usable: its outbound evidence comes with the supervisor.
+fn install_tor_route(host: &Host, socks: SocketAddr) {
+    let incarnation =
+        host.hub
+            .links()
+            .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now());
+    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks}");
+    let hub = host.hub.clone();
+    let watched = crate::daemon_tor_ffi::on_managed_death(socks, move |death| {
+        let fell = hub.links().publish_down(
+            ConnectorId::Tor,
+            incarnation,
+            DownCause::ProcessExited,
+            hub.now(),
+        );
+        if fell && death == TorDeath::Exited {
+            tracing::warn!(
+                "the managed Tor has exited: the Tor connector draws no dial until its link returns"
+            );
+        }
+    });
+    if !watched {
+        tracing::debug!(
+            "the Tor proxy at {socks} is not the managed Tor's: no death edge is watched"
+        );
+    }
 }
 
 /// Replace the ceiling later accepts use.
@@ -776,6 +815,10 @@ pub extern "C" fn shekyl_zone_shutdown() {
     crate::dialer_ffi::stop();
     let host = HOST.lock().expect("zone host").take();
     if let Some(host) = host {
+        // The routes were this host's. A host built later installs its own.
+        for connector in ConnectorId::ALL {
+            host.hub.links().withdraw(*connector);
+        }
         let engine = host.engine_service.lock().expect("engine").take();
         if let Some(engine) = engine.as_ref() {
             engine.close();

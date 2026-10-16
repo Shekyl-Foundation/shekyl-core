@@ -383,6 +383,13 @@ impl DaemonTorControl {
         self.actor.wait_for_shutdown().await;
     }
 
+    /// [`Self::wait_death`] as a future that does not borrow `self`, for a
+    /// watcher spawned to outlive the call that started it.
+    pub fn death(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let actor = self.actor.clone();
+        async move { actor.wait_for_shutdown().await }
+    }
+
     /// Bounded teardown: graceful actor stop (which `DEL_ONION`s the published
     /// service and SIGTERM→wait→SIGKILL→reaps the child), then the exit
     /// telemetry, then the DataDirectory wipe. On a wedged actor, kill and

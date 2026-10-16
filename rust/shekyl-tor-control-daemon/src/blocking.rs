@@ -24,9 +24,12 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName};
+use tokio::task::JoinHandle;
 
 use shekyl_tor_control_client::binary::{self, TorBinaryError};
 use shekyl_tor_control_client::control::{OnionPow, ServiceId, TorExit};
@@ -107,6 +110,21 @@ pub struct BlockingDaemonTor {
     /// handle goes; `shutdown` destructures and orders the teardown itself.
     runtime: Pool,
     control: DaemonTorControl,
+    /// Set by [`Self::shutdown`] before it tears the incarnation down, so a
+    /// death watcher can tell that stop from Tor exiting on its own.
+    stopping: Arc<AtomicBool>,
+    /// The watchers [`Self::on_death`] spawned. [`Self::shutdown`] runs them
+    /// out before the runtime goes, so the stop reaches them too.
+    watchers: Mutex<Vec<JoinHandle<()>>>,
+}
+
+/// How the managed Tor's process ended, as a death watcher hears it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TorDeath {
+    /// [`BlockingDaemonTor::shutdown`] stopped it.
+    Stopped,
+    /// It exited, or was killed, while it was meant to be running.
+    Exited,
 }
 
 impl BlockingDaemonTor {
@@ -141,7 +159,12 @@ impl BlockingDaemonTor {
         let control = runtime
             .block_on(DaemonTorControl::start(daemon_config))
             .map_err(BlockingStartError::Start)?;
-        Ok(Self { runtime, control })
+        Ok(Self {
+            runtime,
+            control,
+            stopping: Arc::new(AtomicBool::new(false)),
+            watchers: Mutex::new(Vec::new()),
+        })
     }
 
     /// Mint-and-publish the per-boot onion: `virtual_port` (what peers dial)
@@ -180,13 +203,56 @@ impl BlockingDaemonTor {
         self.control.is_alive()
     }
 
+    /// Call `then` once, on this instance's runtime, when the incarnation
+    /// dies — at once when it already has. The edge [`Self::is_alive`]
+    /// polls, for a consumer that is told rather than asks. [`Self::shutdown`]
+    /// is a death too, and waits for `then` to return, so `then` must not
+    /// block. A plain drop of the instance drops a watcher that has not run.
+    pub fn on_death(&self, then: impl FnOnce(TorDeath) + Send + 'static) {
+        let death = self.control.death();
+        let stopping = Arc::clone(&self.stopping);
+        let watcher = self.runtime.spawn(async move {
+            death.await;
+            then(if stopping.load(Ordering::Acquire) {
+                TorDeath::Stopped
+            } else {
+                TorDeath::Exited
+            });
+        });
+        self.watchers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(watcher);
+    }
+
     /// Bounded teardown (`DEL_ONION`, SIGTERM→wait→SIGKILL, reap, DataDirectory
     /// wipe), then the exit telemetry. Consumes the value; the runtime shuts
     /// down after the teardown completes (destructured so the drop order is
     /// explicit).
     pub fn shutdown(self) -> Option<TorExit> {
-        let Self { runtime, control } = self;
-        runtime.block_on(control.shutdown())
+        let Self {
+            runtime,
+            control,
+            stopping,
+            watchers,
+        } = self;
+        stopping.store(true, Ordering::Release);
+        let exit = runtime.block_on(control.shutdown());
+        // The incarnation is dead, so every watcher's wait is over: each one
+        // is told of the stop before the runtime that runs it goes.
+        let watchers = watchers
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner);
+        runtime.block_on(async {
+            for watcher in watchers {
+                // A watcher that panicked was reported by the panic hook;
+                // the stop goes on either way.
+                match watcher.await {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        });
+        exit
     }
 }
 
@@ -194,6 +260,70 @@ impl BlockingDaemonTor {
 mod tests {
     use super::*;
     use crate::test_support::tor_binary;
+
+    /// The pid of the tor whose command line names `dir`, its DataDirectory
+    /// parent.
+    #[cfg(target_os = "linux")]
+    fn tor_under(dir: &std::path::Path) -> Option<u32> {
+        let needle = dir.to_string_lossy().into_owned();
+        std::fs::read_dir("/proc").ok()?.find_map(|entry| {
+            let entry = entry.ok()?;
+            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+            let cmdline = std::fs::read(entry.path().join("cmdline")).ok()?;
+            String::from_utf8_lossy(&cmdline)
+                .contains(&needle)
+                .then_some(pid)
+        })
+    }
+
+    /// The death edge (`TOR_SUPERVISOR.md` `TSR-F1`): a watcher hears the
+    /// incarnation end. A tor killed from outside is `Exited`. A shutdown is
+    /// `Stopped`, and the watcher has run when `shutdown` returns, so a
+    /// consumer is told of the stop before the runtime goes.
+    #[test]
+    #[cfg(target_os = "linux")]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps, network)"]
+    fn a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop() {
+        use std::sync::mpsc;
+        let path = tor_binary();
+        let config = |dir: &std::path::Path| BlockingDaemonTorConfig {
+            tor_binary_override: Some(path.clone()),
+            data_dir_parent: dir.to_path_buf(),
+            bootstrap_deadline: Duration::from_secs(300),
+            reply_deadline: Duration::from_secs(30),
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let killed = BlockingDaemonTor::start(config(dir.path())).expect("start");
+        let (heard_tx, heard) = mpsc::channel();
+        killed.on_death(move |death| heard_tx.send(death).expect("heard"));
+        let pid = tor_under(dir.path()).expect("the tor under this directory");
+        let status = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status()
+            .expect("kill");
+        assert!(status.success());
+        assert_eq!(
+            heard.recv_timeout(Duration::from_secs(30)),
+            Ok(TorDeath::Exited)
+        );
+        assert!(!killed.is_alive());
+        let _exit_after_kill = killed.shutdown();
+
+        let dir = tempfile::tempdir().unwrap();
+        let stopped = BlockingDaemonTor::start(config(dir.path())).expect("start");
+        let (heard_tx, heard) = mpsc::channel();
+        stopped.on_death(move |death| heard_tx.send(death).expect("heard"));
+        assert!(
+            stopped.shutdown().is_some(),
+            "the stop observes a real reap"
+        );
+        assert_eq!(
+            heard.try_recv(),
+            Ok(TorDeath::Stopped),
+            "told before shutdown returned"
+        );
+    }
 
     /// The blocking facade end-to-end on a plain (non-tokio) thread — the
     /// exact shape of the FFI consumer. Start, read the three addresses,

@@ -413,6 +413,9 @@ pub unsafe extern "C" fn shekyl_core_publish_tip(
         cumulative_difficulty_top64,
         top_id,
     });
+    if let Some(dialer) = dialer() {
+        dialer.tip_published();
+    }
 }
 
 /// The tip the core last published: 1 and the fields written, or 0 and
@@ -714,6 +717,20 @@ mod tests {
         assert!(dialer().is_none());
     }
 
+    /// Make the built dialer ready to draw (`TSR-F1`): a published tip,
+    /// the network id, and a usable clearnet link.
+    fn ready(dialer: &Dialer) {
+        let top = [1u8; 32];
+        unsafe { shekyl_core_publish_tip(1, 1, 0, top.as_ptr()) };
+        dialer.set_network_id([7; 16]);
+        dialer.hub().links().publish_usable(
+            ConnectorId::Clearnet,
+            shekyl_seam::Route::Direct,
+            dialer.hub().now(),
+        );
+        assert_eq!(dialer.readiness(ConnectorId::Clearnet), Ok(()));
+    }
+
     /// Bind a hub, which builds the dialer and applies what was held.
     fn bind() {
         let ceiling = ShekylInboundCeiling {
@@ -792,6 +809,7 @@ mod tests {
         );
         bind();
         let dialer = dialer().expect("built at the bind");
+        ready(&dialer);
         assert!(dialer.shared().lists.is_gray(&address(4)));
         assert!(
             dialer
@@ -822,6 +840,7 @@ mod tests {
         );
         bind();
         let dialer = dialer().expect("built at the bind");
+        ready(&dialer);
         let drawn = dialer
             .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
             .map(|(address, _aim, _nonce)| address);
@@ -880,6 +899,7 @@ mod tests {
         );
         bind();
         let dialer = dialer().expect("built at the bind");
+        ready(&dialer);
         let drawn = dialer
             .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
             .map(|(address, _aim, _nonce)| address);

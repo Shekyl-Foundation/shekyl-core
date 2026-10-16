@@ -50,7 +50,7 @@ pub mod blocking;
 mod data_dir;
 pub mod ephemeral;
 
-pub use blocking::{BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError};
+pub use blocking::{BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError, TorDeath};
 pub use ephemeral::{
     DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
 };

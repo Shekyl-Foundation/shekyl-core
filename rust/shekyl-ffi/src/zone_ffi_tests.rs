@@ -64,8 +64,9 @@ fn the_engine_outlives_ensure() {
     );
     drop(owner);
 
-    // An outbound-only tor zone installs its proxy without listening.
-    assert!(host.tor_proxy.lock().expect("tor proxy").is_none());
+    // An outbound-only tor zone installs its proxy without listening: the
+    // Tor link (TSR-F1) is usable through it, and dial_tor reads its route.
+    assert_eq!(host.hub.links().get(ConnectorId::Tor).route, None);
     let socks = std::ffi::CString::new("127.0.0.1").expect("socks host");
     let rc = unsafe {
         shekyl_zone_set_tor_proxy(
@@ -76,13 +77,26 @@ fn the_engine_outlives_ensure() {
         )
     };
     assert_eq!(rc, 0);
+    let link = host.hub.links().get(ConnectorId::Tor);
     assert_eq!(
-        *host.tor_proxy.lock().expect("tor proxy"),
-        Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050)),
-        "dial_tor reads this; None is DialFailed before the network"
+        link.route,
+        Some(Route::Socks(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9050
+        ))),
+        "dial_tor reads this route; none is DialFailed before the network"
+    );
+    assert!(
+        link.is_usable(),
+        "no managed Tor holds this port, so no death edge takes it down"
     );
 
     shekyl_zone_shutdown();
+    assert_eq!(
+        host.hub.links().get(ConnectorId::Tor).route,
+        None,
+        "the zone's routes leave with it"
+    );
     assert!(
         host.engine.register(OwnerClass::Transport).is_err(),
         "shutdown closes the engine"

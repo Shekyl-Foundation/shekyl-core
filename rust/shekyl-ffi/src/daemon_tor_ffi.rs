@@ -41,6 +41,7 @@ use std::time::Duration;
 
 use shekyl_tor_control_daemon::{
     BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError, OnionPow, TorBinaryError,
+    TorDeath,
 };
 
 /// Matches `SHEKYL_DAEMON_TOR_*` in `shekyl_ffi.h`.
@@ -99,6 +100,25 @@ unsafe fn read_optional_str<'a>(ptr: *const c_char) -> Result<Option<&'a str>, (
     // SAFETY: caller contract — non-null `ptr` is NUL-terminated.
     let s = unsafe { CStr::from_ptr(ptr) }.to_str().map_err(|_| ())?;
     Ok(if s.is_empty() { None } else { Some(s) })
+}
+
+/// When `socks` is the managed Tor's SOCKS listener, call `then` once that
+/// Tor dies (`TSR-F1`: its death edge takes the Tor link down), and return
+/// `true`. `false`, and nothing is watched, when no managed Tor runs or
+/// `socks` is another Tor's: an operator's Tor has no death edge here.
+pub(crate) fn on_managed_death(
+    socks: std::net::SocketAddr,
+    then: impl FnOnce(TorDeath) + Send + 'static,
+) -> bool {
+    let slot = lock_slot();
+    let Some(instance) = slot
+        .as_ref()
+        .filter(|instance| instance.socks_addr() == socks)
+    else {
+        return false;
+    };
+    instance.on_death(then);
+    true
 }
 
 fn lock_slot() -> std::sync::MutexGuard<'static, Option<BlockingDaemonTor>> {
