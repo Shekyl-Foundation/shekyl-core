@@ -728,8 +728,9 @@ pub struct FeeLadderReport {
     fee_signal_bits: Vec<AnchoredReduction>,
 }
 
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn supply_millionths(tenth: u64) -> u64 {
-    SCALE * tenth / SUPPLY_TENTH_DENOMINATOR
+    (SCALE as f64 * tenth as f64 / SUPPLY_TENTH_DENOMINATOR as f64) as u64
 }
 
 /// Run the instrument.
