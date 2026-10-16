@@ -17346,9 +17346,13 @@ left the class. That merge releases the hop and slots the pin's next
 unslotted candidate before the walk; walking first would return the
 departed hop and leave the cursor there. In the stranded state, while
 the current hop is still in the class, the merge does not run and
-nothing moves. The class-of-one
-rotation report (`hop-0 edge cannot rotate`) stays, at rebuild, when
-exactly one outbound session hides the address. `Relay::new` refuses `stems < 2` with a hidden connector (a new
+nothing moves. The class's state is reported when it changes between
+none, one and several outbound sessions that hide the address, first at
+the first epoch rebuild (`HiddenClass`, `hidden_slot.rs`). One is the
+class-of-one rotation report (`hop-0 edge cannot rotate`), a warning.
+None is a warning that every local origin is held until such a session
+connects. A return to several is noted. A rebuild that finds the state
+unchanged reports nothing. `Relay::new` refuses `stems < 2` with a hidden connector (a new
 `RelayNewError` variant; the FFI already maps every variant to a null
 handle). No connector is named anywhere in either crate's production
 code; the gate of 98.4 holds that.
@@ -17469,7 +17473,7 @@ the only option that keeps both W3c and rule 3. Ruled (i), above.
   hidden sessions the dialer opens afterwards (rule 2: a session opened
   after the pin never serves it this epoch). Slot 0 refills from those
   sessions for relayed traffic. The class-of-one rotation report names
-  the state at rebuild.
+  the state when it is entered.
 
 ### 98.6 Tests, named by property
 

@@ -468,6 +468,10 @@ pub struct Relay {
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.
     stem_watch: StemWatch,
+    /// The address-hiding class's state as last reported to the operator
+    /// (`hidden_slot`), `None` before the first report. Only a reserved map
+    /// has one.
+    hidden_class: Option<hidden_slot::HiddenClass>,
 }
 
 impl Relay {
@@ -567,6 +571,7 @@ impl Relay {
             params,
             stems,
             noise,
+            hidden_class: None,
         })
     }
 
@@ -797,6 +802,8 @@ impl Relay {
     /// step is not entitled to make.
     pub fn on_connection_close(&mut self, id: &ConnectionId) {
         self.contexts.remove(id);
+        let (hidden, _) = self.partitioned_outbound_ids();
+        self.observe_hidden_class(hidden.len(), false);
         // F-8 (§39): dropping the tally is the intentional answer to §33.6's
         // persistence question under a per-connection key — "no". In-flight
         // observations go too (a disconnected peer was not given its deadline).
@@ -859,7 +866,9 @@ impl Relay {
     /// does not call this. The dead slot stays until the next merge.
     pub fn update_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
         let (class, rest) = self.partitioned_outbound_ids();
+        let hidden = class.len();
         self.map.merge_outbound(class, rest, rng);
+        self.observe_hidden_class(hidden, false);
     }
 
     /// Draw a wholly new stem set over `outbound` — what an epoch rollover does.
@@ -1291,6 +1300,8 @@ impl Relay {
 
 #[cfg(test)]
 mod edge;
+#[cfg(test)]
+mod hidden_class_tests;
 #[cfg(test)]
 mod hidden_slot_tests;
 #[cfg(test)]

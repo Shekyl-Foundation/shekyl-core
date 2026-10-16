@@ -16,8 +16,10 @@
 //! merge does not run, and the origin pins on one of them where it sits.
 //!
 //! No connector is named here. The class is `address_hidden_from_peer` on
-//! each session's declaration. A class of one still reports `hop-0 edge
-//! cannot rotate` at each rebuild. No cover on Tor by ruling: the plan kind
+//! each session's declaration. Its size is reported to the operator when it
+//! changes between none, one and several ([`HiddenClass`]): none and one are
+//! degraded states and are warned, a return to several is noted. No cover on
+//! Tor by ruling: the plan kind
 //! stays [`RelayPlan::OwnEdge`], one ordinary send, terminal on write
 //! failure, so a failed hidden write is never fluffed on a clear link.
 
@@ -26,6 +28,52 @@ use shekyl_relay_privacy::stem_map::ConnectionId;
 
 use super::epoch_map::EpochMap;
 use super::{hides_address, Relay, RelayPlan};
+
+/// How many outbound sessions hide this node's address, in the three states
+/// the operator is told about.
+///
+/// The count itself is not reported: between two and the dialer's target the
+/// node's own transactions rotate over the class as designed, and a log line
+/// per session would say nothing an operator can act on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HiddenClass {
+    /// No such session. Every transaction this node originates is held
+    /// ([`RelayPlan::NoOwnEdge`]) until one connects.
+    Empty,
+    /// One session. Every transaction this node originates uses it.
+    One,
+    /// Two or more. The hop-0 edge rotates over them.
+    Several,
+}
+
+impl HiddenClass {
+    fn of(sessions: usize) -> Self {
+        match sessions {
+            0 => Self::Empty,
+            1 => Self::One,
+            _ => Self::Several,
+        }
+    }
+}
+
+/// Whether the class just observed is reported, and from which state.
+///
+/// `reported` is the class last reported, `None` before the first report.
+/// The first report waits for the first epoch rebuild (`at_rebuild`): the
+/// dialer opens its sessions in the first seconds after start, and a report
+/// made then would describe that order rather than the node's state. After
+/// the first, a report is made on every change and on nothing else.
+pub(crate) fn hidden_class_report(
+    reported: Option<HiddenClass>,
+    observed: HiddenClass,
+    at_rebuild: bool,
+) -> Option<HiddenClass> {
+    match reported {
+        None if !at_rebuild => None,
+        Some(previous) if previous == observed => None,
+        _ => Some(observed),
+    }
+}
 
 impl Relay {
     /// Outbound stem candidates split by the declaration cell: sessions
@@ -50,14 +98,46 @@ impl Relay {
     /// The epoch's stem map under a hidden connector: slot 0 reserved for
     /// the address-hiding sessions. The body of [`Relay::rebuild_stems`] on
     /// that path.
-    pub(super) fn reserved_stem_map<R: RelayRng + ?Sized>(&self, rng: &mut R) -> EpochMap {
+    pub(super) fn reserved_stem_map<R: RelayRng + ?Sized>(&mut self, rng: &mut R) -> EpochMap {
         let (hidden, rest) = self.partitioned_outbound_ids();
-        if hidden.len() == 1 {
-            tracing::error!(
-                "hop-0 edge cannot rotate: one outbound connection hides this node's address, so every transaction this node originates uses that connection until another such peer connects"
-            );
-        }
+        self.observe_hidden_class(hidden.len(), true);
         EpochMap::reserved(hidden, rest, self.stems, rng)
+    }
+
+    /// Record the hidden class's size after a change to the session set or
+    /// at an epoch rebuild, and tell the operator when its state changes.
+    ///
+    /// A uniform map (no configured connector hides the address) has no
+    /// class and reports nothing.
+    pub(super) fn observe_hidden_class(&mut self, sessions: usize, at_rebuild: bool) {
+        if !self.map.reserves_slot() {
+            return;
+        }
+        let observed = HiddenClass::of(sessions);
+        let Some(class) = hidden_class_report(self.hidden_class, observed, at_rebuild) else {
+            return;
+        };
+        let recovered = self.hidden_class.is_some();
+        self.hidden_class = Some(class);
+        match class {
+            HiddenClass::Empty => tracing::warn!(
+                "no outbound connection hides this node's address, so every transaction this node originates is held until one connects"
+            ),
+            HiddenClass::One => tracing::warn!(
+                "hop-0 edge cannot rotate: one outbound connection hides this node's address, so every transaction this node originates uses that connection until another such peer connects"
+            ),
+            HiddenClass::Several if recovered => tracing::info!(
+                "hop-0 edge rotates again: {sessions} outbound connections hide this node's address"
+            ),
+            HiddenClass::Several => {}
+        }
+    }
+
+    /// The hidden class as last reported to the operator, `None` before the
+    /// first report.
+    #[cfg(test)]
+    pub(crate) fn reported_hidden_class(&self) -> Option<HiddenClass> {
+        self.hidden_class
     }
 
     /// Plan a local origin's first hop over the hidden stem slot.
