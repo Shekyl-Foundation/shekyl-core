@@ -6,8 +6,9 @@
 //! The fee ladder production serves, measured over the registered state grid.
 //!
 //! Production multiplies three rungs by raw `C` (`corrected_fee_ladder`,
-//! FL-R20). This instrument reports that ladder, how long a posted rung
-//! holds under Poisson traffic, and whether the fee-volume loop settles.
+//! FL-R20). This instrument reports that ladder over the correction
+//! surface and at representative states, and whether the fee-volume loop
+//! settles (FL-C7).
 //!
 //! The instrument measures the design as built, on the operands production
 //! computes: every trace pushes each block's whole transaction count into
@@ -16,10 +17,9 @@
 //! Demand crosses from the scenario layer's float to whole transactions
 //! once, at the scenario boundary ([`whole_transactions`], DQ-2G).
 //!
-//! Dwell and feedback run the served ladder. A new question is a new row
-//! in the scenario tables. The quantizers, the §10 arms and the ArticMine
-//! comparison column were deleted with FL-R21; the last of them went with
-//! PR C, and its figures stay as recorded in §4.2 of the derivation.
+//! The feedback loop runs the served ladder. A new question is a new row
+//! in the scenario tables. How far the floor moves per block is
+//! `fee_floor.rs`'s, in basis points (FL-E2).
 //!
 //! Economics quantities come from `shekyl-economics` or from
 //! build-generated params. One exception, marked where it is defined:
@@ -43,7 +43,6 @@ use shekyl_economics::{
 use crate::fee_bar::CONVERGED_AMPLITUDE_BP;
 use crate::fee_floor::whole_transactions;
 use crate::fee_signal::{registered_models, AnchoredReduction};
-use crate::rng::PoissonTrace;
 use crate::volume_window::VolumeWindow;
 
 /// Penalty-free zone. [`shekyl_economics::FULL_REWARD_ZONE`], generated from
@@ -96,9 +95,6 @@ const DEMAND_SCALES: [u64; 3] = [50, 100, 400];
 /// A displaced start is this many times the demand scale. At every
 /// registered scale the product is the start the convergence probe used.
 const DISPLACED_START_FACTOR: u64 = 8;
-
-/// Blocks in one dwell trace.
-const DWELL_TRACE_BLOCKS: u64 = 20_000;
 
 /// Blocks in one feedback trace, and the tail the settlement test reads.
 const FEEDBACK_TRACE_BLOCKS: u64 = 30_000;
@@ -348,179 +344,6 @@ pub(crate) fn advance_traced_state(ag: u64, volume: TxVolume, params: &EconomicP
     advance_already_generated(ag, paid)
 }
 
-/// A fold's window warmed with one full `W` of blocks at `mean`
-/// transactions each, so a trace's first operand is a full window.
-fn warmed_window(rng: &mut PoissonTrace, mean: f64) -> VolumeWindow {
-    let mut window = VolumeWindow::default();
-    for _ in 0..VOLUME_WINDOW {
-        window.push(rng.poisson(mean));
-    }
-    window
-}
-
-// ---------------------------------------------------------------------------
-// Dwell: how long a posted rung value persists
-// ---------------------------------------------------------------------------
-
-/// Registered dwell scenarios: `(label, mean_start, mean_end, median)`.
-///
-/// Stationary rows cover the volume grid. The two ramps are both
-/// directions of the registered 50↔200 crossing, so a ramp is measured
-/// on the way down as well as on the way up.
-const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
-    ("stationary-v0", 0.0, 0.0, FULL_REWARD_ZONE),
-    ("stationary-v5", 5.0, 5.0, FULL_REWARD_ZONE),
-    ("stationary-v50", 50.0, 50.0, FULL_REWARD_ZONE),
-    ("stationary-v100", 100.0, 100.0, FULL_REWARD_ZONE),
-    ("stationary-v200", 200.0, 200.0, FULL_REWARD_ZONE),
-    ("stationary-v500", 500.0, 500.0, FULL_REWARD_ZONE),
-    (
-        "stationary-v50-m10z",
-        50.0,
-        50.0,
-        MEDIAN_ZONE_FACTORS[2] * FULL_REWARD_ZONE,
-    ),
-    ("ramp-v50-to-v200", 50.0, 200.0, FULL_REWARD_ZONE),
-    ("ramp-v200-to-v50", 200.0, 50.0, FULL_REWARD_ZONE),
-];
-
-/// Per-rung run lengths over a dwell trace.
-struct RungRuns<const N: usize> {
-    runs: [Vec<(u64, u64)>; N],
-    values: [BTreeSet<u64>; N],
-    current: [u64; N],
-    run_len: [u64; N],
-    run_start: [u64; N],
-}
-
-struct RungStats<const N: usize> {
-    median_dwell: [u64; N],
-    distinct: [u64; N],
-    changes: [u64; N],
-    min_ramp: [Option<u64>; N],
-}
-
-impl<const N: usize> RungRuns<N> {
-    fn new() -> Self {
-        Self {
-            runs: std::array::from_fn(|_| Vec::new()),
-            values: std::array::from_fn(|_| BTreeSet::new()),
-            current: [0; N],
-            run_len: [0; N],
-            run_start: [0; N],
-        }
-    }
-
-    fn observe(&mut self, t: u64, fees: [u64; N]) {
-        for (i, fee) in fees.into_iter().enumerate() {
-            self.values[i].insert(fee);
-            if fee == self.current[i] {
-                self.run_len[i] += 1;
-            } else {
-                if self.run_len[i] > 0 {
-                    self.runs[i].push((self.run_start[i], self.run_len[i]));
-                }
-                self.current[i] = fee;
-                self.run_len[i] = 1;
-                self.run_start[i] = t;
-            }
-        }
-    }
-
-    fn finish(mut self, is_ramp: bool, ramp_len: u64) -> RungStats<N> {
-        for ((runs, start), len) in self.runs.iter_mut().zip(self.run_start).zip(self.run_len) {
-            runs.push((start, len));
-        }
-        let mut stats = RungStats {
-            median_dwell: [0; N],
-            distinct: [0; N],
-            changes: [0; N],
-            min_ramp: [None; N],
-        };
-        for (i, runs) in self.runs.iter().enumerate() {
-            let mut lens: Vec<u64> = runs.iter().map(|&(_, l)| l).collect();
-            lens.sort_unstable();
-            stats.median_dwell[i] = lens[lens.len() / 2];
-            stats.distinct[i] = u64::try_from(self.values[i].len()).expect("distinct count fits");
-            stats.changes[i] = u64::try_from(runs.len() - 1).expect("change count fits");
-            if is_ramp {
-                stats.min_ramp[i] = runs
-                    .iter()
-                    .filter(|&&(start, _)| start > 0 && start < ramp_len)
-                    .map(|&(_, l)| l)
-                    .min();
-            }
-        }
-        stats
-    }
-}
-
-#[derive(Serialize)]
-pub struct DwellResult {
-    pub scenario: &'static str,
-    pub is_ramp: bool,
-    pub age_years: u64,
-    pub blocks_measured: u64,
-    pub median_dwell: [u64; SERVED_SLOTS],
-    pub distinct_posted_values: [u64; SERVED_SLOTS],
-    pub value_changes: [u64; SERVED_SLOTS],
-    /// Shortest run that started inside the ramp window. `None` on a
-    /// stationary scenario, and on a rung the ramp never moved.
-    pub min_dwell_started_in_ramp: [Option<u64>; SERVED_SLOTS],
-}
-
-#[allow(clippy::cast_precision_loss)]
-fn dwell_scenario(
-    scenario: &'static str,
-    mean_start: f64,
-    mean_end: f64,
-    median: u64,
-    st: AgeState,
-    params: &EconomicParams,
-) -> DwellResult {
-    // Supply, σ and the reward move with the trace. A rung change caused
-    // by that drift is part of the measurement.
-    let blocks = DWELL_TRACE_BLOCKS;
-    let ramp_len = VOLUME_WINDOW;
-    let mut rng = PoissonTrace::trace();
-    let mut window = warmed_window(&mut rng, mean_start);
-
-    let mut ag = st.ag;
-    let mut rungs = RungRuns::<SERVED_SLOTS>::new();
-    for t in 0..blocks {
-        // The block at `t` is priced at the window of the blocks before it
-        // (CEN-F20), then its own transactions join the fold.
-        let volume = window.operand();
-        let height = st.height + t;
-        let base = base_block_reward(ag, params).expect("base along trace");
-        let c_raw = correction_factor_ratio(volume, ag, height, params).c_scaled;
-        let fees = served_ladder(base, median, c_raw, params);
-        ag = advance_traced_state(ag, volume, params);
-        rungs.observe(t, fees);
-
-        let frac = if (mean_end - mean_start).abs() < f64::EPSILON {
-            0.0
-        } else {
-            (t as f64 / ramp_len as f64).min(1.0)
-        };
-        let mean = mean_start + (mean_end - mean_start) * frac;
-        window.push(rng.poisson(mean));
-    }
-
-    let is_ramp = (mean_end - mean_start).abs() >= f64::EPSILON;
-    let stats = rungs.finish(is_ramp, ramp_len);
-    DwellResult {
-        scenario,
-        is_ramp,
-        age_years: st.height / BLOCKS_PER_YEAR,
-        blocks_measured: blocks,
-        median_dwell: stats.median_dwell,
-        distinct_posted_values: stats.distinct,
-        value_changes: stats.changes,
-        min_dwell_started_in_ramp: stats.min_ramp,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Feedback: the fee↔volume loop on the served ladder
 // ---------------------------------------------------------------------------
@@ -721,7 +544,6 @@ pub struct FeeLadderReport {
     c_reachable_max: u64,
     x_served: Vec<XServedRow>,
     rung_tables: Vec<RungTable>,
-    dwell: Vec<DwellResult>,
     feedback: Vec<FeedbackResult>,
     converged_amplitude_bp: u64,
     degenerate: DegeneratePins,
@@ -818,15 +640,6 @@ pub fn report() -> FeeLadderReport {
         ),
     ];
 
-    let mut dwell = Vec::new();
-    for &(_, st) in &states {
-        for &(label, mean_start, mean_end, median) in DWELL_SCENARIOS {
-            dwell.push(dwell_scenario(
-                label, mean_start, mean_end, median, st, &params,
-            ));
-        }
-    }
-
     let mut feedback = Vec::new();
     for &(_, st) in &states {
         for &factor in &MEDIAN_ZONE_FACTORS {
@@ -854,7 +667,6 @@ pub fn report() -> FeeLadderReport {
         c_reachable_max: c_max,
         x_served,
         rung_tables,
-        dwell,
         feedback,
         converged_amplitude_bp: CONVERGED_AMPLITUDE_BP,
         degenerate: degenerate_pins(&params),
@@ -882,23 +694,6 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             floor = t.relay_floor_accept,
             below = t.served_below_relay,
         );
-    }
-    let _ = writeln!(out, "fee-ladder: dwell grid = {} runs", r.dwell.len());
-    for d in &r.dwell {
-        let repeats = d.value_changes[STANDARD_RUNG] >= 2;
-        let reference = d.scenario.starts_with("stationary-v50");
-        if reference || repeats {
-            let _ = writeln!(
-                out,
-                "fee-ladder: dwell {scenario} age={age} median={median:?} distinct={distinct:?} changes={changes:?} min_ramp={min_ramp:?}",
-                scenario = d.scenario,
-                age = d.age_years,
-                median = d.median_dwell,
-                distinct = d.distinct_posted_values,
-                changes = d.value_changes,
-                min_ramp = d.min_dwell_started_in_ramp,
-            );
-        }
     }
     let oscillating: Vec<_> = r.feedback.iter().filter(|fb| is_oscillating(fb)).collect();
     let worst_amplitude = r
@@ -1000,19 +795,6 @@ mod tests {
                 r[1] as f64 / 1000.0,
             );
         }
-    }
-
-    #[test]
-    fn rung_runs_tracks_one_change_per_slot() {
-        let mut rungs = RungRuns::<SERVED_SLOTS>::new();
-        rungs.observe(0, [10, 20, 40]);
-        rungs.observe(1, [10, 20, 40]);
-        rungs.observe(2, [10, 20, 80]);
-        let stats = rungs.finish(false, 0);
-        assert_eq!(SERVED_SLOTS, 3);
-        assert_eq!(stats.distinct, [1, 1, 2]);
-        assert_eq!(stats.changes, [0, 0, 1]);
-        assert_eq!(stats.min_ramp, [None, None, None]);
     }
 
     /// The served ladder is `corrected_fee_ladder`. At 10 SKL, a 1.5 MB

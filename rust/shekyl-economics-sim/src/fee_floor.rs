@@ -128,7 +128,7 @@ fn c_at(volume: TxVolume, ag: u64, height: u64, params: &EconomicParams) -> u64 
 
 /// Volume traces for the slew set: `(label, mean_start, mean_end, step)`.
 /// `step = true` switches the mean instantaneously at [`STEP_AT`]; `false`
-/// ramps it linearly over one window (the dwell set's shape). `v = 40` is
+/// ramps it linearly over one window. `v = 40` is
 /// the low rail's edge, where `M_r` first unclamps; `v = 500` is the
 /// sweep's top.
 pub const SLEW_SCENARIOS: &[(&str, f64, f64, bool)] = &[
@@ -175,8 +175,8 @@ fn slew_scenario(
     st: AgeState,
     params: &EconomicParams,
 ) -> SlewResult {
-    // `PoissonTrace::trace` is the stream the fee instruments share, so a
-    // floor trace and a dwell trace are the same block sequence.
+    // `PoissonTrace::trace` is a fixed stream, so every slew scenario sees
+    // the same block sequence.
     let mut rng = PoissonTrace::trace();
     // The window production reads (CEN-F20), warmed with one full W.
     let mut window = VolumeWindow::default();
