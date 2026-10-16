@@ -669,7 +669,7 @@ impl core::error::Error for StoreInvariant {
                 ..
             } => Some(e),
             Self::CellCorrupt {
-                fault: CellFault::Absent,
+                fault: CellFault::Absent | CellFault::OutsideDomain { .. },
                 ..
             }
             | Self::KeyImageNotFresh
@@ -778,13 +778,26 @@ impl core::fmt::Display for UndoFault {
     }
 }
 
-/// What is wrong with a typed `properties` cell.
+/// What is wrong with a typed cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellFault {
     /// The cell is not in the table.
     Absent,
     /// The cell's bytes are not an encoding of its value type.
     Undecodable(CodecError),
+    /// The cell decoded, and the value is outside the domain its reader
+    /// can price. `at` is the height of that row. A codec reason is
+    /// `'static`, so it cannot carry the height, and the batch's
+    /// connecting height is the block being connected — a window read can
+    /// fault an earlier row.
+    OutsideDomain {
+        /// Height of the row, raw.
+        at: u64,
+        /// Which value left its domain, in the codec's vocabulary.
+        codec: &'static str,
+        /// Why the value is outside the domain.
+        reason: &'static str,
+    },
 }
 
 impl core::fmt::Display for CellFault {
@@ -792,6 +805,9 @@ impl core::fmt::Display for CellFault {
         match self {
             Self::Absent => f.write_str("absent"),
             Self::Undecodable(e) => write!(f, "undecodable ({e})"),
+            Self::OutsideDomain { at, codec, reason } => {
+                write!(f, "outside its domain at height {at} ({codec}: {reason})")
+            }
         }
     }
 }

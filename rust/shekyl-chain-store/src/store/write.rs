@@ -262,6 +262,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// | `BondHybridKeyMalformed { .. }` | `CellCorrupt { key: "archival_bond", .. }` the hybrid key is not canonical (SI-7) |
     /// | `AccrualOverflow { .. }` | `FoldOverflow { cell: "archival_budget_accruing" }` (SI-8) |
     /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25) |
+    /// | `RelayFloorUnpriceable { at }` | `CellCorrupt { key: "block_info", fault: OutsideDomain { at } }` (SI-7) |
     ///
     /// (The arms between are documented inline on the match.)
     ///
@@ -326,6 +327,24 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                     reason: "the burned fold exceeds the parent's coins_generated (FL-R16c)",
                 }),
             },
+            // The relay-floor reader found a `block_info` median the floor's
+            // arithmetic cannot take — a weight no block can carry, so the
+            // row is bytes no conforming store writes. That is SI-7, the
+            // same class as a cell that decoded and is impossible.
+            // `CodecError`'s reason is `'static` and cannot name the height,
+            // and the batch's noted connecting height is the block being
+            // connected, not this row when the window read an earlier one.
+            // `OutsideDomain` keeps the row's height on the halt. The
+            // operands stay on the validator's `Corrupt`; the operator
+            // opens this `block_info` row.
+            Corrupt::RelayFloorUnpriceable { at, operands: _ } => StoreInvariant::CellCorrupt {
+                key: "block_info",
+                fault: CellFault::OutsideDomain {
+                    at: at.to_raw(),
+                    codec: "long_term_effective_median",
+                    reason: "the median leaves the relay floor's arithmetic domain",
+                },
+            },
             // A rule read below the connecting height and the view answered
             // `AboveTip`: the same SI-7 row the store arms when it finds a
             // dense-range row missing — observed from the rule side this
@@ -334,18 +353,6 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             // connecting height the batch noted is the context. The record
             // selects the cell: a root hole reported as `block_info` would
             // halt the writer against the wrong table.
-            // The relay-floor reader found a `block_info` median the floor's
-            // arithmetic cannot take — a weight no block can carry, in the
-            // row that records weights. The row's own SI-7 shape, with the
-            // reason spelled (FL PR C).
-            Corrupt::RelayFloorUnpriceable { at: _, operands: _ } => StoreInvariant::CellCorrupt {
-                key: "block_info",
-                fault: CellFault::Undecodable(CodecError::Invalid {
-                    codec: "block_info",
-                    reason:
-                        "the long-term effective median leaves the relay floor's arithmetic domain",
-                }),
-            },
             Corrupt::HoleBelowTip { at: _, record } => StoreInvariant::CellCorrupt {
                 key: match record {
                     // The header record is a projection of the same row
