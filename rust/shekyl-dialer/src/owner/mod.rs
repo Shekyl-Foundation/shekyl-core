@@ -633,23 +633,30 @@ impl Dialer {
 
     /// One wake's plan and draw. `None` when this wake dials nothing.
     ///
-    /// The lists are demoted and expired once ([`Peerlist::settle`]), then
-    /// counted and drawn from that view. A stranded connector re-admits its
-    /// configured addresses and dials nothing this wake; the next wake draws
-    /// from what was admitted. The nonce is minted after the lists lock
-    /// drops: it does not depend on the lists, and the nonce set is its own
-    /// lock. It stays in flight until it is dropped. Public so a test can
-    /// read the draw without running the loop.
+    /// Readiness comes first (`TSR-F1`). A connector that cannot dial returns
+    /// here, before the lists are settled or a stranded connector is
+    /// re-admitted: a draw it cannot dial ends as `DialFailed(LocalClose)`,
+    /// and the list rule drops a drawn gray address. The lists are then
+    /// demoted and expired once ([`Peerlist::settle`]), counted and drawn
+    /// from that view. A stranded connector re-admits its configured
+    /// addresses and dials nothing this wake; the next wake draws from what
+    /// was admitted. The nonce is minted after the lists lock drops: it does
+    /// not depend on the lists, and the nonce set is its own lock. It stays
+    /// in flight until it is dropped. Public so a test can read the draw
+    /// without running the loop.
     pub fn choose<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         rng: &mut R,
     ) -> Option<(NetworkAddress, DialAim, InFlightNonce)> {
         let now = self.hub.now();
-        let ready = self.readiness(connector);
+        if let Err(missing) = self.readiness(connector) {
+            tracing::debug!("{connector:?} wake: nothing drawn: {}", missing.describe());
+            return None;
+        }
         let live = live_sessions(&self.hub, connector);
         let mut shared = self.shared();
-        let wake = plan_wake(&mut shared, &self.hub, connector, ready, &live, now, rng);
+        let wake = plan_wake(&mut shared, &self.hub, connector, &live, now, rng);
         let (address, aim) = match wake {
             Wake::Recover => {
                 re_admit(&mut shared, &self.hub, connector, now, rng);
@@ -677,24 +684,16 @@ enum Wake {
     },
 }
 
-/// Check readiness, then settle once, count once, and either recover, idle,
-/// or begin one attempt.
+/// Settle once, count once, and either recover, idle, or begin one attempt.
+/// [`Dialer::choose`] has already returned when the connector cannot dial.
 fn plan_wake<R: RelayRng + ?Sized>(
     shared: &mut Shared,
     hub: &Hub,
     connector: ConnectorId,
-    ready: Result<(), NotReady>,
     live: &LiveSessions,
     now: Tick,
     rng: &mut R,
 ) -> Wake {
-    // Ahead of every draw (`TSR-F1`): a draw the connector cannot dial ends
-    // as `DialFailed(LocalClose)`, and the list rule drops a drawn gray
-    // address on that outcome. Nothing is settled, counted or re-admitted.
-    if let Err(missing) = ready {
-        tracing::debug!("{connector:?} wake: nothing drawn: {}", missing.describe());
-        return Wake::Idle;
-    }
     let index = connector.index();
     let target = shared.targets[index];
     let own = shared.own[index].clone();
