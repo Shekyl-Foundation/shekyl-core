@@ -54,8 +54,8 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     // leaf count 1 (DRS-E3, every connect); root 1; blocks 1,
     // block_heights 1, block_info 1; hf_versions 1; the open epoch's
     // `archival_budget_accruing` upsert 1 (DRS-E4 commit 5, every connect
-    // that is not a close).
-    assert_eq!(connected.journaled, 14, "no pqc_auths row, no burn rows");
+    // that is not a close); the recorded PoW 1 (`block_pow`).
+    assert_eq!(connected.journaled, 15, "no pqc_auths row, no burn rows");
 
     let miner = &block.miner_transaction;
     let miner_hash = Hash32::from(miner.hash());
@@ -283,7 +283,19 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .value()
         .decode()
         .expect("decodes");
-    assert_eq!(undo.0.len(), 14);
+    assert_eq!(undo.0.len(), 15);
+    // The recorded PoW (`block_pow`, layout 26): one row at genesis, under
+    // the null seed CEN-D3 names below the first epoch.
+    let pow: crate::codec::RecordedPow = snap
+        .open_table(crate::schema::BLOCK_POW)
+        .expect("t")
+        .get(0)
+        .expect("g")
+        .expect("row")
+        .value()
+        .decode()
+        .expect("decodes");
+    assert_eq!(pow.seed, BlockHash::NULL);
     cleanup(&path);
 }
 
@@ -347,7 +359,7 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // coinbase carries no length and writes none) + 2 outputs × (output_txs
     // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 +
     // the open epoch's `archival_budget_accruing` upsert 1 (DRS-E4 commit
-    // 5) = 27, plus the drain: `s` is past the unlock window, so block
+    // 5) + the recorded PoW 1 (`block_pow`) = 28, plus the drain: `s` is past the unlock window, so block
     // `s − W`'s coinbase matures here — one leaf (its leaf row and the two
     // position-map rows, `grow.rs` 3a), the chunk it lands in and the root
     // chunk over it (the tree's `s − W` leaves fit one chunk: two layer
@@ -356,7 +368,7 @@ fn two_blocks_in_one_batch_with_a_spend() {
     assert_eq!(drained_leaves, 1, "block s − W's coinbase alone");
     assert_eq!(layer_writes, 2, "a one-chunk tree: its chunk and the root");
     let drain_rows = 3 * drained_leaves + layer_writes + 1;
-    assert_eq!(c1.journaled, 27 + drain_rows);
+    assert_eq!(c1.journaled, 28 + drain_rows);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.

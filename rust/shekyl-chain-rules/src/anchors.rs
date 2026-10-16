@@ -222,6 +222,20 @@ impl ReleaseAnchors {
         }
     }
 
+    /// The last anchor at or below `height` — CEN-E2's floor for a chain
+    /// whose recorded tip is `height`: "the last anchor preceding the
+    /// current height". An anchor the chain has not reached is no floor
+    /// for it yet; `None` when no anchor is at or below `height`, which is
+    /// every height while no checkpoint has shipped.
+    #[must_use]
+    pub fn last_at_or_below(&self, height: BlockHeight) -> Option<Anchor> {
+        self.checkpoints
+            .iter()
+            .rev()
+            .find(|anchor| anchor.height <= height)
+            .copied()
+    }
+
     /// Whether `height` lies in band 1 — at or below the current anchor
     /// (`PDM-Q5` `:293`, *"`≤ C` skeleton"*). What the C++ called
     /// `is_in_checkpoint_zone`; `false` everywhere while no checkpoint has

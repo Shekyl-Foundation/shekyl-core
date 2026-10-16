@@ -30,7 +30,12 @@
 //!   tier that admits an alt block reads no executed-chain fact and
 //!   derives none, and promotion re-derives supply by executing the chain.
 //!   A field with no reader is not stored, so "nothing reads it" is the
-//!   type, not a grep. Deleted at `SCHEMA_VERSION` 24 (rule 42).
+//!   type, not a grep. Deleted at `SCHEMA_VERSION` 24 (rule 42);
+//! - the **proof-of-work hash** the tier computed, under its seed
+//!   ([`RecordedPow`], 64 bytes after the cumulative difficulty;
+//!   `SCHEMA_VERSION` 26): its reader is the switch, which re-forms the
+//!   block through it instead of hashing it again
+//!   (`DRS_E5_POOL_ALT_PRUNE.md`, 2026-10-15 ruling 3).
 //!
 //! # The row is built from the verdict
 //!
@@ -91,7 +96,7 @@ use shekyl_types::{BlockHeight, BlockWeight};
 use shekyl_wire::Block;
 
 use super::archival::AttestationWitnessBytes;
-use super::chain::BlockBody;
+use super::chain::{BlockBody, RecordedPow};
 use shekyl_store_codec::reader::{put_bytes, Reader};
 
 /// Why [`AltBlock::checked`] refused to build a record.
@@ -132,6 +137,10 @@ pub struct AltBlock {
     height: BlockHeight,
     block_weight: BlockWeight,
     cumulative_difficulty: CumulativeDifficulty,
+    /// The PoW the cheap tier computed and accepted, under its seed — the
+    /// switch re-forms this block through it rather than hashing again
+    /// (ruling 3, 2026-10-15).
+    pow: RecordedPow,
     /// Parsed once, at construction or decode. The wire form is
     /// [`Block::serialize`] of this value.
     block: Block,
@@ -150,6 +159,8 @@ pub struct AltBlockFacts {
     pub block_weight: BlockWeight,
     /// Cumulative difficulty at this block along its chain.
     pub cumulative_difficulty: CumulativeDifficulty,
+    /// The PoW the tier computed under its seed.
+    pub pow: RecordedPow,
 }
 
 impl AltBlock {
@@ -169,6 +180,7 @@ impl AltBlock {
         let height = valid.height();
         let cumulative_difficulty = valid.cumulative_difficulty();
         let block_weight = valid.block_weight();
+        let pow = RecordedPow::of(valid.pow());
         debug_assert!(
             block_weight.to_raw() != 0,
             "a measured block weight is at least its coinbase's bytes"
@@ -178,6 +190,7 @@ impl AltBlock {
             height,
             block_weight,
             cumulative_difficulty,
+            pow,
             block: candidate.block,
             attestation_witness: candidate
                 .attestation_witness
@@ -213,6 +226,7 @@ impl AltBlock {
             height: facts.height,
             block_weight: facts.block_weight,
             cumulative_difficulty: facts.cumulative_difficulty,
+            pow: facts.pow,
             block,
             attestation_witness,
         })
@@ -225,6 +239,7 @@ impl AltBlock {
             height: self.height,
             block_weight: self.block_weight,
             cumulative_difficulty: self.cumulative_difficulty,
+            pow: self.pow,
         }
     }
 
@@ -244,6 +259,12 @@ impl AltBlock {
     #[must_use]
     pub const fn cumulative_difficulty(&self) -> CumulativeDifficulty {
         self.cumulative_difficulty
+    }
+
+    /// The PoW the cheap tier computed under its seed.
+    #[must_use]
+    pub const fn pow(&self) -> RecordedPow {
+        self.pow
     }
 
     /// The block. Parsed once, at construction or decode
@@ -268,6 +289,7 @@ impl Canonical for AltBlock {
         out.extend_from_slice(&self.height.to_raw().to_le_bytes());
         out.extend_from_slice(&self.block_weight.to_raw().to_le_bytes());
         out.extend_from_slice(&self.cumulative_difficulty.to_raw().to_le_bytes());
+        self.pow.encode_into(out);
         put_bytes(out, &self.block.serialize());
         match &self.attestation_witness {
             None => out.push(Self::ABSENT),
@@ -288,6 +310,7 @@ impl Canonical for AltBlock {
         let cumulative_difficulty = CumulativeDifficulty::from_raw(u128::from_le_bytes(
             r.array::<16>("buffer ends inside the cumulative difficulty")?,
         ));
+        let pow = RecordedPow::decode(&r.array::<64>("buffer ends inside the recorded PoW")?)?;
         // Copied out so the witness can be read before the parse. The
         // `Block` is what is kept.
         let block_bytes = r.bytes()?.to_vec();
@@ -312,6 +335,7 @@ impl Canonical for AltBlock {
             height,
             block_weight,
             cumulative_difficulty,
+            pow,
             block,
             attestation_witness,
         })
