@@ -159,10 +159,17 @@ derivation at engine assembly.
 
 ## The receipt key at engine assembly (`FND-12`)
 
-One persona slot's derivation is 466 ms on the floor; the receipt key's
-seeded generation is 45.7 ms of it, **9.8 %**, about a tenth of each slot.
-The rest is the ML-KEM-768 and two ML-DSA-65 key generations and the HKDF
-expands, not measured separately.
+One persona slot's derivation is 466 ms on the floor. The receipt key's
+seeded generation, timed from fixed seeds, is 45.7 ms, about a tenth of a
+slot (9.8 %). FN-DSA key generation's time depends on the seed, so the
+share read from a slot's own receipt seeds is
+`fn_dsa_hybrid_persona_receipt_keygen`, which this record has not yet run
+on the floor. The rest of a slot is the SLH-DSA-192s message-signing key
+generation, which `rust/shekyl-crypto-pq/src/archival_p.rs` documents at
+about 415 ms on the floor; the ML-KEM-768 and two ML-DSA-65 key
+generations; the Ed25519 scalar multiplications and the X25519
+conversion; and the HKDF expands. None of these was timed separately in
+this record.
 
 Engine assembly derives one full persona key set for every slot in the
 bonded set and in the three slots from the cursor, one after another. The
