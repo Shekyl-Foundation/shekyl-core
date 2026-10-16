@@ -802,8 +802,7 @@ impl Relay {
     /// step is not entitled to make.
     pub fn on_connection_close(&mut self, id: &ConnectionId) {
         self.contexts.remove(id);
-        let (hidden, _) = self.partitioned_outbound_ids();
-        self.observe_hidden_class(hidden.len(), false);
+        self.observe_hidden_class(self.hidden_outbound_count(), false);
         // F-8 (§39): dropping the tally is the intentional answer to §33.6's
         // persistence question under a per-connection key — "no". In-flight
         // observations go too (a disconnected peer was not given its deadline).

@@ -17,8 +17,8 @@
 //!
 //! No connector is named here. The class is `address_hidden_from_peer` on
 //! each session's declaration. Its size is reported to the operator when it
-//! changes between none, one and several ([`HiddenClass`]): none and one are
-//! degraded states and are warned, a return to several is noted. No cover on
+//! changes between empty, one and several ([`HiddenClass`]): empty and one
+//! are degraded states and are warned, a return to several is noted. No cover on
 //! Tor by ruling: the plan kind
 //! stays [`RelayPlan::OwnEdge`], one ordinary send, terminal on write
 //! failure, so a failed hidden write is never fluffed on a clear link.
@@ -93,6 +93,16 @@ impl Relay {
             }
         }
         (hidden, rest)
+    }
+
+    /// How many outbound stem candidates hide this node's address: the
+    /// length of [`Relay::partitioned_outbound_ids`]'s first half, counted
+    /// without building either list.
+    pub(super) fn hidden_outbound_count(&self) -> usize {
+        self.contexts
+            .values()
+            .filter(|peer| Self::stem_candidate(peer) && hides_address(&peer.declaration))
+            .count()
     }
 
     /// The epoch's stem map under a hidden connector: slot 0 reserved for

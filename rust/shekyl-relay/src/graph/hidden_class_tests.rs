@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The hidden class's operator report (`hidden_slot`): reported on a change
-//! of state between none, one and several address-hiding sessions, never
+//! of state between empty, one and several address-hiding sessions, never
 //! once per epoch, and first at the first epoch rebuild.
 
 use super::hidden_slot::{hidden_class_report, HiddenClass};
@@ -137,4 +137,37 @@ fn a_uniform_map_has_no_hidden_class() {
     z.on_connection_close(&id(10));
     z.rebuild_stems(&mut rng);
     assert_eq!(z.reported_hidden_class(), None);
+}
+
+/// The close path counts the class without building it. The count agrees
+/// with the partition at every step of a mixed session set: outbound and
+/// inbound, clearnet and Tor, opened and closed.
+#[test]
+fn the_close_count_agrees_with_the_partition() {
+    let mut rng = SplitMix64::new(3);
+    let mut z = relay(&[ConnectorId::Clearnet, ConnectorId::Tor], &mut rng);
+    let agrees = |z: &Relay| {
+        assert_eq!(
+            z.hidden_outbound_count(),
+            z.partitioned_outbound_ids().0.len()
+        );
+    };
+    agrees(&z);
+    outbound(&mut z, 1, ConnectorId::Tor, &mut rng);
+    outbound(&mut z, 2, ConnectorId::Tor, &mut rng);
+    outbound(&mut z, 10, ConnectorId::Clearnet, &mut rng);
+    z.on_session_established(id(20), PeerDirection::Inbound, ConnectorId::Tor, &mut rng);
+    z.on_session_established(
+        id(21),
+        PeerDirection::Inbound,
+        ConnectorId::Clearnet,
+        &mut rng,
+    );
+    agrees(&z);
+    assert_eq!(z.hidden_outbound_count(), 2);
+    for closed in [1, 20, 10, 2, 21] {
+        z.on_connection_close(&id(closed));
+        agrees(&z);
+    }
+    assert_eq!(z.hidden_outbound_count(), 0);
 }

@@ -17346,11 +17346,12 @@ left the class. That merge releases the hop and slots the pin's next
 unslotted candidate before the walk; walking first would return the
 departed hop and leave the cursor there. In the stranded state, while
 the current hop is still in the class, the merge does not run and
-nothing moves. The class's state is reported when it changes between
-none, one and several outbound sessions that hide the address, first at
-the first epoch rebuild (`HiddenClass`, `hidden_slot.rs`). One is the
+nothing moves. The class's state (`HiddenClass`: `Empty`, `One`,
+`Several`) is reported when it changes between no, one and several
+outbound sessions that hide the address, first at
+the first epoch rebuild (`hidden_slot.rs`). One is the
 class-of-one rotation report (`hop-0 edge cannot rotate`), a warning.
-None is a warning that every local origin is held until such a session
+Empty is a warning that every local origin is held until such a session
 connects. A return to several is noted. A rebuild that finds the state
 unchanged reports nothing. `Relay::new` refuses `stems < 2` with a hidden connector (a new
 `RelayNewError` variant; the FFI already maps every variant to a null
