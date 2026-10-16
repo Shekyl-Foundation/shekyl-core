@@ -178,7 +178,7 @@ mod tests {
         );
         assert_eq!(relay_floor_from(at(50, FULL_REWARD_ZONE), &p), Some(39));
         assert_eq!(
-            fee_ladder_from(at(50, FULL_REWARD_ZONE), &p).map(|l| l.as_slots()),
+            fee_ladder_from(at(50, FULL_REWARD_ZONE), &p).map(FeeLadder::as_slots),
             Some([39, 156, 7_999])
         );
         // Quiet: M_r at its low rail, no burn, C = 0.8, F = 15.
