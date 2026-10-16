@@ -55,7 +55,9 @@ SIM = ROOT / "rust" / "shekyl-economics-sim" / "src"
 
 # The fold files: where chain quantities are formed. `burden.rs` holds the
 # honest chain's output count and the shard partition, which set the tree
-# depth and the burden operand.
+# depth and the burden operand. The two fee instruments price `C`, the
+# floor and the traced emission at the validator's window operand
+# (FL PR C, 2026-10-16), so they are fold files too.
 FOLD_FILES = [
     "chain_cursor.rs",
     "engine.rs",
@@ -63,12 +65,20 @@ FOLD_FILES = [
     "stage2.rs",
     "record.rs",
     "burden.rs",
+    "fee_ladder.rs",
+    "fee_floor.rs",
 ]
 
-# (file, function) -> reason. Empty: ESR-14 left no float-to-integer cast in
-# a fold function. An entry here is a declared divergence and needs its §4
-# row; an entry that matches nothing fails the gate.
-ALLOWED: dict[tuple[str, str], str] = {}
+# (file, function) -> reason. One entry: the fee instruments' one named
+# boundary. An entry here is a declared divergence and needs its §4 row; an
+# entry that matches nothing fails the gate.
+ALLOWED: dict[tuple[str, str], str] = {
+    ("fee_floor.rs", "whole_transactions"): (
+        "DQ-2G's one boundary in the fee feedback loops: the scenario layer's "
+        "float demand becomes the next block's whole transactions, once, "
+        "before it enters the fold's VolumeWindow"
+    ),
+}
 
 INT_TYPES = r"(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize)"
 CAST = re.compile(r"\bas\s+" + INT_TYPES + r"\b")
