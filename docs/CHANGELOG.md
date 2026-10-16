@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- **Benchmarks: hybrid scheme 3 measured on the floor device** (`docs/benchmarks/ba_t33_fn_dsa_floor_device_20261015.md`). On the Pi 4, an Ed25519 + FN-DSA-1024 signature takes 2.24 ms (1.70 ms with the key held across signatures), a verification 0.57 ms, and a seeded key generation 45.7 ms. The scheme's test vectors, signing included, give the pinned bytes on the device's own floating point, which emulation could not show. One persona slot's key derivation takes 466 ms there, the receipt key 9.8 % of it. A staker's wallet open derives one slot for each bonded slot and three more, one after another: 1.40 s with none bonded, and 466 ms more for each bonded slot. `shekyl-crypto-pq` gains `examples/fn_dsa_stack_ladder.rs`, which finds the stack each scheme-3 operation needs, and a criterion arm for one persona slot's derivation.
+- **Benchmarks: hybrid scheme 3 measured on the floor device** (`docs/benchmarks/ba_t33_fn_dsa_floor_device_20261015.md`). On the Pi 4, an Ed25519 + FN-DSA-1024 signature takes 2.24 ms (1.70 ms with the key held across signatures), a verification 0.57 ms, and a seeded key generation 45.7 ms. The scheme's test vectors, signing included, give the pinned bytes on the device's own floating point, which emulation could not show. One persona slot's key derivation takes 466 ms there, the receipt key 9.6 % of it. A staker's wallet open derives one slot for each bonded slot and three more, one after another: 1.40 s with none bonded, and 466 ms more for each bonded slot. `shekyl-crypto-pq` gains `examples/fn_dsa_stack_ladder.rs`, which finds the stack each scheme-3 operation needs, and a criterion arm for one persona slot's derivation.
 
 ## [3.1.0-alpha.10] - 2026-10-15
 

@@ -1,8 +1,9 @@
 # `BA-T33` floor arm: hybrid scheme 3 on the floor device, 2026-10-15
 
-**State of this record: RUN COMPLETE, three sessions on 2026-10-15: 13:38Z
-to 15:09Z; 16:22Z to 17:17Z for the `hold_key` arm; 20:19Z to 21:03Z for
-the stack.** An
+**State of this record: RUN COMPLETE, four sessions: on 2026-10-15,
+13:38Z to 15:09Z, 16:22Z to 17:17Z for the `hold_key` arm, and 20:19Z to
+21:03Z for the stack; on 2026-10-16, 05:36Z to 06:29Z for the receipt key's
+matched-seed arm, with both ladders again.** An
 observation, not a registered test: no pass lines were set before the run,
 and no constant budgets against these figures yet
 ([`FN_DSA_HYBRID.md`](../design/FN_DSA_HYBRID.md) `FND-10`). It closes
@@ -13,7 +14,8 @@ and no constant budgets against these figures yet
 **2.24 ms** through the per-call entry and **1.70 ms** with the key held
 across signatures, verifies in **0.57 ms**, and generates a seeded key in
 **45.7 ms**. A whole persona slot's key derivation takes **466 ms**, of
-which the receipt key is 9.8 %. The scheme-3 vectors, signing included,
+which the receipt key, generated from that slot's own seeds, is 44.5 ms,
+9.6 %. The scheme-3 vectors, signing included,
 give the pinned bytes on this hardware; until now that agreement was shown
 only under emulation. Every step of both sessions exited 0, and the device
 held 1.8 GHz on every core through the timed benches. Each scheme-3
@@ -53,10 +55,20 @@ The third ran at `81e612327a`, with the stack ladder in its final form
 6. `fn_dsa_stack_ladder`, from the optimized and the unoptimized build
    (`ba_t33_fn_dsa_floor_device_20261015_s3_env.tsv`).
 
+The fourth ran at `e83f16a466`, with the receipt key's matched-seed arm
+and the ladder's stricter acceptance of its probe:
+
+7. `fn_dsa_stack_ladder`, both builds again.
+8. `cargo bench -p shekyl-crypto-pq --bench fn_dsa_hybrid -- --noplot
+   'fn_dsa_hybrid_(keygen_from_seeds|persona_slot_derivation|persona_receipt_keygen)'`,
+   the three key-generation arms side by side
+   (`ba_t33_fn_dsa_floor_device_20261015_s4_env.tsv`).
+
 The first two sessions' scripts were rehearsed on the development host from
 the same archive, in a dry mode with shorter criterion samples, and that
 output was discarded; the third ran a subset of the second's rehearsed
-steps.
+steps, and the fourth's criterion filter was checked on the development
+host to select exactly its three arms.
 
 ## Conditions
 
@@ -66,8 +78,8 @@ steps.
 | Toolchain | rustc 1.94.0, LLVM 21.1.8, `aarch64-unknown-linux-gnu` |
 | Codegen | `RUSTFLAGS` and `CARGO_BUILD_RUSTFLAGS` unset; no cargo configuration file. The shipping configuration: no `target-cpu` |
 | Governor | `ondemand` on every core |
-| Clocks during the benches | 1.8 GHz on every core in all 23 samples of the first session and all 3 of the second |
-| Temperature | First session: 49.7 °C at the start, 66.7 °C after the builds, 56.0 to 60.4 °C during the benches. Second: 49.2 °C at the start, 67.7 °C after the builds, 56.5 to 57.5 °C during the bench. Third: 50.1 °C at the start, 65.2 °C after the builds, 53.6 °C at the end |
+| Clocks during the benches | 1.8 GHz on every core in every sample: 23 in the first session, 3 in the second, 16 in the fourth (the third ran no bench) |
+| Temperature | First session: 49.7 °C at the start, 66.7 °C after the builds, 56.0 to 60.4 °C during the benches. Second: 49.2 °C at the start, 67.7 °C after the builds, 56.5 to 57.5 °C during the bench. Third: 50.1 °C at the start, 65.2 °C after the builds, 53.6 °C at the end. Fourth: 50.1 °C at the start, 66.2 °C after the builds, 53.6 to 57.0 °C during the benches |
 | Throttle flags | Not read: `vcgencmd get_throttled` needs root there, and was refused |
 | Resident | The testnet daemon, running throughout and not touched; nothing else of note. Load average 0.50 at the start, 0.8 to 1.5 during the ladder and benches |
 
@@ -109,6 +121,11 @@ inside each sample's mean and is not shown here.
 | `fn_dsa_hybrid_verify` | **568 µs** | 566 / 567 / 569 µs | 58 µs (§3.1) |
 | `fn_dsa_hybrid_keygen_from_seeds` | **45.68 ms** | 45.62 / 45.64 / 45.70 ms | 6.2 ms (§3.1) |
 | `fn_dsa_hybrid_persona_slot_derivation` | **466.0 ms** | 464.7 / 464.9 / 468.2 ms | not recorded on an idle host |
+| `fn_dsa_hybrid_persona_receipt_keygen` (fourth session) | **44.52 ms** | 44.48 / 44.50 / 44.52 ms | 6.67 ms, this revision, a loaded host |
+
+In the fourth session, beside the matched arm, the fixed-seed key
+generation read 45.70 ms and the persona slot 465.5 ms, within 0.1 % of
+the first session's figures.
 
 The development-host figures are the ones `FN_DSA_HYBRID.md` records; that
 host was shared and loaded on the day of this run, so it was not re-timed.
@@ -123,7 +140,9 @@ decodes into a context on its own stack and never allocates one.
 
 ## Stack
 
-`fn_dsa_stack_ladder`, third session. A thread cannot be made small enough
+`fn_dsa_stack_ladder`, third session; the fourth gave the same figures in
+every cell, with the probe accepted only on the runtime's stack-overflow
+abort. A thread cannot be made small enough
 to measure these directly on this device: Rust raises a requested thread
 stack to the C library's minimum, and glibc's `PTHREAD_STACK_MIN` is 131,072
 bytes on aarch64 against 16,384 on x86_64, plus a page and the thread-local
@@ -159,12 +178,12 @@ derivation at engine assembly.
 
 ## The receipt key at engine assembly (`FND-12`)
 
-One persona slot's derivation is 466 ms on the floor. The receipt key's
-seeded generation, timed from fixed seeds, is 45.7 ms, about a tenth of a
-slot (9.8 %). FN-DSA key generation's time depends on the seed, so the
-share read from a slot's own receipt seeds is
-`fn_dsa_hybrid_persona_receipt_keygen`, which this record has not yet run
-on the floor. The rest of a slot is the SLH-DSA-192s message-signing key
+One persona slot's derivation is 466 ms on the floor. Its receipt key,
+generated from the slot's own seeds (`fn_dsa_hybrid_persona_receipt_keygen`,
+the same persona, network, format and slot), is **44.5 ms of it, 9.6 %**,
+about a tenth. FN-DSA key generation's time depends on the seed, which is
+why the share is read from that arm and not from the fixed-seed one
+(45.7 ms). The rest of a slot is the SLH-DSA-192s message-signing key
 generation, which `rust/shekyl-crypto-pq/src/archival_p.rs` documents at
 about 415 ms on the floor; the ML-KEM-768 and two ML-DSA-65 key
 generations; the Ed25519 scalar multiplications and the X25519
@@ -207,7 +226,10 @@ for &slot in &slots {
 For a staker with `k` bonded slots that is `k + 3` derivations, the intent
 slot adding nothing when it is inside the lookahead. On the floor device a
 staker's wallet open spends **(k + 3) × 466 ms** deriving persona keys:
-**1.40 s with none bonded**, of which the receipt key is 45.7 ms per slot.
+**1.40 s with none bonded**, of which the receipt key is about 44.5 ms per
+slot. That per-slot share is this one persona slot's; FN-DSA key generation
+varies with the seed, so another slot's receipt key takes somewhat more or
+less.
 Only stakers pay it. The bond watch's probe window derives identity public
 keys alone and does not pay it.
 
