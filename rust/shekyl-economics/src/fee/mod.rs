@@ -31,8 +31,8 @@ pub mod relay;
 
 pub use correction::{fee_correction, FeeCorrection};
 pub use floor::{
-    fee_correction_at, fee_ladder_from, relay_floor_from, FeeOperands,
-    RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    correction_factors_at, fee_correction_at, fee_ladder_from, relay_floor_from, CorrectionFactors,
+    FeeOperands, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 pub use ladder::{
     checked_corrected_fee_ladder, corrected_fee_ladder, FeeLadder, EMISSION_CLAIM_FEE_FLOOR,

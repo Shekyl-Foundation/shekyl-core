@@ -102,11 +102,11 @@ fn admits_with_slack(fee: u64, weight: u64, floors: &[u64], slack_bp: u32) -> bo
 mod tests {
     use super::super::quantization::FEE_QUANTIZATION_MASK;
     use super::*;
+    use crate::RELAY_FLOOR_REFERENCE_TX_WEIGHT as W_REF;
 
     #[test]
     fn relay_floor_matches_the_migrated_heritage_grid() {
         const COIN: u64 = 1_000_000_000;
-        const W_REF: u64 = 3_000;
         let params = EconomicParams::default();
         let zone = params.full_reward_zone;
 

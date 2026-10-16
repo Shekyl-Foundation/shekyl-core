@@ -22,8 +22,8 @@
 //! `fee_floor.rs`'s, in basis points (FL-E2).
 //!
 //! Economics quantities come from `shekyl-economics` or from
-//! build-generated params. One exception, marked where it is defined:
-//! `REF_TX_WEIGHT` (the same pinned copy `fee_policy.rs` carries).
+//! build-generated params. The reference weight is
+//! [`shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`].
 //!
 //! This module renders. `main.rs --fee-ladder` writes.
 
@@ -34,11 +34,12 @@ use serde::Serialize;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
-    calc_release_multiplier, corrected_fee_ladder, effective_emission, emission_share_at,
-    fee_correction, paid_block_reward, projected_already_generated, relay_fee_floor,
-    tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
-    RELAY_ADMISSION_SLACK_BP,
+    calc_release_multiplier, corrected_fee_ladder, correction_factors_at, effective_emission,
+    paid_block_reward, projected_already_generated, relay_fee_floor, tail_subsidy_per_block,
+    CirculatingSupply, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
+    RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
+use shekyl_units::AtomicUnits;
 
 use crate::fee_bar::CONVERGED_AMPLITUDE_BP;
 use crate::fee_floor::whole_transactions;
@@ -48,10 +49,6 @@ use crate::volume_window::VolumeWindow;
 /// Penalty-free zone. [`shekyl_economics::FULL_REWARD_ZONE`], generated from
 /// `config/consensus_constants.json`.
 pub(crate) const FULL_REWARD_ZONE: u64 = shekyl_economics::FULL_REWARD_ZONE;
-
-/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h`).
-/// No single Rust owner exists; `fee_policy.rs` carries the same pin.
-pub(crate) const REF_TX_WEIGHT: u64 = 3_000;
 
 /// Rolling transaction-volume window (`SHEKYL_TX_VOLUME_WINDOW`): one day
 /// at the 120 s target. Build-generated, so a window change cannot leave
@@ -127,35 +124,40 @@ pub struct CorrectionPoint {
 }
 
 /// `C` at a per-block volume: the surface grid's whole-number points.
-fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicParams) -> Correction {
-    correction_factor_ratio(TxVolume::per_block(v), circulating, height, params)
+fn correction_factor(
+    v: u64,
+    parent_coins: u64,
+    height: u64,
+    params: &EconomicParams,
+) -> Correction {
+    correction_factor_ratio(TxVolume::per_block(v), parent_coins, height, params)
+}
+
+/// Supply a trace can name. Traces advance gross `already_generated` and
+/// keep no burn ledger, so the burned total is zero — written here, at
+/// the owner's derive, rather than by pricing `b` on the gross coins.
+fn traced_supply(parent_coins: u64) -> CirculatingSupply {
+    CirculatingSupply::derive(AtomicUnits::from_raw(parent_coins), AtomicUnits::ZERO)
+        .expect("a trace with no burn ledger burns nothing")
 }
 
 /// [`correction_factor`] with the volume given as the [`TxVolume`] the
 /// owners take — the fold's window operand on a trace.
+///
+/// `parent_coins` is the trace's gross accumulator. [`traced_supply`]
+/// turns it into the circulating supply the composition prices.
 pub(crate) fn correction_factor_ratio(
     volume: TxVolume,
-    circulating: u64,
+    parent_coins: u64,
     height: u64,
     params: &EconomicParams,
 ) -> Correction {
-    let baseline = params.tx_volume_baseline;
-    let m_r = calc_release_multiplier(volume, baseline, params.release_min, params.release_max);
-    let b = calc_burn_pct(
-        volume,
-        baseline,
-        circulating,
-        params.emission_curve_asymptote,
-        params.burn_base_rate,
-        params.burn_cap,
-    );
-    let sigma = emission_share_at(height);
-    let c = fee_correction(volume, sigma, b, params);
+    let factors = correction_factors_at(height, traced_supply(parent_coins), volume, params);
     Correction {
-        release_multiplier: m_r,
-        burn_pct: b,
-        emission_share_sigma: sigma,
-        c_scaled: c.as_scaled(),
+        release_multiplier: factors.release_multiplier,
+        burn_pct: factors.burn_pct,
+        emission_share_sigma: factors.emission_share,
+        c_scaled: factors.correction.as_scaled(),
     }
 }
 
@@ -174,7 +176,7 @@ fn served_ladder(
     corrected_fee_ladder(
         base_reward,
         median,
-        REF_TX_WEIGHT,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         FeeCorrection::from_scaled(c),
         params,
     )
@@ -186,7 +188,7 @@ fn relay_floor(base_reward: u64, median: u64, c: u64, params: &EconomicParams) -
     relay_fee_floor(
         base_reward,
         median,
-        REF_TX_WEIGHT,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         FeeCorrection::from_scaled(c),
         params,
     )
@@ -395,7 +397,7 @@ fn standard_units_per_floor_unit(params: &EconomicParams) -> u64 {
     let ladder = corrected_fee_ladder(
         10 * shekyl_units::ATOMIC_UNITS_PER_SKL,
         FULL_REWARD_ZONE,
-        REF_TX_WEIGHT,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         FeeCorrection::UNITY,
         params,
     );
@@ -639,12 +641,12 @@ pub fn report() -> FeeLadderReport {
             let hi = (proj_ratio * u128::from(params.release_max) / u128::from(SCALE))
                 .min(u128::from(SCALE));
             let reachable = u128::from(ratio) >= lo && u128::from(ratio) <= hi;
-            let circ = u64::try_from(
+            let parent_coins = u64::try_from(
                 u128::from(params.emission_curve_asymptote) * u128::from(ratio) / u128::from(SCALE),
             )
-            .expect("circ fits");
+            .expect("parent coins fit");
             for &v in &SURFACE_VOLUMES {
-                let correction = correction_factor(v, circ, st.height, &params);
+                let correction = correction_factor(v, parent_coins, st.height, &params);
                 if reachable {
                     c_min = c_min.min(correction.c_scaled);
                     c_max = c_max.max(correction.c_scaled);
@@ -828,6 +830,7 @@ pub fn render_json(r: &FeeLadderReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT;
 
     /// Prints the served-ladder spacing table.
     ///
@@ -882,7 +885,7 @@ mod tests {
             corrected_fee_ladder(
                 10 * coin,
                 1_500_000,
-                REF_TX_WEIGHT,
+                RELAY_FLOOR_REFERENCE_TX_WEIGHT,
                 FeeCorrection::from_scaled(16 * SCALE),
                 &params,
             )

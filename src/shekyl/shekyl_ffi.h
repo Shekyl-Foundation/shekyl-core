@@ -386,12 +386,14 @@ int32_t shekyl_relay_floor_admits(
     size_t floors_len);
 
 // F = R*C*w_ref/M^2, floored at 1. Same function as the ladder's economy
-// rung. The penalty-free zone is EconomicParams::full_reward_zone, not an
-// argument. Returns 0 written, -1 null out_floor, -2 out of u128 domain.
+// rung. w_ref is shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT, not an
+// argument — the same move the lattice and the slack made on
+// shekyl_relay_floor_admits. The penalty-free zone is
+// EconomicParams::full_reward_zone, not an argument.
+// Returns 0 written, -1 null out_floor, -2 out of u128 domain.
 int32_t shekyl_relay_fee_floor(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t* out_floor);
 
@@ -406,13 +408,13 @@ uint64_t shekyl_fee_correction(
 uint64_t shekyl_relay_floor_lookback(void);
 
 // Three-slot ladder [economy, standard, priority]. Economy is the relay
-// floor at the same operands. The penalty-free zone is
-// EconomicParams::full_reward_zone, not an argument.
-// Returns 0 written, -1 null, -2 out of domain.
+// floor at the same operands. w_ref is
+// shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT, not an argument.
+// The penalty-free zone is EconomicParams::full_reward_zone, not an
+// argument. Returns 0 written, -1 null, -2 out of domain.
 int32_t shekyl_corrected_fee_ladder(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t *out_fees);
 

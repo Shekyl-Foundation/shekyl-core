@@ -41,11 +41,6 @@ use shekyl_rpc_client::FeeRate;
 
 use super::traits::FeeEstimates;
 
-/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h`)
-/// — the 2021-scaling reference transaction weight the daemon's fee
-/// formula folds in.
-const DYNAMIC_FEE_REFERENCE_TX_WEIGHT: u64 = 3_000;
-
 /// Absolute cap (atomic units per weight) on every named tier's — and
 /// `Custom`'s — per-weight rate: the maximum fee rate an honest daemon can
 /// quote over the whole emission era.
@@ -93,7 +88,7 @@ pub fn absolute_fee_rate_cap() -> u64 {
     shekyl_economics::corrected_fee_ladder(
         r0,
         params.full_reward_zone,
-        DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
+        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         shekyl_economics::FeeCorrection::from_scaled(structural_max_correction(&params)),
         &params,
     )
@@ -469,7 +464,7 @@ mod tests {
                         let prio = shekyl_economics::corrected_fee_ladder(
                             base,
                             zm,
-                            DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
+                            shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
                             c,
                             &p,
                         )

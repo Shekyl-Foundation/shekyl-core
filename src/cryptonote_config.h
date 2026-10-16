@@ -72,8 +72,8 @@
 #define CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE   SHEKYL_BLOCK_WEIGHT_LONG_TERM_WINDOW_BLOCKS // size in blocks of the long term block weight median window
 #define CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE          600
 // Display precision and atomic-unit constant are generated from config/economics_params.json.
-
-#define DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT         ((uint64_t)3000)
+// w_ref is shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT. The floor and
+// the ladder read it inside the FFI; it is not a C++ macro.
 
 // Four-component economics constants are generated from config/economics_params.json.
 

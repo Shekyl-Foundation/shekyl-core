@@ -1125,7 +1125,6 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
             ZONE,
-            3_000,
             shekyl_economics::params::SCALE,
             std::ptr::null_mut(),
         )
@@ -1139,21 +1138,19 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
 #[test]
 fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
     let mut fees = [SENTINEL; 3];
-    for (base, median, w, c) in [
-        (u64::MAX, u64::MAX, u64::MAX, u64::MAX),
-        (u64::MAX, ZONE, 3_000, u64::MAX),
-        (u64::MAX, ZONE, u64::MAX, 1_000_000),
-        (1, u64::MAX, 3_000, 1_000_000),
-        // Priority is `2·R·C` and does not carry `w_ref`: a zero `w_ref`
-        // zeroes every other product, so a domain check written against a
-        // `w_ref`-bearing product would miss this overflow.
-        (u64::MAX, ZONE, 0, u64::MAX),
+    // `w_ref` is the Rust constant at this boundary. The zero-weight case
+    // that still overflows priority's `2·R·C` stays on the scalar
+    // (`the_domain_covers_each_rung_separately`): it cannot be named here.
+    for (base, median, c) in [
+        (u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX, ZONE, u64::MAX),
+        (1, u64::MAX, shekyl_economics::params::SCALE),
     ] {
-        let st = unsafe { shekyl_corrected_fee_ladder(base, median, w, c, fees.as_mut_ptr()) };
+        let st = unsafe { shekyl_corrected_fee_ladder(base, median, c, fees.as_mut_ptr()) };
         assert_eq!(
             st, -2,
             "out-of-domain scalars must be refused, not computed \
-             (base={base}, median={median}, w={w}, c={c})"
+             (base={base}, median={median}, c={c})"
         );
         assert_eq!(fees, [SENTINEL; 3], "a refused call must not write");
     }
@@ -1162,7 +1159,6 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
             ZONE,
-            3_000,
             shekyl_economics::params::SCALE,
             fees.as_mut_ptr(),
         )
@@ -1174,17 +1170,16 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
 #[test]
 fn corrected_fee_ladder_marshals_the_heritage_vector() {
     let mut fees = [SENTINEL; 3];
-    let st = unsafe {
-        shekyl_corrected_fee_ladder(
-            10_000_000_000,
-            ZONE,
-            3_000,
-            shekyl_economics::params::SCALE,
-            fees.as_mut_ptr(),
-        )
-    };
+    let c = shekyl_economics::params::SCALE;
+    let st = unsafe { shekyl_corrected_fee_ladder(10_000_000_000, ZONE, c, fees.as_mut_ptr()) };
     assert_eq!(st, 0);
     assert_eq!(fees, [333, 1332, 66_666]);
+    let mut floor = SENTINEL;
+    let st = unsafe { shekyl_relay_fee_floor(10_000_000_000, ZONE, c, &raw mut floor) };
+    assert_eq!(st, 0);
+    assert_eq!(floor, fees[0], "the floor FFI is the ladder's economy rung");
+    let st = unsafe { shekyl_relay_fee_floor(10_000_000_000, ZONE, c, std::ptr::null_mut()) };
+    assert_eq!(st, -1);
 }
 
 #[test]

@@ -58,12 +58,12 @@ use serde::Serialize;
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 use shekyl_economics::{
     base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR, RELAY_FLOOR_LOOKBACK,
+    RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 
 use crate::fee_bar::CONVERGED_AMPLITUDE_BP;
 use crate::fee_ladder::{
     advance_traced_state, age_state, correction_factor_ratio, AgeState, FULL_REWARD_ZONE,
-    REF_TX_WEIGHT,
 };
 use crate::rng::PoissonTrace;
 use crate::volume_window::VolumeWindow;
@@ -118,7 +118,8 @@ fn grace_sweep(floors: &[u128]) -> ([u64; 3], [u64; 3]) {
 /// [`shekyl_economics::relay_fee_floor`].
 fn floor_rate(base_reward: u64, median: u64, c_scaled: u64) -> u128 {
     let m = u128::from(median.max(FULL_REWARD_ZONE));
-    u128::from(base_reward) * u128::from(REF_TX_WEIGHT) * u128::from(c_scaled) / (m * m)
+    u128::from(base_reward) * u128::from(RELAY_FLOOR_REFERENCE_TX_WEIGHT) * u128::from(c_scaled)
+        / (m * m)
 }
 
 /// `C` at the fold's window operand.
@@ -501,7 +502,9 @@ pub fn render_json(r: &FeeFloorReport) -> String {
 mod tests {
     use super::*;
     use shekyl_economics::params::SCALE;
-    use shekyl_economics::{corrected_fee_ladder, EconomicParams, FeeCorrection};
+    use shekyl_economics::{
+        corrected_fee_ladder, EconomicParams, FeeCorrection, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    };
 
     /// The instrument's floor is the owner's before rounding: divided by
     /// `SCALE` it is `relay_fee_floor` exactly, and the Standard rung it
@@ -516,7 +519,7 @@ mod tests {
                     let ladder = corrected_fee_ladder(
                         base,
                         median,
-                        REF_TX_WEIGHT,
+                        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
                         FeeCorrection::from_scaled(c),
                         &params,
                     );

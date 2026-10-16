@@ -30,13 +30,17 @@ use crate::burn::calc_burn_pct_at;
 use crate::emission::base_block_reward;
 use crate::emission_share::emission_share_at;
 use crate::params::EconomicParams;
+use crate::release::calc_release_multiplier;
 use crate::supply::CirculatingSupply;
 use crate::volume::TxVolume;
 
-/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT`: the reference transaction
-/// weight the floor and every rung fold in. The basis question (FL-R13,
-/// `w_ref`) is EUP-5 G's; until it is derived, this is the inherited
-/// 3 000.
+/// Reference transaction weight `w_ref` the floor and every rung fold in.
+///
+/// The basis question (FL-R13) is EUP-5 G's. Until that ruling derives the
+/// weight from a Shekyl ordinary transaction, the value is the inherited
+/// 3 000. The FFI entries, the wallet's absolute cap and the economics sim
+/// read this constant. The scalar entries stay parameterized, so a domain
+/// test can pass `0` and `u64::MAX`.
 pub const RELAY_FLOOR_REFERENCE_TX_WEIGHT: u64 = 3_000;
 
 /// One block's fee operands: the chain state the floor and the ladder at
@@ -57,13 +61,55 @@ pub struct FeeOperands {
     pub long_term_effective_median: u64,
 }
 
-/// Raw `C` at the operands: `(1−σ)·M_r/(1−b)` with `σ` at the height,
-/// `b` on the derived supply, `M_r` on the window.
+/// `σ`, `b`, `M_r` and the `C` they compose, from the owners.
+///
+/// `C` does not read a median, and it reads the parent's coins only
+/// through [`CirculatingSupply`]. A caller that has no median does not
+/// invent one to ask for `C`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CorrectionFactors {
+    /// `M_r` in [`crate::params::SCALE`] units.
+    pub release_multiplier: u64,
+    /// `b` in [`crate::params::SCALE`] units, on the derived supply.
+    pub burn_pct: u64,
+    /// `σ` in [`crate::params::SCALE`] units, at the height.
+    pub emission_share: u64,
+    /// `C = (1−σ)·M_r/(1−b)`.
+    pub correction: FeeCorrection,
+}
+
+/// The one composition of the correction factors.
+///
+/// [`fee_correction`] recomputes `M_r` from this same volume and these
+/// same release rails, so the reported multiplier and `correction` cannot
+/// be two formulas.
+#[must_use]
+pub fn correction_factors_at(
+    height: u64,
+    supply: CirculatingSupply,
+    tx_volume: TxVolume,
+    params: &EconomicParams,
+) -> CorrectionFactors {
+    let emission_share = emission_share_at(height);
+    let burn_pct = calc_burn_pct_at(tx_volume, supply, params);
+    let release_multiplier = calc_release_multiplier(
+        tx_volume,
+        params.tx_volume_baseline,
+        params.release_min,
+        params.release_max,
+    );
+    CorrectionFactors {
+        release_multiplier,
+        burn_pct,
+        emission_share,
+        correction: fee_correction(tx_volume, emission_share, burn_pct, params),
+    }
+}
+
+/// Raw `C` at the operands: [`correction_factors_at`]'s `correction`.
 #[must_use]
 pub fn fee_correction_at(operands: FeeOperands, params: &EconomicParams) -> FeeCorrection {
-    let sigma = emission_share_at(operands.height);
-    let burn = calc_burn_pct_at(operands.tx_volume, operands.supply, params);
-    fee_correction(operands.tx_volume, sigma, burn, params)
+    correction_factors_at(operands.height, operands.supply, operands.tx_volume, params).correction
 }
 
 /// The M_r-neutral base reward at the operands: `max(curve(remaining),
@@ -238,7 +284,7 @@ mod tests {
     }
 
     /// The supply operand is the NET supply: a burned total lowers `b`
-    /// and so raises `C` and the floor, where the gross operand the C++
+    /// and so lowers `C` and the floor, where the gross operand the C++
     /// composition used would have left both where they were (FL-R16c).
     #[test]
     fn the_burn_is_priced_on_the_net_supply() {
@@ -255,8 +301,25 @@ mod tests {
             "a tenth of the emission burned lowers the burn ratio's operand, so b falls and C with it"
         );
         assert!(relay_floor_from(net, &p) < relay_floor_from(gross, &p));
-        // And `C` at a zero burn is the raw scalar the sim and the FFI
-        // compute from the same three inputs.
+        // The factors are that composition, not a second one: `C` at a
+        // zero burn is `fee_correction` of the same three owners.
+        let factors = correction_factors_at(height, gross.supply, volume, &p);
+        assert_eq!(factors.emission_share, emission_share_at(height));
+        assert_eq!(factors.burn_pct, calc_burn_pct_at(volume, gross.supply, &p));
+        assert_eq!(
+            factors.release_multiplier,
+            crate::calc_release_multiplier(
+                volume,
+                p.tx_volume_baseline,
+                p.release_min,
+                p.release_max,
+            )
+        );
+        assert_eq!(factors.correction, c_gross);
+        assert_eq!(
+            correction_factors_at(height, net.supply, volume, &p).correction,
+            c_net
+        );
         assert_eq!(
             c_gross,
             fee_correction(

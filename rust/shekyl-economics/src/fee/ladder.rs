@@ -100,6 +100,7 @@ mod tests {
     use super::*;
     use crate::base_block_reward;
     use crate::fee::relay::relay_fee_floor;
+    use crate::RELAY_FLOOR_REFERENCE_TX_WEIGHT as W_REF;
 
     fn shipped() -> EconomicParams {
         EconomicParams::default()
@@ -111,17 +112,17 @@ mod tests {
         let zone = params.full_reward_zone;
         let coin = 1_000_000_000u64;
         assert_eq!(
-            corrected_fee_ladder(10 * coin, zone, 3_000, FeeCorrection::UNITY, &params).as_slots(),
+            corrected_fee_ladder(10 * coin, zone, W_REF, FeeCorrection::UNITY, &params).as_slots(),
             [333, 1332, 66_666]
         );
         // Heritage case 2 used to pass Mnw = 15 MB over Mlw = the zone. The
         // median is one operand now; that pair always reduced to the zone.
         assert_eq!(
-            corrected_fee_ladder(10 * coin, zone, 3_000, FeeCorrection::UNITY, &params).as_slots(),
+            corrected_fee_ladder(10 * coin, zone, W_REF, FeeCorrection::UNITY, &params).as_slots(),
             [333, 1332, 66_666]
         );
         assert_eq!(
-            corrected_fee_ladder(10 * coin, 5 * zone, 3_000, FeeCorrection::UNITY, &params)
+            corrected_fee_ladder(10 * coin, 5 * zone, W_REF, FeeCorrection::UNITY, &params)
                 .as_slots(),
             [13, 52, 13_333]
         );
@@ -169,7 +170,7 @@ mod tests {
         assert!(checked_corrected_fee_ladder(
             10_000_000_000,
             z,
-            3_000,
+            W_REF,
             FeeCorrection::UNITY,
             &params
         )
@@ -199,7 +200,7 @@ mod tests {
         let ladder = corrected_fee_ladder(
             10 * coin,
             5 * params.full_reward_zone,
-            3_000,
+            W_REF,
             FeeCorrection::from_scaled(16 * SCALE),
             &params,
         );
@@ -217,11 +218,11 @@ mod tests {
         let zone = p.full_reward_zone;
         let base = base_block_reward(0, &p).unwrap();
         assert_eq!(
-            corrected_fee_ladder(base, zone, 3_000, FeeCorrection::UNITY, &p).priority,
+            corrected_fee_ladder(base, zone, W_REF, FeeCorrection::UNITY, &p).priority,
             6_826_666
         );
         assert_eq!(
-            corrected_fee_ladder(base, zone, 3_000, FeeCorrection::from_scaled(2 * SCALE), &p)
+            corrected_fee_ladder(base, zone, W_REF, FeeCorrection::from_scaled(2 * SCALE), &p)
                 .priority,
             13_653_333
         );
@@ -237,8 +238,8 @@ mod tests {
             for &median in &[zone, 5 * zone, 50 * zone, 50_000_000] {
                 for &c in &[SCALE * 68 / 100, SCALE, 2 * SCALE, 16 * SCALE] {
                     let c = FeeCorrection::from_scaled(c);
-                    let ladder = corrected_fee_ladder(reward, median, 3_000, c, &params);
-                    let floor = relay_fee_floor(reward, median, 3_000, c, &params);
+                    let ladder = corrected_fee_ladder(reward, median, W_REF, c, &params);
+                    let floor = relay_fee_floor(reward, median, W_REF, c, &params);
                     assert_eq!(
                         ladder.economy, floor,
                         "economy != relay floor at reward={reward} median={median} c={c:?}",
@@ -264,7 +265,7 @@ mod tests {
                     let ladder = corrected_fee_ladder(
                         reward,
                         m,
-                        3_000,
+                        W_REF,
                         FeeCorrection::from_scaled(c),
                         &params,
                     );
@@ -284,7 +285,7 @@ mod tests {
             }
         }
 
-        let degenerate = corrected_fee_ladder(1, zone, 3_000, FeeCorrection::UNITY, &params);
+        let degenerate = corrected_fee_ladder(1, zone, W_REF, FeeCorrection::UNITY, &params);
         assert_eq!(
             degenerate.as_slots(),
             [1, 4, 4],

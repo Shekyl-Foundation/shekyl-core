@@ -420,12 +420,17 @@ pub extern "C" fn shekyl_relay_floor_lookback() -> u64 {
 }
 
 /// Three-slot ladder `[economy, standard, priority]`. Economy **is** the
-/// relay floor at the same operands. The penalty-free zone is
+/// relay floor at the same operands. `w_ref` is
+/// [`shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`], not an argument —
+/// the same move the lattice and the slack made on
+/// [`shekyl_relay_floor_admits`]. The penalty-free zone is
 /// [`shekyl_economics::EconomicParams::full_reward_zone`], not an argument.
 /// Writes three `u64`s.
 ///
 /// Returns `0` written, `-1` null `out_fees`, `-2` scalars outside the
-/// `u128` domain (rule 40: refuse rather than abort).
+/// `u128` domain (rule 40: refuse rather than abort). A `w_ref` of `0` that
+/// still overflows priority's `2·R·C` is a scalar-domain case: this boundary
+/// does not take a weight.
 ///
 /// # Safety
 ///
@@ -434,7 +439,6 @@ pub extern "C" fn shekyl_relay_floor_lookback() -> u64 {
 pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     base_reward: u64,
     median: u64,
-    ref_tx_weight: u64,
     c_scaled: u64,
     out_fees: *mut u64,
 ) -> i32 {
@@ -445,7 +449,7 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     let Some(ladder) = shekyl_economics::checked_corrected_fee_ladder(
         base_reward,
         median,
-        ref_tx_weight,
+        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
     ) else {
@@ -460,7 +464,9 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
 }
 
 /// Relay floor `F = R·C·w_ref/M²`, floored at 1. Same function as the
-/// ladder's economy rung. The penalty-free zone is
+/// ladder's economy rung. `w_ref` is
+/// [`shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`], not an argument.
+/// The penalty-free zone is
 /// [`shekyl_economics::EconomicParams::full_reward_zone`], not an argument.
 /// Returns `0` written, `-1` null, `-2` out of domain.
 ///
@@ -471,7 +477,6 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
 pub unsafe extern "C" fn shekyl_relay_fee_floor(
     base_reward: u64,
     median: u64,
-    ref_tx_weight: u64,
     c_scaled: u64,
     out_floor: *mut u64,
 ) -> i32 {
@@ -482,7 +487,7 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
     let Some(floor) = shekyl_economics::checked_relay_fee_floor(
         base_reward,
         median,
-        ref_tx_weight,
+        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
     ) else {
