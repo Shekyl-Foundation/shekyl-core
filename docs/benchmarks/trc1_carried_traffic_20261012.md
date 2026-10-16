@@ -362,6 +362,12 @@ consensus of 2026-10-15 12:00Z on: the restart reset the uptime it needs.
 
 ## Results
 
+**Amendment 1 is in effect from 2026-10-16 18:15:36Z.** Collector version
+2 started at 17:12:38Z, so the uncapped arm has an hour of memory rows (62).
+The relay then held 1,585,220 kB resident. The cap was applied by a reload
+signal; Tor logged the reload and re-read its configuration with no error,
+and the process id did not change, so S3 continues as the capped arm.
+
 Collection started 2026-10-12 05:55Z, after this registration was pushed
 (2026-10-12, `1dacebeda`).
 
