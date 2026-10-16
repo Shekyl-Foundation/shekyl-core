@@ -171,9 +171,11 @@ impl E2 {
         // anchor above the tip is no floor yet, and treating it as one
         // would refuse the very alternative block it names (CEN-K6's
         // checkpoint arm, DRS-E5 a5). The C++ (`is_alternative_block_allowed`
-        // over `get_current_blockchain_height()`, the block count) also
-        // counts an anchor at `tip + 1`; the two differ only there, where
-        // this floor admits the alternative block that anchor names.
+        // over `get_current_blockchain_height()`, the block COUNT) also
+        // floors on an anchor at `tip + 1`; that divergence is adjudicated
+        // against the specification, not toward the C++ (census CEN-E2,
+        // ruled 2026-10-15): an unreached anchor is no floor, and a block at
+        // its height that does not match it is CEN-E1's refusal.
         let Some(anchor) = trust.anchors().last_at_or_below(fork.recorded_tip().height) else {
             // No anchored chain: no floor to stand on and no cap to bind.
             coverage.insert(Self::ROW);

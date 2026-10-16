@@ -279,10 +279,15 @@ async fn a_demoted_block_the_tier_refuses_halts_the_writer_si27() {
     y.idle();
     let b = y.mine(4).await;
     let plan = offer_branch(&x, &b).await;
-    // Between the plan and the switch, a release anchors A's second block
-    // under another hash: the recorded chain now fails its own tier (the
-    // anchor floors every fork rooted below it), and the switch's demotion
-    // judges A's first block against it.
+    // Witnesses the halt's wiring, not a production path: between the plan
+    // and the switch the fixture swaps in an anchor table the recorded
+    // chain fails (A's second block under another hash), so the demotion's
+    // tier refuses A's first block. Production cannot reach this — a
+    // release's anchors are admitted at open (CEN-E5) and checked at offer
+    // under the same tip (ruling 2, the SI-27 register row; the test
+    // `a_new_release_anchor_refuses_the_pending_alternative_at_offer_and_si27_never_fires`).
+    // It stands in for the one case SI-27 is for: a store whose recorded
+    // chain fails its own rules.
     let mut wrong = a[1].clone();
     wrong.hash = BlockHash::from_bytes([0xEE; 32]);
     x.connector()
@@ -801,6 +806,93 @@ async fn a_plan_naming_a_recorded_block_as_its_alternative_tip_is_a_mismatch_not
         Err(RunFault::PlanMismatch { .. })
     ));
     assert_eq!(x.mine(1).await.len(), 1, "the writer is up");
+    x.close().await;
+    y.close().await;
+}
+
+/// A fixture anchor table pinning each `(height, hash)`, leaked for the
+/// `'static` a release table has.
+fn release(pins: &[(BlockHeight, BlockHash)]) -> shekyl_chain_rules::ReleaseAnchors {
+    let anchors: Vec<shekyl_chain_rules::Anchor> = pins
+        .iter()
+        .map(|&(height, hash)| shekyl_chain_rules::Anchor { height, hash })
+        .collect();
+    shekyl_chain_rules::ReleaseAnchors::for_tests(None, Box::leak(anchors.into_boxed_slice()))
+}
+
+/// Open the store at `path` under `anchors` the way a release opens it
+/// (`ChainStore::with_release`, CEN-E5 at open), and close it.
+fn admit_release(
+    path: &std::path::Path,
+    anchors: &shekyl_chain_rules::ReleaseAnchors,
+) -> Result<(), shekyl_chain_store::store::StoreError> {
+    let horizons = shekyl_chain_store::store::Horizons::under(
+        &crate::scenario::RULES.in_force(BlockHeight::from_raw(0)),
+    )
+    .expect("the scenario's rule set is a store schedule");
+    shekyl_chain_store::store::ChainStore::with_release(
+        path,
+        shekyl_chain_store::apply_policy::ApplyPolicy::default(),
+        horizons,
+        anchors,
+    )
+    .map(drop)
+}
+
+#[tokio::test]
+async fn a_new_release_anchor_refuses_the_pending_alternative_at_offer_and_si27_never_fires() {
+    // Ruling 2 (2026-10-15): an anchor table cannot reach SI-27. Two
+    // mechanisms stand between them, and this test runs both.
+    let mut x = with_prefix("switch-si27-anchor-x", PREFIX).await;
+    let mut y = with_prefix("switch-si27-anchor-y", PREFIX).await;
+    let a = x.mine(3).await;
+    y.idle();
+    let b = y.mine(4).await;
+    // B is pending: held as alternative blocks, its fork point below A.
+    for mined in &b[..3] {
+        assert!(matches!(
+            x.offer(mined).await.expect("offer"),
+            Offered::Held { .. }
+        ));
+    }
+    // (1) At open: a release whose anchor contradicts the recorded chain
+    // does not open the store (CEN-E5, `StoreCannot::ReleasePin`) ...
+    let contradicting = release(&[(a[1].height, BlockHash::from_bytes([0xEE; 32]))]);
+    // ... and one that agrees with it does. Its anchor sits above B's fork
+    // point.
+    let agreeing = release(&[(a[1].height, a[1].hash)]);
+    let mut refused_at_open = None;
+    x.reopen(|path| {
+        refused_at_open = Some(admit_release(path, &contradicting));
+        admit_release(path, &agreeing).expect("an agreeing release opens the store");
+    })
+    .await;
+    assert!(
+        matches!(
+            refused_at_open,
+            Some(Err(shekyl_chain_store::store::StoreError::Cannot(
+                shekyl_chain_store::store::StoreCannot::ReleasePin(_)
+            )))
+        ),
+        "{refused_at_open:?}"
+    );
+    x.connector()
+        .ask(crate::connector::AnchorForTests(
+            shekyl_chain_rules::Trust::full(agreeing),
+        ))
+        .await
+        .expect("anchor");
+    // (2) At offer, under that tip: B's heavier block forks below the new
+    // floor, so CEN-E2 refuses it there — no plan exists, so no switch
+    // ever judges a demoted block under the new table.
+    match x.offer(&b[3]).await.expect("offer") {
+        Offered::Refused(refused) => {
+            assert_eq!(refused.rule, shekyl_chain_rules::CenRow::E2);
+        }
+        other => panic!("the pending alternative was not refused at offer: {other:?}"),
+    }
+    // The writer is up: no SI-27, no halt.
+    assert_eq!(x.mine(1).await.len(), 1, "the writer stays up");
     x.close().await;
     y.close().await;
 }
