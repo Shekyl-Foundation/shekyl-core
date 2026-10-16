@@ -583,9 +583,6 @@ Example command line to start shekyld through Tor:
 torsocks shekyld --p2p-bind-ip 127.0.0.1 --no-igd
 ```
 
-A helper script is in `contrib/tor/`. It assumes Tor is installed
-already, and runs Tor and the daemon with compatible configuration.
-
 ### Using Tor on Tails
 
 TAILS ships with a very restrictive set of firewall rules. Therefore, you need

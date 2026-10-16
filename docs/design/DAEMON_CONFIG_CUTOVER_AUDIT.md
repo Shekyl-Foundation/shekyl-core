@@ -386,6 +386,34 @@ of its own, for the same reason as the negative one.
   surface), which read the dialer's target at use time. `m_require_ipv4`,
   the data-directory port suffix and `RPC_LOGIN` were already zero at
   (c2).
+- **The launchers and harnesses speak the grammar (commit (f1), §5.1).**
+  Every launcher the brief's §5.1 table names is re-spelled in the
+  grammar's words and no other: the packaged unit and the fleet units
+  name `--network` and `--config-file` and the fleet generator writes a
+  TOML file per node; the regtest harnesses (`regtest_e2e.rs`, the levin
+  live tests, the wire and curve-tree capture scripts, the WSS edge
+  script, the CLI daemon-session test) spawn `shekyld --network regtest`
+  with both connectors off for the offline posture, `--clearnet-listen`
+  and `--p2p-closed-peer` for a linked pair, `--dev-sync off` for a sink,
+  `--rpc-view-listen` for the second listener, `--console` when a test
+  drives the in-process arm (nothing reads stdin otherwise, so no FIFO is
+  held open), and the schedule pair as `--dev-settlement-epoch-blocks`
+  and `--dev-archival-reorg-depth` on the command line, not the child's
+  environment (the daemon reads none, so there is nothing to scrub). Every
+  test daemon passes `--tor off`: regtest's default is the managed Tor,
+  and a test daemon launching one is a hang on a machine without a Tor
+  binary; the second measurement rig's Tor-off setting is Rick's to name
+  (§5.1), this one is recorded here. The BA-T5 sync daemons take
+  `--clearnet-listen none` for no inbound and `--p2p-closed-peer` for
+  their one peer. The DRS bench cannot keep DRS-D9's `safe` durability:
+  the daemon takes no sync-mode row (IG-Q4, the DRS lane's) and runs the
+  lane's constant, and the artifact gate refuses a record whose daemon did
+  not run `safe`; the bench is re-spelled and refuses before any daemon
+  starts, naming the FOLLOWUPS row, rather than record a durability it did
+  not impose. `contrib/tor/shekyl-over-tor.sh` is deleted (DC-F8). The
+  wallet CLI's daemon-down hint names `shekyld --network testnet`. Not
+  run here: the fleet launcher (it addresses the Foundation's hosts) and
+  the BA-T5 sessions (they measure on a testnet peer).
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test

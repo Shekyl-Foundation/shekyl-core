@@ -561,7 +561,7 @@ a chain.
 | [`scripts/bench/ba_t5_session2_run.sh`](../../scripts/bench/ba_t5_session2_run.sh), [`scripts/bench/ba_t5_session3_run.sh`](../../scripts/bench/ba_t5_session3_run.sh) | the restricted port becomes a view listener; `--in-peers 0` and the P2P bind flags become `clearnet-listen none` | testnet |
 | [`rust/shekyl-cli/tests/json_script.rs:291`](../../rust/shekyl-cli/tests/json_script.rs), [`rust/shekyl-cli/tests/scripts/daemon_session.txt:8`](../../rust/shekyl-cli/tests/scripts/daemon_session.txt) | spelling | testnet, offline |
 | [`rust/shekyl-cli/src/main.rs:524-532`](../../rust/shekyl-cli/src/main.rs) | its daemon-down message prints the daemon's network spelling | — |
-| [`contrib/tor/shekyl-over-tor.sh`](../../contrib/tor/shekyl-over-tor.sh) | passes `--detach`, retired in V3.1, so it is broken today (DC-F8); rewritten or deleted | — |
+| `contrib/tor/shekyl-over-tor.sh` at `d26148535e` (deleted by commit (f1)) | passes `--detach`, retired in V3.1, so it is broken today (DC-F8); rewritten or deleted | — |
 | [`Dockerfile`](../../Dockerfile) | spelling; drops `--non-interactive` | — |
 | the GUI sidecar (`shekyl-gui-wallet`, `daemon_manager.rs`) | passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` (`INPUT_GRAMMAR.md` §5); a PR in that repository, merged with the cutover | — |
 | `shekyl-dev`: configuration examples, unit files, the stressnet playbook, the Foundation seed recipe (roles only, rule 37) | TOML files at the system path; an explicit `in-peers` goes; a change in that repository under its own authorisation | — |

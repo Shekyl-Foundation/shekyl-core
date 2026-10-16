@@ -157,28 +157,29 @@ impl Daemon {
         std::fs::create_dir_all(&data_dir).expect("create data dir");
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
 
-        // `--out-peers 0` so every connection counted here is INBOUND and ours.
+        // Regtest has no seeds and the test names no peer, so every connection
+        // counted here is INBOUND and ours; the outbound degree is a protocol
+        // constant (`out-peers` is a rejected row). Regtest's default is the
+        // managed Tor; `--tor off` keeps this rig clearnet-only
+        // (DAEMON_CONFIG_CUTOVER.md §5.1).
         let child = Command::new(&bin)
             .args([
-                "--regtest",
-                "--non-interactive",
-                "--no-igd",
-                "--out-peers",
-                "0",
-                "--fixed-difficulty",
+                "--network",
+                "regtest",
+                "--tor",
+                "off",
+                "--dev-difficulty",
                 "1",
-                "--p2p-bind-ip",
-                "127.0.0.1",
-                "--p2p-bind-port",
-                &p2p_port.to_string(),
-                "--rpc-bind-ip",
-                "127.0.0.1",
-                "--rpc-bind-port",
-                &rpc_port.to_string(),
+                "--clearnet-listen",
+                &format!("127.0.0.1:{p2p_port}"),
+                "--rpc-admin-listen",
+                &format!("127.0.0.1:{rpc_port}"),
                 "--data-dir",
                 data_dir.to_str().expect("utf8 data dir"),
+                "--log-file",
+                &data_dir.join("shekyld.log").display().to_string(),
                 "--log-level",
-                "0",
+                "warn",
             ])
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))

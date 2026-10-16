@@ -5,7 +5,7 @@
 
 //! Track-2 end-to-end FAKECHAIN regtest: C++↔Rust FCMP++ verify parity.
 //!
-//! These tests spawn a real `shekyld --regtest` daemon and drive the production
+//! These tests spawn a real `shekyld --network regtest` daemon and drive the production
 //! [`Engine`] against it over the real RPC transport ([`DaemonClient`] /
 //! [`HttpRpc`]). Unlike the rest of the engine test suite (which uses
 //! the in-memory `TestDaemon` mock), the point here is the **submit/verify
@@ -40,7 +40,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-/// What a wallet requires of the `shekyld --regtest` daemon these tests spawn.
+/// What a wallet requires of the `shekyld --network regtest` daemon these tests spawn.
 ///
 /// **The only place `FakechainPolicy::Accept` is selected outside unit tests**
 /// (`VC-R3`): the harness constructs the client in-process, so the affordance
@@ -101,7 +101,7 @@ fn install_wallet_tracing() {
     );
 }
 
-/// A live `shekyld --regtest` daemon spawned for one test, with an ephemeral
+/// A live `shekyld --network regtest` daemon spawned for one test, with an ephemeral
 /// data dir and RPC port. Killed and cleaned on drop.
 /// Last 40 lines of the daemon's captured log, inlined into panics:
 /// `RegtestDaemon::drop` removes the datadir (log included) as a panic
@@ -116,11 +116,13 @@ fn log_tail(log_path: &std::path::Path) -> String {
         .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
 }
 
-/// The fakechain-only regtest schedule levers, as one value so the pair
-/// cannot be set apart: `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
-/// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`. The daemon refuses `seb ≤ reorg_cap`
-/// at arm (`SEB > D_max` on every nettype); a harness that shortens the
-/// epoch lowers the cap with it.
+/// The regtest-only schedule levers, as one value so the pair cannot be
+/// set apart: the daemon's `dev-settlement-epoch-blocks` and
+/// `dev-archival-reorg-depth` rows, which the wallet process still reads
+/// as `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
+/// (FOLLOWUPS: the wallet engine's lever). The daemon refuses
+/// `seb ≤ reorg_cap` at arm (`SEB > D_max` on every nettype); a harness
+/// that shortens the epoch lowers the cap with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RegtestSchedule {
     pub(super) seb: u64,
@@ -128,8 +130,9 @@ pub(super) struct RegtestSchedule {
 }
 
 impl RegtestSchedule {
-    /// Set both levers on this process's environment, for the in-process
-    /// arm that must match the spawned daemon's schedule.
+    /// Set both levers on this process's environment, for the wallet's
+    /// in-process arm that must match the spawned daemon's schedule. The
+    /// daemon itself takes the pair as rows (`spawn`).
     pub(super) fn set_in_process_env(self) {
         std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", self.seb.to_string());
         std::env::set_var(
@@ -154,7 +157,7 @@ pub(super) struct RegtestDaemon {
     /// judges the chain under a rule set naming that pair, not the
     /// production one).
     schedule: Option<RegtestSchedule>,
-    /// Whether this daemon was started offline (`--offline`). Its
+    /// Whether this daemon was started offline (both connectors off). Its
     /// `get_info` must then report that state, not a count of zero.
     offline: bool,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
@@ -166,22 +169,22 @@ pub(super) struct RegtestDaemon {
 /// How a spawned daemon takes part in peer-to-peer.
 #[derive(Clone, Copy, Debug)]
 enum Peering {
-    /// `--offline`: no listener and no dial. The protocol starts
-    /// synchronized, so a submitted transaction finds no route and is
-    /// broadcast-recorded within milliseconds.
+    /// `--clearnet off --tor off`: no listener and no dial. The protocol
+    /// starts synchronized, so a submitted transaction finds no route and
+    /// is broadcast-recorded within milliseconds.
     Offline,
     /// Bound on loopback and dialling exactly one peer.
     ///
-    /// `--add-exclusive-node` is what keeps the daemon off the public
-    /// network: p2p reads `--regtest` as mainnet, and an exclusive list is
-    /// the condition under which it dials no seed. `--no-ephemeral-tor`
-    /// declines the managed Tor, so the node is clearnet-only and a local
-    /// origin takes the stem slot, not a hidden own-edge.
+    /// `--p2p-closed-peer` is what keeps the daemon off the public
+    /// network: a closed list is the condition under which it dials no
+    /// seed. `--tor off` declines the managed Tor, so the node is
+    /// clearnet-only and a local origin takes the stem slot, not a hidden
+    /// own-edge.
     Linked {
         p2p_port: u16,
         peer_p2p_port: u16,
-        /// `--no-sync`: the daemon never reports itself synchronized, so it
-        /// drops every transaction a peer sends it and relays none.
+        /// `--dev-sync off`: the daemon never reports itself synchronized,
+        /// so it drops every transaction a peer sends it and relays none.
         sink: bool,
     },
 }
@@ -282,9 +285,9 @@ impl RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
     }
 
-    /// Spawn the daemon with its interactive console live, so a test can put
-    /// commands to the **in-process** arm. Opt-in: without `--non-interactive`
-    /// the daemon exits on stdin EOF, which every other spawn relies on.
+    /// Spawn the daemon with its interactive console live (`--console`), so
+    /// a test can put commands to the **in-process** arm. Opt-in: the
+    /// console is what reads stdin; without it nothing does.
     pub(super) async fn start_with_console() -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
         Self::spawn(RegtestSpawn::new(Some(serial)).with_console()).await
@@ -293,12 +296,11 @@ impl RegtestDaemon {
     /// Spawn the daemon with a second, restricted listener, so one daemon serves
     /// both postures and a test can put the same request to each.
     ///
-    /// The second listener comes from `--rpc-restricted-bind-port`, which binds
-    /// an additional server with `restricted = true` fixed
-    /// (`src/daemon/daemon.cpp`). That is deliberately *not* `--restricted-rpc`,
-    /// which would flip the posture of the main listener instead — and the main
-    /// listener has to stay unrestricted here, both because the harness drives
-    /// mining through it and because it is the blast-radius control.
+    /// The second listener comes from `--rpc-view-listen`, which binds an
+    /// additional server in the view posture (`RPC_CHANNEL.md` §6.1). The
+    /// admin listener keeps its own posture — and it has to stay admin
+    /// here, both because the harness drives mining through it and because
+    /// it is the blast-radius control.
     ///
     /// The restricted listener is opt-in rather than always-on: this harness is
     /// `#[ignore]`d, so CI would not catch a regression it introduced into the
@@ -308,11 +310,11 @@ impl RegtestDaemon {
         Self::spawn(RegtestSpawn::new(Some(serial)).with_restricted_listener()).await
     }
 
-    /// Spawn the daemon with an optional regtest schedule on the child's
-    /// environment — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
-    /// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`, the fakechain-only levers the
-    /// daemon arms at startup (the gate at the top of `Blockchain::init`,
-    /// before the genesis add). The pair moves together: the daemon refuses
+    /// Spawn the daemon with an optional regtest schedule on its command
+    /// line — `--dev-settlement-epoch-blocks` and
+    /// `--dev-archival-reorg-depth`, the regtest-only rows the daemon arms
+    /// at startup (DAEMON_CONFIG_CUTOVER.md §2.2 step 6, before the genesis
+    /// add). The pair moves together: the daemon refuses
     /// an epoch that is not strictly above the reorg cap (`SEB > D_max` is
     /// an invariant of every valid configuration; a shortened epoch runs a
     /// Fakechain rule set whose cap fits inside it). The emission e2e
@@ -356,26 +358,34 @@ impl RegtestDaemon {
 
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
         let mut cmd = Command::new(&bin);
+        // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off on
+        // every spawn: regtest's default is the managed Tor, and a test
+        // daemon has no business launching one.
         cmd.args([
-            "--regtest",
-            "--no-igd",
-            "--fixed-difficulty",
+            "--network",
+            "regtest",
+            "--tor",
+            "off",
+            "--dev-difficulty",
             "1",
-            "--rpc-bind-ip",
-            "127.0.0.1",
-            "--rpc-bind-port",
-            &rpc_port.to_string(),
+            "--rpc-admin-listen",
+            &format!("127.0.0.1:{rpc_port}"),
             "--data-dir",
             data_dir.to_str().expect("utf8 data dir"),
-            // Level 1 (`info`): the submit engine records a Phase C
-            // refusal at `info`, so the log tail a panic inlines names
-            // what the daemon rejected instead of a bare `Malformed`.
+            // Under the data dir, as the old default was; the account's
+            // own `logs/` is not a test's to fill. The daemon logs to
+            // stderr too, which `daemon.log` below captures.
+            "--log-file",
+            &data_dir.join("shekyld.log").display().to_string(),
+            // `info`: the submit engine records a Phase C refusal at
+            // `info`, so the log tail a panic inlines names what the
+            // daemon rejected instead of a bare `Malformed`.
             "--log-level",
-            "1",
+            "info",
         ]);
         match peering {
             Peering::Offline => {
-                cmd.arg("--offline");
+                cmd.args(["--clearnet", "off"]);
             }
             Peering::Linked {
                 p2p_port,
@@ -383,24 +393,21 @@ impl RegtestDaemon {
                 sink,
             } => {
                 cmd.args([
-                    "--p2p-bind-ip",
-                    "127.0.0.1",
-                    "--p2p-bind-port",
-                    &p2p_port.to_string(),
-                    "--no-ephemeral-tor",
-                    "--add-exclusive-node",
+                    "--clearnet-listen",
+                    &format!("127.0.0.1:{p2p_port}"),
+                    "--p2p-closed-peer",
                     &format!("127.0.0.1:{peer_p2p_port}"),
                 ]);
                 if sink {
-                    cmd.arg("--no-sync");
+                    cmd.args(["--dev-sync", "off"]);
                 }
             }
         }
-        // `--non-interactive` unless the test drives the daemon's own console:
-        // the console is what reads stdin, and suppressing it is what makes
-        // the in-process arm unreachable.
-        if !console {
-            cmd.arg("--non-interactive");
+        // `--console` only when the test drives the daemon's own console:
+        // the console is what reads stdin, and it is what makes the
+        // in-process arm reachable.
+        if console {
+            cmd.arg("--console");
         }
         let restricted_port = restricted_listener.then(|| {
             let mut taken = p2p_ports.to_vec();
@@ -408,12 +415,11 @@ impl RegtestDaemon {
             Self::free_port_excluding(&taken)
         });
         if let Some(port) = restricted_port {
-            // A second listener on the same daemon. This flag binds an extra
-            // server with `restricted = true` fixed; the main listener keeps
-            // whatever posture it had, which here is unrestricted. Same
-            // handlers behind both — only the posture differs, which is the
-            // whole point: one process, two answers.
-            cmd.args(["--rpc-restricted-bind-port", &port.to_string()]);
+            // A second listener on the same daemon, in the view posture;
+            // the admin listener keeps its own. Same handlers behind both —
+            // only the posture differs, which is the whole point: one
+            // process, two answers.
+            cmd.args(["--rpc-view-listen", &format!("127.0.0.1:{port}")]);
         }
         cmd.stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
@@ -422,24 +428,17 @@ impl RegtestDaemon {
             // in-process rather than over HTTP. RK-4c shipped that arm broken
             // because only the remote arm was ever exercised.
             .stdin(Stdio::piped());
-        // The SEB lever rides the child env (the daemon reads it at startup,
-        // arms on fakechain, refuses loudly on a bad value). `None` must
-        // scrub the variable, not merely skip setting it: the child inherits
-        // this process's environment, so a lever leaked from the developer's
-        // or CI's shell would silently reschedule a test that intends the
-        // genesis pin.
-        match schedule {
-            Some(schedule) => {
-                cmd.env("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", schedule.seb.to_string());
-                cmd.env(
-                    "SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS",
-                    schedule.reorg_cap.to_string(),
-                );
-            }
-            None => {
-                cmd.env_remove("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
-                cmd.env_remove("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS");
-            }
+        // The schedule rides the command line as the two regtest rows (the
+        // daemon arms them at startup and refuses loudly on a bad pair).
+        // The daemon reads no environment, so `None` has nothing to scrub:
+        // a lever in the developer's or CI's shell cannot reach it.
+        if let Some(schedule) = schedule {
+            cmd.args([
+                "--dev-settlement-epoch-blocks",
+                &schedule.seb.to_string(),
+                "--dev-archival-reorg-depth",
+                &schedule.reorg_cap.to_string(),
+            ]);
         }
         let child = cmd
             .spawn()
@@ -5402,8 +5401,8 @@ async fn maybe_capture_chain_vector(
         // the value this harness spawned the daemon with, recorded rather
         // than remembered.
         "fixed_difficulty": 1,
-        // The `(SEB, cap)` pair the daemon ran — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
-        // and `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` when levered, the genesis
+        // The `(SEB, cap)` pair the daemon ran — `--dev-settlement-epoch-blocks`
+        // and `--dev-archival-reorg-depth` when levered, the genesis
         // pair when not. What `replay --chain regtest --settlement-epoch-blocks
         // n --reorg-cap m` must be given.
         "settlement_epoch_blocks": settlement_epoch_blocks,
@@ -5817,7 +5816,7 @@ async fn ported_console_commands_answer_on_the_in_process_arm() {
 async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
     let mut daemon = RegtestDaemon::start_with_console().await;
 
-    // This daemon runs `--offline`, so each peer command prints the state,
+    // This daemon runs offline, so each peer command prints the state,
     // not an empty table (Rick, 2026-10-14).
     for command in ["sync_info", "print_cn", "print_pl", "print_pl_stats"] {
         let out = daemon.console(command);
@@ -5831,18 +5830,25 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
         );
     }
 
-    // The bridged leg. `/get_limit` is still C++; when RK-8 migrates it, this
-    // is the assertion that notices if the leg is left naming a dead route.
+    // The limit leg. `/get_limit` was replaced by the link rows
+    // (`RPC_CHANNEL.md` §6.4); the console reads them through the option
+    // show. This daemon runs the default, unlimited, so each line ends in
+    // the limit clause's unlimited form, and a leg that did not answer
+    // would leave the clause out.
     let out = daemon.console("print_net_stats");
+    let limited: Vec<&str> = out
+        .lines()
+        .filter(|line| {
+            (line.starts_with("Received") || line.starts_with("Sent"))
+                && line.contains("bytes")
+                && line.ends_with("no limit")
+        })
+        .collect();
     assert!(
-        out.contains("Received") && out.contains("bytes") && out.contains("of the limit of"),
-        "print_net_stats must render both lines, which needs /get_limit as \
-         well as /get_net_stats; got:\n{out}"
-    );
-    assert!(
-        !out.contains("no reply from /get_limit"),
-        "the bridged /get_limit leg must name a route the C++ table serves; \
-         got:\n{out}"
+        limited.iter().any(|l| l.starts_with("Received"))
+            && limited.iter().any(|l| l.starts_with("Sent")),
+        "print_net_stats must render both lines with the limit clause the \
+         link rows give; got:\n{out}"
     );
 }
 

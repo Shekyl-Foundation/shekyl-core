@@ -167,11 +167,13 @@ sync_height() { grep -oE 'Synced [0-9]+/[0-9]+' "$WORK/syncdata/stdout.log" 2>/d
 
 sync_start() {  # a fresh data directory, then the daemon, then wait until it is syncing
   rm -rf "$WORK/syncdata"; mkdir -p "$WORK/syncdata"
-  local cmd=("$SHEKYLD" --testnet --data-dir "$WORK/syncdata"
-    --p2p-bind-ip 0.0.0.0 --p2p-bind-port $SYNC_P2P --in-peers 0 --no-igd
-    --rpc-bind-ip 127.0.0.1 --rpc-bind-port $SYNC_RPC --rpc-restricted-bind-port $SYNC_RPC_R
-    --add-exclusive-node "$PEER" --clearnet-transport-encrypt
-    --log-file "$WORK/syncdata/sync.log" --log-level 0 --non-interactive)
+  # No inbound (`clearnet-listen none`), one closed peer, Tor off: the
+  # grammar's spellings (INPUT_GRAMMAR.md §5).
+  local cmd=("$SHEKYLD" --network testnet --data-dir "$WORK/syncdata"
+    --clearnet-listen none --tor off
+    --rpc-admin-listen "127.0.0.1:$SYNC_RPC" --rpc-view-listen "127.0.0.1:$SYNC_RPC_R"
+    --p2p-closed-peer "$PEER" --dev-clearnet-encrypt
+    --log-file "$WORK/syncdata/sync.log" --log-level warn)
   case $TOPO in
     t1)
       "${cmd[@]}" > "$WORK/syncdata/stdout.log" 2>&1 &
@@ -189,7 +191,7 @@ sync_start() {  # a fresh data directory, then the daemon, then wait until it is
       # anchored at the executable so setsid's own argument list is not it;
       # -n takes the newest should a stale daemon of an earlier start still
       # be exiting.
-      SYNC_PID=$(pgrep -n -f "^$SHEKYLD --testnet --data-dir $WORK/syncdata")
+      SYNC_PID=$(pgrep -n -f "^$SHEKYLD --network testnet --data-dir $WORK/syncdata")
       ;;
   esac
   echo "${SYNC_PID:-na}" > "$WORK/syncdata/pid"

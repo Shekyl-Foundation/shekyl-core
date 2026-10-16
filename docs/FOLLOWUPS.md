@@ -1215,6 +1215,10 @@ Default. Lands before genesis if it should exist at launch.
 - **Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw ().**
   - Target: pre-genesis
 
+- **The DRS bench cannot impose DRS-D9's `safe` sync mode.** `scripts/bench/drs_bench.py` passed `--db-sync-mode=safe` to the daemons it measures and its artifact gate (`drs_artifact.py`, DRS-D9) refuses a record whose daemon did not run `safe`. The daemon takes no sync-mode option since the daemon-configuration cutover (`INPUT_GRAMMAR.md` §5: `db-sync-mode` is the DRS lane's, IG-Q4) and runs the lane's constant, today's default `fast:async`. The bench is re-spelled and refuses before any daemon starts, naming this row. Blocked on the DRS lane: a `db-sync-mode` row or a development lever is that lane's to rule, and the daemon's durability default is not this cutover's to change. Falsify by `drs_bench.py` starting a daemon.
+  - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §4
+  - Target: pre-genesis
+
 - **The wallet engine's settlement-schedule lever still reads the environment.** The daemon arms the schedule from its `dev-settlement-epoch-blocks` and `dev-archival-reorg-depth` rows (`DAEMON_CONFIG_CUTOVER.md` §4.2) and reads no environment; the wallet engine (`shekyl-engine-core` `lifecycle/assemble.rs`) and its regtest harness (`regtest_e2e.rs`) still arm through `arm_settlement_epoch_override_for_regtest`, which reads `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`, and the harness spawns the daemon with those variables and the old spellings. Blocked on the engine lane: the daemon-configuration cutover does not change a wallet reader (rule 15, every consumer served first); the harness's launcher is commit (f)'s. Falsify by `rg -n 'env::var\("SHEKYL_SETTLEMENT' rust` returning nothing.
   - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §4
   - Target: pre-genesis

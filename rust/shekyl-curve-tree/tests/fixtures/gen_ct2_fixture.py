@@ -87,17 +87,22 @@ class Daemon:
         self.proc = subprocess.Popen(
             [
                 self.binary,
-                "--regtest",
-                "--offline",
-                "--non-interactive",
-                "--fixed-difficulty",
+                "--network",
+                "regtest",
+                "--clearnet",
+                "off",
+                "--tor",
+                "off",
+                "--dev-difficulty",
                 "1",
                 "--data-dir",
                 self.workdir,
-                "--rpc-bind-port",
-                str(self.port),
+                "--log-file",
+                os.path.join(self.workdir, "shekyld.log"),
+                "--rpc-admin-listen",
+                f"127.0.0.1:{self.port}",
                 "--log-level",
-                "0",
+                "warn",
             ],
             stdout=self.log,
             stderr=subprocess.STDOUT,
@@ -220,6 +225,9 @@ def extract_leaf_hash_blob(extra: bytes) -> bytes:
         elif tag == 0x05:  # PQC ownership: varint count + count×{u8,u8,[32]}
             count, pos = _read_varint(extra, pos)
             pos += count * (1 + 1 + 32)
+        elif tag == 0x0C:  # draw commitment: 32 bytes, no length prefix
+            # (`shekyl-wire` `TX_EXTRA_TAG_DRAW_COMMITMENT`; in every coinbase)
+            pos += 32
         elif tag in blob_tags:
             length, pos = _read_varint(extra, pos)
             payload = extra[pos : pos + length]

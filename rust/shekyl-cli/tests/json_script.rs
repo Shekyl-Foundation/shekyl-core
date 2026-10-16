@@ -281,28 +281,24 @@ impl SpawnedDaemon {
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("data dir");
         let port = rpc_port.to_string();
-        let p2p_port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("p2p port");
-            listener.local_addr().expect("addr").port().to_string()
-        };
+        // Both connectors off is the offline posture: no listener, no
+        // dial, so no p2p port to pick (INPUT_GRAMMAR.md §5).
         let child = Command::new(bin)
             .args([
-                "--testnet",
-                "--offline",
-                "--non-interactive",
-                "--no-igd",
-                "--p2p-bind-ip",
-                "127.0.0.1",
-                "--p2p-bind-port",
-                &p2p_port,
-                "--rpc-bind-ip",
-                "127.0.0.1",
-                "--rpc-bind-port",
-                &port,
+                "--network",
+                "testnet",
+                "--clearnet",
+                "off",
+                "--tor",
+                "off",
+                "--rpc-admin-listen",
+                &format!("127.0.0.1:{port}"),
                 "--data-dir",
                 data_dir.to_str().expect("utf8"),
+                "--log-file",
+                &data_dir.join("shekyld.log").display().to_string(),
                 "--log-level",
-                "1",
+                "info",
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -326,13 +322,13 @@ impl Drop for SpawnedDaemon {
 }
 
 /// The script in `tests/scripts/daemon_session.txt`, against a live
-/// daemon this test starts: `--testnet --offline`, so it holds the testnet
-/// genesis and nothing else. Not `--regtest`: that daemon reports
+/// daemon this test starts: testnet with both connectors off, so it holds
+/// the testnet genesis and nothing else. Not regtest: that daemon reports
 /// `fakechain`, and the shipped wallet path refuses it on identity
 /// (`FakechainPolicy::Refuse`). Ignored: CI does not build `shekyld` in the
 /// Rust lane. Run with `SHEKYLD_BIN` set and `--ignored`.
 #[test]
-#[ignore = "daemon pattern: needs SHEKYLD_BIN and spawns shekyld --testnet --offline"]
+#[ignore = "daemon pattern: needs SHEKYLD_BIN and spawns shekyld --network testnet offline"]
 fn daemon_script_drives_balance_refresh_and_a_refused_send() {
     let bin = std::env::var_os("SHEKYLD_BIN").unwrap_or_else(|| {
         panic!(
