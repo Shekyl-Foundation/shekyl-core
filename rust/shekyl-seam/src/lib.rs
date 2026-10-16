@@ -38,6 +38,6 @@ pub use loopback::Loopback;
 pub use post::{Post, SyncPayload};
 pub use registry::{Board, Row};
 pub use shekyl_transport_layer::{
-    deadline_after, BanLeft, CloseCause, CloseKind, ConnectorId, Direction, Ipv4Subnet, ListedBan,
-    SocketId, Sockets,
+    deadline_after, BanLeft, CloseCause, CloseKind, ConnectorId, Direction, DownCause, Ipv4Subnet,
+    Link, Links, ListedBan, Outbound, Route, SocketId, Sockets,
 };

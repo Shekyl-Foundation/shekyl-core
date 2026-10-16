@@ -30,6 +30,7 @@ mod cause;
 mod clock;
 mod declaration;
 mod dial;
+mod link;
 pub mod spans;
 
 pub use admission::{
@@ -46,4 +47,5 @@ pub use declaration::{
     StackPlan, StreamKind, YesNo,
 };
 pub use dial::check_dial;
+pub use link::{DownCause, Link, Links, Outbound, Route, Watcher};
 pub use shekyl_net_address::NetworkAddress;

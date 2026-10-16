@@ -22,8 +22,8 @@ use shekyl_capped_stream::{SendHalf, Session};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 use shekyl_transport_layer::{
-    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet, OpenSocket, SocketId,
-    Sockets,
+    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet, Links, OpenSocket,
+    SocketId, Sockets,
 };
 
 use crate::connection::{
@@ -116,6 +116,10 @@ pub struct Hub {
     post: Arc<dyn Fn(Post) + Send + Sync>,
     clock: Arc<dyn Clock + Send + Sync>,
     dial: Arc<RwLock<Option<Arc<dyn Dial>>>>,
+    /// Each connector's link: published by whoever owns its route, read by
+    /// the connector at each dial and by the dialer before it draws
+    /// (`TOR_SUPERVISOR.md` §4.1).
+    links: Arc<Links>,
 }
 
 /// What one `send` did. `found` is whether the registry held the id.
@@ -151,7 +155,14 @@ impl Hub {
             post,
             clock,
             dial: Arc::new(RwLock::new(None)),
+            links: Arc::new(Links::new()),
         }
+    }
+
+    /// Every connector's link. Clones of this hub share it.
+    #[must_use]
+    pub fn links(&self) -> &Links {
+        &self.links
     }
 
     /// Wake every thread waiter.
