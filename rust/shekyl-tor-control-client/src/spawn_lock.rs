@@ -3,26 +3,36 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The process-wide lock every Rust process spawn takes (`TOR_SUPERVISOR.md` §4.7).
+//! The spawn lock for a process that launches a managed tor (`TOR_SUPERVISOR.md` §4.7).
 //!
-//! On Windows the managed tor inherits its control socket: the launch marks tor's end
-//! inheritable, spawns, and clears the mark. `CreateProcess` hands every inheritable
-//! handle in the process to whatever child it starts, and std passes
-//! `bInheritHandles = TRUE` on every spawn, so a second spawn on another thread inside
-//! that window would inherit tor's end too. A leaked copy hides tor's death from the
-//! control connection for as long as the other child lives (`TSR-F16`). The launch
-//! holds this lock across mark, spawn and clear, and every other Rust spawn site in a
-//! process that can launch a managed tor holds it around its own spawn.
+//! On Windows the managed tor inherits its control socket. The launch marks the
+//! parent's copy of tor's end inheritable, spawns, and closes that copy, under this
+//! lock. `CreateProcess` hands every inheritable handle in the process to whatever
+//! child it starts, and std passes `bInheritHandles = TRUE` on every spawn, so a
+//! second spawn on another thread while that copy was still open and inheritable
+//! would inherit tor's end too. A leaked copy hides tor's death from the control
+//! connection for as long as the other child lives (`TSR-F16`).
 //!
-//! On Unix the launch does not need it: tor's end is made inheritable in the child
-//! only, after `fork`, so no concurrent spawn can see it. The lock is taken there as
-//! well, so a spawn site reads the same on every platform.
+//! Closing the parent's copy is what ends the window. Clearing the inherit bit and
+//! returning while the socket is still open does not: a failed clear leaves the bit
+//! set. The socket is closed before this lock is released, whether or not the clear
+//! succeeded.
 //!
-//! **Residuals.** The C++ `tools::spawn` (DC-F12's subject) does not take this lock;
-//! it is outside it until that lane replaces it. The strict form is
-//! `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, which names the only handles a child receives;
-//! std exposes it only through the unstable `windows_process_extensions_raw_attribute`
-//! (rust-lang/rust#114854). Reopen when that is stable.
+//! Only a process that itself launches a managed tor takes the lock. A process that
+//! never calls the launch has no control socket to leak. On Unix the launch does not
+//! need the lock either: tor's end is made inheritable in the child only, after
+//! `fork`. It is taken there so a spawn site reads the same on every platform.
+//!
+//! **What does not remove the lock.** `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` names the
+//! handles one `CreateProcess` may inherit. It does not stop a different
+//! `CreateProcess` in this process — still passing `bInheritHandles = TRUE`, still
+//! omitting a list — from inheriting a handle that is inheritable at that moment.
+//! std exposes the list only through the unstable
+//! `windows_process_extensions_raw_attribute` (rust-lang/rust#114854). Stabilising it
+//! does not retire this lock.
+//!
+//! **Residual.** The C++ `tools::spawn` (DC-F12's subject) does not take this lock.
+//! It stays outside until that lane is gone.
 
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Mutex, PoisonError};

@@ -1142,11 +1142,12 @@ async fn spawn_managed_tor(
 
     let environment = launch::LaunchEnvironment::resolve(&managed)?;
     let pair = launch::ControlPair::new()?;
-    #[cfg(test)]
-    if let Some(leak) = managed.leak.take() {
-        pair.leak(leak)?;
-    }
     let mut cmd = launch::managed_tor_command(&managed, pair.tor_end(), &environment);
+    // The sleeper, when the test asked for one, shares tor's inherit window.
+    // Two lock acquisitions would clear the bit between them.
+    #[cfg(test)]
+    let (child, read, write) = pair.spawn(&mut cmd, managed.leak.take())?;
+    #[cfg(not(test))]
     let (child, read, write) = pair.spawn(&mut cmd)?;
     Ok((
         TorChild {
