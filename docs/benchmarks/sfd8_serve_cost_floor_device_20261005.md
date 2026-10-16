@@ -29,6 +29,43 @@ Run 2, three arms in one window (15:55:26Z – 16:06:57Z):
   (`u1b_floor_device_20261002.tsv`, 608 completed at 1×: median 14.8 s, fastest
   6.5 s), 78 ms is 0.5 % of the median read and 1.2 % of the fastest.
 
+## Run 3, 2026-10-06 — the single-pass tree as a fourth arm
+
+PR #974 has `P` read the shard once, hash each chunk as it sends it, and
+sign after the send. Same probe, same shape, four arms alternating in one
+window (03:43:13Z – 03:58:32Z):
+
+| Arm | Tree | 1 in flight: median / mean / p95 (n = 200) | CPU per response | 8 in flight: median (n = 128) | 8 in flight: responses per second |
+| --- | --- | --- | --- | --- | --- |
+| before | `b5d563a2fe` | 24.6 / 25.1 / 31.8 ms | 30–36 ms | 96.9 ms | 70–82 |
+| #954 | `cd51261ab2` | 103.9 / 103.9 / 108.8 ms | 111–114 ms | 201.4 ms | 37–38 |
+| #961 | `b5e7dbfed5` | 102.7 / 102.0 / 109.5 ms | 108–114 ms | 204.8 ms | 37 |
+| single pass | `7c9140f297` | 67.2 / 67.4 / 71.9 ms | 75–77 ms | 147.1 ms | 40–60 |
+
+- **The digest costs 43 ms per response on the single-pass tree**
+  (67.2 − 24.6, medians, one in flight), against 78 ms on the two-read
+  tree. Dropping the second read and the second digest saves 36 ms
+  (102.7 − 67.2).
+- Against `U1b`'s median read over Tor (14.8 s), 43 ms is 0.3 %.
+- At eight in flight the single-pass arm's two blocks disagree: 59.6
+  responses per second in the first and 39.7 in the second, with CPU per
+  response 63 ms and 70 ms. The other arms' pairs agree to within a few
+  percent, apart from the "before" arm's 70 and 82. Two blocks do not say
+  which figure is typical, so the eight-in-flight gain is not claimed
+  beyond "between none and 1.6×".
+- **Conditions differ from runs 1 and 2 in one respect.** A testnet
+  `shekyld` was running on the device as a system service, at 2.6–2.7 %
+  of one core throughout (sampled at every block boundary). It was on
+  every arm, and the three repeated arms read within 1.5 ms of run 2 at
+  one in flight.
+- **The arm is the tree at `7c9140f297`.** PR #974 later added the bare
+  503 and the refusal trailer. Neither touches a good read's path beyond
+  one `can_sign` call before the body; that tree was not re-run.
+
+The run script, with this shape and reading, was on the device before the
+first observation. Every block exited 0. Board temperature 52 – 60 °C; the
+run started five minutes after the fourth build finished.
+
 ## What ran
 
 The production serving path: an on-disk `LeafStore` with one frozen, pinned
@@ -66,12 +103,14 @@ threshold: this prices a change and is not a verdict on `W`.
   (sha256 `d052f51420812df365599d597335ef6dc67f62fff1ba50968a0e4ebb9ba82fb7`)
 - `sfd8_serve_cost_floor_device_run2_20261005.tsv`
   (sha256 `77985e2ef7688616606bf1c4921a89641ae714847c6830d580086945b8f4b43d`)
+- `sfd8_serve_cost_floor_device_run3_20261006.tsv`
+  (sha256 `c6d80e524917341f63e7500e6c54ac6ab7222aa53d67b127f7c8f85a300b0f7f`)
 
 Rows: `OBS`, arm.round, in flight, microseconds, bytes received.
 `BLOCK`, arm.round, in flight, fetches, wall ms, CPU ticks (10 ms each, the
 whole process after warm-up), responses served including warm-up.
 `DIGEST`, microseconds, first digest byte. Arm labels in the files: `old` is
-"before", `new` is #954, `cur` is #961.
+"before", `new` is #954, `cur` is #961, `one` is the single-pass tree.
 
 ## The probe
 

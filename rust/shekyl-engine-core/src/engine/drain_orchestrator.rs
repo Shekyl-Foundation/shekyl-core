@@ -57,7 +57,7 @@
 
 use std::collections::BTreeSet;
 
-use shekyl_curve_tree::{AssembleInput, Gindex};
+use shekyl_curve_tree::AssembleInput;
 use shekyl_engine_state::pscan_state::{PFundingOutputRecord, PScanState};
 use shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
@@ -864,11 +864,7 @@ pub(crate) async fn orchestrate_drain(
     //    leaf chunk + layers).
     let assemble_inputs: Vec<AssembleInput> = selected
         .iter()
-        .map(|r| AssembleInput {
-            gindex: Gindex::from_raw(r.gindex.to_raw()),
-            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
-            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
-        })
+        .map(crate::engine::ownership::p_assemble_input)
         .collect();
     let paths = ctx
         .tree

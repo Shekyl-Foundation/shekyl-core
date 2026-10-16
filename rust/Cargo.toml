@@ -37,12 +37,6 @@ members = [
     # See DAEMON_RELAY_PRIVACY.md §94.
     "shekyl-tor-transit-spike",
 
-    # DISPOSABLE probe (RT-P2, RPC_TRANSPORT_POSTURE.md §7.1): pinned mutual TLS
-    # under axum with the wrong-pin bite check. Named `-spike` on purpose --
-    # nothing in it is canonical; RT-W4 rewrites what it keeps and deletes the
-    # rest (rule 15: debt, labelled at birth).
-    "shekyl-rt-p2-spike",
-
     # Canonical genesis block/tx binary wire-format serializer — the clean,
     # Shekyl-owned replacement for the vendored shekyl-oxide block/tx/ct modules
     # (docs/design/GENESIS_TX_WIRE_FORMAT.md, Decision 1 / §4).
@@ -55,6 +49,7 @@ members = [
     # one of them (`shekyl-wallet-rpc`) is `#![deny(unsafe_code)]`. Compiles to
     # nothing off Windows. See docs/design/WINDOWS_WALLET_SUPPORT.md.
     "shekyl-win-sec",
+    "shekyl-thread-priority",
 
     # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
     # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
@@ -89,12 +84,18 @@ members = [
     "shekyl-standoff",
     "shekyl-stats",
 
+    # The RNG seam (`RelayRng`) and the unbiased integer draws
+    # (`bounded_uniform`, `bernoulli`), cut out of `shekyl-relay-privacy` so
+    # the relay scheduler, the peerlist, the dialer and the FFI's CSPRNG do
+    # not reach into the relay-timing crate for one trait. The seeded
+    # `SplitMix64` is behind the `splitmix` feature, on dev edges only.
+    "shekyl-draw-rng",
+
     # Daemon relay-privacy timing core (Dandelion++ epoch/stem/fluff/embargo
     # draws + the stem map), derived from the paper rather than inherited as
-    # `#define`s. Standalone measurement instrument: links nothing, replaces
-    # nothing, and precedes any decision to move the C++ relay path. Shares
-    # `shekyl-stats` with `shekyl-standoff` under the same `conformance`
-    # feature split.
+    # `#define`s. The default build's one dependency is `shekyl-draw-rng`.
+    # Its `conformance` feature pulls `shekyl-stats`, the same grader split
+    # as `shekyl-standoff`. The C++ relay path is still the daemon's.
     "shekyl-relay-privacy",
 
     # Live daemon relay scheduler (RP-3a): owns the Dandelion++ zone state and
@@ -206,10 +207,19 @@ members = [
     # shekyl-chain-rules judges; under the same no-store belt as the rules.
     "shekyl-block-template",
 
+    # Test support, never shipped: the deterministic miner wallet every
+    # fixture coinbase pays and a coinbase composed as that wallet scans it
+    # (the template's second oracle). Reached only from shekyl-chain-rules'
+    # TEST_ONLY `harness` feature and from test-side [dev-dependencies];
+    # under the rules crate's no-store belt, so nothing of the curve tree
+    # or redb is in its closure — the spending half is a sibling crate.
+    "shekyl-harness-wallet",
+    "shekyl-harness-spender",
+
     # The daemon's block-ingest pipeline (DRS-E2, DRS_E2_REPLAY_DRIVER.md §1):
     # Source → form → sequence → validate+connect → sinks. Production code
-    # shared by E2 (replay) and E3 (live); the one crate where the validator,
-    # the store and RandomX meet.
+    # shared by E2 (replay) and DRS-X (live, the store flip); the one crate
+    # where the validator, the store and RandomX meet.
     "shekyl-chain-ingest",
 
     # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)
@@ -242,6 +252,20 @@ members = [
     # Per-P archival-firewall network transport (2d-2 SP-T1)
     "shekyl-p-transport",
     "shekyl-p2p-transport",
+    # What the P2P handshake and the RPC channel share: the Noise symmetric
+    # primitives, the symmetric state and the record layer (RPC_CHANNEL.md
+    # section 4.4, RT-O17). No handshake, no socket.
+    "shekyl-noise",
+
+    # The RPC channel (docs/design/RPC_CHANNEL.md, round R1). Slice RT-W8:
+    # the three domain strings and the derivations that carry them, against
+    # independently generated vectors. The handshake lands here in RT-W9.
+    "shekyl-rpc-channel",
+    # Test-only: holds clatter, an independent implementation of the channel's
+    # handshake pattern, to the community vector and pins hybrid vectors from
+    # it (RT-O11, RT-O12). Nothing may depend on it; the gate is
+    # scripts/ci/check_clatter_not_in_production.py.
+    "shekyl-rpc-channel-xcheck",
 
     # The peer address union. Levin frames it; the transport layer selects
     # a connector from it. Neither crate defines a second copy.
@@ -251,6 +275,15 @@ members = [
     # stack plan, socket counts, the ban list. No sockets. The Noise
     # layer stays shekyl-p2p-transport. Levin is the session above the plan.
     "shekyl-transport-layer",
+    # The peer lists (P2P_3_SLICE_1_PEERLIST_BRIEF.md): gray, white, the
+    # one door between them, the cached disclosure sample, ban demotion,
+    # the per-session intake cap. Data only: no socket, no dial, no FFI.
+    "shekyl-peer-bounds",
+    "shekyl-peerlist",
+    # The outbound dialer: the fill rule, the wake spacing, the failed-address
+    # memory and the self-connection nonces, over `shekyl-peerlist`
+    # (P2P-3 slice 3). The C++ reaches it only through `shekyl-ffi`.
+    "shekyl-dialer",
     # SOCKS5 CONNECT, no authentication. Clearnet's --proxy and the Tor
     # connector share it. It does not know which connector is calling.
     "shekyl-socks",
@@ -274,6 +307,10 @@ members = [
     # binary is deleted and is not linked into this crate.
     "shekyl-p2p-harness",
 
+    # P's serving body store: chunk-sealed shard_frame bodies under
+    # StakeEngine (WSS-Q1(a)). No Tor, no daemon (WSS-17).
+    "shekyl-p-store",
+
     # Persona serving loop: loopback shard server behind the P onion
     # service (2d-2 serving path; provisional THROWAWAY framing)
     "shekyl-p-serve",
@@ -289,6 +326,12 @@ members = [
     # the SF-D5 request header, the SF-D8 countersignature verify, and a
     # content-verify hole; reads no chain state, holds no key (SF-D4 cut).
     "shekyl-p-fetch",
+
+    # Dev-only loopback between `PServeEndpoint` and `PFetchClient`.
+    # SF-D4 keeps that edge out of both shipped graphs: nothing in
+    # `cmake/BuildRust.cmake` builds this crate, and neither end depends
+    # on it except as a dev-dependency.
+    "shekyl-p-loopback",
 
     # Daemon-only operator scheduler of `shekyl-p-fetch` (SF-D1). Linked
     # from `shekyl-daemon-image` only — never from `shekyl-ffi` or an RPC

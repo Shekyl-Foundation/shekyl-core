@@ -23,7 +23,9 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use shekyl_engine_core::{Engine, ServingPosture, SoloSigner, StakedOutput, StakingReadView};
+use shekyl_engine_core::{
+    Engine, ServingPosture, ServingStatus, SoloSigner, StakedOutput, StakingReadView,
+};
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, require_empty_object};
@@ -69,7 +71,8 @@ pub(crate) async fn staking_info(
     params: &Value,
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "staking_info")?;
-    let (view, posture) = read_view_with_posture(tenants).await?;
+    let (view, serving) = read_view_with_serving(tenants).await?;
+    let (posture, serving_priority_not_lowered) = serving_wire(serving);
     let result = StakingInfoResult {
         staking_enabled: view.staking_enabled,
         balance: balance_result(&view),
@@ -78,7 +81,8 @@ pub(crate) async fn staking_info(
             .pscan_synced_height
             .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
         recovery_pending_reopen: view.recovery_pending_reopen,
-        posture: posture_str(posture),
+        posture,
+        serving_priority_not_lowered,
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize staking_info: {e}")))
@@ -151,23 +155,40 @@ async fn read_view(
     read_view_under_guard(&engine)
 }
 
-/// Like [`read_view`], but also snapshots the parked host's posture
-/// under the tenant lock — before the engine guard, never nested.
+/// Like [`read_view`], but also snapshots the parked lifecycle under the
+/// tenant lock — before the engine guard, never nested.
 ///
-/// The posture is the embedder's fact (`Tenant::serving_posture`); it
+/// The snapshot is the embedder's fact (`Tenant::serving_status`); it
 /// does not belong on [`StakingReadView`]. Assembled here so
 /// `staking_info` can project it without stuffing an embedder snapshot
-/// into the engine's sealed-state aggregation.
-async fn read_view_with_posture(
+/// into the engine's sealed-state aggregation. One value: a restart
+/// cannot pair one lifecycle's posture with another's count.
+async fn read_view_with_serving(
     tenants: &tokio::sync::Mutex<TenantState>,
-) -> Result<(StakingReadView, Option<ServingPosture>), WalletRpcError> {
-    let (shared, posture) = {
+) -> Result<(StakingReadView, Option<ServingStatus>), WalletRpcError> {
+    let (shared, serving) = {
         let state = tenants.lock().await;
         let shared = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
-        (shared, state.tenant.serving_posture())
+        (shared, state.tenant.serving_status())
     };
     let engine = shared.read().await;
-    Ok((read_view_under_guard(&engine)?, posture))
+    Ok((read_view_under_guard(&engine)?, serving))
+}
+
+/// The wire pair from one [`ServingStatus`].
+///
+/// The count is absent exactly when no lifecycle is parked, the same
+/// absence as a missing posture from a missing lifecycle. A parked
+/// lifecycle that has not published a posture still carries a count, and
+/// zero is that reading.
+pub(crate) fn serving_wire(status: Option<ServingStatus>) -> (Option<String>, Option<u32>) {
+    match status {
+        None => (None, None),
+        Some(status) => (
+            posture_str(status.posture),
+            Some(status.priority_not_lowered),
+        ),
+    }
 }
 
 /// The wire spelling of a serving posture — the contract's values,
@@ -214,6 +235,26 @@ mod tests {
             Some("foundation_complete_tree")
         );
         assert_eq!(posture_str(None), None);
+    }
+
+    #[test]
+    fn serving_wire_is_absent_only_when_no_lifecycle_is_parked() {
+        assert_eq!(serving_wire(None), (None, None));
+        assert_eq!(
+            serving_wire(Some(ServingStatus {
+                posture: None,
+                priority_not_lowered: 0,
+            })),
+            (None, Some(0)),
+            "a parked lifecycle that has not published a posture still has a count"
+        );
+        assert_eq!(
+            serving_wire(Some(ServingStatus {
+                posture: Some(ServingPosture::Market),
+                priority_not_lowered: 3,
+            })),
+            (Some("market".to_owned()), Some(3))
+        );
     }
 
     #[test]

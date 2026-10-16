@@ -43,13 +43,12 @@ fn tor_binary() -> std::path::PathBuf {
 #[tokio::test]
 #[ignore = "requires the pinned Tor binary via SHEKYL_SPIKE_TOR (bootstraps, publishes onions, network)"]
 async fn two_personas_publish_and_serve_over_real_rendezvous() {
-    // A payload whose length is a whole number of leaves: the served frame
-    // requires that, and the apparatus derives expected body length (frame +
-    // leaves) itself. The live gate asserts that derived length plus a valid
-    // countersignature — `fetch_via` plugs `ContentVerify` open so a short
+    // A payload with structure. The apparatus frames it as one transaction
+    // and derives the expectation (its row) itself; the live gate asserts
+    // the verified archival length plus a valid countersignature. A short
     // body stays `Truncated` (stream) rather than a content refusal the
-    // measurement would void as apparatus error. Same-length substitution is
-    // not this gate's subject (the endpoint is ours).
+    // measurement would void as apparatus error, because the client checks
+    // content per transaction only once the lengths have arrived.
     let payload: Vec<u8> = (0..64_000u32).map(|i| (i % 251) as u8).collect();
 
     let dir = tempfile::tempdir().expect("tempdir");

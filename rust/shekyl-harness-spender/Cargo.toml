@@ -1,0 +1,58 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-harness-spender"
+description = "Test support: the wallet-side spender over a chain of mined blocks — the second curve-tree producer, the production scanner, signer and encoder — that turns a harness coinbase into a real spend. Never a production dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The spending half of the harness wallet (`shekyl-harness-wallet` is the
+# identity-and-composition half). Split from it because of the rules
+# crate's no-store belt (`check_chain_rules_no_store.sh`): the tree walk
+# needs `shekyl-curve-tree`, which `redb`-backs its proving store, and the
+# rules crate reaches the wallet half through its `harness` feature. This
+# crate is therefore reached only from `[dev-dependencies]` — the store's
+# and the ingest's — and never from the rules crate or the template.
+#
+# It depends on `shekyl-chain-rules` with no features: the rule set is
+# where the unlock window lives and `newest_admissible_reference` is the
+# rule's own derivation (CEN-I11) — a wallet knows the consensus it spends
+# under. It never enables `harness` (a TEST_ONLY feature,
+# check_test_only_features.py) and never depends on the template or the
+# ingest: `MinedBlock` names what it reads off a mined block, so the
+# ingest's `Mined` and a store test's own block implement it alike.
+[dependencies]
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# The wallet-side tree (`CurveTreeClient`): DRS-D3c's proving store, fed
+# the same blocks the store grew its tree from — the second producer the
+# spend's proof holds equal to the store's root.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# The production scanner (`recover_combined_ss`, `scan_output`,
+# `compute_output_key_image`), `construct_output` for the paid outputs,
+# the archival persona keys, and the hybrid signature for the bond slot.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The production signer (`sign_transaction_with_terms`) and the shared
+# open-spend tail (`open_spend`).
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+# The production bond-post constructors (`build_join_market_vin`,
+# `build_release_vin`, `bond_post_input`) a `Persona` posts through, and
+# the retention crate's vin and holdings types they are built over.
+shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `Hp(O)` for the key image.
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+# The spend self-verifies through the consensus verifier against the
+# wallet-side root before any rule judges it.
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-wire = { path = "../shekyl-wire" }
+shekyl-types = { path = "../shekyl-types" }
+shekyl-units = { path = "../shekyl-units" }
+
+[lints]
+workspace = true

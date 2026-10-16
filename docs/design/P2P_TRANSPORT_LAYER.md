@@ -92,9 +92,9 @@ The engine-service addendum in
 [`P2P_TIMING_ENGINE.md`](P2P_TIMING_ENGINE.md) is the concurrency
 contract the first line calls. C5 is recorded: the responder handshake
 is 685 µs, one rekey is 5.06 µs, seal and open of a 65,535-byte record
-is 889 µs. The D9 deadlines are written by `transport_spans`:
-clearnet dial 1.415 s (a SOCKS proxy borrows the Tor dial's 9.1 s),
-handshake 1.426 s, gap 1.430 s, Tor dial 9.1 s, gap 2.6 s. No
+is 889 µs. The D9 deadlines are `shekyl-transport-layer::spans` (`rust/shekyl-transport-layer/src/spans.rs:52` to `:81`; *records-was* `transport_spans` in C++, moved 2026-10-13):
+clearnet dial 1.415 s (a SOCKS proxy borrows the Tor dial's 120 s),
+handshake 1.426 s, gap 1.430 s, Tor dial 120 s, gap 37.4 s. No
 accept-rate (D10.3), no transport-runtime thread count
 (D5), and no every-record rekey (D14 item 4, decided with C9's window)
 is written. The implementation does not invent those numbers.
@@ -102,10 +102,12 @@ is written. The implementation does not invent those numbers.
 **The tree matches the citations that the first line will rely on.**
 Fifty-six `file:line` citations in this document fall inside their
 files at this pin. Re-read, and still the values the design states:
-`P2P_DEFAULT_CONNECTION_TIMEOUT` is 5,000 at `cryptonote_config.h:189`;
-the 5 s at `:193` is `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`, and the
-general invoke at `:192` is 2 minutes — D9 already refuses to copy
-either into a transport deadline. `NEW_CONNECTION_TIMEOUT_LOCAL` is
+`P2P_DEFAULT_CONNECTION_TIMEOUT` is 5,000 at `cryptonote_config.h:195`;
+`P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` is 5,000 at `:199`, and the
+general invoke at `:198` is 2 minutes — D9 already refuses to copy
+either into a transport deadline. `:193` is
+`P2P_DEFAULT_PEERS_IN_HANDSHAKE` (250). *Records-was: those three
+timeouts were cited at `:189`, `:193`, and `:192`.* `NEW_CONNECTION_TIMEOUT_LOCAL` is
 1,200,000 with the comment still saying "2 minutes"
 (`abstract_tcp_server2.inl:60-61`). The send queue is 1,000 messages
 and 100 MiB (`abstract_tcp_server2.h:72-73`). The asio pool is 10
@@ -118,7 +120,8 @@ through `shekyl-socks`. `shekyl-p-transport` still enables ureq's
 not fire: the timing-engine round opened 2026-09-25.
 
 **What is built, and what the first commit is.** The crypto core is
-`shekyl-p2p-transport`: `noise`, `channel`, `prefix`, `aead`. HMAC is
+`shekyl-p2p-transport` (`noise`, `prefix`, `channel`) and the shared Noise
+state in `shekyl-noise` (`aead`, `direction`, `symmetric`). HMAC is
 `hmac_blake2s`. `read_message1` range-checks the encapsulation key and
 `ResponderReady` stores the parsed key. `OnionPow`'s default is
 `Enabled`. `InboundCeiling` is in `shekyl-peer-policy`. The timing
@@ -302,16 +305,31 @@ p2p dials, `shekyl-rpc-transport`, and `shekyl-p-fetch` pass
 `shekyl-p-transport`, which still dials through ureq. Moving that HTTP
 client onto `shekyl-socks` is a FOLLOWUPS row. The handshake keeps the
 proxy's reply byte, which `ProxyRefused` carries. A refusal is
-`ProxyRefused` with that byte. `ExtendedErrors` on the operator's
-`SocksPort` is what makes Tor's extended codes appear. That belongs in
-the operator docs. The initiator handshake runs on the blocking pool
+`ProxyRefused` with that byte. The managed `SocksPort` value is
+`auto ExtendedErrors` (a fixed part of the typed value, not an operator
+flag): Tor 0.4.9.11 leaves the flag off, and without it an introduction
+timeout and a missing descriptor are both reply 4. The flag changes
+only the reply byte our own Tor sends us. A clearnet proxy reply never
+forgets the host. The initiator handshake runs on the blocking pool
 under the same engine owner, armed when the socket exists.
 
 The Tor connector is `shekyl-tor`. The stream is the channel: no Noise,
 no handshake on the blocking pool. It uses the same byte cap and the
-same socket copy as clearnet. The gap is an arm of that wait. Holding
-the session without `session_established` is the Levin handshake
-timeout. Dropping the session ends the connection and releases the
+same socket copy as clearnet. The gap is an arm of that wait. The gap
+measures the peer's silence (Rick, 2026-10-14). It ends at the peer's
+first complete handshake frame, on both connectors: its
+`COMMAND_HANDSHAKE` request on a session it opened, its response on one
+this node dialed (`shekyl_levin::HandshakeFrame`). It never ends at
+`session_established`, which is this node's own work, and a complete
+frame of any other command does not end it: the strand answers a
+support-flags request before any handshake, and a peer that sent one
+and stopped would otherwise have held an admission slot with no
+deadline at all. A peer that sends no complete handshake frame inside
+the gap is the Levin handshake timeout. Each
+driver polls its reader before the gap's wake. A fired wake then waits
+one IO driver turn for the reader (`SilenceGap` in
+`shekyl-capped-stream`), so a frame that arrived before the deadline
+wins even when the driver resumes after it. Dropping the session ends the connection and releases the
 admission slot. Outbound is SOCKS5 through `shekyl-socks`, and one
 engine owner covers that exchange, the circuit build, and rendezvous.
 Inbound is `accept_tor`, then that wait. A listener that stops
@@ -395,6 +413,18 @@ and it does not free the strand. The executor drops the link after
 the post has finished. A walker whose `add_ref` returned true still
 holds a count, so the destroy post has not run.
 
+- **The cause travels with the close (2026-10-07).** The connector
+  closes both session ends with the cause. The seam inbound drive
+  records that cause. `PeerClosed` is the reader's end-of-file and
+  nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
+  that sends FIN is `PeerClosed`. Forgetting the address is
+  `implicates_address` with the connector: a destination-naming cause
+  counts where the connector's declaration says the destination is
+  authenticated (Rick, 2026-10-13). The naming causes are a rejected
+  Levin handshake and a proxy reply of `0x04`, `0x05`, `0xF0`, `0xF1`,
+  or `0xF2`. So no clearnet cause counts (R2, 2026-10-12), Tor counts
+  those six, and a refused connect counts nowhere. *Records-was: a
+  refused dial and a rejected handshake counted on every connector.*
 - Rust records the D12 cause through `Sockets::close`. The first
   `CloseResult::Recorded` wins. `AlreadyClosed` leaves that cause
   where the first call put it.
@@ -608,7 +638,7 @@ cancels its tasks, the executor drains, the executor stops.
 **The floor.** An executor thread may block on work the executor
 itself performs only when another executor thread is free to do that
 work. Otherwise the blocked thread is waiting for a post that nothing
-will run. `idle_worker` (`net_node.inl:2217`) is that lane today. It
+will run. *Records-was (superseded 2026-10-13: the Rust dialer's owner loop is a thread of its own and an owner of the timing engine; the C++ dial path below is deleted):* `idle_worker` (`net_node.inl:2217`) is that lane today. It
 is an idle handler on the context (`:1146`), and it calls
 `connections_maker` (`:2220`). `connect` returns only after the
 strand runs `established`. `do_handshake_with_peer` (`:1243`) then
@@ -751,17 +781,16 @@ constant at `:1001-1004`. `is_local` is RFC 1918 (`local_ip.h:41-62`).
 A peer in that class holds the socket for 20 minutes before any Levin
 session exists, then has a 30-minute idle timer. D14 refuses that split.
 
-`P2P_DEFAULT_CONNECTION_TIMEOUT` at `src/cryptonote_config.h:189` is
+`P2P_DEFAULT_CONNECTION_TIMEOUT` at `src/cryptonote_config.h:195` is
 **5,000 ms**, not 10 seconds. `P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT` at
-`:193` is also 5,000 ms. The 10-second figure and the 5-second figure
+`:199` is also 5,000 ms. The 10-second figure and the 5-second figure
 are different clocks. D9 re-derives both; neither number is adopted as
 a connector deadline.
 
 Send-queue caps, read at `abstract_tcp_server2.h:72-73`: 1,000 messages
 and `100 * 1024 * 1024` bytes.
 
-Outbound dialing is serial. `connections_maker` is
-`net_node.inl:2009`. It reaches
+Outbound dialing is serial: one dial in flight per connector (the Rust dialer, PR-3; *records-was:* `connections_maker` at `net_node.inl:2009`, deleted 2026-10-13). It reaches
 `try_to_connect_and_handshake_with_new_peer` (`net_node.inl:1544`) at
 the call sites `:1917` and `:1970`. A transport handshake adds a round
 trip to every dial. A stalled peer holds that loop for the whole
@@ -910,12 +939,12 @@ and the mechanism does not. "Refuse" means it does not survive.
 | Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator and from the session layer's ban call. The transport layer does not own those values and does not score. It does not call into C++ admission. |
 | Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902`. Automatic scoring is `add_host_fail` at `net_node.inl:413` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. Two writers, both in durations (corrected 2026-09-28): the operator's RPC (`block_host`, `unblock_host`, `get_blocked_hosts`) and the session layer's call to ban a host for a duration. A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. A transport close does not write the list. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
-| SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **A proxied clearnet dial uses the Tor dial clock (9.1 s): the worst measured SOCKS path, pending its own D9 distribution.** The three clearnet legs had no proxy, and a Tor-exit dial is 3–6 s. It does not inherit the timeout from `src/net/socks`. |
+| SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **A proxied clearnet dial uses the Tor dial clock (120 s): the worst measured SOCKS path, pending its own D9 distribution.** The three clearnet legs had no proxy, and a Tor-exit dial is 3–6 s. It does not inherit the timeout from `src/net/socks`. |
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust through `shekyl-socks`. `shekyl-p-fetch` and `shekyl-rpc-transport` call it with `Isolation::Principal`. `shekyl-p-transport` still enables `ureq/socks-proxy` (`socks` 0.3.4). Moving that HTTP client is a FOLLOWUPS row. |
 | Overlay inbound attribution | `set_default_remote` at `net_node.inl:678` (`--anonymous-inbound`) and `:885` (`tor_address::unknown()`); applied at `abstract_tcp_server2.inl:1905-1908` | **Carry for Tor now, and for I2P when an I2P connector exists (D14 item 2).** Do not attribute from the socket. Inbound arrives on the local router's loopback socket. The observed endpoint is "this zone, no address", never `127.0.0.1`. Attributing from the socket would collapse admission's per-host view into one host. This is where LV-3's OBSERVED endpoint originates. |
 | Tor forward listener | `net_node.inl:863-880` | Carry. Bound to `127.0.0.1` on port 0. The OS-assigned port is read back with `get_binded_port` (`:881`) and handed to Tor control. Bind failure erases the zone (`:878`). |
 | Local versus remote timers | `m_local` at `abstract_tcp_server2.inl:992`; timers at `:100-112` and `:1001-1004`. Local new-connection is 1,200,000 ms (20 minutes), not the "2 minutes" comment on `:60` | **Refuse (D14).** D2 already refuses a timeout whose only justification is that epee uses it. The class is loopback or RFC 1918, so any LAN host gets 20 minutes before a Levin session, against 10 seconds for everyone else. Container port-forwarding makes this worse: inbound peers arrive from the bridge gateway's private address, every peer looks local, and admission's per-host view collapses to one host. A test rig that needs a longer timer sets it explicitly. |
-| Gap from channel established to session established | Outbound Levin invoke is 5 s (`cryptonote_config.h:193`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A per-connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes on the path that remains after D14 refuses the local split). Each connector owns one deadline for its peers, beside PWD-B3's byte cap for command 1001. |
+| Gap from channel established to session established | Outbound Levin invoke is 5 s (`P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT`, `cryptonote_config.h:199`). Inbound has the 256 KiB pre-session byte cap and then the idle timer | **A per-connector timer, derived under D9.** Once the C++ object exists, epee's new-connection timer no longer covers this gap. An inbound peer that finishes the transport handshake and then sends nothing holds a slot until the idle timer (5 minutes on the path that remains after D14 refuses the local split). Each connector owns one deadline for its peers, beside PWD-B3's byte cap for command 1001. |
 | Dual-stack bind and port 0 | `init_server` at `net_node.inl:1065` takes IPv4 and IPv6 ports and addresses plus `m_use_ipv6` / `m_require_ipv4` | Carry. A port-0 bind reads the assigned port back. The Tor listener above is the port-0 case that must not abort the rest of the boot. |
 | Worker pool | `run_server`'s thread count; `set_threads_prefix` | Carry the pool as a stated size, not as "however many epee used". D6 sizes the socketless executor separately. |
 | Graceful stop | `send_stop_signal`, then connections drained, then `deinit_server` (`net_node.inl:1187` is one `deinit_server` site) | Carry the order: stop accepting, drain or cancel live connections, then tear the listeners down. |
@@ -930,7 +959,7 @@ and the mechanism does not. "Refuse" means it does not survive.
 | FIN versus RST, linger | epee close / shutdown | **One behaviour for every failure before the channel exists:** close after zero bytes written, FIN, no linger and no RST variant. Step 7 asserts those failures are indistinguishable from the far side. |
 | `add_ref` / `release`, `request_callback`, `send_done` | `i_service_endpoint` | The adapter's contract (D4). Not a copy of epee's refcount. |
 | Executor for invoke timers and idle handlers | `levin_protocol_handler_async.h:229` takes `get_io_context()` for the invoke timer. The pool is 10 threads (`net_node.inl:1150`) | **D6, ruled.** A socketless `io_context` is the interim until the timing engine lands. Its pool is a measured budget, not 10. |
-| Serial outbound dialing | `connections_maker` at `net_node.inl:2009`, call at `:1917` | **Stays serial through cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
+| Serial outbound dialing | *Records-was* `connections_maker` at `net_node.inl:2009`, call at `:1917`; the Rust dialer's `IN_FLIGHT_BOUND` of one per connector since PR-3 (2026-10-13) | **Stayed serial through the cutover.** The transport layer exposes an asynchronous dial and does not choose the schedule. When and how many to dial is discovery policy, P2P-3 slice 3. The extra round trip is measured in step 7. |
 | SSL | `m_state.ssl` on the connection | **Refuse.** |
 
 ## Rate limit is four jobs (RULED 2026-09-28)
@@ -1102,7 +1131,7 @@ is never taken from inside a task.
 UPDATE 2026-09-30, thread-budget measurement conditions. The budget is
 three counts, each an editable placeholder today, each "the run record
 replaces this value": the transport runtime's `workers` and `blocking`
-(`transport_spans`, `net_node.inl:3671-3672`, `2` and `1`) and the
+(`shekyl-transport-layer::spans`, `rust/shekyl-transport-layer/src/spans.rs:83-85`, `2` and `1`; *records-was* `transport_spans`) and the
 interim executor's `executor_workers` (`net_node.inl:1173`, `2`). A
 count is changed by editing the placeholder and relinking the daemon;
 none is a runtime knob, so a sweep is one relink per count, C++ only.
@@ -1320,10 +1349,10 @@ declaration, not a new set of branches.
    that mapping, and it is the single source for every consumer — the dialer,
    the peerlist (Part 2 of this ruling, in
    [`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md)), and
-   the relay lane's per-network properties (`RelayZone` / `LinkSecrecy` in
-   `rust/shekyl-relay-privacy/src/zone.rs` reads the declaration rather than
-   keeping a second table; recording that requirement is this round's job,
-   changing the relay lane is not).
+   the relay lane's per-network properties. **UPDATE 2026-10-07:** the
+   relay reads measured transit and cover class from this declaration.
+   *Records-was: recording that requirement is this round's job, changing
+   the relay lane is not.*
 
 4. **One stated exception, until the flip.** A clearnet stack without the Noise
    layer fails the contract's encryption clause. It is permitted while the
@@ -1365,13 +1394,16 @@ declaration, not a new set of branches.
 | Observed identity of an inbound peer | the socket address | "this zone, no address" | not assessed |
 | Deadline inputs (D9) | measured per connector | measured per connector | when a connector exists |
 | Rendezvous arrival priced by onion-service proof-of-work | not applicable — clearnet has no rendezvous | enabled by default (D10). Residual: streams inside an established circuit, bounded by `MaxStreams`. Flood resistance is **not assessed** until the Tor flood test | not assessed |
+| Measured transit, milliseconds. The relay's embargo, read by `shekyl_dandelionpp_embargo_draw_seconds_for_connector`. *Records-was 2026-10-07:* `shekyl_dandelionpp_embargo_draw_seconds(zone)`. Not assessed means the relay does not stem on that connector | 50 (`ADOPTED_TRANSIT_ASSUMPTION_MS`) | 1 625 (`ANON_ZONE_TRANSIT_ASSUMPTION_MS`) | not assessed |
+| Cover class. The relay's ruling, recorded on the column. Owned by `TOR_COVER_POSTURE.md`. Not a wire property | substitution envelope (open link) | volume cover, unmeasured, pending TRC-1 | not assessed |
 
 **Consequences.**
 
 - **Clearnet is plain clearnet, plus the Noise layer.** The declaration is what
   clearnet provides natively. The stack includes Noise because clearnet
-  declares no native encryption. `noise.rs`, `channel.rs`, `prefix.rs` and
-  `aead.rs` are that layer. The option-off path is the exception in ruling 4;
+  declares no native encryption. `noise.rs`, `channel.rs` and `prefix.rs`
+  are that layer in `shekyl-p2p-transport`. `aead.rs`, `direction.rs` and
+  `symmetric.rs` are the shared state in `shekyl-noise`. The option-off path is the exception in ruling 4;
   the flip is "enforce the contract". `--proxy` is a D3 dial duty and changes
   no declared capability.
 - **Tor is a complete overlay, not a VPN.** The Tor connector speaks onion to
@@ -1589,8 +1621,10 @@ own `wait_before_write_ns` and `total_retrans`. No millisecond here
 depends on that event. The three legs, and the New
 York leg that confirms the slope is about 1, are in the benchmark
 record. A measured satellite-class link whose RTT exceeds 700 ms
-reopens the ceiling. These milliseconds, the Tor dial of 9.1 s, and the
-Tor gap of 2.6 s are what `transport_spans` writes. A clearnet dial
+reopens the ceiling. These milliseconds, the Tor dial of 120 s, and the
+Tor gap of 37.4 s (cold first contact on the Rust dialer,
+`docs/benchmarks/p2p_tor_gap_cold_20261014.md`) are what
+`shekyl-transport-layer::spans` holds. A clearnet dial
 through a SOCKS proxy uses the Tor dial clock: the three clearnet
 legs had no proxy, a Tor-exit dial is 3–6 s, and a longer deadline
 costs only the dialer. Shutdown waits out the longest of them, the
@@ -1698,7 +1732,8 @@ listener, and so a connection in the gap phase.
 5. **The gap between channel established and session established.**
    Every connection that has a channel but no session gets a
    per-connector gap timer, derived under D9. It is never the idle
-   timer. The byte limit in this phase is PWD-B3's cap for command
+   timer. It runs from the channel to the peer's first complete Levin
+   frame, not to this node's session verdict (Rick, 2026-10-14). The byte limit in this phase is PWD-B3's cap for command
    1001. It replaces the inherited 256 KiB
    (`LEVIN_INITIAL_MAX_PACKET_SIZE`). On Tor inbound, this timer is the
    first bound a connection meets, beneath PoW and `MaxStreams`.
@@ -1766,8 +1801,8 @@ round can reject them.
   other. UPDATE 2026-09-30: the clearnet pair, the Tor dial and inbound
   distributions, the South America and New York clearnet figures
   (the clearnet deadlines are the D9 ceiling form, 1.415 / 1.426 /
-  1.430 s, written by `transport_spans` with the Tor dial 9.1 s and gap
-  2.6 s) and one Tor stem hop are in
+  1.430 s, held by `shekyl-transport-layer::spans`; the Tor dial and gap are
+  re-derived in `p2p_tor_gap_cold_20261014.md`) and one Tor stem hop are in
   [`p2p_cutover_crossbuild_20260929.md`](../benchmarks/p2p_cutover_crossbuild_20260929.md).
   The epee-to-epee stem still did not cross in the first cross-build.
   The thread-budget legs are not in it; they wait on the ledger row.
@@ -1794,7 +1829,7 @@ hand-kept copy.
 
 | Phase | Causes |
 | --- | --- |
-| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `DialFailed`, `ProxyRefused`, `LocalClose` |
+| Before the channel exists | `PrefixMismatch`, `TransportHandshakeFailed`, `TransportTimeout`, `AdmissionRefused`, `InboundNotAccepted`, `DialFailed`, `ProxyRefused`, `ProxyUnavailable`, `LocalClose` |
 | Channel exists, Levin handshake not done | `LevinHandshakeTimeout`, `LevinHandshakeRejected`, `LocalClose` |
 | Any time after the channel exists | `PeerClosed`, `RecordRejected`, `SessionRefused`, `IoError`, `SendQueueFull`, `LocalClose` |
 
@@ -1852,6 +1887,50 @@ the SOCKS dial. Discriminant 2 stays unused so `zone::tor` remains 3.
 An I2P connector reopens the address type and that discriminant in
 the connector's pull request. D14 records the same ruling: clearnet
 and Tor cut over together.
+
+---
+
+## Clearnet reconnect throttle — REGISTERED 2026-10-09, not built
+
+A question for this layer, registered by the P2P-3 slice 1 ruling
+D-S1 (`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §5c; Rick, 2026-10-09). PR-2
+does not build it.
+
+**The question.** After `N` completed handshakes from one host within a
+period `T`, refuse that host's new inbound handshakes for a cooldown.
+It belongs to the "who can reach us" job of the rate-limit table above:
+connections, before a session exists. D-S1 caps what one *session* may
+put into gray; a host that reconnects buys a fresh session and a fresh
+cap, and this throttle is what would price the reconnect.
+
+**It throttles only.** No score, no ban, no demotion. The reason: a TCP
+reset is forgeable by a path attacker on unencrypted clearnet, and it
+stays forgeable after clearnet encryption is on — the reset is below
+the encrypted channel — so a reconnect count is evidence of a
+reconnect, not of the host's intent. A throttle a path attacker can
+trigger costs the honest host a cooldown; a ban or a demotion it could
+trigger would cost it its white entry (D4 demotes on a ban), which is
+the attacker's gain.
+
+**`N` and `T` are measured**, on the Rust transport after the cutover,
+against the honest reconnect rate per host; neither is set here.
+
+**The IPv6 key is a prefix, not an address (Rick, 2026-10-11).** A
+throttle keyed per host is free to bypass on IPv6: one customer
+allocation is a `/64` or larger, so it holds an effectively unlimited
+number of hosts, and the per-host inbound cap was deleted
+(`has_too_many_connections`, slice 2's fold). This is the one place in
+the P2P-3 lane where grouping by prefix matters — the Rust dialer has
+no subnet grouping (`P2P_3_SLICE_3_DIALER_BRIEF.md`, "The candidate
+filter", ruled the same day) — because it is where address abundance
+meets an inbound-driven budget. The prefix length is decided with `N`
+and `T`, after the cutover, not here.
+
+**Residual.** Tor has no host to throttle: an inbound rendezvous
+carries no address (D7, "this zone, no address"). The per-session cap
+of D-S1 and Tor's proof-of-work on the rendezvous are what bound a
+reconnecting onion peer; the reconnect itself is unpriced there, and
+that is recorded as the residual of this question.
 
 ---
 

@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-chain-ingest"
-description = "The daemon's block-ingest pipeline: Source → form → sequence → validate+connect → sinks. Production code shared by DRS-E2 (replay) and E3 (live); the replay driver is its first source."
+description = "The daemon's block-ingest pipeline: Source → form → sequence → validate+connect → sinks. Production code shared by DRS-E2 (replay) and DRS-X (live, the store flip); the replay driver is its first source."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -33,6 +33,20 @@ replay-cli = [
     "dep:clap",
     "dep:shekyl-rpc-transport",
     "dep:shekyl-archival-retention",
+]
+# harness: the driver's emission-claim assembly (`emission_assembly.rs`,
+# E6 slice 8 row 7) for the one test outside this crate that needs it —
+# `shekyl-engine-core`'s byte-identity pin against its own handler. A
+# TEST_ONLY feature (check_test_only_features.py): no feature here enables
+# it, `default` included, and the only enabler is that crate's
+# [dev-dependencies] edge. A shipping build never carries a second producer.
+harness = [
+    "dep:shekyl-archival-retention",
+    "dep:shekyl-crypto-pq",
+    "dep:shekyl-tx-builder",
+    "dep:shekyl-curve-generators",
+    "dep:curve25519-dalek",
+    "dep:zeroize",
 ]
 
 [[bin]]
@@ -92,6 +106,15 @@ clap = { version = "4", features = ["derive"], optional = true }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", optional = true }
 shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }
 
+# harness: what `emission_assembly.rs` signs and encodes with — the same
+# crates the [dev-dependencies] below name unconditionally for the rest of
+# the driver. Optional here, enabled by `harness` alone.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", optional = true }
+shekyl-tx-builder = { path = "../shekyl-tx-builder", optional = true }
+shekyl-curve-generators = { path = "../shekyl-curve-generators", optional = true }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"], optional = true }
+zeroize = { workspace = true, optional = true }
+
 [dev-dependencies]
 # `shekyl-chain-rules`' fixtures are behind `harness`, a TEST_ONLY feature
 # (check_test_only_features.py) — never enabled from [dependencies].
@@ -101,9 +124,23 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # The block producer the scenario driver (`scenario.rs`, test-only) builds
 # candidates with — the production template over the production stack
 # (CHAIN_RULES_SLICE_6.md §5.3). Dev-dependency: the driver is a test
-# instrument; the template crate's production consumer is E3's handler.
+# instrument; the template crate's production consumer is the live
+# daemon's handler at the store flip (DRS-X).
 shekyl-block-template = { path = "../shekyl-block-template" }
-# The driver's miner keys (an Edwards spend key, a hybrid KEM keypair).
+# The harness miner every scenario block pays (`scenario.rs`), and the
+# spender over the scenario's blocks: the wallet-side curve tree mirrors
+# the store's over the same blocks — DRS-D3c's two Rust producers compared
+# — and assembles the membership path; the production tx-builder signs
+# the spend; the result self-verifies through the consensus verifier
+# against the wallet-side root before the driver lists it. Both are test
+# instruments the 4.I verification rows (CEN-I15, H19-verify) are judged
+# with; the store's tests take the same two edges (the wallet's already,
+# the spender's with its fixture migration), which is why the spender is
+# a crate and not this crate's module.
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
+shekyl-harness-spender = { path = "../shekyl-harness-spender" }
+# The persona's keys (`derive_archival_p_keys`) and the emission claim's
+# assembly (`emission_assembly.rs`, also behind `harness` above).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # The archival body fixtures (`test_support::{serve_credit_body,
 # emission_claim_body}`, slice 7 commit 7): the kept-half and emission-vin
@@ -115,24 +152,12 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 # The driver's coinbase secret is a `Zeroizing<[u8; 32]>`, the type
 # `TemplateContext` takes (rule 35).
 zeroize = { workspace = true }
-# The scenario spend (DRS-E3 commit 7, `scenario_spend.rs`): the wallet-side
-# curve tree mirrors the store's over the same blocks — DRS-D3c's two Rust
-# producers compared — and assembles the membership path; the production
-# tx-builder signs the spend; the Bulletproof+ blob is read back for the
-# production wire encoder. All test-only: the driver is the instrument the
-# 4.I verification rows (CEN-I15, H19-verify) will be judged with.
-shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# The emission claim's assembly (`emission_assembly.rs`): the production
+# tx-builder signs it and `open_spend` encodes it. Also behind `harness` above.
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
-shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
-# The archival scenarios (`scenario_archival.rs`, DRS-E4 commit 4): the
-# production bond-post constructors (`build_join_market_vin`,
-# `build_release_vin`) shape the posts a persona rides on the driver's
-# spend, so CEN-L7 is judged over posts a wallet would emit, not fixtures.
-shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
-# The spend self-verifies through the consensus verifier (`proof::verify`)
-# against the wallet-side root before the driver lists it: until CEN-I15
-# lands, admission alone would not say the proof is sound.
+# The emission scenarios verify a claim's proof through the consensus
+# verifier (`proof::verify`) against the wallet-side root.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 # Planting a corrupt row for the SI-10 path.
 redb = { workspace = true }

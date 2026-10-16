@@ -52,7 +52,7 @@ bool economics_c2a_prime_layer3_pop_replay::verify_pop_replay(
     const uint64_t already_generated = db.get_block_already_generated_coins(height - 1);
 
     cryptonote::block blk;
-    CHECK_TEST_CONDITION(extend_chain_with_empty_block(c, generator, m_miner, prev, /*hf_ver=*/1, blk));
+    CHECK_TEST_CONDITION(extend_chain_with_empty_block(c, generator, m_miner, prev, blk));
     const uint64_t ag_after = db.get_block_already_generated_coins(db.height() - 1);
 
     // Cap invariant (STAGE_1_PR_7 §5.8) — locks in fix α. The live

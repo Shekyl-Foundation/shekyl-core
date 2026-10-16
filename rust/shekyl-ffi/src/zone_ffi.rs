@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use shekyl_capped_stream::{node_gate, Session};
+use shekyl_capped_stream::{node_gate, process_write_stall, Session};
 use shekyl_clearnet::{
     accept_inbound as accept_clearnet_inbound, channel_choice, dial_one as dial_clearnet,
     zero_tally, Admitted as ClearnetAdmitted, ClearnetOption, Dial as ClearnetDial,
@@ -34,6 +34,7 @@ use shekyl_tor::{
     accept_inbound as accept_tor_inbound, dial_one as dial_tor, Admitted as TorAdmitted,
     Inbound as TorInbound,
 };
+use shekyl_transport_layer::spans;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -81,25 +82,6 @@ struct ClearnetReady {
 
 static HOST: LazyLock<Mutex<Option<Arc<Host>>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Spans and the runtime budget. The numbers are the caller's. The five
-/// deadlines are the measured spans; `workers` and `blocking` stay the
-/// structural floor until the thread-budget leg. `shutdown_timeout_ns`
-/// is the longest armed deadline. Field order matches `shekyl_zone_params`.
-/// This module does not pick a thread count or a deadline.
-#[repr(C)]
-pub struct ShekylZoneParams {
-    pub network_id: *const u8,
-    pub clearnet_dial_within_ns: u64,
-    pub clearnet_handshake_within_ns: u64,
-    pub clearnet_gap_within_ns: u64,
-    pub tor_dial_within_ns: u64,
-    pub tor_gap_within_ns: u64,
-    pub send_queue_bytes: u64,
-    pub shutdown_timeout_ns: u64,
-    pub workers: usize,
-    pub blocking: usize,
-}
-
 struct ZoneDial {
     host: Arc<Host>,
 }
@@ -121,12 +103,12 @@ impl Dial for ZoneDial {
                 direction,
             } => {
                 if *direction != Direction::Outbound {
-                    return Err(CloseCause::new(CloseKind::DialFailed));
+                    return Err(CloseCause::new(CloseKind::LocalClose));
                 }
                 self.dial_clearnet(*ip, *port)
             }
             Endpoint::Tor { key, port } => self.dial_tor(key, *port),
-            Endpoint::TorInbound => Err(CloseCause::new(CloseKind::DialFailed)),
+            Endpoint::TorInbound => Err(CloseCause::new(CloseKind::LocalClose)),
         }
     }
 }
@@ -144,7 +126,7 @@ impl ZoneDial {
                 tally: Arc::clone(&ready.tally),
                 proxy: ready.proxy,
             })
-            .ok_or_else(|| CloseCause::new(CloseKind::DialFailed))?;
+            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let address = match ip {
             IpAddr::V4(ip) => NetworkAddress::Ipv4 { ip, port },
             IpAddr::V6(ip) => NetworkAddress::Ipv6 { ip, port },
@@ -193,7 +175,7 @@ impl ZoneDial {
             .tor_proxy
             .lock()
             .expect("tor proxy")
-            .ok_or_else(|| CloseCause::new(CloseKind::DialFailed))?;
+            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let address = NetworkAddress::Tor {
             host: shekyl_onion_v3::v3_onion_hostname(key),
             port,
@@ -248,15 +230,27 @@ async fn recv_admitted<T>(
     tokio::pin!(fail);
     tokio::select! {
         biased;
-        admitted = rx.recv() => admitted.ok_or_else(|| CloseCause::new(CloseKind::DialFailed)),
+        admitted = rx.recv() => match admitted {
+            Some(value) => Ok(value),
+            // The dial task sends the cause and then drops the admission
+            // channel. Both are ready together, and this arm is first, so
+            // a closed channel is not itself the cause. Awaiting `fail`
+            // here is bounded by that task: it owns the sender, and the
+            // sender is dropped when the task returns, which is the same
+            // moment the channel closes.
+            None => match fail.await {
+                Ok(cause) => Err(cause),
+                Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),
+            },
+        },
         result = &mut fail => match result {
             Ok(cause) => Err(cause),
-            Err(_) => Err(CloseCause::new(CloseKind::DialFailed)),
+            Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),
         },
     }
 }
 
-fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host>, ()> {
+fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, ()> {
     let mut slot = HOST.lock().expect("zone host");
     if let Some(host) = slot.as_ref() {
         return Ok(Arc::clone(host));
@@ -265,17 +259,31 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
         return Err(());
     };
     hub.set_ceiling(ceiling);
-    let network_id = read_id(params.network_id).ok_or(())?;
-    let workers = NonZeroUsize::new(params.workers).ok_or(())?;
-    let blocking = NonZeroUsize::new(params.blocking).ok_or(())?;
+    let network_id = read_id(network_id).ok_or(())?;
+    let workers = NonZeroUsize::new(spans::WORKERS).ok_or(())?;
+    let blocking = NonZeroUsize::new(spans::BLOCKING).ok_or(())?;
     let name = ThreadName::new("p2p-transport").map_err(|_| ())?;
     let pool = runtime(RuntimeBudget { workers, blocking }, &name).map_err(|_| ())?;
     let handle = pool.handle().clone();
-    let clock = MonotonicClock::new();
-    let budget_clock = clock.clone();
-    node_gate().install_clock(Arc::new(move || budget_clock.now().get()));
+    // One process clock (Rick, 2026-10-14). The engine (every transport
+    // deadline) and the link gate read the origin the hub and every ban
+    // read, so the clearnet admission checks, which compare an engine `now`
+    // with a ban, compare on one clock. A `MonotonicClock` is its origin:
+    // the clone is the same clock. *Records-was:* the host started its own
+    // clock here, one origin per zone host.
+    let process = crate::seam_ffi::process_clock();
+    let clock = MonotonicClock::clone(&process);
+    node_gate().install_clock(Arc::new(move || process.now().get()));
+    if spans::MEASUREMENT_SPANS {
+        tracing::warn!(
+            tor_dial_within_ns = spans::TOR_DIAL_WITHIN_NANOS,
+            tor_gap_within_ns = spans::TOR_GAP_WITHIN_NANOS,
+            "measurement build: the Tor gap deadline is lifted to the dial's; not a release"
+        );
+    }
     let engine = EngineService::start(clock);
     let engine_handle = engine.handle();
+    spawn_lateness_report(engine_handle.clone());
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| match cause.kind() {
@@ -295,19 +303,24 @@ fn ensure(params: &ShekylZoneParams, ceiling: InboundCeiling) -> Result<Arc<Host
         tor_proxy: Mutex::new(None),
         clearnet_tx,
         tor_tx,
-        shutdown_timeout: Duration::from_nanos(params.shutdown_timeout_ns),
+        shutdown_timeout: Duration::from_nanos(spans::SHUTDOWN_TIMEOUT_NANOS),
         network_id,
-        clearnet_dial_within: Tick::new(params.clearnet_dial_within_ns),
-        clearnet_handshake_within: Tick::new(params.clearnet_handshake_within_ns),
-        clearnet_gap_within: Tick::new(params.clearnet_gap_within_ns),
-        tor_dial_within: Tick::new(params.tor_dial_within_ns),
-        tor_gap_within: Tick::new(params.tor_gap_within_ns),
-        send_queue_bytes: usize::try_from(params.send_queue_bytes).unwrap_or(usize::MAX),
+        clearnet_dial_within: Tick::new(spans::CLEARNET_DIAL_WITHIN_NANOS),
+        clearnet_handshake_within: Tick::new(spans::CLEARNET_HANDSHAKE_WITHIN_NANOS),
+        clearnet_gap_within: Tick::new(spans::CLEARNET_GAP_WITHIN_NANOS),
+        tor_dial_within: Tick::new(spans::TOR_DIAL_WITHIN_NANOS),
+        tor_gap_within: Tick::new(spans::TOR_GAP_WITHIN_NANOS),
+        send_queue_bytes: usize::try_from(spans::SEND_QUEUE_BYTES).unwrap_or(usize::MAX),
         on_cause,
     });
     hub.install_dial(Arc::new(ZoneDial {
         host: Arc::clone(&host),
     }));
+    // The dialer's life is the zone host's: shutdown stops and drops it
+    // while the seam stays bound, so a host built after one (a re-init in
+    // one process) builds it again. A first build happened at the bind.
+    crate::dialer_ffi::ensure_dialer(&hub);
+    crate::dialer_ffi::set_network_id(network_id);
     handle.spawn(pump(hub, clearnet_rx, tor_rx));
     *slot = Some(Arc::clone(&host));
     Ok(host)
@@ -373,6 +386,42 @@ fn spawn_drive(hub: &Hub, id: SocketId, session: Session) {
     tokio::spawn(async move { drive_inbound_async(&hub, id, session).await });
 }
 
+/// Every 60 s, the engine's lateness totals for each class that has fired,
+/// at debug (Rick, 2026-10-14: the transport diagnosis). The thread ends
+/// when the engine closes.
+fn spawn_lateness_report(engine: Handle<MonotonicClock>) {
+    const EVERY: Duration = Duration::from_secs(60);
+    let spawned = std::thread::Builder::new()
+        .name("p2p-lateness".to_owned())
+        .spawn(move || loop {
+            std::thread::sleep(EVERY);
+            for class in shekyl_timing_engine::OwnerClass::ALL {
+                let Ok(totals) = engine.lateness(class) else {
+                    return;
+                };
+                if totals.fires == 0 && totals.home_reports == 0 {
+                    continue;
+                }
+                tracing::debug!(
+                    class = ?class,
+                    fires = totals.fires,
+                    max_wake_delay_ns = totals.max_wake_delay,
+                    wakes_late_1ms = totals.wakes_at_least(1_000_000),
+                    wakes_late_100ms = totals.wakes_at_least(100_000_000),
+                    home_reports = totals.home_reports,
+                    max_home_delay_ns = totals.max_home_delay,
+                    homes_late_1ms = totals.homes_at_least(1_000_000),
+                    homes_late_100ms = totals.homes_at_least(100_000_000),
+                    replaced_wakes = totals.replaced_wakes,
+                    "engine lateness"
+                );
+            }
+        });
+    if spawned.is_err() {
+        tracing::warn!("the engine lateness report could not start");
+    }
+}
+
 fn read_id(ptr: *const u8) -> Option<[u8; 16]> {
     if ptr.is_null() {
         return None;
@@ -409,20 +458,19 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
     proxy_host: *const c_char,
     proxy_port: u16,
     encrypt: i32,
-    params: *const ShekylZoneParams,
+    network_id: *const u8,
     ceiling: *const ShekylInboundCeiling,
     out_port: *mut i32,
     out_port_v6: *mut i32,
 ) -> i32 {
-    if params.is_null() || ceiling.is_null() || out_port.is_null() || out_port_v6.is_null() {
+    if network_id.is_null() || ceiling.is_null() || out_port.is_null() || out_port_v6.is_null() {
         return -1;
     }
-    let params = unsafe { &*params };
     let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
         Some(ceiling) => ceiling,
         None => return -1,
     };
-    let Ok(host) = ensure(params, ceiling) else {
+    let Ok(host) = ensure(network_id, ceiling) else {
         return -1;
     };
     let Some(ipv4) = c_str(ipv4) else {
@@ -491,6 +539,7 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
         proxy,
     });
     spawn_clearnet(&host, bound_v4, kind, Arc::clone(&tally));
+    crate::dialer_ffi::start_connector(ConnectorId::Clearnet, &host.engine);
     if let Some(listener) = bound_v6 {
         spawn_clearnet(&host, listener, kind, tally);
     }
@@ -540,19 +589,18 @@ pub unsafe extern "C" fn shekyl_zone_listen_tor(
     socks_port: u16,
     extra: *const c_char,
     extra_port: u16,
-    params: *const ShekylZoneParams,
+    network_id: *const u8,
     ceiling: *const ShekylInboundCeiling,
     out_port: *mut i32,
 ) -> i32 {
-    if params.is_null() || ceiling.is_null() || out_port.is_null() {
+    if network_id.is_null() || ceiling.is_null() || out_port.is_null() {
         return -1;
     }
-    let params = unsafe { &*params };
     let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
         Some(ceiling) => ceiling,
         None => return -1,
     };
-    let Ok(host) = ensure(params, ceiling) else {
+    let Ok(host) = ensure(network_id, ceiling) else {
         return -1;
     };
     let Some(socks_host) = c_str(socks_host) else {
@@ -562,6 +610,8 @@ pub unsafe extern "C" fn shekyl_zone_listen_tor(
         return -1;
     };
     *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
+    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks_ip}:{socks_port}");
+    crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     let extra = match c_str(extra) {
         Some(text) => {
             let Ok(ip) = text.parse::<IpAddr>() else {
@@ -626,18 +676,17 @@ fn spawn_tor(host: &Host, listener: TcpListener) {
 pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
     socks_host: *const c_char,
     socks_port: u16,
-    params: *const ShekylZoneParams,
+    network_id: *const u8,
     ceiling: *const ShekylInboundCeiling,
 ) -> i32 {
-    if params.is_null() || ceiling.is_null() {
+    if network_id.is_null() || ceiling.is_null() {
         return -1;
     }
-    let params = unsafe { &*params };
     let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
         Some(ceiling) => ceiling,
         None => return -1,
     };
-    let Ok(host) = ensure(params, ceiling) else {
+    let Ok(host) = ensure(network_id, ceiling) else {
         return -1;
     };
     let Some(socks_host) = c_str(socks_host) else {
@@ -647,6 +696,8 @@ pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
         return -1;
     };
     *host.tor_proxy.lock().expect("tor proxy") = Some(SocketAddr::new(socks_ip, socks_port));
+    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks_ip}:{socks_port}");
+    crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     0
 }
 
@@ -686,6 +737,20 @@ pub extern "C" fn shekyl_zone_set_connector_cap(connector: u32, cap: u32) -> i32
     0
 }
 
+/// Drop the operator inbound cap for one connector. Later accepts are
+/// bounded only by the process ceiling.
+///
+/// `connector` is the FFI connector word ([`connector_from_index`]).
+/// Returns 0, or -1 when `connector` is not one.
+#[no_mangle]
+pub extern "C" fn shekyl_zone_clear_connector_cap(connector: u32) -> i32 {
+    let Some(connector) = connector_from_index(connector) else {
+        return -1;
+    };
+    process_sockets().set_zone_cap(connector, None);
+    0
+}
+
 /// The handshake finished. The row's gap sender fires, which disarms the
 /// connector's deadline. An unknown id has nothing to disarm.
 #[no_mangle]
@@ -699,217 +764,41 @@ pub extern "C" fn shekyl_zone_session_established(id: u64) {
     hub.session_established(id);
 }
 
-const KIB: u64 = 1024;
-
-fn store_rate(kbps: i64, set: impl Fn(Option<u64>)) {
-    if kbps < 0 {
-        set(None);
-    } else {
-        let kbps = u64::try_from(kbps).unwrap_or(0);
-        set(Some(kbps.saturating_mul(KIB)));
-    }
-}
-
-fn load_rate(rate: Option<u64>) -> i64 {
-    match rate {
-        None => -1,
-        Some(bytes) => i64::try_from(bytes / KIB).unwrap_or(i64::MAX),
-    }
-}
-
-/// `kbps` negative removes the up bucket. Zero or positive is KiB/s.
-#[no_mangle]
-pub extern "C" fn shekyl_link_set_up(kbps: i64) {
-    store_rate(kbps, |rate| node_gate().set_up(rate));
-}
-
-/// `kbps` negative removes the down bucket. Zero or positive is KiB/s.
-#[no_mangle]
-pub extern "C" fn shekyl_link_set_down(kbps: i64) {
-    store_rate(kbps, |rate| node_gate().set_down(rate));
-}
-
-/// The up rate in KiB/s, or -1 when that direction is unlimited.
-#[no_mangle]
-pub extern "C" fn shekyl_link_get_up() -> i64 {
-    load_rate(node_gate().rate_up())
-}
-
-/// The down rate in KiB/s, or -1 when that direction is unlimited.
-#[no_mangle]
-pub extern "C" fn shekyl_link_get_down() -> i64 {
-    load_rate(node_gate().rate_down())
-}
-
-/// Bytes and packets the budget has moved. Null pointers are skipped.
-#[no_mangle]
-pub extern "C" fn shekyl_link_totals(
-    bytes_down: *mut u64,
-    packets_down: *mut u64,
-    bytes_up: *mut u64,
-    packets_up: *mut u64,
-) {
-    let observed = node_gate().totals();
-    unsafe {
-        if !bytes_down.is_null() {
-            *bytes_down = observed.bytes_down;
-        }
-        if !packets_down.is_null() {
-            *packets_down = observed.packets_down;
-        }
-        if !bytes_up.is_null() {
-            *bytes_up = observed.bytes_up;
-        }
-        if !packets_up.is_null() {
-            *packets_up = observed.packets_up;
-        }
-    }
-}
-
-/// Bytes per second on this connection, from the engine's clock, over
-/// the link budget's recent-speed window. Null pointers are skipped.
-#[no_mangle]
-pub extern "C" fn shekyl_link_speed(
-    id: u64,
-    bytes_per_sec_up: *mut u64,
-    bytes_per_sec_down: *mut u64,
-) {
-    let (up, down) = node_gate().speed(id);
-    unsafe {
-        if !bytes_per_sec_up.is_null() {
-            *bytes_per_sec_up = up;
-        }
-        if !bytes_per_sec_down.is_null() {
-            *bytes_per_sec_down = down;
-        }
-    }
-}
-
-/// Bytes this connection has moved. Null pointers are skipped.
-#[no_mangle]
-pub extern "C" fn shekyl_link_connection(id: u64, bytes_up: *mut u64, bytes_down: *mut u64) {
-    let observed = node_gate().connection(id);
-    unsafe {
-        if !bytes_up.is_null() {
-            *bytes_up = observed.bytes_up;
-        }
-        if !bytes_down.is_null() {
-            *bytes_down = observed.bytes_down;
-        }
-    }
-}
-
 /// Stop the transport runtime. Called from outside one of its tasks.
 ///
 /// D6's order: the engine takes no new deadline, the transport's tasks
-/// are cancelled, then the engine thread is joined.
+/// are cancelled, then the engine thread is joined. Each writer folds its
+/// stall when its task is dropped, including a write still in flight, so
+/// the process total is read after the pool has stopped. Nothing else in
+/// the daemon reads it.
 #[no_mangle]
 pub extern "C" fn shekyl_zone_shutdown() {
+    crate::dialer_ffi::stop();
     let host = HOST.lock().expect("zone host").take();
-    let Some(host) = host else {
-        return;
-    };
-    let engine = host.engine_service.lock().expect("engine").take();
-    if let Some(engine) = engine.as_ref() {
-        engine.close();
+    if let Some(host) = host {
+        let engine = host.engine_service.lock().expect("engine").take();
+        if let Some(engine) = engine.as_ref() {
+            engine.close();
+        }
+        let pool = host.pool.lock().expect("pool").take();
+        if let Some(pool) = pool {
+            pool.shutdown(host.shutdown_timeout);
+        }
+        drop(engine);
     }
-    let pool = host.pool.lock().expect("pool").take();
-    if let Some(pool) = pool {
-        pool.shutdown(host.shutdown_timeout);
-    }
-    drop(engine);
+    let stall = process_write_stall();
+    tracing::info!(
+        closes = stall.closes,
+        max_ns = stall.max_ns,
+        in_flight_at_close = stall.in_flight_at_close,
+        in_flight_max_ns = stall.in_flight_at_close_max_ns,
+        "process write stall"
+    );
+    // The connector caps are this zone's. The socket table outlives the
+    // pool, so they are released only after its tasks have stopped.
+    process_sockets().clear_zone_caps();
 }
 
 #[cfg(test)]
-mod tests {
-    use std::ffi::c_void;
-
-    use shekyl_peer_policy::UnboundedReason;
-    use shekyl_timing_engine::OwnerClass;
-
-    use super::*;
-    use crate::inbound_ceiling_ffi::SHEKYL_INBOUND_CEILING_UNLIMITED;
-    use crate::seam_ffi::{shekyl_seam_bind, ShekylSeamObserved};
-
-    unsafe extern "C" fn discard(
-        _ctx: *mut c_void,
-        _id: u64,
-        _kind: u32,
-        _observed: *const ShekylSeamObserved,
-        _bytes: *const u8,
-        _len: usize,
-        _cause: *const CloseCause,
-    ) {
-    }
-
-    /// The connectors arm every transport deadline on the host's engine
-    /// handle. `ensure` once stored the handle and dropped the service, so
-    /// the engine closed the moment `ensure` returned and every NNhfs and
-    /// Tor connection failed with `TransportHandshakeFailed`. The option-off
-    /// path arms nothing and never saw it.
-    #[test]
-    fn the_engine_outlives_ensure() {
-        let mut executor = 0u8;
-        let ceiling = ShekylInboundCeiling {
-            kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
-            ceiling: 0,
-            soft_limit: 0,
-            held: 0,
-        };
-        let bound = unsafe {
-            shekyl_seam_bind(
-                std::ptr::addr_of_mut!(executor).cast::<c_void>(),
-                Some(discard),
-                &raw const ceiling,
-            )
-        };
-        assert_eq!(bound, 0);
-        let network_id = [7u8; 16];
-        let params = ShekylZoneParams {
-            network_id: network_id.as_ptr(),
-            clearnet_dial_within_ns: 1_000_000_000,
-            clearnet_handshake_within_ns: 1_000_000_000,
-            clearnet_gap_within_ns: 1_000_000_000,
-            tor_dial_within_ns: 1_000_000_000,
-            tor_gap_within_ns: 1_000_000_000,
-            send_queue_bytes: 65_536,
-            shutdown_timeout_ns: 1_000_000_000,
-            workers: 1,
-            blocking: 1,
-        };
-        let host = ensure(
-            &params,
-            InboundCeiling::Unbounded(UnboundedReason::Unlimited),
-        )
-        .expect("zone host");
-
-        let owner = host.engine.register(OwnerClass::Transport);
-        assert!(
-            owner.is_ok(),
-            "a transport deadline must be armable after ensure returns"
-        );
-        drop(owner);
-
-        // An outbound-only tor zone installs its proxy without listening.
-        assert!(host.tor_proxy.lock().expect("tor proxy").is_none());
-        let socks = std::ffi::CString::new("127.0.0.1").expect("socks host");
-        let rc = unsafe {
-            shekyl_zone_set_tor_proxy(socks.as_ptr(), 9050, &raw const params, &raw const ceiling)
-        };
-        assert_eq!(rc, 0);
-        assert_eq!(
-            *host.tor_proxy.lock().expect("tor proxy"),
-            Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050)),
-            "dial_tor reads this; None is DialFailed before the network"
-        );
-
-        shekyl_zone_shutdown();
-        assert!(
-            host.engine.register(OwnerClass::Transport).is_err(),
-            "shutdown closes the engine"
-        );
-        unsafe {
-            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
-        }
-    }
-}
+#[path = "zone_ffi_tests.rs"]
+mod tests;

@@ -66,9 +66,9 @@ pub(crate) fn stored_timelock(raw: u64) -> Timelock {
 /// `ConnectFacts`). The two counts are storage counts the store does
 /// maintain. `rct_outputs` is **this block's** RCT output count, not a
 /// running total: LMDB's `bi_cum_rct` is set to `num_rct_outs`
-/// (`db_lmdb.cpp:1006`) and the `major_version >= 4` arm that would add the
-/// parent's value is the dead Monero-v4 dispatch CEN-L15 rules "delete, do
-/// not port" (live major is 1); the field name follows what the bytes hold.
+/// (`db_lmdb.cpp:1019`) and nothing adds the parent's value. The Monero-v4
+/// arm that would have is deleted from the C++ and was never ported
+/// (CEN-L15); the field name follows what the bytes hold.
 /// `cumulative_tx_count` **is** a running total — the parent's plus this
 /// block's listed transactions, `checked_add` under SI-8 — because that is
 /// the read `get_tx_volume_window` needs in O(1). `cumulative_archival_len`

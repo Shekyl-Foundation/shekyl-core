@@ -82,7 +82,7 @@ zones other than Tor.)* Everything below is what that change would wake up.
 
 | component | file | state |
 | --- | --- | --- |
-| `CovertSchedule` | `shekyl-relay/src/zone/mod.rs` | **one type so "enabled" and "has deadlines" cannot disagree**; channel `i` bound to stem slot `i` (§20.3) |
+| `CovertSchedule` | `shekyl-relay/src/graph/mod.rs` | **one type so "enabled" and "has deadlines" cannot disagree**; channel `i` bound to stem slot `i` (§20.3) |
 | `Zone::covert_deadline` / `due_covert_channel` / `covert_deadline_at` / `covert_enabled` | same | complete |
 | `inherited::NOISE_CHANNELS` mirror | `shekyl-relay-privacy/src/params.rs` | pins the C++ constant |
 | `carrier::WINDOW_BYTES` / `MAX_FRAGMENTS` | `shekyl-relay-privacy/src/params/carrier.rs` | derived window and fragment cap; **not** inherited mirrors |
@@ -916,9 +916,12 @@ ruling is already on the record. Everything below says **encrypted zone**.
 
 #### The embargo cannot be per-node, and the carrier moves `hop` by ~9×
 
-`shekyl_dandelionpp_embargo_draw_seconds(zone)` takes a zone and nothing else,
-so every node on an encrypted zone draws from one distribution. An operator
-switch would put two populations on that one constant:
+*Records-was:* `shekyl_dandelionpp_embargo_draw_seconds(zone)` took a zone
+and nothing else. The live draw is
+`shekyl_dandelionpp_embargo_draw_seconds_for_connector`, one distribution
+per connector's measured transit, so every node on that connector still
+draws from one distribution. An operator switch would put two populations
+on that one constant:
 
 | population | `hop` | embargo (α = 0.90, τ = 250) |
 | --- | --- | --- |
@@ -1258,7 +1261,7 @@ not a convenience; it is the property that makes the arm separable.
 **And the emitter is batch-blind structurally, which is why the carrier arms
 survive PWD-B12 at all.** `NoiseQueues` is held BESIDE `Driver` in
 `RelayZoneHandle` and never inside it, and `Driver` owns `Zone` — so
-PWD-B12's subject, `rust/shekyl-relay/src/zone/mod.rs`, cannot reach the
+PWD-B12's subject, `rust/shekyl-relay/src/graph/mod.rs`, cannot reach the
 carrier's buffers. Batch composition changes what `Zone` releases; it cannot
 change what the carrier emits.
 

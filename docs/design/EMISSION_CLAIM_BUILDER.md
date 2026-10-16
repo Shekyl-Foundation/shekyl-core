@@ -139,6 +139,21 @@ names the landed function it must reuse:
    consults it — M1 wire-positivity resiting), no row-absence proxies.
    Batch up to `MAX_SETTLEMENT_EPOCHS_PER_EMISSION = 15`, strictly
    increasing.
+
+   **Two validators (`SO-D11`,
+   [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15).**
+   The boundaries above are the wallet's, against the C++ daemon it
+   reads. Both are unchanged (`SO-D11g`), and the daemon-side facts they
+   rest on go with `DEL-008`. In the Rust validator the close of `E`
+   freezes `budget(E)` only, and `Σwork(E)` is written by the slash pass
+   of `E` at connecting height `(E+2)·SEB − 1`. An epoch is claimable
+   once its `Σwork` row exists, from connecting height `(E+2)·SEB`, and
+   CEN-J23 refuses it before then. For a block in epoch `C` the top is
+   `C − 2`, one epoch below `E < current_settled_epoch`. The claimable
+   span is 25 epochs, `[C − 26, C − 2]`; `MAX_CLAIM_AGE_W` stays 26. The
+   strict finalization predicate stays true and no longer binds. A
+   budget row without a `Σwork` row is an ordinary state there, for the
+   whole of epoch `E+1`.
 2. **Work-claim assembly** — per epoch, the `WorkEpochClaim` /
    `ShardWorkEntry` rows (`shard_id`, `serve_credit_bit`,
    `scarcity_milli`) exactly as the verifier will recompute them
@@ -690,7 +705,7 @@ field the landed struct lacks and drops none):
 | `close_block_height` | `.close_block_height` | the close-**processing** height `(E+1)·SEB`. Sourced from `shekyl_archival_epoch_close_processing_height`, one above the epoch's last block `shekyl_archival_epoch_last_block` (= `(E+1)·SEB − 1`; named `*_epoch_close_height` until 2026-09-30, when the shared word was retired — `DRS_E4_ARCHIVAL_WRITER.md` §10). The RPC doc comment repeats this pin |
 | `sigma_work_milli` | `.sigma_work_milli` | **persisted** `Σwork(E)` — the stored denominator, never a recompute (M1 gate outcome reaches the wallet only through this value, same as verify) |
 | `budget_atomic` | `.budget_atomic` | frozen close-row `budget(E)` |
-| `has_budget_row` | `.has_budget_row` | absent close row ⇒ wallet treats `E` as unclaimable (mirrors the verify shim's reject); present-and-zero is rejected downstream by wire positivity |
+| `has_budget_row` | `.has_budget_row` | absent close row ⇒ wallet treats `E` as unclaimable (mirrors the verify shim's reject); present-and-zero is rejected downstream by wire positivity. This is the C++ daemon's row, where budget and `Σwork` are frozen together at the close (goes with `DEL-008`). In the Rust validator the budget row exists one epoch before the `Σwork` row (`SO-D11`, [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15), so budget presence alone is not claimability there. `Σwork`'s presence is not on the wire. Gating an epoch on `Σwork`'s row at the claim source is `SO-D11g`, recorded on the `DEL-008` row; the RPC and the wallet are unchanged |
 | `bonds[]` | `.bonds` (`BondRow`) | `join_settlement_epoch`, `is_foundation_complete_tree`, `bad_intervals_flat[]` — flattened pairs, as landed |
 | `shards[]` | `.shards` (`ShardRow`) | `shard_id`, `freeze_height`, `has_segment` |
 | `credit_pairs[]` | `.credit_pairs` (`CreditPair`) | `(bond_idx, shard_idx)` index pairs into the two arrays above |

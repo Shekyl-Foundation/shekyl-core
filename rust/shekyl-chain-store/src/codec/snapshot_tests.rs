@@ -114,12 +114,13 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockInfo, BlockRef, BondRecord, Canonical,
-    Coded, CoverageGaps, CurveTreeState, FirstPayingHeight, HeldShard, Holdings, LayerHash,
-    LeafCount, OriginatedPhase, OutKey, OutTx, PoolRecord, ProbeCell, PropertyCell, RMarket,
-    Readiness, RelayState, Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
-    SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth, TxIndex, TxOutputIndices, UndoEntry,
-    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockDraws, BlockInfo, BlockRef, BondRecord,
+    Canonical, Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard,
+    Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OriginatedPhase, OutKey, OutTx,
+    PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness, RelayState, Responsibility,
+    RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow, SigmaWorkMilli,
+    SlashLogEntry, SlashedHolding, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
+    PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -485,6 +486,11 @@ impl Fixtures for BondRecord {
         let base = BondRecord {
             hybrid_pubkey: vec![0x11; 4],
             bond_spend_pk: vec![0x22; 3],
+            // 1,837 bytes of one fill: the field is fixed-width, so the
+            // fixture pins where it sits and that no length precedes it.
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x44; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0x33; 32],
             join_settlement_epoch: SettlementEpoch::from_raw(3),
             bonded_total: AtomicUnits::from_raw(1_000_000),
@@ -541,25 +547,21 @@ impl Fixtures for BondRecord {
 impl Fixtures for AltBlock {
     fn fixtures() -> Vec<(&'static str, Self)> {
         use shekyl_types::BlockWeight;
-        let facts = |weight: Option<u64>| AltBlockFacts {
+        let facts = |weight: u64| AltBlockFacts {
             height: BlockHeight::from_raw(41),
-            block_weight: weight.map(BlockWeight::from_raw),
+            block_weight: BlockWeight::from_raw(weight),
             cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4), // lo = 4, hi = 5
-            coins_generated: AtomicUnits::from_raw(1_234_567),
         };
         let block = super::alt::test_block_bytes(41);
         vec![
-            // Weight undetermined at admission, no witness: the two
-            // absences are one presence byte each.
+            // Weight is mandatory. The two fixtures differ by the witness.
             (
-                "weight_unknown_no_witness",
-                AltBlock::checked(facts(None), &block, None).expect("fixture"),
+                "weight_no_witness",
+                AltBlock::checked(facts(2_048), &block, None).expect("fixture"),
             ),
-            // Every optional part present: a weight and a 40-byte witness.
             (
                 "weight_and_witness",
-                AltBlock::checked(facts(Some(2_048)), &block, Some(vec![0xA5; 40]))
-                    .expect("fixture"),
+                AltBlock::checked(facts(2_048), &block, Some(vec![0xA5; 40])).expect("fixture"),
             ),
         ]
     }
@@ -679,6 +681,90 @@ impl Fixtures for RMarket {
         vec![
             ("zero_coholders_written", RMarket::from_raw(0)),
             ("distinct", RMarket::from_raw(0x0102_0304_0506_0708)),
+        ]
+    }
+}
+impl Fixtures for SettlementRow {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        let row = |passes, issued| SettlementRow::settle(passes, issued).expect("a row");
+        vec![
+            ("not_observed_one_issued", row(0, 1)),
+            ("not_observed_two_issued", row(0, 2)),
+            ("missed_no_pass", row(0, 3)),
+            ("missed_one_pass", row(1, 3)),
+            ("served_two_passes", row(2, 4)),
+            ("served_three_passes", row(3, 9)),
+            ("served_issued_saturated", row(2, 1000)),
+        ]
+    }
+}
+impl Fixtures for IssuedDraw {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "unpassed",
+                IssuedDraw {
+                    revealed_at: BlockHeight::from_raw(0x0102_0304_0506_0708),
+                    passed: false,
+                },
+            ),
+            (
+                "passed",
+                IssuedDraw {
+                    revealed_at: BlockHeight::from_raw(0x0102_0304_0506_0708),
+                    passed: true,
+                },
+            ),
+        ]
+    }
+}
+impl Fixtures for IssuedDigest {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("no_draws", IssuedDigest::ZERO),
+            (
+                "distinct",
+                IssuedDigest::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i + 1).expect("fits")
+                })),
+            ),
+        ]
+    }
+}
+impl Fixtures for BlockDraws {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        let row = |revealed| BlockDraws {
+            count: 0x0102_0304,
+            carry: 0x1112_1314,
+            shortfall: 0x2122_2324_2526_2728,
+            revealed,
+        };
+        vec![
+            (
+                "no_draws",
+                BlockDraws {
+                    count: 0,
+                    carry: 0,
+                    shortfall: 0,
+                    revealed: false,
+                },
+            ),
+            ("in_flight", row(false)),
+            ("revealed", row(true)),
+        ]
+    }
+}
+impl Fixtures for DrawableDigest {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            // Zero is a digest like any other, not an absent one.
+            ("all_zero", DrawableDigest::from_bytes([0; 32])),
+            (
+                "distinct",
+                DrawableDigest::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i + 1).expect("fits")
+                })),
+            ),
         ]
     }
 }
@@ -1275,6 +1361,11 @@ snapshotted_codecs! {
     RMarket => codec_snapshot_r_market,
     SigmaWorkMilli => codec_snapshot_sigma_work_milli,
     SlashLogEntry => codec_snapshot_slash_log_entry,
+    SettlementRow => codec_snapshot_settlement_row,
+    IssuedDraw => codec_snapshot_issued_draw,
+    IssuedDigest => codec_snapshot_issued_digest,
+    BlockDraws => codec_snapshot_block_draws,
+    DrawableDigest => codec_snapshot_drawable_digest,
     SettlementEpoch => codec_snapshot_settlement_epoch,
     ShardId => codec_snapshot_shard_id,
     ArchivalLength => codec_snapshot_archival_length,

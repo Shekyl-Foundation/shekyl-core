@@ -4,57 +4,45 @@
 // BSD-3-Clause
 
 //! Census 4.B — the block header (slice 1; `CHAIN_RULES_SLICE_1.md` §3):
-//! the version fields (B1, B2, B7), the curve-tree root (B5) and the block's
-//! identity (B6). B3 is surface-bound and the store's; B4 is deferred (E4
-//! S-ARCH) and A3 is subsumed into it.
+//! the version fields (B1, B2), the curve-tree root (B5) and the block's
+//! identity (B6). B3 is surface-bound and the store's; B4 (the
+//! attestation set) is `rules::attestation` (slice 8 row 10), and A3 is
+//! its empty-witness arm.
 //!
-//! # What the C++ does, read at `dev` `3560b80c2`
+//! # The version pair
 //!
-//! `handle_block_to_main_chain` (`blockchain.cpp:5431–5450`) first warns
-//! once if `major_version > get_ideal_version()` — the **latest scheduled**
-//! version, `heights.back().version` (`hardfork.cpp:366–370`), not the one
-//! in force — and does **not** reject (CEN-B7), then calls `HardFork::check` → `do_check`
-//! (`hardfork.cpp:109–113`): `block_version == heights[current].version &&
-//! voting_version >= heights[current].version`, where `voting_version` is
-//! `minor_version` with `0` read as `1` (`hardfork.cpp:41–50`). The first
-//! conjunct is CEN-B1; the second is CEN-B2, unfailable at the shipped table
-//! (`current.version == 1`, and the normalised vote is `>= 1` for every
-//! `u8`) — which is why the census records B2's *effect* as "unconstrained".
+//! A header carries two version bytes, and each has exactly one valid
+//! value. `major_version` is the version the rule set admits
+//! ([`RuleSet::header_major_version`], `1`): CEN-B1. `minor_version` is
+//! [`HEADER_MINOR_VERSION`], `0`: CEN-B2. Both are equalities, and neither
+//! is a vote or an "at least".
 //!
-//! # What lands here
+//! The C++ holds both equalities in one predicate
+//! (`header_version_is_valid`, `blockchain.cpp`), called on the main path
+//! and on the alternative-chain path, against
+//! `CURRENT_BLOCK_MAJOR_VERSION` and `CURRENT_BLOCK_MINOR_VERSION`. It has
+//! no height schedule. `rule_set_tests` holds those two defines equal to
+//! the values here.
 //!
-//! B1 and B2 port the **predicates**, not the effects: `major_version ==`
-//! and `normalised(minor_version) >=` the header version the rule set
-//! admits ([`RuleSet::header_major_version`]). Under `RuleSet::GENESIS`
-//! (admits `1`) B2 cannot refuse — exactly as the C++ cannot — but the
-//! comparison is the C++'s comparison, so a rule set that admits `2`
-//! refuses a stale vote here as the C++ would have. B7 is the no-reject
-//! branch, ported as what it is: a row whose only effect is a one-time
-//! `MCLOG_RED` warning, and the crate has no logging (G12). Its operand is
-//! the latest *scheduled* version, which a rule cannot read — a `RuleSet` is
-//! the set in force, and the schedule is the caller's (rule 71) — so the
-//! condition is **not** re-computed here against the wrong operand; the rule
-//! evaluates (records its row) and refuses nothing, and the header that
-//! would have tripped the warning is refused by **B1**. The fixture pins both
-//! halves: B7 passes such a header when called directly, and the pipeline
-//! refuses it under B1, never B7.
+//! "The version at this height" is a property of the input, not a second
+//! code path: the caller hands `validate` the rule set
+//! `RuleSchedule::rules_at(height)` names, on the main chain and on an
+//! alternative one alike.
 //!
-//! The alt-admission arm (`check_for_height`, ideal version *at* the block's
-//! height) collapses into the same predicates: the caller hands `validate`
-//! the rule set `RuleSchedule::rules_at(height)` names, so "the version at
-//! this height" is a property of the input, not a second code path.
-//!
-//! B1, B2 and B7 read the header and the rule set and nothing else, so they
-//! are [`FormRule`]s — the stateless stage's, run in `form` outside the
-//! write transaction (slice 2, Q9: stage membership is view-dependence, not
-//! which slice landed the rule). B5 reads the tip and a root and stays a
-//! [`BlockRule`].
+//! B1 reads the header and the rule set. B2 reads the header only: the
+//! reserved minor byte does not depend on which rule set is in force. Both
+//! are [`FormRule`]s — the
+//! stateless stage's, run in `form` outside the write transaction (slice 2,
+//! Q9: stage membership is view-dependence, not which slice landed the
+//! rule). B5 reads the tip and a root and stays a [`BlockRule`].
 
 use shekyl_types::BlockHash;
+use shekyl_wire::block::HEADER_MINOR_VERSION;
 use shekyl_wire::Block;
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
+use crate::fault::ViewRead;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{refused, InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView};
@@ -76,21 +64,10 @@ impl FormRule for B1 {
     }
 }
 
-/// CEN-B2: the version vote (`minor_version`, `0` read as `1`) must be at
-/// least the admitted version. Unfailable under `GENESIS`; ported as the
-/// predicate so it stays the C++'s comparison under a later rule set.
+/// CEN-B2: `minor_version` must be [`HEADER_MINOR_VERSION`]. The byte is
+/// reserved, and a reserved byte that validates at any value is the
+/// producer's to write.
 pub(crate) struct B2;
-
-impl B2 {
-    /// `hardfork.cpp:41–50`: a `minor_version` of `0` votes for `1`.
-    const fn normalised_vote(minor_version: u8) -> u8 {
-        if minor_version == 0 {
-            1
-        } else {
-            minor_version
-        }
-    }
-}
 
 impl Rule for B2 {
     const ROW: CenRow = CenRow::B2;
@@ -98,35 +75,11 @@ impl Rule for B2 {
 
 impl FormRule for B2 {
     fn check(cx: &FormContext<'_>) -> Verdict<()> {
-        let vote = Self::normalised_vote(cx.candidate.block.header.minor_version);
-        if vote >= cx.rule_set.header_major_version() {
+        if cx.candidate.block.header.minor_version == HEADER_MINOR_VERSION {
             Ok(())
         } else {
             Err(InvalidBlock::new(Self::ROW, Locus::Block))
         }
-    }
-}
-
-/// CEN-B7: a `major_version` above the latest scheduled version is **not**
-/// a refusal on this row — the C++ (`blockchain.cpp:5431–5441`) logs once
-/// and continues, and B1 then refuses. Bucket 4, ported as-is: the row's
-/// whole effect is a log line the crate does not have, and its operand
-/// (`get_ideal_version()`, the schedule's last entry) is not a rule's to
-/// read, so nothing is computed here in its name. The row is *evaluated* —
-/// it enters coverage — and passes every header.
-///
-/// If the R-round that judges this row ratifies a refusal instead, the
-/// operand arrives as a `RuleSet` parameter with it; until then a computed
-/// condition with no consumer would be a claim the code does not act on.
-pub(crate) struct B7;
-
-impl Rule for B7 {
-    const ROW: CenRow = CenRow::B7;
-}
-
-impl FormRule for B7 {
-    fn check(_cx: &FormContext<'_>) -> Verdict<()> {
-        Ok(())
     }
 }
 
@@ -156,7 +109,7 @@ impl BlockRule for B5 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let claimed = cx.candidate().block.header.curve_tree_root;
         match view.root_at(cx.connecting)? {
             AtHeight::Recorded(root) if root == claimed => Ok(Ok(())),
@@ -173,8 +126,7 @@ impl BlockRule for B5 {
 /// (live-oracle vectors; height 0 equals the published mainnet genesis id).
 ///
 /// A definition, not a predicate: nothing about a candidate can fail it.
-/// B7 is a no-op *policy* the C++ still evaluates, so it runs through
-/// [`BlockRule`] and [`crate::rules::run`]. B6 is the identity function,
+/// B6 is the identity function,
 /// so it is not a check that always passes — coverage is recorded here,
 /// when the identity is derived, and `implemented(rules::header::B6)`
 /// names this function (slice 1, Q5). **Derived once, by `form`**: the

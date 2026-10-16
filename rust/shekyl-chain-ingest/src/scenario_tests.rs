@@ -219,16 +219,16 @@ fn the_scenario_rules_are_regtest_at_difficulty_one() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree() {
     use super::StepOutcome;
-    use crate::scenario_spend::Spender;
     use shekyl_chain_rules::RuleSet;
+    use shekyl_harness_spender::{first_spending_height, Spender};
 
-    // Block 0's coinbase matures at connect 60 (`mined_money_unlock_window`)
-    // and is in the tree going into 61; the newest admissible reference for a
-    // block connecting at `c` is `c − 10`, so the first block that can spend
-    // it against a root containing it connects at 71.
+    // Block 0's coinbase unlocks at connect 60 (`mined_money_unlock_window`)
+    // and is in the tree going into 61; the newest admissible reference for
+    // a block connecting at `c` is `c − 5` (`REFERENCE_BLOCK_MIN_AGE`), so
+    // the first block that can spend it against a root containing it
+    // connects at 66 — `first_spending_height`'s derivation.
     let window = RuleSet::GENESIS.mined_money_unlock_window().to_raw();
-    let age = RuleSet::GENESIS.tx_spendable_age().to_raw();
-    let connecting = window + age + 1;
+    let connecting = first_spending_height(&RuleSet::GENESIS).to_raw();
     let mut scenario = Scenario::open("scenario-spend");
     let mined = scenario.mine(connecting).await;
     assert_eq!(mined.len() as u64, connecting);
@@ -245,7 +245,7 @@ async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree
             .expect("read")
             .expect("recorded");
         assert_eq!(
-            spender.root_at(h),
+            spender.root_at(BlockHeight::from_raw(h)),
             ours,
             "wallet-side vs store root going into {h}"
         );
@@ -263,7 +263,12 @@ async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree
     // The spend: block 0's coinbase, referenced at the newest admissible
     // height, self-verified against the wallet-side root there.
     let fee = 1_000_000;
-    let spend = spender.spend_coinbase(scenario.wallet(), 0, connecting, fee);
+    let spend = spender.spend_coinbase(
+        scenario.wallet(),
+        BlockHeight::ZERO,
+        BlockHeight::from_raw(connecting),
+        fee,
+    );
     let block = scenario
         .mine_listing(vec![spend.clone()])
         .await
@@ -301,7 +306,10 @@ async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree
         .await
         .expect("read")
         .expect("recorded");
-    assert_eq!(spender.root_at(connecting + 1), after);
+    assert_eq!(
+        spender.root_at(BlockHeight::from_raw(connecting + 1)),
+        after
+    );
 
     scenario.close().await;
 }

@@ -479,7 +479,7 @@ q            T_risk bond-only     T_risk +reward
 0.010                0.000000           0.000000
 0.050                0.000000           0.000001
 0.100                0.000000           0.002359
-0.278                0.004978          89.459629
+0.278                0.004978          89.459262
   -> q_risk* (T_risk alone covers S; storage cheap-side worst case): bond-only 0.2762,
 +reward 0.1066. Residual vs the quoted A5 band (0.098-0.278), ATTRIBUTED (F-2): the
 A5 crossover solves T_risk(q) = S - T_bw(opening) and its band ends were quoted at
@@ -505,7 +505,7 @@ per-shard pool because there a larger forfeit is a STRONGER deterrent, so
 max is conservative. For TJ-4/TJ-7 it runs the OTHER WAY -- a larger reward
 makes the slash/Reinstate cycle and the dilution MORE profitable -- so max is
 the ALARM-RAISING end. Tables below run the MEDIAN (1.0418 SKL/shard/epoch);
-the max (226.4604) is reported as the bound beneath each.
+the max (226.4595) is reported as the bound beneath each.
   TJ-4 CORRECTION (reward path, verified): a ZERO-service P earns NOTHING
 (shard_work_micro returns 0 without serve credit; reward pays on credited
 work), so the m-1 unslashable epochs are free of SLASH, not free MONEY.
@@ -551,7 +551,7 @@ NOTE: 0.2308 is the DETERMINISTIC no-slash fraction, which bounds an
 adversary that can PLACE its passing epochs. Under SS 8.2's unchooseable
 draw the cartel cannot place them, so absorption still occurs above it
 — deferred, not prevented.
-     bound at the MAX operand (226.4604 SKL/shard/epoch): break-even f = 0.0004.
+     bound at the MAX operand (226.4595 SKL/shard/epoch): break-even f = 0.0004.
 Both ends of the family are reported so the verdict is a RANGE, not a
 point chosen by which operand happened to be at hand.
   -> WHY it breaks even so low: the burned bond is worth 0.72 EPOCHS of the
@@ -620,15 +620,15 @@ N               h   gain SKL/epoch     break-even rate/yr
 20              5          0.65980                 121.7%
 100             5          0.81855                  29.0%
 100            50          0.67410                  23.9%
-  TJ-7 at MAX pool g = 226.4604 SKL/epoch (sole credited holder; pool is
+  TJ-7 at MAX pool g = 226.4595 SKL/epoch (sole credited holder; pool is
 CONSERVED — N sybils vs h honest take N/(N+h)*g, NOT N*g):
 N               h   gain SKL/epoch     break-even rate/yr
-2               1         37.74341              132252.9%
-5               1         75.48681               66126.4%
-5               5         75.48681               66126.4%
-20              5        143.42494               26450.6%
-100             5        177.93320                6297.8%
-100            50        146.53322                5186.4%
+2               1         37.74325              132252.4%
+5               1         75.48650               66126.2%
+5               5         75.48650               66126.2%
+20              5        143.42435               26450.5%
+100             5        177.93247                6297.7%
+100            50        146.53262                5186.4%
   -> the attack pays iff the cartel's real cost of locked capital is BELOW
 the listed rate. Marginal gain saturating at h/(1+h)*g while cost grows
 linearly gives a finite optimal N — priceable, not unbounded. NOTE

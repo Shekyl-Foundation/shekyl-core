@@ -234,13 +234,14 @@ pub enum StoreInvariant {
     /// just performed is those writes. Bound at the replace handle's open
     /// in phase 2 (DRS-E4 `ARW-7`).
     BondRecordAbsent,
-    /// **SI-21** — an epoch closes whole. `archival_sigma_work[E]` and
-    /// `archival_budget[E]` exist together with every `(shard, E)` row of
-    /// `archival_r_market` the close's snapshot named — zero rows written,
-    /// not skipped (`ARW-Q4`) — or none does; each is insert-once on `E`,
-    /// so a second close of `E` refuses rather than overwriting (CEN-L14's
-    /// O-2 adversary). Bound at the three insert handles' open in phase 9
-    /// (DRS-E4 `ARW-8`).
+    /// **SI-21** — an epoch's frozen rows are two write sets, each whole
+    /// and each written once (`SO-D11e`). The close freezes the budget:
+    /// `archival_budget[E]`. The slash pass, an epoch later, settles
+    /// whole: `archival_sigma_work[E]` with every `(shard, E)` row of
+    /// `archival_r_market` its snapshot named — zero rows written, not
+    /// skipped (`ARW-Q4`). Each is insert-once on `E`, so a second write
+    /// refuses rather than overwriting (CEN-L14's O-2 adversary). Bound at
+    /// the three insert handles' open in phase 9 (DRS-E4 `ARW-8`).
     EpochCloseRewritten {
         /// The epoch a close was already recorded for.
         epoch: shekyl_types::SettlementEpoch,
@@ -289,6 +290,82 @@ pub enum StoreInvariant {
         rows: u64,
         /// What the block's own cell records.
         cell: u64,
+    },
+    /// **SI-25** — settlement folds the index admission wrote, once.
+    /// The `archival_issued_draw` rows of an epoch fold to
+    /// `archival_issued_digest[E]` ([`SettlementFault::IndexDrift`]); the
+    /// fold counts no more passes for a pair than draws it selected
+    /// ([`SettlementFault::PassesExceedCounted`]); the settlement beacon is
+    /// a block strictly below the connecting height
+    /// ([`SettlementFault::BeaconNotRecorded`]); and `archival_settlement`
+    /// holds one row per `(persona, shard, epoch)`, written once
+    /// ([`SettlementFault::AlreadySettled`]). The first three are observed
+    /// by the validator, which computes the rows, and arrive through
+    /// `refuse_corrupt`; the last is the store's own, at the insert. Armed
+    /// by the slash pass (`ARCHIVAL_SETTLEMENT_WRITER.md` §14;
+    /// `ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 checks 1 and 3).
+    SettlementNotSound {
+        /// The epoch being settled.
+        epoch: shekyl_types::SettlementEpoch,
+        /// Which check was observed.
+        observed: SettlementFault,
+    },
+    /// **SI-26** — the slash log is read only where it is kept. An A2 read
+    /// (`slash_log_after`, rows strictly above `asked`) whose range starts
+    /// below the log's retirement floor would fold a retired range as
+    /// "never slashed" and report a removed shard as held; the store
+    /// refuses it instead of answering (`PDM-Q-F19` — *asserted where the
+    /// scan starts*; `DRS_E4_SLASH_LOG_ROUND.md` `SLK-Q1`).
+    ///
+    /// The floor is the caller's — computed on the consensus side from the
+    /// rule set it runs (`SlashLogFloor`, `SLK-2`) — and this store compares;
+    /// it does not source. The two operands are independent: `asked` is an
+    /// epoch's open height or a draw's issuing height, the floor is the
+    /// horizon's expression, so this arm *can* fail where a comparison at
+    /// the writer (whose operand is the horizon's own input) could not
+    /// (`SLK-1`). It fires on a **mis-composed schedule**, never on data —
+    /// the pass reads inside the settling epoch, `(k + 1)` epochs below the
+    /// tip, while the floor is `(k + n)` epochs and a reorg cap below it —
+    /// so a hit says the grace, the window, the epoch and the cap no longer
+    /// compose to a window the pass reads inside. A reader's defect; fatal,
+    /// never a verdict on the block.
+    SlashLogReadBelowFloor {
+        /// The height the read asked for rows strictly above.
+        asked: shekyl_types::BlockHeight,
+        /// The lowest retained height under the caller's rule set.
+        floor: shekyl_types::BlockHeight,
+    },
+}
+
+/// What an SI-25 check observed (payload of
+/// [`StoreInvariant::SettlementNotSound`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettlementFault {
+    /// The epoch's issued-draw rows do not fold to its digest: a row was
+    /// lost, gained or changed after its draw was indexed, or the digest
+    /// cell was.
+    IndexDrift,
+    /// The fold counted more passes for the pair than draws it selected.
+    /// A defect of the fold, not a state a file can hold; halted on, never
+    /// clamped.
+    PassesExceedCounted {
+        /// The persona of the pair.
+        persona: shekyl_types::PCanonicalId,
+        /// The shard of the pair.
+        shard: shekyl_types::ShardId,
+    },
+    /// The settlement beacon's block is not recorded strictly below the
+    /// connecting height. The slash grace puts it there on every schedule
+    /// that has a response window; a re-pin that does not is this halt,
+    /// not an empty settlement.
+    BeaconNotRecorded,
+    /// `archival_settlement` already holds a row for the pair in this
+    /// epoch: the epoch was settled twice.
+    AlreadySettled {
+        /// The persona of the pair.
+        persona: shekyl_types::PCanonicalId,
+        /// The shard of the pair.
+        shard: shekyl_types::ShardId,
     },
 }
 
@@ -395,6 +472,8 @@ impl StoreInvariant {
             Self::SlashLogNotDense { .. } => 22,
             Self::AccruingNotSingular { .. } => 23,
             Self::ArchivalLengthsDisagree { .. } => 24,
+            Self::SettlementNotSound { .. } => 25,
+            Self::SlashLogReadBelowFloor { .. } => 26,
         }
     }
 }
@@ -506,8 +585,9 @@ impl core::fmt::Display for StoreInvariant {
             ),
             Self::EpochCloseRewritten { epoch } => write!(
                 f,
-                "settlement epoch {epoch} already has a close row (archival_r_market / \
-                 archival_sigma_work / archival_budget); an epoch closes once"
+                "settlement epoch {epoch} already has one of its frozen rows (archival_budget \
+                 from the close, archival_sigma_work / archival_r_market from the slash \
+                 pass); each is written once"
             ),
             Self::SlashLogNotDense { height, observed } => match observed {
                 SlashFault::NotDense => write!(
@@ -542,6 +622,35 @@ impl core::fmt::Display for StoreInvariant {
                 "block {height}'s txs_archival_len rows sum to {rows} from its parent's \
                  cumulative_archival_len, but its own cell records {cell}; the shard boundaries \
                  cannot be placed, rebuild from the block corpus"
+            ),
+            Self::SettlementNotSound { epoch, observed } => match observed {
+                SettlementFault::IndexDrift => write!(
+                    f,
+                    "archival_issued_draw's rows for epoch {epoch} do not fold to \
+                     archival_issued_digest; the index settlement reads is not the one that \
+                     was written, rebuild from the block corpus"
+                ),
+                SettlementFault::PassesExceedCounted { persona, shard } => write!(
+                    f,
+                    "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
+                     draws selected; the settlement fold is defective"
+                ),
+                SettlementFault::BeaconNotRecorded => write!(
+                    f,
+                    "the settlement beacon of epoch {epoch} is not recorded strictly below \
+                     the connecting height; this node cannot settle the epoch"
+                ),
+                SettlementFault::AlreadySettled { persona, shard } => write!(
+                    f,
+                    "archival_settlement already holds ({persona}, {shard}, {epoch}); an epoch \
+                     settles once"
+                ),
+            },
+            Self::SlashLogReadBelowFloor { asked, floor } => write!(
+                f,
+                "archival_slash_log was asked for rows strictly above {asked} while rows below \
+                 {floor} may be retired; the slash pass reads outside the window its own rule \
+                 set keeps — the schedule is mis-composed, not the data"
             ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
@@ -583,6 +692,8 @@ impl core::error::Error for StoreInvariant {
             | Self::SlashLogNotDense { .. }
             | Self::AccruingNotSingular { .. }
             | Self::ArchivalLengthsDisagree { .. }
+            | Self::SettlementNotSound { .. }
+            | Self::SlashLogReadBelowFloor { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

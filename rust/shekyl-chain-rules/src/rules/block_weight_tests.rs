@@ -10,9 +10,7 @@
 use super::*;
 use crate::census::CenRow;
 use crate::fault::{FormAttempt, PerHeightRecord};
-use crate::harness::fixture::{
-    candidate_on, chain_of, listed_on, point, recorded, spendable_chain,
-};
+use crate::harness::fixture::{candidate_on, chain_of, recorded, spendable_chain};
 use crate::harness::{
     defined, expected_seed, judged, Faulted, FaultingView, MockChain, MockSubstrate, WithheldRead,
 };
@@ -335,16 +333,19 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Weights {
     })
 }
 
-/// The block's weight is the coinbase's plus every listed body's; the
-/// long-term weight is that clamped to `[LTEM · 10/17, LTEM · 1.7]` —
-/// here the lower arm, since a fixture block is far lighter than the
-/// zone's `10/17`.
+/// The long-term weight is the block's weight clamped to
+/// `[LTEM · 10/17, LTEM · 1.7]` — here the lower arm, since a fixture block
+/// is far lighter than the zone's `10/17`. The block is coinbase-only, the
+/// one a `MockChain` can hold (a fixture spend is refused at CEN-I13 on
+/// any view; slice 6 row 6); that a listed body is the weight's addend is
+/// witnessed where a listed body can exist — `shekyl-chain-ingest`'s
+/// `scenario_spend_tests` reads `Mined::weights` against the bodies, and
+/// the store's `conformance_tests` records the verdict's figure.
 #[test]
 fn the_verdict_carries_the_weight_and_its_long_term_clamp() {
     let chain = spendable_chain();
-    let body = listed_on(&chain, point(9));
-    let candidate = candidate_on(&chain, vec![body.clone()]);
-    let expected_weight = candidate.block.miner_transaction.weight() + body.weight();
+    let candidate = candidate_on(&chain, Vec::new());
+    let expected_weight = candidate.block.miner_transaction.weight();
     let weights = validated_on(&chain, candidate);
     assert_eq!(
         weights.weight.to_raw(),

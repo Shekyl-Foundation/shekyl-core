@@ -160,19 +160,19 @@
 //! `shekyl-stats` and the float-bearing goodness-of-fit machinery. The default
 //! build is the draws and the state machines only.
 
+pub mod basis;
 pub mod derive;
 pub mod geometric;
 pub mod params;
 pub mod poisson;
-pub mod rng;
 pub mod schedule;
 pub mod stem_map;
 pub mod verify_cost;
-pub mod zone;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
+pub use basis::{AdmissibleBasis, DerivationMs};
 pub use derive::{
     derive_embargo, full_travel_probability, marginal_preemption_profile, EmbargoDerivation,
 };
@@ -182,7 +182,6 @@ pub use params::{
     MIXED_ELIGIBILITY_PCT_HUNDREDTHS,
 };
 pub use poisson::PoissonTable;
-pub use rng::{bernoulli, bounded_uniform, RelayRng, SplitMix64};
 #[allow(deprecated)]
 pub use schedule::EmbargoDistribution;
 pub use schedule::{
@@ -192,7 +191,6 @@ pub use schedule::{
 pub use stem_map::{ConnectionId, SlotIndex, SourceId, StemMap, StemSetChange};
 pub use verify_cost::{
     adopted_hop_ms, transit_ms_for_connector, MeasuredConnector, Provenance, SpecVerifyCost,
-    TreeBasis, VerifyCell, VerifyCostRefusal, ADOPTED_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH,
-    MAX_TABLE_DEPTH, MAX_TABLE_INPUTS, SPEC_VERIFY_COST,
+    TreeBasis, VerifyCell, VerifyCostRefusal, ADOPTED_TRANSIT, ADOPTED_TRANSIT_ASSUMPTION_MS,
+    ANON_ZONE_TRANSIT, GENESIS_TREE_DEPTH, MAX_TABLE_DEPTH, MAX_TABLE_INPUTS, SPEC_VERIFY_COST,
 };
-pub use zone::{LinkSecrecy, RelayZone};

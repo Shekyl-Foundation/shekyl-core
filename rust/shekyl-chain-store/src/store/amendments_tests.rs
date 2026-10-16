@@ -23,16 +23,16 @@ use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
 use super::connect_fixtures::{
-    candidate, connect_chain, connect_chain_anchored, credited, judge, spend, spend_at,
-    spendable_prefix, FIRST_SPEND_HEIGHT,
+    at, body, candidate, connect_chain, connect_chain_anchored, credited, height_maturing, judge,
+    prefix_to, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{BlockInfo, Canonical, CurveTreeState};
 use crate::schema::{
-    self, ARCHIVAL_SETTLEMENT, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META,
-    TXS_PQC_AUTH_HASH, UNDO_LOG,
+    self, ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_SETTLEMENT, BLOCKS, BLOCK_BURN,
+    BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META, TXS, TXS_PQC_AUTH_HASH, UNDO_LOG,
 };
 
 fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
@@ -51,11 +51,23 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     let path = tmp("a1-cum-tx-count");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // |txs| per height: none through the prefix, then 2, 1 → cum 0 …, 2, 3.
-    let first = FIRST_SPEND_HEIGHT;
-    let second = first + 1;
-    let hashes = connect_chain(
+    // Each listed body spends a distinct matured coinbase, and the
+    // reconnect below lists three on top of the two at `first`: five
+    // coinbases must have matured by `second`, so `second` is the height
+    // the fifth matures at and `first` the one below it.
+    let second = height_maturing(5).to_raw();
+    let first = second - 1;
+    let mut grown = connect_chain(
         &store,
-        &spendable_prefix(&[vec![spend(9, 2), spend(10, 2)], vec![spend(11, 2)]]),
+        &prefix_to(
+            BlockHeight::from_raw(first),
+            vec![vec![spend(), spend()], vec![spend()]],
+        ),
+    );
+    assert_eq!(
+        grown.height(),
+        BlockHeight::from_raw(second + 1),
+        "the chain reaches `second`"
     );
     let cum = |h| block_info(&store, h).expect("row").cumulative_tx_count;
     assert_eq!(
@@ -76,15 +88,11 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
 
     // Re-connect a different block with three transactions: the total
     // resumes from the parent's row, not from anything the popped block left.
-    let parent_hash = block_info(&store, first).expect("row").hash;
-    let b2 = candidate(
-        second,
-        parent_hash,
-        vec![
-            spend_at(&hashes, second, 12, 2),
-            spend_at(&hashes, second, 13, 2),
-            spend_at(&hashes, second, 14, 2),
-        ],
+    grown.pop();
+    let b2 = grown.next(&store, &[spend(), spend(), spend()]);
+    assert_eq!(
+        b2.block.header.previous,
+        block_info(&store, first).expect("row").hash
     );
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
@@ -179,9 +187,27 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // presence for, and creating them would make "no writer yet" a fact the
     // file could not tell from "empty".
     assert!(
-        snap.open_table(ARCHIVAL_SETTLEMENT).is_err(),
-        "archival_settlement is Unshaped and not sealed"
+        snap.open_table(TXS).is_err(),
+        "txs is Unshaped and not sealed"
     );
+    // Settlement's three tables are sealed and empty: a chain on which no
+    // epoch has settled and no draw was issued is told from a file that
+    // lacks them (`SO-D10`).
+    assert!(snap
+        .open_table(ARCHIVAL_SETTLEMENT)
+        .expect("sealed")
+        .is_empty()
+        .expect("len"));
+    assert!(snap
+        .open_table(ARCHIVAL_ISSUED_DRAW)
+        .expect("sealed")
+        .is_empty()
+        .expect("len"));
+    assert!(snap
+        .open_table(ARCHIVAL_ISSUED_DIGEST)
+        .expect("sealed")
+        .is_empty()
+        .expect("len"));
     // S-CURVE's shaped curve tables are sealed; the summary is a **written**
     // row, not an empty table (`SCU-Q1`, SCU-1).
     assert!(snap
@@ -224,10 +250,10 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
     // the undo log, the per-height accrual rows a view of the emission
     // split, the freeze registry retired — `DRS_E4_ARCHIVAL_WRITER.md`
     // §3.3, §3.4) and **shaped** `archival_slash_log` and
-    // `archival_slash_applied`. What remains `Unshaped` is the two dead
-    // tables (`txs`, `hf_starting_heights`) and `archival_settlement`, held
-    // for SO-D8's cutover with its blocker named.
-    assert_eq!(unshaped, 3, "the §11.1(f) count at this layout");
+    // `archival_slash_applied`. 3 → 2 at layout 22: `SO-D10` **shaped**
+    // `archival_settlement`. What remains `Unshaped` is the two dead tables
+    // (`txs`, `hf_starting_heights`).
+    assert_eq!(unshaped, 2, "the §11.1(f) count at this layout");
     cleanup(&path);
 }
 
@@ -336,30 +362,33 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     let path = tmp("a3-row-iff-4-part");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // Every spend carries per-input auths (the wire reads `nvin` of them),
-    // so a spend is 4-part — here the join-market post, a spend that opens
-    // the record the 3-part body needs; the 3-part non-coinbase transaction
-    // is the serve-credit-only shape, whose `pqc_auths` are empty by rule
-    // (CEN-H20) — its countersignature is over the pass record (CEN-J10) —
-    // and which connects only behind its join (CEN-L7, DRS-E4 commit 4).
-    let [four_part, three_part] = credited(9, [0x5f; 32]);
-    assert!(four_part.txid_parts().pqc_auth_hash.is_some());
+    // so a spend is 4-part — here the join-market post, a real spend that
+    // opens the record the 3-part body needs; the 3-part non-coinbase
+    // transaction is the serve-credit-only shape, whose `pqc_auths` are
+    // empty by rule (CEN-H20) — its countersignature is over the pass
+    // record (CEN-J10) — and which connects only behind its join (CEN-L7 /
+    // CEN-J4), one block above it.
+    let (four_part, three_part) = credited(9);
     assert!(three_part.txid_parts().pqc_auth_hash.is_none());
-    // The first spend block lists the 4-part join then the 3-part credit:
-    // tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one per block through
-    // that one), then four_part, then three_part. The expectation is read
-    // off the join **as connected**: anchoring signs every auth slot, and
-    // the third component is over the auths.
-    let (_, connected) =
-        connect_chain_anchored(&store, &spendable_prefix(&[vec![four_part, three_part]]));
+    // The first spend block lists the 4-part join; the block above it the
+    // 3-part credit: tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one
+    // per block through the join's), then four_part, then the credit
+    // block's coinbase, then three_part. The expectation is read off the
+    // join **as connected**: a join is a spend the chain builds at its
+    // height, and the third component is over its auths.
+    let (_, connected) = connect_chain_anchored(
+        &store,
+        &spendable_prefix(vec![vec![four_part], vec![body(three_part)]]),
+    );
     let expected = connected
-        .last()
+        .get(at(BlockHeight::from_raw(FIRST_SPEND_HEIGHT)))
         .and_then(|block| block.first())
-        .expect("the spend block lists the join first")
+        .expect("the first spend block lists the join")
         .txid_parts()
         .pqc_auth_hash
         .expect("a pqc_auth per input makes the txid 4-part");
     let four_part_id = FIRST_SPEND_HEIGHT + 1;
-    let three_part_id = four_part_id + 1;
+    let three_part_id = four_part_id + 2;
     let snap = store.begin_read().expect("read");
     let table = snap.open_table(TXS_PQC_AUTH_HASH).expect("sealed");
     assert_eq!(table.len().expect("len"), 1, "one 4-part txid, one row");
@@ -373,7 +402,8 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     );
     for (tx_id, why) in [
         (0, "genesis coinbase"),
-        (FIRST_SPEND_HEIGHT, "the spend block's coinbase"),
+        (FIRST_SPEND_HEIGHT, "the join block's coinbase"),
+        (four_part_id + 1, "the credit block's coinbase"),
         (three_part_id, "3-part serve credit"),
     ] {
         assert!(
@@ -384,9 +414,12 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     drop(table);
     drop(snap);
 
-    // The row is journaled: a pop of block 1 removes it with the block.
-    let popped: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
-    popped.expect("pop");
+    // The row is journaled: popping the credit's block and then the join's
+    // removes it with the join's block.
+    for _ in 0..2 {
+        let popped: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+        popped.expect("pop");
+    }
     let snap = store.begin_read().expect("read");
     assert!(snap
         .open_table(TXS_PQC_AUTH_HASH)
@@ -399,23 +432,35 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
 #[test]
 fn the_rust_only_tables_are_catalogued_last_and_named() {
     let ordinal = schema::ordinal_of("txs_pqc_auth_hash").expect("catalogued");
-    let last = schema::ordinal_of("txs_archival_len").expect("catalogued");
+    let archival_len = schema::ordinal_of("txs_archival_len").expect("catalogued");
+    let issued_draw = schema::ordinal_of("archival_issued_draw").expect("catalogued");
+    let issued_digest = schema::ordinal_of("archival_issued_digest").expect("catalogued");
+    let block_draws = schema::ordinal_of("archival_block_draws").expect("catalogued");
+    let last = schema::ordinal_of("archival_drawable_digest").expect("catalogued");
     // The journal stores ordinals as `u32`. A catalogue that does not fit
     // that width cannot be journaled, so the length check fails here
     // rather than at the first pop.
     let catalogue_len =
         u32::try_from(schema::catalogue().len()).expect("catalogue length fits in a table ordinal");
     // `txs_pqc_auth_hash` was appended last (A3); `txs_archival_len`
-    // (`SHT-Q2`) was appended after it, so the two hold the final slots.
-    assert_eq!(ordinal.index() + 1, last.index());
+    // (`SHT-Q2`) was appended after it, `SO-D10`'s two index tables after
+    // that, and `SO-D12`'s two draw-state tables last, so the six hold the
+    // final slots in that order.
+    assert_eq!(ordinal.index() + 1, archival_len.index());
+    assert_eq!(archival_len.index() + 1, issued_draw.index());
+    assert_eq!(issued_draw.index() + 1, issued_digest.index());
+    assert_eq!(issued_digest.index() + 1, block_draws.index());
+    assert_eq!(block_draws.index() + 1, last.index());
     assert_eq!(
         last.index() + 1,
         catalogue_len,
-        "txs_archival_len is the final catalogue slot"
+        "archival_drawable_digest is the final catalogue slot"
     );
-    // 33 LMDB mirrors plus the five Rust-only tables
+    // 33 LMDB mirrors plus the nine Rust-only tables
     // (`archival_budget_accruing`, `curve_tree_leaf_counts`, `undo_log`,
-    // `txs_pqc_auth_hash`, `txs_archival_len`) at SCHEMA_VERSION 19 — 47
+    // `txs_pqc_auth_hash`, `txs_archival_len`, `archival_issued_draw`,
+    // `archival_issued_digest`, `archival_block_draws`,
+    // `archival_drawable_digest`) at SCHEMA_VERSION 23 — 47
     // mirrors until S-POOL moved `txpool_meta` / `txpool_blob` to the pool
     // file (layout 12, `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
     // `archival_alt_attestation_witness` into `alt_blocks` (layout 13,
@@ -423,8 +468,11 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     // tables (layout 15, `schema::NOT_PORTED`) and added
     // `curve_tree_leaf_counts`; 44 when `SHT-Q2` added `txs_archival_len`
     // (layout 18); 38 since DRS-E4 did not port seven archival tables and
-    // added `archival_budget_accruing` (layout 19).
-    assert_eq!(catalogue_len, 38);
+    // added `archival_budget_accruing` (layout 19); 40 since `SO-D10` added
+    // the issued-draw index and its digest (layout 22); 42 since `SO-D12`
+    // added the per-block draw state and the drawable set's digest
+    // (layout 23).
+    assert_eq!(catalogue_len, 42);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
@@ -433,7 +481,11 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
             "curve_tree_leaf_counts",
             "undo_log",
             "txs_pqc_auth_hash",
-            "txs_archival_len"
+            "txs_archival_len",
+            "archival_issued_draw",
+            "archival_issued_digest",
+            "archival_block_draws",
+            "archival_drawable_digest"
         ]
     );
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.

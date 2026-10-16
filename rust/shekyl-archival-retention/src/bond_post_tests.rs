@@ -14,12 +14,12 @@ fn valid_join_vin() -> ArchivalBondPostVin {
         vec![0xAB; 64],
         [0x11; 32],
         vec![0xE5; 64],
+        crate::ReceiptSignPk::from_bytes([0x5C; crate::RECEIPT_SIGN_PK_LEN]),
         [0xEE; ENDPOINT_BYTES],
         HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         },
-        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
         2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
     )
 }

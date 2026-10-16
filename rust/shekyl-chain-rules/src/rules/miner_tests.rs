@@ -22,8 +22,8 @@ use crate::harness::fixture::{
     candidate, candidate_on, coinbase, recorded, recorded_with_work, G, TWO_G,
 };
 use crate::harness::{
-    assert_refused, credited_to_this_falsifier, expected_seed, formed_on, infallible, judged,
-    Faulted, MockChain, MockSubstrate,
+    assert_refused, credited_to_this_falsifier, defined, expected_seed, formed_on, judged, Faulted,
+    MockChain, MockSubstrate,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule};
@@ -95,7 +95,7 @@ fn check_alone<R: FormRule>(candidate: &Candidate) -> Verdict<()> {
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
     chain.with_view(|view| {
-        infallible(R::check(
+        defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
             &view,
         ))
@@ -754,45 +754,22 @@ fn f8_the_wire_admits_one_output_tag() {
     }
 }
 
-/// CEN-F21's epoch is the one-row hardfork table's height: `{ 1, 1, 0, … }`
-/// on every public network (`hardforks.cpp`), which
-/// `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` returns.
-/// Read from the table, not restated beside [`EMISSION_SPLIT_EPOCH`].
+/// CEN-F21 as behaviour, on the economics crate's one constant: the genesis
+/// block pays the miner the whole emission, and block 1 pays a staker share.
 #[test]
-fn the_emission_split_epoch_is_the_hardfork_tables_first_row() {
-    let hardforks_cpp = include_str!("../../../../src/hardforks/hardforks.cpp");
-    for table in [
-        "mainnet_hard_forks",
-        "testnet_hard_forks",
-        "stagenet_hard_forks",
-    ] {
-        let start = hardforks_cpp
-            .find(&format!("const hardfork_t {table}[] = {{"))
-            .unwrap_or_else(|| panic!("hardforks.cpp defines {table}"));
-        let body = &hardforks_cpp[start..];
-        let end = body.find("};").expect("the table closes");
-        let rows: Vec<&str> = body[..end]
-            .lines()
-            .skip(1)
-            .map(str::trim)
-            .filter(|l| l.starts_with('{'))
-            .collect();
-        assert_eq!(
-            rows.len(),
-            1,
-            "{table} has one row (all features from genesis)"
-        );
-        // `{ version, height, threshold, time }`
-        let fields: Vec<&str> = rows[0]
-            .trim_matches(|c| c == '{' || c == '}' || c == ',')
-            .split(',')
-            .map(str::trim)
-            .collect();
-        let height: u64 = fields[1].parse().expect("the row's height is an integer");
-        assert_eq!(
-            EMISSION_SPLIT_EPOCH,
-            BlockHeight::from_raw(height),
-            "{table}"
-        );
-    }
+fn the_staker_share_starts_at_block_one() {
+    assert_eq!(shekyl_economics::EMISSION_SPLIT_EPOCH, 1);
+    let emission = 1_024_000_000_000;
+    let genesis = shekyl_economics::compute_emission_split(emission, 0);
+    assert_eq!(genesis.miner_emission, emission);
+    assert_eq!(genesis.staker_emission, 0);
+    let first =
+        shekyl_economics::compute_emission_split(emission, shekyl_economics::EMISSION_SPLIT_EPOCH);
+    assert!(first.staker_emission > 0);
+    assert_eq!(first.miner_emission + first.staker_emission, emission);
+    assert_eq!(
+        shekyl_economics::emission_share_at(0),
+        0,
+        "the shipped share the daemon reads is zero at genesis"
+    );
 }

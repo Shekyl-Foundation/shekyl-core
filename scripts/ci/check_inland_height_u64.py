@@ -121,8 +121,28 @@ SCOPE = (
 # (2026-10-02: `ShardClose::ClosedAt` and `shard_age_milli` take
 # `BlockHeight` — the merge with `dev`'s SHT-Q2 close operand surfaced the
 # sites as this gate's first red on a merged tree, and they were typed, not
-# recorded).
-GRANDFATHER_CEILING = 167
+# recorded); 166 at E6 slice 8 PR-a review (2026-10-05: the levered chain's
+# next-block height is `BlockHeight`, and `scenario_archival_tests.rs`'s
+# local `first_spending_height() -> u64` moved to `archival_driver` as
+# `BlockHeight`); 161 at slice 6 row 6 (2026-10-07: the pipeline reorg
+# test's hand-built fork, and its `fork_spend` closure, replaced by
+# `reorg` over real spends — the site is gone, not typed); 160 at slice 6
+# row 6, store conversion (2026-10-07: `connect_fixtures::spendable_prefix`
+# became `prefix_to(BlockHeight, …)`, and the fixture surface it grew —
+# `height_maturing`, `Grown::height` / `images_at` / `block` — was typed at
+# birth rather than recorded); 152 at the I13/I15 fixture split (2026-10-08:
+# moving `at` / `anchor` onto `Grown` and the validator-tree reads onto
+# `GrownTree` typed those ordinals as `BlockHeight` instead of re-recording
+# them); 151 on 2026-10-08: the test that parsed the hard-fork table for
+# CEN-F21's epoch left with the table; 150 at the slash-log retirement
+# (2026-10-09, `SLK-Q1`: `prune_at_boundary` grew a rule-set operand and
+# its height was typed as `BlockHeight` — the slash floor is built from it
+# — rather than re-recorded; the two lanes each took one row off 152, and
+# the merge of 2026-10-10 is where the ceiling reads both); 148 at DRS-E5
+# a3 (2026-10-11: the alt fixtures `alt` and `side_block` became
+# `pub(super)` for the `AltView` tests, and a touched site is typed —
+# both take `BlockHeight` — not re-recorded).
+GRANDFATHER_CEILING = 148
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

@@ -10,7 +10,8 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_p_serve::{PServeEndpoint, StoreShardProvider};
+use shekyl_p_serve::{PServeEndpoint, PassSigner, ServeCounterReader, StoreShardProvider};
+use shekyl_p_store::BodyStoreReader;
 use shekyl_tor_control_wallet::service::{
     OnionIdentity, OnionServiceSpec, ServiceId, ServingPosture, TorPosture, WalletTorControl,
     WalletTorControlConfig,
@@ -18,9 +19,10 @@ use shekyl_tor_control_wallet::service::{
 use tokio::sync::watch;
 
 use crate::daemon_tip::DaemonTipCache;
+use crate::runtime::{PriorityFailures, ServingPool};
 use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};
 use crate::signer::HostSigner;
-use crate::PassKey;
+use crate::{PassKey, IDENTITY_ENVELOPE_LEN};
 
 /// The serving identity and the shape of its published port.
 ///
@@ -44,9 +46,17 @@ pub struct PersonaServing {
     /// chooses it (see [`OnionServiceSpec`]).
     pub max_streams: u16,
     /// The persona's attestation signing key for the `SF-D8` pass
-    /// countersignature — [`NoResidentKey`](crate::NoResidentKey) until the resident key is
-    /// wired (SH-2).
-    pub key: Arc<dyn PassKey>,
+    /// countersignature. In production this is the engine's resident pass
+    /// key: a round-trip into the stake actor that holds the secret, which
+    /// never crosses into this crate (`SF-D13`).
+    ///
+    /// **This field is where the host's scheme is chosen.** Its width is
+    /// the envelope's: the bond identity key's (hybrid scheme 1), 3,385
+    /// bytes. The signer the host builds over it and the endpoint it binds
+    /// take their width from this type and name none of their own. A host
+    /// that served receipts would declare the receipt width here, in the
+    /// change that makes a verifier accept them (`FN_DSA_HYBRID.md` §9).
+    pub key: Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
     /// The `SF-D5` gate's height source: the configured daemon's tip,
     /// stamped by a producer the caller owns (see [`crate::signer`] for why
     /// the daemon and not the served store — `WSS-24`).
@@ -56,6 +66,10 @@ pub struct PersonaServing {
     /// correct direction for a persona that cannot see the chain — but it
     /// is a wiring bug, not a posture.
     pub tip: Arc<DaemonTipCache>,
+    /// Read-only handle on `P`'s body store. The endpoint streams
+    /// `shard_frame` bodies from here; pin evidence still lives on the
+    /// curve-tree witness the pinner acquires (`WSS-Q1`(a)).
+    pub bodies: BodyStoreReader,
 }
 
 impl fmt::Debug for PersonaServing {
@@ -64,22 +78,31 @@ impl fmt::Debug for PersonaServing {
             .field("identity", &self.identity)
             .field("virtual_port", &self.virtual_port)
             .field("max_streams", &self.max_streams)
-            .field("key", &"<dyn PassKey>")
+            .field("key", &"<dyn PassKey<IDENTITY_ENVELOPE_LEN>>")
             .field("tip", &self.tip)
+            .field("bodies", &"<BodyStoreReader>")
             .finish()
     }
 }
 
 /// The serving endpoint's aggregate counters, read through the host.
 ///
-/// Every non-servable outcome renders one identical 404 on the wire; these
-/// are the only place the outcomes are distinguishable, and only in
-/// aggregate. In particular `sign_failures` is how an operator tells "this
-/// persona could not read what it needed" (`lookup_failures`) from "it read
-/// everything and the attestation key refused" — a persona started with
-/// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter. An
-/// ordinary miss — a shard the persona simply does not hold — is the
-/// deliberate 404 and moves neither counter.
+/// A store fault, an unreadable tip and a missing key render the same 503.
+/// The counters split them into two buckets, in aggregate, and no finer:
+/// `lookup_failures` is "this persona could not read what it needed" (the
+/// store or the tip, pooled), and `sign_failures` is "the shard was held
+/// and the key refused its pre-flight" — the actor holding the secret is
+/// gone, decided before any shard byte is read. A persona whose key says no
+/// to everything accrues only the latter. An ordinary miss — a shard the
+/// persona simply does not hold — is the deliberate 404 and moves neither
+/// counter.
+///
+/// `late_sign_failures` is not a 503 at all: the pre-flight said yes, the
+/// whole shard went out, and the signer then refused, so the response
+/// closed with the refusal trailer. It is kept apart from `sign_failures`
+/// because the two differ in what the requester saw and in what the
+/// persona spent — one shard open against a whole shard read, hashed and
+/// sent for a response nobody can use.
 ///
 /// `lookup_failures` has **two** causes, deliberately pooled because a
 /// requester cannot distinguish them either: the serving store could not be
@@ -90,15 +113,18 @@ impl fmt::Debug for PersonaServing {
 /// lost sight of something it needs, and passes are being lost to that
 /// rather than to a signer that is down.
 ///
-/// **Distinguishable is not yet surfaced.** These are read through
-/// [`PersonaServingHost::counters`]; today the production serving task
-/// (`engine-core`'s `serving::task`) holds the host privately and publishes
-/// only posture and the serve-set alarms, so the counters reach an operator
-/// only through tests. The reading that puts them on the alarm board is the
-/// operator surface `ARCHIVAL_SHARD_FETCH.md` `SF-D6` assigns to `TJ-D`,
-/// carried with the `SH-2` key wiring in `docs/FOLLOWUPS.md` — until it
-/// lands, a nonzero `sign_failures` is a fact the persona knows and nobody
-/// is told.
+/// **How an operator sees them.** Sampled once per cadence by the
+/// production serving task's health probe (`engine-core`'s
+/// `serving::health`) through the detached
+/// [`PersonaServingHost::counter_reader`] — its own task, so a refresh that
+/// is waiting on the store actor cannot delay the reading — windowed with
+/// [`Self::since`], and mapped onto the operator alarm board by
+/// `shekyl-operator-alarm`'s `serve_health` producer — the `TJ-D` operator
+/// surface `ARCHIVAL_SHARD_FETCH.md` `SF-D6` names. A tick in which the key
+/// refused is an alarm; a tick in which only lookups failed is a different
+/// alarm; a tick in which only the listener failed to accept is a third; a
+/// quiet tick clears the row. `refused` is load, not a fault, and is not on
+/// the board.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ServeCounters {
     /// Shards served (200 with a countersigned frame).
@@ -108,11 +134,58 @@ pub struct ServeCounters {
     /// Requests the serving store could not answer: its tip height for the
     /// gate, or the shard's bytes (I/O, pruned). Not misses.
     pub lookup_failures: u64,
-    /// Requests whose shard was held but whose countersignature the key
-    /// refused.
+    /// Requests whose shard was held and whose key refused its pre-flight:
+    /// no key resident (the 503, nothing sent).
     pub sign_failures: u64,
+    /// Responses whose body went out and whose signer then refused (the
+    /// refusal trailer).
+    pub late_sign_failures: u64,
     /// Accept-loop errors.
     pub accept_errors: u64,
+}
+
+impl ServeCounters {
+    /// One reading of the six totals through a detached reader.
+    ///
+    /// The one place the endpoint's getters are gathered into this struct:
+    /// [`PersonaServingHost::counters`] reads through it, and so does a
+    /// probe holding only the [`ServeCounterReader`]. The six loads are
+    /// not one atomic snapshot; each total is monotone and the consumer
+    /// windows them, so a request landing between two loads moves the
+    /// next window rather than this one.
+    #[must_use]
+    pub fn read(reader: &ServeCounterReader) -> Self {
+        Self {
+            served: reader.served_count(),
+            refused: reader.refused_count(),
+            lookup_failures: reader.lookup_failure_count(),
+            sign_failures: reader.sign_failure_count(),
+            late_sign_failures: reader.late_sign_failure_count(),
+            accept_errors: reader.accept_error_count(),
+        }
+    }
+
+    /// The movement between an earlier reading and this one, per counter.
+    ///
+    /// The counters are session totals, so an operator question — "did the
+    /// key refuse anything *this tick*" — is a difference, and this is its
+    /// one home (rule 05): the alarm producer and anything else that windows
+    /// the counters subtract here rather than each re-deriving the
+    /// subtraction. Saturating, because a host restart inside the window
+    /// resets the totals and a negative movement is not a reading.
+    #[must_use]
+    pub fn since(&self, earlier: &Self) -> Self {
+        Self {
+            served: self.served.saturating_sub(earlier.served),
+            refused: self.refused.saturating_sub(earlier.refused),
+            lookup_failures: self.lookup_failures.saturating_sub(earlier.lookup_failures),
+            sign_failures: self.sign_failures.saturating_sub(earlier.sign_failures),
+            late_sign_failures: self
+                .late_sign_failures
+                .saturating_sub(earlier.late_sign_failures),
+            accept_errors: self.accept_errors.saturating_sub(earlier.accept_errors),
+        }
+    }
 }
 
 /// Why a serving host could not start.
@@ -158,6 +231,37 @@ impl std::error::Error for HostError {
     }
 }
 
+/// The loopback endpoint and the runtime it is bound on.
+///
+/// The pool is the last field, so Drop closes the endpoint and then
+/// [`ServingPool`]'s drop stops the runtime without waiting. That stop
+/// is [`shekyl_runtime::Pool::shutdown_background`]: a zero timeout,
+/// safe on the engine's runtime, where this host is dropped on every
+/// path that is not [`BoundServe::stop`]. Ordered shutdown drops the
+/// endpoint and then awaits the runtime, so the listener is closed when
+/// shutdown resolves. The host holds this as one field, so the order
+/// does not depend on where that field sits among the host's others.
+struct BoundServe {
+    endpoint: PServeEndpoint,
+    pool: ServingPool,
+}
+
+impl BoundServe {
+    fn addr(&self) -> std::net::SocketAddr {
+        self.endpoint.addr()
+    }
+
+    fn counters(&self) -> &ServeCounterReader {
+        self.endpoint.counters()
+    }
+
+    async fn stop(self) {
+        let Self { endpoint, pool } = self;
+        drop(endpoint);
+        pool.stop().await;
+    }
+}
+
 /// A bonded persona's serving host: the loopback shard server, the onion
 /// that makes it reachable, and the pins that keep its shards alive.
 ///
@@ -181,13 +285,13 @@ impl std::error::Error for HostError {
 ///   §9.6 item 4 hazard is not a startup step that could be reordered or
 ///   forgotten; there is no argument through which to hand in an
 ///   unpinned host.
-/// - **And it serves the store those pins are in.** The witness carries its
-///   own [`ServingReader`](shekyl_curve_tree::ServingReader); `start` takes
-///   no store argument at all. Pins applied to one store while another is
-///   served would leave the served store unpinned — the same silent-slash
-///   hazard, re-entering through the API's shape rather than through
-///   bookkeeping. A call site holding two opaque store handles is a call
-///   site that can pair them wrongly, so there is only ever one.
+/// - **The bytes it serves are not the bytes the pins retain.** `start`
+///   streams `serving.bodies`, `P`'s body store (`WSS-Q1`(a)). The witness
+///   still pins the curve-tree serve set (`CTS-7`: the concept survives,
+///   re-keyed to shard `k`). A pin does not keep a `.pstore` row. The
+///   body row is erased when the pin-release gate releases that shard
+///   (`WSS-Q8`). That erase is an ask to the stake actor, which keeps
+///   the writer. This host does not hold it.
 /// - **A serving persona always runs full vanguards.** The posture this host
 ///   writes is [`ServingPosture::Serving`], the one variant that carries both
 ///   the onion and `VanguardsMode::Managed`. The "onion without vanguards"
@@ -198,9 +302,10 @@ impl std::error::Error for HostError {
 /// This host holds: an expanded [`OnionIdentity`], a **read-only**
 /// [`ServingReader`](shekyl_curve_tree::ServingReader) on the store (via
 /// the live witness), and the one [`ServeSetPinner`] taken at start. It
-/// holds no seed, no bond spend authority, and no store write handle of
-/// its own — pinning writes go through the pinner to the curve-tree
-/// actor. The one assumption worth stating rather than leaving implicit:
+/// holds no seed, no bond spend authority, and no body-store writer.
+/// Pinning writes go through the pinner to the curve-tree actor. A
+/// pin-release erase goes through the pinner to the stake actor, which
+/// keeps the body-store key. The one assumption worth stating rather than leaving implicit:
 /// the design frames the custody boundary as *which secret crosses the
 /// process boundary*, and this host is in-process with the wallet — so
 /// what enforces the boundary here is the type of what it can hold, not
@@ -208,8 +313,10 @@ impl std::error::Error for HostError {
 /// a stronger form of the same rule and is not foreclosed by anything
 /// here.
 pub struct PersonaServingHost<P: ServeSetPinner> {
-    /// Bound once in [`Self::start`]; never rebound. See the type doc.
-    endpoint: PServeEndpoint,
+    /// Bound once in [`Self::start`]; never rebound. The endpoint and the
+    /// runtime that runs it are one value, so the runtime cannot stop
+    /// while the endpoint is still the thing that owns the accept task.
+    bound: BoundServe,
     tor: WalletTorControl,
     service_id: ServiceId,
     /// The one pinner this host will ever use. Held rather than taken per
@@ -289,13 +396,23 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// # Errors
     ///
     /// [`HostError::Pin`] if the serve-set could not be pinned,
-    /// [`HostError::Bind`] if the loopback listener cannot be created, and
-    /// [`HostError::NonLoopbackTarget`] if the bound address is refused as
-    /// an onion target.
+    /// [`HostError::Bind`] if the serving runtime or the loopback listener
+    /// cannot be created, and [`HostError::NonLoopbackTarget`] if the bound
+    /// address is refused as an onion target.
+    ///
+    /// # The serving runtime
+    ///
+    /// The endpoint is bound **on the host's own runtime**
+    /// ([`crate::runtime`], `SH-3`), so the accept loop and everything it
+    /// spawns run there, at lowered CPU priority, and not on the runtime
+    /// this call was made from. `priority_failures` is the caller's counter
+    /// for threads the platform refused to lower; it is readable through
+    /// the serving status whether or not this call returns a host.
     pub async fn start(
         mut tor: WalletTorControlConfig,
         serving: PersonaServing,
         pinner: P,
+        priority_failures: &PriorityFailures,
     ) -> Result<Self, HostError> {
         // The pins are taken here, from the pinner this host keeps. Nothing
         // is handed in already-pinned, so there is no way to start a host
@@ -303,18 +420,29 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         let pinned = PinnedServeSet::acquire(&pinner)
             .await
             .map_err(HostError::Pin)?;
-        // The reader comes from the witness, not from an argument: the store
-        // served must be the store pinned, and the only way to make that
-        // unconditional is to leave the caller no way to name a second one.
-        //
-        // The signer's gate height does NOT come from that reader. It is the
-        // daemon's tip, carried in on `serving.tip` — the scan tip and the
-        // chain tip answer different questions, and the gate asks the second
-        // one (`WSS-24`; the reasoning is in `signer`'s module doc).
-        let provider = StoreShardProvider::new(pinned.reader().clone());
-        let signer = HostSigner::new(serving.tip, serving.key);
-        let endpoint = PServeEndpoint::bind(Arc::new(provider), Arc::new(signer))
+        // Bytes come from `P`'s body store, not from the pin witness.
+        // The witness still proves the serve-set was pinned; the frames
+        // it names live in `serving.bodies` (`WSS-Q1`(a)). The signer's
+        // gate height is the daemon's tip on `serving.tip` (`WSS-24`).
+        let provider = StoreShardProvider::new(serving.bodies);
+        // The width is `serving.key`'s; the endpoint is bound at it.
+        let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> =
+            Arc::new(HostSigner::new(serving.tip, serving.key));
+        // The serving runtime first, then the bind *on* it: `tokio::spawn`
+        // inside `bind` lands the accept loop on the runtime the bind future
+        // runs on, and every connection task and blocking hop follows the
+        // accept loop. Awaited through the join handle, never `block_on`,
+        // because this call is itself inside the engine's runtime.
+        let pool = ServingPool::build(priority_failures).map_err(|e| HostError::Bind {
+            detail: e.to_string(),
+        })?;
+        let endpoint = pool
+            .handle()
+            .spawn(PServeEndpoint::bind(Arc::new(provider), signer))
             .await
+            .map_err(|join| HostError::Bind {
+                detail: join.to_string(),
+            })?
             .map_err(|e| HostError::Bind {
                 detail: e.to_string(),
             })?;
@@ -332,7 +460,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         let tor = WalletTorControl::spawn(tor);
 
         Ok(Self {
-            endpoint,
+            bound: BoundServe { endpoint, pool },
             tor,
             service_id,
             pinner,
@@ -485,7 +613,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// rig, can dial the serving loop directly without the onion leg.
     #[must_use]
     pub fn serve_addr(&self) -> std::net::SocketAddr {
-        self.endpoint.addr()
+        self.bound.addr()
     }
 
     /// The endpoint's aggregate counters.
@@ -495,13 +623,19 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// serving path.
     #[must_use]
     pub fn counters(&self) -> ServeCounters {
-        ServeCounters {
-            served: self.endpoint.served_count(),
-            refused: self.endpoint.refused_count(),
-            lookup_failures: self.endpoint.lookup_failure_count(),
-            sign_failures: self.endpoint.sign_failure_count(),
-            accept_errors: self.endpoint.accept_error_count(),
-        }
+        ServeCounters::read(self.bound.counters())
+    }
+
+    /// The counters' read side, detached from this host.
+    ///
+    /// For a watcher on its own task: the host's [`Self::refresh`] awaits
+    /// the store actor with no timeout, so a reading taken through `&self`
+    /// between refreshes is taken only when a refresh is not in flight. A
+    /// clone of this reader samples whenever its own tick fires. It stays
+    /// readable after [`Self::shutdown`]; the totals just stop moving.
+    #[must_use]
+    pub fn counter_reader(&self) -> ServeCounterReader {
+        self.bound.counters().clone()
     }
 
     /// Stop serving: tear the onion down first, then the listener.
@@ -516,7 +650,9 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// rather than an unreachable service it can retry.
     pub async fn shutdown(self) {
         self.tor.shutdown().await;
-        drop(self.endpoint);
+        // Then the endpoint, then its runtime. The listener is closed —
+        // not merely told to close — by the time this returns (`SH-3`).
+        self.bound.stop().await;
     }
 }
 

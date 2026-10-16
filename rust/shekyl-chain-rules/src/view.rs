@@ -14,6 +14,28 @@
 //! (round-1 ruling Q3): narrowness is what keeps rules mockable and the mock
 //! smaller than the store.
 //!
+//! # Two views, one partition: header facts and executed facts
+//!
+//! [`HeaderView`] is the supertrait: the **header facts** — the tip, and at
+//! each height the identity, the header as recorded and the work through it
+//! ([`HeaderRecord`]). A chain of headers that has **not been executed**
+//! can answer them, which is what an alt chain is before it switches
+//! (DRS-E5 `E5-Q3`, ruled 2026-10-10; `E5-13`/`E5-14` measured the
+//! partition): the alt view stitches an alt branch's headers onto the main
+//! chain below the fork and answers `header_at` honestly across the seam.
+//! [`ChainView`] adds the **executed facts** — key images, roots, leaf
+//! counts, outputs, weights, emission, the archival state — that only a
+//! chain whose blocks were applied can hold. A rule that reads header facts
+//! only is a `HeaderRule` (`rules/mod.rs`) and runs at both tiers; a rule
+//! that reads an executed fact is a `BlockRule` and runs at promotion.
+//! Which trait a rule is bound to is what the alt path *can* run, held by
+//! the type and not by a list.
+//!
+//! The partition is by **field**, not by table (`E5-13`): the store's
+//! `block_info` row carries both kinds, so [`RecordedBlock`] embeds the
+//! [`HeaderRecord`] and adds the executed columns beside it, and a reader
+//! that wants a header fact asks `header_at` and gets nothing else.
+//!
 //! # Three answers, three positions
 //!
 //! Every method returns `Result<_, Self::Fault>`. The `Err` is the view's
@@ -37,10 +59,13 @@
 //! refusal the rule writes, never a pass it arrives at by `?` or
 //! `unwrap_or_default`.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
-    BondRecord, PassCount, RMarket, ServedShard, SigmaWorkMilli, SlashLogEntry,
+    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, RMarket,
+    ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -148,19 +173,21 @@ impl Tip {
     }
 }
 
-/// A block the chain has recorded, as a rule reads it.
+/// The **header facts** of a block the chain has recorded — what a chain of
+/// headers knows about it before any block is executed, and therefore what
+/// an alt chain can answer across the fork (module docs; DRS-E5 `E5-13`).
 ///
 /// Every field is here because a named row reads it (round-1 ruling Q3):
 /// `hash` — CEN-A2 (`prev_id` is the tip's hash), CEN-A4 (the parent is a
-/// known block), CEN-D3 (the seed block's identity); `header` — CEN-C2,
-/// CEN-C3 (the timestamps of the eleven preceding blocks), CEN-D4 (the
-/// LWMA-1 window's timestamps); `cumulative_difficulty` — CEN-D4 (the
-/// window's work); `coins_generated` — CEN-F13 (the parent's accumulator
-/// is the subsidy curve's operand); `cumulative_tx_count` — CEN-F20 (two
-/// prefix sums make the volume window). Weight arrives with 4.G; fields
-/// grow with rows, never ahead of them.
+/// known block), CEN-D3 (the seed block's identity), CEN-B4's anchor
+/// window; `header` — CEN-C2, CEN-C3 (the timestamps of the eleven
+/// preceding blocks), CEN-D4 (the LWMA-1 window's timestamps);
+/// `cumulative_difficulty` — CEN-D4 (the window's work) and the fork
+/// choice (CEN-K6). Each is a function of the headers alone: the identity
+/// is the header's hash, and the work is the parent's plus this header's
+/// target.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedBlock {
+pub struct HeaderRecord {
     /// The block's identity, derived once when it was recorded (CEN-B6).
     pub hash: BlockHash,
     /// The header as recorded.
@@ -171,6 +198,25 @@ pub struct RecordedBlock {
     /// reports
     /// [`Corrupt::CumulativeDifficultyNotMonotone`](crate::Corrupt::CumulativeDifficultyNotMonotone).
     pub cumulative_difficulty: CumulativeDifficulty,
+}
+
+/// A block the chain has recorded **and executed**, as a rule reads it:
+/// its [`HeaderRecord`] and the accumulators that exist only because the
+/// block was applied (`E5-13`: the partition is by field, not by table —
+/// the store keeps both in one `block_info` row).
+///
+/// Every executed field is here because a named row reads it (round-1
+/// ruling Q3): `coins_generated` — CEN-F13 (the parent's accumulator is
+/// the subsidy curve's operand); `cumulative_tx_count` — CEN-F20 (two
+/// prefix sums make the volume window); `cumulative_archival_len` — the
+/// shard partition's operand. Weight arrives through
+/// [`ChainView::weights_window`]; fields grow with rows, never ahead of
+/// them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedBlock {
+    /// The header facts: identity, header, work (what
+    /// [`HeaderView::header_at`] answers on its own).
+    pub header: HeaderRecord,
     /// Gross emission through this block (`block_info.coins_generated`):
     /// the parent's plus this block's paid reward. CEN-F13's operand — the
     /// subsidy curve reads the **parent's** value for a candidate at
@@ -227,7 +273,45 @@ pub struct BlockOutputs {
     pub listed: Vec<LeafSource>,
 }
 
-/// The narrow, read-only view a rule consumes.
+/// The **header facts** of a recorded chain: the tip and, by height, the
+/// [`HeaderRecord`]. The supertrait of [`ChainView`], and the whole of
+/// what a `HeaderRule` may read (module docs, "Two views, one partition").
+///
+/// Two methods and not more (DRS-E5 `E5-14`, measured): `height_of` and
+/// `depth_at` are header facts by classification but have no caller that
+/// is not a promotion-tier rule, and a method with no caller is
+/// pre-provisioning (rule 21). A header fact that gains a cheap-tier
+/// reader moves here with its reader, not ahead of it.
+///
+/// Implemented by everything that implements [`ChainView`] — the store's
+/// `BatchView`, the harness views — and, on its own, by the alt view
+/// DRS-E5 PR-a builds over a header branch stitched onto the committed
+/// chain below its fork.
+pub trait HeaderView<'id> {
+    /// What the view's substrate can fail with. Opaque to every rule (no
+    /// bound): the store's engine error for its projection,
+    /// [`Infallible`](core::convert::Infallible) for the mock. A fault is
+    /// not a verdict — see the module docs.
+    type Fault;
+
+    /// The last recorded block, or `None` for an empty chain (genesis
+    /// admission). See [`Tip`] for why `Option`.
+    ///
+    /// CEN-A2 (`hash`); B5 and later 4.C / CEN-F5 (`height`, via
+    /// [`Tip::connecting_height`]).
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
+
+    /// The header record at `height`: identity, header, work.
+    ///
+    /// CEN-A4, CEN-D3 (the seed block, by hash); CEN-C2, CEN-C3 (the
+    /// preceding timestamps); CEN-D4 (the LWMA-1 window); CEN-B4's anchor
+    /// window. A reader of an executed fact asks
+    /// [`ChainView::block_at`] instead and gets this record inside it.
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Self::Fault>;
+}
+
+/// The narrow, read-only view a rule consumes: the header facts of
+/// [`HeaderView`] and the **executed** facts beside them.
 ///
 /// `'id` is the transaction brand (`WriteBatch<'_, 'id>`). `validate` mints
 /// `ChainValid<'id, V>` so the verdict is branded with **both** the batch
@@ -242,22 +326,17 @@ pub struct BlockOutputs {
 /// Implementors answer about the **recorded** chain only. A pool decorator
 /// (DRS-E5) that also knows the pool's own key images implements this trait
 /// over an inner view; this crate never names it.
-pub trait ChainView<'id> {
-    /// What the view's substrate can fail with. Opaque to every rule (no
-    /// bound): the store's engine error for its projection,
-    /// [`Infallible`](core::convert::Infallible) for the mock. A fault is
-    /// not a verdict — see the module docs.
-    type Fault;
-
+pub trait ChainView<'id>: HeaderView<'id> {
     /// Whether `key_image` has been spent on the recorded chain.
     ///
     /// CEN-I7 (chain-wide key-image uniqueness); the chain half of CEN-L1.
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Self::Fault>;
 
-    /// The block recorded at `height`.
+    /// The block recorded at `height`, header facts and executed facts
+    /// together. A reader that needs only the former asks
+    /// [`HeaderView::header_at`].
     ///
-    /// CEN-A2, CEN-A4 (the parent, by hash); CEN-C2, CEN-C3 (the preceding
-    /// timestamps).
+    /// CEN-F13, CEN-F20, CEN-F17's `n` (the accumulators).
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
 
     /// The height the block `hash` is recorded at, or `None` if the chain
@@ -285,13 +364,6 @@ pub trait ChainView<'id> {
     ///
     /// CEN-I12.
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
-
-    /// The last recorded block, or `None` for an empty chain (genesis
-    /// admission). See [`Tip`] for why `Option`.
-    ///
-    /// CEN-A2 (`hash`); B5 and later 4.C / CEN-F5 (`height`, via
-    /// [`Tip::connecting_height`]).
-    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
 
     /// The curve tree as the next grow needs it: its leaf count and every
     /// layer's last chunk hash (DRS-E3 §3.1; CTW-8 — the only chunks a grow
@@ -381,7 +453,8 @@ pub trait ChainView<'id> {
     fn total_burned(&self) -> Result<AtomicUnits, Self::Fault>;
 
     // -----------------------------------------------------------------------
-    // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9, A11–A13)
+    // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9, A11–A13;
+    // `SO-D10` A14–A16, `SO-D11` A17)
     //
     // Recorded archival *state*, for the 4.J rows E6 slice 8 lands and the
     // E4 fold that derives a bond post's transition: a record is state, the
@@ -411,10 +484,17 @@ pub trait ChainView<'id> {
     /// over the record to say whether a shard was held *as of* `height`
     /// (CEN-J8's operand at the fire height; CEN-L16). Scoped to the persona
     /// by the read, so the fold need not re-check it.
+    ///
+    /// `floor` is the log's retirement floor under the rule set the caller
+    /// runs ([`SlashLogFloor`](crate::SlashLogFloor), `SLK-Q1`): a read
+    /// whose range starts below it would fold a retired range as "never
+    /// slashed", so the store refuses it (SI-26) rather than answer. The
+    /// caller computes the floor from its rule set; the view compares.
     fn slash_log_after(
         &self,
         persona: &PCanonicalId,
         height: BlockHeight,
+        floor: crate::SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, Self::Fault>;
 
     /// **A3.** The latest settlement epoch `persona` earned a pass bit in
@@ -430,14 +510,16 @@ pub trait ChainView<'id> {
     /// its latest epoch; empty for a persona that never served. The
     /// last-served marshal in its complete-tree form (such a record stores
     /// no shard list, so the served set is the only list there is) —
-    /// CEN-J16's cooldown over every shard. The HoldingsUpdate drop arm
-    /// that also read this list is REJECTED (2026-09-20); CEN-J17 left the
-    /// registry for bucket 3.
+    /// CEN-J16's cooldown over every shard. (It was also CEN-J17's
+    /// drop-arm grace tail until that row retired with `HoldingsUpdate`,
+    /// `ARW-14`; slice 8 Q1.)
     fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Self::Fault>;
 
     /// **A5.** Pass bits recorded for `(persona, shard, epoch)`;
-    /// [`PassCount::ZERO`] when none. CEN-J3's pair-epoch dedup reads
-    /// [`PassCount::any`]; the settlement writer reads the count.
+    /// [`PassCount::ZERO`] when none. No rule reads it since `SO-D11`:
+    /// slashing and accrual read the settlement row, whose pass fact is
+    /// the issued-draw index's. The read goes with the serve-credit table
+    /// when admission re-keys or deletes it (`SO-D10c`).
     fn pass_count(
         &self,
         persona: &PCanonicalId,
@@ -445,9 +527,11 @@ pub trait ChainView<'id> {
         epoch: SettlementEpoch,
     ) -> Result<PassCount, Self::Fault>;
 
-    /// **A6.** The market's co-holder count for `shard` at `epoch`'s close,
-    /// or `None` for an epoch that never closed for it. A written
-    /// `RMarket(0)` is a closed epoch with no co-holders (SAR-8): the view
+    /// **A6.** The market's co-holder count for `shard` at `epoch`, as the
+    /// epoch's slash pass gathered it (`SO-D11`), or `None` for an epoch
+    /// not gathered with the shard in it: not settled yet, or the shard was
+    /// not closed and final at that pass. A written `RMarket(0)` is a
+    /// gathered shard with no co-holders (SAR-8): the view
     /// keeps the two apart; what a rule does with `None` is that rule's to
     /// say (`SAR-Q6`). CEN-J15's admission operand, CEN-J25's work
     /// arithmetic.
@@ -458,8 +542,9 @@ pub trait ChainView<'id> {
     ) -> Result<Option<RMarket>, Self::Fault>;
 
     /// **A7.** The frozen `Σwork(E)` for `epoch`, in milli-units, or `None`
-    /// for an epoch that never closed (SAR-8). The stored denominator a
-    /// verifier never recomputes — CEN-J25's.
+    /// for an epoch its slash pass has not gathered (SAR-8; `SO-D11`). Its
+    /// existence is what lets a claim cite the epoch (CEN-J23), and it is
+    /// the stored denominator CEN-J25 compares its recompute with.
     fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Self::Fault>;
 
     /// **A8.** The frozen `budget(E)` for `epoch`, or `None` for an epoch
@@ -505,9 +590,76 @@ pub trait ChainView<'id> {
     /// closed epoch whose row the close deleted. The accrual adds this
     /// block's inflow to it; the close freezes it as `budget(E)` (A8).
     fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Self::Fault>;
+
+    // -----------------------------------------------------------------------
+    // Settlement's reads (`ARCHIVAL_SETTLEMENT_WRITER.md` §14, `SO-D10`;
+    // `ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.3, §10). Parent-state reads like
+    // the rest.
+    // -----------------------------------------------------------------------
+
+    /// **A14.** What `epoch` settled for `(persona, shard)`
+    /// (`archival_settlement`). `None` is a pair no draw was issued to in
+    /// that epoch, or an epoch the slash pass has not settled: **never a
+    /// miss**. A caller that counts misses reads the row's outcome.
+    fn settlement_row(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<SettlementRow>, Self::Fault>;
+
+    /// **A15.** Every draw issued in `epoch`, in `(persona, shard, issuing
+    /// height, draw)` order; empty when none was. The settlement walk's
+    /// operand: one pair's rows are adjacent and already in the `(h, j)`
+    /// order the selection is defined over, and the whole answer is what
+    /// the epoch's digest (A16) covers.
+    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, Self::Fault>;
+
+    /// **A16.** The running digest of the draws issued in `epoch`, as
+    /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch
+    /// with none: the digest of no draws.
+    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, Self::Fault>;
+
+    /// **A17.** The shards `persona`'s settlement rows say were Served at
+    /// each of `epochs`, ascending per epoch. An epoch with no Served shard
+    /// is absent. What the emission gather credits (`SO-D11a`), read back
+    /// by the claim verify.
+    ///
+    /// `epochs` is the set of keys to read. Each implementation sees an
+    /// epoch once and lists each of its Served shards once, and none
+    /// orders or deduplicates what it is given. A claim cites each epoch
+    /// once for a different reason: the emission vin's epochs are strictly
+    /// increasing on the wire (`EpochsNotStrictlyIncreasing`), and CEN-J23
+    /// gathers once per cited epoch from that list.
+    ///
+    /// The table is keyed `(P, shard, E)` (`SO-D2`). A store hops the
+    /// persona's shards once and point-reads each requested epoch. CEN-J23
+    /// asks once per bonded persona, for every epoch the claim cites.
+    fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epochs: &BTreeSet<SettlementEpoch>,
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Self::Fault>;
+
+    /// **A18.** What the secret draw's count rule recorded for the block at
+    /// `height`: its draw count, the fraction it carried forward, the
+    /// visible shortfall it saw, and whether its seed has been revealed
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10). `None` for a block the
+    /// rule has not run for. No block writes the row until admission lands
+    /// (`SO-D12`), so every height reads `None` until then.
+    fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, Self::Fault>;
+
+    /// **A19.** The digest of `epoch`'s drawable set, as written when the
+    /// epoch opened (`SO-D10g`). `None` for an epoch whose set was never
+    /// recorded. Every 32-byte value is a digest: an all-zero one is not
+    /// an absent one.
+    fn drawable_digest(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<DrawableDigest>, Self::Fault>;
 }
 
-/// Implement every archival [`ChainView`] read (A1–A9, A11–A13) as one policy.
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A19) as one policy.
 ///
 /// Three policies, one method list. A new archival read is added here, once;
 /// every view that expands the macro then implements it. A view that answers
@@ -516,6 +668,20 @@ pub trait ChainView<'id> {
 ///
 /// * `archival_reads!(empty)` — no bonds: `None`, empty, `PassCount::ZERO`,
 ///   `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
+/// * `archival_reads!(empty, r_market from <path>, sigma_work from <path>,
+///   budget from <path>, slash_watermark from <path>)` — `empty`, except
+///   that four reads answer from `self.<path>`: `r_market` from a
+///   `BTreeMap<(ShardId, SettlementEpoch), RMarket>` of planted prices,
+///   `sigma_work` and `budget` each from a map keyed by epoch, and
+///   `last_settled_slash_epoch` from an `Option<SettlementEpoch>`. The
+///   archival reads a no-bonds view may plant: CEN-J15's accept needs a
+///   shard priced at the slash watermark, CEN-J25's refusal an epoch that
+///   is closed and settled, CEN-J23's a closed epoch that is not yet
+///   settled, and no driven chain in the tree reaches any of them
+///   (`rules/tx_bond.rs`, J15's witness note;
+///   `rules/tx_emission_against.rs`). These are settled values the close
+///   and the slash pass wrote, not records, so planting them tests no
+///   construction.
 /// * `archival_reads!(fault <expr>)` — every read returns `Err(<expr>)`.
 ///   The expression is pasted into each method, so it is a unit constructor
 ///   or another value that is cheap to repeat.
@@ -529,6 +695,17 @@ pub trait ChainView<'id> {
 macro_rules! archival_reads {
     (empty) => {
         $crate::archival_reads!(@methods {empty});
+    };
+    (
+        empty,
+        r_market from $($price:ident).+,
+        sigma_work from $($sigma:ident).+,
+        budget from $($budget:ident).+,
+        slash_watermark from $($mark:ident).+
+    ) => {
+        $crate::archival_reads!(
+            @methods {planted $($price).+ ; $($sigma).+ ; $($budget).+ ; $($mark).+}
+        );
     };
     (fault $err:expr) => {
         $crate::archival_reads!(@methods {fault $err});
@@ -545,9 +722,13 @@ macro_rules! archival_reads {
             (persona);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; slash_log_after;
-            (persona: &shekyl_types::PCanonicalId, height: shekyl_types::BlockHeight);
+            (
+                persona: &shekyl_types::PCanonicalId,
+                height: shekyl_types::BlockHeight,
+                floor: $crate::SlashLogFloor
+            );
             (::std::vec::Vec<shekyl_types::archival::SlashLogEntry>);
-            (persona, height);
+            (persona, height, floor);
             (::std::vec::Vec::new()));
         $crate::archival_reads!(@emit $policy; last_served_epoch;
             (persona: &shekyl_types::PCanonicalId, shard: shekyl_types::ShardId);
@@ -607,8 +788,80 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_units::AtomicUnits>);
             (epoch);
             (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; settlement_row;
+            (
+                persona: &shekyl_types::PCanonicalId,
+                shard: shekyl_types::ShardId,
+                epoch: shekyl_types::SettlementEpoch
+            );
+            (::core::option::Option<shekyl_types::archival::SettlementRow>);
+            (persona, shard, epoch);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; issued_draws;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::std::vec::Vec<shekyl_types::archival::IndexedDraw>);
+            (epoch);
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; issued_digest;
+            (epoch: shekyl_types::SettlementEpoch);
+            (shekyl_types::archival::IssuedDigest);
+            (epoch);
+            (shekyl_types::archival::IssuedDigest::ZERO));
+        $crate::archival_reads!(@emit $policy; served_at;
+            (
+                persona: &shekyl_types::PCanonicalId,
+                epochs: &::std::collections::BTreeSet<shekyl_types::SettlementEpoch>
+            );
+            (
+                ::std::collections::BTreeMap<
+                    shekyl_types::SettlementEpoch,
+                    ::std::vec::Vec<shekyl_types::ShardId>,
+                >
+            );
+            (persona, epochs);
+            (::std::collections::BTreeMap::new()));
+        $crate::archival_reads!(@emit $policy; block_draws;
+            (height: shekyl_types::BlockHeight);
+            (::core::option::Option<shekyl_types::archival::BlockDraws>);
+            (height);
+            (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; drawable_digest;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_types::archival::DrawableDigest>);
+            (epoch);
+            (::core::option::Option::None));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $($arg),*);
+            ::core::result::Result::Ok($empty)
+        }
+    };
+    // The planted reads: matched before the generic `planted` arm below,
+    // so only `r_market`, `sigma_work`, `budget` and
+    // `last_settled_slash_epoch` read their fields and every other read is
+    // `empty`'s.
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; r_market; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn r_market(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(self.$($price).+.get(&($($arg),*)).copied())
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; sigma_work; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn sigma_work(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(self.$($sigma).+.get(&($($arg),*)).copied())
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; budget; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn budget(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(self.$($budget).+.get(&($($arg),*)).copied())
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; last_settled_slash_epoch; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn last_settled_slash_epoch(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(self.$($mark).+)
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $($arg),*);
             ::core::result::Result::Ok($empty)

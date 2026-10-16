@@ -40,8 +40,8 @@
 
 use crate::claimed_epochs::{claim_window_floor, claimed_epochs_contains};
 use crate::consensus_state::{
-    as_of_e_served_work, credited_work_milli, epoch_close_height, settlement_epoch_at_height,
-    shard_contribution_micro, CreditIndexOutOfRange, EpochCloseInputs, ServedWork,
+    as_of_e_served_work, credited_work_milli, shard_contribution_micro, CreditIndexOutOfRange,
+    EpochCloseInputs, ServedWork, SettlementSchedule,
 };
 use crate::emission_wire::{ArchivalRewardEmissionVin, EmissionAuthRole, RewardCommit, WireError};
 use crate::reward_arithmetic::reward_share_floor;
@@ -413,13 +413,41 @@ pub fn claimant_reward_share(
     })
 }
 
-/// §7.1 steps 1–5 over the frozen as-of-`E` sources.
+/// §7.1 steps 1–5 over the frozen as-of-`E` sources, under the
+/// **process-latched** schedule ([`SettlementSchedule::effective`]) — the
+/// form for callers that hold no rule set: the daemon's submit verifier,
+/// the FFI shim, the wallet's claim builder, the KATs.
+/// [`emission_vin_verify_claims_under`] is the body; this is that body
+/// under the latch, the [`EpochCloseInputs::verify_view`] /
+/// [`EpochCloseInputs::under_schedule`] pairing.
 ///
 /// `epoch_sources` must be aligned 1:1 with `vin.settlement_epochs` (the C++
 /// shim marshals one item-2 snapshot per claimed epoch; a missing finalized
 /// `Σwork(E)` row means the shim never reaches this call). Fail-fast in step
 /// order; the set is never mutated (step 3 is the WS-2 read-only layer).
 pub fn emission_vin_verify_claims(
+    vin: &ArchivalRewardEmissionVin,
+    ctx: &EmissionVerifyContext<'_>,
+    epoch_sources: &[EmissionEpochSource<'_>],
+) -> Result<ClaimsVerified, EmissionVerifyError> {
+    emission_vin_verify_claims_under(SettlementSchedule::effective(), vin, ctx, epoch_sources)
+}
+
+/// §7.1 steps 1–5 over the frozen as-of-`E` sources, under `schedule`.
+///
+/// The schedule decides step 1 alone — which epoch `current_block_height`
+/// sits in and where each claimed epoch's close was processed. A caller
+/// that holds a rule set (the validator's CEN-J25) passes that set's
+/// schedule, so a chain captured under a shortened regtest epoch replays
+/// under a rule set naming that epoch, in any process, with no latch armed
+/// (`ARW-15`). Everything after step 1 reads `ctx` and `epoch_sources`
+/// only; the per-epoch `inputs` already carry their own
+/// `settlement_epoch_blocks`, taken from the same schedule by the caller
+/// that built them.
+///
+/// Alignment and fail-fast order as [`emission_vin_verify_claims`].
+pub fn emission_vin_verify_claims_under(
+    schedule: SettlementSchedule,
     vin: &ArchivalRewardEmissionVin,
     ctx: &EmissionVerifyContext<'_>,
     epoch_sources: &[EmissionEpochSource<'_>],
@@ -464,11 +492,12 @@ pub fn emission_vin_verify_claims(
     // the tighter boundary (the F-E1 KAT pins reject-at-`h_close`,
     // accept-at-`h_close + 1`), so the same-block close/claim race is
     // foreclosed structurally.
-    let current_settled = settlement_epoch_at_height(ctx.current_block_height);
+    let current_settled = schedule.epoch_at_height(ctx.current_block_height);
     let window_floor = claim_window_floor(current_settled);
     for &epoch in &vin.settlement_epochs {
-        let finalized =
-            epoch_close_height(epoch).is_some_and(|h_close| ctx.current_block_height > h_close);
+        let finalized = schedule
+            .close_height(epoch)
+            .is_some_and(|h_close| ctx.current_block_height > h_close);
         if !finalized {
             return Err(EmissionVerifyError::EpochNotFinalized {
                 epoch,

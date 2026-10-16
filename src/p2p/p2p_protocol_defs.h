@@ -52,49 +52,36 @@ namespace nodetool
   // forbids — and it was self-asserted, so it identified nothing anyway.
   // The address IS the entry: a hypothesis about where a peer can be dialed.
   //
-  // It carries no pruning_seed either (PDM-Q7, 2026-09-21): the stripe
+  // It carries no stripe seed either (PDM-Q7, 2026-09-21): the stripe
   // engine is deleted, and the field was the same shape as the id above —
   // durable, address-keyed, self-asserted, gossiped in every peerlist — with
   // eight accepted non-zero values against a uniformly-zero honest fleet,
-  // i.e. free markers for topology tracing. A received entry that still
-  // carries the key is decoded with the key ignored (KV_SERIALIZE_OPT on the
-  // old side; epee skips unknown keys on this side).
+  // i.e. free markers for topology tracing. A received entry carrying a key
+  // this build does not define is decoded with the key ignored.
+  //
+  // It carries no `last_seen` either (PR-3, Rick, 2026-10-13): the Rust
+  // lists carry no clock, so the field was always sent as 0 and ignored on
+  // receipt, which makes it a sentinel and a peer-controlled slot. The
+  // Rust codec (`shekyl-levin`, `PeerlistEntry`) is the same shape.
   template<typename AddressType>
   struct peerlist_entry_base
   {
     AddressType adr;
-    int64_t last_seen;
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE(adr)
-      KV_SERIALIZE_OPT(last_seen, (int64_t)0)
     END_KV_SERIALIZE_MAP()
 
     BEGIN_SERIALIZE()
       FIELD(adr)
-      VARINT_FIELD(last_seen)
     END_SERIALIZE()
   };
   typedef peerlist_entry_base<epee::net_utils::network_address> peerlist_entry;
 
   // `anchor_peerlist_entry` was deleted with the anchor mechanism. Its only
-  // job was crossing the restart boundary -- see net_peerlist.h `init()`.
+  // job was crossing the restart boundary, which the Rust address file does
+  // without a type of its own (shekyl-peerlist `address_file`).
 
-  inline 
-  std::string print_peerlist_to_string(const std::vector<peerlist_entry>& pl)
-  {
-    time_t now_time = 0;
-    time(&now_time);
-    std::stringstream ss;
-    ss << std::setfill ('0') << std::setw (8) << std::hex << std::noshowbase;
-    for(const peerlist_entry& pe: pl)
-    {
-      ss << pe.adr.str()
-        << " \tlast_seen: " << (pe.last_seen == 0 ? std::string("never") : epee::misc_utils::get_time_interval_string(now_time - pe.last_seen))
-        << std::endl;
-    }
-    return ss.str();
-  }
 
 
   struct network_config
@@ -114,7 +101,6 @@ namespace nodetool
     uint32_t handshake_interval;
     uint32_t packet_max_size;
     uint32_t config_id;
-    uint32_t send_peerlist_sz;
   };
 
   /*! What a node announces about itself at handshake.
@@ -128,28 +114,18 @@ namespace nodetool
     it holds. What a handshake can honestly establish is that THERE IS A
     PEER AT THIS ADDRESS.
 
-    `address` is that announcement — a hypothesis about WHERE this node can
-    be dialed, never a claim about WHO is there:
-    - public zone: a port-only advert (host zeroed). The receiver never
-      reads the advertised host half; it combines the advertised port with
-      the host it OBSERVED on the socket — an announcement proves nothing,
-      a dial proves reachability. The derived entry lands in gray and earns
-      white only by being dialed (PWD-I2).
-    - anonymity zones, serving: the zone's own self-address
-      (`zone.m_our_address`), dialable — the only verification an overlay
-      address admits.
-    - dialer-only / hidden: the zone's unknown-address sentinel, recorded
-      nowhere (undialable). The address's type tag reveals only the zone,
-      which the acceptor already knows from its own listener. */
+    The handshake carries no address on any connector (ruled 2026-10-09).
+    A node's own dialable address reaches peers only as one uniform member
+    of its disclosure sample, so a handshake has no field that could join
+    a hidden identity to a clearnet one. A peer that still sends `address`
+    is read with the key ignored. */
   struct basic_node_data
   {
     uuid network_id;
-    epee::net_utils::network_address address;
     uint32_t support_flags;
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE_VAL_POD_AS_BLOB(network_id)
-      KV_SERIALIZE(address)
       KV_SERIALIZE_OPT(support_flags, (uint32_t)0)
     END_KV_SERIALIZE_MAP()
   };

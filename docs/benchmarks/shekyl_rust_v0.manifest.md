@@ -501,7 +501,7 @@ The criterion sibling keeps the production path (`scheme.sign(..)`,
 `keypair_generate()`, `OsRng` for BP+) because wall-clock averaging
 absorbs the rejection-sampling variance at the per-iteration level;
 only the instruction-count metric needs determinism. Both halves of
-the split are documented as §12.3 "known gap" because neither fully
+the split are documented in §14 (Known gaps) because neither fully
 exercises the production hedged-randomized sign path in a stable
 way — the criterion half measures it but with variance, the iai
 half measures a fips204-compliant deterministic variant.
@@ -531,7 +531,7 @@ curve-tree fixture is its own scope of work (the tree root is
 chain-dependent; synthesizing a valid fixture from scratch requires
 either a snapshot from the live daemon or a deterministic regtest
 chain of useful depth, neither of which is cheap). It is tracked as
-**§12.1 below**. In the interim, a delta in this bench is
+**§14 (Known gaps) below**. In the interim, a delta in this bench is
 interpretable as a regression in **Bulletproofs+ or ML-DSA-65 only**;
 membership-proof cost is tracked separately once the fixture lands.
 
@@ -780,7 +780,192 @@ re-derivation.
 admission path is the *caller* of these FFI entry points, not an
 independent implementation.
 
-## 12. Known gaps
+## 12. `crypto_bench_serve_*` — the archival serve path (`BA-T3`)
+
+**Crate.** `shekyl-p-serve`.
+**Binary.** `benches/serve_response_iai.rs` (gungraun, registered as an
+iai-only row in `capture_rust_baseline.sh` with the `bench-internals`
+feature). No criterion sibling: wall clock on this path is the floor
+device's measurement (`BENCHMARK_ALIGNMENT.md` `BA-T5`).
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%), all five
+functions.
+
+**What it measures.** Five functions on the single-pass serve (`SF-D8`,
+PR #974; the `SF-D8` amendment of PR #1015 removed the frame header and
+split the signature's cost into its own cell):
+
+| Function | Cells | What is inside the count |
+| --- | --- | --- |
+| `crypto_bench_serve_response` | one leaf, an eighth of a segment, a full segment | One whole response to `GET /shard/{id}`: parse, anchor gate, open, the key's pre-flight, the head, every chunk read and folded into the delivery digest, the call for the countersignature (answered by a pinned envelope — see *Fixture shape*), the bytes written |
+| `crypto_bench_serve_sign` | one pinned transcript | The countersignature alone: the seeded persona key's hybrid sign (Ed25519 + ML-DSA-65) over a fixed transcript, so the cost of signing is gated on a rejection-sampling trajectory nothing on the wire can move |
+| `crypto_bench_serve_prehead` | one leaf, a full segment | The same request up to the 200 head being ready to write. No body byte is read |
+| `crypto_bench_serve_read_and_fold` | all three | Open the shard, then read it at the serve loop's chunk size and fold each chunk into the delivery digest |
+| `crypto_bench_serve_digest_alone` | all three | `pass_delivery_digest` in one call over the same body bytes |
+
+The whole-response cells are pinned to the endpoint's steps, not to the
+digest or the signer, so that a change in how many times the body is read
+or hashed moves the count. The two pre-head cells are read against each
+other: the invariant the single pass exists for is that `P` does no work
+that scales with the shard before the requester has received anything
+(`BA-Q3`), so the two must stay level. The last two functions exist for
+their difference, which is what chunking adds to the digest.
+
+**Counts when the gate was built** (x86 dev, deterministic over two
+runs; the rolling baseline is the live reference, these are the record
+of what the first reading said):
+
+| Function | one leaf | eighth segment | full segment |
+| --- | ---: | ---: | ---: |
+| `serve_response` | 12,357,069 | 26,972,550 | 191,334,665 |
+| `serve_prehead` | 13,527 | — | 13,579 |
+| `serve_read_and_fold` | 26,864 | 19,395,051 | 154,999,150 |
+| `serve_digest_alone` | 25,786 | 18,973,074 | 151,641,265 |
+
+**Counts after the `SF-D8` amendment and the signature split** (PR
+#1015, x86 dev, 2026-10-09; the one-time shift is explained under
+*Fixture shape*):
+
+| Function | one leaf | eighth segment | full segment |
+| --- | ---: | ---: | ---: |
+| `serve_response` | 35,608 | 19,820,875 | 158,342,675 |
+| `serve_sign` (pinned transcript) | 7,155,885 | — | — |
+| `serve_prehead` | 12,747 | — | 12,773 |
+| `serve_read_and_fold` | 26,654 | 19,395,759 | 155,005,869 |
+| `serve_digest_alone` | 25,806 | 18,973,094 | 151,641,285 |
+
+Three readings. At the first table the fixed part of a response was the
+hybrid signature, about 12.3 M instructions on the trajectory the bench's
+seed happened to select; at the second the serve cells carry the serve
+alone and the signature has its own cell. Work before the head is flat
+across a 25,992-fold change in shard size (12,747 against 12,773; the 26
+are the longer `content-length`) and is 0.008 % of a full
+response. Read-and-fold is 2.2 % above the one-shot digest at both larger
+sizes, so interleaving the hash with the chunked read costs almost
+nothing in instructions: the 19 ms per response that the floor run of
+2026-10-06 measured inside the stream and could not attribute
+(`sfd8_serve_cost_floor_device_20261005.md`, run 3) is not in this loop's
+instruction count. Instruction counts are not floor time.
+
+**Fixture shape.** The store is in memory (`ShardBody::flat`): store I/O
+is the floor device's cost, and an on-disk store would put the store's
+read path inside the count. The signer is the bench's own: a persona key
+and an ML-DSA signing nonce fixed by one seed, in the byte layout the
+test signer uses. The shard bytes come from the same seed.
+
+*The signature's cost is the signer's, and it is gated on its own.*
+ML-DSA signs by rejection sampling: it loops until a candidate passes
+its norm checks, each round about two million instructions, and the
+number of rounds is a function of the key, the nonce **and the
+message**. A fresh key or a hedged signature moves the count by tens of
+millions between runs of one input (measured: 14 M against 45 M for one
+leaf). As first built, this section said the gate "pins one trajectory
+so that what moves the count is the serve" — **premise refuted
+2026-10-09**: the message the serve signs is the pass transcript, which
+carries the delivery digest of the body, so a change to the bytes on the
+wire re-rolls the trajectory under the same seed. The `SF-D8` amendment
+(PR #1015) that removed the frame header did exactly that: ML-DSA's
+`sign_internal` went 10.75 M → 7.31 M for one leaf and 31.4 M → 9.0 M
+for a full segment, the serve's own work stayed within 0.7 %, and the
+gate read a −27.9 % / −11.7 % serve regression (the same shape as
+PR-SA-2's −40.64 % in §5). Since then the serve cells are handed a
+**pinned envelope**: the seeded key signs one fixed transcript in
+`setup`, and the signer the serve calls answers every `sign_pass` with
+that envelope — the call is still made, the response is still a 200
+closed by a well-formed envelope from the right key, and the serve is
+what the cell counts. `crypto_bench_serve_sign` measures the seeded key
+signing that same fixed transcript, so the hybrid sign's cost is gated
+on a trajectory no wire change can move. The one-time drop in the serve
+cells at that commit (12.36 M → 35.6 K for one leaf) is the signature
+leaving them, absorbed by the rolling baseline on the next `dev`
+rotation.
+
+**Measurement boundary.** Building the shard and the key, and a
+self-witness serve (asserting a `200` closed by a signature, so the gate
+cannot count a refusal; and that the read-and-fold arm reaches the
+one-shot digest) are `setup`. The response buffer is pre-sized to the
+witness's length so that its growth is not measured. The fixture is
+returned from each measured function so that freeing it is not charged.
+
+**On one thread, into a buffer.** The endpoint runs its steps on tokio's
+blocking pool, and Callgrind keeps one collection state per thread. A
+first cut toggled collection on the pool threads; the pool's own idle
+work then drifted the per-thread totals by up to 14 % between runs of
+one input, which no ±5 % threshold survives. So the measured functions
+are `serve_one_in_memory`, `prehead_in_memory` and
+`read_and_fold_in_memory` (`bench-internals` feature): the endpoint's own
+steps — `gate_and_open`, `response_head`, `read_and_fold`,
+`sign_envelope` — composed in the endpoint's order on the calling thread,
+with no runtime and no socket. They are not second serve paths.
+`serve_bench_seam_tests.rs` holds each to the live endpoint for a served
+response, five refusals and the late-refusal trailer: the same bytes,
+and the same number of shard opens, chunk reads and signatures, since a
+serve that read or signed twice would put the same bytes on the wire.
+What the count leaves out, by construction: the socket writes, the
+blocking-pool hand-offs (one per chunk, 51 for a full segment) and the
+requester's reads, which are the floor's wall clock (`BA-T5`).
+
+**What it cannot assert.** Callgrind's counts are not visible to the
+process being counted, so the bench cannot fail when the two pre-head
+cells diverge. The seam tests assert the cause (one open, no chunk read,
+nothing signed, at both sizes), and each cell is gated against its own
+baseline, so a pre-head cell that starts to grow fails on its own.
+
+**Class rationale.** Bidirectional because the failure modes — a serve
+that stops hashing, or a hybrid sign that got cheaper — present as a
+large instruction-count *drop*, in `serve_response` / `read_and_fold`
+and in `serve_sign` respectively. A serve that stops *calling* the signer
+is not this gate's to catch (the pinned envelope costs almost nothing
+either way): `serve_bench_seam_tests.rs` counts one signature per served
+response against the live endpoint, and that is the gate for it.
+
+**Apples-to-oranges against C++.** None; the serve path is Rust only.
+
+## 13. `crypto_bench_fn_dsa_hybrid_*` — hybrid scheme 3 (`BA-T33`)
+
+**Crate.** `shekyl-crypto-pq`.
+**Binary.** `benches/fn_dsa_hybrid_iai.rs` (gungraun), with the criterion
+sibling `benches/fn_dsa_hybrid.rs`.
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%), every function.
+
+**What it measures.** One nested sign and one nested verify under
+Ed25519 + FN-DSA-1024 (`docs/design/FN_DSA_HYBRID.md`), over a 128-byte
+message and the receipt scheme domain:
+
+| Function | What is inside the count |
+| --- | --- |
+| `crypto_bench_fn_dsa_hybrid_sign` | The combiner's preimage, decoding the FN-DSA signing key, one FN-DSA-1024 signature, one Ed25519 signature |
+| `crypto_bench_fn_dsa_hybrid_sign_held` (added 2026-10-12) | The same signature through `FnDsaHybridSigner`, which decoded the FN-DSA signing key in its setup: the preimage, one FN-DSA-1024 signature, one Ed25519 signature. No decode, and the key's wipe on drop is outside the count. Same message, domain and draw as the arm above, so the two emit the same bytes and their difference is the per-signature decode (`FN_DSA_HYBRID.md` `FND-4`) |
+| `crypto_bench_fn_dsa_hybrid_verify` | The preimage, decoding the FN-DSA verifying key, one FN-DSA-1024 verification, one Ed25519 verification |
+
+**Determinism.** FN-DSA signing is rejection sampling. The pinned signer
+draws one 40-byte seed from its RNG per signature, replaces it with
+`SHAKE256(hashed signing key ‖ message representative ‖ seed)`, and drives
+every attempt of the rejection loop from that derived seed and a counter;
+the RNG is not consulted again. The gated sign arm enters through
+`sign_with_rng_seed`, which shares the nested body with the production
+`sign` and replaces only the source of that draw with a fixed ChaCha20
+stream, so the count repeats exactly. The criterion sign arm uses the
+production entry and its OS-seeded draw.
+
+**What it does not measure.** The cost on the floor device. FN-DSA signing
+is floating-point: the pinned crate uses hardware `f64` and dispatches to
+AVX2 at run time on x86_64, so an x86 count is a count of code the floor
+device does not run. It is a drift signal for the x86 path and nothing
+else; `BA-T33`'s T3 arm is the floor figure.
+
+**First counts** (x86_64 development host, gungraun-runner 0.19.3, two
+runs identical): sign 6,675,212 instructions; verify 891,246. Criterion on
+the same host: sign 457 µs, verify 58 µs, seeded key generation 6.2 ms.
+
+**Counts with the held-key arm** (2026-10-12, x86_64 development host,
+gungraun-runner 0.19.3, two runs identical): sign 6,675,435 instructions;
+sign through the held key 6,010,472 (−9.96 %); verify 891,438. Criterion
+on the same host: sign 442 µs, sign through the held key 411 µs (−7.0 %),
+decoding and holding a key once 52 µs.
+
+---
+
+## 14. Known gaps
 
 The v0 baseline is explicit about what it does not measure:
 
@@ -865,7 +1050,7 @@ lives asymmetrically between the two stacks — this is the
 apples-to-oranges manifest discipline the hardening document
 prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
 
-## 13. Cross-references
+## 15. Cross-references
 
 - `docs/MID_REWIRE_HARDENING.md` §3.1 — C++ scope, Five-path list,
   daemon-coupling rationale.
@@ -896,13 +1081,14 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   runner. Emits `shekyl_rust_v0.json` and
   `shekyl_rust_v0.iai.snapshot` into this directory.
 
-## 14. Change log for this manifest
+## 16. Change log for this manifest
 
 - `v0` (commit 2 of the mid-rewire hardening pass, a.k.a.
   `bench(wallet-state)`): initial Rust baseline. Live measurements:
   all five hot paths (`ledger_postcard_roundtrip`, `balance_compute`,
   `wallet_open_cold`, `scan_block`, `transfer_e2e_1in_2out`). Known
-  gaps documented in §12 (FCMP++ membership proof, hot-spend ledger
+  gaps documented in §14, Known gaps (§12 when this entry was written;
+  renumbered since, as the entries below record) (FCMP++ membership proof, hot-spend ledger
   shape, Argon2id production profile under Valgrind).
 - Stage 0 PR-2 of the V3 engine trait spec measurement gate (see
   `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1 and
@@ -934,3 +1120,57 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   same fixture shape — what moved is the *measured construction
   itself*, by ratified consensus design, which the rolling baseline
   absorbs on the next `dev` rotation.
+- `BA-T3` (`docs/design/BENCHMARK_ALIGNMENT.md`): added §12, the
+  serve-path drift gate on `shekyl-p-serve`, four `crypto_bench_serve_*`
+  functions over eleven cells, registered as an iai-only row with the
+  `bench-internals` feature. Built on the single-pass serve of PR #974.
+  Schema version unchanged (`shekyl_rust_v0`); the function names route
+  into the existing `crypto_bench_*` class. Sections previously numbered
+  §§12–14 (Known gaps, Cross-references, Change log) renumbered to
+  §§13–15.
+- The per-chunk fold of the delivery digest moves into the blocking-pool
+  hop with the read (`read_and_fold`), so the endpoint no longer hashes a
+  shard's bytes on an executor thread. Starting the digest over the frame
+  header and finalizing it stay on the connection's task, a fixed few
+  Keccak permutations whatever the shard's size. §12's compositions call
+  the same function. The work is the same
+  and only the thread differs, which an instruction count on one thread
+  cannot see; what it does see is the digest state now travelling into
+  and out of each hop by value, about 270 instructions per chunk. x86
+  dev: `serve_response` 12,357,813 / 26,974,704 / 191,348,047 (a full
+  segment +0.007 %); `serve_read_and_fold` 27,397 / 19,397,222 /
+  155,013,333 (one leaf +2.0 %, on a base of 27 K; a full segment
+  +0.009 %); `serve_prehead` and `serve_digest_alone` unchanged. Whether
+  the move is worth anything is the floor's to say (`BA-T5`). Schema
+  version unchanged.
+- `BA-T33` (`docs/design/BENCHMARK_ALIGNMENT.md`): added §13, hybrid
+  scheme 3's sign and verify on `shekyl-crypto-pq`, two
+  `crypto_bench_fn_dsa_hybrid_*` functions with a criterion sibling.
+  Schema version unchanged (`shekyl_rust_v0`); the function names route
+  into the existing `crypto_bench_*` class. Sections previously numbered
+  §§13–15 (Known gaps, Cross-references, Change log) renumbered to
+  §§14–16. The same change moves the existing scheme's sign onto the
+  shared combiner body: `crypto_bench_hybrid_sign_1_input` 7,163,792 →
+  7,161,994 on an x86 development host (−0.025 %).
+- PR #1015 (`SF-D8` amendment; `SHARD_VIEW_FETCH.md`): the serve streams
+  the body unframed, and the frame header leaves the digested bytes. That
+  changed the transcript the bench's seeded key signs and re-rolled
+  ML-DSA's rejection-sampling trajectory (10.75 M → 7.31 M for one leaf,
+  31.4 M → 9.0 M for a full segment), which the gate read as a −27.9 %
+  serve regression while the serve's own work moved by under 0.7 %. §12's
+  "pins one trajectory" premise is refuted and rewritten. The serve cells
+  now sign with a pinned envelope and the signature has its own cell,
+  `crypto_bench_serve_sign`, over a fixed transcript: five functions over
+  twelve cells. Second counts table added. One-time gated drop in the
+  three `serve_response` cells (the signature leaving them) and one
+  `added` cell, absorbed by the rolling baseline on the next `dev`
+  rotation. Schema version unchanged (`shekyl_rust_v0`): same class, same
+  counter, same envelope.
+- FN-DSA increment 4 (`docs/design/FN_DSA_HYBRID.md`, the signing
+  capability): §13 gains `crypto_bench_fn_dsa_hybrid_sign_held`, the
+  scheme-3 signature through a key decoded once and held
+  (`FnDsaHybridSigner`), and the criterion sibling gains
+  `fn_dsa_hybrid_sign_held` and `fn_dsa_hybrid_hold_key`. One `added`
+  cell, absorbed by the rolling baseline on the next `dev` rotation; the
+  two existing cells are untouched. Schema version unchanged
+  (`shekyl_rust_v0`): same class, same counter.

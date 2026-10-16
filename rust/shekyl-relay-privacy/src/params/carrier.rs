@@ -202,14 +202,13 @@ const _: () = assert!(
 /// because the next open link is a ceiling change, not because a second
 /// one is live.
 ///
-/// # Not [`crate::zone::RelayZone::is_encrypted`]
+/// # Not a count of encrypted networks
 ///
-/// That predicate says a wire observer cannot read the bytes. Tor is
-/// encrypted and takes no envelope (`TOR_COVER_POSTURE.md`). This crate
-/// cannot import `ConnectorId`, so the number is stated here.
+/// Tor is encrypted and takes no envelope (`TOR_COVER_POSTURE.md`). This
+/// crate cannot import `ConnectorId`, so the number is stated here.
 /// `shekyl-relay` asserts it equals the open-link walk over that enum.
-/// Deriving it from [`crate::zone::RelayZone::is_encrypted`] would bill Tor
-/// and omit the link the envelope actually runs on.
+/// Counting encrypted networks would bill Tor and omit the link the
+/// envelope actually runs on.
 pub const CEILING_ZONES: u32 = 1;
 
 /// SUSTAINED cover-bandwidth ceiling, **per node**, in bytes per second.

@@ -5,8 +5,20 @@ The archival mechanism functions without this; this layer makes
 archival legible to humans. Originally drafted as V4-scoped; rescoped
 to V3 by the 2026-04-27 actor-architecture decision-log entry, which
 established `shekyl-shard-visual` as a domain-primitive library crate
-(no actor wrapping; pure-CPU, async-free, deterministic) shipping
-alongside the V3.x `ArchivalEngine` (Stage 5) ship.
+(no actor wrapping; pure-CPU, async-free, deterministic). **Production
+input (2026-10-08,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md) `SV-D`):** the
+aggregate a daemon answers to `request_archival_shard` after fetching the
+shard's archival body from a holder, reached by every viewer through the
+wallet contract's `get_shard_view` (CLI `shard fetch`, the GUI's Shards
+page) or, for shekyl-web, the site's own daemon server-side. The
+`ArchivalEngine` (Stage 5) framing this document was drafted under is
+*records-was*: the daemon's fetch scheduler is the producer, not a wallet
+engine. **`SV-D` continuation opened 2026-10-10** (*SV-D continuation*
+below; `SV-D10` in `SHARD_VIEW_FETCH.md`): entropy/distinguishability
+audit, CVD gate, byte-texture question, candidate.v2 criteria. Landscape
+dispositions live in
+[`design/ARCHIVAL_STORAGE_LANDSCAPE.md`](design/ARCHIVAL_STORAGE_LANDSCAPE.md).
 
 This is a library crate, not an actor. The 2026-04-27 actor-
 architecture decision pinned actor-shape as wrong for visualization:
@@ -46,10 +58,17 @@ rendering of the shard's content, not an artistic interpretation.
 
 Three properties fall out of this:
 
-1. **Visual integrity check.** Mismatched visuals between stakers
-   indicate corrupt shard data, providing a cheap human-readable
-   integrity signal that complements (not replaces) cryptographic
-   verification.
+1. **Visual integrity signal — a recognizer, not a verifier.** A
+   mismatched picture between holders is a cheap human-readable
+   *suspicion* that the shard bytes differ. It is not a substitute for
+   the view hash (`SV-D1`) or the per-transaction verification digests a
+   challenge checks. Humans distinguish on the order of 30–60 bits in
+   side-by-side comparison (ACSAC 2009; CLPS); candidate.v1's perceptible
+   budget is counted in *SV-D continuation* below. The hash is the
+   verifier. *Records-was (the sentence this restates):* "Mismatched
+   visuals between stakers indicate corrupt shard data, providing a cheap
+   human-readable integrity signal that complements (not replaces)
+   cryptographic verification."
 2. **Legible rarity.** Active stakers playing the rare-shard market
    see *visually distinctive* rare shards, reinforcing the economic
    incentive with aesthetic incentive.
@@ -190,8 +209,17 @@ Candidate derived properties, with their ruling-A dispositions
 (*Parameter admissibility* below; the original draft called all of
 these "public", which the sweep found untrue of the real chain):
 
-- Shard hash (256 bits, uniformly distributed) — **admitted**
-- Block count in shard — **admitted**
+- Shard hash (256 bits, uniformly distributed) — **admitted**; **defined
+  2026-10-08 (`SV-D1` RULED,
+  [`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md))** as a
+  cSHAKE256 fold over the shard's archival bytes (each in-domain
+  transaction's prunable region and `pqc_auths`, in storage order). It
+  requires the pruned components to compute — a node holding only skeleton
+  rows cannot produce it — and is distinct from the per-transaction
+  verification digests a challenge checks. *Was:* the frozen curve-tree
+  sub-root `R_k` of the retired leaf-segment partition.
+- Block count in shard — **admitted** (`SV-D4`: the span `[h_first, h_last]`
+  of the shard's `tx_id` range; a boundary block counts in both neighbours)
 - Transaction count (aggregate) — **admitted**
 - Time range (first block timestamp to last block timestamp) — **admitted**
 - Output count (new outputs in the shard's block range) — **admitted**
@@ -225,6 +253,15 @@ derived while walking the list. It is the design-review checkpoint from
 > no key, no wallet state, no holder-specific privilege — so that a
 > rendering publishes nothing about the shard that holding the shard
 > does not.**
+
+**Re-keyed 2026-10-08 (`SV-D7` PROPOSED,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md)):** under
+`SHT-Q2` a holder holds the **archival good** — prunable regions and
+`pqc_auths` — not blocks; block headers, coinbases and timestamps are
+skeleton rows every node holds. Read "the shard's serialized blocks" as
+*held archival bytes plus the skeleton every node holds*. The intent is
+unchanged; the four admitted features stay admitted; the shard hash's
+input is the archival good only (`SV-D1`).
 
 Two clarifications that do work:
 
@@ -308,12 +345,17 @@ property (a rendering would be a function of wallet state). Cost of
 (a): conforming implementations carry superseded renderers; spec
 versions are expected to be rare enough that this is bounded.
 
-Enforcement of the height pin lands with the Stage 5 cutover, when
-shards acquire creation heights — the named blocker (rule 22): no
-height exists for a fixture aggregate, and only one spec version
-exists today. What lands now is the operand: every `CandidateRecipe`
-carries `spec_version` (`"candidate.v1"`), so exports are
-self-describing and the future comparison has its field.
+Enforcement of the height pin is blocked by name (rule 22) on a second
+spec version existing: with one, there is nothing to select between.
+**The height half of the blocker lifted 2026-10-08 (`SV-D5`)**: every
+`get_shard_view` answer carries the shard's `close_height`, the height
+the pin reads — the earlier text, *"lands with the Stage 5 cutover, when
+shards acquire creation heights"*, is records-was. What is landed is the
+operand on both sides: every `CandidateRecipe` carries `spec_version`
+(`"candidate.v1"`) and every production view carries `close_height`, so
+the comparison has both its fields and awaits only a `candidate.v2`.
+Falsify by a second `spec_version` existing with no selector keyed on
+`close_height`.
 
 ### Overridden renders are visibly non-canonical (hash-override ruling)
 
@@ -341,9 +383,11 @@ aggregate handed to the constructor, unmodified, with no override and
 no synthetic input. It does not attest that the aggregate is truthful
 chain data — the renderer is a pure function and cannot know; that
 binding belongs to the layer that produces aggregates
-(`shekyl-shard-source` rejects a stale handle whose hash disagrees
-with the resolved aggregate today; `ArchivalEngine` supplies verified
-shards at Stage 5). Asking the render layer to verify its input
+(the daemon's fetch scheduler, which answers the aggregate only after
+the body verified against the requester's own skeleton rows and folds
+the view hash in that same pass — `SV-D2`, `SV-D8`; the fixture-only
+`shekyl-shard-source` rejects a stale handle whose hash disagrees with
+the resolved aggregate). Asking the render layer to verify its input
 against the chain would put a chain-integrity check at a
 pure-function boundary that has no chain access — the same
 wrong-layer shape as demanding wire properties of a seal-admission
@@ -610,14 +654,15 @@ layout), so the two implementations agree on the structural draws.
 
 ### Pre-archival preview exception (GUI wallet)
 
-Before `ArchivalEngine` (Stage 5) ships, the GUI wallet may expose a
-**beta preview** on the Staking page that renders **fixture aggregates**
-(illustrative fake-chain samples) and optional user-supplied shard hashes with
-preset feature vectors. This is **not** production archival UI; it validates
-the `shekyl-shard-visual` library and gives stakers a tangible preview of
-deterministic shard identity. Production cutover replaces fixtures with real
-archived shards from `ArchivalEngine`; cache keys use `(shard_id,
-shard_content_hash)` per below.
+The GUI wallet's Staking page may expose a **beta preview** that renders
+**fixture aggregates** (illustrative fake-chain samples) and optional
+user-supplied shard hashes with preset feature vectors. This is **not**
+production archival UI; it validates the `shekyl-shard-visual` library and
+gives stakers a tangible preview of deterministic shard identity. The
+production surface is the Shards page, drawn from the wallet contract's
+`get_shard_view` (`SV-D`, 2026-10-08): real shards, each a real fetch by
+the wallet's daemon; cache keys use `(shard_id, shard_view_hash)` per below.
+The preview retires when the fixtures have no remaining caller.
 
 ---
 
@@ -1264,7 +1309,11 @@ result, and re-renders only if the shard content changes (reorg).
 
 Cache invalidation: keyed on (shard_id, shard_content_hash, and the
 crate's exported `RENDER_REVISION`). The content hash changes on a
-reorg; the revision changes when the pixel derivation itself changes
+reorg (the daemon's aggregate cache is keyed on the shard's
+`close_height` and that block's hash, and an **open** tip shard is
+refused rather than rendered — `SV-D5`,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md)); the
+revision changes when the pixel derivation itself changes
 pre-freeze (review #617: a cache keyed without it can serve a stale
 PNG alongside a recipe the current code would not produce). Once a
 spec version freezes, a revision bump within it is a defect.
@@ -1306,29 +1355,32 @@ any X with a deterministic parameter mapping.
 
 ## V3-ship implications
 
-This feature ships in V3.x alongside the V3.x `ArchivalEngine` Stage 5
-ship. The mechanism is purely an addition layered on top of the V3.x
-archival system. Visualizations are computed client-side from public
-chain data; no consensus involvement, no new protocol surface, no new
-RPC methods.
+**Superseded 2026-10-08 (`SV-D`,
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md)).** The
+paragraphs below were written when the producer of a shard's aggregate was
+to be a wallet-side `ArchivalEngine` and the layer added no RPC. Neither
+holds: the producer is the daemon's fetch scheduler, and the layer added
+one wallet method, `get_shard_view` (`wallet_rpc.yaml` 0.11.0), over the
+daemon's existing restricted `request_archival_shard`. Visualizations are
+still computed client-side from public chain data with no consensus
+involvement. What ships, and what gates it:
 
-The dependencies and timing:
+- **The surface is landed; the daemon's facts are not.** CLI `shard
+  fetch`, the GUI Shards page and shekyl-web's staking guide all draw from
+  `get_shard_view` / `request_archival_shard`. Until the `DRS-E3` store
+  cutover gives the daemon a shard-range read, every shipped daemon answers
+  `ARCHIVAL_SKELETON_ABSENT` (`SV-D9`) and every viewer shows *not offered
+  by this daemon* — a state, never an empty picture.
+- **Shards that closed before the facts exist get visualizations
+  retroactively.** The view is a function of the archival bytes and the
+  skeleton, both of which the network already holds.
 
-- **V3.0 ships without production visualization.** The
-  `shekyl-shard-visual` crate exists and is integrated today, but only
-  behind the pre-archival GUI preview (fixture aggregates on the
-  Staking tab, per the preview exception above); no production shard
-  surface renders visuals until `ArchivalEngine` (Stage 5) provides
-  real shards.
-- **V3.x ships `ArchivalEngine` (Stage 5) and `shekyl-shard-visual`
-  together.** They are companion features: archival produces the
-  shards; visualization makes them legible. Both gate on the
-  simulation work described in `docs/V3_STAKER_ARCHIVAL.md`. Both
-  ship in the same V3.x dot-release.
-- **Existing shards in any earlier V3.x phase get visualizations
-  retroactively.** Visualizations are derived from existing public
-  data; activating the rendering layer in a later V3.x dot-release
-  produces visuals for shards that already existed.
+*Records-was (the text this supersedes):* This feature ships in V3.x
+alongside the V3.x `ArchivalEngine` Stage 5 ship; no new RPC methods.
+V3.0 ships without production visualization; the crate is integrated only
+behind the pre-archival GUI preview until `ArchivalEngine` (Stage 5)
+provides real shards; both gate on the simulation work in
+`docs/V3_STAKER_ARCHIVAL.md`.
 
 V3.0's design surface forecloses nothing here. The
 domain-primitive crate name (`shekyl-shard-visual`) is pre-committed
@@ -1336,6 +1388,160 @@ in the rename entry's "stays as-is" list; the crate has no V3.0
 dependency and is purely additive when V3.x activates it. The
 no-tradeability enforcement-point inventory is codified above (*Not
 tradeable*, "Concrete enforcement", verified 2026-09-04).
+
+---
+
+## SV-D continuation — opened 2026-10-10
+
+Companion questions live in
+[`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md) (`SV-D10`)
+and [`design/ARCHIVAL_STORAGE_LANDSCAPE.md`](design/ARCHIVAL_STORAGE_LANDSCAPE.md)
+(`ASL-1`…`ASL-10`). Decision authority: Rick. Nothing in this section is
+a second spec version; `candidate.v1` stays the palette until a named
+trigger in *candidate.v2 criteria* fires.
+
+### Entropy and distinguishability audit — PROPOSED 2026-10-10
+
+Property 1 above is restated as a **recognizer**, not a verifier. The
+evidence:
+
+- CLPS (colour-letter-position schemes) encodes ~60 distinguishable bits
+  at 97 % accuracy in side-by-side comparison, dropping to 73–79 % in
+  realistic (memory, delay) tasks.
+- The 2009 ACSAC visual-hash comparison found most schemes fail as
+  verifiers above ~30 bits.
+- CEAL reaches 123 bits only with a *learned* generator, which this
+  crate rejects (closed-world, deterministic, no trained weights).
+- Perceptual-hash near-collision attacks (Prokos et al. 2023;
+  LeBlanc-Albarel 2024/26) show that a picture whose job is "looks
+  different" can be forced to look the same by low-order bit edits when
+  the renderer does not listen to those bits.
+
+The SHAKE256 streams consume the full 256-bit view hash. That is
+**cryptographic** entropy. What a human comparing two 128 px thumbnails
+can use is the **perceptible** budget. Counted from the shipped draws
+(recipe + structural namespaces), not from the hash width:
+
+| Draw | Domain | Quantized bits | Perceptible estimate (128 px, side-by-side) |
+|---|---|---|---|
+| four palette indices | 6 palettes each | 4 × log₂ 6 ≈ 10.3 | 8 (some palettes collide; CVD reduces further) |
+| `fg` / `bg` opacity | 0.25–0.75 at 0.01 | 2 × 5.67 | 5 (JND ≈ 0.05 under difference blend) |
+| `final` opacity | 0.58–0.96 at 0.01 | 5.28 | 2 |
+| aperiodic rotation, spread, edge | unit draws | unbounded XOF | 9 |
+| phyllotaxis divergence, scale, radii, ground | unit draws | unbounded XOF | 11 |
+| truchet tone, stroke, 8×8 cell recursion | unit + per-cell SHA-256 | large | 10 |
+| crystalline ω / K / phase / orbit seed | unit + `uint32` | large | 6 (orbit is a horizontal line; y-position carries most of it) |
+
+**Working figure: ~51 perceptible bits at 128 px side-by-side**, inside
+CLPS's 60-bit band and above ACSAC's 30-bit failure line. At a glance
+without a reference the figure drops toward the ACSAC band. Feature
+scalars (`activity_density`, `output_richness`, `coinbase_ratio`) add
+legibility, not uniqueness — two quiet shards can share a regime and
+still differ in the hash draws.
+
+This number is an **estimate with a named method**, not a measurement.
+It may move only by a recorded amendment citing a new count or a
+user-study. It does **not** reopen the avalanche floor (RMS ≥ 20): that
+floor is a renderer-listens-to-its-input check, not a human-bits check.
+
+**Near-collision gate (the visual analogue of Prokos / LeBlanc-Albarel).**
+For every fixture, flip each of the low-order eight bits of the view
+hash in turn and render both at 128 px: the existing raster metric must
+show RMS ≥ 20 against the unflipped picture. The first limb of the
+avalanche falsifier already covers three bit positions; this gate
+extends that limb to the low-order byte, which is the edit class the
+near-collision papers actually use. A pair that lands under 20 is a
+candidate.v1 defect, not a retune.
+
+### Colour-vision-deficiency gate — PROPOSED 2026-10-10
+
+CLPS and T-Flag chose colour-blind-safe palettes deliberately.
+candidate.v1's six palettes were accepted on trichromatic inspection
+(ruling B residue, 2026-09-06). **Default:** add a CVD-simulation check
+over the nine goldens at 128 px — Brettel/Viénot matrices for protanopia,
+deuteranopia, and tritanopia — and require every pairwise RMS under each
+simulation to stay ≥ 20 (the avalanche floor, reused so the gate has one
+metric). A palette change that restores the floor is a `candidate.v2`
+trigger (*candidate.v2 criteria*), not a silent `RENDER_REVISION` bump
+inside v1, because it changes the perceptible-bit table above.
+
+### `SV-D10` — byte-derived texture layer — PROPOSED 2026-10-10
+
+**The question** (owned in `SHARD_VIEW_FETCH.md`; restated here because
+it is a renderer input): today the picture is a function of the
+*aggregate* (hash + admitted counts). Nothing in the pixels is a
+function of the shard's *bytes* beyond the hash. The daemon already
+streams every archival byte through the verifier (`SV-D8`). A small
+sketch from that pass — a 64×64 local-entropy map, or a byte-class
+histogram laid out on a Hilbert curve (the binvis technique) — folded
+into `ShardView` as a few KiB, would give a later compositor a texture
+that *is* the shard.
+
+Admissibility: deterministic from holder-readable bytes plus the
+skeleton (ruling A, re-keyed `SV-D7`). Closed-world: the sketch is
+chain data, not a wallet setting. Cost: one pass the client already
+makes.
+
+**This is a wire change.** It is a round question, not a drive-by, and
+it is one of the three named `candidate.v2` triggers. Default (rule 21):
+**not now** — candidate.v1 stays hash-seeded. Reopen when the
+perceptible-bit audit is ruled *and* a reviewer can name a viewer that
+needs the texture to do a job the hash picture cannot.
+
+### candidate.v2 criteria — PROPOSED 2026-10-10
+
+The height pin (`close_height` vs `spec_version`) cannot be exercised
+until a second spec exists. Minting one for its own sake violates rule
+21. **`candidate.v2` is minted only when one of these fires:**
+
+1. **`SV-D10` RULED admit** — the byte-texture layer is a new renderer
+   input and cannot land inside `candidate.v1` without lying about what
+   the picture is a function of.
+2. **A palette formalization that changes bits** — a CVD-driven palette
+   replacement, or a quantization change that moves the perceptible-bit
+   table.
+3. **Replacing the Penrose layer with the Spectre monotile**
+   (Smith–Myers–Kaplan–Goodman-Strauss 2023/24; chiral aperiodic
+   monotile; deterministic substitution; Rust/wgpu implementations
+   exist). Aesthetic only: this rides (1) or (2), and never drives a
+   version on its own.
+
+A promoted replacement does **not** inherit ruling B's determinism bar
+(*Fallback disposition* reversion clause 3, unchanged). Floor
+performance work (*Performance targets*, the standing trigger) is
+**not** a v2 trigger: it is a v1 fitness question.
+
+### Floor performance — the next v1 work, not a v2 trigger
+
+The 2026-09-06 matrix is a falsification on record (36/36 cells over the
+original budget; worst 12.4 s at 1024 px). The amended targets are
+regression bounds. Before any new visual work:
+
+1. Profile the aperiodic-tile deflation — depth 5–6 is the cost driver
+   (`render/aperiodic_tile.rs`, `BASE_DEPTH = 4`, `MAX_DEPTH = 6`).
+2. Cap depth by output size so a 128 px thumbnail does not pay for
+   geometry that averages away.
+3. Make the 512 / 1024 tiers **async-only by contract** (already obliged
+   under *Consequences these numbers oblige*; the contract is the
+   public render entry point refusing a synchronous 512+ call unless the
+   caller opts into `render_candidate_png_async` or an equivalent
+   off-thread wrapper).
+
+The GUI and web already cache by `(shard_id, shard_hash)`; the CLI
+writes a file. That invariant stays. A floor re-run on the Pi 4 is the
+standing trigger and is the acceptance gate of this work, not a
+separate campaign.
+
+### Coverage-health view — a different artifact
+
+A web-explorer view over `get_archival_shard_coverage` (holders per
+shard, scarcity, close heights) is **not** a shard picture. It does not
+touch the closed-world rule. The Monero pruning discussion and
+Ethereum's Portal history network both record the same failure: "the
+scarcest data gets scarcer" when storage selection is uncoordinated.
+Shekyl's answer is the market hint (`SL-D4`); the coverage view makes
+that hint legible at system scale. Owned by shekyl-web; cited here so
+it is not mistaken for a `shekyl-shard-visual` input.
 
 ---
 
@@ -1362,6 +1568,22 @@ RETIRED*, under *Ruling B's assigned residue*.
 **Color palette specifications.** The exact RGB values for each palette
 family. Candidates: hand-curated by a designer; algorithmically
 generated (e.g., HSL rotations from a base hue); community-proposed.
+**RULED IN PART 2026-10-10:** the six shipped palettes stay; a CVD
+simulation over the goldens is the gate (`SV-D continuation`,
+*Colour-vision-deficiency gate*). A palette change that moves bits is a
+`candidate.v2` trigger, not a v1 retune.
+
+**Perceptible-bit budget and recognizer wording — PROPOSED 2026-10-10.**
+See *SV-D continuation* (*Entropy and distinguishability audit*). The
+picture is a recognizer; the hash is the verifier. Working figure ~51
+bits at 128 px side-by-side.
+
+**Byte-derived texture (`SV-D10`) — PROPOSED 2026-10-10.** See *SV-D
+continuation* and `SHARD_VIEW_FETCH.md`. Default: not now.
+
+**candidate.v2 minting — PROPOSED 2026-10-10.** Named triggers only
+(byte-texture, bit-changing palette, Spectre riding a functional
+change). See *candidate.v2 criteria*.
 
 **Parameter derivation function.** The exact mapping from
 (shard_hash, content_properties) to (algorithm choice, algorithm
@@ -1389,8 +1611,10 @@ time (immutable); (b) shards re-render with the latest algorithm
 is more "true to the data." **RULED IN PART: ruled on its privacy half** — path (a),
 immutable render at the creation height — in *Spec version is chain data
 (algorithm-versioning ruling)*. What remains is enforcement of the height
-pin, blocked by name (rule 22) on Stage 5 creation heights: no height
-exists for a fixture aggregate today.
+pin, blocked by name (rule 22) on a second spec version existing; the
+height it would read, `close_height`, arrives with every production view
+since 2026-10-08 (`SV-D5`). *Records-was:* blocked on Stage 5 creation
+heights.
 
 ---
 
@@ -1432,21 +1656,30 @@ This is on-chain data with on-chain visualization, with deliberately
 *no* trading mechanism. The visual exists to make data legible, full
 stop.
 
-V3.x ships this alongside `docs/V3_STAKER_ARCHIVAL.md`. Together they
+This layer ships beside `docs/V3_STAKER_ARCHIVAL.md`'s mechanism, and
+its production input is that mechanism's own fetch (`SV-D2`): a picture
+of a shard is drawn from the bytes an archivist served. Together they
 make archival economically incentivized, distributed, and culturally
 resonant — the "real work" stakers perform becomes visible, both in
 the metaphorical sense (the network values it) and the literal sense
-(stakers see their portfolios). V3.0 ships the architectural surface
-that makes V3.x activation purely additive (rename entry pre-commits
-the `shekyl-shard-visual` crate name; the no-tradeability
-enforcement-point inventory is codified in *Not tradeable*).
+(stakers see their portfolios). The surface is landed (`get_shard_view`,
+CLI, GUI, shekyl-web); what it waits on is the daemon's shard-range read
+(`SV-D9`) and the archivist serving the same unit the client verifies
+(`WSS-Q1`). *Records-was:* V3.x ships this; V3.0 ships only the
+architectural surface that makes activation additive.
 
 ---
 
 ## References and cross-cutting concerns
 
 - `docs/V3_STAKER_ARCHIVAL.md` — the archival mechanism this layer
-  visualizes (companion document, ships together in V3.x)
+  visualizes (companion document)
+- `docs/design/SHARD_VIEW_FETCH.md` — the `SV-D` round: the view hash,
+  the fetch that produces the aggregate, the Rust RPC, the viewers, the
+  `SV-D9` blocker on the daemon's facts, and `SV-D10` (byte-texture
+  layer, PROPOSED 2026-10-10)
+- `docs/design/ARCHIVAL_STORAGE_LANDSCAPE.md` — 2024–2026 storage and
+  visual-hash dispositions (`ASL-1`…`ASL-10`), each with a reopen clause
 - `docs/V3_WALLET_DECISION_LOG.md` — *2026-04-27 — Engine architecture:
   actor model with staged migration from composition* (pin of
   `shekyl-shard-visual` as library crate, not actor); *2026-04-27 —

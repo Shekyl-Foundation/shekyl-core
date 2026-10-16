@@ -39,12 +39,6 @@
 #include <cstring>
 #include <utility>
 
-#ifndef _WIN32
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#endif
-
 #include "common/command_line.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "shekyl/shekyl_ffi.h"
@@ -122,10 +116,10 @@ namespace nodetool
     const command_line::arg_descriptor<uint32_t>    arg_p2p_external_port  = {"p2p-external-port", "External port for p2p network protocol (if port forwarding used with NAT)", 0};
     const command_line::arg_descriptor<bool>        arg_p2p_allow_local_ip = {"allow-local-ip", "Allow local ip add to peer list, mostly in debug purposes"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_peer   = {"add-peer", "Manually add peer to local peerlist"};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_priority_node   = {"add-priority-node", "Specify list of peers to connect to and attempt to keep the connection open"};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_exclusive_node   = {"add-exclusive-node", "Specify list of peers to connect to only."
-                                                                                                  " If this option is given the options add-priority-node and seed-node are ignored"};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node   = {"seed-node", "Connect to a node to retrieve peer addresses, and disconnect"};
+    const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_add_exclusive_node   = {"add-exclusive-node", "Declare a closed network: this node dials these peers and no other"
+                                                                                                  " address, the compiled seeds and every address learned from a peer included."
+                                                                                                  " Name only peers you control; the option is for a private network, not for"
+                                                                                                  " joining the public one"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy = {"tx-proxy", "Send local txes through proxy: <network-type>,[socks5://[user:pass@]]<socks-ip:port>[,max_connections] i.e. \"tor,127.0.0.1:9050,100\""};
     // PWD-E7 (P2P_2_ENDPOINT_ROUND.md): the durable-address warning is stated
     // wherever this flag is documented, because the failure mode is quiet --
@@ -133,7 +127,8 @@ namespace nodetool
     // durable address. The default posture (no flag) is an ephemeral per-boot
     // onion the daemon publishes itself; see arg_no_ephemeral_tor below.
     const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound = {"anonymous-inbound", "<hidden-service-address>,<[bind-ip:]port>[,max_connections] i.e. \"x.onion,127.0.0.1:18083,100\". This opts into a STABLE, DURABLE onion address (for seeds and deliberately-persistent infrastructure); without it the daemon publishes an ephemeral per-boot address that identifies nothing across restarts"};
-    const command_line::arg_descriptor<bool> arg_no_ephemeral_tor = {"no-ephemeral-tor", "Disable the default ephemeral-per-boot Tor inbound posture (PWD-E7). Without this flag the daemon spawns a managed pinned tor when one is installed, mints a v3 onion key in memory, and serves overlay inbound on a fresh address each boot. --tx-proxy names the SOCKS address used to dial and does not turn that inbound off. --anonymous-inbound does: it is the operator's own onion, and the per-boot publish yields to it", false};
+    const command_line::arg_descriptor<bool> arg_no_ephemeral_tor = {"no-ephemeral-tor", "Decline the managed Tor (PWD-E7, TB-1). With no Tor of your own attached, the node is clearnet-only and says so at every start: its address is visible to its peers and its own transactions are relayed over clearnet. Without this flag the daemon spawns the pinned tor that release packages carry, mints a v3 onion key in memory, and serves overlay inbound on a fresh address each boot. --tx-proxy names the SOCKS address used to dial and does not turn that inbound off. --anonymous-inbound does: it is the operator's own onion, and the per-boot publish yields to it", false};
+    const command_line::arg_descriptor<bool> arg_p2p_disclose_early = {"p2p-disclose-early", "For the first nodes of a new network: below the floor of 48 peers this node discloses its known peers and its own address, on each connector until that connector reaches the floor or 24 hours pass. While it holds, this node is recognisable. Leave it off on an established network."};
     const command_line::arg_descriptor<std::string> arg_ban_list = {"ban-list", "Specify ban list file, one IP address per line"};
     const command_line::arg_descriptor<bool> arg_no_sync = {"no-sync", "Don't synchronize the blockchain with other peers", false};
 
@@ -216,22 +211,10 @@ namespace nodetool
                         MERROR("Invalid max connections given to --" << arg_tx_proxy.name);
                         return std::nullopt;
                     }
-                    // F-8b: the embargo constant is derived from a fluff
-                    // first-passage measured at this outbound degree. Below
-                    // it the real first passage exceeds the provisioned
-                    // value and the embargo is under-provisioned in the
-                    // privacy-losing direction, so an under-floor count is
-                    // refused at startup rather than warned about and run.
-                    const std::int64_t out_floor =
-                        shekyl_relay_zone_min_provisioned_out_peers();
-                    if (0 < proxies.back().max_connections && proxies.back().max_connections < out_floor)
-                    {
-                        MERROR("--" << arg_tx_proxy.name << " outbound count "
-                            << proxies.back().max_connections << " is below the floor of "
-                            << out_floor << " that the relay embargo derivation assumes; "
-                            "refusing to start under-provisioned. Omit the count to use the default.");
-                        return std::nullopt;
-                    }
+                    // F-8b: a count below the floor the relay embargo
+                    // derivation assumes is refused where the cap is set,
+                    // by the dialer (set_max_out_peers), with the reason
+                    // logged there.
                 }
             }
 
@@ -331,54 +314,4 @@ namespace nodetool
         return inbounds;
     }
 
-    std::optional<epee::net_utils::network_address> derive_advertised_endpoint(
-    const epee::net_utils::network_address& observed, const uint16_t advertised_port)
-  {
-    if (advertised_port == 0)
-      return std::nullopt; // not dialable
-    if (observed.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-      return epee::net_utils::network_address{epee::net_utils::ipv4_network_address(
-        observed.as<epee::net_utils::ipv4_network_address>().ip(), advertised_port)};
-    if (observed.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
-      return epee::net_utils::network_address{epee::net_utils::ipv6_network_address(
-        observed.as<epee::net_utils::ipv6_network_address>().ip(), advertised_port)};
-    return std::nullopt;
-  }
-
-  std::set<std::string> local_interface_hosts()
-  {
-    std::set<std::string> hosts;
-#ifndef _WIN32
-    struct ifaddrs *ifaddr = nullptr;
-    if (getifaddrs(&ifaddr) != 0)
-      return hosts;
-    for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next)
-    {
-      if (ifa->ifa_addr == nullptr)
-        continue;
-      if (ifa->ifa_addr->sa_family == AF_INET)
-      {
-        const auto *sin = reinterpret_cast<const sockaddr_in *>(ifa->ifa_addr);
-        if (sin->sin_addr.s_addr == INADDR_ANY)
-          continue;
-        // s_addr is already network-order, matching ipv4_network_address.
-        hosts.insert(epee::net_utils::network_address{
-          epee::net_utils::ipv4_network_address{sin->sin_addr.s_addr, 0}}.host_str());
-      }
-      else if (ifa->ifa_addr->sa_family == AF_INET6)
-      {
-        const auto *sin6 = reinterpret_cast<const sockaddr_in6 *>(ifa->ifa_addr);
-        boost::asio::ip::address_v6::bytes_type bytes{};
-        std::memcpy(bytes.data(), sin6->sin6_addr.s6_addr, bytes.size());
-        const boost::asio::ip::address_v6 v6{bytes, sin6->sin6_scope_id};
-        if (v6.is_unspecified())
-          continue;
-        hosts.insert(epee::net_utils::network_address{
-          epee::net_utils::ipv6_network_address{v6, 0}}.host_str());
-      }
-    }
-    freeifaddrs(ifaddr);
-#endif
-    return hosts;
-  }
 }

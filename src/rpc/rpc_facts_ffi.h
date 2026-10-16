@@ -49,7 +49,7 @@ int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out);
 // callers want a tip and not identity, and widening the tip would move its
 // layout twins, its seeded fill indices and its size pin for every one of
 // them. The precedent is the narrow exports below
-// (`shekyl_rpc_fee_grace_blocks_max`, `shekyl_rpc_peerlist_limits`).
+// (`shekyl_rpc_fee_grace_blocks_max`).
 //
 // The rules digest is NOT here: it is compiled into the Rust image from
 // `config/`, so the handler reads its own constant and never asks C++ for it.
@@ -60,19 +60,6 @@ typedef struct shekyl_rpc_identity_facts {
 } shekyl_rpc_identity_facts;
 
 int shekyl_rpc_identity(core_rpc_handle* h, shekyl_rpc_identity_facts* out);
-
-// One row of the hard-fork schedule.
-typedef struct shekyl_rpc_hardfork_entry {
-    uint8_t  version;
-    uint8_t  reserved[7];
-    uint64_t height;
-} shekyl_rpc_hardfork_entry;
-
-// Fills a C++-owned view of the schedule; release `*out_owner` with
-// shekyl_rpc_hardforks_free once the rows have been copied out.
-int shekyl_rpc_hardforks(core_rpc_handle* h,
-    const shekyl_rpc_hardfork_entry** out, size_t* out_len, void** out_owner);
-void shekyl_rpc_hardforks_free(void* owner);
 
 // Block hash at a height, with the tip as of the same read (RK-2), so a
 // refusal can name the top height without a second call.
@@ -154,8 +141,8 @@ int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
 // The variable-length half of a block's facts (RK-3b): the three payloads
 // whose size the caller cannot know in advance. Allocated by C++, owned by
 // the opaque `owner` the export hands back, and released as one unit by
-// `shekyl_rpc_block_free` — the `shekyl_rpc_hardforks` shape, which §3.2
-// states as the rule for every variable-length payload.
+// `shekyl_rpc_block_free`, which §3.2 states as the rule for every
+// variable-length payload.
 //
 // `json` is epee's rendering of the whole block (RK-D11). It crosses as an
 // opaque string and Rust passes it through untouched; matching that renderer
@@ -342,8 +329,11 @@ int shekyl_rpc_net_stats(core_rpc_handle* h, shekyl_rpc_net_stats_facts* out);
 
 // One live p2p connection, raw.
 //
-// `started` / `last_recv` / `last_send` are absolute unix seconds and the
-// counters are absolute totals: the *elapsed* quantities the wire carries are
+// `started` is unix seconds at admission, from the board. `last_recv` and
+// `last_send` are unix seconds of the last byte read or written
+// (`shekyl_link_unix_ms`, milliseconds, divided by 1000), or 0 when that
+// direction has not moved a byte. The stall check uses the monotonic
+// stamps, not these. The counters are absolute totals: the *elapsed* quantities the wire carries are
 // derived in Rust against the single `now` this export reports beside the
 // list. The C++ this replaces read the clock **twice** per connection — once
 // for the idle times and again for the averages — so a connection could
@@ -377,7 +367,11 @@ typedef struct shekyl_rpc_connection_facts {
     uint8_t      incoming;
     uint8_t      localhost;
     uint8_t      local_ip;
-    uint8_t      reserved[5];
+    /// 1 when height, support flags, and state were read on the strand.
+    /// 0 means those three are unknown: state 0 would otherwise read as
+    /// "before handshake". `height` and `support_flags` are then JSON null.
+    uint8_t      claims_known;
+    uint8_t      reserved[4];
 } shekyl_rpc_connection_facts;
 
 // Fills a C++-owned view of the live connections and the instant they were
@@ -416,83 +410,12 @@ int shekyl_rpc_sync_spans(core_rpc_handle* h,
     const shekyl_rpc_sync_span_facts** out, size_t* out_len, void** out_owner);
 void shekyl_rpc_sync_spans_free(void* owner);
 
-// One peerlist entry, white or gray.
-//
-// The three address arms differ in what `host` means — the ip string for
-// ipv4, `host_str()` for ipv6, the whole `str()` for anything else — so the
-// adapter resolves them here, where the epee type dispatch has to live, and
-// the caller has no branch left to get wrong.
-typedef struct shekyl_rpc_peer_facts {
-    const char*  host;
-    size_t       host_len;
-    uint64_t     last_seen;
-    uint32_t     ip;                   // ipv4 only, octets in network order; else 0
-    uint16_t     port;                 // 0 for the address arms that carry none
-    uint8_t      white;                // 1 = white list, 0 = gray
-    // Filled unconditionally, so the `include_blocked` policy is the caller's
-    // to apply. The C++ skipped the check when the request asked to include
-    // blocked peers; this takes the host-blocked lock once per entry either
-    // way, which is the price of moving a request policy out of the facts.
-    uint8_t      blocked;
-} shekyl_rpc_peer_facts;
-
-// `public_only` selects `get_public_peerlist` over `get_peerlist`; it is a
-// different p2p call, not a filter, so it cannot move to the caller. Release
-// `*out_owner` with `shekyl_rpc_peer_list_free`.
-int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
-    const shekyl_rpc_peer_facts** out, size_t* out_len, void** out_owner);
-void shekyl_rpc_peer_list_free(void* owner);
 
 // ── RK-5b: the header remainder's two non-header facts ──────────────────────
 
-// Hard-fork voting info, exactly as the daemon reports it today.
-//
-// **A projection, not a model.** The Rust side re-expresses none of this:
-// no threshold accounting, no window arithmetic, no vote predicate. CEN-B1 is
-// a ratified row, but **CEN-B2 and CEN-B3 are bucket 4**, queued in the §10
-// R4 round that owns collapse-vs-redesign of the hard-fork subsystem with the
-// V4 lattice-only activation question attached — and B3 says outright that
-// deleting the machinery is "a design round's call, not the census's". So the
-// census's rule binds: C++ is a differential oracle only for ratified rows.
-// A reimplementation would be work R4 must undo; a projection survives either
-// ruling.
-//
-// **Two versions, named apart, because the C++ overloaded one word.** The
-// request's `version` means "the fork I am asking about" (0 → the next one),
-// and the voting fields below all describe *that* version — but the C++
-// reply's `version` was `get_current_hard_fork_version()`, a different fact,
-// and nothing echoed the query. `show_status` asks with 0 and then prints
-// that field beside `earliest_height`, mixing the current fork's version with
-// the next fork's height in one line. Invisible today, since a single-entry
-// table makes both 1; a live defect the moment a second entry exists.
-typedef struct shekyl_rpc_hard_fork_facts {
-    uint64_t earliest_height;
-    uint32_t window;
-    uint32_t votes;
-    uint32_t threshold;
-    uint32_t state;
-    // The version the voting fields describe: the caller's, or the next fork
-    // version when the caller passed 0.
-    uint8_t  queried_version;
-    // The chain's current version. NOT the subject of the fields above.
-    uint8_t  active_version;
-    uint8_t  voting;
-    uint8_t  enabled;
-    uint8_t  reserved[4];
-} shekyl_rpc_hard_fork_facts;
-
-int shekyl_rpc_hard_fork_info(core_rpc_handle* h, uint8_t requested_version,
-    shekyl_rpc_hard_fork_facts* out);
-
 // The dynamic base-fee estimate.
 //
-// One estimator, not two. The C++ branched on
-// `version >= HF_VERSION_2021_SCALING`, and that constant is **1** while
-// `Blockchain` constructs `HardFork` with `original_version = 1` on every
-// network — so the comparison was a tautology and the other arm was
-// unreachable by construction, not merely unexercised. It and
-// `Blockchain::get_dynamic_base_fee_estimate`, which it was the only caller
-// of, are deleted (rule 60).
+// One estimator: the 2021-scaling one.
 //
 // `fees` is one slot per priced tier: [economy, standard, priority].
 // `fee_count` reports what was actually written so a change in that
@@ -513,17 +436,105 @@ int shekyl_rpc_fee_estimate(core_rpc_handle* h, uint64_t grace_blocks,
 // C++ configuration that must not get a second definition in Rust.
 uint64_t shekyl_rpc_fee_grace_blocks_max(void);
 
-// ── Constants the console renders with ──────────────────────────────────────
+// ── A constant the console renders with ─────────────────────────────────────
 //
-// Neither takes a handle, and that is what makes them usable: `shekyld
-// <command>` runs this same binary against a *remote* daemon, with no core to
-// ask, so anything the renderer needs from C++ configuration has to be
-// reachable without one. They cross rather than being restated in Rust
-// because a duplicated constant is the drift this cutover deletes rather than
-// synchronizes.
+// It takes no handle, and that is what makes it usable: `shekyld <command>`
+// runs this same binary against a *remote* daemon, with no core to ask, so
+// anything the renderer needs from C++ configuration has to be reachable
+// without one. It crosses rather than being restated in Rust because a
+// duplicated constant is the drift this cutover deletes rather than
+// synchronizes. (The two peerlist capacities crossed here until the lists
+// moved to Rust, 2026-10-13; the console reads `shekyl-peerlist`'s now.)
 
-// The two peerlist capacities `print_peer_list_stats` reports a fraction of.
-void shekyl_rpc_peerlist_limits(uint32_t* out_white, uint32_t* out_gray);
+
+// ── RK-5c: `get_info` ──────────────────────────────────────────────────────
+//
+// `get_info` is gathered by part (docs/design/DAEMON_RPC_KV_GET_INFO.md §4.2,
+// RK-D24): a part the caller will not be shown is not read. So there is one
+// export per unit of disclosure rather than one for the method, and the Rust
+// handler calls only those its caller is entitled to.
+
+// Health, identity, chain and the economics operands: read for every caller.
+// Every member that comes from the chain store is read under ONE chain lock
+// and carries its own tip (RK-D20), so a reply cannot pair one tip's hash with
+// another tip's difficulty.
+typedef struct shekyl_rpc_info_chain_facts {
+    uint64_t chain_height;             // top block height + 1
+    uint8_t  top_hash[32];
+    uint64_t difficulty_lo;            // next block's difficulty, 128 bits
+    uint64_t difficulty_hi;
+    uint64_t cumulative_difficulty_lo; // at the tip, 128 bits
+    uint64_t cumulative_difficulty_hi;
+    uint64_t difficulty_target;        // seconds
+    uint64_t total_transactions;       // coinbases included
+    uint64_t block_weight_limit;
+    uint64_t block_weight_median;
+    uint64_t adjusted_time;
+    uint64_t already_generated_coins;  // through the tip, atomic units
+    uint64_t total_burned;
+    uint64_t tx_volume_count_sum;      // the trailing volume window
+    uint64_t tx_volume_blocks;
+    uint64_t core_target_height;       // 0: the core has no target
+    uint8_t  synchronized;             // the protocol's predicate, read once
+    uint8_t  busy_syncing;
+    uint8_t  offline;
+    uint8_t  following_degraded;
+    uint8_t  protocol_version;         // SHEKYL_PROTOCOL_VERSION, a C++ constant
+    uint8_t  reserved[3];
+} shekyl_rpc_info_chain_facts;
+
+int shekyl_rpc_info_chain(core_rpc_handle* h, shekyl_rpc_info_chain_facts* out);
+
+// The pool's population, as two counts of one pool state.
+//
+// `*out_broadcast` is the entries this node has broadcast: what every caller
+// may be told. With `with_unbroadcast` non-zero, `*out_unbroadcast` is the
+// entries it holds and has not yet broadcast, which is host-only data
+// (RPC_CHANNEL.md §6.1, RT-O9.3) and is asked for only on behalf of a caller
+// who may see it. Both are then counted under one hold of the pool's lock, so
+// they describe one pool; a pool whose broadcast set is larger than the whole
+// is ERR_INCONSISTENT. With `with_unbroadcast` zero the second count is not
+// made and `out_unbroadcast` is not written (it may be null).
+int shekyl_rpc_info_pool_counts(core_rpc_handle* h, uint8_t with_unbroadcast,
+    uint64_t* out_broadcast, uint64_t* out_unbroadcast);
+
+// Status facts, read only for a caller who is shown Status. The store's
+// on-disk size is NOT here: a restricted reply still carries it, rounded, so
+// it has its own read (`shekyl_rpc_info_store_file`).
+typedef struct shekyl_rpc_info_status_facts {
+    uint64_t start_time;
+    uint64_t free_space;                   // of the data directory's volume
+    uint64_t alt_blocks_count;
+} shekyl_rpc_info_status_facts;
+
+// The build's version string (SHEKYL_VERSION_FULL) is written to
+// `version_buf`, not NUL-terminated, with its length in `*version_len`. It
+// exists only in C++, and it is a Status field, so it rides this export. A
+// buffer too small for it is ERR_INTERNAL, never a truncated version.
+int shekyl_rpc_info_status(core_rpc_handle* h, shekyl_rpc_info_status_facts* out,
+    char* version_buf, size_t version_cap, size_t* version_len);
+
+// Peers facts, read only for a caller who is shown Peers.
+typedef struct shekyl_rpc_info_peers_facts {
+    uint64_t public_incoming_sockets;
+    uint64_t public_outgoing_sockets;
+    uint64_t tor_incoming_sockets;
+    uint64_t tor_outgoing_sockets;
+} shekyl_rpc_info_peers_facts;
+
+int shekyl_rpc_info_peers(core_rpc_handle* h, shekyl_rpc_info_peers_facts* out);
+
+// The path of the chain store's data file, written to `path_buf`, not
+// NUL-terminated, with its length in `*path_len`.
+//
+// This crosses instead of a size because the store's own size getter swallows
+// the stat error and answers 0 — a zero that means "could not read". The Rust
+// side stats the file itself and reports a failure as a fault. It is also the
+// half that survives the store cutover: the Rust store names its file the
+// same way and the stat does not change. A store that names no file, or a
+// path longer than the buffer, is ERR_INTERNAL.
+int shekyl_rpc_info_store_file(core_rpc_handle* h, char* path_buf, size_t path_cap,
+    size_t* path_len);
 
 // Layout-twin test hooks (no production callers; see the roundtrip test).
 //
@@ -545,12 +556,8 @@ void shekyl_rpc_identity_facts_test_fill(shekyl_rpc_identity_facts* out, uint64_
 int shekyl_rpc_identity_facts_test_check(const shekyl_rpc_identity_facts* facts, uint64_t seed);
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
-void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed);
-int shekyl_rpc_hardfork_entry_test_check(const shekyl_rpc_hardfork_entry* entry, uint64_t seed);
 void shekyl_rpc_block_hash_facts_test_fill(shekyl_rpc_block_hash_facts* out, uint64_t seed);
 int shekyl_rpc_block_hash_facts_test_check(const shekyl_rpc_block_hash_facts* facts, uint64_t seed);
-void shekyl_rpc_hard_fork_facts_test_fill(shekyl_rpc_hard_fork_facts* out, uint64_t seed);
-int shekyl_rpc_hard_fork_facts_test_check(const shekyl_rpc_hard_fork_facts* facts, uint64_t seed);
 void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out, uint64_t seed);
 int shekyl_rpc_fee_estimate_facts_test_check(const shekyl_rpc_fee_estimate_facts* facts, uint64_t seed);
 void shekyl_rpc_net_stats_facts_test_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed);
@@ -560,6 +567,12 @@ int shekyl_rpc_net_stats_facts_test_check(const shekyl_rpc_net_stats_facts* fact
 // `rpc_facts_ffi_roundtrip.cpp`, as `shekyl_rpc_tx_entry` is.
 void shekyl_rpc_block_header_facts_test_fill(shekyl_rpc_block_header_facts* out, uint64_t seed);
 int shekyl_rpc_block_header_facts_test_check(const shekyl_rpc_block_header_facts* facts, uint64_t seed);
+void shekyl_rpc_info_chain_facts_test_fill(shekyl_rpc_info_chain_facts* out, uint64_t seed);
+int shekyl_rpc_info_chain_facts_test_check(const shekyl_rpc_info_chain_facts* facts, uint64_t seed);
+void shekyl_rpc_info_status_facts_test_fill(shekyl_rpc_info_status_facts* out, uint64_t seed);
+int shekyl_rpc_info_status_facts_test_check(const shekyl_rpc_info_status_facts* facts, uint64_t seed);
+void shekyl_rpc_info_peers_facts_test_fill(shekyl_rpc_info_peers_facts* out, uint64_t seed);
+int shekyl_rpc_info_peers_facts_test_check(const shekyl_rpc_info_peers_facts* facts, uint64_t seed);
 
 #ifdef __cplusplus
 } // extern "C"
@@ -593,11 +606,40 @@ namespace cryptonote { class Blockchain; class core; class tx_memory_pool; }
 
 namespace daemon_rpc_facts {
 
-int hard_fork_info(cryptonote::Blockchain& bc, uint8_t requested_version,
-    shekyl_rpc_hard_fork_facts* out) noexcept;
-
 int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
     shekyl_rpc_fee_estimate_facts* out) noexcept;
+
+// `get_info`'s chain snapshot. The four scalars are what the adapter reads
+// from `core` and the p2p payload object; everything else is read here, under
+// one chain lock.
+struct info_chain_scalars
+{
+  uint64_t core_target_height;
+  uint8_t synchronized;
+  uint8_t busy_syncing;
+  uint8_t offline;
+};
+
+int info_chain(cryptonote::Blockchain& bc, const info_chain_scalars& scalars,
+    shekyl_rpc_info_chain_facts* out) noexcept;
+
+int info_pool_counts(const cryptonote::tx_memory_pool& pool, uint8_t with_unbroadcast,
+    uint64_t* out_broadcast, uint64_t* out_unbroadcast) noexcept;
+
+// `get_info`'s Status facts. The alt-block count is the one chain-store read;
+// the rest are `core` scalars the adapter snapshots. The connection counts
+// are not here: Rust reads them from the seam board, with `has_peers`.
+struct info_status_scalars
+{
+  uint64_t start_time;
+  uint64_t free_space;
+};
+
+int info_status(cryptonote::Blockchain& bc, const info_status_scalars& scalars,
+    shekyl_rpc_info_status_facts* out) noexcept;
+
+int info_store_file(cryptonote::Blockchain& bc, char* path_buf, size_t path_cap,
+    size_t* path_len) noexcept;
 
 int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
     uint64_t target_height, shekyl_rpc_chain_tip_facts* out) noexcept;

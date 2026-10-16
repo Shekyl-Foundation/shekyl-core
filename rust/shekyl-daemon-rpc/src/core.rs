@@ -109,8 +109,11 @@ pub struct ConnectionFacts {
     pub support_flags: u32,
     pub port: u16,
     /// `cryptonote_connection_context::state`, unmapped — the name it renders
-    /// to is the wire projection's business.
+    /// to is the wire projection's business. Meaningful when `claims_known`.
     pub state: u8,
+    /// The strand read height, support flags, and state. False means those
+    /// three have not landed and must not be rendered as zeroes.
+    pub claims_known: bool,
     /// epee type id: 1 ipv4, 2 ipv6, 4 tor, …
     pub address_type: u8,
     pub incoming: bool,
@@ -151,12 +154,25 @@ pub struct SyncSpansSnapshot {
     pub spans: Vec<SyncSpanFacts>,
 }
 
-/// One peerlist entry, copied out of the C++ view.
+/// A P2P read from a daemon that may have been started offline
+/// (Rick, 2026-10-14). [`P2pRead::Offline`] carries nothing: the daemon has no
+/// peers, connections or lists by configuration, and nothing stands in for
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PeerFacts {
+pub enum P2pRead<T> {
+    /// P2P runs; what was read.
+    Running(T),
+    /// The daemon was started offline.
+    Offline,
+}
+
+/// One peerlist entry, copied out of the Rust peer lists' export. No
+/// clock: the lists carry none (3.55). Named apart from
+/// [`crate::info_facts::PeerFacts`], `get_info`'s Peers state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerEntry {
     /// Already resolved per address arm by the adapter.
     pub host: String,
-    pub last_seen: u64,
     /// The ipv4 address packed as `epee`'s `ipv4_network_address::ip()`
     /// returns it: the four octets in **network** order. On a little-endian
     /// host that means 10.32.0.7 is `0x0700_200a`, which is the value in the
@@ -180,6 +196,27 @@ pub struct PeerFacts {
 /// than data a caller supplied, and there is no reply shape that could carry
 /// it faithfully anyway — the wire is JSON.
 ///
+/// Room for the build's version string. `SHEKYL_VERSION_FULL` is a version, a
+/// dash and a short commit hash; the callee refuses rather than truncates.
+const INFO_VERSION_CAP: usize = 128;
+
+/// Room for the chain store's data-file path: `PATH_MAX` on the platforms
+/// this daemon runs on. The callee refuses a longer one.
+const INFO_STORE_PATH_CAP: usize = 4096;
+
+/// A path as the operating system wrote it. On Unix a path is bytes and is
+/// taken as such; elsewhere it is the daemon's UTF-8 rendering of one.
+#[cfg(unix)]
+fn path_from_bytes(bytes: Vec<u8>) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    std::ffi::OsString::from_vec(bytes).into()
+}
+
+#[cfg(not(unix))]
+fn path_from_bytes(bytes: Vec<u8>) -> std::path::PathBuf {
+    String::from_utf8_lossy(&bytes).into_owned().into()
+}
+
 /// # Safety
 ///
 /// `ptr` must be null or point to `len` readable bytes that outlive the call.
@@ -326,6 +363,152 @@ impl CoreRpc {
         }
     }
 
+    /// `get_info`'s chain snapshot (`shekyl_rpc_info_chain`); `Err(code)` on
+    /// a non-OK return, including a null handle.
+    pub fn info_chain(&self) -> Result<ffi::InfoChainFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::InfoChainFactsFfi {
+            chain_height: 0,
+            top_hash: [0; 32],
+            difficulty_lo: 0,
+            difficulty_hi: 0,
+            cumulative_difficulty_lo: 0,
+            cumulative_difficulty_hi: 0,
+            difficulty_target: 0,
+            total_transactions: 0,
+            block_weight_limit: 0,
+            block_weight_median: 0,
+            adjusted_time: 0,
+            already_generated_coins: 0,
+            total_burned: 0,
+            tx_volume_count_sum: 0,
+            tx_volume_blocks: 0,
+            core_target_height: 0,
+            synchronized: 0,
+            busy_syncing: 0,
+            offline: 0,
+            following_degraded: 0,
+            protocol_version: 0,
+            reserved: [0; 3],
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe { ffi::shekyl_rpc_info_chain(self.handle, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
+    /// The pool's population (`shekyl_rpc_info_pool_counts`): the broadcast
+    /// count, and with `with_unbroadcast` the count of entries held and not
+    /// yet broadcast, both of one pool state. `None` for the second when it
+    /// was not asked for: it was then not counted.
+    pub fn info_pool_counts(&self, with_unbroadcast: bool) -> Result<(u64, Option<u64>), i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut broadcast: u64 = 0;
+        let mut unbroadcast: u64 = 0;
+        // SAFETY: live handle; both are valid out pointers for the call.
+        let rc = unsafe {
+            ffi::shekyl_rpc_info_pool_counts(
+                self.handle,
+                u8::from(with_unbroadcast),
+                &raw mut broadcast,
+                &raw mut unbroadcast,
+            )
+        };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok((broadcast, with_unbroadcast.then_some(unbroadcast)))
+        } else {
+            Err(rc)
+        }
+    }
+
+    /// `get_info`'s Status facts and the build's version string
+    /// (`shekyl_rpc_info_status`).
+    pub fn info_status(&self) -> Result<(ffi::InfoStatusFactsFfi, String), i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::InfoStatusFactsFfi {
+            start_time: 0,
+            free_space: 0,
+            alt_blocks_count: 0,
+        };
+        let mut version = [0u8; INFO_VERSION_CAP];
+        let mut version_len: usize = 0;
+        // SAFETY: live handle; `pod`, `version` and `version_len` are valid
+        // for the call, and the callee writes at most `INFO_VERSION_CAP`
+        // bytes into `version`.
+        let rc = unsafe {
+            ffi::shekyl_rpc_info_status(
+                self.handle,
+                &raw mut pod,
+                version.as_mut_ptr(),
+                version.len(),
+                &raw mut version_len,
+            )
+        };
+        if rc != ffi::SHEKYL_RPC_FACTS_OK {
+            return Err(rc);
+        }
+        let written = version
+            .get(..version_len)
+            .ok_or(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL)?;
+        Ok((pod, String::from_utf8_lossy(written).into_owned()))
+    }
+
+    /// `get_info`'s Peers facts (`shekyl_rpc_info_peers`).
+    pub fn info_peers(&self) -> Result<ffi::InfoPeersFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::InfoPeersFactsFfi {
+            public_incoming_sockets: 0,
+            public_outgoing_sockets: 0,
+            tor_incoming_sockets: 0,
+            tor_outgoing_sockets: 0,
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe { ffi::shekyl_rpc_info_peers(self.handle, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
+    /// The path of the chain store's data file (`shekyl_rpc_info_store_file`).
+    pub fn info_store_file(&self) -> Result<std::path::PathBuf, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut path = vec![0u8; INFO_STORE_PATH_CAP];
+        let mut path_len: usize = 0;
+        // SAFETY: live handle; `path` and `path_len` are valid for the call,
+        // and the callee writes at most `INFO_STORE_PATH_CAP` bytes.
+        let rc = unsafe {
+            ffi::shekyl_rpc_info_store_file(
+                self.handle,
+                path.as_mut_ptr(),
+                path.len(),
+                &raw mut path_len,
+            )
+        };
+        if rc != ffi::SHEKYL_RPC_FACTS_OK {
+            return Err(rc);
+        }
+        if path_len == 0 || path_len > path.len() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL);
+        }
+        path.truncate(path_len);
+        Ok(path_from_bytes(path))
+    }
+
     /// Block hash at `height` plus the tip as of the same read
     /// (`shekyl_rpc_block_hash_at`); `Err(code)` on a non-OK return.
     pub fn block_hash_at(&self, height: u64) -> Result<ffi::BlockHashFactsFfi, i32> {
@@ -445,6 +628,7 @@ impl CoreRpc {
                         support_flags: e.support_flags,
                         port: e.port,
                         state: e.state,
+                        claims_known: e.claims_known != 0,
                         address_type: e.address_type,
                         incoming: e.incoming != 0,
                         localhost: e.localhost != 0,
@@ -497,33 +681,33 @@ impl CoreRpc {
         }
     }
 
-    /// The peerlist (`shekyl_rpc_peer_list`), white entries then gray, copied
-    /// out before the owner is released.
-    pub fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, i32> {
-        if self.handle.is_null() {
-            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
-        }
+    /// The peerlist (`shekyl_rpc_peer_list`, exported by `shekyl-ffi` from
+    /// the Rust peer lists), white entries then gray, copied out before the
+    /// owner is released. No core handle: the lists are the dialer's.
+    pub fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, i32> {
         let mut rows: *const ffi::PeerFactsFfi = std::ptr::null();
         let mut len: usize = 0;
         let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
         // SAFETY: as `connections` above.
         unsafe {
             let rc = ffi::shekyl_rpc_peer_list(
-                self.handle,
                 u8::from(public_only),
                 &raw mut rows,
                 &raw mut len,
                 &raw mut owner,
             );
+            if rc == ffi::SHEKYL_RPC_FACTS_OFFLINE {
+                // Nothing was written, the owner included.
+                return Ok(P2pRead::Offline);
+            }
             if rc != ffi::SHEKYL_RPC_FACTS_OK {
                 return Err(rc);
             }
             let mut peers = Vec::with_capacity(len);
             if !rows.is_null() {
                 for e in std::slice::from_raw_parts(rows, len) {
-                    peers.push(PeerFacts {
+                    peers.push(PeerEntry {
                         host: borrowed_string(e.host, e.host_len),
-                        last_seen: e.last_seen,
                         ip: e.ip,
                         port: e.port,
                         white: e.white != 0,
@@ -532,49 +716,34 @@ impl CoreRpc {
                 }
             }
             ffi::shekyl_rpc_peer_list_free(owner);
-            Ok(peers)
+            Ok(P2pRead::Running(peers))
         }
     }
 
-    /// The two compile-time peerlist capacities
-    /// (`shekyl_rpc_peerlist_limits`), as `(white, gray)`.
-    ///
-    /// Not restated in Rust: a duplicated constant is drift waiting to
-    /// happen, and these are p2p configuration the C++ owns.
-    pub fn peerlist_limits() -> (u32, u32) {
-        let mut white: u32 = 0;
-        let mut gray: u32 = 0;
-        // SAFETY: two valid out pointers; the export takes no handle and
-        // writes two compile-time constants.
-        unsafe { ffi::shekyl_rpc_peerlist_limits(&raw mut white, &raw mut gray) };
-        (white, gray)
+    /// How many addresses the clearnet white and gray lists hold
+    /// (`shekyl_rpc_peerlist_sizes`, exported by `shekyl-ffi` from the Rust
+    /// peer lists), as `(white, gray)`. No core handle: the lists are the
+    /// dialer's. [`P2pRead::Offline`] for a daemon started offline.
+    pub fn peerlist_sizes() -> Result<P2pRead<(u64, u64)>, i32> {
+        let mut white: u64 = 0;
+        let mut gray: u64 = 0;
+        // SAFETY: two valid out pointers.
+        let rc = unsafe { ffi::shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) };
+        match rc {
+            ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running((white, gray))),
+            ffi::SHEKYL_RPC_FACTS_OFFLINE => Ok(P2pRead::Offline),
+            fault => Err(fault),
+        }
     }
 
-    /// Hard-fork voting info (`shekyl_rpc_hard_fork_info`). `requested_version`
-    /// of 0 means "the next fork"; the export resolves it and reports which.
-    pub fn hard_fork_info(&self, requested_version: u8) -> Result<ffi::HardForkFactsFfi, i32> {
-        if self.handle.is_null() {
-            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
-        }
-        let mut pod = ffi::HardForkFactsFfi {
-            earliest_height: 0,
-            window: 0,
-            votes: 0,
-            threshold: 0,
-            state: 0,
-            queried_version: 0,
-            active_version: 0,
-            voting: 0,
-            enabled: 0,
-            reserved: [0; 4],
-        };
-        // SAFETY: live handle; `pod` is a valid out pointer for the call.
-        let rc =
-            unsafe { ffi::shekyl_rpc_hard_fork_info(self.handle, requested_version, &raw mut pod) };
-        if rc == ffi::SHEKYL_RPC_FACTS_OK {
-            Ok(pod)
-        } else {
-            Err(rc)
+    /// Whether P2P runs (`shekyl_rpc_p2p_state`, exported by `shekyl-ffi`
+    /// from what the p2p layer recorded when it read `--offline`).
+    pub fn p2p_state() -> Result<P2pRead<()>, i32> {
+        // SAFETY: no arguments; reads one atomic.
+        match unsafe { ffi::shekyl_rpc_p2p_state() } {
+            ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running(())),
+            ffi::SHEKYL_RPC_FACTS_OFFLINE => Ok(P2pRead::Offline),
+            fault => Err(fault),
         }
     }
 
@@ -595,33 +764,6 @@ impl CoreRpc {
             Ok(pod)
         } else {
             Err(rc)
-        }
-    }
-
-    /// The hard-fork schedule (`shekyl_rpc_hardforks`), copied out of the
-    /// C++-owned view before it is released.
-    pub fn hardforks(&self) -> Result<Vec<ffi::HardforkEntryFfi>, i32> {
-        if self.handle.is_null() {
-            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
-        }
-        let mut rows: *const ffi::HardforkEntryFfi = std::ptr::null();
-        let mut len: usize = 0;
-        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
-        // SAFETY: live handle; the three out pointers are valid; on OK the
-        // view is valid until `shekyl_rpc_hardforks_free(owner)`.
-        unsafe {
-            let rc =
-                ffi::shekyl_rpc_hardforks(self.handle, &raw mut rows, &raw mut len, &raw mut owner);
-            if rc != ffi::SHEKYL_RPC_FACTS_OK {
-                return Err(rc);
-            }
-            let copied = if rows.is_null() || len == 0 {
-                Vec::new()
-            } else {
-                std::slice::from_raw_parts(rows, len).to_vec()
-            };
-            ffi::shekyl_rpc_hardforks_free(owner);
-            Ok(copied)
         }
     }
 

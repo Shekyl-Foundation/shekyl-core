@@ -54,9 +54,10 @@ The three Shekyl mechanisms absent from the ArticMine calibration:
    `b = min(0.9, 0.5·sqrt(v/50)·circulating/total)`
    (`rust/shekyl-economics/src/burn.rs`).
 3. **Emission split** — the miner receives `(1 − σ(t))` of the (penalized,
-   modulated) block emission, `σ(0) = 0.15` decaying `×0.9` per year
-   (`rust/shekyl-economics/src/emission_share.rs`,
-   `src/shekyl/economics.h:95-116`).
+   modulated) block emission. `σ` is 0 at height 0 and 0.15 at block 1
+   (`EMISSION_SPLIT_EPOCH`), then decays `×0.9` per year measured from
+   block 1 (`rust/shekyl-economics/src/emission_share.rs`,
+   `compute_emission_split` in `src/shekyl/economics.h`).
 
 ### §0.1 Census collision and sequencing hold (coordination, 2026-09-03)
 
@@ -324,7 +325,7 @@ hysteresis/smoothing on `C`, then re-test; if still divergent, surface in
 
 A module in `rust/shekyl-economics-sim` (extending the existing sim per the
 drift-pair ban) that calls the **canonical** `shekyl-economics` functions —
-`calc_burn_pct`, `calc_release_multiplier`, `calc_effective_emission_share`,
+`calc_burn_pct`, `calc_release_multiplier`, `emission_share`,
 and the KAT-pinned penalty via the crate's block-reward entry point — and
 reimplements none of them. Hand arithmetic in this document is illustration;
 the tables in §4 come from the instrument.
@@ -392,7 +393,7 @@ by FL-R17.
   `blockchain.cpp:4541` (`get_dynamic_base_fee_estimate_2021_scaling`).
 - Additionally — a factor the brief did not list — the miner does not
   receive the whole modulated reward: `compute_emission_split`
-  (`blockchain.cpp:1795-1798`, `src/shekyl/economics.h:95-116`) diverts
+  (`validate_miner_transaction` in `blockchain.cpp`; the wrapper is in `src/shekyl/economics.h`) diverts
   `σ(t)` (15% at genesis, ×0.9/year) to the staker pool, and the split
   operand is the modulated reward (per the F-B1c block comment at
   `blockchain.cpp:6349-6365`), so the miner bears exactly `(1−σ)` of any
@@ -2029,12 +2030,13 @@ owes the store lane the requirement, not a patch.
   `start = h > W ? h − W : 0`, `W` = `SHEKYL_TX_VOLUME_WINDOW`, and the
   `h` = 0 / `cum(−1)` = 0 edges as the walk defines them
   (`blockchain.cpp:2055–2061`).
-- **Layout precedent, not invention.** `mdb_block_info_4.bi_cum_rct` is a
-  cumulative-at-write, differenced-at-read per-block counter
-  (`db_lmdb.cpp`, `bi.bi_cum_rct = num_rct_outs; bi.bi_cum_rct +=
-  bi_prev->bi_cum_rct`), pop-symmetric for free because the row goes with
-  the block. The redb block row carries the same field in the same
-  discipline. Eight bytes per block.
+- **Layout precedent, not invention.** `mdb_block_info_4.bi_cum_rct` was
+  written as a cumulative-at-write, differenced-at-read counter
+  (`bi.bi_cum_rct = num_rct_outs` plus the parent's total), pop-symmetric
+  because the row goes with the block. That add was deleted 2026-10-05:
+  the column stores this block's count only (`db_lmdb.cpp:1019`) and is
+  never read, so it is no longer an example of the pattern. The shape this
+  requirement asks for is that cumulative one. Eight bytes per block.
 - **Consensus bit-identity gate (rule 47).** `get_tx_volume_avg` is not a
   fee-estimate convenience: it feeds `get_block_reward` inside
   `validate_miner_transaction` (`blockchain.cpp:1669`), i.e. **block
@@ -3159,6 +3161,17 @@ not contradict. *Integer arm:* 108/600 outside the bar at 30 000 blocks,
 **312 bp** — persistent limit cycles of ≤ ~1.5 ticks at the cell's `V`,
 every one of them the truncation, none of them the map. The tick is not a
 transient; it is a quantizer doing what quantizers do in a loop.
+
+> **2026-10-13 (ESR-14).** The feedback instrument now reads the window
+> as production reads it: whole transactions per block into the fold's
+> `VolumeWindow`, in place of a float running sum of fractional demand
+> (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.20, item 1). On that reading the
+> exact arm keeps every verdict above (4/600 outside the bar at 30 000
+> blocks, worst 87 bp). The integer arm, the truncating reading FL-R24
+> retired from consensus, reads 116/600 outside the bar with a worst
+> amplitude of 281 bp: whole-transaction demand feeds its one-tick
+> toggles more coarsely. The figures in this paragraph are the 2026-09-10
+> run's, on the instrument's own float window.
 
 **FL-R24 — the pre-registered rule fires; RULED 2026-09-10: exact SMA, reward and floor together ("accepted/agree").** Integer stationary
 `grace_bp_max` = 307 > 300 at age 30 (`grace_bp_mean` = 4, inside its

@@ -167,10 +167,6 @@ TEST(rpc_restricted_disclosure, the_sensitive_scope_is_the_not_yet_broadcast_set
   using cryptonote::relay_method;
   using cryptonote::relay_category;
 
-  // No HardFork is registered: this test never adds a block, and the txpool
-  // tables do not consult one. The block-adding tests nearby need it; copying
-  // it here would also outlive-invert it, since a HardFork declared after the
-  // DB is destroyed before the close that holds its pointer.
   TempLMDB env;
 
   const crypto::hash fluffed = tagged(1);

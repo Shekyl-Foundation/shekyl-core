@@ -5,9 +5,10 @@
 
 //! `Engine::start_serving_if_staker` — the construction site.
 
-use shekyl_p_host::{DaemonTipCache, NoResidentKey, PersonaServing};
+use shekyl_p_host::{DaemonTipCache, PersonaServing};
 
 use super::daemon_tip;
+use super::pass_key::ResidentPassKey;
 use super::task::{
     spawn_serving_task, ServingConfig, CLAIM_SOURCE_TIMEOUT, SERVING_MAX_STREAMS,
     SERVING_VIRTUAL_PORT,
@@ -173,6 +174,16 @@ where
             return Ok(None);
         };
 
+        // Outside the engine lock: both handles are actor asks, and the
+        // store lives on the stake actor, not on `Engine`. An empty store
+        // answers 404 until fill (`WSS-Q4`) lands. The reader still
+        // decrypts (`WSS-Q13` is not met). Pin-release erase asks this
+        // actor (`WSS-Q8`); the host does not receive the writer.
+        let bodies = stake
+            .serving_bodies()
+            .await
+            .map_err(|e| ServingStartError::Identity(Box::new(e)))?;
+
         // Claim only once we know we will start a host. An idle staker must
         // not occupy the slot; a second start after activation must.
         let slot_guard = {
@@ -227,6 +238,7 @@ where
             curve_tree,
             claim_rpc,
             p_id.to_bytes(),
+            crate::engine::stake_engine::serve_set_source::ReleasedRows::Actor(stake.actor.clone()),
         );
 
         Ok(Some(spawn_serving_task(
@@ -237,17 +249,17 @@ where
                 max_streams: SERVING_MAX_STREAMS,
                 // The `SF-D13` countersignature key is the persona's
                 // `hybrid_sign_sk`, which lives inside the stake actor under
-                // Model D and crosses into the serving role only as a signing
-                // capability — the SH-2 remainder
-                // (`ARCHIVAL_SHARD_FETCH.md` §"out of scope"). Until that
-                // capability is wired the host refuses to sign: every fetch
-                // is the identical 404, counted under `sign_failures`, and
-                // no unsigned shard is ever served.
-                key: std::sync::Arc::new(NoResidentKey),
+                // Model D. What crosses into the serving role is not the key
+                // but a per-shard signing round-trip to the actor, over a
+                // weak handle bound to the slot active at this start
+                // (`pass_key`). The actor going away is the pre-flight 503
+                // (`sign_failures`); no unsigned shard is ever served.
+                key: ResidentPassKey::new(&stake, active.p_slot),
                 // The anchor gate reads the daemon's tip, not the principal's
                 // scan (`WSS-24`). The refresher spawned above keeps it
                 // stamped and exits with the last reader.
                 tip,
+                bodies,
             },
             pinner,
             std::sync::Arc::new(shekyl_operator_alarm::OperatorAlarms::new()),

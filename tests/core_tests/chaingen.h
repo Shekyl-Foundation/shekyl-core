@@ -148,32 +148,13 @@ private:
   }
 };
 
-typedef std::vector<std::pair<uint8_t, uint64_t>> v_hardforks_t;
-struct event_replay_settings
-{
-  std::optional<v_hardforks_t> hard_forks;
-
-  event_replay_settings() = default;
-
-private:
-  friend class boost::serialization::access;
-
-  template<class Archive>
-  void serialize(Archive & ar, const unsigned int /*version*/)
-  {
-    ar & hard_forks;
-  }
-};
-
-
 VARIANT_TAG(binary_archive, callback_entry, 0xcb);
 VARIANT_TAG(binary_archive, cryptonote::account_base, 0xcc);
 VARIANT_TAG(binary_archive, serialized_block, 0xcd);
 VARIANT_TAG(binary_archive, serialized_transaction, 0xce);
 VARIANT_TAG(binary_archive, event_visitor_settings, 0xcf);
-VARIANT_TAG(binary_archive, event_replay_settings, 0xda);
 
-typedef std::variant<cryptonote::block, cryptonote::transaction, std::vector<cryptonote::transaction>, cryptonote::account_base, callback_entry, serialized_block, serialized_transaction, event_visitor_settings, event_replay_settings> test_event_entry;
+typedef std::variant<cryptonote::block, cryptonote::transaction, std::vector<cryptonote::transaction>, cryptonote::account_base, callback_entry, serialized_block, serialized_transaction, event_visitor_settings> test_event_entry;
 typedef std::unordered_map<crypto::hash, const cryptonote::transaction*> map_hash2tx_t;
 
 class test_chain_unit_base
@@ -245,7 +226,6 @@ public:
     bf_tx_hashes = 1 << 5,
     bf_diffic    = 1 << 6,
     bf_max_outs  = 1 << 7,
-    bf_hf_version= 1 << 8,
     bf_tx_fees   = 1 << 9
   };
 
@@ -267,22 +247,20 @@ public:
   uint64_t get_already_generated_coins(const cryptonote::block& blk) const;
 
   void add_block(const cryptonote::block& blk, size_t tsx_size, std::vector<size_t>& block_weights, uint64_t already_generated_coins, uint64_t block_reward,
-    uint8_t hf_version = 1, const std::vector<cryptonote::transaction>& txs = std::vector<cryptonote::transaction>());
+    const std::vector<cryptonote::transaction>& txs = std::vector<cryptonote::transaction>());
   bool construct_block(cryptonote::block& blk, uint64_t height, const crypto::hash& prev_id,
     const cryptonote::account_base& miner_acc, uint64_t timestamp, uint64_t already_generated_coins,
-    std::vector<size_t>& block_weights, const std::list<cryptonote::transaction>& tx_list,
-    const std::optional<uint8_t>& hf_ver = std::nullopt);
+    std::vector<size_t>& block_weights, const std::list<cryptonote::transaction>& tx_list);
   bool construct_block(cryptonote::block& blk, const cryptonote::account_base& miner_acc, uint64_t timestamp);
   bool construct_block(cryptonote::block& blk, const cryptonote::block& blk_prev, const cryptonote::account_base& miner_acc,
-    const std::list<cryptonote::transaction>& tx_list = std::list<cryptonote::transaction>(),
-    const std::optional<uint8_t>& hf_ver = std::nullopt);
+    const std::list<cryptonote::transaction>& tx_list = std::list<cryptonote::transaction>());
 
   bool construct_block_manually(cryptonote::block& blk, const cryptonote::block& prev_block,
     const cryptonote::account_base& miner_acc, int actual_params = bf_none, uint8_t major_ver = 0,
     uint8_t minor_ver = 0, uint64_t timestamp = 0, const crypto::hash& prev_id = crypto::hash(),
     const cryptonote::difficulty_type& diffic = 1, const cryptonote::transaction& miner_tx = cryptonote::transaction(),
     const std::vector<crypto::hash>& tx_hashes = std::vector<crypto::hash>(), size_t txs_sizes = 0, size_t max_outs = 999,
-    uint8_t hf_version = 1, uint64_t fees = 0);
+    uint64_t fees = 0);
   bool construct_block_manually_tx(cryptonote::block& blk, const cryptonote::block& prev_block,
     const cryptonote::account_base& miner_acc, const std::vector<crypto::hash>& tx_hashes, size_t txs_size);
   void fill_nonce(cryptonote::block& blk, const cryptonote::difficulty_type& diffic, uint64_t height);
@@ -340,17 +318,14 @@ std::string dump_keys(T * buff32)
 }
 
 
-inline cryptonote::difficulty_type get_test_difficulty(const std::optional<uint8_t>& hf_ver=std::nullopt) {return !hf_ver || *hf_ver <= 1 ? 1 : 2;}
+inline cryptonote::difficulty_type get_test_difficulty() { return 1; }
 // Shekyl is single-DAA from genesis (LWMA-1 with T = SHEKYL_DAA_TARGET_SECONDS).
-// The hf_ver parameter is retained for caller-site source compatibility but
-// has no effect; pre-genesis Monero hard-fork dispatch is removed per
-// .cursor/rules/60-no-monero-legacy.mdc.
-inline uint64_t current_difficulty_window(const std::optional<uint8_t>& /*hf_ver*/=std::nullopt) { return SHEKYL_DAA_TARGET_SECONDS; }
+inline uint64_t current_difficulty_window() { return SHEKYL_DAA_TARGET_SECONDS; }
 
 
 bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins,
                                  const cryptonote::account_public_address& miner_address, cryptonote::transaction& tx,
-                                 uint64_t fee, uint8_t hf_version = 1,
+                                 uint64_t fee,
                                  cryptonote::keypair* p_txkey = nullptr,
                                  size_t median_block_weight = 0, size_t txs_weight = 0);
 
@@ -368,8 +343,6 @@ bool find_block_chain(const std::vector<test_event_entry>& events, std::vector<c
 bool find_block_chain(const std::vector<test_event_entry>& events, std::vector<const cryptonote::block*>& blockchain, map_hash2tx_t& mtx, const crypto::hash& head);
 
 
-bool extract_hard_forks(const std::vector<test_event_entry>& events, v_hardforks_t& hard_forks);
-bool extract_hard_forks_from_blocks(const std::vector<test_event_entry>& events, v_hardforks_t& hard_forks);
 
 /************************************************************************/
 /*                                                                      */
@@ -398,12 +371,6 @@ public:
   void event_index(size_t ev_index)
   {
     m_ev_index = ev_index;
-  }
-
-  bool operator()(const event_replay_settings& settings)
-  {
-    log_event("event_replay_settings");
-    return true;
   }
 
   bool operator()(const event_visitor_settings& settings)
@@ -591,11 +558,7 @@ inline bool replay_events_through_core_plain(cryptonote::core& cr, const std::ve
 //--------------------------------------------------------------------------
 template<typename t_test_class>
 struct get_test_options {
-  const std::pair<uint8_t, uint64_t> hard_forks[2];
-  const cryptonote::test_options test_options = {
-    hard_forks, 0
-  };
-  get_test_options():hard_forks{std::make_pair((uint8_t)1, (uint64_t)0), std::make_pair((uint8_t)0, (uint64_t)0)}{}
+  const cryptonote::test_options test_options = {0};
 };
 //--------------------------------------------------------------------------
 template<class t_test_class>
@@ -620,17 +583,7 @@ inline bool do_replay_events_get_core(std::vector<test_event_entry>& events, cry
   // this test needs for it to be so.
   get_test_options<t_test_class> gto;
 
-  // Hardforks can be specified in events.
-  v_hardforks_t hardforks;
-  cryptonote::test_options test_options_tmp{nullptr, 0};
-  const cryptonote::test_options * test_options_ = &gto.test_options;
-  if (extract_hard_forks(events, hardforks)){
-    hardforks.push_back(std::make_pair((uint8_t)0, (uint64_t)0));  // terminator
-    test_options_tmp.hard_forks = hardforks.data();
-    test_options_ = &test_options_tmp;
-  }
-
-  if (!c.init(vm, test_options_))
+  if (!c.init(vm, &gto.test_options))
   {
     MERROR("Failed to init core");
     return false;
@@ -730,11 +683,6 @@ inline bool do_replay_file(const std::string& filename)
   generator.construct_block(BLK_NAME, PREV_BLOCK, MINER_ACC);                         \
   VEC_EVENTS.push_back(BLK_NAME);
 
-#define MAKE_NEXT_BLOCK_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, HF)           \
-  cryptonote::block BLK_NAME;                                                         \
-  generator.construct_block(BLK_NAME, PREV_BLOCK, MINER_ACC, std::list<cryptonote::transaction>(), HF);                     \
-  VEC_EVENTS.push_back(BLK_NAME);
-
 #define MAKE_NEXT_BLOCK_TX1(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, TX1)         \
   cryptonote::block BLK_NAME;                                                           \
   {                                                                                   \
@@ -744,51 +692,34 @@ inline bool do_replay_file(const std::string& filename)
   }                                                                                   \
   VEC_EVENTS.push_back(BLK_NAME);
 
-#define MAKE_NEXT_BLOCK_TX1_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, TX1, HF)         \
-  cryptonote::block BLK_NAME;                                                           \
-  {                                                                                   \
-    std::list<cryptonote::transaction> tx_list;                                         \
-    tx_list.push_back(TX1);                                                           \
-    generator.construct_block(BLK_NAME, PREV_BLOCK, MINER_ACC, tx_list, HF);              \
-  }                                                                                   \
-  VEC_EVENTS.push_back(BLK_NAME);
-
 #define MAKE_NEXT_BLOCK_TX_LIST(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, TXLIST)  \
   cryptonote::block BLK_NAME;                                                           \
   generator.construct_block(BLK_NAME, PREV_BLOCK, MINER_ACC, TXLIST);                 \
   VEC_EVENTS.push_back(BLK_NAME);
 
-#define MAKE_NEXT_BLOCK_TX_LIST_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, TXLIST, HF)  \
-  cryptonote::block BLK_NAME;                                                           \
-  generator.construct_block(BLK_NAME, PREV_BLOCK, MINER_ACC, TXLIST, HF);                 \
-  VEC_EVENTS.push_back(BLK_NAME);
-
-#define REWIND_BLOCKS_N_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT, HF)    \
+#define REWIND_BLOCKS_N(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT)           \
   cryptonote::block BLK_NAME;                                                         \
   {                                                                                   \
     cryptonote::block blk_last = PREV_BLOCK;                                          \
     for (size_t i = 0; i < COUNT; ++i)                                                \
     {                                                                                 \
-      MAKE_NEXT_BLOCK_HF(VEC_EVENTS, blk, blk_last, MINER_ACC, HF);                   \
+      MAKE_NEXT_BLOCK(VEC_EVENTS, blk, blk_last, MINER_ACC);                          \
       blk_last = blk;                                                                 \
     }                                                                                 \
     BLK_NAME = blk_last;                                                              \
   }
 
-#define REWIND_BLOCKS_N(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT) REWIND_BLOCKS_N_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT, std::nullopt)
 #define REWIND_BLOCKS(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC) REWIND_BLOCKS_N(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW)
-#define REWIND_BLOCKS_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, HF) REWIND_BLOCKS_N_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW, HF)
 
-#define MAKE_MINER_TX_AND_KEY_AT_HF_MANUALLY(TX, BLK, HF_VERSION, KEY)                                    \
+#define MAKE_MINER_TX_AND_KEY_MANUALLY(TX, BLK, KEY)                                                      \
   transaction TX;                                                                                         \
   std::vector<size_t> MAKE_MINER_TX_bw_##TX;                                                              \
   generator.get_last_n_block_weights(MAKE_MINER_TX_bw_##TX, get_block_hash(BLK), CRYPTONOTE_REWARD_BLOCKS_WINDOW); \
   if (!construct_miner_tx_manually(get_block_height(BLK) + 1, generator.get_already_generated_coins(BLK), \
-    miner_account.get_keys().m_account_address, TX, 0, HF_VERSION, KEY,                                   \
+    miner_account.get_keys().m_account_address, TX, 0, KEY,                                               \
     epee::misc_utils::median(MAKE_MINER_TX_bw_##TX), 0))                                                  \
     return false;
 
-#define MAKE_MINER_TX_AND_KEY_MANUALLY(TX, BLK, KEY) MAKE_MINER_TX_AND_KEY_AT_HF_MANUALLY(TX, BLK, 1, KEY)
 
 #define MAKE_MINER_TX_MANUALLY(TX, BLK) MAKE_MINER_TX_AND_KEY_MANUALLY(TX, BLK, 0)
 

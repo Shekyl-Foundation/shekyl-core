@@ -9,16 +9,40 @@
 //! until that decision is a grant. The wait is the connection pausing.
 //! Nothing here closes a connection or drops a byte.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use shekyl_transport_layer::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
+use shekyl_transport_layer::{
+    monotonic_ms, unix_ms_of, LinkBudget, LinkDirection, MessageClass, Observed, Turn,
+};
 use tokio::sync::Notify;
 
 struct GateInner {
     budget: Mutex<LinkBudget>,
     wake: Notify,
     clock: Mutex<Arc<dyn Fn() -> u64 + Send + Sync>>,
+    /// Per session. The byte path stores into the atomic. Looking the
+    /// atomic up is the only lock, and a copy does it once.
+    send_stamps: Mutex<HashMap<u64, Arc<AtomicU64>>>,
+    recv_stamps: Mutex<HashMap<u64, Arc<AtomicU64>>>,
+}
+
+/// The monotonic millisecond of the last byte on one direction.
+///
+/// [`ByteStamp::store`] does not take the link-budget lock. The grant
+/// and the refund already take that lock; a stamp is not a grant.
+#[derive(Clone)]
+pub struct ByteStamp {
+    ms: Arc<AtomicU64>,
+}
+
+impl ByteStamp {
+    /// The bytes just moved. A grant does not call this.
+    pub fn store(&self) {
+        self.ms.store(monotonic_ms(), Ordering::Relaxed);
+    }
 }
 
 /// One node's budget, shared by every connector's reader and writer.
@@ -38,6 +62,8 @@ impl LinkGate {
                 clock: Mutex::new(Arc::new(move || {
                     u64::try_from(origin.elapsed().as_nanos()).unwrap_or(u64::MAX)
                 })),
+                send_stamps: Mutex::new(HashMap::new()),
+                recv_stamps: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -171,6 +197,10 @@ impl LinkGate {
             .lock()
             .expect("link budget")
             .leave(direction, conn);
+        self.stamp_map(direction)
+            .lock()
+            .expect("byte stamps")
+            .remove(&conn);
         self.inner.wake.notify_waiters();
     }
 
@@ -199,6 +229,84 @@ impl LinkGate {
             .expect("link budget")
             .connection(conn)
     }
+
+    /// The atomic for `direction` on `conn`. A copy holds it and stores
+    /// when a byte is read or written. The lookup is once per copy.
+    #[must_use]
+    fn stamp_map(&self, direction: LinkDirection) -> &Mutex<HashMap<u64, Arc<AtomicU64>>> {
+        match direction {
+            LinkDirection::Up => &self.inner.send_stamps,
+            LinkDirection::Down => &self.inner.recv_stamps,
+        }
+    }
+
+    pub fn byte_stamp(&self, direction: LinkDirection, conn: u64) -> ByteStamp {
+        let mut stamps = self.stamp_map(direction).lock().expect("byte stamps");
+        let ms = stamps
+            .entry(conn)
+            .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+            .clone();
+        ByteStamp { ms }
+    }
+
+    /// Monotonic milliseconds of the last byte, `(send, recv)`.
+    /// Zero until that direction has read or written a byte.
+    #[must_use]
+    pub fn activity(&self, conn: u64) -> (u64, u64) {
+        let load = |direction: LinkDirection| {
+            self.stamp_map(direction)
+                .lock()
+                .expect("byte stamps")
+                .get(&conn)
+                .map(|ms| ms.load(Ordering::Relaxed))
+                .unwrap_or(0)
+        };
+        (load(LinkDirection::Up), load(LinkDirection::Down))
+    }
+
+    /// Unix milliseconds of those instants, for the operator view.
+    #[must_use]
+    pub fn activity_unix(&self, conn: u64) -> (u64, u64) {
+        let (send, recv) = self.activity(conn);
+        (unix_ms_of(send), unix_ms_of(recv))
+    }
+
+    /// Hold this across a copy. Drop releases the fairness slot and the stamp,
+    /// including when the task is aborted before the copy returns.
+    pub(crate) fn lease(&self, direction: LinkDirection, conn: u64) -> DirectionLease {
+        DirectionLease {
+            gate: self.clone(),
+            direction,
+            conn,
+        }
+    }
+
+    /// Stamps currently stored, both directions.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn held_stamps(&self) -> usize {
+        let count =
+            |direction: LinkDirection| self.stamp_map(direction).lock().expect("byte stamps").len();
+        count(LinkDirection::Up) + count(LinkDirection::Down)
+    }
+}
+
+/// The copy's hold on one direction.
+///
+/// [`LinkGate::leave`] runs when this drops. The handshake queue does not
+/// stamp, so it releases its slot with [`LinkGate::leave`] and does not
+/// take a lease.
+#[must_use = "the lease releases the byte stamp when dropped"]
+pub(crate) struct DirectionLease {
+    gate: LinkGate,
+    direction: LinkDirection,
+    conn: u64,
+}
+
+impl Drop for DirectionLease {
+    fn drop(&mut self) {
+        self.gate.leave(self.direction, self.conn);
+    }
 }
 
 impl Default for LinkGate {
@@ -212,4 +320,34 @@ impl Default for LinkGate {
 pub fn node_gate() -> LinkGate {
     static GATE: LazyLock<LinkGate> = LazyLock::new(LinkGate::new);
     GATE.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_transport_layer::{LinkDirection, MessageClass};
+
+    use super::LinkGate;
+
+    #[tokio::test]
+    async fn a_grant_does_not_stamp_and_a_byte_does() {
+        let gate = LinkGate::new();
+        let conn = 7u64;
+        assert_eq!(gate.activity(conn), (0, 0));
+        assert_eq!(gate.held_stamps(), 0);
+        let granted = gate
+            .acquire(LinkDirection::Down, conn, MessageClass::Session, 64)
+            .await;
+        assert_eq!(granted, 64);
+        assert_eq!(gate.activity(conn), (0, 0));
+        assert_eq!(gate.held_stamps(), 0);
+        let stamp = gate.byte_stamp(LinkDirection::Down, conn);
+        assert_eq!(gate.held_stamps(), 1);
+        stamp.store();
+        let (send, recv) = gate.activity(conn);
+        assert_eq!(send, 0);
+        assert!(recv > 0);
+        drop(gate.lease(LinkDirection::Down, conn));
+        assert_eq!(gate.activity(conn), (0, 0));
+        assert_eq!(gate.held_stamps(), 0);
+    }
 }

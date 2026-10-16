@@ -100,7 +100,7 @@ template <typename T>
 class BlockchainDBTest : public testing::Test
 {
 protected:
-  BlockchainDBTest() : m_db(new T()), m_hardfork(*m_db, 1, 0)
+  BlockchainDBTest() : m_db(new T())
   {
     account_base miner_acc;
     miner_acc.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
@@ -138,18 +138,11 @@ protected:
   }
 
   BlockchainDB* m_db;
-  HardFork m_hardfork;
   std::string m_prefix;
   std::vector<std::pair<block, blobdata>> m_blocks;
   std::array<size_t, 2> m_block_weights{};
   std::vector<std::vector<std::pair<transaction, blobdata>>> m_txs;
   std::vector<std::string> m_filenames;
-
-  void init_hard_fork()
-  {
-    m_hardfork.init();
-    m_db->set_hard_fork(&m_hardfork);
-  }
 
   void get_filenames()
   {
@@ -216,7 +209,6 @@ TYPED_TEST(BlockchainDBTest, AddBlockRefusesAMinerTxThatDoesNotSerialize)
   this->set_prefix(dirPath);
   ASSERT_NO_THROW(this->m_db->open(dirPath));
   this->get_filenames();
-  this->init_hard_fork();
 
   db_wtxn_guard guard(this->m_db);
 
@@ -256,7 +248,6 @@ TYPED_TEST(BlockchainDBTest, AddBlock)
   // make sure open does not throw
   ASSERT_NO_THROW(this->m_db->open(dirPath));
   this->get_filenames();
-  this->init_hard_fork();
 
   db_wtxn_guard guard(this->m_db);
 
@@ -304,7 +295,6 @@ TYPED_TEST(BlockchainDBTest, RetrieveBlockData)
   // make sure open does not throw
   ASSERT_NO_THROW(this->m_db->open(dirPath));
   this->get_filenames();
-  this->init_hard_fork();
 
   db_wtxn_guard guard(this->m_db);
 

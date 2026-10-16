@@ -10,6 +10,10 @@
 //!    caller after inserting proofs into the transaction), produces hybrid
 //!    Ed25519 + ML-DSA-65 signatures.
 //!
+//! [`crate::open_spend`] is that second phase for a spend that may also carry
+//! non-spend prefix inputs: it hashes every auth slot, signs the spend slots,
+//! and leaves each extra slot for the caller to seal.
+//!
 //! This two-phase design avoids a circular dependency: the PQC payload hash
 //! includes the serialized proofs, so the proofs must exist before signing.
 
@@ -26,7 +30,7 @@ use shekyl_fcmp::PqcLeafScalar;
 use shekyl_types::{PrefixHash, SigningPayloadHash};
 
 use crate::error::TxBuilderError;
-use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
+use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION};
 use crate::validate::validate_inputs;
 
 /// Construct the proof portion of an FCMP++ transaction.
@@ -273,7 +277,7 @@ pub fn sign_pqc_auths(
         })?;
 
         auths.push(PqcAuth {
-            auth_version: 1,
+            auth_version: PQC_AUTH_VERSION,
             signature: auth_sig.signature,
             public_key: auth_sig.hybrid_public_key,
         });

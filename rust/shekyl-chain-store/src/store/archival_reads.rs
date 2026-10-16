@@ -37,6 +37,24 @@
 //! - **A13** [`budget_accruing`] — the open epoch's running staker inflow
 //!   (SI-23), the accrual's pre-image and the close's operand.
 //!
+//! Settlement's reads (`ARCHIVAL_SETTLEMENT_WRITER.md` §14, `SO-D10`):
+//!
+//! - **A14** [`settlement_row`] — what an epoch settled for a pair; absent
+//!   is "no draw issued, or not settled yet", never a miss.
+//! - **A15** [`issued_draws`] — one epoch's issued-draw index, whole, in
+//!   `(P, shard, h, j)` order.
+//! - **A16** [`issued_digest`] — the running digest that index is checked
+//!   against.
+//! - **A17** [`served_at`] — the shards a persona's rows say were Served at
+//!   the epochs a caller names: one hop of that persona's shards, then a
+//!   point read of each epoch (`SO-D2`). What the claim's gather credits
+//!   (`SO-D11`).
+//! - **A18** [`block_draws`] — what the draw's count rule recorded for one
+//!   block (`SO-D12`). `None` until a block writes it.
+//! - **A19** [`drawable_digest`] — the digest of an epoch's drawable set as
+//!   written at its open (`SO-D10g`). `None` is no recorded set; an
+//!   all-zero digest is a digest.
+//!
 //! # Absence, stated once (`DRS_E1_SARCH.md` §3.3)
 //!
 //! - **"No bond record" is a case**, not a `false`: every caller branches
@@ -58,6 +76,17 @@
 //!   *pruned* height reads as is S-PRUNE's to say when it deletes anything
 //!   here; until a prune exists the two states are exhaustive.
 //!
+//! # SI-26 is armed here
+//!
+//! The slash log is read only where it is kept. A2 takes the log's
+//! retirement floor from its caller — computed on the consensus side from
+//! the rule set the slash pass runs (`SlashLogFloor`, `SLK-Q1` / `SLK-2`)
+//! — and refuses a scan whose start lies in [`SlashLogKey::below`]
+//! ([`StoreInvariant::SlashLogReadBelowFloor`]) rather than fold a retired
+//! range as "never slashed". The store compares; it does not source the
+//! floor, because the horizon is a consensus expression and a store setting
+//! must not be able to move it.
+//!
 //! # SI-15 is armed here
 //!
 //! Every serve-credit row names a persona with a bond record (the connect
@@ -77,20 +106,26 @@
 //! No composed "emission source" read (`SAR-Q4`): the rule that needs
 //! A1 + A5 + A7 + A8 composes them at its call site.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use redb::ReadableTable;
-use shekyl_chain_rules::AtHeight;
+use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::{BlobKind, CodecError};
-pub use shekyl_types::archival::{PassCount, ServedShard};
+use shekyl_types::archival::SettlementOutcome;
+pub use shekyl_types::archival::{
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily, SnapshotFault};
 use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
-use crate::ids::{ServeCreditKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
+    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -109,6 +144,16 @@ const SIGMA_WORK: &str = "archival_sigma_work";
 const BUDGET: &str = "archival_budget";
 /// The `archival_budget_accruing` cell as faults name it.
 const BUDGET_ACCRUING: &str = "archival_budget_accruing";
+/// The `archival_settlement` cell as faults name it.
+const SETTLEMENT: &str = "archival_settlement";
+/// The `archival_issued_draw` cell as faults name it.
+const ISSUED_DRAW: &str = "archival_issued_draw";
+/// The `archival_issued_digest` cell as faults name it.
+const ISSUED_DIGEST: &str = "archival_issued_digest";
+/// The `archival_block_draws` cell as faults name it.
+const BLOCK_DRAWS: &str = "archival_block_draws";
+/// The `archival_drawable_digest` cell as faults name it.
+const DRAWABLE_DIGEST: &str = "archival_drawable_digest";
 /// The `archival_attestation_witness` cell as faults name it.
 const WITNESS: &str = "archival_attestation_witness";
 
@@ -135,14 +180,30 @@ pub(super) fn bond_record<T: ReadTables>(
 /// [`SlashLogKey::above`] has no range to give (no height lies above it),
 /// so the C++'s `u64::MAX` early-return is the key type's `None` and not a
 /// case here. A row that does not decode is SI-7.
+///
+/// `floor` is the log's retirement floor under the caller's rule set.
+/// The scan is [`SlashLogKey::above`]; a start that lies in
+/// [`SlashLogKey::below`] is SI-26, refused before the table is opened.
+/// The last height has no range, so it needs no check.
 pub(super) fn slash_log_after<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
     height: BlockHeight,
+    floor: SlashLogFloor,
 ) -> Result<Vec<SlashLogEntry>, ReadFault> {
     let Some(above) = SlashLogKey::above(height) else {
         return Ok(Vec::new());
     };
+    if let Some(kept_from) = floor.height() {
+        if SlashLogKey::below(kept_from).contains(&above.start) {
+            return Err(ReadFault::Invariant(
+                StoreInvariant::SlashLogReadBelowFloor {
+                    asked: height,
+                    floor: kept_from,
+                },
+            ));
+        }
+    }
     let table = txn.table(ARCHIVAL_SLASH_LOG)?;
     let mut out = Vec::new();
     for row in table.range(above)? {
@@ -393,6 +454,139 @@ pub(super) fn budget_accruing<T: ReadTables>(
         ARCHIVAL_BUDGET_ACCRUING,
         epoch.to_raw(),
         BUDGET_ACCRUING,
+    )
+}
+
+/// **A14.** `archival_settlement[(persona, shard, epoch)]` — what the epoch
+/// settled for the pair. `None` is a pair no draw was issued to in that
+/// epoch, or an epoch not settled yet: never a miss. A row that does not
+/// decode — an outcome its own counts do not give among them — is SI-7.
+pub(super) fn settlement_row<T: ReadTables>(
+    txn: &T,
+    persona: &PCanonicalId,
+    shard: ShardId,
+    epoch: SettlementEpoch,
+) -> Result<Option<SettlementRow>, ReadFault> {
+    chain_reads::cell(
+        txn,
+        ARCHIVAL_SETTLEMENT,
+        SettlementKey::new(*persona, shard, epoch).key(),
+        SETTLEMENT,
+    )
+}
+
+/// **A15.** Every draw issued in `epoch`, in `(P, shard, h, j)` order: one
+/// range of `archival_issued_draw`. Empty for an epoch no draw was issued
+/// in. A row that does not decode is SI-7.
+pub(super) fn issued_draws<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+) -> Result<Vec<IndexedDraw>, ReadFault> {
+    let table = txn.table(ARCHIVAL_ISSUED_DRAW)?;
+    let mut out = Vec::new();
+    for row in table.range(IssuedDrawKey::epoch(epoch))? {
+        let (key, value) = row?;
+        let key = IssuedDrawKey::from_key(key.value());
+        let state = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(ISSUED_DRAW, cause))?;
+        out.push(IndexedDraw {
+            persona: *key.persona(),
+            shard: key.shard(),
+            issuing_height: key.issuing_height(),
+            draw: key.draw(),
+            state,
+        });
+    }
+    Ok(out)
+}
+
+/// **A16.** `archival_issued_digest[epoch]` — the running digest of the
+/// draws issued in `epoch`. An epoch with no row has had no draw folded,
+/// which is [`IssuedDigest::ZERO`]: the digest of no draws, not a hole.
+pub(super) fn issued_digest<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+) -> Result<IssuedDigest, ReadFault> {
+    chain_reads::cell(txn, ARCHIVAL_ISSUED_DIGEST, epoch.to_raw(), ISSUED_DIGEST)
+        .map(Option::unwrap_or_default)
+}
+
+/// **A17.** The shards `persona`'s settlement rows say were Served at each
+/// of `epochs`, ascending per epoch.
+///
+/// The table is keyed `(P, shard, E)` (`SO-D2`), so one pair's epochs are
+/// adjacent and `(P, E)` is not a range. This hops the persona's shards the
+/// way [`served_shards`] hops serve-credit — seek to the next shard, never
+/// walk the shard ids between — and point-reads each requested epoch. An
+/// epoch with no Served shard is absent from the map. Empty `epochs` reads
+/// nothing. The set names each epoch once ([`ChainView::served_at`]). Only
+/// a requested epoch is decoded; a row that does not decode is SI-7.
+pub(super) fn served_at<T: ReadTables>(
+    txn: &T,
+    persona: &PCanonicalId,
+    epochs: &BTreeSet<SettlementEpoch>,
+) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, ReadFault> {
+    let mut out = BTreeMap::new();
+    if epochs.is_empty() {
+        return Ok(out);
+    }
+    let table = txn.table(ARCHIVAL_SETTLEMENT)?;
+    let span = SettlementKey::persona_range(*persona);
+    let (mut from, persona_hi) = (*span.start(), *span.end());
+    loop {
+        let Some(row) = table.range(from..=persona_hi)?.next() else {
+            break;
+        };
+        let shard = SettlementKey::from_key(row?.0.value()).shard();
+        for &epoch in epochs {
+            let Some(guard) = table.get(SettlementKey::new(*persona, shard, epoch).key())? else {
+                continue;
+            };
+            let settled: SettlementRow = guard
+                .value()
+                .decode()
+                .map_err(|cause| undecodable(SETTLEMENT, cause))?;
+            if settled.outcome() == SettlementOutcome::Served {
+                out.entry(epoch).or_default().push(shard);
+            }
+        }
+        let Some(next_shard) = shard.to_raw().checked_add(1) else {
+            break;
+        };
+        from = SettlementKey::new(
+            *persona,
+            ShardId::from_raw(next_shard),
+            SettlementEpoch::ZERO,
+        )
+        .key();
+    }
+    Ok(out)
+}
+
+/// **A18.** `archival_block_draws[height]` — what the count rule recorded
+/// for the block. `None` is a block no row was written for. A row that
+/// does not decode is SI-7.
+pub(super) fn block_draws<T: ReadTables>(
+    txn: &T,
+    height: BlockHeight,
+) -> Result<Option<BlockDraws>, ReadFault> {
+    chain_reads::cell(txn, ARCHIVAL_BLOCK_DRAWS, height.to_raw(), BLOCK_DRAWS)
+}
+
+/// **A19.** `archival_drawable_digest[epoch]` — the digest of the epoch's
+/// drawable set. `None` is an epoch with no recorded set. The row is
+/// returned as stored whatever its bytes: no value is read as absent.
+pub(super) fn drawable_digest<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+) -> Result<Option<DrawableDigest>, ReadFault> {
+    chain_reads::cell(
+        txn,
+        ARCHIVAL_DRAWABLE_DIGEST,
+        epoch.to_raw(),
+        DRAWABLE_DIGEST,
     )
 }
 

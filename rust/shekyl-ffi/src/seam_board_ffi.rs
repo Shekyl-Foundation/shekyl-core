@@ -1,0 +1,535 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The published seam board, as C reads it.
+//!
+//! A count is an integer: [`shekyl_seam_board_count`] for one connector
+//! and direction, [`shekyl_seam_board_direction_count`] for that direction
+//! on every connector. Both count a row whether or not the handshake has
+//! finished. [`shekyl_seam_session_counts`] counts the rows that **have**
+//! finished it, per direction, from one snapshot, and is the one export
+//! here that says when there is no hub. Address walks use [`shekyl_seam_board`]: one snapshot, and
+//! each visit is one fixed-size row. An id is
+//! [`shekyl_seam_session_established`] or [`shekyl_seam_session_connector`].
+//! Those do not copy the board. The row is the admission id, the
+//! handshake flag, and the endpoint. Connector and direction are fields
+//! of that endpoint.
+
+use std::ffi::c_void;
+
+use shekyl_seam::{connector_from_index, direction_from_index, Row, SocketId};
+
+use crate::seam_ffi::{
+    hub, observed_c, ShekylSeamObserved, SHEKYL_DIRECTION_INBOUND, SHEKYL_DIRECTION_OUTBOUND,
+};
+
+/// One published row.
+///
+/// `endpoint` is the address, the connector, and the direction observed
+/// at admission. `established` is 1 after the Levin handshake. It is not
+/// an input to [`shekyl_seam_board_count`].
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ShekylSeamBoardRow {
+    pub id: u64,
+    pub established: u8,
+    /// Aligns `endpoint` to 8. Not a field.
+    pub _pad: [u8; 7],
+    pub endpoint: ShekylSeamObserved,
+    /// Aligns the unix-second fields. Not a field.
+    pub _pad_tail: [u8; 2],
+    /// Unix seconds at admission.
+    pub started: u64,
+    /// Monotonic milliseconds at admission, on the byte-stamp clock.
+    pub started_mono: u64,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<ShekylSeamObserved>() == 70);
+    assert!(std::mem::offset_of!(ShekylSeamBoardRow, established) == 8);
+    assert!(std::mem::offset_of!(ShekylSeamBoardRow, endpoint) == 16);
+    assert!(std::mem::offset_of!(ShekylSeamBoardRow, started) == 88);
+    assert!(std::mem::offset_of!(ShekylSeamBoardRow, started_mono) == 96);
+    assert!(std::mem::size_of::<ShekylSeamBoardRow>() == 104);
+    assert!(SHEKYL_DIRECTION_INBOUND == 0 && SHEKYL_DIRECTION_OUTBOUND == 1);
+};
+
+fn board_row(row: &Row) -> ShekylSeamBoardRow {
+    ShekylSeamBoardRow {
+        id: row.id().get(),
+        established: u8::from(row.established()),
+        _pad: [0; 7],
+        endpoint: observed_c(&row.endpoint()),
+        _pad_tail: [0; 2],
+        started: row.started_unix(),
+        started_mono: row.started_mono(),
+    }
+}
+
+/// Rows of `connector` and `direction` on the process hub.
+///
+/// The handshake flag is not read. A missing hub is zero. An index that
+/// is not a connector or a direction is zero: this process holds no such rows.
+#[no_mangle]
+pub extern "C" fn shekyl_seam_board_count(connector: u32, direction: u32) -> u64 {
+    let Some(hub) = hub() else {
+        return 0;
+    };
+    let Some(connector) = connector_from_index(connector) else {
+        return 0;
+    };
+    let Some(direction) = direction_from_index(direction) else {
+        return 0;
+    };
+    u64::try_from(hub.board().count(connector, direction)).unwrap_or(u64::MAX)
+}
+
+/// No published row for this id. A present row's answers are never negative.
+const NO_ROW: i32 = -1;
+
+/// The published row for `id`, copied out of the board.
+///
+/// The board is ordered by admission id. This is that order's lookup.
+fn published_row(id: u64) -> Option<Row> {
+    let id = SocketId::from_ffi(id)?;
+    hub()?.board().get(id).copied()
+}
+
+/// 1 when `id`'s row has finished the Levin handshake, 0 when the row is
+/// present and the handshake has not, [`NO_ROW`] when the hub has no such row.
+#[no_mangle]
+pub extern "C" fn shekyl_seam_session_established(id: u64) -> i32 {
+    match published_row(id) {
+        Some(row) => i32::from(row.established()),
+        None => NO_ROW,
+    }
+}
+
+/// The connector index of `id`'s row, or [`NO_ROW`] when the hub has no such row.
+///
+/// Zero is clearnet, so absence cannot be zero. A caller that needs the
+/// connector does not copy the board to find it.
+#[no_mangle]
+pub extern "C" fn shekyl_seam_session_connector(id: u64) -> i32 {
+    match published_row(id) {
+        Some(row) => i32::from(row.connector() as u8),
+        None => NO_ROW,
+    }
+}
+
+/// Rows in `direction` on every connector.
+///
+/// The sum of [`shekyl_seam_board_count`] across the connectors this
+/// process names. A missing hub, or a direction index that is not one, is zero.
+#[no_mangle]
+pub extern "C" fn shekyl_seam_board_direction_count(direction: u32) -> u64 {
+    let Some(hub) = hub() else {
+        return 0;
+    };
+    let Some(direction) = direction_from_index(direction) else {
+        return 0;
+    };
+    u64::try_from(hub.board().direction_count(direction)).unwrap_or(u64::MAX)
+}
+
+/// [`shekyl_seam_session_counts`] wrote the counts.
+pub const SHEKYL_SEAM_COUNT_OK: i32 = 0;
+/// `out` was null. Nothing was written.
+pub const SHEKYL_SEAM_COUNT_ERR_NULL: i32 = -1;
+/// No hub is bound in this process. Nothing was written: there are no
+/// counts to give, which is not counts of zero.
+pub const SHEKYL_SEAM_COUNT_ERR_NO_HUB: i32 = -2;
+
+/// The board's sessions, per direction, over **one** snapshot.
+///
+/// A session is a row that has finished the Levin handshake. A row before
+/// its handshake is a socket, not a session: it cannot relay, the hub's
+/// socket counts already report it, and an inbound one costs whoever opened
+/// it almost nothing, so counting it would let anyone inflate what this
+/// node reports. Both counts are on every connector.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShekylSeamSessionCounts {
+    pub outbound: u64,
+    pub inbound: u64,
+}
+
+const _: () = {
+    assert!(std::mem::offset_of!(ShekylSeamSessionCounts, outbound) == 0);
+    assert!(std::mem::offset_of!(ShekylSeamSessionCounts, inbound) == 8);
+    assert!(std::mem::size_of::<ShekylSeamSessionCounts>() == 16);
+};
+
+/// The process hub's session counts, from one snapshot of its board.
+///
+/// The daemon RPC's `get_info` reads this: the two connection counts are
+/// `outbound` and `inbound`, and `has_peers` is whether either is
+/// non-zero. One read and one definition of a session, so a reply cannot
+/// say a node has peers and no connections, or connections and no peers.
+///
+/// The other counts here answer a missing hub with `0`. This one cannot,
+/// because its reader would report a node whose p2p layer is not up as a
+/// node with no peers and no connections. So the counts are written
+/// through `out` and the return says whether there were any:
+/// [`SHEKYL_SEAM_COUNT_OK`], or [`SHEKYL_SEAM_COUNT_ERR_NO_HUB`] with `out`
+/// untouched.
+///
+/// The reader is Rust (`shekyl-daemon-rpc`, which does not depend on this
+/// crate and shares its link image). No C++ calls it.
+///
+/// # Safety
+///
+/// `out` is null or points to a writable [`ShekylSeamSessionCounts`].
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_seam_session_counts(out: *mut ShekylSeamSessionCounts) -> i32 {
+    if out.is_null() {
+        return SHEKYL_SEAM_COUNT_ERR_NULL;
+    }
+    let Some(hub) = hub() else {
+        return SHEKYL_SEAM_COUNT_ERR_NO_HUB;
+    };
+    // One copy of the board; both counts are of it.
+    let board = hub.board();
+    let count = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    let counts = ShekylSeamSessionCounts {
+        outbound: count(board.established_count(shekyl_seam::Direction::Outbound)),
+        inbound: count(board.established_count(shekyl_seam::Direction::Inbound)),
+    };
+    // SAFETY: `out` is non-null, and the caller's contract makes it writable.
+    unsafe { out.write(counts) };
+    SHEKYL_SEAM_COUNT_OK
+}
+
+/// Visit the process hub's board, one fixed-size row per call.
+///
+/// There is one hub and one snapshot. Each call of `visit` receives one
+/// row, and the pointer is valid only for that call. A missing hub, or a
+/// board with no rows, visits once with a null row.
+///
+/// # Safety
+/// `visit` receives `ctx` and a pointer to one row of this call's buffer,
+/// or null when the board is empty. `visit` does not call back into the seam.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_seam_board(
+    ctx: *mut c_void,
+    visit: Option<unsafe extern "C" fn(*mut c_void, *const ShekylSeamBoardRow)>,
+) -> i32 {
+    let Some(visit) = visit else {
+        return -1;
+    };
+    let Some(hub) = hub() else {
+        unsafe { visit(ctx, std::ptr::null()) };
+        return 0;
+    };
+    let rows: Vec<ShekylSeamBoardRow> = hub.board().rows().iter().map(board_row).collect();
+    if rows.is_empty() {
+        unsafe { visit(ctx, std::ptr::null()) };
+        return 0;
+    }
+    for row in &rows {
+        unsafe { visit(ctx, row) };
+    }
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    use shekyl_seam::CloseCause;
+
+    use super::*;
+    use crate::inbound_ceiling_ffi::{ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_UNLIMITED};
+    use crate::seam_ffi::{
+        seam_bind_lock, shekyl_seam_bind, shekyl_seam_close, shekyl_seam_handler_armed,
+        shekyl_seam_handler_gone, shekyl_seam_install_loopback, shekyl_seam_open, shekyl_seam_reap,
+        ShekylSeamAddress, ShekylSeamObserved, ADDR_IPV4, POST_ESTABLISHED,
+        SHEKYL_CONNECTOR_CLEARNET, SHEKYL_CONNECTOR_TOR,
+    };
+    use crate::zone_ffi::shekyl_zone_session_established;
+
+    const DOC_OCTETS: [u8; 4] = [203, 0, 113, 10];
+    const DOC_PORT: u16 = 18_080;
+    /// An index that is not a connector and not a direction.
+    const UNNAMED_INDEX: u32 = u32::MAX;
+
+    struct Seen {
+        rows: Vec<ShekylSeamBoardRow>,
+        pointer_was_null: bool,
+    }
+
+    unsafe extern "C" fn collect(ctx: *mut c_void, row: *const ShekylSeamBoardRow) {
+        let seen = unsafe { &mut *ctx.cast::<Seen>() };
+        if row.is_null() {
+            seen.pointer_was_null = true;
+            return;
+        }
+        // One fixed-size row. The pointer is valid only for this call.
+        seen.pointer_was_null = false;
+        seen.rows.push(unsafe { row.read() });
+    }
+
+    /// Stores the admission id. The post runs under the hub lock, so this
+    /// does not call back into the seam.
+    unsafe extern "C" fn note_established(
+        ctx: *mut c_void,
+        id: u64,
+        kind: u32,
+        _observed: *const ShekylSeamObserved,
+        _bytes: *const u8,
+        _len: usize,
+        _cause: *const CloseCause,
+    ) {
+        if kind != POST_ESTABLISHED {
+            return;
+        }
+        let slot = unsafe { &*ctx.cast::<Mutex<Option<u64>>>() };
+        *slot.lock().expect("arm slot") = Some(id);
+    }
+
+    fn unlimited() -> ShekylInboundCeiling {
+        ShekylInboundCeiling {
+            kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+            ceiling: 0,
+            soft_limit: 0,
+            held: 0,
+        }
+    }
+
+    fn doc_address() -> ShekylSeamAddress {
+        let mut addr = ShekylSeamAddress {
+            connector: u8::try_from(SHEKYL_CONNECTOR_CLEARNET).expect("connector fits"),
+            address_type: ADDR_IPV4,
+            zone_only: 0,
+            _pad: 0,
+            port: DOC_PORT,
+            len: u16::try_from(DOC_OCTETS.len()).expect("ipv4 len"),
+            bytes: [0; shekyl_seam::TOR_HOST_MAX],
+        };
+        addr.bytes[..DOC_OCTETS.len()].copy_from_slice(&DOC_OCTETS);
+        addr
+    }
+
+    fn visit(seen: &mut Seen) -> i32 {
+        seen.rows.clear();
+        seen.pointer_was_null = false;
+        unsafe { shekyl_seam_board((seen as *mut Seen).cast::<c_void>(), Some(collect)) }
+    }
+
+    fn assert_doc_endpoint(row: &ShekylSeamBoardRow) {
+        assert_eq!(
+            row.endpoint.connector,
+            u8::try_from(SHEKYL_CONNECTOR_CLEARNET).expect("connector fits")
+        );
+        assert_eq!(u32::from(row.endpoint.direction), SHEKYL_DIRECTION_OUTBOUND);
+        assert_eq!(row.endpoint.address_type, ADDR_IPV4);
+        assert_eq!(row.endpoint.zone_only, 0);
+        assert_eq!(row.endpoint.port, DOC_PORT);
+        assert_eq!(
+            row.endpoint.len,
+            u16::try_from(DOC_OCTETS.len()).expect("ipv4 len")
+        );
+        assert_eq!(&row.endpoint.bytes[..DOC_OCTETS.len()], &DOC_OCTETS);
+    }
+
+    #[test]
+    fn the_board_call_refuses_a_null_visit() {
+        assert_eq!(unsafe { shekyl_seam_board(std::ptr::null_mut(), None) }, -1);
+    }
+
+    #[test]
+    fn an_unestablished_outbound_row_survives_the_copy() {
+        let _bind = seam_bind_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let slot = Arc::new(Mutex::new(None::<u64>));
+        let stop = Arc::new(AtomicBool::new(false));
+        let slot_for_armer = Arc::clone(&slot);
+        let stop_for_armer = Arc::clone(&stop);
+        let armer = thread::spawn(move || {
+            while !stop_for_armer.load(Ordering::Relaxed) {
+                let id = slot_for_armer.lock().expect("arm slot").take();
+                if let Some(id) = id {
+                    shekyl_seam_handler_armed(id, 1);
+                    return;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+
+        let ceiling = unlimited();
+        let bound = unsafe {
+            shekyl_seam_bind(
+                Arc::as_ptr(&slot).cast_mut().cast::<c_void>(),
+                Some(note_established),
+                &raw const ceiling,
+            )
+        };
+        assert_eq!(bound, 0);
+        assert_eq!(shekyl_seam_install_loopback(), 0);
+        assert_eq!(session_counts(), Ok(counts(0, 0)), "a hub with no rows");
+
+        let mut seen = Seen {
+            rows: Vec::new(),
+            pointer_was_null: false,
+        };
+        assert_eq!(visit(&mut seen), 0);
+        assert!(seen.pointer_was_null);
+        assert!(seen.rows.is_empty());
+        assert_eq!(
+            shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
+            0
+        );
+
+        let addr = doc_address();
+        let opened = unsafe { shekyl_seam_open(&raw const addr, 0) };
+        assert_ne!(opened.id, 0, "cause {}", opened.cause_kind);
+
+        assert_eq!(visit(&mut seen), 0);
+        assert!(!seen.pointer_was_null);
+        assert_eq!(seen.rows.len(), 1);
+        let row = seen.rows[0];
+        assert_eq!(row.id, opened.id);
+        assert_eq!(row.established, 0);
+        assert_eq!(shekyl_seam_session_established(opened.id), 0);
+        assert_eq!(
+            shekyl_seam_session_connector(opened.id),
+            i32::try_from(SHEKYL_CONNECTOR_CLEARNET).expect("connector fits")
+        );
+        assert_eq!(shekyl_seam_session_established(0), NO_ROW);
+        assert_eq!(shekyl_seam_session_connector(0), NO_ROW);
+        assert_eq!(
+            shekyl_seam_session_connector(opened.id.wrapping_add(1)),
+            NO_ROW
+        );
+        assert_doc_endpoint(&row);
+        assert_eq!(
+            shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
+            1
+        );
+        assert_eq!(
+            shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_INBOUND),
+            0
+        );
+        assert_eq!(
+            shekyl_seam_board_count(SHEKYL_CONNECTOR_TOR, SHEKYL_DIRECTION_OUTBOUND),
+            0
+        );
+        assert_eq!(
+            shekyl_seam_board_direction_count(SHEKYL_DIRECTION_OUTBOUND),
+            1
+        );
+        assert_eq!(
+            shekyl_seam_board_count(UNNAMED_INDEX, SHEKYL_DIRECTION_OUTBOUND),
+            0
+        );
+        assert_eq!(shekyl_seam_board_direction_count(UNNAMED_INDEX), 0);
+        assert_eq!(
+            session_counts(),
+            Ok(counts(0, 0)),
+            "a row before its handshake occupies a dial slot (the count \
+             above) and is not a session"
+        );
+
+        shekyl_zone_session_established(opened.id);
+        assert_eq!(
+            session_counts(),
+            Ok(counts(1, 0)),
+            "the handshake makes it a session, in its own direction"
+        );
+        assert_eq!(visit(&mut seen), 0);
+        assert_eq!(seen.rows.len(), 1);
+        assert_eq!(seen.rows[0].id, opened.id);
+        assert_eq!(seen.rows[0].established, 1);
+        assert_eq!(shekyl_seam_session_established(opened.id), 1);
+        assert_eq!(
+            shekyl_seam_session_connector(opened.id),
+            i32::try_from(SHEKYL_CONNECTOR_CLEARNET).expect("connector fits")
+        );
+        assert_doc_endpoint(&seen.rows[0]);
+        assert_eq!(
+            shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
+            1
+        );
+
+        shekyl_seam_close(opened.id);
+        assert_eq!(
+            session_counts(),
+            Ok(counts(0, 0)),
+            "a closed session is not one"
+        );
+        assert_eq!(shekyl_seam_session_established(opened.id), NO_ROW);
+        assert_eq!(shekyl_seam_session_connector(opened.id), NO_ROW);
+        assert_eq!(
+            shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
+            0
+        );
+        assert_eq!(visit(&mut seen), 0);
+        assert!(seen.pointer_was_null);
+        assert!(seen.rows.is_empty());
+
+        shekyl_seam_handler_gone(opened.id);
+        shekyl_seam_reap(opened.id);
+        unsafe {
+            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        }
+        assert_eq!(
+            shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
+            0
+        );
+        assert_eq!(visit(&mut seen), 0);
+        assert!(seen.pointer_was_null);
+        assert_eq!(
+            session_counts(),
+            Err(SHEKYL_SEAM_COUNT_ERR_NO_HUB),
+            "unbound again: no hub, which is not zero sessions"
+        );
+
+        stop.store(true, Ordering::Relaxed);
+        armer.join().expect("armer");
+    }
+
+    fn counts(outbound: u64, inbound: u64) -> ShekylSeamSessionCounts {
+        ShekylSeamSessionCounts { outbound, inbound }
+    }
+
+    /// The counts, or the code that says why there are none.
+    fn session_counts() -> Result<ShekylSeamSessionCounts, i32> {
+        // Values no board can hold, so a write is told apart from none.
+        let untouched = counts(u64::MAX, u64::MAX);
+        let mut out = untouched;
+        match unsafe { shekyl_seam_session_counts(&raw mut out) } {
+            SHEKYL_SEAM_COUNT_OK => Ok(out),
+            code => {
+                assert_eq!(out, untouched, "a refusal writes nothing");
+                Err(code)
+            }
+        }
+    }
+
+    /// **A missing hub is not zero sessions.** The other counts in this
+    /// file answer `0` for it. This one's reader turns the counts into
+    /// "this node has a peer" and "this node has N connections", so `0`
+    /// here would report a node whose p2p layer is not up as a node with
+    /// nobody to talk to.
+    #[test]
+    fn the_session_counts_of_a_missing_hub_are_a_refusal_not_zeros() {
+        let _bind = seam_bind_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsafe {
+            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        }
+        assert_eq!(session_counts(), Err(SHEKYL_SEAM_COUNT_ERR_NO_HUB));
+        assert_eq!(
+            unsafe { shekyl_seam_session_counts(std::ptr::null_mut()) },
+            SHEKYL_SEAM_COUNT_ERR_NULL
+        );
+    }
+}

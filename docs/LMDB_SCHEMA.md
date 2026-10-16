@@ -149,7 +149,7 @@ Offset  Size  Field
 32       8    uint64_t bi_diff_lo (cumulative difficulty, low 64 bits)
 40       8    uint64_t bi_diff_hi (cumulative difficulty, high 64 bits)
 48      32    crypto::hash bi_hash
-80       8    uint64_t bi_cum_rct (cumulative RCT output count)
+80       8    uint64_t bi_cum_rct (this block's RCT output count; the cumulative add was deleted 2026-10-05)
 88       8    uint64_t bi_long_term_block_weight
 ```
 
@@ -206,7 +206,7 @@ PQC authentication data for v3+ transactions (second unprunable segment, between
 | Value | Byte slice `[pqc_auths_offset, unprunable_size)` from the tx blob. Variable length. Only present for non-coinbase transactions with `tx.version >= 3`. |
 | Writers | `add_transaction_data` (conditional), `remove_transaction_data`. Never a discard — this is the second unprunable segment. |
 | Readers | `get_pruned_tx_blob` (concatenates with txs_pruned) |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (DB v6, `migrate_5_6`) |
+| Introduced | DB v6 (`migrate_5_6`), FCMP++ from genesis |
 
 ### `txs_prunable`
 
@@ -445,9 +445,9 @@ that are per-pair-epoch by design (`archival_slash_applied`,
 Three-valued settlement verdict per `(P_id, shard_id, settlement_epoch)`
 (`SO-D1`/`SO-D2`). **One row per pair with `issued >= 1`** — a pair the urn
 never reached is recorded by its ABSENCE, which is what makes *absent ⇒ never
-issued* a theorem about the writer rather than an inference. `issued = 0` is
-refused at the boundary (`SHEKYL_ARCHIVAL_SETTLEMENT_ERR_ISSUED_ZERO`), on both
-the write and the read.
+issued* a theorem about the writer rather than an inference. `issued = 0` has
+no row: `SettlementRow::settle` refuses it (`SettlementRowError::NothingIssued`),
+and `SettlementRow::from_bytes` refuses it on the read.
 
 | Property | Value |
 |---|---|
@@ -455,20 +455,23 @@ the write and the read.
 | Flags | `MDB_CREATE` (composite key; no `INTEGERKEY`) |
 | Key | `P_id[32] \|\| BE(shard_id) \|\| BE(settlement_epoch)` (48 bytes) |
 | Value | `outcome \|\| passes \|\| issued` (3 bytes) — `0x01` Served, `0x02` Missed, `0x03` NonObservation; `0x00` is deliberately not a live tag |
-| Writers | `set_archival_settlement` — **not wired to production yet** (`SO-D8`); when it lands it runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event |
-| Readers | `get_archival_settlement` |
+| Writers | **None in this store.** `set_archival_settlement` was deleted (`SO-D10e`); settlement is the Rust validator's (`SO-D10`, `ARCHIVAL_SETTLEMENT_WRITER.md` §14), whose writer runs inside the slash scheduler's per-epoch pass (`SO-D7`), not at a separate epoch-close event. It is wired: the Rust store's connect writes the pass's rows. No block path issues a draw yet, so off Fakechain there is nothing for it to settle |
+| Readers | **None in this store.** `get_archival_settlement` was deleted (`SO-D10e`); the Rust store's read is `ChainView::settlement_row` |
 | Revert | `delete_archival_settlement_for_epoch` (reorg crossing a fold — the row is a memoised derivation over final chain state, so it is DELETED and recomputed rather than journalled) |
 | Prune | `delete_archival_settlement_before_epoch`, from `prune_archival_epochs_before` |
 | Encoder | key `shekyl::db::ArchivalPairEpochKey`; **value encoded in Rust only** |
 | Introduced | HF1 (Shekyl genesis) |
 
-**C++ never composes the value.** Rust folds `(passes, issued)` and emits the
-three bytes (`shekyl_archival_settlement_row`), so a row whose outcome
-contradicts its counts is not a state this side can express. The FFI writes
-nothing on any refusal, so a caller that ignored the return code still cannot
-store a fabricated settlement. The 3-byte length is a fixed-size FFI contract
-agreed at compile time on both sides (`SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES`,
-rule 40).
+**C++ never composes the value, and no longer writes or reads it.** The row
+FFI and its length macro were deleted with the C++ writer and reader
+(`SO-D10e`); the revert and the prune run over a table nothing writes, until
+`DEL-008`. The row is `shekyl_types::archival::SettlementRow`
+(`rust/shekyl-types/src/archival/settlement.rs`), and `SettlementRow::settle`
+is the only way to produce its three bytes, so a row whose outcome contradicts
+its counts is not a state that can be expressed. `passes` is counted among
+three draws selected by a beacon
+(`shekyl_archival_retention::settlement_select::settle_pair`): NonObservation
+below 3 issued, Served at 2 passes, `issued` saturating at 255.
 
 **Keyed by `ArchivalPairEpochKey`, not `ArchivalServeCreditKey`.** `SO-D2`
 ruled the two byte-identical so one key could probe both tables; `PC-D4` then
@@ -859,7 +862,7 @@ Full-chain membership proof tree leaf nodes.
 | Value | 128 bytes — 4 × 32-byte curve scalars forming the leaf tuple |
 | Writers | `grow_curve_tree`, `trim_curve_tree` |
 | Readers | `get_curve_tree_leaf_by_tree_position`, `get_curve_tree_leaf_by_output_index` (double lookup via `output_to_leaf`), leaf iteration for proof generation |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Introduced | FCMP++ from genesis |
 
 ### `curve_tree_layers`
 
@@ -873,7 +876,7 @@ Internal hash nodes of the curve tree, organized by layer and chunk.
 | Value | 32 bytes — layer chunk hash |
 | Writers | `grow_curve_tree`, `trim_curve_tree`, `prune_curve_tree_intermediate_layers` |
 | Readers | `get_curve_tree_layer_chunk`, layer iteration |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Introduced | FCMP++ from genesis |
 
 ### `curve_tree_meta`
 
@@ -895,7 +898,7 @@ Small key-value store for tree state metadata.
 |---|---|
 | Writers | `grow_curve_tree`, `trim_curve_tree` |
 | Readers | `get_curve_tree_root`, `get_curve_tree_leaf_count`, `get_curve_tree_depth` |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Introduced | FCMP++ from genesis |
 
 ### `curve_tree_checkpoints`
 
@@ -919,7 +922,7 @@ Offset  Size  Field
 |---|---|
 | Writers | `save_curve_tree_checkpoint` (every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` blocks) |
 | Readers | `get_curve_tree_checkpoint` (for rollback), `prune_curve_tree_intermediate_layers` |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Introduced | FCMP++ from genesis |
 
 ### `curve_tree_roots`
 
@@ -929,11 +932,11 @@ Per-height curve-tree root hash for fast lookup without deserializing checkpoint
 |---|---|
 | LMDB name | `"curve_tree_roots"` |
 | Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` block height (8 bytes) — key *h* holds the tree state **at** height *h*: block *h−1*'s connect writes it as `prev_height + 1` (`blockchain_db.cpp:664`), so it is the anchor CEN-I12 reads for `ref_height = h` and the root block *h*'s header must carry (CEN-B5) |
+| Key | `uint64_t` block height (8 bytes) — key *h* holds the tree state **at** height *h*: block *h−1*'s connect writes it as `prev_height + 1` (`blockchain_db.cpp:612`), so it is the anchor CEN-I12 reads for `ref_height = h` and the root block *h*'s header must carry (CEN-B5) |
 | Value | 32-byte root hash |
-| Writers | `store_curve_tree_root_at_height` (block connect, `src/blockchain_db/blockchain_db.cpp:663`–`:664`) — **on every connect**, whether or not the drain grew the tree: the call is inside the `blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` gate (`:493`, always true) and *outside* the `if (new_output_count > 0)` block that closes at `:650`. The table is therefore **dense from key 1**; **key 0 is never written** (no connect produces it). Deleted on `pop_block` |
-| Readers | `get_curve_tree_root_at_height` — returns an **all-zero** array silently on a missing key (`src/blockchain_db/lmdb/db_lmdb.cpp:9064`–`:9080`, `MDB_NOTFOUND`), which is reachable only for key 0 in a healthy file (`ref_height = 0` is age-selectable while `chain_height ≤ 100`); the zeros decode to the identity point, so a proof anchored at genesis is verified against *O* — consequence-free (the empty tree has no members; forging against *O* is a DL break). Walked and recorded on CEN-I12's CSR row 2026-09-15 (`docs/design/CONSENSUS_RULE_CENSUS.md` §7 #21; S-CHAIN-W SCW-19); the verdict stands |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Writers | `store_curve_tree_root_at_height` (block connect, `src/blockchain_db/blockchain_db.cpp:612`) — **on every connect**, whether or not the drain grew the tree: the call sits in the curve-tree scope that opens at `:434` and *outside* the `if (new_output_count > 0)` block that closes at `:598`. The version gate that used to wrap the scope was removed 2026-10-05; the write was already unconditional. The table is therefore **dense from key 1**; **key 0 is never written** (no connect produces it). Deleted on `pop_block` |
+| Readers | `get_curve_tree_root_at_height` — returns an **all-zero** array silently on a missing key (`src/blockchain_db/lmdb/db_lmdb.cpp:8943`–`:8958`, `MDB_NOTFOUND`), which is reachable only for key 0 in a healthy file (`ref_height = 0` is age-selectable while `chain_height ≤ 100`); the zeros decode to the identity point, so a proof anchored at genesis is verified against *O* — consequence-free (the empty tree has no members; forging against *O* is a DL break). Walked and recorded on CEN-I12's CSR row 2026-09-15 (`docs/design/CONSENSUS_RULE_CENSUS.md` §7 #21; S-CHAIN-W SCW-19); the verdict stands |
+| Introduced | FCMP++ from genesis |
 
 ### `pending_tree_leaves`
 
@@ -948,7 +951,7 @@ Outputs that have been created but not yet matured into the curve tree. Composit
 | Writers | `add_pending_tree_leaf` (block connect), removed by `drain_pending_tree_leaves` |
 | Readers | `drain_pending_tree_leaves` (cursor scan up to current height) |
 | Notes | LMDB's default byte-compare yields canonical `(maturity, output_index)` order. No `DUPSORT` anywhere in curve-tree state — this was changed in DB v7 to fix a consensus-critical bug where `DUPSORT` on leaf bytes caused non-deterministic drain order for outputs sharing the same maturity height. |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (schema v7) |
+| Introduced | schema v7, FCMP++ from genesis |
 
 ### `pending_tree_drain`
 
@@ -972,7 +975,7 @@ Offset  Size  Field
 | Writers | `drain_pending_tree_leaves` (records what was drained) |
 | Readers | `BlockchainDB::pop_block` (restores entries on rollback) |
 | Notes | `pop_block` range-scans by `DrainKey::prefix(block_height)` to find all entries for the popped block, then restores each to `pending_tree_leaves` and removes the output→leaf mapping. |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (schema v7) |
+| Introduced | schema v7, FCMP++ from genesis |
 
 ### `block_pending_additions`
 
@@ -1028,22 +1031,26 @@ Bidirectional mapping: tree position → global output index. Inverse of `output
 
 ### `hf_versions`
 
-Per-height hard fork version.
+Declared and opened; nothing writes or reads it. It held the per-height
+hard-fork version until the hard-fork mechanism was deleted (2026-10-08).
+The declaration stays until the redb cutover: the redb store's schema and
+digest domain are defined against this table list, and its own
+`hf_versions` (the rule set in force per height) shares the name
+(`FOLLOWUPS.md`).
 
 | Property | Value |
 |---|---|
 | LMDB name | `"hf_versions"` |
 | Flags | `MDB_INTEGERKEY` |
 | Key | `uint64_t` height (8 bytes) |
-| Value | `uint8_t` hard fork version (1 byte) |
-| Writers | `set_hard_fork_version` (via `TXN_BLOCK_PREFIX`, joins active batch) |
-| Readers | `get_hard_fork_version` |
-| Note | Entries are not removed on block pop (known issue; see `LMDB_WRITE_ATOMICITY_AUDIT.md`). Overwritten on re-add. |
+| Value | `uint8_t` (1 byte) in databases written before 2026-10-08 |
+| Writers | none |
+| Readers | none |
 | Introduced | Genesis (DB v0) |
 
 ### `hf_starting_heights`
 
-Scratch table used during initialization. Dropped after use.
+Never used. Dropped at every writable open; kept declared for the same reason as `hf_versions`.
 
 | Property | Value |
 |---|---|

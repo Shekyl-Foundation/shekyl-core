@@ -113,9 +113,9 @@ while IFS=$'\x1f' read -r mech literal file const status _key _notes || [[ -n "$
   # Well-formed mechanism id (reject typos like "55" that would create a silent
   # collision bucket in the distinctness test).
   case "$mech" in
-    1|2|3|4|5|6|x) ;;
+    1|2|3|4|5|6|7|x) ;;
     *)
-      echo "BAD MECH ID: '$mech' (literal b\"$literal\") — expected 1..6 or x" >&2
+      echo "BAD MECH ID: '$mech' (literal b\"$literal\") — expected 1..7 or x" >&2
       fail=1
       continue
       ;;
@@ -284,7 +284,61 @@ count_pattern() {
 # (shekyl/archival-pass-delivery-digest-v1, the nonce-salted digest of the
 # response P delivered). `pass_delivery_digest` is that hasher run once, and
 # the tests call those two; none adds a site.
-MECH1_EXPECTED=59
+# SV-D1 (2026-10-08): 59 -> 61. One production site in
+# rust/shekyl-archival-retention/src/shard_view_hash.rs -- `ShardViewHasher::begin`
+# (shekyl/archival-shard-view-hash-v1, the visualization's seed over a
+# W-byte shard's archival bytes) -- plus one inline #[cfg(test)] site: the
+# fold-equals-one-shot test rebuilds the documented preimage with
+# `cshake256_32` under the same label.
+# Settlement (2026-10-08): 61 -> 63. Two production sites in
+# rust/shekyl-archival-retention/src/settlement_select.rs -- `candidate`
+# (shekyl/archival-settlement-select-v1, the counted-draw selection) and
+# `issued_draw_term` (shekyl/archival-issued-index-v1, one draw's term in
+# its epoch's digest). The tests call those through `select_counted` and
+# `issued_draw_term`; none adds a site.
+# Slice C (2026-10-10): 63 -> 69. Four production sites in
+# rust/shekyl-archival-retention/src/secret_draw.rs -- `stream`
+# (shekyl/archival-draw-v1), `draw_commit` (shekyl/archival-draw-commit-v1),
+# `challenge_nonce` (shekyl/archival-challenge-nonce-v1), and
+# `serve_credit_batch_commitment` (shekyl/archival-serve-credit-batch-v1) --
+# plus two production sites 2c landed in rust/shekyl-p-store/src/store.rs
+# (`derive_store_key` / `slot_key`; shekyl/p-store-aead-v1,
+# shekyl/p-store-slot-v1) that this pin records with the labels.
+# The tests call those through the public functions; none adds a site.
+# FN-DSA hybrid (2026-10-09, PR #1016): 69 stays 69. The two scheme domains
+# (shekyl/archival-receipt-scheme-v1, shekyl/archival-witness-carrier-scheme-v1)
+# are byte strings fed to the existing nested combiner's one cSHAKE site
+# (hybrid_combiner.rs `preimage`). Neither has a signer yet, and neither
+# adds a call site.
+# Public urn (2026-10-10): 69 -> 68. challenge_assignment.rs is deleted.
+# Its one test-only cshake256_32 site goes with it. The scheme-3 domains
+# stay; receipt signing is the FN-DSA lane's increment.
+# RT-W8: +2 (68 -> 70): `rendezvous_name` (shekyl/rpc-rendezvous-name-v1)
+# and `static_fingerprint` (shekyl/rpc-static-fingerprint-v1) in
+# shekyl-rpc-channel. Its tests call both through those functions and add
+# no site.
+# Bundle verifier, the scheme domain (2026-10-12): 70 stays 70.
+# shekyl/archival-witness-bundle-scheme-v1 is a third byte string fed to the
+# nested combiner's one cSHAKE site, as the receipt's and the carrier's are.
+# Bundle verifier, the hashes (2026-10-12): 70 -> 73. Three production sites
+# in rust/shekyl-archival-retention/src/bundle.rs -- `bundle_commitment`
+# (shekyl/archival-serve-credit-bundle-v1), `bundle_prunable_hash`
+# (shekyl/archival-bundle-prunable-v1) and `bundle_root`
+# (shekyl/archival-bundle-root-v1). Their vectors were computed outside the
+# tree and are pinned as hex, so the tests add no site.
+# SCS-P39 (2026-10-12): 73 -> 74. One inline #[cfg(test)] site in
+# rust/shekyl-archival-retention/src/bundle_tests.rs: the test that the
+# bundle commitment is the hash of the kept part's one encoding followed by
+# the records rebuilds that preimage and hashes it under the registered
+# label (shekyl/archival-serve-credit-bundle-v1). No production site and no
+# new domain.
+# Slice C post-merge review (2026-10-13): 74 -> 75. One inline #[cfg(test)]
+# site in rust/shekyl-archival-retention/src/secret_draw.rs: the
+# specification's §5.2 negative control hashes the 68-byte preimage WITHOUT
+# the attempt byte under the registered nonce label
+# (shekyl/archival-challenge-nonce-v1) and asserts it matches no row. No
+# production site and no new domain.
+MECH1_EXPECTED=75
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

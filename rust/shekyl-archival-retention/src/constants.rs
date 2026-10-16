@@ -14,20 +14,23 @@
 /// `3f²(1−f)+f³`, honest survival `a²(3−2a)`, the unanimity rejection, and the
 /// free-rider deterrent `n·I − S`).
 ///
-/// **Per *pair*, not per block.** The urn issues `λ·D/E` draws in each block
-/// (`D` = drawable pairs, `E` = `SETTLEMENT_EPOCH_BLOCKS`); that per-block
-/// count is *derived* by [`crate::challenge_assignment`], never pinned. This
-/// constant is the coverage target [`crate::ChallengeUrn::new`] **reads**
-/// (Q4, 2026-09-17); [`crate::assign_epoch`] feeds that constructor, so it
-/// is not a parameter a caller supplies, and the urn and the settlement
-/// threshold below cannot be given different values.
+/// **Per *pair*, not per block.** The public urn that spread `λ·D` draws
+/// across an epoch is deleted. This constant remains the number of draws
+/// settlement counts for one pair. It is not a parameter a caller supplies.
 ///
-/// Jointly pinned with [`crate::SERVE_THRESHOLD_PASSES`] — 2-of-3 is one
-/// decision, and `attestation.rs` const-asserts the two properties that make
-/// it one: the threshold must be reachable, and it must be a strict majority.
-/// Re-pinning either requires re-running §3's derivation, the `(m, n)` window
-/// re-pin, and the economics-sim arithmetic that scales with it.
+/// Jointly pinned with settlement's
+/// [`COUNTED_DRAWS`](shekyl_types::archival::COUNTED_DRAWS): the assert
+/// below keeps them one number. The threshold's own two
+/// properties — reachable, and a strict majority — are asserted beside it
+/// in `shekyl_types::archival`. Re-pinning requires re-running §3's
+/// derivation, the `(m, n)` window re-pin, and the economics-sim arithmetic
+/// that scales with it.
 pub const CHALLENGES_PER_PAIR_PER_EPOCH: u32 = 3;
+
+const _: () = assert!(
+    CHALLENGES_PER_PAIR_PER_EPOCH as usize == shekyl_types::archival::COUNTED_DRAWS,
+    "the per-pair challenge count and the draws settlement counts are one decision"
+);
 
 /// `k` — the slash grace after `H_close`, **in settlement epochs**: the
 /// slash fold for epoch `E` runs at the first block strictly above

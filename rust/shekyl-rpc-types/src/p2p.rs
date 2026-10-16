@@ -40,6 +40,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chain::RpcStatus;
+use crate::nullable::Nullable;
 
 /// Response of `GET|POST /get_net_stats`. The request body is empty.
 ///
@@ -107,6 +108,10 @@ const fn is_false(b: &bool) -> bool {
 /// branch is resolved daemon-side, so this type carries a string and no
 /// discriminator; `ip` and `port` are zero on the arms that do not carry
 /// them.
+///
+/// No `last_seen` (3.55): the Rust peer lists carry no clock in what they
+/// disclose or list (`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4, ruled
+/// 2026-10-09), so there is no value to report and none is invented.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Peer {
@@ -115,11 +120,10 @@ pub struct Peer {
     /// **number**, unlike [`ConnectionInfo::ip`], which carries the same
     /// address as a dotted string. `10.32.0.7` is `117448714`
     /// (`0x0700_200a`); the pair appears together in
-    /// `tests/vectors/rpc/get_peer_list_v1.json`. Zero for every non-ipv4
+    /// `tests/vectors/rpc/get_peer_list_v4.json`. Zero for every non-ipv4
     /// arm.
     pub ip: u32,
     pub port: u16,
-    pub last_seen: u64,
 }
 
 /// Response of `GET|POST /get_peer_list`.
@@ -222,11 +226,13 @@ pub struct ConnectionInfo {
     pub current_download: u64,
     pub avg_upload: u64,
     pub current_upload: u64,
-    pub support_flags: u32,
+    /// JSON null when the strand has not reported the claim.
+    pub support_flags: Option<u32>,
     /// The connection uuid as 32 lowercase hex characters.
     pub connection_id: String,
-    /// The peer's claimed blockchain height.
-    pub height: u64,
+    /// The peer's claimed blockchain height. JSON null when the strand
+    /// has not reported it. Zero would read as a real claim.
+    pub height: Option<u64>,
     /// epee address type id: 1 ipv4, 2 ipv6, 4 tor, …
     pub address_type: u8,
 }
@@ -244,7 +250,7 @@ pub struct GetConnectionsResponse {
 ///
 /// The nesting is the wire's, not a modelling choice — `sync_info` carries a
 /// one-member wrapper struct where `get_connections` carries the object
-/// directly, and `sync_info_v1.json` pins both in one capture.
+/// directly, and `sync_info_v3.json` pins both in one capture.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SyncInfoPeer {
@@ -275,10 +281,9 @@ pub struct SyncInfoResponse {
     pub status: RpcStatus,
     /// Chain height: top block height plus one.
     pub height: u64,
-    /// The core's target count. `0` when the core reported none. A
-    /// synchronized node reports the target the core named. `get_info`
-    /// still writes `0` when synchronized; this method does not.
-    pub target_height: u64,
+    /// The core's target count, `null` when the core reports none. A
+    /// synchronized node reports the target the core named.
+    pub target_height: Nullable<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peers: Vec<SyncInfoPeer>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -286,6 +291,133 @@ pub struct SyncInfoResponse {
     /// An ASCII picture of the download queue — `"[]"` when it is empty. A
     /// *string* holding brackets, not an empty array.
     pub overview: String,
+}
+
+/// A reply about peers or connections, from a daemon that may have been
+/// started offline (Rick, 2026-10-14; 3.56).
+///
+/// [`P2pReply::Offline`] is `{"status": "offline"}` and nothing else: the daemon
+/// has no peers, connections or download queue by configuration, and an
+/// empty list under `OK` would read as a running node that has none. The
+/// decoder refuses a `offline` status beside any other member, and a running
+/// reply whose status is `offline`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum P2pReply<T> {
+    /// P2P runs; the method's reply.
+    Running(T),
+    /// The daemon was started offline.
+    Offline,
+}
+
+impl<T> P2pReply<T> {
+    /// The reply, when P2P runs.
+    #[must_use]
+    pub fn running(&self) -> Option<&T> {
+        match self {
+            Self::Running(reply) => Some(reply),
+            Self::Offline => None,
+        }
+    }
+
+    /// The reply by value, when P2P runs.
+    #[must_use]
+    pub fn into_running(self) -> Option<T> {
+        match self {
+            Self::Running(reply) => Some(reply),
+            Self::Offline => None,
+        }
+    }
+}
+
+/// A reply type that can stand as [`P2pReply::Running`]: one with a status.
+pub trait P2pRunningReply {
+    /// The reply's status.
+    fn status(&self) -> &RpcStatus;
+}
+
+impl P2pRunningReply for GetConnectionsResponse {
+    fn status(&self) -> &RpcStatus {
+        &self.status
+    }
+}
+
+impl P2pRunningReply for GetPeerListResponse {
+    fn status(&self) -> &RpcStatus {
+        &self.status
+    }
+}
+
+impl P2pRunningReply for SyncInfoResponse {
+    fn status(&self) -> &RpcStatus {
+        &self.status
+    }
+}
+
+/// `{"status": "offline"}`, the whole of an offline reply.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OfflineWire {
+    status: OfflineStatus,
+}
+
+/// The one status an offline reply carries.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(try_from = "RpcStatus", into = "RpcStatus")]
+struct OfflineStatus;
+
+impl TryFrom<RpcStatus> for OfflineStatus {
+    type Error = &'static str;
+
+    fn try_from(status: RpcStatus) -> Result<Self, Self::Error> {
+        if status.is_offline() {
+            Ok(Self)
+        } else {
+            Err("not offline")
+        }
+    }
+}
+
+impl From<OfflineStatus> for RpcStatus {
+    fn from(_: OfflineStatus) -> Self {
+        Self::offline()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum P2pReplyWire<T> {
+    Offline(OfflineWire),
+    Running(T),
+}
+
+impl<T: Serialize> Serialize for P2pReply<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Running(reply) => reply.serialize(serializer),
+            Self::Offline => OfflineWire {
+                status: OfflineStatus,
+            }
+            .serialize(serializer),
+        }
+    }
+}
+
+impl<'de, T> Deserialize<'de> for P2pReply<T>
+where
+    T: Deserialize<'de> + P2pRunningReply,
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match P2pReplyWire::<T>::deserialize(deserializer)? {
+            P2pReplyWire::Offline(_) => Ok(Self::Offline),
+            P2pReplyWire::Running(reply) if reply.status().is_offline() => {
+                Err(serde::de::Error::custom(
+                    "an offline reply carries no other member: an offline daemon \
+                     reports no peer, connection or span",
+                ))
+            }
+            P2pReplyWire::Running(reply) => Ok(Self::Running(reply)),
+        }
+    }
 }
 
 #[cfg(test)]

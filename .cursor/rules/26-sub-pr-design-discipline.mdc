@@ -117,6 +117,13 @@ consensus event requires the abstracted surface now. Test convenience
 does not reopen it. A scope move updates the parent plan's phase list
 in the same change.
 
+A PR whose scope was ruled carries the ruled row or phase range in its
+body. A commit that lands outside that range updates the line or
+re-rules the split in the same turn, never later. The body is the one
+surface a reviewer reads before the diff, so it is where the branch is
+checked against the ruling; a ruling that lives only in the plan doc is
+checked by nobody at commit time.
+
 ### A5. Forward actions have two anchors
 
 Every finding is absorbed now or carried to a named PR scaffold, and

@@ -61,7 +61,7 @@ pub use engine::cadence::CadenceHandle;
 /// on close. Re-exported here rather than through `engine`'s own list because
 /// that module sits at its decomposition ceiling.
 pub use engine::stake_engine::serving::{
-    ServingHandle, ServingPosture, ServingStartError, TorConfigError,
+    ServingHandle, ServingPosture, ServingStartError, ServingStatus, TorConfigError,
 };
 pub use engine::stake_facade::StakeFacade;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};
@@ -231,7 +231,7 @@ pub mod __test_helpers {
             vec![BondPostRecord {
                 height: shekyl_types::BlockHeight::from_raw(10),
                 p_canonical_id: persona,
-                post_kind: 0,
+                post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
             }],
             vec![funding_record_for_test(
                 slot,

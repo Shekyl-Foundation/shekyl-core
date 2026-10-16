@@ -23,12 +23,6 @@ use shekyl_portable_storage::{store_to_binary, Section, HEADER};
 fn node() -> BasicNodeData {
     BasicNodeData {
         network_id: [0x11; 16],
-        // The public-zone port-only advert: host zeroed, only the port is
-        // the claim.
-        address: NetworkAddress::Ipv4 {
-            ip: Ipv4Addr::new(0, 0, 0, 0),
-            port: 18_080,
-        },
         support_flags: SupportFlags::default(),
     }
 }
@@ -41,7 +35,6 @@ fn sync_data() -> CoreSyncData {
         cumulative_difficulty: 2,
         cumulative_difficulty_top64: 0,
         top_id: [0xab; 32],
-        top_version: 0,
     }
 }
 
@@ -124,36 +117,70 @@ fn deleted_rpc_advert_fields_never_written_still_readable() {
             ip: Ipv4Addr::new(10, 0, 0, 1),
             port: 18_080,
         },
-        last_seen: 0,
     });
 }
 
-/// `pruning_seed` was deleted from `CORE_SYNC_DATA` and `peerlist_entry`
-/// with the stripe engine (`PDM-Q7`): a self-asserted, durable,
-/// address-keyed attribute gossiped in every peerlist — the shape `PWD-I1`
-/// forbids, and with a uniform honest population every non-zero value was
-/// a free marker. Never emitted; a peer that still sends a well-formed
-/// stripe seed (`384` = stripe 1 at log-stripes 3) decodes with the key
-/// ignored, so the deletion is interop-safe against a mixed fleet in both
-/// directions (`KV_SERIALIZE_OPT` on the C++ side, absent reads as 0).
-fn stale_pruning_seed_ignored<T: PortableMap + PartialEq + std::fmt::Debug>(value: &T) {
+/// `last_seen` left the wire entry in PR-3 (Rick, 2026-10-13: a field
+/// always sent as 0 and ignored on receipt is a sentinel and a
+/// peer-controlled slot). This build never writes it, and an entry that
+/// carries one, at any value, is read as its address with the key ignored.
+#[test]
+fn a_last_seen_key_on_a_received_entry_is_read_with_the_key_ignored() {
+    let entry = PeerlistEntry {
+        adr: NetworkAddress::Ipv4 {
+            ip: Ipv4Addr::new(10, 0, 0, 1),
+            port: 18_080,
+        },
+    };
+    let mut section = entry.to_section().expect("section");
+    assert!(section.get("last_seen").is_none(), "never written");
+    section.insert(
+        "last_seen",
+        shekyl_portable_storage::Value::Int64(1_750_000_000),
+    );
+    let bytes = store_to_binary(&section).expect("encode");
+    assert_eq!(PeerlistEntry::load(&bytes).expect("load"), entry);
+}
+
+/// Neither `CORE_SYNC_DATA` nor `peerlist_entry` carries a key this build
+/// does not define: the stripe seed went with the stripe engine (`PDM-Q7`),
+/// the peer identifier with `PWD-I1`. Nothing is ever emitted for them, and
+/// a section carrying a key this build never wrote decodes with the key
+/// ignored, so a value of either shape on the wire is not a refusal.
+fn unknown_key_ignored<T: PortableMap + PartialEq + std::fmt::Debug>(value: &T) {
     let mut section = value.to_section().expect("section");
-    assert!(section.get("pruning_seed").is_none());
-    section.insert("pruning_seed", shekyl_portable_storage::Value::UInt32(384));
+    assert!(section.get("a_key_this_build_never_wrote").is_none());
+    section.insert(
+        "a_key_this_build_never_wrote",
+        shekyl_portable_storage::Value::UInt32(384),
+    );
     let bytes = store_to_binary(&section).expect("encode");
     assert_eq!(&T::load(&bytes).expect("load"), value);
 }
 
 #[test]
-fn deleted_pruning_seed_never_written_still_readable() {
-    stale_pruning_seed_ignored(&sync_data());
-    stale_pruning_seed_ignored(&PeerlistEntry {
+fn a_key_this_build_never_wrote_is_read_with_the_key_ignored() {
+    unknown_key_ignored(&sync_data());
+    unknown_key_ignored(&PeerlistEntry {
         adr: NetworkAddress::Ipv4 {
             ip: Ipv4Addr::new(10, 0, 0, 1),
             port: 18_080,
         },
-        last_seen: 0,
     });
+}
+
+/// `CORE_SYNC_DATA` carries no `top_version`: the block version is the
+/// constant 1, so a tip version is not information. Never emitted; a peer
+/// that still sends the key — as a `uint8`, the type it had on the wire —
+/// decodes with the key ignored, as any key this build never wrote is.
+#[test]
+fn deleted_top_version_never_written_still_readable() {
+    let value = sync_data();
+    let mut section = value.to_section().expect("section");
+    assert!(section.get("top_version").is_none());
+    section.insert("top_version", shekyl_portable_storage::Value::UInt8(1));
+    let bytes = store_to_binary(&section).expect("encode");
+    assert_eq!(CoreSyncData::load(&bytes).expect("load"), value);
 }
 
 #[test]
@@ -249,7 +276,6 @@ fn handshake_with_ipv4_peerlist_round_trip() {
                 ip: Ipv4Addr::new(10, 0, 0, 1),
                 port: 18_080,
             },
-            last_seen: 0,
         }],
     };
     round_trip(&rsp);
@@ -295,4 +321,27 @@ fn handshake_invoke_survives_bucket_reader() {
         other => panic!("unexpected {other:?}"),
     }
     assert_eq!(reader.next_message().expect("drain"), None);
+}
+
+/// The handshake carries no address on any connector (ruled 2026-10-09).
+/// `basic_node_data` never emits the key, and a peer that still sends it,
+/// as every node before the cutover does, is decoded with the key ignored.
+#[test]
+fn node_data_emits_no_address_and_ignores_one_a_peer_sends() {
+    let ours = node().to_section().expect("encode");
+    assert!(ours.get("address").is_none(), "no address key is emitted");
+
+    let mut theirs = node().to_section().expect("encode");
+    let old_advert = NetworkAddress::Ipv4 {
+        ip: Ipv4Addr::new(0, 0, 0, 0),
+        port: 18_080,
+    };
+    theirs.insert(
+        "address",
+        shekyl_portable_storage::Value::Object(old_advert.to_section().expect("address")),
+    );
+    assert_eq!(
+        BasicNodeData::from_section(&theirs).expect("decodes with the key ignored"),
+        node()
+    );
 }

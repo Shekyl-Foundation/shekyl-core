@@ -1,9 +1,11 @@
 # Benchmark alignment — inventory, gaps, proposed tracked set, rulings needed
 
 **Status: OPEN — round 0, assessment (2026-10-05).** Ruled so far: BA-Q1,
-BA-Q8, BA-Q21 and BA-Q23; BA-Q2 is done (§6). Everything else is unruled: every other
-disposition in §2 and row of §5 is a *proposal*. No benchmark, workflow,
-baseline or threshold changes with this document.
+BA-Q3, BA-Q8, BA-Q21 and BA-Q23; BA-Q2 is done (§6). Everything else is unruled: every other
+disposition in §2 and row of §5 is a *proposal*. No workflow, baseline or
+threshold changes with this document. One tracked benchmark has been built
+since: BA-T3, the serve-path gate (§5, 2026-10-06). BA-T33's T1 arm, added
+with its row on 2026-10-09, is built; its floor arm is owed.
 
 **Pins.** `shekyl-core`: verified at `dev` `63e456fb95`. `shekyl-gui-wallet`:
 branch `dev` at `447908f` (the working branch; `main` is `319517a`,
@@ -101,7 +103,7 @@ that fixes or retires each.
 | **BA-D11** | `rust/shekyl-engine-file/benches/open.rs:22`: the bidirectional threshold catches a "silent `m_log2` demotion" of the Argon2id default | The gated sibling pins the KAT profile `m_log2 = 0x08` itself (`rust/shekyl-engine-file/benches/open_iai.rs:9`) and never runs `KdfParams::default()`. A change to the default cost moves no gated count |
 | **BA-D12** | `scripts/bench/gap7_pi4_gate.sh` and `scripts/bench/fa6_pi4_gate.sh` are named gates | Neither enforces a performance threshold. The GAP-7 script checks build provenance and that the measurement ran (`scripts/bench/gap7_pi4_gate.sh:123`, `:135`). The FA-6 script runs a binary that prints a classification; its recorded outcome is `fail` and FA-6 shipped (`docs/PERFORMANCE_BASELINE.md:808`). The FA-6 script recommends `-C target-cpu=cortex-a72` (`scripts/bench/fa6_pi4_gate.sh:20`), which the GAP-7 script forbids because it crashes RandomX on the floor board (`scripts/bench/gap7_pi4_gate.sh:34`). The GAP-7 script cites "PERFORMANCE_BASELINE.md §8.2" (`scripts/bench/gap7_pi4_gate.sh:9`); that file has no §8.2 |
 | **BA-D13** | [`MID_REWIRE_HARDENING.md`](../MID_REWIRE_HARDENING.md) §3.3 defers the Tier-2 criterion gate to §6 "and its deadline" (`docs/MID_REWIRE_HARDENING.md:382`) | §6.1 (`docs/MID_REWIRE_HARDENING.md:1220`) states triggers and no deadline, and no `docs/FOLLOWUPS.md` row carries the deferral (`grep -n -e 'Tier-2' -e 'Tier 2' docs/FOLLOWUPS.md` returns only an unrelated row). Under [`22-no-lazy-deferral`](../../.cursor/rules/22-no-lazy-deferral.mdc) it has no carrier |
-| **BA-D14** | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) "Verification Time": FCMP++ proof ~35 ms per input, PQC auth ~18 ms per input (`docs/FCMP_PLUS_PLUS.md:1081`, `:1083`); no source or device given | Measured on the floor ([`CHAIN_RULES_SLICE_6.md`](CHAIN_RULES_SLICE_6.md) §5.4, 2026-09-24, depth 3): the proof verifies in 130.6 ms at one input and 191.9 ms at two, a marginal 63.9 ms per added input; the hybrid signature is about 1.0 ms per input (0.97 ms in GAP-7, 2026-09-05); Bulletproofs+ is a fixed 34.9 ms; a one-input transaction verifies in 166.7 ms and a two-input one in 229.1 ms |
+| **BA-D14** | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) "Verification Time": FCMP++ proof ~35 ms per input, PQC auth ~18 ms per input (`docs/FCMP_PLUS_PLUS.md:1081`, `:1083`); no source or device given | Measured on the floor ([`CHAIN_RULES_SLICE_6.md`](../completed/CHAIN_RULES_SLICE_6.md) §5.4, 2026-09-24, depth 3): the proof verifies in 130.6 ms at one input and 191.9 ms at two, a marginal 63.9 ms per added input; the hybrid signature is about 1.0 ms per input (0.97 ms in GAP-7, 2026-09-05); Bulletproofs+ is a fixed 34.9 ms; a one-input transaction verifies in 166.7 ms and a two-input one in 229.1 ms |
 | **BA-D15** | `rust/shekyl-p-serve/src/serve.rs:119`: "The W₂ rig derives the real value" of `MAX_INFLIGHT` on floor hardware | The W₂ runs are finished and read ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10); none varied or derived the serve-side cap. `MAX_INFLIGHT = 64` is still the placeholder the same comment declares it to be (`rust/shekyl-p-serve/src/serve.rs:112`, `:122`) |
 | **BA-D16** | `scripts/bench/test_compare.py` is the regression suite for the comparator that decides the gate | No workflow runs it (`grep -rn test_compare .github/workflows` returns nothing). `scripts/bench/test_drs_bench.py`, its sibling, is run (`.github/workflows/docs-gates.yml:313`) |
 
@@ -132,6 +134,7 @@ Every gated row's last run is the baseline refresh of 2026-10-05 from
 | **BA-I8** | `shekyl-engine-core::engine_trait_bench_key_dispatch` / `_baseline_iai` | `try_claim_output` on `LocalKeys` and through the key actor, one synthetic output | Not yet: the caller is designed and unwritten (BA-D8) | The B9 dispatch ratio ≤ 1.05 ([`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md), key-dispatch section); the claim path the send and subaddress designs build on (`docs/design/PHASE_2A_SEND_PATH.md:759`) | **Keep, gated** — it holds the cost of a designed path until its caller lands (BA-Q6) |
 | **BA-I9** | `shekyl-engine-core::engine_trait_bench_key_merge_projection` (+ `_iai`) | `populate_engine_handle_fields` over 256 outputs | Yes: `rust/shekyl-engine-core/src/engine/merge.rs:256` | Evidence for keeping eager projection at merge (`docs/PERFORMANCE_BASELINE.md:577`) | **Keep, gated** |
 | **BA-I10** | `shekyl-ffi::relay_admission_verify_iai` — `rust/shekyl-ffi/benches/relay_admission_verify_iai.rs` | `shekyl_check_commitment_masks` + `shekyl_fcmp_verify` at 1-in/2-out, depth 2 | Yes: `src/cryptonote_core/blockchain.cpp:3239`, `:4224` | The hop term and the embargo derived from it (`rust/shekyl-relay-privacy/src/verify_cost.rs:349`) | **Keep, gated** — after BA-D1 (trigger) and BA-D7 (omitted terms) are ruled |
+| **BA-I105** | `shekyl-crypto-pq::fn_dsa_hybrid` / `fn_dsa_hybrid_iai` — `rust/shekyl-crypto-pq/benches/fn_dsa_hybrid_iai.rs`. Added 2026-10-09, after the baseline refresh this section is dated at | One nested sign and one nested verify under hybrid scheme 3 (Ed25519 + FN-DSA-1024); the gated sign arm pins the signer's draw, the criterion arm does not | Not yet: the scheme has no caller until the receipt moves onto it ([`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §6) | None yet. The receipt's per-response signing cost on the serve path, and the witness's verification of it, once those are built | **Keep, gated** as a drift signal for the x86 path only; the figure a budget would rest on is BA-T33's floor arm |
 
 ### 2.2 Registered Rust bench targets outside the gate
 
@@ -170,12 +173,12 @@ criterion-only and have no instruction count to gate.
 | **BA-I28** | `rust/shekyl-chain-store/src/store/weights_read_bench_tests.rs` (`#[ignore]`) | Two read shapes for the weight window over 100 000 blocks; the cursor arm is a copy of the function that later landed (`rust/shekyl-chain-store/src/store/read.rs:279`) | floor, 2026-09-27, n = 1: 36.6 ms against 598 ms | The read-shape ruling ([`CHAIN_RULES_SLICE_7.md`](../completed/CHAIN_RULES_SLICE_7.md)); ruled with about ten times headroom | **Retire** — decision made, and the arm no longer times production code |
 | **BA-I29** | `rust/shekyl-levin/tests/inbound_cost_bench.rs` (`#[ignore]`) | RSS, high-water RSS and descriptors of a real daemon at 0 to 128 inbound peers | x86 dev and floor; no capture in `docs/benchmarks/` | The inbound ceiling, where a measurement is owed (`docs/FOLLOWUPS.md:1290`) | **Keep, tracked** (T3) |
 | **BA-I30** | `rust/shekyl-wire/tests/input_cap_cost.rs` (`#[ignore]`) | Prove and verify for real 1 / 2 / 4 / 8-input spends | x86 dev and floor, 2026-09-24, n = 1 each: on the floor 166.7 ms to verify one input, and 64.9 ms for each added input | The input cap of 8, whose derivation is owed (`docs/FOLLOWUPS.md:141`) | **Keep, tracked** (T3) |
-| **BA-I31** | `rust/shekyl-archival-retention/src/challenge_assignment.rs:620` (`#[ignore]`) | Full-epoch challenge replay on reorg, 972 000 draws | none recorded | Not traced | **Keep, tracked** — pending BA-Q12 |
+| **BA-I31** | deleted 2026-10-10 with the public urn (`challenge_assignment.rs`) | Full-epoch challenge replay on reorg, 972 000 draws | none recorded | Not traced | **Retire** — the subject was deleted with the urn; the secret draw's producer is a later measurement |
 | **BA-I32** | `rust/shekyl-shard-visual/examples/budget_matrix.rs` | Shard render latency, 36 cells; an x86 smoke profile and the floor targets | CI runner per PR (smoke); floor 2026-09-06 (BA-I89) | `FLOOR_TARGETS` (`rust/shekyl-shard-visual/examples/budget_matrix.rs:34`) | **Keep, gated** for the smoke; the floor arm is T3 |
 | **BA-I33** | `rust/shekyl-randomx-differential/src/mode_latency.rs`, `rust/shekyl-randomx-differential/tests/worst_case_ratio.rs` | Rust-to-C RandomX latency ratio, typical and adversarial | CI runner, daily and weekly cron | The ratio bounds 3.0 and 5.0 (`rust/shekyl-randomx-differential/src/mode_latency.rs:127`) | **Keep, gated** — no aarch64 leg (BA-G9) |
 | **BA-I34** | `rust/shekyl-wss-q1b-bench` (four binaries) | Wallet proving-state edges: spend-time replay against proving, open-time refetch, root read, path assembly | floor and others (BA-I96 to BA-I103) | The spend-edge and open-edge thresholds (`docs/design/WALLET_SIDE_STORE.md:815`, `:816`) | **Keep, tracked** (T3) |
 | **BA-I35** | `rust/shekyl-sp-t3-spike` binaries `pd-f2-measure`, `pd-f2-u1b`, `serve-only` | Whole-shard fetch over Tor against the production serve endpoint and fetch client; content verification is stubbed to accept (`rust/shekyl-sp-t3-spike/src/harness.rs:460`) | internal node and floor (BA-I91 to BA-I95) | `W`, `L`, the retry budget, `p_attempt`, and the per-epoch read capacity (§4) | **Rewrite** — every archival latency constant rests on a crate that calls itself disposable, with a verify step that verifies nothing |
-| **BA-I36** | `rust/shekyl-tor-transit-spike`, `rust/shekyl-rt-p2-spike/tests/probes.rs` | Tor transit and RPC-transport probes | none recorded in `docs/benchmarks/` | Not traced | **Keep, tracked** — pending BA-Q12 |
+| **BA-I36** | `rust/shekyl-tor-transit-spike` (the RPC-transport probe crate `shekyl-rt-p2-spike` was deleted in RT-W8, its subject superseded) | Tor transit probe | none recorded in `docs/benchmarks/` | Not traced | **Keep, tracked** — pending BA-Q12 |
 
 ### 2.4 Scripts
 
@@ -255,10 +258,14 @@ BA-T5.
 | **BA-I80** | `p2p_clearnet_lan_floor_initiator_run1_20260930.tsv` | Clearnet dial and handshake spans, LAN (100) | floor dialer, x86 responder | Input to the node-local residual; does not bind | **Keep, tracked** |
 | **BA-I81** | `p2p_clearnet_lan_floor_initiator_run2_20260930.tsv` | As BA-I80 with pre-write spans (100) | as BA-I80 | as BA-I80 | **Keep, tracked** |
 | **BA-I82** | `p2p_clearnet_lan_floor_responder_20260930.tsv` | Responder-side spans (100) | x86 dialer, floor responder | as BA-I80 | **Keep, tracked** |
-| **BA-I83** | `p2p_clearnet_nyc_floor_initiator_20260930.tsv` | Clearnet dial to a datacenter peer: residual 7.2 ms (100) | floor dialer | Clearnet dial 1.415 s and gap 1.430 s (`src/p2p/net_node.inl:3445`, `:3447`) | **Keep, tracked** |
-| **BA-I84** | `p2p_clearnet_wan_floor_initiator_20260930.tsv` | Clearnet dial over a 170 ms path: handshake residual 12.6 ms (100) | floor dialer | Clearnet handshake 1.426 s (`src/p2p/net_node.inl:3446`) | **Keep, tracked** |
-| **BA-I85** | `p2p_cutover_crossbuild_20260929.md` | The summaries and derivations for BA-I80 to BA-I88 | per section | Cited from the constants' own comment (`src/p2p/net_node.inl:3429`) | **Keep, tracked** |
-| **BA-I86** | `p2p_tor_dial_floor_20260929.tsv` | Tor dial: p99 4.54 s; gap p99 1.26 s (100) | floor dialer, off-site peer | Tor dial and shutdown 9.1 s, Tor gap 2.6 s (`src/p2p/net_node.inl:3448`, `:3449`); the proxied clearnet dial borrows the 9.1 s (`docs/FOLLOWUPS.md:77`) | **Keep, tracked** |
+| **BA-I83** | `p2p_clearnet_nyc_floor_initiator_20260930.tsv` | Clearnet dial to a datacenter peer: residual 7.2 ms (100) | floor dialer | Clearnet dial 1.415 s and gap 1.430 s (`rust/shekyl-transport-layer/src/spans.rs:52`, `:56`) | **Keep, tracked** |
+| **BA-I84** | `p2p_clearnet_wan_floor_initiator_20260930.tsv` | Clearnet dial over a 170 ms path: handshake residual 12.6 ms (100) | floor dialer | Clearnet handshake 1.426 s (`rust/shekyl-transport-layer/src/spans.rs:54`) | **Keep, tracked** |
+| **BA-I85** | `p2p_cutover_crossbuild_20260929.md` | The summaries and derivations for BA-I80 to BA-I88 | per section | Cited from the constants' own comment (`rust/shekyl-transport-layer/src/spans.rs:17`) | **Keep, tracked** |
+| **BA-I86** | `p2p_tor_dial_floor_20260929.tsv` | Tor dial: p99 4.54 s; gap p99 1.26 s (100) | floor dialer, off-site peer | None since 2026-10-14: the Tor spans are derived from BA-I107 and BA-I108 | **Retire** — superseded by BA-I107 and BA-I108 |
+| **BA-I106** | `p2p_tor_gap_cold_20261014.md` | The summaries and derivation for BA-I107 to BA-I109: cold first contact, the three fixes, the rerun with the Tor spans lifted to 120 s | per section | Tor dial and shutdown 120 s, Tor gap 37.4 s, RustPath (`rust/shekyl-transport-layer/src/spans.rs:58`, `:61`, `:81`), cited from the constants' own comment (`:27`) | **Keep, tracked** |
+| **BA-I107** | `p2p_tor_gap_cold_20261014_rerunA.tsv` | Cold first contact over Tor, measurement build, spans lifted to 120 s (100 starts) | measurement-host responder | Pooled with BA-I108 for the Tor dial and gap | **Keep, tracked** |
+| **BA-I108** | `p2p_tor_gap_cold_20261014_rerunB.tsv` | The same against the floor device (100 starts); pooled with BA-I107, 189 sessions: outbound gap p99 18.69 s, Tor dial p99 112.66 s, censored at 120 s | floor responder | Tor dial 120 s, Tor gap 37.4 s (BA-I106) | **Keep, tracked** |
+| **BA-I109** | `p2p_tor_gap_cold_20261014_runA.tsv` | The first cold run, before the three fixes (100 starts) | measurement-host responder | None: its responder-side series carry the logging stalls BA-I106 records | **Retire** — superseded by BA-I107 |
 | **BA-I87** | `p2p_tor_inbound_floor_20260930.tsv` | Tor inbound, both circuit ends on one device (67) | floor | None: its summary marks it superseded and unused | **Retire** — superseded by BA-I88 |
 | **BA-I88** | `p2p_tor_inbound_floor_distant_20260930.tsv` | Tor inbound from a distant dialer: gap p99 1.22 s (110) | floor responder | The smaller of the two Tor gaps; does not bind | **Keep, tracked** |
 | **BA-I89** | `shard_visual_budget_matrix_pi4_20260906T090000Z.txt` | Shard render, 36 cells, median of 5: worst 12.44 s at 1 024 px | floor | `FLOOR_TARGETS` (BA-I32); a standing manual re-run trigger (`docs/FOLLOWUPS.md:1132`) | **Keep, tracked** |
@@ -298,10 +305,10 @@ capture counts as a gap until a tracked T3 run reproduces it.
 | **BA-G4** | Transaction and block verify cost on the floor after `PL-D3` | The surge factor 4 and the 300 000-byte zone (`config/consensus_constants.json:16`, `:17`); `SPEC_VERIFY_COST`, the hop and the embargo (`rust/shekyl-relay-privacy/src/verify_cost.rs:349`); the input cap (`src/cryptonote_config.h:316`) | `shekyl_fcmp_verify` (`rust/shekyl-ffi/src/legacy_fcmp.rs:390`), called at `src/cryptonote_core/blockchain.cpp:4224` | BA-I77 was captured at `8af70a60a`, 2026-09-05; `PL-D3` (`20738bf714`, 2026-09-14) is not an ancestor of it and "moved every shape" (`rust/shekyl-relay-privacy/src/verify_cost.rs:346`). The depth-24 cost `S = 4` is signed on is composed from per-layer slopes, not measured. Carriers already open: `docs/FOLLOWUPS.md:65`, `:917`, `:964` |
 | **BA-G5** | The validation path the cutover makes consensus: Rust `validate` and store `connect`, with proof verification in it | The cutover itself; its only performance acceptance is the DRS-BENCH suite ([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §8.1, `docs/design/DAEMON_REDB_STORE.md:2079`) | `rust/shekyl-chain-rules/src/validate.rs:355`, `:558`, `:622`; `rust/shekyl-chain-store/src/store/connect.rs:170` | The FCMP++ and Bulletproofs+ rows are still pending in the Rust validator (`rust/shekyl-chain-rules/src/census.rs:445`, `:476`). The Rust batch verifier it would use has never run on the floor. BA-I27 and BA-I28 are the only timings, on a fixture with no proofs |
 | **BA-G6** | Chain store on redb: write and read per block, IBD rate | The IBD floor, redb ≤ 1.25× LMDB (`docs/design/DAEMON_REDB_STORE.md:398`) | `rust/shekyl-chain-store/src/store/connect.rs:170` | BA-I69 to BA-I71: LMDB only, x86 dev, coinbase-only. The redb arm waits on a build target (`docs/FOLLOWUPS.md:179`). The floor is specified on x86 by design (`docs/design/DAEMON_REDB_STORE.md:396`); no floor-device IBD figure exists. Reorg cost has no threshold, deliberately (`docs/design/DAEMON_REDB_STORE.md:430`) |
-| **BA-G7** | The P2P deadline distributions, re-measured | Clearnet dial, handshake and gap; Tor dial, gap and shutdown (`src/p2p/net_node.inl:3445` to `:3449`) | `dial_one` in `rust/shekyl-clearnet/src/drive.rs:207` and `rust/shekyl-tor/src/drive.rs:157` | BA-I80 to BA-I88: one capture each, n ≈ 100, floor. Each carries a reopen rule that nothing evaluates. The proxied clearnet dial is unmeasured (`docs/FOLLOWUPS.md:77`) |
-| **BA-G8** | The Tor stem hop: transit and node-local time as a distribution | `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1 625` and `ADOPTED_TRANSIT_ASSUMPTION_MS = 50` (`rust/shekyl-relay-privacy/src/verify_cost.rs:560`, `:465`), and through them the embargo and `ADOPTED_PROPAGATION_TIMEOUT_SECS = 2 297` (`rust/shekyl-relay-privacy/src/schedule.rs:473`) | The Tor-edge embargo (`rust/shekyl-relay/src/zone/edge.rs:537`) | One stem, n = 1 (BA-I68). Carrier open: `docs/FOLLOWUPS.md:65` |
+| **BA-G7** | The P2P deadline distributions, re-measured | Clearnet dial, handshake and gap; Tor dial, gap and shutdown (`rust/shekyl-transport-layer/src/spans.rs:52` to `:81`) | `dial_one` in `rust/shekyl-clearnet/src/drive.rs:207` and `rust/shekyl-tor/src/drive.rs:157` | BA-I80 to BA-I88: one capture each, n ≈ 100, floor. Each carries a reopen rule that nothing evaluates. The proxied clearnet dial is unmeasured (`docs/FOLLOWUPS.md:77`) |
+| **BA-G8** | The Tor stem hop: transit and node-local time as a distribution | `ANON_ZONE_TRANSIT_ASSUMPTION_MS = 1 625` and `ADOPTED_TRANSIT_ASSUMPTION_MS = 50` (`rust/shekyl-relay-privacy/src/verify_cost.rs:560`, `:465`), and through them the embargo and `ADOPTED_PROPAGATION_TIMEOUT_SECS = 2 297` (`rust/shekyl-relay-privacy/src/schedule.rs:473`) | The Tor-edge embargo (`rust/shekyl-relay/src/graph/edge.rs:537`) | One stem, n = 1 (BA-I68). Carrier open: `docs/FOLLOWUPS.md:65` |
 | **BA-G9** | RandomX on the floor: per-hash verify and cache derivation | The floor's per-block PoW verify budget and its tip-advance stall at an epoch boundary (`rust/shekyl-difficulty/src/seed_epoch.rs:37`); the dataset-mode decision | `compute_hash` (`rust/shekyl-ffi/src/pow_randomx_ffi.rs:228`); `PreparedCache::derive` (`rust/shekyl-pow-randomx/src/cache_store.rs:535`) | One floor figure, 1.2845 s per hash, a by-product of BA-I77. Cache derivation has never run on the floor; on x86 dev it is 341 ms against a 150–200 ms budget. No budget is stated for the floor, and the ratio gates (BA-I33) run on x86 only |
-| **BA-G10** | Thread budgets under load | `workers = 2`, `blocking = 1` (`src/p2p/net_node.inl:3452`, `:3453`), described in place as a structural floor | The transport pool and the timing-engine service | Unmeasured. Carrier open: `docs/FOLLOWUPS.md:69` |
+| **BA-G10** | Thread budgets under load | `workers = 2`, `blocking = 1` (`rust/shekyl-transport-layer/src/spans.rs:83`, `:85`), described in place as a structural floor | The transport pool and the timing-engine service | Unmeasured. Carrier open: `docs/FOLLOWUPS.md:69` |
 | **BA-G11** | Inbound connection cost and accept rate | The inbound ceiling and the clearnet accept-rate bound, neither yet a number | BA-I29's subject; the handshake in BA-I22 | Carriers open: `docs/FOLLOWUPS.md:954`, `:1290` |
 | **BA-G12** | Wallet open on the floor at the default KDF | The Argon2id default (`rust/shekyl-crypto-pq/src/wallet_envelope.rs:135`), sized for a commodity desktop | `WalletFile::open` (`rust/shekyl-engine-core/src/engine/lifecycle/open.rs:137`) | No floor figure. The gated arm cannot see the default (BA-D11) |
 | **BA-G13** | Transfer build end to end, on the floor | Send latency; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) states "~2-5 seconds" with no source | `sign_transaction` and the proof inside it (`rust/shekyl-tx-builder/src/sign.rs:57`, `:171`) | One floor figure, 6.05 s to prove a 2-input spend, a by-product of BA-I98. Nothing tracks it |
@@ -333,16 +340,16 @@ moving; at the pin only the first row has one.
 | Argon2id default: 64 MiB, t = 3 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs:135` | "under ~500 ms on a commodity desktop" | Not on the floor | No | BA-G12, BA-T17 |
 | Spend edge ≤ max(2 s, 15 % of proving); open edge ≤ 5 s | `docs/design/WALLET_SIDE_STORE.md:815`, `:816` | Maintainer judgment, stated as such | floor, 2026-09-27, ungraded | No | `docs/FOLLOWUPS.md:1253`, BA-T19 |
 | Key-dispatch ratio ≤ 1.05 | [`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md) | Mailbox overhead against decapsulation | CI runner | The baseline arm only | BA-I8, BA-T28 |
-| Serve-side `MAX_INFLIGHT = 64` | `rust/shekyl-p-serve/src/serve.rs:122` | Nothing: a declared placeholder | Did not bind at ≤ 32 readers on x86 hosts, on the spike's serve loop | No | BA-G1, BA-T5 |
+| Serve-side `MAX_INFLIGHT = 64` | `rust/shekyl-p-serve/src/serve.rs:122` | Nothing: a declared placeholder | Did not bind at ≤ 32 readers on x86 hosts, on the spike's serve loop; on the floor device at N = 64 exactly, one refusal in 6,144 for a requester that reconnects as its last stream closes (`BA-T5` session 2, 2026-10-09) | No | BA-G1, BA-T5, BA-Q4 |
 | Fetch-side `MAX_INFLIGHT = 8` | `rust/shekyl-p-fetch/src/client.rs:60` | Largest non-churning width, and floor memory by arithmetic | 2026-09-16; device not recorded; pre-#954 | No | BA-G2, BA-T6 |
 | `archival_shard_length_bytes = 3 000 000` | `config/consensus_constants.json:40` | Fetch time and miss rate by size | internal node and floor, pre-#954 | No | BA-G3, BA-T7 |
 | `archival_attestation_anchor_lag_blocks = 4` | `config/consensus_constants.json:37` | Fetch span plus skew | internal node, pre-#954 | No | BA-G3, BA-T7 |
 | Retry budget, 2 retries; `p_attempt = 0.30` | `docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md:2110`; `rust/shekyl-economics-sim/src/mn_feasibility.rs:410` | The same ladder | internal node, pre-#954 | No | BA-G3, BA-T7 |
 | Read capacity, 18 229 pairs per device per epoch | `docs/FOLLOWUPS.md:109` | One read in flight | floor, 2026-10-03, pre-#954 | No | BA-G1, BA-T5 |
 | `CHALLENGE_RESPONSE_BLOCKS = 500` | `rust/shekyl-archival-retention/src/constants.rs:180` | A latency argument | — | No | None needed: ruled as not resting on a measurement (`rust/shekyl-archival-retention/src/constants.rs:137`) |
-| Clearnet dial 1.415 s, handshake 1.426 s, gap 1.430 s | `src/p2p/net_node.inl:3445` | Twice a 700 ms path ceiling plus the node-local residual | floor, 2026-09-30, n = 100 | No | BA-G7, BA-T8 |
-| Tor dial and shutdown 9.1 s; Tor gap 2.6 s | `src/p2p/net_node.inl:3448`, `:3449` | Twice the measured p99 | floor, 2026-09-29 and 09-30, n ≈ 100 | No | BA-G7, BA-T8 |
-| `workers = 2`, `blocking = 1` | `src/p2p/net_node.inl:3452` | A structural floor, pending measurement | Not measured | No | BA-G10, BA-T11 |
+| Clearnet dial 1.415 s, handshake 1.426 s, gap 1.430 s | `rust/shekyl-transport-layer/src/spans.rs:52` | Twice a 700 ms path ceiling plus the node-local residual | floor, 2026-09-30, n = 100 | No | BA-G7, BA-T8 |
+| Tor dial and shutdown 120 s; Tor gap 37.4 s | `rust/shekyl-transport-layer/src/spans.rs:58`, `:61`, `:81` | The dial: Tor's own SOCKS timeout. The gap: twice the pooled p99 | measurement host and floor responders, 2026-10-14, n = 189 | No | BA-G7, BA-T8 |
+| `workers = 2`, `blocking = 1` | `rust/shekyl-transport-layer/src/spans.rs:83` | A structural floor, pending measurement | Not measured | No | BA-G10, BA-T11 |
 | Anonymity-zone transit 1 625 ms; clearnet transit 50 ms | `rust/shekyl-relay-privacy/src/verify_cost.rs:560`, `:465` | Assumptions, declared as such | One stem, n = 1 | No | BA-G8, BA-T9 |
 | `fluff_return_ms = 3 250` | `rust/shekyl-relay-privacy/src/params.rs:397` | A simulation on an earlier graph | Simulated | No | BA-G8 |
 | `ADOPTED_PROPAGATION_TIMEOUT_SECS = 2 297` | `rust/shekyl-relay-privacy/src/schedule.rs:473` | Derived from the three rows above | — | No | BA-G4, BA-G8 |
@@ -399,12 +406,12 @@ a live node.
 | --- | --- | --- | --- | --- | --- |
 | **BA-T1** | Pool-admission verify at the modal shape | T1, CI runner | gungraun; scope per BA-Q9 | BA-I10 | relay privacy |
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
-| **BA-T3** | Serve one response: digest pass, send pass, countersignature, at three shard sizes from an in-memory store | T1, CI runner | gungraun | new (BA-G1) | archival serve |
+| **BA-T3** | Serve one response at three shard sizes from an in-memory store; the work before the first byte at two; the chunked read-and-fold loop beside the one-shot digest at three. **Built 2026-10-06** on the single-pass serve: `shekyl-p-serve` `benches/serve_response_iai.rs`, five `crypto_bench_serve_*` functions (manifest §12; the signature's cost in its own cell since PR #1015, so a wire change cannot re-roll ML-DSA's trajectory under the serve cells) | T1, CI runner | gungraun | built (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
-| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64) | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
+| **BA-T5** | Serve cost per response, **split by phase: read, hash, sign**; CPU and wall-clock by shard size (smallest, `W`, heaviest) and by responses in flight (1, 8, 32, 64). **First run 2026-10-07** on the floor device, daemon resident, two arms: [`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md). Pre-registered pass lines for "can the floor device serve". All four hold on the frames production serves, which are full segments. The fourth (CPU per abandoned request under 5 ms) failed as registered, against a one-leaf frame that production cannot serve; that figure, 8.4 ms, is a projection for any future design that serves short frames. **Session 2, 2026-10-09**, a discovery run by ruling (no pass lines; predictions recorded against measurements): [`ba_t5_serve_floor_device_20261009.md`](../benchmarks/ba_t5_serve_floor_device_20261009.md). N in {8, 16, 32, 64} with the daemon idle, syncing the chain beside the probe, and syncing with the probe at nice 19; time to first byte at one in flight. Serving under sync runs at 70 % of idle throughput with the daemon keeping about a third (31 to 37 %) of its no-serve sync rate; nice 19 gives the daemon 90 to 97 % back at a seventh to a fifth of the serving throughput; throughput flat from N = 16, p99 lateness rising steeply with N (× 2 to × 3 across each of the first two doublings, × 1.1 to × 1.4 across the last); TTFB 0.19 ms p50 idle; one refusal in 6,144 at N = 64. Five of seven predictions held | T3, floor | Loopback, on-disk store, no Tor and no daemon; cold and warm; n ≥ 100 per cell. Two arms in one session, alternating: the two-pass path at `b5e7dbfed5` and option S (BA-Q3). Extends the 2026-10-05 runs (BA-G1), which have no S arm, no phase split beyond the digest, one shard size and at most 8 in flight. Falsifier for S: it recovers under 24 ms of the 78 ms #954 added | new (BA-G1) | archival serve |
 | **BA-T6** | Client verify per shard, by shard size | T3, floor | n ≥ 100 per size | new (BA-G2) | archival fetch |
 | **BA-T7** | Whole-shard fetch over Tor on the production serve and fetch path: time and miss rate by object size, with and without mining | T3, floor serving and an internal node reading | The size-ladder and one-device protocols already written in [`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md) §10 | BA-I35, BA-I91 to BA-I95 | archival serve |
-| **BA-T8** | P2P span distributions: clearnet dial, handshake, gap on a LAN and a long path; Tor dial; Tor inbound; write-stall samples | T3, floor | n = 100 per leg; each reopen rule evaluated and its verdict recorded | BA-I80 to BA-I88 | P2P transport |
+| **BA-T8** | P2P span distributions: clearnet dial, handshake, gap on a LAN and a long path; Tor dial; Tor inbound; write-stall samples | T3, floor | n = 100 per leg; each reopen rule evaluated and its verdict recorded | BA-I80 to BA-I88, BA-I106 to BA-I109 | P2P transport |
 | **BA-T9** | Tor stem hop: transit and node-local time | T3, floor | The runbook BA-I68; n ≥ 100; each sample mapped to a verify-cost cell | BA-I68 | relay privacy |
 | **BA-T10** | The floor verify surface: admission pair by input count and depth, hybrid signature, shipped Bulletproofs+ single and batched, parse, block-budget fill, AES throughput | T3, floor | Criterion, 10 samples per point; depth cells that are projections labelled so | BA-I20, BA-I21, BA-I30, BA-I42, BA-I58, BA-I73, BA-I75, BA-I77 | chain rules, relay privacy |
 | **BA-T11** | Timer arm and poll cost, and the thread-budget legs: the smallest worker, blocking and executor counts that meet each duty | T3, floor | Per `docs/FOLLOWUPS.md:69`; criterion, 10 samples, for the timer | BA-I19, BA-I90; new (BA-G10) | P2P transport |
@@ -426,6 +433,10 @@ a live node.
 | **BA-T27** | RandomX Rust-to-C latency ratio, typical and adversarial | Gated on a CI runner by exception (BA-Q22); daily and weekly cron | As `rust/shekyl-randomx-differential` runs it today | BA-I33, BA-I52, BA-I53 | PoW |
 | **BA-T28** | The engine-trait hot paths the trait spec names: `synced_height`, `balance` and its body, `account_public_address` through the actor handle, `base_emission_at`, `parameters_snapshot`; and key dispatch | T1, CI runner | gungraun; the thresholds `scripts/bench/compare.py` already routes | BA-I2, BA-I6, BA-I7, BA-I8, BA-I11, BA-I12, BA-I13 | wallet engine |
 | **BA-T29** | Multisig intent and envelope operations | T2, CI runner | Criterion | BA-I16 | wallet engine |
+| **BA-T30** | A block producer's reader: completing one won block's challenge reads inside `W₂` — about 117 whole-shard reads at the sim's mean, 156 at 30 % dropout — and the sustained rate at a hashrate share (about 290 KB/s at a tenth) | T3 protocol on a **mining-class box**, not the floor: the load is a producer's, and the floor device essentially never produces. Measured, not gated (`SCS-P10`, ruled 2026-10-07) | Readers against real serving personas over Tor, the reads spread at random across `W₂`; completion share and time per won block at 1, 5 and 50 won blocks per window; `n` stated. The count rule it would inform is provisional | none: no producer-side reader exists in the tree | archival serve credit ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §12) |
+| **BA-T31** | The share of challenge draws left unread after the witness's three reads at hour-scale spacing (`x`), with the first-read failure (`p`) and the conditional rate `c = x / p`. The failure window `(11, 13)` clears the per-archiver false-slash budget when `x ≤ 0.2076`; at `p = 0.30` that is `c ≤ 0.692`. `c` is not the mixture weight `ρ` of the specification's table: `ρ = (c − p²) / (1 − p²)` | T3 protocol, against serving personas over Tor, the requester on any always-on box; the serving side on the floor device | Each sample is three whole reads of one shard through the shared fetch path as `SF-D3` rules it (fresh SOCKS credentials per read, so a rendezvous circuit per read; no isolation flags), each read with a fresh nonce, a later read made only when the one before ended stall-class. Every read is on a new circuit through the same entry guard, which is the dependence `ρ` stands for. One arm per spacing between consecutive reads: seconds (the control the one-read calibration rests on), 1 h, 4 h, 8 h. A multi-day series that includes a bad day. Reported per arm: `p`, `x`, `c`, each with its interval and `n`; and failures **per serving host as well as per read**, since one persona serves all its shards from one host and the per-archiver figure assumes they fail independently. Two additions for `SF-D3` as ruled 2026-10-07: (a) confirm the onion descriptor cache is shared across SOCKS credentials, so a read with new credentials does not refetch the descriptor — confirmed for Tor 0.4.9.11 on 2026-10-07, six runs, no descriptor fetch under new credentials ([`sfd3_read_isolation_20261007.md`](../benchmarks/sfd3_read_isolation_20261007.md)); the first read of a persona is not covered; (b) a run against a proof-of-work-enabled onion under load, recording the cost per read (circuit setup time, effort paid) and the failure rate | none: the W₂ size ladder measured single reads, never a re-read at this spacing | archival serve credit ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5, §12; `ESR-11`, sim plan §5.15) |
+| **BA-T32** | The settlement walk of one epoch: for every pair with an issued draw, read its list, hash each draw into the integrity digest, select the three counted draws and write the row; with the re-walk of `D`. All in the one block that settles the epoch | T3 on the **floor device**: it runs inside connect on every node | Wall time at maturity (324,000 pairs, the sim's draws per block) at 0, 10 and 30 % producer dropout; against the block interval | none: no settlement writer is wired. The urn's full-epoch replay, 1.09 s for 972,000 draws on a development host, is the nearest figure and is not this one | archival serve credit ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.3, §9.5) |
+| **BA-T33** | One nested sign and one nested verify under hybrid scheme 3, Ed25519 + FN-DSA-1024, with seeded key generation beside them. **T1 arm built 2026-10-09**: `shekyl-crypto-pq` `benches/fn_dsa_hybrid_iai.rs`, two `crypto_bench_fn_dsa_hybrid_*` functions (manifest §13); a third, `crypto_bench_fn_dsa_hybrid_sign_held`, added 2026-10-12 for the key held across signatures ([`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) `FND-4`) | T1 on a CI runner, as a drift signal for the x86 path. T3 on the **floor device** for the figures: signing is hardware floating point, and x86 dispatches to AVX2 code the floor never runs | Criterion `fn_dsa_hybrid` on the floor: sign through the production entry (rejection sampling, so the distribution and not a point), verify, key generation. The stack a sign needs on the device, by the ladder that found 256 KiB for an optimized build on x86_64 ([`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) `FND-4`) | none: the scheme is new (BA-I105) | archival serve credit ([`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md)) |
 
 The gate's machinery (BA-I37 to BA-I40, BA-I44, BA-I46 to BA-I50, BA-I54,
 BA-I59) persists with the tiers it serves and has no row of its own. The
@@ -461,7 +472,8 @@ capture.** PR #968 merged a record and two observation files,
 and pointed the read-capacity row in `docs/FOLLOWUPS.md` at the result.
 Nothing is left to rule.
 
-**BA-Q3 — The order of read, digest and sign on the serve path.** As ruled
+**BA-Q3 — RULED 2026-10-05: one pass, signed last, as an abuse mitigation.**
+The order of read, digest and sign on the serve path. As ruled
 on 2026-10-04 (`SF-D8`, `docs/design/ARCHIVAL_SHARD_FETCH.md:1292`), the
 persona reads the shard once to compute the delivery digest `D`, signs, then
 reads it again to send, holding no more than a chunk. Neither the ruling nor
@@ -482,9 +494,11 @@ the documents that record it state what the second read and the digest cost.
    carries the nonce and `D`, so anyone who later holds the shard can
    recompute `D` and check a historical pass. A pass signed for bytes that
    were not the shard is permanent evidence against its signer. This holds
-   while the frame is a function of the shard, which the write-zero padding
-   rule makes it today (`rust/shekyl-curve-tree/src/served_frame.rs:162`);
-   a padding scheme keeps it only if the padded frame stays recomputable.
+   while the body is a function of the shard, which it is by construction
+   since 2026-10-08: the serve loop writes the provider's bytes with no
+   frame or padding of its own (~~the write-zero padding rule of
+   `served_frame.rs:162`~~, deleted); a padding scheme, if one is ever
+   ruled, keeps it only if the padded body stays recomputable.
 
 `D` does not show that the persona stores the shard; that is unchanged in
 every option below.
@@ -538,12 +552,12 @@ into the same flat salted digest; then signs and appends the signature.
 *The prerequisite: can the key be absent while the store serves?* Read at
 the pin:
 
-- **Today it always is.** Production binds a placeholder key that refuses
-  every transcript
-  (`rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs:246`).
-  Every servable request is read and hashed in full, then answered 404
-  (`rust/shekyl-p-host/src/signer.rs:68`). The pre-flight would retire that
-  work as well.
+- ~~**Today it always is.** Production binds a placeholder key that refuses
+  every transcript.~~ **SUPERSEDED 2026-10-06 (SH-2):** production binds
+  the persona's resident key (`ResidentPassKey`,
+  `rust/shekyl-engine-core/src/engine/stake_engine/serving/pass_key.rs`);
+  the placeholder is deleted. The pre-flight is still what turns a stopped
+  actor into a 503 before the read.
 - **The design intends residency for as long as the host serves**
   (`docs/design/ARCHIVAL_SHARD_FETCH.md:945`), and the key bundles are
   derived when the wallet opens and held for the session
@@ -552,11 +566,20 @@ the pin:
 - **The contract still allows absence at sign time**: "key not resident,
   signer offline, or a host-side policy refusal"
   (`rust/shekyl-p-serve/src/countersign.rs:74`). Whether the signing
-  capability can go away while the listener stays up is the unwired
-  remainder of `SH-2`, and no document settles it.
+  capability can go away while the listener stays up was the unwired
+  remainder of `SH-2`. **Settled 2026-10-06**
+  ([`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md) §3 Q2): the
+  serving task's life is a subset of the stake actor's by *teardown
+  order* (`tasks.shutdown()` before `drop(engine)`, pinned by test), and
+  the key holds a **weak** actor handle, so the one case the order cannot
+  cover — the actor fail-stopping under a live listener — is observed by
+  `PassKey::ready` as a refusal, not prevented. The capability can go
+  away; when it does, the pre-flight is what answers 503 before the read.
 
-So the pre-flight is mandatory under S unless `SH-2` makes the serving
-task's life a subset of the key's by construction.
+So the pre-flight is mandatory under S: `SH-2` made the serving task's
+life a subset of the key's by construction for the ordinary path, and
+chose observe-not-prevent for the fail-stop, which is exactly the case
+the pre-flight exists for.
 
 *What S is expected to buy.* The floor runs (BA-G1) put the cost #954 added
 at 78 ms per response, of which the digest is 23.9 ms per pass, twice: 48
@@ -567,11 +590,83 @@ range is a prediction until BA-T5 times read, hash and sign apart with S as
 an arm. A faster digest (TurboSHAKE or KangarooTwelve) is a separate change
 to the wire and the domain registry and is not part of S.
 
-S changes the order the 2026-10-04 ruling set (sign before the first byte)
-and leaves the digest alone. It is the maintainer's to rule and is **not
-ruled**. Default: S, with the pre-flight method, once BA-T5 has reported the
-cost by phase for both arms and the `SH-2` question above is answered;
-until then two passes stand. T is not an option.
+*The ruling (maintainer, 2026-10-05).* S, framed as an abuse mitigation,
+which gives it a rule that can be tested: **`P` does no work that scales
+with shard size until the requester has received the bytes that work is
+for.** Before the 200 head `P` does constant work only: parsing, the
+anchor gate, opening the shard, and the key's pre-flight. Each read, hash
+and write after the head is paid for by the requester receiving the
+bytes, and the signature comes last. T is not an option.
+
+The same day's rulings on what a held shard may answer replace property 3
+above. There is no shared 404: an invalid request is a bare 400, a shard
+that is not held is the 404, a fault on `P`'s own side (store, tip or key)
+is a bare 503, and a signer that fails after the body closes the response
+with a refusal trailer where the signature goes, so the response is its
+full declared length and says in `P`'s own bytes that it did not sign.
+Cost 1 above is therefore not a truncated 200. PR #974 built the order
+and the five answers and amended `SF-D8`
+([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md)); PR #982 added the
+tests that hold the invariant, made the pre-flight a required method
+(`PassKey::ready`), and counted the late refusal apart.
+
+*Costs the ruling accepts.* A signing fault after the body spends a whole
+shard on a response nobody can use; it is counted on its own. A store
+that changes a shard under a response is signed for the bytes sent, not
+withheld (cost 2), which moves detection to content verification and
+raises BA-G2's priority. *Not covered, and left to BA-Q4:* a slow reader
+holding an in-flight permit to the stall timeout, which costs `P` a
+permit and no CPU, so it is not an amplification.
+
+*What was predicted, and what was measured.* The section above predicted
+that S would recover "between 24 ms and something over 50 ms of the 78".
+A sharper prediction was made on 2026-10-06 before the floor result was
+read: about 50 ms per response at one in flight, band 40 to 60, being the
+pre-#954 arm (24.8 ms) plus one digest pass (23.9 ms). Run 3 on the floor
+device measured the single-pass tree the same day
+([`sfd8_serve_cost_floor_device_20261005.md`](../benchmarks/sfd8_serve_cost_floor_device_20261005.md)):
+
+| Quantity | Predicted | Measured | Verdict |
+| --- | --- | --- | --- |
+| Median per response, one in flight | 40 to 60 ms | 67.2 ms | **falsified** |
+| Digest cost inside the stream | 23.9 ms, its cost alone | 43 ms (67.2 − 24.6) | 19 ms unexplained |
+| Responses per second, eight in flight | 37 to 60 | 49.7, median of six blocks (`BA-T5`, 2026-10-07) | **held** |
+| Work before the first byte | under 1 ms | 0.19 ms p50 time to first byte at one in flight, daemon idle, a bound from above on the whole pre-head step (`BA-T5` session 2, 2026-10-09); 1.85 ms p50 beside a syncing daemon | **held** |
+
+The prediction assumed the digest costs the same inside the stream as
+alone. It does not. BA-T3 narrows where the difference can be: on x86 the
+chunked read-and-fold loop is 2.2 % above the one-shot digest in
+instructions, at an eighth of a segment and at a full one, so the 19 ms
+is not instructions spent interleaving the hash with the read. What the
+instruction count leaves out is what remains to suspect: the on-disk
+store's read path, the blocking-pool hand-off per chunk (51 for a full
+segment), and cache behaviour on the floor device. BA-T5's split by phase
+is the measurement that says which.
+
+BA-T3 also puts a first number on the abuse figure. Work before the head
+is 13,527 instructions for one leaf and 13,579 for a full segment, flat
+across a 25,992-fold change in size, and 0.007 % of a full response. By
+that share of the measured 67.2 ms it is about 5 µs on the floor; the
+store is in memory in the gate, so a cold shard open is not in the figure
+and the estimate keeps its ceiling of 1 ms until the floor measures it.
+
+The predictions are in the measurement ledger. Two are retired
+estimates, each beside the floor capture that settled it and with a
+verdict the check computes: the per-response figure (falsified by run 3)
+and throughput at eight in flight (held, by the first run of `BA-T5`,
+2026-10-07). The third, work before the first byte, was an open estimate
+after that run, which bounded it from above at 2.2 ms with one chunk read
+and hashed inside the figure; `BA-T5` session 2 (2026-10-09) measured
+time to first byte at one in flight at 0.19 ms p50 with the daemon idle,
+a bound from above inside the band, and the estimate is a measured
+constant on that capture (`serve_prehead_work_floor`).
+The run's record also explains run 3's two disagreeing blocks
+(the executor-side hash made throughput bimodal) and puts the digest
+alone at 23.9 ms of a 57.7 ms response.
+
+*Carried.* The invariant is general, and a rules-queue row in
+`docs/FOLLOWUPS.md` asks the same of daemon RPC, Levin object and
+transaction requests, and the fetch client's handling of large responses.
 
 **BA-Q4 — Derive serve-side `MAX_INFLIGHT`.** Default: derive it from BA-T5
 on the floor, as the constant's own comment promises (BA-D15), and state
@@ -579,10 +674,50 @@ which resource bound. The serving device class is itself open
 (`docs/FOLLOWUPS.md:1257`); the default keeps the floor as the conservative
 interim.
 
+*Inputs from the first `BA-T5` run (2026-10-07).* The floor device is
+ruled the serving floor, and it serves today's shards at 41 to 56 per
+second at eight in flight. The cost an unpaid request can impose is about
+4 ms of CPU today and about 8 ms at a frame small enough to be buffered
+whole. The control over how many such requests one rendezvous circuit can
+make is the serving onion's stream cap, 8 per circuit with the circuit
+closed past it (`SERVING_MAX_STREAMS`), a carried placeholder: its value
+is part of this question, beside `MAX_INFLIGHT`.
+
+*Inputs from `BA-T5` session 2 (2026-10-09, a discovery run by the ruling
+of 2026-10-08; it sets nothing).* The sweep N in {8, 16, 32, 64} on the
+floor device, daemon idle and syncing
+([`ba_t5_serve_floor_device_20261009.md`](../benchmarks/ba_t5_serve_floor_device_20261009.md)):
+throughput is flat from N = 16 in every state (idle 51 → 55 → 57 → 55
+responses/s; under sync 37 → 41 → 41 → 40), so beyond 16 the cap buys
+no throughput on this device; p99 executor wake lateness rises steeply
+with N (idle 5.5 → 11.7 → 35.8 → 51.6 ms; sync 7.2 → 14.3 → 45.0 →
+60.0 ms: × 2 to × 3 across each of the first two doublings, × 1.3 to
+× 1.4 across the last), so each doubling costs latency; CPU per response is 66
+to 72 ms at every N. At N = 64 = `MAX_INFLIGHT`, a requester that opens
+its next connections the instant its last stream closes was refused once
+in 6,144 under sync and never with the daemon idle: the in-flight permit
+is dropped after the stream, so for such a requester the cap is N − ε.
+Whether the permit should outlive the stream, and what resource the
+constant bounds (on this device, latency, not throughput or CPU), are
+this question's to rule. N = 128 was not run: no test-only override of
+the constant exists, and none was added.
+
 **BA-Q5 — Re-measure `W`, `L`, the retry budget and the read capacity on the
 v3 path.** Default: BA-T7 runs before the Round-2 gate re-pins them, with an
 owner and a date entered beside the reopen condition in
 [`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](CLIENT_VERSION_CONSTANTS_VALIDATION.md).
+
+*An input the `W` derivation must take (2026-10-07).* The floor device's
+serve verdict holds because a shard of `W` bytes is far larger than what
+can be buffered between the persona and the requester. If `W` falls to
+that amount, every abandoned request costs the persona a whole response
+and a signature
+([`ba_t5_serve_floor_device_20261007.md`](../benchmarks/ba_t5_serve_floor_device_20261007.md),
+"How far this verdict reaches"). The amount is tor's stream window plus
+the kernel's socket buffers, about 250 KB by the specification and not
+yet measured through an onion; BA-T7 measures it. The ledger row
+`serve_floor_verdict_frame` fails when `W` changes, until the verdict is
+re-graded.
 
 **BA-Q6 — The key-dispatch gate and the re-route it waits on (BA-D8).**
 The design routes claims through `KeyEngine::try_claim_output`; the caller

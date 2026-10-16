@@ -64,14 +64,22 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod archival;
 pub mod bin_commands;
 pub mod chain;
 pub mod consensus_digest;
 pub mod hash;
 pub mod headers;
+pub mod hex128;
 pub mod identity;
+pub mod info;
+pub mod nullable;
 pub mod p2p;
 pub mod transactions;
+pub use archival::{
+    RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,
+    CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
+};
 pub use bin_commands::{
     BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
     GetOIndexesResponse,
@@ -79,12 +87,11 @@ pub use bin_commands::{
 pub use chain::{
     core_rpc_version_string, BlockHeader, ConnectState, GetBlockCountResponse, GetBlockHashParams,
     GetBlockHeaderByHeightRequest, GetBlockHeaderByHeightResponse, GetBlockRequest,
-    GetBlockResponse, GetHeightResponse, GetVersionResponse, HardForkEntry, RestErrorEnvelope,
-    RpcStatus, StoreInvariantRow, CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE,
-    CORE_RPC_ERROR_CODE_CORE_BUSY, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-    CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-    CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION, CORE_RPC_VERSION_MAJOR,
-    CORE_RPC_VERSION_MINOR,
+    GetBlockResponse, GetHeightResponse, GetVersionResponse, RestErrorEnvelope, RpcStatus,
+    StoreInvariantRow, CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE, CORE_RPC_ERROR_CODE_CORE_BUSY,
+    CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_RESTRICTED,
+    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION,
+    CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
 };
 pub use consensus_digest::{
     DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH,
@@ -94,12 +101,21 @@ pub use headers::{
     BlockHeaderSlot, FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
-    HardForkInfoRequest, HardForkInfoResponse,
 };
-pub use identity::{genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch};
+pub use hex128::{HexU128, HexU128Error};
+pub use identity::{
+    daemon_rpc_version, genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch,
+    IdentityRefusal, VersionUnreadable,
+};
+pub use info::{
+    GetInfoResponse, GetInfoShapeError, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth,
+    InfoHost, InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, StatusConnections,
+};
+pub use nullable::Nullable;
 pub use p2p::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
-    GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
+    GetPeerListRequest, GetPeerListResponse, P2pReply, P2pRunningReply, Peer, SyncInfoPeer,
+    SyncInfoResponse, SyncSpan,
 };
 pub use transactions::{
     GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
@@ -217,6 +233,17 @@ pub enum RejectCause {
     /// Reference block hash unknown to this daemon (typically: daemon not
     /// yet synced to it). Sync-gated retry (§2.5).
     ReferenceNotFound,
+    /// The transaction is a JoinMarket bond post and this daemon cannot
+    /// admit one. Phases A–C passed. Phase D's mutable re-checks do not
+    /// run, because the C++ commit step decodes no JoinMarket form that
+    /// carries a receipt key and returns before `shekyl_submit_commit_tx`
+    /// (`FN_DSA_HYBRID.md` `FND-20`). The capability refusal is the
+    /// verdict: a key-image or fee race during Phase C is reported as this
+    /// cause, and retrying the same bytes against this daemon fails the
+    /// same way. The wallet releases the post and its funding reservation
+    /// and does not resubmit (§2.5). Deleted with the C++ commit shim at
+    /// `DEL-008`.
+    JoinMarketUnsupported,
     /// Forward-compat catch-all: a cause this client build does not know.
     /// Deserialize-side only — a daemon never authors it. Disposition per
     /// §2.5: release + one-shot rebuild (the F28 loop-breaker applies).

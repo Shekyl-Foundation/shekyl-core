@@ -385,18 +385,6 @@ fn test_burn_split_ffi() {
 }
 
 #[test]
-fn test_emission_share_genesis() {
-    let share = shekyl_calc_emission_share(0, 0, 150_000, 900_000, 262_800);
-    assert_eq!(share, 150_000);
-}
-
-#[test]
-fn test_emission_share_year_1() {
-    let share = shekyl_calc_emission_share(262_800, 0, 150_000, 900_000, 262_800);
-    assert_eq!(share, 135_000);
-}
-
-#[test]
 fn test_emission_split_ffi() {
     let split = shekyl_split_block_emission(1_000_000_000, 150_000);
     assert_eq!(split.staker_emission, 150_000_000);
@@ -445,20 +433,20 @@ fn test_burn_pct_ffi_matches_rust_impl() {
     }
 }
 
+/// The share at the boundary is the crate's: zero at genesis, the shipped
+/// share at block 1, decayed after it.
 #[test]
-fn test_emission_share_ffi_matches_rust_impl() {
-    let cases = [
-        (0u64, 0u64, 150_000u64, 900_000u64, 262_800u64),
-        (262_800, 0, 150_000, 900_000, 262_800),
-        (2 * 262_800, 0, 150_000, 900_000, 262_800),
-        (10 * 262_800, 0, 150_000, 900_000, 262_800),
-    ];
-    for (height, genesis, initial, decay, bpy) in cases {
-        let ffi = shekyl_calc_emission_share(height, genesis, initial, decay, bpy);
-        let direct = shekyl_economics::emission_share::calc_effective_emission_share(
-            height, genesis, initial, decay, bpy,
+fn emission_share_at_ffi_matches_the_crate() {
+    assert_eq!(shekyl_emission_share_at(0), 0);
+    assert_eq!(
+        shekyl_emission_share_at(1),
+        shekyl_economics::STAKER_EMISSION_SHARE
+    );
+    for height in [0u64, 1, 2, 262_800, 262_801, 10 * 262_800, 3_000_000] {
+        assert_eq!(
+            shekyl_emission_share_at(height),
+            shekyl_economics::emission_share_at(height)
         );
-        assert_eq!(ffi, direct);
     }
 }
 
@@ -1314,11 +1302,12 @@ fn calc_burn_pct_at_ffi_matches_the_crate() {
 fn compute_emission_split_ffi_matches_the_crate() {
     for (emission, height) in [
         (0u64, 5u64),
+        (1_638_400_000_000, 0),
         (1_638_400_000_000, 1),
         (1_000_000_000, 3_000_000),
     ] {
-        let ffi = shekyl_compute_emission_split(emission, height, 1);
-        let want = shekyl_economics::compute_emission_split(emission, height, 1);
+        let ffi = shekyl_compute_emission_split(emission, height);
+        let want = shekyl_economics::compute_emission_split(emission, height);
         assert_eq!(ffi.miner_emission, want.miner_emission);
         assert_eq!(ffi.staker_emission, want.staker_emission);
     }

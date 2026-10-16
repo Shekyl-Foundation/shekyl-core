@@ -3,29 +3,31 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The client: one admission path, one dial shape, one request, one
-//! response reader, and the two verifications that make a body a
-//! [`VerifiedShard`].
+//! The client: one admission path, one dial shape, one request, and the
+//! two verifications that make a body a [`VerifiedShard`]. The streaming
+//! body reader — frame walk, delivery digest, envelope, close probe —
+//! is the crate's private body module.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
-use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{
-    CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX, SERVING_VIRTUAL_PORT,
+    is_refusal_trailer, CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
+    SERVING_VIRTUAL_PORT,
 };
-use shekyl_curve_tree::{leaves_per_segment, LEAF_BYTES};
 use shekyl_socks::{connect as socks_connect, Destination, Isolation};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
+use crate::body::{read_frame, BodyReader, Checker};
 use crate::error::{FetchError, Malformed, Stall};
 use crate::header::RequestHeader;
-use crate::target::{ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
+use crate::target::{
+    ExpectedShard, FetchTarget, PassVerifyingKey, ServingEndpoint, TxSink, VerifiedShard,
+};
 
 /// Concurrent transfers one client may have outstanding (`SF-D7`): the
 /// in-flight cap `N`. Shared by both callers; there is no queue behind
@@ -40,67 +42,35 @@ use crate::target::{ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
 ///   0.0 / 1.0 / 0.0 / 0.0 %; p50 12.4 → 13.2 s. 8 is the largest
 ///   width that apparatus could exercise (eight personas); 16 was not
 ///   measured. Raising above 8 is a new sweep, not a silent bump.
-/// - **Upper bound (memory).** The client materialises each body until
-///   both verifications finish (`SF-D8`: verified-or-refused, no
-///   streaming accept), so `N × max_body_bytes()` is resident in the worst
-///   case. At the leaf figure that is `8 × ~6.7 MB ≈ 53 MB` on the Pi 4
-///   floor (rule 76) — still well under the placeholder-64 figure
-///   `SF-D7` refused (213 MB). Memory does not bind at 8.
+/// - **Upper bound (memory).** The body streams: one transaction's two
+///   segments are resident per fetch while they are checked and handed to
+///   the sink, then dropped (`SF-D8` amendment 2026-10-08). The resident
+///   term is `N × (largest archival length of one transaction + a read
+///   chunk)`, bounded by consensus (`max_tx_weight`) and not by `W`. At
+///   the pin it was `N × max_body_bytes()` with the whole body resident —
+///   `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor (rule 76), itself well under
+///   the placeholder-64 figure `SF-D7` refused (213 MB). Memory did not
+///   bind at 8 then and binds less now.
 /// - **Lower bound (throughput).** Reconstruct is a sustained fill over a
 ///   single Tor instance whose per-stream throughput, not the client's
-///   parallelism, is the ceiling (`SF-D3`: no per-fetch circuit build).
-///   The (b) judgement that four outstanding transfers keep the stream
-///   busy still holds; eight is that judgement plus the W₂ room.
+///   parallelism, is the ceiling. That judgement was made when fetches
+///   shared circuits. Since 2026-10-07 each read builds a rendezvous
+///   circuit of its own (`SF-D3`), and what that does to the right cap is
+///   not measured (`BA-T31`, `BA-T6`); the constant is unmeasured either
+///   way.
 ///
-/// **Re-derive under `PDM-Q6`'s unit** once the body is a tx-range's and
-/// not a leaf shard's — the memory term changes, the shape does not.
-/// Reopen otherwise on `SF-D7`'s criteria: capped reconstruct throughput
+/// The body is the tx-range's now (`SHT-Q2`); the memory term moved as
+/// above and the churn bound did not, so the pin stands. Reopen on
+/// `SF-D7`'s criteria: capped reconstruct throughput
 /// below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer
 /// for a challenge fetch approaching `CHALLENGE_RESPONSE_BLOCKS`.
 pub const MAX_INFLIGHT: usize = 8;
-
-/// Width of the countersignature envelope that closes the body: the
-/// canonical `HybridSignature` encoding and nothing else (`SF-D8`). Both
-/// ends read `HybridSignature::CANONICAL_LEN`; this name is the
-/// fetch-side statement that the body's **last** bytes are a signature —
-/// `P` releases it only after the frame, so a countersignature in hand
-/// means the whole read was delivered.
-pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
-
-/// Ceiling on a response body, applied to `content-length` **before** a
-/// body byte is read (`SF-D6`: refused from the HTTP headers).
-///
-/// `content-length` comes from a potentially adversarial `P`; an
-/// unbounded one is a pre-allocation and resource-exhaustion path. The
-/// figure is `envelope + frame-header-max + 2 × segment`: the `RF-D4`
-/// frame bounds padding at one segment's worth (its
-/// `ServedFrameHeader::padding_len` contract), so a well-formed body is
-/// never more than twice a segment behind two varint lengths.
-///
-/// **This is the one leaf-shaped number in the crate, and it is
-/// provisional by name.** It is a *resource* bound, not a parse: the crate
-/// still hands the bytes to the content-verify hole unparsed. When
-/// `PDM-Q6` retires the leaf shard for a tx-range body, this function is
-/// re-derived from that unit's maximum (sub-PR 2), and nothing else here
-/// moves.
-#[must_use]
-pub fn max_body_bytes() -> u64 {
-    // Two LEB128 `u64` lengths lead the frame; each is at most 10 bytes.
-    const FRAME_HEADER_MAX: u64 = 2 * 10;
-    let segment = u64::try_from(leaves_per_segment() * LEAF_BYTES).expect("segment fits u64");
-    u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64")
-        + FRAME_HEADER_MAX
-        + 2 * segment
-}
 
 /// Longest head this client will buffer while looking for `\r\n\r\n`. The
 /// ruled head is a status line and two headers — well under 200 bytes.
 /// A stream that keeps flowing past this without terminating the head is
 /// not stalled and is not the contract; it is [`Malformed::HeadTooLong`].
 const MAX_HEAD_BYTES: usize = 1024;
-
-/// Largest single read while draining a body.
-const BODY_CHUNK: usize = 64 * 1024;
 
 /// Per-step bounds on one fetch. Operational, not contract (`RF-R1`):
 /// they decide when an attempt becomes a [`Stall`], never what a
@@ -150,7 +120,7 @@ impl Default for Timeouts {
 pub struct PFetchClient {
     proxy: SocketAddr,
     /// `Arc` so a permit can be *owned* and travel into the blocking
-    /// verify task — see [`Self::fetch`] on cancellation.
+    /// check tasks — see [`Self::fetch`] on cancellation.
     slots: Arc<Semaphore>,
     timeouts: Timeouts,
 }
@@ -174,8 +144,8 @@ impl PFetchClient {
     /// thing here that *is* resolved locally, because it is a loopback
     /// socket, not a name.
     ///
-    /// The content-verify hole is per-`fetch`, not per-client: two callers
-    /// share this admission path and plug the check for *this* shard.
+    /// The expectation and the sink are per-`fetch`, not per-client: two
+    /// callers share this admission path and each names *its* shard.
     #[must_use]
     pub fn new(proxy: SocketAddr) -> Self {
         Self::with_timeouts(proxy, Timeouts::DEFAULT)
@@ -198,43 +168,66 @@ impl PFetchClient {
         self.slots.available_permits()
     }
 
-    /// Fetch `target.shard_id` from `target.endpoint`, carrying `header`,
-    /// and return it only if `P`'s countersignature verifies under
-    /// `target.verifying_key` and `verifier` accepts the body.
+    /// Fetch `expected`'s shard from `target.endpoint`, carrying `header`,
+    /// checking the body against `expected` transaction by transaction as
+    /// it streams and handing each verified transaction to `sink`; return
+    /// the shard's record only if the whole body matched and `P`'s
+    /// countersignature verifies under `target.verifying_key`.
     ///
     /// Waits for an in-flight slot first; the slot is held until the
-    /// result is decided, body included (`SF-D7`: the body is resident
-    /// until verify finishes). Both verifications run off the executor
-    /// thread — a hybrid verify is CPU, and the hole may be far more.
+    /// result is decided. The body is never resident whole (`SF-D8`
+    /// amendment 2026-10-08): the frame is read as `version ‖ tx_count ‖
+    /// per tx (pqc_auth_count, pqc_auths_len, prunable_len, pqc_auths
+    /// bytes ‖ prunable bytes)`, each entry's declared lengths are checked
+    /// against its retained row **before** its segments are read (a `P`
+    /// declaring a length the rows do not allow is refused without the
+    /// client allocating for it), and each entry's two segments are hashed
+    /// against the rows, folded into the view hash and handed to `sink` on
+    /// the blocking pool, then dropped. The delivery digest folds every
+    /// body byte, frame bytes included, under this request's nonce.
+    ///
+    /// Refusal order, by what each outcome is evidence of: a frame that is
+    /// not the grammar, or does not end where the envelope begins, is
+    /// [`Malformed`] where it is seen — `P` is off the contract. A frame
+    /// whose content is not the expectation is remembered, the rest of the
+    /// body is drained into the digest, and the envelope is read: a
+    /// refusal trailer is [`FetchError::Unsigned`], a signature that does
+    /// not verify is [`FetchError::BadCountersignature`], and only a
+    /// signature that **does** verify makes the mismatch
+    /// [`FetchError::ContentRefused`] — `P`'s own statement that it served
+    /// these bytes for this request. A mismatch behind a bad signature says
+    /// nothing about `P`'s content.
     ///
     /// Cancellation: dropping the future closes the stream and releases the
     /// slot — **once the fetch is actually over**. A `spawn_blocking` task
     /// does not stop when its handle is dropped, so if the future is
-    /// dropped mid-verify the body and the hole keep running to their end;
-    /// the slot travels into that task and is released by it, not by the
-    /// drop. Otherwise repeated cancellation during verify would let the
-    /// next fetch take the slot while the last body is still resident,
-    /// and `MAX_INFLIGHT` would bound admissions rather than bodies.
-    /// Nothing is decided about `P` by a fetch that was not allowed to
-    /// finish.
+    /// dropped during an entry's check the entry, the sink call and the
+    /// final verify run to their end; the slot travels through those tasks
+    /// and is released by the last of them, not by the drop. Otherwise
+    /// repeated cancellation during a check would let the next fetch take
+    /// the slot while the last entry is still resident, and `MAX_INFLIGHT`
+    /// would bound admissions rather than resident work. Nothing is decided
+    /// about `P` by a fetch that was not allowed to finish.
     ///
     /// # Errors
     ///
     /// The [`FetchError`] taxonomy. [`FetchError::retries_same_p`] is the
     /// one-bit summary a scheduler needs.
-    pub async fn fetch(
+    pub async fn fetch<K: PassVerifyingKey>(
         &self,
-        target: &FetchTarget,
+        target: &FetchTarget<K>,
         header: &RequestHeader,
-        verifier: Arc<dyn ContentVerify>,
-    ) -> Result<VerifiedShard, FetchError> {
+        expected: &ExpectedShard,
+        sink: Arc<dyn TxSink>,
+    ) -> Result<VerifiedShard<K>, FetchError> {
         let slot = Arc::clone(&self.slots)
             .acquire_owned()
             .await
             .expect("in-flight semaphore is never closed");
 
-        let mut stream = self.dial(&target.endpoint).await?;
-        let request = request_bytes(target.shard_id, header);
+        let shard_id = expected.shard_id();
+        let mut stream = self.dial(&target.endpoint, header).await?;
+        let request = request_bytes(shard_id.to_raw(), header);
         timeout(self.timeouts.head, stream.write_all(&request))
             .await
             .map_err(|_| FetchError::Stall(Stall::HeadTimeout))?
@@ -242,77 +235,107 @@ impl PFetchClient {
             // close, not a short body (`Stall::Io` is body-phase only).
             .map_err(|_| FetchError::Stall(Stall::ClosedBeforeHead))?;
 
-        let (head, mut body) = read_head(&mut stream, self.timeouts.head).await?;
+        let (head, carried) = read_head(&mut stream, self.timeouts.head).await?;
         let head = parse_head(&head)?;
-        let held = match head.status {
-            404 => {
+        // The one scheme this exchange can be: the target's key's.
+        let envelope_len = u64::try_from(K::ENVELOPE_LEN).expect("envelope fits u64");
+        // A bare answer's verdict, or `None` for a 200.
+        let bare = match head.status {
+            400 | 404 | 503 => {
                 if head.content_length != 0 {
                     return Err(FetchError::Malformed(Malformed::ContentLength));
                 }
-                false
+                Some(match head.status {
+                    400 => FetchError::Rejected,
+                    404 => FetchError::Miss,
+                    _ => FetchError::Unavailable,
+                })
             }
             200 => {
                 let declared = head.content_length;
-                let envelope = u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64");
-                if declared < envelope {
+                if declared < envelope_len {
                     return Err(FetchError::Malformed(Malformed::EnvelopeShort { declared }));
                 }
-                let max = max_body_bytes();
+                let max = expected.max_response_len::<K>();
                 if declared > max {
                     return Err(FetchError::Malformed(Malformed::Oversize { declared, max }));
                 }
-                true
+                None
             }
             other => return Err(FetchError::Malformed(Malformed::Status(other))),
         };
 
-        // Both answers are read to the same standard: exactly the declared
-        // bytes, then `P`'s close. A 404 is a *completed* exchange only if
-        // it completes — a "no" with bytes behind it is not the identical
-        // 404, it is a `P` off the contract.
-        read_body(&mut stream, &mut body, head.content_length, self.timeouts).await?;
-        drop(stream);
-        if !held {
-            return Err(FetchError::Miss);
+        // Every answer is read to the same standard: exactly the declared
+        // bytes, then `P`'s close. A bare answer is a *completed* exchange
+        // only if it completes — a "no" with bytes behind it is not the
+        // bare answer, it is a `P` off the contract. And a 200 that stops
+        // short is a stall at every offset: nothing is concluded about `P`
+        // from where a stream ended.
+        let mut reader = BodyReader::new(
+            &mut stream,
+            carried,
+            head.content_length,
+            K::ENVELOPE_LEN,
+            header,
+            self.timeouts.body_stall,
+        )?;
+        if let Some(verdict) = bare {
+            match timeout(self.timeouts.body_total, reader.close_probe()).await {
+                Err(_elapsed) => return Err(FetchError::Stall(Stall::BodyTimeout)),
+                Ok(probe) => probe?,
+            }
+            return Err(verdict);
         }
 
-        // Off the executor: a hybrid verify is real CPU, and the hole may
-        // be much more (today it recomputes a segment root). The slot goes
-        // with the body: it is dropped when this closure returns, whether
-        // or not anyone is still awaiting the handle.
-        let (verifying_key, shard_id, header) =
-            (target.verifying_key.clone(), target.shard_id, *header);
+        let checker = Checker::new(slot, shard_id, sink);
+        let streamed = async {
+            let (checker, mismatch) = read_frame(&mut reader, expected, checker).await?;
+            let envelope = reader.envelope().await?;
+            reader.close_probe().await?;
+            Ok::<_, FetchError>((checker, mismatch, envelope, reader.finish()))
+        };
+        let (checker, mismatch, envelope, delivery_digest) =
+            match timeout(self.timeouts.body_total, streamed).await {
+                Err(_elapsed) => return Err(FetchError::Stall(Stall::BodyTimeout)),
+                Ok(outcome) => outcome?,
+            };
+        drop(stream);
+
+        // The envelope is the body's tail. If it is the refusal trailer,
+        // `P` has said it served and did not sign. That is read before
+        // anything is verified, and the body behind it goes no further.
+        if is_refusal_trailer(&envelope) {
+            return Err(FetchError::Unsigned);
+        }
+
+        // Off the executor: a hybrid verify is real CPU. The slot goes with
+        // the checker: it is dropped when this closure returns, whether or
+        // not anyone is still awaiting the handle.
+        let (verifying_key, header) = (target.verifying_key.clone(), *header);
+        let (tx_count, archival_len) = (expected.tx_count(), expected.archival_len());
         tokio::task::spawn_blocking(move || {
-            let _slot = slot;
-            // The envelope is the body's tail. `declared >= envelope` was
-            // checked at the head and `read_body` read exactly `declared`.
-            let mut content = body;
-            let envelope = content.split_off(content.len() - SIGNATURE_ENVELOPE_LEN);
-            let signature = HybridSignature::from_canonical_bytes(&envelope)
-                .map_err(|_| FetchError::Malformed(Malformed::Envelope))?;
-            // The digest is recomputed from the bytes in hand under this
-            // request's own nonce, never taken from `P`: a signature over
-            // any other bytes, or over these bytes for another request,
-            // fails the next check.
-            let delivery_digest = pass_delivery_digest(header.nonce(), &content);
-            verify_pass_transcript(
-                &verifying_key,
-                header.nonce(),
-                header.anchor_height(),
-                header.anchor_hash(),
-                shard_id,
-                &delivery_digest,
-                &signature,
-            )
-            .map_err(|_| FetchError::BadCountersignature)?;
-            verifier
-                .verify(shard_id, &content)
-                .map_err(FetchError::ContentRefused)?;
+            let checker = checker;
+            // This scheme's canonical signature, or nothing: there is no
+            // second parse under another scheme.
+            let signature =
+                K::parse_envelope(&envelope).ok_or(FetchError::Malformed(Malformed::Envelope))?;
+            // The digest was recomputed from the bytes as they arrived
+            // under this request's own nonce, never taken from `P`: a
+            // signature over any other bytes, or over these bytes for
+            // another request, fails this check.
+            if !verifying_key.verifies(&header, shard_id.to_raw(), &delivery_digest, &signature) {
+                return Err(FetchError::BadCountersignature);
+            }
+            if let Some(mismatch) = mismatch {
+                return Err(FetchError::ContentRefused(mismatch));
+            }
             Ok(VerifiedShard::new(
                 shard_id,
                 delivery_digest,
                 signature,
-                content,
+                checker.finish(),
+                tx_count,
+                archival_len,
             ))
         })
         .await
@@ -321,18 +344,29 @@ impl PFetchClient {
 
     /// SOCKS5h dial: the proxy receives the `.onion` **name** (ATYP=DOMAIN)
     /// and resolves it. Passing a pre-resolved address here is the DNS
-    /// leak `SF-D3` exists to close; there is no code path that could,
+    /// leak `SF-D2` exists to close; there is no code path that could,
     /// because an onion has no IP to resolve to — but the shape is kept
     /// deliberately so a future non-onion endpoint would not acquire one.
-    async fn dial(&self, endpoint: &ServingEndpoint) -> Result<TcpStream, FetchError> {
+    ///
+    /// The dial presents this read's SOCKS credentials, taken from its
+    /// header, as [`Isolation::Persona`]. Each read is on a circuit of its
+    /// own (`SF-D3`, as ruled 2026-10-07) because the header's nonce is a
+    /// username no other read presents. There is no caller argument for
+    /// the credentials: challenge and organic reads cannot differ here.
+    async fn dial(
+        &self,
+        endpoint: &ServingEndpoint,
+        header: &RequestHeader,
+    ) -> Result<TcpStream, FetchError> {
         let host = endpoint.onion_address();
+        let credentials = header.socks_credentials();
         let connect = async {
             let mut stream = TcpStream::connect(self.proxy)
                 .await
                 .map_err(|err| FetchError::Stall(Stall::Dial(err.to_string())))?;
             socks_connect(
                 &mut stream,
-                Isolation::Principal,
+                Isolation::Persona(&credentials),
                 Destination::Name {
                     host: host.as_str(),
                     port: SERVING_VIRTUAL_PORT,
@@ -485,64 +519,6 @@ impl From<Stall> for FetchError {
     }
 }
 
-/// Read exactly `declared` body bytes into `body` (which may already hold
-/// the bytes that arrived with the head), then confirm `P` closed — under
-/// a per-read stall bound and a whole-body deadline.
-///
-/// "Exactly" is checked in both directions. Fewer bytes before the close is
-/// [`Stall::Truncated`]; more bytes — already buffered behind the head, or
-/// arriving on the probe for the close — is [`Malformed::Overlength`]
-/// (`SF-D6`: body long of agreed `N` is malformed, not trimmed). The probe
-/// is what makes the second direction decidable: `RF-R1` has `P` close
-/// after the body, so a conforming `P`'s EOF is already behind the last
-/// byte, and a `P` that sends neither EOF nor bytes within the stall bound
-/// is [`Stall::NoClose`].
-async fn read_body<S: AsyncRead + Unpin>(
-    stream: &mut S,
-    body: &mut Vec<u8>,
-    declared: u64,
-    timeouts: Timeouts,
-) -> Result<(), FetchError> {
-    let declared_len = usize::try_from(declared).expect("declared length within the ceiling");
-    if body.len() > declared_len {
-        return Err(FetchError::Malformed(Malformed::Overlength { declared }));
-    }
-    body.reserve_exact(declared_len - body.len());
-    let drain = async {
-        while body.len() < declared_len {
-            let want = (declared_len - body.len()).min(BODY_CHUNK);
-            let start = body.len();
-            body.resize(start + want, 0);
-            let n = timeout(timeouts.body_stall, stream.read(&mut body[start..]))
-                .await
-                .map_err(|_| Stall::BodyTimeout)?
-                .map_err(Stall::Io)?;
-            body.truncate(start + n);
-            if n == 0 {
-                return Err(FetchError::Stall(Stall::Truncated {
-                    declared,
-                    received: u64::try_from(body.len()).expect("received fits u64"),
-                }));
-            }
-        }
-        // Exactly `declared` in hand. The next read decides the response:
-        // EOF completes it, a byte breaks it, silence is a stall.
-        let mut probe = [0u8; 1];
-        let n = timeout(timeouts.body_stall, stream.read(&mut probe))
-            .await
-            .map_err(|_| Stall::NoClose)?
-            .map_err(Stall::Io)?;
-        if n != 0 {
-            return Err(FetchError::Malformed(Malformed::Overlength { declared }));
-        }
-        Ok(())
-    };
-    match timeout(timeouts.body_total, drain).await {
-        Err(_elapsed) => Err(FetchError::Stall(Stall::BodyTimeout)),
-        Ok(outcome) => outcome,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,12 +620,37 @@ mod tests {
         );
     }
 
+    /// The one-machinery rule (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.1): the
+    /// request is a function of the shard and the caller's header and of
+    /// nothing else, so a challenge and an organic read of one shard differ
+    /// on the wire only where their nonces do. There is no caller kind to
+    /// pass, which is the rule's other half and is held by the signature.
     #[test]
-    fn the_body_ceiling_is_two_segments_behind_the_envelope_and_frame_header() {
-        let segment = u64::try_from(leaves_per_segment() * LEAF_BYTES).unwrap();
-        assert_eq!(max_body_bytes(), 3385 + 20 + 2 * segment);
-        // The figure the round quoted: ~3.33 MB a segment, so ~6.7 MB ceiling.
-        assert_eq!(segment, 3_326_976);
+    fn a_request_differs_from_another_only_in_its_nonce() {
+        let anchor = BlockHeight::from_raw(1_000);
+        let organic = RequestHeader::with_nonce([0xa5; 32], anchor, [3; 32]);
+        let challenge = RequestHeader::with_nonce([0x5a; 32], anchor, [3; 32]);
+        let a = request_bytes(7, &organic);
+        let b = request_bytes(7, &challenge);
+        assert_eq!(a.len(), b.len());
+
+        // The nonce leads the header, as 64 lowercase hex characters.
+        let nonce_hex: String = organic.nonce().iter().map(|x| format!("{x:02x}")).collect();
+        let text = String::from_utf8(a.clone()).unwrap();
+        let start = text.find(&nonce_hex).expect("the nonce is on the wire");
+        let nonce_span = start..start + nonce_hex.len();
+
+        let differing: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+        assert!(!differing.is_empty(), "two nonces, one request");
+        assert!(
+            differing.iter().all(|i| nonce_span.contains(i)),
+            "a byte outside the nonce differs: {differing:?} against {nonce_span:?}"
+        );
+        // Every nonce byte differs here, so the whole span is accounted for.
+        assert_eq!(differing.len(), nonce_span.len());
+
+        // The same header is the same request: nothing ambient enters.
+        assert_eq!(a, request_bytes(7, &organic));
     }
 
     #[test]

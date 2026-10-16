@@ -138,6 +138,7 @@ pub(crate) fn coinbase_block<'a>(
 ) -> Vec<TxLeafInputs<'a>> {
     vec![TxLeafInputs {
         is_miner: true,
+        tx_hash: None,
         leaf_entry_blob: Some(blob),
         outputs,
     }]
@@ -253,7 +254,8 @@ mod tests {
                 next_gindex,
                 &mut entries,
             )
-            .expect("construct_leaf accepts every fixture point");
+            .expect("construct_leaf accepts every fixture point")
+            .next_gindex;
         }
         entries
     }

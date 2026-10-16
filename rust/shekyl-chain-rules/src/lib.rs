@@ -52,7 +52,7 @@
 //! (`CHAIN_RULES_SLICE_1.md`) landed 4.A/4.B's six predicate rows; slice 2
 //! (`CHAIN_RULES_SLICE_2.md`) landed 4.C and 4.D — the two-stage split,
 //! [`Substrate`], and ten rows (C1–C3, D1, D1b, D2, D3, D4, D6, D7; D5 is
-//! subsumed by D4 over an alt view and closes with slice 9); slice 3
+//! the alt window, recorded by the cheap tier beside D4 — slice 9); slice 3
 //! (`CHAIN_RULES_SLICE_3.md`) housed `PDM-Q5`'s anchor model — the
 //! release-carried [`ReleaseAnchors`], the [`Trust`] input to `validate`,
 //! CEN-E1 per block and CEN-E5 at writer open (the first `enforced_at` row;
@@ -64,8 +64,7 @@
 //! (the first of that status), every public network's genesis pinned in
 //! [`ReleaseAnchors`] — verified by equality, in no trust band — and
 //! `RuleSet::mined_money_unlock_window` (the split epoch is
-//! `rules::miner::EMISSION_SPLIT_EPOCH` until a schedule step names
-//! another); F14/F14b/F16/F18 wait on CEN-G6's
+//! `shekyl_economics::EMISSION_SPLIT_EPOCH`, read by the split itself); F14/F14b/F16/F18 wait on CEN-G6's
 //! median (slice 7) and F17 on the curve tree's writer (DRS-E3); slice 5
 //! (`CHAIN_RULES_SLICE_5.md`) landed 4.H — the transaction on its own —
 //! as the third rule class, `TxRule` over a `TxContext` (crate-private,
@@ -119,6 +118,7 @@
 
 #![deny(unsafe_code)]
 
+mod alt;
 mod anchors;
 mod archival;
 mod block;
@@ -126,6 +126,7 @@ mod census;
 mod coverage;
 mod drain;
 mod fault;
+mod header_ladder;
 mod reorg;
 mod rule_set;
 mod rules;
@@ -150,23 +151,35 @@ mod view;
 #[cfg(any(test, feature = "harness"))]
 pub mod harness;
 
+pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
-    shard_close, shard_close_height, Accrual, ArchivalDelta, ClosedUniverse, EpochClose,
-    RecordWrite, RecordWriteKind, ServeCreditKey, Slash,
+    closed_and_final, shard_close, shard_close_height, Accrual, ArchivalDelta, ClosedUniverse,
+    DrawableSet, EpochClose, EpochGather, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement,
+    Slash,
+};
+// The serve-credit bundle rule (`archival/bundle.rs`): STAGED. The
+// verifier and its view trait are exported for the lanes that wire them
+// (`SO-D12`'s cutover, DRS-E5's queue); `form` and `validate` do not call
+// them.
+pub use archival::{
+    check_section, check_section_until_switch, open_body, open_reference, verify_bundle, Admitted,
+    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge,
+    SectionCheckFailed, SectionRefused, SectionStanding,
 };
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};
 pub use fault::{
-    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, Retry, Stale, ViewRead,
-    MAX_FORM_ATTEMPTS,
+    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, Retry, SettlementCheck, Stale,
+    ViewRead, MAX_FORM_ATTEMPTS,
 };
-pub use reorg::{journal_horizon, journal_horizon_under, D_MAX};
+pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
-    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule, ReorgCapNotInsideEpoch,
-    RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
+    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule,
+    FakechainScheduleRefused, ReorgCapNotInsideEpoch, ResponseWindowOutrunsAnchor, RuleSchedule,
+    RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{
@@ -177,13 +190,14 @@ pub use rules::body::ArchivalKey;
 pub use rules::difficulty::Target;
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
-    EMISSION_SPLIT_EPOCH,
 };
-pub use rules::recorded;
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
-pub use rules::tx_against::{REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE};
+pub use rules::tx_against::{
+    newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE,
+};
+pub use rules::{recorded, recorded_header};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
 pub use tree_growth::{
@@ -193,5 +207,6 @@ pub use trust::Trust;
 pub use validate::{form, tx_against, tx_form, validate};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{
-    AtHeight, BlockOutputs, ChainView, LeafSource, RecordedBlock, RecordedWeights, Tip,
+    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, LeafSource, RecordedBlock,
+    RecordedWeights, Tip,
 };

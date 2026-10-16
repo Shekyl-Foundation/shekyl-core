@@ -24,6 +24,17 @@
 //! The re-exports below force both crates into the archive; their
 //! `#[no_mangle]` exports survive into the staticlib (verified by the
 //! same mechanism that puts `shekyl_log_*` into `libshekyl_ffi.a`).
+//!
+//! This crate is also the daemon's **composition root** for the archival
+//! fetch scheduler: `shekyl-archival-fetch-sched` reaches the fetch client,
+//! `shekyl-daemon-rpc` may not (`check_p_fetch_dep_cut.py`), and the one
+//! place both are in scope is here. [`shard_view`] implements
+//! `ShardViewFacts` over a `ViewDesk` whose `ShardFacts` / `HolderSource`
+//! read `shekyl-chain-store` (`SHARD_VIEW_FETCH.md` `SV-D9`). Production
+//! `ServerConfig` still defaults to `SkeletonAbsent` until the daemon
+//! opens that store (`DRS-E3`).
+
+pub mod shard_view;
 
 pub use shekyl_archival_fetch_sched;
 pub use shekyl_daemon_rpc;

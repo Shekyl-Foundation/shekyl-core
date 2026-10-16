@@ -8,7 +8,10 @@
 use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
-use shekyl_archival_retention::HoldingsDescriptor;
+use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
+use shekyl_crypto_pq::signature::HybridSignature;
+use shekyl_p_host::sign_pass_transcript;
 use shekyl_tor_control_wallet::service::OnionIdentity;
 
 use crate::engine::{Network, ShekylAddress};
@@ -141,7 +144,7 @@ impl Message<PersonaIdentityOf> for StakeEngine {
 /// **The guarantee is the boundary, not the seed's lifetime**, and the two are
 /// easy to conflate. This call does not shorten the seed's life or wipe it:
 /// `hs_id_seed` stays in the actor's [`ArchivalPKeys`] for the persona's life,
-/// under that field's `Zeroizing` and the `on_stop` wipe, and
+/// on the heap and wiped when the bundle drops, and under the `on_stop` wipe.
 /// [`OnionIdentity::from_hs_id_seed`] borrows it and retains nothing. What
 /// makes the custody property hold is narrower and stronger: no caller of this
 /// message can obtain the seed, only the expanded credential.
@@ -173,7 +176,183 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
             .ok_or(StakeEngineError::LookaheadExhausted {
                 requested: msg.p_slot,
             })?;
-        Ok(OnionIdentity::from_hs_id_seed(&held.keys().hs_id_seed))
+        Ok(OnionIdentity::from_hs_id_seed(held.keys().hs_id_seed()))
+    }
+}
+
+/// Countersign one SF-D8 pass transcript with the held persona's bond
+/// identity key — the SH-2 resident-key handoff into `PersonaServingHost`.
+///
+/// This is the §7.2(iii) ruling applied to a key that is *stronger* than
+/// `hs_id_seed`, and the shape differs accordingly. The onion handoff can
+/// export an expanded credential because the credential authorises exactly
+/// one thing. `hybrid_sign_sk` authorises three: the bond post
+/// (`PQC_AUTH_TX`), the emission claim (`EMISSION_CLAIM`) and the attestation
+/// pass (`ATTESTATION`), separated only by the domain byte the signer chooses.
+/// A copy of it in the serving role would be restricted at the API, not by the
+/// key — one edit from a serving task that signs a claim. So **the secret does
+/// not cross the actor boundary at all**: the serving role sends the
+/// 112-byte transcript in and receives the signature out, per served shard
+/// (`SF-D13`, "injection, not custody"; `SH2_RESIDENT_KEY_AUDIT.md` §3 Q1).
+///
+/// The domain is fixed by [`sign_pass_transcript`] itself, the only signing
+/// call for the identity key. This handler cannot sign anything else with
+/// that key even if asked. The receipt key has its own call,
+/// [`shekyl_p_host::sign_receipt_transcript`], reached through
+/// [`SignReceiptTranscript`].
+///
+/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], as at every
+/// other slot boundary. The handler does **not** also gate on the
+/// [`HeldPersona::Bonded`] tag: that tag is a reconcilable persistence hint,
+/// not a statement of chain truth, and the host already cannot start without
+/// a connected bond record — a second gate on a hint would add false refusals
+/// and no security.
+pub(crate) struct SignPassTranscript {
+    pub p_slot: PSlot,
+    pub message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+}
+
+impl Message<SignPassTranscript> for StakeEngine {
+    type Reply = Result<HybridSignature, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: SignPassTranscript,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let held = self
+            .held
+            .get(&msg.p_slot)
+            .ok_or(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })?;
+        // Identity key, live scheme. The receipt key is a second message
+        // ([`SignReceiptTranscript`]). The cutover selects
+        // `ResidentReceiptKey`; it does not replace this argument.
+        sign_pass_transcript(&held.keys().hybrid_sign_sk, &msg.message)
+            .map_err(StakeEngineError::PassCountersign)
+    }
+}
+
+/// Sign one pass transcript with the held persona's **receipt key** —
+/// Ed25519 + FN-DSA-1024, hybrid scheme 3, under `SCHEME_DOMAIN_RECEIPT`
+/// (`FN_DSA_HYBRID.md` §6, increment 4).
+///
+/// **STAGED.** The receipt-key counterpart of [`SignPassTranscript`], with
+/// one production sender, `serving::receipt_key::ResidentReceiptKey`, which
+/// the serving task is not started with. [`SignPassTranscript`] stays the
+/// live signer until the settlement lane's cutover switches the serve path
+/// in the change that makes a verifier accept scheme-3 receipts.
+///
+/// The shape is [`SignPassTranscript`]'s for the same reason: the secret
+/// does not cross the actor boundary. The 112-byte transcript goes in, the
+/// signature comes out. The domain is fixed by
+/// [`shekyl_p_host::sign_receipt_transcript`], which
+/// [`HeldPersona::sign_receipt_transcript`] calls, so this handler cannot
+/// sign anything else with the key even if asked. The transcript is the one
+/// the identity key signs today, unchanged.
+///
+/// The first message for a persona decodes its receipt key and every later
+/// one signs from the held key ([`HeldReceiptKey`], `FND-4`). The first
+/// therefore needs the stack a decode needs, on the actor's task; the
+/// figures are on `the_first_receipt_pays_the_decode_and_later_ones_do_not`.
+/// A key that does not decode is [`StakeEngineError::ReceiptKeyUndecodable`]
+/// at that first message and at each one after it; the later ones are
+/// refused from the remembered state and decode nothing. A decoded key whose
+/// signature fails is [`StakeEngineError::ReceiptSign`], a different variant
+/// (`HeldPersona::sign_receipt_transcript`).
+///
+/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], and there is
+/// no gate on the [`HeldPersona::Bonded`] tag, both as in
+/// [`SignPassTranscript`] and for its reasons.
+pub(crate) struct SignReceiptTranscript {
+    pub p_slot: PSlot,
+    pub message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+}
+
+impl Message<SignReceiptTranscript> for StakeEngine {
+    type Reply = Result<FnDsaHybridSignature, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: SignReceiptTranscript,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let held = self
+            .held
+            .get_mut(&msg.p_slot)
+            .ok_or(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })?;
+        // Undecodable and a failed signature come back as two variants;
+        // the capability's pre-flight latches on the first only.
+        held.sign_receipt_transcript(&msg.message)
+    }
+}
+
+/// Test-only: whether the persona at `p_slot` holds a decoded receipt key
+/// (`None` for an unheld slot). The lazy state is otherwise invisible from
+/// outside the actor, by design.
+#[cfg(test)]
+pub(crate) struct ReceiptKeyIsBuilt {
+    pub p_slot: PSlot,
+}
+
+#[cfg(test)]
+impl Message<ReceiptKeyIsBuilt> for StakeEngine {
+    type Reply = Option<bool>;
+
+    async fn handle(
+        &mut self,
+        msg: ReceiptKeyIsBuilt,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.held
+            .get(&msg.p_slot)
+            .map(|held| held.receipt_key().built().is_some())
+    }
+}
+
+/// The read-only handle on the actor's body store.
+///
+/// The writer stays on the actor (`WSS-Q1`(a)). The reader still holds the
+/// store key and decrypts on the serve path, so this is not `WSS-Q13`.
+pub(crate) struct ServingBodies;
+
+impl Message<ServingBodies> for StakeEngine {
+    type Reply = Result<shekyl_p_store::BodyStoreReader, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        _msg: ServingBodies,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.body_store.reader())
+    }
+}
+
+/// Erase body-store rows the pin-release gate has cleared (`WSS-Q8`).
+///
+/// The writer stays on this actor. The serving host asks; it does not
+/// hold the store key.
+pub(crate) struct EraseReleasedShards {
+    pub shard_ids: Vec<u64>,
+}
+
+impl Message<EraseReleasedShards> for StakeEngine {
+    type Reply = Result<(), String>;
+
+    async fn handle(
+        &mut self,
+        msg: EraseReleasedShards,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        for id in msg.shard_ids {
+            self.body_store
+                .erase_shard(shekyl_types::ShardId::from_raw(id))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 }
 
@@ -232,10 +411,9 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 ///
 /// The entry-gap timing draw runs inside the handler (S4/S5): the OS entropy
 /// source is preflighted via `try_fill_bytes` (fail-loud on source failure —
-/// no silent fallback to a weaker source), then the draw is taken and checked
-/// for the double-jitter degeneracy pattern. A degenerate draw is rejected;
-/// a correct CSPRNG produces consecutive equal spreads with probability ≈ 1/601,
-/// so a single retry resolves an unlucky-but-correct draw.
+/// no silent fallback to a weaker source), then [`super::helpers::draw_entry_gap_guarded`]
+/// draws a run of pairs. An equal pair is drawn again inside the guard. The
+/// handler rejects only when the whole run collided, which is a stuck source.
 ///
 /// The `ArchivalPKeys` bundle is borrowed inside the actor and never crosses
 /// the actor boundary (rule 36-secret-locality). `build_join_market_vin` is
@@ -333,7 +511,7 @@ impl Message<PlanBondPost> for StakeEngine {
         //    never returned to the caller (rule 36-secret-locality): only the
         //    constructed `JoinMarketVin` (paired with its placement offset)
         //    crosses the actor boundary.
-        let endpoint = OnionIdentity::from_hs_id_seed(&keys.hs_id_seed).public_key();
+        let endpoint = OnionIdentity::from_hs_id_seed(keys.hs_id_seed()).public_key();
         let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings, endpoint)
             .map_err(StakeEngineError::BondBuild)?;
         Ok(BondPostPlacement {

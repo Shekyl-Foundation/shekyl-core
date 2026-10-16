@@ -876,7 +876,7 @@ mod tests {
         // composes from the split plus the fee-burn miner leg — all independent
         // of the C++ connect path.
         use crate::burn::compute_burn_split;
-        use crate::emission_share::{calc_effective_emission_share, split_block_emission};
+        use crate::emission_share::{emission_share, split_block_emission};
         use crate::escalation::ScaledShare;
         use crate::params::SCALE;
 
@@ -908,9 +908,8 @@ mod tests {
             let q_full = effective_emission(ag, TxVolume::ZERO, &p).unwrap();
 
             for h in height_grid {
-                let share = calc_effective_emission_share(
+                let share = emission_share(
                     h,
-                    0,
                     STAKER_EMISSION_SHARE,
                     STAKER_EMISSION_DECAY,
                     BLOCKS_PER_YEAR,

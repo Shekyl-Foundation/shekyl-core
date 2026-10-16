@@ -24,8 +24,9 @@
 //! implement the traits without this crate naming them. Each returns a
 //! fault in the outer position and a verdict in the inner one; `validate`'s
 //! outer position is a [`Fault<V::Fault>`] — the view's, or one of the two
-//! kinds this crate defines (`fault.rs`). Inside a view-reading rule, `?`
-//! propagates a fault and only a fault; a refusal is always written out as
+//! kinds this crate defines (`fault.rs`). Inside a block rule, `?`
+//! propagates a [`ViewRead`] — the view's fault, or a corrupt observation —
+//! and `validate` maps that into [`Fault`]. A refusal is always written out as
 //! [`refused`](crate::refused) at the site that judged, so the row is named
 //! where the decision is made.
 //!
@@ -48,26 +49,27 @@ use crate::block::{Candidate, Derived, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
+use crate::header_ladder::{self, HeaderFacts};
 use crate::rule_set::RuleSet;
-use crate::rules::anchors::E1;
+use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::body::{G1, G10, G2, G7, G9};
-use crate::rules::difficulty::D4;
-use crate::rules::header::{B1, B2, B5, B6, B7};
-use crate::rules::miner::{Emission, F1, F10, F3, F4, F5, F6, F7, F9};
-use crate::rules::pow::{D1b, D1, D2, D3};
+use crate::rules::header::{B1, B2, B5, B6};
+use crate::rules::miner::{Emission, F1, F10, F3, F7, F9};
+use crate::rules::pow::D2;
 use crate::rules::reward;
-use crate::rules::timestamps::{C1, C2, C3};
-use crate::rules::topology::A2;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
+use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
+use crate::rules::tx_emission::{J19, J20, J22, J24};
+use crate::rules::tx_emission_against::judge_emission_claim;
 use crate::rules::tx_extra::{I19, I20};
-use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J2};
-use crate::rules::{self, BlockContext, FormContext};
+use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J2, J28};
+use crate::rules::{self, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
 use crate::verdict::{ChainValid, TxSlot, Verdict};
-use crate::view::{ChainView, Tip};
+use crate::view::ChainView;
 
 /// Run the listed stateless rules in order; the first refusal is the verdict.
 ///
@@ -86,12 +88,14 @@ macro_rules! judge_form {
 }
 
 /// Run the listed view-bound rules in order; the first refusal is the
-/// verdict. A view fault is wrapped into its arm of [`Fault`].
+/// verdict. A [`ViewRead`] becomes [`Fault`] through [`From`]: the view's
+/// own fault stays [`Fault::View`], and a corrupt observation stays
+/// [`Fault::Corrupt`].
 macro_rules! judge_block {
     ($cx:expr, $view:expr, $coverage:expr; $($rule:ty),+ $(,)?) => {
         $(
             if let Err(refused) =
-                rules::run::<$rule, V>(&$cx, $view, &mut $coverage).map_err(Fault::View)?
+                rules::run::<$rule, V>(&$cx, $view, &mut $coverage).map_err(Fault::from)?
             {
                 return Ok(Err(refused));
             }
@@ -133,7 +137,7 @@ pub fn form<S: Substrate>(
     // then the coinbase's shape (4.F — one field of the block, judged here
     // because the coinbase never passes the per-transaction path).
     let cx = FormContext::new(&candidate, rule_set);
-    judge_form!(cx, coverage; B1, B2, B7, G2, F1, F3, F7, F9, F10);
+    judge_form!(cx, coverage; B1, B2, G2, F1, F3, F7, F9, F10);
 
     // Two definitions, after the cheap refusals and outside any
     // transaction. The identity first (B6: one keccak over the hashing
@@ -179,179 +183,22 @@ pub fn form<S: Substrate>(
 /// view, it cannot be connected under another — the store's `connect` takes
 /// a `ChainValid<'id, StoreView<'_, 'id>>`, and a verdict from a different
 /// transaction, or from an unbranded view that merely borrowed the `'id`,
-/// does not unify with it:
+/// does not unify with it.
 ///
-/// ```compile_fail
-/// use core::convert::Infallible;
-/// use core::marker::PhantomData;
-/// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
-///
-/// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
-/// impl<'id> ChainView<'id> for View<'id> {
-///     type Fault = Infallible;
-///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
-///         Ok(false)
-///     }
-///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
-///         Ok(None)
-///     }
-///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
-///         Ok(None)
-///     }
-///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-///         Ok(TreeFrontier::EMPTY)
-///     }
-///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn weights_window(
-///         &self,
-///         _: BlockHeight,
-///         _: BlockCount,
-///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
-///         Ok(false)
-///     }
-///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
-///         Ok(shekyl_units::AtomicUnits::ZERO)
-///     }
-/// }
-/// // Each call brands a fresh view, as the store's `write` does.
-/// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
-///     f(View(PhantomData))
-/// }
-/// // The store's `connect`: the verdict must carry *this* view's brand.
-/// fn connect<'id>(_view: &View<'id>, _valid: ChainValid<'id, View<'id>>) {}
-/// fn formed() -> StructurallyValid {
-///     unimplemented!()
-/// }
-///
-/// with_view(|outer| {
-///     with_view(|inner| {
-///         let valid = validate(
-///             formed(),
-///             &inner,
-///             &RuleSet::GENESIS,
-///             &Trust::UNANCHORED,
-///         )
-///         .unwrap()
-///         .unwrap();
-///         connect(&outer, valid); // judged against `inner`: does not compile
-///     })
-/// });
-/// ```
-///
-/// An unbranded view that implements `ChainView` for every `'id` still
-/// cannot satisfy `connect`: it mints `ChainValid<'id, Evil>`, not
-/// `ChainValid<'id, View<'id>>`.
-///
-/// ```compile_fail
-/// use core::convert::Infallible;
-/// use core::marker::PhantomData;
-/// use shekyl_chain_rules::*;
-/// use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, TxHash};
-///
-/// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
-/// impl<'id> ChainView<'id> for View<'id> {
-///     type Fault = Infallible;
-///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
-///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
-///         Ok(None)
-///     }
-///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
-///         Ok(None)
-///     }
-///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-///         Ok(TreeFrontier::EMPTY)
-///     }
-///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn weights_window(
-///         &self,
-///         _: BlockHeight,
-///         _: BlockCount,
-///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
-///         Ok(false)
-///     }
-///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
-///         Ok(shekyl_units::AtomicUnits::ZERO)
-///     }
-/// }
-/// struct Evil;
-/// impl<'id> ChainView<'id> for Evil {
-///     type Fault = Infallible;
-///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
-///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn height_of(&self, _: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
-///         Ok(None)
-///     }
-///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
-///         Ok(None)
-///     }
-///     fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-///         Ok(TreeFrontier::EMPTY)
-///     }
-///     fn leaf_count_at(&self, _: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn outputs_at(&self, _: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn weights_window(
-///         &self,
-///         _: BlockHeight,
-///         _: BlockCount,
-///     ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-///         Ok(AtHeight::AboveTip)
-///     }
-///     fn has_transaction(&self, _: &TxHash) -> Result<bool, Infallible> {
-///         Ok(false)
-///     }
-///     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
-///         Ok(shekyl_units::AtomicUnits::ZERO)
-///     }
-/// }
-/// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}
-/// fn formed() -> StructurallyValid { unimplemented!() }
-///
-/// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
-///     f(View(PhantomData))
-/// }
-/// with_view(|view| {
-///     let valid = validate(formed(), &Evil, &RuleSet::GENESIS, &Trust::UNANCHORED).unwrap().unwrap();
-///     connect(&view, valid); // ChainValid<Evil> ≠ ChainValid<View>
-/// });
-/// ```
+/// That is a property of the types, with no runtime behaviour to test; the
+/// test is the program that must not compile, and it lives in
+/// `tests/trybuild/` (`verdict_does_not_escape_its_view.rs`: a verdict
+/// judged against an inner brand cannot be connected under an outer one,
+/// `E0521`; `unbranded_view_does_not_connect.rs`: a view implementing
+/// `ChainView` for every `'id` mints `ChainValid<'id, Evil>`, which is not
+/// `ChainValid<'id, View<'id>>`, `E0308`; and
+/// `verdict_connects_under_its_own_view.rs`, the positive control). They
+/// were two `compile_fail` doctests here until 2026-10-10. A doctest's
+/// `compile_fail` cannot say *why* the program failed, and from 2026-09-29
+/// — when `ChainView` grew the archival reads and the doctests' stub views
+/// did not — both passed because the stubs no longer implemented the trait,
+/// not because `connect` refused the verdict. `trybuild` snapshots the
+/// stderr, so the cause is the thing asserted.
 pub fn validate<'id, V: ChainView<'id>>(
     formed: StructurallyValid,
     view: &V,
@@ -371,35 +218,42 @@ pub fn validate<'id, V: ChainView<'id>>(
 
     let mut coverage = *formed.coverage();
 
-    // Definitions the predicates read, derived once and recorded where they
-    // are derived: the connecting height (one tip read), the seed
-    // verification (D3), the MTP window (C3), the target (D4, minted
+    // Definitions the predicates read, derived once — the same function the
+    // alt tier calls — and recorded where they are derived: the connecting
+    // height, the seed (D3), the MTP window (C3), the target (D4, minted
     // through D6) and the work it implies, the comparison (D1b). B6 was
-    // recorded by `form` (the identity is stateless) and rides on the token.
-    let tip = view.tip().map_err(Fault::View)?;
-    let connecting = Tip::connecting_height(tip.as_ref());
-    // The seed claim first: a stale seed means the longhash below was
-    // computed against a chain this is not, and nothing else is worth
-    // judging until `form` is redone.
-    D3::verify_seed(view, connecting, &formed, &mut coverage)?;
-    let mtp_window = C3::window(view, connecting, &mut coverage)?;
-    let target = match D4::target(view, connecting, rule_set, &mut coverage)? {
-        Ok(target) => target,
-        // CEN-D6: the ratified algorithm derived zero for this height; the
-        // block is refused, as the C++ refuses it. A verdict, not a fault
-        // (rules::difficulty module docs).
+    // recorded by `form` and rides on the token. CEN-D6's zero is a
+    // refusal, not a fault (rules::difficulty module docs). This tier does
+    // not record D5: the window is the recorded chain.
+    let HeaderFacts {
+        connecting,
+        cumulative_difficulty,
+        context: cx,
+    } = match header_ladder::derive(&formed, view, rule_set, trust, &mut coverage)? {
+        Ok(facts) => facts,
         Err(refused) => return Ok(Err(refused)),
     };
-    let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
-    D1b::record(&mut coverage);
+    let target = cx.target;
 
-    // View-bound block-level predicates (4.A–4.G), in census order. G1
-    // (no listed transaction already on the chain, or twice in this block)
-    // is here, **before** the slot loop — the C++'s order, and the only one
-    // under which it has a witness on a spend: after the loop I7 and L1
-    // refuse the same shapes first (slice 7 Q8; `body_tests` pins it).
-    let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
-    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1, F4, F5, F6, G1);
+    // View-bound block-level predicates (4.A–4.G). The header rules are the
+    // ladder's three segments, written once and shared with the alt tier.
+    // Between them, the C++'s insertion points: B5 after the parent link;
+    // B4 (the attestation set) after D1 and before the coinbase rows, where
+    // `verify_block_attestation` runs — so a coinbase extra that does not
+    // parse is B4's refusal, not I20's (slice 8 §4); G1 before the slot
+    // loop, the only place it has a witness on a spend (slice 7 Q8).
+    if let Err(refused) = header_ladder::parent_link(&cx, view, &mut coverage)? {
+        return Ok(Err(refused));
+    }
+    judge_block!(cx, view, coverage; B5);
+    if let Err(refused) = header_ladder::clock_and_proof(&cx, view, &mut coverage)? {
+        return Ok(Err(refused));
+    }
+    judge_block!(cx, view, coverage; B4);
+    if let Err(refused) = header_ladder::anchor_and_coinbase(&cx, view, &mut coverage)? {
+        return Ok(Err(refused));
+    }
+    judge_block!(cx, view, coverage; G1);
 
     // The 4.F definitions (F11, F13, F15, F20): the emission this height is
     // priced at, F14b's operand once the block's weight is known (below).
@@ -484,6 +338,8 @@ pub fn validate<'id, V: ChainView<'id>>(
         Err(refused) => return Ok(Err(refused)),
     };
 
+    // `cx` borrows `formed`. The derived scalars above are `Copy`.
+    drop(cx);
     let hash = formed.hash();
     let (candidate, _stateless) = formed.into_parts();
     let block = ValidatedBlock::derive(
@@ -580,15 +436,25 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    `check_tx_inputs`). Pulling I1 or I4 ahead of H21 would hide the
     //    class failure. H19's verification half is the later `validate`
     //    fold (slice 6 commit 8), so this call stays unrecorded.
-    // 3. The stateless input-path rows, and J2 (the serve credit's pass
-    //    records against its vins, after H20 has required the region). The
-    //    cap does not have to precede the shape rules to bound proof work:
-    //    I15 and the H19 batch verify run after `tx_form` returns, so I4 has
-    //    already refused.
+    // 3. The stateless input-path rows, and 4.J's stateless rows: J2 (the
+    //    serve credit's pass records against its vins, after H20 has
+    //    required the region), J11 and J12 (the bond post's key, hint and
+    //    JoinMarket coupling, after H21 has required the shape — the first
+    //    two arms of the C++ `check_archival_bond_post_input`), J28 (the
+    //    JoinMarket's receipt key is a key — after J12, so a post wrong in
+    //    both keys is named by the older row), and the
+    //    emission statics J19, J20, J22, J24 (the vin's parse, the slot's
+    //    key, the signable hash and the reward commit set, after H22 has
+    //    required the shape — the C++ emission arm's byte-only checks, in
+    //    its order; `rules::tx_emission`). The cap does not have to precede
+    //    the shape rules to bound proof work: I15 and the H19 batch verify
+    //    run after `tx_form` returns, so I4 has already refused.
     judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
-    judge_tx!(cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2);
+    judge_tx!(
+        cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2, J11, J12, J28, J19, J20, J22, J24
+    );
     Ok(coverage)
 }
 
@@ -625,23 +491,72 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     view: &V,
     rule_set: &RuleSet,
 ) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
-    // No 4.I row reads the rule set yet; the first that does (a schedule
-    // step varying a reference-window constant, Q5) takes it from here.
-    let _ = rule_set;
+    // The rule set reaches the archival rows here: J15's reorg cap and
+    // settlement schedule, J16's current epoch at the connecting height
+    // (`judge_bond_post`), J23's close heights and J25's schedule
+    // (`judge_emission_claim`). No 4.I row reads it yet; the first that
+    // does (a schedule step varying a reference-window constant, Q5) takes
+    // it from the same argument.
     let mut coverage = RuleCoverage::EMPTY;
     let cx = match rules::TxContext::derive(tx, slot, &mut coverage) {
         Ok(cx) => cx,
         Err(refused) => return Ok(Err(refused)),
     };
     // Order: the C++'s `check_tx_inputs` looks up each key image as it
-    // walks the inputs (I7), then the reference sequence (I10 yields the
-    // height, I11 measures it, I12 reads the anchor). I13 and I15 join
-    // that sequence in `judge_reference`, not here.
+    // walks the inputs (I7, `blockchain.cpp:3414–3467`), then runs the
+    // class's arm (`:3516`, `:3606`, `:3734`): the serve credit's and the
+    // bond post's record reads, then the reference sequence (I10 yields
+    // the height, I11 measures it, I12 reads the anchor; on an emission
+    // the whole context is J21's and is yielded for the emission's proof
+    // rows; on a bond post it is J27's, after the post has been judged
+    // against its record — `check_archival_bond_post_input` at `:3616`,
+    // the funding half at `:3654`). I13 and I15 join the spend's sequence
+    // in `judge_reference`, not here.
     match rules::run_tx_against::<I7, _>(&cx, view, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    match judge_reference(&cx, view, &mut coverage)? {
+    // The serve-credit arm of `check_tx_inputs`: the bond record read off
+    // the view before the block (J4), its join epoch against the credited
+    // one (J5), `good_through` (J6) — one read per vin, in that order. J7's
+    // window joins the sequence in `judge_serve_credit_bond` (Slice C).
+    match judge_serve_credit_bond(&cx, view, &mut coverage).map_err(ViewRead::View)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    // The bond-post arms of `check_tx_inputs`, in the C++'s per-kind order:
+    // a JoinMarket's statics against the record's absence (J14) then its
+    // identity key (J13); a Release's slot against the record's committed
+    // `bond_spend_pk` (J13, `cold_authority_pin`) then its full exit,
+    // cooldown and settlement (J16, the one row reading the rule set); a
+    // Reinstate's open interval and unchanged holdings (J18) then its
+    // identity key (J13). Before the signatures, as the C++ pins the key
+    // before `verify_transaction_pqc_auth` verifies it — I18 asks whether
+    // the slot's key signed; J13 asks whether it is the right key. A
+    // JoinMarket's held shards are admissible at the parent (J15) between
+    // its statics and its key, as the C++ gathers between the two. J15 is
+    // the first 4.J row to read a per-height record, so the sequence's
+    // fault is a `ViewRead` from here on. Before the funding half (J27, in
+    // `judge_reference`), as the C++ judges the post before its funding
+    // spends' reference and proof: a post refused against its record is
+    // these rows' whatever its proof says. *Records-was:* the reference
+    // sequence ran ahead of this arm until 2026-10-08, when the bond post
+    // was a vacuous class there and the order between them was moot.
+    match judge_bond_post(&cx, view, rule_set, &mut coverage)? {
+        Ok(()) => {}
+        Err(refused) => return Ok(Err(refused)),
+    }
+    let reference = match judge_reference(&cx, view, &mut coverage)? {
+        Ok(reference) => reference,
+        Err(refused) => return Ok(Err(refused)),
+    };
+    // The emission arm of `check_tx_inputs`: every claimed epoch's frozen
+    // close gathered (J23), then the verify over the gathers, the
+    // claimant's record before the block, J21's reference context and the
+    // statics' operands (J25), then the fee inputs' FCMP++ proof as I15's
+    // over the `ToKey` subset (J26). Before the signatures, as the C++
+    // verifies the claim before `verify_transaction_pqc_auth`.
+    match judge_emission_claim(&cx, view, rule_set, reference.as_ref(), &mut coverage)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }

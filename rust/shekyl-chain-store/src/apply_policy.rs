@@ -93,8 +93,10 @@ macro_rules! archival_families {
 archival_families! {
     /// `archival_serve_credit`
     ServeCredit => "archival_serve_credit",
-    /// `archival_settlement` — apply is unforceable (no production caller)
-    /// and its revert is vacuous over an unwritten table. Named exclusion.
+    /// `archival_settlement` — the C++ store has no writer for it, and its
+    /// revert is vacuous over an unwritten table. Named exclusion. In the
+    /// Rust store the family governs the slash pass's row write
+    /// (`archival_write.rs`, phase 9; `SO-D10`).
     Settlement => "archival_settlement",
     /// `archival_attestation_witness`
     AttestationWitness => "archival_attestation_witness",

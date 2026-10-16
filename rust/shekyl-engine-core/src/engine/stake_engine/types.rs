@@ -9,7 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_bond_builder::BondBuildError;
 use shekyl_archival_retention::epoch_is_claim_expired;
+use shekyl_archival_retention::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridSecretKey, FnDsaHybridSignature, FnDsaHybridSigner,
+};
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_scanner::GuaranteedScanner;
 #[cfg(feature = "gf7-hooks")]
@@ -114,6 +118,18 @@ pub(crate) enum HeldPersona {
 }
 
 impl HeldPersona {
+    /// Take a derived bundle into the held set, tagged `bonded` or ephemeral,
+    /// with an empty slot for its decoded receipt key ([`HeldReceiptKey`]).
+    /// The one constructor. Nothing is decoded here: the actor's start does
+    /// no FN-DSA work.
+    pub(crate) fn hold(keys: ArchivalPKeys, bonded: bool) -> Self {
+        if bonded {
+            HeldPersona::Bonded(BondedPersona(keys, HeldReceiptKey::NotBuilt))
+        } else {
+            HeldPersona::Ephemeral(EphemeralPersona(keys, HeldReceiptKey::NotBuilt))
+        }
+    }
+
     /// Borrow the underlying derived bundle (read-only; the secret never
     /// escapes — callers project the public [`PersonaIdentity`] out of it).
     pub(crate) fn keys(&self) -> &ArchivalPKeys {
@@ -122,15 +138,180 @@ impl HeldPersona {
             HeldPersona::Ephemeral(e) => &e.0,
         }
     }
+
+    /// Sign one 112-byte pass transcript with this persona's receipt key,
+    /// decoding it first if this is the first signature asked of the persona
+    /// ([`HeldReceiptKey`]).
+    ///
+    /// Thin over [`shekyl_p_host::sign_receipt_transcript`], which is where
+    /// the transcript is paired with the receipt domain. The domain is not a
+    /// parameter here either, so no caller can have this key sign anything
+    /// else.
+    ///
+    /// `&mut self`: the first call fills the slot, and every call writes the
+    /// decoded key's own working buffers. The actor's message loop is the
+    /// one borrower.
+    ///
+    /// # Errors
+    ///
+    /// Two, kept apart by where they arise, not by the scheme's error value
+    /// (which is `InvalidKeyMaterial` for both):
+    ///
+    /// - [`StakeEngineError::ReceiptKeyUndecodable`] — the key does not
+    ///   decode: from the decode on the first call, from the slot's
+    ///   remembered [`HeldReceiptKey::Undecodable`] on every later one.
+    ///   Only this means "this persona's receipt key does not decode".
+    /// - [`StakeEngineError::ReceiptSign`] — a decoded key's signature
+    ///   failed (the scheme's signer gave up). The key stays held, and the
+    ///   next request signs from it.
+    pub(crate) fn sign_receipt_transcript(
+        &mut self,
+        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<FnDsaHybridSignature, StakeEngineError> {
+        let (keys, receipt) = match self {
+            HeldPersona::Bonded(b) => (&b.0, &mut b.1),
+            HeldPersona::Ephemeral(e) => (&e.0, &mut e.1),
+        };
+        let signer = receipt
+            .signer_over(&keys.receipt_sign_sk)
+            .map_err(|ReceiptKeyUndecodable| StakeEngineError::ReceiptKeyUndecodable)?;
+        shekyl_p_host::sign_receipt_transcript(signer, message)
+            .map_err(StakeEngineError::ReceiptSign)
+    }
+
+    /// The persona's receipt-key slot, read-only: its state, never its key.
+    /// Tests are the only reader. The sign path borrows the field itself.
+    #[cfg(test)]
+    pub(crate) fn receipt_key(&self) -> &HeldReceiptKey {
+        match self {
+            HeldPersona::Bonded(b) => &b.1,
+            HeldPersona::Ephemeral(e) => &e.1,
+        }
+    }
 }
 
 /// A held persona that carries a live bond. The wipe path cannot accept this
 /// type (typed contract #4), so a bonded persona is never zeroized while a bond
 /// depends on its `bond_spend` key.
-pub(crate) struct BondedPersona(pub(crate) ArchivalPKeys);
+///
+/// The second field is the slot for the persona's decoded receipt key. It
+/// is a field of the persona, not a map beside the held set, so that every
+/// path that drops the bundle — the activation wipe, the retire wipe,
+/// `on_stop` — drops and wipes a decoded key with it, with no second removal
+/// to forget.
+pub(crate) struct BondedPersona(pub(crate) ArchivalPKeys, pub(crate) HeldReceiptKey);
 
 /// A held persona with no live bond — the only thing [`wipe_ephemeral`] accepts.
-pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys);
+/// Its second field is the receipt-key slot, as on [`BondedPersona`].
+pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys, pub(crate) HeldReceiptKey);
+
+/// The slot for a persona's **decoded receipt key** — Ed25519 + FN-DSA-1024,
+/// hybrid scheme 3 (`FN_DSA_HYBRID.md` §9, `FND-4`). Three states, entered
+/// in one direction: not yet built, then, at the first receipt signature
+/// asked of the persona, either built or undecodable, for the rest of the
+/// persona's life.
+///
+/// **STAGED.** Nothing on the live serve path signs with this key: the
+/// serving task is handed the identity key's capability
+/// (`serving::pass_key`), and the receipt capability
+/// (`serving::receipt_key`) is built and tested but not selected. See that
+/// module for who switches and what would falsify the staging.
+///
+/// **Why it is lazy.** A staged capability must cost the live path nothing.
+/// Decoding is the expensive step — up to 360 KiB of stack in an optimized
+/// build and 118,640 bytes of heap for the key — and until the cutover no
+/// persona is ever asked for a receipt. So the actor's start decodes nothing
+/// and the slot of a persona that never signs a receipt stays
+/// [`Self::NotBuilt`] for its whole life. The first signature pays the
+/// decode; every later one signs from the held key (`FnDsaHybridSigner`).
+///
+/// **What secret material the slot holds.** While [`Self::NotBuilt`] or
+/// [`Self::Undecodable`], none: no key byte, and nothing derived from one.
+/// Once [`Self::Built`], it holds the receipt key a second time, in decoded
+/// form: the FN-DSA signing key expanded to its 118,640-byte context
+/// (x86_64), and the signer's own heap copy of the 32-byte Ed25519 seed.
+/// That is in addition to the encoded secret, which stays in
+/// `ArchivalPKeys::receipt_sign_sk` in the bundle that is the other field of
+/// the same persona and is what the slot decodes from, borrowed at the first
+/// signature. Both forms are wiped when the persona drops.
+///
+/// **A key that does not decode is remembered as such.** The first
+/// signature is refused and the slot becomes [`Self::Undecodable`]; every
+/// later request is refused at once, without reading the secret or
+/// attempting a decode. The refusal is its own error,
+/// [`ReceiptKeyUndecodable`], and not the scheme's `InvalidKeyMaterial`,
+/// which a decoded key's give-up also returns: a holder that acts on "this
+/// key does not decode" must be able to tell it from "this signature
+/// failed". The key
+/// bytes do not change while the persona is held, so a decode that failed
+/// once fails every time, and retrying would spend a decode's stack and
+/// time on each request — on a path that a remote reader drives once the
+/// capability is live. The state is a unit: it carries no error value and
+/// nothing computed from the key. A persona leaves it only by being dropped;
+/// reopening the wallet re-derives the bundle.
+///
+/// Nothing checks the key when the actor starts. The cutover, which makes
+/// receipt signing live, is where a start-time check belongs if one is
+/// wanted.
+pub(crate) enum HeldReceiptKey {
+    /// No receipt signature has been asked of this persona. Holds nothing.
+    NotBuilt,
+    /// The decoded key, built by the first receipt signature and wiped in
+    /// place when the persona drops.
+    Built(FnDsaHybridSigner),
+    /// The first receipt signature found that the key does not decode.
+    /// Holds nothing; every request is refused without another attempt.
+    Undecodable,
+}
+
+impl HeldReceiptKey {
+    /// The held signer, decoded from `secret` now if no signature has been
+    /// asked for yet. `secret` is always the receipt key of the bundle
+    /// beside this slot ([`HeldPersona::sign_receipt_transcript`] is the one
+    /// caller), and is read only in the [`Self::NotBuilt`] state.
+    ///
+    /// # Errors
+    ///
+    /// [`ReceiptKeyUndecodable`] if the key does not decode: from the decode
+    /// on the first call, from the remembered state on every later one.
+    /// `FnDsaHybridSigner::new` has one error and it means exactly this, so
+    /// the unit state loses nothing by not storing it.
+    fn signer_over(
+        &mut self,
+        secret: &FnDsaHybridSecretKey,
+    ) -> Result<&mut FnDsaHybridSigner, ReceiptKeyUndecodable> {
+        if matches!(self, Self::NotBuilt) {
+            *self = match FnDsaHybridSigner::new(secret) {
+                Ok(signer) => Self::Built(signer),
+                Err(_) => Self::Undecodable,
+            };
+        }
+        match self {
+            Self::Built(signer) => Ok(signer),
+            // `NotBuilt` is not reachable here: the branch above left it.
+            // It is refused, not trusted, and refused as what it would be.
+            Self::Undecodable | Self::NotBuilt => Err(ReceiptKeyUndecodable),
+        }
+    }
+
+    /// Where the decoded key is, or `None` in the two states that hold
+    /// none. Two calls that give the same address saw the same held key.
+    #[cfg(test)]
+    pub(crate) fn built(&self) -> Option<*const FnDsaHybridSigner> {
+        match self {
+            Self::Built(signer) => Some(std::ptr::from_ref(signer)),
+            Self::NotBuilt | Self::Undecodable => None,
+        }
+    }
+}
+
+/// A persona's receipt key does not decode. The one error
+/// [`HeldReceiptKey`] gives, and a type of its own so that it cannot be
+/// confused with a decoded key's failed signature, whose scheme error has
+/// the same value. Carries nothing: no error from the scheme and nothing
+/// computed from the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReceiptKeyUndecodable;
 
 /// Wipe a retired ephemeral persona.
 ///
@@ -492,16 +673,18 @@ pub(crate) enum StakeEngineError {
     )]
     RngSourceFailed(#[source] rand_core::Error),
 
-    /// The entry-gap timing draw was statistically degenerate (`PlanBondPost`, S5 /
-    /// Round 3 — double-jitter-trap detection). Two consecutive draws from the
-    /// same RNG produced identical spreads, which is the signature of a stuck
-    /// or non-random source. The draw is rejected; a correct CSPRNG produces
-    /// consecutive equal spreads with probability ≈ 1/601 — a single retry
-    /// resolves an unlucky-but-correct draw. Multiple consecutive `RngDegeneracy`
-    /// errors indicate a broken entropy source.
+    /// The entry-gap guard refused the draw (`PlanBondPost`, S5).
+    ///
+    /// [`super::helpers::draw_entry_gap_guarded`] compared a full
+    /// [`super::helpers::entry_gap_degeneracy_run`] of pairs and every pair
+    /// had equal spreads. A correct source reaches that run at most once per
+    /// [`super::helpers::ENTRY_GAP_DEGENERACY_BOUND`] draws. A stuck source
+    /// reaches it on every request. Retrying the bond request does not help
+    /// while the source keeps producing equal spreads.
     #[error(
-        "entry-gap draw degenerate: consecutive spreads were equal (stuck-RNG guard); \
-         retry the bond request"
+        "entry-gap draw degenerate: a run of equal spreads (stuck-RNG guard); \
+         the entropy source is not producing distinct draws, and retrying the \
+         bond request will not help until it does"
     )]
     RngDegeneracy,
 
@@ -599,6 +782,38 @@ pub(crate) enum StakeEngineError {
     /// "bond assembly". Nothing was persisted and no funding was reserved.
     #[error("drain assembly: {0}")]
     DrainAssembly(#[from] DrainAssemblyError),
+
+    /// Countersigning a pass transcript with the held persona's bond identity
+    /// key failed inside the scheme — **malformed resident key material**
+    /// (corrupted in-memory state), the same class as [`Self::ScanSetup`].
+    /// Not a refusal the serving host chose: the host reports it in its
+    /// `late_sign_failures` counter and the client sees a refusal trailer.
+    #[error("pass countersignature failed: {0}")]
+    PassCountersign(#[source] shekyl_crypto_pq::CryptoError),
+
+    /// Signing a pass transcript with the held persona's **receipt key**
+    /// (hybrid scheme 3) failed inside the scheme, **with a key that
+    /// decoded**: the scheme's signer gave up, or the domain was refused.
+    /// The same class as [`Self::PassCountersign`], kept apart from it so an
+    /// operator can tell which of the persona's two signing keys failed.
+    /// Says nothing about the next signature: the key stays held. A key
+    /// that does not decode is [`Self::ReceiptKeyUndecodable`], never this.
+    /// STAGED with the receipt capability (`serving::receipt_key`): no live
+    /// path constructs it.
+    #[error("receipt signature failed: {0}")]
+    ReceiptSign(#[source] shekyl_crypto_pq::CryptoError),
+
+    /// The held persona's **receipt key does not decode** — its own variant,
+    /// and the only error that means it. Refused from the decode on the
+    /// first receipt and from the slot's remembered state on every later
+    /// one (`HeldReceiptKey::Undecodable`); no later request can succeed
+    /// while this persona is held. The receipt capability latches its
+    /// pre-flight on this variant and on no other. STAGED with it.
+    #[error(
+        "receipt key does not decode: this persona cannot sign receipts; \
+         its identity key and its other keys are unaffected"
+    )]
+    ReceiptKeyUndecodable,
 }
 
 /// The bonded union's transient scan inputs (SP-3 dual extractor): one
@@ -650,6 +865,11 @@ pub(crate) struct StakeEngineArgs {
     /// Must be present in `bundles` when `Some` (the orchestrator guarantees the
     /// current slot is in the derive-forward set).
     pub active: Option<PSlot>,
+    /// The persona body store (`WSS-Q1`(a)). Opened by the orchestrator
+    /// before spawn, so the blocking redb open stays off `on_start`.
+    /// Non-stakers never construct one. Fill and erase stay on this writer;
+    /// the serve path asks for a reader.
+    pub bodies: shekyl_p_store::BodyStore,
     /// **Test + conformance only.** Selects the `on_start` session self-cert (S6)
     /// behavior. Defaults to [`TestSelfCert::Skip`] so the bulk of the stake
     /// tests — which are **not** about the self-cert — do not run a real ~15 ms
@@ -688,14 +908,16 @@ pub(crate) enum TestSelfCert {
     Degenerate,
 }
 
-/// The entry-gap degeneracy guard fired: two consecutive draws produced equal
-/// spreads (the double-jitter-trap signature).
+/// The entry-gap guard refused: every pair in the run had equal spreads.
 ///
 /// A named zero-sized type rather than `()` so the failure reads at the
-/// signature and the single call site maps it explicitly. It is deliberately
-/// **not** an enum: there is exactly one way this guard fails, and a multi-variant
-/// "in case we add more later" error would be pre-provisioned flexibility
-/// (`21-reversion-clause-discipline.mdc`) — add a variant (or a new error type)
-/// when a second failure mode actually exists.
+/// signature and the call site maps it explicitly. There is one way this
+/// guard fails, so this stays a struct. A second failure mode would be a
+/// new type, not a variant added in advance
+/// (`21-reversion-clause-discipline.mdc`).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct DegenerateDraw;
+
+#[cfg(test)]
+#[path = "held_receipt_key_tests.rs"]
+mod held_receipt_key_tests;

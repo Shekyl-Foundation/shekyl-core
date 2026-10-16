@@ -22,9 +22,9 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::{simulate_fluff_return, FloodParams, FloodReach};
 use shekyl_relay_privacy::schedule::DelayFamily;
-use shekyl_relay_privacy::SplitMix64;
 
 #[test]
 fn f7_directed_first_passage_exceeds_the_undirected_measurement() {

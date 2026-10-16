@@ -58,6 +58,7 @@
 #include "net/levin_base.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
+#include "p2p/seam_board.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "net/parse.h"
 #include "net/tor_address.h"
@@ -70,8 +71,6 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "net.p2p"
 
 #define NET_MAKE_IP(b1,b2,b3,b4)  ((LPARAM)(((DWORD)(b1)<<24)+((DWORD)(b2)<<16)+((DWORD)(b3)<<8)+((DWORD)(b4))))
-
-#define MIN_WANTED_SEED_NODES 12
 
 static inline boost::asio::ip::address_v4 make_address_v4_from_v6(const boost::asio::ip::address_v6& a)
 {
@@ -114,12 +113,11 @@ namespace nodetool
     command_line::add_arg(desc, arg_p2p_external_port);
     command_line::add_arg(desc, arg_p2p_allow_local_ip);
     command_line::add_arg(desc, arg_p2p_add_peer);
-    command_line::add_arg(desc, arg_p2p_add_priority_node);
     command_line::add_arg(desc, arg_p2p_add_exclusive_node);
-    command_line::add_arg(desc, arg_p2p_seed_node);
     command_line::add_arg(desc, arg_tx_proxy);
     command_line::add_arg(desc, arg_anonymous_inbound);
     command_line::add_arg(desc, arg_no_ephemeral_tor);
+    command_line::add_arg(desc, arg_p2p_disclose_early);
     command_line::add_arg(desc, arg_ban_list);
     command_line::add_arg(desc, arg_no_sync);
     command_line::add_arg(desc, arg_no_igd);
@@ -138,38 +136,54 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::init_config()
   {
     TRY_ENTRY();
-    auto storage = peerlist_storage::open(m_config_folder + "/" + P2P_NET_DATA_FILENAME);
-    if (storage)
-      m_peerlist_storage = std::move(*storage);
+    shekyl_dialer_open_address_file((m_config_folder + "/" + P2P_NET_DATA_FILENAME).c_str());
 
     network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
     public_zone.m_config.m_support_flags = P2P_SUPPORT_FLAGS;
-    m_first_connection_maker_call = true;
 
     CATCH_ENTRY_L0("node_server::init_config", false);
     return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f)
+  size_t node_server<t_payload_net_handler>::post_each(std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> note, std::function<void()> then)
   {
+    // The count is stored before any post runs. The last strand calls
+    // `then`. No connections calls it here. `n == 0` does not post.
+    auto left = std::make_shared<std::atomic<size_t>>(0);
+    auto ran = std::make_shared<std::atomic<bool>>(false);
+    auto finish = std::make_shared<std::function<void()>>(std::move(then));
+    std::vector<std::function<void()>> posts;
     for(auto& zone : m_network_zones)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](p2p_connection_context& cntx){
-        return f(cntx, cntx.support_flags);
-      });
+      zone.second.m_net_server.get_config_object().collect_context_posts(
+        [note, left, ran, finish](p2p_connection_context& cntx){
+          note(cntx, cntx.support_flags);
+          if (left->fetch_sub(1, std::memory_order_acq_rel) == 1
+              && !ran->exchange(true, std::memory_order_acq_rel)
+              && *finish)
+            (*finish)();
+        }, posts);
     }
+    left->store(posts.size(), std::memory_order_release);
+    for (auto& post : posts)
+      post();
+    if (posts.empty() && !ran->exchange(true, std::memory_order_acq_rel) && *finish)
+      (*finish)();
+    return posts.size();
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::for_connection(const boost::uuids::uuid &connection_id, std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f)
+  bool node_server<t_payload_net_handler>::for_connection(const boost::uuids::uuid &connection_id, std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> f)
   {
+    // True when some zone queued the callback. The callback runs on that
+    // connection's strand. False means the id is not in a zone.
     for(auto& zone : m_network_zones)
     {
-      const bool result = zone.second.m_net_server.get_config_object().for_connection(connection_id, [&](p2p_connection_context& cntx){
-        return f(cntx, cntx.support_flags);
+      const bool queued = zone.second.m_net_server.get_config_object().for_connection(connection_id, [f](p2p_connection_context& cntx){
+        f(cntx, cntx.support_flags);
       });
-      if (result)
+      if (queued)
         return true;
     }
     return false;
@@ -256,22 +270,6 @@ namespace nodetool
     if (shekyl_ban_for(host_str.c_str(), 0, duration_ns) != 0)
       return false;
 
-    for(auto& zone : m_network_zones)
-    {
-      peerlist_entry pe{};
-      pe.adr = addr;
-      if (addr.port() == 0)
-      {
-        zone.second.m_peerlist.evict_host_from_peerlist(true, pe);
-        zone.second.m_peerlist.evict_host_from_peerlist(false, pe);
-      }
-      else
-      {
-        zone.second.m_peerlist.remove_from_peer_white(pe);
-        zone.second.m_peerlist.remove_from_peer_gray(pe);
-      }
-    }
-
     MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
     return true;
   }
@@ -296,16 +294,6 @@ namespace nodetool
     if (shekyl_ban_for(host_str.c_str(), 1, duration_ns) != 0)
       return false;
 
-    for(auto& zone : m_network_zones)
-    {
-      for (int i = 0; i < 2; ++i)
-        zone.second.m_peerlist.filter(i == 0, [&subnet](const peerlist_entry &pe){
-          if (pe.adr.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
-            return false;
-          return subnet.matches(pe.adr.as<const epee::net_utils::ipv4_network_address>());
-        });
-    }
-
     MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
     return true;
   }
@@ -328,21 +316,6 @@ namespace nodetool
     const std::string host_str = addr.host_str();
     if (shekyl_ban_permanent(host_str.c_str(), 0) != 0)
       return false;
-    for (auto& zone : m_network_zones)
-    {
-      peerlist_entry pe{};
-      pe.adr = addr;
-      if (addr.port() == 0)
-      {
-        zone.second.m_peerlist.evict_host_from_peerlist(true, pe);
-        zone.second.m_peerlist.evict_host_from_peerlist(false, pe);
-      }
-      else
-      {
-        zone.second.m_peerlist.remove_from_peer_white(pe);
-        zone.second.m_peerlist.remove_from_peer_gray(pe);
-      }
-    }
     MCLOG_CYAN(el::Level::Info, "global", "Host " << host_str << " blocked.");
     return true;
   }
@@ -353,15 +326,6 @@ namespace nodetool
     const std::string host_str = subnet.host_str();
     if (shekyl_ban_permanent(host_str.c_str(), 1) != 0)
       return false;
-    for (auto& zone : m_network_zones)
-    {
-      for (int i = 0; i < 2; ++i)
-        zone.second.m_peerlist.filter(i == 0, [&subnet](const peerlist_entry &pe){
-          if (pe.adr.get_type_id() != epee::net_utils::ipv4_network_address::get_type_id())
-            return false;
-          return subnet.matches(pe.adr.as<const epee::net_utils::ipv4_network_address>());
-        });
-    }
     MCLOG_CYAN(el::Level::Info, "global", "Subnet " << host_str << " blocked.");
     return true;
   }
@@ -456,14 +420,16 @@ namespace nodetool
     m_nettype = testnet ? cryptonote::TESTNET : stagenet ? cryptonote::STAGENET : cryptonote::MAINNET;
 
     network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
-    public_zone.m_connect = &public_connect;
+    public_zone.m_outbound = true;
     public_zone.m_bind_ip = command_line::get_arg(vm, arg_p2p_bind_ip);
     public_zone.m_bind_ipv6_address = command_line::get_arg(vm, arg_p2p_bind_ipv6_address);
     public_zone.m_port = command_line::get_arg(vm, arg_p2p_bind_port);
     public_zone.m_port_ipv6 = command_line::get_arg(vm, arg_p2p_bind_port_ipv6);
     public_zone.m_can_announce = true;
     m_external_port = command_line::get_arg(vm, arg_p2p_external_port);
-    m_allow_local_ip = command_line::get_arg(vm, arg_p2p_allow_local_ip);
+    shekyl_peerlist_allow_local_ip(command_line::get_arg(vm, arg_p2p_allow_local_ip));
+    if (command_line::get_arg(vm, arg_p2p_disclose_early))
+      shekyl_peerlist_disclose_early();
     const bool has_no_igd = command_line::get_arg(vm, arg_no_igd);
     const std::string sigd = command_line::get_arg(vm, arg_igd);
     if (sigd == "enabled")
@@ -493,7 +459,7 @@ namespace nodetool
       MFATAL("Invalid value for --" << arg_igd.name << ", expected enabled, disabled or delayed");
       return false;
     }
-    m_offline = command_line::get_arg(vm, cryptonote::arg_offline);
+    m_offline = shekyl_p2p_record_offline(command_line::get_arg(vm, cryptonote::arg_offline));
     m_use_ipv6 = command_line::get_arg(vm, arg_p2p_use_ipv6);
     m_require_ipv4 = !command_line::get_arg(vm, arg_p2p_ignore_ipv4);
 
@@ -531,20 +497,7 @@ namespace nodetool
     {
       if (!parse_peers_and_add_to_container(vm, arg_p2p_add_exclusive_node, m_exclusive_peers))
         return false;
-    }
-
-    if (command_line::has_arg(vm, arg_p2p_add_priority_node))
-    {
-      if (!parse_peers_and_add_to_container(vm, arg_p2p_add_priority_node, m_priority_peers))
-        return false;
-    }
-
-    if (command_line::has_arg(vm, arg_p2p_seed_node))
-    {
-      boost::unique_lock<boost::shared_mutex> lock(public_zone.m_seed_nodes_lock);
-
-      if (!parse_peers_and_add_to_container(vm, arg_p2p_seed_node, public_zone.m_seed_nodes))
-        return false;
+      shekyl::declare_exclusive_peers(m_exclusive_peers);
     }
 
     if (!command_line::is_arg_defaulted(vm, arg_ban_list))
@@ -601,7 +554,7 @@ namespace nodetool
     if ( !set_max_out_peers(public_zone, command_line::get_arg(vm, arg_out_peers) ) )
       return false;
     else
-      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, public_zone.m_config.m_net_config.max_out_connection_count);
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, shekyl_dialer_out_target(SHEKYL_CONNECTOR_CLEARNET));
 
 
     // Negative is unset. The ceiling is derived in `apply_inbound_ceiling`
@@ -630,18 +583,18 @@ namespace nodetool
     for (auto& proxy : *proxies)
     {
       network_zone& zone = add_zone(proxy.zone);
-      if (zone.m_connect != nullptr)
+      if (zone.m_outbound)
       {
         MERROR("Listed --" << arg_tx_proxy.name << " twice with " << epee::net_utils::connector_id_to_string(proxy.zone));
         return false;
       }
-      zone.m_connect = &public_connect;
+      zone.m_outbound = true;
       zone.m_proxy_address = std::move(proxy.address);
 
       if (!set_max_out_peers(zone, proxy.max_connections))
         return false;
       else
-        m_payload_handler.set_max_out_peers(proxy.zone, proxy.max_connections);
+        m_payload_handler.set_max_out_peers(proxy.zone, shekyl_dialer_out_target(SHEKYL_CONNECTOR_TOR));
 
       // No noise ARGUMENT here, and none to pass: the notifier has taken no
       // covert payload since #515 deleted the C++ carrier, and
@@ -665,7 +618,7 @@ namespace nodetool
       && !command_line::get_arg(vm, arg_no_ephemeral_tor);
     for (const auto& zone : m_network_zones)
     {
-      if (zone.second.m_connect != nullptr)
+      if (zone.second.m_outbound)
         continue;
       if (zone.first == epee::net_utils::connector_id::tor && managed_tor_supplies_socks)
         continue;
@@ -688,7 +641,7 @@ namespace nodetool
         return false;
       }
 
-      if (zone.m_connect == nullptr && tx_relay_zones <= 1)
+      if (!zone.m_outbound && tx_relay_zones <= 1)
       {
         MERROR("Listed --" << arg_anonymous_inbound.name << " without listing any --" << arg_tx_proxy.name << ". The latter is necessary for sending local txes over anonymity networks");
         return false;
@@ -698,7 +651,7 @@ namespace nodetool
       zone.m_port = std::move(inbound.local_port);
       // The operator runs this onion and hands us its address. That is
       // configuration, not a publish result, and it is what peers are told.
-      zone.m_our_address = std::move(inbound.our_address);
+      zone.m_our_address = shekyl::note_own_address(std::move(inbound.our_address));
 
       if (!set_max_in_peers(zone, inbound.max_connections))
         return false;
@@ -748,74 +701,6 @@ namespace nodetool
 
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  std::set<std::string> node_server<t_payload_net_handler>::get_ip_seed_nodes() const
-  {
-    std::set<std::string> full_addrs;
-    // The Foundation seed fleet. Six hosts, not four: seedjp and seedbrz were
-    // provisioned after this list was written and were reachable but invisible --
-    // absent here and absent from DNS, so no node could ever bootstrap from them.
-    // Literal addresses, not hostnames: bootstrap must not depend on a resolver.
-    // The list is shared across the fleet; a node whose listen address matches
-    // an entry is omitted at connect (`is_self_dial`), so a seed does not dial
-    // itself. Do not special-case a host here.
-    static const std::array<const char *, 6> default_seed_hosts = {
-      "134.199.166.22",  // seedaus  -- Sydney
-      "45.77.147.65",    // seeduse  -- US East
-      "45.76.171.128",   // seedusw  -- US West
-      "45.77.66.189",    // seedeu   -- EU Frankfurt
-      "139.162.71.114",  // seedjp   -- Tokyo
-      "104.64.59.31"     // seedbrz  -- Brazil
-    };
-    if (m_nettype == cryptonote::TESTNET)
-    {
-      for (const char *host : default_seed_hosts)
-        full_addrs.insert(std::string(host) + ":" + std::to_string(::config::testnet::P2P_DEFAULT_PORT));
-    }
-    else if (m_nettype == cryptonote::STAGENET)
-    {
-      // Shekyl stagenet seed nodes -- to be populated
-    }
-    else if (m_nettype == cryptonote::FAKECHAIN)
-    {
-    }
-    else
-    {
-      for (const char *host : default_seed_hosts)
-        full_addrs.insert(std::string(host) + ":" + std::to_string(::config::P2P_DEFAULT_PORT));
-    }
-    return full_addrs;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  std::set<std::string> node_server<t_payload_net_handler>::get_seed_nodes(epee::net_utils::connector_id zone)
-  {
-    switch (zone)
-    {
-    case epee::net_utils::connector_id::clearnet:
-      return get_ip_seed_nodes();
-    /* GENESIS BLOCKER until Shekyl's own hidden services exist: without seeds
-       here, a node whose only anonymity peers would come from this list has no
-       bootstrap path, and its anonymity zone never forms. An operator can still
-       bootstrap with `--add-peer <address>`, which routes by parsed zone, but
-       that is a manual step and not a default. Q12-R1 generates the addresses
-       and lands them here; nothing about Tor on mainnet works until it does.
-
-       These lists previously held MONERO's onion and Tor seeds, which is worse
-       than empty rather than better. A Shekyl node started with `--tx-proxy
-       tor` dialed six Monero hidden services, failed the network-ID handshake
-       at each, and had nowhere else to go — the same dead zone, reached more
-       slowly, while announcing Shekyl's Tor population to another network's
-       seed operators on the way. An unbootstrapped zone is at least visible as
-       what it is. */
-    case epee::net_utils::connector_id::tor:
-      return {};
-    default:
-      break;
-    }
-    throw std::logic_error{"Bad zone given to get_seed_nodes"};
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   typename node_server<t_payload_net_handler>::network_zone& node_server<t_payload_net_handler>::add_zone(const epee::net_utils::connector_id zone)
   {
     const auto zone_ = m_network_zones.lower_bound(zone);
@@ -833,24 +718,40 @@ namespace nodetool
     // anonymity zone, so a start failure must leave NO tor zone in the map.
     if (m_offline || m_nettype == cryptonote::FAKECHAIN)
       return;
+    const auto preexisting = m_network_zones.find(epee::net_utils::connector_id::tor);
+    const bool zone_was_present = preexisting != m_network_zones.end();
     if (command_line::get_arg(vm, arg_no_ephemeral_tor))
     {
-      MINFO("Ephemeral Tor inbound disabled by --" << arg_no_ephemeral_tor.name);
+      // TB-1: declining Tor is a supported choice, and a node that made it
+      // says so on every boot at a level that is read. An operator who
+      // attached a Tor of their own has not declined Tor, only the managed one.
+      //
+      // These lines go to the "global" category on purpose. This file's own
+      // category, net.p2p, is filtered to errors by the default log settings,
+      // so a warning written there is one nobody sees -- which is how a node
+      // came to run clearnet-only without its operator knowing.
+      if (zone_was_present)
+        MINFO("Managed Tor disabled by --" << arg_no_ephemeral_tor.name
+            << "; the operator-provisioned Tor configuration is in use");
+      else
+        MCWARNING("global", "Tor is declined (--" << arg_no_ephemeral_tor.name << "): this node is clearnet-only. "
+            "Its address is visible to its peers, and its own transactions are relayed over clearnet "
+            "with no onion route. The clearnet link is encrypted only where --"
+            << arg_clearnet_transport_encrypt.name << " is set on both ends. "
+            "Remove the flag to run with Tor");
       return;
     }
     // --anonymous-inbound already owns the onion. --tx-proxy does not: it
     // names the SOCKS address dials use, and the per-boot onion still publishes.
     // A tor zone that exists only because a named onion was parsed is the same
     // case — the managed Tor has not started yet, so it is not operator SOCKS.
-    const auto preexisting = m_network_zones.find(epee::net_utils::connector_id::tor);
-    const bool zone_was_present = preexisting != m_network_zones.end();
     if (zone_was_present && !preexisting->second.m_bind_ip.empty())
     {
       MINFO("Operator inbound onion (--" << arg_anonymous_inbound.name
           << ") owns the tor zone; ephemeral publish yields to it");
       return;
     }
-    const bool socks_from_tx_proxy = zone_was_present && preexisting->second.m_connect != nullptr;
+    const bool socks_from_tx_proxy = zone_was_present && preexisting->second.m_outbound;
 
     constexpr uint16_t EPHEMERAL_TOR_MAX_STREAMS = 8;
     constexpr uint32_t EPHEMERAL_TOR_BOOTSTRAP_TIMEOUT_SECS = 300;
@@ -866,13 +767,42 @@ namespace nodetool
       MINFO("Pinned tor binary found; publishing ephemeral overlay inbound (PWD-E7)");
       break;
     case SHEKYL_DAEMON_TOR_NO_BINARY:
-      MINFO("No tor binary found; overlay (.onion) inbound disabled for this boot. Install the pinned "
-          "tor bundle beside the daemon, stage it under /opt/shekyl/<version>-<target>/, or set "
-          "SHEKYL_TOR_BINARY to enable the default ephemeral posture");
+      // Not declined, and not present: the state TB-1 says a node is not
+      // quietly in. It is a warning until the refusal (TB-2) lands.
+      // `--tx-proxy` already installed a SOCKS dial, and this return leaves
+      // that zone in place, so outbound is that proxy. Calling the node
+      // clearnet-only would be false.
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "No Tor bundle was found, so there is no per-boot onion for inbound. "
+            "Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Install the pinned Tor bundle in the tor/ directory beside the daemon or under "
+            "/opt/shekyl/<bundle>-<target>/ (release packages carry it) to publish inbound as well");
+      else
+        MCWARNING("global", "No Tor was found, so this node is clearnet-only for this boot although Tor was not "
+            "declined. Install the pinned Tor bundle in the tor/ directory beside the daemon or under "
+            "/opt/shekyl/<bundle>-<target>/ (release packages carry it), or pass --"
+            << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
       return;
     case SHEKYL_DAEMON_TOR_BAD_BINARY:
-      MWARNING("A tor binary was found but is unusable for the ephemeral overlay posture: " << error_msg
-          << ". Overlay inbound disabled for this boot");
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "A Tor installation was found but is unusable: " << error_msg
+            << ". Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Inbound has no per-boot onion for this boot");
+      else
+        MCWARNING("global", "A Tor installation was found but is unusable: " << error_msg
+            << ". This node is clearnet-only for this boot");
+      return;
+    case SHEKYL_DAEMON_TOR_UNAVAILABLE:
+      if (socks_from_tx_proxy)
+        MCWARNING("global", "Shekyl does not manage a Tor process on this platform (" << error_msg
+            << "). Outbound stays on the Tor proxy already configured (--" << arg_tx_proxy.name
+            << "). Inbound has no per-boot onion until you pass --" << arg_anonymous_inbound.name
+            << " with an onion of your own");
+      else
+        MCWARNING("global", "Shekyl does not manage a Tor process on this platform (" << error_msg
+            << "), so this node is clearnet-only unless you attach a Tor of your own: run tor, then pass --"
+            << arg_tx_proxy.name << " for outbound and --" << arg_anonymous_inbound.name
+            << " for inbound. Pass --" << arg_no_ephemeral_tor.name << " to run clearnet-only on purpose");
       return;
     default:
       MERROR("Ephemeral tor start failed (" << error_msg
@@ -899,7 +829,7 @@ namespace nodetool
     // already named one, init()'s dial_through_tor writes that address back,
     // so dials use the operator SOCKS and the onion stays on this managed Tor.
     if (!zone.m_net_server.listen_tor(proxy_endpoint->address, "", "", false,
-        reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans()))
+        reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling()))
     {
       MERROR("Cannot bind the ephemeral tor forward listener on 127.0.0.1 (OS-assigned port); tearing tor down");
       shekyl_daemon_tor_shutdown();
@@ -912,13 +842,10 @@ namespace nodetool
     if (!socks_from_tx_proxy)
     {
       zone.m_proxy_address = *proxy_endpoint;
-      zone.m_connect = &public_connect;
-      // The own-edge pool. The fluff floor does not apply: relayed stems
-      // draw over every outbound session, and `--out-peers` does not set
-      // this cap.
-      const std::uint32_t hop0_out = shekyl_hop0_outbound_target();
-      zone.m_config.m_net_config.max_out_connection_count = hop0_out;
-      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, hop0_out);
+      zone.m_outbound = true;
+      // Address-hiding outbound target: the dialer's compiled default for
+      // Tor, the measured degree. `--out-peers` does not set it.
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::tor, shekyl_dialer_out_target(SHEKYL_CONNECTOR_TOR));
       set_max_in_peers(zone, -1);
     }
     m_ephemeral_tor_alive = true;
@@ -933,7 +860,7 @@ namespace nodetool
         service_id, sizeof (service_id), error_msg, sizeof (error_msg));
     if (publish_rc != SHEKYL_DAEMON_TOR_OK)
     {
-      MWARNING("Ephemeral onion publish failed (" << error_msg
+      MCWARNING("global", "Ephemeral onion publish failed (" << error_msg
           << "); the tor zone stays outbound-only this boot (no overlay inbound; PWD-E7 ruled degrade)");
       return;
     }
@@ -949,6 +876,9 @@ namespace nodetool
 
     MLOG_GREEN(el::Level::Info, "Ephemeral overlay inbound published: " << service_id << ".onion:" << virtual_port
         << " -> 127.0.0.1:" << local_port << " (new address every boot; SOCKS " << socks_addr << ")");
+    // The address stays in net.p2p, which the default log settings filter. That
+    // Tor is up is said where an operator reads it, without the address.
+    MGINFO("Tor is up: the managed tor is running and overlay inbound is published on a per-boot onion address");
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -961,7 +891,7 @@ namespace nodetool
       const auto endpoint = net::socks::endpoint::get(proxy);
       CHECK_AND_ASSERT_MES(endpoint, false, "Failed to parse proxy: " << proxy << " - " << endpoint.error().message());
       network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
-      public_zone.m_connect = &public_connect;
+      public_zone.m_outbound = true;
       public_zone.m_proxy_address = *endpoint;
       public_zone.m_can_announce = false;
     }
@@ -1005,32 +935,12 @@ namespace nodetool
     CHECK_AND_ASSERT_MES(res, false, "Failed to init config.");
 
 
-    for (auto& zone : m_network_zones)
-    {
-      res = zone.second.m_peerlist.init(m_peerlist_storage.take_connector(zone.first), m_allow_local_ip);
-      CHECK_AND_ASSERT_MES(res, false, "Failed to init peerlist.");
-    }
-
-    // `--add-peer` is a CANDIDATE, not a verified peer. It has never been
-    // dialled, so it enters gray and earns white the same way every other
-    // address does.
-    //
-    // What this fixes, stated at the strength it actually holds: a stale
-    // `--add-peer` used to sit in white permanently AND be gossiped onward,
-    // since `get_peerlist_head` reads the white list only. In gray it is never
-    // disclosed, so the propagation stops immediately. Its REMOVAL is lazy --
-    // a failed refill dial only records the address in the recently-failed
-    // cache; eviction waits for `gray_peerlist_housekeeping` to draw that
-    // entry (one random gray peer per zone per cycle) and fail its probe. An
-    // earlier version of this comment claimed eviction "on the first failed
-    // dial", which the dial path does not do. Evicting there would be worse:
-    // a transient local outage would discard reachable peers, which is what
-    // the recently-failed retry window exists to avoid.
+    // `--add-peer` names CANDIDATES, not verified peers: operator-named
+    // addresses enter the Rust gray list and earn white the way every other
+    // address does, through a drawn dial the strand accepts (slice 1 brief
+    // §3: seeds are ordinary peers; the compiled seeds enter from Rust).
     for(const auto& p: m_command_line_peers)
-      m_network_zones.at(epee::net_utils::require_address_connector(p.adr)).m_peerlist.append_operator_candidate(p);
-
-    //only in case if we really sure that we have external visible ip
-    m_have_address = true;
+      shekyl::admit_operator_peer(p.adr);
 
     //configure self
 
@@ -1056,12 +966,11 @@ namespace nodetool
       if (!zone.second.m_bind_ip.empty())
       {
         const shekyl_inbound_ceiling ceiling = transport_ceiling();
-        const shekyl_zone_params spans = transport_spans();
         const std::uint8_t* network_id = reinterpret_cast<const std::uint8_t*>(&m_network_id);
         if (zone.first == epee::net_utils::connector_id::tor)
         {
           MINFO("Binding tor forward on " << zone.second.m_bind_ip << ":" << zone.second.m_port);
-          res = zone.second.m_net_server.listen_tor(zone.second.m_proxy_address.address, zone.second.m_bind_ip, zone.second.m_port, true, network_id, ceiling, spans);
+          res = zone.second.m_net_server.listen_tor(zone.second.m_proxy_address.address, zone.second.m_bind_ip, zone.second.m_port, true, network_id, ceiling);
         }
         else
         {
@@ -1076,18 +985,16 @@ namespace nodetool
           }
           const bool have_proxy = zone.second.m_proxy_address.address.port() != 0;
           res = zone.second.m_net_server.listen_clearnet(zone.second.m_bind_ip, zone.second.m_port, ipv6_addr, ipv6_port, m_use_ipv6 && !ipv6_addr.empty(),
-              have_proxy ? &zone.second.m_proxy_address.address : nullptr, clearnet_encrypt, network_id, ceiling, spans);
+              have_proxy ? &zone.second.m_proxy_address.address : nullptr, clearnet_encrypt, network_id, ceiling);
         }
         CHECK_AND_ASSERT_MES(res, false, "Failed to bind server");
       }
       else if (zone.first == epee::net_utils::connector_id::tor && zone.second.m_proxy_address.address.port() != 0)
       {
-        // `--tx-proxy tor,...` without `--anonymous-inbound`: no listener,
-        // and the dials still go through the seam, which needs the SOCKS
-        // address and a tor binding for the connections it establishes.
-        MINFO("Tor zone dials through " << zone.second.m_proxy_address.address << " with no inbound");
+        // This branch installs the Tor dial path through the seam; the
+        // managed onion, if any, is published from Rust.
         res = zone.second.m_net_server.dial_through_tor(zone.second.m_proxy_address.address,
-            reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling(), transport_spans());
+            reinterpret_cast<const std::uint8_t*>(&m_network_id), transport_ceiling());
         CHECK_AND_ASSERT_MES(res, false, "Failed to install the tor proxy");
       }
     }
@@ -1101,15 +1008,6 @@ namespace nodetool
     }
     if(m_external_port)
       MDEBUG("External port defined as " << m_external_port);
-
-    m_local_hosts = local_interface_hosts();
-    auto consider_bind = [this](const std::string& ip) {
-      if (ip.empty() || ip == "0.0.0.0" || ip == "::" || ip == "::0")
-        return;
-      m_local_hosts.insert(ip);
-    };
-    consider_bind(public_zone.m_bind_ip);
-    consider_bind(public_zone.m_bind_ipv6_address);
 
     // add UPnP port mapping
     if(m_igd == igd)
@@ -1179,15 +1077,6 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  uint64_t node_server<t_payload_net_handler>::get_public_connections_count()
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return public_zone->second.m_net_server.get_config_object().get_connections_count();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::deinit()
   {
     kill();
@@ -1206,31 +1095,6 @@ namespace nodetool
       if(m_igd == igd)
         delete_upnp_port_mapping(m_listening_port);
     }
-    return store_config();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::store_config()
-  {
-    TRY_ENTRY();
-
-    if (!tools::create_directories_if_necessary(m_config_folder))
-    {
-      MWARNING("Failed to create data directory \"" << m_config_folder);
-      return false;
-    }
-
-    peerlist_types active{};
-    for (auto& zone : m_network_zones)
-      zone.second.m_peerlist.get_peerlist(active);
-
-    const std::string state_file_path = m_config_folder + "/" + P2P_NET_DATA_FILENAME;
-    if (!m_peerlist_storage.store(state_file_path, active))
-    {
-      MWARNING("Failed to save config to file " << state_file_path);
-      return false;
-    }
-    CATCH_ENTRY_L0("node_server::store", false);
     return true;
   }
   //-----------------------------------------------------------------------------------
@@ -1242,120 +1106,19 @@ namespace nodetool
         zone.second.m_net_server.send_stop_signal();
     MDEBUG("[node] Stop signal sent");
 
+    const auto board = shekyl::seam_board_snapshot();
     for (auto& zone : m_network_zones)
     {
+      const auto connector = static_cast<std::uint8_t>(zone.first);
       std::list<boost::uuids::uuid> connection_ids;
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt) {
-        connection_ids.push_back(cntxt.m_connection_id);
-        return true;
-      });
+      for (const auto& row : board)
+        if (row.endpoint.connector == connector)
+          connection_ids.push_back(shekyl::seam_connection_id(row.id));
       for (const auto &connection_id: connection_ids)
         zone.second.m_net_server.get_config_object().close(connection_id);
     }
     m_payload_handler.stop();
     return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::do_handshake_with_peer(p2p_connection_context& context_, bool just_take_peerlist)
-  {
-    network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context_.m_connector));
-
-    typename COMMAND_HANDSHAKE::request arg;
-    typename COMMAND_HANDSHAKE::response rsp;
-    get_local_node_data(epee::net_utils::require_session_connector(context_.m_connector), arg.node_data, zone);
-    m_payload_handler.get_payload_sync_data(arg.payload_data);
-
-    // Self-detection nonce: minted for THIS outbound attempt, inserted into
-    // this zone's in-flight set BEFORE the request is written (the acceptor
-    // must be able to see it from the first read), erased when the attempt
-    // terminates on any path -- the scope guard is the attempt's lifetime.
-    // A self-connection is one TCP stream, so our own listener reads the
-    // request strictly before this invoke can complete: detection is by
-    // ordering, not by timing.
-    const epee::net_utils::connector_id zone_type = epee::net_utils::require_session_connector(context_.m_connector);
-    // Recorded before it exists to be written: see mint_recorded_handshake_nonce.
-    arg.nonce = mint_recorded_handshake_nonce(zone_type);
-    const auto nonce_guard = epee::misc_utils::create_scope_leave_handler([this, zone_type, nonce = arg.nonce](){
-      erase_outbound_handshake_nonce(zone_type, nonce);
-    });
-
-    epee::simple_event ev;
-    std::atomic<bool> hsh_result(false);
-    bool timeout = false;
-
-    bool r = epee::net_utils::async_invoke_remote_command2<typename COMMAND_HANDSHAKE::response>(context_, COMMAND_HANDSHAKE::ID, arg, zone.m_net_server.get_config_object(),
-      [this, &ev, &hsh_result, &just_take_peerlist, &context_, &timeout](int code, const typename COMMAND_HANDSHAKE::response& rsp, p2p_connection_context& context)
-    {
-      epee::misc_utils::auto_scope_leave_caller scope_exit_handler = epee::misc_utils::create_scope_leave_handler([&](){ev.raise();});
-
-      if(code < 0)
-      {
-        LOG_WARNING_CC(context, "COMMAND_HANDSHAKE invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
-        if (code == LEVIN_ERROR_CONNECTION_TIMEDOUT || code == LEVIN_ERROR_CONNECTION_DESTROYED)
-          timeout = true;
-        return;
-      }
-
-      if(rsp.node_data.network_id != m_network_id)
-      {
-        LOG_WARNING_CC(context, "COMMAND_HANDSHAKE Failed, wrong network!  (" << rsp.node_data.network_id << "), closing connection.");
-        return;
-      }
-
-      if(!handle_remote_peerlist(rsp.local_peerlist_new, context))
-      {
-        LOG_WARNING_CC(context, "COMMAND_HANDSHAKE: failed to handle_remote_peerlist(...), closing connection.");
-        add_host_fail(context.m_remote_address);
-        return;
-      }
-      hsh_result = true;
-      if(!just_take_peerlist)
-      {
-        if(!m_payload_handler.process_payload_sync_data(rsp.payload_data, context, true))
-        {
-          LOG_WARNING_CC(context, "COMMAND_HANDSHAKE invoked, but process_payload_sync_data returned false, dropping connection.");
-          hsh_result = false;
-          return;
-        }
-
-        context.support_flags = rsp.node_data.support_flags;
-        const auto azone = epee::net_utils::require_session_connector(context.m_connector);
-        network_zone& zone = m_network_zones.at(azone);
-        zone.m_peerlist.set_peer_just_seen(context.m_remote_address);
-        // Self-connection is detected on the ACCEPTOR side (the inbound
-        // handler sees our own in-flight nonce and drops); this arm then
-        // observes an ordinary failed handshake.
-        LOG_INFO_CC(context, "New connection handshaked");
-        LOG_DEBUG_CC(context, " COMMAND_HANDSHAKE INVOKED OK");
-      }else
-      {
-        LOG_DEBUG_CC(context, " COMMAND_HANDSHAKE(AND CLOSE) INVOKED OK");
-      }
-      context_ = context;
-    }, std::chrono::milliseconds{P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT});
-
-    if(r)
-    {
-      ev.wait();
-    }
-
-    if(!hsh_result)
-    {
-      LOG_WARNING_CC(context_, "COMMAND_HANDSHAKE Failed");
-      if (!timeout)
-        zone.m_net_server.get_config_object().close(context_.m_connection_id);
-    }
-    else if (!just_take_peerlist)
-    {
-      if (context_.support_flags == 0)
-        try_get_support_flags(context_, [](p2p_connection_context& flags_context, const uint32_t& support_flags) 
-        {
-          flags_context.support_flags = support_flags;
-        });
-    }
-
-    return hsh_result;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -1381,8 +1144,6 @@ namespace nodetool
         m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
         add_host_fail(context.m_remote_address);
       }
-      if(!context.m_is_income)
-        m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_peerlist.set_peer_just_seen(context.m_remote_address);
       if (!m_payload_handler.process_payload_sync_data(rsp.payload_data, context, false))
       {
         m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id );
@@ -1398,58 +1159,6 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_random_index_with_fixed_probability(size_t max_index)
-  {
-    //divide by zero workaround
-    if(!max_index)
-      return 0;
-
-    size_t x = crypto::rand<size_t>()%(16*max_index+1);
-    size_t res = (x*x*x)/(max_index*max_index*16*16*16); //parabola \/
-    MDEBUG("Random connection index=" << res << "(x="<< x << ", max_index=" << max_index << ")");
-    return res;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  std::array<uint8_t, 32> node_server<t_payload_net_handler>::mint_recorded_handshake_nonce(const epee::net_utils::connector_id zone)
-  {
-    std::array<uint8_t, 32> nonce{};
-    crypto::generate_random_bytes_thread_safe(nonce.size(), nonce.data());
-    record_outbound_handshake_nonce(zone, nonce);
-    return nonce;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::record_outbound_handshake_nonce(const epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce)
-  {
-    const auto found = m_network_zones.find(zone);
-    if (found == m_network_zones.end())
-      return;
-    CRITICAL_REGION_LOCAL(found->second.m_nonce_lock);
-    found->second.m_inflight_handshake_nonces.insert(nonce);
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::erase_outbound_handshake_nonce(const epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce)
-  {
-    const auto found = m_network_zones.find(zone);
-    if (found == m_network_zones.end())
-      return;
-    CRITICAL_REGION_LOCAL(found->second.m_nonce_lock);
-    found->second.m_inflight_handshake_nonces.erase(nonce);
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::inflight_handshake_nonce_count(const epee::net_utils::connector_id zone) const
-  {
-    const auto found = m_network_zones.find(zone);
-    if (found == m_network_zones.end())
-      return 0;
-    CRITICAL_REGION_LOCAL(found->second.m_nonce_lock);
-    return found->second.m_inflight_handshake_nonces.size();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::detect_self_handshake(const epee::net_utils::connector_id zone, const std::array<uint8_t, 32>& nonce)
   {
     // Within-zone only, and erase-on-match: see the declaration. The zone
@@ -1457,777 +1166,45 @@ namespace nodetool
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
       return false;
-    CRITICAL_REGION_LOCAL(found->second.m_nonce_lock);
-    return found->second.m_inflight_handshake_nonces.erase(nonce) > 0;
+    return shekyl_dial_take_handshake_nonce(static_cast<std::uint32_t>(zone), nonce.data()) != 0;
+  }
+
+
+
+
+
+  //-----------------------------------------------------------------------------------
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  size_t node_server<t_payload_net_handler>::get_incoming_connections_count(epee::net_utils::connector_id connector)
+  {
+    return static_cast<size_t>(shekyl_seam_board_count(
+        static_cast<std::uint32_t>(connector), SHEKYL_DIRECTION_INBOUND));
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_self_dial(const epee::net_utils::network_address& na) const
+  size_t node_server<t_payload_net_handler>::get_outgoing_connections_count(epee::net_utils::connector_id connector)
   {
-    const auto found = m_network_zones.find(epee::net_utils::require_address_connector(na));
-    const epee::net_utils::network_address unset{};
-    const epee::net_utils::network_address& zone_ours =
-      found == m_network_zones.end() ? unset : found->second.m_our_address;
-    const auto as_port = [](uint32_t p) -> uint16_t {
-      return p > 65535u ? uint16_t{0} : static_cast<uint16_t>(p);
-    };
-    return is_our_listen_address(
-      na,
-      zone_ours,
-      as_port(m_listening_port),
-      as_port(m_listening_port_ipv6),
-      as_port(m_external_port),
-      m_local_hosts);
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::has_outbound_connection_to_host(network_zone& zone, const epee::net_utils::network_address& adr)
-  {
-    // Same-host outbound cap (the PWD-I1 amendment's condition for removing
-    // the peerlist id): white already holds at most one entry per host, but
-    // gray may hold one IP at many ports, so without this bound one
-    // adversary IP gossiped at N ports could occupy several outbound slots
-    // through gray draws. Broader outbound diversity is PWD-B9's row.
-    bool found = false;
-    zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      if (outbound_connection_takes_host(cntxt.m_is_income, cntxt.m_remote_address, adr))
-      {
-        found = true;
-        return false; // stop enumerating
-      }
-      return true;
-    });
-    return found;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_peer_used(const peerlist_entry& peer)
-  {
-    const auto zone = epee::net_utils::require_address_connector(peer.adr);
-    const auto server = m_network_zones.find(zone);
-    if (server == m_network_zones.end())
-      return false;
-
-    bool used = false;
-    server->second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      // Exact-address outbound duplicate. Same-host (cross-port) duplicates
-      // are bounded by the outbound same-host cap at candidate selection --
-      // the id arm this replaces never bounded an adversary (a self-declared
-      // id plus exact-IP equality only ever caught the honest multi-homed
-      // corner); broader outbound diversity is PWD-B9's row.
-      if(!cntxt.m_is_income && peer.adr == cntxt.m_remote_address)
-      {
-        used = true;
-        return false;//stop enumerating
-      }
-      return true;
-    });
-    return used;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_addr_connected(const epee::net_utils::network_address& peer)
-  {
-    const auto zone = m_network_zones.find(epee::net_utils::require_address_connector(peer));
-    if (zone == m_network_zones.end())
-      return false;
-
-    bool connected = false;
-    zone->second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      if(!cntxt.m_is_income && peer == cntxt.m_remote_address)
-      {
-        connected = true;
-        return false;//stop enumerating
-      }
-      return true;
-    });
-
-    return connected;
-  }
-
-#define LOG_PRINT_CC_PRIORITY_NODE(priority, con, msg) \
-  do { \
-    if (priority) {\
-      LOG_INFO_CC(con, "[priority]" << msg); \
-    } else {\
-      LOG_INFO_CC(con, msg); \
-    } \
-  } while(0)
-
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::try_to_connect_and_handshake_with_new_peer(const epee::net_utils::network_address& na, bool just_take_peerlist, uint64_t last_seen_stamp, PeerType peer_type)
-  {
-    network_zone& zone = m_network_zones.at(epee::net_utils::require_address_connector(na));
-    if (zone.m_connect == nullptr) // outgoing connections in zone not possible
-      return false;
-
-    if (is_self_dial(na))
-    {
-      MDEBUG("Not connecting to " << na.str() << " — it is this node's listen address");
-      return false;
-    }
-
-    // Recount. The one-second thread is gone, and an exclusive list
-    // returns before connections_maker's own recount, so a stored
-    // count would skip this cap. The count is not cached.
-    const size_t out_peers = get_outgoing_connections_count(zone);
-    const uint32_t max_out = zone.m_config.m_net_config.max_out_connection_count;
-    if (out_peers >= max_out)
-    {
-      if (out_peers > max_out)
-        zone.m_net_server.get_config_object().del_out_connections(1);
-      return false;
-    }
-
-
-    MDEBUG("Connecting to " << na.str() << " (peer_type=" << peer_type << ", last_seen: "
-        << (last_seen_stamp ? epee::misc_utils::get_time_interval_string(time(NULL) - last_seen_stamp):"never")
-        << ")...");
-
-    auto con = zone.m_connect(zone, na);
-    if(!con)
-    {
-      bool is_priority = is_priority_node(na);
-      LOG_PRINT_CC_PRIORITY_NODE(is_priority, bool(con), "Connect failed to " << na.str()
-        /*<< ", try " << try_count*/);
-      record_addr_failed(na);
-      return false;
-    }
-
-    bool res = do_handshake_with_peer(*con, just_take_peerlist);
-
-    if(!res)
-    {
-      bool is_priority = is_priority_node(na);
-      LOG_PRINT_CC_PRIORITY_NODE(is_priority, *con, "Failed to HANDSHAKE with peer "
-        << na.str()
-        /*<< ", try " << try_count*/);
-      record_addr_failed(na);
-      return false;
-    }
-
-    // A completed handshake proves the address is reachable, so its failure
-    // history is cleared rather than aged out. Both success paths do this; a
-    // peer that recovers must not carry an escalation into its next bad minute.
-    record_addr_success(na);
-
-    if(just_take_peerlist)
-    {
-      zone.m_net_server.get_config_object().close(con->m_connection_id);
-      LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK AND CLOSED.");
-      return true;
-    }
-
-    peerlist_entry pe_local = AUTO_VAL_INIT(pe_local);
-    pe_local.adr = na;
-    time_t last_seen;
-    time(&last_seen);
-    pe_local.last_seen = static_cast<int64_t>(last_seen);
-    zone.m_peerlist.append_with_peer_white(pe_local);
-    //update last seen and push it to peerlist manager
-
-    m_notifier.on_session_established(con->m_connection_id, con->m_is_income, con->m_connector);
-    {
-      std::uint64_t socket_id = 0;
-      std::memcpy(&socket_id, con->m_connection_id.data + 8, sizeof(socket_id));
-      shekyl_zone_session_established(socket_id);
-    }
-
-    LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK.");
-    return true;
-  }
-
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::check_connection_and_handshake_with_peer(const epee::net_utils::network_address& na, uint64_t last_seen_stamp)
-  {
-    network_zone& zone = m_network_zones.at(epee::net_utils::require_address_connector(na));
-    if (zone.m_connect == nullptr)
-      return false;
-
-    LOG_PRINT_L1("Connecting to " << na.str() << "(last_seen: "
-                                  << (last_seen_stamp ? epee::misc_utils::get_time_interval_string(time(NULL) - last_seen_stamp):"never")
-                                  << ")...");
-
-    auto con = zone.m_connect(zone, na);
-    if (!con) {
-      bool is_priority = is_priority_node(na);
-
-      LOG_PRINT_CC_PRIORITY_NODE(is_priority, p2p_connection_context{}, "Connect failed to " << na.str());
-      record_addr_failed(na);
-
-      return false;
-    }
-
-    const bool res = do_handshake_with_peer(*con, true);
-    if (!res) {
-      bool is_priority = is_priority_node(na);
-
-      LOG_PRINT_CC_PRIORITY_NODE(is_priority, *con, "Failed to HANDSHAKE with peer " << na.str());
-      record_addr_failed(na);
-      return false;
-    }
-
-    // Same reset as the white path: this function also completes an outbound
-    // handshake, and an address that answers here has proved itself reachable.
-    // Without it the failure history is WRITE-ONLY on this route -- both its
-    // failure paths record, none of its success paths clear -- so the gray
-    // housekeeping that exists to re-test doubtful peers would accumulate
-    // escalation those peers could never shed.
-    record_addr_success(na);
-
-    zone.m_net_server.get_config_object().close(con->m_connection_id);
-
-    LOG_DEBUG_CC(*con, "CONNECTION HANDSHAKED OK AND CLOSED.");
-
-    return true;
-  }
-
-#undef LOG_PRINT_CC_PRIORITY_NODE
-
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::record_addr_failed(const epee::net_utils::network_address& addr)
-  {
-    m_conn_fails_cache.record_failure(addr, time(NULL));
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::record_addr_success(const epee::net_utils::network_address& addr)
-  {
-    m_conn_fails_cache.record_success(addr);
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_addr_recently_failed(const epee::net_utils::network_address& addr)
-  {
-    return m_conn_fails_cache.is_recently_failed(addr, time(NULL));
-  }
-  //-----------------------------------------------------------------------------------
-  // Find a single candidate from the given peer list in the given zone and connect to it if possible
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::make_new_connection_from_peerlist(network_zone& zone, bool use_white_list)
-  {
-
-    // Local helper method to get the host string, i.e. the pure IP address without port
-    const auto get_host_string = [](const epee::net_utils::network_address &address) {
-      if (address.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
-      {
-        const boost::asio::ip::address_v6 actual_ip = address.as<const epee::net_utils::ipv6_network_address>().ip();
-        if (actual_ip.is_v4_mapped())
-        {
-          boost::asio::ip::address_v4 v4ip = make_address_v4_from_v6(actual_ip);
-          uint32_t actual_ipv4;
-          memcpy(&actual_ipv4, v4ip.to_bytes().data(), sizeof(actual_ipv4));
-          return epee::net_utils::ipv4_network_address(actual_ipv4, 0).host_str();
-        }
-      }
-      return address.host_str();
-    };
-
-    // Get the current list of known peers of the desired kind, ordered by 'last_seen'.
-    // Deduplicate ports right away, i.e. if we know several peers on the same host address but
-    // with different ports, take only one of them, to avoid giving such peers undue weight
-    // and make it impossible to game peer selection by advertising on a large number of ports.
-    // Making this list also insulates us from any changes that may happen to the original list
-    // while we are working here, and allows an easy retry in the inner try loop.
-    std::vector<peerlist_entry> peers;
-    std::unordered_set<std::string> hosts;
-    size_t total_peers_size = 0;
-    zone.m_peerlist.foreach(use_white_list, [&peers, &hosts, &total_peers_size, &get_host_string](const peerlist_entry &peer)
-    {
-      ++total_peers_size;
-      const std::string host_string = get_host_string(peer.adr);
-      if (hosts.insert(host_string).second)
-      {
-        peers.push_back(peer);
-      }
-      // else ignore this additional peer on the same IP number
-
-      return true;
-    });
-
-    const size_t peers_size = peers.size();
-    MDEBUG("Looking at " << peers_size << " port-deduplicated peers out of " << total_peers_size
-      << ", i.e. dropping " << (total_peers_size - peers_size));
-
-    std::set<epee::net_utils::network_address> tried_peers;  // all addresses ever tried (the address is what a dial targets)
-
-    // Outer try loop, with up to 3 attempts to actually connect to a suitable randomly choosen candidate
-    size_t outer_loop_count = 0;
-    while ((outer_loop_count < 3) && !zone.m_net_server.is_stop_signal_sent())
-    {
-      ++outer_loop_count;
-
-      // Build a list of all distinct /24 subnets we are connected to now right now; to catch
-      // any connection changes, re-build the list for every outer try loop pass
-      std::set<uint32_t> connected_subnets;
-      const uint32_t subnet_mask = ntohl(0xffffff00);
-      const bool is_public_zone = &zone == &m_network_zones.at(epee::net_utils::connector_id::clearnet);
-      if (is_public_zone)
-      {
-        zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-        {
-          if (cntxt.m_remote_address.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-          {
-            const epee::net_utils::network_address na = cntxt.m_remote_address;
-            const uint32_t actual_ip = na.as<const epee::net_utils::ipv4_network_address>().ip();
-            connected_subnets.insert(actual_ip & subnet_mask);
-          }
-          else if (cntxt.m_remote_address.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
-          {
-            const epee::net_utils::network_address na = cntxt.m_remote_address;
-            const boost::asio::ip::address_v6 &actual_ip = na.as<const epee::net_utils::ipv6_network_address>().ip();
-            if (actual_ip.is_v4_mapped())
-            {
-              boost::asio::ip::address_v4 v4ip = make_address_v4_from_v6(actual_ip);
-              uint32_t actual_ipv4;
-              memcpy(&actual_ipv4, v4ip.to_bytes().data(), sizeof(actual_ipv4));
-              connected_subnets.insert(actual_ipv4 & subnet_mask);
-            }
-          }
-          return true;
-        });
-      }
-
-      std::vector<peerlist_entry> subnet_peers;
-      std::vector<peerlist_entry> filtered;
-
-      // Inner try loop: Find candidates first with subnet deduplication, if none found again without.
-      // Finding none happens if all candidates are from subnets we are already connected to.
-      // Only actually loop and deduplicate if we are
-      // in the public zone because private zones don't have subnets.
-      for (int step = 0; step < 2; ++step)
-      {
-        if ((step == 1) && !is_public_zone)
-          break;
-
-        const bool try_subnet_dedup = step == 0 && is_public_zone;
-        const std::vector<peerlist_entry> &candidate_peers = try_subnet_dedup ? subnet_peers : peers;
-        if (try_subnet_dedup)
-        {
-          // Deduplicate subnets using 3 steps
-
-          // Step 1: Prepare to access the peers in a random order
-          std::vector<size_t> shuffled_indexes(peers.size());
-          std::iota(shuffled_indexes.begin(), shuffled_indexes.end(), 0);
-          std::shuffle(shuffled_indexes.begin(), shuffled_indexes.end(), crypto::random_device{});
-
-          // Step 2: Deduplicate by only taking 1 candidate from each /24 subnet that occurs, the FIRST
-          // candidate seen from each subnet within the now random order
-          std::set<uint32_t> subnets = connected_subnets;
-          for (size_t index : shuffled_indexes)
-          {
-            const peerlist_entry &peer = peers.at(index);
-            bool take = true;
-            if (peer.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-            {
-              const epee::net_utils::network_address na = peer.adr;
-              const uint32_t actual_ip = na.as<const epee::net_utils::ipv4_network_address>().ip();
-              const uint32_t subnet = actual_ip & subnet_mask;
-              take = subnets.find(subnet) == subnets.end();
-              if (take)
-                // This subnet is now "occupied", don't take any more candidates from this one
-                subnets.insert(subnet);
-            }
-            else if (peer.adr.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
-            {
-              const epee::net_utils::network_address na = peer.adr;
-              const boost::asio::ip::address_v6 &actual_ip = na.as<const epee::net_utils::ipv6_network_address>().ip();
-              if (actual_ip.is_v4_mapped())
-              {
-                boost::asio::ip::address_v4 v4ip = make_address_v4_from_v6(actual_ip);
-                uint32_t actual_ipv4;
-                memcpy(&actual_ipv4, v4ip.to_bytes().data(), sizeof(actual_ipv4));
-                uint32_t subnet = actual_ipv4 & subnet_mask;
-                take = subnets.find(subnet) == subnets.end();
-                if (take)
-                  subnets.insert(subnet);
-              }
-              // else 'take' stays true, we will take an IPv6 address that is not V4 mapped
-            }
-            if (take)
-              subnet_peers.push_back(peer);
-          }
-
-          // Step 3: Put back into order according to 'last_seen', i.e. most recently seen first
-          std::sort(subnet_peers.begin(), subnet_peers.end(), [](const peerlist_entry &a, const peerlist_entry &b)
-          {
-            return a.last_seen > b.last_seen;
-          });
-
-          const size_t subnet_peers_size = subnet_peers.size();
-          MDEBUG("Looking at " << subnet_peers_size << " subnet-deduplicated peers out of " << peers_size
-            << ", i.e. dropping " << (peers_size - subnet_peers_size));
-        } // deduplicate
-        // else, for step 1 / second pass of inner try loop, take all peers from all subnets
-
-        // Take as many candidates as we need
-        const size_t limit = use_white_list ? 20 : std::numeric_limits<size_t>::max();
-        for (const peerlist_entry &peer : candidate_peers) {
-          if (filtered.size() >= limit)
-            break;
-          if (tried_peers.count(peer.adr))
-            // Already tried, not a possible candidate
-            continue;
-
-          filtered.push_back(peer);
-        }
-
-        if (!filtered.empty())
-          break;
-      } // inner try loop
-
-      if (filtered.empty())
-      {
-        MINFO("No available peer in " << (use_white_list ? "white" : "gray") << " list");
-        return false;
-      }
-
-      size_t random_index;
-      if (use_white_list)
-      {
-        // If using the white list, we first pick in the set of peers we've already been using earlier;
-        // that "fixed probability" heavily favors the peers most recently seen in the candidate list
-        random_index = get_random_index_with_fixed_probability(filtered.size() - 1);
-      }
-      else
-        random_index = crypto::rand_idx(filtered.size());
-      CHECK_AND_ASSERT_MES(random_index < filtered.size(), false, "random_index < filtered.size() failed!!");
-
-      // We have our final candidate for this pass of the outer try loop
-      const peerlist_entry &candidate = filtered.at(random_index);
-
-      if (tried_peers.count(candidate.adr))
-        // Already tried, don't try that one again
-        continue;
-      tried_peers.insert(candidate.adr);
-
-      _note("Considering connecting (out) to " << (use_white_list ? "white" : "gray") << " list peer: " <<
-          candidate.adr.str() << ", in loop pass " << outer_loop_count);
-
-      if (zone.m_our_address == candidate.adr)
-        // It's ourselves, obviously don't take that
-        continue;
-
-      if (has_outbound_connection_to_host(zone, candidate.adr))
-        // Same-host outbound cap: at most one outbound connection per host
-        continue;
-
-      if (is_peer_used(candidate)) {
-        _note("Peer is used");
-        continue;
-      }
-
-      if (!is_remote_host_allowed(candidate.adr)) {
-        _note("Not allowed");
-        continue;
-      }
-
-      if (is_addr_recently_failed(candidate.adr)) {
-         _note("Recently failed");
-        continue;
-      }
-
-      MDEBUG("Selected peer: " << candidate.adr.str() << " "
-      << "[peer_list=" << (use_white_list ? white : gray)
-      << "] last_seen: " << (candidate.last_seen ? epee::misc_utils::get_time_interval_string(time(NULL) - candidate.last_seen) : "never"));
-
-      const time_t begin_connect = time(NULL);
-      if (!try_to_connect_and_handshake_with_new_peer(candidate.adr, false, candidate.last_seen, use_white_list ? white : gray)) {
-        time_t fail_connect = time(NULL);
-        _note("Handshake failed after " << epee::misc_utils::get_time_interval_string(fail_connect - begin_connect));
-        continue;
-      }
-
-      return true;
-    } // outer try loop
-
-    return false;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::connect_to_seed(epee::net_utils::connector_id zone)
-  {
-      network_zone& server = m_network_zones.at(zone);
-      boost::upgrade_lock<boost::shared_mutex> seed_nodes_upgrade_lock(server.m_seed_nodes_lock);
-
-      if (!server.m_seed_nodes_initialized)
-      {
-        const std::uint16_t default_port = cryptonote::get_config(m_nettype).P2P_DEFAULT_PORT;
-        boost::upgrade_to_unique_lock<boost::shared_mutex> seed_nodes_lock(seed_nodes_upgrade_lock);
-        server.m_seed_nodes_initialized = true;
-        for (const auto& full_addr : get_seed_nodes(zone))
-        {
-          // seeds should have hostname converted to IP already
-          MDEBUG("Seed node: " << full_addr);
-          auto seed = MONERO_UNWRAP(net::get_network_address(full_addr, default_port));
-          if (is_self_dial(seed))
-          {
-            MINFO("Omitting seed " << seed.str() << " — it is this node's listen address");
-            continue;
-          }
-          server.m_seed_nodes.push_back(std::move(seed));
-        }
-        MDEBUG("Number of seed nodes: " << server.m_seed_nodes.size());
-      }
-
-      if (server.m_seed_nodes.empty() || m_offline || !m_exclusive_peers.empty())
-        return true;
-
-      size_t try_count = 0;
-      bool is_connected_to_at_least_one_seed_node = false;
-      size_t current_index = crypto::rand_idx(server.m_seed_nodes.size());
-      while(true)
-      {
-        if(server.m_net_server.is_stop_signal_sent())
-          return false;
-
-        peerlist_entry pe_seed{};
-        pe_seed.adr = server.m_seed_nodes[current_index];
-        if (is_peer_used(pe_seed))
-          is_connected_to_at_least_one_seed_node = true;
-        else if (try_to_connect_and_handshake_with_new_peer(server.m_seed_nodes[current_index], true))
-          break;
-        if(++try_count > server.m_seed_nodes.size())
-        {
-          // only IP zone has fallback (to direct IP) seeds
-          if (zone == epee::net_utils::connector_id::clearnet && !m_fallback_seed_nodes_added.test_and_set())
-          {
-            MWARNING("Failed to connect to any of seed peers, trying fallback seeds");
-            current_index = server.m_seed_nodes.size() - 1;
-            {
-              boost::upgrade_to_unique_lock<boost::shared_mutex> seed_nodes_lock(seed_nodes_upgrade_lock);
-
-              for (const auto &peer: get_ip_seed_nodes())
-              {
-                MDEBUG("Fallback seed node: " << peer);
-                append_net_address(server.m_seed_nodes, peer, cryptonote::get_config(m_nettype).P2P_DEFAULT_PORT);
-              }
-            }
-            if (current_index == server.m_seed_nodes.size() - 1)
-            {
-              MWARNING("No fallback seeds, continuing without seeds");
-              break;
-            }
-            // continue for another few cycles
-          }
-          else
-          {
-            if (!is_connected_to_at_least_one_seed_node)
-              MWARNING("Failed to connect to any of seed peers, continuing without seeds");
-            break;
-          }
-        }
-        if(++current_index >= server.m_seed_nodes.size())
-          current_index = 0;
-      }
-      return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::connections_maker()
-  {
-    using zone_type = epee::net_utils::connector_id;
-
-    if (m_offline) return true;
-    if (!connect_to_peerlist(m_exclusive_peers)) return false;
-
-    if (!m_exclusive_peers.empty()) return true;
-
-    bool one_succeeded = false;
-    for(auto& zone : m_network_zones)
-    {
-      size_t start_conn_count = get_outgoing_connections_count(zone.second);
-      // Seeds are for a node that knows NOBODY -- see `has_no_known_peers`,
-      // which carries why this is keyed on both lists rather than on white.
-      if(zone.second.m_peerlist.has_no_known_peers() && !connect_to_seed(zone.first))
-      {
-        continue;
-      }
-
-      if (zone.first == zone_type::clearnet && !connect_to_peerlist(m_priority_peers)) continue;
-
-      size_t base_expected_white_connections = (zone.second.m_config.m_net_config.max_out_connection_count*P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT)/100;
-
-      // carefully avoid `continue` in nested loop
-      
-      size_t conn_count = get_outgoing_connections_count(zone.second);
-      while(conn_count < zone.second.m_config.m_net_config.max_out_connection_count)
-      {
-        const size_t expected_white_connections = base_expected_white_connections;
-        if(conn_count < expected_white_connections)
-        {
-          //start with the white list
-          while (get_outgoing_connections_count(zone.second) < expected_white_connections
-            && make_expected_connections_count(zone.second, white, expected_white_connections));
-          //then do grey list
-          while (get_outgoing_connections_count(zone.second) < zone.second.m_config.m_net_config.max_out_connection_count
-            && make_expected_connections_count(zone.second, gray, zone.second.m_config.m_net_config.max_out_connection_count));
-        }else
-        {
-          //start from grey list
-          while (get_outgoing_connections_count(zone.second) < zone.second.m_config.m_net_config.max_out_connection_count
-            && make_expected_connections_count(zone.second, gray, zone.second.m_config.m_net_config.max_out_connection_count));
-          //and then do white list
-          while (get_outgoing_connections_count(zone.second) < zone.second.m_config.m_net_config.max_out_connection_count
-            && make_expected_connections_count(zone.second, white, zone.second.m_config.m_net_config.max_out_connection_count));
-        }
-        if(zone.second.m_net_server.is_stop_signal_sent())
-          return false;
-        size_t new_conn_count = get_outgoing_connections_count(zone.second);
-        if (new_conn_count <= conn_count)
-        {
-          // we did not make any connection, sleep a bit to avoid a busy loop in case we don't have
-          // any peers to try, then break so we will try seeds to get more peers
-          boost::this_thread::sleep_for(boost::chrono::seconds(1));
-          break;
-        }
-        conn_count = new_conn_count;
-      }
-
-      if (start_conn_count == get_outgoing_connections_count(zone.second) && start_conn_count < zone.second.m_config.m_net_config.max_out_connection_count)
-      {
-        MINFO("Failed to connect to any, trying seeds");
-        if (!connect_to_seed(zone.first))
-          continue;
-      }
-      one_succeeded = true;
-    }
-
-    return one_succeeded;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::make_expected_connections_count(network_zone& zone, PeerType peer_type, size_t expected_connections)
-  {
-    if (m_offline)
-      return false;
-
-    size_t conn_count = get_outgoing_connections_count(zone);
-    //add new connections from white peers
-    if(conn_count < expected_connections)
-    {
-      if(zone.m_net_server.is_stop_signal_sent())
-        return false;
-
-      MDEBUG("Making expected connection, type " << peer_type << ", " << conn_count << "/" << expected_connections << " connections");
-
-      if (peer_type == white && !make_new_connection_from_peerlist(zone, true)) {
-        return false;
-      }
-
-      if (peer_type == gray && !make_new_connection_from_peerlist(zone, false)) {
-        return false;
-      }
-    }
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_public_outgoing_connections_count()
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return get_outgoing_connections_count(public_zone->second);
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_incoming_connections_count(network_zone& zone)
-  {
-    size_t count = 0;
-    zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      if(cntxt.m_is_income)
-        ++count;
-      return true;
-    });
-    return count;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_outgoing_connections_count(network_zone& zone)
-  {
-    size_t count = 0;
-    zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-    {
-      if(!cntxt.m_is_income)
-        ++count;
-      return true;
-    });
-    return count;
+    return static_cast<size_t>(shekyl_seam_board_count(
+        static_cast<std::uint32_t>(connector), SHEKYL_DIRECTION_OUTBOUND));
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   size_t node_server<t_payload_net_handler>::get_outgoing_connections_count()
   {
-    size_t count = 0;
-    for(auto& zone : m_network_zones)
-      count += get_outgoing_connections_count(zone.second);
-    return count;
+    return static_cast<size_t>(shekyl_seam_board_direction_count(SHEKYL_DIRECTION_OUTBOUND));
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   size_t node_server<t_payload_net_handler>::get_incoming_connections_count()
   {
-    size_t count = 0;
-    for (auto& zone : m_network_zones)
-    {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        if(cntxt.m_is_income)
-          ++count;
-        return true;
-      });
-    }
-    return count;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_public_white_peers_count()
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return public_zone->second.m_peerlist.get_white_peers_count();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::get_public_gray_peers_count()
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return public_zone->second.m_peerlist.get_gray_peers_count();
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::get_public_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white)
-  {
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone != m_network_zones.end())
-      public_zone->second.m_peerlist.get_peerlist(gray, white);
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::get_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white)
-  {
-    for (auto &zone: m_network_zones)
-    {
-      zone.second.m_peerlist.get_peerlist(gray, white); // appends
-    }
+    return static_cast<size_t>(shekyl_seam_board_direction_count(SHEKYL_DIRECTION_INBOUND));
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::idle_worker()
   {
     m_peer_handshake_idle_maker_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::peer_sync_idle_maker, this));
-    m_connections_maker_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::connections_maker, this));
-    m_gray_peerlist_housekeeping_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::gray_peerlist_housekeeping, this));
-    m_peerlist_store_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::store_config, this));
     m_incoming_connections_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::check_incoming_connections, this));
     m_ephemeral_tor_liveness_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::check_ephemeral_tor_liveness, this));
     return true;
@@ -2278,7 +1255,7 @@ namespace nodetool
     //
     // This does NOT stop advertising, classify, or infer anything about a
     // remote peer -- all three are the deferred action half.
-    const size_t inbound_now = get_incoming_connections_count(public_zone->second);
+    const size_t inbound_now = get_incoming_connections_count(public_zone->first);
     const uint32_t announced = get_announced_port(epee::net_utils::connector_id::clearnet);
     const auto uptime_min = std::chrono::duration_cast<std::chrono::minutes>(
         std::chrono::steady_clock::now() - m_started_at).count();
@@ -2315,136 +1292,35 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::peer_sync_idle_maker()
   {
     MDEBUG("STARTED PEERLIST IDLE HANDSHAKE");
-    std::list<epee::net_utils::connection_context_base> cncts;
+    // The other `foreach_connection`. The callback runs on the connection
+    // strand: it writes `m_in_timedsync` and starts the timed sync there.
+    // Nothing after this call reads a list the posts have not filled.
     for(auto& zone : m_network_zones)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](p2p_connection_context& cntxt)
+      zone.second.m_net_server.get_config_object().foreach_connection([this](p2p_connection_context& cntxt)
       {
-        // Session state this node OBSERVED, never a wire value: only
-        // handshake-completed connections take part in timed sync.
         if(cntxt.session_established() && !cntxt.m_in_timedsync)
         {
           cntxt.m_in_timedsync = true;
-          cncts.push_back(cntxt);
+          do_peer_timed_sync(cntxt);
         }
         return true;
       });
     }
-
-    std::for_each(cncts.begin(), cncts.end(), [&](const epee::net_utils::connection_context_base& vl){do_peer_timed_sync(vl);});
 
     MDEBUG("FINISHED PEERLIST IDLE HANDSHAKE");
     return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::sanitize_peerlist(std::vector<peerlist_entry>& local_peerlist)
-  {
-    for (size_t i = 0; i < local_peerlist.size(); ++i)
-    {
-      bool ignore = false;
-      peerlist_entry &be = local_peerlist[i];
-      epee::net_utils::network_address &na = be.adr;
-      if (na.is_loopback() || na.is_local())
-      {
-        ignore = true;
-      }
-      else if (be.adr.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-      {
-        const epee::net_utils::ipv4_network_address &ipv4 = na.as<const epee::net_utils::ipv4_network_address>();
-        if (ipv4.ip() == 0 || ipv4.port() == 0) // 0.0.0.0 or not dialable
-          ignore = true;
-      }
-      if (ignore)
-      {
-        MDEBUG("Ignoring " << be.adr.str());
-        std::swap(local_peerlist[i], local_peerlist[local_peerlist.size() - 1]);
-        local_peerlist.resize(local_peerlist.size() - 1);
-        --i;
-        continue;
-      }
-      local_peerlist[i].last_seen = 0;
-    }
-    return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context)
   {
-    if (peerlist.size() > P2P_MAX_PEERS_IN_HANDSHAKE)
-    {
-      MWARNING(context << "peer sent " << peerlist.size() << " peers, considered spamming");
-      return false;
-    }
-    std::vector<peerlist_entry> peerlist_ = peerlist;
-    if(!sanitize_peerlist(peerlist_))
-      return false;
-
-    const epee::net_utils::connector_id zone = epee::net_utils::require_session_connector(context.m_connector);
-    for(const auto& peer : peerlist_)
-    {
-      if(epee::net_utils::require_address_connector(peer.adr) != zone)
-      {
-        MWARNING(context << " sent peerlist from another zone, dropping");
-        return false;
-      }
-    }
-
-    LOG_DEBUG_CC(context, "REMOTE PEERLIST: remote peerlist size=" << peerlist_.size());
-    LOG_TRACE_CC(context, "REMOTE PEERLIST: " << ENDL << print_peerlist_to_string(peerlist_));
-    return m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_peerlist.merge_peerlist(peerlist_, [this](const peerlist_entry &pe) {
-      return !is_addr_recently_failed(pe.adr) && is_remote_host_allowed(pe.adr);
-    });
+    return shekyl::received_peerlist(context.m_connection_id, peerlist);
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::get_local_node_data(const epee::net_utils::connector_id zone_type, basic_node_data& node_data, const network_zone& zone) const
   {
-    // The announcement is an ADDRESS -- a hypothesis about WHERE this node
-    // can be dialed, never a claim about who it is (see basic_node_data).
-    //
-    // Announce only where a peer could actually reach us. There is no
-    // dedicated advertisement flag; operator influence is the supported,
-    // derived kind: `--in-peers 0` sets `max_in_connection_count` to zero
-    // and thereby suppresses the announcement -- the decision follows from
-    // the node's reachability, and an operator changes it by changing that
-    // reachability, not by asserting a different answer.
-    // `m_can_announce` is the PUBLIC zone's reachability flag (it is what the
-    // deleted back-ping's pingback capability became). An anonymity zone's
-    // reachability is its configured self-address instead: a serving zone has
-    // one because `--anonymous-inbound` gave it one, so gating it on the
-    // public flag would silently announce the unknown sentinel from a node
-    // that is in fact reachable.
-    const bool zone_is_reachable = (zone_type == epee::net_utils::connector_id::clearnet)
-      ? zone.m_can_announce
-      : (zone.m_our_address.get_type_id() != epee::net_utils::address_type::invalid);
-    if (zone_is_reachable && zone.m_config.m_net_config.max_in_connection_count > 0)
-    {
-      if (zone_type == epee::net_utils::connector_id::clearnet)
-      {
-        // Port-only advert: the host half is zeroed and carries no meaning
-        // -- the receiver never reads it, combining this port with the host
-        // it observed on its own socket. Only the port is the claim.
-        const uint32_t port = m_external_port ? m_external_port : m_listening_port;
-        node_data.address = epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, port)};
-      }
-      else
-        node_data.address = zone.m_our_address;
-    }
-    else
-    {
-      // Dialer-only on this zone: announce the zone's unknown-address
-      // sentinel. Undialable, and never recorded by any receiver.
-      switch (zone_type)
-      {
-        case epee::net_utils::connector_id::tor:
-          node_data.address = net::tor_address::unknown();
-          break;
-        default:
-          node_data.address = epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, 0)};
-          break;
-      }
-    }
     node_data.network_id = m_network_id;
     node_data.support_flags = zone.m_config.m_support_flags;
     return true;
@@ -2581,6 +1457,24 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::on_outbound_handshake(p2p_connection_context& context, const shekyl_seam_handshake_result& result)
+  {
+    cryptonote::CORE_SYNC_DATA payload{};
+    payload.current_height = result.current_height;
+    payload.cumulative_difficulty = result.cumulative_difficulty;
+    payload.cumulative_difficulty_top64 = result.cumulative_difficulty_top64;
+    std::memcpy(payload.top_id.data, result.top_id, sizeof(payload.top_id.data));
+    if(!m_payload_handler.process_payload_sync_data(payload, context, true))
+      return false;
+    if (result.keep == 0)
+      return true;
+    shekyl_zone_session_established(shekyl::seam_socket_id(context.m_connection_id));
+    m_notifier.on_session_established(context.m_connection_id, context.m_is_income, context.m_connector);
+    context.support_flags = result.support_flags;
+    return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::invoke_notify_to_peer(const int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context)
   {
     network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector));
@@ -2637,35 +1531,7 @@ namespace nodetool
     const epee::net_utils::connector_id zone_type = epee::net_utils::require_session_connector(context.m_connector);
     network_zone& zone = m_network_zones.at(zone_type);
 
-    //will add self to peerlist if in same zone as outgoing later in this function
-    const bool outgoing_to_same_zone = !context.m_is_income && zone.m_our_address.connector() == zone_type;
-    const uint32_t max_peerlist_size = P2P_DEFAULT_PEERS_IN_HANDSHAKE - (outgoing_to_same_zone ? 1 : 0);
-
-    std::vector<peerlist_entry> local_peerlist_new;
-    zone.m_peerlist.get_peerlist_head(local_peerlist_new, true, max_peerlist_size);
-
-    /* Tor nodes receiving connections via forwarding (from Tor daemon)
-    do not know the address of the connecting peer. This is relayed to them,
-    iff the node has setup an inbound hidden service.
-
-    \note Insert into `local_peerlist_new` so that it is only sent once like
-      the other peers. */
-    if(outgoing_to_same_zone)
-    {
-      local_peerlist_new.insert(
-        local_peerlist_new.begin() + crypto::rand_range(std::size_t(0), local_peerlist_new.size()),
-        peerlist_entry{zone.m_our_address, 0}
-      );
-    }
-
-    //only include out peers we did not already send
-    rsp.local_peerlist_new.reserve(local_peerlist_new.size());
-    for (auto &pe: local_peerlist_new)
-    {
-      if (!context.sent_addresses.insert(pe.adr).second)
-        continue;
-      rsp.local_peerlist_new.push_back(std::move(pe));
-    }
+    rsp.local_peerlist_new = shekyl::disclose(context.m_connection_id);
     m_payload_handler.get_payload_sync_data(rsp.payload_data);
 
     LOG_DEBUG_CC(context, "COMMAND_TIMED_SYNC");
@@ -2734,29 +1600,6 @@ namespace nodetool
     context.m_in_timedsync = false;
     context.support_flags = arg.node_data.support_flags;
 
-    // An advert is a claim about WHERE this peer can be dialed, and only its
-    // PORT is admissible: the host is the one this node OBSERVED on the
-    // socket, which is why `derive_advertised_endpoint` takes the two as
-    // separate inputs -- the advertised host has nowhere to go. The derived
-    // entry enters GRAY (white is earned by an actual outbound dial), and a
-    // wrong port costs that later dial nothing but the failure that evicts
-    // the entry. Gray is never disclosed to peers, so an unverified entry
-    // poisons no view but our own, for one dial. Anonymity-zone
-    // self-addresses are not derivable from a socket and travel as
-    // timed-sync peerlist self-announcements instead.
-    {
-      const auto derived = derive_advertised_endpoint(
-        context.m_remote_address, arg.node_data.address.port());
-      if (derived)
-      {
-        peerlist_entry pe{};
-        pe.adr = *derived;
-        pe.last_seen = 0; // an unverified claim has never been "seen"
-        zone.m_peerlist.append_with_peer_gray(pe);
-      }
-    }
-
-    
     if (context.support_flags == 0)
       try_get_support_flags(context, [](p2p_connection_context& flags_context, const uint32_t& support_flags) 
       {
@@ -2764,24 +1607,11 @@ namespace nodetool
       });
 
     //fill response
-    zone.m_peerlist.get_peerlist_head(rsp.local_peerlist_new, true);
-    for (const auto &e: rsp.local_peerlist_new)
-      context.sent_addresses.insert(e.adr);
+    rsp.local_peerlist_new = shekyl::disclose(context.m_connection_id);
     get_local_node_data(azone, rsp.node_data, zone);
     m_payload_handler.get_payload_sync_data(rsp.payload_data);
     LOG_DEBUG_CC(context, "COMMAND_HANDSHAKE");
     return 1;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::log_peerlist()
-  {
-    std::vector<peerlist_entry> pl_white;
-    std::vector<peerlist_entry> pl_gray;
-    for (auto& zone : m_network_zones)
-      zone.second.m_peerlist.get_peerlist(pl_gray, pl_white);
-    MINFO(ENDL << "Peerlist white:" << ENDL << print_peerlist_to_string(pl_white) << ENDL << "Peerlist gray:" << ENDL << print_peerlist_to_string(pl_gray) );
-    return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -2796,15 +1626,13 @@ namespace nodetool
   {
 
     std::stringstream ss;
-    for (auto& zone : m_network_zones)
+    const auto board = shekyl::seam_board_snapshot();
+    for (const auto& row : board)
     {
-      zone.second.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
-      {
-        ss << cntxt.m_remote_address.str()
-          << " \t\tconn_id " << cntxt.m_connection_id << (cntxt.m_is_income ? " INC":" OUT")
-          << std::endl;
-        return true;
-      });
+      ss << shekyl::seam_network_address(row.endpoint).str()
+        << " \t\tconn_id " << shekyl::seam_connection_id(row.id)
+        << (row.endpoint.direction == SHEKYL_DIRECTION_INBOUND ? " INC":" OUT")
+        << std::endl;
     }
     std::string s = ss.str();
     return s;
@@ -2828,29 +1656,7 @@ namespace nodetool
     MINFO("["<< epee::net_utils::print_connection_context(context) << "] CLOSE CONNECTION");
   }
 
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_priority_node(const epee::net_utils::network_address& na)
-  {
-    return (std::find(m_priority_peers.begin(), m_priority_peers.end(), na) != m_priority_peers.end()) || (std::find(m_exclusive_peers.begin(), m_exclusive_peers.end(), na) != m_exclusive_peers.end());
-  }
 
-  template<class t_payload_net_handler> template <class Container>
-  bool node_server<t_payload_net_handler>::connect_to_peerlist(const Container& peers)
-  {
-    const network_zone& public_zone = m_network_zones.at(epee::net_utils::connector_id::clearnet);
-    for(const epee::net_utils::network_address& na: peers)
-    {
-      if(public_zone.m_net_server.is_stop_signal_sent())
-        return false;
-
-      if(is_addr_connected(na))
-        continue;
-
-      try_to_connect_and_handshake_with_new_peer(na);
-    }
-
-    return true;
-  }
 
   template<class t_payload_net_handler> template <class Container>
   bool node_server<t_payload_net_handler>::parse_peers_and_add_to_container(const boost::program_options::variables_map& vm, const command_line::arg_descriptor<std::vector<std::string> > & arg, Container& container)
@@ -2882,31 +1688,12 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::set_max_out_peers(network_zone& zone, int64_t max)
   {
-    if(max == -1) {
-      zone.m_config.m_net_config.max_out_connection_count = shekyl_p2p_default_out_peers();
+    // -1 is unset: the dialer's compiled default for the connector. A
+    // positive cap below the F-8b floor is refused there, with the reason
+    // logged; 0 stays legal and stops outbound entirely.
+    if(max == -1)
       return true;
-    }
-    // F-8b: the embargo constant is derived from a fluff first passage
-    // measured at outbound degree `shekyl_relay_zone_min_provisioned_out_peers()`.
-    // A zone capped below that degree fluffs slower than the derivation
-    // assumes, so the embargo is under-provisioned in the privacy-losing
-    // direction. This is the one place every zone's outbound cap is set —
-    // public (`--out-peers`) and anonymity (`--tx-proxy`, whose parser also
-    // refuses with a flag-specific message) — so the floor is enforced here
-    // rather than only at one parser. A cap of 0 stays legal: it stops
-    // outbound relay entirely, which is loud (liveness-visible), unlike a
-    // quietly degraded fluff degree.
-    const int64_t out_floor = shekyl_relay_zone_min_provisioned_out_peers();
-    if (0 < max && max < out_floor)
-    {
-      MERROR("Outbound connection cap " << max << " is below the floor of "
-          << out_floor << " that the relay embargo derivation assumes (F-8b); "
-          "refusing to start under-provisioned. Omit the option for the default ("
-          << shekyl_p2p_default_out_peers() << ") or give a value >= " << out_floor << ".");
-      return false;
-    }
-    zone.m_config.m_net_config.max_out_connection_count = max;
-    return true;
+    return shekyl_dialer_set_out_peers(static_cast<std::uint32_t>(&zone == &m_network_zones.at(epee::net_utils::connector_id::clearnet) ? epee::net_utils::connector_id::clearnet : epee::net_utils::connector_id::tor), static_cast<std::uint32_t>(max)) == 0;
   }
 
   template<class t_payload_net_handler>
@@ -2956,7 +1743,7 @@ namespace nodetool
     // public inbound by 2N. Each zone with an explicit cap is bounded by the
     // Rust admission table; the ceiling bounds the pool they all draw from.
     for (const auto& entry : m_network_zones)
-      add(entry.second.m_config.m_net_config.max_out_connection_count);
+      add(shekyl_dialer_out_target(static_cast<std::uint32_t>(entry.first)));
     return reserved;
   }
 
@@ -2976,8 +1763,19 @@ namespace nodetool
 
     for (const auto& entry : m_network_zones)
     {
-      if (!entry.second.m_inbound_cap_explicit)
+      std::uint32_t connector = SHEKYL_CONNECTOR_CLEARNET;
+      if (entry.first == epee::net_utils::connector_id::tor)
+        connector = SHEKYL_CONNECTOR_TOR;
+      else if (entry.first != epee::net_utils::connector_id::clearnet)
         continue;
+      // The cap lives on the process socket table, which outlives this zone.
+      // An unset `--in-peers` is no cap. Leaving a previous zone's cap would
+      // keep refusing inbound after this zone replaced it.
+      if (!entry.second.m_inbound_cap_explicit)
+      {
+        shekyl_zone_clear_connector_cap(connector);
+        continue;
+      }
       const std::uint32_t cap = entry.second.m_config.m_net_config.max_in_connection_count;
       if (decision.kind == SHEKYL_INBOUND_CEILING_BOUNDED && cap > decision.ceiling)
       {
@@ -2986,11 +1784,6 @@ namespace nodetool
             << "; refusing to start.");
         return false;
       }
-      std::uint32_t connector = SHEKYL_CONNECTOR_CLEARNET;
-      if (entry.first == epee::net_utils::connector_id::tor)
-        connector = SHEKYL_CONNECTOR_TOR;
-      else if (entry.first != epee::net_utils::connector_id::clearnet)
-        continue;
       shekyl_zone_set_connector_cap(connector, cap);
     }
 
@@ -3073,44 +1866,28 @@ namespace nodetool
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::change_max_out_public_peers(size_t count)
   {
-    // Same F-8b floor as set_max_out_peers, on the runtime path (`out_peers`
-    // console command / RPC) that no startup check can see. The daemon is
-    // already running here, so the under-floor request is clamped loudly
-    // rather than refused; 0 stays legal (see set_max_out_peers).
-    const size_t out_floor =
-        static_cast<size_t>(shekyl_relay_zone_min_provisioned_out_peers());
-    if (0 < count && count < out_floor)
+    // The runtime path (`out_peers` console command / RPC). The dialer
+    // refuses a positive cap below the F-8b floor and logs why; the cap is
+    // then unchanged. Lowering it closes the excess kept sessions there.
+    const std::uint32_t previous = shekyl_dialer_out_target(SHEKYL_CONNECTOR_CLEARNET);
+    if (shekyl_dialer_set_out_peers(SHEKYL_CONNECTOR_CLEARNET, static_cast<std::uint32_t>(count)) != 0)
+      return;
+    m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, count);
+    // The outbound cap is a term in the inbound ceiling's reservation, so
+    // changing it at runtime invalidates a ceiling derived against the old
+    // one. Raising `out_peers` without this leaves inbound reserved against
+    // a smaller outbound budget, and live outbound plus inbound can then
+    // exceed the descriptor limit -- the exact exhaustion the ceiling
+    // exists to prevent. Re-derives against the same non-p2p reservation
+    // the last call used, so a caller that never knew the RPC budget does
+    // not have to learn it. A cap the new ceiling cannot hold is refused
+    // and the previous outbound cap is put back; lowering the cap is the
+    // path that drops live connections, and that path widens the ceiling.
+    if (!apply_inbound_ceiling(m_reserved_beyond_p2p))
     {
-      MWARNING("out_peers " << count << " is below the floor of " << out_floor
-          << " that the relay embargo derivation assumes (F-8b); clamping to "
-          << out_floor << ".");
-      count = out_floor;
-    }
-    auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone != m_network_zones.end())
-    {
-      const auto current = public_zone->second.m_net_server.get_config_object().get_out_connections_count();
-      const size_t previous = public_zone->second.m_config.m_net_config.max_out_connection_count;
-      public_zone->second.m_config.m_net_config.max_out_connection_count = count;
-      if(current > count)
-        public_zone->second.m_net_server.get_config_object().del_out_connections(current - count);
-      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, count);
-      // The outbound cap is a term in the inbound ceiling's reservation, so
-      // changing it at runtime invalidates a ceiling derived against the old
-      // one. Raising `out_peers` without this leaves inbound reserved against
-      // a smaller outbound budget, and live outbound plus inbound can then
-      // exceed the descriptor limit -- the exact exhaustion the ceiling
-      // exists to prevent. Re-derives against the same non-p2p reservation
-      // the last call used, so a caller that never knew the RPC budget does
-      // not have to learn it. A cap the new ceiling cannot hold is refused
-      // and the previous outbound cap is put back; lowering the cap is the
-      // path that drops live connections, and that path widens the ceiling.
-      if (!apply_inbound_ceiling(m_reserved_beyond_p2p))
-      {
-        public_zone->second.m_config.m_net_config.max_out_connection_count = previous;
-        m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, previous);
-        apply_inbound_ceiling(m_reserved_beyond_p2p);
-      }
+      shekyl_dialer_set_out_peers(SHEKYL_CONNECTOR_CLEARNET, previous);
+      m_payload_handler.set_max_out_peers(epee::net_utils::connector_id::clearnet, previous);
+      apply_inbound_ceiling(m_reserved_beyond_p2p);
     }
   }
 
@@ -3118,7 +1895,10 @@ namespace nodetool
   template<class t_payload_net_handler>
   epee::net_utils::network_address node_server<t_payload_net_handler>::get_announced_address(const epee::net_utils::connector_id zone) const
   {
-    /* The address `get_local_node_data` puts on the wire for this zone.
+    /* This node's own dialable address on this zone, or the zone's
+       undialable placeholder when it is not reachable there. No handshake
+       carries it (ruled 2026-10-09): it reaches peers only as one uniform
+       member of this node's disclosure sample.
        On an anonymity zone run dialer-only this is the zone's CONSTANT
        unknown sentinel — equal for every node, carrying no entropy and
        linking nothing, which is the property the deleted per-zone
@@ -3126,33 +1906,64 @@ namespace nodetool
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
       return {};
-    basic_node_data node_data{};
-    get_local_node_data(zone, node_data, found->second);
-    return node_data.address;
+    // Announce only where a peer could actually reach us. There is no
+    // dedicated advertisement flag; operator influence is the supported,
+    // derived kind: `--in-peers 0` sets `max_in_connection_count` to zero
+    // and thereby suppresses the announcement -- the decision follows from
+    // the node's reachability, and an operator changes it by changing that
+    // reachability, not by asserting a different answer.
+    // `m_can_announce` is the PUBLIC zone's reachability flag (it is what the
+    // deleted back-ping's pingback capability became). An anonymity zone's
+    // reachability is its configured self-address instead: a serving zone has
+    // one because `--anonymous-inbound` gave it one, so gating it on the
+    // public flag would silently announce the unknown sentinel from a node
+    // that is in fact reachable.
+    const bool zone_is_reachable = (zone == epee::net_utils::connector_id::clearnet)
+      ? found->second.m_can_announce
+      : (found->second.m_our_address.get_type_id() != epee::net_utils::address_type::invalid);
+    if (zone_is_reachable && found->second.m_config.m_net_config.max_in_connection_count > 0)
+    {
+      if (zone == epee::net_utils::connector_id::clearnet)
+      {
+        // The port this node listens on, with the host half zeroed: this
+        // node does not know the host its peers see it at.
+        const uint32_t port = m_external_port ? m_external_port : m_listening_port;
+        return epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, port)};
+      }
+      else
+        return found->second.m_our_address;
+    }
+    else
+    {
+      // Dialer-only on this zone: announce the zone's unknown-address
+      // sentinel. Undialable, and never recorded by any receiver.
+      switch (zone)
+      {
+        case epee::net_utils::connector_id::tor:
+          return net::tor_address::unknown();
+        default:
+          return epee::net_utils::network_address{epee::net_utils::ipv4_network_address(0, 0)};
+      }
+    }
   }
 
   template<class t_payload_net_handler>
   uint32_t node_server<t_payload_net_handler>::get_announced_port(const epee::net_utils::connector_id zone) const
   {
-    /* The port `get_local_node_data` would put on the wire for this zone.
+    /* The port of `get_announced_address` for this zone.
        Named so the derived advertisement has something a test can observe:
        the decision has no dedicated flag any more, so there is nothing to
        assert on but the announced value itself. */
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
       return 0;
-    basic_node_data node_data{};
-    get_local_node_data(zone, node_data, found->second);
-    return node_data.address.port();
+    return get_announced_address(zone).port();
   }
 
   template<class t_payload_net_handler>
   uint32_t node_server<t_payload_net_handler>::get_max_out_public_peers() const
   {
-    const auto public_zone = m_network_zones.find(epee::net_utils::connector_id::clearnet);
-    if (public_zone == m_network_zones.end())
-      return 0;
-    return public_zone->second.m_config.m_net_config.max_out_connection_count;
+    return shekyl_dialer_out_target(SHEKYL_CONNECTOR_CLEARNET);
   }
 
   template<class t_payload_net_handler>
@@ -3252,40 +2063,6 @@ namespace nodetool
     return true;
   }
 
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::gray_peerlist_housekeeping()
-  {
-    if (m_offline) return true;
-    if (!m_exclusive_peers.empty()) return true;
-
-    for (auto& zone : m_network_zones)
-    {
-      if (m_payload_handler.needs_new_sync_connections(zone.first))
-        continue;
-
-      if (zone.second.m_net_server.is_stop_signal_sent())
-        return false;
-
-      if (zone.second.m_connect == nullptr)
-        continue;
-
-      peerlist_entry pe{};
-      if (!zone.second.m_peerlist.get_random_gray_peer(pe))
-        continue;
-
-      if (!check_connection_and_handshake_with_peer(pe.adr, pe.last_seen))
-      {
-        zone.second.m_peerlist.remove_from_peer_gray(pe);
-        LOG_PRINT_L2("PEER EVICTED FROM GRAY PEER LIST: address: " << pe.adr.host_str());
-      }
-      else
-      {
-        zone.second.m_peerlist.set_peer_just_seen(pe.adr);
-        LOG_PRINT_L2("PEER PROMOTED TO WHITE PEER LIST IP address: " << pe.adr.host_str());
-      }
-    }
-    return true;
-  }
 
   template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::add_upnp_port_mapping_impl(uint32_t port, bool ipv6) // if ipv6 false, do ipv4
@@ -3421,40 +2198,6 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
-  shekyl_zone_params node_server<t_payload_net_handler>::transport_spans() const
-  {
-    // Clearnet dial, handshake, and gap: 2 x (700 ms GEO-satellite RTT
-    // ceiling + the node-local residual), rounded up to 1 ms. Residuals
-    // are the larger of the LAN, South America (~170 ms), and New York
-    // (~24 ms) legs in docs/benchmarks/p2p_cutover_crossbuild_20260929.md.
-    // Dial 1.415 s (residual 7.2 ms), handshake 1.426 s (12.6 ms, the
-    // measured median of the body), gap 1.430 s (residual 14.7 ms). The
-    // ~700 ms handshake tail is not a term in any of these.
-    // Tor dial 9.1 s: 2 x p99 (4.54 s) of the floor dial distribution,
-    // South America circuit, proof-of-work on. A clearnet dial through a
-    // SOCKS proxy uses this clock: the worst measured SOCKS path, pending
-    // its own distribution. The three clearnet legs had no proxy.
-    // Tor gap 2.6 s: the outbound
-    // direction, the larger of the two distant-circuit gaps.
-    // Shutdown waits out the longest armed deadline, the Tor dial.
-    // Send queue: one admitted packet, room for the largest legitimate message.
-    // workers and blocking: the structural floor. The thread-budget leg
-    // replaces them after the ledger row.
-    shekyl_zone_params spans{};
-    spans.network_id = nullptr;
-    spans.clearnet_dial_within_ns = 1415000000ull;
-    spans.clearnet_handshake_within_ns = 1426000000ull;
-    spans.clearnet_gap_within_ns = 1430000000ull;
-    spans.tor_dial_within_ns = 9100000000ull;
-    spans.tor_gap_within_ns = 2600000000ull;
-    spans.send_queue_bytes = LEVIN_DEFAULT_MAX_PACKET_SIZE;
-    spans.shutdown_timeout_ns = 9100000000ull;
-    spans.workers = 2;
-    spans.blocking = 1;
-    return spans;
-  }
-
-  template<class t_payload_net_handler>
   shekyl_inbound_ceiling node_server<t_payload_net_handler>::transport_ceiling() const
   {
     shekyl_inbound_ceiling ceiling{};
@@ -3463,13 +2206,4 @@ namespace nodetool
     return ceiling;
   }
 
-  template<typename t_payload_net_handler>
-  std::optional<p2p_connection_context_t<typename t_payload_net_handler::connection_context>>
-  node_server<t_payload_net_handler>::public_connect(network_zone& zone, epee::net_utils::network_address const& na)
-  {
-    p2p_connection_context con{};
-    if (!zone.m_net_server.open(na, con))
-      return std::nullopt;
-    return {std::move(con)};
-  }
 }

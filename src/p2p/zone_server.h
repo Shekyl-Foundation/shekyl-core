@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -51,7 +52,6 @@ namespace detail
     std::mutex mu;
     zone_binding* clearnet = nullptr;
     zone_binding* tor = nullptr;
-    bool seam_bound = false;
   };
 
   inline zone_slots& slots()
@@ -91,19 +91,18 @@ namespace detail
     target->enqueue(id, kind, stored, have, std::move(copy));
   }
 
+  /// The hub is the binding. The relay harness clears it with a null
+  /// `shekyl_seam_bind` when that test finishes, and the next listen
+  /// installs this zone's hub again. A flag set on the first bind would
+  /// stay set across that clear: the listen would only refresh a ceiling
+  /// on a hub that is no longer there, and every later port would fail.
   inline bool ensure_seam(const shekyl_inbound_ceiling& ceiling)
   {
     std::lock_guard<std::mutex> lock(slots().mu);
-    if (slots().seam_bound)
-    {
-      shekyl_seam_set_ceiling(&ceiling);
-      return true;
-    }
+    if (shekyl_seam_is_bound() != 0)
+      return shekyl_seam_set_ceiling(&ceiling) == 0;
     static int ctx = 1;
-    if (shekyl_seam_bind(&ctx, &zone_post, &ceiling) != 0)
-      return false;
-    slots().seam_bound = true;
-    return true;
+    return shekyl_seam_bind(&ctx, &zone_post, &ceiling) == 0;
   }
 
   inline void register_binding(std::uint32_t connector, zone_binding* binding)
@@ -184,6 +183,78 @@ namespace detail
     }
     return static_cast<std::uint16_t>(value);
   }
+}
+
+/// A peerlist a peer sent, handed to Rust as it arrived: every entry's
+/// address, in order, none dropped or rewritten. An address this adapter
+/// cannot encode goes over as an empty entry, which Rust refuses. False
+/// is Rust's refusal and the only answer on which the caller closes.
+template<class Entries>
+inline bool received_peerlist(const boost::uuids::uuid& session, const Entries& entries)
+{
+  std::vector<shekyl_seam_address> raw(entries.size());
+  for (std::size_t i = 0; i < entries.size(); ++i)
+    detail::address_from(entries[i].adr, raw[i]);
+  return shekyl_peerlist_admit_received(seam_socket_id(session), raw.data(), raw.size()) != SHEKYL_PEERLIST_REFUSE;
+}
+
+/// The disclosure sample for a response on `session`, from the Rust peer
+/// lists: empty below the white diversity floor. Entries carry no clock.
+inline std::vector<nodetool::peerlist_entry> disclose(const boost::uuids::uuid& session)
+{
+  std::array<shekyl_seam_address, 32> raw{};
+  const std::size_t count = shekyl_peerlist_disclose(seam_socket_id(session), raw.data(), raw.size());
+  std::vector<nodetool::peerlist_entry> out;
+  out.reserve(count);
+  for (std::size_t i = 0; i < count; ++i)
+  {
+    shekyl_seam_observed observed{};
+    observed.connector = raw[i].connector;
+    observed.direction = SHEKYL_DIRECTION_OUTBOUND;
+    observed.address_type = raw[i].address_type;
+    observed.port = raw[i].port;
+    observed.len = raw[i].len;
+    std::memcpy(observed.bytes, raw[i].bytes, sizeof(observed.bytes));
+    out.push_back(nodetool::peerlist_entry{seam_network_address(observed)});
+  }
+  return out;
+}
+
+/// This node's own address on a connector (an operator onion from
+/// `--anonymous-inbound`), told to the Rust lists as one member of that
+/// connector's disclosure population. Returns the address, so the line
+/// that stores it for the operator log keeps its value.
+inline epee::net_utils::network_address note_own_address(epee::net_utils::network_address addr)
+{
+  shekyl_seam_address raw{};
+  if (detail::address_from(addr, raw))
+    shekyl_peerlist_set_own_address(raw.connector, &raw);
+  return addr;
+}
+
+/// An operator-named address (`--add-peer`), into the Rust gray list.
+inline void admit_operator_peer(const epee::net_utils::network_address& addr)
+{
+  shekyl_seam_address raw{};
+  if (detail::address_from(addr, raw))
+    shekyl_peerlist_admit_operator(&raw);
+}
+
+/// A closed network (`--add-exclusive-node`): the Rust dialer's candidate
+/// population is exactly these addresses. An address this adapter cannot
+/// encode is left out of the declaration.
+template<class Addresses>
+inline void declare_exclusive_peers(const Addresses& addresses)
+{
+  std::vector<shekyl_seam_address> raw;
+  raw.reserve(addresses.size());
+  for (const auto& address : addresses)
+  {
+    shekyl_seam_address entry{};
+    if (detail::address_from(address, entry))
+      raw.push_back(entry);
+  }
+  shekyl_dialer_set_exclusive(raw.data(), raw.size());
 }
 
 template <class t_protocol_handler>
@@ -292,8 +363,7 @@ public:
   }
 
   bool listen_clearnet(const std::string& ip, const std::string& port, const std::string& ipv6, const std::string& port_v6,
-      bool use_ipv6, const boost::asio::ip::tcp::endpoint* proxy, bool encrypt, const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling,
-      const shekyl_zone_params& spans)
+      bool use_ipv6, const boost::asio::ip::tcp::endpoint* proxy, bool encrypt, const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling)
   {
     const auto parsed_port = detail::port_of(port);
     if (!parsed_port)
@@ -309,8 +379,6 @@ public:
     if (!detail::ensure_seam(ceiling))
       return false;
     detail::register_binding(SHEKYL_CONNECTOR_CLEARNET, this);
-    shekyl_zone_params params = spans;
-    params.network_id = network_id;
     int bound = -1;
     int bound_v6 = -1;
     const std::string proxy_host = proxy != nullptr ? proxy->address().to_string() : std::string();
@@ -318,7 +386,7 @@ public:
         ip.c_str(), *parsed_port,
         use_ipv6 ? ipv6.c_str() : nullptr, parsed_v6, use_ipv6 ? 1 : 0,
         proxy != nullptr ? proxy_host.c_str() : nullptr, proxy != nullptr ? proxy->port() : 0,
-        encrypt ? 1 : 0, &params, &ceiling, &bound, &bound_v6);
+        encrypt ? 1 : 0, network_id, &ceiling, &bound, &bound_v6);
     if (rc != 0)
       return false;
     m_port = bound;
@@ -327,7 +395,7 @@ public:
   }
 
   bool listen_tor(const boost::asio::ip::tcp::endpoint& socks, const std::string& extra_ip, const std::string& extra_port, bool have_extra,
-      const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling, const shekyl_zone_params& spans)
+      const std::uint8_t* network_id, const shekyl_inbound_ceiling& ceiling)
   {
     std::uint16_t parsed_extra = 0;
     if (have_extra)
@@ -340,14 +408,12 @@ public:
     if (!detail::ensure_seam(ceiling))
       return false;
     detail::register_binding(SHEKYL_CONNECTOR_TOR, this);
-    shekyl_zone_params params = spans;
-    params.network_id = network_id;
     const std::string socks_host = socks.address().to_string();
     int bound = -1;
     const int rc = shekyl_zone_listen_tor(
         socks_host.c_str(), socks.port(),
         have_extra ? extra_ip.c_str() : nullptr, parsed_extra,
-        &params, &ceiling, &bound);
+        network_id, &ceiling, &bound);
     if (rc != 0)
       return false;
     m_port = bound;
@@ -360,35 +426,13 @@ public:
   /// address in the host. Without this call both were missing and every
   /// Tor dial was `DialFailed` before the network.
   bool dial_through_tor(const boost::asio::ip::tcp::endpoint& socks, const std::uint8_t* network_id,
-      const shekyl_inbound_ceiling& ceiling, const shekyl_zone_params& spans)
+      const shekyl_inbound_ceiling& ceiling)
   {
     if (!detail::ensure_seam(ceiling))
       return false;
     detail::register_binding(SHEKYL_CONNECTOR_TOR, this);
-    shekyl_zone_params params = spans;
-    params.network_id = network_id;
     const std::string socks_host = socks.address().to_string();
-    return shekyl_zone_set_tor_proxy(socks_host.c_str(), socks.port(), &params, &ceiling) == 0;
-  }
-
-  bool open(const epee::net_utils::network_address& address, connection_context& out)
-  {
-    shekyl_seam_address ffi{};
-    if (!detail::address_from(address, ffi))
-      return false;
-    const shekyl_seam_open_result result = shekyl_seam_open(&ffi, 0);
-    if (result.id == 0)
-    {
-      MINFO("seam open refused cause " << seam_close_name(result.cause_kind)
-          << " reply " << result.reply_code);
-      return false;
-    }
-    std::lock_guard<std::mutex> lock(m_mu);
-    const auto found = m_links.find(result.id);
-    if (found == m_links.end())
-      return false;
-    out = found->second->context();
-    return true;
+    return shekyl_zone_set_tor_proxy(socks_host.c_str(), socks.port(), network_id, &ceiling) == 0;
   }
 
   void enqueue(std::uint64_t id, std::uint32_t kind, shekyl_seam_observed observed, bool have_observed, std::vector<std::uint8_t> bytes) override
@@ -474,6 +518,17 @@ private:
     {
       const bool accepted = link->take_bytes(bytes.data(), bytes.size());
       shekyl_seam_delivery_finished(id, accepted ? 1 : 0);
+    }
+    else if (kind == SHEKYL_SEAM_HANDSHAKE && link)
+    {
+      // The Rust dialer adopted the channel and posted the response's
+      // fields. One strand turn, before any frame: accept or refuse.
+      shekyl_seam_handshake_result result{};
+      const bool well_formed = bytes.size() == sizeof(result) && m_config->commands_handler();
+      if (well_formed)
+        std::memcpy(&result, bytes.data(), sizeof(result));
+      const bool accepted = well_formed && m_config->commands_handler()->on_outbound_handshake(link->context_mut(), result);
+      shekyl_dialer_handshake_verdict(id, accepted ? 1 : 0);
     }
     else if (kind == SHEKYL_SEAM_CLOSED && link)
     {

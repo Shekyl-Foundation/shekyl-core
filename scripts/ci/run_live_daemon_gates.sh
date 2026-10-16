@@ -34,8 +34,10 @@
 #   pr    — ARMED, per-PR in build.yml (each gate <= ~3.5 min, measured
 #           2026-09-08 local Release; sum ~20 min).
 #   slow  — ARMED_SLOW, the nightly live-daemon workflow (depth-3 spend
-#           780 s + emission claim 1122 s measured 2026-09-08 local
-#           Release — too heavy per-PR, still consensus gates).
+#           780 s measured 2026-09-08 local Release, and the two slice-7
+#           gates — too heavy per-PR, still consensus gates). The emission
+#           claim left this lane: it submits a kind-5 JoinMarket, which
+#           this daemon does not admit (DECIDED_DARK, FND-20).
 # Both lanes name-check ALL lists, so a rename is caught in every run.
 #
 # PR #660 ruled against a cost tier on the grounds that a nightly tier
@@ -94,13 +96,8 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #   e2e_refresh_scans_coinbase_balance — historical red: RpcError::
 #     InvalidNode("invalid block") before the shekyl-wire parse migration.
 #   e2e_trim_curve_tree_restores_grow_root — sabotage 2026-09-08.
-#   e2e_staker_bond_post_accepted_and_applied — historical red: the PR-4a
-#     daemon-gap tripwire pinned the unimplemented-arm Malformed refusal.
-#   e2e_drain_wire_shape_matches_a_real_transfer — sabotage 2026-09-08.
-#   e2e_release_accepted_and_connected — sabotage 2026-09-08 (as
-#     e2e_unbond_accepted_and_connected, pre Unbond→Release rename).
-#   e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
 #   e2e_arm3_phantom_slot_collected_at_open — sabotage 2026-09-08.
+#     Stays armed: it persists a bond locally and never broadcasts one.
 #   jsonrpc_we_carries_handler_status_through_the_result_envelope — the
 #     result-envelope leg split out of restricted_listener_* by PR #782;
 #     sabotage 2026-09-18 (envelope pointer inverted, panicked there).
@@ -108,9 +105,40 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     (SOK-Q3): red by construction on any tree that routes the method
 #     (dev at 8494f2a27 does); sabotage 2026-09-18 (expected message
 #     inverted, panicked there).
+#   restricted_listener_is_withheld_status_and_capped_by_native_handlers — the
+#     gate armed 2026-09-07 as restricted_listener_applies_request_caps_
+#     through_the_ffi_bridge, renamed in RK-5c commit 4 when its last leg
+#     (/get_info) went native and it stopped saying anything about the
+#     bridge. Sabotage 2026-10-10, daemon rebuilt: the listener's posture
+#     mapped to full disclosure for every caller; panicked at "each listener
+#     must say which it is".
+#   get_info_console_commands_answer_on_the_in_process_arm — RK-5c commit
+#     4: status, diff, version and print_pool_stats on the daemon's own
+#     console. Sabotage 2026-10-10, daemon rebuilt: `diff` cut off from the
+#     native method; panicked at "the in-process diff must name the live
+#     tip" after `status` had passed.
+#   restricted_listener_hides_a_transaction_this_node_has_not_broadcast —
+#     the origin guard anchored on include_sensitive (RK-5c commit 1), two
+#     daemons. Sabotage 2026-10-09, twice, each rebuilding the daemon:
+#     dispatch_json passing nullptr for the origin panicked naming the three
+#     bridged pool routes and not the native one; the native
+#     /get_transactions handler passing `true` for the flag panicked naming
+#     that route alone. ~77 s measured, local Release daemon.
+#   e2e_the_cxx_daemon_answers_join_market_unsupported — the FND-20
+#     tripwire for the five DECIDED_DARK walks below: drives the bond walk
+#     to its submit and asserts the C++ commit shim's typed answer
+#     (Rejected{JoinMarketUnsupported}, which the wallet takes as terminal
+#     and releases the post's funding — not a Rust verdict on the post, not
+#     a commit fault). Goes red the day the daemon under test admits a
+#     kind-5 JoinMarket, naming the five walks that are then due back
+#     (FOLLOWUPS: "The five bonded regtest walks are decided dark").
+#     Sabotage 2026-10-14, local Release daemon built from this branch: the
+#     C++ shim's JoinMarket answer disabled (`if false && …`), daemon
+#     rebuilt; the commit fell through to the C++ reparse and the test
+#     panicked on its other-finding arm naming Submit(Ambiguous {
+#     DaemonUnavailable }) (78 s; the green run before it 89 s).
 #   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
 #     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
-#   e2e_emission_claim_accepted_and_applied (slow) — sabotage 2026-09-08.
 #   e2e_cxx_template_fills_to_its_median (slow) — historical red
 #     2026-09-28: its premise (a C++-built block at the limit) failed its
 #     own assertions on the first run; the C++ producer stops at its
@@ -121,7 +149,8 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
 #     that fixed the daemon's hard-fork table. Same pool cost as above.
 ARMED=(
-  engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge
+  engine::regtest_e2e::e2e_the_cxx_daemon_answers_join_market_unsupported
+  engine::regtest_e2e::origin::restricted_listener_is_withheld_status_and_capped_by_native_handlers
   engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::native_handlers_apply_their_own_request_caps
@@ -130,21 +159,19 @@ ARMED=(
   engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
-  engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
-  engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
-  engine::regtest_e2e::e2e_release_accepted_and_connected
-  engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
   engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
   engine::regtest_e2e::get_output_histogram_stays_unrouted
+  engine::regtest_e2e::origin::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
+  engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
 )
 
-# Consensus gates too heavy for the per-PR lane (13 + 19 min measured; the
-# two slice-7 gates ~5 min each in a debug build, fifty spends apiece): the
-# nightly live-daemon workflow runs these with GATE_LANE=slow.
+# Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
+# measured 2026-09-08; the two slice-7 gates ~5 min each in a debug build,
+# fifty spends apiece). The emission claim (19 min) left with the kind-5
+# walks. The nightly live-daemon workflow runs these with GATE_LANE=slow.
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
-  engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
   engine::regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx
 )
@@ -154,8 +181,44 @@ ARMED_SLOW=(
 # name-check below, so the decision cannot rot silently.
 #   generate_ct2_tier_b_fixture — fixture regenerator, not a pass/fail
 #     proposition; run manually when the CT-2 Tier-B scenarios change.
+#   The five walks below each call `stake_persona_to_confirmed_bond`, which
+#     submits a `post_kind` 5 JoinMarket. The C++ daemon cannot parse that
+#     byte, and the frozen verify export refuses every JoinMarket
+#     (`FN_DSA_HYBRID.md` §8, FND-20); its commit shim answers
+#     Rejected{JoinMarketUnsupported} for one. Observed red 2026-10-13 on
+#     `e2e_staker_bond_post_accepted_and_applied`, when that refusal still
+#     surfaced as a commit fault. The lane exits on the first red, so the
+#     other four were not reached; they share the helper and fail the same
+#     way. Teaching the
+#     C++ decoder the receipt key is the departure this increment refuses
+#     (no file under `src/` moved). A Rust reparse inside the submit shim
+#     would not apply the post either: pool, mine, connect and relay all
+#     parse the blob in C++. The walks stay in the tree — the positive
+#     subject returns when the daemon under test admits a kind-5 JoinMarket
+#     (DEL-008) — and move back to ARMED or ARMED_SLOW then. That day is
+#     not left to be noticed: the ARMED tripwire
+#     e2e_the_cxx_daemon_answers_join_market_unsupported drives
+#     the same bonding path to the submit and asserts the refusal, so a
+#     daemon that admits the post turns it red naming these five. The
+#     deferral record is the FOLLOWUPS row "The five bonded regtest walks
+#     are decided dark until the daemon under test admits a kind-5
+#     JoinMarket" (owner DEL-008).
+#     Prior reds, so the original subject is not lost:
+#       e2e_staker_bond_post_accepted_and_applied — PR-4a daemon-gap
+#         tripwire (unimplemented-arm Malformed).
+#       e2e_drain_wire_shape_matches_a_real_transfer — sabotage 2026-09-08.
+#       e2e_release_accepted_and_connected — sabotage 2026-09-08 (as
+#         e2e_unbond_accepted_and_connected, pre Unbond→Release rename).
+#       e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
+#       e2e_emission_claim_accepted_and_applied — sabotage 2026-09-08;
+#         was ARMED_SLOW.
 DECIDED_DARK=(
   engine::regtest_e2e::generate_ct2_tier_b_fixture
+  engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
+  engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
+  engine::regtest_e2e::e2e_release_accepted_and_connected
+  engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
+  engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
 
 for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}"; do

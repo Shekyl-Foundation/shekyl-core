@@ -32,7 +32,6 @@
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/difficulty.h"
 #include "fcmp/ct_semantics.h"
-#include "rpc/rpc_handler.h"
 
 #include <unordered_map>
 #include <vector>
@@ -124,18 +123,6 @@ namespace rpc
     bool unlocked;
   };
 
-  struct hard_fork_info
-  {
-    uint8_t version;
-    bool enabled;
-    uint32_t window;
-    uint32_t votes;
-    uint32_t threshold;
-    uint8_t voting;
-    uint32_t state;
-    uint64_t earliest_height;
-  };
-
   //required by JSON-RPC 2.0 spec
   struct error
   {
@@ -198,13 +185,6 @@ namespace rpc
     uint64_t block_weight_median;
     uint64_t start_time;
     std::string version;
-  };
-
-  struct output_distribution
-  {
-    output_distribution_data data;
-    uint64_t amount;
-    bool cumulative;
   };
 }  // namespace rpc
 

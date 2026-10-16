@@ -34,7 +34,11 @@
 //! either the daemon that built it and this validator disagree (E2's
 //! subject — grade it), or a rule landed that the chain's real spend now
 //! trips (the cascade slice 5 §5.1 named — the fixture was right; the
-//! rule is what moved).
+//! rule is what moved). The second kind is recorded, not patched: the
+//! corpus pins what was true at capture and is not the witness for a rule
+//! that landed after it, so the chain replays as far as the rule admits,
+//! compares every connected height, and [`PREDATES`] says exactly where it
+//! stops and why — until the chain is regenerated against the rule.
 
 // A whole-file test module, gated at `lib.rs` by
 // `#[cfg(all(test, feature = "pipeline"))]`. The inner attribute is the
@@ -49,7 +53,9 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{FakechainSchedule, ReleaseAnchors, SettlementEpochBlocks, Substrate};
+use shekyl_chain_rules::{
+    FakechainSchedule, InvalidBlock, ReleaseAnchors, SettlementEpochBlocks, Substrate,
+};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::corpus::CorpusReader;
@@ -65,6 +71,10 @@ use crate::trace::Trace;
 use shekyl_chain_rules::Candidate;
 use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
+
+mod retired_keyless_join;
+pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
+
 /// `manifest.json`, as the capture writes it (format 4).
 #[derive(Deserialize, Debug)]
 pub(crate) struct Manifest {
@@ -144,10 +154,15 @@ fn only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly
                 dir.display()
             );
         }
+        // A chain that stops at a retired keyless JoinMarket is read only
+        // below it, so only the receipts below it can be found in the
+        // corpus; the manifest still names every one (asserted above).
+        let readable_below = retired_keyless_join(&manifest.shape).map(|r| r.at);
         let in_manifest: Vec<Injection> = manifest
             .out_of_band_writes
             .iter()
             .map(|r| r.receipt)
+            .filter(|r| readable_below.is_none_or(|at| r.at < at))
             .collect();
         assert_eq!(
             corpus_injections(&dir),
@@ -162,8 +177,9 @@ fn only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly
 /// at — the one the corpus law held to the tip when it was written.
 fn corpus_injections(dir: &Path) -> Vec<Injection> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let mut reader =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    let mut reader = UntilRetiredJoin::new(
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
+    );
     let mut tip: Option<BlockHeight> = None;
     let mut found = Vec::new();
     while let Some(event) = reader.next().expect("corpus reads") {
@@ -181,6 +197,7 @@ fn corpus_injections(dir: &Path) -> Vec<Injection> {
             }),
         }
     }
+    reader.finish(&shape_of(dir));
     found
 }
 
@@ -269,8 +286,9 @@ where
 {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");
-    let mut source =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    let mut source = UntilRetiredJoin::new(
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
+    );
     let trace = Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace"));
     let schedule = FakechainSchedule::new(
         SettlementEpochBlocks::new(manifest.settlement_epoch_blocks)
@@ -313,6 +331,9 @@ where
     .await
     .map_err(|e| format!("{e:?}"));
     cleanup(&path);
+    if report.is_ok() {
+        source.finish(&manifest.shape);
+    }
     report
 }
 
@@ -345,26 +366,129 @@ pub(crate) fn mock_with_the_real_clock() -> Arc<MockSubstrate> {
     })
 }
 
+/// A captured chain that **predates a rule**: a row landed after the
+/// capture and refuses one of its blocks, so the chain replays short and
+/// says why. The corpus pins what was true at capture — the daemon's
+/// roots, weights, accumulator and digest — and is not the witness for a
+/// rule that landed later; the rule's witness is the driven scenario
+/// (`scenario_archival_tests.rs`) or its unit test. A short replay still
+/// compares every connected height against the trace, so the pin holds
+/// over the blocks the rule admits.
+///
+/// Enumerated, not discovered: the refusal is pinned exactly — height,
+/// row, locus — and `hold` asserts it, so a chain refused anywhere else is
+/// still the finding the module doc names, and a regenerated chain that
+/// replays whole fails here with "the record is stale" rather than quietly
+/// outgrowing it. Each record is deleted the day its chain is regenerated.
+#[derive(Debug)]
+pub(crate) struct Predates {
+    pub(crate) shape: &'static str,
+    /// The refusal, exactly.
+    pub(crate) refused: (BlockHeight, InvalidBlock),
+    /// What the chain does that the rule refuses, and what a capture that
+    /// replays whole does instead.
+    pub(crate) why: &'static str,
+}
+
+/// The chains that predate a rule. **None, as of 2026-10-12.** The one
+/// record this held since E6 slice 8 row 6 (2026-10-06) — `emission-claim`,
+/// refused at 98 by CEN-J15 for a compact join onto a shard the chain never
+/// closed — named a block that no longer parses: its join is a keyless
+/// JoinMarket, and the chain is a [`retired_keyless_join::RETIRED_KEYLESS_JOINS`] record now. The
+/// mechanism stays for the next rule a capture predates.
+pub(crate) const PREDATES: [Predates; 0] = [];
+
+/// The shape a captured chain's directory names.
+fn shape_of(dir: &Path) -> String {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .expect("a captured chain's directory is its shape")
+        .to_owned()
+}
+
+/// The record for a captured chain, if it predates a rule.
+pub(crate) fn predates(shape: &str) -> Option<&'static Predates> {
+    PREDATES.iter().find(|p| p.shape == shape)
+}
+
+/// Every `PREDATES` record names a captured chain. The other direction —
+/// a chain refused without a record — is `hold`'s first assertion.
+#[test]
+fn every_predates_record_names_a_captured_chain() {
+    let shapes: Vec<String> = captured_chains()
+        .into_iter()
+        .map(|(_, m)| m.shape)
+        .collect();
+    for record in &PREDATES {
+        assert!(
+            shapes.iter().any(|s| s == record.shape),
+            "PREDATES names `{}`, which is not captured — the chain was deleted or renamed; \
+             delete the record",
+            record.shape
+        );
+    }
+}
+
 /// What every replay must show, whichever substrate judged the hashes.
 fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
-    assert!(
-        report.refused.is_none(),
-        "{} ({}): the daemon accepted every block of this chain and the validator refused one — \
-         {:?}. A finding: either E2's subject (the two disagree; grade it) or a rule landed \
-         that the chain's real spend trips (slice 5 §5.1's cascade — the rule moved, not the \
-         fixture)",
-        manifest.shape,
-        manifest.generator,
-        report.refused
-    );
+    // How far the chain replays: whole, or exactly as far as the rule it
+    // predates admits.
+    let expected_connected = match predates(&manifest.shape) {
+        // A chain that stops at a retired keyless JoinMarket connects every
+        // block below it and is refused nowhere: the stream ended.
+        None if retired_keyless_join(&manifest.shape).is_some() => {
+            assert!(
+                report.refused.is_none(),
+                "{}: refused below its retired join — {:?}",
+                manifest.shape,
+                report.refused
+            );
+            retired_keyless_join(&manifest.shape)
+                .expect("checked")
+                .at
+                .to_raw()
+        }
+        None => {
+            assert!(
+                report.refused.is_none(),
+                "{} ({}): the daemon accepted every block of this chain and the validator \
+                 refused one — {:?}. A finding: either E2's subject (the two disagree; grade \
+                 it) or a rule landed that the chain's real spend trips (slice 5 §5.1's \
+                 cascade — the rule moved, not the fixture). If it is the latter and the \
+                 refusal is the rule's, record it in `PREDATES` with its why",
+                manifest.shape,
+                manifest.generator,
+                report.refused
+            );
+            manifest.block_count
+        }
+        Some(record) => {
+            assert_eq!(
+                report.refused,
+                Some(record.refused),
+                "{} ({}): PREDATES says this chain is refused at {:?} by {:?}, and the replay \
+                 says {:?}. A different refusal is a finding (grade it); none is a chain that \
+                 no longer predates the rule — the record is stale, delete it. Why the record \
+                 exists: {}",
+                manifest.shape,
+                manifest.generator,
+                record.refused.0,
+                record.refused.1,
+                report.refused,
+                record.why
+            );
+            record.refused.0.to_raw()
+        }
+    };
     assert_eq!(
         report.connected.len() as u64,
-        manifest.block_count,
-        "{}: connected {} of {} blocks (tip {}) — {}",
+        expected_connected,
+        "{}: connected {} of {} blocks (tip {}; expected to connect {}) — {}",
         manifest.shape,
         report.connected.len(),
         manifest.block_count,
         manifest.tip_height,
+        expected_connected,
         dir.display()
     );
     // CTW-5 (DRS-E3): the derived root is held to the trace's recorded
@@ -373,11 +497,11 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // a comparison.
     assert_eq!(
         report.roots.compared(),
-        manifest.block_count,
-        "{}: {} of {} heights had a recorded root to compare against",
+        expected_connected,
+        "{}: {} of {} connected heights had a recorded root to compare against",
         manifest.shape,
         report.roots.compared(),
-        manifest.block_count
+        expected_connected
     );
     let diverged: Vec<_> = report.roots.diverged().collect();
     assert!(
@@ -399,11 +523,11 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // finding about the derivation, never a fixture to patch.
     assert_eq!(
         report.weights.compared(),
-        manifest.block_count,
-        "{}: {} of {} heights had recorded weights to compare against",
+        expected_connected,
+        "{}: {} of {} connected heights had recorded weights to compare against",
         manifest.shape,
         report.weights.compared(),
-        manifest.block_count
+        expected_connected
     );
     let diverged: Vec<_> = report.weights.diverged().collect();
     assert!(
@@ -431,11 +555,11 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
     // Rust derives it owed.
     assert_eq!(
         report.emission.compared(),
-        manifest.block_count,
-        "{}: {} of {} heights had a recorded accumulator and burn to compare against",
+        expected_connected,
+        "{}: {} of {} connected heights had a recorded accumulator and burn to compare against",
         manifest.shape,
         report.emission.compared(),
-        manifest.block_count
+        expected_connected
     );
     let diverged: Vec<_> = report.emission.diverged().collect();
     assert!(
@@ -456,6 +580,78 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         "{}: the corpus's block 0 is not the genesis the manifest names",
         manifest.shape
     );
+    // DRS-E4 §3.8 item 3: the replay applied exactly the injections the
+    // manifest names, each at the height the daemon attributed it to — the
+    // report's half of the out-of-band contract (the corpus's half is
+    // `only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly_those`).
+    // A chain that predates a rule applies exactly those attributed below
+    // the refusal — none, on the one such chain today — and the rest wait
+    // on the regeneration with the tip.
+    let named: Vec<Injection> = manifest
+        .out_of_band_writes
+        .iter()
+        .map(|r| r.receipt)
+        .filter(|r| r.at.to_raw() < expected_connected)
+        .collect();
+    assert_eq!(
+        report.injected, named,
+        "{}: the replay's committed injections are not the manifest's receipts below height {}",
+        manifest.shape, expected_connected
+    );
+    if let Some(txid) = &manifest.spend_txid {
+        assert_eq!(
+            txid.len(),
+            64,
+            "{}: spend_txid is a 32-byte hex hash",
+            manifest.shape
+        );
+    }
+    // The view-bound 4.I rows a real spend exercises, recorded on this
+    // chain. The **witness** for each is the admission above — every
+    // connected block passed with the row live, so the wallet-built spends
+    // it carries passed it (for CEN-I18: a signature made with a real
+    // HKDF-derived key over I17's derivation verified, which no harness
+    // fixture can show, its keys being derived from the image rather than
+    // the image from the key; for CEN-I13/I15: a declared depth and a
+    // proof built over the tree at the reference, admitted and verified
+    // there — slice 6 row 6's flip). This assertion is the weaker half: the
+    // row was *run* here. It cannot say the row judged rather than recorded
+    // vacuous (slice 5 Q2 — one bit per row, by design), which is why it is
+    // paired with the refusal check rather than standing for it.
+    for row in [
+        "CEN-I7", "CEN-I10", "CEN-I11", "CEN-I12", "CEN-I13", "CEN-I15", "CEN-I17", "CEN-I18",
+    ] {
+        assert!(
+            report.exercised.contains(row),
+            "{}: {row} was not recorded on a chain carrying a real spend",
+            manifest.shape
+        );
+    }
+    // The tip-anchored comparisons: the daemon's digest and `0x04` record
+    // are recorded at the chain's tip, so a chain that predates a rule has
+    // nothing to compare them against — the run ended below the covered
+    // height, and the report says so with `None` for both (**not
+    // compared**, never identical). The pin over this chain's tip resumes
+    // when the chain is regenerated.
+    if let Some(retired) = retired_keyless_join(&manifest.shape) {
+        assert!(
+            report.checkpoint.is_none() && report.archival.is_none(),
+            "{}: stopped at the retired join at {:?} and yet compared at the tip",
+            manifest.shape,
+            retired.at
+        );
+        return;
+    }
+    if let Some(record) = predates(&manifest.shape) {
+        assert!(
+            report.checkpoint.is_none() && report.archival.is_none(),
+            "{}: refused at {:?} and yet compared at the tip — the trace's covered height is \
+             below the refusal, or the report compared a tip it did not reach",
+            manifest.shape,
+            record.refused.0
+        );
+        return;
+    }
     let checkpoint = report.checkpoint.as_ref().unwrap_or_else(|| {
         panic!(
             "{}: the trace carries the daemon's digest at the tip",
@@ -470,20 +666,6 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         checkpoint.at,
         checkpoint.ours,
         checkpoint.theirs
-    );
-    // DRS-E4 §3.8 item 3: the replay applied exactly the injections the
-    // manifest names, each at the height the daemon attributed it to — the
-    // report's half of the out-of-band contract (the corpus's half is
-    // `only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly_those`).
-    let named: Vec<Injection> = manifest
-        .out_of_band_writes
-        .iter()
-        .map(|r| r.receipt)
-        .collect();
-    assert_eq!(
-        report.injected, named,
-        "{}: the replay's committed injections are not the manifest's receipts",
-        manifest.shape
     );
     // The archival snapshot (§3.8.1) was COMPARED at the tip — the run
     // reached the covered height with a `0x04` record there — and it is
@@ -519,33 +701,6 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
             })
             .collect::<String>()
     );
-    if let Some(txid) = &manifest.spend_txid {
-        assert_eq!(
-            txid.len(),
-            64,
-            "{}: spend_txid is a 32-byte hex hash",
-            manifest.shape
-        );
-    }
-    // The view-bound 4.I rows a real spend exercises, recorded on this
-    // chain. The **witness** for each is the admission above — `refused` is
-    // `None` with the row live, so the wallet-built spend passed it (for
-    // CEN-I18: a signature made with a real HKDF-derived key over I17's
-    // derivation verified, which no harness fixture can show, its keys
-    // being derived from the image rather than the image from the key).
-    // This assertion is the weaker half: the row was *run* here. It cannot
-    // say the row judged rather than recorded vacuous (slice 5 Q2 — one bit
-    // per row, by design), which is why it is paired with the refusal
-    // check rather than standing for it.
-    for row in [
-        "CEN-I7", "CEN-I10", "CEN-I11", "CEN-I12", "CEN-I17", "CEN-I18",
-    ] {
-        assert!(
-            report.exercised.contains(row),
-            "{}: {row} was not recorded on a chain carrying a real spend",
-            manifest.shape
-        );
-    }
 }
 
 /// **The consensus pin, made visible.** These blobs are valid against one
@@ -595,21 +750,35 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, Arc::clone(&substrate)).await;
         hold(&dir, &manifest, &report);
-        let archival = report.archival.as_ref().expect("held above");
+        let retired = retired_keyless_join(&manifest.shape);
+        let tip = match (&report.archival, predates(&manifest.shape)) {
+            (None, _) if retired.is_some() => format!(
+                "RETIRED keyless JoinMarket at {:?}: connected below it, tip {} not compared",
+                retired.expect("checked").at,
+                manifest.tip_height
+            ),
+            (Some(archival), _) => format!(
+                "digest MATCH at {}, archival snapshot MATCH at {} ({} rows equal)",
+                manifest.tip_height,
+                archival.at,
+                archival.diff.rows_equal()
+            ),
+            (None, Some(record)) => format!(
+                "PREDATES {:?}: refused at {:?} as recorded, tip {} not compared",
+                record.refused.1.rule, record.refused.0, manifest.tip_height
+            ),
+            (None, None) => unreachable!("held above"),
+        };
         eprintln!(
-            "{}: {} blocks connected, digest MATCH at {}, roots MATCH at all {} heights, weights \
-             MATCH at all {} heights, accumulator and burn MATCH at all {} heights, {} \
-             injection(s) applied, archival snapshot MATCH at {} ({} rows equal), rows \
-             exercised: {}",
+            "{}: {} blocks connected, {tip}, roots MATCH at all {} heights, weights MATCH at \
+             all {} heights, accumulator and burn MATCH at all {} heights, {} injection(s) \
+             applied, rows exercised: {}",
             manifest.shape,
             report.connected.len(),
-            manifest.tip_height,
             report.roots.compared(),
             report.weights.compared(),
             report.emission.compared(),
             report.injected.len(),
-            archival.at,
-            archival.diff.rows_equal(),
             report.exercised.len()
         );
     }
@@ -660,8 +829,9 @@ fn note(causes: &mut Vec<Unmutable>, cause: Unmutable) {
 /// did not move).
 fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let mut reader =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
+    let mut reader = UntilRetiredJoin::new(
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
+    );
     let mut height = reader.first_height().to_raw();
     let mut chain: Vec<(u64, Candidate, Before)> = Vec::new();
     let mut below = Before::default();
@@ -690,6 +860,7 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
             IngestEvent::Inject(_) => {}
         }
     }
+    reader.finish(&shape_of(dir));
     chain
 }
 
@@ -710,8 +881,8 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
 fn the_family_over_the_corpus_names_what_it_cannot_reach() {
     let chains = captured_chains();
     // A corpus chain brings no spare bodies and no twins, and the bound
-    // is the validator's: the weight and the two signed-twin mutations
-    // are `Unmutable` here by construction, and the census says so below.
+    // is the validator's: the weight and the signed-twin mutation are
+    // `Unmutable` here by construction, and the census says so below.
     let env = Environment {
         clock: MockSubstrate::CLOCK,
         pow: None,
@@ -773,15 +944,17 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
         .zip(everywhere_unmutable)
         .filter_map(|(m, causes)| causes.map(|c| (m, c)))
         .collect();
-    // Five entries, and the census says whose — the environment's or the
+    // Four entries, and the census says whose — the environment's or the
     // corpus's, never the family's. `PowUnderWrongSeed`: this census
     // carries no PoW leg. `OverweightBlock`: no body supply — the corpus
-    // census judges captured blocks as they are. `DuplicateClaim` and
-    // `DuplicateBondPost`: this census supplies no twins, and the *other*
-    // cause on each — `NoArchivalBodyToDuplicate` — is the heights that
-    // carry no claim or no post, which is a reading of the corpus: the
-    // emission-claim and bond-post captures do carry the bodies, so a twin
-    // supply would reach both. `DuplicateServeCredit` needs no supply (its
+    // census judges captured blocks as they are. `DuplicateBondPost`: this
+    // census supplies no twins, and the *other* cause —
+    // `NoArchivalBodyToDuplicate` — is the heights that carry no post,
+    // which is a reading of the corpus: *until 2026-10-12* the bond-post
+    // capture did carry the body, so a twin supply would have reached it
+    // (see the entry below). (`DuplicateClaim` was the
+    // fifth until slice 8 row 9 retired it to the driver — `Mutation`
+    // docs.) `DuplicateServeCredit` needs no supply (its
     // twin is the body itself) and is unreachable on the corpus alone: no
     // captured chain carries a serve credit. `ReorderedBodies` was the
     // corpus's until 2026-09-28 — every captured block listed at most one
@@ -790,12 +963,6 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
     // 4 (c)): its block 211 lists 23 bodies, so the mutations that need two
     // have a corpus witness there. A change here is a change in the
     // corpus's shape or in the family, and §3.7 moves with it.
-    let supplied_twin = |kind: ArchivalKind| {
-        vec![
-            Unmutable::NoArchivalBodyToDuplicate { kind },
-            Unmutable::NoTwinSupplied { kind },
-        ]
-    };
     assert_eq!(
         unreachable,
         vec![
@@ -810,12 +977,16 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
                 }]
             ),
             (
-                Mutation::DuplicateClaim,
-                supplied_twin(ArchivalKind::EmissionClaim)
-            ),
-            (
                 Mutation::DuplicateBondPost,
-                supplied_twin(ArchivalKind::BondPost)
+                // *Moved 2026-10-12:* this also listed `NoTwinSupplied`
+                // — the bond-post capture carried the body, so only the
+                // twin was missing. That body is a keyless JoinMarket and
+                // the chain is read only below it now
+                // (`retired_keyless_join::RETIRED_KEYLESS_JOINS`), so no captured chain carries a
+                // post at all and the one cause is the corpus's.
+                vec![Unmutable::NoArchivalBodyToDuplicate {
+                    kind: ArchivalKind::BondPost
+                }]
             ),
             (Mutation::OverweightBlock, vec![Unmutable::NoBodySupply]),
         ],

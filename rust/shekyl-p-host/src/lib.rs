@@ -55,11 +55,12 @@
 //! status line, header set, route) is `RF-R1`
 //! (`docs/design/ARCHIVAL_SERVING_ROUTE.md`), not a format-round candidate;
 //! §9.5's exclusion of it from that round stands. The response *payload* is
-//! no longer open: `RF-D4` ruled it on 2026-08-20 and `shekyl-p-serve` emits
-//! the frame (`shekyl_curve_tree::served_frame`). Nothing in this crate
-//! reads or writes it — the host wires lifecycle, not bytes — but "the
-//! response wire format is undecided" has stopped being true and should not
-//! be repeated from here. Calling [`PersonaServingHost::refresh`] from the P-scan
+//! no longer open: it is the `shekyl_wire::shard_frame` body over the
+//! shard's archival good (`SF-D8` amendment 2026-10-08), which the
+//! provider holds and `shekyl-p-serve` streams unframed. Nothing in this
+//! crate reads or writes it — the host wires lifecycle, not bytes — but
+//! "the response wire format is undecided" has stopped being true and
+//! should not be repeated from here. Calling [`PersonaServingHost::refresh`] from the P-scan
 //! sweep is the wiring slice's job (SH-2b), on the crate that owns the
 //! claim-source decode and the curve-tree actor; this crate owns the
 //! refresh *behaviour* and the seam ([`ServeSetPinner`]) the sweep plugs
@@ -80,14 +81,20 @@
 
 pub mod daemon_tip;
 pub mod host;
+pub mod runtime;
 pub mod serve_set;
 pub mod signer;
 
 pub use daemon_tip::DaemonTipCache;
 pub use host::{HostError, PersonaServing, PersonaServingHost, ServeCounters};
+pub use runtime::{PriorityFailures, SERVING_BLOCKING, SERVING_WORKERS};
 pub use serve_set::{
     PinError, PinReport, PinnedServeSet, ReportedSet, ServeObligation, ServeSet, ServeSetPinner,
     Staleness, StalenessBound,
 };
-pub use shekyl_p_serve::PassKey;
-pub use signer::NoResidentKey;
+pub use shekyl_p_serve::{
+    sign_pass_transcript, sign_receipt_transcript, PassKey, ServeCounterReader, SignRefused,
+    IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
+};
+#[cfg(any(test, feature = "test-signer"))]
+pub use signer::{signer_at_synced_tip, RefusingKey};

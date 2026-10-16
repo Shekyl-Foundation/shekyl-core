@@ -1,6 +1,6 @@
 shekyl-p2p-transcript 1
 seed 30
 role peer
-sent 01210101010101011b01
+sent 0121010101010101ef00
 recv 
 end closed

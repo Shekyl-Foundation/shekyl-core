@@ -1,0 +1,44 @@
+path	count	operand	evaluates	disposition	landing	text
+src/blockchain_db/blockchain_db.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (blk.miner_tx.version >= 2)
+src/blockchain_db/blockchain_db.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2)
+src/blockchain_db/lmdb/db_lmdb.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	bool is_pseudo_rct = tx.version >= 2 && tx.vin.size() == 1 && std::holds_alternative<txin_gen>(tx.vin[0]);
+src/blockchain_db/lmdb/db_lmdb.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	const bool split_pqc = tx.version >= 3 && !tx.vin.empty()
+src/blockchain_db/lmdb/db_lmdb.cpp	1	LMDB schema version	compares the stored schema with the build's	none	none	else if (db_version < VERSION)
+src/blockchain_db/lmdb/db_lmdb.cpp	1	LMDB schema version	compares the stored schema with the build's	none	none	if (db_version > VERSION)
+src/blockchain_db/lmdb/db_lmdb.cpp	1	LMDB schema version	compares the stored schema with the build's	none	none	if (oldversion < VERSION)
+src/blockchain_db/lmdb/db_lmdb.cpp	2	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version > 1)
+src/blockchain_db/shekyl_types.h	3	persisted row version	live: a stored row's version byte must equal the writer's kVersion	none	none	if (p[0] != kVersion)
+src/blockchain_db/shekyl_types.h	3	persisted row version	live: a stored row's version byte must equal the writer's kVersion	none	none	if (p[off++] != kVersion)
+src/blockchain_db/shekyl_types.h	1	persisted row version	live: a stored row's version byte must equal the writer's kVersion	none	none	if (version != kVersion)
+src/blockchain_utilities/blockchain_import.cpp	1	bootstrap file version	the import's file format, compared with the build's, as the LMDB schema version is	none	none	if (major_version != bootstrap::BOOTSTRAP_MAJOR_VERSION
+src/blockchain_utilities/blockchain_import.cpp	1	bootstrap file version	the import's file format, compared with the build's, as the LMDB schema version is	none	none	|| minor_version < bootstrap::BOOTSTRAP_MINOR_VERSION_WITNESS)
+src/cryptonote_basic/cryptonote_basic.h	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (!(version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0])))
+src/cryptonote_basic/cryptonote_basic.h	2	transaction version	false for an admitted transaction; reachable from the wire, where the parser admits version 1	delete	tx-version	if (version == 1)
+src/cryptonote_basic/cryptonote_basic.h	1	transaction version	live: the parser refuses 0 and above 3, and still admits 1 and 2	collapse	tx-version	if(version == 0 || CURRENT_TRANSACTION_VERSION < version) return false;
+src/cryptonote_basic/cryptonote_boost_serialization.h	1	transaction version	false for an admitted transaction; reachable from the wire, where the parser admits version 1	delete	tx-version	if (x.version == 1)
+src/cryptonote_basic/cryptonote_boost_serialization.h	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (x.version >= 3 && !x.vin.empty() && !std::holds_alternative<cryptonote::txin_gen>(x.vin[0]))
+src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	CHECK_AND_ASSERT_MES(tx.version >= 2, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support v1 txes");
+src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	CHECK_AND_ASSERT_MES(tx.version >= 3, blob_size, "Shekyl requires tx version >= 3");
+src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	const bool first_input_is_spend = t.version >= 3 && !t.vin.empty() && !std::holds_alternative<txin_gen>(t.vin[0]);
+src/cryptonote_basic/cryptonote_format_utils.cpp	2	transaction version	false for an admitted transaction; reachable from the wire, where the parser admits version 1	delete	tx-version	if (t.version == 1)
+src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version > 1)
+src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2 && !is_coinbase(tx))
+src/cryptonote_basic/cryptonote_format_utils.cpp	1	transaction version	false for an admitted transaction; reachable from the wire, where the parser admits version 1	delete	tx-version	return version <= 1;
+src/cryptonote_core/blockchain.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	CHECK_AND_ASSERT_MES(b.miner_tx.version >= 3, false, "Invalid coinbase transaction version: " << b.miner_tx.version << " (minimum: 3)");
+src/cryptonote_core/blockchain.cpp	1	transaction version	false for an admitted transaction; a second statement of the rule	delete	tx-version	if (cur_tx.tx.version < 3)
+src/cryptonote_core/blockchain.cpp	1	transaction version	false for an admitted transaction; a second statement of the rule	delete	tx-version	if (tx.version < 3)
+src/cryptonote_core/blockchain.cpp	1	transaction version	a second statement of the admission bound; both locals are 3	delete	tx-version	if (tx.version < min_tx_version)
+src/cryptonote_core/blockchain.cpp	1	transaction version	a second statement of the admission bound; both locals are 3	delete	tx-version	if (tx.version > max_tx_version)
+src/cryptonote_core/blockchain.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2 && !is_archival_serve_credit_only)
+src/cryptonote_core/blockchain.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 3 && !tx.vin.empty() && !std::holds_alternative<txin_gen>(tx.vin[0])
+src/cryptonote_core/cryptonote_core.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version > 1)
+src/cryptonote_core/tx_pqc_verify.cpp	1	PQC auth version	the rule: auth_version is 1	none	none	if (auth.auth_version != 1)
+src/cryptonote_core/tx_pqc_verify.cpp	1	transaction version	false for an admitted transaction; a second statement of the rule	delete	tx-version	if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
+src/cryptonote_core/tx_verification_utils.cpp	1	transaction version	live admission bound; both locals are 3, and the parser still admits 1 and 2	collapse	tx-version	if (tx.version < min_tx_version || tx.version > max_tx_version)
+src/cryptonote_core/tx_verification_utils.cpp	1	transaction version	always true for an admitted transaction (version is 3)	collapse	tx-version	if (tx.version >= 2)
+src/net/socks.cpp	2	SOCKS protocol version	the protocol's own check	none	none	if (header.version != 5)
+src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (header.version != v5_userpass_version)
+src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v4a_tor)
+src/net/socks.cpp	1	SOCKS protocol version	the protocol's own check	none	none	if (socks_version() != version::v5)
+src/cryptonote_core/blockchain.cpp	1	block major version	CEN-B1: the major version is 1	none	none	return b.major_version == CURRENT_BLOCK_MAJOR_VERSION
+src/cryptonote_core/blockchain.cpp	1	block minor version	CEN-B2: the minor version is reserved at 0; it is not a vote	none	none	&& b.minor_version == CURRENT_BLOCK_MINOR_VERSION;

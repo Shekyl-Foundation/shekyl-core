@@ -8,8 +8,8 @@
 //!
 //! A handler never touches the FFI: it asks a [`ChainFacts`] for what it
 //! needs and decides the rest itself. [`FfiChainFacts`] is today's only
-//! implementation, reading the C++ core through `shekyl_rpc_chain_tip` /
-//! `shekyl_rpc_hardforks` (`src/rpc/rpc_facts_ffi.h`). When the Rust chain
+//! implementation, reading the C++ core through `shekyl_rpc_chain_tip` and
+//! its siblings (`src/rpc/rpc_facts_ffi.h`). When the Rust chain
 //! store lands (DRS-E) a second implementation reads it directly and this
 //! one is deleted; the handlers and their tests do not move.
 //!
@@ -79,7 +79,7 @@ use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
 };
 
-use crate::core::{ConnectionsSnapshot, CoreRpc, PeerFacts, SyncSpansSnapshot};
+use crate::core::{ConnectionsSnapshot, CoreRpc, P2pRead, PeerEntry, SyncSpansSnapshot};
 use crate::ffi;
 
 /// What this daemon **is**: the two identity facts a client checks at
@@ -112,8 +112,8 @@ pub struct ChainTip {
     /// The core's target count. `None` when the core reported `0`: that
     /// raw value is an absence, not a [`ChainCount`] (C5). Synchronization
     /// is [`Self::synchronized`]. `get_version` and `sync_info` forward this
-    /// count (`0` only for `None`). `get_info` still writes `0` when the
-    /// node is synchronized.
+    /// count, and write `None` as `null`; `get_info` reports the same fact
+    /// from its own snapshot.
     pub target_height: Option<ChainCount>,
     /// Whether the protocol layer considers this node synchronized.
     pub synchronized: bool,
@@ -182,13 +182,6 @@ pub struct BlockHeaderAt {
     pub chain_height: ChainCount,
 }
 
-/// One row of the hard-fork schedule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HardFork {
-    pub version: u8,
-    pub height: BlockHeight,
-}
-
 /// Why a facts read could not be served. Each variant is a distinct C return
 /// code (rule 40: codes, not booleans), so the transport can choose between
 /// "try again" and "this daemon is broken".
@@ -215,6 +208,17 @@ pub enum FactsFault {
     /// index list) that would reach the caller as a fact about their request
     /// rather than a fault of this node.
     Inconsistent,
+    /// The chain store's data file could not be read for its size. Raised on
+    /// this side, by [`crate::info_facts::store_file_size`], and never
+    /// reported as a size of `0` — an empty store is `0`, and a store that
+    /// cannot be read is not that (RK-D23).
+    StoreUnreadable,
+    /// The p2p hub is not up in this process, so there is no board to count
+    /// sessions on. Raised by [`crate::info_facts::sessions`],
+    /// and never reported as zero sessions: a node whose p2p layer has not
+    /// started is not a node with no peers, and a reader told "no peers"
+    /// raises an alarm an operator would act on (RK-D23).
+    HubAbsent,
     /// A code outside the documented set — a contract violation, never a
     /// guessed fact.
     Unknown(i32),
@@ -258,7 +262,6 @@ pub trait ChainFacts: Send + Sync {
     /// The daemon's identity facts (`nettype`, genesis hash). Constant for
     /// the process's life, so a caller may read it once per connection.
     fn identity(&self) -> Result<DaemonIdentity, FactsFault>;
-    fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault>;
     /// The block hash at `height`, with the tip as of the same read.
     /// Absence is data ([`BlockHashAt::hash`] is `None`), not a fault.
     fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault>;
@@ -270,10 +273,6 @@ pub trait ChainFacts: Send + Sync {
         at: BlockLookup,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault>;
-    /// Hard-fork voting info for one version. `requested` is `None` for
-    /// "the next fork" — the daemon resolves it and reports which it chose,
-    /// so the sentinel never reaches a caller.
-    fn hard_fork_info(&self, requested: Option<u8>) -> Result<HardForkInfo, FactsFault>;
     /// The dynamic base-fee estimate. A `grace_blocks` above
     /// [`Self::fee_grace_blocks_max`] is refused by the caller first; the
     /// facts layer refuses it too rather than letting the estimator throw.
@@ -347,28 +346,11 @@ pub trait P2pFacts: Send + Sync {
     fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault>;
     /// The peerlist, white entries then gray. `public_only` selects a
     /// different p2p call, not a filter over one result.
-    fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, FactsFault>;
-}
-
-/// Hard-fork voting info, carried verbatim.
-///
-/// Nothing here is re-derived: CEN-B2/B3 are bucket-4 rows reserved for the R4
-/// round that owns the hard-fork subsystem, so a Rust reimplementation of the
-/// threshold accounting would be work that round has to undo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HardForkInfo {
-    /// The version the fields below describe — resolved, so the request's
-    /// "next fork" sentinel never reaches a reader.
-    pub queried_version: u8,
-    /// The chain's current fork version. Not the subject of the fields below.
-    pub active_version: u8,
-    pub enabled: bool,
-    pub window: u32,
-    pub votes: u32,
-    pub threshold: u32,
-    pub voting: u8,
-    pub state: u32,
-    pub earliest_height: u64,
+    /// [`P2pRead::Offline`] for a daemon started offline.
+    fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault>;
+    /// Whether P2P runs, from the daemon's configuration: read before a
+    /// method that reads no peer list answers about peers or connections.
+    fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault>;
 }
 
 /// The dynamic base-fee estimate: three priced tiers and the quantization mask.
@@ -487,10 +469,14 @@ impl P2pFacts for FfiP2pFacts {
         self.core.sync_spans().map_err(FactsFault::from_code)
     }
 
-    fn peer_list(&self, public_only: bool) -> Result<Vec<PeerFacts>, FactsFault> {
+    fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault> {
         self.core
             .peer_list(public_only)
             .map_err(FactsFault::from_code)
+    }
+
+    fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
+        CoreRpc::p2p_state().map_err(FactsFault::from_code)
     }
 }
 
@@ -517,24 +503,6 @@ impl ChainFacts for FfiChainFacts {
             target_height: decode_target_count(pod.target_height),
             synchronized: pod.synchronized != 0,
             release_build: pod.release_build != 0,
-        })
-    }
-
-    fn hard_fork_info(&self, requested: Option<u8>) -> Result<HardForkInfo, FactsFault> {
-        let pod = self
-            .core
-            .hard_fork_info(requested.unwrap_or(0))
-            .map_err(FactsFault::from_code)?;
-        Ok(HardForkInfo {
-            queried_version: pod.queried_version,
-            active_version: pod.active_version,
-            enabled: pod.enabled != 0,
-            window: pod.window,
-            votes: pod.votes,
-            threshold: pod.threshold,
-            voting: pod.voting,
-            state: pod.state,
-            earliest_height: pod.earliest_height,
         })
     }
 
@@ -609,17 +577,6 @@ impl ChainFacts for FfiChainFacts {
             }),
             chain_height,
         })
-    }
-
-    fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault> {
-        let rows = self.core.hardforks().map_err(FactsFault::from_code)?;
-        Ok(rows
-            .into_iter()
-            .map(|r| HardFork {
-                version: r.version,
-                height: BlockHeight::from_raw(r.height),
-            })
-            .collect())
     }
 }
 

@@ -24,7 +24,8 @@ pub type Verdict<T> = Result<T, InvalidBlock>;
 
 /// Invariant in `'id`: neither shrinks nor grows, so a value branded with
 /// one transaction's lifetime is not a value branded with any other's.
-type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
+/// Shared with [`crate::AltValid`]: both verdicts are branded the same way.
+pub(crate) type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 
 /// A block judged valid under one rule set against one view of one
 /// transaction.

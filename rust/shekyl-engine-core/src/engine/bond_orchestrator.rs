@@ -17,7 +17,7 @@ use std::sync::Arc;
 use super::local_ledger::LocalLedger;
 use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_curve_tree::{
-    select_reference_height, should_reanchor, AssembleInput, BlockHash, CurveTreeRoot, Gindex,
+    select_reference_height, should_reanchor, AssembleInput, BlockHash, CurveTreeRoot,
     ReferenceBlock,
 };
 use shekyl_engine_file::WalletFile;
@@ -595,11 +595,7 @@ where
         let assemble_inputs: Vec<AssembleInput> = selection
             .records
             .iter()
-            .map(|r| AssembleInput {
-                gindex: Gindex::from_raw(r.gindex.to_raw()),
-                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
-                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
-            })
+            .map(crate::engine::ownership::p_assemble_input)
             .collect();
 
         let paths = curve_tree

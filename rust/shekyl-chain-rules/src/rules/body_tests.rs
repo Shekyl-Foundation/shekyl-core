@@ -18,15 +18,15 @@ use super::*;
 use crate::block::Candidate;
 use crate::fault::FormAttempt;
 use crate::harness::fixture::{
-    anchored_on, candidate, candidate_on, listed, listed_on, point_at, spend, spendable_chain,
+    self, anchored_on, candidate, candidate_on, listed, listed_on, point_at, spend, spendable_chain,
 };
-use crate::harness::{assert_refused, formed_on, infallible, judged, Faulted, MockSubstrate};
+use crate::harness::{assert_refused, defined, formed_on, judged, Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
-use shekyl_types::{BlockHash, KeyImage, PCanonicalId};
+use shekyl_types::{BlockHash, KeyImage};
 use shekyl_wire::{BondPost, BondPostKind, Holdings};
 
 /// Three distinct listed bodies, the header declaring exactly them.
@@ -149,7 +149,7 @@ fn check_alone_on<R: BlockRule>(
 ) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
     chain.with_view(|view| {
-        infallible(R::check(
+        defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
             &view,
         ))
@@ -224,18 +224,15 @@ fn cen_g1_refuses_a_relisted_spend_before_i7_can() {
     // where the recorded one has two, so a different identity) is not on
     // the chain — G1 passes it — and I7 refuses at the input, as before G1
     // existed. The two rows share a trigger and are told apart by this.
-    let respent = candidate_on(
-        &chain,
-        vec![
-            listed_on(&chain, point_at(41)),
-            anchored_on(&chain, spend(point_at(40), 3)),
-        ],
-    );
+    // Listed alone: I7 is the first view-bound row in the slot's sequence,
+    // and a fixture listed ahead of it would be refused at CEN-I13 (slice 6
+    // row 6) before this slot was reached.
+    let respent = candidate_on(&chain, vec![anchored_on(&chain, spend(point_at(40), 3))]);
     assert_refused(
         judge_on(&chain, respent),
         CenRow::I7,
         Locus::Input {
-            slot: TxSlot::Listed(1),
+            slot: TxSlot::Listed(0),
             input: 0,
         },
     );
@@ -315,11 +312,14 @@ fn emission_vin(p_pubkey_fill: u8, epochs: &[u64]) -> Input {
     }
 }
 
-/// A bond post for `P`, of `kind`.
+/// A bond post for the persona tagged `p`, of `kind` — the persona's key
+/// and its recompute (CEN-J11's pair), so what G10 counts is a post the
+/// form rows admit.
 fn bond_post_vin(p: [u8; 32], kind: BondPostKind) -> Input {
+    let who = fixture::persona(p);
     Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: vec![0xb1; SINGLE_KEY_CANONICAL_LEN],
-        p_canonical_id: PCanonicalId::from_bytes(p),
+        hybrid_public_key: who.identity,
+        p_canonical_id: who.id,
         kind,
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 0,
@@ -429,6 +429,9 @@ fn cen_g10_two_bond_posts_for_one_p_are_refused_whatever_their_kinds() {
     let chain = spendable_chain();
     let join = || BondPostKind::JoinMarket {
         bond_spend_pk: vec![0xb3; SINGLE_KEY_CANONICAL_LEN],
+        receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+            [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+        ),
         endpoint: [0xe0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
     };
     // Mixed kinds — a JoinMarket and a Release for one P — still two posts.
@@ -478,7 +481,7 @@ fn the_archival_rows_are_vacuous_on_a_block_of_spends() {
 #[test]
 fn cen_g2_refuses_in_form_before_the_identity_is_derived() {
     // Through the stage: the refusal is the stage's verdict, and it is
-    // G2's — B1/B2/B7 pass this header, and the coinbase rows pass its
+    // G2's — B1/B2 pass this header, and the coinbase rows pass its
     // coinbase, so nothing earlier in `judge_form!` claims it.
     let mut reordered = three_bodies();
     reordered.transactions.swap(0, 1);

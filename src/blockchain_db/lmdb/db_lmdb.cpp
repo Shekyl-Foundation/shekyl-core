@@ -1012,16 +1012,11 @@ void BlockchainLMDB::add_block(const block& blk, size_t block_weight, uint64_t l
   bi.bi_diff_hi = ((cumulative_difficulty >> 64) & 0xffffffffffffffff).convert_to<uint64_t>();
   bi.bi_diff_lo = (cumulative_difficulty & 0xffffffffffffffff).convert_to<uint64_t>();
   bi.bi_hash = blk_hash;
+  // This block's own output count. The field is named for a running total
+  // that only ever accumulated behind a Monero fork number Shekyl does not
+  // reach, and its reader (the decoy output distribution) is deleted; it
+  // stays because it is part of the persisted row (docs/FOLLOWUPS.md).
   bi.bi_cum_rct = num_rct_outs;
-  if (blk.major_version >= 4)
-  {
-    uint64_t last_height = m_height-1;
-    MDB_val_set(h, last_height);
-    if ((result = mdb_cursor_get(m_cur_block_info, (MDB_val *)&zerokval, &h, MDB_GET_BOTH)))
-        throw1(BLOCK_DNE(lmdb_error("Failed to get block info: ", result).c_str()));
-    const mdb_block_info *bi_prev = (const mdb_block_info*)h.mv_data;
-    bi.bi_cum_rct += bi_prev->bi_cum_rct;
-  }
   bi.bi_long_term_block_weight = long_term_block_weight;
 
   MDB_val_set(val, bi);
@@ -1481,8 +1476,6 @@ BlockchainLMDB::BlockchainLMDB(bool batch_transactions): BlockchainDB()
   m_cum_count = 0;
 
   // reset may also need changing when initialize things here
-
-  m_hardfork = nullptr;
 }
 
 #ifdef WIN32
@@ -1682,6 +1675,14 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   if (!(mdb_flags & MDB_RDONLY))
     lmdb_db_open(txn, LMDB_HF_STARTING_HEIGHTS, MDB_CREATE, m_hf_starting_heights, "Failed to open db handle for m_hf_starting_heights");
 
+  // The hard-fork mechanism that used these two tables is deleted. Nothing
+  // reads either. `hf_versions` is never written; `hf_starting_heights` is
+  // still dropped at every writable open, below, which is the runtime fact
+  // the store audit records as DRS-W5. The two declarations stay because
+  // the redb store's schema and digest domain are defined against this
+  // table list (scripts/ci/check_redb_schema_bijection.py), and its
+  // `hf_versions` (the rule set in force per height) is in that domain.
+  // They leave with the list (docs/FOLLOWUPS.md).
   lmdb_db_open(txn, LMDB_HF_VERSIONS, MDB_INTEGERKEY | MDB_CREATE, m_hf_versions, "Failed to open db handle for m_hf_versions");
 
   lmdb_db_open(txn, LMDB_PROPERTIES, MDB_CREATE, m_properties, "Failed to open db handle for m_properties");
@@ -2483,68 +2484,6 @@ uint64_t BlockchainLMDB::get_block_timestamp(const uint64_t& height) const
   uint64_t ret = bi->bi_timestamp;
   TXN_POSTFIX_RDONLY();
   return ret;
-}
-
-std::vector<uint64_t> BlockchainLMDB::get_block_cumulative_rct_outputs(const std::vector<uint64_t> &heights) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-  std::vector<uint64_t> res;
-  int result;
-
-  if (heights.empty())
-    return {};
-  res.reserve(heights.size());
-
-  TXN_PREFIX_RDONLY();
-  RCURSOR(block_info);
-
-  MDB_stat db_stats;
-  if ((result = mdb_stat(m_txn, m_blocks, &db_stats)))
-    throw0(DB_ERROR(lmdb_error("Failed to query m_blocks: ", result).c_str()));
-  for (size_t i = 0; i < heights.size(); ++i)
-    if (heights[i] >= db_stats.ms_entries)
-      throw0(BLOCK_DNE(std::string("Attempt to get rct distribution from height " + std::to_string(heights[i]) + " failed -- block size not in db").c_str()));
-
-  MDB_val v;
-
-  uint64_t prev_height = heights[0];
-  uint64_t range_begin = 0, range_end = 0;
-  for (uint64_t height: heights)
-  {
-    if (height >= range_begin && height < range_end)
-    {
-      // nohting to do
-    }
-    else
-    {
-      if (height == prev_height + 1)
-      {
-        MDB_val k2;
-        result = mdb_cursor_get(m_cur_block_info, &k2, &v, MDB_NEXT_MULTIPLE);
-        range_begin = ((const mdb_block_info*)v.mv_data)->bi_height;
-        range_end = range_begin + v.mv_size / sizeof(mdb_block_info); // whole records please
-        if (height < range_begin || height >= range_end)
-          throw0(DB_ERROR(("Height " + std::to_string(height) + " not included in multuple record range: " + std::to_string(range_begin) + "-" + std::to_string(range_end)).c_str()));
-      }
-      else
-      {
-        v.mv_size = sizeof(uint64_t);
-        v.mv_data = (void*)&height;
-        result = mdb_cursor_get(m_cur_block_info, (MDB_val *)&zerokval, &v, MDB_GET_BOTH);
-        range_begin = height;
-        range_end = range_begin + 1;
-      }
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Error attempting to retrieve rct distribution from the db: ", result).c_str()));
-    }
-    const mdb_block_info *bi = ((const mdb_block_info *)v.mv_data) + (height - range_begin);
-    res.push_back(bi->bi_cum_rct);
-    prev_height = height;
-  }
-
-  TXN_POSTFIX_RDONLY();
-  return res;
 }
 
 uint64_t BlockchainLMDB::get_top_block_timestamp() const
@@ -4187,111 +4126,6 @@ void BlockchainLMDB::get_output_tx_and_index(const uint64_t& amount, const std::
   }
   TIME_MEASURE_FINISH(db3);
   LOG_PRINT_L3("db3: " << db3);
-}
-
-bool BlockchainLMDB::get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-  RCURSOR(output_amounts);
-
-  distribution.clear();
-  const uint64_t db_height = height();
-  if (from_height >= db_height)
-    return false;
-  distribution.resize(db_height - from_height, 0);
-
-  MDB_val_set(k, amount);
-  MDB_val v;
-  MDB_cursor_op op = MDB_SET;
-  base = 0;
-  while (1)
-  {
-    int ret = mdb_cursor_get(m_cur_output_amounts, &k, &v, op);
-    op = MDB_NEXT_DUP;
-    if (ret == MDB_NOTFOUND)
-      break;
-    if (ret)
-      throw0(DB_ERROR("Failed to enumerate outputs"));
-    const outkey *ok = (const outkey *)v.mv_data;
-    const uint64_t height = ok->data.height;
-    if (height >= from_height)
-      distribution[height - from_height]++;
-    else
-      base++;
-    if (to_height > 0 && height > to_height)
-      break;
-  }
-
-  distribution[0] += base;
-  for (size_t n = 1; n < distribution.size(); ++n)
-    distribution[n] += distribution[n - 1];
-  base = 0;
-
-  TXN_POSTFIX_RDONLY();
-
-  return true;
-}
-
-void BlockchainLMDB::check_hard_fork_info()
-{
-}
-
-void BlockchainLMDB::drop_hard_fork_info()
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX(0);
-
-  auto result = mdb_drop(*txn_ptr, m_hf_starting_heights, 1);
-  if (result)
-    throw1(DB_ERROR(lmdb_error("Error dropping hard fork starting heights db: ", result).c_str()));
-  result = mdb_drop(*txn_ptr, m_hf_versions, 1);
-  if (result)
-    throw1(DB_ERROR(lmdb_error("Error dropping hard fork versions db: ", result).c_str()));
-
-  TXN_POSTFIX_SUCCESS();
-}
-
-void BlockchainLMDB::set_hard_fork_version(uint64_t height, uint8_t version)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_BLOCK_PREFIX(0);
-
-  MDB_val_copy<uint64_t> val_key(height);
-  MDB_val_copy<uint8_t> val_value(version);
-  int result;
-  result = mdb_put(*txn_ptr, m_hf_versions, &val_key, &val_value, MDB_APPEND);
-  if (result == MDB_KEYEXIST)
-    result = mdb_put(*txn_ptr, m_hf_versions, &val_key, &val_value, 0);
-  if (result)
-    throw1(DB_ERROR(lmdb_error("Error adding hard fork version to db transaction: ", result).c_str()));
-
-  TXN_BLOCK_POSTFIX_SUCCESS();
-}
-
-uint8_t BlockchainLMDB::get_hard_fork_version(uint64_t height) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-  RCURSOR(hf_versions);
-
-  MDB_val_copy<uint64_t> val_key(height);
-  MDB_val val_ret;
-  auto result = mdb_cursor_get(m_cur_hf_versions, &val_key, &val_ret, MDB_SET);
-  if (result == MDB_NOTFOUND || result)
-    throw0(DB_ERROR(lmdb_error("Error attempting to retrieve a hard fork version at height " + boost::lexical_cast<std::string>(height) + " from the db: ", result).c_str()));
-
-  uint8_t ret = *(const uint8_t*)val_ret.mv_data;
-  TXN_POSTFIX_RDONLY();
-  return ret;
 }
 
 void BlockchainLMDB::add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata_ref &blob)
@@ -6780,103 +6614,11 @@ void BlockchainLMDB::delete_archival_serve_credit_before_epoch(uint64_t prune_be
   mdb_cursor_close(cur);
 }
 
-// PC-D4/§5.2: this table keys with `ArchivalPairEpochKey`, not
-// `ArchivalServeCreditKey`. SO-D2 ruled the two byte-identical so one key could
-// probe both tables; PC-D4 widened the serve-credit key to 56 B and the
-// settlement table stayed per-pair-epoch, so that rationale is RETIRED rather
-// than broken -- the tables answer at different granularities, evidence per
-// challenge and verdict per pair-epoch.
-//
-// Left borrowing the widened key, these rows would be written at 56 B and the
-// revert's size guard would then throw FATAL on every 48-byte row already in
-// the table: a silent-until-catastrophic coupling between two tables that only
-// ever shared a shape.
-void BlockchainLMDB::set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t settlement_epoch, uint32_t passes, uint32_t issued)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  if (!m_write_txn)
-    throw std::runtime_error("FATAL: archival settlement write requires active write txn");
-
-  // Rust owns the value: it folds (passes, issued) and emits the three bytes.
-  // C++ never composes an outcome byte, so a settlement whose outcome
-  // contradicts its counts is not a thing this side can express (SO-D2).
-  // Rule 40: the length is agreed at COMPILE time on both sides. The buffer is
-  // declared from the shared constant, and the assertion below is the one that
-  // fails if Rust's SETTLEMENT_ROW_LEN ever moves -- a build error, where the
-  // old runtime length query could only have thrown after the mismatched
-  // buffer was already compiled in.
-  std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES> row{};
-  static_assert(SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES == 3,
-    "settlement row is outcome||passes||issued (SO-D2); Rust pins the same 3");
-
-  const uint8_t rc = shekyl_archival_settlement_row(passes, issued, row.data());
-  if (rc != 0)
-    throw std::runtime_error("FATAL: settlement fold refused (P, shard, E) counts; code "
-      + std::to_string(static_cast<unsigned>(rc)));
-
-  shekyl::db::ArchivalPairEpochKey key(
-    reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
-  MDB_val k = key.as_mdb_val();
-  MDB_val v{ row.size(), row.data() };
-  const int result = mdb_put(*m_write_txn, m_archival_settlement, &k, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to write archival_settlement row: ", result).c_str()));
-}
-
-bool BlockchainLMDB::get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t settlement_epoch,
-  std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  shekyl::db::ArchivalPairEpochKey key(
-    reinterpret_cast<const uint8_t*>(p_id.data), shard_id, settlement_epoch);
-  MDB_val k = key.as_mdb_val();
-  MDB_val v;
-  // Same read helper the serve-credit bit uses -- this table has no dedicated
-  // cursor member, and adding one would be plumbing for a reader that does a
-  // single point lookup.
-  const int result = archival_db_get(m_archival_settlement, &k, &v);
-  if (result == MDB_NOTFOUND)
-    return false;
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to read archival_settlement row: ", result).c_str()));
-  if (v.mv_size != out_row.size())
-    throw std::runtime_error("FATAL: archival_settlement value size mismatch");
-
-  std::memcpy(out_row.data(), v.mv_data, out_row.size());
-
-  // SO-D2: the stored outcome must be the one its counts derive, and a
-  // zero-issued row is not a settlement (SO-D1). The write path cannot emit
-  // either, so reaching one here is corruption -- but "cannot be written" is
-  // only half an invariant while the reader has no way to ASK. C++ does not
-  // re-fold the counts itself (rule 36: Rust owns the value); it hands the
-  // bytes back to the same decoder that refuses them on the write side.
-  //
-  // Coverage boundary, stated because it is not what it looks like: the
-  // VALIDATOR is directly tested (`a_corrupt_row_is_refused_on_read` drives
-  // every refusal through the FFI), but this CALL SITE is a corruption
-  // tripwire with no red-side test -- `set_archival_settlement` cannot write a
-  // row that fails it, so the state is not constructible through any
-  // accessible interface, and deleting this call fails nothing. A test-only
-  // raw writer would add a way to STORE invalid rows in order to prove invalid
-  // rows are rejected; the honest note is the better trade. Same category as
-  // the `mv_size` FATAL checks throughout this file.
-  static_assert(SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES == 3,
-    "the validate call names all three bytes; a width change must break this");
-  const uint8_t row_rc =
-    shekyl_archival_settlement_row_validate(out_row[0], out_row[1], out_row[2]);
-  if (row_rc != 0)
-    throw std::runtime_error(
-      "FATAL: stored archival_settlement row is not a canonical settlement; code "
-      + std::to_string(static_cast<unsigned>(row_rc)));
-  return true;
-}
-
+// The table keys with `ArchivalPairEpochKey` (48 B), not the 56-byte
+// `ArchivalServeCreditKey`: the two tables answer at different granularities,
+// evidence per challenge and verdict per pair-epoch (PC-D4, §5.2). Nothing in
+// this store writes or reads a row (SO-D10e); the revert and the prune below
+// are what remain until DEL-008.
 void BlockchainLMDB::delete_archival_settlement_for_epoch(uint64_t settlement_epoch)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -7036,11 +6778,9 @@ void BlockchainLMDB::delete_archival_attestation_witness_before_height(uint64_t 
 // reason (SO-D2's key puts the epoch LAST so a pair's epochs range-scan in
 // order, which costs a full-table walk here).
 //
-// Without this the table was the ONE epoch-scoped archival table the shared
-// prune did not visit, so its rows would have accumulated for the life of the
-// chain the moment the writer went live. It is latent today only because
-// set_archival_settlement has no production caller yet -- which is exactly
-// the kind of "not reachable, so not wrong" that stops being true silently.
+// The shared prune visits every epoch-scoped archival table, this one
+// included. Nothing in this store writes a row here (SO-D10e), so the walk
+// is over an empty table until DEL-008.
 void BlockchainLMDB::delete_archival_settlement_before_epoch(uint64_t prune_below_epoch)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);

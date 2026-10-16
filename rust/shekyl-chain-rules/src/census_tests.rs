@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 
 use crate::census::{CenRow, Flag, PolicyRow, Row, RowStatus};
-use crate::rules::header::{B1, B2, B5, B6, B7};
+use crate::rules::header::{B1, B2, B5, B6};
 use crate::rules::topology::A2;
 use crate::rules::Rule;
 
@@ -100,9 +100,12 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::A2,
             CenRow::B1,
             CenRow::B2,
+            // Slice 8 row 10: B4 over the attestation witness
+            // (`CHAIN_RULES_SLICE_8.md` §5 row 10). A3 is decided by B4's
+            // empty arm and stays `pending` as a row.
+            CenRow::B4,
             CenRow::B5,
             CenRow::B6,
-            CenRow::B7,
             CenRow::C1,
             CenRow::C2,
             CenRow::C3,
@@ -180,7 +183,11 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I10,
             CenRow::I11,
             CenRow::I12,
+            // Slice 6 row 6 (2026-10-08): the depth step and the proof over
+            // the reference context, on the spend class.
+            CenRow::I13,
             CenRow::I14,
+            CenRow::I15,
             CenRow::I16,
             CenRow::I17,
             CenRow::I18,
@@ -189,6 +196,44 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // `SHT-9`'s conformance correction (2026-10-03): the serve
             // credit's pass records against its vins.
             CenRow::J2,
+            // Slice 8 row 3: the bond-state rows on a serve-credit vin.
+            CenRow::J4,
+            CenRow::J5,
+            CenRow::J6,
+            // Slice 8 row 4: the bond post's key and hint, its JoinMarket
+            // coupling, and the key its kind selects.
+            CenRow::J11,
+            CenRow::J12,
+            // FN-DSA increment 3 (2026-10-12): the JoinMarket's receipt key
+            // is a key. Filed after J12, as in the registry.
+            CenRow::J28,
+            CenRow::J13,
+            // Slice 8 row 5: the post against its record — a join's floor and
+            // claim slot, a Release's exit, a Reinstate's open interval.
+            CenRow::J14,
+            // Slice 8 row 6: a compact join's held shards closed, final,
+            // priced and viable at the parent.
+            CenRow::J15,
+            CenRow::J16,
+            CenRow::J18,
+            // Slice 6 row 6 (2026-10-08): the bond post's funding half —
+            // its reference context and the proof over its funding spends,
+            // one row in `judge_reference`'s bond-post arm.
+            CenRow::J27,
+            // Slice 8 row 8: the emission statics — the vin's parse, the
+            // slot's key, the signable hash and the reward commit set.
+            CenRow::J19,
+            CenRow::J20,
+            // Slice 8 row 9: the emission's reference context (I10–I13's
+            // reads, judged as one row in `judge_reference`), the frozen
+            // closes gathered per claimed epoch and the verify over them
+            // (`judge_emission_claim`).
+            CenRow::J21,
+            CenRow::J22,
+            CenRow::J23,
+            CenRow::J24,
+            CenRow::J25,
+            CenRow::J26,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.
@@ -203,6 +248,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     assert_eq!(
         by_construction,
         [
+            CenRow::A3,
+            CenRow::A6,
+            CenRow::A7,
             CenRow::F2,
             CenRow::F8,
             CenRow::F19,
@@ -219,8 +267,13 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I3,
             CenRow::L8,
             CenRow::L9,
+            CenRow::L11,
+            CenRow::L12,
+            CenRow::L16,
         ],
-        "slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter; \
+        "the census re-class of 2026-10-15 (R4): B4's one witness field (A3), the wire's \
+         block parser (A6, A7), the root `tree_after` derives that B5 judges (L11, L12), \
+         and the holdings fold over the store's rows (L16); slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter; \
          slice 5 Q6: the same version (H2, H13) and tag (H12) for listed transactions, one \
          commitment per output (H8), and a parsed transaction as `tx_form`'s input (H23); \
          slice 6 Q3: the CT type set plus H15 (I2) and the same version a fourth time (I3); \
@@ -228,6 +281,30 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
          door and no skip (G3, G4), and the full form the only body a block rule sees (G5); \
          DRS-E4 commit 4: the accrual fold (L8) and the slash fold (L9) return the C++'s \
          aborts as `Corrupt` by type"
+    );
+    let at_open: Vec<CenRow> = CenRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::EnforcedAt)
+        .collect();
+    assert_eq!(
+        at_open,
+        [CenRow::D5, CenRow::E2, CenRow::E5, CenRow::K1b, CenRow::K4],
+        "slice 3 Q4 (a): E5 at writer open; DRS-E5 slice 9: the alt tier's target over the \
+         stitched window (D5), the anchor floor and reorg cap over the fork (E2), the \
+         height-0 claim (K1b) and the tier as the set and order of its steps (K4)"
+    );
+    let held_by_store: Vec<CenRow> = CenRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::HeldByStore)
+        .collect();
+    assert_eq!(
+        held_by_store,
+        [CenRow::B3, CenRow::K1a, CenRow::K2, CenRow::K3, CenRow::K8],
+        "the rule-set belt at connect (B3, re-classed 2026-10-15, R4); DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
+         insert (K3) and no supply word on an alt row (K8) are the store's structures, \
+         proved by the store's tests"
     );
     assert!(PolicyRow::ALL
         .iter()
@@ -240,7 +317,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     assert_eq!(<B2 as Rule>::ROW, CenRow::B2);
     assert_eq!(<B5 as Rule>::ROW, CenRow::B5);
     assert_eq!(<B6 as Rule>::ROW, CenRow::B6);
-    assert_eq!(<B7 as Rule>::ROW, CenRow::B7);
 }
 
 #[test]
@@ -274,9 +350,24 @@ fn registries_are_the_expected_size_at_this_increment() {
     // predicate, an R8-class placement row minted by S-ARCH's pre-flight,
     // DRS_E1_SARCH.md SAR-2 / SAR-7) — pending here until E4 moves the fold
     // to shekyl-archival-retention and slice 8 judges through it.
-    // 154 → 153 on 2026-10-05: CEN-J17 (HoldingsUpdate) moved to bucket 3.
-    // The census keeps the id marked REJECTED; the registry does not.
-    assert_eq!(CenRow::ALL.len(), 153);
+    // 154 → 153 on 2026-10-04: CEN-J17 (the `HoldingsUpdate` add / drop
+    // arms, a post kind REJECTED 2026-09-20 and deleted by E4's ARW-14) went
+    // to bucket 3 (E6 slice 8 Q1 (a)) — a row whose subject is gone does
+    // not inflate the denominator. 153 → 154 on 2026-10-08: CEN-J27 (the
+    // bond post's funding half — its reference context and the proof over
+    // its funding spends, one row) minted with its implementation, per the
+    // H21 cell's ruling of 2026-10-07 (slice 6 row 6). 154 → 153 on
+    // 2026-10-08: CEN-B7 (the one-time warning on a block version above
+    // the last scheduled one) went to bucket 3 with the hard-fork
+    // mechanism: a higher version is refused by B1, and there is nothing
+    // to warn about. 153 → 154 on 2026-10-12: CEN-J28 (a JoinMarket's
+    // `receipt_sign_pk` parses as a canonical FN-DSA hybrid public key)
+    // minted with its implementation, FN-DSA increment 3
+    // (`FN_DSA_HYBRID.md` §6). 154 → 163 the same day: CEN-J29–J37, the
+    // serve-credit bundle's nine admission rows, minted `pending` with the
+    // pure verifier that names them as refusals (`archival/bundle.rs`,
+    // STAGED — no rule type is bound until `SO-D12`'s cutover).
+    assert_eq!(CenRow::ALL.len(), 163);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 

@@ -1,0 +1,25 @@
+[package]
+name = "shekyl-thread-priority"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lower the calling thread's CPU priority (SH-3): the three platform calls the serving runtime's threads make at start, sited here because shekyl-runtime denies unsafe"
+publish = false
+
+# Both dependencies were in Cargo.lock before this crate existed (`libc`
+# through `shekyl-logging`, `windows-sys 0.61` through `shekyl-win-sec`),
+# so this adds no supply-chain surface. Rule 17: the symbols used are read
+# in the pinned sources, named in `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true

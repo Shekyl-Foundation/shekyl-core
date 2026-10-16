@@ -85,7 +85,7 @@ fn as_f64(count: usize) -> f64 {
 pub enum Void {
     /// No attempts were made at this size.
     NoAttempts,
-    /// A completed exchange the client refused — the identical 404, a
+    /// A completed exchange the client refused — a bare 404 or 400, a
     /// malformed envelope, a countersignature that does not verify. None of
     /// that is Tor's doing, so its presence says the rig was wrong while it
     /// measured, and every other row of the arm with it.

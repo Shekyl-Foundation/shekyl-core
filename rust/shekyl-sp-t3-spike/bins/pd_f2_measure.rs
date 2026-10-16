@@ -35,7 +35,9 @@
 //!
 //! - **`N` (`SF-D7`):** the churn table — per width: `n`, p50, p99, p99 as
 //!   a ratio to width 1, circuit-failure rate, `D*`, and the memory term
-//!   `width × max_body_bytes()`. The binary does **not** pick the knee; a
+//!   `width × resident bytes per fetch` (the client holds one transaction
+//!   at a time, and this rig's object is one transaction, so the term is
+//!   the served payload). The binary does **not** pick the knee; a
 //!   threshold it invented would be exactly the kind of number the `L`
 //!   note's falsifier was rewritten to avoid. The reader takes the largest
 //!   width that is not churning *and* whose memory term fits the Pi 4
@@ -63,7 +65,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use shekyl_p_fetch::max_body_bytes;
 use shekyl_sp_t3_spike::fixture::{size_ladder, ShardFixture};
 use shekyl_sp_t3_spike::harness::{posture_tag, postures_from_env, Apparatus};
 use shekyl_sp_t3_spike::measure::{
@@ -152,8 +153,10 @@ fn fmt_opt_secs(d: Option<Duration>) -> String {
     )
 }
 
-/// The `SF-D7` churn table, with the memory term beside each row.
-fn report_churn(points: &[SweepPoint]) {
+/// The `SF-D7` churn table, with the memory term beside each row:
+/// `width × per_body`, where `per_body` is what one in-flight fetch holds
+/// resident (one transaction — this rig's whole object).
+fn report_churn(points: &[SweepPoint], per_body: u64) {
     println!("\n=== SF-D7 upper-bound inputs: client-side churn by in-flight width ===");
     println!("(one client tor; `width` cold fetches to `width` personas at once, start rotating by round; shared uplink → pessimistic)");
     println!(
@@ -164,7 +167,6 @@ fn report_churn(points: &[SweepPoint]) {
         "{:>5} {:>5} {:>8} {:>8} {:>9} {:>8} {:>10}  {:>10}  valid",
         "width", "n", "p50 s", "p99 s", "p99/w1", "circ %", "D* s", "mem MB"
     );
-    let per_body = max_body_bytes();
     let rows = churn_table(points);
     let void_rows = rows.iter().filter(|r| r.is_void()).count();
     for row in &rows {
@@ -173,8 +175,8 @@ fn report_churn(points: &[SweepPoint]) {
             DStar::Unbounded => " UNBOUNDED".to_owned(),
             DStar::Undefined => "     undef".to_owned(),
         };
-        // `width × max_body_bytes()` is the resident term SF-D7 caps
-        // against the Pi 4 floor; integer bytes, shown to a tenth of a MB.
+        // `width × per_body` is the resident term SF-D7 caps against the
+        // Pi 4 floor; integer bytes, shown to a tenth of a MB.
         let mem_bytes = u64::try_from(row.width)
             .expect("width fits u64")
             .saturating_mul(per_body);
@@ -388,11 +390,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The expected body length is the apparatus's to know, not this binary's
     // to pass: it is derived from the payload through the production serving
-    // contract (RF-D4's frame included), so no caller here can hand in a
-    // number that the wire has since moved away from.
+    // contract, so no caller here can hand in a number that the wire has
+    // since moved away from.
     for shard in 0..shard_count {
         println!(
-            "served body, shard {shard}: {} bytes (frame + object)",
+            "served body, shard {shard}: {} bytes",
             app.expected_body_len_of(shard).expect("a served shard")
         );
     }
@@ -444,9 +446,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cold_summary = summarize(&cold);
 
     // --- Arm 2: warm. Back-to-back fetches to one persona with no signal in
-    // between, so the client tor reuses its rendezvous circuit and only the
-    // stream cost is paid — the organic fill scheduler's steady state against
-    // one `P`, and the optimistic case.
+    // between. Each fetch mints a nonce and presents it as the SOCKS username,
+    // so the rendezvous circuit is a new one (`IsolateSOCKSAuth`). The missing
+    // signal is what leaves the client tor's cached onion state standing;
+    // whether that cache serves the next username is not assumed (`BA-T31`).
+    // This is the organic fill scheduler's steady state against one `P`.
+    // The 2026-09-16 warm column measured circuit reuse, before per-read
+    // credentials, and a re-run of that label would record a different arm.
     let mut warm = Vec::new();
     for i in 0..warm_n {
         warm.push(app.timed_fetch(0).await);
@@ -455,7 +461,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     out.append(0, "warm", &warm);
-    report("warm (reused circuit), single stream", &warm);
+    report("warm (no NEWNYM, circuit per read), single stream", &warm);
 
     // --- Arm 3: the concurrency sweep. At each width, `NEWNYM` once, then
     // `width` cold fetches to `width` distinct personas at once through the
@@ -581,7 +587,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The two pin inputs this run exists to produce, last so they are what
     // the operator sees at the bottom of the log.
-    report_churn(&sweep);
+    report_churn(
+        &sweep,
+        u64::try_from(app.expected_body_len()).expect("payload length fits u64"),
+    );
     report_l(&cold_summary);
 
     let app = Arc::try_unwrap(app).map_err(|_| "a fetch task still holds the apparatus")?;

@@ -431,7 +431,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   // INVARIANT: pending, drain, output_to_leaf, leaf_to_output, block_pending_additions,
   // and curve_tree_* tables MUST be mutated within the same m_write_txn as the block add.
   // Any partial commit here is a consensus split.
-  if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
   {
     using shekyl::db::MaturityHeight;
     using shekyl::db::OutputIndex;
@@ -636,8 +635,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   TIME_MEASURE_FINISH(time1);
   time_add_block1 += time1;
 
-  m_hardfork->add(blk, prev_height);
-
   // Redirected staker-inflow accrual row (ARCHIVAL_BUDGET_SCHEDULE.md §3.1),
   // keyed at the connecting block's index (prev_height). Written BEFORE the
   // epoch-close hook below: the close of epoch E fires while connecting E's
@@ -655,11 +652,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   ++num_calls;
 
   return prev_height;
-}
-
-void BlockchainDB::set_hard_fork(HardFork* hf)
-{
-  m_hardfork = hf;
 }
 
 bool BlockchainDB::pop_target_allowed(uint64_t target_tip_height) const
@@ -808,7 +800,6 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // INVARIANT: pending, drain, output_to_leaf, leaf_to_output, block_pending_additions,
   // and curve_tree_* tables MUST be mutated within the same m_write_txn as the block pop.
   // Any partial commit here is a consensus split.
-  if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
   {
     using shekyl::db::MaturityHeight;
     using shekyl::db::OutputIndex;

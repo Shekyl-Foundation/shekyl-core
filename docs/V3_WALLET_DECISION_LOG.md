@@ -413,7 +413,9 @@ defense, but a `Debug` derive added later (or a `format!("{:?}",
 struct)` that pulled in a non-redacted field) bypasses it. The
 subscriber layer is a backstop. Tests assert that both layers fire.
 
-### Config file handling: TOML, layered precedence, XDG paths
+### Config file handling: TOML, layered precedence, XDG paths — SUPERSEDED 2026-10-13 (input grammar IG-13, R7)
+
+**Superseded 2026-10-13.** The environment layer (item 2) and the XDG paths are replaced by the input grammar's IG-13 and the config ruling R7, and `--config` becomes `--config-file`; see *2026-10-13 — Input grammar Part A ruled* below. TOML and the CLI-over-file precedence stand.
 
 `shekyl-wallet-rpc` and `shekyl-cli` read configuration from (in
 descending precedence):
@@ -555,7 +557,7 @@ system. The CLI's two modes are:
 - **One-shot mode.** `shekyl-cli balance` (no agent running) spawns
   an in-process `shekyl-wallet-rpc` instance, runs the command
   against it, shuts it down, and exits.
-- **Agent mode.** `shekyl-wallet-rpc --uds /path/sock my.wallet`
+- **Agent mode.** `shekyl-wallet-rpc --rpc-bind uds:///path/sock`
   starts a long-running RPC daemon. `shekyl-cli --rpc-url uds:///path/sock
   balance` is a remote client to it.
 
@@ -5891,13 +5893,15 @@ shard byte arrived.
    3,425) and the witness maximum is 885,000 B (was 876,808). `D` joins
    each record's contribution to `attestation_root`. **The empty root is
    unchanged**, so the genesis header value does not move.
-4. **The signature is the response's last bytes.** `P` reads the body
-   once to compute `D`, signs, then reads it again and streams it while
-   hashing what it writes, and appends the signature only if the sent
-   bytes hash to the signed `D`. Neither pass holds more than one chunk,
-   so the serving ceiling's memory bound is unchanged. A transfer that
-   fails mid-body, or a body that differs between the two reads, yields
-   no signature.
+4. **The signature is the response's last bytes.** `P` reads the store
+   once: it hashes each chunk as it sends it, then finishes `D`, signs,
+   and appends the signature. No more than one chunk is resident, so the
+   serving ceiling's memory bound is unchanged. Signing comes after the
+   body, so a signer fault there is a refusal trailer in the signature's
+   place, not a 404. A transfer that fails mid-body yields no signature
+   either.
+   *(Rewritten by the entry of 2026-10-06; as first landed, `P` read the
+   shard twice and signed between the reads.)*
 5. **The scheme domain** rotates `shekyl/archival-attestation-scheme-v2` →
    `…-v3`. One label never names two messages (`30-cryptography.mdc`); a v2
    signature can never verify as v3. No retired-label constant is kept;
@@ -5938,5 +5942,767 @@ signature at all are Slice C's Round 0
   its digest can be re-derived.
 - `docs/test_vectors/PQC_HYBRID_V2_KAT.json`: the attestation vector's
   domain.
+
+---
+
+## 2026-10-06 — Archival serving: one store read, and five answers that each mean one thing
+
+**Decision.** Changes to the serving route (`RF-R1`), ruled 2026-10-05 and
+2026-10-06 and landed together because they touch one serve path and one
+client outcome table. The signed message, the scheme domain and the pass
+record are unchanged.
+
+The rule the answers follow: **a failure shows as a failure.** A held
+shard never answers 404, and `P` failing is never inferred from a response
+that stopped.
+
+| Response | Meaning |
+| --- | --- |
+| 400, empty | The request is invalid. Decided from the head and `P`'s own height, with no store lookup and no branch on holdings. |
+| 404, empty | Not held. Only a valid request reaches this, and nothing else does. |
+| 503, empty | `P` cannot serve right now and the fault is its own: an unreadable tip, a store failure, or no resident key. |
+| 200, body, signature | A good read. |
+| 200, body, refusal trailer | `P`'s signer failed after the body went out. |
+
+1. **One read.** `P` reads the store once, hashes each chunk as it sends
+   it, then finishes `D`, signs, and appends the signature. The second
+   read, the comparison between two digests and the "body changed between
+   reads" path are deleted. On the floor device the two-read path took
+   102.7 ms per served shard and this one takes 67.2 ms, against 24.6 ms
+   before the digest
+   (`docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`, run 3).
+2. **An invalid request is a 400, decided before the lookup.** `P`
+   validates the request before it looks up the shard, so every malformed
+   or out-of-gate request gets the same bare 400 whether or not `P` holds
+   that shard. Holdings are public, so nothing is hidden by keeping them
+   one code; the store is simply not consulted for a request that is going
+   to be refused. As built, "invalid" is everything decidable without the
+   shard store: a wrong method or route, a malformed shard id, a request
+   header that is missing, duplicated or does not decode, and an anchor
+   outside the gate.
+3. **A fault of `P`'s own is a 503.** A store that fails to open the
+   shard, a tip `P` cannot read, and a persona with no resident key all
+   answer one bare 503. The earlier text answered the first two with the
+   404 on the ground that a distinct status "would be a live health
+   oracle". That ground fails: holdings are chain-public, so a 404 for a
+   bonded shard already tells anyone watching that `P` is failing, and
+   tells it as "not held". The 503 does not say which fault; the counters
+   do, to the operator.
+4. **A persona with no key says so before the body.** `P` knows it has no
+   resident key before the first byte (`PassKey::ready`), so it
+   answers the 503 and does not send a shard it cannot countersign.
+5. **A signer that fails after the body writes a refusal trailer.** The
+   body is out and the status cannot change. `P` closes the response with
+   a fixed trailer where the signature goes, so the response is its full
+   declared length and says, in bytes `P` wrote, that `P` served and did
+   not sign.
+
+**Why a trailer and not an inference from a short body.** Signing after
+sending first landed as "the response ends at the frame, with no
+signature", and the client read a body cut cleanly at that offset as `P`
+declining to sign. A relay on the circuit can count bytes, and the frame
+length is public, so it can cut a good response exactly there. Allowing a
+retry does not help: Tor pins guards, so the witness's entry guard is on
+every circuit it builds and the service's guards are on every circuit it
+builds, and a relay in guard position on either side sees every retry.
+Such a relay could make an honest `P` fail every challenge.
+
+What a relay cannot do is write. Relay cells on an onion-service circuit
+are end-to-end encrypted and integrity-checked between the client and the
+service, so a relay can drop cells or destroy the circuit and cannot
+inject bytes. That leaves three cases, and the cut is never the first:
+
+| Client sees | Meaning | Next move |
+| --- | --- | --- |
+| Body, then the refusal trailer | `P` failed. Authored by `P`. | Failed read, no retry |
+| Body, then nothing | Transport cut, at whatever offset | Stall, retried as before |
+| Body, then a valid signature | A good read | Pass |
+
+What remains is the general residual: a network adversary can deny any
+read at any point. That is not specific to the frame boundary, and
+nothing at this layer fixes it.
+
+**The trailer's encoding.** The envelope's own width (3,385 bytes) of
+`0xFF`, in place of the signature
+(`serving_route::REFUSAL_TRAILER_BYTE`, `is_refusal_trailer`). Chosen over
+a status byte ahead of the envelope for three reasons. A good read's
+bytes and every `content-length` stay exactly what they were, so nothing
+pinned on the good path moves. Every 200 is then its full declared
+length, which is what lets "short" mean "transport" with no exception.
+And it cannot be read as a signature: a canonical `HybridSignature`
+opens with a four-byte header and a little-endian length, and
+`0xFFFF_FFFF` is not a length an envelope can hold
+(`a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer`
+asserts the parse fails; `a_real_signature_is_never_the_refusal_trailer`
+asserts the other direction). The cost is 3,385 bytes on a response that
+has already failed.
+
+**The client's rows.** A 400 is neither a miss nor `P`'s failure on first
+sight, because the anchor gate can trip on clock or chain skew on either
+side. The witness retries once with a freshly derived anchor. A second
+400 is a failed read: `P`'s gate sits within ±`L` of `P`'s own height, so
+a `P` that is persistently out of step is `P`'s problem. A 503 is a
+failed read with no retry of that `P`. A refusal trailer is a failed read
+with no retry. A body that stops short, anywhere, is a stall. The fetch
+client does not retry — the anchor is the caller's, from chain state — so
+the counting is the scheduler's and `FetchError::next_move` is the rule
+it reads.
+
+**Reverses.** Item 4 of the 2026-10-04 entry (two reads; rewritten in
+place). `RF-R1`'s "one identical 404 for every non-servable outcome": the
+404 now means "not held" and nothing else.
+
+**Where.** `rust/shekyl-p-serve/src/serve.rs`, `delivery.rs`,
+`countersign.rs` (`PassKey::ready`);
+`rust/shekyl-curve-tree/src/serving_route.rs` (the trailer);
+`rust/shekyl-p-fetch/src/error.rs`, `client.rs`;
+`rust/shekyl-p-host/src/signer.rs`; `ARCHIVAL_SERVING_ROUTE.md`;
+`ARCHIVAL_SHARD_FETCH.md` `SF-D6` (the outcome table's rows) and `SF-D8`
+(the carrier).
+
+---
+
+## 2026-10-07 — Serve credit: a secret per-block draw replaces the public urn; FN-DSA-1024 receipts under a separate receipt key
+
+**Decision (maintainer, in review; stated as the Slice C Round 0 brief of
+this date).** The serve-credit mechanism is re-based on a draw only the
+block's producer knows. The specification is
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](design/ARCHIVAL_SERVE_CREDIT_SPEC.md);
+this entry records what was decided and what it replaces. Nothing is built.
+
+1. **The draw is secret and per block.** The producer of `h` commits to a
+   seed in its coinbase, draws pairs with replacement from the epoch's
+   drawable set using the seed and `block_hash(h)`, reads them, and
+   reveals the whole seed with that block's pass records within `W₂`.
+   *Replaces* the public urn derived from `block_hash(h − 1)` (challenge
+   mechanism §2, `SO-D8e`), which was never wired.
+2. **Issued means revealed.** A draw is issued only when its seed is
+   revealed. An unrevealed block issues nothing: no passes and no misses.
+   A miss is an issued draw with no pass by `h + W₂`, derived as before.
+3. **Settlement selects the three counted draws at close.** A beacon at
+   `h_close(E) + W₂` picks 3 of each pair's issued draws; 2 or 3 passes
+   among them is Served, fewer is Missed, fewer than 3 issued is
+   NonObservation. *Replaces* two earlier forms: the landed
+   `settle_epoch`, which settles on every issued draw with a floor of 2,
+   and a "first three" selection ruled earlier the same day and not
+   otherwise recorded. The reason for selecting at close is that `P` must
+   not be able to learn mid-epoch that its outcome is settled.
+4. **FN-DSA-1024 (level V)** for the receipt and for the witness's carrier
+   signature, inside the hybrid structure with Ed25519, under a new value
+   of the existing scheme byte. Against ML-DSA-65: a 1,280-byte signature
+   against 3,309, faster, more margin. The implementation is the `fn-dsa`
+   crate, which is pre-standard; its keys and signatures will change when
+   FIPS 206 is final. That risk is not privacy-exposing and is accepted
+   pre-genesis, with an exact version pin, a FOLLOWUPS row and a genesis
+   gate (no genesis on a pre-1.0 `fn-dsa`) landing with the integration.
+5. **A separate receipt key.** The bond record keeps its identity key
+   (Ed25519 + ML-DSA-65), which defines `p_canonical_id` and authorizes
+   JoinMarket and Reinstate, and gains a receipt key (Ed25519 +
+   FN-DSA-1024) bound by the identity key's signature on the JoinMarket
+   post. The reason is algorithm isolation: persona identity stays on a
+   finalized standard, and the pre-standard scheme touches only signatures
+   whose value expires within an epoch. **This is a rule-21 reopening of
+   `SF-D13`**, which ruled the countersigning key to be the identity key
+   and said it "does not invent a second key field".
+6. **`W₂` is the only window.** A carrier for `h` is admitted in
+   `(h, h + W₂]`. There is no separate read window, and admission checks
+   no bound on the receipt's anchor (ruling 7 below). *Replaces* the
+   landed window `[h − 720 − L, h − 720]` keyed on the including block's
+   predecessor, which belonged to a design where the read and the
+   inclusion were one event.
+7. **Provisional (rule 21).** The draw weighting (1 for a pair visibly
+   short of 3 issued, 1/16 otherwise), the count per block (a base of one
+   draw per pair per epoch plus a top-up, capped at 3 × nominal), and the
+   bar they are held to (at most 3 % of pairs short of 3 at 10 % producer
+   dropout). The sim reads 1.18 % at that bar (`ESR-11`).
+
+**Rulings on the twelve questions the specification posed (maintainer,
+same date, on review of #992 and #993).** `SCS-P1`–`P12`, specification
+§13.3.
+
+1. **`0x0C` is 32 bytes** (`SCS-P1`): one commitment over
+   `witness_pk ‖ seed` under its own registered domain. Q13's length
+   stands. *Replaces* Q12's bare hash of the witness key alone
+   (2026-09-16), which is not built.
+2. **Each carrier carries the whole seed** (`SCS-P2`).
+3. **Q10 stands; re-derivability is dropped** (`SCS-P3`). The seed and the
+   witness key are fresh randomness per block, independent of each other,
+   held in memory only. *Rejected:* deriving either from the coinbase
+   output's shared secret, because the coinbase recipient would learn the
+   seed (this also retires Q8's derivation of 2026-09-16); a persistent
+   producer secret; and re-derivability, which Q10 had held as a named
+   fallback. Losing the ring is harmless: the block's draws are not
+   revealed and issue nothing.
+4. **Selection is rejection sampling with a deterministic cap**
+   (`SCS-P4`): after 256 attempts the current candidate is accepted. A
+   vector pins the cap.
+5. **A record keeps its input tag and `j`** (`SCS-P5`). The pair is
+   derived from `(seed, h, j)`; `h` rides the carrier beside the seed;
+   the witness key and signature are the carrier's prunable part. One
+   rule-42 bump covers record and carrier.
+6. **The set commitment covers the seed and `h`** (`SCS-P6`), with a
+   fifth vector.
+7. **No bound on `anchor_height` at admission** (`SCS-P7`). A lower bound
+   keyed on `h` is implied by the nonce, which contains `block_hash(h)`.
+   The anchor stays on the wire for `P`'s own gate and for organic reads.
+8. **`issued` saturates at 255** (`SCS-P8`).
+9. **"In flight" counts unrevealed draws only** (`SCS-P9`).
+10. **The producer's read load is measured, not gated** (`SCS-P10`), on a
+    mining-class machine (`BA-T30`).
+11. **The pass is carried by the serve-credit input** (`SCS-P11`). The
+    attestation path's pass records and CEN-B4's operand are deleted with
+    the implementation, with the reason recorded (rule 15), not left
+    inert.
+12. **The drop filter reads per draw, at `h`** (`SCS-P12`): the state
+    after `h` connects, strictly above a same-block slash.
+
+**A refusal this decision reverses.** `SO-D8e` (2026-09-16) foreclosed
+stateless per-block draws with replacement on three grounds: about 20 % of
+pairs unobservable per epoch at three draws per pair, a longer time to
+slash, and that an absolute threshold of two passes is a different test
+over two draws than over six. The draw is now with replacement. What
+answers each ground is in the specification: the top-up and the 16:1
+weighting hold the share of pairs short of three issued draws to 1.10 % at
+10 % producer dropout, 1.18 % at most over eight seeds (`ESR-11`, §12); and settlement counts exactly three
+selected draws for every pair that has them, so the threshold is one test.
+The urn's own recorded weakness, that a pair late in a wave could
+anticipate its draw, has no counterpart: nothing about a block's draws is
+public before the reveal.
+
+**Also recorded.** The receipt key is derived from the wallet master seed
+when the engine is assembled, as the identity key is; the brief's "per-persona
+seed in the stake-engine actor" does not exist (`SCS-F5`). Registry rows
+for the new labels land with their constants (`SCS-F4`). At the `fn-dsa`
+integration, key-generation and verification vectors are pinned on both
+x86_64 and aarch64; signing uses hardware floating point. Sequencing: the
+specification first, the settlement writer wired before the secret draw
+goes live, then the FN-DSA integration.
+
+**Where.** `docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md`. The superseded
+mechanism text is deleted from the five documents that stated it before
+and replaced by pointers; what each still owns is the specification's
+§15. Index rows for the document and for `SCS-P` / `SCS-F`.
+
+
+**Further rulings, same date, on review of the merged specification.**
+
+1. **`(m, n)` is not re-pinned on the one-attempt figure.** At the
+   feasibility module's calibration the window exceeds the per-archiver
+   false-slash budget (0.689 against `10⁻³` at 4,096 shards). That
+   calibration credits one attempt per read, because failures inside one
+   window cluster. Under the secret draw the witness reads a draw again
+   hours later, and with three reads the window clears the budget when a
+   draw goes unread after all three with probability at most 0.2076
+   (`ESR-11`).
+   Loosening the window on the one-attempt figure would weaken detection
+   of pairs that do not serve. Two pieces of work instead: the witness's
+   re-read policy is specified as its own policy above `SF-D6`
+   (specification §5: a stall-class read is read again, a completed
+   exchange is final, and circuit assignment stays Tor's under `SF-D3`),
+   and the unread share at hour-scale spacing is measured (`BA-T31`)
+   and fed to the feasibility module. `(m, n)` stays open until then.
+2. **`SO-D8d`'s integrity layers, in their form under the stored index**
+   (closes `SCS-F11`; specification §9.5). The first layer is a digest:
+   at admission each issued `(pair, h, j)` is folded into a per-epoch
+   running digest kept as revertible consensus state, and at settlement
+   the stored index is hashed during the walk that selects the counted
+   draws and compared. Full re-derivation from the kept seeds at
+   settlement, the form first ruled the same day, is **rejected**: it
+   repeated in one block the hashing admission spread over an epoch. A
+   pair mismatch cannot occur, because the pair is derived from `j`. The second, the persisted digest of `D`
+   against a re-walk, and the third, `passes ≤ issued` as a typed halt,
+   carry over.
+
+   **Review, same date.** The sentence above records the hash as taken
+   during the walk that selects the counted draws. The living
+   specification (§9.5) and the proposal (§6.2) were corrected the same
+   day: settlement hashes every issued draw the stored index holds,
+   including a draw the selection then drops because the pair no longer
+   held the shard. Hashing only the counted draws would disagree with
+   the admission digest on an honest node after a mid-epoch slash or
+   release. `BA-T32` already says hash each issued draw, then select.
+3. **Ratified:** the in-flight count stops at `h_open(E)`; the settlement
+   selection's bytes, rejection zone, swap and vectors.
+4. **Accepted:** documents keep describing the attestation path and the
+   `SF-D13` window while that code runs, with the pointer to the
+   specification's §11.1.
+
+5. **One request machinery for every shard fetch.** Challenge and
+   organic reads go through one client code path: one entry point that
+   takes a caller-built header and returns one outcome type, with no
+   challenge-only path in the request layer. Only the nonce's source and
+   the challenger's bookkeeping sit outside it (specification §5.1).
+6. **`SCS-P13`: a fresh nonce for every read, for every caller.** A
+   challenge's nonce takes the read's `attempt`. The record carries
+   `attempt` as one prunable byte; admission recomputes the nonce with
+   one hash and refuses `attempt ≥ K`. `K = 3` is a consensus constant.
+   *Replaces* a nonce bound to `(h, j)` alone, which would have returned
+   to `P` on a re-read.
+7. **`SF-D3` reopened (rule 21) and ruled: fresh SOCKS credentials per
+   read.** The 2026-09-12 ruling was unauthenticated SOCKS with no
+   isolation flags, on the premise that fetches would blend with overlay
+   P2P on shared circuits. For an onion destination the premise is
+   false: a connection to an onion uses a rendezvous circuit to that
+   onion only, and overlay P2P never dials a persona's serving onion.
+   The actual effect was that every read one daemon sent to one persona
+   rode one rendezvous circuit, kept alive from its last use, so `P`
+   could link a producer's reads, a re-read to its failed read, and
+   reads across blocks. Now every read, for every caller, presents fresh
+   SOCKS credentials, and Tor's default `IsolateSOCKSAuth` gives it a
+   circuit of its own. Stall retries inside a read keep the credentials.
+   No isolation flags; no Tor configuration change; works on any stock
+   Tor, and an operator-run `SocksPort` must not disable
+   `IsolateSOCKSAuth`. *Supersedes*, within the same day, "fresh circuit
+   by spacing with `SF-D3` not reopened": the spacing is scheduling only,
+   and the managed Tor's `MaxCircuitDirtiness` test stays as defence in
+   depth.
+
+   **Costs accepted, none measured (`BA-T31`):** about 1 to 5 seconds of
+   circuit setup per read; a higher first-try failure rate, offset by
+   the reads of a draw becoming independent; proof of work paid per read
+   against a flooded onion; slower organic bulk reads. `SF-D7`'s
+   in-flight cap loses its premise that no fetch builds a circuit.
+
+   **As built:** the credentials are a function of the read's nonce, the
+   nonce in hex as the username with a fixed password, taken from the
+   header inside the request layer. The ruling said fresh random
+   credentials. A nonce is fresh for every read and is random for an
+   organic read and pseudo-random for a challenge, and deriving from it
+   means a caller cannot give two reads one circuit or one read two.
+
+   **Checked against a real Tor, 2026-10-07** (0.4.9.11, the pinned
+   bundle): a stall retry inside one read stayed on its circuit, a
+   second read of the same shard rode a different one, both rendezvous
+   circuits, and Tor fetched no descriptor for the new credentials
+   (`docs/benchmarks/sfd3_read_isolation_20261007.md`).
+
+   **Review, same date.** The `MaxCircuitDirtiness` test named above was
+   removed. It restated the spacing theory this ruling superseded: it
+   rejected the option at every value, and two reads with different
+   credentials do not share a circuit at any reuse length. The managed
+   launch stays a closed list of typed options
+   (`the_managed_launch_surface_is_the_typed_options`). That list is the
+   spawn surface, not a second isolation mechanism. The dial uses
+   `Isolation::Persona`; the per-read property is the header's
+   credentials, not a second SOCKS variant.
+8. **Operator visibility of serving attacks is owed.** The design's
+   answer to a sustained flood against a persona's onion is that the
+   operator sees it and has months to respond. That holds only if the
+   data and a warning exist; neither does. FOLLOWUPS carries the row,
+   owned by the RPC lane (data) and the GUI lane (presentation).
+
+---
+
+## 2026-10-08 — The settlement writer is wired ahead of the secret draw, on an empty issued-draw index (`SO-D10`)
+
+**Decision (maintainer, on the pre-flight in
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md)
+§14).** The serve-credit specification puts the settlement writer before
+the draw; the writer document's §5.1 said the writer could not be live
+before the cutover. Grounded at `dev@98fbd20acb`, the writer's two inputs
+did not exist in the Rust path: nothing issued a draw, and a pass row named
+no draw. Seven sub-items were posed and all are ruled as recommended, with
+conditions.
+
+1. **`SO-D10a`: the writer reads the issued-draw index, which is empty
+   until the draw lands.** No beacon-era stand-in. From the change that
+   switches the readers until the draw lands, the Rust validator slashes
+   nothing. The C++ daemon stays consensus, on the beacon, until `DEL-008`.
+   *Supersedes* §5.1's "cannot be live before the cutover": its three
+   reasons were about a beacon-era wiring, and none arises when the input
+   is the index from the first commit.
+2. **`SO-D10b`: the failure window's walk-back skips an unobserved epoch
+   inside a standing run**, and stops only where the record says the run
+   began. *Replaces* stopping at the first epoch that is not an
+   observation. Stopping is exploitable: a colluding producer can withhold
+   one reveal, push a non-server's pair below three issued draws, and
+   clear its window. Skipping is the genesis-frozen rule as written: `m`
+   misses within the last `n` observations.
+3. **`SO-D10c`: the draw's index entry carries the pass fact, and the
+   pass fact has exactly one home.** When admission lands, the
+   `(P, s, E, h)` serve-credit table is re-keyed or deleted, never kept
+   beside the index's pass bit. The issued-index digest covers issuance
+   only; a pass is set later, inside `W₂`.
+4. **`SO-D10d`: accrual reads the row in its own change**, after the slash
+   fold does and before the draw. **The draw cannot go live until it has
+   landed**: no Rust consensus pays on any pass while it slashes on rows.
+   Slash timing stays as designed, the pass for `E` at `(E+2)·SEB − 1`.
+5. **`SO-D10e`: the count fold, its FFI, the C++ writer and their tests
+   are deleted with the list fold** (rule 15). The LMDB table's handle,
+   revert and prune stay for `DEL-008`. The row's NonObservation floor
+   becomes 3.
+6. **`SO-D10f`: a Fakechain-only hook issues draws and marks passes**, and
+   the two Rust slash tests are re-driven through it. **The comparison
+   against the LMDB beacon-era slash fixture is retired.** The C++ is not
+   canonical, and keeping the any-pass fold alive to feed the comparison
+   is the wrong trade.
+7. **`SO-D10g`: the drawable-set check lands with admission.** Named
+   blocker: no drawable set exists for the writer to re-walk.
+
+**Build order.** Tables and the view read; the list fold with the
+`SO-D10e` deletions; the slash fold reads the row; `SO-D10d`; admission
+and the draw.
+
+**Posed to the economics sim, not a blocker (`ESR-12`).** Whether settling
+`E` at `h_close(E) + W₂ + 1` is better than the inherited
+`(E+2)·SEB − 1`. A material gain comes back as a re-pin of slash timing
+and the grace coupling, not as a move.
+
+**Where.** `docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §14; the draw's gate
+on `DEL-008` and in the SO-D8 proposal's §8.0; `ESR-12` in
+`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.16.
+
+---
+
+## 2026-10-09 — The failure window's walk stops at the retention horizon (`SO-D10b`, amended)
+
+**Decision (maintainer, relayed 2026-10-09, on the choice
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md)
+§14.4 step 3 posed).** `SO-D10b` ruled that the walk passes over an
+unobserved epoch and stops only where the record says the run began. That
+removed the walk's old bound of `n − 1` epochs, so it could read below the
+horizon a prune of settlement rows would use. The walk now also stops at
+that horizon.
+
+- **One constant.** The walk's bound and the settlement rows' prune
+  horizon are the same constant, `SETTLEMENT_RETENTION_EPOCHS`, and it is
+  const-asserted against `n` and a stated minimum observation rate, so the
+  reasoning is in code and not in prose.
+- **Why it is acceptable.** The window needs 13 observations and the
+  horizon leaves 26 epochs to find them in. The bound shortens a walk only
+  when fewer than half a pair's epochs are observed. At the simulated
+  observation rate, 0.96 or better, 13 observations span about 14 epochs.
+  A slash missed below one half observed is accepted: the network has
+  larger problems than one free rider at that point.
+- **Why now.** Adding the bound when pruning lands would be a consensus
+  change at that point (rule 07). In the rule from the first commit, the
+  prune is not one.
+
+**Cost recorded.** A pair with ten misses, more than a retention window of
+unobserved epochs, and one more miss has eleven recorded misses and is not
+slashed.
+
+---
+
+## 2026-10-09 — The serving host runs below the daemon's CPU priority, on by default, with no setting
+
+**Decision (maintainer, 2026-10-09; brief relayed to the serving lane).**
+The persona serving host runs its threads below the daemon's CPU
+priority by default, and there is no operator setting for it. Recorded
+in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
+§9.8 as `SH-3`.
+
+1. **The evidence.** `BA-T5` session 2 on the floor device
+   ([`ba_t5_serve_floor_device_20261009.md`](benchmarks/ba_t5_serve_floor_device_20261009.md)):
+   with the serving process at `nice 19` beside a daemon syncing the
+   chain, the daemon kept 90 to 97 % of its no-serve sync rate and
+   serving still delivered 5 to 8 responses per second, about a hundred
+   times honest demand; at normal priority the daemon kept 31 to 37 %.
+2. **The unit is the serving threads, not the process.** Serving runs
+   inside the wallet process on the engine's runtime, so a service-unit
+   `Nice=` would also slow the GUI and the user's own spend proving.
+   Serving gets a dedicated runtime and blocking pool through the single
+   constructor (D5), with its own thread-ledger row, and every thread of
+   it lowers its own priority as it starts. That needs no privilege on
+   any platform.
+3. **`nice 19`, not `SCHED_IDLE`.** An idle-class thread can be starved
+   completely under a syncing daemon; a persona whose serving threads
+   never run fails challenge reads it should pass. Normal scheduling at
+   the lowest nice keeps serving alive, as the run shows. macOS maps to
+   the Utility QoS class and Windows to the lowest thread priority;
+   neither platform's "background" mode is used, because both also
+   throttle I/O.
+4. **Uniform, with no knob.** Priority shows only under contention, and
+   timing already reveals load; if every `P` runs the same default the
+   setting tells an observer nothing, and an opt-out would create a
+   population that behaves differently. Unconditional, under rule 75.
+5. **Failure is a warning and a counter, never a refusal to serve.** A
+   thread whose priority could not be lowered serves at normal priority.
+   The host counts the threads still in that state — a thread that has
+   exited leaves the count — and the operator sees one warning.
+6. **Out of scope.** The daemon, the wallet's other work and the wallet's
+   tor process stay at normal priority. The `SF-D13` countersignature is
+   made inside the stake actor at engine priority: the serving runtime
+   carries the round trip, not the key.
+7. **Confirming run.** After the mechanism merges, a short `BA-T5` floor
+   block with the syncing daemon at N = 8 and N = 64 records whether the
+   thread-level mechanism reproduces the external-nice figure. Discovery,
+   not a gate, by the 2026-10-08 ruling. The ledger row for the nice
+   value is estimated until that run promotes it.
+
+---
+
+## 2026-10-09 — Accrual reads the settlement row; the emission gather moves to the slash pass (`SO-D11`)
+
+**Decision (maintainer, relayed 2026-10-09, on the pre-flight in
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md)
+§15).** `SO-D8c` (2026-09-16) moved the emission gather to the slash pass
+and said the consumers tolerate the move. Grounded, three did not as
+written: CEN-J15's price row would exist for one parent height per epoch,
+a claim would be refused for an epoch longer than today, and `SI-21`
+excludes a budget written an epoch before its work total. The claim
+verify also re-gathers on any pass, so it moves with the gather.
+
+1. **A pair is credited for an epoch iff its settlement row is Served.**
+   Paying on the test used for slashing closes the mismatch `PC-D6`
+   noted and left unopened.
+2. **No Rust consensus before the draw is live.** With an empty index the
+   Rust validator slashes nothing and pays nothing. One gate with
+   `SO-D10d`'s, on the `DEL-008` row.
+3. **"Settled" is the slash watermark.** CEN-J15 reads `r_market` there.
+4. **An epoch is claimable once its `Σwork` row exists**, one epoch later
+   than before. `MAX_CLAIM_AGE_W_EPOCHS` stays 26, so the claimable span
+   is 25 epochs. Moving the retention horizon to keep 26 was refused.
+5. **`SI-21` is two write sets in one row**: the close freezes the
+   budget; the slash pass settles whole.
+6. **The gather reads the state as of the slash pass, over shards that
+   are closed and final.** The epoch close used plain "closed" while bond
+   admission and the drawable set use closed-and-final; a shard closed
+   inside the reorg cap would have priced joins as maximally scarce
+   before it was bondable. One predicate.
+7. **The wallet and the claim-source RPC do not change in this step.**
+   The RPC lane's cutover item is on the `DEL-008` row.
+8. **The design text that pins materialisation at the close is re-pinned
+   in the implementing change.**
+
+---
+
+## 2026-10-10 — Admission and the draw: the cut, the stable drawable set, and a required `0x0C` (`SO-D12`)
+
+**Decision (maintainer, relayed 2026-10-10, on the pre-flight in
+[`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md)
+§16).** Step 5 of the settlement writer's build order. The mechanism was
+ruled in the serve-credit specification; this rules how it is built.
+
+1. **Four increments, each its own change:** state and wire types; the
+   drawable set as of the epoch's open with its digest; issuance,
+   staged; the receipt and the switch. The producer side is a separate
+   lane.
+2. **The drawable set is made stable by journaling a Release's holdings
+   pre-image.** This completes Q3 (2026-09-16), which defines the set
+   over the bond journals; the Rust store lacked the unbond journal. The
+   set is built once per epoch into an in-memory cache, never persisted
+   as consensus state, rebuilt from tip and journals, and guarded by the
+   digest. A Reinstate was checked and does not change holdings.
+3. **Increment 3 is staged**, with no network-type branch: no tree
+   admits a carrier without checking its receipts.
+4. **The FN-DSA lane closed at increment 2; increments 3 and 4 and the
+   receipt check belong to the Slice C round** (changed 2026-10-11; ruled
+   on 2026-10-10 as the settlement lane's). The settlement lane builds
+   none of the three and does not own the receipt check.
+5. **Rust deletions land in the increment that replaces each piece; C++
+   deletions at `DEL-008`.**
+6. **The visible shortfall is stored, with undo.**
+7. **The census rows are minted with increment 1's design text; the
+   retired-by-ruling status lands with the first successor row.**
+8. **The same journal fixes the complete-tree flag read by market
+   membership.**
+9. **`0x0C` is required in every coinbase from increment 1, with no
+   height gate.** The coinbase extra is written and judged by one Rust
+   implementation that both validators call, so the change moves both.
+   It refuses existing blocks and each network's genesis coinbase. That
+   is accepted: the testnet runs tagged releases and the next tag is a
+   regenesis. The C++ daemon must accept the tag in increment 1 itself.
+10. **What the two reads on the serve-credit table become is deferred
+    to increment 4's design text.**
+
+**Reason.** The enumerator that landed reads bond records at tip, so a
+Release or a slash inside an epoch would shift the index admission
+derives a record's pair from; and the receipt check has no key until the
+FN-DSA increments land. Both are closed by ordering the build, not by
+changing the mechanism.
+
+---
+
+## 2026-10-11 — Serve credit: one bundle per block replaces the carrier transaction (`SCS-P14`–`P31`)
+
+**Decision (maintainer, 2026-10-11; the Slice C Round 0 reopen).** The
+specification is
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
+§7, §9 and §13.5. This entry records what was decided and what it
+replaces. Nothing of it is built.
+
+**Why it was reopened.** The reopen asked whether a carrier survives a
+reorg. Grounding found that a carrier could not travel at all: a zero-fee
+transaction is never relayed and cannot be admitted from a peer
+(`SCS-F12`). Under that sat one defect. A block could need two carriers,
+and the first one admitted issued every draw of the block, so the miner of
+a late block could include one and leave out the other. The pairs whose
+records were in the second took misses, at no cost to the miner, and the
+pairs could be chosen in advance (`SCS-F13`).
+
+1. **One bundle per block `h`**: the reveal and every pass record,
+   admitted whole or not at all. A bundle with no passes is valid and
+   required. *Replaces* the `serve_credit_only` carrier transaction; it
+   reverses `SCS-P11` (the serve-credit input carries the pass) and drops
+   `n ≥ 1`.
+2. **No node can refuse a valid bundle, and no rule acts on its absence.**
+   Non-inclusion through all of `W₂` is NonObservation, never misses.
+3. **The bundle sits beside the block**; the header root covers each
+   bundle's kept bytes and a hash of its prunable bytes. Kept: seed, `h`,
+   and a pass bitmap of `count(h)` bits, in place of the list of `j`.
+4. **`W₂` stays the only consensus window.** `W₂ + D_max` is rejected. The
+   challenger files by `h + W₂ − M`, `M = 30` blocks, provisional and not
+   consensus. A deliberate `M`-block reorg gets no wargame row:
+   it is majority hashrate, which the containment layer handles.
+5. **The receipt key is read from the `h_open(E)` bond snapshot**, the one
+   the drawable set is drawn from: one type, two methods.
+6. **The section has a budget counted in draws**, `c · 9·D / SEB` with
+   `c = 2` provisional, and is outside the fee median and the penalty
+   curve. This dissolves the unpaid-inclusion and cap-raise items of the
+   fee-and-weight row in FOLLOWUPS.
+7. **The prunable part is archival content in the shard domain**, kept
+   past `D_max`, then discarded and backfilled. "Never after the prune" is
+   withdrawn. `SHT-Q1`'s wording is amended to admit bundles.
+8. **Alternative chains:** stateless checks on arrival, everything else at
+   the switch.
+9. **No C++.** Bundles exist only in Rust; the C++ sidecar path goes at
+   `DEL-008`.
+10. **Dandelion++ for bundles is withdrawn**; reopen when
+    block-origination privacy is designed.
+11. **FN-DSA increments 3 and 4 are Slice C's.** *Supersedes* `SO-D12d`'s
+    "the FN-DSA lane builds increments 2 to 4" for those two.
+12. **Transport is by reference**: blocks carry references, bodies live in
+    one store keyed by hash, and the pool gains a separate bundle queue.
+    DRS-E5 builds both; Slice C supplies the rule.
+13. **No fee-floor bypass by how a transaction arrived** (`E5-Q1`, partly
+    reopened): the ruling of 2026-10-02 applied to DRS-E5.
+14. **Housekeeping:** `SCV-Q5`'s gate accepts `ByConstruction`; the
+    specification's §2 is re-pinned; the proposal's §2.2 is restated as
+    referential integrity; the sim is to call the production draw
+    functions.
+
+15. **Three lanes, split by what needs checking**: Slice C builds
+    validity (the specification, the verifier's view trait, the pure
+    verifier, FN-DSA increments 3 and 4), `SO-D12` builds state, DRS-E5
+    builds transport. The contracts between them are the view trait and
+    the kept projection type.
+
+**Re-ruled 2026-10-12: superseded is not deleted.** Item 1's reversal of
+`SCS-P11` stands, but nothing landed in Rust is deleted to make room for
+the bundle, and C++ goes only when it is unreachable or fully replaced.
+Slice C's changes are additive (the receipt key as a second JoinMarket
+form, the verifier staged beside the live path); the serve-credit input's
+fate is decided at the cutover. The PR that had begun deleting it was
+closed unmerged.
+
+**Ruled 2026-10-12, the six questions found while writing the bundle in**
+(specification §13.6, `SCS-P32`–`P37`):
+
+- admission checks `anchor_height < h`, and every rule set asserts
+  `W₂ + L ≤` anchor depth; an amendment to `SCS-P7`;
+- the budget is `c · (⌊9·D / SEB⌋ + 1)`, with `D` the largest among the
+  epochs of the bundles in the section; a zero-draw bundle is admissible;
+- the header's `attestation_root` field is reused and renamed
+  `bundle_root`; CEN-B4 is retired by ruling for a new row;
+- the bundle commitment under a new label, fixed-width records with no
+  frame, and the dependency on FN-DSA-1024's padded signature written
+  down;
+- a backfilled bundle is accepted on hash equality; re-verifying receipts
+  is optional. *Corrects* item 7's "can be re-verified";
+- the verifier returns the derived draws with the kept projection.
+
+---
+
+## 2026-10-12 — Serving co-residence: the daemon's slice, no adaptive back-off, and the T2 measurement redefined
+
+**Decision (maintainer, 2026-10-12; brief relayed to the serving lane).**
+On the `BA-T5` session 3 finding that the per-thread nice (`SH-3`) gives a
+daemon in a different cpu cgroup only part of its CPU back
+([`ba_t5_serve_floor_device_20261012.md`](benchmarks/ba_t5_serve_floor_device_20261012.md);
+[`ARCHIVAL_CHALLENGE_MECHANISM.md`](design/ARCHIVAL_CHALLENGE_MECHANISM.md)
+§9.8):
+
+1. **A headless staker's daemon runs in its own top-level `shekyl.slice`
+   with a CPU weight above `user.slice`'s** (`CPUWeight=400`, reasoned,
+   not measured: 4:1 against `user.slice` under contention, about 80 %
+   of the CPU to the daemon while the per-user wallet serves). The slice
+   ships with the `.deb`, and `shekyld.service` joins it. The wallet
+   stays a per-user process. **A wallet as a system service is
+   rejected**: it breaks per-user custody, the same ruling `WP-D7` makes
+   on Windows.
+2. **Beyond that, the in-process nice-19 mechanism plus the serving gate
+   are the defence. No adaptive back-off.**
+3. **The T2 measurement is redefined**: the time to verify a block while
+   the daemon is synced and following the tip, idle against serving at
+   N = 64, with and without the slice weight — not the sync rate. The
+   syncing arms of sessions 2 and 3 are a stress case production
+   prevents: a daemon that is not following the tip serves nothing
+   (`DaemonTipCache::stamp_not_following`, the gate's `own_height`
+   refusal); the probe served through a sync only because its test
+   signer carries a fixed height. Their figures stand as the cost of
+   contention, cited as such.
+4. **The write-stall timer measures the peer.** `WRITE_STALL_TIMEOUT`
+   wrapped the whole write and so counted a starved serving task's own
+   lateness as a stall (two cut responses in 1,536 at N = 64 in session
+   3, every one with a client that was reading). It is restructured to
+   wrap only the wait for the socket to become writable; a socket the
+   peer is draining never starts the clock. `WRITE_TIMEOUT` is
+   unchanged. Its own PR, with a probe smoke run in CI so the floor probe
+   cannot break silently again.
+
+---
+
+## 2026-10-13 — Input grammar Part A ruled: one grammar for every binary; no environment layer; `--config-file`
+
+**Decision (maintainer, 2026-10-13; recorded on PR #1067).** The rules
+IG-1…IG-15 of [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) are ruled
+and become the cursor rule
+[`83-input-grammar`](../.cursor/rules/83-input-grammar.mdc); the daemon's
+glossary subtree and name table are ruled with them, and the questions
+IG-Q1…IG-Q20 are ruled as recorded in that document's §8 (IG-Q20, ruled
+the same day, names PR-3's `--small-network` as the public row
+`p2p-disclose-early`).
+
+This entry **supersedes** *Config file handling: TOML, layered
+precedence, XDG paths* above, for `shekyl-wallet-rpc` and `shekyl-cli`:
+
+1. **No environment layer in any binary** (IG-13). No option value
+   comes from the environment; default paths come from the operating
+   system's account and known-folder interfaces, never from `HOME`,
+   `XDG_*` or `%APPDATA%`; the only environment reads are
+   presentation-only.
+2. **`--config` becomes `--config-file`** (R7): the network picks the
+   default file, `--config-file` replaces that path whole, the file is
+   validated whole before anything applies, ownership and permissions
+   are checked, and one startup line shows every effective value and
+   its source, a secret shown as set and never its value (IG-6).
+3. **TOML and the precedence CLI over file over defaults stand**; the
+   file's keys are the option names exactly, and a command-line list or
+   map replaces the file's whole.
+
+The wallet binaries' own name tables are Part B of the same round and
+are brought to the maintainer for ruling before anything lands.
+
+---
+
+
+## 2026-10-14 — Bundle verifier review: the section's window, an unanswered draw count; decode-once deferred
+
+**Decision (maintainer, 2026-10-14; recorded on PR #1076).** Three
+questions from the post-merge review of the bundle verifier, recorded in
+[`ARCHIVAL_SERVE_CREDIT_SPEC.md`](design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
+§13.9:
+
+1. **`SCS-P41`, ruled as built.** The window `h < h_incl ≤ h + W₂` is
+   part of a section's form: `check_section` and
+   `check_section_until_switch` refuse an out-of-window reference before
+   the budget (CEN-J31), so one such reference cannot switch the budget
+   off. A section holds at most `W₂` references.
+2. **`SCS-P42`, ruled as built.** No draw count for a block below the
+   including one is the view's failure (`BundleUnanswered::DrawCount`),
+   not a verdict. §9.6's sentence that refused the bundle is reversed.
+3. **`SCS-P43`, deferred (rule 21).** Decoding each receipt key once
+   reopens when `BA-T33`'s floor run shows receipt verification is a
+   material share of block connect time; the decoded key's size per
+   persona is measured against the resident cost on the floor device
+   first. If built, the decoded form lives inside
+   `FnDsaHybridPublicKey`, so `DrawableEpoch::receipt_key` and `SO-D12`'s
+   increment 2 are unaffected.
+
+The SH-2 pre-flight audit is archived to `docs/completed/` in the same
+PR (rule 95). On PR #1075, the same day: BP6 (the pool checks a
+JoinMarket's receipt key) and `RejectCause::JoinMarketUnsupported` are
+accepted.
 
 ---

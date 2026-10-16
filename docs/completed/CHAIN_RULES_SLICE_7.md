@@ -44,7 +44,7 @@ the `BlockRule` class), [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md)
 (CEN-G1–G7, G6b, G9–G13; G8 retired by C2-R1a). Predecessors:
 [`CHAIN_RULES_SLICE_4.md`](../design/CHAIN_RULES_SLICE_4.md), whose Q1 (RULED (a),
 2026-09-22) sent **F14, F14b, F16, F18** here to land *with the weights
-machinery*; [`CHAIN_RULES_SLICE_6.md`](../design/CHAIN_RULES_SLICE_6.md), whose §5.1
+machinery*; [`CHAIN_RULES_SLICE_6.md`](CHAIN_RULES_SLICE_6.md), whose §5.1
 predicted this slice's fixture class should be smaller than its own —
 falsifiable here (§5.1).
 

@@ -44,7 +44,8 @@ use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{Candidate, CenRow, Locus, TxSlot};
 use shekyl_chain_store::store::{AtIndex, ChainStore, Horizons};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex, Timestamp, TxHash};
+use shekyl_harness_spender::{MinerWallet, Spender};
+use shekyl_types::{GlobalOutputIndex, Timestamp, TxHash};
 use shekyl_wire::{Block, Transaction};
 
 use crate::metrics::Metrics;
@@ -52,16 +53,23 @@ use crate::pipeline::{run, PipelineConfig, RunReport};
 use crate::scenario::{Mined, Scenario, RULES};
 use crate::source::IngestEvent;
 use crate::test_support::{
-    anchor, cleanup, key_image, open_store, spend, tmp, trace_with, Family, Scripted,
-    TraceEconomics, EPOCH, FIRST_SPEND_HEIGHT,
+    cleanup, h, open_store, tmp, trace_with, Family, Scripted, TraceEconomics, EPOCH,
+    FIRST_SPEND_HEIGHT,
 };
 use crate::trace::Trace;
 
 /// A chain the driver built: every block's template, as `(block, bodies)`.
 type Chain = Vec<(Block, Vec<Transaction>)>;
 
+/// The height of the two-body block. The two bodies spend two coinbases,
+/// and the substitution test a third; a coinbase from block `k` is
+/// spendable at `k + FIRST_SPEND_HEIGHT`, so the lowest height at which
+/// three distinct coinbases (blocks 0, 1 and 2) have matured is this one.
+const AT: u64 = FIRST_SPEND_HEIGHT + 2;
+
 /// What the driver built: every mined block, and the two bodies of the last
-/// one in the header's order.
+/// one in the header's order — real spends of block 0's and block 1's
+/// coinbases.
 struct Driven {
     mined: Vec<Mined>,
     a: Transaction,
@@ -69,6 +77,14 @@ struct Driven {
 }
 
 impl Driven {
+    /// A third real spend for the block at [`AT`], of block 2's coinbase:
+    /// admissible on its own — proven against the wallet-side tree over
+    /// the blocks below — and a body the header never listed.
+    fn third(&self) -> Transaction {
+        let spender = Spender::over(&self.mined[..usize::try_from(AT).expect("small")]);
+        spender.spend_coinbase(MinerWallet::harness(), h(2), h(AT), Family::Main.fee())
+    }
+
     fn chain(&self) -> Chain {
         self.mined
             .iter()
@@ -106,14 +122,15 @@ impl Driven {
         // The trace's accumulator is the tree's derivation (slice 7 commit
         // 5), not a fold over the driver's priced rewards: the replay then
         // holds the validator's paid reward to the ratified composition.
+        // The burn likewise is the tree's, derived over the bodies the
+        // replayed block carries — the driver's `fees_burned` names the
+        // bodies it listed, and a mutated listing is not those.
         trace_with(
             chain,
             |height| {
-                let mined = &self.mined[usize::try_from(height).expect("a fixture height fits")];
                 // Regtest difficulty is 1, so the accumulator after this
                 // block is `height + 1`.
                 TraceEconomics {
-                    burned: mined.template.fees_burned,
                     cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from(height) + 1),
                 }
             },
@@ -122,15 +139,21 @@ impl Driven {
     }
 }
 
-/// Mine `FIRST_SPEND_HEIGHT` empty blocks, then one block listing two
-/// anchored spends — the first two-body block through the driver.
+/// Mine [`AT`] empty blocks, then one block listing two real spends —
+/// block 0's and block 1's coinbases, proven against the wallet-side tree
+/// over the blocks below — the first two-body block through the driver.
 async fn two_body_chain(name: &str) -> Driven {
     let mut scenario = Scenario::open(name);
-    let mut mined = scenario.mine(FIRST_SPEND_HEIGHT).await;
-    let hashes: Vec<BlockHash> = mined.iter().map(|m| m.hash).collect();
-    let at = FIRST_SPEND_HEIGHT;
-    let a = anchor(&hashes, at, spend(key_image(Family::Main, at)));
-    let b = anchor(&hashes, at, spend(key_image(Family::Fork, at)));
+    let mut mined = scenario.mine(AT).await;
+    let at = AT;
+    let (a, b) = {
+        let spender = Spender::over(&mined);
+        let wallet = scenario.wallet();
+        (
+            spender.spend_coinbase(wallet, h(0), h(at), Family::Main.fee()),
+            spender.spend_coinbase(wallet, h(1), h(at), Family::Main.fee()),
+        )
+    };
     let two = scenario
         .mine_listing(vec![a.clone(), b.clone()])
         .await
@@ -140,7 +163,7 @@ async fn two_body_chain(name: &str) -> Driven {
         vec![a.hash(), b.hash()],
         "the template declares the bodies it was handed, in order"
     );
-    assert_eq!(two.height, BlockHeight::from_raw(at));
+    assert_eq!(two.height, h(at));
     mined.push(two);
     Driven { mined, a, b }
 }
@@ -208,11 +231,7 @@ fn refused_on_g2(report: &RunReport, name: &str, locus: Locus) {
         .refused
         .as_ref()
         .unwrap_or_else(|| panic!("{name}: G2 refuses this shape; the run connected it"));
-    assert_eq!(
-        *at,
-        BlockHeight::from_raw(FIRST_SPEND_HEIGHT),
-        "{name}: refused at the two-body block"
-    );
+    assert_eq!(*at, h(AT), "{name}: refused at the two-body block");
     assert_eq!(
         refused.rule,
         CenRow::G2,
@@ -222,9 +241,10 @@ fn refused_on_g2(report: &RunReport, name: &str, locus: Locus) {
         refused.locus, locus,
         "{name}: the locus is the rule's evidence"
     );
+    // The blocks below the refused one are heights `0..AT`: `AT` of them.
     assert_eq!(
         report.connected.len(),
-        usize::try_from(FIRST_SPEND_HEIGHT).expect("small"),
+        usize::try_from(AT).expect("small"),
         "{name}: every block before the refusal connected, and nothing after"
     );
 }
@@ -264,7 +284,7 @@ fn connected_through(report: &RunReport, chain: &Chain, name: &str) {
 async fn a_reordered_two_body_block_is_refused_on_g2_and_records_no_output() {
     let driven = two_body_chain("g2-reorder-driver").await;
     let (chain, a, b) = (driven.chain(), &driven.a, &driven.b);
-    let at = usize::try_from(FIRST_SPEND_HEIGHT).expect("small");
+    let at = usize::try_from(AT).expect("small");
 
     let (as_listed, listed_path) = replay("as-listed", &chain, driven.trace(&chain)).await;
     connected_through(&as_listed, &chain, "as listed");
@@ -316,15 +336,10 @@ async fn a_reordered_two_body_block_is_refused_on_g2_and_records_no_output() {
 async fn a_substituted_body_the_header_never_listed_is_refused_on_g2() {
     let driven = two_body_chain("g2-substitute-driver").await;
     let (chain, a, b) = (driven.chain(), &driven.a, &driven.b);
-    let at = usize::try_from(FIRST_SPEND_HEIGHT).expect("small");
-    let hashes: Vec<BlockHash> = chain[..at].iter().map(|(blk, _)| blk.hash()).collect();
-    // A third spend, admissible on its own: anchored like the others, a key
-    // image neither family used at this height.
-    let c = anchor(
-        &hashes,
-        FIRST_SPEND_HEIGHT,
-        spend(key_image(Family::Fork, FIRST_SPEND_HEIGHT + 1_000)),
-    );
+    let at = usize::try_from(AT).expect("small");
+    // A third spend, admissible on its own: a real spend of a coinbase
+    // neither listed body spent, proven like the others.
+    let c = driven.third();
     assert_ne!(c.hash(), b.hash());
 
     let mut substituted = chain.clone();

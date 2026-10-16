@@ -24,6 +24,12 @@ crate-type = ["staticlib"]
 shekyl-ffi = { path = "../shekyl-ffi" }
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
+shekyl-chain-store = { path = "../shekyl-chain-store" }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-p-fetch = { path = "../shekyl-p-fetch" }
+shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
 
 [lints]
 workspace = true

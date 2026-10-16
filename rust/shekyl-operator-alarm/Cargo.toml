@@ -15,8 +15,9 @@ publish = false
 # handle, only a `watch::Receiver`.
 shekyl-tor-control-wallet = { path = "../shekyl-tor-control-wallet" }
 # The second producer's vocabulary: `Staleness`, the serving host's tripwire
-# reading. Read-only — this crate starts no host and holds no store handle, it
-# only maps a reading onto the board. Same shape as the `shekyl-tor-control-wallet` edge above,
+# reading, and the serve-health producer's `ServeCounters`. Read-only — this
+# crate starts no host and holds no store handle, it only maps a reading onto
+# the board. Same shape as the `shekyl-tor-control-wallet` edge above,
 # and it is what keeps `OperatorAlarms`'s raise/clear methods crate-private
 # instead of handing every crate the ability to raise an alarm.
 shekyl-p-host = { path = "../shekyl-p-host" }

@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::{ConnectorId, Driver, Effect, Relay};
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::params::DandelionParams;
-use shekyl_relay_privacy::rng::SplitMix64;
 use shekyl_relay_privacy::schedule::PeerDirection;
 
 const W: usize = 64; // the window, via the dummy's length

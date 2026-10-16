@@ -113,9 +113,6 @@ public:
   bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::transaction>& txs, std::vector<crypto::hash>& missed_txs) const { return false; }
   bool get_block_by_hash(const crypto::hash &h, cryptonote::block &blk, bool *orphan = NULL) const { return false; }
   cryptonote::blobdata get_block_attestation_witness(const cryptonote::block &blk) const { return {}; }
-  uint8_t get_ideal_hard_fork_version() const { return 0; }
-  uint8_t get_ideal_hard_fork_version(uint64_t height) const { return 0; }
-  uint8_t get_hard_fork_version(uint64_t height) const { return 0; }
   uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return 0; }
   cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
   bool pad_transactions() { return false; }
@@ -147,7 +144,7 @@ struct recording_p2p : nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connec
   }
   bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score) override
   { ++host_fails; return true; }
-  bool for_connection(const boost::uuids::uuid&, std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
+  bool for_connection(const boost::uuids::uuid&, std::function<void(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
   { f(lambda_ctx, 0); return true; }
 };
 

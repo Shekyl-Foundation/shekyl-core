@@ -127,34 +127,15 @@ store what they claim:
   sustained failure.
 
 **Settled doctrine (do not redesign):** coverage is exhaustive, not sampled —
-every bonded pair is challenged every epoch. Structural: the emission formula
+every bonded pair is drawable every epoch and the draw is weighted to reach
+each one. A pair the draw does not reach three times settles NonObservation
+([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.3, §4.4, §12). Structural: the emission formula
 indexes per shard (§5.5; welded in `ARCHIVAL_CORPUS_FOSSIL_SWEEP.md`,
 `ARCHIVAL_TIMING_CONSTANTS.md`).
 
 ## 2. The lifecycle under derived assignment (the ratified direction)
 
-**Selection is a pure function of chain state.** The assignment for block h —
-which pair is challenged, and the window in which the read must resolve — is
-derived from block h−1's hash over the epoch's drawable set (§4 defines
-drawable). Every node computes it identically; nothing is recorded for
-selection. Grinding the assignment costs discarding a valid block (a full
-block reward), as in the TJ round.
-
-**There is no commitment record.** The prior design's Phase B (an explicit
-in-block "I am challenging (P, s)" record, with window W₁ between selection
-and commitment) is **superseded**: since assignment is derivable, the block
-*is* the commitment, and W₁ dissolves. Recorded as considered-and-superseded,
-not deleted, because the commitment record was the previous answer to putting
-the denominator on-chain — the denominator is now derived (§4).
-
-**Grounding note — this ruling dissolves a documented dead-end.** The
-audit-by-omission retraction (FOLLOWUPS, credit-wire round, 2026-08-02) found
-that a commitment riding the same block as the records is post-hoc — the
-miner picks its pair list *after* learning outcomes — and that fixing it
-needed the commitment on-chain **before** the reads: "a two-block protocol
-requiring the miner to win twice — dead on arrival." Derived assignment is
-that fix without the obstacle: the assignment is public at h−1's publication,
-before any read, with no second win required.
+> **Specification:** the lifecycle is [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)'s. Selection is a secret per-block draw: the producer of `h` commits to a seed in its coinbase, reads the pairs it draws, and reveals the seed with that block's pass records (its §4, §7). Nothing about a block's draws is public before the reveal. What this section holds is the read, the rule that a miss is never asserted, continued drawability, and the reorg argument.
 
 The read itself (unchanged from the TJ round):
 
@@ -182,14 +163,25 @@ The read itself (unchanged from the TJ round):
    §7.2(i) anchor-key fork is **closed**). P gates `anchor_height`
    against its own height ±`L` before signing; admission looks the anchor
    hash up on the connecting chain inside `[h − 720 − L, h − 720]`. The
-   v1 block-bound-nonce-alone message is deleted.
-4. The pass record is broadcast as a transaction; any miner may include it
-   within the resolution window **W₂**.
+   v1 block-bound-nonce-alone message is deleted. *This step describes the
+   landed verifier. The receipt the specification rules — a nonce bound to
+   `(h, j)`, a separate receipt key, no anchor bound at admission — is its
+   §5, §6 and §9.1, and is not built.*
+4. The producer of `h` files the block's pass records in one bundle it
+   signs, within the resolution window **W₂** (specification §7; the
+   carrier transaction this step named was replaced 2026-10-11,
+   `SCS-P14`).
 
-**A miss is never asserted.** It is the expiry of a derived challenge with no
-pass recorded within W₂. No miss record exists on the wire; no party attests
-failure; there is no 49-byte fabrication path. To manufacture a miss you must
-suppress a pass for W₂ blocks — a censorship capability, not a write.
+**A miss is never asserted.** It is a draw of an admitted bundle with no
+receipt in it: a clear bit in the bundle's pass bitmap. A block whose
+bundle is not admitted within W₂ issues nothing, so its draws are neither
+passes nor misses, and a pair left short of three issued draws settles
+NonObservation (specification §9.2, §9.3). No party attests failure; there
+is no 49-byte fabrication path. The producer of `h` can leave a pass out of
+its own bundle, which is contained by 2-of-3; nobody else can make a miss,
+and suppressing a bundle for W₂ blocks suppresses observations, not passes.
+*Restated 2026-10-12 (`SCS-P14`): under the carrier this paragraph read "the
+expiry of a derived challenge with no pass recorded within W₂".*
 
 **Satisfaction does not drain the pool, and the redraw floor (both
 ratified):** a pair whose epoch requirement is already met (two passes)
@@ -219,12 +211,6 @@ intercept *every* draw a pair receives, succeeding with probability q^k
 rather than q — at q = 0.1, one draw per epoch is a 10 % shield, two is
 1 %.
 
-**Anti-DDoS scope property (part of the ruling):** deriving from the
-*previous block's hash* strictly limits how far ahead challenge windows are
-knowable, so an attacker cannot precompute P's obligated-to-serve schedule.
-This property is in tension with exact-coverage scheduling — that tension is
-fork §7.1, not something to resolve silently.
-
 **Reorg semantics fall out for free:** a `pop_block` leaves nothing to void —
 assignments re-derive on the new chain; a pass record anchored to a reorged
 block loses its anchor. The prior round's open item 3 answers itself. Two
@@ -242,6 +228,8 @@ time-varying. A dropped pair stays in `D` for `E`; the filter lives at
 settlement and at the witness.
 
 ## 3. Nested measurement: 2-of-3 within an epoch, m-of-n across epochs
+
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.3 states the settlement rule. Since 2026-10-07 the three counted draws are selected at close from the pair's issued draws, and a pair with fewer than three issued settles NonObservation. The 2-of-3 argument below is unchanged and is this section's.
 
 Two nested systems, and the nesting is load-bearing:
 
@@ -289,6 +277,8 @@ Missed epoch is now the stronger claim "failed a majority," so
 attestation-resistance as a co-objective).
 
 ## 4. Three-valued settlement, drawability, and the schema-gating finding
+
+> **Specification:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4.1 (drawability) and §9.2–§9.3 (issuance, misses, the three outcomes).
 
 Per `(P, s, E)`, settlement is one of **Served** (≥2 of 3 passed), **Missed**
 (challenged, <2 passed — an observation, counts in the outer window), or
@@ -385,6 +375,11 @@ Writing a Missed cell there corrupts vin-dedup and emission simultaneously.
 
 - `settle_epoch` (`attestation.rs:75`) rewrites: a majority rule needs the
   derived denominator, not a pass multiset. Pass-priority retires.
+  *(The rule to build is the specification's §9.3: three counted draws
+  selected at close, fewer than three issued is NonObservation. What
+  follows is `settle_epoch` as it landed; it was deleted under `SO-D10e`,
+  and that rule is built as `settlement_select::settle_pair` with
+  `SettlementRow::settle`.)*
   **The threshold sub-decision is RATIFIED (2026-08-11): absolute-2.**
   `settle_epoch(passes, issued)`, three-valued: Served iff passes ≥ 2,
   full stop; issued < 2 settles **NonObservation** (a pair the urn could
@@ -404,7 +399,8 @@ Writing a Missed cell there corrupts vin-dedup and emission simultaneously.
   tolerates short issuance by design.
 - `EpochSettlement::to_observation` **deletes** (not re-documents): its
   "sole bridge to the m-of-n machinery" role belonged to the superseded
-  design.
+  design. **UPDATE 2026-10-08 (`SO-D10e`):** `EpochSettlement` is deleted
+  whole; the outcome type is `shekyl_types::archival::SettlementOutcome`.
 - `CHALLENGES_PER_EPOCH = 1` — **DONE (2026-08-11), and the framing here
   was wrong in a way worth recording.** This bullet read as though λ were
   *gated* on the (m, n) re-derivation; it is not. λ = 3 is ruled by §3,
@@ -1252,7 +1248,9 @@ the round kept trying to add forensics underneath it.
   verifies the *claimant's* signature on the vin; no attestation record or
   countersignature appears anywhere in the signature. (2) The settlement
   fold is structurally incapable of reaching one — `settle_epoch` takes
-  `&[AttestationKind]` (the §4 type seam). (3) LMDB-side pruning is
+  `&[AttestationKind]` (the §4 type seam). **UPDATE 2026-10-08 (`SO-D10e`):**
+  `settle_epoch` is deleted; `settle_pair` takes `&[IssuedDraw]`, a
+  per-draw `passed` flag and no record, so the layer holds. (3) LMDB-side pruning is
   already landed: `delete_archival_attestation_witness_before_height`
   drops the admission-only `r` + signatures beyond the reorg window, its
   comment naming the seam ("Settlement reads the kept tx_extra headers,
@@ -1555,7 +1553,11 @@ settlement writer (item 9's schema is genuinely open).
   timing is superseded, the writer runs inside the slash scheduler's per-epoch
   pass. What remains is **`SO-D8`**: `set_archival_settlement` has the table,
   the value encoding and the revert, and **no production caller**. The hold is
-  a wiring cutover, not an open schema question.
+  a wiring cutover, not an open schema question. **UPDATE 2026-10-08 (`SO-D10e`):**
+  `set_archival_settlement` and the C++ value encoding are deleted; the
+  writer is the Rust slash pass's, `ARCHIVAL_SETTLEMENT_WRITER.md` §14
+  (`SO-D10`), and is wired. What it waits on is a block path that issues
+  a draw: until the secret draw lands the issued-draw index is empty.
 
 **Recorded rather than edited down to the two survivors**, because the list's
 own framing is the useful part: it named a hold whose blocker was *the format
@@ -1569,6 +1571,10 @@ sitting," §7.1 then ratified absolute-2 (2026-08-11), and the fold shipped
 as `settle_epoch(passes, issued)` in `attestation.rs`. Recorded rather than
 silently deleted, because the entry's own framing — a hold whose blocker was
 a *decision*, not a design round — is what let it clear in one sitting.
+**UPDATE 2026-10-08 (`SO-D10e`):** that fold is deleted. Its replacement is
+`settlement_select::settle_pair`: passes counted among three selected draws,
+NonObservation below 3 issued, Served at 2 (`ARCHIVAL_SETTLEMENT_WRITER.md`
+§14).
 
 ### 9.5.1 Two inputs the assignment cutover acquired elsewhere (2026-08-24)
 
@@ -1599,7 +1605,8 @@ consensus now, still permit adaptive selection, and buy nothing.
 **2. The sampled-leaf floor is weaker until responses are pinned to their
 assignment blocks — RETIRED BY RULING with the leaf unit (`PDM-Q6` item 4:
 `challenge_leaf_index` and the `c1_layers` / `c2_layers` path are retired by
-ruling, live in code, deleted at E4 / S-ARCH); the per-challenge binding this
+ruling, live in code, deleted at the cutover — `DEL-008`; *was* "at E4 /
+S-ARCH", corrected 2026-10-10); the per-challenge binding this
 cutover restores is now the count bound alone (item 1).** *Record:* `PC-D3` made
 the challenged leaf index vary per block. Under
 the beacon a response may land anywhere in its `H_fire` window, so a prover gets
@@ -1664,8 +1671,9 @@ against these.
 
 2. **Current (2026-09-19): resolved upward by `PDM-Q6` — there is no leaf to
    sample.** `verify_segment_path` / `challenge_leaf_index` are retired by
-   ruling, live in code, and deleted at E4 / S-ARCH with the serve-credit
-   verifier (`PDM-Q6` item 4, rows 1 and 4); verification is per-tx against
+   ruling, live in code, and deleted at the cutover with the C++ serve-credit
+   verifier (`DEL-008`; *was* "at E4 / S-ARCH", corrected 2026-10-10 —
+   `PDM-Q6` item 4, rows 1 and 4); verification is per-tx against
    the hash rows (§2 step 2). The entry below is the record of how the
    deletion surface was reached, and it stands.
 
@@ -1876,6 +1884,43 @@ exactly one planned (the wiring's refresh path), and one call site is
 reviewable by reading it. A second consumer, a test-support constructor that
 escapes `#[cfg(test)]`, or any FFI surface that accepts holdings from outside
 the decode all re-open this item at its full weight.
+
+**UPDATE 2026-10-06 (SH-2 resident-key pre-flight,
+[`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md) §4) — the hazard
+moved one type outward and is NOT discharged.** `ServeSet::from_connected_record`
+no longer exists; `ServeSet` is sealed (`pub(crate)` constructors, minted only
+by `PinnedServeSet::acquire`). What `acquire` consumes is `ReportedSet`
+(`shekyl-p-host/src/serve_set/report.rs`), a public enum any `ServeSetPinner`
+implementation may construct as a literal — so the fabrication path is now
+"a different pinner", injected at the one `spawn_serving_task` call site. The
+criterion above applies to `ReportedSet` verbatim. The SH-2 resident-key PR
+does not build the seal (a provenance-sealing change across three crates is a
+separate validation surface, rule 19); whether it lands as a following PR or
+is re-ruled against the reopen criterion is the maintainer's, put to them with
+that record.
+
+**RULED 2026-10-07 — re-ruled against the reopen criterion; the three-crate
+seal is NOT built.** Positioned: the only code that can fabricate a
+`ReportedSet` is code inside the operator's own wallet process, so the
+"attacker" is the operator against themselves. A fabricated set cannot make
+`P` serve bytes it does not hold, and a pass for a shard outside `P`'s bond
+is refused **on chain** by `J9` (`CEN-J9`, the derived leaf index against
+the bond record) — the chain is authoritative over `P`'s own report. A wrong
+set can only make `P` fail its own challenges. Production construction is
+one pinner (`engine/stake_engine/serve_set_source.rs`), reviewable by
+reading it, which is what the reopen criterion asks. **The ruling names its
+dependency: it stands on `J9` landing with SO-D8 Slice C.** Until then
+nothing reaches settlement (`set_archival_settlement` has no production
+caller, `FOLLOWUPS.md` CEN-L8 row), so nothing is exposed in the interval.
+**UPDATE 2026-10-08 (`SO-D10e`):** `set_archival_settlement` is deleted; the C++
+store has no settlement writer. The Rust slash pass writes settlement rows,
+but no block path issues a draw yet, so it has nothing to settle and the
+interval claim holds.
+The reopen criterion above is unchanged: a second production pinner, a
+test-support constructor that escapes `#[cfg(test)]`, or an FFI surface that
+accepts a reported set from outside the process each re-open this item at
+full weight. Record: [`SH2_RESIDENT_KEY_AUDIT.md`](../completed/SH2_RESIDENT_KEY_AUDIT.md)
+§4.
 
 **4. A new load-bearing invariant, in the same class as the vanguards
 one: a serving host must never rebind its listener.** `WalletTorControl`
@@ -2153,6 +2198,255 @@ value is still the same call. It is retained rather than deleted because
 
 This lands with a rig if one is ever scoped, not before — a provenance type
 with no measurement to stamp is scaffolding.
+
+## 9.8 Serving runs below the daemon's CPU priority (SH-3, RULED 2026-10-09)
+
+**Ruling (maintainer, 2026-10-09).** The serving host runs below the
+daemon's CPU priority by default, with no operator setting. The evidence
+is `BA-T5` session 2
+([`ba_t5_serve_floor_device_20261009.md`](../benchmarks/ba_t5_serve_floor_device_20261009.md)):
+on the floor device, with the serving process at `nice 19` beside a
+daemon syncing the chain, the daemon kept 90 to 97 % of the sync rate it
+has with nothing serving, and serving still delivered 5 to 8 responses
+per second — about a hundred times honest demand. At normal priority the
+same serving took the daemon down to about a third of its rate, 31 to
+37 %. At nice 19 the serving executor's own p99 wake lateness rises to
+0.5 to 0.7 s at N ≥ 32: that is serving yielding as intended, and it sits
+inside the 30 s write-stall timeout and the witness's window.
+
+**Why the scope is the serving threads and nothing wider.** Serving is
+not its own process. Before this ruling, `shekyl-p-host` bound the
+loopback endpoint on whatever runtime the engine was running on
+(`host.rs`, `PServeEndpoint::bind`), and the endpoint's read-and-fold
+and sign hops went to that runtime's shared blocking pool. A `Nice=`
+line in a service
+unit would lower the whole wallet — the GUI, the user's own spend
+proving, the P-scan — to pay for a priority that only serving needs. The
+right unit is the thread, and lowering a thread's own priority needs no
+privilege on any platform, so it works for an ordinary user and ships on
+by default.
+
+**Design.**
+
+1. **A dedicated serving runtime.** The host builds one runtime and
+   blocking pool for serving through `runtime_with_thread_hooks` (the
+   single constructor, with the thread pair from item 2; D5/D14 item 1),
+   named `sk-serving`, with
+   its own thread-ledger row, and owns it for the host's life. The
+   endpoint is bound *on* that runtime, so the accept loop, every
+   per-connection task, the read-and-fold hops and the sign hop run
+   there; it shares nothing with the engine's runtime. Its budget —
+   `workers = 2`, `blocking = MAX_INFLIGHT` — is a structural floor,
+   labelled unmeasured in the ledger: two workers because the serving
+   loop's executor work per response is small (the frame head, the
+   digest start and finish, the socket writes) and `BA-T5` showed the
+   path CPU-bound on the blocking side, and one blocking thread per
+   permitted connection because each connection has at most one hop in
+   flight at a time. The confirming run below is the first measurement of
+   this budget: `BA-T5`'s endpoint ran on the probe binary's default
+   runtime.
+
+   *What the runtime does not cover.* The `SF-D13` countersignature is
+   made inside the stake actor, which holds the persona's key and runs at
+   engine priority; the serving runtime carries the round trip, not the
+   ML-DSA work. That work is bounded — one signature per response, about
+   forty a second at the measured serving rate — and moving it would move
+   the key, which `SF-D13` forbids. The tor supervisor stays on the
+   engine's runtime and the wallet's tor *process* stays at normal
+   priority: an onion that cannot keep its circuits up serves nothing at
+   any priority.
+
+2. **Threads lower their own priority at start**, through thread hooks
+   the serving runtime passes to `runtime_with_thread_hooks`. The
+   ordinary constructor, `shekyl_runtime::runtime`, takes a budget and a
+   name and starts threads as Tokio starts them; no other runtime passes
+   hooks. The hooks are one value, a start and a stop. Tokio's
+   `on_thread_start` runs on every worker and every blocking thread
+   before it takes work, and `on_thread_stop` runs before that thread
+   exits, including when Tokio retires an idle blocking thread. The
+   start hook lowers the thread. The stop hook is what keeps the
+   failure count in item 3 a count of threads that are still running.
+   The platform mapping, with the scheduling class kept normal everywhere:
+   - **Linux:** `setpriority(PRIO_PROCESS, 0, 19)` — on Linux the nice
+     value is a per-thread attribute and `who = 0` is the calling thread.
+     Ordinary `SCHED_OTHER`, never `SCHED_IDLE`: an idle-class thread can
+     be starved outright while the daemon syncs, and a persona whose
+     serving threads never run fails challenge reads it should pass. At
+     nice 19 the run above shows serving still delivering 5 to 8
+     responses a second under a full sync.
+   - **macOS:** `pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0)`.
+     Utility, not Background: the background class also lowers the
+     thread's I/O priority and is what the system throttles under
+     App Nap and low-power modes, and a serving thread that cannot read
+     the store is the SCHED_IDLE failure by another route.
+   - **Windows:** `SetThreadPriority(GetCurrentThread(),
+     THREAD_PRIORITY_LOWEST)`. Not `THREAD_MODE_BACKGROUND_BEGIN`, which
+     also lowers the thread's I/O and memory priority.
+   - **Android** shares Linux's per-thread nice. **The other unix
+     targets (the BSDs)** have no mapping under normal scheduling:
+     `setpriority(PRIO_PROCESS, 0, …)` there is the whole process, and
+     the only per-thread alternative is the idle class, which the ruling
+     forbids. On those targets the call reports *unsupported* and the
+     failure path below applies: serving continues at normal priority,
+     counted and warned about. Not a silent no-op, and not a build break
+     on a platform the wallet otherwise supports.
+
+   *Rule 17.* No new dependency: `libc 0.2` (unix) and `windows-sys 0.61`
+   with `Win32_System_Threading` (windows) are already workspace
+   dependencies through `shekyl-logging` and `shekyl-win-sec`, and every
+   symbol above was read in the pinned sources
+   (`libc-0.2.184`: `unix/linux_like/linux/{gnu,musl}/mod.rs` for
+   `setpriority`/`PRIO_PROCESS`, `new/apple/libpthread/pthread_/qos.rs`
+   for the QoS call and `qos_class_t`; `windows-sys-0.61.2`
+   `Win32/System/Threading/mod.rs` for the two functions and the
+   constants). `shekyl-runtime` denies unsafe code and keeps doing so;
+   the three calls live in a new `shekyl-thread-priority` crate, the
+   same siting `shekyl-win-sec` uses for the wallet's other platform
+   calls, with one entry point: lower the current thread.
+
+3. **Failure mode (rule 82).** If lowering fails — an unexpected errno,
+   a platform call refused — the thread goes on serving at normal
+   priority. The host's count (`priority_not_lowered`, read through the
+   engine's serving status beside the posture) is how many serving
+   threads are in that state right now. The start hook adds the thread;
+   the stop hook removes it when the thread exits, including when the
+   runtime retires an idle blocking thread and the next hop starts
+   another. The count therefore stays within the runtime's budget. The
+   host keeps the first cause and logs nothing — it is on `P`'s serving
+   path, which carries no logging surface (`WSS-20`). The counter wakes
+   the engine's serving task on the first refusal, and that task logs
+   one warning per host naming that cause, where the count is, and that
+   serving continues. The warning does not ride the serve-set refresh:
+   that loop awaits the store actor with no timeout, and a refusal
+   during the wait is the case the line exists for. Serving is never
+   refused for this: a
+   persona that stops answering accrues misses toward a slash, and a
+   priority it could not set is not a reason to be slashed. The counter
+   reports the OS call's result for the threads that are still running,
+   and nothing more; whether the lowered priority yields CPU to the
+   daemon is a question of scheduling topology, answered by the
+   confirming run below, not by the counter.
+
+4. **Uniform, with no knob (rule 75).** Priority shows only under
+   contention, and timing already reveals load, so if every `P` runs the
+   same default the setting tells an observer nothing. An opt-out would
+   create a population that behaves differently under load, which is a
+   fingerprint. The lowering is unconditional in the shipped binary.
+
+5. **Out of scope.** The daemon, the wallet's other work, and the
+   wallet's tor process all stay at normal priority.
+
+**Tests.** A Linux test builds the serving runtime, runs a task and a
+blocking task on it, and reads each thread's nice value back
+(`getpriority(PRIO_PROCESS, 0)` on the thread itself, cross-checked
+against `/proc/self/task/<tid>/stat`), asserting 19; the same test
+asserts the test's own runtime threads are unchanged. The failure path
+runs through an injected failing setter and asserts the counter and
+that the endpoint still answers. The counter's own test asserts that
+the first refusal wakes every subscribed waiter and keeps that cause.
+The engine test asserts the one warning's text. A further failure
+test waits out Tokio's blocking-thread keep-alive, asserts the retired
+thread has left the count, asserts the thread that replaces it is
+counted on its own call, and asserts shutdown brings the count to zero.
+The serve invariant tests and the `BA-T3` instruction-count gate pass
+unchanged: priority does not change instruction counts.
+
+**Confirming run (after merge; discovery, not a gate, by the 2026-10-08
+ruling).** A short `BA-T5` floor block with the syncing daemon, N = 8
+and N = 64, with the shipped thread-level mechanism in place of the
+external `nice 19`, in **two topologies**, because nice orders threads
+only within one scheduling group:
+
+1. **The daemon as a child of the wallet's session** — the GUI sidecar
+   shape, where wallet and daemon share the user's session scope.
+2. **The daemon as the resident system service, the wallet in a user
+   session** — the Pi staker shape, where the two sit in different
+   cgroups and, with autogroup on, in different scheduling groups.
+
+For each topology the record carries, for both processes,
+`/proc/<pid>/cgroup`, whether `cpu` is in the parent cgroup's
+`cgroup.controllers`, and `/proc/sys/kernel/sched_autogroup_enabled`,
+beside the sync-rate share and the serving throughput. Its record says
+whether the thread-level mechanism reproduces the 90 to 97 % figure in
+each topology, and it is the first measurement of the serving runtime's
+budget. **If topology 2 shows no benefit, the record says so plainly**:
+the nice value is then ordering the serving threads against the wallet's
+other threads and not against the daemon's, and the fix for that shape is
+a CPU weight on the cgroup, which is its own follow-up and not a change to
+this mechanism.
+
+**Confirming run, read (2026-10-12).** `BA-T5` session 3
+([`ba_t5_serve_floor_device_20261012.md`](../benchmarks/ba_t5_serve_floor_device_20261012.md)),
+the shipped mechanism in the probe's serving runtime beside a daemon
+syncing a 4,800-block chain, three passes per topology:
+
+- **T1, daemon and serving process in one cgroup** (the sidecar shape):
+  the daemon kept **93 % at N = 8 and 91 % at N = 64** of its no-serve
+  sync rate, against 38 % for the same runtime at normal priority —
+  session 2's external nice reproduced. Serving at 6.6 and 7.9 responses
+  per second, p99 wake lateness 82 and 697 ms. `serving_priority_nice`
+  is current on this capture at 0.91.
+- **T2′, daemon in a different cpu cgroup** (an approximation of the
+  resident-service shape; T2 itself needs root this lane does not have):
+  the daemon kept **65 % at N = 8**, between the control's 29 % and T1's
+  93 %, and serving ran at 18 to 23 per second with p99 lateness of 19 to
+  100 ms. Nice does not cross the cgroup boundary: the serving group takes
+  the fair share its `cpu.weight` gives it, and nice inside the group
+  lowers the load it presents but does not yield the share. **The
+  mechanism gives a resident-service staker part of the benefit, not all
+  of it.** The fix for that shape is a lower CPU weight for the wallet's
+  serving host — its own cgroup, or a unit setting — which is its own
+  decision and is carried in `docs/FOLLOWUPS.md`; this mechanism is
+  unchanged.
+- Every mechanism block's serving threads read nice 19 in `/proc`; at
+  N = 64 two responses in 1,536 per topology were cut by the 30 s
+  write-stall timeout while the threads yielded.
+
+**What the syncing arms are, and are not (ruled 2026-10-12).** The
+syncing arms of sessions 2 and 3 are a stress case that production
+prevents: while the daemon is not synced and following the tip, the
+serving host clears its tip cache (`DaemonTipCache::stamp_not_following`,
+`rust/shekyl-p-host/src/daemon_tip.rs:135`), `own_height` is `None`, and
+the gate refuses every request before the store is read
+(`rust/shekyl-p-serve/src/serve.rs:588`). The probe served during the
+sync only because its test signer carries a fixed height
+(`rust/shekyl-p-serve/tests/ba_t5_floor_probe.rs:473`). The figures
+stand as the cost of contention against a daemon at full CPU, not as a
+scenario a staker meets. The cut responses at N = 64 were the write-stall
+timer counting the serving task's own starvation as a stall; it is
+restructured to count only waits the peer causes, in its own PR.
+
+**Rulings of 2026-10-12 on co-residence** (recorded in the decision log):
+
+1. **A headless staker's daemon runs in its own top-level `shekyl.slice`
+   with a CPU weight above `user.slice`'s** (`CPUWeight=400`: under
+   contention the slice outweighs `user.slice` 4:1, so the daemon keeps
+   about 80 % of the CPU while the per-user wallet serves). The wallet
+   stays a per-user process. **A wallet as a system service is
+   rejected**: it breaks per-user custody, as `WP-D7` rules on Windows.
+   The slice ships with the `.deb` (its own PR); the weight is reasoned,
+   not measured, and has an estimated ledger row whose carrier is the
+   T2 measurement below.
+2. **Beyond the slice, the in-process nice 19 (this mechanism) and the
+   serving gate are the defence. No adaptive back-off.**
+3. **The T2 measurement is redefined.** It measures the time to verify a
+   block while the daemon is synced and following the tip, idle against
+   serving at N = 64, with and without the slice weight — not the sync
+   rate. Its result decides whether 400 stays, moves, or the slice goes.
+   `docs/FOLLOWUPS.md` carries it.
+
+**Ledger.** A constant row `serving_priority_nice` (the Linux nice
+value, 19) on a new path set `serving-runtime` covering the serving
+runtime's construction and the priority crate. The budget constants are
+rows of their own on that path set, `serving_workers` (`2`) and
+`serving_blocking` (`MAX_INFLIGHT`), both *unmeasured*: the confirming
+run ran under them and derived neither, so they stay unmeasured with
+that run as their evidence. The nice row was *estimated* — a band of 0.90
+to 1.00 for the share of its no-serve sync rate the daemon keeps, from
+the external-nice arm — until the confirming run landed, and is
+*current* on that run's T1 capture at 0.91 (2026-10-12). A current row
+listens to its path set, so a change to the priority setup now trips the
+ledger.
 
 ## 10. Standing rules for any agent working this
 

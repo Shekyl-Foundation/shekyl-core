@@ -65,6 +65,8 @@ use crate::recon::{
 use crate::store::{
     LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError, StoreOpenFault,
 };
+use shekyl_types::TxHash;
+
 use crate::types::{
     BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity,
     ReferenceBlock, TargetKind,
@@ -100,6 +102,15 @@ pub struct RawOutput {
 pub struct TxLeafInputs<'a> {
     /// Whether this is the block's coinbase (`is_miner`).
     pub is_miner: bool,
+    /// The transaction's hash, when the producer has it.
+    ///
+    /// Read only against [`ExpectedOutput`]s: a wallet names the outputs
+    /// of a transaction it built by `(tx_hash, vout)`, and the ingest
+    /// registers them as it assigns their gindexes. A producer with no
+    /// expectations to serve (the daemon-side replica, a fixture) passes
+    /// `None`; one that passes `None` while expectations are live is
+    /// refused ([`ClientError::TxHashMissing`]) rather than silently late.
+    pub tx_hash: Option<TxHash>,
     /// Parsed `tx_extra 0x07` blob, or `None` if the tag is absent.
     pub leaf_entry_blob: Option<&'a [u8]>,
     /// Per-output identities in `vout` order, leaf commitment not yet resolved.
@@ -249,6 +260,21 @@ pub enum ClientError {
         /// Siblings the leaf rows yielded.
         got: usize,
     },
+    /// The requested output has no resolved owned position, so there is no
+    /// captured path to read.
+    ///
+    /// Assembly reads captures and never rebuilds; an input reaches it
+    /// registered or not at all. The curve-tree actor registers a batch's
+    /// inputs ([`CurveTreeClient::sync_owned`]) before assembling, so this
+    /// fires for a direct caller that skipped that, or for an input the sync
+    /// reported stale — the client holds a different output at that gindex,
+    /// and the caller's view of the chain is behind.
+    OutputNotRegistered {
+        /// The input's global output index.
+        gindex: Gindex,
+        /// The output key the caller supplied.
+        output_key: OneTimePubkey,
+    },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
     OutputNotDrained {
@@ -370,6 +396,19 @@ pub enum ClientError {
         /// What was wrong with the payload.
         source: crate::recon::LeafEntryError,
     },
+    /// A transaction arrived without its hash while the client holds
+    /// [`ExpectedOutput`]s to match against ([`TxLeafInputs::tx_hash`]).
+    ///
+    /// The hash is optional for producers that serve no expectations; a
+    /// producer that drops it while the wallet is waiting for its own
+    /// outputs would make every one of them a late registration, quietly.
+    /// Refused instead, at the block, with nothing applied.
+    TxHashMissing {
+        /// Block height being ingested.
+        height: BlockHeight,
+        /// Transaction index within the block (coinbase is `0`).
+        tx_index: usize,
+    },
     /// An output's published point (`O`, `C`, or the `0x07` leaf commitment
     /// `CM`) failed Ed25519 decompression while building this block's
     /// leaves. The point-content twin of [`ClientError::LeafEntries`]: on an
@@ -468,6 +507,7 @@ impl ClientError {
             | ClientError::CaptureMissing { .. }
             | ClientError::RootMismatch { .. }
             | ClientError::PathRootMismatch { .. }
+            | ClientError::OutputNotRegistered { .. }
             | ClientError::OutputNotDrained { .. }
             | ClientError::IdentityMismatch { .. }
             | ClientError::TooManyInputs { .. }
@@ -475,6 +515,7 @@ impl ClientError {
             | ClientError::ReferenceBeyondIngestedTip { .. }
             | ClientError::Poisoned
             | ClientError::LeafEntries { .. }
+            | ClientError::TxHashMissing { .. }
             | ClientError::LeafPoint { .. } => StoreOpenFault::Internal,
         }
     }
@@ -558,7 +599,7 @@ pub struct CurveTreeClient {
     /// The wallet re-registers what it holds; what that leaves owed is the
     /// captures for chunks that closed before the registration, which
     /// reconciliation discharges.
-    owned_outputs: BTreeMap<Gindex, OneTimePubkey>,
+    pub(crate) owned_outputs: BTreeMap<Gindex, OneTimePubkey>,
     /// Drain positions of owned leaves, as the fold assigned them.
     ///
     /// Not derived from [`Self::owned_outputs`] on demand: a position is
@@ -575,6 +616,47 @@ pub struct CurveTreeClient {
     /// A rollback **retains** the positions below the surviving leaf count
     /// and drops the rest — see [`Self::rollback_to_fork`].
     pub(crate) owned_positions: BTreeMap<u64, Gindex>,
+    /// Outputs the wallet built and has not yet seen mined, keyed by their
+    /// transaction: `vout` and the key the wallet gave that output.
+    ///
+    /// [`Self::ingest_block`] looks each transaction up here and registers a
+    /// confirmed output at the gindex [`crate::recon::collect_block_leaves`]
+    /// assigned it — before its leaf drains, so every
+    /// chunk over it is captured by the fold. Matching is by transaction
+    /// and position, never by key alone: a key is public the moment its
+    /// transaction is relayed, and a copy of it in someone else's
+    /// transaction must not take the registration
+    /// (`CT6_PROVING_STATE.md` §11.13).
+    ///
+    /// Session-scoped like [`Self::owned_outputs`], and **replaced** whole
+    /// by every [`Self::set_expected_outputs`]: the wallet derives the set
+    /// from the records it keeps of its unconfirmed transactions, so an
+    /// expectation's lifetime is its record's. A rollback leaves it in
+    /// place, which is how a transaction mined again on the other fork is
+    /// matched again.
+    pub(crate) expected_outputs: BTreeMap<TxHash, Vec<(u64, OneTimePubkey)>>,
+    /// Expected outputs whose transaction arrived carrying a different key
+    /// at that `vout`, since this client was opened. Not registered — the
+    /// transaction hashes are the block feed's and only the key is the
+    /// wallet's own — and counted, so a feed that mislabels is visible.
+    pub(crate) expected_output_mismatches: u64,
+}
+
+/// An output the wallet built and expects the chain to carry: where it will
+/// sit in its transaction, and the key the wallet gave it.
+///
+/// Offered through [`CurveTreeClient::set_expected_outputs`]; matched by
+/// [`CurveTreeClient::ingest_block`] when the transaction is ingested, which
+/// is the one moment the gindex is known and the leaf has not yet drained.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ExpectedOutput {
+    /// The transaction the wallet built.
+    pub tx_hash: TxHash,
+    /// The output's index within that transaction.
+    pub vout: u64,
+    /// The one-time key the wallet gave it, confirmed against the mined
+    /// transaction before anything is registered.
+    pub output_key: OneTimePubkey,
 }
 
 /// What registering an owned output means for the captures it needs
@@ -598,6 +680,43 @@ pub enum OwnedRegistration {
     /// the registry does not persist
     /// ([`CurveTreeClient::register_owned`]).
     AfterDrain,
+    /// The same pair was already held, and nothing is owed: either the leaf
+    /// has not drained, or its position is already resolved so every chunk
+    /// over it is captured by the fold as it closes.
+    ///
+    /// This is what makes a re-offer cheap. The wallet re-registers
+    /// everything it holds on every refresh ([`CurveTreeClient::sync_owned`]),
+    /// and a verdict of `AfterDrain` for a pair that is already fully served
+    /// would trigger a reconciliation per refresh that reads the table and
+    /// writes nothing. A held pair whose leaf *has* drained but whose position
+    /// is **not** resolved is still `AfterDrain` — that is the one case where
+    /// "held" and "served" diverge, and it is owed.
+    AlreadyHeld,
+}
+
+/// What one [`CurveTreeClient::sync_owned`] call did with its batch.
+///
+/// Per-output verdicts are counted rather than returned one by one, because
+/// the caller's decisions are batch-level: whether anything was owed (and so
+/// reconciled), and which outputs the client could not accept. The stale
+/// list is the one per-output fact that matters, because each entry names a
+/// caller whose view of the chain is behind the client's.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct OwnershipSync {
+    /// Registered ahead of their drain; the fold will capture them.
+    pub before_drain: usize,
+    /// Registered after their drain; their closed chunks were owed and
+    /// `reconciliation` wrote them.
+    pub after_drain: usize,
+    /// Already held and fully served; nothing done.
+    pub already_held: usize,
+    /// Refused: the client holds a *different* output at that gindex. Not an
+    /// error for the batch — the rest were registered — because this is the
+    /// normal outcome of a scan that lags the tree across a reorg: the caller
+    /// re-offers the right key once its rescan reaches the new chain.
+    pub stale: Vec<Gindex>,
+    /// The reconciliation run iff anything was `after_drain`.
+    pub reconciliation: Option<CaptureReconciliation>,
 }
 
 /// What one [`CurveTreeClient::reconcile_captures`] call did.
@@ -735,6 +854,8 @@ impl CurveTreeClient {
             frontier: Frontier::new(),
             owned_outputs: BTreeMap::new(),
             owned_positions: BTreeMap::new(),
+            expected_outputs: BTreeMap::new(),
+            expected_output_mismatches: 0,
         })
     }
 
@@ -930,6 +1051,8 @@ impl CurveTreeClient {
             // client what to capture. See `owned_outputs`.
             owned_outputs: BTreeMap::new(),
             owned_positions: BTreeMap::new(),
+            expected_outputs: BTreeMap::new(),
+            expected_output_mismatches: 0,
         })
     }
 
@@ -1254,13 +1377,17 @@ impl CurveTreeClient {
         // point refuses the whole block (the local vec is discarded), so no
         // partial leaf set can reach the store or memory.
         let mut new_leaves: Vec<LeafEntry> = Vec::new();
-        let next_gindex =
-            collect_block_leaves(block.height, &txs, self.next_gindex, &mut new_leaves).map_err(
-                |source| ClientError::LeafPoint {
-                    height: block.height,
-                    source,
-                },
-            )?;
+        let collected = collect_block_leaves(block.height, &txs, self.next_gindex, &mut new_leaves)
+            .map_err(|source| ClientError::LeafPoint {
+                height: block.height,
+                source,
+            })?;
+
+        // The wallet's own outputs in this block, named ahead by transaction
+        // and position and confirmed by key against the gindex the collector
+        // just assigned. Applied after the store commits, with the rest of
+        // the block's effect.
+        let matched = self.match_expected_outputs(&block, &collected.assigned)?;
 
         // The bucket newly final at this block's cutoff, read from the
         // *existing* maturity index (a leaf created in this block can never
@@ -1315,10 +1442,12 @@ impl CurveTreeClient {
                 .push(entry_base + offset);
         }
         self.entries.extend(new_leaves);
-        self.next_gindex = next_gindex;
+        self.next_gindex = collected.next_gindex;
         self.ingested_tip_height = Some(block.height);
         self.frontier = advanced;
         self.owned_positions.extend(captured.pending_owned);
+        self.owned_outputs.extend(matched.registered);
+        self.expected_output_mismatches += matched.mismatches;
         self.record_drained_count(through, canonical);
         Ok(())
     }
@@ -1771,11 +1900,13 @@ mod tests {
             let txs = [
                 TxLeafInputs {
                     is_miner: true,
+                    tx_hash: None,
                     leaf_entry_blob: Some(&cb_blob),
                     outputs: &cb_outs,
                 },
                 TxLeafInputs {
                     is_miner: false,
+                    tx_hash: None,
                     leaf_entry_blob: Some(&reg_blob),
                     outputs: &reg_outs,
                 },
@@ -1947,11 +2078,13 @@ mod tests {
             let txs = [
                 TxLeafInputs {
                     is_miner: true,
+                    tx_hash: None,
                     leaf_entry_blob: Some(&cb_blob),
                     outputs: &cb_outs,
                 },
                 TxLeafInputs {
                     is_miner: false,
+                    tx_hash: None,
                     leaf_entry_blob: Some(&reg_blob),
                     outputs: &reg_outs,
                 },
@@ -1995,11 +2128,13 @@ mod tests {
         let txs1 = [
             TxLeafInputs {
                 is_miner: true,
+                tx_hash: None,
                 leaf_entry_blob: Some(&blob1_cb),
                 outputs: &outs1_cb,
             },
             TxLeafInputs {
                 is_miner: false,
+                tx_hash: None,
                 leaf_entry_blob: Some(&blob1_reg),
                 outputs: &outs1_reg,
             },

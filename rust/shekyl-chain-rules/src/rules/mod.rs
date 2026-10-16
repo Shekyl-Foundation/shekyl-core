@@ -18,14 +18,14 @@
 //! `census_rows!` emits a `const` assertion that `<T as Rule>::ROW` is the
 //! entry's own variant. Row binding is structural, not nominal, and it was
 //! decided before the first rule so the migration is one call site rather
-//! than 153 (SCW-18).
+//! than one per census row (SCW-18).
 //!
 //! # One signature per rule class — and the class is view-dependence
 //!
 //! Two block-level shapes, one per stage (`CHAIN_RULES_SLICE_2.md` §4.2,
 //! Q1/Q9 as ruled). [`FormRule::check`] is the **stateless** shape: the
 //! candidate, the rule set and the clock reading through a
-//! [`FormContext`], nothing else — B1, B2, B7 read only those, so they
+//! [`FormContext`], nothing else — B1, B2 read only those, so they
 //! belong here whatever slice added them. [`BlockRule::check`] is the
 //! **view-bound** shape: a [`BlockContext`] (the candidate, the rule set, and
 //! what `form` established) with the view beside it. A rule that needs a
@@ -35,6 +35,20 @@
 //! the view — not a record of which slice landed it; a stage whose
 //! membership was "whatever slice 2 happened to add" would be the accretion
 //! pattern with a trait name on it.
+//!
+//! The view-bound shape is itself partitioned by **which** view a rule
+//! reads (DRS-E5 `E5-Q3`, ruled 2026-10-10). [`HeaderRule::check`] is bound
+//! to [`HeaderView`] — the tip and the header record by height, which a
+//! chain of headers answers before any block is executed — and so runs at
+//! the alt path's cheap tier as well as at promotion. [`BlockRule::check`]
+//! is bound to the full [`ChainView`]. Every `HeaderRule` is a `BlockRule`
+//! by the blanket impl below, so `validate`'s list and [`run`] see one
+//! class; the narrower bound is what the alt path *can* run, held by the
+//! type and not by a list. Which trait a rule implements is measured, not
+//! chosen: a rule that reads only header facts is a `HeaderRule`, and one
+//! that reads an executed fact (a root, a key image, an accumulator) is a
+//! `BlockRule` — `E5-14` measured the partition at five rule files, with
+//! `header.rs` (form rows and B5) on the executed side.
 //!
 //! `form` and `validate` each run their landed **predicate** rows from a
 //! list, and [`run_form`] / [`run`] record `R::ROW` themselves: a rule cannot
@@ -68,10 +82,15 @@
 //! locus)`. The row is therefore named twice — structurally by `ROW`, and at
 //! the arm — and the pin holds the two together: a rule that refuses under
 //! another row's id still records its own coverage, and the fixture for the
-//! other row fails. `?` inside a rule propagates a **fault** and only a fault
-//! (`view.rs`, "Three answers, three positions").
+//! other row fails. `?` inside a rule propagates that rule's error and only
+//! that error (`view.rs`, "Three answers, three positions"). A [`BlockRule`]'s
+//! error is a [`ViewRead`]: the view's own fault, or a store invariant the
+//! read observed. A transaction rule's error stays the view's own fault; a
+//! hole there is a [`ViewRead`] at the function that walked the heights.
 
+pub(crate) mod alt;
 pub(crate) mod anchors;
+pub(crate) mod attestation;
 pub(crate) mod block_weight;
 pub(crate) mod body;
 pub(crate) mod difficulty;
@@ -84,6 +103,9 @@ pub(crate) mod timestamps;
 pub(crate) mod topology;
 pub(crate) mod tx;
 pub(crate) mod tx_against;
+pub(crate) mod tx_bond;
+pub(crate) mod tx_emission;
+pub(crate) mod tx_emission_against;
 pub(crate) mod tx_extra;
 pub(crate) mod tx_inputs;
 
@@ -97,7 +119,7 @@ use crate::rules::timestamps::MtpWindow;
 use crate::rules::tx::TxClass;
 use crate::trust::Trust;
 use crate::verdict::{Locus, TxSlot, Verdict};
-use crate::view::{AtHeight, ChainView, RecordedBlock, Tip};
+use crate::view::{AtHeight, ChainView, HeaderRecord, HeaderView, RecordedBlock, Tip};
 use shekyl_types::BlockHeight;
 use shekyl_wire::Transaction;
 
@@ -249,15 +271,60 @@ impl<'a> BlockContext<'a> {
 /// transaction that will apply the block.
 pub(crate) trait BlockRule: Rule {
     /// `Ok(Ok(()))` passed; `Ok(Err(refused))` refused on `Self::ROW`;
-    /// `Err(fault)` the view could not answer. Shared connect facts (tip,
-    /// connecting height, window, target) live on [`BlockContext`]. A rule
-    /// that needs a further recorded fact reads `view` itself — a root, a
-    /// parent — so a new shared fact is a new context field, and a new
-    /// per-rule lookup is a new `ChainView` method.
+    /// `Err(ViewRead::View)` the view could not answer;
+    /// `Err(ViewRead::Corrupt)` the view answered with a hole or with bytes
+    /// no conforming store holds. Shared connect facts (tip, connecting
+    /// height, window, target) live on [`BlockContext`]. A rule that needs
+    /// a further recorded fact reads `view` itself — a root, a parent — so
+    /// a new shared fact is a new context field, and a new per-rule lookup
+    /// is a new `ChainView` method. `?` on a view method lifts `V::Fault`
+    /// into [`ViewRead::View`]; a parent-side hole goes through [`recorded`].
+    ///
+    /// The type says every block rule can halt the writer; only B4 can. That
+    /// gap is held by `scripts/ci/check_block_rule_corrupt_sites.py`, which
+    /// reads each rule impl — `impl BlockRule for X` and `impl HeaderRule
+    /// for X` alike, the trait set derived from the blanket impl below
+    /// rather than listed — for a way `Corrupt` can enter its error and
+    /// refuses when the set is not exactly its `CORRUPT_CAPABLE`. A rule
+    /// that gains a `Corrupt` path is added there, with the reason, on a
+    /// reviewed day — not inferred from this signature.
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,
-    ) -> Result<Verdict<()>, V::Fault>;
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>>;
+}
+
+/// A block-level rule that reads **header facts only** — the tip and
+/// [`HeaderView::header_at`] — and so can be judged against a chain of
+/// headers that has not been executed: the alt path's cheap tier (DRS-E5
+/// `E5-Q3` ruled 2026-10-10; `E5-14` measured the membership). The
+/// signature is [`BlockRule::check`]'s with the narrower view bound; the
+/// context is the same [`BlockContext`], which carries no view.
+///
+/// A rule is a `HeaderRule` because its reads are header facts, not
+/// because a tier wants it: a rule that reads `root_at`, `has_key_image`
+/// or an accumulator cannot implement this trait, and the bound — not a
+/// list — is what keeps the cheap tier honest about what it checked.
+pub(crate) trait HeaderRule: Rule {
+    /// As [`BlockRule::check`], over a [`HeaderView`]. A parent-side hole
+    /// goes through [`recorded_header`].
+    fn check<'id, H: HeaderView<'id>>(
+        cx: &BlockContext<'_>,
+        view: &H,
+    ) -> Result<Verdict<()>, ViewRead<H::Fault>>;
+}
+
+/// Every header rule is a block rule: a [`ChainView`] is a [`HeaderView`],
+/// so `validate`'s list and [`run`] run both classes through one bound,
+/// and the promotion tier re-judges a header rule against the executed
+/// chain with no second impl.
+impl<R: HeaderRule> BlockRule for R {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        view: &V,
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        <R as HeaderRule>::check(cx, view)
+    }
 }
 
 /// Run one block rule and, if it passed, record its row.
@@ -273,8 +340,24 @@ pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
     cx: &BlockContext<'_>,
     view: &V,
     coverage: &mut RuleCoverage,
-) -> Result<Verdict<()>, V::Fault> {
+) -> Result<Verdict<()>, ViewRead<V::Fault>> {
     let verdict = R::check(cx, view)?;
+    if verdict.is_ok() {
+        coverage.insert(R::ROW);
+    }
+    Ok(verdict)
+}
+
+/// [`run`] for a [`HeaderRule`] over a [`HeaderView`]: the alt tier's
+/// runner (`crate::alt_against`), where the view is a stitched chain of
+/// headers that implements no `ChainView`. A [`BlockRule`] cannot be
+/// named here — the bound is what keeps the cheap tier to header facts.
+pub(crate) fn run_header<'id, R: HeaderRule, H: HeaderView<'id>>(
+    cx: &BlockContext<'_>,
+    view: &H,
+    coverage: &mut RuleCoverage,
+) -> Result<Verdict<()>, ViewRead<H::Fault>> {
+    let verdict = <R as HeaderRule>::check(cx, view)?;
     if verdict.is_ok() {
         coverage.insert(R::ROW);
     }
@@ -445,11 +528,13 @@ pub(crate) fn run_tx<R: TxRule>(cx: &TxContext<'_>, coverage: &mut RuleCoverage)
 /// pool's view decorator (DRS-E5) — the C++'s `check_tx_inputs` arrangement
 /// after its stateless arms, with the DB lookups the arms make.
 ///
-/// Three positions, as [`BlockRule`]: `Ok(Ok(()))` passed; `Ok(Err(refused))`
-/// refused on `Self::ROW` at the context's locus; `Err(fault)` the view could
-/// not answer, which is never a verdict. A rule that needs a recorded fact
-/// reads `view` itself, so a new per-rule lookup is a new [`ChainView`]
-/// method (slice 6 commit 5 adds `height_of` that way).
+/// Three positions: `Ok(Ok(()))` passed; `Ok(Err(refused))` refused on
+/// `Self::ROW` at the context's locus; `Err(fault)` the view could not
+/// answer, which is never a verdict. A parent-side hole is not this error.
+/// The walk that reads one (`judge_reference`) returns [`ViewRead`] at its
+/// own boundary, the same position a [`BlockRule`] returns. A rule that
+/// needs a recorded fact reads `view` itself, so a new per-rule lookup is
+/// a new [`ChainView`] method (slice 6 commit 5 adds `height_of` that way).
 pub(crate) trait TxAgainstRule: Rule {
     /// Which transactions this rule judges.
     const SCOPE: TxScope;
@@ -509,6 +594,25 @@ pub fn recorded<'id, V: ChainView<'id>>(
         AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
             at: height,
             record: PerHeightRecord::Block,
+        })),
+    }
+}
+
+/// [`recorded`]'s header-facts half: the [`HeaderRecord`] at `height`,
+/// which is below the connecting height and therefore present on a
+/// conforming view — the read every [`HeaderRule`] makes for a parent-side
+/// fact (C3's window, D3's seed, D4's window and work, E1's anchors, B4's
+/// anchor window). The hole is the same SI-7 under
+/// [`PerHeightRecord::Header`], so the store halts against `block_info`.
+pub fn recorded_header<'id, H: HeaderView<'id>>(
+    view: &H,
+    height: BlockHeight,
+) -> Result<HeaderRecord, ViewRead<H::Fault>> {
+    match view.header_at(height).map_err(ViewRead::View)? {
+        AtHeight::Recorded(record) => Ok(record),
+        AtHeight::AboveTip => Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+            at: height,
+            record: PerHeightRecord::Header,
         })),
     }
 }

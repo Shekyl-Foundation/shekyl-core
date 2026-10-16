@@ -44,14 +44,14 @@ fn fetch_block_headers_range(
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn print_blockchain_info(src: &Source, start: i64, end: u64) -> Result<String, String> {
     let (start_height, end_height) = if start < 0 {
-        let info = fetch_get_info(src)?;
+        let height = fetch_get_info(src)?.health.height;
         // `-start` as a magnitude, taken through `unsigned_abs` so
         // `i64::MIN` has no special case.
         let back = start.unsigned_abs();
-        if back >= info.height {
+        if back >= height {
             return Err("start offset is larger than blockchain height".to_owned());
         }
-        let first = info.height.saturating_sub(back);
+        let first = height.saturating_sub(back);
         // The C++ wrote `start + end - 1` with `end == -start`, i.e. the
         // window ends where the tip is. Saturating rather than wrapping: a
         // zero-length window would otherwise underflow past the tip.
@@ -135,33 +135,18 @@ pub(super) fn median(values: &mut [u64]) -> u64 {
     }
 }
 
-/// A `count` of `version` byte tallies as the C++ listed them: `"3 v1, 1 v2"`,
-/// ascending by version, versions with no votes omitted.
-pub(super) fn version_tally(counts: &[u32; 256]) -> String {
-    counts
-        .iter()
-        .enumerate()
-        .filter(|(_, n)| **n > 0)
-        .map(|(version, n)| format!("{n} v{version}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// `print_blockchain_dynamic_stats <nblocks>`.
 ///
-/// **The `hard_fork_info` leg is deleted rather than ported.** Its only use
-/// was `hfres.enabled ? "byte" : "kB"`. `enabled` was
-/// `get_current_version() >= 1`, so the "kB" arm was unreachable from genesis.
-/// `original_version = 1` on all three networks
-/// (`blockchain.cpp:474`/`:476`/`:478`), `init()` seeds `heights[0]` with
-/// that version at height 0, and `current_fork_index` starts at 0 and only
-/// advances — so the condition is true on every chain this daemon can be
-/// running, and the `kB` arm is unreachable. Shekyl is v3-from-genesis with
-/// no pre-v1 history for it to describe (rule 60). The unit is per byte; the
-/// round trip that asked is gone with the branch it fed.
+/// **The fee unit is per byte, with no query behind it.** The C++ chose
+/// between `byte` and `kB` on a block-version test that is true from genesis
+/// on every chain this daemon can run — Shekyl is v3-from-genesis with no
+/// pre-v1 history for a `kB` arm to describe (rule 60) — so the unit is a
+/// literal and the command makes two calls, `get_info` and
+/// `get_fee_estimate`, before it reads any header.
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Result<String, String> {
     let info = fetch_get_info(src)?;
+    let height = info.health.height;
     let fees = fetch_fee_estimate(src, 0)?;
     // `res.fee = res.fees[0]` — `on_get_base_fee_estimate` set the scalar
     // from the first tier, which is why RK-5b could retire it. The console
@@ -172,18 +157,16 @@ pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Resu
     let mut out = Vec::new();
     out.push(format!(
         "Height: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",
-        info.height,
-        wide_difficulty_decimal(&info.wide_difficulty),
-        wide_difficulty_decimal(&info.wide_cumulative_difficulty),
+        height, info.chain.difficulty, info.chain.cumulative_difficulty,
     ));
     if nblocks == 0 {
         return Ok(out.join("\n"));
     }
     // The window is the last `nblocks` below the tip; `height` is a count, so
     // the tip's own height is one below it.
-    let window = nblocks.min(info.height);
-    let start = info.height.saturating_sub(window);
-    let end = info.height.saturating_sub(1);
+    let window = nblocks.min(height);
+    let start = height.saturating_sub(window);
+    let end = height.saturating_sub(1);
     let headers = fetch_block_headers_range(src, start, end)?;
     // **The window is checked against what arrived, not assumed from what was
     // asked.** Every figure below is labelled `Last {window}`, so a reply with
@@ -234,8 +217,6 @@ pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Resu
     let mut weights: Vec<u64> = Vec::with_capacity(headers.len());
     let mut earliest = u64::MAX;
     let mut latest = 0u64;
-    let mut major = [0u32; 256];
-    let mut minor = [0u32; 256];
     for h in &headers {
         // An unreadable wide difficulty contributes nothing rather than
         // failing the whole listing; `wide_difficulty_decimal` shows the raw
@@ -247,8 +228,6 @@ pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Resu
         weights.push(h.block_weight);
         earliest = earliest.min(h.timestamp);
         latest = latest.max(h.timestamp);
-        major[usize::from(h.major_version)] = major[usize::from(h.major_version)].saturating_add(1);
-        minor[usize::from(h.minor_version)] = minor[usize::from(h.minor_version)].saturating_add(1);
     }
     #[expect(
         clippy::cast_precision_loss,
@@ -277,7 +256,5 @@ pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Resu
         AtomicUnits::from_raw(reward_sum.checked_div(sample).unwrap_or(0)).to_skl_string(),
         median(&mut weights)
     ));
-    out.push(format!("Block versions: {}", version_tally(&major)));
-    out.push(format!("Voting for: {}", version_tally(&minor)));
     Ok(out.join("\n"))
 }

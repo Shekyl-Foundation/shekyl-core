@@ -26,6 +26,7 @@ pub mod params;
 pub mod release;
 pub mod reward;
 pub mod supply;
+pub mod tip;
 pub mod volume;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
@@ -44,7 +45,8 @@ pub use emission::{
     PrePenaltyEmission,
 };
 pub use emission_share::{
-    calc_effective_emission_share, compute_emission_split, split_block_emission, EmissionSplit,
+    compute_emission_split, emission_share, emission_share_at, split_block_emission, EmissionSplit,
+    EMISSION_SPLIT_EPOCH,
 };
 pub use escalation::{
     staker_pool_share_at, ClosedShardCount, EscalationParams, EscalationShapeError, ScaledShare,
@@ -66,4 +68,5 @@ pub use reward::{
     GENESIS_HEIGHT, REPRICING_PASSES,
 };
 pub use supply::{CirculatingSupply, SupplyInvariantViolation};
+pub use tip::{project_at_tip, TipEconomics, TipOperands};
 pub use volume::TxVolume;

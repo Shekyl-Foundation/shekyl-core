@@ -70,6 +70,87 @@ impl VarInt for usize {
     }
 }
 
+/// Widest canonical LEB128 encoding of a `u64`: `ceil(64 / 7)` bytes.
+///
+/// A streaming reader refuses a varint still unterminated after this many
+/// bytes, so a continuation never runs on. Ten bytes is also the widest
+/// canonical encoding, so the cap rejects nothing a `u64` can hold.
+pub const MAX_VARINT_LEN: usize = 10;
+
+/// How a canonical LEB128 `u64` failed to decode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VarintFault {
+    /// A redundant trailing zero group — the encoding is not canonical.
+    NonCanonical,
+    /// A group whose bits fall off the `u64`.
+    Overflow,
+    /// Still unterminated after [`MAX_VARINT_LEN`] bytes.
+    TooLong,
+}
+
+/// A streaming canonical-LEB128 `u64` decoder.
+///
+/// Feed it one byte at a time until it yields the value. This is the one
+/// decoder: [`read_varint`] drives it, and the shard frame re-exports it
+/// for a reader that already holds the bytes. Both paths refuse a redundant
+/// trailing zero, a group whose bits fall off the `u64`, and a varint still
+/// open after [`MAX_VARINT_LEN`] bytes. The pulling reader maps
+/// [`VarintFault::TooLong`] and [`VarintFault::Overflow`] onto one I/O
+/// error, because a caller of [`read_varint`] has no use for the distinction
+/// the streaming reader reports to the frame.
+#[derive(Debug, Default)]
+pub struct VarintDecoder {
+    value: u64,
+    shift: u32,
+    bytes: usize,
+}
+
+impl VarintDecoder {
+    /// A decoder with nothing fed.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed the next byte. `Ok(Some(v))` when the varint terminated on it,
+    /// `Ok(None)` when more bytes are needed.
+    ///
+    /// # Errors
+    ///
+    /// [`VarintFault`] on a non-canonical, overflowing or over-long encoding.
+    /// The decoder is spent after an error.
+    pub fn push(&mut self, byte: u8) -> Result<Option<u64>, VarintFault> {
+        if self.bytes >= MAX_VARINT_LEN {
+            return Err(VarintFault::TooLong);
+        }
+        self.bytes += 1;
+        if self.shift != 0 && byte == 0 {
+            return Err(VarintFault::NonCanonical);
+        }
+        let payload = u64::from(byte & PAYLOAD);
+        if self.shift >= u64::BITS || (payload << self.shift) >> self.shift != payload {
+            return Err(VarintFault::Overflow);
+        }
+        self.value |= payload << self.shift;
+        self.shift += 7;
+        if byte & CONTINUATION == CONTINUATION {
+            return Ok(None);
+        }
+        Ok(Some(self.value))
+    }
+}
+
+fn io_error(fault: VarintFault) -> io::Error {
+    let message = match fault {
+        VarintFault::NonCanonical => "non-canonical varint (redundant trailing zero)",
+        // The pulling reader has one overflow: a group that falls off the
+        // `u64`, and a continuation that outlives the ten-byte canonical
+        // width, are the same refusal to the caller.
+        VarintFault::Overflow | VarintFault::TooLong => "varint overflow (exceeds u64 width)",
+    };
+    io::Error::other(message)
+}
+
 /// Write `value` as a canonical varint.
 pub fn write_varint<U: VarInt, W: Write>(value: U, w: &mut W) -> io::Result<()> {
     let mut value = value.to_u64();
@@ -91,34 +172,22 @@ pub fn write_varint<U: VarInt, W: Write>(value: U, w: &mut W) -> io::Result<()> 
 /// Read a canonical varint, rejecting non-canonical encodings and values that
 /// overflow `U`.
 ///
-/// The 7-bit groups accumulate into a `u64` working value, then [`VarInt::from_u64`]
-/// narrows (and rejects) per target type. The per-group guard cannot underflow or
-/// panic on hostile input: `shift >= u64::BITS` is checked first and `||`
-/// short-circuits, so the shift below is only evaluated for an in-range `shift`, and
-/// the round-trip-through-shift comparison rejects any group whose high bits would
-/// fall off the `u64`.
+/// The bytes are decoded by [`VarintDecoder`] — the same decoder a streaming
+/// reader drives — and [`VarInt::from_u64`] narrows the `u64`. The decoder's
+/// per-group guard cannot underflow or panic on hostile input: `shift >=
+/// u64::BITS` is checked first and `||` short-circuits, so the shift is only
+/// evaluated for an in-range `shift`, and the round-trip-through-shift
+/// comparison rejects any group whose high bits would fall off the `u64`.
+/// A continuation past [`MAX_VARINT_LEN`] is the same overflow to this caller.
 pub fn read_varint<U: VarInt, R: Read>(r: &mut R) -> io::Result<U> {
-    let mut res: u64 = 0;
-    let mut shift: u32 = 0;
+    let mut decoder = VarintDecoder::new();
     loop {
         let byte = read_byte(r)?;
-        // A non-leading terminator of `0x00` is a redundant trailing zero.
-        if shift != 0 && byte == 0 {
-            return Err(io::Error::other(
-                "non-canonical varint (redundant trailing zero)",
-            ));
-        }
-        let payload = u64::from(byte & PAYLOAD);
-        if shift >= u64::BITS || (payload << shift) >> shift != payload {
-            return Err(io::Error::other("varint overflow (exceeds u64 width)"));
-        }
-        res |= payload << shift;
-        shift += 7;
-        if byte & CONTINUATION != CONTINUATION {
-            break;
+        if let Some(value) = decoder.push(byte).map_err(io_error)? {
+            return U::from_u64(value)
+                .ok_or_else(|| io::Error::other("varint overflow for target type"));
         }
     }
-    U::from_u64(res).ok_or_else(|| io::Error::other("varint overflow for target type"))
 }
 
 #[cfg(test)]
@@ -184,5 +253,36 @@ mod tests {
         // guard must return an error, never underflow/panic on this hostile input.
         let err = read_varint::<u64, _>(&mut [0x80u8; 11].as_slice()).unwrap_err();
         assert!(err.to_string().contains("overflow"), "{err}");
+    }
+
+    #[test]
+    fn the_streaming_decoder_agrees_with_the_reader() {
+        for value in [0u64, 1, 127, 128, 300, 16_383, 16_384, u64::MAX] {
+            let mut bytes = Vec::new();
+            write_varint(value, &mut bytes).unwrap();
+            let mut decoder = VarintDecoder::new();
+            let mut out = None;
+            for (i, byte) in bytes.iter().enumerate() {
+                out = decoder.push(*byte).unwrap();
+                if i + 1 < bytes.len() {
+                    assert_eq!(out, None, "terminated early for {value}");
+                }
+            }
+            assert_eq!(out, Some(value));
+            let read: u64 = read_varint(&mut bytes.as_slice()).unwrap();
+            assert_eq!(read, value);
+        }
+
+        let mut decoder = VarintDecoder::new();
+        assert_eq!(decoder.push(0x80).unwrap(), None);
+        assert_eq!(decoder.push(0x00).unwrap_err(), VarintFault::NonCanonical);
+
+        // Ten continuation bytes are still inside the canonical width; the
+        // eleventh is the cap, and the reader reports it as overflow.
+        let mut decoder = VarintDecoder::new();
+        for _ in 0..MAX_VARINT_LEN {
+            assert_eq!(decoder.push(0x80).unwrap(), None);
+        }
+        assert_eq!(decoder.push(0x01).unwrap_err(), VarintFault::TooLong);
     }
 }

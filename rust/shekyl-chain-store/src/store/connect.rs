@@ -285,9 +285,10 @@ impl<'id> WriteBatch<'_, 'id> {
             .insert(height + 1, block.root_after().encoded().as_encoded())?;
 
         // ---- 5. attestation witness (DRS-E4; `archival_write.rs`) -------
-        // The verdict's sidecar, written unjudged until CEN-B4 lands in
-        // `validate`: the provenance widening above records B4 as a
-        // coverage gap for exactly as long as that is so.
+        // The verdict's sidecar, judged by CEN-B4 in `validate` (E6 slice 8
+        // row 10): `None` is the empty set against the mined root, `Some`
+        // the recompute and every record's countersignature. B4 is always
+        // in coverage, so the widening above never names it.
         self.record_attestation_witness(height, block.attestation_witness())?;
 
         // ---- 6. block --------------------------------------------------
@@ -315,7 +316,7 @@ impl<'id> WriteBatch<'_, 'id> {
             cumulative_difficulty: block.cumulative_difficulty(),
             hash,
             // Per-block, not accumulated: LMDB's `bi_cum_rct` is this block's
-            // count and the accumulation arm is dead (CEN-L15) — see
+            // count and nothing accumulates it (CEN-L15) — see
             // `BlockInfo::rct_outputs`.
             rct_outputs,
             // G6b: the block's weight clamped under the median in force.
@@ -369,10 +370,12 @@ impl<'id> WriteBatch<'_, 'id> {
         // After the seal, so the boundary block's undo row carries the
         // block's writes and none of the prune's (a discard is not
         // pop-reversible, `prune.rs`); inside this transaction, so a chain
-        // connected past `E·SEB` with `D(E)` un-run is unrepresentable.
-        let pruned = self.prune_at_boundary(height)?;
+        // connected past `E·SEB` with `D(E)` un-run is unrepresentable. The
+        // slash log's floor is `in_force`'s expression (`SLK-2`).
+        let height = BlockHeight::from_raw(height);
+        let pruned = self.prune_at_boundary(height, &in_force)?;
         Ok(Connected {
-            height: BlockHeight::from_raw(height),
+            height,
             journaled,
             pruned,
         })

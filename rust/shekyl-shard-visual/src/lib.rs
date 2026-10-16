@@ -1,9 +1,13 @@
-//! Deterministic shard identity visuals for the GUI wallet preview path.
+//! Deterministic shard identity visuals: the **candidate.v1** two-stage
+//! difference compositor of `docs/V3_SHARD_VISUALIZATION.md`.
 //!
-//! Implements the **candidate.v1** two-stage difference compositor documented in
-//! `docs/V3_SHARD_VISUALIZATION.md`. Production archival shards will use the same
-//! recipe once `ArchivalEngine` (Stage 5) lands; until then the wallet exposes
-//! fixture aggregates on the Staking tab.
+//! Every viewer draws from the same input, a [`ShardAggregate`]: the view a
+//! daemon answers after fetching a closed shard's archival body from a
+//! holder (`docs/design/SHARD_VIEW_FETCH.md` SV-D; the wallet contract's
+//! `get_shard_view`), or a [`fixtures`] aggregate for the pre-archival
+//! preview. The CLI and GUI wallets link this crate; a web host runs the
+//! `shekyl-shard-render` binary (feature `cli`) beside its site. One
+//! aggregate, one picture, wherever it is drawn.
 
 // Pixel compositing and feature normalization use intentional float/int casts;
 // values are aesthetic scalars, not consensus amounts.

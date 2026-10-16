@@ -9,10 +9,11 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
 use shekyl_relay_privacy::{
-    derive_embargo, full_travel_probability, DelayFamily, EmbargoTimer, GeometricTable, SplitMix64,
+    derive_embargo, full_travel_probability, DelayFamily, EmbargoTimer, GeometricTable,
 };
 
 /// **Q-8, made decidable.** The preemption profile — *who* fluffs early, not

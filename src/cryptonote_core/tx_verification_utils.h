@@ -65,9 +65,9 @@ struct pool_supplement
     // Map of supplemental tx info that we might need to validate a block
     // Maps TXID -> transaction and blob
     std::unordered_map<crypto::hash, std::pair<transaction, blobdata>> txs_by_txid;
-    // If non-zero, then consider all the txs' non-input consensus (NIC) rules verified for this
-    // hard fork. User: If you add an unverified transaction to txs_by_txid, set this field to zero!
-    mutable std::uint8_t nic_verified_hf_version = 0;
+    // If set, all the txs' non-input consensus (NIC) rules are verified.
+    // User: If you add an unverified transaction to txs_by_txid, clear this field!
+    mutable bool nic_verified = false;
 };
 
 /**
@@ -95,7 +95,7 @@ struct block_connect_supplement
  * List of checks that we do for each transaction:
  *     1. Check tx blob size < get_max_tx_size()
  *     2. Check tx version != 0
- *     3. Check tx version is less than maximum for given hard fork version
+ *     3. Check the transaction version is CURRENT_TRANSACTION_VERSION
  *     4. Check tx weight < get_transaction_weight_limit()
  *     5. Passes core::check_tx_semantic()
  *     6. Passes Blockchain::check_tx_outputs()
@@ -104,19 +104,16 @@ struct block_connect_supplement
  * For pool_supplement input:
  * We assume the structure of the pool supplement is already correct: for each value entry, the
  * cryptonote::transaction matches its corresponding blobdata and the TXID map key is correctly
- * calculated for that transaction. We use the .nic_verified_hf_version field to skip verification
- * for the pool supplement if hf_version matches, and we cache that version on success.
+ * calculated for that transaction. We use the .nic_verified field to skip verification
+ * for a pool supplement already verified, and we set it on success.
  *
  * @param tx single transaction to verify
  * @param pool_supplement pool supplement to verify
  * @param tvc relevant flags will be set for if/why verification failed
- * @param hf_version Hard fork version to run rules against
  * @return true if all relevant transactions verify, false otherwise
  */
-bool ver_non_input_consensus(const transaction& tx, tx_verification_context& tvc,
-    std::uint8_t hf_version);
+bool ver_non_input_consensus(const transaction& tx, tx_verification_context& tvc);
 
-bool ver_non_input_consensus(const pool_supplement& ps, tx_verification_context& tvc,
-    std::uint8_t hf_version);
+bool ver_non_input_consensus(const pool_supplement& ps, tx_verification_context& tvc);
 
 } // namespace cryptonote

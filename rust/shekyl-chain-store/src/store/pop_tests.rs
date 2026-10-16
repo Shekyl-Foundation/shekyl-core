@@ -12,11 +12,10 @@
 use redb::ReadableTableMetadata;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
-    at, candidate, connect_chain_burning, connect_with_image_planted_under_the_token, spend,
-    spend_at, spend_paying, spendable_prefix, FIRST_SPEND_HEIGHT,
+    candidate, connect_chain_burning, connect_with_image_planted_under_the_token, spend,
+    spend_paying, spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::*;
@@ -26,11 +25,8 @@ use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS, UNDO_LOG};
 /// The pop tests' chain: the burn fold must have a pre-image to restore,
 /// so the chain is built on an endowed genesis and its spend blocks may
 /// pay fees (`connect_chain_burning`; the burn is the verdict's, CEN-F17).
-/// Returns the hashes and each block's derived burn.
-fn connect_chain(
-    store: &ChainStore,
-    listed: &[Vec<Transaction>],
-) -> (Vec<BlockHash>, Vec<AtomicUnits>) {
+/// Returns the chain and each block's derived burn.
+fn connect_chain(store: &ChainStore, listed: &[Vec<Listed>]) -> (Grown, Vec<AtomicUnits>) {
     connect_chain_burning(store, listed)
 }
 
@@ -46,18 +42,20 @@ fn tip_height(store: &ChainStore) -> Option<u64> {
 fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
     let path = tmp("pop-basic");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // The spendable prefix, then two spend blocks: the tip is `s + 1`.
     // The spendable prefix, then three spend blocks: a zero-fee one (the
     // F20 window needs a listed body behind the first burn), then two
-    // paying a fee; the tip is `s + 2`.
+    // paying a fee; the tip is `s + 2`. Each spends the coinbase that
+    // matured for its height (blocks 0, 1, 2's), and the fee comes out of
+    // the spent coinbase — block 1's and 2's rewards, which the endowment
+    // does not touch.
     let s = FIRST_SPEND_HEIGHT;
     let tip = s + 2;
-    let (_, burns) = connect_chain(
+    let (grown, burns) = connect_chain(
         &store,
-        &spendable_prefix(&[
-            vec![spend(9, 2)],
-            vec![spend_paying(10, 2, FEE)],
-            vec![spend_paying(11, 2, FEE)],
+        &spendable_prefix(vec![
+            vec![spend()],
+            vec![spend_paying(FEE)],
+            vec![spend_paying(FEE)],
         ]),
     );
     assert_eq!(tip_height(&store), Some(tip));
@@ -94,12 +92,15 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
             Some(fold_before_tip),
             "the tip's burn restored to the pre-image its parent left"
         );
+        // The image the popped block spent — read off the chain as it
+        // connected, not named — is no longer spent.
+        let [popped_image] = grown.images_at(BlockHeight::from_raw(tip)) else {
+            panic!("the tip listed one spend");
+        };
         assert!(snap
             .open_table(SPENT_KEYS)
             .expect("t")
-            .get(crate::lmdb_order::LmdbHashKey::from_bytes(
-                shekyl_chain_rules::harness::fixture::point(11),
-            ))
+            .get(crate::lmdb_order::LmdbHashKey::from_bytes(*popped_image))
             .expect("g")
             .is_none());
         assert!(snap
@@ -232,13 +233,11 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
     // slice 6 commit 4 a plain double spend reached this belt, which tested
     // it as the rule; this is the belt tested as a belt, the shape the test
     // should always have had.
-    let (hashes, _) = connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    let (mut grown, _) = connect_chain(&store, &spendable_prefix(vec![vec![spend()]]));
     let next = FIRST_SPEND_HEIGHT + 1;
-    let double = candidate(
-        next,
-        hashes[at(FIRST_SPEND_HEIGHT)],
-        vec![spend_at(&hashes, next, 10, 2)],
-    );
+    // A real spend for the next block (of block 1's coinbase, matured for
+    // it); the fixture plants its image before connecting.
+    let double = grown.next(&store, &[spend()]);
     let out = connect_with_image_planted_under_the_token(&store, double);
     assert!(matches!(out, Err(TestErr::Store(ref m)) if m.starts_with("SI-1 violated")));
     assert_eq!(
@@ -266,7 +265,7 @@ fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
     let path = tmp("pop-post-image");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let tip = FIRST_SPEND_HEIGHT;
-    connect_chain(&store, &spendable_prefix(&[vec![spend(9, 2)]]));
+    connect_chain(&store, &spendable_prefix(vec![vec![spend()]]));
     // Write around the journal: overwrite `blocks[tip]` through an upsert
     // handle in a batch that records nothing.
     let impostor = candidate(tip, BlockHash::from_bytes([0x77; 32]), Vec::new())

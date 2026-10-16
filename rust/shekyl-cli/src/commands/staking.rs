@@ -503,6 +503,28 @@ pub(crate) fn show_collect(val: &Value) {
 fn print_serving_posture(val: &Value) {
     let posture = val.get("posture").and_then(Value::as_str);
     println!("Serving posture:     {}", serving_posture_display(posture));
+    if let Some(line) = serving_priority_line(val.get("serving_priority_not_lowered")) {
+        println!("{line}");
+    }
+}
+
+/// The operator line for a serving host that could not lower its priority.
+///
+/// Absent and zero are the steady readings and print nothing: no lifecycle
+/// is parked, or every serving thread that is running was lowered. A
+/// thread that has exited is not in the count. A positive count is the
+/// failure, and the line says serving is still up and where the cause is
+/// written.
+fn serving_priority_line(field: Option<&Value>) -> Option<String> {
+    let count = field.and_then(Value::as_u64)?;
+    if count == 0 {
+        return None;
+    }
+    let threads = if count == 1 { "thread" } else { "threads" };
+    Some(format!(
+        "Serving could not lower its priority on {count} {threads}. \
+         It is still serving. The wallet log names the reason."
+    ))
 }
 
 /// Bare `stake`: this wallet's posture and the returnable amount.
@@ -543,7 +565,7 @@ pub fn cmd_stake_join(_rpc: &crate::rpc_client::RpcSession, shard_ids: &[u64]) -
 
 #[cfg(test)]
 mod tests {
-    use super::{serving_posture_display, FOUNDATION_PHRASE};
+    use super::{serving_posture_display, serving_priority_line, FOUNDATION_PHRASE};
     use shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING;
 
     /// **The phrase shown and the phrase required are one string.**
@@ -586,6 +608,28 @@ mod tests {
             serving_posture_display(Some("future_arm")),
             "future_arm",
             "unknown spellings are echoed, never downgraded to not serving"
+        );
+    }
+
+    #[test]
+    fn a_priority_failure_is_said_once_it_happens() {
+        use serde_json::json;
+
+        assert_eq!(serving_priority_line(None), None);
+        assert_eq!(serving_priority_line(Some(&json!(0))), None);
+        assert_eq!(
+            serving_priority_line(Some(&json!(1))).as_deref(),
+            Some(
+                "Serving could not lower its priority on 1 thread. \
+                 It is still serving. The wallet log names the reason."
+            )
+        );
+        assert_eq!(
+            serving_priority_line(Some(&json!(3))).as_deref(),
+            Some(
+                "Serving could not lower its priority on 3 threads. \
+                 It is still serving. The wallet log names the reason."
+            )
         );
     }
 }

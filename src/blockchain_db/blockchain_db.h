@@ -40,7 +40,7 @@
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/difficulty.h"
-#include "cryptonote_basic/hardfork.h"
+#include "syncobj.h"
 #include "cryptonote_protocol/enums.h"
 #include "net/enums.h"
 #include "blockchain_db/shekyl_types.h"
@@ -750,14 +750,13 @@ protected:
   uint64_t time_commit1 = 0;  //!< a performance metric
   bool m_auto_remove_logs = true;  //!< whether or not to automatically remove old logs
 
-  HardFork* m_hardfork;
 
 public:
 
   /**
    * @brief An empty constructor.
    */
-  BlockchainDB(): m_hardfork(NULL), m_open(false) { }
+  BlockchainDB(): m_open(false) { }
 
   /**
    * @brief An empty destructor.
@@ -986,8 +985,6 @@ public:
   virtual void block_rtxn_stop() const = 0;
   virtual void block_rtxn_abort() const = 0;
 
-  virtual void set_hard_fork(HardFork* hf);
-
   // adds a block with the given metadata to the top of the blockchain, returns the new height
   /**
    * @brief handles the addition of a new block to BlockchainDB
@@ -1008,8 +1005,7 @@ public:
    * @param coins_generated the number of coins generated total after this block
    * @param archival_budget_accrual the block's staker inflow
    *   (ARCHIVAL_BUDGET_SCHEDULE.md §3.1); 0 when the inflow is zero (genesis,
-   *   or fully decayed). Computed by the caller BEFORE add_block so the
-   *   hardfork operand is the connecting block's own validated version, and
+   *   or fully decayed). Computed by the caller BEFORE add_block and
    *   written here (keyed at the block's index) before the epoch-close hook
    *   fires, so the close of an epoch sees its final block's row
    *   (F-B1a/F-B1b).
@@ -1138,20 +1134,6 @@ public:
    * @return the timestamp
    */
   virtual uint64_t get_block_timestamp(const uint64_t& height) const = 0;
-
-  /**
-   * @brief fetch a block's cumulative number of rct outputs
-   *
-   * The subclass should return the numer of rct outputs in the blockchain
-   * up to the block with the given height (inclusive).
-   *
-   * If the block does not exist, the subclass should throw BLOCK_DNE
-   *
-   * @param height the height requested
-   *
-   * @return the cumulative number of rct outputs
-   */
-  virtual std::vector<uint64_t> get_block_cumulative_rct_outputs(const std::vector<uint64_t> &heights) const = 0;
 
   /**
    * @brief fetch the top block's timestamp
@@ -1923,39 +1905,6 @@ public:
   virtual bool for_all_alt_blocks(std::function<bool(const crypto::hash &blkid, const alt_block_data_t &data, const cryptonote::blobdata_ref *blob)> f, bool include_blob = false) const = 0;
 
 
-  //
-  // Hard fork related storage
-  //
-
-  /**
-   * @brief sets which hardfork version a height is on
-   *
-   * @param height the height
-   * @param version the version
-   */
-  virtual void set_hard_fork_version(uint64_t height, uint8_t version) = 0;
-
-  /**
-   * @brief checks which hardfork version a height is on
-   *
-   * @param height the height
-   *
-   * @return the version
-   */
-  virtual uint8_t get_hard_fork_version(uint64_t height) const = 0;
-
-  /**
-   * @brief verify hard fork info in database
-   */
-  virtual void check_hard_fork_info() = 0;
-
-  /**
-   * @brief delete hard fork info from database
-   */
-  virtual void drop_hard_fork_info() = 0;
-
-  virtual bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const = 0;
-
   /**
    * @brief is BlockchainDB in read-only mode?
    *
@@ -2079,34 +2028,14 @@ public:
   virtual uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch) const = 0;
 
-  // ─── Settlement outcomes (ARCHIVAL_SETTLEMENT_WRITER.md SO-D1/SO-D2/SO-D6) ──
+  // ─── Settlement outcomes (ARCHIVAL_SETTLEMENT_WRITER.md §14, SO-D10e) ──────
   //
-  // Per-pair-epoch VERDICT table, distinct from the per-challenge EVIDENCE
-  // ledger above: `outcome‖passes‖issued` (3 B, Rust-encoded) keyed
-  // `P_id‖BE(shard)‖BE(E)` (48 B). An absent row is SO-D1 "never issued ⇒
-  // non-observation", NOT a miss — the reader must not collapse the two.
-  //
-  // Pure virtual so a store that forgot the table fails to compile. The
-  // writer's production call site is a rule-22 hold on SO-D8 (§5.1). The
-  // revert (`revert_archival_slashes_at_height`) and the retention prune
-  // (`prune_archival_epochs_before`) are wired. Redb's table denominator is
-  // the SHEKYL_LMDB_TABLES X-macro, not this interface.
-
-  /// Fold `(passes, issued)` through the Rust encoder and store the row for
-  /// `(P_id, shard, E)`. Refuses (throws) rather than storing if the fold
-  /// refuses — C++ never composes an outcome byte (rule 36).
-  virtual void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch, uint32_t passes, uint32_t issued) = 0;
-
-  /// Read a settlement row. Returns false when absent (SO-D1 never-issued).
-  /// When true, `out_row` holds a canonical
-  /// `SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES` row. The width is the FFI
-  /// compile-time constant so a Rust-side SETTLEMENT_ROW_LEN change breaks
-  /// every override. Integrity checks on stored bytes are the backend's,
-  /// not this signature's.
-  virtual bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch,
-    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const = 0;
+  // The `archival_settlement` table has no writer and no reader in this
+  // store: settlement is the Rust validator's (SO-D10), and the count fold
+  // that wrote here was deleted with its FFI. What stays is the table's
+  // handle, its revert and its prune, which run over an empty table until
+  // DEL-008 deletes the archival C++ path. Redb's table denominator is the
+  // SHEKYL_LMDB_TABLES X-macro, not this interface.
 
   /// Drop every settlement row for one epoch — the SO-D6 revert. Rows are a
   /// memoised derivation over final chain state, so a reorg crossing a fold

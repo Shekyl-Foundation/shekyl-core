@@ -102,7 +102,7 @@ as every other C++ consumer of every other E1 surface has.
 | `header::seal` / `header::verify` — a sealed file refuses to open without its shaped tables (SI-7, SCR-17) | landed — the pattern the pool file's own header repeats |
 | `txpool_meta`, `txpool_blob` in the redb schema | landed, **`Unshaped`, in the consensus file** (`schema.rs:350`, `:353`; `tables.snap` #13, #14) — §5.1's falsifier, firing (SPL-1) |
 | `accumulator/class.rs` grades both `Excluded` (`:160–161`); `digest_v0` excludes txpool (`digest_v0.rs:24`); §11.2 "not chain state" | landed — this increment moves no digest family (SPL-12) |
-| `RelayMethod` (five variants, byte-pinned to `cryptonote::relay_method`) and `NetZone` (four, pinned to the pool origin bytes) | **At `a1159f1a2`:** lived in `shekyl-relay` (then `zone_route.rs`), FFI-mirrored by value and `const` assert — not in `shekyl-types`. **Now:** both live in `shekyl-types` (`rust/shekyl-types/src/relay.rs:57`); `RelayMethod`'s pins are `shekyl-relay/src/zone/mod.rs:122–128`. The store still cannot depend on `shekyl-relay` (SPL-6, `SPL-Q6`) |
+| `RelayMethod` (five variants, byte-pinned to `cryptonote::relay_method`) and `NetZone` (four, pinned to the pool origin bytes) | **At `a1159f1a2`:** lived in `shekyl-relay` (then `zone_route.rs`), FFI-mirrored by value and `const` assert — not in `shekyl-types`. **Now:** both live in `shekyl-types` (`rust/shekyl-types/src/relay.rs:57`); `RelayMethod`'s pins are `shekyl-relay/src/graph/mod.rs:122–128`. The store still cannot depend on `shekyl-relay` (SPL-6, `SPL-Q6`) |
 | `check_redb_schema_bijection.py` — every X-macro table has exactly one `TableDefinition` in `schema.rs`; `RUST_ONLY_TABLES` is the one exception direction | landed — has **no** "mirrored in another file" direction (SPL-2) |
 | `check_redb_schema_key_types.py` — 49 definitions / 27 constraints, `txpool_meta hash key` among them (`:327`) | landed — the constraint follows the table when it moves (SPL-2) |
 | §5.1 pick: separate pool file | **RULED 2026-09-12** (`ba4b3c73a`), unbuilt; this is its increment |
@@ -334,7 +334,7 @@ commit's `Result` (SPL-11).
   is free to choose its encoding and drops the dead fields.
 - **`relay_method`'s byte values** — **inherited as the wire contract they
   already are** (`src/cryptonote_protocol/enums.h:39`,
-  `shekyl-relay/src/zone/mod.rs:122–128`): the enum keeps `None = 0 …
+  `shekyl-relay/src/graph/mod.rs:122–128`): the enum keeps `None = 0 …
   Block = 4` because the FFI seam is pinned to them. What the *store*
   does with `None` is `SPL-Q6`.
 - **Persistence across restart** — **inherited as the default, its policy
@@ -458,7 +458,7 @@ codec refuses what they would observe, SI-14's shape.
   (`DRS_E1_SPRUNE.md` §13); `padding[44]` is the C struct's. Not carried
   (rule 60 / rule 15). `RelayMethod` and `NetZone` **moved** to
   `shekyl-types` (`rust/shekyl-types/src/relay.rs:57`; `SPL-Q6` RULED). The
-  `RelayMethod` pins are `shekyl-relay/src/zone/mod.rs:122–128`. The store
+  `RelayMethod` pins are `shekyl-relay/src/graph/mod.rs:122–128`. The store
   does not take `shekyl-relay` (a relay scheduler with an async driver)
   as a dependency.
 - **SPL-7 — a separate file loses an atomicity the C++ has, and §5.1 already

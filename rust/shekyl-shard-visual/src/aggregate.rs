@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ShardAggregate {
     pub shard_id: u64,
-    /// 32-byte shard content hash (hex-serialized on the wire).
+    /// The 32-byte shard view hash (hex-serialized on the wire): the
+    /// cSHAKE256 fold over the shard's archival bytes (`ShardViewHash`,
+    /// SHARD_VIEW_FETCH.md SV-D1). Distinct from the challenge hash: a
+    /// daemon that did not fetch the pruned components cannot produce it.
     #[serde(with = "hex_bytes")]
     pub shard_hash: [u8; 32],
     pub block_count: u64,

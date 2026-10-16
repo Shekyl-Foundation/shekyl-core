@@ -8,11 +8,18 @@
 //!
 //! A fixture pays what CEN-F18 will require of it on the view it will be
 //! judged against. The arithmetic is the validator's ([`quote_emission`]
-//! calls [`crate::rules::reward::price`]); this module only writes the
-//! owed amount onto the first coinbase output and repeats while that
-//! amount's varint moves the block weight.
+//! calls [`crate::rules::reward::price`]); this module only re-pays the
+//! first coinbase output with the owed amount and repeats while that
+//! amount's varint moves the block weight. "Re-pays", not "writes": the
+//! fixture coinbase is a real output to the harness miner, so the amount
+//! carries a commitment and an encrypted amount with it, and
+//! [`shekyl_harness_wallet::coinbase::repay`] re-derives all three
+//! together — a patched amount over a stale commitment would be an
+//! output no wallet could spend.
 
 use shekyl_economics::REPRICING_PASSES;
+use shekyl_harness_wallet::coinbase::repay;
+use shekyl_harness_wallet::MinerWallet;
 use shekyl_types::BlockHeight;
 
 use super::MockChain;
@@ -138,11 +145,12 @@ pub(super) fn for_candidate(
     })
 }
 
-/// Write `owed` onto the first output when it differs.
+/// Re-pay the first output with `owed` when it differs.
 ///
 /// `Ok(true)` means the amount changed and the caller should price again.
 /// `Ok(false)` means the candidate is done: it already pays `owed`, it has
-/// no output to pay, or the reward chain refused it before F18's equality.
+/// no coinbase output to pay, or the reward chain refused it before F18's
+/// equality.
 fn settle_one<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
@@ -151,14 +159,14 @@ fn settle_one<'id, V: ChainView<'id>>(
     let Ok(paid) = quote_emission(view, connecting, candidate)? else {
         return Ok(false);
     };
-    let Some(first) = candidate.block.miner_transaction.prefix.outputs.first_mut() else {
-        return Ok(false);
-    };
-    if first.amount == paid.owed.to_raw() {
+    if first_amount(candidate) == Some(paid.owed.to_raw()) {
         return Ok(false);
     }
-    first.amount = paid.owed.to_raw();
-    Ok(true)
+    Ok(repay(
+        &mut candidate.block.miner_transaction,
+        MinerWallet::harness().recipient(),
+        paid.owed.to_raw(),
+    ))
 }
 
 fn first_amount(candidate: &Candidate) -> Option<u64> {

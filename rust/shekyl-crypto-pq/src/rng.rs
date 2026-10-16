@@ -20,23 +20,40 @@
 //! secret's hash inputs — it is never the sole defense. On RNG failure
 //! the construction degrades to its deterministic RFC-6979-style form:
 //! never a repeated nonce across distinct statements, never a panic that
-//! aborts the supervisor owning the caller. [`hedged_fresh32`] encodes
-//! that policy: fresh bytes, or all-zeros on failure, never a panic.
-//! It is **only** sound inside such a construction — a caller that uses
-//! the output as a nonce directly reintroduces the bare-RNG defect this
-//! module retires.
+//! aborts the supervisor owning the caller. `hedged_fill` is that
+//! policy: the draw's bytes, or zeros across the whole buffer when the
+//! draw fails, never a panic. [`hedged_fresh32`] asks it for 32 bytes.
+//! `HedgedOsRng` asks it for whatever the signer draws and then reports
+//! success, because the signer calls infallible `fill_bytes` and a zero
+//! buffer is the fallback rather than an error. Both are sound only
+//! inside a hedged construction — a caller that uses the output as a
+//! nonce or a key directly reintroduces the bare-RNG defect this module
+//! retires.
 //!
 //! **Key material — fail-loud.** Master seeds, transaction keys, and
 //! session seeds have no deterministic fallback that is safe to emit: a
-//! predictable key is a compromised key. Those call sites draw from
-//! `OsRng` directly (panicking or erroring on entropy failure) and are
-//! deliberately *not* routed through this module — a fail-safe helper
-//! there would convert an outage into silent key reuse. See
-//! `stake_engine`'s `try_fill_bytes` preflight for the fail-loud-without-
-//! panic variant where a supervisor needs to survive.
+//! predictable key is a compromised key. `key_material32` is that draw
+//! inside this crate: 32 fresh bytes, or an error, never zeros and never
+//! a panic. It is crate-private, so the public surface of this module
+//! stays the one function whose failure mode is the opposite of a key
+//! draw. Callers outside this crate still draw `OsRng` and handle the
+//! error at the site; `stake_engine`'s `try_fill_bytes` preflight is
+//! that shape for a supervisor that must survive the outage. Do not feed
+//! key material through [`hedged_fresh32`].
 
 use rand::rngs::OsRng;
 use rand::RngCore as _;
+
+/// Apply the hedged-draw policy to `dest`.
+///
+/// `draw` fills `dest` from its source. On `Ok` those bytes stay. On `Err`
+/// every byte of `dest` becomes zero, including a prefix `draw` wrote
+/// before failing. The caller decides what a zero draw means.
+fn hedged_fill(dest: &mut [u8], draw: impl FnOnce(&mut [u8]) -> Result<(), rand::Error>) {
+    if draw(dest).is_err() {
+        dest.fill(0);
+    }
+}
 
 /// 32 fresh bytes from the OS CSPRNG, or all-zeros if the OS RNG fails.
 ///
@@ -45,10 +62,73 @@ use rand::RngCore as _;
 #[must_use]
 pub fn hedged_fresh32() -> [u8; 32] {
     let mut fresh = [0u8; 32];
-    if OsRng.try_fill_bytes(&mut fresh).is_err() {
-        fresh = [0u8; 32];
-    }
+    hedged_fill(&mut fresh, |dest| OsRng.try_fill_bytes(dest));
     fresh
+}
+
+/// The OS CSPRNG as a [`rand::RngCore`], with `hedged_fill`'s policy:
+/// fresh bytes, or zeros if the OS RNG fails, never a panic.
+///
+/// For a signer that **hedges internally** and takes its randomness as an
+/// RNG it calls infallibly. FN-DSA's is the case this exists for: its
+/// `sign` draws a seed with `fill_bytes` and immediately replaces it with
+/// `SHAKE256(H(signing key) ‖ μ ‖ seed)`, so the seed is one input among
+/// three and a zero seed degrades to a deterministic signature over the
+/// same key and message rather than to a repeated nonce. Handing that
+/// signer the bare `OsRng` would instead panic, inside whatever task was
+/// signing, the moment the OS RNG failed.
+///
+/// **Not for key generation**, and not for any consumer that uses the
+/// bytes as a secret directly — see the module docs. A deterministic
+/// FN-DSA signature is only as safe as its floating-point arithmetic is
+/// reproducible: two different signatures over one hashed point leak the
+/// key, and a zero seed makes the hashed point a function of the key and
+/// message alone. That is why the signing vectors are pinned on both
+/// supported architectures (`tests/kat_fn_dsa_hybrid_v1.rs`).
+///
+/// Crate-private for that reason: it is a `CryptoRng` that can return
+/// zeros, and the type system would accept it wherever a key generator
+/// takes one. No caller outside this crate can name it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct HedgedOsRng;
+
+impl rand::RngCore for HedgedOsRng {
+    fn next_u32(&mut self) -> u32 {
+        let mut bytes = [0u8; 4];
+        self.fill_bytes(&mut bytes);
+        u32::from_le_bytes(bytes)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut bytes = [0u8; 8];
+        self.fill_bytes(&mut bytes);
+        u64::from_le_bytes(bytes)
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        hedged_fill(dest, |buf| OsRng.try_fill_bytes(buf));
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+        self.fill_bytes(dest);
+        Ok(())
+    }
+}
+
+/// A hedged signer's randomness source: the fallback is sound only inside
+/// the construction, which is the caller's to establish.
+impl rand::CryptoRng for HedgedOsRng {}
+
+/// 32 bytes of key material from the OS CSPRNG, or an error.
+///
+/// The fail-loud half of this module's policy. A caller that must survive
+/// an entropy outage gets an `Err` to propagate, and never a predictable
+/// key. Crate-private: the public entropy function is [`hedged_fresh32`],
+/// and its zero-on-failure policy is unsafe for a key.
+pub(crate) fn key_material32() -> Result<zeroize::Zeroizing<[u8; 32]>, rand::Error> {
+    let mut bytes = zeroize::Zeroizing::new([0u8; 32]);
+    OsRng.try_fill_bytes(bytes.as_mut())?;
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -66,5 +146,54 @@ mod tests {
         let b = hedged_fresh32();
         assert_ne!(a, b, "consecutive draws must differ under a working RNG");
         assert_ne!(a, [0u8; 32], "a working RNG must not return the fallback");
+    }
+
+    /// The adapter draws real entropy when the OS provides it: the same
+    /// property as above, through the `RngCore` face a signer calls.
+    #[test]
+    fn the_adapter_draws_distinct_bytes() {
+        use rand::RngCore as _;
+        let (mut a, mut b) = ([0u8; 40], [0u8; 40]);
+        HedgedOsRng.fill_bytes(&mut a);
+        HedgedOsRng.fill_bytes(&mut b);
+        assert_ne!(a, b);
+        assert_ne!(a, [0u8; 40]);
+    }
+
+    #[test]
+    fn key_material_draws_are_distinct() {
+        let a = key_material32().expect("a working OS RNG");
+        let b = key_material32().expect("a working OS RNG");
+        assert_ne!(*a, *b);
+    }
+
+    /// The OS RNG cannot be made to fail on demand (rule 50, case 2). The
+    /// policy is the function both callers share, so a draw that writes a
+    /// prefix and then fails is the fault, and zeros in every byte are the
+    /// classification.
+    #[test]
+    fn a_failed_draw_zeros_the_whole_buffer() {
+        let unavailable = || rand::Error::new(std::io::Error::other("entropy source unavailable"));
+
+        let mut partial = [0xABu8; 40];
+        hedged_fill(&mut partial, |dest| {
+            dest[..7].fill(0x11);
+            Err(unavailable())
+        });
+        assert_eq!(
+            partial, [0u8; 40],
+            "a prefix written before failure is wiped"
+        );
+
+        let mut untouched = [0xABu8; 4];
+        hedged_fill(&mut untouched, |_| Err(unavailable()));
+        assert_eq!(untouched, [0u8; 4]);
+
+        let mut kept = [0u8; 8];
+        hedged_fill(&mut kept, |dest| {
+            dest.fill(0x5A);
+            Ok(())
+        });
+        assert_eq!(kept, [0x5Au8; 8], "a successful draw is kept");
     }
 }

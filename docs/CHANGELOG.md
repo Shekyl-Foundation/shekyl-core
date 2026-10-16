@@ -2,8 +2,349 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.10] - 2026-10-15
+
+- **Managed Tor: it reads only the launcher's own configuration, and its Windows environment carries `SystemRoot`** (`TOR_BUNDLE_DISTRIBUTION.md` TB-7). Without `-f`, tor loaded its compiled-in default `torrc` and `torrc-defaults` and parsed its default GeoIP files. Command-line options override only the keys they name, so the rest of those files merged into the daemon's and the wallet's tor. For the pinned Linux bundle those files are under `/var/tmp/dist/tor/`, which any local account can create, so on a multi-user host another user could set our tor's guards, an upstream proxy or an onion service. The launch now names all four (`--torrc-file`, `--defaults-torrc`, `--GeoIPFile`, `--GeoIPv6File`) as one zero-length file, `blank`, which it writes in the `DataDirectory`. That directory is owner-only, and the write does not follow a symlink or a hard link. On Windows the cleared environment made `tor.exe` abort at startup (`0xC0000409`). The launcher now sets exactly `SystemRoot`, from `GetSystemWindowsDirectoryW` and never from the parent's environment (observed on Windows, 2026-10-15). No Windows build launches tor yet (TB-11), so the Windows fix was not reachable by users. The Windows CI job runs the inheritance proof, the command's variable list, and clippy for this crate.
+
+- **Economics sim: ESR-11's secret-draw loop is deleted** (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.22). Since ESR-14 it and ESR-13's loop ran one experiment on one rule; ESR-13 at `Timing::esr11()` agrees with it within seed noise on every cell, and the remaining 30 % gap is the two generators realising different dropout, shown by replication. `--secret-draw` now runs ESR-13's loop at ESR-11's timing, and the nightly lane names `the_esr11_timing_set_runs_and_the_table_renders`. ESR-11's analytic functions and the shared `count_at` / `capped_at` stay.
+
+- **Bundle verifier: the section's window and an unanswered draw count** (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §13.9, `SCS-P41` and `SCS-P42`, ruled 2026-10-14; the verifier is STAGED, so nothing a node runs changes). `check_section` and `check_section_until_switch` take the including block's height and its rule set and refuse a reference outside `h < h_incl ≤ h + W₂` before the budget (CEN-J31); one reference to a block the window does not reach could otherwise turn a whole section's budget off. A section therefore holds at most `W₂` references. A missing draw count for a block below the including one is the view's failure (`BundleUnanswered::DrawCount`), not a verdict; `BundleInvalid::UnknownBlock` is deleted. Also: the held FN-DSA signer relies on the crate's own wipe on drop and no longer runs a second one; the superseded carrier label and batch commitment are marked SUPERSEDED in code and in the domain registry, and tests use the live bundle-witness label as their wrong-domain foil; `ReceiptSignPk`'s `Debug` prints bytes from both halves, so two keys print differently; the `-29530` message no longer calls a scan file from a newer wallet "earlier"; a fetch target whose envelope is wider than the widest checked fails to compile; two unused aliases and two assertions that could not fail are removed; the SH-2 pre-flight audit is archived to `docs/completed/`.
+
+- **Daemon submit: the pool checks a JoinMarket's receipt key, and a daemon that cannot hold a JoinMarket says so** (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 BP6 and §2.5; `FN_DSA_HYBRID.md` `FND-20`). The submit battery refuses a JoinMarket whose receipt key does not parse as a scheme-3 key, with the predicate `CEN-J28` runs at connect, as `Rejected { Malformed }`; until now only the block rule checked it, so such a post could be admitted and relayed and make any block that included it invalid. Separately, the C++ daemon cannot reparse a JoinMarket, and its commit step answered every one with an internal fault, an HTTP 500 the wallet took as an ambiguous outcome: it resent the post every minute for about 900 blocks and then held it and its funding indefinitely. The commit shim now answers `Rejected { JoinMarketUnsupported }` without calling into C++, a new additive cause on the submit wire. The wallet treats it as terminal: the pending stake is withdrawn, its funds are spendable again, and the wallet log says that staking is not available on this daemon. Older wallets read the new cause as `Unrecognized` and release the same way. The cause, its commit outcome and the wallet's terminal kind are deleted with the C++ commit shim (`DEL-008`). The live-daemon tripwire is renamed `e2e_the_cxx_daemon_answers_join_market_unsupported` and asserts the new answer.
+- **P2P: the Rust dialer is the only dialer; the C++ dial path and the C++ peerlist are deleted** (P2P-3 slice 3 with slice 1 increment 3, PR-3, #1056; `P2P_3_SLICE_3_DIALER_BRIEF.md`). Outbound dials, the handshake, the fill rules, the failed-address memory, the self-connection nonce and the peer lists are `shekyl-dialer` and `shekyl-peerlist`; the dial's wake is an owner of the timing engine; the address file is written by the dialer every thirty minutes and at stop, and an existing `p2pstate.bin` from a previous build is dropped whole at the first start and replaced at the first store. Operator-visible: `--add-priority-node` and `--seed-node` are deleted outright, with no retired-flag row (Rick, 2026-10-13: pre-genesis there is no backward compatibility; `--add-peer` names a peer, the compiled seeds are candidates already); `--add-exclusive-node` declares a closed network (name only peers you control); an `--out-peers` or `--tx-proxy` count below the F-8b floor (12) refuses to start, and the runtime `out_peers` command refuses such a request and leaves the cap unchanged, where it clamped; the transport deadlines are `shekyl-transport-layer::spans`. The handshake and timed-sync frame bound is derived from `DISCLOSE_COUNT` and the entry's pinned encoding (1434 bytes, where the C++ reconstructed a 65536-byte envelope from 250 entries); the wire entry is its address alone, `last_seen` deleted on both sides (Rick, 2026-10-13: a field always sent as 0 and ignored on receipt is a sentinel and a peer-controlled slot). Removed-flag rows, the retired constants and every deletion-table check are in the brief. The handshake gap measures the peer's silence (Rick, 2026-10-14): on both connectors it ends at the peer's first complete handshake frame (its request on a session it opened, its response on one this node dialed), not at this node's handshake verdict, and a frame that arrived before the deadline is read even when the node resumes after it. A complete frame of any other command does not end the gap: an inbound peer that sent a support-flags request and stopped would otherwise have held an admission slot with no deadline at all.
+- **Daemon RPC: `get_peer_list` entries lose `last_seen` at `CORE_RPC_VERSION` 3.55.** The listing is exported by `shekyl-ffi` from the Rust peer lists, which carry no clock (`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4); `get_info`'s two peerlist sizes come from the same export. `print_pl` drops its last-seen column. The `_v1`/`_v2` vectors of `get_peer_list`, `get_connections` and `sync_info`, which carried the stripe seed, are deleted with the stripe-seed sweep; `_v3` is the earliest kept.
+- **Daemon RPC: a daemon started offline reports that state at `CORE_RPC_VERSION` 3.56.** `get_info` carries `offline: true`, `"p2p": "offline"` and no `has_peers`, connection count or peer count, or `"p2p": "running"` with all of them; `get_peer_list`, `get_connections` and `sync_info` answer the status `offline` and nothing else. Before, an `--offline` daemon on this branch either refused `get_info` or answered empty lists and zeros that read as a running node with no peers. The daemon console and `shekyl-cli chain health` print `P2P: offline`.
+
+- **Dependencies: `rustls` 0.23.45 → 0.23.46.** The 2026-10-14 advisories (RUSTSEC-2026-0346, 0347, 0348 and 0349) cover a client that records a server's key-exchange choice before the handshake is authenticated, so a later connection to that name can finish on classical X25519 alone, and `Debug` output of client session values that included a resumption secret. Shekyl's HTTPS clients take the patched crate through `hyper-rustls` and `ureq`. No call site changes.
+
+- **Logging: a log call never blocks.** Every sink — stderr always, the log file when configured — sits behind its own bounded queue (`SINK_QUEUE_LINES`, 8 192 lines) and writer thread. A stalled sink drops further lines and counts them, and writes `N lines dropped since <time>` when it catches up. Before, the stderr layer wrote synchronously: one slow stderr write held every logging thread, the daemon's P2P transport workers included, so a peer's handshake timed out while this node waited on its own log (18 s on one responder during the PR-3 measurement, 2026-10-14). The file sink's queue, already lossy, was silent about what it dropped and held 128 000 lines; it now holds 8 192 and reports. A write or flush the sink refuses (a dead stderr pipe, a full disk, a failing file) is counted too, and reported as `N lines failed to write since <time>` once the sink takes writes again; `tracing_appender`'s worker had discarded those errors, so the lines were lost with nothing said.
+
+- **CI: the Windows job boots and stops the daemon instead of re-proving the daemonizer removal** (Rick, 2026-10-14). `build.yml`'s step runs `scripts/ci/daemon_boot_stop_smoke.ps1` against the built `shekyld.exe`: an offline regtest start with a fresh data directory and a free RPC port, a wait for `get_info`, a stop over RPC, and assertions that it exits 0 in time and created its chain store, each check asserting its subject. The old step re-proved the link, asserted that a deleted code path did nothing, and pinned the `removed_flags` shim the daemon-configuration cutover deletes; its `--help` check returned before the logger started. The cutover extends the same job with the lock, the allowlist and the marker (`DAEMON_CONFIG_CUTOVER.md` §5.2).
+
+- **Wallet: a bond request no longer fails because two entry-gap draws matched.** The entry-gap guard compares a run of spread pairs and refuses only when every pair was equal (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` S5, UPDATE 2026-10-13). One matching pair, which a correct source produces about once in 601 requests at today's window, is drawn again inside the guard. The refusal a caller still sees means the source stayed equal for the whole run: at most once per 100 million guarded draws from a correct source, and on every request from a stuck source. Retrying that refusal does not help until the source produces distinct draws. A constant source still refuses inside the same request.
+
+- **Archival serving: the write-stall bound counts only waits the peer causes.** `WRITE_STALL_TIMEOUT` (30 s) wrapped the whole write of each chunk, so a serving task starved of CPU — the serving runtime runs below the daemon's priority since `SH-3` — was charged for its own lateness and cut a peer that was reading (`BA-T5` session 3: two responses in 1,536 at 64 in flight). Each attempt is now one `write`, the bytes the socket will take, and that attempt alone is timed. Bytes accepted start the bound over. A poll that finds the socket writable writes, however late it arrives. `WRITE_TIMEOUT` (600 s overall) is unchanged. Paused-time tests cover a drain spaced across the bound, a poll that arrives after the bound onto a writable socket, and a peer that stops reading. The `BA-T5` floor probe runs once per CI in its smallest mode so it cannot break silently again (it had, when #1015 unframed the body); its length check follows the unframed body. The step refuses a harness that does not list the probe among its ignored tests. The probe's scratch store is removed if that run fails.
+
+- **Economics sim: chain quantities are formed in production's integers** (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.20, ESR-14). The fee-floor feedback instrument pushes whole transactions into the fold's volume window; an epoch's budget is `year × SEB / BLOCKS_PER_YEAR` in `u128`; a scenario's starting emission is parts per million crossed once; the curve tree's leaf count is a `u64`; the ESR-11 secret-draw run calls `draw_count`, `draw_horizon` and `select_draw`, and ESR-13 no longer prints the `f64` comparison. No fixture or verdict of production's reading moves; the feedback table's integer-SMA arm, the reading FL-R24 retired, reads 116 of 600 cells outside its bar where it read 92. `scripts/ci/check_sim_integer_seams.py` holds the fold files to it, in the bundled grep gates.
+
+- **Packaging: the daemon runs in its own `shekyl.slice`** (ruled 2026-10-12; `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8). `contrib/packaging/linux/shekyl.slice` is a top-level slice at `CPUWeight=400` — weighed 4:1 against `user.slice` under contention, so a headless staker's daemon keeps about 80 % of the CPU while the per-user wallet serves archival shards beside it — and `shekyld.service` joins it (`Slice=shekyl.slice`; nothing else in the unit changes). The `.deb` installs the slice beside the service on both architectures and reloads systemd on install and upgrade. The weight is reasoned, not measured: the ledger row `shekyl_slice_cpu_weight` is estimated until the T2 measurement in `FOLLOWUPS.md` lands. The Monero-heritage example unit `utils/systemd/shekyld.service` is deleted (unhardened, output to null, used by nothing); the README and the installation guide point only at the shipped unit, and whether the service reads `/etc/shekyl/shekyld.conf` is carried as an `RT-16` open item.
+
+- **Benchmarks: `BA-T5` session 3, the `SH-3` confirming block** (`docs/benchmarks/ba_t5_serve_floor_device_20261012.md`; a discovery run by the 2026-10-08 ruling). The shipped per-thread priority mechanism beside a daemon syncing a 4,800-block chain on the floor device, in two scheduler topologies. With the daemon and the serving process in one cgroup (the sidecar shape) the daemon keeps 93 % of its no-serve sync rate at 8 in flight and 91 % at 64 — session 2's external nice reproduced — against 38 % at normal priority; `serving_priority_nice` is measured at 0.91 and is current on this capture. With the daemon in a different cpu cgroup (the resident-service shape, approximated without root) it keeps 65 %: nice does not cross a cgroup boundary, so the serving group takes its `cpu.weight`'s fair share; the fix for that shape, a CPU weight for the wallet's serving host, is a `FOLLOWUPS` row for a ruling. Every mechanism block's serving threads read nice 19 in `/proc`; at 64 in flight two responses in 1,536 per topology were cut by the 30 s write-stall timeout. The floor probe gains `BAT5_PRIORITY` (the serving host's budget through the single constructor, with and without the lowering hook; dev edges only), records a cut response as data, and follows the unframed body of #1015; a session-3 run script and reader with a selftest land beside it.
+- **Chain store: the alternative-block row carries no supply word (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, CEN-K8).** `alt_block` drops the per-alt-block `coins_generated` the C++ `alt_block_data_t` carried as a coinbase-paid approximation nothing consensus-bearing read; the Rust admission tier reads no executed-chain fact, and promotion derives supply by executing the chain. Chain-store layout is 24 (23 is the draw tables below; the two changes were cut from 22 on concurrent lanes). In that same unreleased layout an alt block's weight is mandatory: the presence byte is gone, zero is a codec refusal, and a later writer that needs an absent weight bumps the layout. A store written under 23 or earlier is refused at open, before any table is read, and is rebuilt from the block corpus — no migration ladder exists, as for every layout bump before genesis. The FOLLOWUPS row "Alt-chain supply accumulation advances by the coinbase, not the emission subsidy" closes: nothing accumulates.
+- **Chain rules: the cheap alt tier is a public surface.** `HeaderView`, `AltChainView` and `alt_against` judge a block over a stitched header chain and record CEN-D5, CEN-E2, CEN-K1b and CEN-K4. The verdict is `AltValid`, branded to the view type that minted it the way `ChainValid` is branded to its view, so `insert_alt_block` accepts only a verdict over that store's `AltView`. `Fork::new` refuses a root above the recorded tip; the store reports that pair as a corrupt height cell before a fork exists. The tier and the write stay two operations.
+- **Regenesis on every network: every coinbase now carries a `0x0C` draw commitment (`SO-D12` increment 1).** The coinbase extra's grammar gains a required third field, 32 bytes after the nonce, in every block including genesis, with no height gate. It is the block producer's commitment to the witness key and seed of the secret archival draw. The three genesis transactions are regenerated to carry it (genesis commits to 32 zero bytes, which nobody can open), so every genesis block id and network id changes: mainnet `d7af3823…107ad8ed`, testnet `e895bf2b…a18033da`, stagenet `371e8fa3…99677c60`. A node on an earlier build cannot sync with one on this build. One Rust implementation writes and judges the field for both validators. Rust draws each coinbase's commitment inside the writer the daemon already calls, so the C++ gains no parameter, no type and no secret. Until a producer keeps those secrets, every block commits to a seed nobody reveals and no draw is issued. The largest grammar-valid coinbase extra grows from 18,994 to 19,027 bytes.
+- **Archival bonds commit the persona's receipt key, and the key is mandatory (Rust validator, store and wallet; `FN_DSA_HYBRID.md` §8).** A JoinMarket bond post has one wire form, `post_kind` `5`: `bond_spend_pk`, then the persona's receipt key (Ed25519 + FN-DSA-1024, 1,837 canonical bytes), then the endpoint. The keyless form, `post_kind` `0`, is deleted and refused at parse; `0`, `3` and `4` are unassigned. The key is covered by the identity signature on the post, a new consensus row (`CEN-J28`) refuses a post whose key does not parse, and the bond record stores the key, fixed-width, for the record's life — a Release or a Reinstate does not change it. Nothing signs with the receipt key yet. **Rust only, and the C++ daemon no longer admits a JoinMarket:** it cannot parse `post_kind` `5`, and the Rust verify it calls for the keyless kind now refuses every call; its archival snapshot export refuses a bond row. The C++ cases in `archival_bond_post_integration.cpp` whose subject was an accepted JoinMarket, or a defect the blanket refusal now hides, are deleted; `join_market_verify_ffi_refuses_every_call` pins the refusal (`FND-20`). Captured C++ chains and fixtures that contain a keyless JoinMarket are retired on the Rust side from that post on, their files untouched (`FND-19`). A wallet's P-scan state from before this change records its joins as `0`. `PSCAN_STATE_VERSION` moves 10 → 11, so a staker whose `.wallet.pscan` carries version 10 is refused at open (`-29530`); nothing rewrites `0` into `5`, nothing rebuilds the file in place, and the postcard schema does not move (`FND-18`). The refusal names the file, both versions and the remedy — move that one file out of the wallet's folder and open the wallet again, and the staking scan rebuilds it from the chain (`StakeStateVersionUnsupported`, the version form of `-29530`, with `data.file` / `data.found` / `data.expected`). **Store layout 24 → 25** (after the alt record's 23 → 24 and the draw-state tables' 22 → 23 below): an existing redb chain store is refused at open and rebuilt.
+
+- **Economics sim: the recorded wallet vectors come from a chain the fill rule builds** (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, ESR-8). `docs/test_vectors/economics/baseline_steady_state.json` is regenerated: the recorder used to pay the unpenalised emission on fifty transactions a block, which is over the block-weight limit at the control fee, and now runs the same chain step as the scenario folds. `tx_volume` is the count a block listed. The burn and the release multiplier are the window that priced the block, recorded as `volume_tx_count_sum` and `volume_window_blocks`, and the wallet's differential replays that window. On the baseline those two columns do not move: at every sampled height the window's mean is the listed count. The folds and the stuffer advance by the composition's paid reward. The sim's folds and its stuffer price each block through `price_emission`, and eight restated constants are imports. The serve-challenge response size is built from `shekyl_fcmp::tree`'s widths. `shekyl-archival-retention` exports `SLASH_SETTLEMENT_TIP_LAG_EPOCHS` and `FAILURE_WINDOW_N_GATHER_BOUND`; no value changes.
+
+- **Archival personas derive a receipt key.** Each persona slot now has a second signing key beside its identity key: Ed25519 + FN-DSA-1024, derived from the wallet seed under two new frozen labels (`shekyl-archival-p-receipt-ed25519-v1`, `shekyl-archival-p-receipt-fn-dsa-1024-v1`) and scoped to the network like every other persona key. A wallet restored from its seed re-derives it. Nothing signs with it yet and no wire format moves; serve-credit receipts move onto it when the bond record carries its public half (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.3). Stakers pay one more key generation per held persona slot when the wallet opens. The `ARCHIVAL_P_DERIVE_V1` vectors gain the new rows; no existing vector changed.
+- Docs: `RPC_CHANNEL.md` (`RT-`) records a round ruled 2026-10-08 and 2026-10-09 and not yet implemented. Once it is built: every RPC leg that leaves the host runs inside one hybrid post-quantum Noise channel, mutually authenticated, in place of the pinned mutual TLS that was ruled before and never built; a caller running as the same user as the daemon reaches it over an owner-only socket or pipe with no keys to provision; per-connection grants replace the restricted listener, and what a remote key may see or do is the operator's choice at enrolment; and the daemon may run as a service under a dedicated account, never as SYSTEM or root. `RPC_TRANSPORT_POSTURE.md` loses the superseded mechanism text and keeps its premise, threat model and landed slices. The first slice, `RT-W8` (the handshake's model, vectors and registry rows; no listener), has landed its evidence: a ProVerif model of the handshake with every verdict as predicted, vectors pinned against an independent Noise library, the channel's naming functions with known-answer tests, and a timing measurement finding no dependence of ML-KEM-768 decapsulation time on the ciphertext, to 0.5 % of a decapsulation, on a Raspberry Pi 4 and on one x86 laptop core. Its pre-flight is `RPC_CHANNEL_RT_W8_PREFLIGHT.md`. Nothing a user or operator runs has changed.
+
+- **Archival serving: P's body store, the secret-draw hash side, and a challenge read through the scheduler.** `shekyl-p-store` is the persona's chunk-sealed file of `shard_frame` bodies, opened from the wallet key; the serve path streams those bodies and no longer reads a frozen leaf segment. An empty store answers 404 until fill lands. Releasing a serve-set pin erases that shard's body row. The daemon can read a closed shard off the chain store's archival fold, and still answers that the skeleton is absent until it opens that store. The secret draw's selection, commitment, challenge nonce and batch commitment are registered domain-separated hashes with no producer, so nothing is credited. A challenge read dials only the assigned holder and keeps its nonce across a retry. The public challenge urn is deleted; its pair type remains. Six mechanism-1 labels landed with this work (four draw, two body-store) and one retired with the urn (`shekyl/archival-challenge-assignment-v1`). Receipt signing under scheme 3 is a later change.
+- **Testnet regenesis, twice over, and a new network id on every network.** The testnet genesis nonce moves from 10101 to 10102, and separately every coinbase now carries a `0x0C` draw commitment (`SO-D12` increment 1, below), which regenerates all three genesis transactions. As released, the genesis block ids are mainnet `d7af3823…107ad8ed`, testnet `e895bf2b…a18033da`, stagenet `371e8fa3…99677c60`, and the network ids derived from them are mainnet `49CDEE7DEA1A61291C56ABD4DE5E0364`, testnet `5E0BADE97EA2938CB49E8F6E90F15D4E`, stagenet `E7E770405F898E6157E5A76ECFDA38CF`. Why the nonce moved as well: since `v3.1.0-alpha.9` the header's minor version is reserved at `0`, and every block the alpha.9 testnet mined carries `1`; the release gate `scripts/release/check_frozen_tuple.py` now refuses a cut whose consensus moved while the testnet genesis did not. **Operators: an alpha.9 data directory cannot be carried forward on any network. Stop the node, delete its data directory, then start the new build.** Stop every node of a fleet before starting any of them.
+- Release: `scripts/release/check_frozen_tuple.py <previous-tag> <candidate>` fails a cut whose consensus surface moved while the testnet genesis did not (`RELEASE_PROMOTION.md` §6).
+- **Chain store: the slash log is retired below its horizon (`SLK-Q1`, `DRS_E4_SLASH_LOG_ROUND.md`).** At every settlement-epoch boundary the store's prune now deletes `archival_slash_log` rows below `tip − ((SLASH_GRACE_EPOCHS + FAILURE_WINDOW_N)·SEB + reorg_cap)` — the journal horizon `PDM-Q-F19` ratified, until now computed by `journal_horizon` and enforced nowhere. Both the prune and the one reader take the depth term from the rule set in force (`RuleSet::reorg_cap`), never from the store's own `undo_retention`: an operator who keeps a deeper pop journal moves the undo floor and not this one. The reader (`slash_log_after`) refuses a range start below the floor it is handed (SI-26, `StoreInvariant::SlashLogReadBelowFloor`), an arm a mis-composed schedule reaches and data never does; the slash pass reads inside the window by construction. Node-local retention only — nothing on the wire or in a digest changes; the `0x04` archival snapshot's `slash_log` family is the table as the boundary prunes have left it, walked whole and not re-filtered to the current tip, which is the whole log while a chain is under the window. No layout bump.
+
+- **Relay: a node's own transactions ride the hidden stem slot** (`DAEMON_RELAY_PRIVACY.md` §95.3, §98; #1018). When a configured connector hides this node's address, one of the two Dandelion++ stem slots is reserved for the outbound sessions that do, and a transaction this node originates leaves on that slot's peer, pinned for the epoch with one alternate drawn from the same sessions; when both are gone the node holds its own transactions until the next epoch rather than send on a connection that reveals its address. The separate per-epoch draw this replaces sent originated traffic on a link that carried no relayed traffic. Relayed traffic is unchanged. A stem width below two with such a connector is refused at construction.
+
+- **Cryptography: a second hybrid signature scheme, Ed25519 + FN-DSA-1024, with no consumers yet.** `shekyl-crypto-pq` gains hybrid scheme byte 3 beside the existing Ed25519 + ML-DSA-65 scheme, for the archival serve-credit receipt and the witness's carrier signature (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6). Nothing signs or verifies with it in this change, and no wire format moves. The two schemes share one nested-combiner body and one canonical-header codec, and have distinct key and signature types; a 1,837-byte canonical key and a 1,356-byte canonical signature. Vectors for seeded key generation, seeded signing and verification are pinned and run on x86_64 and aarch64. The scheme rests on the pre-standard `fn-dsa` crate, pinned exactly; a release tag with no pre-release suffix is refused while that crate is below 1.0 (`docs/design/FN_DSA_HYBRID.md`).
+
+- **Daemon RPC: `get_info` is served in Rust.** `/get_info`, `/getinfo` and the JSON-RPC `get_info` are answered natively, with the same reply as before (five oracle vectors captured from the C++ handler's own computation hold it to that). A caller on the restricted listener no longer costs the node the reads it is not shown, and a failure in one of those reads — the data volume refusing a free-space query, say — no longer refuses that caller. The store's on-disk size is reported as a fault when it cannot be read, never as `0`. The wallet, the CLI and the daemon console read the one reply type, so a reply missing a member is refused by all of them rather than read as zero. The console's `diff`, `version` and `print_pool_stats` are rendered in Rust; `version` still answers from a daemon whose identity the other commands refuse.
+- **Archival accrual reads the settlement row (Rust validator; `SO-D11`).** A pair earns for an epoch only if its settlement row is Served: two passes among the three counted draws. A pair issued fewer than three draws earns nothing for that epoch. The epoch close freezes the budget and nothing else; the epoch's slash pass, one epoch later, computes each shard's co-holder count and the epoch's work total, over shards that are closed and final. Three consequences for the Rust validator: an epoch becomes claimable one epoch later than before, on the block after its slash pass, and the claimable span is 25 epochs where it was 26; a compact bond join is priced at the last epoch whose slash pass has run; and until the secret draw is live no pair is Served, so nothing is credited. The C++ daemon is unchanged and stays consensus; the wallet and the claim-source RPC read it and do not change. The Rust validator does not become consensus before the draw is live.
+
+- CI: the nightly workflow gains `economics-sim-ignored`, which runs the four `#[ignore]`d tests of `shekyl-economics-sim` (the two `--stage2` narration fixtures, the challenge-coverage reproduction and the secret draw's evidence set) on `main` and `dev`. No lane ran them before; the narration fixtures drifted on PR #1009 and CI stayed green. The job fails if the crate's ignored set is anything but those four and the two regeneration helpers, which it never runs.
+
+### Shard view — a picture of a shard is drawn from a real fetch
+
+- **Wallet RPC: `get_shard_view { shard_id }`** (contract 0.11.0,
+  `SHARD_VIEW_FETCH.md`). The wallet forwards the id to its daemon, which
+  fetches the shard's body from an archivist, verifies it per transaction
+  and returns the aggregate the viewers draw from: `shard_hash`,
+  `archival_len`, `block_count`, `tx_count`, `output_count`,
+  `coinbase_output_count`, `time_range_seconds`, `close_height`. A shard
+  the wallet itself holds is still answered through the daemon; the point
+  of the method is the fetch. New codes: `-29534 SHARD_STILL_OPEN`,
+  `-29535 SHARD_UNAVAILABLE` (no archivist could serve it), `-29536
+  SHARD_VIEW_NOT_OFFERED` with `data.cause` `restricted` or
+  `skeleton_absent`.
+- **Daemon RPC: `request_archival_shard` is served in Rust (RPC 3.43).**
+  The C++ handler and its struct are deleted; `shekyl-daemon-rpc` answers
+  natively. The response gains `close_height`; `shard_hash` is now the
+  **view hash** — a cSHAKE256 fold over the shard's archival bytes that
+  requires the pruned components to derive (`SV-D1`), distinct from the
+  per-transaction verification digests the challenge path uses. The
+  method stays restricted. New code `-25 ARCHIVAL_SKELETON_ABSENT`: the
+  daemon has no shard-range read until the `DRS-E3` store cutover
+  (`SV-D9`), so **every daemon in this release answers it** and every
+  viewer shows *not offered by this daemon*.
+- **Fetch client and scheduler (`SF` Sub-PR 2).** `shekyl-p-fetch` reads
+  the tx-range body as a stream, one transaction resident, verifying each
+  against the `txs_prunable_hash` / `txs_pqc_auth_hash` rows and the
+  boundary pair; `shekyl-archival-fetch-sched` is the one scheduler that
+  challenge, organic and view callers enter, drawing holders from the
+  epoch's drawable set with an in-flight cap of 8. Until the serve side
+  speaks the same unit (`WSS-Q1`), a fetch against a shipped archivist is
+  a typed content miss, never a picture.
+- **CLI: `shard fetch <id> [--png <path>] [--size <n>]`** prints the
+  aggregate and optionally writes the candidate.v1 render. **GUI:** the
+  Shards page draws a card from `get_shard_view`, with *fetching*, *still
+  open*, *could not be retrieved* (retry) and *not offered* as visible
+  states; the fixture-only `ArchivalShardSource` stub is deleted.
+  **shekyl-web:** `shekyl-shard-visual` gains the `shekyl-shard-render`
+  binary (feature `cli`; JSON view on stdin, PNG on stdout) for the site's
+  server-side route.
+
+- **Archival serving runs below the daemon's CPU priority, on by default, with no setting** (`SH-3`, ruled 2026-10-09; `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8). The persona serving host now builds its own runtime and blocking pool through the single runtime constructor (`sk-serving`, its own thread-ledger row) and binds the endpoint on it, so the accept loop, every connection and every read-and-fold or sign hop run there — and every thread of it lowers its own CPU priority as it starts: Linux `nice 19` under normal scheduling (never `SCHED_IDLE`, which a syncing daemon could starve outright), macOS Utility QoS, Windows lowest thread priority. The new `shekyl-thread-priority` crate holds the three platform calls (`libc` and `windows-sys` were already workspace dependencies). The ordinary runtime constructor stays a budget and a name; the serving runtime passes a start hook and a stop hook, so a thread is counted when its call fails and leaves the count when it exits. Evidence: `BA-T5` session 2, where the daemon kept 90–97 % of its sync rate beside serving at nice 19 and serving still answered 5–8 per second. If the platform refuses, the thread serves at normal priority, the wallet logs one warning per host, and `staking_info` / `get_wallet_info` carry `serving_priority_not_lowered`, the number of serving threads still at normal priority because the OS refused to lower them (`0` is the expected reading; a thread that has exited, including a blocking thread the runtime retired, is not in the count; it reports the call's result for the threads still running, not whether serving yields CPU to the daemon, which depends on the two processes sharing a scheduling group). The field is in the wallet-RPC contract at document version 0.12.0 (`api_version` stays 1). Absent means no serving lifecycle is parked; zero means every serving thread that is running was lowered. `shekyl-cli` prints the count only when it is positive: serving is still up, and the wallet log names the reason. Serving is never refused for it. The daemon, the wallet's other work and the wallet's tor process stay at normal priority; the `SF-D13` signature is still made inside the stake actor at engine priority. A confirming floor block follows the merge; until it lands the ledger row `serving_priority_nice` is estimated.
+- **Archival settlement (Rust validator; `SO-D10`).** The Rust slash pass settles each epoch before it slashes on it: it reads the epoch's issued draws, checks them against the epoch's digest, writes one settlement row per pair with a counted draw, and slashes only on a Missed row. The failure window passes over an unobserved epoch and reads nothing below the retention horizon, the same constant the settlement rows' prune will use. No block issues a draw yet, so the Rust pass settles and slashes nothing off Fakechain; the C++ daemon is unchanged and stays consensus. Chain-store layout is 22: `archival_settlement` is shaped, `archival_issued_draw` and `archival_issued_digest` are new, and a store written under 21 is refused at open. New store invariant SI-25. The count fold `settle_epoch`, the FFI exports `shekyl_archival_settlement_row` and `shekyl_archival_settlement_row_validate`, and the C++ `set_`/`get_archival_settlement` are deleted.
+- **`shekyl-cli chain_health` says when a count is unreadable** (`DAEMON_RPC_KV_GET_INFO.md`, RK-5c reader sweep). The height and the transaction count were printed as `0` when the value was missing; they now print `unreadable`, as the difficulty line does. `tests/stressnet/monitor.py` fails on a `get_info` reply without a height where it recorded height 0.
+- **Daemon RPC: `get_info` no longer names the network** (`DAEMON_RPC_KV_GET_INFO.md` RK-Q6). `nettype` and the booleans `mainnet`, `testnet` and `stagenet` are removed from the reply; they repeated `get_version.nettype`, which is now the one place a daemon names its network. A client that read any of the four reads `get_version` instead. `shekyl-cli`'s mining commands now check the daemon's identity through `get_version` before anything else, so they also refuse a daemon on a different RPC version, consensus configuration or genesis, each with its own message. The daemon console's `status` line is unchanged for the operator. `CORE_RPC_VERSION` 3.54.
+- **Daemon RPC: `get_info`'s amounts are decimal strings** (`DAEMON_RPC_KV_GET_INFO.md` RK-Q2). `already_generated_coins` and `total_burned` are written as strings of digits, in atomic units, the same encoding the wallet RPC uses for amounts. As JSON numbers they lost precision above 2^53 in any JavaScript reader. Both are required; a JSON number in either place is refused. Other daemon methods still write amounts as numbers until they are migrated (`docs/FOLLOWUPS.md`). This is the daemon's half of what the GUI wallet needs to read `get_info` again. `CORE_RPC_VERSION` 3.53.
+- **Daemon RPC: `get_info` says each thing once** (`DAEMON_RPC_KV_GET_INFO.md` RK-Q1). Six members are gone: `difficulty`, `difficulty_top64`, `cumulative_difficulty`, `cumulative_difficulty_top64`, `block_size_limit` and `block_size_median`. Read `wide_difficulty` and `wide_cumulative_difficulty` (a `0x` hex string holding the whole 128-bit value) and `block_weight_limit` and `block_weight_median`, which are now always present, including at `0`. The hex strings are read strictly: `0x`, then 1 to 32 hex digits, no sign. Block headers and the mining RPCs are unchanged. `shekyl-cli chain_health` now shows the whole difficulty; its JSON output carries `wide_difficulty` in place of a `difficulty` that was cut to 64 bits. `CORE_RPC_VERSION` 3.52.
+- **Daemon RPC: `get_info` refuses on a chain store that contradicts itself** (`DAEMON_RPC_KV_GET_INFO.md` RK-Q9). If the store holds more coins burned than generated, `get_info` returns an error that names the broken invariant and gives the three numbers: total burned, coins generated, and the chain height they were read at. The daemon logs the same text. It used to answer with `burn_pct: 0`, which is also what a healthy chain with no burn reports. A node that hits this needs its chain data rebuilt. `CORE_RPC_VERSION` 3.51.
+- **Daemon RPC: `get_info`'s `tx_pool_size` means one thing** (`DAEMON_RPC_KV_GET_INFO.md` RK-Q10). It is the number of pool entries the node has broadcast, whoever asks. It used to be that for a restricted listener and every entry for the unrestricted one. The entries a node holds and has not yet broadcast, which include a transaction still on its stem, are `tx_pool_unbroadcast_count`, told only on the node's own unrestricted listener. A client that wants everything the node holds adds the two; a client on a restricted listener sees only the first. `CORE_RPC_VERSION` 3.50.
+- **Daemon RPC: `get_info`'s connection counts cover every connector** (`DAEMON_RPC_KV_GET_INFO.md` RK-Q3). `outgoing_connections_count` and `incoming_connections_count` are handshaken sessions in that direction on every connector, Tor included, read from one snapshot of the seam board together with `has_peers`, so `has_peers` is true exactly when the two counts are not both zero. A socket that has not finished its handshake is not counted here; the per-connector socket counts report those. They were clearnet-only, and the incoming count was a total from one store minus an outbound count from another, which could wrap to a number near 2^64. A shown Status with an empty `version` is now a malformed reply; `shekyld version` no longer reads it as "not available". `CORE_RPC_VERSION` 3.49.
+- **Daemon RPC: a restricted `get_info` reply omits what it does not disclose** (`DAEMON_RPC_KV_GET_INFO.md` RK-Q8). A reply from a restricted listener no longer carries the Status members (`start_time`, `free_space`, `database_size`, `version`, the two connection counts, `alt_blocks_count`, `rpc_connections_count`) or the Peers members (the four socket counts and the two peerlist sizes). It used to carry them with values that meant "not disclosed": zeros, an empty version, a free space of `u64::MAX`, and the store's size rounded up to 5 GiB. A client must treat those members as optional and read an absent one as not disclosed, never as zero. `shekyld status` against a restricted listener now prints "connections not disclosed". `CORE_RPC_VERSION` 3.48.
+- **Daemon RPC: `get_info` gains `has_peers`** (`DAEMON_RPC_KV_GET_INFO.md` RK-D14). True when the node has at least one handshaken session on any connector. It is in Health, so a restricted listener reports it too; a client that wants to know whether the node has peers reads this and not the connection counts, which a restricted listener writes as `0`. The wallet's submit watchdog did read those counts, and raised a false "daemon has no peers" alarm against a restricted daemon in place of its resubmit probe; that is fixed. `get_info` now refuses when the node's p2p layer is not up, where it answered zero counts. `CORE_RPC_VERSION` 3.47.
+- **Daemon RPC: `target_height` is the core's target, and `null` when there is none** (`DAEMON_RPC_KV_GET_INFO.md` RK-D15, RK-Q7). On `get_info`, `get_version` and `sync_info` together. `get_info` no longer writes `0` for a synchronized node: read `synchronized` for that, and treat the target as information only, since it comes from heights peers claim. `get_version` no longer omits `target_height` or a zero `current_height`. A client reads the daemon's RPC version before decoding the rest of `get_version` (RK-Q11), so a version difference is reported as one, with both versions; the `version` field's key, integer type and `(major << 16) | minor` encoding are frozen across every future change (RK-D25). `CORE_RPC_VERSION` 3.46.
+- **Daemon RPC: `get_info` no longer carries `emission_era`.** There never was an emission era; the field and its four labels are deleted, not replaced (`DAEMON_RPC_KV_GET_INFO.md` RK-D21). The chain-health dashboard in `DESIGN_CONCEPTS.md` loses its era row, its era-boundary wording and its emission forecast row with it. A client that read it must stop. `CORE_RPC_VERSION` 3.45.
+- **Daemon RPC: a live test holds a transaction un-broadcast and asks both listeners for it.** Two regtest daemons, an origin and a sink that drops what it is sent, keep a wallet's transaction on the stem at the origin. The restricted listener must not list, name, count or return it; the unrestricted listener must; and once the transaction is back in the broadcast set the restricted listener must show it. This is the origin guard anchored on the pool's sensitivity flag, owed before `/get_info` leaves the C++ bridge (`DAEMON_RPC_KV_CUTOVER.md` §7, 2026-10-09). No daemon behaviour changes.
+- **Consensus validator (Rust): every spend's FCMP++ proof is now verified, and a bond post's funding spend is judged like a spend.** `shekyl-chain-rules` runs CEN-I13 (the declared tree depth is the tree's at the reference height) and CEN-I15 (the membership proof verifies over the reference's anchor, the inputs' key images and the PQC-bound prefix) on the Spend class, and the new CEN-J27 runs the same reference sequence and proof verification over a bond post's funding inputs — which the Rust validator had not judged at all (CEN-H21's recorded finding; the C++ did, `blockchain.cpp:3654`). Until now the Rust validator ran I13's predicate and I15's body only under an emission claim (CEN-J21/J26); a regular spend carrying a wrong depth or a proof not made in this chain's tree was admitted by it and refused only by the C++ daemon. Registry `implemented 116 → 119`, validator-enforced `151 → 152` (`CONSENSUS_RULE_CENSUS.md` §4.I, §4.J; `CHAIN_RULES_SLICE_6.md` §5 rows 6, 8). Test substrate: the store's, ingest's and rules crate's filler-spend and fixture-join tests now run over chains the harness spender grew, with real proofs; `shekyl-harness-spender` gains `Persona` (the archival persona and its bond posts).
+- **Daemon RPC.** `get_info` reports `already_generated_coins`, the gross coins emitted through the tip, in atomic units. Net circulating supply is that figure minus `total_burned`. `CORE_RPC_VERSION` is 3.42. `get_version` is otherwise unchanged.
+- **Archival shard fetches ride a Tor circuit per read.** The fetch client now presents SOCKS credentials that belong to one read, so Tor isolates each read on its own rendezvous circuit and a serving persona cannot link a requester's reads by the circuit they arrive on. Stall retries inside a read keep the credentials. Username/password is the only SOCKS method offered. An operator running their own Tor for the daemon must leave `IsolateSOCKSAuth` on (its default). `SF-D3` reopened and ruled 2026-10-07. The measurement rig's warm arm is those back-to-back reads with no `NEWNYM`, each on its own circuit; the 2026-09-16 warm column remains the run that reused one.
+- A test holds the managed Tor's launch arguments as `--Name`/`value` pairs on the one launch command, so a single-dash flag or a `+Option` cannot pass it unseen. The fetch client gains a test that two requests for one shard differ only in their nonce. Re-read separation is the per-read SOCKS credentials; circuit-reuse length is not a second mechanism.
+- Docs: the serve-credit specification states one request machinery for every shard fetch, a fresh nonce for every read (the record carries the read's `attempt`, bounded by a consensus constant of three), and a digest in place of re-derivation for the settlement writer's first integrity check.
+- Docs: the serve-credit specification gains the witness's re-read policy and the settlement writer's three integrity checks; the failure window is left open rather than re-pinned on a one-read figure, with two measurements registered (`BA-T31`, `BA-T32`).
+- **P2P.** A context walk posts onto that connection's strand and returns. `get_connections` and `sync_info` wait up to two seconds for the claim fields, on the admin thread. A claim that has not landed is unknown: `height` and `support_flags` are JSON null, not a height of zero. A dial in `idle_worker` can occupy the io pool those posts share, so unknown during a dial is expected until the dialer (P2P-3 slice 3) moves the dial off that pool. The connector closes the session with the cause, and the seam records that cause. A silent peer is a handshake timeout. A peer that sends FIN is a peer close. A refused connection, a rejected handshake, and an onion SOCKS reply that names the onion make the address undialable. A handshake timeout, a peer close, and a local failure do not. A clearnet proxy reply does not: it is the exit's claim and would suppress the whole host for an hour. The managed Tor SocksPort is `auto ExtendedErrors`, so an introduction timeout is not reported as a missing host. A gap timeout, a close this node chose, and a local proxy or Tor failure leave the address dialable. An attacker who can answer for an onion's responsible directories can still force reply 4, which buys only the short Tor backoff. A direct clearnet connect counts only when the peer refuses the connection. That refusal was being dropped: the admission channel closed in the same instant as the cause, and the opener kept the channel close, which is a local failure and does not forget the address. The opener now keeps the cause the dial sent. Last receive and last send are stamped when the bytes are read or written, on a monotonic clock, and shown to the operator as unix time. They do not rebuild the connection board. An address the node stops dialing is logged with the close cause, the reply, and whether it was recorded. The four pre-handshake request gates read the seam board, and a missing row is not established. A listen after another caller clears the hub installs that hub again. A connector's inbound cap belongs to the zone that set it: shutdown releases it, and a zone that did not set one does not keep the previous cap.
+- Docs: `ARCHIVAL_SERVE_CREDIT_SPEC.md` is the single specification of the serve-credit mechanism under the secret per-block draw (Slice C Round 0). Nothing in it is built; the twelve questions the round posed are ruled, and the superseded mechanism text is deleted from the five documents that held it.
+
+- **Archival serving: a shard's bytes are hashed on the blocking pool, not on an executor thread.** `shekyl-p-serve` read each chunk on the blocking pool and then folded it into the delivery digest back on the async executor, tens of milliseconds of software Keccak per full segment on the floor device, holding a worker thread away from other connections. The read and the per-chunk fold are now one blocking-pool step (`read_and_fold`), and the digest's `absorb` is private to its module, so the fold cannot be separated from the read again. Starting the digest over the frame header and finalizing it stay on the connection's task: a fixed few Keccak permutations whatever the shard's size. No wire, status or ordering change.
+- **Benchmarks: `BA-T5` session 2 on the floor device, a discovery run** (`docs/benchmarks/ba_t5_serve_floor_device_20261009.md`; ruled 2026-10-08 to record predictions against measurements and set nothing). Beside a second testnet daemon syncing the chain at 3.3 cores, the Pi 4 serves full segments at 37 to 41 per second, 70 % of its idle rate, with p99 executor wake lateness under 61 ms at every N up to 64, and the daemon keeps about a third (31 to 37 %) of its no-serve sync rate; with the serving process at `nice 19` the daemon gets 90 to 97 % back and serving falls to a seventh to a fifth. Throughput is flat from 16 in flight in every state; p99 lateness rises steeply with N — more than doubling across each of the first two doublings and by a third to a half across the last; CPU per response is 66 to 72 ms throughout. Time to first byte at one in flight is 0.19 ms p50 with the daemon idle (1.85 ms under sync), which settles the open pre-head estimate; `serve_prehead_work_floor` is a measured constant on this capture. At N = 64, the cap, one connection in 6,144 was refused: the in-flight permit is dropped after the stream, so a requester that reconnects as its last stream closes sees a cap of N − ε — an input to `BA-Q4`, which still owns `MAX_INFLIGHT` (unmeasured, citing this capture). The probe gains a `ttfb` mode and records a refusal instead of failing the block; the reading script has a selftest. Five of seven predictions held; the two misses (lateness under sync, the throughput knee) were in the device's favour.
+- **Benchmarks: first floor run of `BA-T5`, asking whether the Pi 4 can serve archival shards** (`docs/benchmarks/ba_t5_serve_floor_device_20261007.md`), with pass lines registered before the run and a testnet daemon resident. On the frames production serves, which are full segments, all four lines hold with wide margin: an abandoned request costs 3.9 ms of CPU against 5; 41 to 56 full segments per second at eight in flight against 0.5; executor wake lateness p99 57 ms against 100; one hour at the honest rate at 51 °C with 6.5 GB of memory free. One line failed as registered, against a one-leaf frame production cannot serve (8.4 ms: a body that fits the socket buffer is signed for whether or not it is read); it is recorded as a projection. The run also shows the hash on the executor is what made throughput bimodal and wake lateness 57 ms; with the hash on the blocking pool (#995) lateness is 5.6 ms.
+- **Linux release artifacts carry Tor, and the daemon checks the whole bundle before it runs it** (`TOR_BUNDLE_DISTRIBUTION.md` `TB-1`, `TB-4`, `TB-6` to `TB-10`, `TB-13`). Until now no artifact shipped tor, so an installed node ran clearnet-only and said so only at info level.
+  - **Packaging.** The x86_64 and aarch64 Linux archives hold the pinned Tor Expert Bundle in `tor/` beside the binaries, with its licence texts and a source pointer in `tor-licenses/`. The `.deb` and `.rpm` install it under `/opt/shekyl/<bundle>-<target>/`. Only `tor` and the three libraries it loads are shipped. The riscv64 archive carries no tor: there is no bundle for it.
+  - **Pin moved to tor 0.4.9.13**: Expert Bundle 15.0.24 on x86_64, 16.0a13 (alpha line) on aarch64. The pins live in one file, `config/tor_pins.json`, compiled into the binary and read by the packaging tool `scripts/release/tor_bundle.py`.
+  - **What the daemon and wallet check at every launch changed.** The pin covered the `tor` file. It now covers every file in tor's directory, and the directory must hold nothing else: an extra file, a subdirectory or a symlink there is a refusal. The managed tor starts with an empty environment plus `LD_LIBRARY_PATH` set to that directory, so it loads the bundle's libevent and OpenSSL and nothing from a shell's `LD_PRELOAD`.
+  - **Operators who staged tor by hand must restage.** The bundle is looked for in `tor/tor` beside the executable (it was `tor` beside it), then `/opt/shekyl/<bundle>-<target>/tor`. A `tor` on `PATH` is no longer used. `SHEKYL_TOR_BINARY` still overrides the location, and is checked the same way: pointing it at a full extracted Expert Bundle is refused, because that directory holds `pluggable_transports/`. `scripts/release/tor_bundle.py stage` produces a directory that passes (`COMPILING_DEBUGGING_TESTING.md`).
+  - **`--no-ephemeral-tor` is the way to decline Tor, and a node that declined says so at every start**, at warning level, with what it costs. A node that finds no tor without having declined also warns now; that case will refuse to start in a later release.
+  - **Windows, macOS, FreeBSD, riscv64 Linux and Android have no managed tor.** Each is recorded as unavailable with its reason, the daemon says so at start, and a build target with no record does not compile. Windows and macOS follow once each has a launch test.
+  - `tor-pin-verify` reads the pin file, so it has no version input to go stale, and runs on both Linux architectures.
+  - The `.deb` and `.rpm` declare `BSD-3-Clause AND GPL-3.0-only AND Apache-2.0`: Shekyl's licence, the packaged tor's, and its OpenSSL's.
+  - The gitian workflow takes a `package_dry_run` input that runs the package job on a dispatch without publishing.
+- **Chain store.** A public network opens with `ChainStore::with_release` (and `open_read_only_with_release`). CEN-E5 runs once at that open: a file whose recorded pin is not this binary's is `StoreCannot::ReleasePin` and the handle is not returned. `ChainStore::create` stays the unanchored door (harness chains, synthetic block ids, Fakechain) and does not compare pins. The open reports a later checkpoint conflict and does not pop; that rewind is still the ingest driver's. The C++ daemon does not enforce this until it opens the redb store.
+
+### The hard-fork mechanism is deleted
+
+Ruled 2026-10-06 (Rick): "delete the fork table - when we need one, we will
+write a fresh one, not try to recycle Monero's." Block version is 1. A future
+consensus change is a design document first, and this change deliberately
+leaves no activation machinery behind.
+
+- **No behaviour changes for a valid chain.** A block's version must be
+  `1.0`, as before (CEN-B1, CEN-B2); the rule is now one comparison against
+  the two constants, with no height schedule behind it. The captured replay
+  chains are unchanged.
+- **The staker emission share starts at block 1** (ruled 2026-10-08): the
+  genesis block pays no staker share, and the share's decay is measured from
+  block 1. The epoch is one constant, `shekyl_economics::EMISSION_SPLIT_EPOCH`.
+  `emission_share` closes over it: zero below the epoch, then the decay.
+  `emission_share_at` is that function on the shipped constants. The old
+  function took a caller-supplied genesis height and returned the initial
+  share there, so a fold that passed epoch 1 and height 0 disagreed with
+  the daemon. The daemon path is unchanged.
+- **Removed from the daemon:** the `HardFork` class and its table; the
+  block-version parameter threaded through the pool, transaction checks,
+  reward and coinbase builder; the start-up loop that popped blocks made
+  under an older fork; the "you may be running an old daemon" warning on a
+  higher block version (CEN-B7, such a block is refused); the
+  `HF_VERSION_*` constants.
+- **Wire, `CORE_RPC_VERSION` 3.44:** the `hard_fork_info` method is deleted
+  and `get_version` no longer carries `hard_forks`. No wallet read either.
+  3.43 was already the native `request_archival_shard` on `dev`, so the
+  deletion took the next minor.
+- **Wire, p2p:** the handshake no longer carries `top_version`. A peer that
+  still sends it is read with the key ignored.
+- **Daemon console:** the `hard_fork_info` command is removed; `status` no
+  longer prints a fork version or a countdown; `print_blockchain_dynamic_stats`
+  no longer prints `Block versions` and `Voting for`.
+- **`shekyl-blockchain-import`:** `--drop-hard-fork` is removed.
+- **Template fill:** the inherited C++ copy of the reward-aware fill, which
+  sat behind a block version this chain never had, is deleted. The fill that
+  ships is `decide_listed_body`: list in fee order, one body may cross the
+  median, and that body may not cross 13/10 of the median less the coinbase
+  reserve. `get_block_template.expected_reward` is the coinbase that template
+  carries. The reward-aware fill (`shekyl_block_template::Fill`) is still the
+  design and still arrives with the fill's move to Rust (`FOLLOWUPS.md`).
+- **Version gate:** a hard-fork table call is refused under every landing.
+  Labelling one `tx-version` does not admit it.
+- **Python RPC client:** `hard_fork_info` is deleted with the method.
+- **`get_block_template.expected_reward` is the coinbase the template
+  carries.** It reported the pre-split emission for an empty template and
+  `0` for any template that listed a transaction, because the inherited
+  fill only priced the coinbase in an arm that never ran. It is now the sum
+  of the template's coinbase outputs: the miner's emission leg plus its fee
+  income. The fill itself is unchanged.
+- **Not removed:** LMDB still declares `hf_versions` and
+  `hf_starting_heights`, unused, until the redb cutover (`FOLLOWUPS.md`).
+  The redb store's `hf_versions` is the rule set in force per height and is
+  not this mechanism.
+
+### Consensus — the header's minor version is reserved at 0
+
+- A block's `minor_version` must be `0` (CEN-B2). The byte was Monero's
+  hard-fork vote and any value validated, which left a byte in every header
+  for the block's producer to write. Both validators now refuse every other
+  value, and both templates write the constant; the Rust template no longer
+  takes it from its caller. Ruled 2026-10-06 with the deletion of the
+  hard-fork mechanism, superseding the 2026-09-23 ruling that kept the vote
+  window (`CONSENSUS_RULE_CENSUS.md` §10 R4).
+- `HardFork::check`, `check_for_height` and `add` shared one predicate: the
+  major version is the one the height schedule names, and the minor version
+  is the reserved constant. The vote window, the threshold and the decoder
+  that read a minor of 0 as a vote for 1 were deleted here. The class, its
+  tables and its RPC surface are deleted with the mechanism above.
+- Wire, until that deletion: `hard_fork_info` answered and reported
+  `window`, `votes` and `threshold` as `0`. The one reader was the daemon
+  console's `hard_fork_info` command. No wallet crate and neither wallet
+  repository called the method.
+- Mainnet, testnet and stagenet then installed one table,
+  `hard_fork_schedule` (version 1 at height 1). The three per-network copies
+  were identical and were deleted; regtest and the trace exporter read the
+  same row. Rule 71's allowlist for the table selection was retired with it.
+  The table itself is deleted with the mechanism above.
+- Blocks mined by earlier builds carried `1` and are invalid under this rule:
+  the six captured replay chains are re-captured. Genesis carries `0` and is
+  unchanged. Atomic under `07-consensus-atomic-cutovers`: both validators,
+  both templates and the captured chains change together.
+
+- Docs: the release documents describe the release as it is cut. `VERSIONING.md` ties a pre-release to an incompatibility on `dev`, not to a two-week rhythm. `RELEASE_PROMOTION.md` §4 and `RELEASING.md` promote `dev` to `main` by pull request through `beta.N` and keep the release branch for `rc.1` onward; the tag is signed with the Foundation subkey on the merge commit. `SIGNING.md`'s manifest command takes `--clobber`, because the release job publishes an unsigned `SHA256SUMS` first. The `RELEASE_CHECKLIST.md` manifest row is checked: the ceremony ran on `v3.1.0-alpha.9`.
+- Docs: `TOR_BUNDLE_DISTRIBUTION.md` (`TB-`) records a round ruled 2026-10-06 and not yet implemented: a node has Tor unless its operator explicitly declines it, every artifact ships the pinned Expert Bundle, the pin covers every file in tor's directory and the directory holds nothing else, and the launcher clears its environment. It records what the alpha.9 fleet install found: no artifact carries tor, a node without it runs clearnet-only at a log level nobody reads, and the Linux tor loads the system's OpenSSL unless told otherwise.
+- **Benchmarks: the archival serve path is gated per PR.** `BA-T3` adds four `crypto_bench_serve_*` instruction-count functions to `shekyl-p-serve` (a whole response at three shard sizes, the work before the first byte at two, and the chunked read-and-fold beside the one-shot digest), on the single-pass serve. First readings: a full segment is 191 M instructions; work before the head is 13.5 K and does not grow with the shard; chunking adds 2.2 % to the digest. The measurement ledger gains an `estimated` status with a typed band and `[[retired_estimate]]`, which keeps a prediction beside the measurement that settled it with a verdict the check computes; the first entry is the 40–60 ms single-pass prediction against the floor's 67.2 ms, falsified. `BENCHMARK_ALIGNMENT.md` records `BA-Q3` as ruled.
+- **C++ version gates swept.** Every version comparison in `src/` is classified in `docs/ci/cxx-version-gates.tsv` and held there by a CI gate (`CXX_VERSION_GATES.md`). Deleted with it: the unreachable `get_output_distribution` surface (`RpcHandler`, its message struct, the function through core, blockchain and LMDB) behind `major_version >= 4`, the peer top-version check behind `version >= 6`, and two always-true `HF_VERSION_FCMP_PLUS_PLUS_PQC` gates. `HF_VERSION_DYNAMIC_FEE` and `HF_VERSION_FCMP_PLUS_PLUS_PQC` are gone. Widened 2026-10-06: the gate reads a comparison on any version name, including a named bound, `HardFork`'s own comparisons, a persisted row's `kVersion` and the bootstrap file version, and it scans `.cc`. 99 sites in 89 rows, counted on code alone: a comparison quoted in a string literal is not a row. Disposition and landing are closed tokens. The hard-fork mechanism is ruled deleted (Rick, 2026-10-06): its rows are `delete`, and that deletion is the section above. No behaviour changes.
+
+### Archival serving — one store read, and five answers that each mean one thing
+
+- `shekyl-p-serve` reads a shard once. It hashes each chunk as it sends
+  it, then signs the finished digest and appends the signature. On a Pi 4
+  a served shard takes 67 ms, against 103 ms on the two-read path.
+- **Wire change to the serving route** (`ARCHIVAL_SERVING_ROUTE.md`). The
+  signed message and the pass record are unchanged.
+  - `400`: the request is not valid (wrong route or method, a request
+    header that is missing or malformed, an anchor outside the gate).
+    Decided before the shard is looked up.
+  - `404`: the shard is not held. Nothing else answers 404 any more.
+  - `503`: the persona cannot serve through its own fault: its store or
+    its tip could not be read, or it has no resident key. These answered
+    404 before.
+  - A signer that fails after the body has gone out ends the response
+    with a refusal trailer in the signature's place. A response that
+    stops short is always treated as a transport failure and retried.
+- `shekyl-p-fetch` types each: `FetchError::Rejected` (400),
+  `FetchError::Unavailable` (503) and `FetchError::Unsigned` (the refusal
+  trailer). `FetchError::next_move` gives the scheduler's rule: a first
+  400 earns one retry of the same `P` with a freshly derived anchor and a
+  second is a failed read; a 503 and a refusal trailer are failed reads
+  with no retry.
+- A persona whose signing key is not available answers 503 and sends no
+  shard.
+
+### Archival serving — the persona signs its own passes (SH-2)
+
+- **Served shards are now countersigned with the persona's bond identity
+  key.** The serving host's key is the persona's resident attestation key
+  (`ResidentPassKey`): the signature is produced inside the stake actor,
+  which already holds that key for the bond's own transactions, so no
+  second copy of the secret exists and the serving role holds only a weak
+  handle to the actor. A wallet whose stake actor has stopped refuses
+  before the first byte (503). The placeholder key that refused every
+  pass is deleted. Verified end to end against the daemon's fetch client
+  in a loopback test: the client accepts the pass under the bond identity
+  and refuses it under any other key.
+- **Operator alarm board: `ServeHealth`.** A new condition reports, once
+  per refresh cadence from a probe on its own task (so a refresh wedged on
+  the store actor cannot delay the reading), whether the host's answers
+  are being answered:
+  `ServeSigningRefused { pre_flight, late }` when the key refused during
+  the tick, `ServeLookupsFailing { failures }` when only lookups (store or
+  daemon tip) failed, `ServeListenerFailing { accept_errors }` when only
+  the loopback listener failed to accept, and a clean armed row when none
+  did. Connections closed over the in-flight cap are load, not an alarm.
+  The first reading is windowed against zero, so a refusal answered before
+  the first read is reported rather than folded into the baseline. The row
+  is disarmed `NotServing` outside the host's life. Previously the serve
+  counters were readable only by tests.
+- **Closing a serving wallet no longer waits on a wedged serve-set
+  refresh.** The refresh loop's actor round trip is now interrupted by
+  shutdown like the tick before it; an abandoned refresh leaves the
+  previous pins in place and the teardown reports `NotServing` as before.
+
+### Chain rules — a compact join names shards that are closed, final and priced (CEN-J15)
+
+- The Rust validator now refuses a JoinMarket whose shard set names a
+  shard the chain has not closed, one closed fewer than the reorg cap
+  of blocks before the admitting block's parent, or one the last settled
+  epoch did not price — and then judges the priced, aged shards for
+  viability through the retention crate's admission check, as the C++
+  does. A complete-tree join gathers nothing and is unaffected. Until this
+  change the Rust side admitted a compact join onto any shard id, and the
+  C++ still does for an unclosed one (it has no closure step and scores a
+  missing price as zero), so the Rust refuses a strict superset of what
+  the C++ refuses; the difference is recorded for cutover day beside
+  `DEL-008` (`DAEMON_REDB_STORE.md` §12), not patched into the C++
+  (`CHAIN_RULES_SLICE_8.md` §5 row 6). An unclosed shard is not available
+  to bond; there is an epoch to claim one once it is.
+- The captured `emission-claim` chain predates this rule: its market bond
+  at height 98 joins a shard no block had closed. The replay connects it
+  through 97, refuses 98 on CEN-J15 as recorded, and compares nothing at
+  its tip (`shekyl-chain-ingest` `vectors_tests::PREDATES`); the chain is
+  a witness for what was true at capture, not for this rule, until it is
+  regenerated over a filled, closed and priced shard.
+
+### Chain rules — the emission claim's statics (CEN-J19, J20, J22, J24)
+
+- The Rust validator now judges the byte-only rows of an emission claim
+  as the C++ does: the emission vin must parse exactly (CEN-J19); the
+  hybrid key in the claim's emission slot must derive the vin's
+  `P_canonical_id`, so the claim is signed by the persona it pays
+  (CEN-J20); the signable hash is the prefix hash with the emission vin
+  removed (CEN-J22; `shekyl-wire` gains `TxPrefix::hash`, the derivation
+  `Transaction::prefix_hash` already was, now callable on an edited
+  prefix); and the reward commit set is the loud outputs in order with a
+  checked sum, refusing a missing commitment or an overflow (CEN-J24).
+  The verify crossing that consumes the hash and the set (CEN-J25) is
+  the entry below (`CHAIN_RULES_SLICE_8.md` §5 rows 8–9).
+
+### Chain rules — the emission claim is verified (CEN-J21, J23, J25, J26)
+
+- The Rust validator now refuses an emission claim the C++ refuses: the
+  claim's reference block must exist, be inside the window and carry the
+  tree root its backing proof was made against, even with no fee inputs
+  (CEN-J21); every claimed epoch must have a frozen close (CEN-J23); the
+  claim window, work share, budget arithmetic, membership-only backing
+  proof and hybrid authorization are verified through the same retention
+  bodies the C++ calls, under the settlement schedule in force rather
+  than a process-wide latch (CEN-J25); and a claim that spends fee
+  inputs must carry an FCMP++ proof that verifies over them (CEN-J26).
+  Until this change the Rust side admitted a claim whose proof failed or
+  whose epoch had not closed, and let the block fold refuse it. The
+  FCMP++ verification body is now in the rules crate; its run over
+  ordinary spends and over a bond post's funding spends is held for a
+  ruling (`CHAIN_RULES_SLICE_8.md` §5 row 9).
+
+### Chain rules — the block's attestation set is judged (CEN-B4)
+
+- The Rust validator now refuses a block whose `attestation_root` is not
+  the root of the attestation set it carries: with no witness the header
+  must commit to the empty set, and with one every record must pair with
+  the coinbase's record field and carry a countersignature that verifies
+  under the holder's bond key. Until this change the Rust side admitted
+  any root. The admission body moved out of the C++-facing FFI into the
+  retention crate, so the daemon's existing check and the Rust validator
+  are one function; the daemon's verdicts are unchanged
+  (`CHAIN_RULES_SLICE_8.md` §5 row 10).
+
 ## [3.1.0-alpha.9] - 2026-10-05
 
+- **Upgrading a running node from alpha.8 to alpha.9: restart once more after your peers have upgraded.** An alpha.8 node that keeps dialing an alpha.9 node is banned by it for 24 hours once its failure score passes 10 (the eleventh failed handshake, at one point each), and the ban stays after the alpha.8 node itself upgrades. If an alpha.9 node shows no peers although its peers are on alpha.9, restart it; the ban list is not kept across a restart. Seen on the Foundation fleet's own rolling install. The scoring itself is the misbehaviour-scoring row in `FOLLOWUPS.md`.
 - Docs: `V3_ROLLOUT.md` says what the LMDB daemon does today: it keeps every transaction whole. Uniform pruning is the contract (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) and lands with the Rust store (`PDM-Q-S0`), so budget disk for an unpruned chain. The CLI's daemon-session test runs against a `--testnet --offline` daemon, since the shipped wallet refuses a `--regtest` one on identity (PR #963).
 - Docs: the delivery digest (`SF-D8`, PR #954) costs a Pi 4 78 ms of CPU per served shard, 0.5 % of a Tor read; record in `docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md`.
 - Docs: `BENCHMARK_ALIGNMENT.md` (`BA-`) inventories every benchmark, gate script and dated capture, lists the measurements that ruled constants rest on with nothing tracking them, and proposes a tracked set for ruling. No benchmark, workflow or baseline changes.
@@ -95,6 +436,54 @@
   with their reopen conditions among the provisional-until-testnet keys in
   `CLIENT_VERSION_CONSTANTS_VALIDATION.md`, and reading B is the gate 4/5
   owner's participation-floor input.
+
+### Chain rules — a bond post is judged against its record before the block (CEN-J14, J16, J18)
+
+- The Rust validator now runs the retention crate's three kind verifies
+  on every bond post, over the record as the chain stood before the
+  block: a JoinMarket must bond exactly the floor for its holdings over
+  no existing record; a Release must empty a record that exists, past
+  the cooldown from its last served epoch and with slashes settled through
+  it; a Reinstate must close the one open interval of the record it names
+  without changing its holdings. Until this change those predicates ran
+  only in the C++ and the daemon's submit pool, and the Rust side refused
+  a subset of them one pass later, from the fold's belts
+  (`CHAIN_RULES_SLICE_8.md` §5 row 5). A join and a release for one
+  persona in one block is refused on the release's missing record, not on
+  the block's one-post-per-persona rule — the order both implementations
+  already had.
+- An unnamed bond-post kind is refused under CEN-L7 inside that same
+  sequence, at the post's input — the row and the locus the fold already
+  used. The fold's arm stays, for a transition that did not run the
+  sequence. A bond post with no auth slot at its input is refused under
+  CEN-J13 at the point that kind reads the slot, after the kind's other
+  check, so neither case is recorded as a covered pass
+  (`CHAIN_RULES_SLICE_8.md` §5 row 5).
+
+### Chain rules — a bond post is keyed by its key, and a Release by the record's (CEN-J11, J12, J13)
+
+- The Rust validator now refuses a bond post whose `p_canonical_id` is not
+  the recompute over its hybrid public key, or whose key (or a JoinMarket's
+  `bond_spend_pk`) is not canonical length — and a post whose slot carries
+  the wrong key: the identity key on a JoinMarket or Reinstate, the
+  record's committed `bond_spend_pk` on a Release, judged before the
+  slot's signature is verified. Until this change the Rust side trusted
+  the hint and verified the slot against whatever key it carried, so a
+  Release of another persona's bonded record, signed by the poster's own
+  key, connected and paid that record's collateral to the poster; the C++
+  refused both (`CHAIN_RULES_SLICE_8.md` §2, §5 row 4). No corpus block
+  carries either.
+
+### Chain rules — the serve credit's bond state is judged before the block (CEN-J4, J5, J6)
+
+- The Rust validator now refuses a serve-credit input whose persona has no
+  bond record, whose epoch is not past the join epoch, or whose persona is
+  not `good_through` the epoch — read off the chain view **before** the
+  block, as live consensus reads its database. Until this change the fold
+  that applied the credit saw the block's own joins, so a join and a credit
+  for the same persona in one block, or a credit for the join's own epoch,
+  connected on the Rust side and would not have on the C++; no corpus block
+  carries either (`CHAIN_RULES_SLICE_8.md` §5 row 3).
 
 ### Chain rules — CEN-H20 requires the serve credit's pass records (`SHT-9`)
 

@@ -272,10 +272,11 @@ pub struct LeafEntry {
     /// the membership-path assembler can rebuild the leaf chunk's
     /// compressed `O`/`I`/`C` points (the prover's `Path.leaves`, F6).
     /// The cached `leaf` only holds x-coordinates, which cannot be
-    /// decompressed back to points; `identity` carries the compressed `O`
-    /// and `C` so the assembler derives `I = Hp(O)` and emits a
-    /// [`crate::types::ChunkLeaf`]. Co-located with the entry so it rides
-    /// the drain-order sort without desync.
+    /// decompressed back to points. The circuit tape hashes those
+    /// x-coordinates; `identity` carries the compressed `O` and `C` so the
+    /// assembler derives `I = Hp(O)` and emits a [`crate::types::ChunkLeaf`]
+    /// for the prover API, which still takes points. Co-located with the
+    /// entry so it rides the drain-order sort without desync.
     pub identity: OutputIdentity,
 }
 

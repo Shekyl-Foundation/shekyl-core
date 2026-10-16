@@ -39,13 +39,14 @@
 
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
-use shekyl_chain_rules::{AtHeight, RecordedWeights, Tip};
+use shekyl_chain_rules::{AtHeight, RecordedWeights, SlashLogFloor, Tip};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
     PCanonicalId, SettlementEpoch, ShardId, TreeLeaf, TreePosition, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::archival_snapshot::ArchivalSnapshot;
 use crate::codec::{
@@ -56,7 +57,10 @@ use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
-use super::archival_reads::{self, PassCount, ServedShard};
+use super::archival_reads::{
+    self, BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
+    SettlementRow,
+};
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
 use super::tx_reads::{self, Prunable, TxLocation, TxRecord};
@@ -458,6 +462,27 @@ impl ReadSnapshot<'_> {
             AtHeight::Recorded(info) => AtHeight::Recorded(info.cumulative_tx_count),
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
+    }
+
+    /// How many outputs the transaction at `id` recorded, from
+    /// `tx_outputs` (**T5**). The shard fold counts in-domain outputs from
+    /// this row, not by parsing the pruned segment.
+    ///
+    /// # Errors
+    ///
+    /// As [`tx_prunable`](Self::tx_prunable): an id at or past the dense
+    /// count is [`AtIndex::BeyondCount`]; a hole below it is SI-9.
+    pub fn tx_output_count(&self, id: TxStorageId) -> Result<AtIndex<u64>, StoreError> {
+        Ok(
+            match tx_reads::output_indices_at(&self.txn, id)
+                .map_err(chain_reads::ReadFault::into_plain)?
+            {
+                AtIndex::Recorded(indices) => AtIndex::Recorded(
+                    u64::try_from(indices.0.len()).expect("an output count fits u64"),
+                ),
+                AtIndex::BeyondCount => AtIndex::BeyondCount,
+            },
+        )
     }
 
     /// The long-term weight median **in force for** the block at `height`
@@ -904,12 +929,15 @@ impl ReadSnapshot<'_> {
     /// **A2.** Every slash logged against `persona` strictly above `height`,
     /// in log order — the history half of the as-of-height holdings fold
     /// (`shekyl-archival-retention::holds_shard_at`). Empty when none.
+    /// `floor` is the log's retirement floor under the caller's rule set; a
+    /// range starting below it is SI-26, not an empty answer.
     pub fn slash_log_after(
         &self,
         persona: &PCanonicalId,
         height: BlockHeight,
+        floor: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
-        archival_reads::slash_log_after(&self.txn, persona, height)
+        archival_reads::slash_log_after(&self.txn, persona, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
@@ -1009,6 +1037,58 @@ impl ReadSnapshot<'_> {
         epoch: SettlementEpoch,
     ) -> Result<Option<AtomicUnits>, StoreError> {
         archival_reads::budget_accruing(&self.txn, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A14.** What `epoch` settled for `(persona, shard)`. `None` is a
+    /// pair no draw was issued to, or an epoch not settled yet.
+    pub fn settlement_row(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::settlement_row(&self.txn, persona, shard, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A15.** Every draw issued in `epoch`, in `(P, shard, h, j)` order.
+    pub fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A16.** The running digest of the draws issued in `epoch`;
+    /// [`IssuedDigest::ZERO`] when none was.
+    pub fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A17.** The shards `persona` was Served on at each of `epochs`,
+    /// ascending per epoch. An epoch with none is absent. One hop of the
+    /// persona's shards, then a point read of each epoch (`SO-D2`).
+    pub fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epochs: &BTreeSet<SettlementEpoch>,
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
+        archival_reads::served_at(&self.txn, persona, epochs)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A18.** What the draw's count rule recorded for the block at
+    /// `height`, or `None` for a block no row was written for.
+    pub fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
+        archival_reads::block_draws(&self.txn, height).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A19.** The digest of `epoch`'s drawable set as written at its
+    /// open, or `None` for an epoch with no recorded set. An all-zero
+    /// digest is a digest.
+    pub fn drawable_digest(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<DrawableDigest>, StoreError> {
+        archival_reads::drawable_digest(&self.txn, epoch)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

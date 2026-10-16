@@ -19,6 +19,7 @@ use crate::proofs;
 use crate::queries;
 use crate::receiving;
 use crate::send;
+use crate::shard_view;
 use crate::staking;
 use crate::staking_actions;
 use crate::sync;
@@ -91,6 +92,9 @@ pub async fn dispatch(
         // all its inputs are public and caller-supplied.
         "sign_message" => message_signing::sign_message(tenants, params).await,
         "verify_message" => message_signing::verify_message(tenants, params).await,
+        // SV-D shard view: forwarded to the open wallet's daemon, which
+        // fetches the shard body from a holder and answers the aggregate.
+        "get_shard_view" => shard_view::get_shard_view(tenants, params).await,
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }

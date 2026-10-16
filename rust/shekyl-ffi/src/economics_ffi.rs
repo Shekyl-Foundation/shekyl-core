@@ -240,16 +240,13 @@ fn circulating_supply(
 /// slice 4 precursor §3.1 S4/S6). The zero-emission arm and the
 /// share→split composition that the C++ shim `economics.h` used to own are
 /// `shekyl_economics::compute_emission_split`'s; the three constants it
-/// marshaled are that crate's. `genesis_ng_height` is CEN-F21's epoch (1 on
-/// every shipped network). Infallible.
+/// marshaled and CEN-F21's epoch are that crate's. Infallible.
 #[no_mangle]
 pub extern "C" fn shekyl_compute_emission_split(
     block_emission: u64,
     current_height: u64,
-    genesis_ng_height: u64,
 ) -> ShekylEmissionSplit {
-    let split =
-        shekyl_economics::compute_emission_split(block_emission, current_height, genesis_ng_height);
+    let split = shekyl_economics::compute_emission_split(block_emission, current_height);
     ShekylEmissionSplit {
         miner_emission: split.miner_emission,
         staker_emission: split.staker_emission,
@@ -550,24 +547,13 @@ pub extern "C" fn shekyl_advance_already_generated(
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────
 
-/// Calculate the effective staker emission share at a given block height.
-///
-/// Returns fixed-point SCALE value (e.g., 150_000 = 15%).
+/// The staker emission share in force at `height`, in SCALE units
+/// (150_000 = 15%). `shekyl_economics::emission_share_at`: zero at genesis,
+/// the shipped share decayed from block 1 after it. The epoch and the three
+/// share constants are that crate's, not arguments.
 #[no_mangle]
-pub extern "C" fn shekyl_calc_emission_share(
-    current_height: u64,
-    genesis_height: u64,
-    initial_share: u64,
-    annual_decay: u64,
-    blocks_per_year: u64,
-) -> u64 {
-    shekyl_economics::emission_share::calc_effective_emission_share(
-        current_height,
-        genesis_height,
-        initial_share,
-        annual_decay,
-        blocks_per_year,
-    )
+pub extern "C" fn shekyl_emission_share_at(height: u64) -> u64 {
+    shekyl_economics::emission_share_at(height)
 }
 
 #[no_mangle]

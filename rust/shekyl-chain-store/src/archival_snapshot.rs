@@ -52,7 +52,8 @@
 //!
 //! # What is not here, by name
 //!
-//! `archival_settlement` (held, SO-D8), the seven `NOT_PORTED` journals (no
+//! `archival_settlement` (the C++ chain has no settlement writer to
+//! compare with, `SO-D10`), the seven `NOT_PORTED` journals (no
 //! state to compare), `archival_alt_attestation_witness` (alt-chain,
 //! excluded as v0 excludes alt-chain), the txpool. [`disposition`] is the
 //! exhaustive `match` over [`ArchivalFamily`] that says so, so a family
@@ -232,7 +233,9 @@ pub const fn disposition(family: ArchivalFamily) -> Disposition {
         ArchivalFamily::SlashApplied => Disposition::Rows(SnapshotFamily::SlashApplied),
         ArchivalFamily::BudgetAccrual => Disposition::Rows(SnapshotFamily::BudgetAccruing),
         ArchivalFamily::Settlement => {
-            Disposition::Excluded("archival_settlement is held (SO-D8); no writer on either side")
+            Disposition::Excluded(
+                "archival_settlement has no production writer in the C++ store to compare with (SO-D10)",
+            )
         }
         ArchivalFamily::AltAttestationWitness => {
             Disposition::Excluded("alt-chain state, excluded as v0 excludes alt-chain")
@@ -851,6 +854,9 @@ mod tests {
         BondRecord {
             hybrid_pubkey: vec![0x0A],
             bond_spend_pk: Vec::new(),
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x0c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0; 32],
             join_settlement_epoch: SettlementEpoch::ZERO,
             bonded_total: AtomicUnits::from_raw(bonded),

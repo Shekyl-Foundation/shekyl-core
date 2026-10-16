@@ -18,11 +18,20 @@
 //! `previous` is not the recorded tip as SI-2 `TipMismatch` — a fatal, not a
 //! verdict. This rule is what stands in front of it, so a wrong-parent block
 //! is refused as `InvalidBlock` and never reaches a belt.
+//!
+//! The rule reads one header fact — the tip's hash — so it is a
+//! [`HeaderRule`], and the alt tier (`crate::alt_against`) runs it first in
+//! its ladder for the same reason `validate` does: the stitched view's tip
+//! is the candidate's parent by the store's construction, but the function
+//! that mints the verdict cannot see that construction, and a view handed
+//! to it for another candidate must refuse, not mint (`DRS_E5_POOL_ALT_PRUNE.md`
+//! §2.1, review finding 2026-10-12).
 
 use crate::census::CenRow;
-use crate::rules::{BlockContext, BlockRule, Rule};
+use crate::fault::ViewRead;
+use crate::rules::{BlockContext, HeaderRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::ChainView;
+use crate::view::HeaderView;
 use shekyl_types::BlockHash;
 
 /// CEN-A2: the candidate's `previous` is the recorded tip's hash — or, on
@@ -44,11 +53,11 @@ impl Rule for A2 {
     const ROW: CenRow = CenRow::A2;
 }
 
-impl BlockRule for A2 {
-    fn check<'id, V: ChainView<'id>>(
+impl HeaderRule for A2 {
+    fn check<'id, H: HeaderView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+        _view: &H,
+    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
         let expected = match cx.tip {
             Some(tip) => tip.hash,
             None => Self::GENESIS_PREVIOUS,

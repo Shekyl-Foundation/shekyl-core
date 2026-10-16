@@ -12,14 +12,14 @@
 //! (corpus │  (stateless; real     (restore the  (one actor; owns    (digest/grader,
 //!  now,   │   RandomX per worker)  source order; the ChainStore;     checkpoint,
 //!  p2p at │                        Rewind is a   one write closure   metrics)
-//!  E3)    │                        barrier)      per handler)
+//!  DRS-X) │                        barrier)      per handler)
 //! ```
 //!
 //! DRS-E2's replay driver is this pipeline with a corpus [`Source`] and a
-//! grader sink; E3's cutover swaps the source for the p2p feed and drops the
-//! grader. There is no second connect path — a harness that admitted blocks
-//! through code production never runs is the C++ defect (`core_tests` /
-//! `chaingen`) this crate exists not to reproduce.
+//! grader sink; the store flip (DRS-X) swaps the source for the p2p feed
+//! and drops the grader. There is no second connect path — a harness that
+//! admitted blocks through code production never runs is the C++ defect
+//! (`core_tests` / `chaingen`) this crate exists not to reproduce.
 //!
 //! # What lives here
 //!
@@ -50,6 +50,14 @@
 //!   (`CHAIN_RULES_SLICE_6.md` §5.3). It has no feature flag of its own and
 //!   nothing outside this crate's tests can reach it — by design: a driver
 //!   that shipped would be a second producer.
+//! - [`emission_assembly`] — the one exception to that sentence, and a
+//!   narrow one: the driver's emission-claim assembly (E6 slice 8 row 7,
+//!   Q3), compiled under `cfg(test)` **or** the `harness` feature. The
+//!   feature exists for one consumer — `shekyl-engine-core`'s byte-identity
+//!   test, which holds this assembly and the engine handler's to the same
+//!   bytes — and `check_test_only_features.py` registers it TEST_ONLY: no
+//!   feature of this crate enables it, and every enabler is a
+//!   `[dev-dependencies]` edge, so no shipping build carries it either.
 //!
 //! Form is `shekyl_chain_rules::form`. The sequencer, the validate+connect
 //! actor, the grader and the replay driver live behind `feature = "pipeline"`.
@@ -66,10 +74,22 @@
 
 #![deny(unsafe_code)]
 
-/// `ARW-Q15`'s consumer: the LMDB slash fixture rebuilt on the Rust stack
-/// under a levered schedule and compared through a role map.
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2 (a)): the corpus's
+/// archival inputs, enumerated both ways.
 #[cfg(all(test, feature = "pipeline"))]
-mod archival_fixture_replica_tests;
+mod archival_corpus_tests;
+/// The first spendable height and the refusal shape the archival driver
+/// tests share.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod archival_driver;
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 4): a mismatched hint is
+/// CEN-J11, and a Release signed by the wrong key is CEN-J13.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_hint_tests;
+/// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 rows 3 and 5): one levered
+/// slash chain, J5 through the Release, a phase at a time.
+#[cfg(all(test, feature = "pipeline"))]
+mod archival_slash_tests;
 /// DRS-E4 §3.8 item 2: the archival oracle's sufficiency stamp — census
 /// and stub halves over the captured corpus.
 #[cfg(all(test, feature = "pipeline"))]
@@ -83,14 +103,17 @@ mod body_pairing_tests;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
+/// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 7, Q3): the driver's
+/// emission claim, assembled as the engine handler assembles it. Reachable
+/// under `harness` for the byte-identity pin alone (crate docs).
+#[cfg(any(test, feature = "harness"))]
+pub mod emission_assembly;
 #[cfg(feature = "fetch")]
 pub mod fetch;
 #[cfg(feature = "pipeline")]
 pub mod grader;
 pub mod metrics;
 pub mod mutation;
-#[cfg(all(test, feature = "pipeline"))]
-mod mutation_bodies;
 #[cfg(all(test, feature = "pipeline"))]
 #[path = "mutation_tests.rs"]
 mod mutation_tests;
@@ -104,8 +127,25 @@ pub(crate) mod scenario;
 pub(crate) mod scenario_archival;
 #[cfg(all(test, feature = "pipeline"))]
 mod scenario_archival_tests;
+/// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 7): one emission claim
+/// the driver assembles, `validate` admits, pinned. Live lane.
 #[cfg(all(test, feature = "pipeline"))]
-pub(crate) mod scenario_spend;
+mod scenario_emission_tests;
+/// The compact-join scenario that `scenario_archival_tests` describes.
+/// Its own module so that file stays the single-block arms.
+#[cfg(all(test, feature = "pipeline"))]
+mod scenario_join_tests;
+/// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 6): the `close_shard()`
+/// step — real spends until a shard closes, then the wait for CEN-J15's
+/// finality and price. Live lane.
+#[cfg(all(test, feature = "pipeline"))]
+pub(crate) mod scenario_shard;
+/// Slice 6 row 6 (`CHAIN_RULES_SLICE_6.md` §5): real spends through the
+/// stack — the acceptances and the refusals behind an accepted body that
+/// the rules crate's fixtures cannot witness once CEN-I13 runs on the
+/// spend class. Default lane.
+#[cfg(all(test, feature = "pipeline"))]
+mod scenario_spend_tests;
 #[cfg(feature = "pipeline")]
 pub mod schedule;
 #[cfg(feature = "pipeline")]
@@ -123,8 +163,8 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject, Injected, Rewind,
-    Rewound, RunEnd, RunFault, TemplateFacts,
+    Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject, Injected,
+    IssueDraws, Rewind, Rewound, RunEnd, RunFault, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

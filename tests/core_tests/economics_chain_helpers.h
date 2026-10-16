@@ -86,10 +86,10 @@ inline void seed_generator_from_db_genesis(
 {
   std::vector<size_t> seed_weights;
   generator.add_block(genesis, 0, seed_weights, 0,
-      db.get_block_already_generated_coins(0), genesis.major_version);
+      db.get_block_already_generated_coins(0));
 }
 
-// Constructs one empty block of `hf_ver` on top of `prev`, connects it
+// Constructs one empty block on top of `prev`, connects it
 // through the real path, and resyncs `generator` bookkeeping from the DB's
 // post-connect state. Returns false (with a logged, height-labeled message)
 // on the first failing step.
@@ -98,7 +98,6 @@ inline bool extend_chain_with_empty_block(
     test_generator& generator,
     const cryptonote::account_base& miner,
     const cryptonote::block& prev,
-    uint8_t hf_ver,
     cryptonote::block& blk_out)
 {
   cryptonote::BlockchainDB& db = c.get_blockchain_storage().get_db();
@@ -115,13 +114,12 @@ inline bool extend_chain_with_empty_block(
       timestamp,
       already_generated,
       block_weights,
-      std::list<cryptonote::transaction>{},
-      hf_ver), false,
+      std::list<cryptonote::transaction>{}), false,
       "extend_chain_with_empty_block: construct_block failed at height " << height);
   CHECK_AND_ASSERT_MES(add_block_to_core(c, blk_out), false,
       "extend_chain_with_empty_block: block not connected to main chain at height " << height);
   const uint64_t ag_after = db.get_block_already_generated_coins(height);
   std::vector<size_t> resync_weights;
-  generator.add_block(blk_out, 0, resync_weights, already_generated, ag_after - already_generated, blk_out.major_version);
+  generator.add_block(blk_out, 0, resync_weights, already_generated, ag_after - already_generated);
   return true;
 }

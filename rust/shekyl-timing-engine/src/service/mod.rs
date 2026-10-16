@@ -80,7 +80,8 @@ enum Command {
     Advance(Tick),
     #[cfg(test)]
     Barrier(Sender<()>),
-    #[cfg(test)]
+    /// A read of one class's lateness totals; production since the
+    /// transport diagnosis's periodic report (2026-10-14).
     Lateness {
         class: OwnerClass,
         reply: Sender<crate::ClassLateness>,
@@ -618,7 +619,6 @@ fn dispatch<C: Clock>(
             ignore(reply.send(()));
             return true;
         }
-        #[cfg(test)]
         Command::Lateness { class, reply } => {
             ignore(reply.send(engine.lateness(class).clone()));
             return true;
@@ -744,6 +744,26 @@ impl<C: Clock + Clone> Handle<C> {
     /// The clock the service was started with. A clone shares its origin.
     pub fn clock(&self) -> &C {
         &self.clock
+    }
+
+    /// `class`'s lateness totals as the engine thread holds them: fires,
+    /// wake delays and home delays with their histograms, replaced wakes.
+    /// Exposed for the periodic report the transport diagnosis asked for
+    /// (Rick, 2026-10-14); it reads, it changes nothing.
+    ///
+    /// # Errors
+    /// [`EngineError::Closed`] once the service has shut down.
+    pub fn lateness(&self, class: OwnerClass) -> Result<crate::ClassLateness, EngineError> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        enqueue(
+            &self.tx,
+            &self.closed,
+            Command::Lateness {
+                class,
+                reply: reply_tx,
+            },
+        )?;
+        reply_rx.recv().map_err(|_| EngineError::Closed)
     }
 
     /// Mint an id and queue its registration. This does not wait for the

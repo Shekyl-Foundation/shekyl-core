@@ -173,7 +173,7 @@ or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
 | `--out-peers <n>` | Maximum outbound peer connections |
 | `--in-peers <n>` | Maximum inbound peer connections |
 | `--add-peer <host:port>` | Manually add a peer |
-| `--add-priority-node <host:port>` | Peer that is always maintained |
+| `--p2p-disclose-early` | For the first nodes of a new network: below the floor of 48 peers this node discloses its known peers and its own address, on each connector until that connector reaches the floor or 24 hours pass. While it holds, this node is recognisable. Leave it off on an established network. |
 | `--ban-list <path>` | File of banned IP addresses |
 
 **Background operation**
@@ -209,7 +209,6 @@ so scripts can check it without parsing the output.
 | `print_height` | Current blockchain height |
 | `diff` | Current mining difficulty |
 | `sync_info` | Detailed sync and peer download state |
-| `hard_fork_info` | Current and upcoming hard fork versions |
 | `version` | Daemon version string |
 
 **Mining**

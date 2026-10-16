@@ -223,7 +223,66 @@ use super::{Canonical, CodecError};
 ///   not compute, and would halt at its first skeleton rebuild as
 ///   corruption; the bump refuses it at open with the true reason. LMDB
 ///   took `VERSION` 15 → 16 with the same change, for the same reason.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(21);
+/// - `22` — the settlement writer's tables (`ARCHIVAL_SETTLEMENT_WRITER.md`
+///   §14, `SO-D10`). `archival_settlement` leaves `Unshaped` for
+///   `([u8; 32], u64, u64) → settlement_row` and is sealed from here on;
+///   `archival_issued_draw` (`(u64, [u8; 32], u64, u64, u32) →
+///   issued_draw`) and `archival_issued_digest` (`u64 → issued_digest`) are
+///   born Rust-only, appended at ordinals 38 and 39 so no existing ordinal
+///   moves. A `21` file lacks all three, and `header::verify` would refuse
+///   it as a sealed file missing a table (SI-7); the bump refuses it at
+///   open with the true reason. No snapshot family moves: none of the
+///   three has a C++ counterpart to compare.
+/// - `23` — the secret draw's per-block state and the drawable set's
+///   digest (`ARCHIVAL_SETTLEMENT_WRITER.md` §16, `SO-D12` increment 1).
+///   `archival_block_draws` (`u64 → block_draws`, 17 bytes) and
+///   `archival_drawable_digest` (`u64 → drawable_digest`) are born
+///   Rust-only, appended at ordinals 40 and 41 so no existing ordinal
+///   moves. No block writes either yet. A `22` file lacks both, and
+///   `header::verify` would refuse it as a sealed file missing a table
+///   (SI-7); the bump refuses it at open with the true reason. No snapshot
+///   family moves: neither has a C++ counterpart to compare.
+/// - `24` — DRS-E5 (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, CEN-K8): **the alt
+///   record loses its supply word.** `alt_block` drops `coins_generated`,
+///   the C++ `alt_block_data_t`'s coinbase-paid approximation that nothing
+///   consensus-bearing read; the Rust admission tier reads no executed
+///   fact and derives none, and promotion re-derives supply by executing
+///   the chain. The same unreleased layout drops the weight's presence
+///   byte: `block_weight` is `BlockWeight`, eight bytes, always, and a
+///   zero weight is a codec refusal. Admission always measured one; the
+///   absence arm had no writer, and a later demotion does not inherit it.
+///   The fixture `alt_block` re-pins for both; no table moves. A `23`
+///   file's alt rows would decode with their block bytes mis-framed, so
+///   the bump refuses the file at open rather than
+///   letting `decode` report a parse failure as corruption. The refusal
+///   is `header::verify`'s
+///   [`StoreCannot::SchemaVersionMismatch`](crate::store::StoreCannot::SchemaVersionMismatch),
+///   raised before any table is read — AL3's drop of the alt table at
+///   init never runs on a `23` file — and the operator path is the one
+///   every bump has: no migration ladder exists; rebuild the store from
+///   the block corpus (`15-deletion-and-debt.mdc`, the pre-genesis
+///   migration path). (Both this change and `23` were cut from `22`
+///   on concurrent lanes; the merge ordered them by landing.)
+/// - `25` — the bond record carries the persona's receipt key
+///   (`FN_DSA_HYBRID.md` §8, increment 3; `ARCHIVAL_SERVE_CREDIT_SPEC.md`
+///   §6.3). `bond_record` gains `receipt_sign_pk`: exactly 1,837 bytes
+///   (`RECEIPT_SIGN_PK_LEN`, the canonical Ed25519 + FN-DSA-1024 hybrid
+///   public key a JoinMarket commits), **fixed-width with no length
+///   prefix**, directly after `bond_spend_pk`. The key is mandatory — a
+///   JoinMarket has one wire form and it carries one — so every record
+///   has it and every stored record moves by those bytes: a `24` file's
+///   `archival_bond` rows would decode with their endpoint and everything
+///   after it read as key bytes, and the bump refuses the file at open
+///   instead. `bond_record.snap` moves in both fixtures; no table,
+///   ordinal or property cell moves. The archival snapshot's
+///   `archival_bond` family encodes through this codec, so a trace
+///   captured under an earlier layout holds bond rows this store does not
+///   write, and the C++ export cannot push one at all (its record has no
+///   receipt key): `FN_DSA_HYBRID.md` `FND-19`, `FND-20`. One bump for
+///   the layout this change ends on; it is `25` because the draw-state
+///   tables took `23` and the alt record `24` while it was open, and it
+///   is independent of both.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(25);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -280,10 +339,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(21));
-        assert_eq!(SCHEMA_VERSION.encode(), [21, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(25));
+        assert_eq!(SCHEMA_VERSION.encode(), [25, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[21, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[25, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

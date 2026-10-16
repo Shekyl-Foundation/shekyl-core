@@ -420,15 +420,26 @@ then dies mid-draw triggers the actor's fail-stop (panic = loud). The
 failure into it would require changing `shekyl-standoff`'s API — deferred
 per the reversion clause if a specific need emerges.
 
-*Per-draw degeneracy guard (float-free, fail-loud — S5):*
-After the entry-gap draw, one probe draw is taken from the same RNG adapter.
-If `spread_draw == spread_probe`, the guard fires `StakeEngineError::RngDegeneracy`.
-This catches the double-jitter-trap degenerate pattern with probability
-≈ 1 per 601 for a correct CSPRNG (acceptable false-positive rate; a bond
-retry is cheap). The guard is extracted into a tested helper
-`draw_entry_gap_guarded(window, rng)` so the degeneracy logic is unit-tested
-with injectable degenerate RNGs (conformance-gated, not injected into the
-live actor).
+*Per-draw degeneracy guard (float-free, fail-loud — S5; UPDATE 2026-10-13, the refusal is a run):*
+Round 3 drew one pair and fired `StakeEngineError::RngDegeneracy` when the two
+spreads were equal. At the operational window that is one collision in 601 on
+a correct source, and the round called a user retry acceptable.
+UPDATE 2026-10-13: that figure is the per-pair collision, not the refusal a
+caller sees. `draw_entry_gap_guarded` (`stake_engine/helpers.rs`) draws the
+minimal run of pairs whose correct-source refusal is at most one draw in
+`ENTRY_GAP_DEGENERACY_BOUND`, and returns `DegenerateDraw` only when every
+pair was equal. The actor still maps that to `RngDegeneracy`. A constant
+source still refuses inside the request. One equal pair is drawn again inside
+the guard, so a wallet is not told to retry a chance collision, and retrying
+the surfaced error does not help while the source stays stuck. A finite
+equality test cannot promise zero refusals of a correct source; the bound is
+the accepted residue, not a claim of never. Falsify by the helper's
+deterministic tests: a constant `GapRng` refuses; a scripted source that
+collides once and then draws a distinct pair accepts, and the spread is the
+first of that pair; a source that collides for the whole run refuses;
+`entry_gap_degeneracy_run` at `DEFAULT_ENTRY_GAP` meets the bound, is minimal,
+and is longer than one pair. The helper stays the tested seam. The live actor
+is not the injection point.
 
 *Session-level self-cert (S6 — `certify_draw`, gated):*
 `certify_draw` over `GapRng`-adapted `OsRng` runs at session start, gated

@@ -39,7 +39,7 @@ impl FeeCorrection {
 }
 
 /// `C = (1−σ)·M_r/(1−b)` from the caller's already-computed `σ` and `b`
-/// (the same `shekyl_calc_emission_share` / `shekyl_calc_burn_pct` values
+/// (the same `shekyl_emission_share_at` / `shekyl_calc_burn_pct` values
 /// the validation path uses at this state).
 ///
 /// Total: `σ` and `b` are clamped below `SCALE`, so the divisor is at least

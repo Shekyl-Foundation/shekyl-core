@@ -153,6 +153,20 @@ pub mod inbound_ceiling_ffi;
 // cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 pub mod seam_ffi;
 
+// Whether a close should stop dials, and the cause stored on a seam row.
+// The C++ handshake still asks. The Rust dialer will hold the cause itself.
+pub mod close_cause_ffi;
+pub mod dialer_ffi;
+pub mod peerlist_ffi;
+pub mod rpc_peerlist_ffi;
+
+// Operator link rates and the byte-stamp clock the stall check reads.
+pub mod link_ffi;
+
+// The published board. Counts are integers. Address walks receive a
+// snapshot whose row is the id, the handshake flag, and the endpoint.
+pub mod seam_board_ffi;
+
 // The thread ledger at the C boundary: one executor row, and the report
 // of every row. The floor check is ExecutorBudget::above_floor; this
 // module does not reimplement it.

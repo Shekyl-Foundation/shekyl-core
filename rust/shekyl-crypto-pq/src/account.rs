@@ -58,7 +58,7 @@
 //!                                                                 || d_z)[0..32]
 //!                                                                        │
 //!                                                                        ▼
-//!                                                                ChaCha20Rng::from_seed
+//!                                                                SeededRng::from_seed
 //!                                                                        │
 //!                                                                        ▼
 //!                                                                ml_kem_768::KG::
@@ -66,7 +66,9 @@
 //!                                                                  → (ek, dk)
 //! ```
 //!
-//! The SHA3-ChaCha intermediary exists because `fips203 = "=0.4.3"` does not
+//! That step is `SeededRng::from_seed`. The cipher lives on the heap, and the
+//! bytes are what `ChaCha20Rng::from_seed` produces. The SHA3-ChaCha
+//! intermediary exists because `fips203 = "=0.4.3"` does not
 //! publicly expose `KeyGen_internal(d, z)` per FIPS 203 §7.1; see
 //! `upstream-fips203-keygen-internal` in the stabilization plan for the
 //! tracking follow-up. The intermediary commits to all 64 bytes of `d_z` via
@@ -96,8 +98,6 @@
 
 use curve25519_dalek::scalar::Scalar;
 use hkdf::Hkdf;
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
 use sha2::Sha512;
 use sha3::{Digest, Sha3_256};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -411,16 +411,20 @@ pub fn wide_reduce_to_scalar(input: &[u8; 64]) -> Scalar {
 /// `fips203` crate exposes `KeyGen_internal(d, z)` directly we can swap
 /// this for a one-line call without shifting any observable bytes (the
 /// direct API is also deterministic in `d_z` by FIPS 203 §7.1).
+///
+/// The seed is the whole secret of the ML-KEM key, so it is returned
+/// wrapped, and the digest is written straight into the wrapped buffer:
+/// there is no separate digest value to wipe, because `finalize` is never
+/// asked to return one. The hasher is consumed by that call and wipes its
+/// own state (`sha3`'s `zeroize` feature).
 #[must_use]
-pub fn ml_kem_chacha_seed_from_d_z(d_z: &[u8; 64]) -> [u8; 32] {
+pub fn ml_kem_chacha_seed_from_d_z(d_z: &[u8; 64]) -> Zeroizing<[u8; 32]> {
     let mut hasher = Sha3_256::new();
     hasher.update(MLKEM_CHACHA_SEED_PREFIX);
     hasher.update(d_z);
-    let digest = hasher.finalize();
-    let mut out = [0u8; 32];
-    debug_assert_eq!(digest.len(), 32, "SHA3-256 output must be 32 bytes");
-    out.copy_from_slice(&digest[..]);
-    out
+    let mut seed = Zeroizing::new([0u8; 32]);
+    hasher.finalize_into((&mut *seed).into());
+    seed
 }
 
 /// Produce an ML-KEM-768 `(ek, dk)` pair deterministically from a
@@ -453,7 +457,7 @@ pub fn ml_kem_keypair_from_d_z(
     d_z: &[u8; 64],
 ) -> Result<([u8; ML_KEM_768_EK_LEN], MlKem768DecapKey), CryptoError> {
     let chacha_seed = ml_kem_chacha_seed_from_d_z(d_z);
-    let mut rng = ChaCha20Rng::from_seed(chacha_seed);
+    let mut rng = crate::seeded_rng::SeededRng::from_seed(&chacha_seed);
     let (ek, dk) = ml_kem_768::KG::try_keygen_with_rng(&mut rng)
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-KEM-768 keygen: {e}")))?;
 
@@ -518,7 +522,7 @@ pub struct AllKeysBlob {
     // --- public side (plain-text portion of the wallet) ------------------
     /// Ed25519 spend public key.
     ///
-    /// Wrapped in [`SpendPublicKey`](crate::keys::SpendPublicKey) for
+    /// Wrapped in [`SpendPublicKey`] for
     /// type-system protection at sites that distinguish "spend half"
     /// from "view half" of the account identity. `#[repr(transparent)]`
     /// preserves the bit-for-bit FFI layout invariant with
@@ -527,7 +531,7 @@ pub struct AllKeysBlob {
     pub spend_pk: SpendPublicKey,
     /// Ed25519 view public key.
     ///
-    /// Wrapped in [`ViewPublicKey`](crate::keys::ViewPublicKey) — see
+    /// Wrapped in [`ViewPublicKey`] — see
     /// `spend_pk` for the FFI-layout / accessor contract.
     pub view_pk: ViewPublicKey,
     /// ML-KEM-768 encap (public) key, 1184 bytes.
@@ -547,7 +551,7 @@ pub struct AllKeysBlob {
     // --- secret side (held by C++ only as opaque bytes) -------------------
     /// Ed25519 spend secret scalar, in canonical 32-byte little-endian form.
     ///
-    /// Wrapped in [`SpendSecret`](crate::keys::SpendSecret) for
+    /// Wrapped in [`SpendSecret`] for
     /// type-system protection and structural wipe-on-drop.
     /// `#[repr(transparent)]` preserves the bit-for-bit FFI layout
     /// invariant with `shekyl_ffi::ShekylAllKeysBlob.spend_sk: [u8; 32]`.
@@ -556,7 +560,7 @@ pub struct AllKeysBlob {
     /// Ed25519 view secret scalar, in canonical 32-byte little-endian form.
     /// Also used (unclamped) as the Montgomery scalar at ECDH sites.
     ///
-    /// Wrapped in [`ViewSecret`](crate::keys::ViewSecret) for type-system
+    /// Wrapped in [`ViewSecret`] for type-system
     /// protection and structural wipe-on-drop. `#[repr(transparent)]`
     /// on `ViewSecret` preserves the bit-for-bit FFI layout invariant
     /// with `shekyl_ffi::ShekylAllKeysBlob.view_sk: [u8; 32]`. Read
@@ -565,7 +569,7 @@ pub struct AllKeysBlob {
     /// ML-KEM-768 decap (secret) key, 2400 bytes. Rederived on every wallet
     /// open; persisted only via the master seed.
     ///
-    /// Wrapped in [`MlKem768DecapKey`](crate::keys::MlKem768DecapKey) for
+    /// Wrapped in [`MlKem768DecapKey`] for
     /// type-system protection and structural wipe-on-drop, per the
     /// `35-secure-memory.mdc:21-22` "wrap secret scalars and key bytes"
     /// mandate. `#[repr(transparent)]` preserves the bit-for-bit FFI

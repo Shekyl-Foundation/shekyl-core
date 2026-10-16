@@ -22,6 +22,7 @@
 //! | [`epoch_close`] | Failure window, prune, epoch-close compute |
 //! | [`emission`] | Emission vin + claimed-epochs writer |
 //! | [`ct_balance`] | Bond-post CT balance |
+//! | [`draw`] | The coinbase's `0x0C` draw commitment, drawn in Rust (no export) |
 //!
 //! Split from the former monofile so the archival C edge stays reviewable.
 //! Pattern matches [`crate::relay_zone_ffi`].
@@ -30,15 +31,16 @@ mod attestation;
 mod bond;
 mod codes;
 mod ct_balance;
+mod draw;
 mod emission;
 mod epoch_close;
 mod schedule;
 mod serve_credit;
-mod settlement;
 mod shard_coverage;
 
 pub use attestation::{ShekylArchivalAttestationVerifyCtx, ShekylArchivalPidPubkey};
 pub use codes::*;
+pub(crate) use draw::commit_and_discard;
 pub use epoch_close::ShekylArchivalEmissionEpochSnapshot;
 pub use schedule::{
     settlement_epoch_last_block, settlement_epoch_open_height,
@@ -60,7 +62,6 @@ pub use epoch_close::*;
 pub use schedule::*;
 #[allow(unused_imports)]
 pub use serve_credit::*;
-pub use settlement::*;
 pub use shard_coverage::*;
 
 #[cfg(test)]

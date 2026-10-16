@@ -66,7 +66,6 @@ public:
   virtual void block_rtxn_stop() const override {}
   virtual void block_rtxn_abort() const override {}
 
-  virtual void drop_hard_fork_info() override {}
   virtual bool block_exists(const crypto::hash& h, uint64_t *height) const override { return false; }
   virtual cryptonote::blobdata get_block_blob_from_height(const uint64_t& height) const override { return cryptonote::t_serializable_object_to_blob(get_block_from_height(height)); }
   virtual cryptonote::blobdata get_block_blob(const crypto::hash& h) const override { return cryptonote::blobdata(); }
@@ -79,7 +78,6 @@ public:
   virtual uint64_t get_block_height(const crypto::hash& h) const override { return 0; }
   virtual cryptonote::block_header get_block_header(const crypto::hash& h) const override { return cryptonote::block_header(); }
   virtual uint64_t get_block_timestamp(const uint64_t& height) const override { return 0; }
-  virtual std::vector<uint64_t> get_block_cumulative_rct_outputs(const std::vector<uint64_t> &heights) const override { return {}; }
   virtual uint64_t get_top_block_timestamp() const override { return 0; }
   virtual size_t get_block_weight(const uint64_t& height) const override { return 128; }
   virtual std::vector<uint64_t> get_block_weights(uint64_t start_height, size_t count) const override { return {}; }
@@ -142,7 +140,6 @@ public:
   virtual bool for_all_outputs(std::function<bool(uint64_t amount, const crypto::hash &tx_hash, uint64_t height, size_t tx_idx)> f) const override { return true; }
   virtual bool for_all_outputs(uint64_t amount, const std::function<bool(uint64_t height)> &f) const override { return true; }
   virtual bool is_read_only() const override { return false; }
-  virtual bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const override { return false; }
 
   virtual void add_txpool_tx(const crypto::hash &txid, const cryptonote::blobdata_ref &blob, const cryptonote::txpool_tx_meta_t& details) override {}
   virtual void update_txpool_tx(const crypto::hash &txid, const cryptonote::txpool_tx_meta_t& details) override {}
@@ -164,9 +161,6 @@ public:
                         , const crypto::hash& blk_hash
                         ) override { }
   virtual cryptonote::block get_block_from_height(const uint64_t& height) const override { return cryptonote::block(); }
-  virtual void set_hard_fork_version(uint64_t height, uint8_t version) override {}
-  virtual uint8_t get_hard_fork_version(uint64_t height) const override { return 0; }
-  virtual void check_hard_fork_info() override {}
 
 
   virtual void add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata_ref &blob) override {}
@@ -196,23 +190,6 @@ public:
   virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t, uint64_t) override {}
   virtual uint32_t archival_serve_credit_pass_count(const crypto::hash&, uint64_t, uint64_t) const override { return 0; }
 
-  // Settlement write throws. Absence is SO-D1 non-observation (the most
-  // forgiving verdict), so a silent no-op write would let a test pass after
-  // a failed store — the SO-D5 inversion in a double. Serve-credit may no-op
-  // because absence there is a MISS. A working in-memory table belongs on a
-  // subclass (the serve-credit pattern) or on BlockchainLMDB / TempLMDB.
-  virtual void set_archival_settlement(const crypto::hash&, uint64_t, uint64_t,
-    uint32_t, uint32_t) override
-  {
-    throw std::runtime_error(
-      "FATAL: BaseTestDB is not a settlement store; a no-op write would "
-      "read back as SO-D1 non-observation (fail-open). Use TempLMDB.");
-  }
-  virtual bool get_archival_settlement(const crypto::hash&, uint64_t, uint64_t,
-    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>&) const override
-  {
-    return false;
-  }
   virtual void delete_archival_settlement_for_epoch(uint64_t) override {}
   virtual void delete_archival_settlement_before_epoch(uint64_t) override {}
 

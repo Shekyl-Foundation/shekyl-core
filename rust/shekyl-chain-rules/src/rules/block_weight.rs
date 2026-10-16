@@ -204,7 +204,10 @@ impl Weights {
 }
 
 /// The wire weight of a candidate: the coinbase plus every listed body.
-fn block_weight(candidate: &Candidate) -> BlockWeight {
+/// A measurement of the bytes the candidate carries, not a chain fact —
+/// the alt tier takes it for the row it stores (`crate::alt_against`),
+/// where no median has been derived.
+pub(crate) fn block_weight(candidate: &Candidate) -> BlockWeight {
     let weight_of = |tx: &Transaction| u64::try_from(tx.weight()).unwrap_or(u64::MAX);
     let coinbase = weight_of(&candidate.block.miner_transaction);
     let total = candidate

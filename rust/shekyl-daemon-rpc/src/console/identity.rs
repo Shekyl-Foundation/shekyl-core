@@ -5,15 +5,15 @@
 
 //! Remote-arm identity handshake (`VC-3`).
 //!
-//! Comparison is [`shekyl_rpc_types::IdentityExpectation::check`]. This
+//! Decode and comparison are [`shekyl_rpc_types::IdentityExpectation::read`]. This
 //! module fetches `get_version` over the blocking control transport and
 //! formats the refusal.
 
 use shekyl_rpc_types::{
-    core_rpc_version_string, DaemonNetwork, GetVersionResponse, IdentityExpectation,
-    IdentityMismatch,
+    core_rpc_version_string, DaemonNetwork, IdentityExpectation, IdentityMismatch,
 };
 
+use crate::chain_facts::{ChainFacts, FfiChainFacts};
 use crate::ctl_client;
 
 use super::{json_rpc_result, Source};
@@ -23,7 +23,30 @@ impl Source {
     pub(super) fn ensure_identity(&self) -> Result<(), String> {
         match self {
             Source::Live(_) => Ok(()),
-            Source::Remote { checked, .. } => checked.get_or_init(|| handshake(self)).clone(),
+            Source::Remote { .. } => self.network().map(|_| ()),
+        }
+    }
+
+    /// The daemon's network, from the one place a daemon names it (RK-Q6).
+    ///
+    /// Remote, it is what the daemon answered `get_version` with, kept from
+    /// the identity handshake: no second request, and never this console's
+    /// own flag read back. In-process, it is the identity facts `get_version`
+    /// itself is built from.
+    pub(super) fn network(&self) -> Result<DaemonNetwork, String> {
+        match self {
+            Source::Live(core) => FfiChainFacts::new(core.clone())
+                .identity()
+                .map(|identity| identity.nettype)
+                .map_err(|fault| format!("the daemon's network cannot be read: {fault:?}")),
+            Source::Remote {
+                address,
+                timeout,
+                nettype,
+                checked,
+            } => checked
+                .get_or_init(|| handshake(address, *timeout, *nettype))
+                .clone(),
         }
     }
 
@@ -44,16 +67,14 @@ impl Source {
     }
 }
 
-fn handshake(src: &Source) -> Result<(), String> {
-    let (address, timeout, nettype) = match src {
-        Source::Live(_) => return Ok(()),
-        Source::Remote {
-            address,
-            timeout,
-            nettype,
-            ..
-        } => (address.as_str(), *timeout, *nettype),
-    };
+/// The identity handshake against a remote daemon. Its verdict is the
+/// network the daemon reported, which the expectation has checked is this
+/// console's own.
+fn handshake(
+    address: &str,
+    timeout: std::time::Duration,
+    nettype: u8,
+) -> Result<DaemonNetwork, String> {
     let network = DaemonNetwork::from_cryptonote(nettype).ok_or_else(|| {
         format!(
             "refusing to render: this console was given network code {nettype}, which this \
@@ -61,29 +82,45 @@ fn handshake(src: &Source) -> Result<(), String> {
         )
     })?;
 
+    let result = get_version_result(address, timeout)?;
+    IdentityExpectation::exact(network)
+        .read(&result)
+        .map(|reply| reply.nettype)
+        .map_err(|refusal| {
+            let message = console_identity_message(&refusal.mismatch);
+            match refusal.evidence {
+                Some(evidence) => format!("{message} (evidence: {evidence})"),
+                None => message,
+            }
+        })
+}
+
+/// `get_version`'s `result`, undecoded, with no identity check before it.
+///
+/// Undecoded because reading it is `shekyl_rpc_types`' (`RK-D25`): the
+/// handshake hands it to [`IdentityExpectation::read`], and the `version`
+/// command to [`shekyl_rpc_types::daemon_rpc_version`]. A daemon that
+/// answers with a JSON-RPC error is reported in its own words.
+pub(super) fn get_version_result(
+    address: &str,
+    timeout: std::time::Duration,
+) -> Result<serde_json::Value, String> {
     let body = serde_json::to_vec(&serde_json::json!({
         "jsonrpc": "2.0", "id": "0", "method": "get_version", "params": {},
     }))
     .map_err(|e| format!("cannot encode the handshake request: {e}"))?;
     let raw = ctl_client::post_blocking(address, "/json_rpc", body, timeout)
         .map_err(|(_, reason)| reason)?;
-
-    let theirs: GetVersionResponse = match json_rpc_result(&raw, "get_version") {
-        Ok(reply) => reply,
-        Err(reason) if reason.starts_with("get_version failed:") => {
-            return Err(reason);
-        }
-        Err(reason) => {
-            return Err(format!(
+    json_rpc_result(&raw, "get_version").map_err(|reason| {
+        if reason.starts_with("get_version failed:") {
+            reason
+        } else {
+            format!(
                 "{} (evidence: {reason})",
                 console_identity_message(&IdentityMismatch::unreadable())
-            ))
+            )
         }
-    };
-
-    IdentityExpectation::exact(network)
-        .check(&theirs)
-        .map_err(|m| console_identity_message(&m))
+    })
 }
 
 fn console_identity_message(m: &IdentityMismatch) -> String {

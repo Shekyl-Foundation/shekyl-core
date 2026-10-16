@@ -8,10 +8,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use kameo::actor::{ActorRef, Spawn};
+use kameo::actor::{ActorRef, Spawn, WeakActorRef};
 use kameo::error::SendError;
-use shekyl_archival_retention::HoldingsDescriptor;
+use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
+use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_scanner::ScannableBlock;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::NoOpObserver;
@@ -24,7 +26,8 @@ use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
-    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
+    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, ServingBodies,
+    SignPassTranscript, SignReceiptTranscript,
 };
 use super::release::{AssembleRelease, AssembledReleasePost};
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
@@ -48,6 +51,29 @@ pub(crate) struct StakeEngineHandle {
     pub(crate) actor: ActorRef<StakeEngine>,
 }
 
+/// A non-owning [`StakeEngineHandle`]: reaches the actor while the engine
+/// holds it, and observes — never prevents — the actor's stop. Minted by
+/// [`StakeEngineHandle::downgrade`] for roles whose life must stay inside the
+/// secrets' life (the SH-2 resident pass key), so that no role can keep the
+/// persona bundles resident past the wallet close that was meant to wipe them.
+#[derive(Clone)]
+pub(crate) struct WeakStakeEngineHandle {
+    actor: WeakActorRef<StakeEngine>,
+}
+
+impl WeakStakeEngineHandle {
+    /// Re-acquire a strong handle iff the actor is still alive.
+    ///
+    /// `is_alive` is checked after the upgrade because a `WeakActorRef` can
+    /// upgrade against a mailbox whose task has already stopped (the strong
+    /// count and the mailbox close are separate events); the pair is the only
+    /// test that means "a message sent now will be handled".
+    pub(crate) fn upgrade(&self) -> Option<StakeEngineHandle> {
+        let actor = self.actor.upgrade()?;
+        actor.is_alive().then_some(StakeEngineHandle { actor })
+    }
+}
+
 impl StakeEngineHandle {
     /// Spawn the StakeEngine over the pre-derived derive-forward set.
     ///
@@ -69,6 +95,7 @@ impl StakeEngineHandle {
         bundles: BTreeMap<PSlot, ArchivalPKeys>,
         bonded: BTreeSet<PSlot>,
         active: Option<PSlot>,
+        bodies: shekyl_p_store::BodyStore,
     ) -> Self {
         assert!(
             tokio::runtime::Handle::try_current().is_ok(),
@@ -82,6 +109,7 @@ impl StakeEngineHandle {
             bundles,
             bonded,
             active,
+            bodies,
             // A non-test `conformance` build always grades the real OsRng adapter
             // (no field); in `test + conformance` the default is `Skip` so
             // unrelated stake tests are not flaked by the grade. The dedicated S6
@@ -169,6 +197,20 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
+    /// The read-only handle on this actor's body store (`WSS-Q1`(a)).
+    ///
+    /// The writer stays on the actor. This reader still decrypts, so
+    /// `WSS-Q13` is not met; the ask exists so the serve task never holds
+    /// the writer, and so the engine orchestrator does not hold the store.
+    pub(crate) async fn serving_bodies(
+        &self,
+    ) -> Result<shekyl_p_store::BodyStoreReader, StakeEngineError> {
+        self.actor
+            .ask(ServingBodies)
+            .await
+            .map_err(collapse_send_error)
+    }
+
     /// The public identity of the currently-active persona, or `None` when idle.
     pub(crate) async fn active_persona(&self) -> Result<Option<PersonaIdentity>, StakeEngineError> {
         self.actor
@@ -219,6 +261,59 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
+    /// A weak reference to the stake actor, for a role that must be able to
+    /// reach the persona's secrets **without keeping them alive** — the
+    /// SH-2 resident pass key. Upgrading yields a handle only while some
+    /// strong owner (the engine) still holds the actor; once the engine is
+    /// gone the secrets went with it and the role observes that, rather than
+    /// having prevented it.
+    pub(crate) fn downgrade(&self) -> WeakStakeEngineHandle {
+        WeakStakeEngineHandle {
+            actor: self.actor.downgrade(),
+        }
+    }
+
+    /// Countersign one SF-D8 pass transcript with the held persona at
+    /// `p_slot`, from a **blocking** context — the SH-2 resident-key handoff
+    /// into `PersonaServingHost`.
+    ///
+    /// `PassKey::sign_pass` is synchronous and runs on the blocking pool
+    /// (`shekyl-p-serve` wraps both key calls in `spawn_blocking`), so this
+    /// parks the calling thread on the actor's reply. It must never be called
+    /// from an async executor thread: `oneshot::Receiver::blocking_recv`
+    /// panics there by design. The signature is the only thing that crosses
+    /// the boundary; see [`SignPassTranscript`] for why the key does not.
+    pub(crate) fn sign_pass_transcript_blocking(
+        &self,
+        p_slot: PSlot,
+        message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<HybridSignature, StakeEngineError> {
+        self.actor
+            .ask(SignPassTranscript { p_slot, message })
+            .blocking_send()
+            .map_err(collapse_send_error)
+    }
+
+    /// Sign one pass transcript with the **receipt key** of the held persona
+    /// at `p_slot`, from a **blocking** context — the receipt-key counterpart
+    /// of [`Self::sign_pass_transcript_blocking`], and STAGED with it
+    /// (`serving::receipt_key`): no live path calls this.
+    ///
+    /// The same contract: it parks the calling thread on the actor's reply,
+    /// so it runs on the blocking pool and never on an async executor
+    /// thread, and the signature is the only thing that crosses the
+    /// boundary ([`SignReceiptTranscript`]).
+    pub(crate) fn sign_receipt_transcript_blocking(
+        &self,
+        p_slot: PSlot,
+        message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<FnDsaHybridSignature, StakeEngineError> {
+        self.actor
+            .ask(SignReceiptTranscript { p_slot, message })
+            .blocking_send()
+            .map_err(collapse_send_error)
+    }
+
     /// Construct a JoinMarket archival bond-post vin for the persona named by
     /// `handle` (Bond-PR 2c-2b), returning the constructed vin **paired with**
     /// its block-timed placement plan ([`BondPostPlacement`]). No on-vin
@@ -242,7 +337,7 @@ impl StakeEngineHandle {
     ///   error; construction only validates an already-minted handle.
     /// - [`StakeEngineError::SlotMismatch`] — `handle.p_slot != ticket.p_slot`.
     /// - [`StakeEngineError::RngSourceFailed`] — OS entropy source unavailable.
-    /// - [`StakeEngineError::RngDegeneracy`] — timing draw degenerate; retry.
+    /// - [`StakeEngineError::RngDegeneracy`] — the entry-gap run collided; the source is stuck.
     /// - [`StakeEngineError::BondBuild`] — bond construction failed (see inner).
     #[allow(dead_code)] // 2c-2b: the production caller lands with the request path; today's callers are all `cfg(test)`.
     pub(crate) async fn plan_bond_post(

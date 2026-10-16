@@ -31,9 +31,10 @@
 //! ladder transliteration (the round's *subject* — porting it faithfully is
 //! the point of the comparison column) and `REF_TX_WEIGHT` (a C++ constant
 //! with no single Rust owner yet; `fee_policy.rs` carries the same pinned
-//! copy wallet-side). The emission-split epoch is the validator's
-//! ([`crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT`]), and [`HysteresisCq`]
-//! calls `shekyl-economics::hysteresis_step`.
+//! copy wallet-side). The shipped staker share is
+//! [`shekyl_economics::emission_share_at`] (the epoch and the shipped
+//! constants are closed over there). [`HysteresisCq`] calls
+//! `shekyl-economics::hysteresis_step`.
 //!
 //! I/O convention: this module renders; the binary target performs the
 //! writes (`main.rs --fee-ladder`), per the crate's stage2 precedent.
@@ -46,18 +47,18 @@ use shekyl_chain_rules::REFERENCE_BLOCK_MAX_AGE;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
-    calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
-    effective_emission, fee_correction, hysteresis_fold, hysteresis_settled, hysteresis_step,
-    paid_block_reward, projected_already_generated, quantize_pow2_ceil, relay_fee_floor,
-    round_money_up_2, tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume,
-    BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    calc_release_multiplier, corrected_fee_ladder, effective_emission, emission_share_at,
+    fee_correction, hysteresis_fold, hysteresis_settled, hysteresis_step, paid_block_reward,
+    projected_already_generated, quantize_pow2_ceil, relay_fee_floor, round_money_up_2,
+    tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
+    RELAY_ADMISSION_SLACK_BP,
 };
 
 /// Penalty-free zone. [`shekyl_economics::FULL_REWARD_ZONE`], generated from
 /// `config/consensus_constants.json`.
 pub(crate) const FULL_REWARD_ZONE: u64 = shekyl_economics::FULL_REWARD_ZONE;
 
-/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h:70`).
+/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h`).
 /// Declared exception: no single Rust owner exists;
 /// `rust/shekyl-engine-core/src/engine/fee_policy.rs` carries the same
 /// pinned copy wallet-side.
@@ -74,13 +75,6 @@ const _: () = assert!(
     TX_VOLUME_WINDOW <= usize::MAX as u64,
     "TX_VOLUME_WINDOW does not fit this target's usize"
 );
-
-/// The height production feeds to `calc_effective_emission_share`: the
-/// validator's emission-split epoch, read through the crate's one accessor.
-/// An epoch of `0` here would put `σ` a whole decay step ahead of the
-/// validation path at exact year-boundary heights:
-/// `(k·BLOCKS_PER_YEAR − 0)/BPY = k` but `(k·BPY − 1)/BPY = k − 1`.
-const GENESIS_NG_HEIGHT: u64 = crate::engine::EMISSION_SPLIT_EPOCH_HEIGHT;
 
 /// The minimum-dwell floor examined for FL-R18 (c) and **NOT ADOPTED**
 /// (round 14): the anonymity harm it was to prevent was refuted (§4.5b)
@@ -173,13 +167,7 @@ pub(crate) fn correction_factor_ratio(
         params.burn_base_rate,
         params.burn_cap,
     );
-    let sigma = calc_effective_emission_share(
-        height,
-        GENESIS_NG_HEIGHT,
-        STAKER_EMISSION_SHARE,
-        STAKER_EMISSION_DECAY,
-        BLOCKS_PER_YEAR,
-    );
+    let sigma = emission_share_at(height);
     // `C = (1 − σ)·M_r/(1 − b)`, composed by its owner (which also clamps
     // σ and b); the three operands are reported beside it.
     let c = fee_correction(volume, sigma, b, params);
@@ -197,12 +185,13 @@ pub(crate) fn correction_factor_ratio(
 
 /// UNROUNDED four-rung ladder, an exact integer transliteration of
 /// `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
-/// (`blockchain.cpp:4475-4508`), including its folded-division order.
+/// (`blockchain.cpp`, the five-argument overload), including its
+/// folded-division order.
 /// Instrument-local by design: this is the artifact under derivation, and
 /// the comparison column must reproduce it bit-for-bit, not idealize it.
 ///
 /// The 5-arg C++ this transliterates does not clamp its medians — the
-/// production wrapper (`blockchain.cpp:4527-4537`) guarantees
+/// production wrapper (the same function's grace-blocks overload) guarantees
 /// `Mlw ≥ zone` and `Mnw ≥ Mlw` before it is ever called. The
 /// `debug_assert`s document that precondition so an instrument grid row
 /// below the zone fails loudly instead of printing fees the daemon cannot
@@ -550,12 +539,10 @@ pub struct RungTable {
     pub corrected_raw_c: [u64; SERVED_SLOTS],
     /// What a §5.2 daemon would serve (`C_q`, ceiling rule).
     pub served_ceil_cq: [u64; SERVED_SLOTS],
-    /// `check_fee` acceptance bound at this state. Modeled as
-    /// `floor − floor/50` per byte: the real check takes 2% off the
-    /// *total* and rounds up to the quantization mask
-    /// (`blockchain.cpp:4462-4466`) — both divergences are bounded well
-    /// below every measured state's margin, and the mask examination is
-    /// CEN-M3's held row.
+    /// Admission's acceptance bound at this state, per byte: the relay
+    /// floor itself, since FL-R23 set the slack to zero. The real check
+    /// rounds the total up to the quantization mask, which a per-byte
+    /// figure does not show; the mask examination is CEN-M3's held row.
     pub relay_floor_accept: u64,
     /// FL-C6/FL-V5: does the raw-`C` corrected floor bounce off
     /// `check_fee`?
@@ -1490,13 +1477,30 @@ fn dwell_scenario(
 // Feedback map (FL-C7) — on the SERVED (quantized) ladder
 // ---------------------------------------------------------------------------
 
+/// FL-R18's thin-margin line, in thousandths of `served/floor`.
+///
+/// The race was measured against the 2% acceptance buffer admission had
+/// then (`served * 100 < floor * 98`). FL-R23 set the slack to zero and
+/// production names no margin to import, so `1_020` stays as that round's
+/// threshold and its counts stay with it
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4, D6).
+const FL_R18_THIN_MARGIN_MILLI: u64 = 1_020;
+
+/// The two factors of FL-R18's acceptance comparison: a quote was refused
+/// when `served * NUM < floor * DEN`, which is `needed - needed/50`.
+const FL_R18_ACCEPT_NUM: u128 = 100;
+const FL_R18_ACCEPT_DEN: u128 = 98;
+
 #[derive(Serialize)]
 pub struct FeedbackResult {
     /// FL-R18 rejection-race (§4.5b): quotes issued along the trace, and
     /// how many would be REFUSED at admission `RACE_LAGS[i]` blocks later
     /// because the relay floor rose above the quoted (already
-    /// floor-clamped) economy rung. `check_fee`'s 2% buffer is applied,
-    /// so this counts real refusals, not near-misses.
+    /// floor-clamped) economy rung. The count applies
+    /// [`FL_R18_ACCEPT_NUM`] / [`FL_R18_ACCEPT_DEN`], the 2% buffer
+    /// admission had when FL-R18 was measured. FL-R23 has since set the
+    /// slack to zero and added a lookback
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, Appendix A2, D6).
     pub race_quotes: u64,
     pub race_refused: [u64; 4],
     /// The race's REAL governing quantity (§4.5b). With the median held,
@@ -1504,10 +1508,11 @@ pub struct FeedbackResult {
     /// shrinks `R`), so `race_refused` is structurally zero and proves
     /// nothing on its own. What decides a refusal is the MARGIN a quote
     /// carries over the floor it was clamped against: `served/floor` in
-    /// thousandths, minimised over the trace. A quote survives a median
-    /// contraction of factor `f` iff `f² ≤ (served/floor)·(100/98)`, so
-    /// this margin converts directly into the median move the quote can
-    /// absorb — the exposure the fixed-median traces cannot show.
+    /// thousandths, minimised over the trace. Under the buffer FL-R18
+    /// measured, a quote survived a median contraction of factor `f` iff
+    /// `f² ≤ (served/floor)·(100/98)`, and a margin below
+    /// [`FL_R18_THIN_MARGIN_MILLI`] was that round's thin line. FL-R23
+    /// removed the buffer (§4, D6); the line stays so the counts stay.
     pub race_margin_min_milli: u64,
     /// Chain age and median of the swept state (§1.8 interior grid;
     /// PR #614 review — feedback was previously pinned to (age 4, zone)).
@@ -1719,14 +1724,17 @@ fn feedback_scenario(
             last_tail_fee = Some(fee);
         }
     }
-    // Refused iff the quote misses `check_fee`'s acceptance bound at
-    // admission: accept requires `fee >= needed - needed/50`, i.e.
-    // `served * 100 >= floor_at_admission * 98`.
+    // FL-R18's refusal count, under the 2% buffer that round's admission
+    // had (`served * FL_R18_ACCEPT_NUM < floor * FL_R18_ACCEPT_DEN`).
+    // Not the slack production admits at: `RELAY_ADMISSION_SLACK_BP` is 0
+    // (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §4, D6).
     let mut race_refused = [0u64; 4];
     for (i, &lag) in RACE_LAGS.iter().enumerate() {
         let lag = lag as usize;
         for h in 0..served_economy.len().saturating_sub(lag) {
-            if u128::from(served_economy[h]) * 100 < u128::from(floors[h + lag]) * 98 {
+            if u128::from(served_economy[h]) * FL_R18_ACCEPT_NUM
+                < u128::from(floors[h + lag]) * FL_R18_ACCEPT_DEN
+            {
                 race_refused[i] += 1;
             }
         }
@@ -2338,7 +2346,7 @@ pub fn report() -> FeeLadderReport {
                                 oscillating += 1;
                                 worst_transitions = worst_transitions.max(fb.tail_transitions);
                             }
-                            if fb.race_margin_min_milli < 1020 {
+                            if fb.race_margin_min_milli < FL_R18_THIN_MARGIN_MILLI {
                                 thin_margin_cells += 1;
                             }
                         }
@@ -2514,7 +2522,7 @@ pub fn report() -> FeeLadderReport {
             } else if reference.contains(&key) {
                 recovered_cells += 1;
             }
-            if fb.race_margin_min_milli < 1020 {
+            if fb.race_margin_min_milli < FL_R18_THIN_MARGIN_MILLI {
                 thin_margin_cells += 1;
             }
         }
@@ -3013,7 +3021,7 @@ mod tests {
     /// covering one rung less than it claims.
     #[test]
     fn transliteration_matches_cpp_kat() {
-        let coin: u64 = 1_000_000_000;
+        let coin: u64 = crate::burden::COIN;
         let legacy =
             |r: u64, mnw: u64, mlw: u64| articmine_ladder_raw(r, mnw, mlw).map(round_money_up_2);
         assert_eq!(
@@ -3107,7 +3115,7 @@ mod tests {
     /// two cannot diverge again.
     #[test]
     fn served_ladder_is_the_owners_arithmetic() {
-        let coin: u64 = 1_000_000_000;
+        let coin: u64 = crate::burden::COIN;
         // The legacy transliteration still truncates its rung first —
         // that is what today's daemon does, and it is why the Current
         // column keeps it.

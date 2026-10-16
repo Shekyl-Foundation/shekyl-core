@@ -106,6 +106,19 @@ BENCHES=(
   # A change to FCMP++ verification moves this count, which is the signal
   # that `hop` (and the embargo derived from it) is owed a re-derivation.
   "shekyl-ffi::relay_admission_verify_iai"
+  # BA-T3: the archival serve path. Four functions: one whole response at
+  # three shard sizes, the work before the first byte at two, and the
+  # read-and-fold loop beside the one-shot digest at three. iai-only: wall
+  # clock on this path is the floor device's (BA-T5). Needs the in-memory
+  # compositions, which are not on the shipped graph, so the feature rides
+  # the row.
+  "shekyl-p-serve::serve_response_iai:bench-internals"
+  # BA-T33's T1 arm: one nested sign and one nested verify under hybrid
+  # scheme 3 (Ed25519 + FN-DSA-1024). The iai arm pins FN-DSA's signing
+  # draw, so the rejection-sampling path is the same on every run; the
+  # criterion arm signs through the production entry and reports the
+  # distribution. The floor-device figures are BA-T33's T3 arm.
+  "shekyl-crypto-pq:fn_dsa_hybrid:fn_dsa_hybrid_iai"
 )
 
 # Clean criterion output so the envelope reflects this run only.

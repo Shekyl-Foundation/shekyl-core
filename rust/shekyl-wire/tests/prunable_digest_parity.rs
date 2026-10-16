@@ -40,7 +40,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use serde_json::Value;
-use shekyl_wire::{prunable_hash_of, Block, Input, Transaction};
+use shekyl_wire::{prunable_hash_of, Block, Input, RetiredKeylessJoinMarket, Transaction};
 
 const FIXTURE: &str = "tests/fixtures/prunable_digest_parity_v1.json";
 const BODIES: &str = "tests/fixtures/pqc_signing_preimage_v1.json";
@@ -100,6 +100,35 @@ fn class_of(tx: &Transaction) -> &'static str {
     }
 }
 
+/// The two fixture bodies that are **keyless JoinMarket bond posts**
+/// (`post_kind` 0), captured from the C++ daemon. Retired from this test's
+/// Rust-side derivation 2026-10-12 (ruling on PR #1046; `FN_DSA_HYBRID.md`
+/// `FND-19`): the receipt key is mandatory, the keyless byte is refused at
+/// parse, and a C++ capture can never contain a key-carrying JoinMarket —
+/// its serializer has no such kind. The fixture file is untouched, because
+/// the C++ leg still parses these bytes; here each is held to exactly one
+/// thing, that it is refused for being the retired form, and to whatever
+/// the test checks without parsing. The JoinMarket's preimage and digest
+/// are witnessed on Rust-built posts instead (`shekyl-chain-rules`,
+/// `i18_the_identity_signature_covers_the_join_markets_receipt_key`; the
+/// ingest's `a_join_markets_receipt_key_is_the_records_and_a_release_leaves_it`).
+const RETIRED_KEYLESS_BOND_POSTS: [&str; 2] = [
+    "bond-post-to_key-bond_post",
+    "emission-bond-post-to_key-bond_post",
+];
+
+/// `bytes` is refused by the parser for carrying the retired keyless
+/// JoinMarket byte, and for nothing else — matched on the typed cause
+/// `BondPost::read` returns, not on the sentence it displays.
+fn refused_as_the_retired_keyless_join_market(name: &str, bytes: &[u8]) {
+    let err = Transaction::from_bytes(bytes).expect_err("a keyless JoinMarket no longer parses");
+    assert!(
+        err.get_ref()
+            .is_some_and(RetiredKeylessJoinMarket::downcast_is),
+        "{name}: refused for another reason: {err}"
+    );
+}
+
 /// One pinned body.
 struct Subject {
     name: String,
@@ -127,6 +156,17 @@ fn subjects() -> Vec<Subject> {
         .expect("transactions")
     {
         let bytes = hex_bytes(entry["tx_hex"].as_str().expect("tx_hex"));
+        let name = entry["name"].as_str().expect("name");
+        if RETIRED_KEYLESS_BOND_POSTS.contains(&name) {
+            // No parse, so no pruned-segment length to find the oracle by.
+            subjects.push(Subject {
+                name: name.to_owned(),
+                bytes,
+                inline: false,
+                oracle: None,
+            });
+            continue;
+        }
         let tx = Transaction::from_bytes(&bytes).expect("a captured body parses");
         // payload(i) = pruned segment ‖ keccak256(prunable) ‖ …, so the 32
         // bytes after the pruned segment are the C++ assembly's digest.
@@ -157,6 +197,12 @@ fn regenerate_prunable_digest_parity_fixture() {
     let entries: Vec<Value> = subjects()
         .into_iter()
         .map(|s| {
+            assert!(
+                !RETIRED_KEYLESS_BOND_POSTS.contains(&s.name.as_str()),
+                "{}: a retired keyless bond post cannot be re-derived here; the regenerator \
+                 needs a fixture without it, which is the C++ leg's change to make",
+                s.name
+            );
             let tx = Transaction::from_bytes(&s.bytes).expect("parses");
             let mut entry = serde_json::json!({
                 "name": s.name,
@@ -191,6 +237,7 @@ fn every_class_has_a_pinned_prunable_digest_and_it_is_the_regions() {
 
     let mut classes = BTreeSet::new();
     let mut held_to_an_oracle = 0;
+    let mut retired_seen = 0;
     for (entry, subject) in pinned.iter().zip(&subjects) {
         let name = subject.name.as_str();
         assert_eq!(entry["name"].as_str(), Some(name), "subject order");
@@ -201,6 +248,14 @@ fn every_class_has_a_pinned_prunable_digest_and_it_is_the_regions() {
             "{name}: where the bytes live"
         );
 
+        if RETIRED_KEYLESS_BOND_POSTS.contains(&name) {
+            // Still pinned, still in order, still where the fixture says
+            // its bytes live (the C++ leg reads this entry); not derived.
+            assert_eq!(entry["class"].as_str(), Some("bond-post"), "{name}: class");
+            refused_as_the_retired_keyless_join_market(name, &subject.bytes);
+            retired_seen += 1;
+            continue;
+        }
         let tx = Transaction::from_bytes(&subject.bytes).expect("parses");
         assert_eq!(
             tx.serialize(),
@@ -233,19 +288,20 @@ fn every_class_has_a_pinned_prunable_digest_and_it_is_the_regions() {
     // Every class the validator partitions transactions into, and no pin
     // that rests only on the function under test except the one shape with
     // no signing payload to carry an oracle.
+    //
+    // *Moved 2026-10-12:* the list read `["bond-post", "coinbase", …]`. The
+    // fixture's two bond-post bodies are keyless JoinMarkets, retired above;
+    // the class is pinned in the fixture and derived by the C++ leg alone
+    // until a capture can hold a key-carrying post.
     assert_eq!(
         classes.into_iter().collect::<Vec<_>>(),
-        [
-            "bond-post",
-            "coinbase",
-            "emission",
-            "serve-credit-only",
-            "spend"
-        ]
+        ["coinbase", "emission", "serve-credit-only", "spend"]
     );
+    assert_eq!(retired_seen, RETIRED_KEYLESS_BOND_POSTS.len());
     assert_eq!(
         held_to_an_oracle,
-        subjects.len() - 1,
-        "all but the serve-credit form, which has no signing payload"
+        subjects.len() - 1 - RETIRED_KEYLESS_BOND_POSTS.len(),
+        "all but the serve-credit form, which has no signing payload, and the two retired \
+         keyless bond posts (was: all but the serve-credit form)"
     );
 }

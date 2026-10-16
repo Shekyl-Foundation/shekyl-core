@@ -25,10 +25,14 @@
 //! seam table the caller logs loudly and continues either way; the daemon
 //! does not abort.
 //!
-//! Start's return codes carry the log-tone classification that used to be a
-//! separate `probe` export: `SHEKYL_DAEMON_TOR_NO_BINARY` is the calm skip,
-//! `SHEKYL_DAEMON_TOR_BAD_BINARY` is found-but-unusable. Start re-runs the
-//! pin gate itself; there is no advisory pass that can disagree with it.
+//! Start's return codes carry the classification that used to be a separate
+//! `probe` export: `SHEKYL_DAEMON_TOR_NO_BINARY` is nothing installed,
+//! `SHEKYL_DAEMON_TOR_BAD_BINARY` is found-but-unusable, and
+//! `SHEKYL_DAEMON_TOR_UNAVAILABLE` is a platform Shekyl manages no tor on
+//! (`TOR_BUNDLE_DISTRIBUTION.md` TB-4). Start re-runs the pin gate itself;
+//! there is no advisory pass that can disagree with it. The typed reason
+//! stays on this side: C++ receives a code to branch on and a sentence to
+//! print.
 
 use std::ffi::{c_char, c_int, CStr};
 use std::path::PathBuf;
@@ -46,6 +50,7 @@ const RC_ARG: c_int = 2;
 const RC_NO_BINARY: c_int = 3;
 const RC_BAD_BINARY: c_int = 4;
 const RC_START_FAILED: c_int = 5;
+const RC_UNAVAILABLE: c_int = 6;
 const RC_NOT_RUNNING: c_int = 1;
 const RC_PUBLISH_FAILED: c_int = 3;
 
@@ -121,9 +126,11 @@ fn lock_slot() -> std::sync::MutexGuard<'static, Option<BlockingDaemonTor>> {
 /// Returns `SHEKYL_DAEMON_TOR_OK` on success;
 /// `SHEKYL_DAEMON_TOR_ALREADY_RUNNING` if an instance is already running;
 /// `SHEKYL_DAEMON_TOR_ARG` on argument errors;
-/// `SHEKYL_DAEMON_TOR_NO_BINARY` when no candidate exists (calm skip);
+/// `SHEKYL_DAEMON_TOR_NO_BINARY` when no candidate exists;
 /// `SHEKYL_DAEMON_TOR_BAD_BINARY` when a candidate exists but fails the pin
-/// (loud);
+/// gate;
+/// `SHEKYL_DAEMON_TOR_UNAVAILABLE` when this build target has no managed tor
+/// (`out_error` carries the reason);
 /// `SHEKYL_DAEMON_TOR_START_FAILED` when spawn/bootstrap failed (the
 /// incarnation was torn down before return).
 ///
@@ -222,6 +229,11 @@ pub unsafe extern "C" fn shekyl_daemon_tor_start(
             unsafe { write_c_string("no tor binary found", out_error, out_error_len) };
             RC_NO_BINARY
         }
+        Err(BlockingStartError::Binary(TorBinaryError::Unavailable { reason })) => {
+            // SAFETY: caller contract for `out_error`.
+            unsafe { write_c_string(reason, out_error, out_error_len) };
+            RC_UNAVAILABLE
+        }
         Err(BlockingStartError::Binary(err)) => {
             // SAFETY: caller contract for `out_error`.
             unsafe { write_c_string(&err.to_string(), out_error, out_error_len) };
@@ -289,6 +301,10 @@ pub unsafe extern "C" fn shekyl_daemon_tor_publish(
 
     match instance.publish(virtual_port, local_port, max_streams, OnionPow::Enabled) {
         Ok(service_id) => {
+            // This node's own onion is one uniform member of the Tor
+            // disclosure population (ruled 2026-10-09); it reaches the
+            // lists here, with no C++ in between.
+            crate::dialer_ffi::note_own_onion(service_id.as_str(), virtual_port);
             // SAFETY: caller contract for `out_service_id`.
             unsafe { write_c_string(service_id.as_str(), out_service_id, out_service_id_len) };
             RC_OK
@@ -302,9 +318,10 @@ pub unsafe extern "C" fn shekyl_daemon_tor_publish(
 }
 
 /// Is the ephemeral tor still up? `false` when never started, already shut
-/// down, or died — per PWD-E7 there is no respawn, so a death means the
-/// overlay inbound posture is gone for this boot (the caller logs; the node
-/// continues on its other zones).
+/// down, or died. There is no respawn until the supervisor of
+/// `docs/design/TOR_SUPERVISOR.md` lands, so today a death means the overlay
+/// inbound posture is gone for this boot (the caller logs; the node continues
+/// on its other zones).
 #[no_mangle]
 pub extern "C" fn shekyl_daemon_tor_is_alive() -> bool {
     lock_slot()

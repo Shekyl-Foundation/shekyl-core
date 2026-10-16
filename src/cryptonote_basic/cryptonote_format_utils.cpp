@@ -620,8 +620,7 @@ namespace cryptonote
   //---------------------------------------------------------------
   bool get_output_public_key(const cryptonote::tx_out& out, crypto::public_key& output_public_key)
   {
-    // before HF_VERSION_VIEW_TAGS, outputs with public keys are of type txout_to_key
-    // after HF_VERSION_VIEW_TAGS, outputs with public keys are of type txout_to_tagged_key
+    // outputs with public keys are txout_to_key or txout_to_tagged_key
     if (std::holds_alternative<txout_to_key>(out.target))
       output_public_key = std::get<txout_to_key>(out.target).key;
     else if (std::holds_alternative<txout_to_tagged_key>(out.target))
@@ -695,13 +694,7 @@ namespace cryptonote
   bool check_output_types(const transaction& tx)
   {
     // One rule, no version dispatch (CEN-F8; E6 slice 4 §3.1 S23, ruled Q2
-    // (a)). This was a four-arm hard-fork ladder — `>= NG`, `> VIEW_TAGS`,
-    // `< VIEW_TAGS`, `== VIEW_TAGS` — of which exactly one arm was reachable:
-    // both constants are 1 and the hard-fork version is never below 1. The
-    // three Monero-era arms were rule-60 deletions ("when you encounter
-    // `if (version < N)` … delete the dead branch"); the `hf_version`
-    // parameter went with them, so a caller cannot select a rule that does
-    // not exist.
+    // (a)).
     for (const auto &o: tx.vout)
     {
       // txout_to_tagged_key is the sole output type from genesis (the

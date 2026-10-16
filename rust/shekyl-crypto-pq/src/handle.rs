@@ -82,7 +82,7 @@ pub const OUTPUT_HANDLE_LEN: usize = 16;
 /// Opaque deterministic identifier for a wallet output position.
 ///
 /// Holds 16 bytes. Constructed only via [`derive_output_handle`]
-/// (or, internally, [`OutputHandle::from_bytes`] for tests + future
+/// (or, internally, the private `OutputHandle::from_bytes` for tests + future
 /// deserialization paths). Public derives support orchestrator-side
 /// bookkeeping (`HashMap<OutputHandle, _>`, sorted iteration via
 /// `BTreeMap<OutputHandle, _>`); `Copy` is intentional — handles are

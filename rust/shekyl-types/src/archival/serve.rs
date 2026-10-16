@@ -47,9 +47,9 @@ impl PassCount {
 
 /// A served shard and the latest settlement epoch it earned a pass bit in
 /// — one row of the served-shards read (S-ARCH A4) and the release
-/// cooldown's anchor (CEN-J16). The HoldingsUpdate drop arm that also
-/// read this epoch is REJECTED (2026-09-20); CEN-J17 left the registry
-/// for bucket 3.
+/// cooldown's anchor (CEN-J16). (It was also the drop arm's grace-tail
+/// operand until CEN-J17 retired with `HoldingsUpdate`, `ARW-14`; slice 8
+/// Q1.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServedShard {
     /// Which shard.

@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::attestation::AttestationKind;
+use crate::attestation_admission::{AttestationSet, AttestationSetError};
 use crate::id::p_canonical_id_from_hybrid_pubkey;
 use crate::pass_anchor::{
     pass_countersignature_message, PassAnchorWindow, PASS_ANCHOR_HEIGHT_LEN,
@@ -478,13 +479,30 @@ fn witness_roundtrips_including_empty() {
         BlockAttestationWitness::from_canonical_bytes(&bytes).unwrap(),
         w
     );
+}
 
+/// The empty set has one encoding — no bytes — so a block's witness has
+/// one persisted form: `None` and no row. An eight-byte zero count would
+/// be a second spelling of the same set (a present row for an empty
+/// witness on one node, none on another); the decoder refuses it.
+#[test]
+fn witness_empty_set_is_no_bytes_and_a_zero_count_is_refused() {
     let empty = BlockAttestationWitness { passes: vec![] };
-    let eb = empty.to_canonical_bytes().unwrap();
-    assert_eq!(eb.len(), WITNESS_PREFIX_LEN);
+    assert!(empty.to_canonical_bytes().unwrap().is_empty());
     assert_eq!(
-        BlockAttestationWitness::from_canonical_bytes(&eb).unwrap(),
+        BlockAttestationWitness::from_canonical_bytes(&[]).unwrap(),
         empty
+    );
+    assert!(matches!(
+        BlockAttestationWitness::from_canonical_bytes(&0u64.to_le_bytes()),
+        Err(WitnessError::ZeroCount)
+    ));
+    assert!(
+        matches!(
+            AttestationSet::parse(&[], &0u64.to_le_bytes()),
+            Err(AttestationSetError::MalformedWitness)
+        ),
+        "the set parser inherits the refusal; it has no empty case of its own"
     );
 }
 

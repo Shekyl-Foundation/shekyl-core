@@ -782,7 +782,7 @@ fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
         );
         assert_eq!(
             via_dispatch, SHEKYL_RELAY_PLAN_OWN_EDGE,
-            "a hidden-address origin is the own-edge, not a stem slot"
+            "a hidden-address origin plans OWN_EDGE over the hidden stem slot"
         );
         assert_ne!(dest_dispatch, NIL, "the own-edge names its peer");
         assert_eq!(

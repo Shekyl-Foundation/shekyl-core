@@ -72,11 +72,7 @@ struct BlockchainAndPool
 
 bool init_blockchain(Blockchain& bc, BlockchainDB* db)
 {
-  const std::pair<uint8_t, uint64_t> hard_forks[] = {
-    std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-    std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-  };
-  const cryptonote::test_options test_options = {hard_forks, 5000};
+  const cryptonote::test_options test_options = {5000};
   return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 0);
 }
 
@@ -114,14 +110,13 @@ TEST(economics_tx_volume_window, shim_hands_the_exact_pair_to_rust_undivided)
 {
   // Same chain state as the Rust KAT: mid-curve, weight below the zone.
   const uint64_t ag = SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2;
-  const uint8_t version = 1;
   const shekyl::tx_volume_window exact{40u * 720 + 360, 720};
   const shekyl::tx_volume_window floored{40, 1};
 
   uint64_t reward_exact = 0;
   uint64_t reward_floored = 0;
-  ASSERT_TRUE(cryptonote::get_block_reward(0, 1, ag, reward_exact, version, exact));
-  ASSERT_TRUE(cryptonote::get_block_reward(0, 1, ag, reward_floored, version, floored));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, 1, ag, reward_exact, exact));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, 1, ag, reward_floored, floored));
 
   // new (exact, M_r = 0.81) / old (floored, M_r = 0.80 = the lower rail),
   // on curve(A/2) = (A/2) >> 22 = 512 SKL at the design's ESF 22 per block

@@ -58,7 +58,7 @@ TEST(EconomicsC2aPrime, Layer1SubsidyBaseCallPathMatchesFfiPrimitive) {
   for (const uint64_t already_generated : grid) {
     uint64_t cpp_reward = 0;
     ASSERT_TRUE(get_block_reward(
-        0, kStandardBlockWeight, already_generated, cpp_reward, 1));
+        0, kStandardBlockWeight, already_generated, cpp_reward));
     const uint64_t rust_base = shekyl_base_block_reward(already_generated);
     EXPECT_EQ(cpp_reward, rust_base) << "already_generated=" << already_generated;
   }
@@ -74,7 +74,6 @@ TEST(EconomicsC2aPrime, Layer1SubsidyWithReleaseCallPathMatchesFfiPrimitives) {
         kStandardBlockWeight,
         already_generated,
         cpp_reward,
-        1,
         shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     // FL-R12': the release multiplier composes INSIDE the one owner
@@ -99,19 +98,17 @@ TEST(EconomicsC2aPrime, Layer1PerQuantityCallPathComposesSplitAndCoinbase) {
     // Q_subsidy → Q_full_emission (release applied at empty-block volume 0).
     uint64_t q_full = 0;
     ASSERT_TRUE(get_block_reward(
-        0, kStandardBlockWeight, ag, q_full, 1, /*tx_volume=*/{}));
+        0, kStandardBlockWeight, ag, q_full, /*tx_volume=*/{}));
 
     for (const uint64_t height : height_grid) {
       // Q_miner_base / Q_staker_emission via the production split.
       const shekyl::EmissionSplit split =
-          shekyl::compute_emission_split(q_full, height, /*genesis_ng_height=*/0);
+          shekyl::compute_emission_split(q_full, height);
       const uint64_t q_miner_base = split.miner_emission;
       const uint64_t q_staker_emission = split.staker_emission;
 
       // Cross-check against the Rust FFI primitives the helper wraps.
-      const uint64_t share = shekyl_calc_emission_share(
-          height, 0, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY,
-          SHEKYL_BLOCKS_PER_YEAR);
+      const uint64_t share = shekyl_emission_share_at(height);
       const ShekylEmissionSplit rust_split =
           shekyl_split_block_emission(q_full, share);
       EXPECT_EQ(q_miner_base, rust_split.miner_emission)
@@ -153,7 +150,6 @@ TEST(EconomicsC2aPrime, Layer2FullEmissionAccumulationCallPathMatchesFfiPrimitiv
         kStandardBlockWeight,
         ag_cpp,
         q_sub,
-        1,
         shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     // FL-R12': multiplier inside the one owner; 1 at baseline.
@@ -176,10 +172,10 @@ TEST(EconomicsC2aPrime, Layer2MinerOnlyAccumulationDiffersFromFullEmission) {
   for (unsigned height = 1; height <= 100; ++height) {
     uint64_t q_sub = 0;
     ASSERT_TRUE(get_block_reward(
-        0, kStandardBlockWeight, ag_full, q_sub, 1, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
+        0, kStandardBlockWeight, ag_full, q_sub, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     const shekyl::EmissionSplit split =
-        shekyl::compute_emission_split(q_sub, height, 0);
+        shekyl::compute_emission_split(q_sub, height);
 
     ag_full = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_full + q_sub);
     ag_miner = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_miner + split.miner_emission);
@@ -332,7 +328,7 @@ TEST(EconomicsC2aPrime, Layer1WeightPenaltyPinnedVectors) {
     for (const WeightPenaltyVector& v : kWeightPenaltyVectors) {
         uint64_t reward = UINT64_MAX;
         const bool ok = get_block_reward(
-            v.median_weight, v.current_block_weight, v.already_generated_coins, reward, 1);
+            v.median_weight, v.current_block_weight, v.already_generated_coins, reward);
 
         ASSERT_EQ(ok, v.expect_ok)
             << "median=" << v.median_weight << " current=" << v.current_block_weight

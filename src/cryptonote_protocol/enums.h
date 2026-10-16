@@ -60,7 +60,7 @@ namespace cryptonote
      `upgrade_relay_method`'s monotonicity, whose `static_assert`s moved with
      the deletion. */
 
-  /* Relay-method bytes are the FFI contract with `shekyl-relay::zone`
+  /* Relay-method bytes are the FFI contract with `shekyl-relay::graph`
      (the `RelayMethod` pins). NetZone bytes below are the contract with
      `shekyl_types::relay::NetZone`. Neither compiler observes the other,
      so each side pins its own literals. A hidden-address origin stays
@@ -69,7 +69,7 @@ namespace cryptonote
   static_assert(unsigned(relay_method::none) == 0 && unsigned(relay_method::local) == 1
              && unsigned(relay_method::stem) == 2 && unsigned(relay_method::fluff) == 3
              && unsigned(relay_method::block) == 4,
-    "relay_method bytes are the FFI contract with shekyl-relay::zone");
+    "relay_method bytes are the FFI contract with shekyl-relay::graph");
   /* Bytes of `shekyl_types::relay::NetZone`. Not connector ids: clearnet's
      connector is 0, and this public byte is 1. Tor stays 3. Discriminant 2
      is not a value. */

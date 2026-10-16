@@ -8,8 +8,8 @@
 //! live in `tx_conformance_tests`.
 
 use crate::harness::fixture::{
-    bp_plus_layout_for, coinbase, coinbase_extra, listed, point, pqc_auth_filler, pqc_extra,
-    serve_credit_only, G, TWO_G,
+    bp_plus_layout_for, coinbase, coinbase_extra, listed, persona, point, pqc_auth_filler,
+    pqc_extra, serve_credit_only, G, TWO_G,
 };
 use shekyl_wire::transaction::{
     MAX_TX_EXTRA, MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
@@ -93,12 +93,18 @@ pub(super) fn coinbase_extra_for(n: usize) -> Vec<u8> {
     coinbase_extra(n)
 }
 
-/// A bond-post input with a canonical hybrid key and `kind`; the type's
-/// minimum otherwise.
+/// A bond-post input of the persona tagged `[0xB0; 32]` with `kind`; the
+/// type's minimum otherwise. At the canonical length the key is the
+/// persona's identity key and the hint its recompute, so the post passes
+/// CEN-J11 and a trip reaches the row it is built for; any other length
+/// is the key cut or padded to it — J11's own trip.
 pub(super) fn bond_post_input(hybrid_key_len: usize, kind: BondPostKind) -> Input {
+    let who = persona([0xB0; 32]);
+    let mut hybrid_public_key = who.identity;
+    hybrid_public_key.resize(hybrid_key_len, 0xB1);
     Input::BondPost(Box::new(BondPost {
-        hybrid_public_key: vec![0xB1; hybrid_key_len],
-        p_canonical_id: shekyl_types::PCanonicalId::from_bytes([0xB0; 32]),
+        hybrid_public_key,
+        p_canonical_id: who.id,
         kind,
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 0,
@@ -190,6 +196,9 @@ pub(super) fn j12_short_bond_spend_pk() -> Transaction {
         PQC_HYBRID_SINGLE_KEY_LEN,
         BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xC0; 5],
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xE0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
         },
     ))

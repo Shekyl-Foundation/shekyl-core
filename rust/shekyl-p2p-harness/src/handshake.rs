@@ -13,16 +13,14 @@
 
 use shekyl_levin::{
     invoke, response, BasicNodeData, CoreSyncData, HandshakeRequest, HandshakeResponse,
-    NetworkAddress, PortableMap, SupportFlags, COMMAND_HANDSHAKE,
+    PortableMap, SupportFlags, COMMAND_HANDSHAKE,
 };
-use std::net::Ipv4Addr;
 
 use crate::Error;
 
 /// First eight bytes of the handshake nonce, little-endian. Independent of
 /// the script seed: every leg uses this same invoke.
 const HANDSHAKE_NONCE: u64 = 1;
-const ADVERTISED_PORT: u16 = 18_080;
 const NETWORK_ID_BYTE: u8 = 0x11;
 const TOP_ID_BYTE: u8 = 0xab;
 
@@ -59,10 +57,6 @@ pub fn handshake() -> Result<Handshake, Error> {
 fn node() -> BasicNodeData {
     BasicNodeData {
         network_id: [NETWORK_ID_BYTE; 16],
-        address: NetworkAddress::Ipv4 {
-            ip: Ipv4Addr::new(0, 0, 0, 0),
-            port: ADVERTISED_PORT,
-        },
         support_flags: SupportFlags::default(),
     }
 }
@@ -73,6 +67,5 @@ fn sync() -> CoreSyncData {
         cumulative_difficulty: 2,
         cumulative_difficulty_top64: 0,
         top_id: [TOP_ID_BYTE; 32],
-        top_version: 0,
     }
 }

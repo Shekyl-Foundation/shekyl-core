@@ -50,7 +50,7 @@
 /// **by value and test, not by include**: the C++ side `static_assert`s each
 /// variant's byte against this contract at the FFI seam, so a renumbering on
 /// either side is a compile error there rather than a silent remap here.
-/// `shekyl-relay::zone` carries the Rust-side `const` pins.
+/// `shekyl-relay::graph` carries the Rust-side `const` pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RelayMethod {

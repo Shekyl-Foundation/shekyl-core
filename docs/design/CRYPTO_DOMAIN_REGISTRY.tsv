@@ -51,7 +51,7 @@
 # so a future "cleanup" cannot touch them without failing the gate.
 #
 # COLUMNS (tab-separated):
-#   mech    1..6 mechanism id (see below); "x" = excluded-with-reason
+#   mech    1..7 mechanism id (see below); "x" = excluded-with-reason
 #   literal exact bytes WITHOUT the b"" wrapper (the gate greps for b"<literal>")
 #   file    repo-root-relative path where the literal is DEFINED (the b"..." site)
 #   const   defining constant name, or a short site descriptor in parens
@@ -71,6 +71,7 @@
 #   4  Blake2b DST                    (first Blake2b512::update as a domain; sal_dst-padded tags)
 #   5  keccak / schnorr challenge DST (schnorr sign/verify domain, keccak256(...) hash-to-point/scalar prefix)
 #   6  SHA3-256 direct-prefix         (micro-bucket: a domain prefix fed straight to Sha3_256, outside 1..5)
+#   7  Noise prologue label           (micro-bucket: a label's own bytes mixed into a Noise handshake hash as prologue)
 #
 # SUB-LABELS ARE OUT OF SCOPE (documented, not rowed): FROST transcript field
 # labels appended via append_message (b"O_tilde", b"r_o", ...), the schnorr
@@ -101,10 +102,21 @@
 1	shekyl/pqc-leaf-key-v1	rust/shekyl-crypto-pq/src/leaf_commitment.rs	DOMAIN_PQC_LEAF_KEY	shekyl-live		PL-D3: k = H_ℓ(hybrid_pk), 64-byte read reduced mod ℓ; replaces mech-4 shekyl-pqc-leaf (retired 2026-09-14)
 1	shekyl/pqc-leaf-record-v1	rust/shekyl-crypto-pq/src/leaf_commitment.rs	DOMAIN_PQC_LEAF_RECORD	shekyl-live		PL-D3a: post-quantum record cSHAKE256(pk ‖ r_h) beside CM in tx_extra 0x07
 1	shekyl/archival-serve-credit-response-v1	rust/shekyl-archival-retention/src/challenge.rs	SERVE_CREDIT_RESPONSE_CUSTOMIZATION	shekyl-live
-1	shekyl/archival-challenge-assignment-v1	rust/shekyl-archival-retention/src/challenge_assignment.rs	CHALLENGE_ASSIGNMENT_CUSTOMIZATION	shekyl-live		per-draw challenge-assignment stream (PR #435)
 1	shekyl/archival-p-id-v1	rust/shekyl-archival-retention/src/id.rs	P_CANONICAL_ID_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-attestation-root-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_ROOT_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-pass-delivery-digest-v1	rust/shekyl-archival-retention/src/pass_anchor.rs	PASS_DELIVERY_DIGEST_CUSTOMIZATION	shekyl-live		2026-10-04: digest of the response P delivered, salted by the request's nonce — cSHAKE256(label, nonce ‖ framed)[..32]; the last term of the attestation countersignature transcript and a carried field of the pass record
+1	shekyl/archival-shard-view-hash-v1	rust/shekyl-archival-retention/src/shard_view_hash.rs	SHARD_VIEW_HASH_CUSTOMIZATION	shekyl-live		2026-10-08 (SV-D1): the visualization's seed for a W-byte shard — cSHAKE256(label, shard_id_le ‖ per tx: txid ‖ len ‖ prunable ‖ len ‖ pqc_auths)[..32] over the archival bytes themselves, so it requires the pruned components; not a verification digest, never a skeleton row, never on the serving wire
+1	shekyl/archival-settlement-select-v1	rust/shekyl-archival-retention/src/settlement_select.rs	SETTLEMENT_SELECT_CUSTOMIZATION	shekyl-live		2026-10-08: which three of a pair's issued draws count at settlement — cSHAKE256(label, beacon ‖ persona ‖ shard_le8 ‖ epoch_le8 ‖ k_le4 ‖ attempt_le4)[..8], a partial Fisher–Yates (ARCHIVAL_SERVE_CREDIT_SPEC.md §9.3)
+1	shekyl/archival-issued-index-v1	rust/shekyl-archival-retention/src/settlement_select.rs	ISSUED_INDEX_CUSTOMIZATION	shekyl-live		2026-10-08: one issued draw's term in its epoch's running digest — cSHAKE256(label, persona ‖ shard_le8 ‖ epoch_le8 ‖ h_le8 ‖ j_le4)[..32], summed modulo 2^256 (ARCHIVAL_SERVE_CREDIT_SPEC.md §10)
+1	shekyl/archival-draw-v1	rust/shekyl-archival-retention/src/secret_draw.rs	DRAW_CUSTOMIZATION	shekyl-live		2026-10-10 (Slice C): selection stream — cSHAKE256(label, seed ‖ block_hash(h) ‖ j_le4 ‖ attempt_le4)[..32], rejection sampling over the static set (ARCHIVAL_SERVE_CREDIT_SPEC.md §4.4)
+1	shekyl/archival-draw-commit-v1	rust/shekyl-archival-retention/src/secret_draw.rs	DRAW_COMMIT_CUSTOMIZATION	shekyl-live		2026-10-10 (Slice C): the coinbase 0x0C commitment — cSHAKE256(label, witness_pk ‖ seed)[..32] (ARCHIVAL_SERVE_CREDIT_SPEC.md §4.2)
+1	shekyl/archival-challenge-nonce-v1	rust/shekyl-archival-retention/src/secret_draw.rs	CHALLENGE_NONCE_CUSTOMIZATION	shekyl-live		2026-10-10 (Slice C): a challenge read's nonce — cSHAKE256(label, seed ‖ block_hash(h) ‖ j_le4 ‖ attempt[1])[..32] (ARCHIVAL_SERVE_CREDIT_SPEC.md §5.2)
+1	shekyl/archival-serve-credit-batch-v1	rust/shekyl-archival-retention/src/secret_draw.rs	SERVE_CREDIT_BATCH_CUSTOMIZATION	shekyl-live		SUPERSEDED by shekyl/archival-serve-credit-bundle-v1 (SCS-P35); no consensus caller, kept until the cutover decides it (ARCHIVAL_SERVE_CREDIT_SPEC.md §11.1). 2026-10-10 (Slice C): the witness signature's set commitment — cSHAKE256(label, seed ‖ h_le8 ‖ frame(r1) ‖ … ‖ frame(rn))[..32] (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3)
+1	shekyl/archival-serve-credit-bundle-v1	rust/shekyl-archival-retention/src/bundle.rs	BUNDLE_COMMITMENT_CUSTOMIZATION	shekyl-live		2026-10-12 (Slice C): the bundle commitment the witness signs — cSHAKE256(label, seed ‖ h_le8 ‖ count_le4 ‖ bitmap ‖ r1 ‖ … ‖ rn)[..32], the kept part followed by the records, unframed because every record is 1,397 bytes (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3, SCS-P35). A different message from archival-serve-credit-batch-v1, which stays beside it until the carrier's deletion. STAGED: read by shekyl-chain-rules' verify_bundle; no block path until SO-D12's cutover
+1	shekyl/archival-bundle-prunable-v1	rust/shekyl-archival-retention/src/bundle.rs	BUNDLE_PRUNABLE_CUSTOMIZATION	shekyl-live		2026-10-12 (Slice C): the hash of a bundle's prunable bytes, carried by its reference and the key its body is fetched by — cSHAKE256(label, witness_pk ‖ witness_sig ‖ r1 ‖ … ‖ rn)[..32] (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3, §7.5, SCS-P36). STAGED with the bundle commitment
+1	shekyl/archival-bundle-root-v1	rust/shekyl-archival-retention/src/bundle.rs	BUNDLE_ROOT_CUSTOMIZATION	shekyl-live		2026-10-12 (Slice C): the block header's root over its bundle references in ascending h — cSHAKE256(label, n_le4 ‖ ref1 ‖ … ‖ refn)[..32] with ref = seed ‖ h_le8 ‖ count_le4 ‖ bitmap ‖ prunable_hash, unframed because a reference states its own count, so it recomputes with no chain (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3, §9.1, SCS-P23, SCS-P39; the preimage carried a per-reference length frame and no count until 2026-10-12, before any block could carry one). STAGED with the bundle commitment
+1	shekyl/p-store-aead-v1	rust/shekyl-p-store/src/store.rs	STORE_AEAD_CUSTOMIZATION	shekyl-live		2026-10-10 (WSS-Q1): P's body-store file key — cSHAKE256(label, file_kek)[..32]. Open checks a cell sealed under this key, so a swapped companion file fails before any shard row is trusted.
+1	shekyl/p-store-slot-v1	rust/shekyl-p-store/src/store.rs	STORE_SLOT_CUSTOMIZATION	shekyl-live		2026-10-10 (WSS-Q1): P's per-shard table slot — cSHAKE256(label, store_key ‖ shard_id_le8)[..32]
 1	shekyl/archival-emission-auth-backing-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_BACKING_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-emission-auth-claim-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_CLAIM_CUSTOMIZATION	shekyl-live
 1	shekyl/p-socks-user-v1	rust/shekyl-p-transport/src/lib.rs	SOCKS_USER_CUSTOMIZATION	shekyl-live
@@ -119,6 +131,9 @@
 1	shekyl/archival-emission-backing-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_BACKING	shekyl-live
 1	shekyl/archival-attestation-scheme-v3	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live		2026-10-04: message gained the delivery digest, nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]; -v2 (no digest, SF-D8 2026-09-13) and -v1 (nonce-only) retired, no code const kept — the retention crate's a_retired_domain_signature_does_not_verify_under_v3 test is the negative control for both
 1	shekyl/archival-serve-credit-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_SERVE_CREDIT	shekyl-live
+1	shekyl/archival-receipt-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_RECEIPT	shekyl-live		2026-10-09: the serve receipt under hybrid scheme 3 (Ed25519 + FN-DSA-1024), signed by the persona's receipt key over the 112-byte delivery transcript (ARCHIVAL_SERVE_CREDIT_SPEC.md §6). The constant and its vectors land first; the receipt path moves onto it, and archival-attestation-scheme-v3 retires, in the FN-DSA lane's increment 4
+1	shekyl/archival-witness-carrier-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_WITNESS_CARRIER	shekyl-live		SUPERSEDED by shekyl/archival-witness-bundle-scheme-v1 (SCS-P16); no signer or verifier, kept so the label is never reused. 2026-10-09: the witness's signature over a carrier's set commitment under hybrid scheme 3, with a key generated fresh per block (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3). The constant and its vector land with the scheme; the signer is Slice C's
+1	shekyl/archival-witness-bundle-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_WITNESS_BUNDLE	shekyl-live		2026-10-12 (Slice C): the witness's signature over the bundle commitment (shekyl/archival-serve-credit-bundle-v1) under hybrid scheme 3, with the key generated fresh per block and committed in 0x0C (ARCHIVAL_SERVE_CREDIT_SPEC.md §6.2, §7.3). A different message from the carrier's set commitment, so a different label. STAGED: the one verifier is shekyl-chain-rules' verify_bundle, which no connect path calls until SO-D12's cutover; the signer is the challenger's
 1	shekyl/snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh/types.rs	SNAPSHOT_ID_CUSTOMIZATION	shekyl-live		wallet-internal reservation-staleness digest; cSHAKE customization (SA-3c retargeted it off cn_fast_hash — unpersisted, no wire, fresh mint)
 1	shekyl/chain-digest/v0	rust/shekyl-chain-store/src/digest_v0.rs	OUTER_CUSTOMIZATION	shekyl-live		DRS-P0d logical-state digest outer
 1	shekyl/chain-digest/v0/chain	rust/shekyl-chain-store/src/digest_v0.rs	CHAIN_CUSTOMIZATION	shekyl-live		DRS-P0d height-ordered chain component
@@ -126,6 +141,8 @@
 1	shekyl/chain-store/undo-log/post-image-v1	rust/shekyl-chain-store/src/codec/undo.rs	POST_IMAGE_DST	shekyl-live		S-CHAIN-W (DRS-E1 inc 3): cSHAKE256-32 post-image digest of the value a journaled write left under its key; replay compares it before counting an inverse reversed (SI-6 exact). Part of the undo_log row layout (SCHEMA_VERSION 2)
 1	shekyl/p2p-wire-prefix-v1	rust/shekyl-p2p-transport/src/prefix.rs	WIRE_PREFIX_DST	shekyl-live		PWD-T5: first 8 bytes of cSHAKE256(S = this customization, X = network_id). Used only when --clearnet-transport-encrypt is on; the default plaintext path still starts with LEVIN_SIGNATURE
 1	shekyl/p2p-network-id-v1	rust/shekyl-p2p-transport/src/prefix.rs	NETWORK_ID_DST	shekyl-live		first 16 bytes of cSHAKE256(S = this customization, X = genesis block hash). The handshake id; a regenesis rotates it because the hash moves
+1	shekyl/rpc-rendezvous-name-v1	rust/shekyl-rpc-channel/src/lib.rs	RENDEZVOUS_NAME_DST	shekyl-live		RT-O10/RT-O14: first 12 bytes of cSHAKE256(S = this customization, X = network_id || instance label). The name a daemon's local rendezvous is found under, so an instance name never reaches a path
+1	shekyl/rpc-static-fingerprint-v1	rust/shekyl-rpc-channel/src/lib.rs	STATIC_FINGERPRINT_DST	shekyl-live		RT-O14: cSHAKE256(S = this customization, X = X25519 public key || ML-KEM-768 encapsulation key), 32 bytes. The identity a daemon enrols an RPC client under
 #
 # ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are
@@ -168,6 +185,8 @@
 2	shekyl-archival-p-bond-spend-ml-dsa-65-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO	shekyl-live		info
 2	shekyl-archival-p-hs-id-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_HS_ID_INFO	shekyl-live		info
 2	shekyl-archival-p-msg-sign-slh-dsa-192s-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_MSG_SIGN_INFO	shekyl-live		info
+2	shekyl-archival-p-receipt-ed25519-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_RECEIPT_ED_INFO	shekyl-live		info
+2	shekyl-archival-p-receipt-fn-dsa-1024-v1	rust/shekyl-crypto-pq/src/archival_p.rs	ARCHIVAL_P_RECEIPT_FN_DSA_INFO	shekyl-live		info
 2	shekyl-v31-hybrid-sign	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_HYBRID_SIGN	shekyl-live		info
 2	shekyl-v31-classical-spend	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_CLASSICAL_SPEND	shekyl-live		info
 2	shekyl-v31-view-tag	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_VIEW_TAG	shekyl-live		info
@@ -213,6 +232,13 @@
 #
 # ── Mechanism 6 — SHA3-256 direct-prefix micro-bucket ──────────────────
 6	shekyl-mlkem-chacha-seed	rust/shekyl-crypto-pq/src/account.rs	MLKEM_CHACHA_SEED_PREFIX	shekyl-live		domain prefix fed straight to Sha3_256 (NOT cSHAKE) to derive a ChaCha seed; kept as its own bucket rather than silently folded into mechanism 1
+#
+# ── Mechanism 7 — Noise prologue label ──────────────────────────────────────
+# A label whose own bytes are mixed into a Noise handshake hash as (part of)
+# the prologue, before any message. It is hashed by the handshake's hash, not
+# by cSHAKE, so it is not mechanism 1. (The P2P handshake's prologue is the
+# network id alone, which is a mechanism-1 derivation and has no label here.)
+7	shekyl/rpc-channel-v1	rust/shekyl-rpc-channel/src/lib.rs	CHANNEL_DST	shekyl-live		RT-O14: the RPC channel's prologue is these bytes followed by the 16-byte network id, no separator. Binds the handshake to the channel protocol and to one network
 #
 # ── TEST-ONLY — domains minted by test/bench code, segregated from production ─
 # Registered so the SEGREGATION is machine-checked: a test-only domain spelled

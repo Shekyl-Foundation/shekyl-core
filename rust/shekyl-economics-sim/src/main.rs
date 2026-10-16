@@ -21,6 +21,8 @@ mod onset;
 mod population;
 mod proxy;
 mod redistribution;
+mod secret_draw;
+mod secret_draw_production;
 mod stranding;
 mod swing;
 mod volume_window;
@@ -111,6 +113,62 @@ fn main() {
         return;
     }
 
+    if std::env::args().any(|a| a == "--secret-draw") {
+        // ESR-11's experiment (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.13)
+        // on ESR-13's loop at ESR-11's timing (§5.22): the secret per-block
+        // draw at 0 / 10 / 30 % producer dropout, pairs short of three
+        // issued draws, draws per block, and the failure window
+        // re-checked. JSON to stdout, table to stderr.
+        let report = secret_draw_production::Report {
+            cells: secret_draw_production::esr11_timing_specs()
+                .into_iter()
+                .map(secret_draw_production::cell)
+                .collect(),
+        };
+        let mut summary = String::new();
+        secret_draw_production::render_summary(&mut summary, &report)
+            .expect("String sink is infallible");
+        eprint!("{summary}");
+        println!("{}", secret_draw_production::evidence_json(&report));
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--secret-draw-production") {
+        // ESR-13 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.17): ESR-11's epoch
+        // on production's `draw_count` and `select_draw`, with a block's
+        // draws issued only when its bundle is admitted. Each cell is
+        // reported to stderr as it finishes, with its wall time; then the
+        // table to stderr and JSON to stdout.
+        let started = std::time::Instant::now();
+        let mut report = secret_draw_production::Report { cells: Vec::new() };
+        for pairs in secret_draw::EVIDENCE_PAIRS {
+            for spec in secret_draw_production::evidence_specs(pairs) {
+                let cell_started = std::time::Instant::now();
+                let cell = secret_draw_production::cell(spec);
+                let mut row = String::new();
+                secret_draw_production::render_cell(&mut row, &cell)
+                    .expect("String sink is infallible");
+                eprintln!(
+                    "[{:>7.1} s] {}",
+                    cell_started.elapsed().as_secs_f64(),
+                    row.trim_end()
+                );
+                report.cells.push(cell);
+            }
+        }
+        let mut summary = String::new();
+        secret_draw_production::render_summary(&mut summary, &report)
+            .expect("String sink is infallible");
+        eprint!("\n{summary}");
+        eprintln!(
+            "wall time: {:.1} s, {} seeds per cell on one thread each",
+            started.elapsed().as_secs_f64(),
+            secret_draw::SEEDS
+        );
+        println!("{}", secret_draw_production::evidence_json(&report));
+        return;
+    }
+
     if std::env::args().any(|a| a == "--stage2") {
         // The I/O boundary lives here, in the binary target: the arm modules
         // *render* into a sink (`fmt::Write`) and `main` performs the write.
@@ -162,7 +220,10 @@ fn main() {
     if gate7 {
         eprintln!("\nGate-7 scenario set complete. JSON written to stdout.");
     } else {
-        eprintln!("\nAll 8 scenarios complete. JSON written to stdout.");
+        eprintln!(
+            "\nAll {} scenarios complete. JSON written to stdout.",
+            results.len()
+        );
     }
 }
 

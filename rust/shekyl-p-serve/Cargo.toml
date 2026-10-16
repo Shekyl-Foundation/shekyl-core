@@ -9,11 +9,12 @@ description = "PR-A persona serving loop: loopback shard server + store pin/read
 publish = false
 
 [dependencies]
-# The shard store: `frozen_segment_leaf_bytes` is the serving read and
-# `pin_segment` is what keeps a bonded shard's bytes across `prune_frozen`.
-# `recompute_segment_r_k` is re-exported for the witness-side check the
-# integration test mirrors.
+# The request-header codec lives here (`serving_route`); the shard body
+# no longer does. Pin/freeze stay on this crate until the class-C rename.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# `P`'s serving body store: `StoreShardProvider` streams `shard_frame`
+# bytes from a read-only `BodyStoreReader` (`WSS-Q1`(a)).
+shekyl-p-store = { path = "../shekyl-p-store" }
 # Same async runtime surface as the SP-T3 spike's serve endpoint whose
 # hardening shape this crate productionizes: net + io-util for the loopback
 # listener, sync for the in-flight semaphore, time for the per-step bounds.
@@ -34,17 +35,53 @@ shekyl-types = { path = "../shekyl-types" }
 [features]
 # Exposes `TestKeySigner` — a `PassSigner` over an ephemeral, non-derived
 # keypair — to this crate's integration tests and to `shekyl-p-fetch`'s
-# loopback conversation test (a *dev* edge; SF-D4 forbids it on the
-# shipped graph). The name announces intent: a non-derived key never
-# reaches a wallet or a bonded persona.
+# conversation test (a *dev* edge; SF-D4 forbids it on the shipped graph).
+# The SOCKS shim that test shares lives in `shekyl-p-loopback`, which does
+# not enable this feature. The name announces intent: a non-derived key
+# never reaches a wallet or a bonded persona.
 test-signer = ["shekyl-crypto-pq/test-utils"]
+# Exposes `serve_one_in_memory`, `prehead_in_memory` and
+# `read_and_fold_in_memory`: the endpoint's own steps composed on the
+# calling thread, for the `BA-T3` instruction-count gate. Not serve paths
+# and not on the shipped graph; the loopback endpoint is the production
+# surface.
+bench-internals = []
 
 [dev-dependencies]
-tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
+# `test-util`: the write-stall tests pause time. A drain is spaced across
+# the stall bound, and a late poll finds the socket writable after the
+# bound has already run out.
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "test-util"] }
+# `BA-T3`: the serve-one-response drift gate (`benches/serve_response_iai.rs`),
+# hardware-independent instruction counts gated per PR by `ci/benchmarks`.
+# gungraun rather than criterion: wall clock on this path is the floor
+# device's measurement (`BA-T5`), not a CI runner's.
+gungraun = "0.19"
+# The bench signs under a SEEDED key with a seeded ML-DSA nonce, as
+# `shekyl-tx-builder`'s `transfer_e2e_iai` does: a fresh key or a hedged
+# signature moves the rejection-sampling trajectory and with it the count
+# by tens of millions of instructions between runs of the same input.
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+fips204 = "0.4.6"
+rand = "0.8"
 # Self-dependency: integration tests build the lib without cfg(test), so the
 # test signer must ride the dev graph explicitly (same shape as retention's
 # `consensus-kat` unlock).
 shekyl-p-serve = { path = ".", features = ["test-signer"] }
+# `BA-T5` session 3: the floor probe's `BAT5_PRIORITY` arm builds its
+# endpoint runtime the way the serving host does — the single constructor
+# with the thread-start hook that lowers each thread's priority (`SH-3`).
+# Dev edges only; nothing on the shipped serve path uses them.
+shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 
 [lints]
 workspace = true
+
+# Gated by `bench-internals`, the in-memory compositions it times. Its signer
+# is its own seeded key, built inside the bench. Registered as an iai-only
+# row in `scripts/bench/capture_rust_baseline.sh` with that feature.
+[[bench]]
+name = "serve_response_iai"
+harness = false
+required-features = ["bench-internals"]

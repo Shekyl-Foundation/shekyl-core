@@ -16,7 +16,8 @@ use crate::rules::tx::{refused_listed, refused_lone};
 use crate::validate::tx_form;
 use crate::verdict::{Locus, TxSlot};
 use shekyl_wire::tx_extra::{
-    self, conforming_pqc_leaf_blob, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES,
+    self, conforming_pqc_leaf_blob, TxExtraField, COINBASE_NONCE_BYTES, CONFORMING_DRAW_COMMITMENT,
+    HYBRID_KEM_CT_BYTES,
 };
 use shekyl_wire::Transaction;
 
@@ -159,9 +160,9 @@ fn i19_on_the_coinbase_leaves_the_grammar_to_i20() {
 
 // ---- CEN-I20 ------------------------------------------------------------
 
-/// Every departure from the coinbase grammar is I20's refusal at `Miner`:
-/// no pubkey, no nonce, a nonce of the wrong width, a duplicate pubkey, a
-/// foreign tag, the fields out of order, and a trailing field.
+/// Every departure from the coinbase grammar is I20's refusal at `Miner`.
+/// Each departure is the conforming five-field extra with **one** defect,
+/// so the refusal is that defect's and not a missing field's beside it.
 #[test]
 fn i20_every_departure_from_the_grammar_is_refused_at_miner() {
     let n = 1;
@@ -169,35 +170,94 @@ fn i20_every_departure_from_the_grammar_is_refused_at_miner() {
     let leaf = || TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n));
     let nonce = || TxExtraField::Nonce(vec![0; COINBASE_NONCE_BYTES]);
     let pubkey = || TxExtraField::PubKey(G);
+    let commitment = || TxExtraField::DrawCommitment(CONFORMING_DRAW_COMMITMENT);
     let ser = |fields: &[TxExtraField]| tx_extra::serialize(fields).expect("fields serialize");
-    // Baseline: the fixture's own extra is the grammar and passes.
-    assert_eq!(coinbase(1).prefix.extra, coinbase_extra(1));
+    // Baseline: the fixture's own extra — the grammar's constructor over
+    // the harness miner's real output — passes, as does the filler-bodied
+    // `coinbase_extra(1)` the departures below are cut from: the grammar
+    // reads the layout, not the fields' content. The hand-laid conforming
+    // extra is the same bytes, so a departure differs from an admitted
+    // extra by its one defect.
     tx_form(&coinbase(1), TxSlot::Miner, &RuleSet::GENESIS).expect("the grammar");
+    tx_form(
+        &coinbase_with_extra(coinbase_extra(1)),
+        TxSlot::Miner,
+        &RuleSet::GENESIS,
+    )
+    .expect("the grammar over filler");
+    assert_eq!(
+        ser(&[pubkey(), nonce(), commitment(), kem(), leaf()]),
+        coinbase_extra(1),
+        "the hand-laid conforming extra is the constructor's"
+    );
 
-    let departures: [Vec<u8>; 7] = [
-        ser(&[nonce(), kem(), leaf()]),
-        ser(&[pubkey(), kem(), leaf()]),
-        ser(&[pubkey(), TxExtraField::Nonce(vec![0; 7]), kem(), leaf()]),
-        ser(&[pubkey(), pubkey(), nonce(), kem(), leaf()]),
+    let departures: [Vec<u8>; 10] = [
+        // No pubkey.
+        ser(&[nonce(), commitment(), kem(), leaf()]),
+        // No nonce.
+        ser(&[pubkey(), commitment(), kem(), leaf()]),
+        // A nonce one byte short.
+        ser(&[
+            pubkey(),
+            TxExtraField::Nonce(vec![0; COINBASE_NONCE_BYTES - 1]),
+            commitment(),
+            kem(),
+            leaf(),
+        ]),
+        // A duplicate pubkey.
+        ser(&[pubkey(), pubkey(), nonce(), commitment(), kem(), leaf()]),
+        // A foreign tag.
         ser(&[
             pubkey(),
             nonce(),
+            commitment(),
             kem(),
             leaf(),
             TxExtraField::PqcViewTagHints(vec![1]),
         ]),
-        ser(&[nonce(), pubkey(), kem(), leaf()]),
-        ser(&[pubkey(), nonce(), kem(), leaf(), TxExtraField::Padding(1)]),
+        // Pubkey and nonce out of order.
+        ser(&[nonce(), pubkey(), commitment(), kem(), leaf()]),
+        // A trailing field.
+        ser(&[
+            pubkey(),
+            nonce(),
+            commitment(),
+            kem(),
+            leaf(),
+            TxExtraField::Padding(1),
+        ]),
+        // The draw commitment's own three defects (`SO-D12i`): absent,
+        // twice, and after the KEM field.
+        ser(&[pubkey(), nonce(), kem(), leaf()]),
+        ser(&[pubkey(), nonce(), commitment(), commitment(), kem(), leaf()]),
+        ser(&[pubkey(), nonce(), kem(), commitment(), leaf()]),
     ];
     for extra in departures {
         refused_at_miner(&coinbase_with_extra(extra), CenRow::I20);
     }
 }
 
-/// A leafless coinbase (no outputs) carries pubkey and nonce and nothing
-/// else; the same two fields with an output are I19's refusal first.
+/// A `0x0C` draw commitment on a listed transaction is refused on I19, as
+/// a `0x02` nonce is: a block commits to one seed, in its coinbase
+/// (`ExtraShapeError::DrawCommitmentOutsideCoinbase`).
 #[test]
-fn i20_a_leafless_coinbase_is_pubkey_and_nonce_only() {
+fn i19_a_draw_commitment_off_the_coinbase_is_refused_on_i19() {
+    let n = 2;
+    let with_commitment = tx_extra::serialize(&[
+        TxExtraField::DrawCommitment(CONFORMING_DRAW_COMMITMENT),
+        TxExtraField::PqcKemCiphertext(vec![0x5A; HYBRID_KEM_CT_BYTES * n]),
+        TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)),
+    ])
+    .expect("three fields serialize");
+    refused_lone(&listed_with_extra(with_commitment.clone()), CenRow::I19);
+    refused_listed(&listed_with_extra(with_commitment), CenRow::I19);
+}
+
+/// A leafless coinbase (no outputs) carries pubkey, nonce and draw
+/// commitment and nothing else; the same three fields with an output are
+/// I19's refusal first.
+#[test]
+fn i20_a_leafless_coinbase_is_pubkey_nonce_and_commitment_only() {
     let mut cb = coinbase(1);
     cb.prefix.outputs.clear();
     cb.prefix.extra = coinbase_extra(0);
@@ -207,8 +267,9 @@ fn i20_a_leafless_coinbase_is_pubkey_and_nonce_only() {
         base.commitments.clear();
     }
     // F4 (one output) is `form`'s; `tx_form` at `Miner` judges the extra.
-    tx_form(&cb, TxSlot::Miner, &RuleSet::GENESIS).expect("pubkey and nonce only");
-    // Two fields on a coinbase that has an output: I19's missing fields.
+    tx_form(&cb, TxSlot::Miner, &RuleSet::GENESIS).expect("pubkey, nonce and commitment only");
+    // The leafless layout on a coinbase that has an output: I19's missing
+    // fields.
     refused_at_miner(&coinbase_with_extra(coinbase_extra(0)), CenRow::I19);
 }
 

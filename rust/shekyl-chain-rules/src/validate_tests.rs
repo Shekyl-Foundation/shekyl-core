@@ -6,9 +6,7 @@
 use super::*;
 use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
-use crate::harness::fixture::{
-    candidate, candidate_on, coinbase, listed_on, point, spendable_chain,
-};
+use crate::harness::fixture::{candidate, candidate_on, coinbase, spendable_chain};
 use crate::harness::{
     defined, formed, formed_on, formed_under, judged, Faulted, MockChain, MockSubstrate,
 };
@@ -19,15 +17,16 @@ use crate::TxIdentity;
 
 #[test]
 fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
-    // On the youngest chain that can list a spend (CEN-I11), the two spends
-    // anchored on it (CEN-I10); a genesis block listing spends is a shape
-    // consensus refuses, and until slice 6 commit 5 this fixture was one.
+    // On the youngest chain that can list a spend (CEN-I11), a coinbase-only
+    // block: the one well-formed block a `MockChain` can hold, since a
+    // fixture spend is refused at CEN-I13 on any view (slice 6 row 6 — until
+    // which this candidate listed two of them; a genesis block listing
+    // spends is a shape consensus refuses, and until slice 6 commit 5 it
+    // was one of those). The coverage a block with real spends records is
+    // `shekyl-chain-ingest`'s `scenario_spend_tests` (`Mined::judged_by`).
     let chain = spendable_chain();
     chain.with_view(|view| {
-        let input = candidate_on(
-            &chain,
-            vec![listed_on(&chain, point(9)), listed_on(&chain, point(10))],
-        );
+        let input = candidate_on(&chain, Vec::new());
         let valid = judged(validate(
             formed_on(&chain, input),
             &view,
@@ -36,11 +35,12 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         ))
         .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSetId::GENESIS);
-        // Slice 1's block rows — B1, B2, B7 from the stateless stage, A2,
+        // Slice 1's block rows — B1, B2 from the stateless stage, A2,
         // B5 from the view-bound one, B6 from the derivation — slice 2's
         // 4.C rows (C1, C2 predicates; C3 definition) and 4.D rows (D2 in
         // form; D3's verification, D4 the target, D6 at its mint, D1b the
-        // comparison, D1 the predicate), slice 3's E1, and slice 4's 4.F
+        // comparison, D1 the predicate), slice 8's B4 (the attestation
+        // witness, after D1), slice 3's E1, and slice 4's 4.F
         // rows (F1, F3, F7, F9, F10 in form; F4, F5, F6 view-bound; F11,
         // F13, F15, F20 the emission definitions), slice 7's G2 (the
         // body's pairing, in form), its two
@@ -57,9 +57,11 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::A2,
                 CenRow::B1,
                 CenRow::B2,
+                // Slice 8 row 10: B4, always in coverage — `None` is the
+                // empty preimage against the header's root.
+                CenRow::B4,
                 CenRow::B5,
                 CenRow::B6,
-                CenRow::B7,
                 CenRow::C1,
                 CenRow::C2,
                 CenRow::C3,
@@ -129,11 +131,15 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I9,
                 // Slice 6 commit 5: the regular-spend reference rows — the
                 // reference recorded (I10), in the window (I11), the anchor
-                // read at its height (I12, a definition).
+                // read at its height (I12, a definition). Slice 6 row 6
+                // (2026-10-08): the declared depth against the tree at the
+                // reference (I13) and the proof over that context (I15).
                 CenRow::I10,
                 CenRow::I11,
                 CenRow::I12,
+                CenRow::I13,
                 CenRow::I14,
+                CenRow::I15,
                 CenRow::I16,
                 // Slice 6 commit 7: the signing preimage, a definition
                 // recorded where the hashes are derived.
@@ -142,6 +148,38 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I19,
                 CenRow::I20,
                 CenRow::J2,
+                // Slice 8 row 3: the bond-state rows on a serve-credit vin,
+                // vacuous on the coinbase (no credit vin to read for).
+                CenRow::J4,
+                CenRow::J5,
+                CenRow::J6,
+                // Slice 8 row 4: the bond post's statics and key selection,
+                // vacuous on the coinbase (no post).
+                CenRow::J11,
+                CenRow::J12,
+                CenRow::J28,
+                CenRow::J13,
+                // Slice 8 rows 5 and 6: the post against its record and the
+                // join's admission, vacuous likewise.
+                CenRow::J14,
+                CenRow::J15,
+                CenRow::J16,
+                CenRow::J18,
+                // Slice 6 row 6: the bond post's funding half, vacuous on
+                // the coinbase likewise.
+                CenRow::J27,
+                // Slice 8 row 8: the emission statics, vacuous on the
+                // coinbase (no emission vin).
+                CenRow::J19,
+                CenRow::J20,
+                // Slice 8 row 9: the emission's reference context, gathers
+                // and verify, vacuous on the coinbase likewise.
+                CenRow::J21,
+                CenRow::J22,
+                CenRow::J23,
+                CenRow::J24,
+                CenRow::J25,
+                CenRow::J26,
                 CenRow::L1,
                 // DRS-E4 commit 4: the archival transition, which passes
                 // with nothing archival to fold and records the row.
@@ -154,13 +192,15 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
     });
 }
 
+/// The block is coinbase-only (the one a `MockChain` can hold; slice 6 row
+/// 6), so the identity derived here is the miner's. A listed spend's
+/// 4-part identity, derived once by the verdict and recorded by the store
+/// as the verdict handed it, is `shekyl-chain-store`'s `tx_read_tests`
+/// (the record against `txid_parts()`, `pqc_auth_hash` included).
 #[test]
 fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     let chain = spendable_chain();
-    let input = candidate_on(
-        &chain,
-        vec![listed_on(&chain, point(9)), listed_on(&chain, point(10))],
-    );
+    let input = candidate_on(&chain, Vec::new());
     let expected_hash = input.block.hash();
     let identity = |tx: &Transaction| {
         let parts = tx.txid_parts();
@@ -190,12 +230,10 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     assert_ne!(expected_miner.prunable_hash.as_bytes(), &[0u8; 32]);
     // A coinbase txid is 3-part: there is no third component to record
     // (PDM-Q-F26) — `None` is the identity's arity, not a discarded value.
-    // A spend carries one `pqc_auth` per input, so its txid is 4-part and
-    // the component is `Some`.
+    // (A spend carries one `pqc_auth` per input, so its txid is 4-part and
+    // the component `Some`: the store's `tx_read_tests`, above.)
     assert_eq!(expected_miner.pqc_auth_hash, None);
-    for (id, _) in &expected_listed {
-        assert!(id.pqc_auth_hash.is_some(), "a spend's txid is 4-part");
-    }
+    assert!(expected_listed.is_empty());
 
     chain.with_view(|view| {
         let valid = judged(validate(
@@ -270,15 +308,28 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::I16,
             CenRow::I19,
             CenRow::I20,
-            CenRow::J2
+            CenRow::J2,
+            CenRow::J11,
+            CenRow::J12,
+            CenRow::J28,
+            CenRow::J19,
+            CenRow::J20,
+            CenRow::J22,
+            CenRow::J24
         ]
     );
     // `tx_against` at the miner slot: the class derivation records H5/H6
     // here too (it derives its own context, so it evaluated them), and the
-    // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I12 (the
-    // regular-spend reference rows), I17 and I18 (the signing preimage and
-    // the signatures over it, of which a coinbase has none) — are recorded
-    // vacuous on a coinbase.
+    // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I13 and I15
+    // (the regular-spend reference rows and the proof over the context
+    // they yield), I17 and I18 (the signing preimage and
+    // the signatures over it, of which a coinbase has none), J4–J6 (the
+    // bond state behind a serve-credit vin, of which a coinbase has none),
+    // J13–J16 and J18 (the bond post against its record and the join's
+    // admission, of which a coinbase has none), J27 (the post's funding
+    // half, likewise), J21, J23, J25 and J26 (the emission's reference
+    // context, gathers, verify and fee-input proof, of which a coinbase
+    // has none) — are recorded vacuous on a coinbase.
     MockChain::default().with_view(|view| {
         let against = defined(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
             .expect("the coinbase reads nothing from the view");
@@ -291,8 +342,23 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::I10,
                 CenRow::I11,
                 CenRow::I12,
+                CenRow::I13,
+                CenRow::I15,
                 CenRow::I17,
-                CenRow::I18
+                CenRow::I18,
+                CenRow::J4,
+                CenRow::J5,
+                CenRow::J6,
+                CenRow::J13,
+                CenRow::J14,
+                CenRow::J15,
+                CenRow::J16,
+                CenRow::J18,
+                CenRow::J27,
+                CenRow::J21,
+                CenRow::J23,
+                CenRow::J25,
+                CenRow::J26
             ]
         );
     });
@@ -332,7 +398,6 @@ fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
             CenRow::B1,
             CenRow::B2,
             CenRow::B6,
-            CenRow::B7,
             CenRow::D2,
             CenRow::F1,
             CenRow::F3,
@@ -375,7 +440,6 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
     let admits_two = RuleSet::admitting_for_tests(2);
     let mut input = candidate(Vec::new());
     input.block.header.major_version = 2;
-    input.block.header.minor_version = 2;
     // Formed under the rule set that admits 2; validated under GENESIS.
     let formed = form(
         input,
@@ -409,7 +473,6 @@ fn the_last_attempt_is_terminal() {
     let admits_two = RuleSet::admitting_for_tests(2);
     let mut input = candidate(Vec::new());
     input.block.header.major_version = 2;
-    input.block.header.minor_version = 2;
     let last = FormAttempt::last_for_tests();
     let formed = form(
         input,

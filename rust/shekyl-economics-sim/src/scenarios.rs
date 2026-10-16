@@ -28,7 +28,7 @@ pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
             get_volume: Box::new(move |_block, _bpy| baseline),
         },
         stake: default_stake_schedule(),
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -51,7 +51,7 @@ pub fn scenario_2_boom_bust(params: &SimParams) -> ScenarioConfig {
             }),
         },
         stake: default_stake_schedule(),
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -71,7 +71,7 @@ pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
             }),
         },
         stake: default_stake_schedule(),
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -96,7 +96,7 @@ pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 200_000),
         },
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -114,7 +114,7 @@ pub fn scenario_5_stake_concentration(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 300_000),
         },
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -124,7 +124,7 @@ pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
     let baseline = params.tx_volume_baseline;
     ScenarioConfig {
         name: "mass_unstaking".into(),
-        description: "80% of stakers unlock within one epoch (~35 days) at year 3".into(),
+        description: "80% of stakers unlock within 25,000 blocks (~35 days) at year 3".into(),
         sim_years: 5,
         volume: VolumeSchedule {
             get_volume: Box::new(move |_block, _bpy| baseline),
@@ -146,7 +146,7 @@ pub fn scenario_6_mass_unstaking(params: &SimParams) -> ScenarioConfig {
                 }
             }),
         },
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -184,7 +184,7 @@ pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
                 }
             }),
         },
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -210,7 +210,7 @@ pub fn scenario_8_late_tail(params: &SimParams) -> ScenarioConfig {
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 400_000),
         },
-        initial_emitted_fraction: 0.95,
+        initial_emitted_ppm: 950_000,
         // ~year 30 in the configured chain timing (derived, not a literal —
         // byte-identical at the default 262_800; see `fee_era` in
         // budget_scenarios.rs for the drift rationale).
@@ -262,7 +262,7 @@ pub fn scenario_9_high_history_low_activity(_params: &SimParams) -> ScenarioConf
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 400_000),
         },
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -335,7 +335,7 @@ fn gate7_scenario(
         stake: StakeSchedule {
             get_stake_ratio: Box::new(|_block, _bpy, _circ| 0),
         },
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: Some(model),
     }
@@ -381,7 +381,7 @@ fn gate7_asserted_comparator(
         sim_years: GATE7_YEARS,
         volume: VolumeSchedule { get_volume },
         stake: default_stake_schedule(),
-        initial_emitted_fraction: 0.0,
+        initial_emitted_ppm: 0,
         genesis_height_offset: 0,
         archival_lock: None,
     }
@@ -390,6 +390,7 @@ fn gate7_asserted_comparator(
 pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
     let seb = SETTLEMENT_EPOCH_BLOCKS;
     let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    let floor_coins = floor as f64 / crate::burden::COIN as f64;
     vec![
         // Arm A (bonds-only) across the N_P envelope.
         gate7_scenario(
@@ -427,21 +428,30 @@ pub fn gate7_scenarios(params: &SimParams) -> Vec<ScenarioConfig> {
         gate7_scenario(
             params,
             "gate7_admission_min_1x_lean",
-            "Arm B hard lock; ADMISSION_MIN = 1x bond floor (0.75 coin) x N_P=79",
+            &format!(
+                "Arm B hard lock; ADMISSION_MIN = 1x bond floor ({} coin) x N_P=79",
+                floor_coins
+            ),
             false,
             lock_model(R_FULL, seb, NP_LEAN, floor),
         ),
         gate7_scenario(
             params,
             "gate7_admission_min_100x_lean",
-            "Arm B hard lock; ADMISSION_MIN = 100x bond floor (75 coins) x N_P=79",
+            &format!(
+                "Arm B hard lock; ADMISSION_MIN = 100x bond floor ({} coins) x N_P=79",
+                floor_coins * 100.0
+            ),
             false,
             lock_model(R_FULL, seb, NP_LEAN, floor * 100),
         ),
         gate7_scenario(
             params,
             "gate7_admission_min_10000x_lean",
-            "Arm B hard lock; ADMISSION_MIN = 10_000x bond floor (7_500 coins) x N_P=79",
+            &format!(
+                "Arm B hard lock; ADMISSION_MIN = 10_000x bond floor ({} coins) x N_P=79",
+                floor_coins * 10_000.0
+            ),
             false,
             lock_model(R_FULL, seb, NP_LEAN, floor * 10_000),
         ),

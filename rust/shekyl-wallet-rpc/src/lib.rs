@@ -34,6 +34,7 @@ pub mod queries;
 pub mod receiving;
 pub mod send;
 pub mod server;
+pub mod shard_view;
 pub mod staking;
 pub mod staking_actions;
 pub mod sync;

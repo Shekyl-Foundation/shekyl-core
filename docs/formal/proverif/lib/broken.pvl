@@ -1,0 +1,29 @@
+(* Copyright (c) 2026, The Shekyl Foundation
+ *
+ * All rights reserved.
+ * BSD-3-Clause
+ *
+ * A broken primitive, as one public constant. A model that asks whether a
+ * property is hybrid runs once with X25519 broken and once with ML-KEM
+ * broken. The keys and ciphertexts still travel; every shared secret of
+ * the broken primitive is this constant, so it protects nothing. That
+ * gives the attacker at least what a real break would (it need not even
+ * see the public keys), so a property that survives here survives the
+ * real break.
+ *
+ * Two other modellings were tried in the RT-P7 model and made the search
+ * grow without bound: a discrete-log rule beside the Diffie-Hellman
+ * equation, and a rule recovering a KEM secret key from its public key.
+ *
+ * Both models load this file after lib/noise.pvl. NNhfs then loads
+ * lib/encrypt_and_hash.pvl; hybridXK does not, because its pattern writes
+ * `aead` and `mixh` itself.
+ *
+ * On hybridXK's forward-secrecy query, declaring these constants here or
+ * after that model's events is the same resolution, and both finish under
+ * the 6 GiB cap. A long comment in noise.pvl is what pushed that query
+ * over the cap. The essay lives in docs/formal/proverif/README.md.
+ *)
+
+const broken_dh: point.
+const broken_kem: bitstring.

@@ -189,7 +189,7 @@ pub(crate) struct BondPostMatch {
     /// The matched persona's cleartext canonical id (the domain newtype; the wire
     /// `[u8; 32]` is lifted at the match site below).
     pub(crate) p_canonical_id: PCanonicalId,
-    /// Wire post-kind byte (`0` = JoinMarket; otherwise the `Other` tag).
+    /// Wire `post_kind`. JoinMarket is `5` ([`is_join_market_post_kind`](shekyl_wire::transaction::is_join_market_post_kind)); `0` is the retired keyless byte, not a bond.
     pub(crate) post_kind: u8,
 }
 

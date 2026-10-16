@@ -119,7 +119,7 @@ Rule 60 is being enforced where PRs have reached.
 
 ### U-1 — The hardfork machinery (HIGH: pure dead weight, consensus-adjacent)
 
-`src/hardforks/hardforks.cpp:35-37`:
+`src/hardforks/hardforks.cpp`, lines 35 to 37 at the survey's date (the file was deleted with the mechanism, 2026-10-08):
 
 ```c
 // Rebooted chain: all features active from genesis.

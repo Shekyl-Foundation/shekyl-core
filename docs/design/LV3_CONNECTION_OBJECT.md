@@ -43,8 +43,14 @@ type has been cut.
 scope was the whole p2p surface.* **LV-3 is the `levin_notify` / `net_node`
 seam — the socket layer and relay dispatch — and nothing else.** The peerlist,
 admission policy, discovery policy and handshake state machine are **not Levin
-work**; they are P2P-3 slices 1–4 and none of them waits on this one. The
-boundary had been drawn **from a family name rather than from the work**, and a
+work**; they are P2P-3 slices 1–4 and none of them waits on this one.
+**UPDATE 2026-10-08 (PR #1001).** The register's inherits cell is split
+by step. Steps b and c are closed. Step b landed in #991 before slice 1.
+Step c closed after the transport cutover. Neither inherits slices 1–4,
+the timing engine, or relay dispatch. Step a and the registry remainder
+do. Discovery does not wait on the remaining LV-3 work.
+
+The boundary had been drawn **from a family name rather than from the work**, and a
 "first slice" that contained all of them was the round, not a slice. §1's
 first-slice argument is withdrawn at §1.
 
@@ -95,6 +101,8 @@ where *admission's* seam was under the cap, not that this slice comes first. **I
 comes last** (§4.1 there). *Still falsifiable in its own terms — if a later
 measurement shows shipped C++ growing while the noun is missing, the seam moved.*
 
+**UPDATE 2026-10-07:** steps b and c are closed (§6.2.1). *Records-was 2026-10-06: the `foreach_connection` holdouts are the sync walks, and they wait on steps b and c. Records-was before that: there is no connection object in Rust to walk.*
+
 *(The converging-rows argument in §1 reached the same **first-slice** conclusion
 from six consumers, and is withdrawn with it — see §1. Two derivations agreeing
 on a wrong ordering is worth recording: both were about which decisions need the
@@ -129,10 +137,11 @@ this round has failed to justify — delete it or find its ruling.
 
 ## 1. ~~Why this slice is first~~ — WITHDRAWN 2026-09-21; why the consumers still converge
 
-**Nothing in Rust owns a connection.** `shekyl-levin` owns bytes;
+**UPDATE 2026-10-07:** steps b and c are closed (§6.2.1). *Records-was 2026-10-06: step a owns the session record (`Connection` in `shekyl-seam`). Step c's board is what the address walks read. Step b posts the two context walks and does not make `p2p_connection_context` a handle. The sync walks that still read the handler's context are steps b and c. Records-was before that: steps b and c, the handle and the remaining sync walks, are open. Records-was before that: nothing in Rust owns a connection.* `shekyl-levin` owns bytes;
 `shekyl-peer-policy` owns stateless verdicts that C++ calls with values C++
-walked itself. The connection lives in `net_node.inl`'s `foreach_connection`
-lambda and epee's context.
+walked itself. *Records-was: the connection lives in `net_node.inl`'s
+`foreach_connection` lambda and epee's context.* The session record is
+`Connection`.
 
 **That absence is why the per-host cap became an address comparison inside a
 loop — there was no object to hang a category on.** The missing noun has
@@ -236,6 +245,11 @@ round and expensive forever afterwards.)*
 round. What follows is where each of the three categories comes from.
 
 ### 2.6.1 The claim already travels, and the acceptor already parses it
+
+*Records-was (2026-10-13): the handshake carries no address since the
+2026-10-09 ruling, and PR-3 deleted the field, `derive_advertised_endpoint`
+and the inbound advertisement's gray write. The analysis below is kept as
+the record of what the acceptor parsed at the time.*
 
 A node announces one of two things about itself in `basic_node_data.address`
 (`p2p_protocol_defs.h`), and **which one is already the category signal**:
@@ -413,7 +427,9 @@ reaches another node's view."* That is true of the ADDRESS and false of the
 record.** Verified at `f9e000f76`:
 
 - `peerlist_entry_base` carries `adr`, `last_seen` **and `pruning_seed`**, all
-  three serialized (`p2p_protocol_defs.h`);
+  three serialized (`p2p_protocol_defs.h`) — at that pin; since then the
+  stripe seed left the wire (2026-09-21, `PDM-Q7`) and `last_seen` left it
+  (2026-10-13, PR-3), so the entry is its address;
 - the white append sets `pe_local.pruning_seed = con->m_pruning_seed`
   (`net_node.inl:1586`), and `m_pruning_seed` is **the peer's own claim** —
   `context.m_pruning_seed = hshd.pruning_seed`
@@ -611,7 +627,7 @@ what it did not watch.
 
 **The inherited code already reasons this way at one site and not as a
 principle:** `get_peerlist_head`'s `anonymize` path
-([`net_peerlist.h:282`](../../src/p2p/net_peerlist.h#L282)) randomises which
+(`net_peerlist.h:282` at `f317d979c4`; the C++ peerlist is deleted, 2026-10-13) randomises which
 white entries it returns specifically so a repeat query cannot be differenced,
 citing Cao et al. **That is this principle applied to one query. The principle
 is more general, and stating it is what stops a future "consistency"
@@ -966,8 +982,8 @@ So the cap provides **zero** protection against the only *measured* inbound
 adversary in the project. It is not weakly relevant to the diversity job — it is
 **orthogonal to it**. And the defence that does exist lives in another lane
 entirely: the transport gate
-([`FluffReach::OutboundOnly`](../../rust/shekyl-relay/src/zone/mod.rs#L216),
-enforced at [`zone/mod.rs:833`](../../rust/shekyl-relay/src/zone/mod.rs#L833))
+([`FluffReach::OutboundOnly`](../../rust/shekyl-relay/src/graph/mod.rs#L216),
+enforced at [`zone/mod.rs:833`](../../rust/shekyl-relay/src/graph/mod.rs#L833))
 plus the embargo, **both designed on the assumption that the observer sees
 everything** — which is the correct posture, and one a door filter cannot
 contribute to.
@@ -1053,7 +1069,7 @@ require an outbound dial:**
 
 **And the code supplies a third leg the proof does not need but gets anyway:
 gray is never disclosed.** `get_peerlist_head` reads the **white list only**
-([`net_peerlist.h:282`](../../src/p2p/net_peerlist.h#L282)), and
+(`net_peerlist.h:282` at `f317d979c4`; deleted 2026-10-13), and
 [`net_node.inl:994`](../../src/p2p/net_node.inl#L994) says so in those words.
 **So an inbound flood's gray entries never reach any other node's view** — they
 poison nothing but our own, for one dial each.
@@ -1551,13 +1567,16 @@ wrong was calling them the round.*
 
 | Step | What | Note |
 | --- | --- | --- |
-| **c** | The connection registry, **including its own count**. **UPDATE 2026-10-04: the hub lock writes the row. The strand writes the C++ context.** Walkers read snapshots. A change is a post. *Records-was: "the strand is the only writer."* | the `foreach_connection` race, above |
+| **c** | **CLOSED 2026-10-07, code-anchored, outside the unified stamp (`241bc4eb9c`).** The connection registry, including its own count. `rg -n 'for_each_connection\(' src rust tests` returns nothing. `peer_sync_idle_maker` (`net_node.inl:2345`) posts through `foreach_connection` (`levin_protocol_handler_async.h:1047`). `rg -n m_current_number_of_ src rust tests` returns nothing. The peers-monitor thread is gone. `node_server::run` (`net_node.inl:1180`) is the net_service loop and does not write peer counts. *Records-was 2026-10-04: the hub lock writes the row. The strand writes the C++ context. Walkers read snapshots. A change is a post. Records-was before that: "the strand is the only writer."* | The `rg` results in this row. *Records-was: the `foreach_connection` race.* |
 | **a** | The `Connection` type — the endpoint with Round 2's claimed/observed provenance, direction, connector, established-at. Follows step c. *Records-was: zone.* | `Claimed<T>` / `Observed<T>` distinct in the type, per §2.7.4 |
-| **b** | Ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle. Follows step c. | |
+| **b** | The two context walks post onto the connection strand and return. Forget-cause, write-stall samples, and the four handshake gates read the board's `established`. **UPDATE 2026-10-06.** *Records-was: ownership transfer — the Rust object becomes authoritative; `p2p_connection_context` becomes a handle.* | Follows step c. |
 | **d** | Relay dispatch — moved out 2026-09-25 to the RD row, after the timing engine | not this slice; see §6.3 item 3 |
 
 **What slice 5 inherits from slices 1–4. UPDATE 2026-09-25: it does not
-go last, and the sockets are not its move.** The peerlist's differential
+go last, and the sockets are not its move.** **UPDATE 2026-10-08 (PR #1001).**
+Steps b and c are closed and inherit none of slices 1–4, the timing
+engine, or relay dispatch. Step a and the registry remainder do.
+Discovery does not wait on that remainder. The peerlist's differential
 harness, admission's ceiling, discovery's candidate selection and the
 handshake phases are in Rust before this slice's connection object.
 *Records-was: that inheritance was why this slice went last, and why
@@ -1569,18 +1588,23 @@ recount. `apply_inbound_ceiling` (`net_node.inl:2964`) charges
 `shekyl_seam_inbound_held()` (`net_node.inl:2973`). The once-per-second
 peers-monitor thread is deleted. *Records-was: `node_server::run`
 (`:1163`) slept one second and wrote `m_current_number_of_in_peers`
-and `m_current_number_of_out_peers`.* The dial cap recounts through `get_outgoing_connections_count`
-(`try_to_connect_and_handshake_with_new_peer`, `net_node.inl:1576`). *Records-was: the cap
+and `m_current_number_of_out_peers`.* The dial cap reads `get_outgoing_connections_count(connector)`
+(`try_to_connect_and_handshake_with_new_peer`). The connector is the
+one `require_address_connector` already returned. *Records-was: the cap
 read the stored atomic at `:1573`, which the deleted thread used to
 write, and an exclusive list returned before any recount.* Both count
 functions return that recount and neither stores it. *Records-was: the
 out-count store at `:2170` and the in-count store at `:2150`.* The
-recount is a `foreach_connection` at every dial. The board publishes
-`direction_count` (`registry.rs`), which counts rows in one direction
-whether or not the handshake has finished. The dial cap's predicate is
-`direction_count(Outbound)`. The cap still walks `foreach_connection`
-until that count's FFI lands. It does not count established rows only,
-and this step does not convert the walk. Slice 3 keeps the fill
+recount was a `foreach_connection` at every dial. `Board::count`
+(`registry.rs`) is the zone predicate: rows of one connector and
+direction, handshake or not. `direction_count` is that count summed
+across `ConnectorId::ALL`. `shekyl_seam_board_count` is the integer the
+cap reads. A dial already past the cap closes the newest outbound row
+of that connector. Lowering the public cap closes that many newest
+rows. Both close by id. Each `shekyl_seam_board` visit is one fixed-size row.
+*Records-was: the cap read
+`outbound_dial_refused` on a copied board whose row repeated connector
+and direction, and before that the cap walked `foreach_connection`.* Slice 3 keeps the fill
 loops. Deleting the thread removes the one-second `--in-peers`
 measurement input (rule 76;
 [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §7.4
@@ -1615,7 +1639,10 @@ row.
 peers-monitor thread deleted.** `git grep -c foreach_connection` at
 that pin was 12 calls in `src/p2p/net_node.inl` and 1 comment in
 `src/cryptonote_protocol/levin_notify.cpp` (`:406`, not a call). The
-thread's walk is gone, so the calls in `net_node.inl` are 11.
+thread's walk is gone, so the calls in `net_node.inl` were 11.
+**UPDATE 2026-10-06:** two calls remain, `for_each_connection` (`:164`)
+and `peer_sync_idle_maker` (`:2342`). The other nine read
+`shekyl_seam_board`.
 *Records-was at `9bc062036`: 15 calls in `net_node.inl` and 2 calls
 in `levin_notify.cpp` (`:190`, `:232`), plus a comment at `:472`.*
 
@@ -1633,9 +1660,11 @@ in `levin_notify.cpp` (`:190`, `:232`), plus a comment at `:472`.*
 | `peer_sync_idle_maker` | `:2321`, mutable; sets `m_in_timedsync` |
 | `print_connections_container` | `:2801` |
 
-`foreach_connection` hands the callback `get_context_ref()`
-(`levin_protocol_handler_async.h:946`). `for_connection` does the same
-at `:960`. *Records-was: `:939` and `:925`, and before that `:932` and `:946`, and before that `:907` and `:921`.* The session's network is
+`foreach_connection` and `for_connection` hand the callback
+`get_context_ref()` from `outer_call::post_on_strand`
+(`levin_protocol_handler_async.h:881`; a null endpoint uses `:877`).
+The ref is an `outer_call`, released when that post is destroyed.
+*Records-was: `:946` and `:960`, and before that `:939` and `:925`, and before that `:932` and `:946`, and before that `:907` and `:921`.* The session's network is
 `m_connector`, a `ConnectorId`.
 
 **Two Rust session tables already exist. Step c does not add a
@@ -1653,45 +1682,52 @@ grows the Hub row until it publishes the snapshot above, and the count
 is owned there. `Relay::contexts` becomes a reader of that registry,
 or a view over it.
 
-**What greens step c.** The walks that remain read snapshots. The two
-mutable walks become posts to that connection's strand:
-`for_each_connection` (`:158`) hands its callback a mutable context,
-and `peer_sync_idle_maker` (`:2321`) sets `m_in_timedsync`. The
-snapshot gains what each of those reads before it writes. The `run`
-thread is deleted, and that deletion removes the `--in-peers`
-measurement input named above. D8 had left the thread until slice 3;
-that sentence is records-was in
+**What greens step c — CLOSED 2026-10-07.** Code-anchored, outside the
+unified stamp (`241bc4eb9c`). `rg -n 'for_each_connection\(' src rust tests`
+returns nothing; the name remains in a comment at
+`rpc_facts_ffi.cpp:1252`. `peer_sync_idle_maker` posts:
+`net_node.inl:2353` calls `foreach_connection`, which posts
+`post_on_strand` and returns. `rg -n m_current_number_of_ src rust tests`
+returns nothing. The peers-monitor thread is gone.
+`node_server::run` (`net_node.inl:1180`) remains the net_service loop
+and does not write peer counts. The dial cap reads
+`shekyl_seam_board_count` (`get_outgoing_connections_count`,
+`net_node.inl:2179`) and does not store the count. Slice 3 keeps the
+fill loops. *Records-was: the two mutable walks become posts,
+`for_each_connection` (`:158`) handing its callback a mutable context
+and `peer_sync_idle_maker` (`:2321`) setting `m_in_timedsync`. The
+`run` thread's deletion removes the `--in-peers` measurement input.
+The out-count cache at `:1573` was not refreshed by the thread
+(`:1605`). The dial cap recounts at `:1576`.* D8 had left the
+peers-monitor thread until slice 3; that sentence is records-was in
 [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D8 and in the
-timing-engine inventory. The peer-count caches are deleted. The dial
-cap recounts at `:1576` and does not store the count. *Records-was: the
-out-count cache at `:1573` was not refreshed by the thread (`:1605`).*
-Slice 3 keeps the fill loops. They recount.
+timing-engine inventory.
 
 **Which of the twelve move in step c.** The board carries the id, the
 connector, the direction, whether the handshake has finished, and the
 observed endpoint. It does not carry support flags or the pull
-relationship. Those arrive when their owner publishes them, through
-the step-b handle, not as blanks on the board. The `run` thread is
-gone. The dial cap's recount is still `foreach_connection`.
-`Board::direction_count(Outbound)` is that predicate, including rows
-whose handshake has not finished. The cap reads it when the FFI lands.
-This step does not convert the walk. The rest of this subset is still
-the C++ walk. The twelve
-reading snapshots greens at b.
+relationship. Those arrive when their owner publishes them. Step b does not
+publish them: the readers are still C++. *Records-was: through the step-b handle, not as blanks on the board.* The `run` thread is
+gone. The dial cap reads `shekyl_seam_board_count`. A zone's count is
+`Board::count(connector, direction)`, handshake or not.
+`Board::direction_count(Outbound)` is that count across connectors.
+*Records-was: the cap read `outbound_dial_refused` on a copied board,
+and before that the recount was still `foreach_connection`.* The two walks that need sync state stay.
+The rest of this subset reads the board.
 
 | Step c | Step b |
 | --- | --- |
-| `for_each_connection` `:158`, for the reads this row answers. A callback that reads support flags or the pull relationship waits. | `peer_sync_idle_maker` `:2321`. It reads the pull relationship and writes `m_in_timedsync`. |
+| `for_each_connection` `:164`, for the reads this row answers. **UPDATE 2026-10-07: step b closed. `get_connections` and `sync_info` wait up to two seconds on the admin thread. A claim that has not landed is unknown. A dial on this pool can make that happen; the dialer (P2P-3 slice 3) is the carrier.** `post_each` keeps the countdown. The walk does not wait. *Records-was: the caller does not wait, including that view.* *Records-was: a callback that reads support flags or the pull relationship waits.* The protocol handler still reads support flags, pull state, and byte counters the board does not carry. | `peer_sync_idle_maker` `:2342`. **UPDATE 2026-10-06: `foreach_connection` posts. The timed sync starts on the strand.** *Records-was: still the walk, on the caller's thread.* It reads the pull relationship and writes `m_in_timedsync`. |
 | `run` | deleted. *Records-was: `:1174`, inside the thread `run` started at `:1163`.* The peer-count caches are deleted. *Records-was: the stored out-count was not refreshed by the thread.* |
-| `send_stop_signal` `:1248` | |
-| `has_outbound_connection_to_host` `:1492` | |
-| `is_peer_used` `:1513` | |
-| `is_addr_connected` `:1538` | |
-| `make_new_connection_from_peerlist` `:1770` | |
-| `get_incoming_connections_count` `:2139` | |
-| The dial cap (`:1576`) still recounts through `get_outgoing_connections_count` (`:2152`). `direction_count(Outbound)` is the same predicate, including rows whose handshake has not finished, and is what the cap reads once its FFI lands. Established is not part of the count. This step does not convert the walk. | |
-| `get_incoming_connections_count` `:2174` | |
-| `print_connections_container` `:2801`, the address, the id, and the direction | A sync-state line on the connection print. `:2801` does not print one today. |
+| `send_stop_signal` — **UPDATE 2026-10-06: reads the board, then `close` by id.** *Records-was: `:1248`.* | |
+| `has_outbound_connection_to_host` — **UPDATE 2026-10-06: the board.** *Records-was: `:1492`.* | |
+| `is_peer_used` — **UPDATE 2026-10-06: the board.** *Records-was: `:1513`.* | |
+| `is_addr_connected` — **UPDATE 2026-10-06: the board.** *Records-was: `:1538`.* | |
+| `make_new_connection_from_peerlist` — **UPDATE 2026-10-06: the subnet set is the board.** *Records-was: `:1771`.* | |
+| `get_incoming_connections_count` — **UPDATE 2026-10-06: the board, one zone and every zone.** *Records-was: `:2142` and `:2179`.* | |
+| The dial cap reads `shekyl_seam_board_count`. Established is not part of the count. An overshoot closes the newest outbound id of that connector. *Records-was: `outbound_dial_refused` on the board copy, and before that `:1576` recounted through `get_outgoing_connections_count`.* | |
+| `get_outgoing_connections_count` — **UPDATE 2026-10-06: the board.** *Records-was: `:2155`.* | |
+| `print_connections_container` — **UPDATE 2026-10-06: the address, the id, and the direction, from the board.** *Records-was: `:2801`.* | A sync-state line on the connection print. The board print does not carry one. |
 
 This step does not wait behind steps a and b. Those follow it. It
 does not wait on slices 1–4, the timing-engine bridge, or relay
@@ -1706,8 +1742,8 @@ mutable context across a strand write. `rg get_context_ref` in
 | `:829` | the definition. *Records-was: `:808`, and before that `:815`, and before that `:790`.* |
 | `:329`, `:331` | the invoke-timeout completion, inside the post at `:321`. It reports timeout unless close set the report to destroyed. *Records-was: `:313` and `:315`, inside `:303`, gated on `m_timer_cancelled`. Records-was before that: `:319` and `:321`, inside `:314`, gated on `m_cancel_timer_called`.* |
 | `:283` | `anvoke_handler::cancel`, the callback. This is where the report becomes destroyed. |
-| `:946` | `foreach_connection` hands the walker the context. *Records-was: `:925`, and before that `:932`, and before that `:907`.* |
-| `:960` | `for_connection` hands the caller the context. *Records-was: `:939`, and before that `:946`, and before that `:921`.* |
+| `:973` | `foreach_connection` posts the walker. `get_context_ref` runs inside that post. *Records-was: `:946` handed the walker the context on the caller's thread, and before that `:925`, `:932`, `:907`.* |
+| `:983` | `for_connection` posts the caller. `get_context_ref` runs inside that post. *Records-was: `:960` handed the caller the context on the caller's thread, and before that `:939`, `:946`, `:921`.* |
 
 `:283` is strand-side. `cancel` is called only from
 `release_protocol`, and `begin_closed` calls that from `on_strand`
@@ -1734,49 +1770,63 @@ and a `m_cancel_timer_called` check at `:319` and `:321`.* The timer stays on th
 `:302` and `:304`, ran on whichever worker took the timer, and `:234`
 ran on `async_invoke`'s caller.*
 
+**UPDATE 2026-10-06.** The nine walks that moved no longer call
+`get_context_ref`. What still does:
+
+| Caller | Strand |
+| --- | --- |
+| `:283` `anvoke_handler::cancel` | Yes. `release_protocol` from `begin_closed`, and `begin_closed` runs from `on_strand`. |
+| `:329`, `:331` the invoke-timeout completion | Yes. Posted onto the connection strand. |
+| `post_each` (`net_node.inl`), via `collect_context_posts` then `post_on_strand` | Yes. The protocol handler still reads support flags, pull state, and byte counters. The walk does not wait. **UPDATE 2026-10-07:** the admin connection view does, for two seconds. *Records-was: the caller does not wait. Before that: No, and waiting on each strand from that walk is the deadlock this step does not introduce.* |
+| `peer_sync_idle_maker` (`net_node.inl`), via `foreach_connection` | Yes. It writes `m_in_timedsync` on the strand. *Records-was: No. Same wait.* |
+| `node_server::for_connection` (`net_node.inl`) | Yes. Reached from `try_add_next_blocks`, `update_sync_search`, `should_download_next_span`, `drop_connection`, `drop_connections`, and `levin_notify.cpp`. Those read or write sync state on the strand. The return is whether the id was queued. The callback is void. *Records-was: No.* |
+
+**UPDATE 2026-10-06:** `:946` and `:960` post the callback onto the connection strand and return. `get_context_ref` runs inside that post. *Records-was: the two `:946` callers are the step-b holdouts, and `:960` is the same class.*
+
 `:960` is not only a walker. *Records-was: `:939`, and before that `:946`, and before that `:921`.* `node_server::for_connection`
 (`net_node.inl:169`) reaches it. So do `try_add_next_blocks`
 (`cryptonote_protocol_handler.inl:1437`, `:1477`, `:1512`, `:1538`),
 `update_sync_search` (`:1757`), `should_download_next_span`
 (`:1849`), `drop_connection` by id (`:2624`, and the comment there
 says the call can be outside the strand), `drop_connections` by host
-(`:2665`), and `levin_notify.cpp:374` and `:430`. Step c is green when
-`rg get_context_ref` returns only strand-side callers, and the commit
-that claims it lists them. A caller that cannot move onto the strand
-is a finding, not a carve-out.
+(`:2665`), and `levin_notify.cpp:374` and `:430`. *Records-was: step c
+is green when `rg get_context_ref` returns only strand-side callers.*
+The 2026-10-06 list above is that enumeration. The holdouts are not
+strand-side, and this step does not post-and-wait them.
 
 **Step a, a starting table (2026-10-04).** The hub lock is the only writer of the row, and the connection's strand is the only writer of the C++ context. `adopt`, `finish`, and `reap` come from the connector, the transport, and the executor. The strand does not exist until the established post, so a close never waits on a strand that may not be there. The members that cross are
 the 14 on `connection_context_base` (`net_utils_base.h`) and the 16
 on `cryptonote_connection_context` (`connection_context.h`), plus
 `support_flags`, `m_in_timedsync`, and `sent_addresses` on
 `p2p_connection_context_t`. The test for each is who asserted it.
-This is the sort. It is not a struct.
+**UPDATE 2026-10-06:** this sort is the design of `Connection` in `shekyl-seam` (`connection.rs`). *Records-was: it is not a struct.*
 
 | Bin | Members | Rule |
 | --- | --- | --- |
 | Observed, we measured it | `m_connection_id`, `m_remote_address` as connected, `m_is_income` as direction, `m_connector`, `m_started` as established-at, `m_last_recv`, `m_last_send`, `m_recv_cnt`, `m_send_cnt`, `m_current_speed_down`, `m_current_speed_up`, `m_max_speed_down`, `m_max_speed_up` | Eviction, admission, the protection set, and the operator view read only this bin (§2.8.2). `m_recv_cnt` and `m_send_cnt` are byte counters this node kept from the socket. |
-| Claimed, the peer told us | `m_remote_blockchain_height`, `m_last_known_hash`, `support_flags`, the handshake's advertised port and address (§2.7.4; not one of these 33 members) | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. The advertised port and address are the sole claimed-to-observed promotion: a successful re-dial sets an `Observed` result, distinct from the `Claimed` that arrived in the handshake. |
-| Local state, ours about this session | `m_state`, `m_needed_objects`, `m_expected_heights`, `m_requested_objects`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_idle_peer_notification`, `m_score`, `m_in_timedsync`, `sent_addresses`, `m_remote_height_source` | Owned by the component that drives that protocol. The sync fields, including the three lists this node built from a peer's chain response, go with the sync driver when it moves. `m_idle_peer_notification` is this node's timer flag. `m_remote_height_source` names which message last wrote the claimed height (`connection_context.h:122`). `note_remote_height` (`:173`) stores that enum. The peer asserted the height, not the label. Until then they are plain fields the C++ handler reads through the handle. |
+| Claimed, the peer told us | `m_remote_blockchain_height` when a message asserted it, `m_last_known_hash`, `support_flags`, the handshake's advertised address (§2.7.4; not one of these 33 members) | Sync may read a claim as a hypothesis to test (§2.11). Nothing that decides who stays connected may. `Claimed<T>` so a reader cannot forget. A clearnet advertisement keeps the port: the wire zeros the host and the receiver does not store it. Port 0 is not a port. An overlay advertisement keeps the v3 service key and its port. A re-dial is admitted only when the observation is that advertisement. Clearnet uses the host already observed on the origin socket and the claimed port. An overlay dial is that key and port. The claim stays on the origin. The new row's endpoint is the observation. **UPDATE 2026-10-06:** a claimed height (`HeightClaim`, named by `HeightMessage`) and the chain length of a block this node accepted (`ChainLength`) are different fields. A later claim does not erase the measurement, and a delivered block does not lower it. *Records-was: one `RemoteHeight` slot, and a later claim replaced an accepted block.* |
+| Local state, ours about this session | `m_state`, `m_needed_objects`, `m_expected_heights`, `m_requested_objects`, `m_last_response_height`, `m_expected_heights_start`, `m_last_request_time`, `m_callback_request_count`, `m_expect_response`, `m_expect_height`, `m_num_requested`, `m_idle_peer_notification`, `m_score`, `m_in_timedsync`, `sent_addresses`, `m_remote_height_source` | Owned by the component that drives that protocol. The sync fields, including the three lists this node built from a peer's chain response, go with the sync driver when it moves. `m_idle_peer_notification` is this node's timer flag. **UPDATE 2026-10-06:** the message that carried a claimed height is `HeightMessage` on `HeightClaim`. *Records-was: `m_remote_height_source` (`connection_context.h:122`) was the label, `note_remote_height` (`:173`) stored it on the same word as the height, and `accepted_block` (`raise_remote_height`, `:192`) shared that word.* The sync lists stay off this type until the sync driver moves. |
 
 `m_state` is this node's pull relationship with the session. `m_ssl`
 is not in a bin: p2p SSL was deleted in #909, the field is false by
-construction, and it leaves the base struct. `m_score` is listed under
-local state and is not kept by that listing. A score that accumulates
-from claimed inputs is the self-selection trap §2.7.2 names, and that
-look happens before the struct. Constraint 2 covers the object:
+construction, and it leaves the base struct. **UPDATE 2026-10-06:**
+`m_score` is not a field of `Connection`. A score a peer can improve by
+what it asserts is the self-selection trap §2.7.2 names. The C++ field
+stays; removing it would change who gets dropped, and this step changes
+no behavior. A later round may add a counter whose inputs are
+measurements this node made, not the peer's claims. *Records-was:
+listed under local state and not kept by that listing, the look still
+ahead of the struct.* Constraint 2 covers the object:
 nothing in it is stable across reconnects except the observed
 endpoint, which is already public.
 
-**Step b is the ownership cut.** `p2p_connection_context` becomes a
-handle to the Rust object. Through b the C++ handler still runs
-`handle_recv` and the invoke timers, so it reads local state and
-claimed fields, and writes local state only, through FFI accessors on
-the handle. The observed bin is write-once at establishment, by the
-seam. C++ never writes an observed field. The forget-cause split and
-the per-session write-stall samples land here. `message_writer::finalize`
-stays C++ through b. Swapping the reader for `BucketReader`,
-`send_txs` handing a plan to the seam, and deleting `levin_notify.cpp`
-and `levin.cpp` are the RD row.
+**Step b is not an ownership cut.** *Records-was: `p2p_connection_context` becomes a handle to the Rust object, and C++ reads claimed fields through FFI accessors.* Every reader of the claimed fields is C++. Moving them into `Connection` would be a write through FFI and a read back through FFI with no Rust consumer. Claims move with their readers: the sync driver's height, last-known hash, and accepted chain length when that driver moves; `support_flags` and the advertised address when handshake processing is Rust. `m_state` stays with the sync driver. The `Connection` claim slots stay empty until then.
+
+Step b is four things. The two `get_context_ref` hands post the callback onto that connection's strand and return. Those walks do not wait. **UPDATE 2026-10-07: step b closed.** `get_connections` and `sync_info` wait up to two seconds for the strand post. A claim that has not landed is unknown. *Records-was: "The caller does not wait" covered this caller too.* **Known defect, rule 21.** `idle_worker` dials on the 2-worker io pool. While a dial is in flight, one thread runs every strand, and the operator view can report claims unknown. Observed on the closeout pair, exclusive lists, 2026-10-07: an idle pair reported height 1, support flags 2, state normal, both directions. During a dial to a blackhole address the same call still reported those claims on the handshaked rows, and one before-handshake row with height 0, flags 0, and state before_handshake. This run did not show unknown. Unknown remains possible while a dial occupies the pool. The same run recorded a closed port as `DialFailed`, a silent acceptor as `LevinHandshakeTimeout` and not recorded, and an onion dial after the bundled Tor child was stopped as `LocalClose` and not recorded. Rejection: do not copy the handler on the admin thread, and do not move `idle_worker`; both are C++ the dialer deletes. Reopen when the dial no longer runs on that pool. Re-evaluation is P2P-3 slice 3, the dialer. Carrier: that slice, and the FOLLOWUPS row.
+
+**Known defect, rule 21.** After the handshake invoke returns a negative code, the dial thread reads `shekyl_seam_session_cause` (`handshake_close_cause`, `net_node.h:229`). The closed post (`zone_post`, `zone_server.h:63`) logs that cause and `enqueue` does not take it, so the strand can reap the hub row before the dial thread reads. A missing row is `LocalClose`. A cause that does not implicate the address can therefore be recorded as `LocalClose`. No counted cause takes this path: `DialFailed` and `LevinHandshakeRejected` are classified before that read. Observed on the closeout pair, 2026-10-07: a socket that shut its write was `PeerClosed` once and `LocalClose` on the other tries, not recorded either way. Rejection: do not patch the C++ closed post or the dial thread. The dialer's Rust handshake receives the cause directly. Reopen if that handshake still classifies a shut write by reading a row the strand can reap first. Falsify by a dialer test in which a peer that shuts its write is `PeerClosed` without a later read of a reaped row. Carrier: P2P-3 slice 3.
+
+A session the seam does not hold is not established, in production and in the protocol tests. The tests install a hub and a board row. *Records-was: the protocol tests stated the handshake on `m_state`.* Forgetting an address is `CloseCause::implicates_address`, and a proxy reply is read with the connector. A dial that failed to reach the peer and a Levin response the layer rejected count. An onion reply counts only when it names that onion (`0x04`, `0x05`, `0xF0`, `0xF1`, `0xF2`). A clearnet proxy reply never counts: it is the exit's claim, and the cache would suppress the whole host for an hour. **Residual:** an attacker on the responsible directories for a target's key can force reply 4, which buys only the short Tor backoff. *Records-was: `record_addr_failed` counted every `DialFailed`, every `ProxyRefused`, and `LevinHandshakeRejected`.* The writer owns a 64-bucket histogram of completed socket writes, plus one in-flight sample when a write is cancelled, and folds that into the process histogram at close. The process total is logged when the zone shuts down. The four handshake gates read the board's `established`. The operator view reads direction, the endpoint, the handshake flag, and admission time from the board. Last receive and last send are monotonic milliseconds, stamped when the socket reads or writes a byte, not when the rate gate grants the chunk. The operator view converts those stamps to unix time. The stall check compares them to `shekyl_monotonic_ms`. The board rebuilds when a session opens, closes, or finishes the handshake. Before the first byte, the stall check uses `started_mono`, admission on that same clock. *Records-was, same day: the instants were unix milliseconds stamped when the gate granted the chunk, and the stall check used `started`.* The connector closes both session ends with the cause, and the seam inbound drive records that cause. `PeerClosed` is only a reader end-of-file. A silent acceptor is `LevinHandshakeTimeout` and is not recorded. A peer FIN is `PeerClosed`. `record_addr_failed` logs the cause, the reply, and whether the address was recorded. Height, support flags, and the pull state stay on the handler context and are read by the strand post. A claim that has not landed is JSON null for `height` and `support_flags`. `message_writer::finalize` stays C++ through b. Swapping the reader for `BucketReader`, `send_txs` handing a plan to the seam, and deleting `levin_notify.cpp` and `levin.cpp` are the RD row. The no-hub branch in `levin_notify` (the board when the seam is bound, the lock lookup when it is not) is deleted with that file.
 
 **Shape.** Three PRs, one per step, each inside rule 06.
 `check-goldens` is unchanged at every step. `unit_tests` and the

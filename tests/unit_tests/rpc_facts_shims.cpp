@@ -173,9 +173,8 @@ namespace
 
     // A block whose miner transaction the serializer refuses. The chain's
     // coinbase is v1 with one input; a signature vector whose length is not
-    // that input count is the refusal. Set this after `init_blockchain`:
-    // `HardFork::init` rereads every height through `get_block_from_height`
-    // while the chain is built.
+    // that input count is the refusal. Set this after `init_blockchain`,
+    // which may read blocks through `get_block_from_height`.
     void set_unserializable_block(uint64_t height) { m_unserializable_block = height; }
 
     // `get_block_from_height` is what `blocks_by_height` reads. BaseTestDB
@@ -186,10 +185,9 @@ namespace
     cryptonote::block get_block_from_height(const uint64_t& height) const override
     {
       // Out of range only — deliberately NOT honouring `m_missing`, which
-      // models a failing *hash* lookup. `HardFork::init` rescans every height
-      // through this call while the chain is being built, so throwing for a
-      // missing height here fails `init_blockchain` itself and the test never
-      // reaches its subject.
+      // models a failing *hash* lookup. `init_blockchain` may read
+      // heights through this call, and a throw for a missing height there
+      // fails the fixture before the test reaches its subject.
       if (height >= m_height)
         throw BLOCK_DNE("no block at that height");
       cryptonote::block blk = block_at(height);
@@ -279,11 +277,7 @@ namespace
 
   bool init_blockchain(Blockchain& bc, BlockchainDB* db)
   {
-    const std::pair<uint8_t, uint64_t> hard_forks[] = {
-      std::make_pair(static_cast<uint8_t>(1), static_cast<uint64_t>(0)),
-      std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
-    };
-    const cryptonote::test_options test_options = {hard_forks, 5000};
+    const cryptonote::test_options test_options = {5000};
     return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1);
   }
 
@@ -631,34 +625,6 @@ TEST(rpc_facts_shims, a_hash_whose_coinbase_claims_a_height_past_the_tip_is_refu
 }
 
 // ── RK-5b: hard-fork voting info, and the fee estimate ──────────────────────
-
-// **The resolution the C++ did in a local and then reported a different
-// version beside.** `queried_version` is what the voting fields describe;
-// asking with 0 means "the next fork" and the answer says which that was.
-TEST(rpc_facts_shims, hard_fork_info_reports_which_version_it_answered_about)
-{
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
-
-  shekyl_rpc_hard_fork_facts zero{};
-  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::hard_fork_info(bap.bc, 0, &zero));
-  EXPECT_NE(0, zero.queried_version)
-    << "0 is a sentinel meaning 'the next fork', and must be resolved before "
-       "it is reported";
-
-  // An explicit version is echoed, so a caller can tell what it got an answer
-  // about without re-deriving the daemon's default.
-  shekyl_rpc_hard_fork_facts explicit_v{};
-  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::hard_fork_info(bap.bc, 1, &explicit_v));
-  EXPECT_EQ(1, explicit_v.queried_version);
-
-  // And the chain's own version is a separate field. They coincide at this
-  // fixture's single-entry table — which is exactly why the C++ collision was
-  // invisible — so what is pinned here is that they are two fields, not that
-  // they differ.
-  EXPECT_EQ(explicit_v.active_version, zero.active_version)
-    << "the active version does not depend on what was asked";
-}
 
 // The estimator asserts on `grace_blocks` and throws. The export refuses
 // first, so an out-of-range request is a named refusal rather than an
@@ -1112,13 +1078,6 @@ TEST(rpc_facts_shims, a_refused_export_never_leaves_a_stale_owner)
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
     shekyl_rpc_block_at(nullptr, nullptr, 0, 0, &h, &p, &owner));
   EXPECT_EQ(nullptr, owner) << "block_at left the caller a pointer to free twice";
-
-  const shekyl_rpc_hardfork_entry* rows = nullptr;
-  size_t len = 0;
-  owner = stale;
-  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
-    shekyl_rpc_hardforks(nullptr, &rows, &len, &owner));
-  EXPECT_EQ(nullptr, owner) << "hardforks left the caller a pointer to free twice";
 
   // A null owner slot is still refused rather than dereferenced.
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
@@ -1596,4 +1555,227 @@ TEST(rpc_facts_shims, a_pool_entrys_prunable_hash_is_the_digest_of_the_prunable_
   ASSERT_TRUE(shekyl_tx_prunable_hash(e.prunable, e.prunable_len, of_served_bytes));
   EXPECT_EQ(0, std::memcmp(of_served_bytes, e.prunable_hash, 32))
     << "the digest served is not the digest of the prunable half served";
+}
+
+// ── RK-5c: `get_info`'s facts ───────────────────────────────────────────────
+//
+// `get_info` is gathered by part (DAEMON_RPC_KV_GET_INFO.md §4.2, RK-D24), so
+// there is one body per unit of disclosure. These drive each body over a
+// store with stated answers.
+
+namespace
+{
+  // A store that answers the reads `get_info` adds to the header fixture's:
+  // coins generated, total burned, the alt-block count, the transaction
+  // count and its own file names.
+  class InfoTestDB : public FactsTestDB
+  {
+  public:
+    explicit InfoTestDB(uint64_t height) : FactsTestDB(height) {}
+
+    uint64_t get_block_already_generated_coins(const uint64_t& height) const override
+    {
+      return 5000000000ull + height;
+    }
+    uint64_t get_total_burned() const override { return 1234567; }
+    uint64_t get_alt_block_count() override { return 3; }
+    uint64_t get_tx_count() const override { return 4242; }
+    std::vector<std::string> get_filenames() const override { return m_filenames; }
+
+    std::vector<std::string> m_filenames{"/var/lib/shekyl/lmdb/data.mdb",
+      "/var/lib/shekyl/lmdb/lock.mdb"};
+  };
+
+  daemon_rpc_facts::info_chain_scalars chain_scalars()
+  {
+    daemon_rpc_facts::info_chain_scalars s{};
+    s.core_target_height = 12345;
+    s.synchronized = 1;
+    s.busy_syncing = 0;
+    s.offline = 0;
+    return s;
+  }
+}
+
+// One tip, read once: the count, the top block's hash, the cumulative
+// difficulty and the coins generated all belong to the same block. Each is
+// checked against what the store says for `CHAIN_HEIGHT - 1`, so a body that
+// read any of them at another height does not pass.
+TEST(rpc_facts_shims, info_chain_describes_one_tip)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new InfoTestDB(CHAIN_HEIGHT)));
+
+  shekyl_rpc_info_chain_facts facts{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::info_chain(bap.bc, chain_scalars(), &facts));
+
+  const uint64_t top = CHAIN_HEIGHT - 1;
+  EXPECT_EQ(CHAIN_HEIGHT, facts.chain_height);
+  const crypto::hash expected = hash_at(top);
+  EXPECT_EQ(0, std::memcmp(facts.top_hash, expected.data, sizeof(facts.top_hash)));
+  // The fixture's cumulative difficulty is (1 << 71) + height: bit 7 of the
+  // high word, and the height in the low word.
+  EXPECT_EQ(top, facts.cumulative_difficulty_lo);
+  EXPECT_EQ(uint64_t(1) << 7, facts.cumulative_difficulty_hi);
+  EXPECT_EQ(5000000000ull + top, facts.already_generated_coins);
+  EXPECT_EQ(1234567u, facts.total_burned);
+  EXPECT_EQ(4242u, facts.total_transactions);
+  EXPECT_EQ(bap.bc.get_difficulty_target(), facts.difficulty_target);
+  EXPECT_EQ(bap.bc.get_current_cumulative_block_weight_limit(), facts.block_weight_limit);
+  EXPECT_EQ(bap.bc.get_current_cumulative_block_weight_median(), facts.block_weight_median);
+  EXPECT_EQ(SHEKYL_PROTOCOL_VERSION, facts.protocol_version);
+
+  // The next block's difficulty is the function the chain computes it with.
+  const cryptonote::difficulty_type next = bap.bc.get_difficulty_for_next_block();
+  EXPECT_EQ((next & 0xffffffffffffffff).convert_to<uint64_t>(), facts.difficulty_lo);
+  EXPECT_EQ(((next >> 64) & 0xffffffffffffffff).convert_to<uint64_t>(), facts.difficulty_hi);
+}
+
+// The adapter's scalars cross verbatim, and the three flags normalize to
+// exactly 0 or 1 so the Rust twin can read each byte as a bool.
+TEST(rpc_facts_shims, info_chain_passes_its_scalars_through)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new InfoTestDB(CHAIN_HEIGHT)));
+
+  shekyl_rpc_info_chain_facts facts{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::info_chain(bap.bc, chain_scalars(), &facts));
+  EXPECT_EQ(12345u, facts.core_target_height);
+  EXPECT_EQ(1, facts.synchronized);
+  EXPECT_EQ(0, facts.busy_syncing);
+  EXPECT_EQ(0, facts.offline);
+  EXPECT_EQ(0, facts.following_degraded);
+
+  daemon_rpc_facts::info_chain_scalars other = chain_scalars();
+  other.core_target_height = 0;
+  other.synchronized = 0;
+  other.busy_syncing = 200;
+  other.offline = 7;
+  shekyl_rpc_info_chain_facts second{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::info_chain(bap.bc, other, &second));
+  EXPECT_EQ(0u, second.core_target_height);
+  EXPECT_EQ(0, second.synchronized);
+  EXPECT_EQ(1, second.busy_syncing);
+  EXPECT_EQ(1, second.offline);
+}
+
+// Status reads the alt-block count from the store and takes the rest as the
+// adapter's scalars. The count is here and not in the chain snapshot because
+// it is a Status field: it is read only for a caller who is shown Status.
+TEST(rpc_facts_shims, info_status_reads_the_alt_block_count_and_passes_its_scalars)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new InfoTestDB(CHAIN_HEIGHT)));
+
+  daemon_rpc_facts::info_status_scalars scalars{};
+  scalars.start_time = 1699990000;
+  scalars.free_space = 123456789012ull;
+  shekyl_rpc_info_status_facts facts{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::info_status(bap.bc, scalars, &facts));
+  EXPECT_EQ(3u, facts.alt_blocks_count);
+  EXPECT_EQ(1699990000u, facts.start_time);
+  EXPECT_EQ(123456789012ull, facts.free_space);
+}
+
+// The store's data file is named first, and it is the name that crosses: the
+// size is read from it on the Rust side, where a failure is a fault and not
+// the 0 the store's own size getter answers.
+TEST(rpc_facts_shims, info_store_file_names_the_data_file)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new InfoTestDB(CHAIN_HEIGHT)));
+
+  char path[256];
+  size_t len = 0;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::info_store_file(bap.bc, path, sizeof(path), &len));
+  EXPECT_EQ(std::string("/var/lib/shekyl/lmdb/data.mdb"), std::string(path, len));
+}
+
+// A store that names no file, or an empty one, is a fault. So is a path the
+// caller's buffer cannot hold: a truncated path would name a different file.
+TEST(rpc_facts_shims, info_store_file_refuses_what_it_cannot_name_whole)
+{
+  {
+    BlockchainAndPool bap;
+    InfoTestDB* db = new InfoTestDB(CHAIN_HEIGHT);
+    db->m_filenames.clear();
+    ASSERT_TRUE(init_blockchain(bap.bc, db));
+    char path[256];
+    size_t len = 99;
+    EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INTERNAL,
+      daemon_rpc_facts::info_store_file(bap.bc, path, sizeof(path), &len));
+    EXPECT_EQ(0u, len);
+  }
+  {
+    BlockchainAndPool bap;
+    InfoTestDB* db = new InfoTestDB(CHAIN_HEIGHT);
+    db->m_filenames = {""};
+    ASSERT_TRUE(init_blockchain(bap.bc, db));
+    char path[256];
+    size_t len = 99;
+    EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INTERNAL,
+      daemon_rpc_facts::info_store_file(bap.bc, path, sizeof(path), &len));
+    EXPECT_EQ(0u, len);
+  }
+  {
+    BlockchainAndPool bap;
+    ASSERT_TRUE(init_blockchain(bap.bc, new InfoTestDB(CHAIN_HEIGHT)));
+    char path[8];
+    size_t len = 99;
+    EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INTERNAL,
+      daemon_rpc_facts::info_store_file(bap.bc, path, sizeof(path), &len));
+    EXPECT_EQ(0u, len);
+  }
+}
+
+// An empty pool counts zero in both sets. Without the flag only the broadcast
+// count is made, and the second slot is not written.
+TEST(rpc_facts_shims, info_pool_counts_of_an_empty_pool_are_zero_and_the_flag_gates_the_second)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new InfoTestDB(CHAIN_HEIGHT)));
+
+  uint64_t broadcast = 99;
+  uint64_t unbroadcast = 99;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 1, &broadcast, &unbroadcast));
+  EXPECT_EQ(0u, broadcast);
+  EXPECT_EQ(0u, unbroadcast);
+
+  broadcast = 99;
+  unbroadcast = 77;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 0, &broadcast, &unbroadcast));
+  EXPECT_EQ(0u, broadcast);
+  EXPECT_EQ(77u, unbroadcast) << "the count that was not asked for is not written";
+
+  // A caller who is not told the second count need not give it a slot.
+  broadcast = 99;
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 0, &broadcast, nullptr));
+  EXPECT_EQ(0u, broadcast);
+}
+
+TEST(rpc_facts_shims, info_null_out_pointers_refuse)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new InfoTestDB(CHAIN_HEIGHT)));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_chain(bap.bc, chain_scalars(), nullptr));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_status(bap.bc, daemon_rpc_facts::info_status_scalars{}, nullptr));
+  uint64_t slot = 0;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 0, nullptr, nullptr));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 1, &slot, nullptr));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_pool_counts(bap.txpool, 1, nullptr, &slot));
+  char path[16];
+  size_t len = 0;
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_store_file(bap.bc, nullptr, sizeof(path), &len));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
+    daemon_rpc_facts::info_store_file(bap.bc, path, sizeof(path), nullptr));
 }

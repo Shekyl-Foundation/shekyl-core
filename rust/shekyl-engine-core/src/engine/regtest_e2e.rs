@@ -65,7 +65,7 @@ use serde_json::json;
 use shekyl_chain_ingest::source::{Injection, ServeCredit};
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
-use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
+use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse, GetInfoResponse};
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId, TxHash};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
@@ -73,6 +73,11 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 /// races on the RPC port and is resource-heavy (each mines blocks). Serialize all
 /// regtest e2e tests through one async lock — held for the daemon's lifetime via
 /// [`RegtestDaemon`], released on drop.
+///
+/// The lock is in-process only. Each daemon takes a fresh ephemeral port and
+/// temp datadir and removes both on drop, so nothing sweeps the process table:
+/// a `pkill` of `shekyl-regtest-` would also kill another `cargo test`
+/// process's daemon, and this lock cannot see that process.
 static SERIAL: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
 
 fn serial_lock() -> Arc<Mutex<()>> {
@@ -149,38 +154,36 @@ pub(super) struct RegtestDaemon {
     /// judges the chain under a rule set naming that pair, not the
     /// production one).
     schedule: Option<RegtestSchedule>,
+    /// Whether this daemon was started offline (`--offline`). Its
+    /// `get_info` must then report that state, not a count of zero.
+    offline: bool,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
-    _serial: OwnedMutexGuard<()>,
+    /// `None` on the sink of a [`origin::StemSinkPair`], whose origin holds
+    /// the one guard for both.
+    _serial: Option<OwnedMutexGuard<()>>,
 }
 
-/// `get_info` result fields we care about.
-#[derive(Deserialize, Debug)]
-struct GetInfoResp {
-    height: u64,
-    /// Pool population — the mined-yet signal for a submitted tx (see
-    /// `mine_until_pool_empty`).
-    #[serde(default)]
-    tx_pool_size: u64,
-    /// Daemon version string — provenance for the live-oracle spend capture.
-    #[serde(default)]
-    version: String,
-    /// Cumulative destroyed atomic units — `compute_fee_burn`'s
-    /// `actually_destroyed` term only (`blockchain.cpp` feeds it
-    /// `block_burn_amount` and rolls it back on pop). The sibling
-    /// `staker_pool_amount` term does *not* land here; it goes to the
-    /// `archival_budget_accrual` row. See the A6 assertion for why the
-    /// destroyed half is nonetheless evidence about the pool half.
-    #[serde(default)]
-    total_burned: u64,
-    /// The C++'s block-weight limit in force for the next block —
-    /// `Blockchain::get_current_cumulative_block_weight_limit`, twice the
-    /// effective median (CEN-G6b). What the C++ template fills up to.
-    #[serde(default)]
-    block_weight_limit: u64,
-    /// The C++'s effective median in force for the next block
-    /// (`get_current_cumulative_block_weight_median`).
-    #[serde(default)]
-    block_weight_median: u64,
+/// How a spawned daemon takes part in peer-to-peer.
+#[derive(Clone, Copy, Debug)]
+enum Peering {
+    /// `--offline`: no listener and no dial. The protocol starts
+    /// synchronized, so a submitted transaction finds no route and is
+    /// broadcast-recorded within milliseconds.
+    Offline,
+    /// Bound on loopback and dialling exactly one peer.
+    ///
+    /// `--add-exclusive-node` is what keeps the daemon off the public
+    /// network: p2p reads `--regtest` as mainnet, and an exclusive list is
+    /// the condition under which it dials no seed. `--no-ephemeral-tor`
+    /// declines the managed Tor, so the node is clearnet-only and a local
+    /// origin takes the stem slot, not a hidden own-edge.
+    Linked {
+        p2p_port: u16,
+        peer_p2p_port: u16,
+        /// `--no-sync`: the daemon never reports itself synchronized, so it
+        /// drops every transaction a peer sends it and relays none.
+        sink: bool,
+    },
 }
 
 /// `generateblocks` result fields we care about.
@@ -189,6 +192,52 @@ pub(super) struct GenerateBlocksResp {
     height: u64,
     #[serde(default)]
     blocks: Vec<String>,
+}
+
+/// How one regtest daemon is spawned.
+///
+/// The fields are the postures a caller can ask for, named at the call
+/// site. The serial guard stays with the caller: one daemon takes it, and
+/// a stem/sink pair takes it once, on the origin.
+struct RegtestSpawn {
+    serial: Option<OwnedMutexGuard<()>>,
+    schedule: Option<RegtestSchedule>,
+    restricted_listener: bool,
+    console: bool,
+    peering: Peering,
+}
+
+impl RegtestSpawn {
+    /// Offline, non-interactive, one listener, the genesis-pinned schedule.
+    fn new(serial: Option<OwnedMutexGuard<()>>) -> Self {
+        Self {
+            serial,
+            schedule: None,
+            restricted_listener: false,
+            console: false,
+            peering: Peering::Offline,
+        }
+    }
+
+    fn with_console(mut self) -> Self {
+        self.console = true;
+        self
+    }
+
+    fn with_restricted_listener(mut self) -> Self {
+        self.restricted_listener = true;
+        self
+    }
+
+    fn with_schedule(mut self, schedule: Option<RegtestSchedule>) -> Self {
+        self.schedule = schedule;
+        self
+    }
+
+    fn with_peering(mut self, peering: Peering) -> Self {
+        self.peering = peering;
+        self
+    }
 }
 
 impl RegtestDaemon {
@@ -212,9 +261,33 @@ impl RegtestDaemon {
         l.local_addr().expect("local_addr").port()
     }
 
+    /// A free port that is none of `taken`. Each probe binds :0 and releases
+    /// immediately, so the kernel is free to hand back the same number twice
+    /// — and a daemon given one number for two listeners dies at startup,
+    /// intermittently. (The TOCTOU window between releasing a probe and the
+    /// daemon binding is unchanged; this only removes the self-collision,
+    /// which is the part we create.)
+    fn free_port_excluding(taken: &[u16]) -> u16 {
+        for _ in 0..64 {
+            let port = Self::free_port();
+            if !taken.contains(&port) {
+                return port;
+            }
+        }
+        panic!("could not obtain a port distinct from {taken:?}");
+    }
+
     /// Spawn the daemon and wait until its RPC answers `get_info`.
     pub(super) async fn start() -> RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
+    }
+
+    /// Spawn the daemon with its interactive console live, so a test can put
+    /// commands to the **in-process** arm. Opt-in: without `--non-interactive`
+    /// the daemon exits on stdin EOF, which every other spawn relies on.
+    pub(super) async fn start_with_console() -> RegtestDaemon {
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).with_console()).await
     }
 
     /// Spawn the daemon with a second, restricted listener, so one daemon serves
@@ -230,15 +303,9 @@ impl RegtestDaemon {
     /// The restricted listener is opt-in rather than always-on: this harness is
     /// `#[ignore]`d, so CI would not catch a regression it introduced into the
     /// spawn that every other e2e test shares.
-    /// Spawn the daemon with its interactive console live, so a test can put
-    /// commands to the **in-process** arm. Opt-in: without `--non-interactive`
-    /// the daemon exits on stdin EOF, which every other spawn relies on.
-    pub(super) async fn start_with_console() -> RegtestDaemon {
-        Self::start_inner(None, false, true).await
-    }
-
     pub(super) async fn start_with_restricted_listener() -> RegtestDaemon {
-        Self::start_inner(None, true, false).await
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).with_restricted_listener()).await
     }
 
     /// Spawn the daemon with an optional regtest schedule on the child's
@@ -256,25 +323,33 @@ impl RegtestDaemon {
     pub(super) async fn start_with_regtest_schedule(
         schedule: Option<RegtestSchedule>,
     ) -> RegtestDaemon {
-        Self::start_inner(schedule, false, false).await
+        let serial = serial_lock().lock_owned().await;
+        Self::spawn(RegtestSpawn::new(Some(serial)).with_schedule(schedule)).await
     }
 
-    async fn start_inner(
-        schedule: Option<RegtestSchedule>,
-        restricted_listener: bool,
-        console: bool,
-    ) -> RegtestDaemon {
-        // Serialize across this test binary so no two in-process daemons race on
-        // a port. Each instance uses a unique ephemeral port + temp datadir and
-        // kills its own child (+ removes its datadir) on Drop, so no global daemon
-        // sweep is needed. A `pkill -f shekyl-regtest-` would also kill a
-        // concurrent `cargo test` *process*'s daemon — the in-process lock can't
-        // serialize across processes — so it is deliberately not done here.
-        let serial = serial_lock().lock_owned().await;
+    /// Spawn one daemon. The caller owns the serial guard, so a test that
+    /// spawns two daemons takes it once.
+    async fn spawn(spec: RegtestSpawn) -> RegtestDaemon {
+        let RegtestSpawn {
+            serial,
+            schedule,
+            restricted_listener,
+            console,
+            peering,
+        } = spec;
         install_wallet_tracing();
 
         let bin = Self::binary();
-        let rpc_port = Self::free_port();
+        let offline = matches!(peering, Peering::Offline);
+        let p2p_ports: &[u16] = match &peering {
+            Peering::Offline => &[],
+            Peering::Linked {
+                p2p_port,
+                peer_p2p_port,
+                ..
+            } => &[*p2p_port, *peer_p2p_port],
+        };
+        let rpc_port = Self::free_port_excluding(p2p_ports);
         let data_dir = std::env::temp_dir().join(format!("shekyl-regtest-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
@@ -283,7 +358,6 @@ impl RegtestDaemon {
         let mut cmd = Command::new(&bin);
         cmd.args([
             "--regtest",
-            "--offline",
             "--no-igd",
             "--fixed-difficulty",
             "1",
@@ -299,12 +373,29 @@ impl RegtestDaemon {
             "--log-level",
             "1",
         ]);
-        // Distinct from the main port. Both probes bind :0 and release
-        // immediately, so the kernel is free to hand back the same number
-        // twice — and the daemon would then try to bind both listeners to it
-        // and die at startup, intermittently. (The pre-existing TOCTOU window
-        // between releasing a probe and the daemon binding is unchanged; this
-        // only removes the self-collision, which is the part we create.)
+        match peering {
+            Peering::Offline => {
+                cmd.arg("--offline");
+            }
+            Peering::Linked {
+                p2p_port,
+                peer_p2p_port,
+                sink,
+            } => {
+                cmd.args([
+                    "--p2p-bind-ip",
+                    "127.0.0.1",
+                    "--p2p-bind-port",
+                    &p2p_port.to_string(),
+                    "--no-ephemeral-tor",
+                    "--add-exclusive-node",
+                    &format!("127.0.0.1:{peer_p2p_port}"),
+                ]);
+                if sink {
+                    cmd.arg("--no-sync");
+                }
+            }
+        }
         // `--non-interactive` unless the test drives the daemon's own console:
         // the console is what reads stdin, and suppressing it is what makes
         // the in-process arm unreachable.
@@ -312,14 +403,9 @@ impl RegtestDaemon {
             cmd.arg("--non-interactive");
         }
         let restricted_port = restricted_listener.then(|| {
-            let mut port = Self::free_port();
-            for _ in 0..64 {
-                if port != rpc_port {
-                    return port;
-                }
-                port = Self::free_port();
-            }
-            panic!("could not obtain a restricted port distinct from {rpc_port}");
+            let mut taken = p2p_ports.to_vec();
+            taken.push(rpc_port);
+            Self::free_port_excluding(&taken)
         });
         if let Some(port) = restricted_port {
             // A second listener on the same daemon. This flag binds an extra
@@ -376,6 +462,7 @@ impl RegtestDaemon {
             rpc,
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
+            offline,
             _serial: serial,
         };
         daemon.await_ready().await;
@@ -398,10 +485,25 @@ impl RegtestDaemon {
             }
             match self
                 .rpc
-                .json_rpc_call::<GetInfoResp>("get_info", None)
+                .json_rpc_call::<GetInfoResponse>("get_info", None)
                 .await
             {
-                Ok(_) => return,
+                Ok(info) => {
+                    // The harness reads the P2P state, not a count: a daemon
+                    // started offline says so, and one whose P2P runs
+                    // reports its counts (Rick, 2026-10-14).
+                    let state = info
+                        .peers
+                        .shown()
+                        .expect("the harness's main listener is shown Peers");
+                    assert_eq!(
+                        matches!(state, shekyl_rpc_types::InfoP2p::Offline),
+                        self.offline,
+                        "get_info's P2P state must be the daemon's configuration; got {state:?}"
+                    );
+                    assert_eq!(info.health.p2p.is_offline(), self.offline);
+                    return;
+                }
                 Err(e) => last_err = format!("{e:?}"),
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -415,9 +517,10 @@ impl RegtestDaemon {
 
     pub(super) async fn height(&self) -> u64 {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .health
             .height
     }
 
@@ -428,20 +531,44 @@ impl RegtestDaemon {
     /// it, and this crate's version is not that identity.
     pub(super) async fn version(&self) -> String {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .node
+            .shown()
+            .expect("the harness's own listener is shown Status")
             .version
+            .clone()
     }
 
-    /// Transactions currently in the daemon's pool — the drain loop's
-    /// condition and the pop legs' return-to-pool observable.
+    /// Every transaction this daemon holds in its pool, broadcast or not —
+    /// the drain loop's condition and the pop legs' return-to-pool
+    /// observable.
+    ///
+    /// `get_info` reports the pool as two counts: the entries the node has
+    /// broadcast, told to every caller, and the entries it has not yet
+    /// broadcast, told only to the host's administrator (RK-Q10). Both
+    /// callers of this mean "everything", and a transaction a wallet has
+    /// just submitted sits in the second count until its stem ends, so
+    /// this is their sum. The harness talks to the unrestricted listener,
+    /// which stands in for the host until the RPC channel exists; a reply
+    /// without the host part would mean it was answered as someone else,
+    /// and is a failure, never a zero.
     pub(super) async fn tx_pool_size(&self) -> u64 {
-        self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+        let info = self
+            .rpc
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
-            .expect("get_info")
+            .expect("get_info");
+        let unbroadcast = info
+            .host
+            .shown()
+            .expect("the harness's listener is the host's, and is told the host-only part")
+            .tx_pool_unbroadcast_count;
+        info.pool
             .tx_pool_size
+            .checked_add(unbroadcast)
+            .expect("two pool counts fit a u64")
     }
 
     /// The C++'s `(effective median, block-weight limit)` in force for the
@@ -449,10 +576,13 @@ impl RegtestDaemon {
     pub(super) async fn weight_limit(&self) -> (u64, u64) {
         let info = self
             .rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info");
-        (info.block_weight_median, info.block_weight_limit)
+        (
+            info.chain.block_weight_median,
+            info.chain.block_weight_limit,
+        )
     }
 
     /// Non-coinbase transaction hashes carried by the block named by `hash`
@@ -511,11 +641,12 @@ impl RegtestDaemon {
     /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
     /// partition. The emission e2e samples it once, at epoch close, and
     /// pins it to 0 (A6 pool-half disposition).
-    pub(super) async fn total_burned(&self) -> u64 {
+    pub(super) async fn total_burned(&self) -> shekyl_units::AtomicUnits {
         self.rpc
-            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
             .await
             .expect("get_info")
+            .economics
             .total_burned
     }
 
@@ -1791,14 +1922,11 @@ async fn overfill_pool(
 /// expected at most 600000`) and the block at the bound was refused for
 /// its coinbase: the miner leg differed by `33 595` atomic units — one
 /// unit of the staker share in `10⁶` — because the C++ *regtest* measured
-/// CEN-F21's decay from height 0 while every issued network, and
-/// `EMISSION_SPLIT_EPOCH`, measure it from height 1. The regtest hardfork
-/// table was `{(1, 0), (1, 1)}` with the second row rejected by
-/// `HardFork::add_fork` (version ≤ back), a nettype-conditional
-/// consensus datum no `m_nettype` sweep could see (rule 71). Fixed in the
-/// table (`cryptonote_core.cpp`, `shekyl_e2_trace_export.cpp`) in the same
-/// PR; this test is the falsifier. Fee income agreed to the unit both
-/// times.
+/// CEN-F21's decay from height 0 while every issued network measures it
+/// from block 1. The share now starts at `shekyl_economics::EMISSION_SPLIT_EPOCH`
+/// on every network, read by the split itself. This test is the falsifier
+/// that the two producers agree on that share. Fee income agreed to the
+/// unit both times.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; ~50 spends into the pool, several min"]
 async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
@@ -1806,7 +1934,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use shekyl_block_template::{
         build, EmissionOperands, MinerKeys, TemplateContext, TemplateError,
     };
-    use shekyl_chain_rules::{RuleSet, EMISSION_SPLIT_EPOCH};
+    use shekyl_chain_rules::RuleSet;
     use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
     use shekyl_economics::params::TX_VOLUME_WINDOW;
     use shekyl_economics::{ClosedShardCount, EconomicParams, EmissionError, TxVolume};
@@ -1854,14 +1982,21 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         Some(median),
         "get_miner_data's median is get_info's"
     );
+    // Two encodings of an amount meet here, on purpose for now.
+    // `get_miner_data` still writes this one as a JSON number; `get_info`
+    // writes its amounts as decimal strings since 3.53 (RK-Q2), and the
+    // `total_burned` read below comes through the shared type as
+    // `AtomicUnits`. `get_miner_data` moves when its own method migrates
+    // (FOLLOWUPS: "two encodings across methods").
     let already_generated = miner_data["already_generated_coins"]
         .as_u64()
         .expect("already_generated_coins");
     let total_burned = daemon
         .rpc
-        .json_rpc_call::<GetInfoResp>("get_info", None)
+        .json_rpc_call::<GetInfoResponse>("get_info", None)
         .await
         .expect("get_info")
+        .economics
         .total_burned;
     // CEN-F20's operand over the C++'s headers: the listed-transaction
     // count over the prior `min(height, W)` blocks.
@@ -1916,6 +2051,16 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     };
     let params = EconomicParams::default();
     let rule_set = RuleSet::GENESIS;
+    // The daemon drew this template's commitment; the Rust producer is
+    // handed the same one, as it is handed the same header operands.
+    let draw_commitment = shekyl_wire::tx_extra::parse(&cxx_block.miner_transaction.prefix.extra)
+        .expect("the daemon's coinbase extra parses")
+        .into_iter()
+        .find_map(|field| match field {
+            shekyl_wire::tx_extra::TxExtraField::DrawCommitment(c) => Some(c),
+            _ => None,
+        })
+        .expect("the daemon's coinbase carries a 0x0C draw commitment");
     let build_with = |listed: &[Transaction]| {
         build(&TemplateContext {
             height: BlockHeight::from_raw(height),
@@ -1925,7 +2070,6 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
                 *cxx_block.header.attestation_root.as_bytes(),
             ),
             major_version: cxx_block.header.major_version,
-            minor_version: cxx_block.header.minor_version,
             // The C++'s template timestamp is already `max(now, MTP + 1)`;
             // claiming it with no median reproduces it exactly.
             now: Timestamp::from_raw(cxx_block.header.timestamp),
@@ -1933,16 +2077,16 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             unlock_window: BlockCount::from_raw(rule_set.mined_money_unlock_window().to_raw()),
             emission: EmissionOperands {
                 already_generated_coins: shekyl_units::AtomicUnits::from_raw(already_generated),
-                total_burned: shekyl_units::AtomicUnits::from_raw(total_burned),
+                total_burned,
                 median_weight: median,
                 tx_volume,
                 closed_shards: ClosedShardCount::ZERO,
-                emission_split_epoch: EMISSION_SPLIT_EPOCH,
             },
             params: &params,
             miner: &miner,
             tx_key_secret: Zeroizing::new([0x42; 32]),
             extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
+            draw_commitment,
             listed,
         })
     };
@@ -2067,11 +2211,12 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 ///
 /// **What the first run found (2026-09-28), and what this therefore
 /// captures.** The premise was a block *at the limit*. The C++ producer
-/// does not build one: `tx_pool::fill_block_template` stops listing once
-/// the bodies pass the median (*"would exceed median block weight"*, the
-/// arm a block version below 5 takes, and Shekyl's is 1; the reward-aware
-/// comparison beside it, *"would decrease coinbase"*, never runs), so
-/// the template stops one transaction past the **median**
+/// does not build one: `tx_pool::fill_block_template` lists bodies in fee
+/// order, lets one body cross the median, refuses a body that would pass
+/// 13/10 of the median less the coinbase reserve, and then stops. The
+/// reward-aware rule, `shekyl_block_template::Fill`, is not this scan and
+/// does not run here, so the template stops one transaction past the
+/// **median**
 /// — 305 738 bytes, 23 spends, 27 left in the pool, against a limit of
 /// 600 000. The 2 × median bound is the *validator's* refusal (CEN-F14); no
 /// C++ producer reaches it, and a block at it is a Rust-producer-built
@@ -2104,6 +2249,12 @@ async fn e2e_cxx_template_fills_to_its_median() {
         weights,
     } = overfill_pool(&daemon, &arc, &address).await;
 
+    // `get_block_template` reports what the template pays its miner. With
+    // the pool full the template lists transactions, and the figure is the
+    // coinbase the template carries: not zero, and not the pre-split
+    // emission.
+    assert_template_reports_its_coinbase(&daemon, &address, true).await;
+
     // The fullest block the C++ producer builds from that pool.
     let mined = daemon.generate_blocks(1, &address).await;
     assert_eq!(mined.blocks.len(), 1);
@@ -2122,11 +2273,10 @@ async fn e2e_cxx_template_fills_to_its_median() {
         pool_after >= 1,
         "the template must have been bounded by its own policy: the pool ran dry instead"
     );
-    // The producer's stop is the fee/penalty equilibrium just past the
-    // median (the doc above): one more spend would have been refused for
-    // decreasing the coinbase, and the block is within two spends of `M`
-    // on the heavy side — not at the limit, and not under the median with
-    // room to spare.
+    // The producer stops once the listed weight passes the median (the
+    // doc above), so the block is within two spends of `M` on the heavy
+    // side — not at the limit, and not under the median with room to
+    // spare.
     assert!(
         block_weight + lightest_left > median,
         "one more spend ({lightest_left}) would have kept the block under the median: \
@@ -2135,7 +2285,7 @@ async fn e2e_cxx_template_fills_to_its_median() {
     assert!(
         block_weight < median + 2 * lightest_left,
         "the C++ producer took the block {block_weight} more than two spends past its median \
-         {median}: the fee/penalty stop is not where tx_pool.cpp:2135–2146 says it is"
+         {median}: the fill does not stop where `fill_block_template` says it does"
     );
     assert!(
         carried >= 20,
@@ -2152,6 +2302,8 @@ async fn e2e_cxx_template_fills_to_its_median() {
         daemon.generate_blocks(1, &address).await;
     }
     assert_eq!(daemon.tx_pool_size().await, 0, "the pool drains");
+    // The same holds for a template that lists nothing.
+    assert_template_reports_its_coinbase(&daemon, &address, false).await;
     daemon.generate_blocks(1, &address).await;
     maybe_capture_chain_vector(
         &daemon,
@@ -2161,6 +2313,53 @@ async fn e2e_cxx_template_fills_to_its_median() {
         &[],
     )
     .await;
+}
+
+/// `get_block_template.expected_reward` is the sum of the coinbase outputs of
+/// the template it returns. `lists_transactions` states which template the
+/// caller set up, so a pool that did not fill (or did not drain) fails here
+/// and not as a vacuous pass.
+#[cfg(test)]
+async fn assert_template_reports_its_coinbase(
+    daemon: &RegtestDaemon,
+    address: &str,
+    lists_transactions: bool,
+) {
+    use shekyl_wire::Block;
+
+    let template: serde_json::Value = daemon
+        .rpc
+        .json_rpc_call(
+            "get_block_template",
+            Some(json!({ "wallet_address": address, "reserve_size": 0 })),
+        )
+        .await
+        .expect("get_block_template");
+    let block = Block::from_bytes(&hex_decode(
+        template["blocktemplate_blob"]
+            .as_str()
+            .expect("blocktemplate_blob"),
+    ))
+    .expect("the C++ template parses");
+    assert_eq!(
+        !block.transaction_hashes.is_empty(),
+        lists_transactions,
+        "the template lists {} transaction(s)",
+        block.transaction_hashes.len()
+    );
+    let coinbase: u64 = block
+        .miner_transaction
+        .prefix
+        .outputs
+        .iter()
+        .map(|output| output.amount)
+        .sum();
+    assert!(coinbase > 0, "a template pays its miner");
+    assert_eq!(
+        template["expected_reward"].as_u64(),
+        Some(coinbase),
+        "expected_reward is the coinbase the template carries"
+    );
 }
 
 /// Trim (reorg) self-consistency: popping the chain back to an earlier height must
@@ -2428,6 +2627,22 @@ async fn transfer_to(
     batch: u64,
     max_batches: usize,
 ) {
+    submit_transfer(daemon, arc, address, recipient, amount, batch, max_batches).await;
+    daemon.generate_blocks(1, address).await;
+}
+
+/// Build (retrying past the C2 reference-spendability gate) + submit a transfer
+/// of exactly `amount` to `recipient`, and leave it in the pool. Returns the
+/// hash of a fresh accept.
+async fn submit_transfer(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    recipient: &str,
+    amount: shekyl_units::AtomicUnits,
+    batch: u64,
+    max_batches: usize,
+) -> TxHash {
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     let request = TxRequest {
         recipients: vec![TxRecipient {
@@ -2456,14 +2671,15 @@ async fn transfer_to(
         }
     }
     let pending = pending.expect("transfer must build once reference-spendable");
-    let tx_hash = {
+    let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the transfer (consensus verify)")
     };
-    eprintln!("daemon accepted transfer: {tx_hash:?}");
-    daemon.generate_blocks(1, address).await;
+    let tx_hash = require_fresh_accept(outcome, "the transfer");
+    eprintln!("daemon accepted transfer: {tx_hash}");
+    tx_hash
 }
 
 async fn refresh(arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>) {
@@ -2708,6 +2924,34 @@ struct ConfirmedBondFixture {
     confirmed_tip_height: u64,
 }
 
+/// What `stake_persona_and_submit_bond` hands back: the staker wallet with
+/// its persona funded, discovered and bonded as far as the **submit**, plus
+/// the submit verdict itself, un-judged. `stake_persona_to_confirmed_bond`
+/// judges it (accepted, then confirmed on chain); the FND-20 tripwire
+/// judges it the other way (refused, at the C++ parser).
+struct SubmittedBondPost {
+    /// The staker wallet engine (persona funded; bond post sealed and sent).
+    arc: Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    /// The wallet's backing tempdir — an RAII guard, never read.
+    _tmp: tempfile::TempDir,
+    /// The principal's mining/funding address.
+    principal: String,
+    /// The bonded persona's canonical id (the bond post's identity).
+    persona_id: shekyl_types::PCanonicalId,
+    /// The sealed P-scan state path (for follow-on `pscan_until` calls).
+    pscan_seal: std::path::PathBuf,
+    /// The pre-post funding gindexes `first_stake` swept.
+    swept_gindexes: Vec<u64>,
+    /// How many pre-post funding records the discovery scan found.
+    pre_post_discovered: usize,
+    /// The daemon's answer to the wallet-built post, through the audited
+    /// posture→submitter choke point.
+    verdict: Result<
+        super::transaction_submitter::SubmitSuccess,
+        super::transaction_submitter::BroadcastSubmitError,
+    >,
+}
+
 /// How the confirmed-bond fixture enters the stake.
 enum FixtureStake {
     /// The production [`Engine::first_stake`] entry (SP-R0 arm-#1
@@ -2744,6 +2988,16 @@ enum FixtureStake {
 /// Every step retries-until-ready (funding maturity, reference
 /// spendability, the Dandelion++ embargo), so the block geography is a
 /// *result*, not an input — read it from the returned fixture.
+///
+/// The post this builds is a kind-5 JoinMarket. The C++ daemon under test
+/// cannot parse that byte and its verify export refuses every JoinMarket
+/// (`FN_DSA_HYBRID.md` §8, FND-20), so each caller is `DECIDED_DARK` in
+/// `scripts/ci/run_live_daemon_gates.sh` until the daemon admits one
+/// (DEL-008). The bodies stay: they are the positive subject. The armed
+/// tripwire `e2e_the_cxx_daemon_answers_join_market_unsupported`
+/// drives the same path to the submit and pins the refusal, so the day the
+/// daemon admits one is a red, not a silence (FOLLOWUPS, "The five bonded
+/// regtest walks are decided dark").
 async fn stake_persona_to_confirmed_bond(
     daemon: &RegtestDaemon,
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
@@ -2751,6 +3005,96 @@ async fn stake_persona_to_confirmed_bond(
     funding_cushion: u64,
     stake_entry: FixtureStake,
 ) -> ConfirmedBondFixture {
+    use super::stake_engine::PSlot;
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
+
+    let slot = PSlot::from_raw(slot_raw);
+    let SubmittedBondPost {
+        arc,
+        _tmp: tmp,
+        principal,
+        persona_id,
+        pscan_seal,
+        swept_gindexes,
+        pre_post_discovered,
+        verdict,
+    } = stake_persona_and_submit_bond(daemon, seed, slot_raw, funding_cushion, stake_entry).await;
+
+    // Accepted-and-applied (the promoted PR-4a tripwire): the daemon's
+    // PR-4b bond-post Phase-C battery verifies the wallet-built post over
+    // real RPC. Any rejection — Phase A, Phase C, transport — fails loudly.
+    let receipt = verdict.unwrap_or_else(|e| {
+        daemon.panic_with_log(
+            "daemon must accept the wallet-built bond post (PR-4b battery landed)",
+            format!("{e:?}"),
+        )
+    });
+    eprintln!("bond post accepted by the daemon submit engine: {receipt:?}");
+
+    // Applied: mine the accepted post into a block, then past the scan
+    // horizon, and re-run the production P-scan — the sealed state must
+    // carry the persona's bond-post match (rung-2 substrate) and a
+    // `BondPostChange` change-funding output beyond the pre-post set (the
+    // outputs the emission-claim e2e, PR-4c, spends from).
+    //
+    mine_until_pool_drains(daemon, &principal, "accepted bond post", 5).await;
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
+        .await;
+    refresh(&arc).await;
+    let state = pscan_until(
+        &arc,
+        &pscan_seal,
+        "the bond-post match + BondPostChange change funding + swept-record prune",
+        |s| {
+            // The swept-prune leg makes the wait deterministic: the arm-1
+            // prune can land a seal batch AFTER the match does, and a
+            // fixture snapshot taken between the two would carry the swept
+            // pre-post record alongside the change — a phantom extra row
+            // that would flake any consumer counting the slot's records
+            // (the bond e2e's own prune assertion included). Wait for all
+            // three writes before snapshotting.
+            s.bond_post_matches()
+                .iter()
+                .any(|m| m.p_canonical_id == persona_id)
+                && s.funding_outputs()
+                    .iter()
+                    .any(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
+                && s.funding_outputs()
+                    .iter()
+                    .all(|r| !swept_gindexes.contains(&r.gindex.to_raw()))
+        },
+    )
+    .await;
+    let confirmed_tip_height = daemon.height().await;
+
+    ConfirmedBondFixture {
+        arc,
+        _tmp: tmp,
+        principal,
+        persona_id,
+        pscan_seal,
+        state,
+        swept_gindexes,
+        pre_post_discovered,
+        confirmed_tip_height,
+    }
+}
+
+/// The first half of [`stake_persona_to_confirmed_bond`], up to and
+/// including the submit: fund the principal, fund the persona, discover the
+/// funding through the production P-scan, enter the stake (the production
+/// `first_stake` entry or the market-bond assembly), re-lift the sealed
+/// pending post and dispatch it through the audited posture→submitter
+/// choke point. The verdict is returned, not judged, so one body serves
+/// the confirmed-bond fixture and the FND-20 tripwire.
+async fn stake_persona_and_submit_bond(
+    daemon: &RegtestDaemon,
+    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    slot_raw: u32,
+    funding_cushion: u64,
+    stake_entry: FixtureStake,
+) -> SubmittedBondPost {
     use super::bond_assembly::{BondAssemblyError, PBoundBytes, SpentRecordsDurablyPruned};
     use super::bond_orchestrator::p_lane_weight_ceiling_bytes;
     use super::bond_orchestrator::FirstStakeError;
@@ -2759,7 +3103,6 @@ async fn stake_persona_to_confirmed_bond(
     use super::traits::DaemonEngine;
     use super::transaction_submitter::BroadcastSubmitter;
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
-    use shekyl_engine_state::pscan_state::MintLineageOutput;
     use shekyl_units::AtomicUnits;
 
     const MINE_BATCH_BLOCKS: u64 = 10;
@@ -2996,64 +3339,15 @@ async fn stake_persona_to_confirmed_bond(
     let submitter = BroadcastSubmitter::local(persona_id, Arc::new(daemon_client));
     let verdict = submitter.submit_bound(bound).await;
 
-    // Accepted-and-applied (the promoted PR-4a tripwire): the daemon's
-    // PR-4b bond-post Phase-C battery verifies the wallet-built post over
-    // real RPC. Any rejection — Phase A, Phase C, transport — fails loudly.
-    let receipt = verdict.unwrap_or_else(|e| {
-        daemon.panic_with_log(
-            "daemon must accept the wallet-built bond post (PR-4b battery landed)",
-            format!("{e:?}"),
-        )
-    });
-    eprintln!("bond post accepted by the daemon submit engine: {receipt:?}");
-
-    // Applied: mine the accepted post into a block, then past the scan
-    // horizon, and re-run the production P-scan — the sealed state must
-    // carry the persona's bond-post match (rung-2 substrate) and a
-    // `BondPostChange` change-funding output beyond the pre-post set (the
-    // outputs the emission-claim e2e, PR-4c, spends from).
-    //
-    mine_until_pool_drains(daemon, &principal, "accepted bond post", 5).await;
-    daemon
-        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &principal)
-        .await;
-    refresh(&arc).await;
-    let state = pscan_until(
-        &arc,
-        &pscan_seal,
-        "the bond-post match + BondPostChange change funding + swept-record prune",
-        |s| {
-            // The swept-prune leg makes the wait deterministic: the arm-1
-            // prune can land a seal batch AFTER the match does, and a
-            // fixture snapshot taken between the two would carry the swept
-            // pre-post record alongside the change — a phantom extra row
-            // that would flake any consumer counting the slot's records
-            // (the bond e2e's own prune assertion included). Wait for all
-            // three writes before snapshotting.
-            s.bond_post_matches()
-                .iter()
-                .any(|m| m.p_canonical_id == persona_id)
-                && s.funding_outputs()
-                    .iter()
-                    .any(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
-                && s.funding_outputs()
-                    .iter()
-                    .all(|r| !swept_gindexes.contains(&r.gindex.to_raw()))
-        },
-    )
-    .await;
-    let confirmed_tip_height = daemon.height().await;
-
-    ConfirmedBondFixture {
+    SubmittedBondPost {
         arc,
         _tmp: tmp,
         principal,
         persona_id,
         pscan_seal,
-        state,
         swept_gindexes,
         pre_post_discovered,
-        confirmed_tip_height,
+        verdict,
     }
 }
 
@@ -3089,7 +3383,7 @@ async fn stake_persona_to_confirmed_bond(
 /// - A shallow P-scan finality horizon + tight cadence via the injectable
 ///   `start_pscan_with` seam (see [`PSCAN_TEST_REORG_DEPTH`]).
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_staker_bond_post_accepted_and_applied() {
     use super::stake_engine::PSlot;
     use shekyl_engine_state::pscan_state::MintLineageOutput;
@@ -3165,6 +3459,99 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
     .await;
 }
 
+/// FND-20 tripwire, **ARMED** while the five bonded walks are
+/// `DECIDED_DARK` (`scripts/ci/run_live_daemon_gates.sh`; FOLLOWUPS "The
+/// five bonded regtest walks are decided dark").
+///
+/// The walks (`e2e_staker_bond_post_accepted_and_applied`,
+/// `e2e_drain_wire_shape_matches_a_real_transfer`,
+/// `e2e_release_accepted_and_connected`,
+/// `e2e_unstake_collect_retire_composed_arc`,
+/// `e2e_emission_claim_accepted_and_applied`) each begin by bonding through
+/// `stake_persona_to_confirmed_bond`, whose post is the one JoinMarket wire
+/// form, `post_kind` `5` (`FN_DSA_HYBRID.md` §8). The C++ daemon under test
+/// does not admit it, so they cannot pass their first step and were decided
+/// dark with "returns when the daemon admits one" — a restated blocker, not
+/// a check. This test is the check: it drives the same bonding path to the
+/// submit and asserts the refusal, **named precisely**:
+///
+/// - the daemon's native submit route parses and verifies the post in Rust
+///   (Phase A, Phase C: the wallet-built post is valid, so neither
+///   refuses), then reaches the C++ commit shim, which cannot reparse a
+///   kind-5 post (`txin_archival_bond_post`'s serializer refuses
+///   `post_kind` above Release, `cryptonote_basic.h`) and so does not try:
+///   it answers `CommitOutcome::JoinMarketUnsupported` (`ffi_shim.rs`);
+/// - the engine turns that into `Rejected { JoinMarketUnsupported }`, the
+///   one place that cause is authored, and the wallet's submitter maps it
+///   to `SubmitterError::RejectedTerminal { JoinMarketUnsupported }`, which
+///   the dispatch driver treats as terminal: the post is withdrawn and its
+///   funding reservation released, never resubmitted. Any other answer
+///   (a Rust verdict on the post, a commit fault, a transport error) is a
+///   different finding.
+///
+/// The day the daemon under test admits a kind-5 JoinMarket (the Rust
+/// daemon at the cutover, `DEL-008`), the submit succeeds and this test
+/// panics naming the five walks that are due back on ARMED / ARMED_SLOW. A
+/// refusal of any other shape is also red, with the daemon log inlined.
+///
+/// Cost: the first half of the bond walk that was ARMED per-PR before
+/// 2026-10-13 (mine, fund, discover, stake, submit), minus its confirm half.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "FND-20 tripwire: needs SHEKYLD_BIN + a built regtest daemon; red when the daemon admits a kind-5 JoinMarket"]
+async fn e2e_the_cxx_daemon_answers_join_market_unsupported() {
+    use super::error::TerminalErrorKind;
+    use super::transaction_submitter::{BroadcastSubmitError, SubmitterError};
+
+    const SLOT: u32 = 0;
+    /// The bond walk's cushion: a non-zero change output, nothing more.
+    const FUNDING_CUSHION: u64 = 200_000_000;
+
+    let daemon = RegtestDaemon::start().await;
+    // Schedule guard (see the bond walk): wallet epoch arithmetic here must
+    // run on the genesis pin; a sibling-armed levered schedule fails loudly.
+    assert_eq!(
+        shekyl_archival_retention::effective_settlement_epoch_blocks(),
+        shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS,
+        "another test latched a levered settlement-epoch schedule in this process; \
+         run the regtest e2es in separate processes"
+    );
+    let seed = [0x4Au8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let submitted = stake_persona_and_submit_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::FirstStake,
+    )
+    .await;
+
+    match submitted.verdict {
+        Err(BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
+            kind: TerminalErrorKind::JoinMarketUnsupported,
+        })) => {}
+        Ok(receipt) => panic!(
+            "THE DAEMON ADMITTED A KIND-5 JOINMARKET ({receipt:?}). FND-20's blocker has \
+             lifted: move e2e_staker_bond_post_accepted_and_applied, \
+             e2e_drain_wire_shape_matches_a_real_transfer, \
+             e2e_release_accepted_and_connected, e2e_unstake_collect_retire_composed_arc \
+             and e2e_emission_claim_accepted_and_applied off DECIDED_DARK in \
+             scripts/ci/run_live_daemon_gates.sh (observe each red first), close the \
+             FOLLOWUPS row \"The five bonded regtest walks are decided dark\", and retire \
+             this tripwire"
+        ),
+        Err(other) => panic!(
+            "the kind-5 JoinMarket was refused, but not as Rejected{{JoinMarketUnsupported}} \
+             from the C++ commit shim ({other:?}); a Rust verdict on the post, a commit \
+             fault or a transport error is a different finding; daemon log tail:\n{}",
+            daemon.log_tail()
+        ),
+    }
+    eprintln!(
+        "FND-20 tripwire: the C++ daemon answered the wallet-built kind-5 JoinMarket \
+         Rejected{{JoinMarketUnsupported}}; the five bonded walks stay DECIDED_DARK"
+    );
+}
+
 /// PR-4c emission-claim harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4c): the
 /// full staker reward loop over real RPC — serve credit injected under the
 /// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever, the epoch closed by mining, the
@@ -3213,7 +3600,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;
@@ -3288,10 +3675,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // The claimable bond must be a MARKET bond (`ShardSetCompact`): the
     // `first_stake` genesis posture (CompleteTree) is foundation-shaped and
     // market-excluded (E-2), so its Σwork is zero forever — surfaced by
-    // this e2e's first close. The declared shard need not be frozen
-    // (`bond_post.rs`: adding an unfrozen shard is valid), and an unfrozen
-    // credited shard carries age 0 ⇒ `g(0) = WORK_MILLI_SCALE` ⇒ positive
-    // work.
+    // this e2e's first close. The shard a compact join names must be
+    // closed, final and priced at the parent (CEN-J15, `shekyl-chain-rules`
+    // `tx_bond.rs`); this generator never fills `SHARD_ID`, so the chain it
+    // captures is admitted by the C++ daemon (which marshals a presence bit
+    // and no closure) and refused by the Rust validator at the join — the
+    // `vectors_tests` `PREDATES` record for `emission-claim`. A capture
+    // meant to replay whole fills the shard, lets it close and prices it
+    // before the join.
     let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
         kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
@@ -3404,7 +3795,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
         epoch_row.budget_atomic,
         epoch_row.sigma_work_milli,
         epoch_row.credit_pairs.len(),
-        total_burned_at_close,
+        total_burned_at_close.to_raw(),
     );
     assert!(
         !epoch_row.credit_pairs.is_empty(),
@@ -3429,7 +3820,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // is the tied observable, pinned here so an operand-law change
     // re-surfaces this disposition instead of silently shifting the budget.
     assert_eq!(
-        total_burned_at_close, 0,
+        total_burned_at_close,
+        shekyl_units::AtomicUnits::ZERO,
         "regtest e2e activity must floor the volume mean to 0 ⇒ zero fee burn \
          (pool-half disposition, §9.5 item 8; positive-pool coverage is the B5 KATs)"
     );
@@ -3860,7 +4252,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
 ///
 /// [`EXIT_FEE_RESERVE_ATOMIC`]: shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-4 staker harness; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use super::drain_dispatch::DrainRequestError;
     use super::drain_orchestrator::DrainOrchestrationError;
@@ -4152,7 +4544,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 /// façades end-to-end. This walk keeps the seam-level byte proposition:
 /// it exists so a façade-layer regression can never mask a wire one.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-B daemon walk; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_release_accepted_and_connected() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::emission_source::fetch_claim_source_for;
@@ -4320,7 +4712,7 @@ async fn e2e_release_accepted_and_connected() {
 /// 7. The daemon row is STILL present with `bonded_total == 0`:
 ///    retirement is a wallet-side act; the chain record outlives it.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "PR-C composed-arc walk; needs SHEKYLD_BIN + a built regtest daemon"]
+#[ignore = "DECIDED_DARK (FND-20): the C++ daemon admits no kind-5 JoinMarket; returns when e2e_the_cxx_daemon_answers_join_market_unsupported goes red (FOLLOWUPS: the five bonded regtest walks)"]
 async fn e2e_unstake_collect_retire_composed_arc() {
     use super::emission_source::fetch_claim_source_for;
     use super::prpc::LocalNodeRpc;
@@ -5157,114 +5549,6 @@ fn jsonrpc_body(method: &str, params: &serde_json::Value) -> serde_json::Value {
     json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params })
 }
 
-/// The restricted RPC posture reaches the C++ handlers behind the FFI bridge.
-///
-/// This is the regression guard for the bridge's origin context. Until
-/// 2026-08-26 the dispatchers passed `nullptr` for the handler's
-/// `connection_context*`, so `m_restricted && ctx` was false at every site and
-/// a restricted listener behaved as an unrestricted one — no request caps,
-/// and, on the pool paths, disclosure of transactions the node had not
-/// broadcast.
-///
-/// **Every leg here crosses the bridge, and only those legs are here.** RK-4c
-/// migrated `/get_transactions` and `/is_key_image_spent` to native Rust, so
-/// their cap assertions stopped saying anything about the bridge while still
-/// passing under a name that claimed they did — six green assertions where the
-/// bridge had three. They now live in
-/// `native_handlers_apply_their_own_request_caps`, which is what they actually
-/// test. What remains: `/get_info`'s field trimming on `dispatch_json`, and
-/// the JSON-RPC origin cap on `dispatch_jsonrpc_we`
-/// (`get_block_header_by_hash` over `RESTRICTED_BLOCK_COUNT`). Admin-only
-/// method gating is `admin_methods_are_refused_only_on_the_restricted_listener`
-/// in `shekyl-daemon-rpc`. The WE result-envelope shape is
-/// `jsonrpc_we_carries_handler_status_through_the_result_envelope`. The
-/// histogram deletion gate is `get_output_histogram_stays_unrouted`.
-///
-/// Both listeners come from one daemon, so the postures are compared against
-/// the same chain in the same process, and the unrestricted rows are the
-/// blast-radius check: the fix must not narrow the admin listener.
-#[tokio::test]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
-    /// `RESTRICTED_BLOCK_COUNT`, the cap on `get_block_header_by_hash`.
-    const BLOCK_CAP: usize = 1000;
-
-    let daemon = RegtestDaemon::start_with_restricted_listener().await;
-    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
-        .await
-        .expect("restricted rpc client");
-    let unrestricted = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-        .await
-        .expect("unrestricted rpc client");
-
-    // Hashes that resolve to nothing: a cap is a request-shape refusal and
-    // fires before any lookup, so the chain's contents are irrelevant.
-    let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
-
-    // ── the bridge's REST template ──────────────────────────────────────
-    //
-    // The two capped routes above are native as of RK-4c, so they no longer
-    // reach `dispatch_json`. `/get_info` still does, and its restricted arm is
-    // the same `caller_is_restricted(ctx)` at core_rpc_server.cpp:209 — with
-    // `start_time` forced to 0 and `free_space` to u64::MAX, both observable
-    // without a populated chain. If a dispatcher stops passing the origin,
-    // these two answers become the admin ones.
-    let admin_info: serde_json::Value = unrestricted
-        .rpc_call("get_info", None::<serde_json::Value>)
-        .await
-        .expect("admin get_info");
-    let restricted_info: serde_json::Value = restricted
-        .rpc_call("get_info", None::<serde_json::Value>)
-        .await
-        .expect("restricted get_info");
-    assert_eq!(
-        restricted_info
-            .get("start_time")
-            .and_then(serde_json::Value::as_u64),
-        Some(0),
-        "a restricted listener must not disclose the node's start time; if this \
-         is the real start time the handler saw a null connection context"
-    );
-    assert_eq!(
-        restricted_info
-            .get("free_space")
-            .and_then(serde_json::Value::as_u64),
-        Some(u64::MAX),
-        "a restricted listener must not disclose free space"
-    );
-    assert!(
-        admin_info
-            .get("start_time")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            > 0,
-        "the admin listener must still report the start time — otherwise the \
-         assertions above would hold for a daemon that reports nothing to anyone"
-    );
-
-    // JSON-RPC goes through `dispatch_jsonrpc_we`, a separate template. Over
-    // the block cap the handler writes `error_resp`, so the reply is an error
-    // envelope and `result` never appears. That is the remaining origin
-    // witness on this template: if the dispatcher stops passing `ctx`, the
-    // cap does not fire.
-    let hdr: serde_json::Value = restricted
-        .rpc_call(
-            "json_rpc",
-            Some(jsonrpc_body(
-                "get_block_header_by_hash",
-                &json!({ "hashes": hashes(BLOCK_CAP + 1) }),
-            )),
-        )
-        .await
-        .expect("restricted get_block_header_by_hash over cap");
-    assert_eq!(
-        hdr.pointer("/error/message").and_then(|m| m.as_str()),
-        Some("Too many block headers requested in restricted mode"),
-        "a restricted listener must refuse more than {BLOCK_CAP} block hashes; \
-         if this succeeds the JSON-RPC template stopped passing the origin"
-    );
-}
-
 /// `dispatch_jsonrpc_we` can carry a handler's non-OK `res.status` in the
 /// JSON-RPC *result* envelope, not only in `error`.
 ///
@@ -5272,7 +5556,7 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
 /// (`get_output_histogram` was the last). The remaining witness is a
 /// universal cap on the admin listener. This is not an origin check: if a
 /// WE handler grows a restricted `res.status` refusal, that leg belongs on
-/// `restricted_listener_applies_request_caps_through_the_ffi_bridge`.
+/// `restricted_listener_is_withheld_status_and_capped_by_native_handlers`.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn jsonrpc_we_carries_handler_status_through_the_result_envelope() {
@@ -5533,35 +5817,19 @@ async fn ported_console_commands_answer_on_the_in_process_arm() {
 async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
     let mut daemon = RegtestDaemon::start_with_console().await;
 
-    let out = daemon.console("sync_info");
-    assert!(
-        out.contains("Height: 1") && out.contains("0 peers") && out.contains("0 spans"),
-        "sync_info must render against the live core; got:\n{out}"
-    );
-
-    let out = daemon.console("print_cn");
-    assert!(
-        out.contains("Remote Host") && out.contains("Livetime(sec)"),
-        "print_connections must render its header; got:\n{out}"
-    );
-
-    let out = daemon.console("print_pl");
-    assert!(
-        !out.contains("no reply") && !out.contains("failed"),
-        "print_peer_list must answer, even with an empty peerlist; got:\n{out}"
-    );
-
-    let out = daemon.console("print_pl_stats");
-    assert!(
-        out.contains("White list size: 0/") && out.contains("Gray list size: 0/"),
-        "print_pl_stats must report both capacities, which come from the C++ \
-         p2p constants over the FFI; got:\n{out}"
-    );
-    assert!(
-        !out.contains("size: 0/0"),
-        "a zero capacity means the constants export answered with nothing; \
-         got:\n{out}"
-    );
+    // This daemon runs `--offline`, so each peer command prints the state,
+    // not an empty table (Rick, 2026-10-14).
+    for command in ["sync_info", "print_cn", "print_pl", "print_pl_stats"] {
+        let out = daemon.console(command);
+        // The log tail echoes the command and carries the log line; the
+        // state is the line the console printed, and no table follows it.
+        assert!(
+            out.lines().any(|line| line.trim() == "P2P: offline")
+                && !out.contains("Remote Host")
+                && !out.contains("list size"),
+            "{command} must render the live core's P2P state; got:\n{out}"
+        );
+    }
 
     // The bridged leg. `/get_limit` is still C++; when RK-8 migrates it, this
     // is the assertion that notices if the leg is left naming a dead route.
@@ -5577,3 +5845,6 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
          got:\n{out}"
     );
 }
+
+#[path = "regtest_e2e_origin.rs"]
+mod origin;

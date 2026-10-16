@@ -32,6 +32,8 @@ hex = "0.4"
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 # The §2 wire contract (SubmitVerdict / RejectCause) — single Rust definition.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# The two peerlist capacities `print_pl_stats` reports a fraction of.
+shekyl-peerlist = { path = "../shekyl-peerlist" }
 # Typed identities (TxHash / BlockHash / BlockHeight) per rule 18.
 shekyl-types = { path = "../shekyl-types" }
 # Phase-A parse + structural validation + canonical txid (§3.1, §3.4).
@@ -56,6 +58,10 @@ shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-units = { path = "../shekyl-units" }
+# `get_info`'s economics part is one projection in `shekyl-economics`
+# (DAEMON_RPC_KV_GET_INFO.md §4.3, RK-D19); the handler calls it and does
+# nothing else with economics.
+shekyl-economics = { path = "../shekyl-economics" }
 # Bp+ batch verification takes a CSPRNG for the batch weights; same 0.6 pin
 # and `std` (OsRng) feature as shekyl-fcmp's own verify path.
 rand_core = { version = "0.6", features = ["std"] }

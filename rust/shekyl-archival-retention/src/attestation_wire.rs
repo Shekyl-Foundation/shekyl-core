@@ -9,6 +9,9 @@
 //! §3, amended by [`ARCHIVAL_SHARD_FETCH.md`](../../../docs/design/ARCHIVAL_SHARD_FETCH.md)
 //! `SF-D8`. Window arithmetic and the signed transcript live in [`crate::pass_anchor`].
 
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
+};
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
 };
@@ -33,7 +36,9 @@ pub const ATTESTATION_HEADER_LEN: usize = 32 + 8 + 8 + 1;
 /// `config::ARCHIVAL_MAX_ATTESTATION_RECORDS`.
 pub const MAX_ATTESTATION_RECORDS: usize = 256;
 
-/// Fixed framing prefix of a canonical witness: `count_le(8)`.
+/// Fixed framing prefix of a canonical **non-empty** witness: `count_le(8)`,
+/// `count ≥ 1`. The empty set has no prefix — its canonical bytes are no
+/// bytes ([`BlockAttestationWitness::to_canonical_bytes`]).
 pub const WITNESS_PREFIX_LEN: usize = 8;
 
 /// One witness entry:
@@ -254,6 +259,10 @@ pub enum WitnessError {
         "attestation witness shorter than the {WITNESS_PREFIX_LEN}-byte count prefix: got {0}"
     )]
     TooShort(usize),
+    /// A count prefix of zero: the empty set's only encoding is no bytes,
+    /// so an eight-byte zero count is a second spelling of it, refused.
+    #[error("attestation witness declares zero entries; the empty set is carried as no bytes")]
+    ZeroCount,
     #[error("attestation witness count {0} exceeds cap {MAX_ATTESTATION_RECORDS}")]
     CountExceedsCap(u64),
     #[error("attestation witness length {got}, expected {expected} for {count} entry(ies)")]
@@ -271,10 +280,21 @@ pub enum WitnessError {
 }
 
 impl BlockAttestationWitness {
-    /// Canonical bytes:
-    /// `count_le(8) ‖ (nonce ‖ anchor_height_le ‖ delivery_digest ‖ signature)[0..count]`.
+    /// Canonical bytes: **no bytes** for the empty set; otherwise
+    /// `count_le(8) ‖ (nonce ‖ anchor_height_le ‖ delivery_digest ‖ signature)[0..count]`
+    /// with `count ≥ 1`.
+    ///
+    /// The empty set has exactly one encoding so that a block's witness
+    /// has exactly one persisted form: a carrier holds the empty set as
+    /// *no witness* (`Option::None`, no store row —
+    /// `shekyl_types::archival::AttestationWitness` refuses empty bytes),
+    /// and a zero count on the wire is [`WitnessError::ZeroCount`] on
+    /// decode, never a present-but-empty row.
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, WitnessError> {
         let count = self.passes.len();
+        if count == 0 {
+            return Ok(Vec::new());
+        }
         if count > MAX_ATTESTATION_RECORDS {
             return Err(WitnessError::CountExceedsCap(count as u64));
         }
@@ -294,13 +314,21 @@ impl BlockAttestationWitness {
         Ok(out)
     }
 
-    /// Decode a witness blob. Cap is checked before allocating.
+    /// Decode a witness blob: no bytes is the empty set; any other blob
+    /// must be a non-empty canonical witness, exactly. Cap is checked
+    /// before allocating.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, WitnessError> {
+        if bytes.is_empty() {
+            return Ok(Self { passes: Vec::new() });
+        }
         if bytes.len() < WITNESS_PREFIX_LEN {
             return Err(WitnessError::TooShort(bytes.len()));
         }
         let count_u64 =
             u64::from_le_bytes(bytes[0..WITNESS_PREFIX_LEN].try_into().expect("8 bytes"));
+        if count_u64 == 0 {
+            return Err(WitnessError::ZeroCount);
+        }
         if count_u64 > MAX_ATTESTATION_RECORDS as u64 {
             return Err(WitnessError::CountExceedsCap(count_u64));
         }
@@ -468,6 +496,60 @@ pub fn verify_pass_transcript(
         )
         .map_err(|_| PassCountersignatureError::InvalidSignature)
 }
+
+/// Verify a **receipt** over the pass transcript: the same 112-byte
+/// transcript [`verify_pass_transcript`] checks, signed by the persona's
+/// receipt key — Ed25519 + FN-DSA-1024, hybrid scheme 3 — under
+/// [`SCHEME_DOMAIN_RECEIPT`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT)
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6; `FN_DSA_HYBRID.md` §9).
+///
+/// The scheme-3 counterpart of [`verify_pass_transcript`], and separate
+/// from it by type as well as by domain: this takes a receipt key and a
+/// receipt signature, that takes an identity key and an identity signature,
+/// and neither can be handed the other's. There is no function that accepts
+/// either. A caller verifies under the one scheme its key is of.
+///
+/// **STAGED.** No connect path and no live fetch calls this: receipts are
+/// not accepted anywhere yet. It has two callers, both staged: the fetch
+/// client's scheme-3 target (`shekyl-p-fetch`, `target.rs`), which no live
+/// target selects, and the bundle verifier's step 8
+/// (`shekyl-chain-rules`, `archival::bundle::verify_bundle`), which nothing
+/// on the connect path runs. Both call this and neither builds the
+/// transcript or names the domain itself, so the receipt a persona signs at
+/// serve time and the receipt admission verifies cannot drift. The
+/// settlement lane's cutover is what makes a verifier accept a receipt.
+///
+/// `delivery_digest` is the caller's, recomputed from the body it received,
+/// as for [`verify_pass_transcript`].
+///
+/// # Errors
+///
+/// [`PassCountersignatureError::InvalidSignature`] if the signature does not
+/// verify under `receipt_pubkey`, the receipt domain and this transcript.
+pub fn verify_receipt_transcript(
+    receipt_pubkey: &FnDsaHybridPublicKey,
+    nonce: &[u8; PASS_NONCE_LEN],
+    anchor_height: BlockHeight,
+    anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
+    shard_id: u64,
+    delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
+    signature: &FnDsaHybridSignature,
+) -> Result<(), PassCountersignatureError> {
+    let message =
+        pass_countersignature_message(nonce, anchor_height, anchor_hash, shard_id, delivery_digest);
+    HybridEd25519FnDsa
+        .verify(
+            receipt_pubkey,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT,
+            &message,
+            signature,
+        )
+        .map_err(|_| PassCountersignatureError::InvalidSignature)
+}
+
+#[cfg(test)]
+#[path = "receipt_transcript_tests.rs"]
+mod receipt_transcript_tests;
 
 #[cfg(test)]
 #[path = "attestation_wire_tests.rs"]

@@ -225,6 +225,30 @@ jobs:
       - name: Run FOLLOWUPS owner gate selftest
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_owners.py --selftest
+
+      - name: Change-scope classifier selftest
+        # scripts/ci/change_scope.py decides which changes skip the builds,
+        # the Rust suite and the CodeQL Rust analysis (build.yml,
+        # rust-audit-test.yml, codeql.yml). Its selftest pins the cases a
+        # wrong `true` would let through against this tree: the domain
+        # registry, the test vectors, a markdown file a Rust test reads, a
+        # crate README compiled into rustdoc, and any source file.
+        if: '!cancelled()'
+        run: python3 scripts/ci/change_scope.py --selftest
+
+      - name: Relay production code does not name a connector
+        # shekyl-relay and shekyl-relay-privacy read declaration cells. Any
+        # ConnectorId:: or NetworkColumn:: variant may appear only in their
+        # #[cfg(test)] code (DAEMON_RELAY_PRIVACY.md §98.4, structure). The
+        # selftest proves a production hit fails, in either crate, and an
+        # empty subject fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_relay_connector_agnostic.py
+
+      - name: Relay connector gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_relay_connector_agnostic.py --selftest
+
       - name: Check FOLLOWUPS row prose ends a sentence
         # Every row's prose (heading + continuation) must end a sentence or
         # a reference. Closes the class the 2026-08-28 compression opened:
@@ -550,6 +574,37 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_chain_rules_coverage.py --selftest
 
+      - name: Run block-rule Corrupt-site gate
+        # `BlockRule::check` returns `ViewRead<V::Fault>` (CHAIN_RULES_CRATE.md
+        # §4.6, 2026-10-07), so every block rule's type says it can halt the
+        # writer while exactly one (CEN-B4) can. The gate reads each
+        # `impl BlockRule` body for the ways `Corrupt` can enter its error —
+        # the path `ViewRead::Corrupt` (a call or the constructor function,
+        # so `map_err(ViewRead::Corrupt)` counts), a use of a `-> ViewRead`
+        # converter, a `?` on a lifting function, a bare outer `Err(` — and
+        # holds the set with a site to CORRUPT_CAPABLE exactly, each entry
+        # naming the read its halt comes from; a stale entry refuses too. The
+        # finding leads with the rule enforced (a block rule may propagate
+        # `Corrupt`, never consume it). A match arm on the path is not a site. Subject asserted: no rule
+        # files, no `impl BlockRule`, too few of them, no lifting function,
+        # `recorded` not among them — each exits 2 (47-gate-subject-assertion).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_block_rule_corrupt_sites.py
+
+      - name: Run block-rule Corrupt-site gate self-test
+        # Every refusal bitten red on synthetic sources: a second rule that
+        # lifts through `recorded`, one with the literal, one with
+        # `map_err(ViewRead::Corrupt)?`, one with `map_err(parent_read)?`, one
+        # with an outer `Err(`, one with an opaque `?`, one calling a
+        # path-qualified lifting method; B4 with no site and B4 with no impl
+        # (stale entries); no impls, too few, no lifters, sentinel missing,
+        # empty tree. Proven NOT to trip: a comment naming the literal,
+        # `view.method()?`, a refusal built inside a `match`, `Err(_) =>` and
+        # `ViewRead::Corrupt(c) =>` as patterns, `map_err(ViewRead::View)?`,
+        # and `Vec::extend` sharing a lifting method's name.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_block_rule_corrupt_sites.py --selftest
+
       - name: Run conformance-coverage gate
         # Every RATIFIED consensus rule (census bucket 1/2) must carry a
         # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
@@ -637,3 +692,51 @@ jobs:
         # A gate never shown to fire is indistinguishable from one that cannot.
         if: '!cancelled()'
         run: python3 scripts/ci/check_bench_not_a_dependency.py --selftest
+
+      - name: Run measurement-ledger gate
+        # A constant derived from a capture must not outlive the code the
+        # capture was taken on without the ledger saying so. Each constant
+        # in `docs/benchmarks/measurement_ledger.toml` names its definition,
+        # its capture and revision, and one path set: the pathspecs whose
+        # cost it shares, acknowledged once. The gate fails when a
+        # constant's stated status (current / stale / unmeasured) disagrees
+        # with git in either direction. A stale constant keeps its name
+        # until a newer capture retires it. Needs the full history this
+        # job already fetches (`fetch-depth: 0`); a shallow checkout whose
+        # cut lies inside a constant's range is exit 2, never a pass
+        # (47-gate-subject-assertion.mdc).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_measurement_ledger.py
+
+      - name: Run measurement-ledger gate selftest
+        # Builds throwaway repositories and bites each failure class red,
+        # beside a control row that must stay green.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_measurement_ledger.py --selftest
+
+      - name: Check the RPC channel name vectors against their generator
+        # docs/test_vectors/RPC_CHANNEL_NAMES_V1/ pins three derivations of
+        # shekyl-rpc-channel (RPC_CHANNEL.md RT-O14). The vectors come from
+        # generate.py beside them, which carries its own cSHAKE256 and
+        # refuses to run unless it reproduces the NIST SP 800-185 sample.
+        # This step regenerates them and fails if the committed files
+        # differ, so a vector edited by hand to match the code is caught
+        # here even though the Rust test would pass.
+        if: '!cancelled()'
+        run: python3 docs/test_vectors/RPC_CHANNEL_NAMES_V1/generate.py --check
+
+      - name: Run clatter production-graph gate
+        # clatter is an independent implementation of the RPC channel's
+        # handshake pattern, in the workspace as a test-only cross-check
+        # (RPC_CHANNEL.md section 4.1, RT-O12). This asserts the one edge to
+        # it is a dev-dependency of the cross-check crate, that nothing
+        # depends on that crate, and that clatter's C ML-KEM backend stays
+        # off. It reads the manifests and Cargo.lock; no build is needed.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_clatter_not_in_production.py
+
+      - name: Run clatter production-graph gate selftest
+        # Builds throwaway trees and bites each failure class red, beside a
+        # control that must stay green.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_clatter_not_in_production.py --selftest

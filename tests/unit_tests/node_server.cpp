@@ -38,6 +38,9 @@
 #include "unit_tests_utils.h"
 #include "net/tor_address.h"
 #include <condition_variable>
+#include <mutex>
+#include <thread>
+#include "p2p/seam_endpoint.h"
 #include <set>
 #include "shekyl/shekyl_ffi.h"
 #include <cstdlib>
@@ -123,9 +126,6 @@ public:
   bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::transaction>& txs, std::vector<crypto::hash>& missed_txs) const { return false; }
   bool get_block_by_hash(const crypto::hash &h, cryptonote::block &blk, bool *orphan = NULL) const { return false; }
   cryptonote::blobdata get_block_attestation_witness(const cryptonote::block &blk) const { return {}; }
-  uint8_t get_ideal_hard_fork_version() const { return 0; }
-  uint8_t get_ideal_hard_fork_version(uint64_t height) const { return 0; }
-  uint8_t get_hard_fork_version(uint64_t height) const { return 0; }
   uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return 0; }
   cryptonote::difficulty_type get_block_cumulative_difficulty(uint64_t height) const { return 0; }
   bool pad_transactions() { return false; }
@@ -244,40 +244,6 @@ TEST(cryptonote_protocol_handler, block_propagation_has_exactly_one_command)
     EXPECT_TRUE(handled)
         << "NOTIFY_NEW_COMPACT_BLOCK must still dispatch — it is the only block path";
   }
-}
-
-TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
-{
-  // The ipv4 `ip == 0 || port == 0` drop is the sole surviving behavior of
-  // the deleted `port == rpc_port` comparison (PR #587): every honest peer
-  // advertised rpc_port 0, so undialable port-0 entries were what it
-  // actually removed. The tor port-0 entry is asserted KEPT on purpose —
-  // the check is deliberately ipv4-scoped (tor port-0 semantics are
-  // disputed; named for the P2P-1 wire census), so this test goes red on
-  // either deleting the ipv4 drop or silently widening it.
-  test_core pr_core;
-  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
-  Server server(cprotocol);
-  cprotocol.set_p2p_endpoint(&server);
-
-  std::vector<nodetool::peerlist_entry> peers;
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 100});   // kept
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100});   // ip 0: dropped
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100});       // port 0: dropped
-  peers.push_back({net::tor_address::unknown(), 100});                 // tor port 0: kept
-
-  ASSERT_TRUE(server.sanitize_peerlist(peers));
-
-  std::set<std::string> kept;
-  for (const auto &pe : peers)
-  {
-    kept.insert(pe.adr.str());
-    EXPECT_EQ(0, pe.last_seen); // remote-supplied timestamps are discarded
-  }
-  EXPECT_EQ((std::set<std::string>{
-              MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080).str(),
-              net::tor_address::unknown().str()}),
-            kept);
 }
 
 TEST(ban, add)
@@ -767,12 +733,33 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   const std::int64_t floor_value = shekyl_relay_zone_min_provisioned_out_peers();
   ASSERT_EQ(12, floor_value) << "the floor must match the degree fluff_return_ms was measured at";
 
-  // Below the floor: refused, and refused because of the floor (1..=11 all
-  // land in the guarded range; 4 is the motivating operator practice).
-  EXPECT_FALSE(parse("tor,127.0.0.1:9050,4").has_value())
-    << "an under-floor outbound count must refuse to parse";
-  EXPECT_FALSE(parse("tor,127.0.0.1:9050,11").has_value())
+  // The parser carries the count; the floor is enforced where the cap is
+  // set, by the dialer (2026-10-13), so an under-floor count parses and
+  // then refuses init (1..=11 all land in the guarded range; 4 is the
+  // motivating operator practice).
+  const auto under = parse("tor,127.0.0.1:9050,4");
+  ASSERT_TRUE(under.has_value()) << "the parser carries the count";
+  EXPECT_EQ(4, under->front().max_connections);
+  // One server per init: a second init on the same server would refuse the
+  // proxy as listed twice, and pass the under-floor case for the wrong reason.
+  const auto init_with_proxy = [](const char* proxy_arg) -> bool {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+    Server server(cprotocol);
+    const auto node_dir = create_node_dir();
+    if (node_dir.empty())
+      return false;
+    auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
+        boost::filesystem::remove_all(node_dir);
+      });
+    return server.init(offline_node_vm(node_dir, {"--tx-proxy", proxy_arg}));
+  };
+  EXPECT_FALSE(init_with_proxy("tor,127.0.0.1:9050,4"))
+    << "an under-floor outbound count must refuse to start";
+  EXPECT_FALSE(init_with_proxy("tor,127.0.0.1:9050,11"))
     << "one below the floor must still refuse";
+  EXPECT_TRUE(init_with_proxy("tor,127.0.0.1:9050,12"))
+    << "the floor itself is a valid count";
 
   // At the floor and above: accepted, with the count preserved.
   const auto at_floor = parse("tor,127.0.0.1:9050,12");
@@ -796,270 +783,17 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   EXPECT_EQ(-1, omitted->front().max_connections);
 }
 
-TEST(node_server, an_advert_contributes_its_port_and_never_its_host)
-{
-  // The receive-side discipline, at the seam that owns it. An announcement
-  // is a claim about WHERE a peer can be dialed and only its PORT is
-  // admissible; the host is the one this node OBSERVED on the socket.
-  // `derive_advertised_endpoint` takes the two as separate inputs, so a
-  // caller cannot pass the advertised host where the observed one belongs --
-  // there is nowhere to put it. This is the POSITIVE limb; the live
-  // `dual_stack` run carries the negative one (a lying host never appears in
-  // a readout) but cannot carry this one, because a loopback-bound test
-  // daemon's derived entry is refused by `is_host_allowed` before it can be
-  // observed.
-  const epee::net_utils::network_address observed{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 44444)};
-  const epee::net_utils::network_address expected{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 28099)};
-
-  const auto derived = nodetool::derive_advertised_endpoint(observed, 28099);
-  ASSERT_TRUE(bool(derived));
-  EXPECT_EQ(expected.str(), derived->str())
-    << "the endpoint must be the OBSERVED host with the ADVERTISED port";
-  // The socket's own ephemeral port is not the claim either.
-  EXPECT_NE(observed.str(), derived->str());
-
-  // A zero port is not dialable, so there is nothing to record.
-  EXPECT_FALSE(bool(nodetool::derive_advertised_endpoint(observed, 0)));
-
-  // An anonymity-zone remote carries no host to re-port: those self-addresses
-  // travel as timed-sync peerlist entries, never through this path.
-  EXPECT_FALSE(bool(nodetool::derive_advertised_endpoint(
-    epee::net_utils::network_address{net::tor_address::unknown()}, 28099)));
-}
-
-TEST(node_server, same_host_outbound_cap_matches_host_and_only_outbound)
-{
-  // The cap is the load-bearing replacement for peer_id's duplicate-detection
-  // arm -- the amendment names it the condition under which removing the
-  // field is safe -- so it gets its own test rather than riding on the
-  // selection loop that calls it.
-  const epee::net_utils::network_address candidate{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080)};
-  const epee::net_utils::network_address same_host_other_port{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 9999)};
-  const epee::net_utils::network_address other_host{MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 18080)};
-
-  // Host, not address: the exact-address check this replaces would miss it,
-  // and so did the peer_id arm (which also needed a self-declared id to
-  // match, so an adversary minting ids never tripped it).
-  EXPECT_TRUE(nodetool::outbound_connection_takes_host(false, same_host_other_port, candidate));
-
-  // Control. Without it a predicate that refused everything would pass.
-  EXPECT_FALSE(nodetool::outbound_connection_takes_host(false, other_host, candidate));
-
-  // INBOUND must never cap an outbound dial: otherwise any peer suppresses
-  // this node's dials to a host just by connecting to us.
-  EXPECT_TRUE(nodetool::outbound_connection_takes_host(false, candidate, candidate));
-  EXPECT_FALSE(nodetool::outbound_connection_takes_host(true, candidate, candidate))
-    << "an inbound connection consumed the host's outbound slot: a peer can "
-       "suppress our dials by dialling us";
-}
-
-TEST(node_server, is_our_listen_address_skips_self_not_other_net)
-{
-  // Public-zone AVOIDANCE (PWD-E3(c)): skip outbound to our listen address
-  // so a seed in the hardcoded list does not TCP-hairpin itself. Detection
-  // stays the nonce. Port-sensitive so mainnet+testnet on one VPS still
-  // reach each other.
-  const epee::net_utils::network_address unset{};
-  const epee::net_utils::network_address listen{MAKE_IPV4_ADDRESS_PORT(45, 76, 171, 128, 12021)};
-  const epee::net_utils::network_address other_port{MAKE_IPV4_ADDRESS_PORT(45, 76, 171, 128, 11021)};
-  const epee::net_utils::network_address other_host{MAKE_IPV4_ADDRESS_PORT(45, 77, 147, 65, 12021)};
-  const epee::net_utils::network_address loopback{MAKE_IPV4_ADDRESS_PORT(127, 0, 0, 1, 12021)};
-  const std::set<std::string> local_hosts{listen.host_str()};
-
-  EXPECT_TRUE(nodetool::is_our_listen_address(listen, unset, 12021, 0, 0, local_hosts));
-  EXPECT_TRUE(nodetool::is_our_listen_address(loopback, unset, 12021, 0, 0, {}));
-  EXPECT_FALSE(nodetool::is_our_listen_address(other_port, unset, 12021, 0, 0, local_hosts))
-    << "same host other port (mainnet on the same VPS) must still be dialable; "
-       "a zero IPv6 listen port (IPv6 off / not yet bound) must not skip it";
-  EXPECT_FALSE(nodetool::is_our_listen_address(other_host, unset, 12021, 0, 0, local_hosts));
-  EXPECT_FALSE(nodetool::is_our_listen_address(listen, unset, 12021, 0, 0, {}))
-    << "a public IP not on an interface is not skipped (NAT home node)";
-  EXPECT_TRUE(nodetool::is_our_listen_address(listen, listen, 0, 0, 0, {}));
-  EXPECT_TRUE(nodetool::is_our_listen_address(listen, unset, 0, 0, 12021, local_hosts));
-}
-
-TEST(node_server, handshake_nonce_is_recorded_before_it_can_be_written)
-{
-  // The §5c falsifier (P2P_2_ENDPOINT_ROUND.md): the in-flight-set insert
-  // must precede the request write, or DETECTION is lost — our own arriving
-  // connection would be checked against the set before the value is in it.
-  // This ordering bounds nothing; the set's size rests on the attempt scope
-  // guard alone (m_inflight_handshake_nonces is attempt-scoped by
-  // construction). The sibling test pins both erase IMPLEMENTATIONS, but for
-  // different guarantees — termination for the size bound, match for
-  // single-fire — and its own comment states what it does not observe. This
-  // reds if the recording
-  // moves out of the minting function — which is the only way the insert
-  // can come to follow the write, because the request cannot be built
-  // without the value this returns.
-  //
-  // Why this rather than a self-dial: a real self-dial's detection is a
-  // race the acceptor usually wins, so an insert-after-write regression
-  // would make such a test FLAKY rather than red — a falsifier that fails
-  // to fail is the defect it is meant to catch.
-  struct test_data_t
-  {
-    test_core pr_core;
-    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
-    std::unique_ptr<Server> server;
-
-    test_data_t(): cprotocol(pr_core, NULL)
-    {
-      server.reset(new Server(cprotocol));
-      cprotocol.set_p2p_endpoint(server.get());
-    }
-  };
-
-  test_data_t data;
-
-  boost::program_options::options_description desc_options("Command line options");
-  cryptonote::core::init_options(desc_options);
-  Server::init_options(desc_options);
-
-  const char* argv[2] = {nullptr, nullptr};
-  boost::program_options::variables_map vm;
-  boost::program_options::store(
-    boost::program_options::parse_command_line(1, argv, desc_options), vm);
-
-  vm.find(nodetool::arg_p2p_bind_ip.name)->second =
-    boost::program_options::variable_value(std::string("127.0.0.2"), false);
-  vm.find(nodetool::arg_p2p_bind_port.name)->second =
-    boost::program_options::variable_value(std::string("48088"), false);
-
-  boost::program_options::notify(vm);
-  ASSERT_TRUE(data.server->init(vm));
-
-  // The value a caller would put on the wire...
-  const std::array<uint8_t, 32> nonce =
-    data.server->mint_recorded_handshake_nonce(epee::net_utils::connector_id::clearnet);
-  // ...is already recognisable the moment it exists. If the recording moved
-  // after the request write, this handshake — an inbound arriving before the
-  // insert — would not be detected as self.
-  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce))
-    << "the minted nonce was not in its zone's in-flight set on return: the "
-       "insert now follows the value's availability to the writer, so a "
-       "self-connection arriving in that window goes undetected";
-
-  data.server->deinit();
-}
-
-TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
-{
-  // The self-detection nonce's ruled contract (PWD-E3 + the zone-scoping
-  // requirement): recognised exactly ONCE (erase-on-match, so a peer that
-  // learned N by being dialed cannot make it fire twice), and only on the
-  // zone it was recorded for — a cross-zone match would turn the drop into
-  // a cross-zone correlation oracle, the exact leak the inherited peer_id
-  // check warned about.
-  struct test_data_t
-  {
-    test_core pr_core;
-    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
-    std::unique_ptr<Server> server;
-
-    test_data_t(): cprotocol(pr_core, NULL)
-    {
-      server.reset(new Server(cprotocol));
-      cprotocol.set_p2p_endpoint(server.get());
-    }
-  };
-
-  test_data_t data;
-
-  boost::program_options::options_description desc_options("Command line options");
-  cryptonote::core::init_options(desc_options);
-  Server::init_options(desc_options);
-
-  const char* argv[2] = {nullptr, nullptr};
-  boost::program_options::variables_map vm;
-  boost::program_options::store(
-    boost::program_options::parse_command_line(1, argv, desc_options), vm);
-
-  vm.find(nodetool::arg_p2p_bind_ip.name)->second =
-    boost::program_options::variable_value(std::string("127.0.0.2"), false);
-  vm.find(nodetool::arg_p2p_bind_port.name)->second =
-    boost::program_options::variable_value(std::string("48086"), false);
-  vm.find(nodetool::arg_tx_proxy.name)->second =
-    boost::program_options::variable_value(
-      std::vector<std::string>{"tor,127.0.0.1:9050,12"}, false);
-
-  boost::program_options::notify(vm);
-  ASSERT_TRUE(data.server->init(vm));
-
-  const std::array<uint8_t, 32> nonce{{0x5a}};
-  data.server->record_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, nonce);
-
-  // Within-zone only: the tor probe must NOT match — and must not consume.
-  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::connector_id::tor, nonce))
-    << "a nonce recorded on public_ matched on tor: the drop is a cross-zone "
-       "correlation oracle";
-
-  // Fires exactly once on its own zone...
-  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce));
-  // ...and a replay cannot fire it again.
-  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce))
-    << "erase-on-match failed: a peer that learned the nonce by being dialed "
-       "could replay it";
-
-  // THE ERASE LEG — independent of the insert ordering the sibling test
-  // pins. Both erase IMPLEMENTATIONS are checked, because a single-exit test
-  // passes while the other path leaks, and each is checked by COUNT as well
-  // as by detection: a set that still holds the value is a leak whether or
-  // not anything would still match it. Implementations, not exit paths: this
-  // calls each erase directly and never runs a handshake attempt, which is
-  // the boundary restated at the end of this test.
-  //
-  // The two exits do NOT carry the same guarantee, and saying they do is the
-  // conflation P2P_2_ENDPOINT_ROUND.md §5c corrects:
-  //   - termination is what BOUNDEDNESS rests on. The set is attempt-scoped
-  //     by construction (see m_inflight_handshake_nonces), so this exit
-  //     alone bounds cardinality by in-flight attempts.
-  //   - match is SINGLE-FIRE / anti-replay plus prompt removal. Delete it
-  //     and the set is still bounded — the scope guard still clears the
-  //     entry at termination — but a nonce could fire twice in the window
-  //     before then.
-  //
-  // Exit 1 — attempt termination (what do_handshake_with_peer's scope guard
-  // calls on every path: success, failure, timeout). This is the size bound.
-  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet))
-    << "the match above must have removed it";
-  data.server->record_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, nonce);
-  EXPECT_EQ(1u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet));
-  data.server->erase_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, nonce);
-  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet))
-    << "an attempt that terminated left its nonce in the set: the set grows "
-       "without bound across attempts";
-  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, nonce));
-
-  // Exit 2 — match. Erase-on-match is the other removal path; the count is
-  // the observable a missing erase cannot satisfy. What this pins is
-  // single-fire and prompt removal, NOT a second size bound.
-  const std::array<uint8_t, 32> second{{0x7c}};
-  data.server->record_outbound_handshake_nonce(epee::net_utils::connector_id::clearnet, second);
-  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::connector_id::clearnet, second));
-  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::connector_id::clearnet))
-    << "a matched nonce stayed in the set: it would linger until the attempt "
-       "terminates and could fire a second time in that window";
-
-  // Coverage boundary, stated so it is not mistaken for completeness: this
-  // pins BOTH erase implementations the two exits call, each for the
-  // guarantee named above. That
-  // do_handshake_with_peer attaches the scope guard at all is structural
-  // (RAII over a local, so every exit path runs it) and is NOT observed
-  // here.
-
-  data.server->deinit();
-}
-
 TEST(node_server, anonymity_zone_announces_the_constant_unknown_address)
 {
   // Successor of the Q12-R-W3 sentinel-peer_id pin, for the identifier-free
   // handshake (PWD-I1): nothing announced on an anonymity zone may carry
-  // entropy. `basic_node_data.address` is now the ONLY announced value, and
-  // a dialer-only tor zone must announce the zone's CONSTANT unknown
-  // sentinel — equal for every node, linking nothing. A per-node value here
-  // (an onion, a random address) would correlate this node's hidden-service
-  // activity with its clearnet identity exactly as a random peer_id did.
+  // entropy. The handshake carries no address since 2026-10-09; what this
+  // node would announce is `get_announced_address`, which reaches peers only
+  // as one member of the disclosure sample. A dialer-only tor zone's value
+  // there must be the zone's CONSTANT unknown sentinel — equal for every
+  // node, linking nothing. A per-node value (an onion, a random address)
+  // would correlate this node's hidden-service activity with its clearnet
+  // identity exactly as a random peer_id did.
   struct test_data_t
   {
     test_core pr_core;
@@ -1169,31 +903,36 @@ TEST(node_server, add_peer_enters_gray_not_white)
   boost::program_options::notify(vm);
   ASSERT_TRUE(data.server->init(vm));
 
-  // RFC 5737 documentation range, NOT loopback and NOT RFC1918. Both
-  // `append_with_peer_white` and `append_with_peer_gray` gate on
-  // `is_host_allowed`, which refuses loopback unconditionally and refuses
-  // local addresses without `--allow-local-ip` -- so a 127.x fixture is
-  // dropped by both lists and the test would fail for a reason that has
-  // nothing to do with the routing it is pinning. (Checked: the two appends
-  // carry the SAME guard, so this PR introduces no divergence there.)
-  std::vector<nodetool::peerlist_entry> gray{}, white{};
-  data.server->get_peerlist(gray, white);
-
-  const auto holds = [](const std::vector<nodetool::peerlist_entry>& v) {
-    for (const auto& e : v)
-      if (e.adr.host_str() == "203.0.113.9") return true;
-    return false;
-  };
+  // RFC 5737 documentation range, NOT loopback and NOT RFC1918: an
+  // operator-named address is admitted whatever its range, but a global
+  // one keeps this test independent of --allow-local-ip. The lists are the
+  // Rust dialer's; the listing export reads them, white then gray. The
+  // address is pushed before the first listen builds the dialer, so this
+  // also pins that an early push is held for the build.
+  const shekyl_rpc_peer_facts* rows = nullptr;
+  std::size_t len = 0;
+  void* owner = nullptr;
+  ASSERT_EQ(shekyl_rpc_peer_list(0, &rows, &len, &owner), 0);
+  bool in_gray = false;
+  bool in_white = false;
+  for (std::size_t i = 0; i < len; ++i)
+  {
+    const std::string host(rows[i].host, rows[i].host_len);
+    if (host != "203.0.113.9")
+      continue;
+    (rows[i].white ? in_white : in_gray) = true;
+  }
+  shekyl_rpc_peer_list_free(owner);
 
   // The property: it is a candidate.
-  EXPECT_TRUE(holds(gray)) << "--add-peer must enter the gray list";
+  EXPECT_TRUE(in_gray) << "--add-peer must enter the gray list";
   // The limb that actually pins the routing. Without it a change that put the
   // entry in BOTH lists, or in white only, would still satisfy the assertion
   // above or leave it unexercised -- and white is the list that is dialled
-  // preferentially and gossiped onward.
-  EXPECT_FALSE(holds(white))
+  // preferentially and disclosed onward.
+  EXPECT_FALSE(in_white)
     << "--add-peer must NOT enter the white list: it has never been dialled, "
-       "and white entries are gossiped onward by get_peerlist_head";
+       "and white entries are disclosed to peers";
 
   data.server->deinit();
 }
@@ -1203,11 +942,12 @@ TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
   // F-8b, the public-zone half: `--tx-proxy` counts are floored at the parser
   // (test above), but the same outbound-degree quantity is also set by
   // `--out-peers` at init and by the `out_peers` console/RPC command at
-  // runtime. The floor lives in `set_max_out_peers` (every zone's one setter)
-  // and, for the runtime path, `change_max_out_public_peers` clamps loudly —
-  // otherwise a NAT'd operator at `--out-peers 2` runs a fluff degree far
-  // below any point `fluff_return_ms` was measured at and the embargo is
-  // under-provisioned in the privacy-losing direction.
+  // runtime. The floor lives in the dialer, which both paths push the cap
+  // to (2026-10-13): init refuses to start, and the runtime path refuses
+  // the request and leaves the cap as it was — otherwise a NAT'd operator
+  // at `--out-peers 2` runs a fluff degree far below any point
+  // `fluff_return_ms` was measured at and the embargo is under-provisioned
+  // in the privacy-losing direction.
   struct test_data_t
   {
     test_core pr_core;
@@ -1259,7 +999,7 @@ TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
 
     data.server->change_max_out_public_peers(4);
     EXPECT_EQ(12u, data.server->get_max_out_public_peers())
-      << "a runtime under-floor request must clamp to the floor, not take effect";
+      << "a runtime under-floor request is refused and the cap is unchanged";
 
     data.server->change_max_out_public_peers(0);
     EXPECT_EQ(0u, data.server->get_max_out_public_peers())
@@ -1270,172 +1010,6 @@ TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
 
     data.server->deinit();
   }
-}
-
-namespace
-{
-  // Q12-R13. The suppression window after a failed dial is a property of the
-  // TRANSPORT: an hour is right for a clearnet address, where a failed dial
-  // usually means a down host, and disconnecting for an anonymity address,
-  // where it is frequently a descriptor that has not propagated against a peer
-  // that is up and answering everyone else.
-  //
-  // These assert the WINDOW's PROPERTIES rather than the constants' values, so
-  // the test still means something if the numbers are re-derived: what must not
-  // change is that the anon window is shorter, that it escalates, that it never
-  // exceeds the public one, and that a success clears it.
-  //
-  // `nodetool::failed_addr_window` is THE function the daemon calls. It is not
-  // re-implemented here: a test that recomputes the schedule agrees with itself
-  // however the daemon behaves.
-  time_t anon_window_after(uint32_t consecutive)
-  {
-    return nodetool::failed_addr_cache::window(epee::net_utils::connector_id::tor, consecutive);
-  }
-
-  epee::net_utils::network_address tor_addr(const char* host)
-  {
-    return epee::net_utils::network_address{
-      MONERO_UNWRAP(net::tor_address::make(std::string(host) + ":13021"))};
-  }
-}
-
-TEST(node_server, anon_zone_failed_address_window_is_shorter_than_public)
-{
-  // The defect this encodes: with a one-hour anon window and a per-dial failure
-  // rate near 0.2, a node below F-8b's floor of 12 cannot climb back, because
-  // the peers it would recover with are the ones it just burned.
-  EXPECT_LT(P2P_ANON_FAILED_ADDR_FORGET_SECONDS, P2P_FAILED_ADDR_FORGET_SECONDS);
-
-  // Negative control: the public zone is NOT shortened by this change. If a
-  // future edit made the two equal, the assertion above would still pass while
-  // the fix had been undone, so the public value is pinned on its own.
-  EXPECT_EQ(P2P_FAILED_ADDR_FORGET_SECONDS, 60 * 60);
-}
-
-TEST(node_server, anon_zone_failed_address_window_escalates_and_is_capped)
-{
-  EXPECT_EQ(anon_window_after(1), P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
-  EXPECT_EQ(anon_window_after(2), 2 * P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
-  EXPECT_EQ(anon_window_after(3), 4 * P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
-
-  // A peer that is genuinely gone converges on the public-zone hour rather than
-  // being retried at the short interval forever...
-  EXPECT_EQ(anon_window_after(32), P2P_FAILED_ADDR_FORGET_SECONDS);
-  // ...and never exceeds it, at any count.
-  for (uint32_t n = 1; n <= 64; ++n)
-    EXPECT_LE(anon_window_after(n), P2P_FAILED_ADDR_FORGET_SECONDS) << "at n=" << n;
-}
-
-TEST(node_server, anon_zone_first_failure_is_short_enough_to_reach_the_floor)
-{
-  // Measured: a hidden service is undialable for on the order of a minute after
-  // its introduction points change, which is what a restart -- the documented
-  // remedy for a service that never published -- causes. A first-failure window
-  // shorter than that would retry INSIDE the same dead window and burn the
-  // address again; much longer and the floor stops being reachable.
-  //
-  // Dials are serial and blocking at up to P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT
-  // each, so three attempts across a dozen candidates must remain minutes
-  // rather than an hour of wall clock.
-  const uint64_t attempts = 3;
-  const uint64_t candidates = 12;
-  uint64_t worst_case = 0;
-  for (uint32_t n = 1; n <= attempts; ++n)
-    worst_case += anon_window_after(n) + candidates * P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT;
-  EXPECT_LT(worst_case, P2P_FAILED_ADDR_FORGET_SECONDS)
-    << "three attempts at every candidate must cost less than the single hour "
-       "the unfixed code spends on one failure";
-}
-
-TEST(node_server, anon_zone_success_clears_the_failure_history)
-{
-  // The half of Q12-R13's fix that nothing else covers. Without the reset a
-  // peer that is transiently flaky -- fails, succeeds, fails -- keeps its
-  // counter, escalates to the public-zone hour anyway, and arrives at the same
-  // disconnection by a slower road. The fix would decay into the defect.
-  nodetool::failed_addr_cache cache;
-  const auto addr = tor_addr("aghoxa757l2wqribeto2hv2rk3wjwcwdqzvu5hjkqdjcm24nuhaszjqd.onion");
-  const time_t t0 = 1000000;
-
-  // Three failures in a row escalate the window to 4x the base...
-  cache.record_failure(addr, t0);
-  cache.record_failure(addr, t0);
-  cache.record_failure(addr, t0);
-  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + 4 * P2P_ANON_FAILED_ADDR_FORGET_SECONDS - 1));
-  EXPECT_FALSE(cache.is_recently_failed(addr, t0 + 4 * P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1));
-
-  // ...and a successful handshake clears the history entirely, so the NEXT
-  // failure is charged the first-failure window again rather than 8x.
-  cache.record_success(addr);
-  EXPECT_FALSE(cache.is_recently_failed(addr, t0));
-
-  cache.record_failure(addr, t0);
-  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS - 1));
-  EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
-    << "a success must RESET the counter, not decrement it";
-}
-
-TEST(node_server, public_zone_window_is_not_shortened_by_the_anon_fix)
-{
-  // Negative control on the change itself: the anonymity-zone window must not
-  // leak onto clearnet addresses, where an hour remains correct because a
-  // failed dial there usually does mean a down host.
-  nodetool::failed_addr_cache cache;
-  const epee::net_utils::network_address addr{
-    epee::net_utils::ipv4_network_address{0x04030201, 12021}};
-  const time_t t0 = 1000000;
-
-  cache.record_failure(addr, t0);
-  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
-    << "a clearnet address must still be suppressed well past the anon window";
-  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_FAILED_ADDR_FORGET_SECONDS - 1));
-  EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_FAILED_ADDR_FORGET_SECONDS + 1));
-}
-
-TEST(node_server, unknown_zone_keeps_the_public_window)
-{
-  // The window is selected by NAMING the anonymity zones. A not-public test
-  // would give `zone::invalid` -- an address whose zone could not be determined
-  // -- the short anonymity window, which no measurement supports: the 240 s
-  // comes from hidden-service republication, a property invalid addresses do
-  // not have. This pins the safe default so a later refactor to `!= public_`
-  // reds a test instead of silently shortening suppression.
-  EXPECT_EQ(nodetool::failed_addr_cache::window(std::nullopt, 1),
-            P2P_FAILED_ADDR_FORGET_SECONDS);
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::connector_id::clearnet, 1),
-            P2P_FAILED_ADDR_FORGET_SECONDS);
-  // The anonymity zone gets the short window.
-  EXPECT_EQ(nodetool::failed_addr_cache::window(epee::net_utils::connector_id::tor, 1),
-            P2P_ANON_FAILED_ADDR_FORGET_SECONDS);
-}
-
-TEST(node_server, both_outbound_paths_clear_the_failure_history)
-{
-  // node_server has TWO outbound connect+handshake routines:
-  // `try_to_connect_and_handshake_with_new_peer` (white/gray selection) and
-  // `check_connection_and_handshake_with_peer` (gray-peerlist housekeeping).
-  // Both record failures. The first version of this fix cleared on success in
-  // only one of them, so on the gray route the failure history was WRITE-ONLY:
-  // the path that exists to re-test doubtful peers accumulated escalation those
-  // peers could never shed, and a peer promoted from gray to white carried its
-  // counter with it.
-  //
-  // The mechanism is asserted at the cache, which is what both routines call.
-  nodetool::failed_addr_cache cache;
-  const auto addr = tor_addr("aks2vbpjb5ojfyqcataqedodws7ardjxczy76bqwmlv55mgfunsxoiyd.onion");
-  const time_t t0 = 2000000;
-
-  cache.record_failure(addr, t0);
-  cache.record_failure(addr, t0);
-  EXPECT_TRUE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
-    << "two failures must have escalated beyond the first-failure window";
-
-  cache.record_success(addr);
-  cache.record_failure(addr, t0);
-  EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
-    << "after a success the next failure is charged the FIRST-failure window, "
-       "whichever routine reported the success";
 }
 
 // ---------------------------------------------------------------------------
@@ -1512,23 +1086,27 @@ namespace
       conns.push_back(std::move(c));
     }
 
-    virtual void for_each_connection(
-      std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
+    virtual size_t post_each(
+      std::function<void(cryptonote::cryptonote_connection_context&, uint32_t)> note,
+      std::function<void()> then) override
     {
       for (auto &c : conns)
-        if (!f(c, 0))
-          return;
+        note(c, 0);
+      if (then)
+        then();
+      return conns.size();
     }
     virtual bool for_connection(const boost::uuids::uuid &id,
-      std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
+      std::function<void(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
     {
-      // Production propagates the callback's own result: epee's
-      // `for_connection` returns false both when the id is absent and when the
-      // callback returns false (`levin_protocol_handler_async.h`,
-      // `if(!cb(...)) return false;`). A double that always returned true on a
-      // match would be more permissive than the endpoint it stands for.
+      // Production returns false only when the id is absent. The callback
+      // runs on the connection strand and does not report the lookup.
       for (auto &c : conns)
-        if (c.m_connection_id == id) return f(c, 0);
+        if (c.m_connection_id == id)
+        {
+          f(c, 0);
+          return true;
+        }
       return false;
     }
     virtual bool drop_connection(const epee::net_utils::connection_context_base &context) override
@@ -1876,9 +1454,23 @@ namespace
     return arg;
   }
 
-  void make_ready(cryptonote::cryptonote_connection_context &ctx)
+  void arm_harness_post(void*, std::uint64_t id, std::uint32_t kind,
+      const shekyl_seam_observed*, const std::uint8_t*, std::size_t, const shekyl_close_cause*)
   {
-    ctx.m_state = cryptonote::cryptonote_connection_context::state_normal;
+    if (kind != 1)
+      return;
+    // `open` posts this while it holds the hub lock, then waits until the
+    // handler is armed. Arming from this stack would take that lock again.
+    std::thread([id] { shekyl_seam_handler_armed(id, 1); }).detach();
+  }
+
+  void bind_harness_hub()
+  {
+    static int ctx = 0;
+    shekyl_inbound_ceiling ceiling{};
+    shekyl_inbound_ceiling_resolve(0, 0, &ceiling);
+    shekyl_seam_bind(&ctx, arm_harness_post, &ceiling);
+    shekyl_seam_install_loopback();
   }
 
   struct NotifyHarness
@@ -1886,15 +1478,43 @@ namespace
     test_core core;
     cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
     recording_endpoint endpoint;
+    std::uint64_t socket_id = 0;
 
-    NotifyHarness() : cprotocol(core, NULL)
+    explicit NotifyHarness(bool established = true) : cprotocol(core, NULL)
     {
       cprotocol.set_p2p_endpoint(&endpoint);
       cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
+      bind_harness_hub();
+      shekyl_seam_address addr{};
+      addr.connector = SHEKYL_CONNECTOR_CLEARNET;
+      addr.address_type = SHEKYL_ADDR_IPV4;
+      addr.port = 18080;
+      addr.len = 4;
+      addr.bytes[0] = 127;
+      addr.bytes[3] = 1;
+      const shekyl_seam_open_result opened = shekyl_seam_open(&addr, 1);
+      socket_id = opened.id;
+      EXPECT_NE(socket_id, 0u) << "loopback open cause " << static_cast<unsigned>(opened.cause_kind);
       const auto ip = epee::net_utils::network_address{
           epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
-      endpoint.add(fixed_uuid(1), ip);
-      make_ready(endpoint.conns.front());
+      endpoint.add(shekyl::seam_connection_id(socket_id == 0 ? 1 : socket_id), ip);
+      if (established && socket_id != 0)
+      {
+        shekyl_zone_session_established(socket_id);
+        endpoint.conns.front().m_state = cryptonote::cryptonote_connection_context::state_normal;
+      }
+    }
+
+    ~NotifyHarness()
+    {
+      if (socket_id != 0)
+      {
+        shekyl_seam_close(socket_id);
+        shekyl_seam_reap(socket_id);
+      }
+      // The relay puppet has no hub. Leaving this one bound would make
+      // its sessions look absent. The zone's next listen installs its own.
+      shekyl_seam_bind(nullptr, nullptr, nullptr);
     }
 
     cryptonote::cryptonote_connection_context &ctx() { return endpoint.conns.front(); }
@@ -1915,6 +1535,135 @@ namespace
           cprotocol, arg, ctx());
     }
   };
+}
+
+namespace
+{
+  // One loopback session on the harness hub, in the direction asked for.
+  // The peer lists read that direction from the board by this id.
+  struct PeerlistSession
+  {
+    std::uint64_t socket_id = 0;
+
+    explicit PeerlistSession(bool inbound)
+    {
+      bind_harness_hub();
+      shekyl_seam_address addr{};
+      addr.connector = SHEKYL_CONNECTOR_CLEARNET;
+      addr.address_type = SHEKYL_ADDR_IPV4;
+      addr.port = 18080;
+      addr.len = 4;
+      addr.bytes[0] = 127;
+      addr.bytes[3] = 1;
+      const shekyl_seam_open_result opened = shekyl_seam_open(&addr, inbound ? 1 : 0);
+      socket_id = opened.id;
+      EXPECT_NE(socket_id, 0u) << "loopback open cause " << static_cast<unsigned>(opened.cause_kind);
+    }
+
+    ~PeerlistSession()
+    {
+      if (socket_id != 0)
+      {
+        shekyl_seam_close(socket_id);
+        shekyl_seam_reap(socket_id);
+      }
+      shekyl_seam_bind(nullptr, nullptr, nullptr);
+    }
+
+    bool receive(const std::vector<nodetool::peerlist_entry>& peers) const
+    {
+      return shekyl::received_peerlist(shekyl::seam_connection_id(socket_id), peers);
+    }
+  };
+
+  // `count` distinct global addresses. `block` keeps one test's addresses
+  // apart from another's: the Rust lists are one per process.
+  std::vector<nodetool::peerlist_entry> global_peers(std::uint8_t block, std::size_t count)
+  {
+    std::vector<nodetool::peerlist_entry> peers;
+    for (std::size_t i = 0; i < count; ++i)
+      peers.push_back({MAKE_IPV4_ADDRESS_PORT(11, 7, block, static_cast<std::uint8_t>(i + 1), 18080)});
+    return peers;
+  }
+}
+
+// The C++ no longer judges a received peerlist. It hands the list to Rust
+// as it arrived and closes only on Rust's refusal. A list of exactly the
+// receiver limit is accepted and one more entry is refused, so no entry
+// was dropped on the way; a bad entry refuses the list wherever it sits,
+// so none was reordered away or filtered. `sanitize_peerlist` dropped the
+// ip-0 and port-0 entries and kept the rest; under R4 one such entry is
+// evidence about the sender and refuses the whole list.
+TEST(node_server, a_received_peerlist_reaches_rust_unaltered_and_only_a_refusal_closes)
+{
+  PeerlistSession session(false);
+  ASSERT_NE(session.socket_id, 0u);
+
+  EXPECT_TRUE(session.receive({}));
+  EXPECT_TRUE(session.receive(global_peers(1, 12)));
+  EXPECT_FALSE(session.receive(global_peers(2, 13)));
+
+  const std::vector<nodetool::peerlist_entry> bad = {
+      {MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080)},      // ip 0
+      {MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0)},          // port 0
+      {MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080)},  // private
+      {MAKE_IPV4_ADDRESS_PORT(127, 0, 0, 1, 18080)},    // loopback
+      {net::tor_address::unknown()},                    // not this session's connector
+  };
+  for (const auto& entry : bad)
+  {
+    for (const std::size_t at : {std::size_t{0}, std::size_t{1}, std::size_t{2}})
+    {
+      std::vector<nodetool::peerlist_entry> peers = global_peers(3, 2);
+      peers.insert(peers.begin() + at, entry);
+      EXPECT_FALSE(session.receive(peers)) << entry.adr.str() << " at " << at;
+    }
+  }
+}
+
+// PWD-I2: a list on an inbound session admits nothing and is not a
+// refusal, whatever it holds. The same lists are refused on the outbound
+// session above, so the answer here is the direction's, read in Rust from
+// the board: this call passes no direction.
+// Every exchange is an exchange (Rick, 2026-10-13, §2.5): a list on a
+// session the peer opened is admitted under the same limits as one on a
+// session this node opened, and refused by the same rules. Records-was
+// PWD-I2's direction rule, under which this session's lists admitted
+// nothing and nothing closed it.
+TEST(node_server, a_peerlist_on_an_inbound_session_is_admitted_under_the_same_limits)
+{
+  PeerlistSession session(true);
+  ASSERT_NE(session.socket_id, 0u);
+
+  EXPECT_TRUE(session.receive(global_peers(4, 12)));
+  const shekyl_rpc_peer_facts* rows = nullptr;
+  std::size_t len = 0;
+  void* owner = nullptr;
+  ASSERT_EQ(shekyl_rpc_peer_list(0, &rows, &len, &owner), 0);
+  std::size_t admitted = 0;
+  for (std::size_t i = 0; i < len; ++i)
+    if (std::string(rows[i].host, rows[i].host_len).rfind("11.7.4.", 0) == 0 && rows[i].white == 0)
+      ++admitted;
+  shekyl_rpc_peer_list_free(owner);
+  EXPECT_EQ(admitted, 12u) << "the twelve entered gray from the inbound session";
+
+  EXPECT_FALSE(session.receive(global_peers(5, 13))) << "one over the receiver limit refuses";
+  EXPECT_FALSE(session.receive({{MAKE_IPV4_ADDRESS_PORT(192, 168, 1, 1, 18080)}})) << "a non-global entry refuses (R4)";
+  EXPECT_FALSE(session.receive({{net::tor_address::unknown()}})) << "a foreign-connector entry refuses";
+}
+
+// A session the board does not hold has no known direction. Its list
+// admits nothing and does not close anything.
+TEST(node_server, a_peerlist_on_an_unknown_session_never_closes_it)
+{
+  PeerlistSession session(false);
+  ASSERT_NE(session.socket_id, 0u);
+  const boost::uuids::uuid stranger = shekyl::seam_connection_id(session.socket_id + 1000);
+  EXPECT_TRUE(shekyl::received_peerlist(stranger, global_peers(6, 13)));
+  EXPECT_EQ(shekyl_peerlist_admit_received(session.socket_id + 1000, nullptr, 0), SHEKYL_PEERLIST_NO_SESSION);
+  EXPECT_EQ(shekyl_peerlist_admit_received(session.socket_id, nullptr, 0), SHEKYL_PEERLIST_ADMITTED);
+  // A null pointer with a count is the caller's fault and closes nothing.
+  EXPECT_EQ(shekyl_peerlist_admit_received(session.socket_id, nullptr, 3), SHEKYL_PEERLIST_BAD_ARGUMENT);
 }
 
 TEST(attributable_drop, a_form_failure_still_severs_and_abandons_the_batch)
@@ -1996,7 +1745,9 @@ TEST(tx_ingress, a_handshake_complete_peer_is_admitted)
 
 TEST(tx_ingress, a_peer_before_handshake_does_not_reach_the_core)
 {
-  NotifyHarness h;
+  // The row is on the board and the handshake flag is clear. Covers the
+  // gate's "row present, not established" arm. Does not cover a missing hub.
+  NotifyHarness h(false);
   h.ctx().m_state = cryptonote::cryptonote_connection_context::state_before_handshake;
   EXPECT_EQ(1, h.notify_txs());
   EXPECT_EQ(0u, h.core.handle_incoming_tx_calls);
@@ -2197,8 +1948,30 @@ TEST(node_server, in_peers_ceiling_re_derives_when_the_outbound_reserve_changes)
   EXPECT_LT(after, before)
     << "raising the outbound reserve must lower the inbound ceiling";
 
-  // And back down again: the reserve is recomputed, not ratcheted.
-  d.server->change_max_out_public_peers(8);
+  // And back down again, to the floor (the dialer refuses below it): the
+  // reserve is recomputed, not ratcheted.
+  d.server->change_max_out_public_peers(12);
   EXPECT_GT(d.server->get_max_in_public_peers(), after)
     << "lowering the outbound reserve must return the headroom";
+}
+
+// The relay harness unbinds the process hub when it returns. A listen
+// that remembered the first bind and only refreshed the ceiling then
+// found no hub, and every later fixed port in this suite failed at once.
+// These two ports are otherwise unused here, so a leftover listener is
+// not what a red result is reporting.
+TEST(node_server, a_cleared_seam_is_bound_again_on_the_next_listen)
+{
+  {
+    in_peers_fixture first;
+    ASSERT_TRUE(first.init("48096", -1));
+    first.server->deinit();
+  }
+  ASSERT_EQ(0, shekyl_seam_bind(nullptr, nullptr, nullptr));
+  ASSERT_EQ(0, shekyl_seam_is_bound());
+
+  in_peers_fixture second;
+  ASSERT_TRUE(second.init("48097", -1))
+    << "the next listen installs the hub again";
+  second.server->deinit();
 }

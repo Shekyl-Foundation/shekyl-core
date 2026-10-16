@@ -9,10 +9,11 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::FloodParams;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
-use shekyl_relay_privacy::{DelayFamily, EmbargoTimer, SplitMix64};
+use shekyl_relay_privacy::{DelayFamily, EmbargoTimer};
 
 /// An inbound supernode sees a production fluff. Production reach is
 /// [`FloodReach::EveryPeer`] on every connector, so the cheap inbound edge

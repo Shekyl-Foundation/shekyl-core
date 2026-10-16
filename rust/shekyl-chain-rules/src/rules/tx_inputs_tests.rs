@@ -7,17 +7,22 @@
 //! sites — the pool's `Lone` slot through `tx_form`, and a `Listed` slot
 //! through `validate`.
 
-use super::{I14, I5, J2};
+use super::{I14, I5, J12, J2, J28};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::harness::fixture::{coinbase, listed, point, serve_credit_only, G, TWO_G};
+use crate::harness::fixture::{
+    coinbase, join_market, listed, persona, point, serve_credit_only, G, TWO_G,
+};
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{emission, refused_listed, refused_lone, spend, with_inputs};
 use crate::rules::TxContext;
 use crate::rules::TxRule;
 use crate::validate::tx_form;
 use crate::verdict::TxSlot;
-use shekyl_wire::{Ct, Input, Transaction};
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
+use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
+use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
+use shekyl_wire::{BondPost, BondPostKind, Ct, Input, RetiredKeylessJoinMarket, Transaction};
 
 /// The fixture spend's key image, the same point `tx_tests` pins.
 const KI: [u8; 32] = point(9);
@@ -394,4 +399,343 @@ fn j2_one_bounded_record_per_serve_credit_vin() {
     assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
         .expect("a spend")
         .contains(CenRow::J2));
+}
+
+// ---- census 4.J, the stateless bond-post rows (slice 8 row 4) -----------
+
+/// The persona every bond-post fixture here posts for.
+const P: [u8; 32] = [0x4b; 32];
+
+/// The fixture JoinMarket with its post edited: [`join_market`] is
+/// balanced for the shape rows, so the row that fires is the one the edit
+/// is for.
+fn join_with(edit: impl FnOnce(&mut BondPost)) -> Transaction {
+    let mut tx = join_market(KI, P);
+    let post = tx
+        .prefix
+        .inputs
+        .iter_mut()
+        .find_map(|item| match item {
+            Input::BondPost(post) => Some(post),
+            _ => None,
+        })
+        .expect("the fixture join carries one post");
+    edit(post);
+    tx
+}
+
+/// CEN-J11: a post whose `p_canonical_id` is not the recompute over its
+/// `hybrid_public_key` is refused, alone and listed — the hint naming
+/// another persona (slice 8 row 2's pin, now the rule's), and the hint
+/// one bit off. A short key and a long one are refused on the same row:
+/// the length arm is the C++'s first, and a key of another length has no
+/// recompute to match. The fixture join — the persona's key, its
+/// recompute — passes; the row is vacuous on a spend and a coinbase.
+#[test]
+fn j11_the_hint_is_the_recompute_over_a_canonical_key() {
+    let stranger = persona([0x4c; 32]);
+    let one_bit_off = {
+        let mut bytes = *persona(P).id.as_bytes();
+        bytes[0] ^= 0x01;
+        shekyl_types::PCanonicalId::from_bytes(bytes)
+    };
+    for refused in [
+        join_with(|post| post.p_canonical_id = stranger.id),
+        join_with(|post| post.p_canonical_id = one_bit_off),
+        join_with(|post| post.hybrid_public_key.truncate(5)),
+        join_with(|post| post.hybrid_public_key.push(0x00)),
+        join_with(|post| post.hybrid_public_key.clear()),
+    ] {
+        refused_lone(&refused, CenRow::J11);
+        refused_listed(&refused, CenRow::J11);
+    }
+    assert!(
+        tx_form(&join_market(KI, P), TxSlot::Lone, &RuleSet::GENESIS)
+            .expect("the fixture join recomputes")
+            .contains(CenRow::J11)
+    );
+    for (name, tx, slot) in [
+        ("spend", listed(KI), TxSlot::Lone),
+        ("coinbase", coinbase(0), TxSlot::Miner),
+    ] {
+        assert!(
+            tx_form(&tx, slot, &RuleSet::GENESIS)
+                .unwrap_or_else(|r| panic!("{name}: {r}"))
+                .contains(CenRow::J11),
+            "{name}: J11 recorded vacuous"
+        );
+    }
+}
+
+/// CEN-J12: a JoinMarket whose `bond_spend_pk` is not canonical-length is
+/// refused, alone and listed — short, long, empty. The fixture join
+/// commits the persona's bond-spend key and passes; a Release carries no
+/// key by the wire type and passes the row (the C++'s
+/// `join_market_coupled_fields_absent`, unrepresentable here); the row is
+/// vacuous on a spend. A short key with a bad hint is J11's: the C++
+/// judges the key and hint first.
+#[test]
+fn j12_a_join_market_commits_a_canonical_bond_spend_pk() {
+    let with_bond_spend_pk = |edit: fn(&mut Vec<u8>)| {
+        join_with(|post| {
+            if let BondPostKind::JoinMarket { bond_spend_pk, .. } = &mut post.kind {
+                edit(bond_spend_pk);
+            }
+        })
+    };
+    for refused in [
+        with_bond_spend_pk(|pk| pk.truncate(5)),
+        with_bond_spend_pk(|pk| pk.push(0x00)),
+        with_bond_spend_pk(Vec::clear),
+    ] {
+        refused_lone(&refused, CenRow::J12);
+        refused_listed(&refused, CenRow::J12);
+    }
+    let release = join_with(|post| {
+        post.kind = BondPostKind::Other(shekyl_archival_retention::BondPostKind::Release as u8);
+        post.bond_credit = 0;
+    });
+    for (name, tx) in [("join", join_market(KI, P)), ("release", release)] {
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+            .unwrap_or_else(|r| panic!("{name} classifies: {r}"));
+        J12::check(&cx).unwrap_or_else(|r| panic!("{name} passes J12: {r}"));
+    }
+    assert!(
+        tx_form(&join_market(KI, P), TxSlot::Lone, &RuleSet::GENESIS)
+            .expect("the fixture join commits its key")
+            .contains(CenRow::J12)
+    );
+    assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("a spend")
+        .contains(CenRow::J12));
+
+    let both = join_with(|post| {
+        post.hybrid_public_key.truncate(5);
+        if let BondPostKind::JoinMarket { bond_spend_pk, .. } = &mut post.kind {
+            bond_spend_pk.truncate(5);
+        }
+    });
+    refused_lone(&both, CenRow::J11);
+}
+
+// ---- census 4.J, the JoinMarket's receipt key (FN-DSA increment 3) -------
+
+/// The fixture JoinMarket with its receipt key replaced by `key`.
+fn join_committing(key: ReceiptSignPk) -> Transaction {
+    join_with(|post| match &mut post.kind {
+        BondPostKind::JoinMarket {
+            receipt_sign_pk, ..
+        } => *receipt_sign_pk = key,
+        BondPostKind::Other(_) => panic!("the fixture join is a JoinMarket"),
+    })
+}
+
+/// The canonical encoding's offsets (`hybrid_combiner::encode_canonical`):
+/// `version ‖ scheme ‖ reserved(2) ‖ len(4) ‖ ed25519(32) ‖ len(4) ‖ fn_dsa`.
+const VERSION_AT: usize = 0;
+const SCHEME_AT: usize = 1;
+const RESERVED_AT: usize = 2;
+const ED25519_LEN_AT: usize = 4;
+const ED25519_AT: usize = 8;
+const FN_DSA_LEN_AT: usize = 40;
+const FN_DSA_AT: usize = 44;
+
+/// CEN-J28, the accept: the fixture JoinMarket commits its persona's real
+/// derived receipt key and passes `tx_form` with the row recorded; it
+/// re-parses to the same JoinMarket with the same key. A Release carries no
+/// receipt key and passes the row; it is recorded on a spend and a coinbase.
+/// There is no keyless JoinMarket to try: the type has no such value and
+/// the wire refuses the retired byte (below).
+#[test]
+fn j28_a_join_market_s_receipt_key_that_is_a_key_is_admitted() {
+    let key = persona(P).receipt;
+    FnDsaHybridPublicKey::from_receipt_sign_pk(&key).expect("the derived key parses");
+
+    let join = join_market(KI, P);
+    assert!(tx_form(&join, TxSlot::Lone, &RuleSet::GENESIS)
+        .expect("a JoinMarket committing a real receipt key forms")
+        .contains(CenRow::J28));
+    let reparsed = Transaction::from_bytes(&join.serialize()).expect("re-parses");
+    assert_eq!(reparsed, join);
+    let carried = reparsed.prefix.inputs.iter().find_map(|item| match item {
+        Input::BondPost(post) => match &post.kind {
+            BondPostKind::JoinMarket {
+                receipt_sign_pk, ..
+            } => Some(receipt_sign_pk.clone()),
+            BondPostKind::Other(_) => None,
+        },
+        _ => None,
+    });
+    assert_eq!(carried, Some(key));
+
+    let release = join_with(|post| {
+        post.kind = BondPostKind::Other(shekyl_archival_retention::BondPostKind::Release as u8);
+        post.bond_credit = 0;
+    });
+    let mut coverage = RuleCoverage::EMPTY;
+    let cx = TxContext::derive(&release, TxSlot::Lone, &mut coverage).expect("classifies");
+    J28::check(&cx).expect("a release carries no receipt key");
+    for (name, tx, slot) in [
+        ("spend", listed(KI), TxSlot::Lone),
+        ("coinbase", coinbase(0), TxSlot::Miner),
+    ] {
+        assert!(
+            tx_form(&tx, slot, &RuleSet::GENESIS)
+                .unwrap_or_else(|r| panic!("{name}: {r}"))
+                .contains(CenRow::J28),
+            "{name}: J28 recorded"
+        );
+    }
+}
+
+/// One edit of a canonical receipt key's bytes. The key type has no
+/// mutator — a chain-carried type is not edited in place — so a test edits
+/// a copy of the bytes and wraps it with `ReceiptSignPk::from_bytes`.
+type KeyEdit = Box<dyn Fn(&mut [u8; RECEIPT_SIGN_PK_LEN])>;
+
+/// CEN-J28, the refusals — one per way the canonical parse fails, each
+/// **one edit** of the real key (the type holds the length, so a string of
+/// 1,837 bytes is all that can reach the rule), alone and listed:
+///
+/// - the FN-DSA half does not decode — its header byte, and a coefficient
+///   past the modulus (fourteen set bits is 16,383 > q = 12,289);
+/// - the Ed25519 half is not a curve point;
+/// - the version is not 1; the scheme byte is not 3 (the identity key's
+///   scheme, 1, among them: an ML-DSA header on FN-DSA bytes is not a
+///   receipt key); the reserved field is not zero;
+/// - an inner length prefix disagrees with the scheme's fixed length.
+///
+/// **Red edit:** delete `J28` from `tx_form`'s `judge_tx!` line in
+/// `validate.rs` (or make `J28::check` return `Ok(())`) and every refusal
+/// below is admitted — nothing else in `tx_form` reads the key's content.
+#[test]
+fn j28_a_receipt_key_that_does_not_parse_is_refused() {
+    let key = persona(P).receipt;
+    // A compressed Edwards y with no x on the curve. Asserted below, with
+    // every other mutation, to be a string the parse refuses.
+    let not_a_point = {
+        let mut y = [0u8; 32];
+        y[0] = 2;
+        y
+    };
+    let edits: [(&str, KeyEdit); 9] = [
+        ("fn-dsa header byte", Box::new(|k| k[FN_DSA_AT] ^= 0xff)),
+        (
+            "fn-dsa coefficient past q",
+            Box::new(|k| k[FN_DSA_AT + 1..FN_DSA_AT + 8].fill(0xff)),
+        ),
+        (
+            "fn-dsa half all ones",
+            Box::new(|k| k[FN_DSA_AT..].fill(0xff)),
+        ),
+        (
+            "ed25519 half not a point",
+            Box::new(move |k| {
+                k[ED25519_AT..FN_DSA_LEN_AT].copy_from_slice(&not_a_point);
+            }),
+        ),
+        ("version 2", Box::new(|k| k[VERSION_AT] = 2)),
+        ("scheme 1 (ML-DSA)", Box::new(|k| k[SCHEME_AT] = 1)),
+        ("reserved non-zero", Box::new(|k| k[RESERVED_AT] = 1)),
+        ("ed25519 length 31", Box::new(|k| k[ED25519_LEN_AT] = 31)),
+        (
+            "fn-dsa length off by one",
+            Box::new(|k| k[FN_DSA_LEN_AT] ^= 1),
+        ),
+    ];
+    for (name, edit) in &edits {
+        let mut bytes = *key.as_bytes();
+        edit(&mut bytes);
+        let bad = ReceiptSignPk::from_bytes(bytes);
+        assert_ne!(bad, key, "{name}: the edit changed the key");
+        assert!(
+            FnDsaHybridPublicKey::from_receipt_sign_pk(&bad).is_err(),
+            "{name}: the mutation is a string the parse refuses"
+        );
+        let refused = join_committing(bad);
+        // It is on the wire: the parser admits the length, so the rule is
+        // what stands between this string and the record.
+        assert_eq!(
+            Transaction::from_bytes(&refused.serialize()).expect("canonical length parses"),
+            refused,
+            "{name}"
+        );
+        refused_lone(&refused, CenRow::J28);
+        refused_listed(&refused, CenRow::J28);
+    }
+
+    // All zeros and all ones: no header at all.
+    for fill in [0x00u8, 0xff] {
+        let refused = join_committing(ReceiptSignPk::from_bytes([fill; RECEIPT_SIGN_PK_LEN]));
+        refused_lone(&refused, CenRow::J28);
+        refused_listed(&refused, CenRow::J28);
+    }
+}
+
+/// A JoinMarket with no receipt key does not exist for CEN-J28 to judge:
+/// the fixture join's bytes with the kind byte set back to the retired
+/// keyless `0` do not parse, and neither do they with the key cut out under
+/// kind 5. And the older rows name first: a post wrong in `bond_spend_pk`
+/// too is J12's, and one wrong in its hint J11's.
+#[test]
+fn j28_no_join_market_without_a_key_parses_and_older_rows_name_first() {
+    let join = join_market(KI, P);
+    let bytes = join.serialize();
+    let post_bytes = {
+        let mut out = Vec::new();
+        join.prefix
+            .inputs
+            .iter()
+            .find(|item| matches!(item, Input::BondPost(_)))
+            .expect("the fixture join carries one post")
+            .write(&mut out)
+            .expect("the post writes");
+        out
+    };
+    let post_at = bytes
+        .windows(post_bytes.len())
+        .position(|w| w == post_bytes)
+        .expect("the post's bytes are in the transaction's");
+    // tag ‖ varint(1996) ‖ identity ‖ hint, then the kind byte.
+    let kind_at = post_at + 1 + 2 + PQC_HYBRID_SINGLE_KEY_LEN + 32;
+    assert_eq!(
+        bytes[kind_at],
+        shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET
+    );
+    let mut retired = bytes.clone();
+    retired[kind_at] = 0;
+    let err = Transaction::from_bytes(&retired).expect_err("post_kind 0 does not parse");
+    // The typed cause, not its sentence: `RetiredKeylessJoinMarket` is what
+    // `BondPost::read` puts inside the `io::Error`.
+    assert!(
+        err.get_ref()
+            .is_some_and(RetiredKeylessJoinMarket::downcast_is),
+        "{err}"
+    );
+    // The keyless layout under the live byte: cut `varint(1837) ‖ key`.
+    let key_field_at = kind_at + 1 + 2 + PQC_HYBRID_SINGLE_KEY_LEN;
+    let mut keyless = bytes.clone();
+    keyless.drain(key_field_at..key_field_at + 2 + RECEIPT_SIGN_PK_LEN);
+    assert!(Transaction::from_bytes(&keyless).is_err());
+
+    let bad_key = ReceiptSignPk::from_bytes([0u8; RECEIPT_SIGN_PK_LEN]);
+    let with = |edit: fn(&mut BondPost)| {
+        let mut tx = join_committing(bad_key.clone());
+        for item in &mut tx.prefix.inputs {
+            if let Input::BondPost(post) = item {
+                edit(post);
+            }
+        }
+        tx
+    };
+    refused_lone(&with(|_| {}), CenRow::J28);
+    let both_keys = with(|post| {
+        if let BondPostKind::JoinMarket { bond_spend_pk, .. } = &mut post.kind {
+            bond_spend_pk.truncate(5);
+        }
+    });
+    refused_lone(&both_keys, CenRow::J12);
+    let hint_too = with(|post| post.hybrid_public_key.truncate(5));
+    refused_lone(&hint_too, CenRow::J11);
 }

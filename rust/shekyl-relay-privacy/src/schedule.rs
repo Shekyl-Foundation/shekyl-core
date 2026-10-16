@@ -34,8 +34,8 @@ use std::collections::BTreeMap;
 use crate::geometric::GeometricTable;
 use crate::params::{carrier, inherited, DandelionParams};
 use crate::poisson::PoissonTable;
-use crate::rng::{bernoulli, bounded_uniform, RelayRng};
 use crate::stem_map::ConnectionId;
+use shekyl_draw_rng::{bernoulli, bounded_uniform, RelayRng};
 
 /// Monotonic milliseconds. Not a wall-clock time and not comparable across
 /// processes.
@@ -769,7 +769,7 @@ impl NoiseCadence {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rng::SplitMix64;
+    use shekyl_draw_rng::SplitMix64;
 
     fn peer(i: u8) -> ConnectionId {
         let mut b = [0_u8; 16];
@@ -1011,7 +1011,9 @@ mod tests {
 
     #[test]
     fn propagation_timeout_follows_from_the_shipped_table() {
-        let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(crate::zone::RelayZone::Tor));
+        let t = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(
+            crate::verify_cost::ANON_ZONE_TRANSIT,
+        ));
         let secs = t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
 
         // Exact pin: the number and the table must not drift apart. A loose
@@ -1041,20 +1043,21 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_wait_clears_every_zones_embargo() {
-        // The one property the worst-zone interim must have: no zone's embargo
-        // outlasts it. A wait that clears only the zone it was derived from is
-        // how 874 s came to be wrong for the anonymity path.
-        for zone in [
-            crate::zone::RelayZone::Public,
-            crate::zone::RelayZone::Tor,
-            crate::zone::RelayZone::Invalid,
+    fn the_shipped_wait_clears_both_measured_transits() {
+        // The one property the longest-transit interim must have: neither
+        // shipped transit's embargo outlasts it. A wait that clears only the
+        // transit it was derived from is how 874 s came to be wrong for the
+        // anonymity path. *Records-was:* this loop named `RelayZone`.
+        for transit in [
+            crate::verify_cost::ADOPTED_TRANSIT,
+            crate::verify_cost::ANON_ZONE_TRANSIT,
         ] {
-            let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(zone));
+            let t = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(transit));
             assert!(
                 ADOPTED_PROPAGATION_TIMEOUT_SECS
                     >= t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
-                "{zone:?} needs a longer wait than the shipped {ADOPTED_PROPAGATION_TIMEOUT_SECS}s"
+                "{} ms needs a longer wait than the shipped {ADOPTED_PROPAGATION_TIMEOUT_SECS}s",
+                transit.ms()
             );
         }
     }

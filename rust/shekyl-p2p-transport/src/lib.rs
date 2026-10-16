@@ -14,7 +14,6 @@
 //! the Noise layer's public record path. The D11 fuzz targets call those
 //! same methods. This crate stays the Noise layer.
 
-mod aead;
 mod channel;
 mod noise;
 mod prefix;

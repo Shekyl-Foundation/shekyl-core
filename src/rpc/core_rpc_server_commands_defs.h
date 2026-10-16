@@ -30,15 +30,12 @@
 
 #pragma once
 
-#include <limits>
-
 #include "string_tools.h"
 
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/difficulty.h"
 #include "crypto/hash.h"
-#include "rpc/rpc_handler.h"
 #include "common/varint.h"
 #include "common/perf_timer.h"
 
@@ -204,122 +201,6 @@ namespace cryptonote
     };
     typedef epee::misc_utils::struct_init<response_t> response;
   };
-  //-----------------------------------------------
-  struct COMMAND_RPC_GET_INFO
-  {
-    struct request_t: public rpc_request_base
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base);
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      uint64_t height;
-      uint64_t target_height;
-      uint64_t difficulty;
-      std::string wide_difficulty;
-      uint64_t difficulty_top64;
-      uint64_t target;
-      uint64_t tx_count;
-      uint64_t tx_pool_size;
-      uint64_t alt_blocks_count;
-      uint64_t outgoing_connections_count;
-      uint64_t incoming_connections_count;
-      uint64_t public_incoming_socket_count;
-      uint64_t public_outgoing_socket_count;
-      uint64_t tor_incoming_socket_count;
-      uint64_t tor_outgoing_socket_count;
-      uint64_t rpc_connections_count;
-      uint64_t white_peerlist_size;
-      uint64_t grey_peerlist_size;
-      bool mainnet;
-      bool testnet;
-      bool stagenet;
-      std::string nettype;
-      std::string top_block_hash;
-      uint64_t cumulative_difficulty;
-      std::string wide_cumulative_difficulty;
-      uint64_t cumulative_difficulty_top64;
-      uint64_t block_size_limit;
-      uint64_t block_weight_limit;
-      uint64_t block_size_median;
-      uint64_t block_weight_median;
-      uint64_t adjusted_time;
-      uint64_t start_time;
-      uint64_t free_space;
-      bool offline;
-      uint64_t database_size;
-      bool busy_syncing;
-      std::string version;
-      uint32_t protocol_version;
-      bool synchronized;
-      bool following_degraded;
-      bool restricted;
-
-      // Shekyl NG four-component economics fields
-      uint64_t release_multiplier;
-      uint64_t burn_pct;
-      uint64_t total_burned;
-      uint64_t staker_emission_share_effective;
-      std::string emission_era;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(height)
-        KV_SERIALIZE(target_height)
-        KV_SERIALIZE(difficulty)
-        KV_SERIALIZE(wide_difficulty)
-        KV_SERIALIZE(difficulty_top64)
-        KV_SERIALIZE(target)
-        KV_SERIALIZE(tx_count)
-        KV_SERIALIZE(tx_pool_size)
-        KV_SERIALIZE(alt_blocks_count)
-        KV_SERIALIZE(outgoing_connections_count)
-        KV_SERIALIZE(incoming_connections_count)
-        KV_SERIALIZE(public_incoming_socket_count)
-        KV_SERIALIZE(public_outgoing_socket_count)
-        KV_SERIALIZE(tor_incoming_socket_count)
-        KV_SERIALIZE(tor_outgoing_socket_count)
-        KV_SERIALIZE(rpc_connections_count)
-        KV_SERIALIZE(white_peerlist_size)
-        KV_SERIALIZE(grey_peerlist_size)
-        KV_SERIALIZE(mainnet)
-        KV_SERIALIZE(testnet)
-        KV_SERIALIZE(stagenet)
-        KV_SERIALIZE(nettype)
-        KV_SERIALIZE(top_block_hash)
-        KV_SERIALIZE(cumulative_difficulty)
-        KV_SERIALIZE(wide_cumulative_difficulty)
-        KV_SERIALIZE(cumulative_difficulty_top64)
-        KV_SERIALIZE(block_size_limit)
-        KV_SERIALIZE_OPT(block_weight_limit, (uint64_t)0)
-        KV_SERIALIZE(block_size_median)
-        KV_SERIALIZE_OPT(block_weight_median, (uint64_t)0)
-        KV_SERIALIZE(adjusted_time)
-        KV_SERIALIZE(start_time)
-        KV_SERIALIZE(free_space)
-        KV_SERIALIZE(offline)
-        KV_SERIALIZE(database_size)
-        KV_SERIALIZE(busy_syncing)
-        KV_SERIALIZE(version)
-        KV_SERIALIZE(protocol_version)
-        KV_SERIALIZE(synchronized)
-        KV_SERIALIZE(following_degraded)
-        KV_SERIALIZE(restricted)
-        KV_SERIALIZE(release_multiplier)
-        KV_SERIALIZE(burn_pct)
-        KV_SERIALIZE(total_burned)
-        KV_SERIALIZE(staker_emission_share_effective)
-        KV_SERIALIZE(emission_era)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-    
   //-----------------------------------------------
 
   //-----------------------------------------------
@@ -1637,47 +1518,6 @@ namespace cryptonote
         KV_SERIALIZE(sigma_work_milli)
         KV_SERIALIZE(profit_estimate_available)
         KV_SERIALIZE(shards)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  /// Operator fetch that names `shard_id` only (`ARCHIVAL_SHARD_FETCH.md` SF-D1).
-  /// Returns a ruling-A aggregate, never segment bytes.
-  struct COMMAND_RPC_REQUEST_ARCHIVAL_SHARD
-  {
-    struct request_t: public rpc_request_base
-    {
-      /// Omitted on the wire stays this sentinel (`struct_init` + in-class
-      /// initializer). 0 is a real shard; `{}` must not fetch it.
-      uint64_t shard_id = std::numeric_limits<uint64_t>::max();
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(shard_id)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t: public rpc_response_base
-    {
-      uint64_t shard_id;
-      std::string shard_hash;
-      uint64_t block_count;
-      uint64_t tx_count;
-      uint64_t output_count;
-      uint64_t coinbase_output_count;
-      uint64_t time_range_seconds;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(shard_id)
-        KV_SERIALIZE(shard_hash)
-        KV_SERIALIZE(block_count)
-        KV_SERIALIZE(tx_count)
-        KV_SERIALIZE(output_count)
-        KV_SERIALIZE(coinbase_output_count)
-        KV_SERIALIZE(time_range_seconds)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

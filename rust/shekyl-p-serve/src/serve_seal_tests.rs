@@ -3,62 +3,31 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The two-read seal: the countersignature is the response's last bytes,
-//! and it is withheld when the sent body is not the body that was signed.
-//! Split out of the endpoint suite so that file stays under a thousand lines.
+//! The countersignature's place in the response: it is the last bytes, it
+//! covers the bytes ahead of it, a signer that fails after the body leaves
+//! the refusal trailer there, and a persona with no key sends no shard. Split out of the endpoint suite so that
+//! file stays under a thousand lines.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::signature::HybridSignature;
-use shekyl_curve_tree::ServedFrameHeader;
 use shekyl_types::BlockHeight;
 
 use super::{
-    bind, fetch, head_of, leaves, render_not_found, FixtureProvider, ANCHOR_HASH, IN_GATE_ANCHOR,
-    NONCE, SIGNATURE_ENVELOPE_LEN,
+    bind, fetch, filler, head_of, is_refusal_trailer, render_not_found, render_unavailable,
+    FixtureProvider, PServeEndpoint, ANCHOR_HASH, IDENTITY_ENVELOPE_LEN, IN_GATE_ANCHOR, NONCE,
+    OWN_HEIGHT, REFUSAL_TRAILER_BYTE,
 };
-use crate::provider::{ProviderError, ShardBody, ShardProvider};
-
-/// Provider that answers the first `shard_bytes` with one body and every
-/// later call with another. A conforming store cannot do this: it is the
-/// fault the two-read serve has to survive, built by wrapper (rule 50).
-struct ShiftingProvider {
-    first: Arc<[u8]>,
-    later: Option<Arc<[u8]>>,
-    calls: AtomicUsize,
-}
-
-impl ShiftingProvider {
-    fn new(first: Vec<u8>, later: Option<Vec<u8>>) -> Arc<Self> {
-        Arc::new(Self {
-            first: Arc::from(first.into_boxed_slice()),
-            later: later.map(|b| Arc::from(b.into_boxed_slice())),
-            calls: AtomicUsize::new(0),
-        })
-    }
-}
-
-impl ShardProvider for ShiftingProvider {
-    fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-        let call = self.calls.fetch_add(1, Ordering::SeqCst);
-        let bytes = if call == 0 {
-            Some(Arc::clone(&self.first))
-        } else {
-            self.later.clone()
-        };
-        Ok(bytes.and_then(ShardBody::flat))
-    }
-}
+use crate::countersign::{PassKey, PassSigner, SignRefused};
 
 #[tokio::test]
-async fn the_countersignature_is_released_only_after_the_whole_frame() {
+async fn the_countersignature_is_released_only_after_the_whole_body() {
     // The signature is released last. It is exactly the response's last
     // bytes, and no copy of it appears anywhere ahead of them — so every
     // proper prefix of the response, which is all a reader that stops early
     // can have, is without it.
-    let payload = leaves(9, 0x40);
+    let payload = filler(9 * 128, 0x40);
     let (ep, signer) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let r = fetch(ep.addr(), "/shard/0").await;
 
@@ -67,7 +36,7 @@ async fn the_countersignature_is_released_only_after_the_whole_frame() {
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head")
         + 4;
-    let (before, sealed) = r.split_at(r.len() - SIGNATURE_ENVELOPE_LEN);
+    let (before, sealed) = r.split_at(r.len() - IDENTITY_ENVELOPE_LEN);
     let signature =
         HybridSignature::from_canonical_bytes(sealed).expect("the last bytes are the signature");
     verify_pass_transcript(
@@ -81,34 +50,52 @@ async fn the_countersignature_is_released_only_after_the_whole_frame() {
     )
     .expect("the closing signature covers this request and the bytes ahead of it");
 
-    // The first body bytes are the frame, not a signature.
-    let mut framed = &before[end..];
-    let frame = ServedFrameHeader::read(&mut framed).expect("the body opens with the frame");
-    assert_eq!(frame.segment_bytes(), payload.len() as u64);
-    assert_eq!(framed, &payload[..], "frame header, then the whole segment");
+    // The body is the provider's bytes from the first one, not a signature.
+    assert_eq!(
+        &before[end..],
+        &payload[..],
+        "the whole body, and nothing ahead of it"
+    );
 
     // No earlier copy: a prefix reader never sees the signature.
     assert!(
-        !before.windows(SIGNATURE_ENVELOPE_LEN).any(|w| w == sealed),
-        "the signature must not appear ahead of the frame it seals"
+        !before.windows(IDENTITY_ENVELOPE_LEN).any(|w| w == sealed),
+        "the signature must not appear ahead of the body it seals"
     );
 }
 
+/// A signer that says it can sign and then refuses: the fault that is only
+/// discovered after the body has gone out.
+struct RefusesLate;
+impl PassKey<IDENTITY_ENVELOPE_LEN> for RefusesLate {
+    fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+    fn sign_pass(
+        &self,
+        _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<HybridSignature, SignRefused> {
+        Err(SignRefused::new("signer went away"))
+    }
+}
+impl PassSigner<IDENTITY_ENVELOPE_LEN> for RefusesLate {
+    fn own_height(&self) -> Option<BlockHeight> {
+        Some(BlockHeight::from_raw(OWN_HEIGHT))
+    }
+}
+
 #[tokio::test]
-async fn a_body_that_changes_between_the_signed_read_and_the_sent_one_gets_no_signature() {
-    // The persona hashes the body, signs, then streams a second read. If
-    // the store answers that second read with other bytes, the signature
-    // describes bytes that were not sent — so it must not be sent either.
-    // The response ends after the body, short of its `content-length`,
-    // which a fetcher reads as a truncated transfer.
-    let signed_for = leaves(9, 0x40);
-    let mut sent = signed_for.clone();
-    *sent.last_mut().expect("nine leaves") ^= 1;
-    let (ep, signer) = bind(ShiftingProvider::new(
-        signed_for.clone(),
-        Some(sent.clone()),
-    ))
-    .await;
+async fn a_signer_that_fails_after_the_body_closes_it_with_the_refusal_trailer() {
+    // The signature covers the bytes sent, so it is asked for after them.
+    // A signer that refuses then cannot change the status. The persona
+    // says so itself: the envelope is the refusal trailer, and the response
+    // is its full declared length. A requester never has to infer a refusal
+    // from a response that stopped.
+    let payload = filler(9 * 128, 0x40);
+    let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> = Arc::new(RefusesLate);
+    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]), signer)
+        .await
+        .expect("bind");
     let r = fetch(ep.addr(), "/shard/0").await;
 
     assert!(head_of(&r).starts_with("HTTP/1.1 200 OK"));
@@ -117,44 +104,87 @@ async fn a_body_that_changes_between_the_signed_read_and_the_sent_one_gets_no_si
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head")
         + 4;
-    let mut framed = &r[end..];
-    let frame = ServedFrameHeader::read(&mut framed).expect("the body opens with the frame");
-    assert_eq!(framed, &sent[..], "the body on the wire is the second read");
-    assert_eq!(
-        (r.len() - end) as u64,
-        frame.framed_len(),
-        "the response stops at the end of the frame: no envelope follows"
-    );
+    let (before, trailer) = r.split_at(r.len() - IDENTITY_ENVELOPE_LEN);
+    assert_eq!(&before[end..], &payload[..], "the whole body went out");
     assert!(
-        head_of(&r).contains(&format!(
-            "content-length: {}",
-            frame.framed_len() + SIGNATURE_ENVELOPE_LEN as u64
-        )),
-        "so it is short of its declared length by exactly one signature"
+        head_of(&r).contains(&format!("content-length: {}", r.len() - end)),
+        "the response is exactly its declared length"
     );
+    assert_eq!(r.len() - end, payload.len() + IDENTITY_ENVELOPE_LEN);
+    assert!(is_refusal_trailer(trailer));
+    assert_eq!(trailer, [REFUSAL_TRAILER_BYTE; IDENTITY_ENVELOPE_LEN]);
+    assert!(
+        HybridSignature::from_canonical_bytes(trailer).is_err(),
+        "the trailer can never be read as a signature"
+    );
+    assert_eq!(ep.late_sign_failure_count(), 1);
+    assert_eq!(
+        ep.sign_failure_count(),
+        0,
+        "not a pre-flight refusal: the key said yes and the shard went out"
+    );
+    assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
-    assert_eq!(ep.lookup_failure_count(), 1);
-    assert_eq!(ep.sign_failure_count(), 0);
-    let _ = signer;
+}
+
+#[test]
+fn a_real_signature_is_never_the_refusal_trailer() {
+    // The other direction of the same disjointness: a good read's envelope
+    // is not mistaken for a refusal.
+    let signer = crate::countersign::TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT));
+    let signature = signer
+        .sign_pass(
+            &[0x5a; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        )
+        .expect("sign")
+        .to_canonical_bytes()
+        .expect("canonical");
+    assert_eq!(signature.len(), IDENTITY_ENVELOPE_LEN);
+    assert!(!is_refusal_trailer(&signature));
+    assert!(!is_refusal_trailer(&[]));
+}
+
+/// A persona with no resident key: it knows before the first byte.
+struct Keyless;
+impl PassKey<IDENTITY_ENVELOPE_LEN> for Keyless {
+    fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
+        Err(SignRefused::new("not resident"))
+    }
+    fn sign_pass(
+        &self,
+        _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<HybridSignature, SignRefused> {
+        Err(SignRefused::new("not resident"))
+    }
+}
+impl PassSigner<IDENTITY_ENVELOPE_LEN> for Keyless {
+    fn own_height(&self) -> Option<BlockHeight> {
+        Some(BlockHeight::from_raw(OWN_HEIGHT))
+    }
 }
 
 #[tokio::test]
-async fn a_shard_that_vanishes_between_the_two_reads_is_the_identical_404() {
-    // Signed for, then gone before it could be sent: nothing has been
-    // written, so this is still the shared miss, counted as a store fault.
-    let (ep, _) = bind(ShiftingProvider::new(leaves(9, 0x40), None)).await;
-    let r = fetch(ep.addr(), "/shard/0").await;
-    assert_eq!(r, render_not_found().as_bytes());
+async fn a_persona_with_no_key_answers_503_and_sends_no_shard() {
+    // No key is known before the first byte, so the shard is not sent only
+    // to go uncountersigned. A held shard never 404s: the answer is the
+    // bare 503. An unheld shard is still the 404, and an invalid request
+    // still the 400 — the key is not what decides either.
+    let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> = Arc::new(Keyless);
+    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, filler(9 * 128, 0x40))]), signer)
+        .await
+        .expect("bind");
+    assert_eq!(
+        fetch(ep.addr(), "/shard/0").await,
+        render_unavailable().as_bytes()
+    );
+    assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.late_sign_failure_count(), 0, "no shard was sent");
+    assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
-    assert_eq!(ep.lookup_failure_count(), 1);
 
-    // And a shard whose frame changed (a different length) between them.
-    let (ep, _) = bind(ShiftingProvider::new(
-        leaves(9, 0x40),
-        Some(leaves(8, 0x40)),
-    ))
-    .await;
-    let r = fetch(ep.addr(), "/shard/0").await;
-    assert_eq!(r, render_not_found().as_bytes());
-    assert_eq!(ep.lookup_failure_count(), 1);
+    assert_eq!(
+        fetch(ep.addr(), "/shard/9").await,
+        render_not_found().as_bytes()
+    );
+    assert_eq!(ep.sign_failure_count(), 1, "an unheld shard asks no key");
 }

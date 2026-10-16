@@ -358,6 +358,15 @@ impl Sockets {
         self.lock().zone_caps[connector.index()] = cap;
     }
 
+    /// Drop every connector cap. The socket table outlives the zone that
+    /// set them, and a later admit would keep a cap that zone no longer has.
+    /// The process ceiling still bounds the sum.
+    pub fn clear_zone_caps(&self) {
+        for connector in ConnectorId::ALL {
+            self.set_zone_cap(*connector, None);
+        }
+    }
+
     /// Inbound clearnet.
     ///
     /// `ceiling` is the process-wide inbound ceiling: this row and every
@@ -421,7 +430,7 @@ impl Sockets {
     }
 
     /// Outbound Tor. The addressing cell says what may be dialed. Anything
-    /// else is [`CloseKind::DialFailed`] and reserves nothing.
+    /// else is [`CloseKind::LocalClose`] and reserves nothing.
     pub fn open_tor(&self, address: &NetworkAddress) -> Result<OpenSocket, OpenError> {
         check_dial(ConnectorId::Tor, address).map_err(OpenError::Refused)?;
         let mut inner = self.lock();

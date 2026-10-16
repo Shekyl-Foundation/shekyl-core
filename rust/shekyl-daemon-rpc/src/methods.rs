@@ -12,21 +12,23 @@
 //! That is what lets one unit test with an in-memory [`ChainFacts`] pin a
 //! method's behaviour for every transport at once.
 
-use crate::core::TxSlot;
+use crate::core::{P2pRead, TxSlot};
 use serde::Deserialize;
 use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
     GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,
-    GetVersionResponse, HardForkEntry, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+    GetVersionResponse, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
     CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
     CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_rpc_types::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
-    GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
+    GetPeerListRequest, GetPeerListResponse, P2pReply, Peer, SyncInfoPeer, SyncInfoResponse,
+    SyncSpan,
 };
 use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
 use shekyl_types::{ArchivalLength, BlockHeight, ChainCount};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
 
 use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
@@ -34,7 +36,7 @@ use shekyl_rpc_types::{
     BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
-    HardForkInfoRequest, HardForkInfoResponse, CORE_RPC_ERROR_CODE_CORE_BUSY,
+    CORE_RPC_ERROR_CODE_CORE_BUSY,
 };
 
 /// Why a native method could not answer. Maps onto the transport's existing
@@ -47,6 +49,10 @@ use shekyl_rpc_types::{
 pub enum RpcFault {
     /// The facts source refused (a C return code, or no core).
     Facts(FactsFault),
+    /// The facts were read and they contradict each other. Unlike
+    /// [`FactsFault::Inconsistent`], which is a bare code from a shim, this
+    /// carries what contradicted what, and the transport tells the caller.
+    Store(StoreFault),
     /// The handler answered but the transport could not deliver it.
     Internal(InternalFault),
     /// The method itself refused: the request was malformed, or the chain
@@ -55,6 +61,54 @@ pub enum RpcFault {
     /// the transport answers with it rather than a generic internal error.
     Refused(RpcRefusal),
 }
+
+/// The chain store's own figures contradict each other, found on this side
+/// of the facts seam and reported with its operands.
+///
+/// **Verbose on purpose** (RK-Q9). A contradiction has a plausible-looking
+/// fallback — here, a burn percentage of zero — and a fallback reaches the
+/// caller as a fact. So the method refuses, and the refusal says which
+/// invariant broke and with what numbers. Every operand is a public chain
+/// fact a successful reply would have carried, so the error discloses
+/// nothing the reply does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreFault {
+    /// More has been burned than was ever generated. Every burned unit was
+    /// first emitted, so no conforming chain holds this pair.
+    SupplyInvariant {
+        /// Gross coins emitted through the tip, in atomic units.
+        coins_generated: AtomicUnits,
+        /// Cumulative coins destroyed through the tip, in atomic units.
+        total_burned: AtomicUnits,
+        /// The chain count of the snapshot the two were read at: the top
+        /// block's height plus one.
+        chain_height: ChainCount,
+    },
+}
+
+impl std::fmt::Display for StoreFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SupplyInvariant {
+                coins_generated,
+                total_burned,
+                chain_height,
+            } => write!(
+                f,
+                "the chain store contradicts itself: supply invariant violated \
+                 (total_burned <= coins_generated). total_burned is {} atomic units and \
+                 coins_generated is {} atomic units, at chain height {} (the top block's \
+                 height plus one). Every burned unit was first emitted, so no burn \
+                 percentage can be computed from this store.",
+                total_burned.to_raw(),
+                coins_generated.to_raw(),
+                chain_height.to_raw(),
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StoreFault {}
 
 /// A method-level refusal: the JSON-RPC `code` (see
 /// `shekyl_rpc_types::CORE_RPC_ERROR_CODE_*`) and its `message`.
@@ -110,10 +164,10 @@ pub fn get_height(facts: &dyn ChainFacts) -> Result<GetHeightResponse, RpcFault>
 }
 
 /// `get_version` (JSON-RPC, no params): RPC contract version, release flag,
-/// current and target heights, hard-fork schedule.
+/// current and target heights, and the identity tuple.
 ///
-/// `target_height` is the core's target. `0` means the core reported none,
-/// not that the node is synchronized.
+/// `target_height` is the core's target, `null` when the core reports none.
+/// It says nothing about whether the node is synchronized.
 pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFault> {
     let tip = facts.chain_tip()?;
     // The identity axes. Two FFI reads inside one handler still produce one
@@ -122,21 +176,12 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
     // in-process read cannot (VC-R17). Both facts are process-lifetime
     // constants besides.
     let identity = facts.identity()?;
-    let hard_forks = facts
-        .hardforks()?
-        .into_iter()
-        .map(|hf| HardForkEntry {
-            hf_version: hf.version,
-            height: hf.height.to_raw(),
-        })
-        .collect();
     Ok(GetVersionResponse {
         status: RpcStatus::ok(),
         version: shekyl_rpc_types::CORE_RPC_VERSION,
         release: tip.release_build,
         current_height: tip.chain_height.to_raw(),
-        target_height: tip.target_height.map(ChainCount::to_raw).unwrap_or(0),
-        hard_forks,
+        target_height: tip.target_height.map(ChainCount::to_raw).into(),
         // The rules axis is this build's own constant, read here rather than
         // fetched over FFI: it is compiled from `config/` into this image, so
         // asking C++ for it would give one value two sources.
@@ -777,13 +822,12 @@ fn pow_hash_or_refuse(requested: bool, restricted: bool) -> Result<bool, RpcFaul
     Ok(requested)
 }
 
-/// The request parsers for the five RK-5b methods.
+/// The request parsers for the four RK-5b methods.
 ///
 /// Each names **its own** fields, because a caller that sent the wrong shape
 /// needs to know what this method wanted, not what the last one did.
-/// `get_last_block_header` and `hard_fork_info` accept absent params — the
-/// tip and the next fork are what they answer with no arguments.
-/// `get_block_headers_range` does **not**: a range has no empty form, so
+/// `get_last_block_header` accepts absent params — the tip is what it
+/// answers with no arguments. `get_block_headers_range` does **not**: a range has no empty form, so
 /// absent params and `{}` are refused rather than answered as genesis.
 ///
 /// # Errors
@@ -826,19 +870,6 @@ pub fn block_headers_range_request(
         params,
         "Wrong parameters, expected an object with start_height and end_height \
          (non-negative integers) and optional fill_pow_hash (boolean)",
-    )
-}
-
-/// See [`last_block_header_request`].
-///
-/// # Errors
-///
-/// As [`last_block_header_request`].
-pub fn hard_fork_info_request(params: &serde_json::Value) -> Result<HardForkInfoRequest, RpcFault> {
-    object_params(
-        params,
-        "Wrong parameters, expected an object with optional version (1-255); \
-         omit it to ask about the fork this node would vote in next",
     )
 }
 
@@ -897,16 +928,16 @@ pub fn get_last_block_header(
     let pow = pow_hash_or_refuse(fill_pow_hash, restricted)?;
     let tip = facts.chain_tip()?;
     // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
-    // guarded `on_get_last_block_header` alone among this slice's five —
+    // guarded `on_get_last_block_header` alone among this slice's methods —
     // deliberately, and the reason survives the port: this is the one method
     // that answers "the tip", which on an unsynchronised node is the top of a
-    // partial chain presented as the top of the chain. The other four take an
-    // explicit height or hash, where the caller already named what it wanted
-    // and a partial chain simply does not have it.
+    // partial chain presented as the top of the chain. The other header
+    // methods take an explicit height or hash, where the caller already named
+    // what it wanted and a partial chain simply does not have it.
     //
     // The C++ answered `status = BUSY` with a **default-constructed header**,
-    // which `shekyl-rpc-client`'s `get_hardfork_version` read straight
-    // through as major version 0. Refusing is the ruling already applied to
+    // which a client reading a header field without the status beside it
+    // took for a block of major version 0 and a zero hash. Refusing is the ruling already applied to
     // `fill_pow_hash`: a method that declines to answer must not report
     // success (`5b0c32f51`).
     if !tip.synchronized {
@@ -1053,29 +1084,6 @@ pub fn get_block_headers_range(
     Ok(GetBlockHeadersRangeResponse {
         status: RpcStatus::ok(),
         headers,
-    })
-}
-
-/// `hard_fork_info`.
-///
-/// A projection. The voting fields are carried exactly as the daemon reports
-/// them, and the two versions are reported apart — see the type.
-pub fn hard_fork_info(
-    facts: &dyn ChainFacts,
-    request: &HardForkInfoRequest,
-) -> Result<HardForkInfoResponse, RpcFault> {
-    let info = facts.hard_fork_info(request.version.map(core::num::NonZeroU8::get))?;
-    Ok(HardForkInfoResponse {
-        status: RpcStatus::ok(),
-        queried_version: info.queried_version,
-        active_version: info.active_version,
-        enabled: info.enabled,
-        window: info.window,
-        votes: info.votes,
-        threshold: info.threshold,
-        voting: info.voting,
-        state: info.state,
-        earliest_height: info.earliest_height,
     })
 }
 
@@ -1231,18 +1239,22 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         recv_idle_time: now.saturating_sub(c.started.max(c.last_recv)),
         send_count: c.send_count,
         send_idle_time: now.saturating_sub(c.started.max(c.last_send)),
-        state: ConnectionState::from(c.state),
+        state: if c.claims_known {
+            ConnectionState::from(c.state)
+        } else {
+            ConnectionState::Unknown
+        },
         live_time,
         avg_download: average_kib(c.recv_count, live_time),
         current_download: kib_per_second(c.current_speed_down),
         avg_upload: average_kib(c.send_count, live_time),
         current_upload: kib_per_second(c.current_speed_up),
-        support_flags: c.support_flags,
+        support_flags: c.claims_known.then_some(c.support_flags),
         // `hex::encode` is lowercase and undashed, which is exactly what
         // `epee::string_tools::pod_to_hex` produced for this uuid — and it is
         // the encoder this file already uses four times over.
         connection_id: hex::encode(c.connection_id),
-        height: c.height,
+        height: c.claims_known.then_some(c.height),
         address_type: c.address_type,
     }
 }
@@ -1309,16 +1321,22 @@ pub fn get_net_stats(facts: &dyn P2pFacts) -> Result<GetNetStatsResponse, RpcFau
 }
 
 /// `get_connections` (JSON-RPC, admin-only): the live p2p connections.
-pub fn get_connections(facts: &dyn P2pFacts) -> Result<GetConnectionsResponse, RpcFault> {
+/// A daemon started offline answers `offline` alone (Rick,
+/// 2026-10-14): it has no connections by configuration, and an empty list
+/// would read as a running node with none.
+pub fn get_connections(facts: &dyn P2pFacts) -> Result<P2pReply<GetConnectionsResponse>, RpcFault> {
+    if facts.p2p_state()? == P2pRead::Offline {
+        return Ok(P2pReply::Offline);
+    }
     let snapshot = facts.connections()?;
-    Ok(GetConnectionsResponse {
+    Ok(P2pReply::Running(GetConnectionsResponse {
         status: RpcStatus::ok(),
         connections: snapshot
             .connections
             .iter()
             .map(|c| project_connection(c, snapshot.now))
             .collect(),
-    })
+    }))
 }
 
 /// `/get_peer_list` (admin-only): the white and gray peerlists.
@@ -1327,11 +1345,17 @@ pub fn get_connections(facts: &dyn P2pFacts) -> Result<GetConnectionsResponse, R
 /// applied **here**, because it is a property of the request rather than of
 /// the peerlist, and the facts export reports each entry's blocked state
 /// without deciding what to do about it.
+///
+/// A daemon started offline answers `offline` alone: it has no peer
+/// lists by configuration.
 pub fn get_peer_list(
     request: &GetPeerListRequest,
     facts: &dyn P2pFacts,
-) -> Result<GetPeerListResponse, RpcFault> {
-    let entries = facts.peer_list(request.public_only)?;
+) -> Result<P2pReply<GetPeerListResponse>, RpcFault> {
+    let entries = match facts.peer_list(request.public_only)? {
+        P2pRead::Offline => return Ok(P2pReply::Offline),
+        P2pRead::Running(entries) => entries,
+    };
     let mut white_list = Vec::new();
     let mut gray_list = Vec::new();
     for e in entries {
@@ -1342,7 +1366,6 @@ pub fn get_peer_list(
             host: e.host,
             ip: e.ip,
             port: e.port,
-            last_seen: e.last_seen,
         };
         if e.white {
             white_list.push(peer);
@@ -1350,11 +1373,11 @@ pub fn get_peer_list(
             gray_list.push(peer);
         }
     }
-    Ok(GetPeerListResponse {
+    Ok(P2pReply::Running(GetPeerListResponse {
         status: RpcStatus::ok(),
         white_list,
         gray_list,
-    })
+    }))
 }
 
 /// `sync_info` (JSON-RPC, admin-only): where this node is in its download.
@@ -1364,17 +1387,26 @@ pub fn get_peer_list(
 /// with each other — the C++ handler read the chain, the connection list and
 /// the queue in three separate acquisitions too, and closing that would mean
 /// holding a p2p lock across a chain read.
-pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoResponse, RpcFault> {
+///
+/// A daemon started offline answers `offline` alone: it downloads
+/// from no peer, so it has no sync to report.
+pub fn sync_info(
+    chain: &dyn ChainFacts,
+    p2p: &dyn P2pFacts,
+) -> Result<P2pReply<SyncInfoResponse>, RpcFault> {
+    if p2p.p2p_state()? == P2pRead::Offline {
+        return Ok(P2pReply::Offline);
+    }
     let tip = chain.chain_tip()?;
     let connections = p2p.connections()?;
     let queue = p2p.sync_spans()?;
     let height = tip.chain_height.to_raw();
-    Ok(SyncInfoResponse {
+    Ok(P2pReply::Running(SyncInfoResponse {
         status: RpcStatus::ok(),
         height,
-        // The same count `get_version` reports: the core's target, not a
-        // rewrite of it when the node is synchronized.
-        target_height: tip.target_height.map(ChainCount::to_raw).unwrap_or(0),
+        // The same member `get_version` and `get_info` report: the core's
+        // target, `null` when it has none.
+        target_height: tip.target_height.map(ChainCount::to_raw).into(),
         peers: connections
             .connections
             .iter()
@@ -1397,7 +1429,7 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
             })
             .collect(),
         overview: render_overview(&queue.spans, height),
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -1405,10 +1437,11 @@ pub(crate) mod tests {
     use super::*;
     use crate::chain_facts::{
         decode_target_count, BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts,
-        ChainTip, DaemonIdentity, FeeEstimate, HardFork, HardForkInfo, NetStats,
+        ChainTip, DaemonIdentity, FeeEstimate, NetStats,
     };
     use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
     use serde_json::json;
+    use shekyl_rpc_types::Nullable;
     use shekyl_types::{
         AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
     };
@@ -1423,7 +1456,6 @@ pub(crate) mod tests {
     /// the caller's height would pass every one of them.
     pub(crate) struct FakeFacts {
         pub tip: Result<ChainTip, FactsFault>,
-        pub forks: Result<Vec<HardFork>, FactsFault>,
         /// Length of the fake chain for `block_hash_at`'s bound.
         pub hash_chain_height: ChainCount,
         /// When set, `block_hash_at` faults instead of answering.
@@ -1438,9 +1470,6 @@ pub(crate) mod tests {
         pub alt_declared_height: Option<BlockHeight>,
         /// The last `fill_pow_hash` `block_header_at` was asked for.
         pub asked_pow: AtomicBool,
-        /// What `hard_fork_info` was asked about, including whether the
-        /// caller supplied a version at all.
-        pub asked_fork_version: std::sync::Mutex<Option<Option<u8>>>,
         /// The last `grace_blocks` `fee_estimate` was asked for.
         pub asked_grace: AtomicU64,
         /// The hash `block_at` was asked for, when it was asked by hash.
@@ -1490,27 +1519,6 @@ pub(crate) mod tests {
                     nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
                     genesis_hash: shekyl_types::BlockHash::from_bytes([0x11; 32]),
                 })
-            })
-        }
-        fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault> {
-            self.forks.clone()
-        }
-        fn hard_fork_info(&self, requested: Option<u8>) -> Result<HardForkInfo, FactsFault> {
-            // The double records the request and answers a fixed shape. It
-            // does not re-derive "0 means next" — that resolution belongs to
-            // the daemon, and a fake that reimplemented it would be asserting
-            // its own copy of the rule.
-            *self.asked_fork_version.lock().expect("not poisoned") = Some(requested);
-            Ok(HardForkInfo {
-                queried_version: requested.unwrap_or(7),
-                active_version: 3,
-                enabled: true,
-                window: 10080,
-                votes: 42,
-                threshold: 0,
-                voting: 9,
-                state: 2,
-                earliest_height: 1_234_000,
             })
         }
 
@@ -1681,10 +1689,6 @@ pub(crate) mod tests {
                 synchronized,
                 release_build: false,
             }),
-            forks: Ok(vec![HardFork {
-                version: 1,
-                height: BlockHeight::from_raw(0),
-            }]),
             hash_chain_height: ChainCount::from_raw(1_234_567),
             hash_fault: None,
             asked_height: AtomicU64::new(u64::MAX),
@@ -1695,7 +1699,6 @@ pub(crate) mod tests {
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
-            asked_fork_version: std::sync::Mutex::new(None),
             asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
@@ -2065,7 +2068,7 @@ pub(crate) mod tests {
         // source — the digest against the compiled constant, the genesis and
         // nettype against what the facts layer handed up.
         let out = get_version(&facts(true, 999_999)).unwrap();
-        assert_eq!(out.target_height, 999_999);
+        assert_eq!(out.target_height, Nullable::value(999_999));
         assert_eq!(
             out.consensus_constants_digest,
             shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
@@ -2079,10 +2082,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v18` = 3.41). A bump that
+        // Head of the `get_version` chain (`_v33` = 3.56). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v18.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v33.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2101,8 +2104,25 @@ pub(crate) mod tests {
     #[test]
     fn get_version_reports_the_target_while_syncing() {
         let out = get_version(&facts(false, 2_000_000)).unwrap();
-        assert_eq!(out.target_height, 2_000_000);
+        assert_eq!(out.target_height, Nullable::value(2_000_000));
         assert_eq!(out.version, shekyl_rpc_types::CORE_RPC_VERSION);
+    }
+
+    /// **No target is `null`, not `0` and not an omitted member** (RK-Q7),
+    /// and a chain count of `0` is written as `0` (RK-D23). The facts layer
+    /// reports "no target" as `None`; the reply writes that as `null`,
+    /// whether or not the node is synchronized.
+    #[test]
+    fn get_version_writes_no_target_as_null_and_a_zero_height_as_zero() {
+        for synchronized in [true, false] {
+            let mut facts = facts(synchronized, 0);
+            facts.tip.as_mut().expect("a tip").chain_height = ChainCount::from_raw(0);
+            let out = get_version(&facts).unwrap();
+            assert_eq!(out.target_height, Nullable::NULL);
+            let wire = serde_json::to_value(&out).unwrap();
+            assert_eq!(wire["target_height"], serde_json::Value::Null);
+            assert_eq!(wire["current_height"], serde_json::json!(0));
+        }
     }
 
     /// A facts fault is a fault, never a fabricated reply.
@@ -2110,7 +2130,6 @@ pub(crate) mod tests {
     fn facts_fault_is_not_answered_with_zeros() {
         let f = FakeFacts {
             tip: Err(FactsFault::NotReady),
-            forks: Ok(vec![]),
             hash_chain_height: ChainCount::ZERO,
             hash_fault: Some(FactsFault::NotReady),
             asked_height: AtomicU64::new(u64::MAX),
@@ -2121,7 +2140,6 @@ pub(crate) mod tests {
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
-            asked_fork_version: std::sync::Mutex::new(None),
             asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
@@ -2284,7 +2302,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// The five RK-5b params parsers each accept absent params and their own
+    /// The four RK-5b params parsers each accept absent params and their own
     /// object, and refuse every other shape — an array included.
     ///
     /// The array rows are the ones with a defect behind them: serde's derive
@@ -2321,17 +2339,6 @@ pub(crate) mod tests {
         }
 
         assert_eq!(
-            hard_fork_info_request(&json!(null)).unwrap().version,
-            None,
-            "absent params ask about the active fork"
-        );
-        assert_eq!(
-            hard_fork_info_request(&json!({"version": 7}))
-                .unwrap()
-                .version,
-            core::num::NonZeroU8::new(7)
-        );
-        assert_eq!(
             fee_estimate_request(&json!({"grace_blocks": 5}))
                 .unwrap()
                 .grace_blocks,
@@ -2353,7 +2360,6 @@ pub(crate) mod tests {
                 last_block_header_request(&bad).err(),
                 block_header_by_hash_request(&bad).err(),
                 block_headers_range_request(&bad).err(),
-                hard_fork_info_request(&bad).err(),
                 fee_estimate_request(&bad).err(),
             ] {
                 let RpcFault::Refused(refusal) =
@@ -2366,7 +2372,6 @@ pub(crate) mod tests {
         }
 
         // And a field of the wrong type inside a well-shaped object.
-        assert!(hard_fork_info_request(&json!({"version": "7"})).is_err());
         assert!(block_headers_range_request(&json!({"start_height": -1})).is_err());
     }
 
@@ -2681,17 +2686,16 @@ pub(crate) mod tests {
     /// the top of a partial chain.
     ///
     /// The C++ `CHECK_CORE_READY()` guarded **this method alone** among the
-    /// slice's five, and the reason survives: this is the one that answers
+    /// slice's methods, and the reason survives: this is the one that answers
     /// "the tip", which on a syncing node is the top of what has arrived so
-    /// far presented as the top of the chain. The other four take an explicit
-    /// height or hash, where the caller named what it wanted.
+    /// far presented as the top of the chain. The other header methods take
+    /// an explicit height or hash, where the caller named what it wanted.
     ///
     /// The C++ answered `status = BUSY` with a **default-constructed**
-    /// header, and that was a live trap rather than a tidy convention:
-    /// `shekyl-rpc-client`'s `get_hardfork_version` reads
-    /// `block_header.major_version` without checking the status, so an
-    /// unsynchronised daemon told it the fork version was 0. A refusal cannot
-    /// be read as an answer.
+    /// header, and that was a live trap rather than a tidy convention: a
+    /// client reading `block_header` without checking the status beside it
+    /// was told the tip was a block of major version 0 with a zero hash. A
+    /// refusal cannot be read as an answer.
     #[test]
     fn an_unsynchronized_node_refuses_to_report_a_tip() {
         let unsynced = facts(false, 900_000);
@@ -2704,7 +2708,7 @@ pub(crate) mod tests {
         // syncing node does not pay for a question it will not answer.
         assert_eq!(unsynced.header_reads.load(Ordering::Relaxed), 0);
 
-        // The other four have no readiness check, because the C++ gave them
+        // The other three have no readiness check, because the C++ gave them
         // none — asserted, so that "port what is there" stays a fact about
         // this diff rather than a claim about it.
         let range = GetBlockHeadersRangeRequest {
@@ -2713,7 +2717,6 @@ pub(crate) mod tests {
             fill_pow_hash: false,
         };
         assert!(get_block_headers_range(&unsynced, &range, false).is_ok());
-        assert!(hard_fork_info(&unsynced, &HardForkInfoRequest { version: None }).is_ok());
         assert!(get_fee_estimate(&unsynced, &GetFeeEstimateRequest { grace_blocks: 0 }).is_ok());
         assert!(get_block_header_by_hash(
             &unsynced,
@@ -2870,41 +2873,6 @@ pub(crate) mod tests {
         assert!(refusal.message.contains("999"), "{}", refusal.message);
     }
 
-    /// The request's absent version reaches the facts layer as `None` — the
-    /// handler does not substitute a sentinel on the way down, and the
-    /// resolved answer comes back up.
-    #[test]
-    fn hard_fork_info_forwards_the_absence_and_reports_the_resolution() {
-        let f = facts(false, 0);
-        let out = hard_fork_info(&f, &HardForkInfoRequest { version: None }).expect("info");
-        assert_eq!(
-            *f.asked_fork_version.lock().expect("not poisoned"),
-            Some(None),
-            "the handler must forward 'no version given', not a 0"
-        );
-        assert_ne!(
-            out.queried_version, 0,
-            "the reply never carries the sentinel"
-        );
-        assert_ne!(
-            out.queried_version, out.active_version,
-            "the two versions are separate fields, not one under two names"
-        );
-
-        let out = hard_fork_info(
-            &f,
-            &HardForkInfoRequest {
-                version: core::num::NonZeroU8::new(4),
-            },
-        )
-        .expect("info");
-        assert_eq!(
-            *f.asked_fork_version.lock().expect("not poisoned"),
-            Some(Some(4))
-        );
-        assert_eq!(out.queried_version, 4, "an explicit version is echoed");
-    }
-
     /// `grace_blocks` past the ceiling is refused before the FFI call, so a
     /// caller learns "invalid parameter" rather than "internal error".
     #[test]
@@ -2946,7 +2914,8 @@ pub(crate) mod tests {
         pub net: Result<NetStats, FactsFault>,
         pub connections: Result<ConnectionsSnapshot, FactsFault>,
         pub spans: Result<SyncSpansSnapshot, FactsFault>,
-        pub peers: Result<Vec<crate::core::PeerFacts>, FactsFault>,
+        pub peers: Result<P2pRead<Vec<crate::core::PeerEntry>>, FactsFault>,
+        pub state: Result<P2pRead<()>, FactsFault>,
         pub asked_public_only: AtomicBool,
     }
 
@@ -2965,7 +2934,8 @@ pub(crate) mod tests {
                     connections: Vec::new(),
                 }),
                 spans: Ok(SyncSpansSnapshot { spans: Vec::new() }),
-                peers: Ok(Vec::new()),
+                peers: Ok(P2pRead::Running(Vec::new())),
+                state: Ok(P2pRead::Running(())),
                 asked_public_only: AtomicBool::new(false),
             }
         }
@@ -2981,9 +2951,15 @@ pub(crate) mod tests {
         fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault> {
             self.spans.clone()
         }
-        fn peer_list(&self, public_only: bool) -> Result<Vec<crate::core::PeerFacts>, FactsFault> {
+        fn peer_list(
+            &self,
+            public_only: bool,
+        ) -> Result<P2pRead<Vec<crate::core::PeerEntry>>, FactsFault> {
             self.asked_public_only.store(public_only, Ordering::SeqCst);
             self.peers.clone()
+        }
+        fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
+            self.state.clone()
         }
     }
 
@@ -3011,6 +2987,7 @@ pub(crate) mod tests {
             support_flags: 3,
             port: 18080,
             state: 3,
+            claims_known: true,
             address_type: ADDRESS_TYPE_IPV4,
             incoming: true,
             localhost: false,
@@ -3041,7 +3018,10 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let res = get_connections(&facts).expect("connections");
+        let res = get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs");
         let c = &res.connections[0];
 
         assert_eq!(c.live_time, 600);
@@ -3055,9 +3035,41 @@ pub(crate) mod tests {
         // Zero-padded to 16, as `peerid_to_string` pads.
         assert_eq!(c.connection_id, "151c232a31383f464d545b626970777e");
         assert_eq!(c.state, ConnectionState::Normal);
+        assert_eq!(c.height, Some(1_234_567));
+        assert_eq!(c.support_flags, Some(3));
         // ipv4: `ip` echoes the host and `port` is the number as a string.
         assert_eq!(c.ip, "192.0.2.7");
         assert_eq!(c.port, "18080");
+    }
+
+    /// A claim that has not landed is unknown. Zero height and a real state
+    /// would read as a peer that had answered.
+    #[test]
+    fn an_unknown_claim_is_null_height_and_unknown_state() {
+        let mut raw = connection_facts();
+        raw.claims_known = false;
+        raw.height = 1_234_567;
+        raw.support_flags = 3;
+        raw.state = 3;
+        let facts = FakeP2p {
+            connections: Ok(ConnectionsSnapshot {
+                now: 1600,
+                connections: vec![raw],
+            }),
+            ..FakeP2p::default()
+        };
+        let c = &get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs")
+            .connections[0];
+        assert_eq!(c.state, ConnectionState::Unknown);
+        assert_eq!(c.height, None);
+        assert_eq!(c.support_flags, None);
+        let json = serde_json::to_value(c).expect("json");
+        assert!(json["height"].is_null());
+        assert!(json["support_flags"].is_null());
+        assert_eq!(json["state"], "unknown");
     }
 
     /// A connection younger than a second divides by zero in the naive form.
@@ -3071,7 +3083,11 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts).expect("connections").connections[0];
+        let c = &get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs")
+            .connections[0];
         assert_eq!(c.live_time, 0);
         assert_eq!(c.avg_download, 0);
         assert_eq!(c.avg_upload, 0);
@@ -3089,7 +3105,11 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts).expect("connections").connections[0];
+        let c = &get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs")
+            .connections[0];
         assert_eq!(c.live_time, 0);
         assert_eq!(c.recv_idle_time, 0);
         assert_eq!(c.send_idle_time, 0);
@@ -3110,7 +3130,11 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts).expect("connections").connections[0];
+        let c = &get_connections(&facts)
+            .expect("connections")
+            .into_running()
+            .expect("P2P runs")
+            .connections[0];
         assert_eq!(c.ip, "");
         assert_eq!(c.port, "");
         assert_eq!(c.address, "abcdefghijklmnop.onion:18080");
@@ -3138,21 +3162,20 @@ pub(crate) mod tests {
     /// split comes from the entry's own flag.
     #[test]
     fn the_peer_list_splits_by_list_and_filters_blocked_on_request() {
-        let peer = |n: u64, white: bool, blocked: bool| crate::core::PeerFacts {
+        let peer = |n: u64, white: bool, blocked: bool| crate::core::PeerEntry {
             host: format!("192.0.2.{n}"),
-            last_seen: 1_750_000_000 + n,
             ip: 0,
             port: 18080,
             white,
             blocked,
         };
         let facts = FakeP2p {
-            peers: Ok(vec![
+            peers: Ok(P2pRead::Running(vec![
                 peer(1, true, false),
                 peer(2, true, true),
                 peer(3, false, false),
                 peer(4, false, true),
-            ]),
+            ])),
             ..FakeP2p::default()
         };
 
@@ -3163,7 +3186,9 @@ pub(crate) mod tests {
             },
             &facts,
         )
-        .expect("peer list");
+        .expect("peer list")
+        .into_running()
+        .expect("P2P runs");
         assert_eq!(hidden.white_list.len(), 1);
         assert_eq!(hidden.gray_list.len(), 1);
         assert_eq!(hidden.white_list[0].host, "192.0.2.1");
@@ -3177,13 +3202,52 @@ pub(crate) mod tests {
             },
             &facts,
         )
-        .expect("peer list");
+        .expect("peer list")
+        .into_running()
+        .expect("P2P runs");
         assert_eq!(shown.white_list.len(), 2);
         assert_eq!(shown.gray_list.len(), 2);
         assert!(
             !facts.asked_public_only.load(Ordering::SeqCst),
             "public_only reaches the facts call, which chooses a different p2p read"
         );
+    }
+
+    /// **A daemon started offline answers `offline` alone on all three
+    /// methods** (Rick, 2026-10-14), and reads no connection, span or chain
+    /// for it: every other fact here is a fault, so a read would refuse.
+    #[test]
+    fn an_offline_daemon_answers_the_state_on_every_p2p_method() {
+        let off = FakeP2p {
+            connections: Err(FactsFault::Internal),
+            spans: Err(FactsFault::Internal),
+            peers: Ok(P2pRead::Offline),
+            state: Ok(P2pRead::Offline),
+            ..FakeP2p::default()
+        };
+        assert_eq!(get_connections(&off).expect("a state"), P2pReply::Offline);
+        assert_eq!(
+            get_peer_list(&GetPeerListRequest::default(), &off).expect("a state"),
+            P2pReply::Offline
+        );
+        assert_eq!(
+            sync_info(&facts(false, 0), &off).expect("a state"),
+            P2pReply::Offline
+        );
+    }
+
+    /// An online daemon whose P2P state cannot be read is a fault on every
+    /// method, never an empty reply.
+    #[test]
+    fn an_unreadable_p2p_state_is_a_fault_not_an_empty_reply() {
+        let broken = FakeP2p {
+            peers: Err(FactsFault::NullHandle),
+            state: Err(FactsFault::NotReady),
+            ..FakeP2p::default()
+        };
+        assert!(get_connections(&broken).is_err());
+        assert!(get_peer_list(&GetPeerListRequest::default(), &broken).is_err());
+        assert!(sync_info(&facts(false, 0), &broken).is_err());
     }
 
     /// The lifetime average, including the two inputs that would divide by
@@ -3299,9 +3363,12 @@ pub(crate) mod tests {
         };
 
         let behind = facts(false, 1_234_600);
-        let res = sync_info(&behind, &p2p).expect("sync info");
+        let res = sync_info(&behind, &p2p)
+            .expect("sync info")
+            .into_running()
+            .expect("P2P runs");
         assert_eq!(res.height, 1_234_567);
-        assert_eq!(res.target_height, 1_234_600);
+        assert_eq!(res.target_height, Nullable::value(1_234_600));
         assert_eq!(
             res.peers.len(),
             1,
@@ -3312,7 +3379,24 @@ pub(crate) mod tests {
         assert_eq!(res.spans[0].speed, 75, "0.75 becomes a percentage");
 
         let synced = facts(true, 1_234_600);
-        let res = sync_info(&synced, &p2p).expect("sync info");
-        assert_eq!(res.target_height, 1_234_600);
+        let res = sync_info(&synced, &p2p)
+            .expect("sync info")
+            .into_running()
+            .expect("P2P runs");
+        assert_eq!(res.target_height, Nullable::value(1_234_600));
+
+        // No target is `null` on this method too, the same encoding as
+        // `get_version` and `get_info` (RK-Q7).
+        for synchronized in [true, false] {
+            let res = sync_info(&facts(synchronized, 0), &p2p)
+                .expect("sync info")
+                .into_running()
+                .expect("P2P runs");
+            assert_eq!(res.target_height, Nullable::NULL);
+            assert_eq!(
+                serde_json::to_value(&res).unwrap()["target_height"],
+                serde_json::Value::Null
+            );
+        }
     }
 }

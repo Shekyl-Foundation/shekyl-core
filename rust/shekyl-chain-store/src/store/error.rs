@@ -34,13 +34,14 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use shekyl_chain_rules::RuleSet;
+use shekyl_chain_rules::{AnchorConflict, RuleSet};
 use shekyl_types::{BlockHash, PCanonicalId, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
-    AccrualFault, CellFault, LeafCountFault, LeafDensity, SlashFault, StoreInvariant, UndoFault,
+    AccrualFault, CellFault, LeafCountFault, LeafDensity, SettlementFault, SlashFault,
+    StoreInvariant, UndoFault,
 };
 
 /// Why a store operation failed, by class.
@@ -312,6 +313,17 @@ pub enum StoreCannot {
         /// The schedule this session runs.
         session: SettlementEpochBlocks,
     },
+    /// The recorded chain contradicts a pin this binary carries (CEN-E5).
+    ///
+    /// The file is coherent; this session is the wrong one for it — the
+    /// same class as [`Self::SettlementEpochMismatch`]. Genesis
+    /// ([`AnchorConflict::remedy`] is refuse-to-run) is another network's
+    /// file, or a remint. A later checkpoint carries a pop the ingest
+    /// driver still owes; this open reports that conflict and does not
+    /// pop, so a session cannot start on a chain that disagrees with its
+    /// pins and then forget to rewind. The payload is the rules crate's
+    /// conflict, not a second shape of it.
+    ReleasePin(AnchorConflict),
     /// The session's undo-log retention is not strictly inside its
     /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
     /// §3, §12). `tip − retention` has to sit above the body horizon, which
@@ -385,6 +397,14 @@ pub enum StoreCannot {
         /// The persona the injection named.
         persona: PCanonicalId,
     },
+    /// The regtest draw issue
+    /// (`ChainStore::regtest_issue_draws`) named a draw the index already
+    /// holds. The door adds draws; re-issuing one would fold its term into
+    /// the digest a second time.
+    DrawAlreadyIssued {
+        /// The persona the draw names.
+        persona: PCanonicalId,
+    },
     /// `pop` at `tip` cannot run: the height is below the pop floor
     /// (S-CHAIN-W §5.4, SCW-7).
     ///
@@ -442,14 +462,25 @@ pub enum StoreCannot {
 /// The alt-chain store's typed refusals — decisions, not faults
 /// (`StoreCannot`'s shape; `DRS_E1_SALT.md` §3.4).
 ///
-/// Each is a **caller-contract violation** made visible (`SAL-Q3` as ruled,
-/// and the identity belt with it): the caller states what it expected of
-/// the table, and the store says when the table disagrees, instead of
-/// doing something silently different. A row already on disk whose block
-/// does not hash to its key is not one of these — that is SI-7 at AL4/AL7,
-/// the row having bypassed this boundary.
+/// Each is a **decision about what the caller asked** made visible
+/// (`SAL-Q3` as ruled): the caller states what it expected of the table,
+/// and the store says when the table disagrees, instead of doing something
+/// silently different. A row already on disk whose block does not hash to
+/// its key is not one of these — that is SI-7 at AL4/AL7, the row having
+/// bypassed the write boundary (AL1 keys a row by its verdict's hash, so no
+/// caller supplies an identity to disagree with).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AltCannot {
+    /// [`AltChain::build`](super::AltChain::build) from a parent whose
+    /// `previous` chain reaches neither a recorded row nor another alt row
+    /// — CEN-K2's orphan. `at` is the first hash the store does not hold.
+    /// Not a fault: the chain the caller named does not connect, and the
+    /// ingest door answers the peer accordingly (the C++'s orphan branch,
+    /// `SHEKYL_BLOCK_INGEST_ORPHANED`).
+    Unlinked {
+        /// The first hash on the walk that neither table holds.
+        at: BlockHash,
+    },
     /// `insert_alt_block` of a hash the store already holds — CEN-K3's
     /// belt (`MDB_NODUPDATA`), re-specified as the one typed refusal (SAL-4).
     AlreadyHeld,
@@ -457,17 +488,6 @@ pub enum AltCannot {
     /// is not held is a caller-contract violation — L14's insert-versus-upsert
     /// ruling applied to a remove — not an idempotent no-op.
     NotHeld,
-    /// `insert_alt_block` whose key is not the hash of the block it stores.
-    /// The key is the alt block's identity and the record does not carry a
-    /// second one, so the store verifies the one it is given — the belt
-    /// class `chain_reads::block_body` applies to a blob against
-    /// `block_info.hash`. The C++ trusted the caller (`blockchain.cpp:2359`).
-    IdentityMismatch {
-        /// The key the caller supplied.
-        key: BlockHash,
-        /// What the block bytes hash to.
-        actual: BlockHash,
-    },
 }
 
 /// The pool store's typed refusals — the pool's decisions, not faults
@@ -556,13 +576,18 @@ impl core::fmt::Display for StoreCannot {
             ),
             Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
             Self::InjectionOffFakechain => f.write_str(
-                "regtest serve-credit injection refused: the node's trust carries a release's \
-                 anchors, so this is not a Fakechain",
+                "regtest injection refused: the node's trust carries a release's anchors, so \
+                 this is not a Fakechain",
             ),
             Self::InjectionForUnbondedPersona { persona } => write!(
                 f,
-                "regtest serve-credit injection refused: persona {persona} has no bond record, \
-                 and a credit without one is SI-15 at the next read"
+                "regtest injection refused: persona {persona} has no bond record, and a credit \
+                 or a draw without one is a row the reads refuse"
+            ),
+            Self::DrawAlreadyIssued { persona } => write!(
+                f,
+                "regtest draw issue refused: the index already holds this draw for persona \
+                 {persona}"
             ),
             Self::PopBelowFloor { tip, floor } => write!(
                 f,
@@ -604,6 +629,24 @@ impl core::fmt::Display for StoreCannot {
                  session runs {session}: persisted join epochs and serve-credit windows would be \
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
+            Self::ReleasePin(conflict) => match conflict.recorded {
+                Some(recorded) => write!(
+                    f,
+                    "block {height} is {recorded} but this binary pins {expected}; \
+                     the file is not this release's chain ({remedy:?})",
+                    height = conflict.height,
+                    expected = conflict.expected,
+                    remedy = conflict.remedy(),
+                ),
+                None => write!(
+                    f,
+                    "block {height} is absent below the tip but this binary pins {expected}; \
+                     the file is not this release's chain ({remedy:?})",
+                    height = conflict.height,
+                    expected = conflict.expected,
+                    remedy = conflict.remedy(),
+                ),
+            },
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
             Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
             Self::PoolFileForeign => f.write_str(
@@ -644,12 +687,12 @@ impl From<PoolCannot> for StoreError {
 impl core::fmt::Display for AltCannot {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Unlinked { at } => write!(
+                f,
+                "alt chain does not connect to the recorded chain: {at} is not held"
+            ),
             Self::AlreadyHeld => f.write_str("insert of an alt block the store already holds"),
             Self::NotHeld => f.write_str("remove of an alt block the store does not hold"),
-            Self::IdentityMismatch { key, actual } => write!(
-                f,
-                "insert of an alt block under key {key} whose bytes hash to {actual}"
-            ),
         }
     }
 }

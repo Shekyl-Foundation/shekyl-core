@@ -340,6 +340,51 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
     );
 }
 
+/// A detection and the ledger row the merge builds from it name one
+/// `(gindex, O)`.
+///
+/// The curve tree is told about an output twice: from the detection, before
+/// the ingest that folds it, and from the ledger row on every refresh after.
+/// The registry is keyed on the pair, so if the two derivations differed the
+/// second offer would read as another output — reported stale, or registered
+/// beside the first. Nothing but this equality stops them drifting, since
+/// one reads a `RecoveredWalletOutput` and the other a `TransferDetails`.
+#[test]
+fn a_detection_and_its_ledger_row_name_one_pair() {
+    use crate::engine::ownership::{detected_output, owned_output};
+
+    let (mut ledger, mut indexes) = empty_state();
+    let detected = DetectedTransfer {
+        block_height: shekyl_types::BlockHeight::from_raw(1),
+        output: make_recovered_output(7, 4_242),
+    };
+    let from_detection = detected_output(&detected);
+    let result = ScanResult {
+        processed_height_range: shekyl_types::BlockHeight::from_raw(1)
+            ..shekyl_types::BlockHeight::from_raw(2),
+        parent_hash: None,
+        block_hashes: vec![(
+            shekyl_types::BlockHeight::from_raw(1),
+            BlockHash::from_bytes([0x11; 32]),
+        )],
+        new_transfers: vec![detected],
+        spent_key_images: Vec::new(),
+        reorg_rewind: None,
+        block_leaves: Vec::new(),
+        block_curve_tree_roots: Vec::new(),
+        bond_sightings: Vec::new(),
+    };
+    let inserted = apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+    assert_eq!(inserted, vec![0]);
+
+    assert_eq!(
+        from_detection.0.to_raw(),
+        4_242,
+        "the fixture's gindex, so the equality below is not two defaults"
+    );
+    assert_eq!(owned_output(&ledger.transfers()[0]), from_detection);
+}
+
 /// Cross-batch invariant pin (PERF_MERGE_INSERTION_INDICES_PREFLIGHT
 /// §5.2): a multi-height `ScanResult` with k₁ + k₂ new transfers
 /// produces an inserted-indices Vec of length k₁ + k₂ whose

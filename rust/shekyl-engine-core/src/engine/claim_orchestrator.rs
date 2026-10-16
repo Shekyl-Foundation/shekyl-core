@@ -73,7 +73,7 @@
 use std::collections::BTreeSet;
 
 use shekyl_curve_tree::{
-    two_sided_reference_height, AssembleInput, BlockHash, CurveTreeRoot, Gindex, ReferenceBlock,
+    two_sided_reference_height, AssembleInput, BlockHash, CurveTreeRoot, ReferenceBlock,
     TwoSidedRefusal,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
@@ -91,7 +91,7 @@ use super::prpc::PersonaIsolatedTransport;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
     AssembleEmissionClaim, AssembledEmissionClaim, PersonaHandle, StakeEngineError,
-    StakeEngineHandle,
+    StakeEngineHandle, TxKeyDraw,
 };
 
 /// Why the claim pipeline refused before (or at) the actor hand-off. Every
@@ -339,11 +339,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     };
     let assemble_inputs: Vec<AssembleInput> = swept
         .path_records()
-        .map(|r| AssembleInput {
-            gindex: Gindex::from_raw(r.gindex.to_raw()),
-            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
-            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
-        })
+        .map(crate::engine::ownership::p_assemble_input)
         .collect();
     let paths = ctx
         .tree
@@ -377,6 +373,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
             operands,
             tree_ctx,
             fee_floor: ctx.fee_floor,
+            tx_key: TxKeyDraw::Fresh,
         })
         .await?)
 }
@@ -392,7 +389,7 @@ mod tests {
         BondPostRecord {
             height: BlockHeight::from_raw(height),
             p_canonical_id: persona,
-            post_kind: 0,
+            post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
         }
     }
 
@@ -588,16 +585,16 @@ mod tests {
                     .is_some_and(|m| m == "get_info");
                 let synced = self.1;
                 let result = if is_get_info {
-                    json!({
-                        "height": 10_000,
-                        "target_height": if synced { 0 } else { 1_000_000 },
-                        "synchronized": synced,
-                        "top_block_hash": hex::encode(
+                    crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                        chain_count: shekyl_types::ChainCount::from_raw(10_000),
+                        target_height: (!synced).then_some(1_000_000),
+                        synchronized: synced,
+                        top_hash: shekyl_types::BlockHash::from_bytes(
                             crate::engine::test_support::test_block_hash_at(9_999),
                         ),
-                        "outgoing_connections_count": 8,
-                        "incoming_connections_count": 0,
-                    })
+                        has_peers: true,
+                    }
+                    .to_value()
                 } else {
                     (*self.0).clone()
                 };
@@ -710,6 +707,7 @@ mod tests {
                     let txs: Vec<TxLeafInputs<'_>> = if h == owned_block {
                         vec![TxLeafInputs {
                             is_miner: false,
+                            tx_hash: None,
                             leaf_entry_blob: Some(&leaf_blob),
                             outputs: &raw_outputs,
                         }]
@@ -735,7 +733,7 @@ mod tests {
             let bond_posts = vec![BondPostRecord {
                 height: BlockHeight::from_raw(tip),
                 p_canonical_id: PCanonicalId::from_bytes([9u8; 32]),
-                post_kind: 0,
+                post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
             }];
 
             let expected_reference = BlockHeight::from_raw(tip) - REF_ANCHOR_AGE;

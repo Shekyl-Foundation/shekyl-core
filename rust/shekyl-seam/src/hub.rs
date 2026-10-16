@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::oneshot;
 
@@ -25,54 +26,14 @@ use shekyl_transport_layer::{
     Sockets,
 };
 
-use crate::dial::Dial;
+use crate::connection::{
+    AdvertisedEndpoint, ChainLength, Connection, HeightMessage, RedialRefusal,
+};
+use crate::dial::{Channel, Dial};
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
+use crate::post::{Post, SyncPayload};
 use crate::registry::{Board, Row};
-
-/// What the strand is asked to run. The post returns before the strand does.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Post {
-    /// Create the handler. The channel already exists.
-    Established {
-        /// The admission id.
-        id: SocketId,
-        /// The endpoint the adapter writes before arming the handler.
-        endpoint: Endpoint,
-    },
-    /// One delivery. The handler parses these bytes.
-    Deliver {
-        /// The admission id.
-        id: SocketId,
-        /// The connector this id was established on. The adapter keeps one
-        /// binding per connector and routes by this; a post without it went
-        /// to the clearnet binding, which dropped every Tor delivery.
-        connector: ConnectorId,
-        /// One whole message.
-        bytes: Vec<u8>,
-    },
-    /// The socket is gone. Destroy the handler when its call count is zero.
-    Closed {
-        /// The admission id.
-        id: SocketId,
-        /// The connector this id was established on, as on `Deliver`.
-        connector: ConnectorId,
-        /// The cause that won.
-        cause: CloseCause,
-    },
-}
-
-impl Post {
-    /// The admission id this post names.
-    #[must_use]
-    pub const fn id(&self) -> SocketId {
-        match self {
-            Self::Established { id, .. } | Self::Deliver { id, .. } | Self::Closed { id, .. } => {
-                *id
-            }
-        }
-    }
-}
 
 /// A channel the hub has posted `established` for.
 pub struct Attached {
@@ -100,12 +61,18 @@ struct Conn {
     send: Option<SendHalf>,
     cause: Option<CloseCause>,
     phase: Phase,
-    /// The endpoint this row was adopted with. Posts name its connector.
-    /// The address is the one observed at adopt and is not rewritten.
-    endpoint: Endpoint,
+    /// The session. Adoption fixes the endpoint. A claim does not replace
+    /// it. A clone of this value is not the row.
+    connection: Connection,
     /// The Levin handshake has finished. Distinct from [`Phase`]: a row can
     /// be open to frames before the handshake, and closed after it.
     established: bool,
+    /// Unix seconds at admission. The operator view reads this. It is not
+    /// the timing engine's tick. Last receive and last send are not on
+    /// this row: they are monotonic millisecond instants on the byte path.
+    started_unix: u64,
+    /// The same admission, on the monotonic clock the byte stamps use.
+    started_mono: u64,
     /// Wakes this row's inbound drive, and only it. A hub-wide wake would
     /// wake every waiting driver on every strand answer, O(N) per delivery
     /// on the zone whose N is adversarial. `notify_one` stores a permit when
@@ -129,6 +96,8 @@ struct Inner {
     ceiling: InboundCeiling,
     /// The last board published. Readers clone this. They do not lock the table.
     board: Board,
+    /// How many times [`Hub::republish`] has run. Bytes do not increment it.
+    publishes: u64,
 }
 
 /// What one locked look at a row told [`Hub::deliver_async`].
@@ -176,6 +145,7 @@ impl Hub {
                 conns: HashMap::new(),
                 ceiling,
                 board: Board::empty(),
+                publishes: 0,
             })),
             ready: Arc::new(Condvar::new()),
             post,
@@ -246,7 +216,10 @@ impl Hub {
         self.wake();
     }
 
-    fn now(&self) -> Tick {
+    /// This hub's clock. The peer lists read it for a received list, so
+    /// one process has one notion of when.
+    #[must_use]
+    pub fn now(&self) -> Tick {
         self.clock.now()
     }
 
@@ -254,18 +227,54 @@ impl Hub {
         self.dial.read().expect("seam dial").clone()
     }
 
-    /// Ask the installed dialer for a channel and post `established`.
+    /// Ask the installed dialer for a channel. No row, no post.
     ///
-    /// No dialer is [`CloseKind::DialFailed`]. The caller drives
-    /// [`crate::drive_inbound`] on the returned session.
-    pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
+    /// The channel is admitted and built, and its gap deadline, when it
+    /// has one, is already armed by the connector. Nothing here writes
+    /// the board or tells the adapter: the outbound dialer holds the
+    /// channel through the handshake and calls [`Self::adopt`] only on a
+    /// well-formed response. A channel that is never adopted leaves no
+    /// trace in the registry.
+    ///
+    /// No dialer is [`CloseKind::LocalClose`].
+    pub fn dial_channel(&self, endpoint: &Endpoint) -> Result<Channel, CloseCause> {
         let dial = self
             .current_dial()
-            .ok_or_else(|| CloseCause::new(CloseKind::DialFailed))?;
+            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let ceiling = self.lock().ceiling;
         let now = self.now();
-        let channel = dial.connect(endpoint, ceiling, now)?;
+        dial.connect(endpoint, ceiling, now)
+    }
+
+    /// [`Self::dial_channel`], then [`Self::adopt`]: a channel and its
+    /// `established` post in one call.
+    ///
+    /// The seam tests and the harness use this. The outbound dialer does
+    /// not: it runs the handshake between the two. The caller drives
+    /// [`crate::drive_inbound`] on the returned session.
+    pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
+        let channel = self.dial_channel(endpoint)?;
         self.adopt(channel.open, channel.session, channel.endpoint, channel.gap)
+    }
+
+    /// Post the outbound handshake's result for `id`. The caller has
+    /// adopted the channel; this is the first post after its
+    /// `established`, ahead of any frame the pump will deliver.
+    pub fn post_handshake_result(
+        &self,
+        id: SocketId,
+        connector: ConnectorId,
+        keep: bool,
+        support_flags: u32,
+        sync: SyncPayload,
+    ) {
+        (self.post)(Post::HandshakeResult {
+            id,
+            connector,
+            keep,
+            support_flags,
+            sync,
+        });
     }
 
     /// Register a channel the connector already admitted.
@@ -280,14 +289,135 @@ impl Hub {
         gap: Option<oneshot::Sender<()>>,
     ) -> Result<Attached, CloseCause> {
         let id = open.id();
-        let send = session.send_half();
-        let poster = Arc::clone(&self.post);
+        let connection = Connection::open(id, endpoint, self.now());
+        self.place(connection, open, session, gap)
+    }
+
+    /// Admit `open` as a re-dial of `origin`'s advertisement.
+    ///
+    /// The origin's claim is not written. The new row's endpoint is
+    /// `observed`. [`RedialRefusal::NotThisClaim`] when that observation
+    /// is not the advertisement.
+    pub fn adopt_redial(
+        &self,
+        origin: SocketId,
+        open: OpenSocket,
+        session: Session,
+        observed: Endpoint,
+        gap: Option<oneshot::Sender<()>>,
+    ) -> Result<Attached, RedialRefusal> {
+        let id = open.id();
+        let started = self.now();
         let mut inner = self.lock();
+        let redial = inner.conns.get(&origin).and_then(|conn| {
+            if matches!(conn.phase, Phase::Closed) {
+                None
+            } else {
+                conn.connection.redial(id, observed, started)
+            }
+        });
+        let Some(redial) = redial else {
+            drop(inner);
+            drop(open);
+            return Err(RedialRefusal::NotThisClaim);
+        };
         if inner.conns.contains_key(&id) {
             drop(inner);
             drop(open);
-            return Err(CloseCause::new(CloseKind::DialFailed));
+            return Err(RedialRefusal::AlreadyAdmitted);
         }
+        Ok(Self::write_row(
+            &mut inner,
+            &self.post,
+            redial.into_session(),
+            open,
+            session,
+            gap,
+        ))
+    }
+
+    /// A copy of the session. Recording on the copy does not change the row.
+    #[must_use]
+    pub fn snapshot(&self, id: SocketId) -> Option<Connection> {
+        self.lock()
+            .conns
+            .get(&id)
+            .map(|conn| conn.connection.clone())
+    }
+
+    /// Record a height the peer sent on a live row.
+    ///
+    /// `false` when `id` is missing or the row is closed.
+    pub fn note_claimed_height(&self, id: SocketId, height: u64, message: HeightMessage) -> bool {
+        self.edit(id, |connection| {
+            connection.note_claimed_height(height, message);
+        })
+        .is_some()
+    }
+
+    /// Raise the accepted chain length on a live row.
+    ///
+    /// `false` when `id` is missing or the row is closed. A shorter length
+    /// does not replace a longer one.
+    pub fn raise_accepted_chain_length(&self, id: SocketId, length: ChainLength) -> bool {
+        self.edit(id, |connection| {
+            connection.raise_accepted_chain_length(length);
+        })
+        .is_some()
+    }
+
+    /// Record the hash the peer asserted on a live row.
+    pub fn note_last_known_hash(&self, id: SocketId, hash: [u8; 32]) -> bool {
+        self.edit(id, |connection| connection.note_last_known_hash(hash))
+            .is_some()
+    }
+
+    /// Record the support flags the peer asserted on a live row.
+    pub fn note_support_flags(&self, id: SocketId, flags: u32) -> bool {
+        self.edit(id, |connection| connection.note_support_flags(flags))
+            .is_some()
+    }
+
+    /// Record the handshake's advertisement on a live row.
+    ///
+    /// The observed endpoint stays.
+    pub fn note_advertised(&self, id: SocketId, advertised: AdvertisedEndpoint) -> bool {
+        self.edit(id, |connection| connection.note_advertised(advertised))
+            .is_some()
+    }
+
+    /// Insert `connection` when its id is free.
+    ///
+    /// A duplicate id releases `open` and is [`CloseKind::LocalClose`].
+    fn place(
+        &self,
+        connection: Connection,
+        open: OpenSocket,
+        session: Session,
+        gap: Option<oneshot::Sender<()>>,
+    ) -> Result<Attached, CloseCause> {
+        let mut inner = self.lock();
+        if inner.conns.contains_key(&connection.id()) {
+            drop(inner);
+            drop(open);
+            return Err(CloseCause::new(CloseKind::LocalClose));
+        }
+        Ok(Self::write_row(
+            &mut inner, &self.post, connection, open, session, gap,
+        ))
+    }
+
+    fn write_row(
+        inner: &mut Inner,
+        post: &Arc<dyn Fn(Post) + Send + Sync>,
+        connection: Connection,
+        open: OpenSocket,
+        session: Session,
+        gap: Option<oneshot::Sender<()>>,
+    ) -> Attached {
+        let id = connection.id();
+        let endpoint = *connection.endpoint();
+        let send = session.send_half();
         inner.conns.insert(
             id,
             Conn {
@@ -295,17 +425,29 @@ impl Hub {
                 send: Some(send),
                 cause: None,
                 phase: Phase::Arming,
-                endpoint,
+                connection,
                 established: false,
+                started_unix: Self::unix_secs(),
+                started_mono: shekyl_transport_layer::monotonic_ms(),
                 notify: Arc::new(tokio::sync::Notify::new()),
                 posted_deliveries: 0,
                 strand_closed: false,
                 gap,
             },
         );
-        Self::republish(&mut inner);
-        poster(Post::Established { id, endpoint });
-        Ok(Attached { id, session })
+        Self::republish(inner);
+        post(Post::Established { id, endpoint });
+        Attached { id, session }
+    }
+
+    /// Run `f` on a live row. `None` when `id` is missing or closed.
+    fn edit<R>(&self, id: SocketId, f: impl FnOnce(&mut Connection) -> R) -> Option<R> {
+        let mut inner = self.lock();
+        let conn = inner.conns.get_mut(&id)?;
+        if matches!(conn.phase, Phase::Closed) {
+            return None;
+        }
+        Some(f(&mut conn.connection))
     }
 
     /// The sessions as of the last publish. The returned board does not
@@ -315,6 +457,19 @@ impl Hub {
         self.lock().board.clone()
     }
 
+    /// How many boards have been published. A byte does not increment this.
+    #[must_use]
+    pub fn publish_count(&self) -> u64 {
+        self.lock().publishes
+    }
+
+    fn unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0)
+    }
+
     /// Rebuild the published board from rows that are still connected.
     ///
     /// The live table is a hash map, keyed for lookup by admission id.
@@ -322,13 +477,23 @@ impl Hub {
     /// flood that is O(N²) across the flood. D5's thread-budget flood leg
     /// measures that cost; it is not a reason to hand a reader the live
     /// row. A closed row stays in the table until [`Self::reap`] and is
-    /// not on the board.
+    /// not on the board. Open, close, and the handshake are the callers.
+    /// A byte is not.
     fn republish(inner: &mut Inner) {
+        inner.publishes = inner.publishes.saturating_add(1);
         let rows = inner
             .conns
             .iter()
             .filter(|(_, conn)| !matches!(conn.phase, Phase::Closed))
-            .map(|(&id, conn)| Row::new(id, conn.endpoint, conn.established))
+            .map(|(&id, conn)| {
+                Row::new(
+                    id,
+                    *conn.connection.endpoint(),
+                    conn.established,
+                    conn.started_unix,
+                    conn.started_mono,
+                )
+            })
             .collect();
         inner.board = Board::from_rows(rows);
     }
@@ -476,7 +641,7 @@ impl Hub {
                 }
                 conn.phase = Phase::Delivering;
                 conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
-                let connector = conn.endpoint.connector();
+                let connector = conn.connection.endpoint().connector();
                 let frame = bytes.take().expect("checked above");
                 (self.post)(Post::Deliver {
                     id,
@@ -531,8 +696,8 @@ impl Hub {
     /// The same send, with whether the registry held `id` and any cause.
     pub fn send_report(&self, id: SocketId, bytes: Vec<u8>) -> SendReport {
         let outcome = {
-            let inner = self.lock();
-            let Some(conn) = inner.conns.get(&id) else {
+            let mut inner = self.lock();
+            let Some(conn) = inner.conns.get_mut(&id) else {
                 return SendReport {
                     accepted: false,
                     found: false,
@@ -733,7 +898,7 @@ impl Hub {
             let open = conn.open.take();
             let send = conn.send.take();
             let gap = conn.gap.take();
-            let connector = conn.endpoint.connector();
+            let connector = conn.connection.endpoint().connector();
             poster(Post::Closed {
                 id,
                 connector,

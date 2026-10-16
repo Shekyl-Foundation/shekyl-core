@@ -227,9 +227,14 @@ And `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` DQ-T0.7 (decided 2026-07-02), on the
 
 An earlier revision of this document suggested a "torrc-surface review" could
 settle whether config alone suffices. **That suggestion is withdrawn: the design
-refuses to have such a surface.** `actor.rs` passes six typed options
+refuses to have such a surface.** `control/launch.rs` passes six typed options
 (`DataDirectory`, `ControlPort auto`, `ControlPortWriteToFile`,
-`CookieAuthentication`, `SocksPort`, `Log`, plus test-only `DisableNetwork`) and
+`CookieAuthentication`, `SocksPort`, `Log`, plus test-only `DisableNetwork`).
+It also names every file tor would otherwise find by itself (`--torrc-file`,
+`--defaults-torrc`, `--GeoIPFile`, `--GeoIPv6File`) as one zero-length file in the
+`DataDirectory`. Leaving those out is not enough: tor then reads its compiled-in
+defaults, which for the pinned Linux bundle sit under `/var/tmp/dist/tor/`,
+creatable by any local account. `launch.rs` also
 states why a free-form flag list is excluded — it can smuggle the safety
 invariants open "directly, or indirectly via `-f <torrc>` / `+Option` append /
 `--defaults-torrc`, which no denylist reliably covers." Future customization
@@ -768,6 +773,12 @@ confirmed they served what the client leg believed it fetched.
 > tables above without this note, and go in the (c) record, not here.
 > `live_apparatus` passed over real Tor on the re-based rig in 110 s
 > (three bootstraps, header sent, bodies verified under each persona's key).
+
+**Amendment 2026-10-07.** The re-based rig's warm arm is no longer the
+circuit reuse that paragraph describes. Each fetch mints a nonce and
+presents it as the SOCKS username, so the arm times a new rendezvous
+circuit and no `NEWNYM`. The 2026-09-16 row in §12.3 records the run
+that reused the circuit.
 
 ```bash
 # 1. Mine a regtest chain past the shard-0 leaf range (~5 h at ~0.69 s/block).

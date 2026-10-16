@@ -8,19 +8,16 @@
 //!
 //! [`RuleSetId`] is **its own space** (`CHAIN_RULES_CRATE.md` §4.2, round-1
 //! ruling Q5). It coincides with `BlockHeader.major_version` today because
-//! the shipped hardfork table has one entry — the same inertness that hid
-//! the `on_block_popped` defect — and the coincidence is a fact about the
-//! table, not a definition. So there is no `From<u8>`, no `PartialEq<u8>`,
+//! there is one rule set and one block version, and the coincidence is a
+//! fact about that, not a definition. So there is no `From<u8>`, no `PartialEq<u8>`,
 //! and no reading of the header version anywhere here: the header version
 //! a rule set *admits* is one of its parameters ([`RuleSet::header_major_version`],
 //! landed with CEN-B1 in slice 1), never its identity.
 //!
-//! [`RuleSchedule`] is where R4's state-dependent activation has its seat.
-//! `rules_at(height)` is a function, seeded as the identity (every network,
-//! every height → [`RuleSet::GENESIS`]), so a second rule set arrives as a
-//! schedule step and no caller changes. Nettype selects **data** (rule 71):
-//! three schedule values, one `rules_at`, no `match network` anywhere a rule
-//! runs.
+//! [`RuleSchedule`] is the identity: every network, every height names
+//! [`RuleSet::GENESIS`]. A later activation is a design document before a
+//! step is added. Nettype selects **data** (rule 71): three schedule values,
+//! one `rules_at`, no `match network` anywhere a rule runs.
 //!
 //! [`AdmissionPolicy`] is relay/pool policy — a separate input with a
 //! separate id, never merged into [`RuleSet`] (ruling §8). Its consumer is
@@ -30,6 +27,11 @@
 use core::fmt;
 
 use shekyl_address::Network;
+use shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
+use shekyl_archival_retention::{
+    anchor_depth_covers_response_window, response_window_outrunning_anchor,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
+};
 pub use shekyl_archival_retention::{SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -44,8 +46,9 @@ use crate::rules::difficulty::Target;
 /// `StoreCannot` — the block was judged under rules not in force at its
 /// height, which is not a verdict about the block.
 ///
-/// Not the header's `major_version`, and not comparable to one — the 1:1 is
-/// a fact about today's table, and equality would erase the distinction
+/// Not the header's `major_version`, and not comparable to one. One rule set
+/// and one block version both happen to be 1; that coincidence is not a
+/// definition, and equality would erase the distinction
 /// [`RuleSchedule::rules_at`] exists to preserve:
 ///
 /// ```compile_fail
@@ -82,8 +85,9 @@ impl RuleSetId {
 /// rules land. The first is `enforced` — the census rows this rule set
 /// holds a block to, which is also the denominator a verdict's coverage is
 /// measured complete against. The second is `header_major_version` — the
-/// `BlockHeader.major_version` this rule set admits (CEN-B1; the vote
-/// floor of CEN-B2), landed with slice 1. The third is `difficulty` — how
+/// `BlockHeader.major_version` this rule set admits (CEN-B1), landed with
+/// slice 1. It is not CEN-B2's operand: the header's minor version is
+/// reserved at one value under every rule set. The third is `difficulty` — how
 /// CEN-D4 derives the target — landed with slice 2 and the reason one
 /// non-issued constructor exists ([`RuleSet::fakechain`]). The fourth —
 /// `mined_money_unlock_window` (CEN-F6) — landed with slice 4
@@ -116,8 +120,7 @@ impl RuleSetId {
 /// validator read the latch; a replay of a capture made under the lever,
 /// in a process that had not armed it, refused the first claim under L7
 /// (`DRS_E4_ARCHIVAL_WRITER.md` §5 ARW-15). CEN-F21's split epoch is
-/// `rules::miner::EMISSION_SPLIT_EPOCH`, not a field: it joins this set
-/// when a schedule step names a different epoch.
+/// `shekyl_economics::EMISSION_SPLIT_EPOCH`, not a field.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
@@ -176,6 +179,96 @@ impl fmt::Display for ReorgCapNotInsideEpoch {
 
 impl std::error::Error for ReorgCapNotInsideEpoch {}
 
+/// A [`FakechainSchedule`] whose epoch is long enough that an honest
+/// challenge read could be anchored at or above the block it answers for:
+/// `W₂ + L >` anchor depth (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1,
+/// `SCS-P32`). `W₂` is a fraction of the epoch, so this is a ceiling on
+/// the epoch: [`Self::LONGEST_EPOCH_BLOCKS`].
+///
+/// # Which inputs reach this refusal today
+///
+/// One: the replay tool's `--settlement-epoch-blocks`
+/// (`shekyl-chain-replay`, `schedule_flags`), which builds its pair with
+/// [`FakechainSchedule::new`] and prints this error.
+///
+/// **The daemon's regtest epoch lever does not.**
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is read by the retention crate's
+/// process latch — armed by
+/// `shekyl_archival_retention::arm_settlement_epoch_override_for_regtest`,
+/// read through `effective_settlement_epoch_blocks` and
+/// `SettlementSchedule::effective` — and by the C++ daemon. Nothing in
+/// Rust builds a [`FakechainSchedule`] from it. That latch's own parser
+/// (`parse_settlement_epoch_override`) admits no epoch above the genesis
+/// `SETTLEMENT_EPOCH_BLOCKS`, which is below the ceiling here, so the
+/// lever cannot name an epoch this relation refuses; but that is a
+/// consequence of two constants, not a check of this relation. **When the
+/// Rust daemon wires the lever to a rule set, the pair must be built by
+/// [`FakechainSchedule::new`] and this error surfaced to the operator as
+/// it is written** — not a second constructor, and not a panic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ResponseWindowOutrunsAnchor {
+    /// Blocks per epoch the pair named.
+    pub settlement_epoch: SettlementEpochBlocks,
+    /// `W₂` under that epoch: always the window that outran the anchor,
+    /// never a stand-in. An epoch too short to have a window cannot be
+    /// refused for this (the relation holds vacuously), so no value of this
+    /// type carries a zero here
+    /// (`shekyl_archival_retention::response_window_outrunning_anchor`).
+    pub response_window: BlockCount,
+}
+
+impl ResponseWindowOutrunsAnchor {
+    /// The longest settlement epoch a schedule may name: the last one
+    /// whose response window, `SEB / W2_EPOCH_DIVISOR`, still leaves the
+    /// anchor lag inside the anchor depth.
+    pub const LONGEST_EPOCH_BLOCKS: u64 = {
+        let widest_window = PASS_ANCHOR_DEPTH_BLOCKS.to_raw() - PASS_ANCHOR_LAG_BLOCKS.to_raw();
+        (widest_window + 1) * W2_EPOCH_DIVISOR - 1
+    };
+}
+
+impl fmt::Display for ResponseWindowOutrunsAnchor {
+    /// What was asked for, why it is refused, and the value that works.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a settlement epoch of {} blocks is too long: its challenge-response window is {} \
+             blocks, and with the {}-block anchor lag that reaches past the {}-block pass-anchor \
+             depth, so an honest archival read would be refused at admission. Use a settlement \
+             epoch of at most {} blocks",
+            self.settlement_epoch.get(),
+            self.response_window.to_raw(),
+            PASS_ANCHOR_LAG_BLOCKS.to_raw(),
+            PASS_ANCHOR_DEPTH_BLOCKS.to_raw(),
+            Self::LONGEST_EPOCH_BLOCKS
+        )
+    }
+}
+
+impl std::error::Error for ResponseWindowOutrunsAnchor {}
+
+/// Why a `(settlement_epoch, reorg_cap)` pair is not a
+/// [`FakechainSchedule`]. One arm per invariant the pair is held to, each
+/// carrying what the caller needs to say which value to change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FakechainScheduleRefused {
+    /// `0 < reorg_cap < SEB` fails.
+    ReorgCapNotInsideEpoch(ReorgCapNotInsideEpoch),
+    /// `W₂ + L ≤` anchor depth fails.
+    ResponseWindowOutrunsAnchor(ResponseWindowOutrunsAnchor),
+}
+
+impl fmt::Display for FakechainScheduleRefused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReorgCapNotInsideEpoch(refused) => refused.fmt(f),
+            Self::ResponseWindowOutrunsAnchor(refused) => refused.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for FakechainScheduleRefused {}
+
 impl FakechainSchedule {
     /// The genesis pair: `SETTLEMENT_EPOCH_BLOCKS` per epoch, `D_MAX` cap
     /// — the invariant on it is `reorg.rs`'s compile-time assertion.
@@ -184,24 +277,47 @@ impl FakechainSchedule {
         reorg_cap: D_MAX,
     };
 
-    /// The pair `(settlement_epoch, reorg_cap)`, if `0 < reorg_cap < SEB`.
+    /// The pair `(settlement_epoch, reorg_cap)`, if it satisfies both
+    /// invariants a rule set's schedule is held to: `0 < reorg_cap < SEB`,
+    /// and `W₂ + L ≤` anchor depth with `W₂` the epoch's own response
+    /// window (`SCS-P32`). They are checked in that order.
+    ///
+    /// A value of this type therefore satisfies both, and
+    /// [`RuleSet::fakechain`] checks neither.
     ///
     /// # Errors
     ///
-    /// [`ReorgCapNotInsideEpoch`] otherwise.
+    /// [`FakechainScheduleRefused`], naming the invariant that failed.
+    /// [`ResponseWindowOutrunsAnchor`] says which inputs reach that arm
+    /// today, and what the daemon's regtest lever owes when it is wired
+    /// to a rule set.
     pub const fn new(
         settlement_epoch: SettlementEpochBlocks,
         reorg_cap: BlockCount,
-    ) -> Result<Self, ReorgCapNotInsideEpoch> {
+    ) -> Result<Self, FakechainScheduleRefused> {
         let cap = reorg_cap.to_raw();
         if cap == 0 || cap >= settlement_epoch.get() {
-            return Err(ReorgCapNotInsideEpoch {
-                settlement_epoch,
-                reorg_cap,
-            });
+            return Err(FakechainScheduleRefused::ReorgCapNotInsideEpoch(
+                ReorgCapNotInsideEpoch {
+                    settlement_epoch,
+                    reorg_cap,
+                },
+            ));
+        }
+        let settlement = SettlementSchedule::new(settlement_epoch);
+        // Only a window that exists can outrun the anchor: an epoch too
+        // short to have one satisfies the relation vacuously and has no
+        // window to name, so the refusal's window is always the real one.
+        if let Some(window) = response_window_outrunning_anchor(settlement) {
+            return Err(FakechainScheduleRefused::ResponseWindowOutrunsAnchor(
+                ResponseWindowOutrunsAnchor {
+                    settlement_epoch,
+                    response_window: BlockCount::from_raw(window.get()),
+                },
+            ));
         }
         Ok(Self {
-            settlement: SettlementSchedule::new(settlement_epoch),
+            settlement,
             reorg_cap,
         })
     }
@@ -218,6 +334,17 @@ impl FakechainSchedule {
         self.reorg_cap
     }
 
+    /// Whether an honest challenge read under this pair's epoch is anchored
+    /// below the block it answers for: `W₂ + L ≤` anchor depth
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` `SCS-P32`;
+    /// `shekyl_archival_retention::anchor_depth_covers_response_window`).
+    /// True of every value of this type: [`Self::new`] refuses a pair for
+    /// which it is false, and [`Self::PRODUCTION`] is asserted below.
+    #[must_use]
+    pub const fn anchor_covers_response_window(self) -> bool {
+        anchor_depth_covers_response_window(self.settlement)
+    }
+
     /// Whether this is [`PRODUCTION`](Self::PRODUCTION) — the pair no lever
     /// was pulled to reach, so a public network may carry it (`const`,
     /// where `==` cannot yet be).
@@ -227,6 +354,13 @@ impl FakechainSchedule {
             && self.reorg_cap.to_raw() == Self::PRODUCTION.reorg_cap.to_raw()
     }
 }
+
+// The production pair is a literal, not a call to `new`, so the second
+// invariant `new` holds a pair to is asserted on it here.
+const _: () = assert!(
+    FakechainSchedule::PRODUCTION.anchor_covers_response_window(),
+    "the production schedule's W2 + L exceeds the pass-anchor depth (SCS-P32)"
+);
 
 // The genesis pair satisfies its own invariant — the same fact `reorg.rs`
 // asserts, restated on the type that carries it.
@@ -264,8 +398,8 @@ pub enum DifficultyRule {
 
 impl RuleSet {
     /// The genesis rule set: every consensus row of the census; admits
-    /// header version `1` (`hardforks.cpp:35–50`, the one-entry table);
-    /// LWMA-1 difficulty.
+    /// header version `1` (the C++ `CURRENT_BLOCK_MAJOR_VERSION`;
+    /// `rule_set_tests` pins the two equal); LWMA-1 difficulty.
     pub const GENESIS: Self = Self {
         id: RuleSetId::GENESIS,
         enforced: CenRow::ALL,
@@ -298,7 +432,10 @@ impl RuleSet {
     /// variant exists this takes it as a witness. `fixed` is non-zero by
     /// its type, so the target it fixes is a [`Target`] by construction
     /// (CEN-D6); `schedule` is a valid pair by its type, so the invariant
-    /// between the two fields it sets holds by construction.
+    /// between the two fields it sets holds by construction — and so does
+    /// `W₂ + L ≤` anchor depth (`SCS-P32`), which
+    /// [`FakechainSchedule::new`] refuses a pair for. This function checks
+    /// nothing and cannot fail.
     /// `fakechain(None, FakechainSchedule::PRODUCTION)` **is** `GENESIS`
     /// by value.
     #[must_use]
@@ -347,6 +484,22 @@ impl RuleSet {
         self.reorg_cap
     }
 
+    /// Whether an honest challenge read under this rule set is anchored
+    /// below the block it answers for: `W₂ + L ≤` anchor depth, with `W₂`
+    /// this set's own (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1, `SCS-P32`).
+    ///
+    /// **True of every rule set this crate can build**: of each issued set
+    /// by the compile-time assertion beside [`Self::for_id`]'s table, and
+    /// of a Fakechain set because [`FakechainSchedule::new`] refuses a pair
+    /// that breaks it. It is
+    /// the precondition under which the bundle rule's `anchor_height < h`
+    /// (CEN-J36) refuses no honest record; the rule itself does not read
+    /// it.
+    #[must_use]
+    pub const fn anchor_covers_response_window(&self) -> bool {
+        anchor_depth_covers_response_window(self.settlement_schedule)
+    }
+
     /// The rule set `id` names; `None` for an id no schedule has issued.
     #[must_use]
     pub fn for_id(id: RuleSetId) -> Option<Self> {
@@ -365,25 +518,31 @@ impl RuleSet {
     /// The consensus rows this rule set holds a block to **and the
     /// per-block stages can evaluate**, in census order. Excluded: rows
     /// held by the C++ ingest driver ([`RowStatus::HeldByCxx`]), which are
-    /// not the validator's; and rows this crate enforces at another site
-    /// ([`RowStatus::EnforcedAt`] — CEN-E5 at writer open) or holds by
-    /// construction ([`RowStatus::ByConstruction`] — CEN-F2, F8, F19), which
-    /// no per-block coverage could contain. So `Coverage::is_complete_for`
-    /// measures `enforced − held − at-open − by-construction` — the census
-    /// denominator itself never moves for any of them (the gate prints the
-    /// subtractions beside it).
+    /// not the validator's; rows this crate enforces at another site
+    /// ([`RowStatus::EnforcedAt`] — CEN-E5 at writer open, the alt tier's
+    /// K1b, K4, D5, E2) or holds by construction
+    /// ([`RowStatus::ByConstruction`] — CEN-F2, F8, F19), which no per-block
+    /// coverage could contain; and rows a Rust crate below the validator
+    /// holds ([`RowStatus::HeldByStore`] — CEN-K1a, K2, K3, K8). So
+    /// `Coverage::is_complete_for` measures
+    /// `enforced − held − at-open − by-construction − held-by-store` — the
+    /// census denominator itself never moves for any of them (the gate
+    /// prints the subtractions beside it).
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_ {
         self.enforced.iter().copied().filter(|row| {
             !matches!(
                 row.status(),
-                RowStatus::HeldByCxx | RowStatus::EnforcedAt | RowStatus::ByConstruction
+                RowStatus::HeldByCxx
+                    | RowStatus::EnforcedAt
+                    | RowStatus::ByConstruction
+                    | RowStatus::HeldByStore
             )
         })
     }
 
     /// A rule set that admits `header_major_version`, for the version-rule
-    /// fixtures only: `ISSUED` holds one set today, and B1/B2's refusal
-    /// arms under a later set have no other way to be exercised. Never
+    /// fixtures only: `ISSUED` holds one set today, and B1 under a later set
+    /// has no other way to be exercised. Never
     /// issued, never named by a schedule, not constructible outside tests.
     #[cfg(test)]
     pub(crate) const fn admitting_for_tests(header_major_version: u8) -> Self {
@@ -420,13 +579,14 @@ impl RuleSet {
         self.tx_spendable_age
     }
 
-    /// The `BlockHeader.major_version` this rule set admits (CEN-B1), and
-    /// the floor a header's version vote must reach (CEN-B2).
+    /// The `BlockHeader.major_version` this rule set admits (CEN-B1).
     ///
     /// A **parameter**, not the identity: it equals
-    /// `RuleSetId::GENESIS.to_raw()` today because the shipped hardfork table
-    /// has one entry, and nothing here reads one as the other
-    /// (`CHAIN_RULES_CRATE.md` §4.2, ruling Q5).
+    /// `RuleSetId::GENESIS.to_raw()` today because one rule set is issued,
+    /// and nothing here reads one as the other (`CHAIN_RULES_CRATE.md` §4.2,
+    /// ruling Q5). The header's other version byte is not a parameter: it
+    /// is `shekyl_wire::block::HEADER_MINOR_VERSION` under every rule set
+    /// (CEN-B2).
     #[must_use]
     pub const fn header_major_version(&self) -> u8 {
         self.header_major_version
@@ -434,14 +594,15 @@ impl RuleSet {
 }
 
 impl fmt::Debug for RuleSet {
-    // The row list is 153 names long; a failing assertion wants the count.
+    // The row list is every enforced census row (`CenRow::ALL` on the
+    // genesis set); a failing assertion wants the count, not the names.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuleSet")
             .field("id", &self.id)
             .field(
                 "enforced",
                 &format_args!(
-                    "{} of {} rows (per-block; held, at-open and by-construction rows excluded)",
+                    "{} of {} rows (per-block; held, at-open, by-construction and store-held rows excluded)",
                     self.enforced().count(),
                     CenRow::ALL.len()
                 ),
@@ -476,8 +637,7 @@ pub struct RuleSchedule {
 }
 
 impl RuleSchedule {
-    /// The identity schedule: the genesis rules at every height. What the
-    /// shipped one-entry hardfork table means.
+    /// The identity schedule: the genesis rules at every height.
     const IDENTITY: Self = Self {
         genesis: RuleSetId::GENESIS,
         steps: &[],
@@ -546,6 +706,23 @@ const fn well_formed(schedule: &RuleSchedule) -> bool {
     }
     true
 }
+
+// Every issued rule set anchors an honest challenge read below its block
+// (`W₂ + L ≤` anchor depth, `SCS-P32`), at compile time. `GENESIS` is the
+// production triple, also asserted where the anchor's constants are
+// (`pass_anchor.rs`); this is the same relation on every set a schedule
+// may name, so a second issued set with a longer epoch cannot land
+// without it.
+const _: () = {
+    let mut i = 0;
+    while i < RuleSet::ISSUED.len() {
+        assert!(
+            RuleSet::ISSUED[i].anchor_covers_response_window(),
+            "an issued rule set's W2 + L exceeds the pass-anchor depth (SCS-P32)"
+        );
+        i += 1;
+    }
+};
 
 // Every schedule `for_network` can return is well formed, at compile time.
 const _: () = {

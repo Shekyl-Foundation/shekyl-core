@@ -151,14 +151,13 @@ pub(super) fn alt_chain_info(
     last_blocks: u64,
     now: u64,
 ) -> Result<String, String> {
-    let info = fetch_get_info(src)?;
+    let height = fetch_get_info(src)?.health.height;
     let mut chains = fetch_alt_chains(src)?;
     // The alt chain's first block. Saturating: an alt chain longer than our
     // own height is not something this console gets to be surprised by.
     let start_of = |c: &AltChainProvisional| c.height.saturating_sub(c.length).saturating_add(1);
     // "deep" as the C++ computed it: how far below our tip the fork point is.
-    let depth_of =
-        |c: &AltChainProvisional| info.height.saturating_sub(start_of(c)).saturating_sub(1);
+    let depth_of = |c: &AltChainProvisional| height.saturating_sub(start_of(c)).saturating_sub(1);
 
     if tip.is_empty() {
         chains.sort_by_key(|c| c.height);

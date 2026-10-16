@@ -472,6 +472,9 @@ fn join_market_bond_post() -> Input {
         p_canonical_id: PCanonicalId::from_bytes([7u8; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![9u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
@@ -479,6 +482,56 @@ fn join_market_bond_post() -> Input {
         bond_credit: 100,
         bond_debit: 0,
     }))
+}
+
+/// [`join_market_bond_post`] with its kind replaced — the in-memory face of
+/// the bond post's kind rules, judged by [`Transaction::validate`].
+fn bond_post_spend_with_kind(kind: BondPostKind) -> Transaction {
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    let mut post = join_market_bond_post();
+    if let Input::BondPost(bp) = &mut post {
+        bp.kind = kind;
+    }
+    tx.prefix.inputs.push(post);
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths.push(pqc_auths[0].clone());
+    }
+    tx
+}
+
+/// `Other` carrying the JoinMarket tag (5) or the retired keyless one (0)
+/// is a misconstruction that never validates. Today the size bound's
+/// counting write reaches the writer's guard first and panics on it
+/// (`serialized_len` `.expect`s the write; the conformance registry's note
+/// on the `Other` invariant), before `BondPost::validate`'s own guard
+/// returns its error. Either is a refusal, so this asserts the one thing
+/// both give — never `Ok` — and that the two tags get the same.
+/// `Other(2)` (Release) is the control: the guard is the tag, not `Other`.
+#[test]
+fn bond_post_other_with_a_joinmarket_tag_never_validates() {
+    use shekyl_wire::transaction::{
+        BOND_POST_KIND_JOINMARKET, BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET,
+    };
+    // `Err(message)` for a returned refusal, `Err(panic message)` for the
+    // writer's guard reached through the counting write.
+    let outcome = |tag: u8| -> Result<(), String> {
+        let tx = bond_post_spend_with_kind(BondPostKind::Other(tag));
+        match std::panic::catch_unwind(move || tx.validate()) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(panic) => Err(panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_default()),
+        }
+    };
+    let live = outcome(BOND_POST_KIND_JOINMARKET).expect_err("Other(5) never validates");
+    let retired =
+        outcome(BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET).expect_err("Other(0) never validates");
+    assert!(live.contains("must not use the JoinMarket tag"), "{live}");
+    assert_eq!(retired, live);
+    assert_eq!(outcome(2), Ok(()), "Other(Release) is not a JoinMarket tag");
 }
 
 #[test]
@@ -728,7 +781,9 @@ fn validator_rejects_a_kem_field_of_the_wrong_length() {
 /// real genesis coinbase so everything but the outputs and the extra is a
 /// shape the validator already accepts.
 fn coinbase_with_outputs(n: usize) -> Transaction {
-    use shekyl_wire::tx_extra::{self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES};
+    use shekyl_wire::tx_extra::{
+        self, TxExtraField, COINBASE_NONCE_BYTES, CONFORMING_DRAW_COMMITMENT, HYBRID_KEM_CT_BYTES,
+    };
     let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
     let mut tx = blk.miner_transaction;
     let out = tx.prefix.outputs[0].clone();
@@ -745,6 +800,7 @@ fn coinbase_with_outputs(n: usize) -> Transaction {
     tx.prefix.extra = tx_extra::build_coinbase_extra(
         pk,
         &[0u8; COINBASE_NONCE_BYTES],
+        CONFORMING_DRAW_COMMITMENT,
         n,
         &vec![0x6a; HYBRID_KEM_CT_BYTES * n],
         &tx_extra::conforming_pqc_leaf_blob(n),
@@ -759,8 +815,8 @@ fn coinbase_with_outputs(n: usize) -> Transaction {
 /// not size-capped here or in C++. What the cutover changed is that the
 /// coinbase extra now has a consensus bound of its own — the grammar — and
 /// that bound is tighter than the relay cap ever was: the largest grammar-
-/// valid coinbase extra is the `MAX_OUTPUTS`-output one — four tags, four
-/// varint lengths, `32 + 8 + 1184·16` bytes of payload, 18 994 in all —
+/// valid coinbase extra is the `MAX_OUTPUTS`-output one — five tags, three
+/// varint lengths, `32 + 8 + 32 + 1184·16` bytes of payload, 19 027 in all —
 /// below 24 576. The "unbounded coinbase extra" M4 named is closed, not
 /// moved; one byte of padding on that largest coinbase is refused.
 #[test]
@@ -780,9 +836,13 @@ fn cen_m4_coinbase_extra_is_bounded_by_the_grammar_below_the_relay_cap() {
     let leaf = 64 * MAX_OUTPUTS;
     assert_eq!(
         largest.prefix.extra.len(),
-        (1 + 32) + (1 + 1 + 8) + (1 + varint_len(kem) + kem) + (1 + varint_len(leaf) + leaf)
+        (1 + 32)
+            + (1 + 1 + 8)
+            + (1 + 32)
+            + (1 + varint_len(kem) + kem)
+            + (1 + varint_len(leaf) + leaf)
     );
-    assert_eq!(largest.prefix.extra.len(), 18_994);
+    assert_eq!(largest.prefix.extra.len(), 19_027);
     assert!(largest.prefix.extra.len() < MAX_TX_EXTRA);
     largest
         .validate()

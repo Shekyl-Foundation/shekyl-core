@@ -140,9 +140,24 @@ struct gen_block_big_major_version : public gen_block_verification_base<1>
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_block_big_minor_version : public gen_block_accepted_base<2>
+struct gen_block_big_minor_version : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
+};
+
+// CEN-B2 on the alternative path. gen_block_big_minor_version extends the
+// tip, so it reaches handle_block_to_main_chain alone; the reserved value is
+// checked at alt ADMISSION too, and the two sites are separate lines. Event
+// layout as gen_block_alt_ts_above_ftl: 0 genesis, 1-2 main blocks, 3 the
+// candidate forked from blk_1, so invalid_block_idx == final main height == 3.
+struct gen_block_alt_big_minor_version : public gen_block_verification_base<3>
+{
+  gen_block_alt_big_minor_version()
+  {
+    REGISTER_CALLBACK("check_not_stored_as_alt", gen_block_alt_big_minor_version::check_not_stored_as_alt);
+  }
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_not_stored_as_alt(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
 };
 
 // C2-R3-Q2 (CONSENSUS_C2_R3_TIMESTAMPS.md §5): there is no bootstrap
@@ -364,60 +379,17 @@ struct gen_block_is_too_big : public gen_block_verification_base<1>
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_block_late_v1_coinbase_tx : public gen_block_verification_base<1>
-{
-  bool generate(std::vector<test_event_entry>& events) const;
-};
-template<>
-struct get_test_options<gen_block_late_v1_coinbase_tx> {
-  const std::pair<uint8_t, uint64_t> hard_forks[3] = {std::make_pair(1, 0), std::make_pair(1, 1), std::make_pair(0, 0)};
-  const cryptonote::test_options test_options = {
-    hard_forks, 0
-  };
-};
-
 struct gen_block_low_coinbase : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
 };
-template<>
-struct get_test_options<gen_block_low_coinbase> {
-  const std::pair<uint8_t, uint64_t> hard_forks[3] = {std::make_pair(1, 0), std::make_pair(HF_VERSION_EXACT_COINBASE, 1), std::make_pair(0, 0)};
-  const cryptonote::test_options test_options = {
-    hard_forks, 0
-  };
-};
 
-struct gen_block_miner_tx_out_has_no_view_tag_before_hf_view_tags : public gen_block_verification_base<1>
+struct gen_block_miner_tx_out_has_no_view_tag : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_block_miner_tx_out_has_no_view_tag_from_hf_view_tags : public gen_block_verification_base<1>
+struct gen_block_miner_tx_out_has_view_tag : public gen_block_accepted_base<2>
 {
   bool generate(std::vector<test_event_entry>& events) const;
-};
-template<>
-struct get_test_options<gen_block_miner_tx_out_has_no_view_tag_from_hf_view_tags> {
-  const std::pair<uint8_t, uint64_t> hard_forks[3] = {std::make_pair(1, 0), std::make_pair(HF_VERSION_VIEW_TAGS+1, 1), std::make_pair(0, 0)};
-  const cryptonote::test_options test_options = {
-    hard_forks, 0
-  };
-};
-
-struct gen_block_miner_tx_out_has_view_tag_before_hf_view_tags : public gen_block_accepted_base<2>
-{
-  bool generate(std::vector<test_event_entry>& events) const;
-};
-
-struct gen_block_miner_tx_out_has_view_tag_from_hf_view_tags : public gen_block_accepted_base<2>
-{
-  bool generate(std::vector<test_event_entry>& events) const;
-};
-template<>
-struct get_test_options<gen_block_miner_tx_out_has_view_tag_from_hf_view_tags> {
-  const std::pair<uint8_t, uint64_t> hard_forks[3] = {std::make_pair(1, 0), std::make_pair(HF_VERSION_VIEW_TAGS, 1), std::make_pair(0, 0)};
-  const cryptonote::test_options test_options = {
-    hard_forks, 0
-  };
 };

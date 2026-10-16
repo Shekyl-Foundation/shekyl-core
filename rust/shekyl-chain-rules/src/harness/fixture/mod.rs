@@ -23,16 +23,24 @@ use super::price;
 use super::*;
 use crate::verdict::TxSlot;
 
+pub use crate::rules::tx_against::newest_admissible_reference;
 pub use price::{priced, priced_at, repriced};
+pub use shekyl_harness_wallet::coinbase::{paid, Paid};
+pub use shekyl_harness_wallet::MinerWallet;
+pub use shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT;
+
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 use shekyl_types::{ArchivalLength, SigningPayloadHash};
 
+use crate::archival::BondArm;
+use crate::rules::tx_emission::J19;
+
 mod archival;
 pub use archival::{
-    claimant, emission_vin, join_market, serve_credit_only, serve_credit_vin, BOND_FLOOR,
-    PRUNED_PASS_RECORD,
+    claimant, emission_vin, emission_vin_for, join_market, persona, serve_credit_only,
+    serve_credit_only_with, serve_credit_vin, FixturePersona, BOND_FLOOR, PRUNED_PASS_RECORD,
 };
 
 /// The well-formed **transaction** shapes this module builds, as a
@@ -84,28 +92,32 @@ impl TxShape {
         }
     }
 
-    /// The bodies that must be listed **before** this shape in the block
-    /// that connects it — the archival state it reads, which only an
-    /// earlier body in the same block can create on a chain that holds
-    /// none. A serve credit names a persona with a record (CEN-L7), so it
-    /// lists behind that persona's [`join_market`]; every other shape
-    /// stands alone. The listed slot in [`valid_at`](Self::valid_at) is
-    /// the one behind these.
-    pub fn precedents(self) -> Vec<Transaction> {
-        match self {
-            Self::Coinbase | Self::Listed | Self::JoinMarket => Vec::new(),
-            Self::ServeCreditOnly => vec![Self::JoinMarket.build()],
-        }
-    }
-
-    /// The slots at which the shape is a valid transaction. The coinbase
-    /// is valid at the miner slot only; every other shape at the pool's
-    /// slot and listed — behind its [`precedents`](Self::precedents).
+    /// The slots at which the shape is a valid transaction — **under
+    /// `tx_form`**, the stateless half. The coinbase is valid at the miner
+    /// slot only; every other shape at the pool's slot and listed first.
+    ///
+    /// No listed shape is judged valid through `validate` on a `MockChain`,
+    /// and none can be: the spend carries a named key image and no
+    /// membership proof (CEN-I13/I15 refuse it on any view; slice 6 row 6),
+    /// the join's funding spend is that same fixture, and the serve credit
+    /// reads a persona record the mock holds none of by policy
+    /// (`harness.rs`, `archival_reads!(empty)`; DRS-E4 §5.2). Each shape's
+    /// `validate` witness is a driven chain in `shekyl-chain-ingest`, the
+    /// one place the thing it needs can honestly exist.
+    ///
+    /// *Records-was:* until slice 6 row 6 a `reads_bond_state()` singled
+    /// the serve credit out as the one `tx_form`-only shape; before E6
+    /// slice 8 row 3 that was `precedents()`, which listed the persona's
+    /// [`join_market`] in the **same block** ahead of the credit — a
+    /// premise the rule refuted: the C++ reads the record before the block
+    /// (`check_tx_inputs` before `add_block`), so a same-block join opens
+    /// nothing the credit can be judged against, and J4 says so.
     pub const fn valid_at(self) -> &'static [TxSlot] {
         match self {
             Self::Coinbase => &[TxSlot::Miner],
-            Self::Listed | Self::JoinMarket => &[TxSlot::Lone, TxSlot::Listed(0)],
-            Self::ServeCreditOnly => &[TxSlot::Lone, TxSlot::Listed(1)],
+            Self::Listed | Self::JoinMarket | Self::ServeCreditOnly => {
+                &[TxSlot::Lone, TxSlot::Listed(0)]
+            }
         }
     }
 
@@ -302,24 +314,38 @@ pub fn pqc_extra(n_outputs: usize) -> Vec<u8> {
 }
 
 /// The coinbase `extra` in CEN-I20's one layout for `n_outputs` outputs:
-/// `[0x01 pubkey, 0x02 nonce(8), 0x06, 0x07]`, built by the grammar's
-/// own constructor so the fixture cannot drift from the rule. The
-/// pubkey is `G` and the nonce zero: no rule reads either's value.
+/// `[0x01 pubkey, 0x02 nonce(8), 0x0C commitment, 0x06, 0x07]`, built by
+/// the grammar's own constructor so the fixture cannot drift from the
+/// rule. The pubkey is `G`, the nonce zero and the commitment
+/// [`CONFORMING_DRAW_COMMITMENT`]: no rule reads any of the three values.
 pub fn coinbase_extra(n_outputs: usize) -> Vec<u8> {
     let kem = vec![0x5A; HYBRID_KEM_CT_BYTES * n_outputs];
     let leaf = conforming_pqc_leaf_blob(n_outputs);
-    tx_extra::build_coinbase_extra(G, &[0; COINBASE_NONCE_BYTES], n_outputs, &kem, &leaf)
-        .expect("the grammar's one layout builds")
+    tx_extra::build_coinbase_extra(
+        G,
+        &[0; COINBASE_NONCE_BYTES],
+        CONFORMING_DRAW_COMMITMENT,
+        n_outputs,
+        &kem,
+        &leaf,
+    )
+    .expect("the grammar's one layout builds")
 }
 
 /// A coinbase that satisfies every structural 4.F row for a block at
-/// `height`: one `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one
-/// output (F4) paying `0` with key `G` (F9) and mask `2·G` (F10),
+/// `height`, paying the harness miner a **real** output: one
+/// `Input::Gen(height)` (F1, F5), `Ct::Null` (F3), one output (F4) whose
+/// key and mask are the shared secret's (F9, F10),
 /// `unlock_time = height + mined_money_unlock_window` (F6), and the
-/// grammar's `extra` for one output (I19, I20). The amount written here
-/// is `0`. [`priced_at`] replaces the first output with what CEN-F18
-/// requires, except at genesis, where the configured amount stands (F11):
-/// a zero coinbase stays zero, and an endowed one is kept.
+/// grammar's `extra` for that output — the tx public key, the KEM
+/// ciphertexts and the PQC leaf entry the wallet will scan (I19, I20).
+/// Composed by [`shekyl_harness_wallet::coinbase::paying`], from the same
+/// two owners the block template composes from; the wallet it pays is
+/// [`MinerWallet::harness`], so a test in a crate that may hold a tree can
+/// spend what a fixture block paid. The amount written here is `0`.
+/// [`priced_at`] re-pays the output with what CEN-F18 requires, except at
+/// genesis, where the configured amount stands (F11): a zero coinbase
+/// stays zero, and an endowed one is kept.
 ///
 /// The F6 claim holds at every height a chain can reach. Within the
 /// window of `u64::MAX` no coinbase satisfies F6 — the rule's own sum
@@ -329,23 +355,12 @@ pub fn coinbase_extra(n_outputs: usize) -> Vec<u8> {
 /// the bytes, not a verdict.
 pub fn coinbase(height: u64) -> Transaction {
     let unlock_time = height.saturating_add(RuleSet::GENESIS.mined_money_unlock_window().to_raw());
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time,
-            inputs: vec![Input::Gen(height)],
-            outputs: vec![Output {
-                amount: 0,
-                key: G,
-                view_tag: 1,
-            }],
-            extra: coinbase_extra(1),
-        },
-        ct: Ct::Null(CtBase {
-            enc_amounts: vec![[0x55; 9]],
-            enc_labels: vec![[0x66; 9]],
-            commitments: vec![TWO_G],
-        }),
-    }
+    shekyl_harness_wallet::coinbase::paying(
+        MinerWallet::harness().recipient(),
+        height,
+        unlock_time,
+        0,
+    )
 }
 
 /// A spend of `key_image` with `outputs` zero-amount outputs, shaped to
@@ -359,9 +374,11 @@ pub fn coinbase(height: u64) -> Transaction {
 /// sized to the outputs (H8). A prunable region is present exactly when
 /// there are outputs, and its one BP+ has the canonical layout for that
 /// count (H19's layout half). One [`pqc_auth_filler`] per input, so the
-/// txid is 4-part. The proof bytes are filler: H19's verification and
-/// the 4.I membership rows are not landed, and when they land this
-/// fixture is theirs to refuse. [`listed`] is the two-output case —
+/// txid is 4-part. The proof bytes are filler, and the declared depth is
+/// `0`: since slice 6 row 6 (2026-10-08) CEN-I13 refuses the depth and
+/// CEN-I15 the proof on any view, so this body is a *refusal* fixture
+/// through `tx_against` — a row before I13 or nothing (`tx_against_tests`'
+/// header). [`listed`] is the two-output case —
 /// the fewest CEN-I1 admits (slice 6 commit 2); `spend(ki, 1)` is I1's
 /// own negative fixture.
 pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
@@ -460,22 +477,11 @@ pub fn referencing(mut tx: Transaction, reference: BlockHash) -> Transaction {
     tx
 }
 
-/// The newest reference CEN-I11 admits for a spend listed in the block
-/// that connects at `connecting`: the block `REFERENCE_BLOCK_MIN_AGE`
-/// below it (`ref_height ≤ chain_height − MIN_AGE`, `blockchain.cpp:4121`,
-/// with `chain_height` the connecting height). `None` when the chain is
-/// too young to carry a spend at all — the first block that can list
-/// one is height `MIN_AGE`, referencing genesis.
-#[must_use]
-pub fn newest_admissible_reference(connecting: BlockHeight) -> Option<BlockHeight> {
-    connecting.checked_sub_count(crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE)
-}
-
 /// Whether a row reads `tx`'s `referenceBlock` as a chain fact.
 ///
-/// CEN-I10/I11 read it on a regular spend (a [`Input::ToKey`]). CEN-J21,
-/// in flight, reads it on an emission even when that emission has no fee
-/// input: the reference is the membership anchor of the emission vin.
+/// CEN-I10/I11 read it on a regular spend (a [`Input::ToKey`]). CEN-J21
+/// reads it on an emission even when that emission has no fee input: the
+/// reference is the membership anchor of the emission vin.
 /// A serve-credit's [`Ct::Fcmp`] carries the field and no row reads it, so
 /// the decision is not "any `Fcmp`" — that would put the spend window on a
 /// shape that may be listed at any height. A coinbase is [`Ct::Null`] and
@@ -550,7 +556,35 @@ pub fn anchored_at(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transa
 /// `hold`), it is the infrastructure for every test whose subject is
 /// another rule.
 #[must_use]
-pub fn signed(mut tx: Transaction) -> Transaction {
+pub fn signed(tx: Transaction) -> Transaction {
+    signed_with(tx, None)
+}
+
+/// A claimant outside the fixture personas for [`signed_claiming`]: the
+/// identity key its emission slot carries, and the signer that key
+/// answers to.
+pub struct Claimant<'a> {
+    /// The hybrid public key the emission slot carries — the one the vin's
+    /// `P_canonical_id` derives from (CEN-J20).
+    pub identity: Vec<u8>,
+    /// The signature that key makes over a slot's signing hash.
+    pub sign: &'a dyn Fn(&SigningPayloadHash) -> Vec<u8>,
+}
+
+/// [`signed`] for an emission claim whose claimant is **not** a fixture
+/// persona — a keyed persona another harness derived (the spender's),
+/// whose record a real join wrote: every slot is keyed and signed as
+/// [`signed`] keys and signs it, except the emission slot, which carries
+/// `claimant.identity` and is signed by `claimant.sign` — so the body
+/// passes CEN-J20 and CEN-I18 as the claimant's own would. Re-signing an
+/// already-signed body is the same two passes again over the same bytes;
+/// a caller may anchor first ([`anchored_at`]) and claim after.
+#[must_use]
+pub fn signed_claiming(tx: Transaction, claimant: &Claimant<'_>) -> Transaction {
+    signed_with(tx, Some(claimant))
+}
+
+fn signed_with(mut tx: Transaction, claimant: Option<&Claimant<'_>>) -> Transaction {
     let Some(count) = fcmp_auths(&tx).map(Vec::len) else {
         return tx;
     };
@@ -564,15 +598,29 @@ pub fn signed(mut tx: Transaction) -> Transaction {
         .enumerate()
         .map(|(index, input)| fixture_signing_seed(index, input))
         .collect();
+    let emission_slot = claimant.and_then(|_| {
+        tx.prefix
+            .inputs
+            .iter()
+            .position(|input| matches!(input, Input::ArchivalRewardEmission { .. }))
+    });
     // Pass 1 — the public keys, which the message binds. The key only:
     // deriving it by signing a dummy message would make a signature and
     // throw it away.
-    for (auth, seed) in fcmp_auths_mut(&mut tx).into_iter().flatten().zip(&seeds) {
+    for (index, (auth, seed)) in fcmp_auths_mut(&mut tx)
+        .into_iter()
+        .flatten()
+        .zip(&seeds)
+        .enumerate()
+    {
         auth.auth_version = 1;
         auth.scheme_id = shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
         auth.flags = 0;
-        auth.hybrid_public_key = derive_pqc_public_key(seed, FIXTURE_OUTPUT_INDEX)
-            .expect("a fixture seed derives a hybrid public key");
+        auth.hybrid_public_key = match (claimant, emission_slot) {
+            (Some(claimant), Some(slot)) if slot == index => claimant.identity.clone(),
+            _ => derive_pqc_public_key(seed, FIXTURE_OUTPUT_INDEX)
+                .expect("a fixture seed derives a hybrid public key"),
+        };
     }
     // Pass 2 — the signatures, over the hashes those keys are part of.
     let hashes = tx.pqc_signing_payload_hashes();
@@ -580,13 +628,17 @@ pub fn signed(mut tx: Transaction) -> Transaction {
         // No prunable region (the storage-pruned form): nothing to sign over.
         return tx;
     }
-    for ((auth, seed), hash) in fcmp_auths_mut(&mut tx)
+    for (index, ((auth, seed), hash)) in fcmp_auths_mut(&mut tx)
         .into_iter()
         .flatten()
         .zip(&seeds)
         .zip(&hashes)
+        .enumerate()
     {
-        auth.hybrid_signature = fixture_signature(seed, hash);
+        auth.hybrid_signature = match (claimant, emission_slot) {
+            (Some(claimant), Some(slot)) if slot == index => (claimant.sign)(hash),
+            _ => fixture_signature(seed, hash),
+        };
     }
     tx
 }
@@ -635,14 +687,45 @@ const FIXTURE_OUTPUT_INDEX: u64 = 0;
 
 /// The 64-byte "combined shared secret" a fixture input's signing key is
 /// derived from: the key image doubled for a `ToKey`, so the same spend
-/// always signs with the same key and two spends never share one; a
-/// constant per position for the archival arms.
+/// always signs with the same key and two spends never share one; the
+/// **persona's** seed for a bond post — the identity key's for a credit
+/// (JoinMarket, Reinstate, or a kind no arm names), the bond-spend key's
+/// for a Release — found from the post's `hybrid_public_key` through the
+/// seed map [`persona`](archival::persona) fills, since by the time a body
+/// is signed ([`anchored_at`]) the tag that built it is gone and the key is
+/// what the verifier reads (CEN-J13). Which seed is [`BondArm::of`]: the
+/// same classifier the sequence and the fold use, so a test that edits the
+/// kind and then signs is signed as the kind it became. A post whose key
+/// no persona owns — hand-built, a key filled by hand — signs by position
+/// as before; J13 refuses it, and a test that signs such a post is asking
+/// for that. An **emission** claim signs with the identity seed of the
+/// persona whose key its vin names as `p_pubkey` (CEN-J20: the slot's key
+/// derives the vin's `P_canonical_id`), found the same way; a vin that does
+/// not parse (CEN-J19's refusal) or names no persona signs by position. A
+/// constant per position for the serve credit, which carries no auth.
 fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
     let mut seed = [0u8; 64];
     match input {
         Input::ToKey { key_image, .. } => {
             seed[..32].copy_from_slice(key_image);
             seed[32..].copy_from_slice(key_image);
+        }
+        Input::BondPost(post) => {
+            if let Some(seeds) = archival::slot_seeds_for(&post.hybrid_public_key) {
+                return match BondArm::of(post) {
+                    Some(BondArm::Release { .. }) => seeds.bond_spend,
+                    _ => seeds.identity,
+                };
+            }
+            seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs"));
+        }
+        Input::ArchivalRewardEmission { canonical_bytes } => {
+            if let Some(seeds) =
+                J19::parse(canonical_bytes).and_then(|vin| archival::slot_seeds_for(&vin.p_pubkey))
+            {
+                return seeds.identity;
+            }
+            seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs"));
         }
         _ => seed.fill(0xE0 ^ u8::try_from(index).expect("a fixture has few inputs")),
     }
@@ -668,7 +751,11 @@ fn fcmp_auths_mut(tx: &mut Transaction) -> Option<&mut Vec<PqcAuth>> {
 #[must_use]
 pub fn anchored_on(chain: &MockChain, tx: Transaction) -> Transaction {
     let connecting = Tip::connecting_height(chain.tip().as_ref());
-    let hashes: Vec<BlockHash> = chain.recorded.iter().map(|block| block.hash).collect();
+    let hashes: Vec<BlockHash> = chain
+        .recorded
+        .iter()
+        .map(|block| block.header.hash)
+        .collect();
     anchored_at(&hashes, connecting.to_raw(), tx)
 }
 
@@ -767,7 +854,11 @@ pub fn mask_committing(k: u64, amount: u64) -> [u8; 32] {
 /// credit·H` holds with `(credit, debit) = (post.bond_credit, 0)`. `post`
 /// is the caller's: the shape rows read its kind and key length, the
 /// block-level G10 its `p_canonical_id`. Unanchored and with filler auths;
-/// [`anchored_on`] / [`signed`] make it a body `tx_against` admits.
+/// [`anchored_on`] / [`signed`] make it a body the post rows (CEN-J13–J18)
+/// admit, which `tx_against` then refuses on CEN-J27 — the funding half:
+/// the proof is filler and no mock grows a tree (slice 6 row 6,
+/// 2026-10-08; until then the funding half was unjudged on this class and
+/// the body passed whole).
 pub fn balanced_bond_post(key_image: [u8; 32], post: BondPost) -> Transaction {
     let credit = post.bond_credit;
     let mut tx = listed(key_image);
@@ -786,18 +877,26 @@ pub fn balanced_bond_post(key_image: [u8; 32], post: BondPost) -> Transaction {
 
 /// A **balanced emission** (CEN-H22's shape) with one fee spend of
 /// `key_image` and the emission vin `canonical_bytes` (the type's minimum
-/// for the shape rows, which read the variant; a parseable vin for the
-/// block-level G9, which reads the claims): the loud vouts sum to `reward`
-/// (the first carries it, the second is a loud zero — I1 wants two); the
-/// mint rides the debit slot, so `Σ pseudoOuts + reward·H = Σ masks +
-/// fee·H` — a pseudo-out of `5·G` against masks of `2·G + reward·H` and
-/// `3·G`, zero fee. Unanchored and with filler auths, as above.
+/// for the shape rows, which read the variant; a parseable vin —
+/// [`emission_vin`] — for CEN-J19 and for everything that reads the
+/// claims): the loud vouts sum to `reward` (the first carries it, the
+/// second is a loud zero — I1 wants two); the mint rides the debit slot,
+/// so `Σ pseudoOuts + reward·H = Σ masks + fee·H` — a pseudo-out of `5·G`
+/// against masks of `2·G + reward·H` and `3·G`, zero fee. Unanchored and
+/// with filler auths, as above — except that the emission slot's key is
+/// the vin's `p_pubkey` when the vin parses, so the body passes CEN-J20
+/// through `tx_form` alone; [`signed`] replaces it with the same key,
+/// derived from the persona's identity seed.
 pub fn balanced_emission(
     key_image: [u8; 32],
     canonical_bytes: Vec<u8>,
     reward: u64,
 ) -> Transaction {
     let mut tx = listed(key_image);
+    let mut slot = pqc_auth_filler();
+    if let Some(vin) = J19::parse(&canonical_bytes) {
+        slot.hybrid_public_key = vin.p_pubkey;
+    }
     tx.prefix
         .inputs
         .push(Input::ArchivalRewardEmission { canonical_bytes });
@@ -809,7 +908,7 @@ pub fn balanced_emission(
         ..
     } = &mut tx.ct
     {
-        pqc_auths.push(pqc_auth_filler());
+        pqc_auths.push(slot);
         base.commitments = vec![mask_committing(2, reward), multiple_of_g(3)];
         p.pseudo_outs = vec![multiple_of_g(5)];
     }
@@ -832,23 +931,28 @@ pub fn header() -> BlockHeader {
 }
 
 /// A well-formed candidate **on `chain`'s tip**: `previous` is the tip's
-/// hash (the null hash on an empty chain — CEN-A2) and `curve_tree_root`
+/// hash (the null hash on an empty chain — CEN-A2), `curve_tree_root`
 /// is the tree state at the connecting height (`root_at(tip + 1)`; the
-/// empty tree at genesis — CEN-B5); the header lists exactly the bodies
-/// it carries. Mutate one field to build a negative fixture. A corrupt
+/// empty tree at genesis — CEN-B5), `attestation_root` is the empty
+/// set's (no sidecar, no `0x0B` field in the coinbase — CEN-B4's
+/// empty-witness arm); the header lists exactly the bodies it carries.
+/// Mutate one field to build a negative fixture. A corrupt
 /// parent read leaves the coinbase as [`coinbase`] built it, so
 /// `validate` is the function that reports the fault.
 pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
     let tip = chain.tip();
     let connecting = Tip::connecting_height(tip.as_ref());
-    let root = match chain.root(connecting) {
-        AtHeight::Recorded(root) => root,
-        AtHeight::AboveTip => unreachable!("the mock records the root at tip + 1"),
+    let root = match chain.tree(connecting) {
+        AtHeight::Recorded(tree) => tree.root,
+        AtHeight::AboveTip => unreachable!("the mock records the tree at tip + 1"),
     };
     let block = Block {
         header: BlockHeader {
             previous: tip.map_or(BlockHash::NULL, |t| t.hash),
             curve_tree_root: root,
+            attestation_root: AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
             ..header()
         },
         miner_transaction: coinbase(connecting.to_raw()),
@@ -889,9 +993,11 @@ pub fn recorded_with_work(
         transaction_hashes: Vec::new(),
     };
     RecordedBlock {
-        hash: block.hash(),
-        header: block.header,
-        cumulative_difficulty,
+        header: HeaderRecord {
+            hash: block.hash(),
+            header: block.header,
+            cumulative_difficulty,
+        },
         // No emission recorded and no listed transactions: a chain
         // whose fixtures are not about the coinbase reads the tail
         // subsidy at every height and a zero volume window. A fixture
@@ -918,7 +1024,11 @@ mod anchor_tests {
     #[test]
     fn an_emission_with_no_fee_input_is_anchored_and_a_serve_credit_is_not() {
         let chain = chain_of(crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE.to_raw());
-        let hashes: Vec<BlockHash> = chain.recorded.iter().map(|block| block.hash).collect();
+        let hashes: Vec<BlockHash> = chain
+            .recorded
+            .iter()
+            .map(|block| block.header.hash)
+            .collect();
         let height = crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE.to_raw();
 
         let mut emission = listed([0x11; 32]);

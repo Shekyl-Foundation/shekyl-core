@@ -3,11 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `show_status` and `hard_fork_info`.
+//! `show_status`.
 
-use super::info::fetch_get_info;
-use super::{native_json_rpc, require_ok, wide_difficulty_value, Source};
-use crate::chain_facts::FfiChainFacts;
+use super::info::{fetch_get_info, network_label};
+use super::Source;
 use crate::ctl_client;
 
 /// The `/mining_status` reply, as much of it as `show_status` reads.
@@ -44,7 +43,7 @@ enum MiningReadout {
 /// a fault in this daemon and the command says so. Remotely the daemon may
 /// simply be running a restricted listener, which does not serve the route at
 /// all — an ordinary posture, not a failure, and the status line says "mining
-/// info unavailable" rather than refusing to print the eight other things it
+/// info unavailable" rather than refusing to print the seven other things it
 /// knows. Unifying the arms would either turn a normal restricted daemon into
 /// an error or hide a real local fault.
 fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
@@ -82,19 +81,6 @@ fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
         return Err(reply.status.0);
     }
     Ok(MiningReadout::Ready(reply))
-}
-
-/// Fetch `hard_fork_info` — native here, over `/json_rpc` remotely.
-fn fetch_hard_fork_info(
-    src: &Source,
-    version: Option<core::num::NonZeroU8>,
-) -> Result<shekyl_rpc_types::HardForkInfoResponse, String> {
-    let request = shekyl_rpc_types::HardForkInfoRequest { version };
-    let reply = native_json_rpc(src, "hard_fork_info", &request, |core| {
-        crate::methods::hard_fork_info(&FfiChainFacts::new(core.clone()), &request)
-    })?;
-    require_ok(&reply.status)?;
-    Ok(reply)
 }
 
 /// A hash rate for a human: `get_metric_prefix` + `get_mining_speed`.
@@ -146,109 +132,46 @@ pub(super) fn sync_percentage(height: u64, target_height: u64) -> f64 {
     }
 }
 
-/// `get_fork_extra_info`: what to append after the version, if anything.
-#[deny(clippy::arithmetic_side_effects)]
-pub(super) fn fork_extra_info(earliest_height: u64, net_height: u64, block_time: u64) -> String {
-    if earliest_height == net_height {
-        return " (forking now)".to_owned();
-    }
-    let Some(blocks) = earliest_height.checked_sub(net_height).filter(|d| *d > 0) else {
-        return String::new();
-    };
-    if blocks <= 30 {
-        return format!(" (next fork in {blocks} blocks)");
-    }
-    // `86400 / block_time`, and `blocks_per_day / 24` below, are the C++'s
-    // integer divisions. Both can be zero — the first if the daemon reports a
-    // target above a day, the second if it reports one above an hour — and
-    // the C++ divided by them regardless. A daemon whose target is that large
-    // is not one this line can say anything useful about, so it says nothing
-    // rather than `inf`.
-    let (Some(per_day), Some(per_hour)) = (
-        86_400u64.checked_div(block_time).filter(|d| *d > 0),
-        86_400u64
-            .checked_div(block_time)
-            .and_then(|d| d.checked_div(24))
-            .filter(|d| *d > 0),
-    ) else {
-        return String::new();
-    };
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a countdown for a human, from a block count"
-    )]
-    let (blocks_f, per_day_f, per_hour_f) = (blocks as f64, per_day as f64, per_hour as f64);
-    if blocks <= per_day / 2 {
-        return format!(" (next fork in {:.1} hours)", blocks_f / per_hour_f);
-    }
-    if blocks <= per_day.saturating_mul(30) {
-        return format!(" (next fork in {:.1} days)", blocks_f / per_day_f);
-    }
-    String::new()
-}
-
-/// `hard_fork_info [<version>]`.
-///
-/// The fifth console reader of this slice's methods, and the only one that
-/// needs no bridged leg: one native call, both arms.
-///
-/// **Line one names `queried_version`, which the C++ could get wrong.** It
-/// printed `req.version > 0 ? req.version : res.voting` — with no argument,
-/// the label came from `voting` (`heights.back().version`, the newest fork
-/// the daemon knows of) while the votes, window and threshold beside it
-/// described `get_next_hard_fork_version()`. Two different questions, one
-/// line. They agree on a chain with a single fork entry, which is every
-/// Shekyl chain today, so this changes no output — but the field that says
-/// *which fork these numbers are about* is exactly what
-/// `queried_version` was split out to be, and a label that can drift from
-/// its numbers is worth not carrying forward.
-pub(super) fn hard_fork_info(
-    src: &Source,
-    version: Option<core::num::NonZeroU8>,
-) -> Result<String, String> {
-    let info = fetch_hard_fork_info(src, version)?;
-    Ok([
-        format!(
-            "version {} {}, {}/{} votes, threshold {}",
-            info.queried_version,
-            if info.enabled {
-                "enabled"
-            } else {
-                "not enabled"
-            },
-            info.votes,
-            info.window,
-            info.threshold
-        ),
-        format!(
-            "current version {}, voting for version {}",
-            info.active_version, info.voting
-        ),
-    ]
-    .join("\n"))
-}
-
 /// `status` / `show_status`.
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     let info = fetch_get_info(src)?;
-    // `hfreq.version = 0` in the C++, i.e. "tell me about the active fork".
-    // The line prints `active_version`, which is what `res.version` was:
-    // `on_hard_fork_info` set it from `get_current_hard_fork_version()`
-    // regardless of the request, while the *voting* fields described the
-    // requested one. Reporting the two apart is why RK-5b split them; reading
-    // `queried_version` here would invert the whole point.
-    let fork = fetch_hard_fork_info(src, None)?;
     let mining = fetch_mining_status(src)?;
     let target = crate::consensus::DAA_TARGET_SECONDS;
 
-    let net_height = info.target_height.max(info.height);
-    let network = if info.testnet {
-        "testnet"
-    } else if info.stagenet {
-        "stagenet"
-    } else {
-        "mainnet"
+    let height = info.health.height;
+    // The core's target is shown, not judged. With none, or one this node
+    // is already past, the line is measured against the node's own height.
+    let net_height = info
+        .health
+        .target_height
+        .into_option()
+        .map_or(height, |target| target.max(height));
+    // `get_info` does not name the network (RK-Q6). Remote, this is what
+    // the handshake before the request above already read; no second call.
+    let network = network_label(src.network()?);
+    // Status is a part a daemon may withhold, and a restricted one does.
+    // A withheld part is not a node with no connections and no uptime: the
+    // line says the counts were not disclosed and leaves the uptime off.
+    // Offline is the state, not zero connections (Rick, 2026-10-14), and it
+    // is Health, which every caller is told: a daemon that withholds Status
+    // still says it is offline.
+    let status = info.node.shown();
+    // Not decodable: Health and Status are both read against the reply's
+    // `offline` (`P2pDisagreesWithOffline`, `ConnectionsDisagreeWithOffline`).
+    // The state wins over a count, so a running health with an offline
+    // connection block is still offline.
+    let connections = match (
+        info.health.p2p.is_offline(),
+        status.map(|status| &status.connections),
+    ) {
+        (true, _) | (false, Some(shekyl_rpc_types::StatusConnections::Offline)) => {
+            "P2P: offline".to_owned()
+        }
+        (false, Some(shekyl_rpc_types::StatusConnections::Running { outgoing, incoming })) => {
+            format!("{outgoing}(out)+{incoming}(in) connections")
+        }
+        (false, None) => "connections not disclosed".to_owned(),
     };
     let mining_text = match &mining {
         MiningReadout::Unavailable => "mining info unavailable".to_owned(),
@@ -267,23 +190,21 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     // Network hash rate as difficulty per target second. `checked_div` for
     // the same reason as everywhere else in this file: `T` is genesis-frozen
     // and generated; a zero would be a build defect, not a daemon value.
-    let net_hash = wide_difficulty_value(&info.wide_difficulty)
-        .and_then(|d| d.checked_div(u128::from(target)))
+    let net_hash = info
+        .chain
+        .difficulty
+        .checked_div(u128::from(target))
         .map_or_else(|| "unknown".to_owned(), mining_speed);
     let mut line = format!(
         "Height: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
-         v{}{}, {}(out)+{}(in) connections",
-        info.height,
-        sync_percentage(info.height, info.target_height),
-        fork.active_version,
-        fork_extra_info(fork.earliest_height, net_height, target),
-        info.outgoing_connections_count,
-        info.incoming_connections_count
+         {connections}",
+        height,
+        sync_percentage(height, net_height),
     );
-    // A restricted listener does not disclose the start time, and the C++
-    // omitted the whole clause rather than reporting an uptime of zero.
-    if info.start_time != 0 {
-        let uptime = now.saturating_sub(info.start_time);
+    // No Status, no start time, so no uptime clause: an uptime of zero
+    // would be a claim. The C++ omitted the clause on the same grounds.
+    if let Some(start_time) = status.map(|status| status.start_time) {
+        let uptime = now.saturating_sub(start_time);
         line.push_str(&format!(
             ", uptime {}d {}h {}m {}s",
             uptime / 86_400,

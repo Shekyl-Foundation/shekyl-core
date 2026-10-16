@@ -12,8 +12,8 @@
 //   Diagnostic-only and excluded from the default build.
 
 use crate::params::DandelionParams;
-use crate::rng::{bernoulli, RelayRng};
 use crate::schedule::EmbargoTimer;
+use shekyl_draw_rng::{bernoulli, RelayRng};
 
 use super::util::MAX_SIMULATED_HOPS;
 
@@ -78,9 +78,9 @@ where
     R: RelayRng + ?Sized,
     F: FnMut(usize, u64, &mut R),
 {
-    let hop_ms = u64::from(params.time_between_hop_ms);
+    let hop_ms = u64::from(params.time_between_hop_ms.ms());
     let q = u64::from(params.fluff_probability_pct);
-    let return_ms = u64::from(params.fluff_return_ms);
+    let return_ms = u64::from(params.fluff_return_ms.ms());
 
     let mut deadlines = Vec::new();
     let mut t = 0_u64;
@@ -201,8 +201,9 @@ fn summarize(outcomes: &[Propagation]) -> PropagationSummary {
 /// Search for the smallest embargo mean, in seconds, whose measured
 /// full-travel rate reaches `target`.
 ///
-/// Bisects over the integer second. Re-seeds per probe so the search is
-/// deterministic. See module docs in the design record for why measuring is
+/// Bisects over the integer second. Every probe draws from its own clone of
+/// `rng`, so each starts from the same state and the search is deterministic
+/// for a seeded generator. See module docs in the design record for why measuring is
 /// the only honest route past the closed form.
 ///
 /// # Panics
@@ -214,7 +215,7 @@ pub fn solve_embargo_secs_for_target(
     target: f64,
     family: crate::schedule::DelayFamily,
     trials: usize,
-    seed: u64,
+    rng: &(impl RelayRng + Clone),
 ) -> Option<u32> {
     assert!(
         target > 0.0 && target < 1.0,
@@ -224,7 +225,7 @@ pub fn solve_embargo_secs_for_target(
 
     let measure = |secs: u32| -> f64 {
         let embargo = EmbargoTimer::new(secs, family);
-        let mut rng = crate::rng::SplitMix64::new(seed);
+        let mut rng = rng.clone();
         simulate_propagation(params, &embargo, trials, &mut rng).full_travel_rate
     };
 
@@ -387,7 +388,7 @@ pub fn simulate_sighting_separability<R: RelayRng + ?Sized>(
         spy_fraction > 0.0 && spy_fraction <= 1.0,
         "spy fraction must be in (0, 1]"
     );
-    let return_ms = u64::from(params.fluff_return_ms);
+    let return_ms = u64::from(params.fluff_return_ms.ms());
     let spy_threshold = (spy_fraction * f64::from(u32::MAX)) as u32;
 
     let mut natural: Vec<u64> = Vec::new();
@@ -498,9 +499,9 @@ pub fn simulate_blackhole_attack<R: RelayRng + ?Sized>(
         spy_fraction > 0.0 && spy_fraction <= 1.0,
         "spy fraction must be in (0, 1]"
     );
-    let hop_ms = u64::from(params.time_between_hop_ms);
+    let hop_ms = u64::from(params.time_between_hop_ms.ms());
     let q = u64::from(params.fluff_probability_pct);
-    let return_ms = u64::from(params.fluff_return_ms);
+    let return_ms = u64::from(params.fluff_return_ms.ms());
     let spy_threshold = (spy_fraction * f64::from(u32::MAX)) as u32;
 
     let mut source_counts: Vec<u64> = Vec::new();

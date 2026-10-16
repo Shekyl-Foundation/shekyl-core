@@ -36,8 +36,11 @@
 //! share the verifying functions and cannot diverge semantically.
 //!
 //! - **JoinMarket — the credit arm** (`verify_credit_arm`): BP5 pins the
-//!   bond slot's auth key to `P`'s **identity** key, then BP3's record-absent
-//!   fact and BP4's economic battery.
+//!   bond slot's auth key to `P`'s **identity** key, BP6 requires the
+//!   receipt key to parse (`FnDsaHybridPublicKey::from_receipt_sign_pk`,
+//!   CEN-J28's predicate), then BP3's record-absent fact and BP4's
+//!   economic battery. J14's `verify_join_market_bond_post` does not read
+//!   the key.
 //! - **Release — the debit arm** (`verify_debit_arm`): UB3 pins it to the
 //!   **record's committed `bond_spend_pk`** instead, then UB2/UB4–UB9 over
 //!   the §8.7.1.1 fact bundle. BP5's rule is *wrong* here: the identity key
@@ -92,11 +95,13 @@ use shekyl_archival_retention::{
 };
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::error::PqcVerifyError;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_crypto_pq::signature::verify_pqc_auth;
 use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof, VerifyError};
 use shekyl_fcmp::PqcKeyScalar;
+use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::SigningPayloadHash;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 use shekyl_wire::transaction::{
@@ -258,7 +263,14 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // rule-21 reopening criterion (module docs). Discriminant 3
     // (HoldingsUpdate) is REJECTED at the wire.
     let arm = match &bond.kind {
-        WireBondPostKind::JoinMarket { bond_spend_pk, .. } => BondArm::Credit(bond_spend_pk),
+        WireBondPostKind::JoinMarket {
+            bond_spend_pk,
+            receipt_sign_pk,
+            ..
+        } => BondArm::Credit {
+            bond_spend_pk,
+            receipt_sign_pk,
+        },
         WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Release as u8 => {
             BondArm::Debit
         }
@@ -335,8 +347,11 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
         ));
     };
     match arm {
-        BondArm::Credit(bond_spend_pk) => {
-            verify_credit_arm(bond, bond_spend_pk, bond_auth, facts)?;
+        BondArm::Credit {
+            bond_spend_pk,
+            receipt_sign_pk,
+        } => {
+            verify_credit_arm(bond, bond_spend_pk, receipt_sign_pk, bond_auth, facts)?;
         }
         BondArm::Debit => verify_debit_arm(bond, bond_auth, facts)?,
     }
@@ -653,24 +668,33 @@ fn emission_reject(e: &EmissionVerifyError) -> VerifyReject {
 /// collateral out, and the identity key is exactly the key a compromised
 /// serving host holds. See `verify_debit_arm`.
 enum BondArm<'a> {
-    /// JoinMarket (§8.7.1) — carries the `bond_spend_pk` the record will
-    /// commit; authorized by the identity key (row BP5).
-    Credit(&'a [u8]),
+    /// JoinMarket (§8.7.1). `bond_spend_pk` is what the record will commit,
+    /// authorized by the identity key (BP5). `receipt_sign_pk` is BP6's
+    /// operand: the arm judges it before it reads the record, so a credit
+    /// arm without a key cannot be built.
+    Credit {
+        bond_spend_pk: &'a [u8],
+        receipt_sign_pk: &'a ReceiptSignPk,
+    },
     /// Release (§8.7.1.1) — carries no `bond_spend_pk` on the wire;
     /// authorized by the record's committed key (row UB3).
     Debit,
 }
 
-/// The credit arm: row BP5's identity-key pin, then the BP3 record fact and
-/// the BP4 economic battery.
+/// The credit arm: BP5's identity-key pin, BP6's receipt-key parse, then
+/// the BP3 record fact and the BP4 economic battery.
 ///
-/// `verify_join_market_bond_post` (`shekyl-archival-retention`) is the single
-/// verdict source both paths share: post-kind, holdings-shape consistency,
-/// credit/debit exclusivity, debit == 0, the bond-floor equality, and the
-/// record-absent claim slot.
+/// BP6 calls [`FnDsaHybridPublicKey::from_receipt_sign_pk`], the predicate
+/// CEN-J28 runs in `tx_form`. It runs before the record fact is read, so a
+/// key that does not parse is `Malformed` and never the claim-slot
+/// `DoubleSpendConflict`. [`verify_join_market_bond_post`] is J14's statics
+/// only: post-kind, the non-zero endpoint, holdings shape, credit/debit
+/// exclusivity, debit == 0, the bond-floor equality, and the record-absent
+/// claim slot. It does not read the key.
 fn verify_credit_arm(
     bond: &WireBondPost,
     bond_spend_pk: &[u8],
+    receipt_sign_pk: &ReceiptSignPk,
     bond_auth: &PqcAuth,
     facts: &SubmitFacts,
 ) -> Result<(), VerifyReject> {
@@ -681,6 +705,16 @@ fn verify_credit_arm(
     if bond_auth.hybrid_public_key != bond.hybrid_public_key {
         return Err(VerifyReject::malformed(
             "BP5: pqc_auth key is not the identity key",
+        ));
+    }
+
+    // ── BP6: the receipt key parses as a scheme-3 key ───────────────────
+    // Same predicate as CEN-J28, on the key the kind dispatch already
+    // bound into this arm. Ahead of the record fact, so a bad key cannot
+    // become `RecordExists` → `DoubleSpendConflict`, and J14 never names it.
+    if FnDsaHybridPublicKey::from_receipt_sign_pk(receipt_sign_pk).is_err() {
+        return Err(VerifyReject::malformed(
+            "BP6: JoinMarket receipt_sign_pk is not a scheme-3 key",
         ));
     }
 
@@ -863,12 +897,17 @@ fn retention_vin(
         Holdings::CompleteTree => (HoldingsKind::CompleteTree, ShardSet::empty()),
     };
     let kind = match &bond.kind {
-        WireBondPostKind::JoinMarket { endpoint, .. } => {
-            shekyl_archival_retention::BondKind::JoinMarket {
-                bond_spend_pk: bond_spend_pk.to_vec(),
-                endpoint: *endpoint,
-            }
-        }
+        WireBondPostKind::JoinMarket {
+            receipt_sign_pk,
+            endpoint,
+            ..
+        } => shekyl_archival_retention::BondKind::JoinMarket {
+            bond_spend_pk: bond_spend_pk.to_vec(),
+            // The one JoinMarket form. The receipt key the post committed
+            // rides through, so the retention view is the post that was sent.
+            receipt_sign_pk: receipt_sign_pk.clone(),
+            endpoint: *endpoint,
+        },
         WireBondPostKind::Other(_) => post_kind.unit_kind()?,
     };
     Some(ArchivalBondPostVin {

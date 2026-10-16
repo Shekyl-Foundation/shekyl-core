@@ -66,6 +66,13 @@ pub(crate) struct StakeEngine {
     /// into a bond post. **Never persisted**; cleared per-record when the
     /// task's held list drops the record.
     pub(crate) watch_quarantine: BTreeSet<shekyl_types::GlobalOutputIndex>,
+    /// `P`'s serving body store (`WSS-Q1`(a)). Fill (`WSS-Q4`) is not
+    /// written. Erase at the second absent epoch (`WSS-Q8`) is an ask
+    /// this actor handles; the serving host does not hold the writer.
+    /// `ServingBodies` hands the serve task a reader, which still decrypts,
+    /// so `WSS-Q13` is not met. A per-chunk ask on this actor would stall
+    /// bond signing on bulk redb I/O; the decrypt task is a later increment.
+    pub(crate) body_store: shekyl_p_store::BodyStore,
     /// GF-7 measurement-hook observer (injected via [`StakeEngineArgs`];
     /// see the field docs there). Feature-gated out of default builds.
     #[cfg(feature = "gf7-hooks")]
@@ -145,10 +152,9 @@ impl StakeEngine {
             let _ = probe; // consumed; used only to exercise the source
         }
 
-        // 4. Entry-gap draw + per-draw degeneracy guard (S4/S5, Round 2/3).
-        //    `draw_entry_gap_guarded` draws twice (spread_draw, spread_probe) and
-        //    fires `RngDegeneracy` if they are equal (double-jitter-trap detection).
-        //    The actual timing draw result is returned on success.
+        // 4. Entry-gap draw (S4/S5). The helper absorbs an equal pair and
+        //    returns `DegenerateDraw` only when the whole run collided.
+        //    The spread it returns is the placement.
         let mut rng = OsRngGapAdapter;
         let spread = draw_entry_gap_guarded(DEFAULT_ENTRY_GAP.as_blocks(), &mut rng)
             .map_err(|DegenerateDraw| StakeEngineError::RngDegeneracy)?;
@@ -536,11 +542,9 @@ impl Actor for StakeEngine {
             .bundles
             .into_iter()
             .map(|(slot, keys)| {
-                let tagged = if args.bonded.contains(&slot) {
-                    HeldPersona::Bonded(BondedPersona(keys))
-                } else {
-                    HeldPersona::Ephemeral(EphemeralPersona(keys))
-                };
+                // Tags the bundle and leaves its receipt-key slot empty
+                // (`HeldPersona::hold`): no FN-DSA work happens at start.
+                let tagged = HeldPersona::hold(keys, args.bonded.contains(&slot));
                 (slot, tagged)
             })
             .collect::<BTreeMap<_, _>>();
@@ -583,6 +587,7 @@ impl Actor for StakeEngine {
             generation: 0,
             watch_cache: KeyImageWatchSet::new(),
             watch_quarantine: BTreeSet::new(),
+            body_store: args.bodies,
             #[cfg(feature = "gf7-hooks")]
             observer: args.observer,
         })

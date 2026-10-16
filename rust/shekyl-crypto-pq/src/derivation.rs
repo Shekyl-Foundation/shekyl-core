@@ -36,12 +36,11 @@ pub const ML_DSA_65_SK_LEN: usize = ml_dsa_65::SK_LEN;
 pub fn keygen_from_seed(
     seed: &[u8; 32],
 ) -> Result<(ml_dsa_65::PublicKey, ml_dsa_65::PrivateKey), CryptoError> {
-    // fips204's try_keygen_with_rng expects a CryptoRng + RngCore.
-    // Use ChaCha20Rng (explicit algorithm) so deterministic derivation remains
-    // stable across rand crate upgrades. StdRng's algorithm is not guaranteed.
-    use rand::SeedableRng;
-
-    let mut rng = rand_chacha::ChaCha20Rng::from_seed(*seed);
+    // fips204's try_keygen_with_rng expects a CryptoRng + RngCore. The
+    // stream is `SeededRng`'s, ChaCha20 by construction, so the derivation
+    // does not move with `rand`'s default generator. The cipher is on the
+    // heap and is wiped there when this function returns.
+    let mut rng = crate::seeded_rng::SeededRng::from_seed(seed);
     ml_dsa_65::try_keygen_with_rng(&mut rng)
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-DSA-65 keygen: {e}")))
 }
@@ -165,7 +164,7 @@ pub struct OutputSecrets {
 
 /// Derive all per-output secrets from the combined KEM shared secret.
 ///
-/// `combined_ss` is the 64-byte OKM from [`crate::kem::combine_shared_secrets`]
+/// `combined_ss` is the 64-byte OKM from the private `kem::combine_shared_secrets`
 /// on the production scan path. Any length is accepted here (HKDF-Extract
 /// handles variable-length IKM); test vectors may supply synthetic IKM directly.
 pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSecrets {

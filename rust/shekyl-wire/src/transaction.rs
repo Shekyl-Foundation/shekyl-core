@@ -44,6 +44,7 @@
 use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
+use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_types::{ArchivalLength, BlockHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS};
 
 use crate::bytes::{read_array, read_byte};
@@ -81,10 +82,66 @@ pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 /// enforces (`cryptonote_basic.h:302-310`) and [`Input::read`] mirrors.
 pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
-/// `post_kind` value for a JoinMarket archival bond post. `bond_spend_pk` and
-/// the serving endpoint are present on the wire iff `post_kind == JOINMARKET`
-/// (§9.11, `EU-D3`).
-pub const BOND_POST_KIND_JOINMARKET: u8 = 0;
+/// `post_kind` value for a JoinMarket archival bond post — the one wire
+/// form a JoinMarket has. Its coupled fields are `bond_spend_pk`, the
+/// persona's receipt key and the serving endpoint, present on the wire iff
+/// `post_kind == JOINMARKET` (§9.11, `EU-D3`, `FN_DSA_HYBRID.md` §8).
+///
+/// The byte is `5` because `0`, `3` and `4` are refused names, not free
+/// ones (rule 23): `0` was the keyless JoinMarket
+/// ([`BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET`]); `3` was `HoldingsUpdate`
+/// (REJECTED 2026-09-20, immutable-bond); `4` was `EndpointUpdate` (REJECTED
+/// 2026-09-13, `ARCHIVAL_ENDPOINT_UPDATE.md`: a bonded persona's endpoint
+/// never changes). None is reused.
+pub const BOND_POST_KIND_JOINMARKET: u8 = 5;
+/// `post_kind` `0`: the JoinMarket that committed no receipt key. **RETIRED
+/// 2026-10-12** (ruling on PR #1046): the receipt key is mandatory, and a
+/// keyless join would put a pair in the drawable set that the `h_open(E)`
+/// snapshot cannot build, blocking every bundle for that epoch. The byte is
+/// refused at parse — its coupled fields would otherwise be read as holdings
+/// — and is never reassigned.
+pub const BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET: u8 = 0;
+
+/// `post_kind` 0, refused at parse (`FN_DSA_HYBRID.md` §8, `FND-19`).
+///
+/// [`BondPost::read`] returns this inside an [`io::Error`]. A caller that
+/// has to tell this refusal from every other malformed transaction matches
+/// [`Self::downcast_is`] on [`io::Error::get_ref`]; the sentence is what a
+/// human and the conformance table's read-face row see.
+#[derive(Debug)]
+pub struct RetiredKeylessJoinMarket;
+
+impl RetiredKeylessJoinMarket {
+    /// Whether `cause` — the inner error of an [`io::Error`] — is this refusal.
+    #[must_use]
+    pub fn downcast_is(cause: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+        cause.is::<Self>()
+    }
+}
+
+impl std::fmt::Display for RetiredKeylessJoinMarket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("shekyl-wire: bond_post post_kind 0 is the retired keyless JoinMarket")
+    }
+}
+
+impl std::error::Error for RetiredKeylessJoinMarket {}
+
+/// Whether `post_kind` is a JoinMarket. The one predicate every byte-level
+/// "is this a JoinMarket?" reads, so a consumer that records the wire byte
+/// asks the definition that produced it.
+#[must_use]
+pub const fn is_join_market_post_kind(post_kind: u8) -> bool {
+    post_kind == BOND_POST_KIND_JOINMARKET
+}
+
+/// Whether `post_kind` is a byte [`BondPostKind::Other`] may not carry: the
+/// JoinMarket's own tag, or the retired keyless JoinMarket's. Either would
+/// serialize as a blob with no coupled fields that `read` does not read
+/// back as the value written.
+const fn is_join_market_tag_live_or_retired(post_kind: u8) -> bool {
+    is_join_market_post_kind(post_kind) || post_kind == BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET
+}
 /// The serving endpoint on the wire: the raw 32-byte ed25519 public key of the
 /// persona's v3 onion service. Present iff JoinMarket (`EU-D3`).
 pub const BOND_POST_ENDPOINT_LEN: usize = 32;
@@ -262,16 +319,23 @@ fn read_len_prefixed_bounded<R: Read>(r: &mut R, what: &str, max: usize) -> io::
     Ok(buf)
 }
 
-/// Read a length-prefixed blob whose declared length must equal `expected` —
-/// for fixed-size canonical encodings (hybrid PQC keys) where a shorter value
-/// is malformed, not a smaller valid one. Rejects before allocating.
-fn read_len_prefixed_exact<R: Read>(r: &mut R, what: &str, expected: usize) -> io::Result<Vec<u8>> {
+/// Read a varint length prefix and require it to be exactly `expected`.
+fn read_len_prefix_exact<R: Read>(r: &mut R, what: &str, expected: usize) -> io::Result<()> {
     let len: usize = read_varint(r)?;
     if len != expected {
         return Err(io::Error::other(format!(
             "shekyl-wire: {what} length {len} != canonical {expected}"
         )));
     }
+    Ok(())
+}
+
+/// Read a length-prefixed blob whose declared length must equal `expected` —
+/// for fixed-size canonical encodings (hybrid PQC keys) where a shorter value
+/// is malformed, not a smaller valid one. Rejects before allocating.
+fn read_len_prefixed_exact<R: Read>(r: &mut R, what: &str, expected: usize) -> io::Result<Vec<u8>> {
+    read_len_prefix_exact(r, what, expected)?;
+    let len = expected;
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
     Ok(buf)
@@ -605,20 +669,29 @@ fn check_serve_credit_pruned_blob(bytes: &[u8]) -> io::Result<()> {
 /// hazards of a `{ post_kind: u8, bond_spend_pk: Option<_> }` shape — a
 /// non-JoinMarket post whose `Some` key `write` dropped, and a JoinMarket post
 /// whose missing key `write` errored on — impossible to construct.
+///
+/// A JoinMarket has one wire form (`post_kind` `0x05`) and always commits
+/// the persona's receipt key; the keyless form (`0x00`) is retired and
+/// refused at parse.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BondPostKind {
-    /// JoinMarket post (`post_kind` `0x00`) — carries `bond_spend_pk`, the
-    /// GF-1 debit authorizer (§9.11), and the serving endpoint (`EU-D3`). The
-    /// credit path; Release is `Other(2)`.
+    /// JoinMarket post (`post_kind` `0x05`) — carries `bond_spend_pk`, the
+    /// GF-1 debit authorizer (§9.11), the persona's receipt key and the
+    /// serving endpoint (`EU-D3`). The credit path; Release is `Other(2)`.
     JoinMarket {
         /// The GF-1 debit authorizer hybrid public key.
         bond_spend_pk: Vec<u8>,
+        /// The persona's receipt key (`FN_DSA_HYBRID.md` §8): exactly
+        /// [`RECEIPT_SIGN_PK_LEN`] bytes by type. That the bytes are a key
+        /// is CEN-J28's, not the parser's.
+        receipt_sign_pk: ReceiptSignPk,
         /// Serving endpoint: 32-byte onion pubkey, mandatory on JoinMarket.
         endpoint: [u8; BOND_POST_ENDPOINT_LEN],
     },
-    /// Any non-JoinMarket post kind — no `bond_spend_pk` and no endpoint on the
-    /// wire. The byte must not be the JoinMarket tag (`Other` is non-JoinMarket
-    /// by construction; `write` rejects `Other(JOINMARKET)`).
+    /// Any non-JoinMarket post kind — no `bond_spend_pk`, no receipt key and
+    /// no endpoint on the wire. The byte must not be the JoinMarket tag
+    /// (`0x05`) nor the retired keyless one (`0x00`): `write` and `validate`
+    /// reject both, and `read` yields neither.
     Other(u8),
 }
 
@@ -652,19 +725,24 @@ impl BondPost {
         match &self.kind {
             BondPostKind::JoinMarket {
                 bond_spend_pk,
+                receipt_sign_pk,
                 endpoint,
             } => {
                 w.write_all(&[BOND_POST_KIND_JOINMARKET])?;
                 write_varint(bond_spend_pk.len(), w)?;
                 w.write_all(bond_spend_pk)?;
+                write_varint(RECEIPT_SIGN_PK_LEN, w)?;
+                w.write_all(receipt_sign_pk.as_bytes())?;
                 w.write_all(endpoint)?;
             }
             BondPostKind::Other(post_kind) => {
-                // `Other` is non-JoinMarket by contract; reusing the JoinMarket tag
-                // would make `write` emit a key-less, endpoint-less blob that `read`
-                // would then try to parse as JoinMarket (consuming the holdings
-                // bytes as the key). Reject the misconstruction rather than emit it.
-                if *post_kind == BOND_POST_KIND_JOINMARKET {
+                // `Other` is non-JoinMarket by contract; carrying the JoinMarket
+                // tag (`0x05`) would make `write` emit a key-less, endpoint-less
+                // blob that `read` would then try to parse as JoinMarket
+                // (consuming the holdings bytes as the key), and carrying the
+                // retired keyless tag (`0x00`) one that `read` refuses. Reject
+                // the misconstruction rather than emit it.
+                if is_join_market_tag_live_or_retired(*post_kind) {
                     return Err(io::Error::other(
                         "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag \
                          (use BondPostKind::JoinMarket)",
@@ -684,17 +762,24 @@ impl BondPost {
             read_len_prefixed_exact(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
         let p_canonical_id = PCanonicalId::from_bytes(read_array(r)?);
         let post_kind = read_byte(r)?;
-        // `read` never yields `Other(JOINMARKET)`: the JoinMarket tag always takes the
-        // first arm, so the `write` guard above only fires on a hand-built value.
-        let kind = if post_kind == BOND_POST_KIND_JOINMARKET {
+        // `read` never yields `Other(JOINMARKET)` nor `Other(0)`: the JoinMarket
+        // tag always takes the first arm and the retired keyless tag is
+        // refused, so the `write` guard above only fires on a hand-built value.
+        let kind = if is_join_market_post_kind(post_kind) {
+            let bond_spend_pk =
+                read_len_prefixed_exact(r, "bond_spend_pk", PQC_HYBRID_SINGLE_KEY_LEN)?;
+            read_len_prefix_exact(r, "receipt_sign_pk", RECEIPT_SIGN_PK_LEN)?;
+            let receipt_sign_pk = ReceiptSignPk::from_bytes(read_array(r)?);
             BondPostKind::JoinMarket {
-                bond_spend_pk: read_len_prefixed_exact(
-                    r,
-                    "bond_spend_pk",
-                    PQC_HYBRID_SINGLE_KEY_LEN,
-                )?,
+                bond_spend_pk,
+                receipt_sign_pk,
                 endpoint: read_array(r)?,
             }
+        } else if post_kind == BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET {
+            // A keyless JoinMarket's coupled fields follow this byte on the
+            // wire; read as `Other` they would be taken for the holdings.
+            // The type, not the sentence, is what a caller matches.
+            return Err(io::Error::other(RetiredKeylessJoinMarket));
         } else {
             BondPostKind::Other(post_kind)
         };
@@ -721,6 +806,7 @@ impl BondPost {
             )));
         }
         match &self.kind {
+            // The receipt key's length is its type's; nothing to check here.
             BondPostKind::JoinMarket { bond_spend_pk, .. } => {
                 if bond_spend_pk.len() != PQC_HYBRID_SINGLE_KEY_LEN {
                     return Err(io::Error::other(format!(
@@ -729,10 +815,12 @@ impl BondPost {
                     )));
                 }
             }
-            // `Other` must not reuse the JoinMarket tag — `write` would emit a
-            // key-less, endpoint-less blob that re-parses as JoinMarket (a mis-parse).
+            // `Other` must not carry the JoinMarket tag (`0x05`) — `write` would
+            // emit a key-less, endpoint-less blob that re-parses as JoinMarket (a
+            // mis-parse) — nor the retired keyless one (`0x00`), which `read`
+            // refuses.
             BondPostKind::Other(post_kind) => {
-                if *post_kind == BOND_POST_KIND_JOINMARKET {
+                if is_join_market_tag_live_or_retired(*post_kind) {
                     return Err(io::Error::other(
                         "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag",
                     ));
@@ -1266,6 +1354,20 @@ pub struct TxPrefix {
 }
 
 impl TxPrefix {
+    /// The prefix hash of **this prefix** — `keccak256(varint(TX_VERSION) ‖
+    /// write)`, the one derivation [`Transaction::prefix_hash`] delegates to.
+    /// Taking the prefix rather than the transaction lets a consumer hash a
+    /// prefix it has edited: the emission claim's `signable_tx_hash` is this
+    /// over the prefix with the emission vin removed (CEN-J22, F-C1c), and
+    /// a second body for it would be the two-sources class.
+    pub fn hash(&self) -> PrefixHash {
+        let mut buf = Vec::new();
+        write_varint(TX_VERSION, &mut buf).expect("writing to a Vec is infallible");
+        self.write(&mut buf)
+            .expect("writing to a Vec is infallible");
+        PrefixHash::from_bytes(keccak256(&buf))
+    }
+
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(self.unlock_time, w)?;
         write_varint(self.inputs.len(), w)?;
@@ -1357,7 +1459,8 @@ pub struct Transaction {
 
 mod txid;
 pub use txid::{
-    carries_archival_good, empty_region_prunable_hash, prunable_hash_of, TxidParts, TxidSegments,
+    carries_archival_good, empty_region_prunable_hash, pqc_auth_hash_of, prunable_hash_of,
+    TxidParts, TxidSegments,
 };
 
 mod signing_preimage;
@@ -1590,14 +1693,10 @@ impl Transaction {
     /// `transaction_prefix`). It **includes the version**: the C++ `transaction_prefix`
     /// serializes `VARINT(version)` first, so this is
     /// `keccak256(varint(TX_VERSION) ‖ TxPrefix::write)` — the same `varint(3) ‖
-    /// prefix` composition [`Self::write`] emits at the head of the tx.
+    /// prefix` composition [`Self::write`] emits at the head of the tx
+    /// ([`TxPrefix::hash`], over this transaction's prefix).
     pub fn prefix_hash(&self) -> PrefixHash {
-        let mut buf = Vec::new();
-        write_varint(TX_VERSION, &mut buf).expect("writing to a Vec is infallible");
-        self.prefix
-            .write(&mut buf)
-            .expect("writing to a Vec is infallible");
-        PrefixHash::from_bytes(keccak256(&buf))
+        self.prefix.hash()
     }
 
     /// Parse a transaction from a complete blob, requiring **exact consumption**
@@ -1798,7 +1897,7 @@ impl Transaction {
         }
         // tx_extra size bound on a non-coinbase transaction (the relay cap,
         // CEN-M4). A coinbase extra has no size cap here or in C++; it is
-        // bounded by the coinbase grammar below instead — exactly four fields
+        // bounded by the coinbase grammar below instead — exactly five fields
         // of fixed or `n`-proportional width, so its size is a function of
         // the output count, not a miner's choice.
         if !is_coinbase && self.prefix.extra.len() > MAX_TX_EXTRA {
@@ -1810,8 +1909,9 @@ impl Transaction {
         // The tx_extra shape rule: CEN-I19 (`GENESIS_TX_WIRE_FORMAT.md`
         // §9.6a — exactly one `0x06` of `1120·n` and one `0x07` of `64·n`
         // when the transaction has `n > 0` outputs, neither when `n == 0`)
-        // plus, on a coinbase, the closed grammar `[0x01, 0x02(8), 0x06,
-        // 0x07]` (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′), and no `0x02` off it.
+        // plus, on a coinbase, the closed grammar `[0x01, 0x02(8), 0x0C(32),
+        // 0x06, 0x07]` (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q6′, amended by
+        // `SO-D12i`), and no `0x02` and no `0x0C` off it.
         // The daemon enforces this at admission through the same
         // [`check_tx_extra_shape`]; enforcing it here is what makes that one
         // rule, rather than one rule and a claim.

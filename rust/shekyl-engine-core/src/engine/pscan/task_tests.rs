@@ -26,6 +26,7 @@ use shekyl_scanner::ScannableBlock;
 use shekyl_units::AtomicUnits;
 
 use crate::engine::pscan::scan_step::BondPostMatch;
+use crate::engine::stake_engine::test_fixtures::ephemeral_body_store;
 use crate::engine::stake_engine::{PSlot, StakeEngineHandle};
 use crate::engine::test_support::{make_synthetic_block, TestDaemon, DEFAULT_TEST_SEED};
 
@@ -129,7 +130,7 @@ fn spawn_stake(bonded: &[u32]) -> StakeEngineHandle {
         .map(|&s| (PSlot::from_raw(s), persona(s)))
         .collect();
     let bonded: BTreeSet<PSlot> = bonded.iter().map(|&s| PSlot::from_raw(s)).collect();
-    StakeEngineHandle::spawn(bundles, bonded, None)
+    StakeEngineHandle::spawn(bundles, bonded, None, ephemeral_body_store())
 }
 
 /// A tiny test horizon so a sweep needs only a few real blocks.
@@ -341,7 +342,7 @@ fn record_releases_records_only_release_posts() {
         &[BondPostMatch {
             height: BlockHeight::from_raw(1),
             p_canonical_id: canonical_id(&p),
-            post_kind: 0, // JoinMarket
+            post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET, // JoinMarket
         }],
     );
     assert!(accrual2.pending_releases().is_empty());

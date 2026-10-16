@@ -295,6 +295,13 @@ impl DiagnosticSink for TracingDiagnosticSink {
                     class = ?class,
                 );
             }
+            RefreshDiagnostic::PersonaSealUnreadable => {
+                event!(
+                    target: "shekyl_engine_core::refresh::diagnostic",
+                    Level::WARN,
+                    diagnostic = "persona_seal_unreadable",
+                );
+            }
         }
     }
 }

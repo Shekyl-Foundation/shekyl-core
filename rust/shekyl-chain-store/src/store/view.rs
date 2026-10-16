@@ -85,10 +85,15 @@
 //! every classified read, not only on a read of the tip itself
 //! (`chain_reads` module docs, *The tip is one decoded read*).
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use shekyl_chain_rules::{
-    AtHeight, BlockOutputs, ChainView, RecordedBlock, RecordedWeights, Tip, TreeFrontier,
+    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
+    SlashLogFloor, Tip, TreeFrontier,
 };
-use shekyl_types::archival::{PassCount, ServedShard};
+use shekyl_types::archival::{
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
     ShardId, TxHash,
@@ -144,9 +149,37 @@ impl<'b, 'id> BatchView<'b, 'id> {
     }
 }
 
-impl<'id> ChainView<'id> for BatchView<'_, 'id> {
+impl<'id> HeaderView<'id> for BatchView<'_, 'id> {
     type Fault = StoreError;
 
+    /// `block_info.last()` through the shared read body — the same row
+    /// `block_at` / `root_at` classify against, so the tip a rule reads and
+    /// the tip absence is judged by are one read (SCW-13). `None` is the
+    /// empty chain; an undecodable last row is SI-7 through `arm`.
+    fn tip(&self) -> Result<Option<Tip>, StoreError> {
+        Ok(self.tip_row()?.map(|(height, info)| Tip {
+            height: BlockHeight::from_raw(height),
+            hash: info.hash,
+        }))
+    }
+
+    /// The header half of [`ChainView::block_at`], from the **same** read
+    /// ([`chain_reads::block_body`]): the store has no header-only table —
+    /// the header lives inside the `blocks` blob, which must hash to the
+    /// identity `block_info` records (CEN-B6) — so a header fact costs the
+    /// store exactly what the whole record does. The partition is by
+    /// field, not by table (DRS-E5 `E5-13`); what the narrower return buys
+    /// is the bound, not a cheaper read. Absence classifies as `block_at`
+    /// does: `AboveTip` above the tip, SI-7 at or below it.
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {
+        Ok(match self.block_at(height)? {
+            AtHeight::AboveTip => AtHeight::AboveTip,
+            AtHeight::Recorded(block) => AtHeight::Recorded(block.header),
+        })
+    }
+}
+
+impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// `spent_keys` membership — the chain half of CEN-L1 / CEN-I7, read
     /// from the table SI-1 guards. The body is [`chain_reads::has_key_image`],
     /// shared with the read snapshot (S-OUT-KI K1); a membership read has no
@@ -174,25 +207,16 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         Ok(match body {
             AtHeight::AboveTip => AtHeight::AboveTip,
             AtHeight::Recorded((info, block)) => AtHeight::Recorded(RecordedBlock {
-                hash: info.hash,
-                header: block.header,
-                cumulative_difficulty: info.cumulative_difficulty,
+                header: HeaderRecord {
+                    hash: info.hash,
+                    header: block.header,
+                    cumulative_difficulty: info.cumulative_difficulty,
+                },
                 coins_generated: info.coins_generated,
                 cumulative_tx_count: info.cumulative_tx_count,
                 cumulative_archival_len: info.cumulative_archival_len,
             }),
         })
-    }
-
-    /// `block_info.last()` through the shared read body — the same row
-    /// `block_at` / `root_at` classify against, so the tip a rule reads and
-    /// the tip absence is judged by are one read (SCW-13). `None` is the
-    /// empty chain; an undecodable last row is SI-7 through `arm`.
-    fn tip(&self) -> Result<Option<Tip>, StoreError> {
-        Ok(self.tip_row()?.map(|(height, info)| Tip {
-            height: BlockHeight::from_raw(height),
-            hash: info.hash,
-        }))
     }
 
     /// `block_heights[hash]` — CEN-I10's read. The body is
@@ -279,8 +303,10 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         &self,
         persona: &PCanonicalId,
         height: BlockHeight,
+        floor: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
-        archival_reads::slash_log_after(self.batch.txn(), persona, height).map_err(|f| self.arm(f))
+        archival_reads::slash_log_after(self.batch.txn(), persona, height, floor)
+            .map_err(|f| self.arm(f))
     }
 
     fn last_served_epoch(
@@ -343,5 +369,42 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
 
     fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
         archival_reads::budget_accruing(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
+    fn settlement_row(
+        &self,
+        persona: &PCanonicalId,
+        shard: ShardId,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::settlement_row(self.batch.txn(), persona, shard, epoch)
+            .map_err(|f| self.arm(f))
+    }
+
+    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
+    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
+    fn served_at(
+        &self,
+        persona: &PCanonicalId,
+        epochs: &BTreeSet<SettlementEpoch>,
+    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
+        archival_reads::served_at(self.batch.txn(), persona, epochs).map_err(|f| self.arm(f))
+    }
+
+    fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
+        archival_reads::block_draws(self.batch.txn(), height).map_err(|f| self.arm(f))
+    }
+
+    fn drawable_digest(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<DrawableDigest>, StoreError> {
+        archival_reads::drawable_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
     }
 }

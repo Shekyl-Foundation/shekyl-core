@@ -9,12 +9,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use shekyl_capped_stream::{FrameSender, StreamEnds};
+use shekyl_capped_stream::{InboundEnd, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
-use shekyl_transport_layer::{CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Sockets};
+use shekyl_transport_layer::{
+    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, SocketId, Sockets,
+};
 
 use super::{Hub, Phase, Post};
+use crate::connection::{AdvertisedEndpoint, ChainLength, HeightMessage, RedialRefusal};
 use crate::drive_inbound;
 use crate::endpoint::{admit, Endpoint};
 
@@ -57,7 +60,7 @@ fn doc_ip() -> Ipv4Addr {
 
 struct Opened {
     id: shekyl_transport_layer::SocketId,
-    inbound: FrameSender,
+    inbound: InboundEnd,
     writer: shekyl_capped_stream::ByteQueue,
     _hold: shekyl_capped_stream::QueueHold,
     session: Option<shekyl_capped_stream::Session>,
@@ -98,6 +101,7 @@ fn service(rig: &Rig, accepted: bool) {
             rig.hub.handler_gone(id);
             rig.hub.reap(id);
         }
+        Post::HandshakeResult { .. } => {}
     }
 }
 
@@ -123,7 +127,7 @@ fn a_delivery_posted_before_closed_is_parsed() {
         .expect("posts")
         .iter()
         .map(|post| match post {
-            Post::Deliver { .. } => Phase::Delivering,
+            Post::Deliver { .. } | Post::HandshakeResult { .. } => Phase::Delivering,
             Post::Closed { .. } => Phase::Closed,
             Post::Established { .. } => Phase::Arming,
         })
@@ -166,7 +170,9 @@ fn a_tor_row_posts_deliver_and_closed_with_the_tor_connector() {
         .expect("posts")
         .iter()
         .map(|post| match post {
-            Post::Deliver { connector, .. } | Post::Closed { connector, .. } => *connector,
+            Post::Deliver { connector, .. }
+            | Post::Closed { connector, .. }
+            | Post::HandshakeResult { connector, .. } => *connector,
             Post::Established { .. } => unreachable!("serviced above"),
         })
         .collect();
@@ -409,6 +415,118 @@ fn a_transport_close_does_not_ban_the_host() {
 }
 
 #[test]
+fn a_claim_lands_on_the_row_and_a_snapshot_does_not() {
+    let rig = rig();
+    let opened = adopt(&rig, Direction::Inbound, 32);
+    let mut copied = rig.hub.snapshot(opened.id).expect("row");
+    copied.note_claimed_height(9, HeightMessage::Handshake);
+    assert!(rig
+        .hub
+        .snapshot(opened.id)
+        .expect("row")
+        .claimed_height()
+        .is_none());
+    assert!(rig
+        .hub
+        .note_claimed_height(opened.id, 4, HeightMessage::Handshake));
+    let length = ChainLength::from_coinbase_height(3).expect("length");
+    assert!(rig.hub.raise_accepted_chain_length(opened.id, length));
+    let row = rig.hub.snapshot(opened.id).expect("row");
+    assert_eq!(row.claimed_height().expect("claim").height(), 4);
+    assert_eq!(row.accepted_chain_length(), Some(length));
+    assert!(matches!(
+        rig.hub
+            .finish(opened.id, CloseCause::new(CloseKind::LocalClose)),
+        CloseResult::Recorded(_)
+    ));
+    assert!(!rig
+        .hub
+        .note_claimed_height(opened.id, 8, HeightMessage::TimedSync));
+    assert_eq!(
+        rig.hub
+            .snapshot(opened.id)
+            .expect("closed")
+            .claimed_height()
+            .expect("claim")
+            .height(),
+        4
+    );
+    assert!(!rig.hub.note_claimed_height(
+        SocketId::from_ffi(u64::MAX).expect("id"),
+        1,
+        HeightMessage::ChainEntry
+    ));
+}
+
+#[test]
+fn a_redial_is_admitted_only_when_it_observes_the_claim() {
+    let rig = rig();
+    let origin = adopt(&rig, Direction::Inbound, 32);
+    let advertised = AdvertisedEndpoint::clearnet(22021).expect("port");
+    assert!(rig.hub.note_advertised(origin.id, advertised));
+    let observed = Endpoint::Clearnet {
+        ip: IpAddr::V4(doc_ip()),
+        port: 22021,
+        direction: Direction::Outbound,
+    };
+    let mismatch = Endpoint::Clearnet {
+        ip: IpAddr::V4(doc_ip()),
+        port: 18080,
+        direction: Direction::Outbound,
+    };
+    let refused = admit_open(&rig, mismatch);
+    let Err(RedialRefusal::NotThisClaim) =
+        rig.hub
+            .adopt_redial(origin.id, refused.open, refused.session, mismatch, None)
+    else {
+        panic!("a mismatched port was admitted");
+    };
+    let dialed = admit_open(&rig, observed);
+    let attached = rig
+        .hub
+        .adopt_redial(origin.id, dialed.open, dialed.session, observed, None)
+        .expect("redial");
+    assert_eq!(
+        rig.hub.snapshot(attached.id).expect("new").endpoint(),
+        &observed
+    );
+    assert_eq!(
+        rig.hub
+            .snapshot(origin.id)
+            .expect("origin")
+            .endpoint()
+            .clearnet_ip(),
+        endpoint(doc_ip(), Direction::Inbound).clearnet_ip()
+    );
+    assert_eq!(
+        rig.hub
+            .snapshot(origin.id)
+            .expect("origin")
+            .advertised()
+            .expect("claim")
+            .claim(),
+        &advertised
+    );
+}
+
+struct Admitted {
+    open: shekyl_transport_layer::OpenSocket,
+    session: shekyl_capped_stream::Session,
+}
+
+fn admit_open(rig: &Rig, endpoint: Endpoint) -> Admitted {
+    let ends = StreamEnds::open(32);
+    let now = rig.clock.now();
+    let ceiling = rig.hub.lock().ceiling;
+    let sockets = rig.hub.lock().sockets.clone();
+    let open = admit(&sockets, &endpoint, now, ceiling).expect("admit");
+    Admitted {
+        open,
+        session: ends.session,
+    }
+}
+
+#[test]
 fn established_carries_the_endpoint() {
     let rig = rig();
     let _opened = adopt(&rig, Direction::Outbound, 32);
@@ -491,13 +609,77 @@ fn reap_forgets_the_row() {
     assert!(!rig.hub.send(opened.id, b"late".to_vec()));
 }
 
+/// The split the outbound dialer needs: a dialed channel is not a session
+/// until it is adopted. Between the two the handshake runs, and a channel
+/// that fails it must leave nothing behind.
 #[test]
-fn connect_without_a_dialer_is_dial_failed() {
+fn a_dialed_channel_has_no_row_and_no_post_until_it_is_adopted() {
+    let rig = rig();
+    rig.hub.install_loopback(32);
+    let target = endpoint(doc_ip(), Direction::Outbound);
+
+    let channel = rig.hub.dial_channel(&target).expect("loopback dials");
+    let id = channel.open.id();
+    assert!(rig.hub.board().get(id).is_none(), "no row before adopt");
+    assert!(
+        rig.posts.lock().expect("posts").is_empty(),
+        "no post before adopt"
+    );
+    assert_eq!(
+        rig.hub
+            .board()
+            .count(ConnectorId::Clearnet, Direction::Outbound),
+        0
+    );
+
+    let attached = rig
+        .hub
+        .adopt(channel.open, channel.session, channel.endpoint, channel.gap)
+        .expect("adopt");
+    assert_eq!(attached.id, id, "the row is the dialed channel's");
+    let row = rig.hub.board().get(id).copied().expect("row after adopt");
+    assert!(!row.established(), "adopted, not yet established");
+    assert_eq!(row.direction(), Direction::Outbound);
+    let posts = rig.posts.lock().expect("posts");
+    assert_eq!(posts.len(), 1);
+    assert!(matches!(posts.front(), Some(Post::Established { id: posted, .. }) if *posted == id));
+}
+
+/// A dialed channel that is dropped, as after a failed handshake, leaves
+/// the registry as it was and posts nothing.
+#[test]
+fn a_dialed_channel_that_is_never_adopted_leaves_no_trace() {
+    let rig = rig();
+    rig.hub.install_loopback(32);
+    let channel = rig
+        .hub
+        .dial_channel(&endpoint(doc_ip(), Direction::Outbound))
+        .expect("loopback dials");
+    drop(channel);
+    assert!(rig.hub.board().is_empty());
+    assert!(rig.posts.lock().expect("posts").is_empty());
+}
+
+#[test]
+fn dial_channel_without_a_dialer_is_local() {
+    let rig = rig();
+    let Err(err) = rig
+        .hub
+        .dial_channel(&endpoint(doc_ip(), Direction::Outbound))
+    else {
+        panic!("dial_channel without a dialer admitted a channel");
+    };
+    assert_eq!(err.kind(), CloseKind::LocalClose);
+}
+
+#[test]
+fn connect_without_a_dialer_is_local() {
     let rig = rig();
     let Err(err) = rig.hub.connect(&endpoint(doc_ip(), Direction::Outbound)) else {
         panic!("connect without a dialer admitted a channel");
     };
-    assert_eq!(err.kind(), CloseKind::DialFailed);
+    assert_eq!(err.kind(), CloseKind::LocalClose);
+    assert!(!err.implicates_address(ConnectorId::Clearnet));
 }
 
 #[test]
@@ -555,4 +737,67 @@ fn published_rows_follow_admission_order() {
     assert!(published.windows(2).all(|pair| pair[0] < pair[1]));
     assert_eq!(board.direction_count(Direction::Outbound), 8);
     assert_eq!(board.direction_count(Direction::Inbound), 0);
+}
+
+/// `Board::count` for one connector. The handshake does not change it.
+/// `shekyl_seam_board_count` is the integer the dial cap reads.
+#[test]
+fn an_unestablished_outbound_row_still_counts_toward_the_dial_cap() {
+    let rig = rig();
+    let opened: Vec<_> = (0..12)
+        .map(|_| adopt(&rig, Direction::Outbound, 32))
+        .collect();
+    let board = rig.hub.board();
+    assert_eq!(board.len(), 12);
+    assert!(board.rows().iter().all(|row| !row.established()));
+    assert_eq!(board.count(ConnectorId::Clearnet, Direction::Outbound), 12);
+    assert_eq!(board.count(ConnectorId::Tor, Direction::Outbound), 0);
+    assert_eq!(board.count(ConnectorId::Clearnet, Direction::Inbound), 0);
+    assert_eq!(
+        board.direction_count(Direction::Outbound),
+        board.count(ConnectorId::Clearnet, Direction::Outbound)
+            + board.count(ConnectorId::Tor, Direction::Outbound)
+    );
+    let published = rig.hub.publish_count();
+    rig.hub.session_established(opened[0].id);
+    assert!(rig.hub.publish_count() > published);
+    let after = rig.hub.board();
+    assert!(after.get(opened[0].id).expect("row").established());
+    assert_eq!(after.count(ConnectorId::Clearnet, Direction::Outbound), 12);
+    assert_eq!(after.direction_count(Direction::Outbound), 12);
+}
+
+#[test]
+fn moving_bytes_does_not_republish_the_board() {
+    let rig = rig();
+    assert_eq!(rig.hub.publish_count(), 0);
+    let mut opened = adopt(&rig, Direction::Outbound, 64);
+    service(&rig, true);
+    let opened_at = rig.hub.publish_count();
+    assert_eq!(opened_at, 1);
+    assert!(rig.hub.send(opened.id, b"outbound".to_vec()));
+    assert_eq!(rig.hub.publish_count(), opened_at);
+    let session = opened.session.take().expect("session");
+    let hub = rig.hub.clone();
+    let id = opened.id;
+    let pump = thread::spawn(move || drive_inbound(&hub, id, session));
+    opened
+        .inbound
+        .blocking_send(vec![1, 2, 3, 4])
+        .expect("inject");
+    let start = std::time::Instant::now();
+    while rig.posts.lock().expect("posts").is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(2), "delivery");
+        thread::sleep(Duration::from_millis(5));
+    }
+    service(&rig, true);
+    assert_eq!(rig.hub.publish_count(), opened_at);
+    rig.hub.close(opened.id);
+    // The delivery was accepted, so the pump may already be back in
+    // `recv_blocking`, and `close` does not end the session's inbound
+    // channel: the connector does, by dropping its sender. This rig holds
+    // that sender, so drop it. Without this the join waits forever when
+    // the pump wins the race with `close`.
+    drop(opened);
+    pump.join().expect("pump");
 }

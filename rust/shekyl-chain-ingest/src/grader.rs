@@ -742,8 +742,8 @@ mod tests {
 
     #[test]
     fn a_refusal_is_open_on_an_absent_row_and_an_unreviewed_row_and_owed_on_a_divergent_one() {
-        // CEN-B2 is implemented and bucket 4: never in the register. Its
-        // refusal ended the run; nothing licensed it.
+        // CEN-B2 is absent from this fixture register. A refusal on an id
+        // the register cannot see is open.
         let obs = Observations {
             refused: Some(("CEN-B2", BlockHeight::from_raw(9))),
             ..Observations::default()

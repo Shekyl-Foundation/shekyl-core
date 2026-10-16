@@ -19,14 +19,14 @@
 //! speaks the id derived from fakechain's genesis pin.
 
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use shekyl_levin::{
     invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest,
-    HandshakeResponse, NetworkAddress, PortableMap, Received, SupportFlags, SupportFlagsRequest,
+    HandshakeResponse, PortableMap, Received, SupportFlags, SupportFlagsRequest,
     SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
     COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
@@ -195,29 +195,6 @@ fn get_info(rpc_port: u16) -> Result<ChainTip, String> {
     Ok(ChainTip { height, top_id })
 }
 
-/// The raw `/get_peer_list` body — string matching is all the pin needs, and
-/// it keeps the harness free of a JSON dependency.
-fn get_peer_list(rpc_port: u16) -> Result<String, String> {
-    let mut stream = TcpStream::connect(("127.0.0.1", rpc_port)).map_err(|e| e.to_string())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|e| e.to_string())?;
-    let req = format!(
-        "POST /get_peer_list HTTP/1.1\r\nHost: 127.0.0.1:{rpc_port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
-    );
-    stream
-        .write_all(req.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&buf);
-    // The whole body: an empty peer list omits both list keys entirely, and
-    // that is a legitimate state for this pin (a loopback-derived entry is
-    // refused by `is_host_allowed`), so requiring a key here would fail the
-    // test on the daemon behaving correctly.
-    Ok(text.split("\r\n\r\n").nth(1).unwrap_or(&text).to_owned())
-}
-
 fn json_u64(body: &str, key: &str) -> Option<u64> {
     let needle = format!("\"{key}\":");
     let rest = body.split(&needle).nth(1)?;
@@ -365,17 +342,11 @@ fn rust_client_handshakes_with_shekyld() {
     let tip = get_info(daemon.rpc_port).expect("get_info after ready");
 
     let mut session = Session::connect(daemon.p2p_port, daemon.log_path());
-    // The Q1 pin, live and cross-stack: advertise a LYING host half with a
-    // real port. The daemon must record socket-host:advertised-port in GRAY
-    // and never the advertised host — an announcement proves nothing.
-    let advertised_port: u16 = 28_099;
+    // The handshake carries no address on any connector (ruled 2026-10-09):
+    // there is no advertised host or port for the daemon to record.
     let req = HandshakeRequest {
         node_data: BasicNodeData {
             network_id: regtest_network_id(),
-            address: NetworkAddress::Ipv4 {
-                ip: Ipv4Addr::new(9, 9, 9, 9),
-                port: advertised_port,
-            },
             support_flags: SupportFlags::ADVERTISED,
         },
         payload_data: CoreSyncData {
@@ -383,7 +354,6 @@ fn rust_client_handshakes_with_shekyld() {
             cumulative_difficulty: 0,
             cumulative_difficulty_top64: 0,
             top_id: tip.top_id,
-            top_version: 0,
         },
         nonce: CLIENT_NONCE,
     };
@@ -394,19 +364,6 @@ fn rust_client_handshakes_with_shekyld() {
     assert_eq!(hs.payload_data.top_id, tip.top_id);
 
     session.reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
-
-    // The NEGATIVE limb, live and cross-stack: a lying advertised host is
-    // never adopted. The positive limb (observed host + advertised port IS
-    // what gets derived) cannot be observed here and is not asserted --
-    // `peerlist_manager::is_host_allowed` refuses loopback unconditionally,
-    // so a loopback-bound test daemon discards the derived entry before any
-    // readout can see it. That limb is
-    // `node_server.an_advert_contributes_its_port_and_never_its_host`.
-    let peers = get_peer_list(daemon.rpc_port).expect("get_peer_list after handshake");
-    assert!(
-        !peers.contains("9.9.9.9"),
-        "the advertised host was adopted; only the port is admissible: {peers}"
-    );
 
     let payload = session.invoke_map(
         COMMAND_TIMED_SYNC,

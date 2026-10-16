@@ -8,18 +8,15 @@ Fourteen crates meet the feature-governance trigger ungoverned
 `PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.
 CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (`CRYPTONOTE_MAX_TX_PER_BLOCK`, `cryptonote_basic.h:914`, an element count) and `10^6` (`shekyl_wire::READ_LEN_CAP`, `block.rs:163`).
 `ARCHIVAL_P_DERIVE_V1`'s regenerator is not citation-gated
-DRS-BENCH redb arm: add when a redb-backed `shekyld` build target exists that reports its backend.
 DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.
 `tx_extra` `0x0B` (archival attestation) has a consensus reader and no producer.
 Attestation verify must move behind PoW before credit-wire population activates.
-Bond admission's shard predicate — RULED, unbuilt; three design questions owed to E4 / S-ARCH.
 `PDM` propagation sweep — DISCHARGED 2026-09-19, four PRs in the ruled order, one per document: `docs/pdm-sweep-psl` (PRINCIPAL_STAKE_LIFECYCLE → LIVING CONTRACT), `docs/pdm-sweep-acm` (ARCHIVAL_CHALLENGE_MECHANISM on the tx unit), `docs/pdm-sweep-v3sa` (V3_STAKER_ARCHIVAL contracted, 1,546 → 1,000 lines), `docs/pdm-sweep-ctc` (CURVE_TREE_CLIENT §7 resolved in two halves); PRs #795, #796, #797, #798 in that order (#798 merges last; it carries this line). Each carries `PDM-Q6` / `PDM-Q12` in its current-tense body, not as an appended banner; `grep -c PDM` at the closing pin: PSL 9, ACM 24, V3SA 25, CTC 21. The row's original text follows as the record of what was found.
 `PRINCIPAL_STAKE_LIFECYCLE.md` §4a PR-row table: the dated UPDATE / Corrected chains accrete instead of resolving; PR-P4's row is the extreme case.
 The leaf-era archival data-scope schema (sets A/B/C, "B + C") survives outside its owner after `PDM-Q6` re-keyed `V3_STAKER_ARCHIVAL.md` §*Archival data scope* and its two declared consumers (`PUBLIC_NARRATIVE_FAQ.md`, `FOUNDATION_ARCHIVAL_DISCLOSURE.md`; #797).
 `#[serde(default)]` still lets an omitted daemon field become its zero value.
 `CEN-L8`'s settlement clause has no production caller; census home is already the slash pass.
 `SO-D9` — `ERR_EPOCH_MISMATCH` on the serve-credit admission path is a tautology; RULED (i) 2026-09-13, implementation owed.
-Serve-credit inclusion incentive and archival weight pricing — the fee-and-weight round Q9 names but nothing scheduled.
 Connect-path regression for the hash-gated FCMP++ proof-skip (`CEN-M8` fix wiring).
 `get_archival_emission_claim_source` walks the entire serve-credit table per unauthenticated RPC
 `shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.
@@ -29,7 +26,6 @@ LMDB unbond-journal naming excluded from the Unbond → Release rename — carri
 Collected-total earmark warning (§12.3 carve UX, ruled 2026-09-04 with the carve countersign).
 §12.3 carve UNMEASURED bound — rule-21 measurement obligation with a named expected resolution.
 Release-asset manifest signing owed before the first non-RC release tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring task, not an open decision).
-F-7 — structural gate for the test-only FFI exports that ship in the production archive; two leak shapes, two remedies, one `nm` gate seeded from a sweep
 GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) — [`design/WALLET_MESSAGE_SIGNING.md`](./design/WALLET_MESSAGE_SIGNING.md)
 FFI *signature* drift has no remedy, unlike FFI *constant* drift [`audit_trail/2026-05-ffi-constant-drift-audit.md`](./audit_trail/2026-05-ffi-constant-drift-audit.md)
 TJ-1 (was CRITICAL) — leaf-index beacon MITIGATED 2026-08-24 (`PC-D3`); still closes by TJ-B deleting the vin-carried opening.
@@ -68,7 +64,6 @@ Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing history s
 Phase 4b: build concurrency permit stays 1 — raising it is a rule-21 reopen gated on anonymized segment fetch.
 GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in` single-structured-output funding must land before genesis.
 Block-height representation unification at the WI-2 anchoring seam
-Alt-chain supply accumulation advances by the coinbase, not the emission subsidy.
 Should the genesis block header carry a real mint timestamp instead of 0?
 The pool admits duplicate archival unique-keys that only fail at connect.
 External cryptographic review of the `FcmpMembershipOnly` soundness [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md)
@@ -216,9 +211,7 @@ Fleet: arm readouts must record the per-sample series, not a pooled summary — 
 Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms` fixed, and `F'` is the axis the region derivation moves.
 Relay: `F'` may be per-POSTURE even though §89.2 correctly refused per-ZONE.
 Relay: populate the 48-cell Pi verification surface, then consume it per shape.
-Relay lane: add a derivation check asserting `fluff_return_ms` equals the max over measured zones
 Execute PWD-T6's PWC-F3 deletion: remove `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and `network_config`'s KV serializer.
-Implement PWD-I2's peerlist-acceptance rules: outbound-only acceptance and the `P2P_MAX_PEERS_IN_HANDSHAKE` per-connection ceiling.
 The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.
 Gate PWD-T7's compression invariant mechanically: assert that only notify routes reach `try_compress_message`, and that no message carrying confidential material of any lifetime — session key, node-local secret, reused token — is routed through one.
 Size the Levin bucket header's length field, once `NOTIFY_RESPONSE_GET_OBJECTS`'s byte budget has a value.
@@ -230,9 +223,7 @@ Extend PWD-B1's bucket to *every* dispatch — invoke and notify — and derive 
 Derive PWD-B2's timed-sync `min`/`jitter` split.
 Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.
 Measure address volatility for ephemeral-per-boot onion endpoints (PWD-E8), then rule the acceptable dead fraction.
-Package the pinned Tor Expert Bundle beside `shekyld` in release artifacts, so the PWD-E7 default posture engages out of the box.
 Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.
-Decide `sanitize_peerlist`'s port-0 handling, where the IPv4-only rule collides with `tor_address::unknown()` being port 0.
 Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
 FCMP++ sender-side output verification — inherited `wallet2::sanity_check` [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc)
 Hardening-pass commit 8 follow-up: WalletPrefs round-trip property test (`2k.a2` deferred test).
@@ -254,7 +245,6 @@ C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names (folded into
 Chore #4: platform-gate audit sweep — reduced scope after Chore #3 (V4 pre-audit).
 Restore semantic thread labels in the Rust subscriber ().
 Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw ().
-`removed_flags` shim sunset.
 `shekyl-daemon-rpc` staticlib: `tracing::*` calls silently dropped.
 Re-examine the `/FIiso646.h` deferral.
 MSVC / Windows build-debt cluster (migrated from `STRUCTURAL_TODO.md`, 2026-05-30).
@@ -296,8 +286,6 @@ Age-stratify the foundation floor AND the terminal subsidy toward the irreplacea
 L12 floor-decay schedule should be coupled to the growth↔entry crossover, not a free constant (gate 5 / economics; substrate note).
 Bootstrap APR overshoot is a purse-efficiency note, not a correctness one (gate 5 / economics; substrate note).
 Vanguard eligibility flag set is a provisional pin, unseated only by operation (VG-2 / transport; rule-21 reopen record).
-Validate `prev_id` before attestation verify on the alt-chain path (consensus ordering; independent hardening, NOT a defect).
-Alt-chain attestation verify resolves bond pubkeys from main-chain state
 Land round 19: the relay floor follows raw `C` (FL-R20…FL-R23)
 Disclose the fee-tier privacy trade in the wallet/CLI tier picker
 Block-weight penalty and fee floor price the same expansion off different medians during a surge.

@@ -239,6 +239,11 @@ pub enum WatchdogAlarmReason {
     /// [`AlarmReason::DaemonPeerless`](crate::engine::submit_watchdog::AlarmReason::DaemonPeerless).
     DaemonPeerless,
 
+    /// Past horizon and the daemon was started offline: it relays nothing
+    /// by configuration. Projects
+    /// [`AlarmReason::DaemonOffline`](crate::engine::submit_watchdog::AlarmReason::DaemonOffline).
+    DaemonOffline,
+
     /// The kernel called for the rung-1 resubmit-same-bytes probe, but
     /// the retained bytes are gone — a wallet restart crossed the await
     /// (`DAEMON_SUBMIT_VERDICT.md` §5.3 decision 2, ephemeral held-bytes

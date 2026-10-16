@@ -535,10 +535,11 @@ a line with the syntax `argumentname=value`, where `argumentname` is the name
 of the argument without the leading dashes, for example, `log-level=1`.
 
 To run in the background, use your platform's service manager (systemd,
-launchd, or Task Scheduler). See the example systemd unit files under
-`utils/systemd/` and `contrib/packaging/linux/`, and the configuration
-examples under `utils/conf/`; adapt paths and the service user to your
-deployment. The `--detach` / `--pidfile` / `--*-service` flags were
+launchd, or Task Scheduler). The shipped systemd unit is
+`contrib/packaging/linux/shekyld.service`, which runs in its own
+`shekyl.slice` beside it (the `.deb` installs both); the configuration
+examples are under `utils/conf/`. Adapt paths and the service user to
+your deployment. The `--detach` / `--pidfile` / `--*-service` flags were
 removed in V3.1 — `shekyld` always runs in the foreground and is
 supervised externally.
 
@@ -572,8 +573,7 @@ setting the following configuration parameters and environment variables:
    as well.
 * Rely on systemd/launchd/Task Scheduler to supervise `shekyld` under
   torsocks — `--detach` was removed in V3.1 and `shekyld` always runs in
-  the foreground. See the example service files under `utils/systemd/`
-  for details.
+  the foreground. The shipped unit is `contrib/packaging/linux/shekyld.service`.
 * If you use the wallet with a Tor daemon via the loopback IP (eg, 127.0.0.1:9050),
   then use `--untrusted-daemon` unless it is your own hidden service.
 

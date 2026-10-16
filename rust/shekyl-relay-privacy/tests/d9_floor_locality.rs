@@ -43,12 +43,12 @@
 // ^ Node counts and millisecond means widen to f64 for the ratios reported
 //   below. Every value involved is far below 2^53.
 
+use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::{
     simulate_fluff_return_mixed, FloodParams, FloodReach, FloodSummary,
 };
 use shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS;
 use shekyl_relay_privacy::schedule::DelayFamily;
-use shekyl_relay_privacy::SplitMix64;
 
 const NODES: usize = 60;
 const TRIALS: usize = 400;

@@ -57,6 +57,10 @@ thiserror = { workspace = true }
 # itself asserts about the census. Dev-only, so the production edge stays
 # template → wire/economics/crypto with no path back into the rules crate.
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# The empty attestation set's root, which a witness-less template must
+# commit for CEN-B4 to pass it (slice 8 row 10). Already in the graph via
+# the rules crate; dev-only for the same reason as that edge.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 
 [lints]
 workspace = true

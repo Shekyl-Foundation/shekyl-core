@@ -9,9 +9,9 @@
 //! `shekyl-p-serve` answers `GET /shard/{id}` on a persona's onion and
 //! `shekyl-p-fetch` dials it. Neither may depend on the other (`SF-D4`:
 //! the two ends of `PWD-E9` do not share a dependency graph), so the
-//! route grammar they must agree on lives here, in the codec crate both
-//! already depend on for the `RF-D4` frame. Two constants that happen to
-//! agree are not the ratification; one constant read twice is
+//! route grammar they must agree on lives here, in a crate both already
+//! depend on. Two constants that happen to agree are not the
+//! ratification; one constant read twice is
 //! ([`ARCHIVAL_SHARD_FETCH.md`](../../../docs/design/ARCHIVAL_SHARD_FETCH.md)
 //! `SF-D4`, `SF-D5`). The living contract is
 //! [`ARCHIVAL_SERVING_ROUTE.md`](../../../docs/design/ARCHIVAL_SERVING_ROUTE.md).
@@ -72,9 +72,33 @@ pub const RESPONSE_HEADER_NAMES: &[&str] = &["content-type", "content-length"];
 /// decoder. `P` signs the **decoded** bytes, never this text, so a lenient
 /// server and a strict client could never sign different transcripts for
 /// one request. Missing, duplicate, malformed, or wrong-length values are
-/// the identical complete-head 404 (`RF-R1`); all other request headers
+/// the bare complete-head 400 (`RF-R1`); all other request headers
 /// remain ignored. Not `x-`-prefixed for the reason `RF-R1` gave the path.
 pub const REQUEST_HEADER_NAME: &str = "shekyl-pass-request";
+
+/// The byte a refusal trailer is made of.
+///
+/// A 200 always carries exactly `content-length` bytes: the frame, then an
+/// envelope of the countersignature's fixed width. When `P`'s signer fails
+/// after the body has gone out, the envelope holds this byte repeated in
+/// place of a signature — the **refusal trailer**. `P` says "I served this
+/// and did not sign it" in bytes it wrote, so the requester does not have
+/// to infer that from a response that stopped. A response that stops short
+/// is then always transport, whatever the offset.
+///
+/// It cannot be read as a signature: a canonical `HybridSignature` opens
+/// with a four-byte header and a little-endian length, and `0xFFFF_FFFF`
+/// is not a length any envelope can hold. A reserved value of the
+/// envelope's own width, and not a status byte ahead of it, so that a good
+/// read's bytes and every `content-length` are what they were.
+pub const REFUSAL_TRAILER_BYTE: u8 = 0xFF;
+
+/// Whether `envelope` — the last bytes of a 200, at the countersignature's
+/// width — is the refusal trailer.
+#[must_use]
+pub fn is_refusal_trailer(envelope: &[u8]) -> bool {
+    !envelope.is_empty() && envelope.iter().all(|b| *b == REFUSAL_TRAILER_BYTE)
+}
 
 /// Decoded length of the request header value. The layout and the
 /// transcript `P` signs over it are `shekyl-archival-retention`'s

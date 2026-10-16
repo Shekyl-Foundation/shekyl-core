@@ -102,6 +102,8 @@ pub fn debit_auth_pin(
 pub fn requires_cold_authority(post_kind: BondPostKind, _bond_debit: u64) -> bool {
     match post_kind {
         BondPostKind::Release => true,
+        // A JoinMarket authorizes with the identity key; the receipt key it
+        // carries is committed, never an authorizer.
         BondPostKind::JoinMarket | BondPostKind::Reinstate => false,
     }
 }

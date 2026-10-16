@@ -17,10 +17,12 @@
 //! # Two kinds of row
 //!
 //! **Predicates** — F1, F3, F7, F9, F10 are stateless ([`FormRule`]); F4,
-//! F5, F6 read the connecting height ([`BlockRule`]). The height is
-//! **caller-derived** — `cx.connecting`, from the view's tip — and never
-//! `Input::Gen`'s claim: F5 is the one row that *reads* the claim, and it
-//! compares it to the view's height (census F4 note: "spoof closed by F5").
+//! F5, F6 read the connecting height and nothing else of the chain
+//! ([`HeaderRule`], so the alt tier judges them over a stitched chain of
+//! headers — `DRS_E5_POOL_ALT_PRUNE.md` §2.1). The height is **caller-derived** —
+//! `cx.connecting`, from the view's tip — and never `Input::Gen`'s claim:
+//! F5 is the one row that *reads* the claim, and it compares it to the
+//! view's height (census F4 note: "spoof closed by F5").
 //!
 //! **Definitions** — F13 (the base subsidy), F15 (the release-modulated
 //! emission), F20 (the volume window) and F11 (genesis accepts its
@@ -40,7 +42,8 @@
 //! F2 (the wire admits one transaction version) and F8 (one output tag)
 //! are falsified in `miner_tests`. F19 (parent state is the view's brand)
 //! is falsified by the `compile_fail` doctests on `validate`. F21 is
-//! [`EMISSION_SPLIT_EPOCH`].
+//! [`shekyl_economics::EMISSION_SPLIT_EPOCH`], compile-pinned from the
+//! census and falsified by `the_staker_share_starts_at_block_one`.
 //!
 //! # What is not here
 //!
@@ -83,9 +86,9 @@ use shekyl_wire::{Ct, Input, Transaction};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault, ViewRead};
-use crate::rules::{recorded, BlockContext, BlockRule, FormContext, FormRule, Rule};
+use crate::rules::{recorded, BlockContext, FormContext, FormRule, HeaderRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
-use crate::view::ChainView;
+use crate::view::{ChainView, HeaderView};
 
 /// The refusal locus of every 4.F predicate: the miner transaction.
 const MINER: Locus = Locus::Tx {
@@ -110,23 +113,6 @@ pub(crate) fn economics() -> &'static EconomicParams {
         params
     })
 }
-
-/// CEN-F21: the height the staker share's decay is measured from
-/// (`genesis_ng_height`). One on every issued chain — the C++ returns the
-/// one-row hardfork table's height, and
-/// `the_emission_split_epoch_is_the_hardfork_tables_first_row` pins this
-/// constant to those three tables.
-///
-/// CEN-F16 passes it to `shekyl_economics::compute_emission_split`
-/// (`rules::reward::judge_emission`, slice 7 commit 5). It
-/// becomes a [`crate::RuleSet`] field when a schedule step names a different
-/// epoch. Until then a field would be copied into every rule-set mismatch
-/// and no row would read it.
-///
-/// Public since E6 slice 6 for the same one reason as [`tx_volume_window`]:
-/// the producer's split (`shekyl-block-template`) is priced at the epoch
-/// the validator will judge, read here, not restated.
-pub const EMISSION_SPLIT_EPOCH: BlockHeight = BlockHeight::from_raw(1);
 
 // ---------------------------------------------------------------------------
 // Stateless predicates (form)
@@ -276,11 +262,11 @@ impl Rule for F4 {
     const ROW: CenRow = CenRow::F4;
 }
 
-impl BlockRule for F4 {
-    fn check<'id, V: ChainView<'id>>(
+impl HeaderRule for F4 {
+    fn check<'id, H: HeaderView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+        _view: &H,
+    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
         if cx.connecting.is_zero()
             || cx.candidate().block.miner_transaction.prefix.outputs.len() == 1
         {
@@ -302,11 +288,11 @@ impl Rule for F5 {
     const ROW: CenRow = CenRow::F5;
 }
 
-impl BlockRule for F5 {
-    fn check<'id, V: ChainView<'id>>(
+impl HeaderRule for F5 {
+    fn check<'id, H: HeaderView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+        _view: &H,
+    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
         match cx
             .candidate()
             .block
@@ -332,11 +318,11 @@ impl Rule for F6 {
     const ROW: CenRow = CenRow::F6;
 }
 
-impl BlockRule for F6 {
-    fn check<'id, V: ChainView<'id>>(
+impl HeaderRule for F6 {
+    fn check<'id, H: HeaderView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+        _view: &H,
+    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
         let window = cx.formed.rule_set().mined_money_unlock_window().to_raw();
         let expected = cx.connecting.to_raw().checked_add(window);
         let unlock = cx.candidate().block.miner_transaction.prefix.unlock_time;

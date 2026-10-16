@@ -60,14 +60,16 @@ using namespace crypto;
 namespace cryptonote
 {
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply, uint64_t genesis_ng_height) {
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, shekyl::tx_volume_window tx_volume, shekyl::supply_facts supply) {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
 
     // The extra is built once, at the end, by shekyl_coinbase_extra: the
-    // codec lays out [0x01 pubkey, 0x02 nonce(8), 0x06 KEM, 0x07 leaf
-    // entries] and judges it by the coinbase grammar before handing the bytes
+    // codec lays out [0x01 pubkey, 0x02 nonce(8), 0x0C draw commitment,
+    // 0x06 KEM, 0x07 leaf entries], drawing the commitment itself (the
+    // commitment's secrets never reach C++; this function passes nothing
+    // for it), and judges it by the coinbase grammar before handing the bytes
     // back (TX_EXTRA_RUST_CUTOVER.md §3, TXE-Q2, TXE-Q6'). The nonce is a
     // fixed SHEKYL_COINBASE_NONCE_BYTES: a miner's shorter request is
     // zero-padded and a longer one refused here, not at connect.
@@ -82,14 +84,14 @@ namespace cryptonote
     in.height = height;
 
     uint64_t block_reward;
-    if(!get_block_reward(median_weight, current_block_weight, already_generated_coins, block_reward, hard_fork_version, tx_volume))
+    if(!get_block_reward(median_weight, current_block_weight, already_generated_coins, block_reward, tx_volume))
     {
       LOG_PRINT_L0("Block is too big");
       return false;
     }
 
     // Component 4: split emission between miner and staker pool
-    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, genesis_ng_height);
+    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height);
     block_reward = em_split.miner_emission;
 
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -119,9 +121,6 @@ namespace cryptonote
 
     uint64_t summary_amounts = 0;
 
-    CHECK_AND_ASSERT_MES(hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC, false,
-      "construct_miner_tx: hard_fork_version " << (int)hard_fork_version
-      << " < HF_VERSION_FCMP_PLUS_PLUS_PQC. Shekyl is v3 from genesis.");
     CHECK_AND_ASSERT_MES(!miner_address.m_pqc_public_key.empty(), false,
       "Miner address has no PQC public key; v3 requires per-output KEM encapsulation. "
       "Regenerate your miner wallet with `--generate-new-wallet` on a v3 build.");

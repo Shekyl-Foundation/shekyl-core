@@ -56,7 +56,6 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::Stdio;
 use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
@@ -79,6 +78,7 @@ use super::auth::{parse_authchallenge, read_cookie_file, AuthError};
 use super::bootstrap::{bootstrap_step, parse_bootstrap_progress, BootstrapState, BootstrapStep};
 use super::encoding::hex_upper;
 use super::framing::{ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer};
+use super::launch;
 use super::onion::{AddOnion, ServiceId};
 use super::safecookie::verify_server_hash;
 use super::vanguards::HsLayerPins;
@@ -100,11 +100,37 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// giving up (a `tor` that never opens the control port cannot be driven).
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Why the managed tor's Windows system directory could not be read.
+///
+/// No path and no directory text. [`SystemDirectoryError::Os`] is the code from
+/// the failed call. [`SystemDirectoryError::UnusableLength`] is a length the
+/// call itself contradicted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemDirectoryError {
+    /// `GetSystemWindowsDirectoryW` failed. The code was read immediately.
+    Os(u32),
+    /// The call returned a length that cannot name a directory: nothing
+    /// written, or a written length that does not fit the buffer it asked for.
+    UnusableLength,
+}
+
+impl SystemDirectoryError {
+    /// The OS error from the failed call, read before any further call.
+    #[cfg(windows)]
+    pub(crate) fn from_last_os_error() -> Self {
+        let Some(code) = std::io::Error::last_os_error().raw_os_error() else {
+            return Self::UnusableLength;
+        };
+        u32::try_from(code).map_or(Self::UnusableLength, Self::Os)
+    }
+}
+
 /// A failure in the control connection — handshake or runtime.
 ///
-/// **Content-free**: every variant carries only a protocol status code, never a
-/// fragment of the control-port payload or the cookie (same forensic discipline as
-/// [`FramingError`]/[`AuthError`], which it wraps).
+/// **Content-free**: every variant carries only a protocol status code, or the
+/// system-directory failure below, never a fragment of the control-port payload
+/// or the cookie (same forensic discipline as [`FramingError`]/[`AuthError`],
+/// which it wraps).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlError {
     /// The TCP connection to the control port could not be established.
@@ -147,8 +173,14 @@ pub enum ControlError {
     /// error, `tor` exiting before it becomes driveable, or its `ControlPort` file / cookie
     /// not appearing within the `SPAWN_TIMEOUT` budget.
     /// Carries no path (forensic discipline); `spawn_managed_tor`'s own `--Log` file in the
-    /// `DataDirectory` is where the specific cause is diagnosable.
+    /// `DataDirectory` is where the specific cause is diagnosable. A failure to read the
+    /// Windows system directory is [`Self::SystemDirectory`] instead: it happens before
+    /// any tor log exists, and still carries no path.
     Spawn,
+    /// The Windows system directory could not be read, so the managed tor was not
+    /// started. The code is the OS error, or the call returned a length that cannot
+    /// name a directory.
+    SystemDirectory(SystemDirectoryError),
 }
 
 impl std::fmt::Display for ControlError {
@@ -172,6 +204,15 @@ impl std::fmt::Display for ControlError {
                 "control command was malformed (empty or forbidden character)"
             ),
             Self::Spawn => write!(f, "managed tor failed to launch or become driveable"),
+            Self::SystemDirectory(SystemDirectoryError::Os(code)) => {
+                write!(
+                    f,
+                    "managed tor system directory could not be read (os error {code})"
+                )
+            }
+            Self::SystemDirectory(SystemDirectoryError::UnusableLength) => {
+                write!(f, "managed tor system directory length was unusable")
+            }
         }
     }
 }
@@ -455,20 +496,27 @@ pub enum TorLaunch {
 /// `disable_network`), not a bare integer with a magic zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocksPort {
-    /// `SocksPort auto`: tor picks a free port; the caller discovers it post-Ready
-    /// via `GETINFO net/listeners/socks`. The production (§3c supervisor) choice —
-    /// immune to restart re-bind races by construction.
+    /// `SocksPort auto ExtendedErrors`: tor picks a free port; the caller
+    /// discovers it post-Ready via `GETINFO net/listeners/socks`. The
+    /// production choice — immune to restart re-bind races by construction.
+    /// `ExtendedErrors` is fixed on the value so an introduction timeout
+    /// is not reported as a missing host.
     Auto,
     /// A caller-chosen fixed port — harnesses and bring-your-own-layout setups.
     Fixed(u16),
 }
 
 impl SocksPort {
-    /// The `--SocksPort` command-line value.
-    fn as_arg(self) -> String {
+    /// The `--SocksPort` value.
+    ///
+    /// `ExtendedErrors` is part of the value, not a separate flag. Tor
+    /// 0.4.9.11 leaves it off (`port_cfg_new`), and without it an
+    /// introduction timeout and a missing descriptor are both reply 4.
+    /// The flag changes only the reply byte our own Tor sends us.
+    pub fn as_arg(self) -> String {
         match self {
-            Self::Auto => "auto".to_owned(),
-            Self::Fixed(port) => port.to_string(),
+            Self::Auto => "auto ExtendedErrors".to_owned(),
+            Self::Fixed(port) => format!("{port} ExtendedErrors"),
         }
     }
 }
@@ -865,13 +913,10 @@ async fn handshake(
 async fn spawn_managed_tor(
     managed: ManagedTor,
 ) -> Result<(TorChild, SocketAddr, PathBuf), ControlError> {
-    // Ensure the DataDirectory exists so a missing path fails *fast* here (an immediate
-    // `Spawn` error) rather than as a silent 30s control-port-file timeout. Idempotent;
-    // the actor owns the managed tor's DataDirectory, and tor secures it to 0700 — the
-    // brief window before that is an empty dir, no secrets yet.
-    tokio::fs::create_dir_all(&managed.data_dir)
-        .await
-        .map_err(|_| ControlError::Spawn)?;
+    // The directory is owner-only on Unix before any file is written, and a symlink
+    // at the final component is refused. A missing path fails here, not as a 30s
+    // wait for a control-port file that will never appear.
+    launch::prepare_data_directory(&managed.data_dir).await?;
     let port_file = managed.data_dir.join("control_port");
     // A stale port file from a prior run would be read as *this* run's port — remove it so
     // `wait_for_control_port` can only ever return a fresh value. `NotFound` is the normal
@@ -884,72 +929,15 @@ async fn spawn_managed_tor(
             return Err(ControlError::Spawn);
         }
     }
+    // The launch names this file as tor's torrc, defaults torrc and both GeoIP files.
+    // Tor refuses a named torrc that does not exist. Rewritten on every spawn, and
+    // never by following a symlink or truncating a hard link.
+    launch::install_blank_config(&managed.data_dir).await?;
 
-    // The witness type guarantees this path passed the hash-pin gate and is canonical
-    // (the file hashed is the file named — no exec-time PATH re-search or cwd drift).
-    let mut cmd = tokio::process::Command::new(managed.tor_binary.as_path());
-    cmd.arg("--DataDirectory")
-        .arg(&managed.data_dir)
-        .arg("--ControlPort")
-        .arg("auto")
-        .arg("--ControlPortWriteToFile")
-        .arg(&port_file)
-        .arg("--CookieAuthentication")
-        .arg("1")
-        .arg("--SocksPort")
-        .arg(managed.socks_port.as_arg())
-        // A file log in the (0700, caller-owned) DataDirectory so a `Spawn` failure is
-        // diagnosable — the actor's own errors stay content-free (no paths), but tor's
-        // startup log names the cause (bad binary, torrc/CLI error, bind failure). `notice`
-        // level carries bootstrap + warnings, not the C6 forensic surface (circuit IDs /
-        // targets / SOCKS usernames are info/debug only), so it's safe to persist.
-        //
-        // The path is passed **unquoted on purpose** — do not "fix" this by quoting it. Tor's
-        // `Log <severity> file <FILENAME>` grammar takes the *entire remainder* of the option
-        // value as the filename, so an embedded space (a wallet DataDirectory under a spaced
-        // user profile — `C:\Users\My Name\…`, `/Users/My Name/…`) is preserved verbatim.
-        // Wrapping the path in quotes makes tor treat the literal `"` as part of the filename
-        // and write the log to the wrong place. Verified against the bundled tor: unquoted
-        // writes to the exact spaced path, quoted does not.
-        .arg("--Log")
-        .arg(format!(
-            "notice file {}",
-            managed.data_dir.join("tor.log").display()
-        ))
-        .kill_on_drop(true)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // ---------------------------------------------------------------------------------
-    // NON-ANONYMOUS SERVING IS HELD SHUT HERE, and this is one half of a two-half rule.
-    //
-    // tor can be put into single-hop / non-anonymous onion mode by *two* independent
-    // routes, and they are foreclosed by *different* mechanisms in *different* files:
-    //
-    //   1. `ADD_ONION`'s `NonAnonymous` flag — foreclosed **by type**: it is not a member
-    //      of `control::onion::OnionFlags`, and `onion_line_is_never_non_anonymous`
-    //      asserts over every representable flag/PoW combination that it can never reach
-    //      the wire.
-    //   2. **torrc / config** — `HiddenServiceNonAnonymousMode` (which additionally
-    //      requires `SocksPort 0`) — foreclosed **by construction, right here**: the spawn
-    //      surface is the six typed options above and nothing else. There is no
-    //      `extra_args`, no `-f <torrc>`, no `+Option` append, no `--defaults-torrc`.
-    //
-    // The two halves cannot see each other, which is the hazard worth naming. The
-    // `OnionFlags` test does not fire when someone adds a knob here, and the rationale
-    // below is written about *safety invariants* generally, not about this mode
-    // specifically. So: **when the anticipated future typed knobs arrive (bridges, an
-    // upstream proxy), non-anonymous mode is on the list of things this discipline is
-    // holding shut** — a knob that reaches `HiddenServiceNonAnonymousMode` or zeroes the
-    // `SocksPort` re-opens route 2 while route 1's test stays green and silent.
-    // ---------------------------------------------------------------------------------
-    //
-    // The one caller-toggleable knob (see `ManagedTor::disable_network`): an offline tor for
-    // the child-lifecycle test. Every other flag is actor-owned, so this is the *only* place
-    // caller intent reaches the command line — a typed bool, not a flag passthrough.
-    if managed.disable_network {
-        cmd.arg("--DisableNetwork").arg("1");
-    }
-    let mut child = cmd.spawn().map_err(|_| ControlError::Spawn)?;
+    let environment = launch::LaunchEnvironment::resolve(&managed.tor_binary)?;
+    let mut child = launch::managed_tor_command(&managed, &port_file, &environment)
+        .spawn()
+        .map_err(|_| ControlError::Spawn)?;
 
     // Bounded startup: wait for tor to become driveable — its control-port file *and* its
     // auth cookie. Tor writes them at startup but not atomically, so reading the cookie the
@@ -1491,6 +1479,16 @@ mod tests {
             ControlError::Desync.to_string(),
             "unsolicited control reply (no command in flight)"
         );
+        // An OS code, never a path or a system message.
+        const SAMPLE_OS_CODE: u32 = 2;
+        assert_eq!(
+            ControlError::SystemDirectory(SystemDirectoryError::Os(SAMPLE_OS_CODE)).to_string(),
+            "managed tor system directory could not be read (os error 2)",
+        );
+        assert_eq!(
+            ControlError::SystemDirectory(SystemDirectoryError::UnusableLength).to_string(),
+            "managed tor system directory length was unusable",
+        );
     }
 
     #[test]
@@ -1522,6 +1520,19 @@ mod tests {
 ///
 /// This holds the **fast path** (offline `tor` under `DisableNetwork 1`):
 /// handshake + command correlation + read loop, no circuits. The bootstrapped
+/// Covers the `--SocksPort` value `spawn_managed_tor` passes. Does not
+/// launch Tor.
+#[cfg(test)]
+mod socks_port_arg {
+    use super::SocksPort;
+
+    #[test]
+    fn the_launch_argument_carries_extended_errors() {
+        assert_eq!(SocksPort::Auto.as_arg(), "auto ExtendedErrors");
+        assert_eq!(SocksPort::Fixed(9050).as_arg(), "9050 ExtendedErrors");
+    }
+}
+
 /// `STREAM`/CircID measurement (DQ-T0.4) needs a `DisableNetwork 0` instance with
 /// network egress and lands next.
 #[cfg(test)]
@@ -1537,6 +1548,7 @@ mod live_tests {
     use std::time::{Duration, Instant};
     use tokio::sync::{mpsc, oneshot};
 
+    use super::super::launch::{self, LoggedFile};
     use crate::test_support::tor_binary;
 
     /// A spawned test `tor` + its temp `DataDirectory`. Kills `tor` and cleans up
@@ -1580,11 +1592,23 @@ mod live_tests {
 
     /// Spawn an **offline** `tor` (`DisableNetwork 1`) with a cookie-authed control
     /// port on an OS-assigned port written to `ControlPortWriteToFile`.
+    ///
+    /// This is the fixture for the *attached* posture — a tor somebody else runs —
+    /// so it does not go through the managed launcher. It still has to start, and
+    /// the Expert Bundle's `tor` has no `RPATH`: it finds the libraries shipped
+    /// beside it only when the loader is pointed at them. The directory is the
+    /// witness's, the same one the managed launcher names, so a symlink resolves
+    /// to the target and a path the loader would split fails here instead of
+    /// waiting out the control-port timeout.
     async fn spawn_offline_tor() -> TestTor {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().to_path_buf();
         let port_file = data_dir.join("control_port");
-        let child = ProcCommand::new(tor_binary())
+        let verified = crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary());
+        let mut cmd = ProcCommand::new(verified.as_path());
+        #[cfg(target_os = "linux")]
+        cmd.env("LD_LIBRARY_PATH", verified.library_dir());
+        let child = cmd
             .arg("--DataDirectory")
             .arg(&data_dir)
             .arg("--ControlPort")
@@ -1827,6 +1851,84 @@ mod live_tests {
 
         actor.stop_gracefully().await.expect("graceful stop");
         actor.wait_for_shutdown().await;
+    }
+
+    /// The managed tor reads no configuration but the launcher's own blank file:
+    /// no default `torrc`, no default `torrc-defaults`, no default GeoIP file.
+    ///
+    /// Without `--torrc-file` and `--defaults-torrc`, tor loads both from its
+    /// compiled-in `CONFDIR`, which for the pinned Linux bundle is
+    /// `/var/tmp/dist/tor/etc/tor` — creatable by any local account. Its GeoIP
+    /// files sit beside them under `share/tor`. Command-line options win only
+    /// for the keys the launcher names, so whatever else those files say is
+    /// merged in.
+    ///
+    /// The evidence is tor's own startup log, which names every configuration
+    /// file it reads or looks for and every GeoIP file it parses. A tor that
+    /// read its defaults says so (`Configuration file "…" not present` or
+    /// `Read configuration file "…"` naming another path), and that fails here
+    /// without planting anything at the host's real default paths. The test
+    /// also requires that all four reads are present and name the launcher's
+    /// file, so a log that stopped carrying these lines fails instead of
+    /// passing empty.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
+    async fn managed_tor_reads_no_configuration_but_its_own() {
+        // torrc and torrc-defaults; IPv4 and IPv6. Independent of the option
+        // list the builder loops: these are what tor's own log must report.
+        const OWN_CONFIG_READS: usize = 2;
+        const OWN_GEOIP_PARSES: usize = 2;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().to_path_buf();
+        let (readiness, _ready_rx) = BootstrapReadiness::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let actor = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
+                data_dir: data_dir.clone(),
+                socks_port: super::SocksPort::Fixed(free_port()),
+                disable_network: true,
+                exit_observer: None,
+            }),
+            events: EventSink::new(tx),
+            readiness,
+        });
+        // A handshake means tor has finished reading its configuration.
+        let reply = actor
+            .ask(Command::GetInfo(vec!["version".to_owned()]))
+            .await
+            .expect("GETINFO version against the actor-spawned tor");
+        assert_eq!(reply.status(), 250);
+        actor.stop_gracefully().await.expect("graceful stop");
+        actor.wait_for_shutdown().await;
+
+        let ours = launch::blank_config_path(&data_dir);
+        let ours = ours.display().to_string();
+        let log = std::fs::read_to_string(data_dir.join(launch::LOG_FILE_NAME)).expect("tor's log");
+        let mentions = launch::files_named_in_tor_log(&log);
+        for mention in &mentions {
+            assert_eq!(
+                mention.path,
+                ours.as_str(),
+                "tor named a file the launcher did not"
+            );
+        }
+        let config_reads = mentions
+            .iter()
+            .filter(|mention| mention.kind == LoggedFile::ConfigRead)
+            .count();
+        let geoip_parses = mentions
+            .iter()
+            .filter(|mention| mention.kind == LoggedFile::GeoipParse)
+            .count();
+        assert_eq!(
+            config_reads, OWN_CONFIG_READS,
+            "the torrc and the defaults torrc, both ours"
+        );
+        assert_eq!(
+            geoip_parses, OWN_GEOIP_PARSES,
+            "the IPv4 and IPv6 GeoIP files, both ours"
+        );
     }
 
     /// Reserve a free loopback port (bind `:0`, read it, drop). A small TOCTOU window

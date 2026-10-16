@@ -78,7 +78,7 @@ namespace cryptonote
     crypto::hash hash;
   };
 
-  // outputs <= HF_VERSION_VIEW_TAGS
+  // an output with no view tag: the wire still parses it, admission refuses it
   struct txout_to_key
   {
     txout_to_key() { }
@@ -86,7 +86,7 @@ namespace cryptonote
     crypto::public_key key;
   };
 
-  // outputs >= HF_VERSION_VIEW_TAGS
+  // an output with a view tag: the one form admitted
   struct txout_to_tagged_key
   {
     txout_to_tagged_key() { }
@@ -860,7 +860,7 @@ namespace cryptonote
   struct block_header
   {
     uint8_t major_version;
-    uint8_t minor_version;  // now used as a voting mechanism, rather than how this particular block is built
+    uint8_t minor_version;  // reserved at CURRENT_BLOCK_MINOR_VERSION (CEN-B2); not a vote
     uint64_t timestamp;
     crypto::hash  prev_id;
     uint32_t nonce;

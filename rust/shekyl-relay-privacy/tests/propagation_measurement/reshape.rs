@@ -9,9 +9,11 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
+use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
-use shekyl_relay_privacy::{EmbargoTimer, SplitMix64};
+use shekyl_relay_privacy::EmbargoTimer;
 
 /// **Round 3 — can we reach ≤0.3% exposure by tuning the levers together, and
 /// which lever does it efficiently?** The passive leak decomposes as
@@ -59,14 +61,14 @@ fn origin_exposure_meets_target_via_reshape_not_embargo() {
     println!("\nExposure vs fluff-return F (embargo 144s, no reshape) — F-4's second correction");
     let f_lo = {
         let p = DandelionParams {
-            fluff_return_ms: 2_250,
+            fluff_return_ms: DerivationMs::model(2_250),
             ..base
         };
         simulate_origin_exposure(&p, &e144, 0, 300_000, &mut SplitMix64::new(4)).exposure_rate
     };
     let f_hi = {
         let p = DandelionParams {
-            fluff_return_ms: 13_750,
+            fluff_return_ms: DerivationMs::model(13_750),
             ..base
         };
         simulate_origin_exposure(&p, &e144, 0, 300_000, &mut SplitMix64::new(5)).exposure_rate

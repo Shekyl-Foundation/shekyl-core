@@ -14,17 +14,22 @@
 //! `CAPTURED_IDENTITY_*_AT` offsets. [`crate::assemble`] decodes that layout
 //! in its own function, so the two sides can disagree and a test can see it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::{CaptureReconciliation, ClientError, CurveTreeClient, OwnedRegistration};
+use super::{
+    BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, ExpectedOutput,
+    OwnedRegistration, OwnershipSync,
+};
 use crate::frontier::{FoldedChunk, Frontier};
 use crate::recon::drained_sorted;
+use crate::recon::OutputAssignment;
 use crate::segment::outputs_per_node;
 use crate::store::CapturedChunk;
 use crate::types::{BlockHeight, Gindex, LeafEntry, OneTimePubkey, TreePosition};
 use shekyl_fcmp::tree::{
     build_layers, layer_count_for_leaves, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
 };
+use shekyl_types::TxHash;
 
 /// Width of one curve element in a capture body: a compressed point or a scalar.
 pub(crate) const CURVE_ELEMENT_BYTES: usize = 32;
@@ -147,6 +152,18 @@ pub(crate) struct BlockCaptures {
     pub(crate) pending_owned: Vec<(u64, Gindex)>,
 }
 
+/// What one block's transactions resolved of the wallet's expectations
+/// ([`CurveTreeClient::match_expected_outputs`]), for the ingest to apply
+/// once the block has committed.
+#[derive(Default)]
+pub(super) struct ExpectedMatches {
+    /// Confirmed outputs that became leaves, with the gindex just assigned.
+    pub(super) registered: Vec<(Gindex, OneTimePubkey)>,
+    /// Expected outputs whose transaction carried another key, or no such
+    /// `vout`.
+    pub(super) mismatches: u64,
+}
+
 impl CurveTreeClient {
     /// Capture this output's membership-path material as the fold closes the
     /// chunks over it.
@@ -161,13 +178,13 @@ impl CurveTreeClient {
     /// from a block this client has not ingested, and the registry is matched
     /// against each leaf at its own drain.
     ///
-    /// # The engine registrant is not built yet
+    /// # Who calls this
     ///
-    /// Nothing in the engine calls this. That caller is the refresh driver,
-    /// a separate validation surface. Until it lands, no production batch is
-    /// registered and assembly takes the unregistered route. The state-3
-    /// oracle is
-    /// `capture::a_path_from_captures_equals_the_rebuilt_one_with_every_foreign_leaf_gone`.
+    /// The batch form [`Self::sync_owned`], from the refresh (everything the
+    /// wallet holds, every pass) and from the curve-tree actor (a spend's
+    /// inputs, before it assembles them). An input reaches
+    /// [`Self::assemble_paths`] registered or not at all; there is no
+    /// unregistered route.
     ///
     /// # Errors
     ///
@@ -193,23 +210,202 @@ impl CurveTreeClient {
                 });
             }
         }
+        let resolved: BTreeSet<Gindex> = self.owned_positions.values().copied().collect();
+        Ok(self.register_checked(gindex, output_key, &resolved))
+    }
+
+    /// [`Self::register_owned`] after its checks, against a precomputed set
+    /// of resolved gindexes so a batch does not rescan `owned_positions` per
+    /// output.
+    fn register_checked(
+        &mut self,
+        gindex: Gindex,
+        output_key: OneTimePubkey,
+        resolved: &BTreeSet<Gindex>,
+    ) -> OwnedRegistration {
+        let held = self.owned_outputs.get(&gindex) == Some(&output_key);
         // An insert replaces, which is how a rescan rebinds a gindex after a
         // reorg without a separate retraction.
         self.owned_outputs.insert(gindex, output_key);
         let Some(tip) = self.ingested_tip_height else {
-            return Ok(OwnedRegistration::BeforeDrain);
+            return if held {
+                OwnedRegistration::AlreadyHeld
+            } else {
+                OwnedRegistration::BeforeDrain
+            };
         };
         let cutoff = Self::drained_through(tip);
         // `entries` is strictly increasing in `gindex`.
         let drained = self
             .entries
-            .binary_search_by(|held| held.gindex.cmp(&gindex))
+            .binary_search_by(|h| h.gindex.cmp(&gindex))
             .is_ok_and(|i| self.entries[i].maturity <= cutoff);
-        Ok(if drained {
+        if held && (!drained || resolved.contains(&gindex)) {
+            OwnedRegistration::AlreadyHeld
+        } else if drained {
             OwnedRegistration::AfterDrain
         } else {
             OwnedRegistration::BeforeDrain
-        })
+        }
+    }
+
+    /// Replace the outputs the wallet expects the chain to carry
+    /// ([`ExpectedOutput`]), for [`Self::ingest_block`] to register as it
+    /// sees their transactions.
+    ///
+    /// Replaced whole, not merged: the wallet derives the set on every pass
+    /// from its records of unconfirmed transactions, so an expectation ends
+    /// when its record does. Registrations already made from an earlier set
+    /// are not touched — they are owned outputs now, held in the registry
+    /// like any other. An expectation for a transaction the client has
+    /// *already* ingested is not resolved here: the client keeps no
+    /// transaction hashes for ingested leaves, and resolving by key alone
+    /// would reopen the copied-key case this type exists to close. Such an
+    /// output is registered by its pair, later, when the wallet learns its
+    /// gindex (§11.13 names that window).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Poisoned`].
+    pub fn set_expected_outputs(&mut self, expected: &[ExpectedOutput]) -> Result<(), ClientError> {
+        self.ensure_live()?;
+        let mut by_tx: BTreeMap<TxHash, Vec<(u64, OneTimePubkey)>> = BTreeMap::new();
+        for output in expected {
+            by_tx
+                .entry(output.tx_hash)
+                .or_default()
+                .push((output.vout, output.output_key));
+        }
+        self.expected_outputs = by_tx;
+        Ok(())
+    }
+
+    /// How many expected outputs this client has seen arrive under a
+    /// different key than the wallet named (none of them registered), since
+    /// it was opened.
+    #[must_use]
+    pub fn expected_output_mismatches(&self) -> u64 {
+        self.expected_output_mismatches
+    }
+
+    /// The expected outputs this block carries, as the pairs to register.
+    ///
+    /// `assigned` is [`crate::recon::collect_block_leaves`]'s assignment for
+    /// this block, parallel to `block.txs`: `assigned[tx_index][vout]`. A
+    /// transaction is looked up by its hash; each expected `vout` is
+    /// confirmed against the key the transaction carries there. A confirmed
+    /// output that became a leaf is returned with the gindex the collector
+    /// assigned. An output that consumed an index and did not become a leaf
+    /// is neither registered nor counted: it has no path to prepare.
+    ///
+    /// A key that does not match, or a `vout` the transaction does not have,
+    /// is counted and skipped, never an error. The hash is the block feed's
+    /// and only the key is the wallet's own, so a feed that mislabels a
+    /// transaction can cost the wallet an early registration and nothing else.
+    ///
+    /// Takes `&self` and returns what it found. The block is not committed
+    /// yet, and a block that is then refused — by the fold, or by the store
+    /// — must leave no trace, including in the mismatch count. The ingest
+    /// applies [`ExpectedMatches`] with the rest of the block's effect.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::TxHashMissing`] when expectations are live and a
+    /// transaction arrives without its hash.
+    pub(super) fn match_expected_outputs(
+        &self,
+        block: &BlockLeaves<'_>,
+        assigned: &[Vec<OutputAssignment>],
+    ) -> Result<ExpectedMatches, ClientError> {
+        let mut matched = ExpectedMatches::default();
+        if self.expected_outputs.is_empty() {
+            return Ok(matched);
+        }
+        debug_assert_eq!(
+            block.txs.len(),
+            assigned.len(),
+            "the collector's assignment is one vec per transaction"
+        );
+        for (tx_index, (tx, slots)) in block.txs.iter().zip(assigned).enumerate() {
+            debug_assert_eq!(
+                tx.outputs.len(),
+                slots.len(),
+                "the collector's assignment is one slot per output"
+            );
+            let Some(tx_hash) = tx.tx_hash else {
+                return Err(ClientError::TxHashMissing {
+                    height: block.height,
+                    tx_index,
+                });
+            };
+            let Some(expected) = self.expected_outputs.get(&tx_hash) else {
+                continue;
+            };
+            for (vout, output_key) in expected {
+                let Some(index) = usize::try_from(*vout).ok() else {
+                    matched.mismatches += 1;
+                    continue;
+                };
+                let Some(raw) = tx.outputs.get(index) else {
+                    matched.mismatches += 1;
+                    continue;
+                };
+                if raw.output_key != *output_key {
+                    matched.mismatches += 1;
+                    continue;
+                }
+                if let Some(OutputAssignment::Leaf(gindex)) = slots.get(index).copied() {
+                    matched.registered.push((gindex, *output_key));
+                }
+            }
+        }
+        Ok(matched)
+    }
+
+    /// Register a batch of owned outputs and reconcile **once** if any of
+    /// them is owed captures.
+    ///
+    /// This is the call the wallet makes on every refresh with everything it
+    /// holds, and the one the curve-tree actor makes with a spend's inputs
+    /// before assembling them — so the capture path is total: an input
+    /// reaches [`Self::assemble_paths`] registered, or not at all. Idempotent
+    /// and cheap when nothing changed: a re-offer of a held, served pair is
+    /// [`OwnedRegistration::AlreadyHeld`] and triggers nothing.
+    ///
+    /// A pair the client cannot accept — it holds a *different* output at
+    /// that gindex — is collected in [`OwnershipSync::stale`] rather than
+    /// failing the batch. That is the normal outcome of a scan lagging the
+    /// tree across a reorg, and the remedy is the caller's own rescan, which
+    /// re-offers the right key. Nothing is poisoned by it.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Poisoned`]; and whatever
+    /// [`Self::reconcile_captures`] refuses with, if a reconciliation ran.
+    pub fn sync_owned(
+        &mut self,
+        outputs: &[(Gindex, OneTimePubkey)],
+    ) -> Result<OwnershipSync, ClientError> {
+        self.ensure_live()?;
+        let resolved: BTreeSet<Gindex> = self.owned_positions.values().copied().collect();
+        let mut sync = OwnershipSync::default();
+        for (gindex, output_key) in outputs {
+            if let Some(held) = Self::held_output(&self.entries, *gindex) {
+                if held != *output_key {
+                    sync.stale.push(*gindex);
+                    continue;
+                }
+            }
+            match self.register_checked(*gindex, *output_key, &resolved) {
+                OwnedRegistration::BeforeDrain => sync.before_drain += 1,
+                OwnedRegistration::AfterDrain => sync.after_drain += 1,
+                OwnedRegistration::AlreadyHeld => sync.already_held += 1,
+            }
+        }
+        if sync.after_drain > 0 {
+            sync.reconciliation = Some(self.reconcile_captures()?);
+        }
+        Ok(sync)
     }
 
     /// Write every capture an owned output is due and the store lacks.

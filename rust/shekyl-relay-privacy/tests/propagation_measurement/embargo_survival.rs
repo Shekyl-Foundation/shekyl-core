@@ -9,13 +9,15 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use shekyl_draw_rng::SplitMix64;
+use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::conformance::{
     simulate_fluff_return, simulate_propagation, solve_embargo_secs_for_target, FloodParams,
 };
 use shekyl_relay_privacy::params::{DandelionParams, EMBARGO_FULL_TRAVEL_PROBABILITY};
 use shekyl_relay_privacy::schedule::DEFAULT_EMBARGO_TICK_MILLIS;
 use shekyl_relay_privacy::{derive_embargo, full_travel_probability};
-use shekyl_relay_privacy::{DelayFamily, EmbargoTimer, SplitMix64};
+use shekyl_relay_privacy::{DelayFamily, EmbargoTimer};
 
 use crate::common::{header, row, row_ticked, TRIALS};
 
@@ -261,7 +263,7 @@ fn derived_embargo_replaces_the_closed_form() {
         EMBARGO_FULL_TRAVEL_PROBABILITY,
         DelayFamily::Geometric,
         40_000,
-        0xC0FF_EE00,
+        &SplitMix64::new(0xC0FF_EE00),
     )
     .expect("target is reachable");
 
@@ -495,7 +497,7 @@ fn embargo_sensitivity_to_hop_latency_assumption() {
     let mut degraded = Vec::new();
     for actual_hop_ms in [175_u32, 250, 350, 500, 750, 1_000] {
         let params = DandelionParams {
-            time_between_hop_ms: actual_hop_ms,
+            time_between_hop_ms: DerivationMs::model(actual_hop_ms),
             ..assumed
         };
         let mut rng = SplitMix64::new(0x0B0B_1234_u64.wrapping_add(u64::from(actual_hop_ms)));
@@ -611,7 +613,7 @@ fn fluff_return_dominates_the_embargo_derivation() {
     println!("{}", "-".repeat(70));
 
     let uncorrected = DandelionParams {
-        fluff_return_ms: 0,
+        fluff_return_ms: DerivationMs::model(0),
         ..DandelionParams::inherited()
     };
     let base = derive_embargo(
@@ -630,7 +632,7 @@ fn fluff_return_dominates_the_embargo_derivation() {
     let mut corrected = None;
     for f in [500_u32, 1_500, 2_250, 3_250, 4_250, 13_750] {
         let p = DandelionParams {
-            fluff_return_ms: f,
+            fluff_return_ms: DerivationMs::model(f),
             ..DandelionParams::inherited()
         };
         let d = derive_embargo(

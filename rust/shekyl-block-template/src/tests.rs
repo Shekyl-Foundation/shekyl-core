@@ -18,7 +18,6 @@ use shekyl_chain_rules::harness::{
 };
 use shekyl_chain_rules::{
     form, validate, Candidate, CenRow, ChainView, FormAttempt, Locus, RuleSet, Trust,
-    EMISSION_SPLIT_EPOCH,
 };
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS, GENESIS_DIFFICULTY};
@@ -115,7 +114,6 @@ fn genesis_era_emission() -> EmissionOperands {
         median_weight: FULL_REWARD_ZONE,
         tx_volume: TxVolume::ZERO,
         closed_shards: ClosedShardCount::ZERO,
-        emission_split_epoch: EMISSION_SPLIT_EPOCH,
     }
 }
 
@@ -132,9 +130,12 @@ fn context<'a>(
         height,
         previous,
         curve_tree_root,
-        attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+        // The template carries no witness, so the validator judges it
+        // against the empty set's root (CEN-B4, slice 8 row 10).
+        attestation_root: AttestationRoot::from_bytes(
+            shekyl_archival_retention::empty_attestation_root(),
+        ),
         major_version: RuleSet::GENESIS.header_major_version(),
-        minor_version: 0,
         now: NOW,
         median_timestamp: median_of(chain),
         unlock_window: RuleSet::GENESIS.mined_money_unlock_window(),
@@ -143,6 +144,7 @@ fn context<'a>(
         miner,
         tx_key_secret: Zeroizing::new([0x77; 32]),
         extra_nonce: [0; tx_extra::COINBASE_NONCE_BYTES],
+        draw_commitment: tx_extra::CONFORMING_DRAW_COMMITMENT,
         listed,
     }
 }
@@ -284,9 +286,14 @@ fn a_template_listing_bodies_hashes_them_in_order() {
         listed.iter().map(Transaction::hash).collect::<Vec<_>>(),
         "CEN-A3/A4: the header names the listed bodies, in order"
     );
-    // A3 is pending and A4 held by the C++ (census); the validator admits
-    // the block with its bodies, and the naming is asserted above.
-    let _judged_by = admitted(&chain, template);
+    // A3 is pending and A4 held by the C++ (census); the naming is asserted
+    // above. The validator's admission of a template *listing* bodies is
+    // the ingest scenario's witness (`scenario_spend_tests`, over spends
+    // the harness spender proves against the chain's real tree): since
+    // CEN-I13/I15 flipped (slice 6 row 6, 2026-10-08) a filler-fixture spend
+    // is refused at its declared depth, so this test asserts nothing the
+    // validator says about these bodies. *Records-was:* until the flip it
+    // called `admitted` here and the fixtures passed.
 }
 
 // ---------------------------------------------------------------------------
@@ -347,7 +354,6 @@ fn the_coinbase_pays_exactly_the_miners_leg_of_the_split_plus_its_fee_share() {
         total_fees: fees,
         supply,
         closed_shards: cx.emission.closed_shards,
-        split_epoch: cx.emission.emission_split_epoch.to_raw(),
         params: &params,
     })
     .expect("the kernel prices the template's operands");
@@ -631,7 +637,6 @@ fn amount_at(
         total_fees: 0,
         supply,
         closed_shards: ClosedShardCount::ZERO,
-        split_epoch: EMISSION_SPLIT_EPOCH.to_raw(),
         params,
     })
     .expect("in the penalty zone, below twice the median")

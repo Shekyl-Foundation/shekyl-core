@@ -31,6 +31,7 @@
 //! ```text
 //! hybrid_pubkey        u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES
 //! bond_spend_pk        u32 len ‖ bytes            len ≤ MAX_BOND_KEY_BYTES
+//! receipt_sign_pk      [u8; 1837]                  fixed width, no length prefix
 //! endpoint             [u8; 32]
 //! join_settlement_epoch u64
 //! bonded_total         u64                         atomic units
@@ -43,6 +44,15 @@
 //! first_paying_height  u8 present ‖ (u64 height if present)
 //! ```
 //!
+//! # The receipt key is fixed-width (layout 25)
+//!
+//! `receipt_sign_pk` is exactly `RECEIPT_SIGN_PK_LEN` (1,837) bytes in every
+//! record, so it is stored with no length prefix: a fixed-width field needs
+//! none, and a prefix would be a second place for the length to be wrong.
+//! Every record has the key — a JoinMarket has one wire form and it commits
+//! one — so there is no absent case to encode. A buffer that ends inside
+//! the key is refused under the key's name.
+//!
 //! # The v7 cross-check (ruled on PR #840)
 //!
 //! A round trip of this codec against itself proves it self-consistent, not
@@ -52,9 +62,12 @@
 //! builds a `BondRecord` from each field set and asserts nothing is lost.
 
 use shekyl_types::archival::{
-    BadInterval, BondRecord, FirstPayingHeight, HeldShard, Holdings, HoldingsError, HoldingsKind,
-    RMarket, SigmaWorkMilli, SlashLogEntry, SlashedHolding, MAX_BOND_BAD_INTERVALS,
-    MAX_BOND_KEY_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    BadInterval, BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
+    HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket, ReceiptSignPk, SettlementRow,
+    SettlementRowError, SigmaWorkMilli, SlashLogEntry, SlashedHolding, BLOCK_DRAWS_LEN,
+    DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN,
+    SETTLEMENT_ROW_LEN,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -72,6 +85,7 @@ impl Canonical for BondRecord {
     fn encode_into(&self, out: &mut Vec<u8>) {
         put_bytes(out, &self.hybrid_pubkey);
         put_bytes(out, &self.bond_spend_pk);
+        out.extend_from_slice(self.receipt_sign_pk.as_bytes());
         out.extend_from_slice(&self.endpoint);
         out.extend_from_slice(&self.join_settlement_epoch.to_raw().to_le_bytes());
         out.extend_from_slice(&self.bonded_total.to_raw().to_le_bytes());
@@ -118,6 +132,9 @@ impl Canonical for BondRecord {
                 "bond_spend_pk exceeds MAX_BOND_KEY_BYTES",
             )?
             .to_vec();
+        let receipt_sign_pk = ReceiptSignPk::from_bytes(
+            r.array::<RECEIPT_SIGN_PK_LEN>("buffer ends inside the receipt_sign_pk")?,
+        );
         let endpoint = r.array::<32>("buffer ends inside the endpoint")?;
         let join_settlement_epoch = SettlementEpoch::from_raw(r.u64()?);
         let bonded_total = AtomicUnits::from_raw(r.u64()?);
@@ -199,6 +216,7 @@ impl Canonical for BondRecord {
         Ok(Self {
             hybrid_pubkey,
             bond_spend_pk,
+            receipt_sign_pk,
             endpoint,
             join_settlement_epoch,
             bonded_total,
@@ -289,5 +307,165 @@ impl Canonical for SlashLogEntry {
             epoch,
             holding,
         })
+    }
+}
+
+/// `archival_settlement`'s row (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D2`):
+///
+/// ```text
+/// outcome   u8    0x01 Served, 0x02 Missed, 0x03 NonObservation
+/// passes    u8    passes among the counted draws
+/// issued    u8    draws issued to the pair, saturated at 255
+/// ```
+///
+/// The bytes are the type's own ([`SettlementRow::to_bytes`]). Decoding
+/// re-settles the two counts and refuses a stored outcome they do not give,
+/// so a row this codec returns is one the writer could have written.
+impl Canonical for SettlementRow {
+    const NAME: &'static str = "settlement_row";
+    const FIXED_WIDTH: Option<usize> = Some(SETTLEMENT_ROW_LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        Self::from_bytes(bytes).map_err(|e| CodecError::Invalid {
+            codec: Self::NAME,
+            reason: match e {
+                SettlementRowError::BadLength { .. } => "a settlement row is three bytes",
+                SettlementRowError::UnknownOutcome { .. } => "outcome byte names no outcome",
+                SettlementRowError::NothingIssued => {
+                    "a row with no issued draw; such a pair has no row"
+                }
+                SettlementRowError::MorePassesThanCounted { .. } => {
+                    "more passes than counted draws"
+                }
+                SettlementRowError::OutcomeDisagrees => {
+                    "the stored outcome is not what the counts give"
+                }
+            },
+        })
+    }
+}
+
+/// `archival_issued_draw`'s row (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §10;
+/// `SO-D10c`). Layout:
+///
+/// ```text
+/// revealed_at   u64 LE   the block that admitted the issuing block's seed
+/// passed        u8       0 = no pass record admitted, 1 = one admitted
+/// ```
+///
+/// A third value of the flag, or trailing bytes, is refused.
+impl Canonical for IssuedDraw {
+    const NAME: &'static str = "issued_draw";
+    const FIXED_WIDTH: Option<usize> = Some(9);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.revealed_at.to_raw().to_le_bytes());
+        out.push(u8::from(self.passed));
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let revealed_at = BlockHeight::from_raw(r.u64()?);
+        let passed = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(r.invalid("pass flag is neither 0 nor 1")),
+        };
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the issued draw"));
+        }
+        Ok(Self {
+            revealed_at,
+            passed,
+        })
+    }
+}
+
+/// `archival_issued_digest`'s row: the 32 bytes of the epoch's running sum,
+/// little-endian (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §10).
+impl Canonical for IssuedDigest {
+    const NAME: &'static str = "issued_digest";
+    const FIXED_WIDTH: Option<usize> = Some(ISSUED_DIGEST_LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let digest = r.array::<ISSUED_DIGEST_LEN>("buffer ends inside the digest")?;
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the digest"));
+        }
+        Ok(Self::from_bytes(digest))
+    }
+}
+
+/// `archival_block_draws`'s row (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §10).
+/// Layout:
+///
+/// ```text
+/// count       u32 LE   draws this block's producer made
+/// carry       u32 LE   the fraction carried to the next block's count
+/// shortfall   u64 LE   the visible shortfall the count was computed from
+/// revealed    u8       0 = seed not revealed, 1 = revealed
+/// ```
+///
+/// A third value of the flag, or trailing bytes, is refused.
+impl Canonical for BlockDraws {
+    const NAME: &'static str = "block_draws";
+    const FIXED_WIDTH: Option<usize> = Some(BLOCK_DRAWS_LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.count.to_le_bytes());
+        out.extend_from_slice(&self.carry.to_le_bytes());
+        out.extend_from_slice(&self.shortfall.to_le_bytes());
+        out.push(u8::from(self.revealed));
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let count = r.u32()?;
+        let carry = r.u32()?;
+        let shortfall = r.u64()?;
+        let revealed = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(r.invalid("revealed flag is neither 0 nor 1")),
+        };
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the block's draws"));
+        }
+        Ok(Self {
+            count,
+            carry,
+            shortfall,
+            revealed,
+        })
+    }
+}
+
+/// `archival_drawable_digest`'s row: the 32 bytes of the epoch's
+/// drawable-set digest (`SO-D10g`). Every 32-byte value is a digest; none
+/// stands for an absent one.
+impl Canonical for DrawableDigest {
+    const NAME: &'static str = "drawable_digest";
+    const FIXED_WIDTH: Option<usize> = Some(DRAWABLE_DIGEST_LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let digest = r.array::<DRAWABLE_DIGEST_LEN>("buffer ends inside the digest")?;
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the digest"));
+        }
+        Ok(Self::from_bytes(digest))
     }
 }

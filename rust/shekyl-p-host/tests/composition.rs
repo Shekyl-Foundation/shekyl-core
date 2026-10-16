@@ -27,19 +27,20 @@ use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_NAME};
 use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
-    PostureDeclaration, SegmentPin, ServedFrameHeader, ServingReader, TargetKind, TreePosition,
-    LEAF_BYTES,
+    PostureDeclaration, SegmentPin, ServingReader, TargetKind, TreePosition,
 };
 use shekyl_p_host::{
-    DaemonTipCache, HostError, NoResidentKey, PassKey, PersonaServing, PersonaServingHost,
-    PinError, PinReport, PinnedServeSet, ReportedSet, ServeCounters, ServeObligation,
+    DaemonTipCache, HostError, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
+    PinnedServeSet, PriorityFailures, RefusingKey, ReportedSet, ServeCounters, ServeObligation,
     ServeSetPinner, Staleness, StalenessBound,
 };
-use shekyl_p_serve::{TestKeySigner, SIGNATURE_ENVELOPE_LEN};
+use shekyl_p_serve::{TestKeySigner, IDENTITY_ENVELOPE_LEN};
+use shekyl_p_store::{BodyStore, BodyStoreReader, StoreKey};
 use shekyl_tor_control_wallet::service::{
     EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
     WalletTorControlConfig,
 };
+use shekyl_types::ShardId;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -257,6 +258,29 @@ fn identity() -> OnionIdentity {
     OnionIdentity::from_hs_id_seed(&[9u8; 32])
 }
 
+/// Opaque frame the composition tests put and expect back.
+const HELD_FRAME: &[u8] = b"\x01held-shard-frame-for-composition";
+
+fn empty_bodies() -> BodyStoreReader {
+    BodyStore::open_ephemeral(StoreKey::from_bytes([0x11; 32]))
+        .expect("ephemeral body store")
+        .reader()
+}
+
+fn bodies_holding(ids: &[u64]) -> BodyStoreReader {
+    bodies_writer_holding(ids).reader()
+}
+
+fn bodies_writer_holding(ids: &[u64]) -> BodyStore {
+    let store = BodyStore::open_ephemeral(StoreKey::from_bytes([0x22; 32])).expect("ephemeral");
+    for id in ids {
+        store
+            .put_shard(ShardId::from_raw(*id), HELD_FRAME)
+            .expect("put");
+    }
+    store
+}
+
 /// An ephemeral attestation key for a host under test; the test keeps the
 /// handle to read the public half back.
 fn test_key() -> Arc<TestKeySigner> {
@@ -298,39 +322,33 @@ fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
         .expect("response has a head");
     let body = &response[end + 4..];
     assert!(
-        body.len() >= SIGNATURE_ENVELOPE_LEN,
+        body.len() >= IDENTITY_ENVELOPE_LEN,
         "a served body ends with the countersignature envelope"
     );
-    let (rest, sig) = body.split_at(body.len() - SIGNATURE_ENVELOPE_LEN);
+    let (rest, sig) = body.split_at(body.len() - IDENTITY_ENVELOPE_LEN);
     let sig = HybridSignature::from_canonical_bytes(sig).expect("canonical hybrid signature");
     (sig, rest)
 }
 
-/// Leaf bytes a 200 response actually carries, read through the served frame
-/// (`RF-D4`) the way a fetcher does: the two leading lengths, the segment,
-/// then the envelope that closes the response. Asserting on the raw body length would now be asserting
-/// on the header too, and would pass just as well if the frame were malformed.
+/// Body bytes a 200 response actually carries ahead of the envelope that
+/// closes it. The serve loop writes the provider's bytes and nothing of
+/// its own (`SF-D8` amendment 2026-10-08), so for the interim leaf
+/// provider this is the segment's leaves, exactly.
 fn served_segment_len(response: &[u8]) -> u64 {
-    let (_, mut body) = envelope_of(response);
-    let frame = ServedFrameHeader::read(&mut body).expect("served body carries a frame header");
-    assert_eq!(frame.padding_len(), 0, "writers emit zero padding");
-    assert_eq!(
-        body.len() as u64,
-        frame.framed_len() - frame.encoded_len() as u64,
-        "the frame accounts for every byte after the header"
-    );
-    frame.segment_bytes()
+    let (_, body) = envelope_of(response);
+    u64::try_from(body.len()).expect("body length fits u64")
 }
 
-/// Whether a response is the endpoint's identical refusal. Every non-servable
-/// outcome renders the same 404, so this is all a requester can tell — which
-/// is the point of asserting through it rather than through a counter.
+/// Whether a response is the endpoint's bare 503: a store or tip the
+/// persona could not read, or no resident key. They render the same one, so
+/// this is all a requester can tell — which is the point of asserting
+/// through it rather than through a counter.
 fn is_refused(response: &[u8]) -> bool {
     let head_end = response
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
-    String::from_utf8_lossy(&response[..head_end]).contains(" 404 ")
+    String::from_utf8_lossy(&response[..head_end]).contains(" 503 ")
 }
 
 /// One request as a daemon at `own_height` sends it: the ruled route plus
@@ -520,10 +538,12 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
             identity: id,
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::clone(&key) as Arc<dyn PassKey>,
+            key: Arc::clone(&key) as Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
             tip: tip_at(10_000),
+            bodies: bodies_holding(&[0]),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("host starts without a working tor — the endpoint does not need one");
@@ -537,7 +557,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     let first = fetch(addr, "/shard/0", 10_000).await;
     assert_eq!(
         served_segment_len(&first),
-        (leaves_per_segment() * LEAF_BYTES) as u64,
+        HELD_FRAME.len() as u64,
         "a whole shard, not a 404 that happens to be non-empty"
     );
     // The envelope verifies against the key the host was started with,
@@ -648,10 +668,12 @@ async fn shutdown_stops_the_listener() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -722,10 +744,12 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -769,6 +793,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     // Hoisted: this test advances the chain, so it must advance the gate's
     // view of the chain too (see `tip_at`).
     let tip = tip_at(10_000);
+    let bodies = bodies_writer_holding(&[0]);
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -779,8 +804,10 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
             max_streams: 8,
             key: test_key(),
             tip: Arc::clone(&tip),
+            bodies: bodies.reader(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -788,6 +815,9 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     // Holdings grow to cover segment 1, which then freezes.
     pinner.holdings_became(&[0, 1], BlockHeight::from_raw(20_000));
     host.refresh().await.expect("refresh");
+    bodies
+        .put_shard(ShardId::from_raw(1), HELD_FRAME)
+        .expect("fill gained shard");
     let mut second = segment_entries();
     for (i, e) in second.iter_mut().enumerate() {
         e.gindex = Gindex::from_raw(leaves_per_segment() as u64 + i as u64);
@@ -805,7 +835,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     let body = fetch(host.serve_addr(), "/shard/1", 20_000).await;
     assert_eq!(
         served_segment_len(&body),
-        (leaves_per_segment() * LEAF_BYTES) as u64,
+        HELD_FRAME.len() as u64,
         "the gained shard must be servable — an unrefreshed host loses it here"
     );
 
@@ -1116,10 +1146,12 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1184,8 +1216,10 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
             max_streams: 8,
             key: test_key(),
             tip: tip_at(10_000),
+            bodies: bodies_holding(&[0]),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1209,7 +1243,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     store.prune_frozen(&[]).expect("prune");
     assert_eq!(
         served_segment_len(&fetch(host.serve_addr(), "/shard/0", 10_000).await),
-        (leaves_per_segment() * LEAF_BYTES) as u64
+        HELD_FRAME.len() as u64
     );
 
     host.shutdown().await;
@@ -1226,10 +1260,12 @@ async fn start_refuses_a_pinner_that_cannot_pin() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         DeadPinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect_err("a dead pinner cannot start a host");
@@ -1293,10 +1329,12 @@ async fn host_staleness_uses_the_live_witness() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::new(NoResidentKey),
+            key: Arc::new(RefusingKey),
             tip: tip_at(10_000),
+            bodies: empty_bodies(),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1725,10 +1763,12 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::clone(&key) as Arc<dyn PassKey>,
+            key: Arc::clone(&key) as Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
             tip: Arc::clone(&tip),
+            bodies: bodies_holding(&[0]),
         },
         &pinner,
+        &PriorityFailures::new(),
     )
     .await
     .expect("start");
@@ -1744,7 +1784,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
     );
     assert_eq!(
         served_segment_len(&served),
-        (leaves_per_segment() * LEAF_BYTES) as u64,
+        HELD_FRAME.len() as u64,
         "a whole shard, not a 404 that happens to be non-empty"
     );
     // And the countersignature binds the anchor the requester actually sent,

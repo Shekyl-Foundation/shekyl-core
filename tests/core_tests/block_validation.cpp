@@ -72,7 +72,37 @@ bool gen_block_big_minor_version::generate(std::vector<test_event_entry>& events
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_minor_ver, 0, 255);
   events.push_back(blk_1);
 
-  DO_CALLBACK(events, "check_block_accepted");
+  // CEN-B2: the minor version is reserved at CURRENT_BLOCK_MINOR_VERSION.
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
+bool gen_block_alt_big_minor_version::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
+  MAKE_NEXT_BLOCK(events, blk_2, blk_1, miner_account);
+
+  // Forks from blk_1 while the main tip is blk_2, so it takes
+  // handle_alternative_block. Refused at admission, not parked in the alt
+  // store for promotion to find.
+  block blk_alt;
+  generator.construct_block_manually(blk_alt, blk_1, miner_account, test_generator::bf_minor_ver, 0, 255);
+  events.push_back(blk_alt);
+
+  DO_CALLBACK(events, "check_block_purged");
+  DO_CALLBACK(events, "check_not_stored_as_alt");
+
+  return true;
+}
+
+bool gen_block_alt_big_minor_version::check_not_stored_as_alt(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_alt_big_minor_version::check_not_stored_as_alt");
+
+  CHECK_EQ(0, c.get_alternative_blocks_count());
 
   return true;
 }
@@ -671,21 +701,6 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
   return true;
 }
 
-bool gen_block_late_v1_coinbase_tx::generate(std::vector<test_event_entry>& events) const
-{
-  BLOCK_VALIDATION_INIT_GENERATE();
-
-  block blk_1;
-  generator.construct_block_manually(blk_1, blk_0, miner_account,
-      test_generator::bf_major_ver | test_generator::bf_minor_ver,
-      1, 1);
-  events.push_back(blk_1);
-
-  DO_CALLBACK(events, "check_block_purged");
-
-  return true;
-}
-
 bool gen_block_low_coinbase::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
@@ -694,7 +709,7 @@ bool gen_block_low_coinbase::generate(std::vector<test_event_entry>& events) con
   std::vector<size_t> block_weights;
   generator.construct_block(blk_1, cryptonote::get_block_height(blk_0) + 1, cryptonote::get_block_hash(blk_0),
     miner_account, blk_0.timestamp + SHEKYL_DAA_TARGET_SECONDS, COIN + generator.get_already_generated_coins(cryptonote::get_block_hash(blk_0)),
-    block_weights, {}, HF_VERSION_EXACT_COINBASE);
+    block_weights, {});
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_purged");
@@ -702,7 +717,7 @@ bool gen_block_low_coinbase::generate(std::vector<test_event_entry>& events) con
   return true;
 }
 
-bool gen_block_miner_tx_out_has_no_view_tag_before_hf_view_tags::generate(std::vector<test_event_entry>& events) const
+bool gen_block_miner_tx_out_has_no_view_tag::generate(std::vector<test_event_entry>& events) const
 {
   bool use_view_tags = false;
 
@@ -721,41 +736,13 @@ bool gen_block_miner_tx_out_has_no_view_tag_before_hf_view_tags::generate(std::v
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
-  // Shekyl starts at HF1 where view tags are mandatory — block without view tags is rejected
+  // View tags are mandatory: a coinbase output without one is refused.
   DO_CALLBACK(events, "check_block_purged");
 
   return true;
 }
 
-bool gen_block_miner_tx_out_has_no_view_tag_from_hf_view_tags::generate(std::vector<test_event_entry>& events) const
-{
-  bool use_view_tags = false;
-
-  BLOCK_VALIDATION_INIT_GENERATE();
-
-  keypair txkey;
-  MAKE_MINER_TX_AND_KEY_AT_HF_MANUALLY(miner_tx, blk_0, HF_VERSION_VIEW_TAGS+1, &txkey);
-
-  crypto::public_key output_public_key;
-  crypto::view_tag view_tag;
-  cryptonote::get_output_public_key(miner_tx.vout[0], output_public_key);
-
-  // remove the view tag that is currently set on the miner tx output at this point
-  cryptonote::set_tx_out(miner_tx.vout[0].amount, output_public_key, use_view_tags, view_tag, miner_tx.vout[0]);
-  CHECK_AND_ASSERT_MES(!cryptonote::get_output_view_tag(miner_tx.vout[0]), false, "output should not have a view tag");
-
-  block blk_1;
-  generator.construct_block_manually(blk_1, blk_0, miner_account,
-      test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_miner_tx,
-      HF_VERSION_VIEW_TAGS+1, HF_VERSION_VIEW_TAGS+1, 0, crypto::hash(), 0, miner_tx);
-  events.push_back(blk_1);
-
-  DO_CALLBACK(events, "check_block_purged");
-
-  return true;
-}
-
-bool gen_block_miner_tx_out_has_view_tag_before_hf_view_tags::generate(std::vector<test_event_entry>& events) const
+bool gen_block_miner_tx_out_has_view_tag::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
 
@@ -768,32 +755,11 @@ bool gen_block_miner_tx_out_has_view_tag_before_hf_view_tags::generate(std::vect
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
-  // Shekyl: view tags are mandatory from HF1 (genesis), so this is accepted
+  // View tags are mandatory, so this is accepted.
   DO_CALLBACK(events, "check_block_accepted");
 
   return true;
 }
-
-bool gen_block_miner_tx_out_has_view_tag_from_hf_view_tags::generate(std::vector<test_event_entry>& events) const
-{
-  BLOCK_VALIDATION_INIT_GENERATE();
-
-  MAKE_MINER_TX_AND_KEY_AT_HF_MANUALLY(miner_tx, blk_0, HF_VERSION_VIEW_TAGS, nullptr);
-
-  CHECK_AND_ASSERT_MES(cryptonote::get_output_view_tag(miner_tx.vout[0]), false,
-    "v3 miner tx output should have a view tag (HKDF-derived)");
-
-  block blk_1;
-  generator.construct_block_manually(blk_1, blk_0, miner_account,
-      test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_miner_tx,
-      HF_VERSION_VIEW_TAGS, HF_VERSION_VIEW_TAGS, 0, crypto::hash(), 0, miner_tx);
-  events.push_back(blk_1);
-
-  DO_CALLBACK(events, "check_block_accepted");
-
-  return true;
-}
-
 
 //----------------------------------------------------------------------------------------------------------------------
 // CEN-D2: the PoW-verdict consumers (see block_validation.h for the contract)

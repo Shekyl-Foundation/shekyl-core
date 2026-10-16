@@ -3,37 +3,38 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Which bodies a template lists: the fill rule
+//! Which bodies a template lists under the ruled fill
 //! (`docs/design/ECONOMICS_SIM_PRODUCTION_REBASE.md`, ESR-6).
 //!
-//! A producer offers pool bodies to a [`Fill`] in its own order — the C++
-//! offers them by fee, then by receive time — and lists those it admits.
-//! The rule is one comparison: a body is admitted when listing it does not
-//! lower what the coinbase would carry, the penalised reward at the bodies'
-//! new weight plus every listed fee, and when the bodies stay within twice
-//! the effective median less the coinbase reserve. The penalty is the only
-//! thing that can make a fee-paying body lower that sum, so the rule is
-//! where the fee a transaction pays meets the block size it buys: below the
-//! median every body is admitted; past it, one is admitted only while its
-//! fee covers the reward it costs.
+//! [`Fill`] is the reward-aware policy. It is not the scan
+//! `tx_memory_pool::fill_block_template` runs. That scan lists bodies in
+//! fee order, lets one body cross the median, refuses a body that would
+//! pass 13/10 of the median less the coinbase reserve, and then stops.
+//! This rule admits a body only when listing it does not lower the gross
+//! coinbase, and keeps the bodies within twice the effective median less
+//! the coinbase reserve. The daemon runs it once the coinbase reserve is
+//! derived (`docs/FOLLOWUPS.md`); until then the two policies stay apart.
+//! The economics sim calls this rule. The daemon does not, yet.
 //!
-//! The rule is mempool policy, not consensus — the validator admits any
-//! block under its limit — and its first implementation is
-//! `tx_memory_pool::fill_block_template` (`tx_pool.cpp`), whose comparison
-//! this module owns from here on. Two facts of the C++ are kept, one is not:
+//! A producer offers pool bodies to a [`Fill`] in its own order — the
+//! daemon offers them by fee, then by receive time — and lists those this
+//! rule admits. The penalty is the only thing that can make a fee-paying
+//! body lower the gross coinbase, so the rule is where the fee a
+//! transaction pays meets the block size it buys: below the median every
+//! body is admitted; past it, one is admitted only while its fee covers
+//! the reward it costs. The rule is mempool policy, not consensus — the
+//! validator admits any block under its limit.
 //!
-//! - **Kept:** the comparison is on the **gross** coinbase — the reward
-//!   before the staker split and the fees before the burn. A producer
-//!   paid net of both would weigh a body differently; that is a question
-//!   for the fee design, not something a lift may settle silently.
-//! - **Kept:** the weight priced is the **bodies'** weight. The coinbase's
-//!   own bytes are reserved in the bound, not priced here; [`crate::build`]
+//! - The comparison is on the **gross** coinbase: the reward before the
+//!   staker split and the fees before the burn. A producer paid net of
+//!   both would weigh a body differently; that is a question for the fee
+//!   design, not something this rule settles.
+//! - The weight priced is the **bodies'** weight. The coinbase's own
+//!   bytes are reserved in the bound, not priced here; [`crate::build`]
 //!   prices the block the bodies make, coinbase included.
-//! - **Not kept:** the C++ compares against `best · ACCEPT_THRESHOLD` with
-//!   the threshold a `float` of `1.0`, so `best` is rounded to the nearest
-//!   24-bit-mantissa value first, and within that rounding it can admit a
-//!   body that lowers the coinbase or refuse one that raises it. This rule
-//!   compares exactly.
+//! - The comparison is exact. An earlier C++ copy of this rule rounded
+//!   through a float threshold of 1.0; that copy left with the hard-fork
+//!   mechanism and is not what the daemon runs.
 
 use shekyl_economics::{
     penalty_free_weight, EconomicParams, EmissionError, PrePenaltyEmission, TxVolume,

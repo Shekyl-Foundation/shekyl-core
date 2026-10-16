@@ -44,10 +44,18 @@ const LAMBDA: u64 = CHALLENGES_PER_PAIR_PER_EPOCH as u64;
 /// rather than evaluated at a point.
 pub const NOTICE_TAUS: [u64; 4] = [25, 50, 100, 200];
 
-/// Deterministic SplitMix64 — tie-breaking only (see module doc).
-struct SplitMix64(u64);
+/// Deterministic SplitMix64 — tie-breaking only here (see module doc);
+/// `secret_draw` drives its draws, dropout and reveal lag from the same
+/// generator, so the crate has one.
+pub(crate) struct SplitMix64(u64);
 
 impl SplitMix64 {
+    /// The generator for run `seed`. Seeds are small integers; the multiply
+    /// spreads them and the `+ 1` keeps seed 0 off the all-zero state.
+    pub(crate) fn seeded(seed: u64) -> Self {
+        Self(seed.wrapping_mul(0x9e37_79b9).wrapping_add(1))
+    }
+
     fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
@@ -56,9 +64,19 @@ impl SplitMix64 {
         z ^ (z >> 31)
     }
 
+    /// 32 bytes of the stream, one [`Self::below`]`(256)` each: a seed or
+    /// a hash for a block that is never built.
+    pub(crate) fn bytes32(&mut self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for byte in &mut out {
+            *byte = u8::try_from(self.below(256)).expect("below 256 fits a byte");
+        }
+        out
+    }
+
     /// Uniform draw in `[0, n)` by rejection (no modulo bias).
     /// `n` must be nonzero — an empty range has no uniform draw.
-    fn below(&mut self, n: u64) -> u64 {
+    pub(crate) fn below(&mut self, n: u64) -> u64 {
         assert!(n > 0, "uniform draw from an empty range");
         let zone = u64::MAX - (u64::MAX % n);
         loop {
@@ -154,7 +172,7 @@ pub fn run_epoch(pairs: u32, total_draws: u64, band: bool, seed: u64) -> Coverag
         "a settlement epoch needs at least one bonded pair to draw from"
     );
     let seb = SETTLEMENT_EPOCH_BLOCKS;
-    let mut rng = SplitMix64(seed.wrapping_mul(0x9e37_79b9).wrapping_add(1));
+    let mut rng = SplitMix64::seeded(seed);
     let mut buckets = Buckets::new(pairs);
     let k_avg = total_draws as f64 / seb as f64;
     let mut exposed = [0u64; 4];
@@ -377,7 +395,7 @@ mod tests {
     /// this one, same D and budget) — so the assertion is the honest range
     /// plus the exact symmetry draw-conservation forces, not a point.
     #[test]
-    #[ignore = "full-scale ~1M-draw reproduction of the ARCHIVAL_CHALLENGE_MECHANISM.md §7.1/§8 figures; run with --ignored (release)"]
+    #[ignore = "full-scale ~1M-draw reproduction of the ARCHIVAL_CHALLENGE_MECHANISM.md §7.1/§8 figures; run with --ignored (release); nightly economics-sim-ignored"]
     fn full_scale_maturity_reproduces_doc_figures() {
         let d: u32 = 324_000;
         let band = run_epoch(d, LAMBDA * d as u64, true, 1);

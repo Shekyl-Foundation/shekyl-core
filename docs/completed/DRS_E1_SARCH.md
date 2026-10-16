@@ -10,7 +10,8 @@ statement from its §2 down); owns no open residue — the reads are
 [`STORE_INVARIANT_REGISTER.md`](../design/STORE_INVARIANT_REGISTER.md)'s,
 `SAR-Q7`'s port landed with E4 (`holds_shard_at`, CEN-L16's as-built note),
 and the one open archival question (`SLK-Q1` / `SLK-Q2`) is
-[`DRS_E4_SLASH_LOG_ROUND.md`](../design/DRS_E4_SLASH_LOG_ROUND.md)'s. History
+[`DRS_E4_SLASH_LOG_ROUND.md`](DRS_E4_SLASH_LOG_ROUND.md)'s (ruled and built
+2026-10-09, archived 2026-10-10). History
 follows. **Was: LANDED — implemented 2026-09-23** on the S-ARCH increment PR
 cut from `dev` @ `4dc5194de` (three commits, §7 as executed; layout
 **10 → 11**; nine reads A1, A3–A10 on `ReadSnapshot`; the bond record's

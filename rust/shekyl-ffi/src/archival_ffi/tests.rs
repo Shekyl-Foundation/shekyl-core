@@ -143,10 +143,11 @@ fn cold_authority_ffi_unknown_kind_is_post_kind_not_a_guessed_row() {
 
 #[test]
 fn cold_authority_ffi_credit_kind_is_not_rescued_by_matching_keys() {
+    use shekyl_archival_retention::BondPostKind;
     let key = vec![7u8; HYBRID_PUBKEY_CANONICAL_BYTES];
     let rc = unsafe {
         shekyl_archival_cold_authority_pin(
-            0, // JoinMarket
+            BondPostKind::JoinMarket as u8, // 5
             0,
             key.as_ptr(),
             key.len(),
@@ -248,8 +249,21 @@ fn checked_sum_amounts_sums_overflows_and_guards() {
     );
 }
 
+/// The JoinMarket verify entry point refuses every call with
+/// `ERR_POST_KIND` (2026-10-12, ruling on PR #1046): a JoinMarket commits a
+/// receipt key and this C signature carries none, so no JoinMarket can be
+/// rebuilt from its arguments — not the retired keyless kind 0, not kind 5
+/// without its key, whatever else the arguments say.
+///
+/// *Was* `bond_post_ffi_maps_each_reject_reason`: a well-formed kind-0 join
+/// returned `OK`, and each defect its own code (null pointer, holdings
+/// kind, empty set, complete tree with shards, both terms, debit, floor,
+/// record exists, the two couplings). Those verdicts are the Rust
+/// validator's now (`shekyl-chain-rules`, CEN-J12/J14/J28, over
+/// `verify_join_market_bond_post`, whose own tests hold each reason); the
+/// codes still exist and still map (`bond_post_err_cstr`).
 #[test]
-fn bond_post_ffi_maps_each_reject_reason() {
+fn bond_post_ffi_join_market_verify_refuses_every_call() {
     use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
     let floor = ARCHIVAL_BOND_FLOOR_ATOMIC;
@@ -278,163 +292,45 @@ fn bond_post_ffi_maps_each_reject_reason() {
             record_exists,
         )
     };
-
-    assert_eq!(
-        verify(0, 0, Some(&shard), 1, floor, floor, 0, 0),
+    // What used to be the accept, under the retired byte and under the
+    // JoinMarket's own; a Reinstate byte; and the old defects, each of which
+    // is now the same refusal — the arguments are read for nothing.
+    for (name, code) in [
+        (
+            "well-formed, kind 0",
+            verify(0, 0, Some(&shard), 1, floor, floor, 0, 0),
+        ),
+        (
+            "well-formed, kind 5",
+            verify(5, 0, Some(&shard), 1, floor, floor, 0, 0),
+        ),
+        (
+            "reinstate byte",
+            verify(1, 0, Some(&shard), 1, floor, floor, 0, 0),
+        ),
+        ("null shards", verify(0, 0, None, 1, floor, floor, 0, 0)),
+        (
+            "holdings kind",
+            verify(0, 99, Some(&shard), 1, floor, floor, 0, 0),
+        ),
+        (
+            "both terms",
+            verify(0, 0, Some(&shard), 1, floor, floor, floor, 0),
+        ),
+        (
+            "floor mismatch",
+            verify(5, 0, Some(&shard), 1, floor + 1, floor + 1, 0, 0),
+        ),
+        (
+            "record exists",
+            verify(5, 0, Some(&shard), 1, floor, floor, 0, 1),
+        ),
+    ] {
+        assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND, "{name}");
+    }
+    assert_ne!(
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND,
         SHEKYL_ARCHIVAL_BOND_POST_OK
-    );
-    // This entry is JoinMarket-only: a Reinstate byte is the post-kind verdict,
-    // whether or not the caller also handed an endpoint or a spend key.
-    assert_eq!(
-        unsafe {
-            shekyl_archival_verify_join_market_bond_post(
-                1,
-                0,
-                std::ptr::from_ref(&shard),
-                1,
-                std::ptr::null(),
-                0,
-                std::ptr::null(),
-                0,
-                floor,
-                floor,
-                0,
-                0,
-            )
-        },
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
-    );
-    // JoinMarket missing its endpoint: the EU-D3 coupling refuses at the marshal.
-    assert_eq!(
-        unsafe {
-            shekyl_archival_verify_join_market_bond_post(
-                0,
-                0,
-                std::ptr::from_ref(&shard),
-                1,
-                spend_pk.as_ptr(),
-                spend_pk.len(),
-                std::ptr::null(),
-                0,
-                floor,
-                floor,
-                0,
-                0,
-            )
-        },
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING
-    );
-    // JoinMarket with the all-zero endpoint: the bond record encodes "no
-    // endpoint" as the zero key, so the verify refuses it (EndpointZero) and
-    // the mapping reports it under the coupling code, not a distinct verdict.
-    let zero_endpoint = [0u8; 32];
-    assert_eq!(
-        unsafe {
-            shekyl_archival_verify_join_market_bond_post(
-                0,
-                0,
-                std::ptr::from_ref(&shard),
-                1,
-                spend_pk.as_ptr(),
-                spend_pk.len(),
-                zero_endpoint.as_ptr(),
-                zero_endpoint.len(),
-                floor,
-                floor,
-                0,
-                0,
-            )
-        },
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING
-    );
-    assert_eq!(
-        verify(0, 0, None, 1, floor, floor, 0, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
-    );
-    assert_eq!(
-        verify(0, 99, Some(&shard), 1, floor, floor, 0, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND
-    );
-    assert_eq!(
-        verify(0, 0, None, 0, floor, floor, 0, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY
-    );
-    assert_eq!(
-        verify(0, 1, Some(&shard), 1, floor, floor, 0, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS
-    );
-    assert_eq!(
-        verify(0, 0, Some(&shard), 1, floor, floor, floor, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS
-    );
-    assert_eq!(
-        verify(0, 0, Some(&shard), 1, 0, 0, 1, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO
-    );
-    assert_eq!(
-        verify(0, 0, Some(&shard), 1, floor + 1, floor + 1, 0, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH
-    );
-    assert_eq!(
-        verify(0, 0, Some(&shard), 1, floor, floor, 0, 1),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS
-    );
-
-    // §9.11 coupling at the marshaler: JoinMarket requires the
-    // exact-canonical-length key — empty and truncated both refuse.
-    let coupling = |pk: &[u8]| unsafe {
-        shekyl_archival_verify_join_market_bond_post(
-            0,
-            0,
-            std::ptr::from_ref(&shard),
-            1,
-            if pk.is_empty() {
-                std::ptr::null()
-            } else {
-                pk.as_ptr()
-            },
-            pk.len(),
-            TEST_ENDPOINT.as_ptr(),
-            TEST_ENDPOINT.len(),
-            floor,
-            floor,
-            0,
-            0,
-        )
-    };
-    assert_eq!(
-        coupling(&[]),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
-    );
-    assert_eq!(
-        coupling(&spend_pk[..HYBRID_PUBKEY_CANONICAL_BYTES - 1]),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
-    );
-    // A non-JoinMarket kind at this entry is the post-kind verdict; the
-    // spend-pk coupling is a JoinMarket-operand check, not a kind check.
-    assert_eq!(
-        verify(1, 0, Some(&shard), 1, floor, floor, 0, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
-    );
-    // A null key pointer with a positive length is the caller bug, not coupling.
-    assert_eq!(
-        unsafe {
-            shekyl_archival_verify_join_market_bond_post(
-                0,
-                0,
-                std::ptr::from_ref(&shard),
-                1,
-                std::ptr::null(),
-                HYBRID_PUBKEY_CANONICAL_BYTES,
-                TEST_ENDPOINT.as_ptr(),
-                TEST_ENDPOINT.len(),
-                floor,
-                floor,
-                0,
-                0,
-            )
-        },
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
     );
 }
 
@@ -737,25 +633,30 @@ fn reinstate_ffi_rejects_oversize_post_at_the_marshal_boundary() {
 fn bond_post_ffi_rejects_duplicate_holdings_at_the_marshal_boundary() {
     use shekyl_archival_retention::{BondPostKind, HoldingsKind, ARCHIVAL_BOND_FLOOR_ATOMIC};
     // "A set on the wire": the marshal is a second decoder, so it rejects a
-    // duplicate shard id (the JoinMarket path that silently double-counted
-    // the floor before the newtype). One arbitrary verify entry proves the
-    // shared marshal — the rejection is at the marshal, kind-agnostic, and
-    // fires before any post-kind semantics.
+    // duplicate shard id. One arbitrary verify entry proves the shared
+    // marshal — the rejection is at the marshal, kind-agnostic, and fires
+    // before any post-kind semantics. *Was* driven through the JoinMarket
+    // verify entry, which no longer marshals anything (it refuses every
+    // call, 2026-10-12); the Reinstate entry shares the same marshal.
     let dup = [7u64, 42, 7];
     let code = unsafe {
-        shekyl_archival_verify_join_market_bond_post(
-            BondPostKind::JoinMarket as u8,
+        shekyl_archival_verify_reinstate_bond_post(
+            BondPostKind::Reinstate as u8,
             HoldingsKind::ShardSetCompact as u8,
             dup.as_ptr(),
             dup.len(),
             std::ptr::null(),
             0,
-            TEST_ENDPOINT.as_ptr(),
-            TEST_ENDPOINT.len(),
-            3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             0,
-            0, // record_exists
+            0,
+            1, // record_exists
+            3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+            HoldingsKind::ShardSetCompact as u8,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
         )
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD);

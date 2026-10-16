@@ -462,13 +462,10 @@ uint64_t shekyl_advance_already_generated(
     uint64_t already_generated_coins,
     uint64_t block_reward);
 
-/// Calculate emission share (Component 4) based on chain age and decay curve.
-uint64_t shekyl_calc_emission_share(
-    uint64_t current_height,
-    uint64_t genesis_height,
-    uint64_t initial_share,
-    uint64_t annual_decay,
-    uint64_t blocks_per_year);
+/// The staker emission share in force at height, in SCALE units: zero at
+/// genesis, the shipped share decayed from block 1 after it (CEN-F21). The
+/// epoch and the share constants are shekyl-economics', not arguments.
+uint64_t shekyl_emission_share_at(uint64_t height);
 
 struct ShekylEmissionSplit {
     uint64_t miner_emission;
@@ -479,15 +476,12 @@ ShekylEmissionSplit shekyl_split_block_emission(
     uint64_t block_emission,
     uint64_t effective_share);
 
-/// The emission split (CEN-F16) as ONE owner: the effective share at
-/// current_height measured from genesis_ng_height (CEN-F21's epoch, 1 on
-/// every shipped network), the split, and the zero-emission arm — all Rust,
-/// with the three share/decay constants read from shekyl-economics rather
-/// than marshaled (E6 slice 4 §3.1 S4/S5/S6). Infallible.
+/// The emission split (CEN-F16) as ONE owner: the share in force at
+/// current_height (shekyl_emission_share_at), the split, and the
+/// zero-emission arm, all Rust. Genesis pays no staker share. Infallible.
 ShekylEmissionSplit shekyl_compute_emission_split(
     uint64_t block_emission,
-    uint64_t current_height,
-    uint64_t genesis_ng_height);
+    uint64_t current_height);
 
 /// Generate self-signed SSL certificate (Ed25519 key + X.509 via rcgen).
 bool shekyl_generate_ssl_certificate(
@@ -1289,16 +1283,20 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
  * inside an `extra` again.
  *
  * Codes: shape verdicts keep their SHEKYL_TX_EXTRA_PQC_SHAPE_* /
- * SHEKYL_TX_EXTRA_SHAPE_* values (0 OK, 1..=17) and are returned unchanged
+ * SHEKYL_TX_EXTRA_SHAPE_* values (0 OK, 1..=20) and are returned unchanged
  * by the leaf read and the coinbase writer when the rule refuses; this
  * family's own outcomes start at 100 so the two cannot collide. A null
  * pointer is SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR everywhere.
  *
  * The shape rule (shekyl_wire::tx_extra::check_tx_extra_shape) is CEN-I19 on
  * every transaction plus, on a coinbase, the closed coinbase grammar
- * (TXE-Q6', consensus): the extra is exactly [0x01 pubkey, 0x02 nonce of
- * SHEKYL_COINBASE_NONCE_BYTES, 0x06 KEM(1120*n), 0x07 leaf(64*n)] in that
- * order and nothing else; off the coinbase, no 0x02 at all. */
+ * (TXE-Q6', consensus; amended 2026-10-10, SO-D12i): the extra is exactly
+ * [0x01 pubkey, 0x02 nonce of SHEKYL_COINBASE_NONCE_BYTES, 0x0C draw
+ * commitment of 32 bytes, 0x06 KEM(1120*n), 0x07 leaf(64*n)] in that order
+ * and nothing else; off the coinbase, no 0x02 and no 0x0C at all. The draw
+ * commitment never crosses this boundary as a value: Rust draws it inside
+ * shekyl_coinbase_extra and judges it inside shekyl_tx_extra_shape_of, so
+ * C++ has no name for its tag, its width or its refusal codes (18..=20). */
 /// Per-output widths of the two PQC fields (shekyl_wire::tx_extra::
 /// HYBRID_KEM_CT_BYTES = X25519 ct(32) + ML-KEM-768 ct(1088), and
 /// PQC_LEAF_ENTRY_LEN = CM(32) ‖ record(32)); a 0x06 field is 1120·n bytes
@@ -1314,7 +1312,9 @@ void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
 /// the template adds it to the pubkey's offset in the block blob rather than
 /// re-encoding the 0x02 tag and the length byte.
 size_t shekyl_coinbase_nonce_offset_from_pubkey(void);
-/// Coinbase grammar refusals (12..=17), beside the CEN-I19 codes (1..=11).
+/// Coinbase grammar refusals C++ names (12..=17), beside the CEN-I19 codes
+/// (1..=11). The draw-commitment refusals (18..=20) have no define: no C++
+/// branches on one, and the rule's own sentence is what gets logged.
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_MISSING   12
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_LENGTH    13
 #define SHEKYL_TX_EXTRA_SHAPE_COINBASE_NONCE_DUPLICATE 14
@@ -1436,14 +1436,39 @@ bool shekyl_tx_prunable_hash(
     uint8_t* out_hash);
 
 /// Build the coinbase extra in the grammar's one layout: [PubKey(tx_pubkey
-/// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), PqcKemCiphertext(kem),
-/// PqcLeafEntries(leaf)] — [PubKey, Nonce] when n_outputs == 0 — judged by
-/// the coinbase grammar before it is handed back in `out`. kem is
+/// [32]), Nonce(nonce[SHEKYL_COINBASE_NONCE_BYTES]), DrawCommitment,
+/// PqcKemCiphertext(kem), PqcLeafEntries(leaf)] — [PubKey, Nonce,
+/// DrawCommitment] when n_outputs == 0 — judged by the coinbase grammar
+/// before it is handed back in `out`. The draw commitment is not an input:
+/// each call draws a fresh witness key and seed in Rust, commits to them
+/// and writes the commitment, so two calls with the same arguments return
+/// different bytes and the caller holds no secret (rule 36). If the OS
+/// random source or key generation fails the call returns 104 with a
+/// message and builds nothing; there is no fallback value. kem is
 /// 1120·n_outputs bytes and leaf 64·n_outputs, as shekyl_construct_output
 /// produced them; anything else is refused with the shape code naming the
 /// field, so a template that could not pass admission is refused at
 /// construction, not at the miner.
 int32_t shekyl_coinbase_extra(
+    const uint8_t* tx_pubkey,
+    const uint8_t* nonce,
+    const uint8_t* kem,
+    size_t kem_len,
+    const uint8_t* leaf,
+    size_t leaf_len,
+    size_t n_outputs,
+    ShekylBuffer* out,
+    char* out_msg,
+    size_t out_msg_cap);
+
+/// shekyl_coinbase_extra without the key generation, for C++ TESTS that lay
+/// a coinbase by hand: the production writer generates a key on every call,
+/// which a test building tens of thousands of blocks cannot pay. It writes
+/// the fixture commitment Rust's own fixtures carry and draws nothing. Same
+/// signature, grammar, layout and refusals. Test-support surface, not
+/// consensus, as shekyl_test_conforming_pqc_leaf_entry is; no production
+/// code calls it.
+int32_t shekyl_test_coinbase_extra(
     const uint8_t* tx_pubkey,
     const uint8_t* nonce,
     const uint8_t* kem,
@@ -1819,68 +1844,6 @@ uint8_t shekyl_archival_serve_credit_extract(
     uint8_t* out_p_canonical_id,
     uint64_t* out_shard_id,
     uint64_t* out_settlement_epoch);
-
-/// Settlement-outcome row encoding (SO-D2).
-///
-/// C++ owns the table and its 48-byte key; Rust owns the 3-byte value, because
-/// the value carries the invariant that its outcome byte equals the fold over
-/// its counts. There is deliberately NO outcome parameter: supplying one would
-/// reopen at the boundary the disagreement the Rust type closes.
-///
-/// **The key is `ArchivalPairEpochKey`, not `ArchivalServeCreditKey`** — this
-/// comment said the latter until PC-D4 widened that key to 56 B. The settlement
-/// table is per-pair-epoch by design (SO-D1: one row per pair with issued >= 1),
-/// so it did not widen with the ledger, and SO-D2's "one key probes both
-/// tables" rationale is retired rather than broken: the two tables answer at
-/// different granularities — evidence per challenge, verdict per pair-epoch.
-/// See ARCHIVAL_PER_CHALLENGE_RECORD.md §5.2.
-///
-/// Writes SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES bytes to out_row on OK (0) and
-/// writes NOTHING on any error, so a caller that ignores the code cannot store
-/// a fabricated settlement.
-///   0 = ok, 1 = null out_row, 2 = passes > issued, 3 = issued exceeds one byte,
-///   4 = issued == 0 (SO-D1: a pair the urn never reached is recorded by its
-///       ABSENCE; writing a zero-issued row would make absence ambiguous).
-///
-/// Codes 5 and 6 are READ-ONLY -- the writer cannot produce them; see
-/// shekyl_archival_settlement_row_validate below.
-uint8_t shekyl_archival_settlement_row(
-    uint32_t passes,
-    uint32_t issued,
-    uint8_t* out_row);
-
-/// Encoded length of a settlement row — a FIXED-SIZE FFI contract, so both
-/// sides agree on it at COMPILE time (rule 40) rather than through a runtime
-/// query. Rust pins the same number with `const _: () = assert!(...)` beside
-/// its definition; a divergence fails the build on whichever side moved.
-#define SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES 3
-
-/// Validate a STORED settlement row: re-fold its counts and confirm the stored
-/// outcome is the one they derive. Returns 0 when canonical, otherwise the
-/// same code the writer would have refused it with.
-///
-/// The read half of the invariant. The write path cannot emit a row whose
-/// outcome contradicts its counts, or a zero-issued row -- but until this
-/// existed the read path could not ASK, because the check lives in Rust and
-/// C++ cannot reach it, so a corrupt cell came back as a valid settlement.
-/// C++ does not parse these bytes to check them (rule 40); it asks.
-///
-/// Takes the three bytes as SCALARS rather than a pointer: the row is a fixed
-/// 3 bytes, so there is no null case, no length to agree on, and nothing for
-/// either side to reconstruct. A `const uint8_t*` here would have been a
-/// larger boundary for no gain.
-///
-/// Codes: 0 = canonical, 2 = passes > issued, 3 = issued exceeds one byte,
-/// 4 = issued == 0, and two the WRITER cannot produce because they describe a
-/// stored row that no fold could have emitted:
-///   5 = the outcome byte is not one of the three live tags (a zero-filled or
-///       garbage cell);
-///   6 = the outcome is a live tag but not the one its own counts fold to.
-/// Kept distinct because this is a FATAL diagnostic and "which corruption" is
-/// the whole value of the code -- 5 points at the cell, 6 at the row's
-/// contents. Reporting either as 2 would name a count desync that did not
-/// happen.
-uint8_t shekyl_archival_settlement_row_validate(uint8_t outcome, uint8_t passes, uint8_t issued);
 
 /// The verifier-derived challenge leaf index (RF-D6: never on the wire;
 /// PC-D3: bound to the block the record rides in).
@@ -3242,22 +3205,6 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 // needed here, derive it in the crate and export it, so the number and its
 // reason cannot drift apart again.
 
-/// One embargo duration in seconds, drawn from the adopted memoryless
-/// distribution (mean 190 s). A 0 s draw is legitimate and rare (~0.13 %): the
-/// geometric support includes 0 and the table is not clamped at the boundary,
-/// so what ships is what was derived and tested. A zero draw does not mean "fire
-/// this instant" — deadlines are whole seconds, so it resolves to the earliest
-/// one that does not under-provision (the next second boundary; see
-/// cryptonote::detail::relay_deadline). Rounding it down instead would put the
-/// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
-/// embargo is the privacy-losing direction at every draw value including zero.
-///
-/// \param zone The embargo-class byte, not a connector index. 1 is the
-/// clearnet-class window. 3 is the anonymity-class window. 0 and any other
-/// byte take the longest window: a corrupt byte costs recovery latency
-/// rather than embargo length. (Masking would send 5 to the shortest.)
-uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
-
 /// Not a connector index. The connector embargo draws the longest measured
 /// transit for this byte. A stem-tally row uses the same byte when the
 /// observation recorded no connector.
@@ -3279,10 +3226,10 @@ uint64_t shekyl_dandelionpp_embargo_draw_seconds_for_connector(uint8_t connector
 /// healthy transactions dead while their backstop is still running, and the
 /// sender then releases the inputs it had reserved.
 ///
-/// Deliberately takes no zone, though the draw above does: this is a wallet
-/// decision, and the wallet cannot know which zone its transaction took. It
-/// gets the worst zone's wait. The whole export is a deletion target — see
-/// DAEMON_RELAY_PRIVACY.md §89.6.
+/// Deliberately takes no connector: the wallet cannot know which connector
+/// carried the transaction, so it gets the longest measured transit's wait.
+/// *Records-was:* the worst `RelayZone`. The whole export is a deletion
+/// target — see DAEMON_RELAY_PRIVACY.md §89.6.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
 
 /// How long an ORIGIN waits before re-broadcasting its own still-unseen
@@ -3488,7 +3435,7 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 //!
 //! A bitmask rather than a bare `bool`, so a second flag cannot be transposed
 //! onto this one by argument order. Function signatures on this surface are
-//! gated by `scripts/ci/check_relay_ffi_signatures.sh`. Flag values are not:
+//! gated by `scripts/ci/check_ffi_signatures.sh`. Flag values are not:
 //! `zone_flag_bits_do_not_transpose` pins the number. Bit 0 is not a flag.
 //! Keep the noise value in sync with `SHEKYL_RELAY_ZONE_NOISE_ENABLED` in
 //! `relay_zone_ffi`.
@@ -3544,11 +3491,6 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! FROM those measurements. Same value today, opposite derivations -- do not
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
-
-//! Hidden-address outbound connections a restricted node opens. The
-//! own-edge rotates over that pool. Not the fluff floor: relayed stems
-//! draw over every outbound session.
-std::uint32_t shekyl_hop0_outbound_target();
 
 //! Inbound safety-bound decision (PWD-I7). Rust observes the process and
 //! decides. C++ passes `reserved` — descriptors it has promised but not
@@ -3969,6 +3911,7 @@ bool shekyl_block_sync_orphan_resync(uint8_t action);
 #define SHEKYL_DAEMON_TOR_NO_BINARY          3
 #define SHEKYL_DAEMON_TOR_BAD_BINARY         4
 #define SHEKYL_DAEMON_TOR_START_FAILED       5
+#define SHEKYL_DAEMON_TOR_UNAVAILABLE        6
 #define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
 #define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
 
@@ -3983,10 +3926,12 @@ bool shekyl_block_sync_orphan_resync(uint8_t action);
 //! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
 //! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
 //! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
-//! (refused, not stacked); _ARG; _NO_BINARY (calm skip -- no candidate at
-//! all); _BAD_BINARY (candidate found but unusable: pin mismatch, unpinned
-//! target, unreadable); _START_FAILED (spawn/bootstrap -- incarnation torn
-//! down before return, so a failed start commits the caller to nothing).
+//! (refused, not stacked); _ARG; _NO_BINARY (no candidate at all);
+//! _BAD_BINARY (candidate found but unusable: a pinned file's digest
+//! differs, tor's directory holds something that is not pinned, unreadable);
+//! _UNAVAILABLE (Shekyl manages no tor on this build target; out_error is
+//! the reason); _START_FAILED (spawn/bootstrap -- incarnation torn down
+//! before return, so a failed start commits the caller to nothing).
 int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
                             uint32_t bootstrap_timeout_secs,
                             char* out_socks_addr, size_t out_socks_addr_len,
@@ -4325,6 +4270,7 @@ struct ShekylOwnedBuffer {
 constexpr std::uint32_t SHEKYL_SEAM_ESTABLISHED = 1;
 constexpr std::uint32_t SHEKYL_SEAM_DELIVER = 2;
 constexpr std::uint32_t SHEKYL_SEAM_CLOSED = 3;
+constexpr std::uint32_t SHEKYL_SEAM_HANDSHAKE = 4;
 constexpr std::uint32_t SHEKYL_CONNECTOR_CLEARNET = 0;
 constexpr std::uint32_t SHEKYL_CONNECTOR_TOR = 1;
 constexpr std::uint32_t SHEKYL_DIRECTION_INBOUND = 0;
@@ -4391,8 +4337,199 @@ int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t le
 int shekyl_seam_send_report(std::uint64_t id, const std::uint8_t* bytes, std::size_t len,
     int* found, std::uint8_t* cause_kind);
 void shekyl_seam_close(std::uint64_t id);
+/// Record `kind` on `id` when the row has no cause yet. The row stays
+/// until `shekyl_seam_reap`. An unknown kind records nothing.
+void shekyl_seam_record_cause(std::uint64_t id, std::uint8_t kind, std::uint16_t reply);
 std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
 std::uint64_t shekyl_seam_inbound_held(void);
+
+/// One row of the published seam board. `endpoint` is the address, the
+/// connector, and the direction observed at admission. `established` is 1
+/// after the Levin handshake and is not an input to
+/// `shekyl_seam_board_count`: a dial occupies its slot before the handshake
+/// finishes.
+struct shekyl_seam_board_row {
+  std::uint64_t id;
+  std::uint8_t established;
+  std::uint8_t _pad[7];
+  shekyl_seam_observed endpoint;
+  std::uint8_t _pad_tail[2];
+  /// Unix seconds at admission. Last receive and last send are not here:
+  /// they are monotonic millisecond instants on the byte path
+  /// (`shekyl_link_activity`).
+  std::uint64_t started;
+  /// The same admission on that monotonic clock. The stall check uses it
+  /// until a byte arrives. It does not change after admission.
+  std::uint64_t started_mono;
+};
+static_assert(sizeof(shekyl_seam_observed) == 70, "seam observed encoding");
+static_assert(offsetof(shekyl_seam_board_row, established) == 8, "seam board established");
+static_assert(offsetof(shekyl_seam_board_row, endpoint) == 16, "seam board endpoint");
+static_assert(offsetof(shekyl_seam_board_row, started) == 88, "seam board started");
+static_assert(offsetof(shekyl_seam_board_row, started_mono) == 96, "seam board started_mono");
+static_assert(sizeof(shekyl_seam_board_row) == 104, "seam board row");
+
+/// Rows of `connector` and `direction` on the process hub, handshake or
+/// not. A missing hub, or an index that is not a connector or a direction,
+/// is 0.
+std::uint64_t shekyl_seam_board_count(std::uint32_t connector, std::uint32_t direction);
+/// Rows in `direction` on every connector, handshake or not. A missing hub,
+/// or a direction index that is not one, is 0.
+std::uint64_t shekyl_seam_board_direction_count(std::uint32_t direction);
+/// The board's sessions per direction, over one snapshot: rows on every
+/// connector that have finished the Levin handshake. A row before its
+/// handshake is a socket, not a session, and is not counted here.
+struct shekyl_seam_session_counts_t {
+  std::uint64_t outbound;
+  std::uint64_t inbound;
+};
+static_assert(sizeof(shekyl_seam_session_counts_t) == 16, "seam session counts");
+/// Writes the counts through `out`. Returns 0 when it wrote them, -1 when
+/// `out` is null, and -2 when no hub is bound: there are then no counts,
+/// which is not counts of zero. Read by the daemon RPC (Rust) for
+/// `get_info`; no C++ calls it.
+std::int32_t shekyl_seam_session_counts(shekyl_seam_session_counts_t* out);
+
+/// 1 when the board row for `id` has finished the Levin handshake, 0 when
+/// the row is present and the handshake has not, -1 when there is no row.
+/// The id is the socket id, not the UUID.
+int shekyl_seam_session_established(std::uint64_t id);
+/// The connector index of `id`'s row. Zero is clearnet. -1 when there is
+/// no row. The id is the socket id, not the UUID.
+int shekyl_seam_session_connector(std::uint64_t id);
+/// 1 when a hub is bound.
+int shekyl_seam_is_bound(void);
+/// What `shekyl_peerlist_admit_received` answers. Each situation has its
+/// own code; the caller closes the session on REFUSE and on nothing else.
+/// REFUSE: the list broke a rule.
+constexpr int SHEKYL_PEERLIST_REFUSE = 0;
+/// ADMITTED: an outbound session's list passed every rule.
+constexpr int SHEKYL_PEERLIST_ADMITTED = 1;
+/// INBOUND: the peer opened the session; nothing was read or admitted.
+// 2 was SHEKYL_PEERLIST_INBOUND, retired 2026-10-13: every exchange is an
+// exchange (PR-3 brief §2.5); an inbound list is admitted or refused like
+// any other. The number is not reused.
+/// NO_SESSION: the board holds no such session; nothing was admitted.
+constexpr int SHEKYL_PEERLIST_NO_SESSION = 3;
+/// NO_HUB: no hub is bound; nothing was admitted.
+constexpr int SHEKYL_PEERLIST_NO_HUB = 4;
+/// BAD_ARGUMENT: a null pointer with a non-zero count; nothing was admitted.
+constexpr int SHEKYL_PEERLIST_BAD_ARGUMENT = 5;
+/// The outbound handshake's result, posted by the Rust dialer as kind
+/// SHEKYL_SEAM_HANDSHAKE after `established` and ahead of any frame. The
+/// strand reads these fields and accepts or refuses the sync payload in
+/// that turn; it does not parse a Levin response.
+struct shekyl_seam_handshake_result {
+  std::uint8_t keep;
+  std::uint8_t _pad[3];
+  std::uint32_t support_flags;
+  std::uint64_t current_height;
+  std::uint64_t cumulative_difficulty;
+  std::uint64_t cumulative_difficulty_top64;
+  std::uint8_t top_id[32];
+};
+/// The strand's verdict on the handshake posted for `id`: 1 accepted the
+/// sync payload, 0 refused it. The dialer closes a confirm dial and a
+/// refused dial; a kept and accepted dial stays.
+void shekyl_dialer_handshake_verdict(std::uint64_t id, int accepted);
+/// The inbound handshake's self-connection check: 1 when `nonce` (32 bytes)
+/// is one this node put in flight on `connector`, erasing it; 0 otherwise.
+int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t* nonce);
+/// `--out-peers` and the anonymity zones' cap: the connector's outbound
+/// target. 0 on success; -1 for a positive cap below the F-8b floor, which
+/// is refused, or an unknown connector. Lowering a cap closes kept
+/// sessions only.
+int shekyl_dialer_set_out_peers(std::uint32_t connector, std::uint32_t cap);
+/// The connector's outbound target as the dialer holds it: the pushed cap,
+/// or the compiled default before any push. 0 for an unknown connector.
+std::uint32_t shekyl_dialer_out_target(std::uint32_t connector);
+/// The core's tip: the dialer's next handshake carries it. Called wherever
+/// the tip changes, and once at start.
+void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
+    std::uint64_t cumulative_difficulty_top64, const std::uint8_t* top_id);
+/// The tip the core last published (see shekyl_core_publish_tip): 1 and the
+/// fields written, 0 and nothing written before the first publish. A null
+/// out pointer is skipped.
+int shekyl_core_published_tip(std::uint64_t* out_height, std::uint64_t* out_cumulative_difficulty,
+    std::uint64_t* out_cumulative_difficulty_top64, std::uint8_t* out_top_id);
+/// An operator-named address (`--add-peer`), into gray whatever its range:
+/// 1 newly entered, 0 already sat or refused, -1 not an address or no dialer.
+int shekyl_peerlist_admit_operator(const shekyl_seam_address* entry);
+/// This node's own dialable address on `connector`; null clears it. 0, or
+/// -1 with no dialer or an unknown connector.
+int shekyl_peerlist_set_own_address(std::uint32_t connector, const shekyl_seam_address* entry);
+/// A closed network (`--add-exclusive-node`): the dialer's candidate
+/// population is exactly these `count` entries, admitted as operator-named.
+/// 0, or -1 with no dialer or a null pointer with a non-zero count.
+int shekyl_dialer_set_exclusive(const shekyl_seam_address* entries, std::size_t count);
+/// The disclosure sample for a response on `session` (the socket id): up to
+/// `cap` entries written to `out`, returning how many. Zero below the white
+/// diversity floor, for an unknown session, or with no dialer.
+std::size_t shekyl_peerlist_disclose(std::uint64_t session, shekyl_seam_address* out, std::size_t cap);
+/// `--allow-local-ip`, as the Rust peer lists' constructor input. Returns
+/// `allow`, so the line that read the flag reads it through this call.
+bool shekyl_peerlist_allow_local_ip(bool allow);
+/// `--p2p-disclose-early` (PR-3 brief revision 3 §2.6): the peer lists disclose
+/// below the white diversity floor, fresh per request, until 24 hours pass
+/// or a connector's white reaches the floor. 0, or SHEKYL_DIALER_DEFERRED
+/// when held for the dialer's build. The option is the one C++ exception
+/// to "no new daemon option"; the daemon-config slice deletes it.
+int shekyl_peerlist_disclose_early(void);
+/// Recorded for the dialer's build: a push made before the seam binds takes
+/// effect when the dialer is built.
+constexpr int SHEKYL_DIALER_DEFERRED = 2;
+/// The address file (`<data dir>/p2pstate.bin`), named once at start: its
+/// addresses enter gray, and the dialer writes it every thirty minutes and
+/// at stop. 0, SHEKYL_DIALER_DEFERRED, or -1 for a null or non-UTF-8 path.
+int shekyl_dialer_open_address_file(const char* path);
+/// Which network this process dials, for seed admission. `nettype` is
+/// `cryptonote::network_type` (0 mainnet, 1 testnet, 2 stagenet, 3
+/// fakechain). Called once from `core::init`, after that choice is
+/// settled and before any connector starts. Stagenet and fakechain admit
+/// no compiled seeds. This is not `shekyl_network_id`: that derivation is
+/// pure, and `get_config` builds every network's id on first use, so a
+/// record taken there would always end on stagenet. Returns 0, or -1 when
+/// `nettype` is not one of those four (the record is unchanged).
+int shekyl_dialer_note_network(std::uint8_t nettype);
+/// One `get_peer_list` entry, from the Rust peer lists (RK-5a's export,
+/// moved to Rust 2026-10-13). `host` is the ip string for IPv4, the bare
+/// host for IPv6, the whole `host:port` for Tor (`port` 0 there); `ip` is
+/// the IPv4 address with its octets in network order, else 0. No clock.
+struct shekyl_rpc_peer_facts {
+  const char* host;
+  std::size_t host_len;
+  std::uint32_t ip;
+  std::uint16_t port;
+  std::uint8_t white;    // 1 white, 0 gray
+  std::uint8_t blocked;  // 1 when the transport layer bans the host now
+};
+static_assert(sizeof(shekyl_rpc_peer_facts) == 24, "peer facts layout is pinned on both sides");
+/// White then gray entries in one array; `public_only` nonzero lists the
+/// clearnet lists alone. 0; 1 (offline, nothing written); or -1 for a null
+/// out pointer or no lists online. Release `*out_owner` with shekyl_rpc_peer_list_free.
+int shekyl_rpc_peer_list(std::uint8_t public_only, const shekyl_rpc_peer_facts** out,
+    std::size_t* out_len, void** out_owner);
+void shekyl_rpc_peer_list_free(void* owner);
+/// Clearnet white and gray list sizes. 0; 1 (offline, nothing written); or -1.
+int shekyl_rpc_peerlist_sizes(std::uint64_t* out_white, std::uint64_t* out_gray);
+/// Whether P2P runs: 0 running, 1 offline, -2 before it is recorded.
+int shekyl_rpc_p2p_state(void);
+/// Record --offline where the p2p layer reads it; returns `offline`.
+bool shekyl_p2p_record_offline(bool offline);
+/// The close kind's name for a log line, from the Rust table; static, never freed.
+const char* shekyl_close_kind_name(std::uint8_t kind);
+/// A peerlist a peer sent over session `session` (the socket id), as it
+/// arrived: `count` entries, none dropped or rewritten. Rust reads the
+/// session's connector and direction from the board, applies every
+/// acceptance rule, and answers one of the SHEKYL_PEERLIST_* codes above.
+int shekyl_peerlist_admit_received(std::uint64_t session, const shekyl_seam_address* entries, std::size_t count);
+
+/// Copy the process hub's board through `visit`, one fixed-size row per
+/// call. There is one hub. A missing hub, or a board with no rows, visits
+/// once with a null row. The pointer is valid only for that call. Returns
+/// 0, or -1 when `visit` is null.
+using shekyl_seam_board_visit = void (*)(void* ctx, const shekyl_seam_board_row* row);
+int shekyl_seam_board(void* ctx, shekyl_seam_board_visit visit);
 
 /// One ban still in force. `kind` 1 is a host, 2 is an IPv4 subnet.
 /// `permanent` 1 means there is no deadline. `text` is NUL-terminated.
@@ -4433,25 +4570,6 @@ void shekyl_bans_clear(void);
 int shekyl_executor_record(const char* name, std::size_t lanes, std::size_t workers, std::uint64_t* out_handle);
 void shekyl_executor_release(std::uint64_t handle);
 
-/// Spans and the transport-runtime budget. The caller supplies every
-/// number. The five deadlines are the measured spans; `workers` and
-/// `blocking` stay the structural floor until the thread-budget leg.
-/// `shutdown_timeout_ns` is the longest of the armed deadlines.
-/// `network_id` is 16 bytes. Field order matches the Rust `repr(C)`
-/// struct.
-struct shekyl_zone_params {
-  const std::uint8_t* network_id;
-  std::uint64_t clearnet_dial_within_ns;
-  std::uint64_t clearnet_handshake_within_ns;
-  std::uint64_t clearnet_gap_within_ns;
-  std::uint64_t tor_dial_within_ns;
-  std::uint64_t tor_gap_within_ns;
-  std::uint64_t send_queue_bytes;
-  std::uint64_t shutdown_timeout_ns;
-  std::size_t workers;
-  std::size_t blocking;
-};
-
 /// Bind clearnet. Writes the bound ports. `ipv6` and `proxy_host` may be
 /// null. `encrypt` nonzero is the clearnet channel option on; zero is off.
 /// Returns 0, or -1 when the bind fails.
@@ -4459,14 +4577,14 @@ int shekyl_zone_listen_clearnet(
     const char* ipv4, std::uint16_t port,
     const char* ipv6, std::uint16_t port_v6, int use_ipv6,
     const char* proxy_host, std::uint16_t proxy_port, int encrypt,
-    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling,
     int* out_port, int* out_port_v6);
 /// Bind the Tor forward listener. `extra` may be null. Returns 0, or -1
 /// when the bind fails.
 int shekyl_zone_listen_tor(
     const char* socks_host, std::uint16_t socks_port,
     const char* extra, std::uint16_t extra_port,
-    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling,
+    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling,
     int* out_port);
 /// The SOCKS proxy the Tor connector dials through, for a tor zone with no
 /// inbound listener. `shekyl_zone_listen_tor` installs it for zones that
@@ -4474,7 +4592,7 @@ int shekyl_zone_listen_tor(
 /// does not parse.
 int shekyl_zone_set_tor_proxy(
     const char* socks_host, std::uint16_t socks_port,
-    const shekyl_zone_params* params, const shekyl_inbound_ceiling* ceiling);
+    const std::uint8_t* network_id, const shekyl_inbound_ceiling* ceiling);
 /// Replace the ceiling later accepts use. Returns 0, or -1 when `ceiling`
 /// is null, not a known decision, or the seam is unbound.
 int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
@@ -4482,6 +4600,9 @@ int shekyl_zone_set_ceiling(const shekyl_inbound_ceiling* ceiling);
 /// still enforces the process ceiling on the sum. Returns 0, or -1 for an
 /// unknown connector.
 int shekyl_zone_set_connector_cap(std::uint32_t connector, std::uint32_t cap);
+/// Drop that cap. Later accepts are bounded only by the process ceiling.
+/// Returns 0, or -1 for an unknown connector.
+int shekyl_zone_clear_connector_cap(std::uint32_t connector);
 void shekyl_zone_session_established(std::uint64_t id);
 void shekyl_zone_shutdown(void);
 
@@ -4501,6 +4622,18 @@ void shekyl_link_connection(std::uint64_t id, std::uint64_t* bytes_up, std::uint
 /// Bytes per second right now, over the link budget's recent-speed
 /// window, read from the engine's clock. A null pointer is skipped.
 void shekyl_link_speed(std::uint64_t id, std::uint64_t* bytes_per_sec_up, std::uint64_t* bytes_per_sec_down);
+/// Monotonic milliseconds of the last byte read or written on `id`.
+/// A grant is not a byte. Zero until that direction has moved one.
+/// A null pointer is skipped. Compare with `shekyl_monotonic_ms`.
+void shekyl_link_activity(std::uint64_t id, std::uint64_t* last_send_ms, std::uint64_t* last_recv_ms);
+/// The same instants as unix milliseconds, for the operator view.
+/// Zero stays zero. The stall check does not call this.
+void shekyl_link_unix_ms(std::uint64_t id, std::uint64_t* last_send_ms, std::uint64_t* last_recv_ms);
+/// Milliseconds on the monotonic clock the byte stamps use.
+std::uint64_t shekyl_monotonic_ms(void);
+/// The stall mark. `recv_ms` of 0 means no byte yet, and the mark is
+/// `started_ms` (admission, on the same monotonic clock).
+std::uint64_t shekyl_recv_mark_ms(std::uint64_t recv_ms, std::uint64_t started_ms);
 
 /// The 16-byte network id for `nettype`
 /// (`cryptonote::network_type`: 0 mainnet, 1 testnet, 2 stagenet, 3 fakechain).
@@ -4508,7 +4641,8 @@ void shekyl_link_speed(std::uint64_t id, std::uint64_t* bytes_per_sec_up, std::u
 /// genesis block hash). Fakechain's genesis pin is mainnet's today, so the
 /// two ids match until fakechain has its own genesis. Returns 0, or -1 when
 /// `out` is null or `nettype` is not one of those four. This function does
-/// not state the bytes.
+/// not state the bytes, and it does not choose the dialer's seeds
+/// (`shekyl_dialer_note_network` does, from the network the daemon chose).
 int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 
 } // extern "C"

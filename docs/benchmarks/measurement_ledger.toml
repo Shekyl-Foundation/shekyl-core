@@ -1,0 +1,937 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Measurement ledger: one row per constant whose value is justified by a
+# measured cost or latency. Read by `scripts/ci/check_measurement_ledger.py`,
+# which fails when a row's stated status disagrees with git. Its header says
+# what each status means and how a failure is cleared; `README.md` beside
+# this file says how to add a row.
+#
+# A constant binds what is true of that value alone:
+#
+#   defined_in / needle   where the constant lives and the text that states
+#                         its value. A changed value fails the row.
+#   measured_by           the tracked benchmark(s) in `tracked_set` that
+#                         produce the number.
+#   capture / capture_rev the evidence in the tree and the revision of the
+#                         code it was taken on. `rev_source` says where the
+#                         revision comes from when the capture does not
+#                         record one.
+#   path_set              the `[[path_set]]` whose spec is the code the
+#                         constant budgets. Several constants name one path
+#                         set when they share one cost, and that cost is
+#                         acknowledged once.
+#
+# A path set is heard once. `stale_through` lists the commits to its spec
+# a stale constant has heard, each with a note on what the change does to
+# the cost; a commit that is in none of their histories fails every stale
+# constant on that path set until its author adds an entry. `cleared` is
+# the same list for a current constant, with `reason` in place of `note`.
+# A stale constant does not read `cleared`. Entries are a set: name your
+# own commit, in any order.
+#
+# The only edit that retires a stale constant is a capture, under the same
+# name, whose revision contains that constant's `stale_since`.
+#
+# An `estimated` constant is a prediction: its `estimate` (a band,
+# `{ low, high, unit }`), its `basis` (the arithmetic) and `basis_captures`
+# (the capture files the arithmetic reads, each one exact tracked file).
+# It has no capture of its own. It leaves that status only as `unmeasured`
+# with a reason, as a measured row on a capture file the parent tree did
+# not hold, or into `[[retired_estimate]]` on the same condition.
+#
+# `[[retired_estimate]]` keeps a prediction beside the measurement that
+# settled it: the band, `measured` in the band's unit, the capture and its
+# revision, a `note`, and a `verdict` of `held` or `falsified` that the
+# check computes from the two and refuses when the row says otherwise.
+#
+# `[[toolchain]]` holds one acknowledgment per change to `toolchain_file`,
+# for the whole ledger. It is owed while any constant is current across the
+# change, because a compiler bump is on no path set's spec and moves them
+# all. A toolchain entry names the commit that touched the pin (`commit`).
+# A path-set entry names a commit whose history the path set has heard
+# (`through`). Those are different facts and stay different keys.
+#
+# NOT IN THIS LEDGER, by class, so that an absent constant can be told from a
+# forgotten one (the register is section 4 of the tracked-set document):
+#
+#   re-measured by CI on every run   the RandomX latency-ratio bounds; the
+#                                    key-dispatch ratio. A capture cannot go
+#                                    stale when there is none.
+#   derived from rows that are here  `ADOPTED_PROPAGATION_TIMEOUT_SECS`, from
+#                                    the transit, fluff-return and verify
+#                                    cells.
+#   Tor's protocol, not device work  `P2P_ANON_FAILED_ADDR_FORGET_SECONDS`,
+#                                    `P2P_DEFAULT_SOCKS_CONNECT_TIMEOUT`
+#                                    (BA-Q13).
+#   ruled as resting on no           `CHALLENGE_RESPONSE_BLOCKS`.
+#   measurement
+#   a ruling that left no constant   the weight-window read shape; the
+#                                    slash-scan placement.
+#   named by the design, not yet a   the write-stall deadline; the clearnet
+#   number                           accept-rate bound; the inbound ceiling.
+#                                    Each gets a row when it gets a value.
+#
+# Where a capture records no revision, `capture_rev` is the last commit on
+# this history BEFORE the day the run started, so that anything merged on or
+# after that day reads as newer. The bound errs toward stale, which is the
+# direction that gets looked at.
+
+tracked_set = "docs/design/BENCHMARK_ALIGNMENT.md"
+toolchain_file = "rust/rust-toolchain.toml"
+
+[[toolchain]]
+commit = "a4e092392"
+note = "Pins rustc at 1.94.0. The RandomX allocation record names only the workspace MSRV of its day (1.85), so its compiler is not the pinned one. Not re-measured; the 47.75 us figure sits at about half its 100 us target."
+
+[[toolchain]]
+commit = "5aac523ad"
+note = "Comment only: the bump policy gains the gitian descriptors. The channel does not move."
+
+# --- consensus: block weight ------------------------------------------
+
+[[path_set]]
+id = "block-weight"
+spec = [
+  "rust/shekyl-fcmp/src",
+  "rust/shekyl-fcmp-proofs/src",
+  "rust/shekyl-oxide/crypto/fcmps",
+  "rust/shekyl-ffi/src/legacy_fcmp.rs",
+  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
+  "rust/shekyl-ffi/src/legacy_core.rs",
+  "rust/shekyl-crypto-pq/src/signature.rs",
+  "rust/shekyl-pow-randomx/src",
+  "src/fcmp/bulletproofs_plus.cc",
+]
+stale_through = [
+  { through = "20738bf714", note = "PL-D3: the leaf's fourth scalar becomes a Pedersen commitment opened in-circuit. The proof changed for every shape; its verify cost has not been re-measured on the floor." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "48670ca6c9", note = "Three commits to signature.rs. The first moves the Ed25519 + ML-DSA-65 nested sign and verify and the canonical header onto one body shared with a second scheme; the bytes signed and the order of the two halves are unchanged, and the existing vectors pass untouched. The second adds a scheme byte and two domain constants that no transaction path reads. The third edits one doc comment. The gated sign count moved from 7,163,792 to 7,161,994 instructions on an x86 development host (crypto_bench_hybrid_sign_1_input, -0.025 %). Verify has no gated arm and was not measured; no floor run." },
+  { through = "e9546ed247", note = "The nested verifier checks the same ML-DSA signature the classical half wraps. Verify no longer clones that vector onto the heap before the check; it still copies the bytes once into the fixed array the ML-DSA verifier takes. The signed bytes and the order of the two halves are unchanged. Not re-measured. The block-weight rows stay stale from PL-D3." },
+  { through = "0d374fdfc3", note = "One commit to signature.rs: a third scheme-3 domain constant, SCHEME_DOMAIN_WITNESS_BUNDLE, beside the receipt's and the carrier's. It is a byte string and its doc comment. No function is added or changed, and the Ed25519 + ML-DSA-65 sign and verify that block verification prices do not read it. Not re-measured; nothing the capture priced has moved." },
+  { through = "d4a50e127c", note = "Doc comments only in signature.rs: SCHEME_DOMAIN_WITNESS_CARRIER is marked SUPERSEDED and SCHEME_DOMAIN_WITNESS_BUNDLE's doc names it so. No byte string, function or code path changed, and the Ed25519 + ML-DSA-65 sign and verify that block verification prices are untouched. Not re-measured; nothing the capture priced has moved." },
+]
+
+[[constant]]
+name = "block_weight_short_term_surge_factor"
+defined_in = "config/consensus_constants.json"
+needle = '"block_weight_short_term_surge_factor": 4'
+measured_by = ["BA-T2", "BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
+
+[[constant]]
+name = "block_weight_full_reward_zone_bytes"
+defined_in = "config/consensus_constants.json"
+needle = '"block_weight_full_reward_zone_bytes": 300000'
+measured_by = ["BA-T10"]
+status = "stale"
+stale_since = "20738bf714"
+carrier = "BA-T10 (BA-G4, BA-Q10). PL-D3 changed the FCMP++ proof nine days after the capture."
+capture = "docs/benchmarks/gap7_block_verify_pi4_rust_20260905T181144Z.txt"
+capture_rev = "8af70a60a6d444daa858d94d8b34e71b7e54eb49"
+rev_source = "capture header"
+path_set = "block-weight"
+
+[[path_set]]
+id = "fcmp-inputs"
+spec = [
+  "rust/shekyl-fcmp/src",
+  "rust/shekyl-wire/tests/input_cap_cost.rs",
+]
+
+[[constant]]
+name = "fcmp_max_inputs_per_tx"
+defined_in = "src/cryptonote_config.h"
+needle = "#define FCMP_MAX_INPUTS_PER_TX                  8"
+measured_by = ["BA-T10"]
+status = "unmeasured"
+carrier = "BA-T10. The 2026-09-24 input-count runs are quoted in CHAIN_RULES_SLICE_6.md section 5.4 and have no capture in the tree; the cap's derivation is owed (FOLLOWUPS, CEN-I4)."
+path_set = "fcmp-inputs"
+
+[[path_set]]
+id = "fcmp-tree-depth"
+spec = ["rust/shekyl-fcmp/src"]
+
+[[constant]]
+name = "fcmp_max_tree_depth"
+defined_in = "rust/shekyl-fcmp/src/lib.rs"
+needle = "pub const MAX_TREE_DEPTH: u8 = 24;"
+measured_by = ["BA-T10"]
+status = "unmeasured"
+carrier = "BA-T10. Nothing is measured past depth 7; the depth-24 verify cost the surge factor is signed on is composed from per-layer slopes (BA-G4)."
+path_set = "fcmp-tree-depth"
+
+[[path_set]]
+id = "archival-attestation-cap"
+spec = ["rust/shekyl-crypto-pq/src/signature.rs"]
+
+[[constant]]
+name = "archival_max_attestation_records"
+defined_in = "src/cryptonote_config.h"
+needle = "constexpr size_t ARCHIVAL_MAX_ATTESTATION_RECORDS = 256;"
+measured_by = ["BA-T10"]
+status = "unmeasured"
+carrier = "BA-T10 (BA-G16). Justified in place as bounding per-block admission cost; no measurement of that cost exists."
+path_set = "archival-attestation-cap"
+
+# --- relay privacy ----------------------------------------------------
+
+[[path_set]]
+id = "relay-verify-cell"
+spec = [
+  "rust/shekyl-fcmp/src",
+  "rust/shekyl-ffi/src/legacy_fcmp.rs",
+  "rust/shekyl-ffi/src/ct_balance_ffi.rs",
+]
+
+[[constant]]
+name = "spec_verify_cost_modal_cell"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_311));"
+measured_by = ["BA-T1", "BA-T10"]
+status = "unmeasured"
+carrier = "BA-T10. The 2026-08-05 floor grids are not in the tree, and the cell's own comment says the floor re-measurement is owed after PL-D3 (BA-G4; FOLLOWUPS, the 48-cell surface)."
+path_set = "relay-verify-cell"
+
+[[path_set]]
+id = "relay-aes"
+spec = ["rust/shekyl-relay-privacy/src/verify_cost.rs"]
+
+[[constant]]
+name = "pi4_aes_bytes_per_sec"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "const PI4_AES_BYTES_PER_SEC: f64 = 138_993_660.0;"
+measured_by = ["BA-T10"]
+status = "unmeasured"
+carrier = "BA-T10. Measured on the floor on 2026-08-21; the capture is not in the tree."
+path_set = "relay-aes"
+
+[[path_set]]
+id = "relay-anon-transit"
+spec = [
+  "rust/shekyl-relay/src/graph",
+  "rust/shekyl-tor/src",
+]
+
+[[constant]]
+name = "anon_zone_transit_assumption_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "pub const ANON_ZONE_TRANSIT_ASSUMPTION_MS: f64 = 1_625.0;"
+measured_by = ["BA-T9"]
+status = "unmeasured"
+carrier = "BA-T9 (BA-G8). An assumption, declared as such; one Tor stem has been timed (FOLLOWUPS, the anonymity hop on the floor)."
+path_set = "relay-anon-transit"
+
+[[path_set]]
+id = "relay-adopted-transit"
+spec = [
+  "rust/shekyl-relay/src/graph",
+  "rust/shekyl-clearnet/src",
+]
+
+[[constant]]
+name = "adopted_transit_assumption_ms"
+defined_in = "rust/shekyl-relay-privacy/src/verify_cost.rs"
+needle = "pub const ADOPTED_TRANSIT_ASSUMPTION_MS: f64 = 50.0;"
+measured_by = ["BA-T9"]
+status = "unmeasured"
+carrier = "BA-T9 (BA-G8). An assumption, declared as such in place."
+path_set = "relay-adopted-transit"
+
+[[path_set]]
+id = "relay-fluff"
+spec = ["rust/shekyl-relay-privacy/src/params.rs"]
+
+[[constant]]
+name = "fluff_return_ms"
+defined_in = "rust/shekyl-relay-privacy/src/params.rs"
+needle = "pub const FLUFF_RETURN: DerivationMs = DerivationMs::model(3_250);"
+measured_by = ["BA-T9"]
+status = "unmeasured"
+carrier = "BA-T9 (BA-G8). A simulated figure from an earlier graph; its own comment says it has not been re-measured."
+path_set = "relay-fluff"
+
+# --- archival serve and fetch -----------------------------------------
+
+[[path_set]]
+id = "serve-floor-verdict"
+spec = [
+  "rust/shekyl-p-serve/src",
+  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
+]
+stale_through = [
+  { through = "155e85a130", note = "PR #995. Its code commit, bfcf46c092, is arm B of the same capture: every line of the verdict was read on it beside arm A and holds there, with an abandoned full segment at 3.8 ms against 3.9. The two commits after it reword doc comments in delivery.rs and serve.rs and change no code." },
+  { through = "01aa01fd31", note = "SH-2 (PR #990): a doc comment on PServeEndpoint::bind in serve.rs, which no longer names the deleted NoResidentKey. No code changed; the verdict's arms are untouched." },
+  { through = "9cb164d28e", note = "SH-2 (PR #990): the six serve counters become one clonable ServeCounterReader the endpoint owns; the accept loop increments the same atomics and the getters delegate. The verdict is over what an abandoned request costs the serve path, and no read, hash, sign or socket operation on that path is added, removed or reordered; the counter stores it already made are the same stores." },
+  { through = "8238319ac3", note = "SH-2 review (PR #990): ServeCounterReader moves from serve.rs into serve_counters.rs. The accept loop holds one crate-private writer and clones it into each connection; that clone copies all six arcs, where the connection previously cloned the four it increments. The floor verdict is what an abandoned request costs, and no read, hash, sign or socket operation on that path is added, removed or reordered. The two extra arc clones are not part of the verdict's arms." },
+  { through = "112a9a62bf", note = "SH-2 review (PR #990): the public module docs in serve_counters.rs no longer link the crate-private writer, which rustdoc -D warnings rejects. Doc text only; no executable code changed, and the verdict's arms are untouched." },
+  { through = "24f769906", note = "SF-D8 amendment (PR #1015): the body streams unframed. What leaves the serve path is the RF-D4 frame header — one ~20-byte hasher update and one small write per response; the body length now comes from the provider. The verdict is what an abandoned request costs over one that serves nothing, and on that path no read, hash pass over the body, signature or socket operation is added, removed or reordered. The verdict is bound to W, which this commit does not change." },
+  { through = "11a2d409f", note = "Doc comment in provider.rs on what a leaf-segment body is refused as. No executable code changed; the verdict's arms are untouched." },
+  { through = "8ed51316e", note = "StoreShardProvider reads the sealed body store: each chunk is an AEAD open where the floor capture read a frozen segment. One decrypt per chunk is added on the serve path. Not measured." },
+  { through = "dc40167ad", note = "A doc comment in provider.rs: content-length is fixed from the meta row before any chunk byte, and a later chunk authentication failure can only close the stream. No read, hash, sign or socket operation changed. The key check this commit adds is at store open, off this path." },
+  { through = "976c7d0564", note = "p-serve (976c7d0564): the write-stall bound counts only waits the peer causes. write_bounded tries the socket on every poll, arms the 30 s clock only when a poll finds no room and clears it on progress; a starved serving task that finds the socket writable is never charged. Chunk size, read, digest and sign are untouched, so a served response costs what it did; the change moves only the cut a starved task could suffer, and the next floor block should show zero cuts. Not re-measured." },
+  { through = "8eb6b3bea8", note = "p-serve (8eb6b3bea8): the stall bound is a timeout around each write, the bytes the socket will take, in place of a sleep beside one poll of the slice. Same rule: bytes accepted start the clock over, and a poll that finds the socket writable writes however late it is. Tests fail if the timeout wraps write_all again. Chunk size, read, digest and sign are unchanged, so a served response costs what it did. Not re-measured." },
+  { through = "9a0fab2a41", note = "FND-21 (PR #1049), two commits. The first adds test fixtures under src/wire_pin and no code. The second makes the signer trait const-generic over the envelope width; the serve loop takes the width from its signer where it read one constant. The verdict is over what an abandoned request costs before the envelope, and nothing ahead of the envelope changed: the head, the reads and the fold are the same calls in the same order, and the live scheme's response is byte-identical to fixtures captured before the change. Not measured." },
+  { through = "37b8beb1b8", note = "FND-21 follow-up (PR #1049): sign_receipt_transcript pairs a transcript with the receipt domain. sign_pass_transcript is the same one line. The live serve loop still signs with the identity key and does not call the new function; the test receipt signer changes are behind cfg(test) and the test-signer feature. The verdict is what an abandoned request costs before the envelope, and no read, hash, sign or socket operation on that path is added, removed or reordered. The receipt-key changes in engine-core are off this path set. Not measured." },
+  { through = "e8740ab466", note = "PR #1049 review: the doc comment of sign_receipt_transcript in countersign.rs states that the function is STAGED, who makes it live and its falsifier. Doc comment only; the verdict's arms are untouched." },
+  { through = "45a115cc3f", note = "p-serve (45a115cc3f): the write-stall tests move into serve_stall_tests.rs, and write_bounded's writer parameter is renamed from W to S so W stays the envelope width. The stall bound is the same timeout around each write. Chunk size, read, digest and sign are unchanged, so a served response costs what it did. Not re-measured." },
+  { through = "be38532e2b", note = "Two unused type aliases (IdentityPassKey, IdentityPassSigner) and their re-export deleted from shekyl-p-serve; shekyl-p-fetch gains PassVerifyingKey::WITHIN_WIDEST, a compile-time assertion that a scheme's envelope is within the widest, evaluated in max_response_len as a unit constant. No read, hash, signature or socket operation on the serve or fetch path is added, removed or reordered, and nothing runs at run time that did not before. Not re-measured." },
+]
+
+[[path_set]]
+id = "archival-serve-fetch"
+spec = [
+  "rust/shekyl-p-serve/src",
+  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
+  "rust/shekyl-p-fetch/src",
+  ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
+]
+stale_through = [
+  { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
+  { through = "cd51261ab2", note = "PR #954: the serve path reads each shard twice and digests it per response, and the client digests what it received. Serve cost rose by 78 ms of CPU per response on the floor, and throughput at 8 in flight halved (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md; BA-G1)." },
+  { through = "b5e7dbfed5", note = "PR #961: both serve reads fold through one framed digest. No read or hash pass is added or removed; not measured." },
+  { through = "bfbd0d915c", note = "The serve path reads each shard once and digests it once, where #954 read and digested twice; the signature is made after the send. An invalid request is refused before the store is consulted. Measured on the floor device at 7c9140f297: 67.2 ms per response against 102.7 ms on the two-read tree and 24.6 ms before the digest (docs/benchmarks/sfd8_serve_cost_floor_device_20261005.md, run 3). The constants stay stale: the run prices the serve path over loopback and does not re-run the readings they rest on." },
+  { through = "c5e45d4a54", note = "A bare 503 for a store, tip or key fault; one can_sign call before the body; a refusal trailer written when the signer fails after it; the client compares the envelope to the trailer and types the 503. A good read gains the can_sign call and one envelope comparison and nothing else. Not measured; the run-3 arm predates it." },
+  { through = "096c742626", note = "Doc comments only, in shekyl-p-fetch error.rs and shekyl-p-host host.rs. No executable serve or fetch code changed." },
+  { through = "2bc0b9fd61", note = "Three commits on the single-pass serve. The pre-flight is PassKey::ready(shard_id, anchor_height) with no default, in place of can_sign: still one call before the body. A signing failure after the body increments its own counter in place of the pooled one. The response writer takes any AsyncWrite so a test can stand a sink in for the socket; TcpStream is the only production caller. No read, hash or sign is added, removed or moved. Not measured." },
+  { through = "f7740a762b", note = "Review follow-up in provider.rs: the test-only counting body counts chunks yielded rather than calls. Compiled only under cfg(test); no shipped code path changed and no cost moved." },
+  { through = "bb9ce3a8c8", note = "BA-T3 seam: three blocking-pool closures in serve.rs become named functions and the 200 head is rendered by one; three bench-only compositions are added behind a feature that is not on the shipped graph. No read, hash or sign is added, removed or reordered, and a seam test holds the composition to the endpoint on bytes and on counts of opens, chunk reads and signatures. This is the commit that adds the gate; its first counts are in the manifest, section 12." },
+  { through = "ac52a7a35d", note = "Review follow-up: the fold of a chunk into the delivery digest becomes one function, fold_chunk, called by write_response and by the bench compositions. Same reads, same hash, same order, still on the thread it ran on; BA-T3 moved by a few hundred instructions in 191 million." },
+  { through = "ead1aa0799", note = "Review follow-up: the endpoint's accept loop moves into one function so a test-only constructor can pin the accepted sockets' send buffer; the production bind is unchanged and pins nothing. A doc comment in countersign.rs is corrected. No read, hash, sign or socket option changes on the shipped path." },
+  { through = "b42854193a", note = "A test added to the test module of shekyl-p-fetch client.rs: two requests for one shard differ only in their nonce. No executable fetch or serve code changed." },
+  { through = "6068ba31e9", note = "SF-D3 reopened: every read presents its own SOCKS credentials, so Tor builds a rendezvous circuit per read where reads to one persona shared one. The ruling's estimate is 1 to 5 s of circuit setup per read and a higher first-try failure rate; proof of work is paid per read against a flooded onion. Not measured (BA-T31). The serve path is unchanged." },
+  { through = "71b41cb6cf", note = "The read's nonce moves from the SOCKS password to the username, in shekyl-p-fetch header.rs. The same handshake with the two fields exchanged; no cost moved." },
+  { through = "01aa01fd31", note = "SH-2 (PR #990): a doc comment on PServeEndpoint::bind in serve.rs, which no longer names the deleted NoResidentKey. No executable serve or fetch code changed in this crate; the key the host binds is shekyl-engine-core's and its cost (one actor round-trip per sign) is on the serving task's path, not this set's." },
+  { through = "bfcf46c092", note = "The delivery-digest fold moves from the async executor into the blocking-pool hop that reads the chunk (read_and_fold). The instruction count is unchanged by design, same work on a different thread, so BA-T3 cannot see what this change is for; it moved by 0.007 % on a full response for a different reason, the digest state travelling through each hop by value. The evidence for or against the move is the floor: BA-T5, executor wake lateness at eight in flight with this commit as one arm. Not yet measured." },
+  { through = "9a01008b42", note = "Review follow-up: doc comments in delivery.rs and serve.rs reworded to the guarantee the types give. No code changed; no cost moved." },
+  { through = "155e85a130", note = "Review follow-up: a doc comment in delivery.rs says which part of the digest moved off the executor. No code changed; no cost moved." },
+  { through = "598596ba2f", note = "The fetch dial names Isolation::Persona. Isolation::Read was the same username/password greeting and is deleted. The bytes on the wire are the header's nonce credentials, already heard at 6068ba31e9 and 71b41cb6cf. No read, hash, retry, or circuit is added. Not re-measured." },
+  { through = "9cb164d28e", note = "SH-2 (PR #990): the six serve counters in serve.rs move from loose Arc<AtomicU64> locals into one clonable ServeCounterReader the endpoint owns and hands out; the accept loop increments the same atomics it did, and the endpoint's count getters delegate to the reader. Reads of the counters happen on the serving task's health probe, off this path. No read, hash, sign or socket operation is added, removed or reordered on the shipped serve path; not measured." },
+  { through = "8238319ac3", note = "SH-2 review (PR #990): ServeCounterReader moves from serve.rs into serve_counters.rs. The accept loop holds one crate-private writer and clones it into each connection; that clone copies all six arcs, where the connection previously cloned the four it increments. Increments stay a relaxed fetch_add of one on the same six atomics at the same events. No read, hash, sign or socket operation is added, removed or reordered on the shipped serve path. Not measured." },
+  { through = "112a9a62bf", note = "SH-2 review (PR #990): the public module docs in serve_counters.rs no longer link the crate-private writer, which rustdoc -D warnings rejects. Doc text only. No read, hash, sign or socket operation changed. Not measured." },
+  { through = "24f769906", note = "SF-D8 amendment (PR #1015): the serve path streams the body unframed. The RF-D4 frame header is no longer built, written or absorbed into the delivery digest; the body length comes from the provider and the digest is over the body alone. One ~20-byte hasher update and one small write leave the serve path; reads, the hash pass over the body, the signature and the socket I/O are the same. The client stops parsing a frame header before the body. Not measured." },
+  { through = "3ccb5a225", note = "Fetch Sub-PR 2 client (PR #1015): the body is the tx-range frame, verified as it streams. Per transaction the client hashes the two segments it reads (txid_parts against the retained txs_prunable_hash / txs_pqc_auth_hash rows) and folds them into the view hash, with one transaction resident; this replaces buffering the whole body and recomputing the leaf-segment root over it. Client CPU is a hash pass over the same bytes in a different shape (two per-tx digests and one fold, in place of one Merkle recompute); peak memory drops from the whole body to one transaction plus a read chunk. The serve path is unchanged. Not measured (BA-T6 is the client's floor run)." },
+  { through = "11a2d409f", note = "Doc comments only, in shekyl-p-fetch client.rs and error.rs and shekyl-p-serve provider.rs, describing the frame grammar and what a leaf-segment body is refused as. No executable serve or fetch code changed; no cost moved." },
+  { through = "a17110c27", note = "Merge of dev into PR #1015: the client's dial carries the read's SOCKS credentials (6068ba31e9, heard above) with this branch's typed shard id; a doc comment on MAX_INFLIGHT records that the circuit-per-read cost is unmeasured. The resolution adds no read, hash, sign or socket operation beyond what each side already had." },
+  { through = "6f4988ca5e", note = "The fetch client's pre-read length check takes pqc_auth_count and refuses a count that is not zero exactly when pqc_auths_len is zero, before the body is read. A canonical frame is read, hashed and checked as before. The serve path is untouched. Not measured." },
+  { through = "96f49b7c99", note = "The streaming reader's one varint call site maps VarintFault into FrameError::Varint. Same bytes, same refusal, same order. Not measured." },
+  { through = "a63cf0c8d6", note = "The streaming body reader moves from the fetch client into its own module. Same reads, same hashes, same order. Not measured." },
+  { through = "1b309eae79", note = "A stall's io::Error is shared through Arc so one flight's refusal can be cloned onto every waiter. No read, hash, sign or socket operation changes. Not measured." },
+  { through = "8ed51316e", note = "StoreShardProvider reads the sealed body store: each chunk is an AEAD open where the floor capture read a frozen segment. One decrypt per chunk is added on the serve path. The client is unchanged. Not measured." },
+  { through = "b45e0c389", note = "A doc comment in shekyl-p-fetch header.rs: with_nonce is the challenge's derived nonce, not only a test helper. No executable fetch or serve code changed; no cost moved." },
+  { through = "dc40167ad", note = "A doc comment in provider.rs: content-length is fixed from the meta row before any chunk byte, and a later chunk authentication failure can only close the stream. No read, hash, sign or socket operation changed. The key check this commit adds is at store open, off this path." },
+  { through = "976c7d0564", note = "p-serve (976c7d0564): the write-stall bound counts only waits the peer causes. write_bounded tries the socket on every poll, arms the 30 s clock only when a poll finds no room and clears it on progress; a starved serving task that finds the socket writable is never charged. Chunk size, read, digest and sign are untouched, so a served response costs what it did; the change moves only the cut a starved task could suffer, and the next floor block should show zero cuts. Not re-measured." },
+  { through = "8eb6b3bea8", note = "p-serve (8eb6b3bea8): the stall bound is a timeout around each write, the bytes the socket will take, in place of a sleep beside one poll of the slice. Same rule: bytes accepted start the clock over, and a poll that finds the socket writable writes however late it is. Tests fail if the timeout wraps write_all again. Chunk size, read, digest and sign are unchanged, so a served response costs what it did. Not re-measured." },
+  { through = "b25727e077", note = "FND-21 (PR #1049), three commits. The first adds test fixtures under src/wire_pin and no code. The second makes the signer trait const-generic over the envelope width: the serve loop takes the width from its signer where it read one constant, and the envelope is encoded through a sealed trait that monomorphizes to the same to_canonical_bytes and array conversion. No read, hash, signature or socket write is added or removed, and the whole response for the live scheme is byte-identical to fixtures captured before the change (serve_wire_pin_tests.rs). The third makes the fetch target generic over its key: the client reads the envelope into a heap buffer of the scheme's width where it filled a 3,385-byte stack array, which is one allocation per response, and parses and verifies through a trait that monomorphizes to the same two calls. Not measured." },
+  { through = "37b8beb1b8", note = "FND-21 follow-up (PR #1049): sign_receipt_transcript pairs a transcript with the receipt domain. sign_pass_transcript is the same one line. The live serve loop still signs with the identity key and does not call the new function; the fetch client is untouched; the test receipt signer changes are behind cfg(test) and the test-signer feature. No read, hash, sign, retry or socket operation on the shipped identity path is added, removed or reordered. The receipt-key changes in engine-core are off this path set. Not measured." },
+  { through = "e8740ab466", note = "PR #1049 review: the doc comment of sign_receipt_transcript in countersign.rs states that the function is STAGED, who makes it live and its falsifier. Doc comment only; no executable serve or fetch code changed." },
+  { through = "45a115cc3f", note = "p-serve (45a115cc3f): the write-stall tests move into serve_stall_tests.rs, and write_bounded's writer parameter is renamed from W to S so W stays the envelope width. The stall bound is the same timeout around each write. No read, hash, sign or socket operation on the serve or fetch path is added, removed or reordered. Not re-measured." },
+  { through = "be38532e2b", note = "Two unused type aliases (IdentityPassKey, IdentityPassSigner) and their re-export deleted from shekyl-p-serve; shekyl-p-fetch gains PassVerifyingKey::WITHIN_WIDEST, a compile-time assertion that a scheme's envelope is within the widest, evaluated in max_response_len as a unit constant. No read, hash, signature or socket operation on the serve or fetch path is added, removed or reordered, and nothing runs at run time that did not before. Not re-measured." },
+]
+
+[[constant]]
+name = "archival_shard_length_bytes"
+defined_in = "config/consensus_constants.json"
+needle = '"archival_shard_length_bytes": 3000000'
+measured_by = ["BA-T7"]
+status = "stale"
+stale_since = "2ebb1da607"
+carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
+capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
+capture_rev = "006258d58b9db2e261c2759363e6e7671c08f0de"
+rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-10-01"
+path_set = "archival-serve-fetch"
+
+[[constant]]
+name = "archival_attestation_anchor_lag_blocks"
+defined_in = "config/consensus_constants.json"
+needle = '"archival_attestation_anchor_lag_blocks": 4'
+measured_by = ["BA-T7"]
+status = "stale"
+stale_since = "2ebb1da607"
+carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
+capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
+capture_rev = "5ade4952fb9125c3e4147fa887c8e36d9a3cfd81"
+rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-09-30"
+path_set = "archival-serve-fetch"
+
+[[constant]]
+name = "sf_d6_retry_budget"
+defined_in = "docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md"
+needle = "on that table: 2 retries."
+measured_by = ["BA-T7"]
+status = "stale"
+stale_since = "2ebb1da607"
+carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
+capture = "docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv"
+capture_rev = "5ade4952fb9125c3e4147fa887c8e36d9a3cfd81"
+rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-09-30"
+path_set = "archival-serve-fetch"
+
+[[constant]]
+name = "p_attempt"
+defined_in = "rust/shekyl-economics-sim/src/mn_feasibility.rs"
+needle = "p_attempt: 0.30,"
+measured_by = ["BA-T7"]
+status = "stale"
+stale_since = "2ebb1da607"
+carrier = "BA-T7 (BA-G3, BA-Q5). PR #954 made the serve path read each shard twice and digest it per response."
+capture = "docs/benchmarks/w2_ladder_interleaved_pow_on_20261001.tsv"
+capture_rev = "006258d58b9db2e261c2759363e6e7671c08f0de"
+rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-10-01"
+path_set = "archival-serve-fetch"
+
+[[constant]]
+name = "floor_read_capacity_pairs_per_epoch"
+defined_in = "docs/completed/ARCHIVAL_SHARD_T_DERIVATION.md"
+needle = "18,229 pairs"
+measured_by = ["BA-T5"]
+status = "stale"
+stale_since = "2ebb1da607"
+carrier = "BA-T5 (BA-G1). Measured with one read in flight, before PR #954. The 2026-10-05 serve-cost record prices the v3 serve path over loopback and does not re-run this reading."
+capture = "docs/benchmarks/u1b_floor_device_20261002.tsv"
+capture_rev = "ecdcbffecc1894dbe2a8d26ec4d64f50c2aba270"
+rev_source = "not recorded in the capture; the last commit before the run's first day, 2026-10-02"
+path_set = "archival-serve-fetch"
+
+[[path_set]]
+id = "serving-runtime"
+spec = [
+  "rust/shekyl-thread-priority/src",
+  "rust/shekyl-p-host/src/runtime.rs",
+]
+
+[[constant]]
+name = "serving_priority_nice"
+defined_in = "rust/shekyl-thread-priority/src/lib.rs"
+needle = "pub const SERVING_NICE: i32 = 19;"
+measured_by = ["BA-T5"]
+status = "current"
+capture = "docs/benchmarks/ba_t5_serve_floor_device_20261012_t1_obs.tsv"
+capture_rev = "004ed6c6df"
+rev_source = "capture header, the tree line. BA-T5 session 3, topology T1 (daemon and serving probe in one cgroup): the daemon kept 0.93 of its no-serve sync rate at N = 8 and 0.91 at N = 64 with the shipped mechanism, inside the 0.90 to 1.00 estimated from session 2's external-nice arm (docs/benchmarks/ba_t5_serve_floor_device_20261012.md). In a split-cgroup topology the share was 0.65; that is the cgroup weights, not this constant, and carries its own FOLLOWUPS row."
+path_set = "serving-runtime"
+
+[[constant]]
+name = "serving_workers"
+defined_in = "rust/shekyl-p-host/src/runtime.rs"
+needle = "pub const SERVING_WORKERS: usize = 2;"
+measured_by = ["BA-T5"]
+status = "unmeasured"
+carrier = "BA-T5 (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8). A structural floor: two workers because the executor work per response is small and the path is CPU-bound on the blocking side. Unmeasured until the confirming floor block, which is the first measurement of this budget."
+path_set = "serving-runtime"
+
+[[constant]]
+name = "serving_blocking"
+defined_in = "rust/shekyl-p-host/src/runtime.rs"
+needle = "pub const SERVING_BLOCKING: usize = MAX_INFLIGHT;"
+measured_by = ["BA-T5"]
+status = "unmeasured"
+carrier = "BA-T5 (ARCHIVAL_CHALLENGE_MECHANISM.md 9.8). One blocking thread per permitted connection, because each connection has at most one hop in flight. The cap is MAX_INFLIGHT, recorded separately as p_serve_max_inflight. Unmeasured until the confirming floor block."
+path_set = "serving-runtime"
+
+[[path_set]]
+id = "daemon-packaging"
+spec = ["contrib/packaging/linux"]
+
+[[constant]]
+name = "shekyl_slice_cpu_weight"
+defined_in = "contrib/packaging/linux/shekyl.slice"
+needle = "CPUWeight=400"
+measured_by = ["BA-T5"]
+status = "estimated"
+estimate = { low = 0.75, high = 0.90, unit = "share of the CPU the daemon keeps under contention with a serving wallet in user.slice" }
+basis = "Reasoned, not measured (ruled 2026-10-12). A top-level slice at CPUWeight=400 against user.slice's default 100 is weighed 4:1 by the kernel's fair-group scheduler, so under full contention the daemon's group is entitled to four fifths of the CPU. BA-T5 session 3 measured the other half of the picture: with the daemon and a serving wallet in different cpu cgroups at equal weight, the daemon kept 65 % of its no-serve sync rate against a wallet serving at nice 19 (the T2' topology, docs/benchmarks/ba_t5_serve_floor_device_20261012.md), which is the fair share at 1:1; 4:1 moves that toward 80 %, less whatever the wallet's own group takes when the daemon is not saturating its share."
+basis_captures = ["docs/benchmarks/ba_t5_serve_floor_device_20261012_t2p_obs.tsv"]
+carrier = "The redefined T2 measurement (docs/FOLLOWUPS.md, ruled 2026-10-12): the daemon as the installed system unit in shekyl.slice, synced and following the tip, the wallet probe in a user session serving at N = 64; block-verify time with and without the slice weight. Its result decides whether 400 stays, moves, or the slice goes."
+path_set = "daemon-packaging"
+
+[[path_set]]
+id = "p-serve"
+spec = [
+  "rust/shekyl-p-serve/src",
+  ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
+]
+
+[[constant]]
+name = "p_serve_max_inflight"
+defined_in = "rust/shekyl-p-serve/src/serve.rs"
+needle = "pub const MAX_INFLIGHT: usize = 64;"
+measured_by = ["BA-T5"]
+status = "unmeasured"
+carrier = "BA-T5 (BA-G1, BA-Q4). A placeholder by its own comment. Session 2 of BA-T5 (docs/benchmarks/ba_t5_serve_floor_device_20261009.md, 2026-10-09, a discovery run by ruling) swept N in {8, 16, 32, 64} on the floor device with the daemon idle and syncing: throughput is flat from N = 16 in every state, p99 wake lateness rises steeply with N (more than doubling across each of the first two doublings, by a third to a half across the last), and at N = 64 = MAX_INFLIGHT a requester that reconnects as its last stream closes was refused once in 6,144, because the permit is dropped after the stream. The run sets nothing; the constant stays unmeasured until BA-Q4 is ruled on that evidence."
+path_set = "p-serve"
+
+[[path_set]]
+id = "p-fetch"
+spec = [
+  "rust/shekyl-p-fetch/src",
+  ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
+]
+
+[[constant]]
+name = "p_fetch_max_inflight"
+defined_in = "rust/shekyl-p-fetch/src/client.rs"
+needle = "pub const MAX_INFLIGHT: usize = 8;"
+measured_by = ["BA-T6"]
+status = "unmeasured"
+carrier = "BA-T6 (BA-G2). The 2026-09-16 width run is a table in ARCHIVAL_SHARD_FETCH.md with no capture in the tree, and client verify cost has never been measured."
+path_set = "p-fetch"
+
+# --- P2P transport ----------------------------------------------------
+
+[[path_set]]
+id = "clearnet-span"
+spec = [
+  "rust/shekyl-clearnet/src",
+  "rust/shekyl-noise/src",
+  "rust/shekyl-p2p-transport/src",
+  "rust/shekyl-transport-layer/src",
+]
+stale_through = [
+  { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "5838269c20", note = "A mismatched dial and a clearnet proxy failure are LocalClose instead of DialFailed, and the write half logs its stall after the copy. TCP connect, SOCKS, and the handshake do the same I/O, so the span waits are unchanged. Not re-measured." },
+  { through = "29d3d75860", note = "Send and receive instants leave the connection board and sit on the byte tally, so a new second no longer republishes every row. That republish was outside the dial, handshake, and gap waits. A direct clearnet connect counts only when the peer refuses it. Not re-measured." },
+  { through = "34567c4930", note = "The byte stamp is monotonic and taken when the socket reads or writes, instead of a unix millisecond when the rate gate grants a chunk. Before the first byte the mark is admission on that clock. The dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "23189972dc", note = "The connector records its close cause on both session ends. The byte stamp is a per-session atomic instead of another take of the link-budget lock, which is after the handshake. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "d5d908bc76", note = "The link budget drops its activity clock. The copy holds a direction lease so abort releases the byte stamp, and the connector seals the session once before aborting the other half. The clock and the clearnet tests moved to their own modules. Dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "8fa5ba8bbb", note = "The clearnet writer is joined once, on the select arm that already took it. Dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "eba86c7ff9", note = "The refused-dial test holds a bound socket that is not listening, so a parallel test cannot accept the port. Only that test changed. Dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "c1eaab634f", note = "A zone's connector cap is released when that zone stops, and a zone that did not set a cap clears one a previous zone left. Dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "3953422bd1", note = "The declaration records measured transit, read from the relay-privacy table. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
+  { through = "b3bc220aab", note = "The transit cell's type is DerivationMs built by a named constructor, with AdmissibleBasis in place of the marker types; the declaration table's values are unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "4bc4ad7380", note = "A doc comment in declaration.rs names the hidden stem slot's pin in place of the own-edge draw (PR-1, #1018). No code changed in these paths. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime gained a thread-start hook parameter at this commit (a ThreadStart, since reshaped into ThreadHooks on runtime_with_thread_hooks; the two-argument runtime came back at da7b70c8cf, heard below). The clearnet tests passed the empty hook, so their runtime threads started exactly as before; no production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "da7b70c8cf", note = "SH-3: the ordinary runtime constructor is a budget and a name again. The clearnet tests call it with the same two arguments they had before the hook parameter (the serving runtime alone uses ThreadHooks through runtime_with_thread_hooks), so their runtime threads start as before. No production path in this set changed. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "3081ba830b", note = "The failed-address predicate (implicates_address) answers true only for an onion dial with a destination-naming proxy reply; every clearnet cause is false. It runs after a dial has ended and decides whether the address is remembered. The clearnet dial, handshake, and gap waits do the same I/O. Not re-measured." },
+  { through = "3a0d211d80", note = "The failed-address predicate reads the destination_authenticated cell of the connector declaration in place of matching the connector. Clearnet still answers false for every cause. It runs after a dial has ended. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "e3a167bac2", note = "RT-W9 step 1 (PR #1038): the record layer (aead.rs, channel.rs) and the handshake's symmetric state move out of shekyl-p2p-transport into a new crate, shekyl-noise, which this path set now names so that later changes to that code are heard here. A refactor: the same functions run in the same order on the same bytes, the pinned handshake vectors are untouched and their test is byte-identical. Split now returns a named struct instead of the caller taking the chaining key out of the state, which is one move of three 32-byte values per handshake. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "482da291c5", note = "RT-W9 step 2 at this commit: SymmetricState::mix_key_and_hash for the hybridXK static-KEM tokens, and a three-output HKDF beside the two-output one. A has_key accessor landed with no caller. The P2P handshake and the clearnet connector call none of them. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "edcae056fc", note = "RT-W9 step 1 review (PR #1038): SymmetricState::into_halves owns the initiator/responder key order, and the hash, HKDF and AEAD stay crate-private. The same HKDF still feeds the same two record directions; the pinned handshake vectors are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "1c42c17c21", note = "RT-W9 step 1 review (PR #1038): into_halves and Established::split are must_use. No bytes on the wire moved. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "d03aeb2e0f", note = "RT-W9 step 1 review (PR #1038): the split yields two Directions, and the length-prefixed framer stays in shekyl-p2p-transport. The same HKDF still feeds the same two record directions; the pinned handshake vectors and the post-rekey record are untouched. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "4ae7de867a", note = "RT-W9 step 2 (PR #1039): has_key is gone and the two HKDF functions are one. The two-output bytes are unchanged, and the P2P handshake still uses two outputs. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "7813b29af9", note = "RT-W9 step 2: Direction counts the ciphertexts it has opened (one saturating add of a u64 on each successful open, none on a failed tag) and exposes the count, for the RPC handshake's pending session to gate on. The P2P record path opens through Direction, so that add is on it, twice per record. It is one integer add beside two AEAD operations; no I/O changed. Dial, handshake, and gap waits are unchanged. Not re-measured." },
+  { through = "b57c18478e", note = "PR-3 (#1056): the spans moved from the C++ transport_spans to shekyl-transport-layer::spans, the same numbers with the same provenance comment; the connectors read them from the zone host as before. The outbound cap and its floor moved to the dialer; the dial path is the Rust dialer, whose deadlines these are. Not re-measured: Ruling B measures them again on the Rust path after the cutover." },
+  { through = "fbfc1fff5", note = "PR-3 diagnosis instrumentation: debug lines at the clearnet dial, the handshake, the first bytes read and the gap's wake, each a tracing call beside the existing I/O. The dial, handshake and gap waits do the same I/O. Not re-measured." },
+  { through = "dc9130534", note = "PR-3 fix 2 (Rick, 2026-10-14): the gap now ends at the peer's first complete Levin frame, not at this node's handshake verdict, and a fired wake waits one IO driver turn for the reader before it times the peer out. This changes what the gap span bounds: the capture measured channel to verdict, which includes this node's own handshake work, so it overstates the peer's silence the gap now measures. The span stays as it is until the cold-first-contact rerun measures channel to first frame. The dial is unchanged. Not re-measured." },
+  { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
+  { through = "ee87fc633", note = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved. The clearnet path set holds cause.rs; clearnet closes are unchanged." },
+  { through = "b096e8c77", note = "spans.rs changes the Tor spans and the shutdown wait only; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
+  { through = "58ad7eac8", note = "spans.rs changes the Tor gap and its provenance comment and adds a derivation test; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
+  { through = "189f8104a", note = "The gap ends at the peer's first complete handshake frame, where it ended at any first complete frame: a frame of another command no longer disarms it. The dial, the handshake and their I/O are unchanged; in the clearnet legs the peer's first frame was its handshake. Not re-measured." },
+  { through = "cf144a645", note = "The gap and dial timeout arms stop logging the wake's identity fields at debug; the timeout and its close kind are unchanged. Logging only. Not re-measured." },
+  { through = "db6e11e07", note = "Tests, the seam post and the ban view move into files of their own; no code path changes. Not re-measured." },
+]
+
+[[constant]]
+name = "clearnet_dial_within_ns"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const CLEARNET_DIAL_WITHIN_NANOS: u64 = 1_415_000_000;"
+measured_by = ["BA-T8"]
+status = "stale"
+stale_since = "d25731a18"
+carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
+capture = "docs/benchmarks/p2p_clearnet_nyc_floor_initiator_20260930.tsv"
+capture_rev = "2f9565f71"
+rev_source = "not recorded for this leg; the same day's long-path leg ran the dialer at this revision (p2p_cutover_crossbuild_20260929.md)"
+path_set = "clearnet-span"
+
+[[constant]]
+name = "clearnet_handshake_within_ns"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const CLEARNET_HANDSHAKE_WITHIN_NANOS: u64 = 1_426_000_000;"
+measured_by = ["BA-T8"]
+status = "stale"
+stale_since = "d25731a18"
+carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
+capture = "docs/benchmarks/p2p_clearnet_wan_floor_initiator_20260930.tsv"
+capture_rev = "2f9565f71"
+rev_source = "the leg's conditions in p2p_cutover_crossbuild_20260929.md name the dialer's revision"
+path_set = "clearnet-span"
+
+[[constant]]
+name = "clearnet_gap_within_ns"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const CLEARNET_GAP_WITHIN_NANOS: u64 = 1_430_000_000;"
+measured_by = ["BA-T8"]
+status = "stale"
+stale_since = "d25731a18"
+carrier = "BA-T8 (BA-G7). The connector and transport have changed since the capture; no change has been reviewed for cost."
+capture = "docs/benchmarks/p2p_clearnet_nyc_floor_initiator_20260930.tsv"
+capture_rev = "2f9565f71"
+rev_source = "not recorded for this leg; the same day's long-path leg ran the dialer at this revision (p2p_cutover_crossbuild_20260929.md)"
+path_set = "clearnet-span"
+
+[[path_set]]
+id = "tor-span"
+spec = [
+  "rust/shekyl-tor/src",
+  "rust/shekyl-transport-layer/src",
+]
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "5838269c20", note = "A Tor dial that does not open, and a wake that is dropped, are LocalClose instead of DialFailed. A SOCKS reply that is this node's request is logged. The dial and the gap wait do the same I/O. Not re-measured." },
+  { through = "29d3d75860", note = "Send and receive instants leave the connection board and sit on the byte tally in the transport layer. A direct connect counts only when the peer refuses it. The Tor dial and the gap wait are unchanged. Not re-measured." },
+  { through = "34567c4930", note = "The byte stamp is monotonic and taken when the socket reads or writes, instead of a unix millisecond when the rate gate grants a chunk. Before the first byte the mark is admission on that clock. The Tor dial and the gap wait are unchanged. Not re-measured." },
+  { through = "23189972dc", note = "The Tor connector records its close cause on both session ends. The byte stamp is a per-session atomic instead of another take of the link-budget lock, which is after the dial. Dial and gap I/O are unchanged. Not re-measured." },
+  { through = "d5d908bc76", note = "The link budget drops its activity clock. The copy holds a direction lease so abort releases the byte stamp, and the connector seals the session once before aborting the other half. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "8fa5ba8bbb", note = "The Tor writer is joined once, on the select arm that already took it. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "c1eaab634f", note = "A zone's connector cap is released when that zone stops, and a zone that did not set a cap clears one a previous zone left. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "3953422bd1", note = "The declaration records measured transit, read from the relay-privacy table. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "4363637e68", note = "The declaration records cover class, and the relay reads that cell and the transit cell. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "3035d6c1fb", note = "The transit cell is transit_ms, a DerivationMs carrying its basis (Assumption), instead of a bare u32; the declaration table is otherwise unchanged. The dial and the gap wait are unchanged. Not re-measured; under Ruling B these spans are CppPath and are measured again on the Rust dialer after the cutover (DAEMON_RELAY_PRIVACY.md section 97)." },
+  { through = "b3bc220aab", note = "The transit cell's type is DerivationMs built by a named constructor, with AdmissibleBasis in place of the marker types; the declaration table's values are unchanged. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "4bc4ad7380", note = "A doc comment in declaration.rs names the hidden stem slot's pin in place of the own-edge draw (PR-1, #1018). No code changed in these paths. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "cb7cfe943d", note = "SH-3: shekyl_runtime::runtime gained a thread-start hook parameter at this commit (a ThreadStart, since reshaped into ThreadHooks on runtime_with_thread_hooks; the two-argument runtime came back at da7b70c8cf, heard below). shekyl-tor's tests passed the empty hook, so their runtime threads started exactly as before; no production path in this set changed. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "da7b70c8cf", note = "SH-3: the ordinary runtime constructor is a budget and a name again. shekyl-tor's tests call it with the same two arguments they had before the hook parameter (the serving runtime alone uses ThreadHooks through runtime_with_thread_hooks), so their runtime threads start as before. No production path in this set changed. The dial and the gap wait are unchanged. Not re-measured." },
+  { through = "3081ba830b", note = "The failed-address predicate (implicates_address) no longer counts DialFailed or LevinHandshakeRejected on an onion dial; the five destination-naming replies still count. It runs after a dial has ended. The Tor dial and the gap wait are unchanged. Not re-measured." },
+  { through = "3a0d211d80", note = "The failed-address predicate reads the destination_authenticated cell, and on Tor a rejected Levin handshake counts again beside the five destination-naming replies. It runs after a dial has ended. The Tor dial and the gap wait are unchanged. Not re-measured." },
+  { through = "b57c18478e", note = "PR-3 (#1056): the spans moved from the C++ transport_spans to shekyl-transport-layer::spans, the same numbers with the same provenance comment; the connectors read them from the zone host as before. The outbound cap and its floor moved to the dialer; the dial path is the Rust dialer, whose deadlines these are. Not re-measured: Ruling B measures them again on the Rust path after the cutover." },
+  { through = "8359ef531", note = "Cold first contact instrumented: the Tor driver logs its first bytes read and written and the gap's end, each a tracing call beside the existing I/O. The dial and the gap wait do the same I/O. Not re-measured." },
+  { through = "e32770626", note = "The Tor gap logs what it armed and the wake it received. Logging only; the dial and the gap wait do the same I/O. Not re-measured." },
+  { through = "05c1aeb93", note = "The Tor gap's wake line names the wake's owner. Logging only; the dial and the gap wait are unchanged. Not re-measured." },
+  { through = "fbfc1fff5", note = "PR-3 diagnosis instrumentation: one more debug line set on the Tor driver's wake and close. Logging only; the dial and the gap wait do the same I/O. Not re-measured." },
+  { through = "dc9130534", note = "PR-3 fix 2 (Rick, 2026-10-14): the gap now ends at the peer's first complete Levin frame, not at this node's handshake verdict, and a fired wake waits one IO driver turn for the reader before it times the peer out. This changes what the gap span bounds: the capture measured channel to verdict, which includes this node's own handshake work, so it overstates the peer's silence the gap now measures. The span stays as it is until the cold-first-contact rerun measures channel to first frame. The dial is unchanged. Not re-measured." },
+  { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
+]
+cleared = [
+  { through = "ee87fc633", reason = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved." },
+  { through = "b096e8c77", reason = "The spans themselves: TOR_DIAL_WITHIN_NANOS 120 s and TOR_GAP_WITHIN_NANOS 31 s from the rerun (this ledger's current rows), SHUTDOWN_TIMEOUT_NANOS following the dial, TOR_SPANS_BASIS RustPath, and the measurement feature lifting the gap alone. The values are the capture's; nothing else on these paths changed." },
+  { through = "58ad7eac8", reason = "The Tor gap corrected to 37.4 s, 2 x the pooled p99 of 18.69 s (rank 188 of 189 per D9), rounded up to 100 ms (Rick, 2026-10-14; 31 s struck as a miscount of rank 187). The capture is unchanged; this applies its derivation correctly. A derivation test is added. The dial, the shutdown wait and the I/O are unchanged." },
+  { through = "189f8104a", reason = "The gap ends at the peer's first complete handshake frame instead of its first complete frame (Copilot on #1056). In the capture the two are the same frame: the dialer sends its handshake request first and accepts only the response as its first message, so every counted session's first frame was its handshake (the record says so). The capture still prices this tree; the dial and the I/O are unchanged." },
+  { through = "cf144a645", reason = "The Tor dial and gap timeout arms drop their debug lines naming the wake; the deadlines, the timeout and its close kind are unchanged, so the capture still prices this tree." },
+  { through = "db6e11e07", reason = "The Tor listener tests and the seam's post and ban types move into files of their own; no code path changes." },
+]
+
+[[constant]]
+name = "tor_dial_within_ns"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const TOR_DIAL_WITHIN_NANOS: u64 = 120_000_000_000;"
+measured_by = ["BA-T8"]
+status = "current"
+capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
+capture_rev = "19863b044"
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; bounded by Tor's own SOCKS timeout; censored there, 4 of 200 dials past it). Reopen at 500 pooled Rust-path samples."
+path_set = "tor-span"
+
+[[constant]]
+name = "tor_gap_within_ns"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const TOR_GAP_WITHIN_NANOS: u64 = 37_400_000_000;"
+measured_by = ["BA-T8"]
+status = "current"
+capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
+capture_rev = "19863b044"
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; 2 x 18.69 s, the pooled outbound gap's p99, rank 188 of 189 per D9, rounded up to 37.4 s (Rick, 2026-10-14; the 31 s first ruled is struck as a miscount of rank 187)). Reopen at 500 pooled Rust-path samples."
+path_set = "tor-span"
+
+[[constant]]
+name = "tor_shutdown_timeout_ns"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const SHUTDOWN_TIMEOUT_NANOS: u64 = TOR_DIAL_WITHIN_NANOS;"
+measured_by = ["BA-T8"]
+status = "current"
+capture = "docs/benchmarks/p2p_tor_gap_cold_20261014.md"
+capture_rev = "19863b044"
+rev_source = "the record's rerun section names the build: PR-3 at 19863b044, measurement builds, both rerun TSVs pooled (Rick's close-out ruling, 2026-10-14; RustPath; takes the Tor dial figure). Reopen at 500 pooled Rust-path samples."
+path_set = "tor-span"
+
+[[path_set]]
+id = "transport-budget"
+spec = [
+  "rust/shekyl-transport-layer/src",
+  "rust/shekyl-timing-engine/src",
+]
+
+[[constant]]
+name = "transport_workers"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const WORKERS: usize = 2;"
+measured_by = ["BA-T11"]
+status = "unmeasured"
+carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."
+path_set = "transport-budget"
+
+[[constant]]
+name = "transport_blocking"
+defined_in = "rust/shekyl-transport-layer/src/spans.rs"
+needle = "pub const BLOCKING: usize = 1;"
+measured_by = ["BA-T11"]
+status = "unmeasured"
+carrier = "BA-T11 (BA-G10). A structural floor by its own comment; the thread-budget legs are owed (FOLLOWUPS, D5)."
+path_set = "transport-budget"
+
+# --- wallet -----------------------------------------------------------
+
+[[path_set]]
+id = "fa6-scan"
+spec = [
+  "rust/shekyl-crypto-pq/src/output.rs",
+  "rust/shekyl-crypto-pq/src/kem.rs",
+  "rust/shekyl-scanner/src/scan.rs",
+]
+stale_through = [
+  { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+]
+
+[[constant]]
+name = "fa6_scan_budget_ceiling_a"
+defined_in = "rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs"
+needle = "const T_CEIL_A_SECS: f64 = 45.0;"
+measured_by = ["BA-T16"]
+status = "stale"
+stale_since = "a1801d4ca"
+carrier = "BA-T16 (BA-G15). The decapsulation path has changed since June, PL-D3 included, and the capture used non-shipping RUSTFLAGS."
+capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
+capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
+rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
+path_set = "fa6-scan"
+
+[[constant]]
+name = "fa6_scan_budget_ceiling_b"
+defined_in = "rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs"
+needle = "const T_CEIL_B_SECS: f64 = 20.0 * 60.0;"
+measured_by = ["BA-T16"]
+status = "stale"
+stale_since = "a1801d4ca"
+carrier = "BA-T16 (BA-G15). The decapsulation path has changed since June, PL-D3 included, and the capture used non-shipping RUSTFLAGS."
+capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
+capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
+rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
+path_set = "fa6-scan"
+
+[[constant]]
+name = "fa6_scan_budget_margin"
+defined_in = "rust/shekyl-crypto-pq/examples/fa6_decap_prefilter_gate.rs"
+needle = "const M_MARGIN: f64 = 0.20;"
+measured_by = ["BA-T16"]
+status = "stale"
+stale_since = "a1801d4ca"
+carrier = "BA-T16 (BA-G15). The decapsulation path has changed since June, PL-D3 included, and the capture used non-shipping RUSTFLAGS."
+capture = "docs/benchmarks/fa6_decap_prefilter_pi4_fa6_b_20260608T220614Z.txt"
+capture_rev = "34b2b3c051b037165e423e5a1c526987934029b6"
+rev_source = "not recorded in the capture; the last commit before the archive date, 2026-06-08"
+path_set = "fa6-scan"
+
+[[path_set]]
+id = "wallet-kdf"
+spec = [
+  "rust/shekyl-crypto-pq/src/wallet_envelope.rs",
+  "rust/shekyl-engine-file/src",
+]
+
+[[constant]]
+name = "wallet_default_kdf_m_log2"
+defined_in = "rust/shekyl-crypto-pq/src/wallet_envelope.rs"
+needle = "pub const DEFAULT_KDF_M_LOG2: u8 = 0x10;"
+measured_by = ["BA-T17"]
+status = "unmeasured"
+carrier = "BA-T17 (BA-G12). Sized for a commodity desktop; never timed on the floor."
+path_set = "wallet-kdf"
+
+[[constant]]
+name = "wallet_default_kdf_t"
+defined_in = "rust/shekyl-crypto-pq/src/wallet_envelope.rs"
+needle = "pub const DEFAULT_KDF_T: u8 = 0x03;"
+measured_by = ["BA-T17"]
+status = "unmeasured"
+carrier = "BA-T17 (BA-G12). Sized for a commodity desktop; never timed on the floor."
+path_set = "wallet-kdf"
+
+[[path_set]]
+id = "wss-spend"
+spec = [
+  "rust/shekyl-curve-tree/src",
+  "rust/shekyl-fcmp/src",
+]
+stale_through = [
+  { through = "36d0bd5715", note = "collect_block_leaves returns the gindex it already assigned, one slot per output. The matcher's second walk and its scan of the new leaves are gone; the match is still skipped while the expectation map is empty. Nothing on the spend path changed. Not measured." },
+  { through = "2e3576d34c", note = "The ingest's expectation match returns its result instead of mutating, and the ingest applies it after the store commit. Same lookups, same count; no cost moved. Not measured." },
+  { through = "480a9ba42a", note = "Test-only: four casts in the expectation tests (ct6_oracle/expected.rs) rewritten for clippy. No production code changed, no cost moved." },
+  { through = "34c7daa686", note = "Registration at construction (CT6_PROVING_STATE.md §11.13): ingest_block now looks each transaction up in a map of expected outputs — one BTreeMap lookup per transaction, skipped entirely while the map is empty — and TxLeafInputs carries a transaction hash. Nothing on the spend path changed; not measured." },
+  { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "bfbd0d915c", note = "One doc comment in shekyl-curve-tree's serving_route.rs (the request header's refusals are a 400). No executable code in these paths changed." },
+  { through = "c5e45d4a54", note = "Adds the refusal-trailer constant and its predicate to shekyl-curve-tree's serving_route.rs. No change to the curve tree or the prover." },
+  { through = "1d47dd31c2", note = "PR #966 (CT-6 increment 5, the registrant): path assembly reads the chunks capture wrote and the frontier snapshot instead of rebuilding the layer stack from every drained leaf, so a spend's path cost no longer grows with the chain (CT6_PROVING_STATE.md §11.12); a late-registered output pays a one-off reconciliation instead (§11.10). Not re-measured on the floor; the bench's assemble_once now times the capture path." },
+  { through = "7c30a39804", note = "PR #996: the layer-0 comments in frontier.rs, assemble.rs and types.rs, and CT6_PROVING_STATE.md, now say the path API takes points and the circuit tape hashes scalars. No executable code in these paths changed, so no cost moved. Not measured." },
+  { through = "24f769906", note = "SF-D8 amendment (PR #1015): served_frame.rs is deleted from shekyl-curve-tree and the serving read in redb_backend.rs no longer derives a frame header for the segment it serves. That is the serving side of the store; the spend path — tree build, path assembly, the prover — is untouched. Not measured." },
+]
+
+[[constant]]
+name = "wss_spend_delta_floor_s"
+defined_in = "rust/shekyl-wss-q1b-bench/src/report.rs"
+needle = "pub const SPEND_DELTA_FLOOR_S: f64 = 2.0;"
+measured_by = ["BA-T19"]
+status = "stale"
+stale_since = "af1f60b1a"
+carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 2). The curve tree and the prover have changed since the capture; the row is ungraded."
+capture = "docs/benchmarks/wss-q1b/spend_edge_20260927T195848Z.json"
+capture_rev = "ece3aa4fb"
+rev_source = "capture header; FOLLOWUPS records that this stamp can lag the built tree, which errs toward stale"
+path_set = "wss-spend"
+
+[[constant]]
+name = "wss_spend_delta_relative"
+defined_in = "rust/shekyl-wss-q1b-bench/src/report.rs"
+needle = "pub const SPEND_DELTA_RELATIVE: f64 = 0.15;"
+measured_by = ["BA-T19"]
+status = "stale"
+stale_since = "af1f60b1a"
+carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 2). The curve tree and the prover have changed since the capture; the row is ungraded."
+capture = "docs/benchmarks/wss-q1b/spend_edge_20260927T195848Z.json"
+capture_rev = "ece3aa4fb"
+rev_source = "capture header; FOLLOWUPS records that this stamp can lag the built tree, which errs toward stale"
+path_set = "wss-spend"
+
+[[path_set]]
+id = "wss-open"
+spec = ["rust/shekyl-engine-core/src/engine/daemon"]
+
+[[constant]]
+name = "wss_open_edge_ceiling_s"
+defined_in = "docs/design/WALLET_SIDE_STORE.md"
+needle = "**RULED 2026-09-19: `≤ 5 s` absolute, local-daemon posture.**"
+measured_by = ["BA-T19"]
+status = "unmeasured"
+carrier = "BA-T19 (FOLLOWUPS, WSS-Q1(b) row 3). The open-edge row has not run on the floor; no record of it is in the tree."
+path_set = "wss-open"
+
+[[path_set]]
+id = "shard-render"
+spec = ["rust/shekyl-shard-visual/src"]
+cleared = [
+  { through = "fc2d5eeba", reason = "SV-D (PR #1015): a doc comment on ShardAggregate::shard_hash names the view hash. No code changed on the render path." },
+  { through = "ca38266f8", reason = "SV-D (PR #1015): a new binary, shekyl-shard-render, behind the `cli` feature, which calls the library's render_candidate_png on a JSON view from stdin; the crate doc is rewritten. The library's render path is untouched, and the binary is not on the shipped graph of any wallet." },
+  { through = "5f857fadf", reason = "Doc comments in candidate.rs and params.rs, re-keyed off the Stage 5 framing. No code changed." },
+]
+
+[[constant]]
+name = "shard_render_floor_targets"
+defined_in = "rust/shekyl-shard-visual/examples/budget_matrix.rs"
+needle = "const FLOOR_TARGETS: [(u32, u128); 4] = [(128, 350), (256, 800), (512, 4_000), (1024, 25_000)];"
+measured_by = ["BA-T18"]
+status = "current"
+capture = "docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt"
+capture_rev = "655d31cb2"
+rev_source = "capture header"
+path_set = "shard-render"
+
+# --- PoW and chain store ----------------------------------------------
+
+[[path_set]]
+id = "randomx-cache"
+spec = ["rust/shekyl-pow-randomx/src"]
+stale_through = [
+  { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. Covers the Phase 2d dispatch core and everything after it; the 341 ms record predates them all." },
+]
+
+[[constant]]
+name = "randomx_cache_derivation_target_ms"
+defined_in = "docs/design/RANDOMX_V2_RUST.md"
+needle = "Cache derivation must be at most 200 ms."
+measured_by = ["BA-T14"]
+status = "stale"
+stale_since = "bd7cea464"
+carrier = "BA-T14 (BA-G9, BA-Q19). The record predates the real dispatch core; 341 ms on x86 against the 200 ms target, never run on the floor."
+capture = "rust/shekyl-pow-randomx/BENCH_RESULTS.md"
+capture_rev = "f237aad327aba71cb2c59518c887e5bd44b5df8e"
+rev_source = "not recorded in the record; the last commit touching the crate's sources on the run date, 2026-05-22"
+path_set = "randomx-cache"
+
+[[path_set]]
+id = "randomx-vm"
+spec = ["rust/shekyl-pow-randomx/src/vm.rs"]
+cleared = [
+  { through = "bb7f72df9", reason = "Two commits touch vm.rs after the capture. d27da3ad8 rewrites two `% n == 0` tests as `is_multiple_of`, in a const assertion and a decode predicate, neither on the allocation path. bb7f72df9 changes one comment in this file." },
+]
+
+[[constant]]
+name = "randomx_vm_allocation_target_us"
+defined_in = "docs/design/RANDOMX_V2_RUST.md"
+needle = "Per-call `Vm` allocation must be at most 100 us."
+measured_by = ["BA-T14"]
+status = "current"
+capture = "rust/shekyl-pow-randomx/BENCH_RESULTS.md"
+capture_rev = "321b89edbe9867263d8cdf72d28c444b19b7efc7"
+rev_source = "not recorded in the record; the last commit touching the crate on the re-measurement date, 2026-05-24"
+path_set = "randomx-vm"
+
+[[path_set]]
+id = "chain-store-ibd"
+spec = ["rust/shekyl-chain-store/src"]
+
+[[constant]]
+name = "ibd_floor_ratio"
+defined_in = "scripts/bench/drs_artifact.py"
+needle = "IBD_FLOOR_RATIO = 1.25"
+measured_by = ["BA-T13"]
+status = "unmeasured"
+carrier = "BA-T13 (BA-G6). The ratio is pre-registered; only the LMDB arm has run, and the redb arm waits on a build target (FOLLOWUPS, DRS-BENCH redb arm)."
+path_set = "chain-store-ibd"
+
+# --- BA-Q3: the single-pass serve. One prediction still open, and two
+# beside the floor measurement that settled each.
+
+# The floor device's serve verdict (BA-T5, 2026-10-07) holds on the frame
+# production serves, a full shard of `W` bytes. It is bound here to the
+# value of `W`: a shard small enough to be buffered whole between the
+# persona and the requester turns every abandoned request into a full
+# serve plus a signature. Change `W` and this row fails until the verdict
+# is re-graded on a new capture.
+[[constant]]
+name = "serve_floor_verdict_frame"
+defined_in = "config/consensus_constants.json"
+needle = '"archival_shard_length_bytes": 3000000'
+measured_by = ["BA-T5"]
+status = "stale"
+stale_since = "8ed51316e"
+carrier = "BA-T5. The 2026-10-07 capture prices a serve whose body was the frozen segment. Streaming shard_frame from the sealed body store (8ed51316e) opens one AEAD chunk per read that the capture does not price."
+capture = "docs/benchmarks/ba_t5_serve_floor_device_20261007_obs.tsv"
+capture_rev = "42233bd135"
+rev_source = "capture header, arm A"
+path_set = "serve-floor-verdict"
+
+[[constant]]
+name = "serve_prehead_work_floor"
+defined_in = "docs/design/BENCHMARK_ALIGNMENT.md"
+needle = "| Work before the first byte | under 1 ms | 0.19 ms p50 time to first byte at one in flight, daemon idle, a bound from above on the whole pre-head step (`BA-T5` session 2, 2026-10-09); 1.85 ms p50 beside a syncing daemon | **held** |"
+measured_by = ["BA-T3", "BA-T5"]
+status = "stale"
+stale_since = "24f769906"
+carrier = "BA-T5 (BA-T3). The 2026-10-09 capture prices time to first byte on the framed serve. Streaming the body unframed (24f769906) drops the RF-D4 frame header before the first byte, so that reading no longer prices this tree."
+capture = "docs/benchmarks/ba_t5_serve_floor_device_20261009_obs.tsv"
+capture_rev = "301ed05b73"
+rev_source = "capture header, the tree line"
+path_set = "archival-serve-fetch"
+
+[[retired_estimate]]
+name = "serve_median_per_response_single_pass_floor"
+estimate = { low = 40.0, high = 60.0, unit = "ms" }
+measured = 67.2
+capture = "docs/benchmarks/sfd8_serve_cost_floor_device_run3_20261006.tsv"
+capture_rev = "7c9140f297"
+verdict = "falsified"
+note = "Predicted 2026-10-06 as the pre-#954 arm, 24.8 ms, plus one digest pass at its standalone cost, 23.9 ms. Inside the stream the digest costs 43 ms. BA-T3 shows the chunked read-and-fold is 2.2 % above the one-shot digest in instructions, so the other 19 ms is not instruction work in the loop; the on-disk read path, the per-chunk blocking-pool hand-off and cache behaviour are what BA-T5 has to separate."
+
+[[retired_estimate]]
+name = "serve_throughput_8_inflight_floor"
+estimate = { low = 37.0, high = 60.0, unit = "responses per second" }
+measured = 49.7
+capture = "docs/benchmarks/ba_t5_serve_floor_device_20261007_obs.tsv"
+capture_rev = "42233bd135"
+verdict = "held"
+note = "Median of six eight-in-flight blocks on the floor device with the hash on the executor; the blocks are bimodal, three near 41 and three near 56, which is what run 3's two disagreeing blocks were. With the hash in the blocking-pool hop (bfcf46c092) all six read 52."

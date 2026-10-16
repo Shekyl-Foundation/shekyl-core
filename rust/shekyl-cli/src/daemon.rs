@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::fmt;
 
 use shekyl_rpc_transport::network_posture::{host_of, is_loopback_host};
+use shekyl_rpc_types::GetInfoResponse;
 
 /// Errors from the daemon RPC client with differentiated failure modes.
 #[derive(Debug)]
@@ -92,25 +93,6 @@ impl fmt::Display for DaemonError {
 
 impl std::error::Error for DaemonError {}
 
-/// The fields `get_info` must carry for mining gates and `chain_health`.
-///
-/// No field is defaulted: these are `KV_SERIALIZE` (not `OPT`) on
-/// `COMMAND_RPC_GET_INFO`, so absence means the contract moved, not a safe
-/// zero. A missing `restricted` must not read as unrestricted.
-#[derive(Debug, Deserialize)]
-pub struct DaemonInfo {
-    pub status: String,
-    pub height: u64,
-    pub target_height: u64,
-    pub difficulty: u64,
-    pub tx_count: u64,
-    pub outgoing_connections_count: u64,
-    pub incoming_connections_count: u64,
-    pub restricted: bool,
-    pub nettype: String,
-    pub synchronized: bool,
-}
-
 /// The fields `mine status` / the already-mining preflight read.
 /// Extra daemon fields (`pow_algorithm`, …) are ignored on purpose.
 #[derive(Debug, Deserialize)]
@@ -146,18 +128,6 @@ pub struct ShardCoverageRow {
     pub freeze_height: u64,
     pub join_scarcity_micro: u64,
     pub expected_profit_atomic: u64,
-}
-
-/// `request_archival_shard` result. An aggregate, never shard bytes.
-#[derive(Debug, Deserialize)]
-pub struct ArchivalShardFetch {
-    pub shard_id: u64,
-    pub shard_hash: String,
-    pub block_count: u64,
-    pub tx_count: u64,
-    pub output_count: u64,
-    pub coinbase_output_count: u64,
-    pub time_range_seconds: u64,
 }
 
 /// Lightweight daemon RPC client. Uses ureq (rustls TLS backend) with an
@@ -301,10 +271,24 @@ impl DaemonClient {
     }
 
     /// Fetch daemon info (`get_info`). Used by `chain_health` and mining gates.
-    pub fn get_info(&self) -> Result<DaemonInfo, DaemonError> {
+    ///
+    /// The reply is the shared [`GetInfoResponse`], which decodes strictly:
+    /// a member that is absent means the contract moved, not a safe zero. In
+    /// particular a missing `restricted` cannot read as unrestricted.
+    pub fn get_info(&self) -> Result<GetInfoResponse, DaemonError> {
         let value = self.json_rpc("get_info", &serde_json::json!({}))?;
         serde_json::from_value(value)
             .map_err(|e| DaemonError::MalformedResponse(format!("get_info: {e}")))
+    }
+
+    /// `get_version`'s `result`, undecoded. Used by the mining gates.
+    ///
+    /// Undecoded because reading it is `shekyl_rpc_types`' (`RK-D25`): the
+    /// caller hands it to [`shekyl_rpc_types::IdentityExpectation::read`],
+    /// which reads the version before anything else. It is where a daemon
+    /// names its network; `get_info` stopped repeating it at 3.54 (RK-Q6).
+    pub fn get_version_result(&self) -> Result<Value, DaemonError> {
+        self.json_rpc("get_version", &serde_json::json!({}))
     }
 
     /// Operator coverage list. Empty params; the daemon orders the rows.
@@ -313,16 +297,6 @@ impl DaemonClient {
         serde_json::from_value(value).map_err(|e| {
             DaemonError::MalformedResponse(format!("get_archival_shard_coverage: {e}"))
         })
-    }
-
-    /// Ask the daemon to retrieve one shard. The response is an aggregate.
-    pub fn request_archival_shard(&self, shard_id: u64) -> Result<ArchivalShardFetch, DaemonError> {
-        let value = self.json_rpc(
-            "request_archival_shard",
-            &serde_json::json!({ "shard_id": shard_id }),
-        )?;
-        serde_json::from_value(value)
-            .map_err(|e| DaemonError::MalformedResponse(format!("request_archival_shard: {e}")))
     }
 
     /// The configured daemon URL, for copy that names the endpoint
@@ -435,7 +409,7 @@ fn classify_ureq_error(err: &ureq::Error) -> DaemonError {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_path_status, is_loopback_endpoint, DaemonError, DaemonInfo};
+    use super::{classify_path_status, is_loopback_endpoint, DaemonError, GetInfoResponse};
 
     #[test]
     fn loopback_classification_uses_the_canonical_host_check() {
@@ -480,39 +454,87 @@ mod tests {
         }
     }
 
-    #[test]
-    fn daemon_info_refuses_a_missing_gate_field() {
-        let missing_restricted = serde_json::json!({
-            "status": "OK",
-            "height": 1,
-            "target_height": 0,
-            "difficulty": 1,
-            "tx_count": 0,
-            "outgoing_connections_count": 0,
-            "incoming_connections_count": 0,
-            "nettype": "mainnet",
-            "synchronized": true,
-        });
-        assert!(
-            serde_json::from_value::<DaemonInfo>(missing_restricted).is_err(),
-            "a missing restricted field must not deserialize as unrestricted"
-        );
+    /// A complete `get_info` reply, as the daemon serializes it.
+    fn get_info_reply() -> serde_json::Value {
+        use shekyl_rpc_types::{
+            HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity, InfoPeers,
+            InfoPool, InfoStatus, RpcStatus,
+        };
+        serde_json::to_value(GetInfoResponse {
+            status: RpcStatus::ok(),
+            health: InfoHealth {
+                height: 1,
+                top_block_hash: HashHex::from_bytes([7; 32]),
+                target_height: shekyl_rpc_types::Nullable::NULL,
+                synchronized: true,
+                busy_syncing: false,
+                following_degraded: false,
+                p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+            },
+            identity: InfoIdentity {
+                protocol_version: 3,
+            },
+            chain: InfoChain {
+                difficulty: 1,
+                cumulative_difficulty: 1,
+                target: 120,
+                tx_count: 0,
+                block_weight_limit: 600_000,
+                block_weight_median: 300_000,
+                adjusted_time: 0,
+            },
+            economics: InfoEconomics {
+                already_generated_coins: shekyl_units::AtomicUnits::ZERO,
+                release_multiplier: 1_000_000,
+                burn_pct: 0,
+                total_burned: shekyl_units::AtomicUnits::ZERO,
+                staker_emission_share_effective: 0,
+            },
+            pool: InfoPool { tx_pool_size: 0 },
+            node: Hidden::Shown(InfoStatus {
+                start_time: 1,
+                free_space: 1,
+                database_size: 1,
+                version: "test".to_owned(),
+                connections: shekyl_rpc_types::StatusConnections::Running {
+                    outgoing: 0,
+                    incoming: 0,
+                },
+                alt_blocks_count: 0,
+                rpc_connections_count: 0,
+            }),
+            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(InfoPeers {
+                public_incoming_socket_count: 0,
+                public_outgoing_socket_count: 0,
+                tor_incoming_socket_count: 0,
+                tor_outgoing_socket_count: 0,
+                white_peerlist_size: 0,
+                grey_peerlist_size: 0,
+            })),
+            host: Hidden::Withheld,
+            restricted: false,
+        })
+        .expect("a get_info reply serializes")
+    }
 
-        let complete = serde_json::json!({
-            "status": "OK",
-            "height": 1,
-            "target_height": 0,
-            "difficulty": 1,
-            "tx_count": 0,
-            "outgoing_connections_count": 0,
-            "incoming_connections_count": 0,
-            "restricted": false,
-            "nettype": "testnet",
-            "synchronized": true,
-        });
-        let info: DaemonInfo = serde_json::from_value(complete).expect("complete get_info");
+    /// The mining gates read `restricted` and `synchronized` from this
+    /// reply. One missing either does not decode — above all a missing
+    /// `restricted` must not read as unrestricted. The network gate reads
+    /// `get_version` (RK-Q6); its tests are beside it in `commands/mine.rs`.
+    #[test]
+    fn get_info_refuses_a_missing_gate_field() {
+        for gate in ["restricted", "synchronized", "height"] {
+            let mut reply = get_info_reply();
+            reply.as_object_mut().expect("object").remove(gate);
+            assert!(
+                serde_json::from_value::<GetInfoResponse>(reply).is_err(),
+                "a reply without `{gate}` must not decode"
+            );
+        }
+
+        let info: GetInfoResponse =
+            serde_json::from_value(get_info_reply()).expect("complete get_info");
         assert!(!info.restricted);
-        assert_eq!(info.nettype, "testnet");
-        assert!(info.synchronized);
+        assert!(info.health.synchronized);
     }
 }

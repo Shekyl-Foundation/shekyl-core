@@ -101,8 +101,8 @@ mod tests {
         bookkeeping_block::{BookkeepingBlock, BOOKKEEPING_BLOCK_VERSION},
         ledger_block::{LedgerBlock, LEDGER_BLOCK_VERSION},
         pending_post_block::{PendingPostBlock, PENDING_POST_VERSION},
-        pscan_cursor::{PScanCursor, PSCAN_CURSOR_VERSION},
-        pscan_state::{PScanState, PSCAN_STATE_VERSION},
+        pscan_cursor::{PScanCursor, PSCAN_CURSOR_BLOCK, PSCAN_CURSOR_VERSION},
+        pscan_state::{PScanState, PSCAN_STATE_BLOCK, PSCAN_STATE_VERSION},
         staking_block::{StakingBlock, STAKING_BLOCK_VERSION},
         sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION},
         tx_meta_block::{TxMetaBlock, TX_META_BLOCK_VERSION},
@@ -156,14 +156,14 @@ mod tests {
                 PENDING_POST_VERSION,
             ),
             (
-                "pscan_cursor",
+                PSCAN_CURSOR_BLOCK,
                 PScanCursor::genesis()
                     .to_postcard_bytes()
                     .expect("encode pscan_cursor"),
                 PSCAN_CURSOR_VERSION,
             ),
             (
-                "pscan_state",
+                PSCAN_STATE_BLOCK,
                 PScanState::genesis()
                     .to_postcard_bytes()
                     .expect("encode pscan_state"),
@@ -219,7 +219,7 @@ mod tests {
                 file,
                 binary,
             } => {
-                assert_eq!(block, "pscan_state");
+                assert_eq!(block, PSCAN_STATE_BLOCK);
                 assert_eq!(file, PSCAN_STATE_VERSION - 1);
                 assert_eq!(binary, PSCAN_STATE_VERSION);
             }
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn a_current_version_prefix_passes_the_gate() {
         let current = postcard::to_allocvec(&PSCAN_STATE_VERSION).expect("encode version");
-        gate_leading_version(&current, "pscan_state", PSCAN_STATE_VERSION)
+        gate_leading_version(&current, PSCAN_STATE_BLOCK, PSCAN_STATE_VERSION)
             .expect("the current version must pass the gate");
     }
 }

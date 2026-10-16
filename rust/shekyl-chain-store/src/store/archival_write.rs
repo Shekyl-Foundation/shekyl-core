@@ -62,7 +62,11 @@
 //! `ArchivalFamily::BudgetAccrual` (`ARW-Q3`). The belts that read across
 //! families — SI-15 reads `archival_bond` for a credit — run only when
 //! both families apply: a stubbed `Bond` leaves no records, and a credit
-//! written against that absence is the stub, not a fault.
+//! written against that absence is the stub, not a fault. Since E6 slice
+//! 8 row 3 that arm is a belt with nothing above it to let through: CEN-J4
+//! reads the record off the view before the block, so a `Bond`-stubbed
+//! session's credits are refused at `validate` and never reach this
+//! writer (`archival_write_tests`, ARW-9).
 //!
 //! # What the slash burns into (`ARW-6`)
 //!
@@ -72,6 +76,17 @@
 //! (`apply_archival_slash_one` adds to `total_burned` and to nothing
 //! per-height, `db_lmdb.cpp:5615–5618`); the cell's write is one
 //! `checked_add` over both contributors, so SI-8 sees one running total.
+//!
+//! # Settlement rows (`ARCHIVAL_SETTLEMENT_WRITER.md` §14, `SO-D10`)
+//!
+//! The slash pass settles each epoch before it slashes on it, and the
+//! delta carries the rows. Phase 9 writes them ahead of the slash writes
+//! (`SO-D7`), insert-once: a row already under a pair's key is SI-25. The
+//! two integrity checks that have an operand are the validator's — the
+//! index against its digest, and the fold's own count — and arrive through
+//! `refuse_corrupt` as the same row. The issued-draw index and its digest
+//! have no block writer until admission lands; the regtest door below is
+//! their one producer.
 //!
 //! # The regtest injector (§3.8 item 3)
 //!
@@ -89,7 +104,7 @@
 use shekyl_chain_rules::{
     ArchivalDelta, ChainValid, ChainView, RecordWriteKind, ReleaseAnchors, Trust,
 };
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -98,16 +113,17 @@ use crate::codec::{
     ArchivalLastSlashEpochCell, AttestationWitnessBytes, Canonical, Present, PropertyCell, Raw,
     TotalBurnedCell,
 };
-use crate::ids::{ServeCreditKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG, BLOCK_BURN, BLOCK_INFO,
+    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
+    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
+    BLOCK_BURN, BLOCK_INFO,
 };
 
 use super::archival_reads;
 use super::error::{
-    AccrualFault, EngineError, SlashFault, StoreCannot, StoreError, StoreInvariant,
+    AccrualFault, EngineError, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
 };
 use super::write::WriteBatch;
 use super::ChainStore;
@@ -278,27 +294,35 @@ impl<'id> WriteBatch<'_, 'id> {
         self.upsert_property::<TotalBurnedCell>(&total)
     }
 
-    /// Phase 9: the accrual, the slashes, the close — in the C++'s order
-    /// (`blockchain_db.cpp:689–693`).
+    /// Phase 9: the accrual, the settlement rows, the slashes decided on
+    /// them, the settled epochs' emission gather, and the close — the
+    /// C++'s order (`blockchain_db.cpp:689–693`), with settlement ahead of
+    /// the slash it decides (`SO-D7`) and the gather after it (`SO-D11`).
+    ///
+    /// SI-21's two write sets are here. The close freezes the budget:
+    /// `archival_budget[E]`, insert-once. The slash pass settles whole:
+    /// `archival_sigma_work[E]` and every `(shard, E)` row of
+    /// `archival_r_market` its snapshot named, each insert-once on `E`.
     pub(super) fn record_archival_epoch<V: ChainView<'id>>(
         &self,
         connecting: BlockHeight,
         valid: &ChainValid<'id, V>,
     ) -> Result<(), StoreError> {
         let delta = valid.block().archival();
-        if self.apply_policy().applies(ArchivalFamily::BudgetAccrual) {
+        let policy = self.apply_policy();
+        if policy.applies(ArchivalFamily::BudgetAccrual) {
             self.write_accrual(delta)?;
         }
+        self.write_settlements(delta)?;
         self.write_slashes(connecting, delta)?;
-        if let Some(close) = delta.close() {
-            let policy = self.apply_policy();
-            let epoch = close.epoch();
+        for gather in delta.gathers() {
+            let epoch = gather.epoch();
             if policy.applies(ArchivalFamily::RMarket) {
                 let mut table = self.open_insert_table(
                     ARCHIVAL_R_MARKET,
                     StoreInvariant::EpochCloseRewritten { epoch },
                 )?;
-                for (shard, r_market) in close.r_market() {
+                for (shard, r_market) in gather.r_market() {
                     table.insert(
                         (shard.to_raw(), epoch.to_raw()),
                         r_market.encoded().as_encoded(),
@@ -310,15 +334,45 @@ impl<'id> WriteBatch<'_, 'id> {
                     ARCHIVAL_SIGMA_WORK,
                     StoreInvariant::EpochCloseRewritten { epoch },
                 )?
-                .insert(epoch.to_raw(), close.sigma_work().encoded().as_encoded())?;
+                .insert(epoch.to_raw(), gather.sigma_work().encoded().as_encoded())?;
             }
+        }
+        if let Some(close) = delta.close() {
             if policy.applies(ArchivalFamily::Budget) {
+                let epoch = close.epoch();
                 self.open_insert_table(
                     ARCHIVAL_BUDGET,
                     StoreInvariant::EpochCloseRewritten { epoch },
                 )?
                 .insert(epoch.to_raw(), close.budget().encoded().as_encoded())?;
             }
+        }
+        Ok(())
+    }
+
+    /// 9b, first half. `archival_settlement[(P, shard, E)] = row` for every
+    /// pair the slash pass settled, insert-once: an epoch settles once, and
+    /// a row already there is SI-25 ([`SettlementFault::AlreadySettled`])
+    /// before any journal entry. Governed by `ArchivalFamily::Settlement`.
+    fn write_settlements(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
+        let settlements = delta.settlements();
+        if settlements.is_empty() || !self.apply_policy().applies(ArchivalFamily::Settlement) {
+            return Ok(());
+        }
+        let already = |s: &shekyl_chain_rules::Settlement| StoreInvariant::SettlementNotSound {
+            epoch: s.epoch,
+            observed: SettlementFault::AlreadySettled {
+                persona: s.persona,
+                shard: s.shard,
+            },
+        };
+        let mut table = self.open_insert_table(ARCHIVAL_SETTLEMENT, already(&settlements[0]))?;
+        for settlement in settlements {
+            table.insert_observing(
+                SettlementKey::new(settlement.persona, settlement.shard, settlement.epoch).key(),
+                settlement.row.encoded().as_encoded(),
+                already(settlement),
+            )?;
         }
         Ok(())
     }
@@ -522,6 +576,67 @@ impl ChainStore {
                 Present,
             )?;
             Ok::<_, StoreError>(height)
+        })
+    }
+
+    /// The regtest draw issue: write `draws` into `epoch`'s issued-draw
+    /// index and set the epoch's running digest to `digest`
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`). The stand-in for
+    /// admission until admission exists: it lets a regtest chain reach a
+    /// slash pass with draws to settle, each already marked passed or not.
+    /// Refused off Fakechain exactly as
+    /// [`regtest_inject_serve_credit`](Self::regtest_inject_serve_credit)
+    /// is.
+    ///
+    /// **The caller folds the digest.** The store computes none of the
+    /// archival state it holds (`ARW-Q1`): `digest` is the cell's
+    /// post-image, the value read through
+    /// [`ReadSnapshot::issued_digest`](super::ReadSnapshot::issued_digest)
+    /// with each new draw's term added. A caller that hands a digest its
+    /// draws do not fold to has built the store SI-25 refuses at the slash
+    /// pass, which is how the tests of that refusal are driven.
+    ///
+    /// Its own transaction, **not journaled**: a pop leaves the draws, as
+    /// it leaves an injected credit.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreCannot::InjectionOffFakechain`] if `trust` carries any
+    /// anchor; [`StoreCannot::InjectionForUnbondedPersona`] if a draw names
+    /// a persona with no bond record; [`StoreCannot::DrawAlreadyIssued`]
+    /// if the index holds one of the draws; the admission and engine
+    /// errors of [`write`](Self::write).
+    pub fn regtest_issue_draws(
+        &self,
+        trust: Trust,
+        epoch: SettlementEpoch,
+        draws: &[IndexedDraw],
+        digest: IssuedDigest,
+    ) -> Result<(), StoreError> {
+        if *trust.anchors() != ReleaseAnchors::EMPTY {
+            return Err(StoreCannot::InjectionOffFakechain.into());
+        }
+        self.write(|batch| {
+            let mut index = batch.open_upsert_table(ARCHIVAL_ISSUED_DRAW)?;
+            for draw in draws {
+                let persona = draw.persona;
+                if archival_reads::bond_record(batch.txn(), &persona)
+                    .map_err(|f| batch.arm_read_fault(f))?
+                    .is_none()
+                {
+                    return Err(StoreCannot::InjectionForUnbondedPersona { persona }.into());
+                }
+                let key =
+                    IssuedDrawKey::new(epoch, persona, draw.shard, draw.issuing_height, draw.draw);
+                if index.get(key.key())?.is_some() {
+                    return Err(StoreCannot::DrawAlreadyIssued { persona }.into());
+                }
+                index.upsert(key.key(), draw.state.encoded().as_encoded())?;
+            }
+            batch
+                .open_upsert_table(ARCHIVAL_ISSUED_DIGEST)?
+                .upsert(epoch.to_raw(), digest.encoded().as_encoded())?;
+            Ok::<_, StoreError>(())
         })
     }
 }

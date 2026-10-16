@@ -127,6 +127,11 @@ pub enum Stale {
 pub enum PerHeightRecord {
     /// [`crate::ChainView::block_at`]. The store's `block_info` cell.
     Block,
+    /// [`crate::HeaderView::header_at`]. The same `block_info` cell as
+    /// `Block` — the store keeps header facts and executed facts in one
+    /// row (DRS-E5 `E5-13`) — named apart so the fault says which read
+    /// found the hole: a header rule's, which an alt view also answers.
+    Header,
     /// [`crate::ChainView::root_at`]. The store's `curve_tree_roots` cell.
     CurveTreeRoot,
     /// [`crate::ChainView::leaf_count_at`]. The store's
@@ -142,6 +147,7 @@ impl fmt::Display for PerHeightRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Block => "block",
+            Self::Header => "block header",
             Self::CurveTreeRoot => "curve-tree root",
             Self::LeafCount => "curve-tree leaf count",
             Self::Outputs => "block outputs",
@@ -264,6 +270,21 @@ pub enum Corrupt {
         /// Which invariant the fold found broken.
         which: RecordInvariant,
     },
+    /// A recorded bond's `hybrid_pubkey` is not a canonical hybrid public
+    /// key. The at-rest record keeps the key as bytes (`BondRecord` lives
+    /// in `shekyl-types`, below the crypto crate that owns the grammar),
+    /// and a bond is admitted only with bytes that grammar accepts. Bytes
+    /// that no longer parse are store contents admission cannot have
+    /// written — the same class as [`Self::LeafNotConstructible`], a halt
+    /// on `archival_bond`, not a fold [`RecordInvariant`].
+    ///
+    /// Absence of a record is CEN-B4's refusal of the block. The FFI
+    /// distinguishes a malformed key from an absent bond because there the
+    /// bytes are the caller's input. Here they are the view's.
+    BondHybridKeyMalformed {
+        /// The persona whose record holds the key.
+        persona: PCanonicalId,
+    },
     /// The open epoch's accruing budget plus this block's accrual does not
     /// fit the type (CEN-L8's third clause; SI-8 on
     /// `archival_budget_accruing`). The accrual is bounded by the emission
@@ -275,6 +296,46 @@ pub enum Corrupt {
         /// The open epoch whose total overflowed.
         epoch: SettlementEpoch,
     },
+    /// Settlement of `epoch` found the recorded state it folds unfit to
+    /// fold (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5; SI-25). Never a refusal
+    /// of the block: the block at the slash height is not invalid, this
+    /// node cannot settle it.
+    SettlementIntegrity {
+        /// The epoch being settled.
+        epoch: SettlementEpoch,
+        /// Which check failed.
+        check: SettlementCheck,
+    },
+}
+
+/// Which of settlement's integrity checks failed —
+/// [`Corrupt::SettlementIntegrity`]'s discriminant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettlementCheck {
+    /// The epoch's issued-draw rows do not fold to the epoch's running
+    /// digest (§9.5 check 1): a row was lost, gained or changed after the
+    /// draw was indexed, or the digest was.
+    IssuedIndexDigest,
+    /// The fold counted more passes for a pair than draws it selected
+    /// (§9.5 check 3, in the form the row type holds: `passes ≤ counted`,
+    /// with `counted` three, or none below three issued — which implies
+    /// `passes ≤ issued`). The fold selects at most three and only then
+    /// counts, so this is a defect of the fold and not a state a store can
+    /// hold. It halts, and is never clamped and never skipped: a pair with
+    /// no row reads as unobserved.
+    PassesExceedCounted {
+        /// The persona of the pair.
+        persona: PCanonicalId,
+        /// The shard of the pair.
+        shard: ShardId,
+    },
+    /// The settlement beacon's block is not strictly below the connecting
+    /// height. The slash grace is at least the response window on every
+    /// schedule that has one, so a passed deadline puts the beacon there.
+    /// A re-pin that does not is this halt, not an empty settlement: the
+    /// block at the slash height is not invalid, and this node cannot
+    /// settle the epoch.
+    BeaconNotRecorded,
 }
 
 /// Which of a bond record's invariants a retention fold found broken —
@@ -349,6 +410,19 @@ impl<VF> From<ViewRead<VF>> for Fault<VF> {
             ViewRead::View(fault) => Self::View(fault),
             ViewRead::Corrupt(corrupt) => Self::Corrupt(corrupt),
         }
+    }
+}
+
+impl<VF> From<VF> for ViewRead<VF> {
+    /// A view method's error, lifted into the parent-side read position.
+    ///
+    /// A block rule returns [`ViewRead`], so `?` on a view method (whose
+    /// error is `V::Fault`) becomes [`ViewRead::View`]. This does not lift
+    /// a view fault into [`Fault`]: that remains [`Fault::View`] or the
+    /// [`From<ViewRead>`] above, and a definition that still returns
+    /// `V::Fault` cannot become a halt by `?`.
+    fn from(fault: VF) -> Self {
+        Self::View(fault)
     }
 }
 
@@ -485,9 +559,29 @@ impl fmt::Display for Corrupt {
             Self::BondRecordInvariant { persona, which } => {
                 write!(f, "bond record of {persona} is inconsistent: {which} (SI-7)")
             }
+            Self::BondHybridKeyMalformed { persona } => write!(
+                f,
+                "bond record of {persona} holds a hybrid key that is not canonical (SI-7)"
+            ),
             Self::AccrualOverflow { epoch } => {
                 write!(f, "budget accruing for epoch {epoch} overflows (SI-8)")
             }
+            Self::SettlementIntegrity { epoch, check } => match check {
+                SettlementCheck::IssuedIndexDigest => write!(
+                    f,
+                    "the issued draws recorded for epoch {epoch} do not fold to its digest (SI-25)"
+                ),
+                SettlementCheck::PassesExceedCounted { persona, shard } => write!(
+                    f,
+                    "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
+                     draws selected (SI-25)"
+                ),
+                SettlementCheck::BeaconNotRecorded => write!(
+                    f,
+                    "the settlement beacon of epoch {epoch} is not a block strictly below \
+                     the connecting height (SI-25)"
+                ),
+            },
         }
     }
 }

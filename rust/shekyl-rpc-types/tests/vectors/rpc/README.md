@@ -30,14 +30,24 @@ caught in review and reverted; on inspection the property it violated had no
 consumer, so it was retired deliberately rather than defended by habit.
 
 The emitter is deleted with the structs it captures, so each slice writes its
-own and takes it away again; these files are the oracle's memory. **RK-5b was
-the most recent slice to run one** (`get_last_block_header`,
+own and takes it away again; these files are the oracle's memory. **RK-5c
+was the most recent slice to run one**, for `get_info`, and it was the first
+of a second kind: the five `get_info_*_v1.json` files are not a hand-built
+response serialized. The C++ handler was first split into a gather step and
+a pure `build_get_info(facts, restricted)`, and the emitter ran that
+function over fixed facts — because the handler decided things (a
+synchronized sentinel, the restricted stand-ins, a subtraction across two
+counts, a burn computation that can refuse) and a serializer-only capture
+would pin none of them (`docs/design/DAEMON_RPC_KV_GET_INFO.md` §4.4). The
+split, the builder and the emitter went with the handler. **RK-5b was the
+slice before it** (`get_last_block_header`,
 `get_block_header_by_hash`, `get_block_headers_range`, `hard_fork_info`,
 `get_fee_estimate`), and it is gone with those structs too. To read one, or
 to see how a capture was set up, check out the commit that added
 `tests/unit_tests/rpc_oracle_vectors.cpp` in the slice you care about —
 `git log --diff-filter=A --follow -- tests/unit_tests/rpc_oracle_vectors.cpp`
-lists every one of them.
+lists every one of them. `hard_fork_info` and its two vectors were deleted
+with the method at 3.44, so that capture has no file here.
 
 Once a method's C++ is deleted there is nothing left to capture from *for that
 method*, so a later shape change to it cannot be re-captured and must be argued
@@ -57,16 +67,18 @@ paragraph above could inherit the constraint backwards and treat an
 un-recapturable method as frozen; it is not. **A `_v2` is derived, never authored.** Each pair carries a delta test that
 re-derives `_v2` from `_v1`, so a hand-edited `_v2` fails rather than standing
 as its own authority — demonstrated, not assumed: changing
-`get_fee_estimate_v2.json`'s `quantization_mask` and `hard_fork_info_v2.json`'s
-renamed field both turn their delta tests red. Three delta shapes exist, and
+`get_fee_estimate_v2.json`'s `quantization_mask` turns its delta test red.
+Three delta shapes exist, and
 RK-5b added the third:
 
 - **subtraction** — `_v2` is `_v1` minus exactly these fields
   (`v2_is_v1_minus_exactly_the_two_retired_members`,
-  `fee_v2_is_v1_minus_exactly_the_redundant_scalar`)
+  `fee_v2_is_v1_minus_exactly_the_redundant_scalar`,
+  `the_get_version_side_cases_are_their_predecessors_minus_exactly_hard_forks`)
 - **substitution** — `_v1` with one value replaced
   (`the_get_version_chain_differs_by_exactly_the_version_at_every_link`,
-  which walks every link of that chain rather than its newest pair)
+  which walks every link of that chain rather than its newest pair, and
+  names per link any member that bump adds or removes)
 - **transform, plus a named extension** — for a change of *shape*, where no
   subtraction from `_v1` produces `_v2`. `by_hash_v2_is_v1_reshaped_into_slots`
   writes the reshaping as code; the cases `_v1` structurally cannot express —
@@ -88,7 +100,103 @@ destroy the one property that makes it an oracle. The `_v2` is instead held
 honest by `the_get_version_chain_differs_by_exactly_the_version_at_every_link`,
 which substitutes the live constant across every consecutive pair and requires
 each result to equal its successor exactly — so a file may differ from its
-predecessor by that constant and by nothing else, no link may be skipped, and
-the newest may not go stale against the constant. It replaced a per-pair test
+predecessor by that constant and by the members that link declares added or
+removed, no link may be skipped, and the newest may not go stale against the
+constant. `get_version_absent_target_v1.json` is the one `_v1` here that is
+not a C++ capture: it is `get_version_synced_v6.json` minus `hard_forks`
+(the member `get_version` drops at 3.44), derived by the subtraction test
+above, and takes a new case name
+because `synced_v7` onward carry a target. It replaced a per-pair test
 that was renamed at each bump, which is how a chain with a missing vector
 passed.
+
+**3.46 restated the target, and every vector it moved is derived.** "No
+target" became `null` on `get_info`, `get_version` and `sync_info`, and
+`get_info` stopped writing `0` for a synchronized node (RK-D15, RK-Q7). No
+C++ stood to capture from, so each successor is its predecessor with only
+the named members restated, and
+`the_3_46_vectors_are_their_predecessors_with_exactly_the_target_restated`
+holds each pair to that: `get_version_absent_target_v2`,
+`get_version_all_defaults_v3` (which also gains `current_height: 0`),
+`sync_info_empty_v3`, and the `_v2` of four `get_info` fixtures. The
+synchronized `get_info` fixtures take the core's target, 1234567, which is
+what `shekyl-daemon-rpc`'s method tests produce from the capture's own
+facts. `get_version_syncing_v3`, `sync_info_v3` and `get_info_syncing_v1`
+carried a target already; their replies did not move and they have no
+successor. The side cases keep their predecessor's `version`, as before.
+
+**3.47 added `has_peers` to `get_info`, and all five fixtures have a
+successor.** Each is its predecessor plus that member
+(`the_3_47_get_info_vectors_are_their_predecessors_plus_exactly_has_peers`):
+`true` everywhere but the peerless fixture. `synced_restricted_v3` is the
+one to read: `has_peers: true` beside two connection counts of `0`, which
+is the case the member exists for. `get_version_synced_v24` is the
+chain's 3.47 link; its members do not move.
+
+**3.48 withheld Status and Peers from a restricted reply, and one fixture
+moves.** `get_info_synced_restricted_v4` is `_v3` minus exactly the
+fourteen keys of those two parts
+(`the_3_48_restricted_vector_is_its_predecessor_minus_exactly_status_and_peers`,
+which also asserts that each removed key held its stand-in). The other
+four fixtures are full replies and have no successor.
+`get_version_synced_v25` is the chain's 3.48 link.
+
+**3.49 moved no `get_info` vector.** The two connection counts changed
+source (the seam board, every connector) and so meaning, which is why the
+version moved (RK-D8), but the fixtures hold 8 outbound and 12 inbound
+under either source. `get_version_synced_v26` is the chain's 3.49 link.
+
+**3.50 split the pool count, and the four host fixtures have a
+successor.** They held `tx_pool_size: 12`, every entry. Each successor
+holds `9`, the entries broadcast, and gains
+`tx_pool_unbroadcast_count: 3`
+(`the_3_50_vectors_split_the_same_pool_into_broadcast_and_not_yet_broadcast`).
+The restricted fixture already held `9` and does not move: that every
+caller now reads that number under that key is the change.
+`get_version_synced_v27` is the chain's 3.50 link.
+
+**3.51 retired a fixture and moved no vector.** `get_info` refuses when
+the store holds more burned than generated (RK-Q9), where it answered
+`burn_pct: 0`. `get_info_burn_refusal_v1` to `_v4` record that old reply.
+They stay, held to each other by the derivation tests, and no test decodes
+the newest as a current reply: the daemon does not send it. The refusal is
+tested in `shekyl-daemon-rpc`. `get_version_synced_v28` is the chain's
+3.51 link.
+
+**3.52 retired the duplicate names, and four fixtures have a successor.**
+Each is its predecessor minus exactly six keys: `difficulty`,
+`difficulty_top64`, `cumulative_difficulty`,
+`cumulative_difficulty_top64`, `block_size_limit` and `block_size_median`
+(`the_3_52_get_info_vectors_are_their_predecessors_minus_exactly_the_duplicate_names`,
+which first checks each retired key against the name that stays). The
+burn-refusal fixture has no successor: there is no current reply to
+derive. `get_version_synced_v29` is the chain's 3.52 link.
+
+**3.53 re-encoded two amounts, and four fixtures have a successor.**
+`already_generated_coins` and `total_burned` are decimal strings; each
+successor is its predecessor with those two numbers written as strings and
+nothing else
+(`the_3_53_get_info_vectors_are_their_predecessors_with_the_two_amounts_as_strings`).
+`get_version_synced_v30` is the chain's 3.53 link.
+
+**3.54 retired the network's names from `get_info`, and four fixtures have a
+successor.** Each is its predecessor minus exactly `nettype`, `mainnet`,
+`testnet` and `stagenet`
+(`the_3_54_get_info_vectors_are_their_predecessors_minus_exactly_the_network_names`,
+which first checks the three booleans against the string they repeated).
+`get_version` keeps its `nettype`: it is the one place a daemon names its
+network. `get_version_synced_v31` is the chain's 3.54 link.
+
+**3.55 — `get_peer_list` entries lose `last_seen`.** `get_peer_list_v4` is
+`_v3` minus that one member, held to its delta
+(`the_v4_peer_list_is_its_v3_minus_only_last_seen`): the listing is read
+from the Rust peer lists, which carry no clock
+(`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4), so there is no value to report.
+`get_version_synced_v32` is the chain's 3.55 link. The `_v1`/`_v2`
+vectors of `get_peer_list`, `get_connections` and `sync_info` went with
+the stripe-seed sweep the same day, and with them the two delta tests
+that held them: `_v2` to `_v1` minus exactly the identifier fields of
+3.28 (PWD-I1), and `_v3` to `_v2` minus exactly the stripe fields of 3.35
+(PDM-Q7). The `_v4` delta covers neither (it is `get_peer_list` only), so
+those two deltas are no longer asserted and the three `_v3` vectors rest
+on their parity tests alone.

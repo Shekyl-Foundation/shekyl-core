@@ -120,8 +120,8 @@ fn five_blocks() -> MockChain {
 /// The identity the fixture chain recorded at `height`.
 fn hash_at(chain: &MockChain, height: u64) -> BlockHash {
     chain.with_view(
-        |view| match infallible(view.block_at(BlockHeight::from_raw(height))) {
-            AtHeight::Recorded(block) => block.hash,
+        |view| match infallible(view.header_at(BlockHeight::from_raw(height))) {
+            AtHeight::Recorded(record) => record.hash,
             AtHeight::AboveTip => panic!("fixture chain has a block at {height}"),
         },
     )
@@ -206,6 +206,30 @@ fn an_empty_chain_or_an_empty_table_has_no_conflict() {
         None
     );
     assert_eq!(conflict(&five_blocks(), &ReleaseAnchors::EMPTY), None);
+}
+
+/// `conflict_with` is the view face of `conflict_over`. A second walk
+/// would let the store's open and the view's open disagree about which
+/// pin is first.
+#[test]
+fn conflict_with_is_the_view_face_of_the_one_walk() {
+    let chain = five_blocks();
+    let anchors = pinning_genesis(OTHER);
+    chain.with_view(|view| {
+        let via_view = infallible(anchors.conflict_with(&view));
+        let tip = infallible(view.tip());
+        let via_walk = infallible(anchors.conflict_over(tip, |height| {
+            Ok(match view.header_at(height)? {
+                AtHeight::Recorded(record) => Some(record.hash),
+                AtHeight::AboveTip => None,
+            })
+        }));
+        assert_eq!(via_view, via_walk);
+        assert_eq!(
+            via_walk.map(|conflict| conflict.remedy()),
+            Some(Remedy::RefuseToRun)
+        );
+    });
 }
 
 /// A view that cannot answer is a fault, not a conflict and not agreement.

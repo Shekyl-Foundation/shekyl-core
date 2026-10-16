@@ -10,7 +10,6 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyld` | Full-node daemon (P2P, consensus, RPC) |
 | `shekyl-cli` | Interactive command-line wallet (Rust) |
 | `shekyl-wallet-rpc` | Headless wallet exposed via JSON-RPC |
-| `shekyl-gen-trusted-multisig` | Offline multisig wallet set generator |
 | `shekyl-gen-ssl-cert` | TLS certificate / key generator for RPC |
 | `shekyl-blockchain-import` | Import a bootstrap file into the chain DB |
 | `shekyl-blockchain-export` | Export chain DB to a bootstrap file |
@@ -69,10 +68,9 @@ shekyld [options] [command]
 | `--rpc-restricted-bind-port <port>` | Separate restricted RPC listener |
 | `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
 | `--p2p-bind-port <port>` | P2P listen port |
-| `--add-peer <ip:port>` | Add a persistent peer |
-| `--add-priority-node <ip:port>` | Always try to connect to this peer |
-| `--add-exclusive-node <ip:port>` | Connect only to these peers |
-| `--seed-node <ip:port>` | Connect to a seed node for initial peer discovery |
+| `--add-peer <ip:port>` | Name a peer as a dial candidate; it is dialled like any other |
+| `--p2p-disclose-early` | For the first nodes of a new network: below the floor of 48 peers this node discloses its known peers and its own address, on each connector until that connector reaches the floor or 24 hours pass. While it holds, this node is recognisable. Leave it off on an established network. |
+| `--add-exclusive-node <addr:port>` | Declare a closed network: dial these peers and no other address, the compiled seeds and every address learned from a peer included. Name only peers you control |
 | `--out-peers <n>` | Maximum outbound connections |
 | `--in-peers <n>` | Maximum inbound connections |
 | `--no-igd` | Disable UPnP port forwarding |
@@ -108,7 +106,6 @@ launchd, Task Scheduler, or the GUI wallet's Tauri sidecar), run with
 | `mining_status` | Current mining status |
 | `diff` | Current network difficulty |
 | `sync_info` | Blockchain sync progress and peer states |
-| `hard_fork_info` | Hard fork voting status |
 | `bans` | List banned peers |
 | `ban <ip> [seconds]` | Ban an IP address |
 | `unban <ip>` | Remove a ban |
@@ -184,62 +181,70 @@ secret display, key images, sweeps, `get_tx_key`) refuse at parse time with
 guidance naming the Shekyl-native replacement; the full disposition ledger
 is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
-**Wallet lifecycle**
+**Wallet**
 
 | Command | Description |
 |---------|-------------|
-| `create <filename>` | Create a new wallet (also non-interactive: `create <name> --seed-out <path>`) |
-| `open <filename>` | Open an existing wallet |
-| `close` | Close the current wallet |
-| `restore <filename> <seed...>` | Restore from mnemonic seed |
-| `password` | Change wallet password |
-| `refresh` | Sync with the daemon |
-| `rescan` | Rebuild transaction history from the chain (`hard` accepted; same rescan) |
+| `wallet create <name>` | Create a new wallet (also non-interactive: `shekyl-cli create <name> --seed-out <path>`) |
+| `wallet open <name>` | Open an existing wallet |
+| `wallet close` | Close the current wallet |
+| `wallet restore <name> <seed...>` | Restore from the recovery words |
+| `wallet password` | Change the wallet password |
+| `wallet refresh` | Sync with the daemon |
+| `wallet rescan [hard]` | Rebuild transaction history from the chain (`hard` accepted; same rescan) |
+| `wallet` | Wallet summary (height, balance, address) |
 | `status` | Wallet and daemon sync heights |
 
 **Address and balance**
 
 | Command | Description |
 |---------|-------------|
-| `address [--full] [--out <path>]` | Show the wallet's primary address (short display form by default; `--full` prints all ~2,030 characters; `--out` writes the full form to a new private file) |
+| `address [--full \| --out <path>]` | Show the wallet's primary address (short display form by default; `--full` prints all ~2,030 characters; `--out` writes the full form to a new private file) |
 | `balance` | Balance breakdown |
 
-**Transfers**
+**Sending and history**
 
 | Command | Description |
 |---------|-------------|
-| `transfer <amount> <address> [--priority N] [--no-confirm]` | Send SKL (build → confirm → submit/discard) |
-| `transfers` | Recent transactions |
-| `show_transfer <txid>` | Details for a transaction |
-| `get_tx_note <txid>` | Show the local note for a transaction |
-| `set_tx_note <txid> <note>` | Attach a local note (the note is everything after the txid, verbatim) |
-| `abandon <txid>` | Give up on a dispatched send; funds stay locked until the network is confirmed to have dropped it |
+| `send <amount> <address> [--priority economy\|standard\|high] [--yes]` | Send SKL (build → confirm → submit/discard) |
 | `fee [--inputs N] [--outputs N]` | Fee quotes and size estimate |
+| `tx list [--in \| --out] [--unmatched]` | Recent transactions; `--unmatched` lists receives with no payment-request match |
+| `tx show <id>` | Details for a transaction |
+| `tx note <txid> [<text...>]` | Show the local note for a transaction, or attach one (the note is everything after the txid, verbatim) |
+| `tx abandon <txid>` | Give up on a dispatched send; funds stay locked until the network is confirmed to have dropped it |
 
 **Receiving (payment requests)**
 
 | Command | Description |
 |---------|-------------|
 | `request new <amount> <label> [--expiry <unix\|1h\|7d>]` | Create a payment request (`shekyl:` URI); expiry is wall-clock unix seconds or a duration from now |
-| `requests list [pending\|matched\|all]` | List payment requests |
-| `make_uri [--amount X] [--label L] [--address ADDR]` | Compose a `shekyl:` payment URI |
-| `parse_uri <uri>` | Decode a `shekyl:` payment URI |
-| `history incoming --unattributed` | Receives with no payment-request match |
+| `request list [--matched \| --all]` | List payment requests (pending by default) |
+| `uri make [--amount X] [--label L] [--address ADDR]` | Compose a `shekyl:` payment URI |
+| `uri read <uri>` | Decode a `shekyl:` payment URI |
 
 **Staking**
 
 | Command | Description |
 |---------|-------------|
-| `stake [--complete-tree-foundation]` | Make this wallet a staker |
-| `staked_balance` | Staked-balance breakdown |
-| `staked_outputs` | Unspent staking-side outputs |
-| `staking_info` | Staking state and scan height |
-| `stake_in <amount>` | Add funds to the staking balance (prints a privacy note, then confirms) |
-| `drain_balance` | How much staking money can be moved back to this wallet |
-| `drain <amount>` | Move staking funds back to this wallet (fee and destination automatic; no flags) |
-| `unstake` | Post the permanent exit for the staked bond (irreversible; confirms first) |
-| `collect_unstaked` | Collect the released exit funds back into this wallet (one pass at a time) |
-| `chain_health` | Daemon/chain health (separate connection) |
+| `stake` | Staking state and scan height |
+| `stake balance` | Staked-balance breakdown |
+| `stake outputs` | Unspent staking-side outputs |
+| `stake available` | How much staking money can be moved back to this wallet |
+| `stake add <amount> [--yes]` | Add funds to the staking balance (prints a privacy note, then confirms) |
+| `stake return <amount> [--yes]` | Move staking funds back to this wallet (fee and destination automatic) |
+| `stake release [--yes]` | Post the permanent exit for the staked bond (irreversible; confirms first) |
+| `stake collect [--yes]` | Collect the released exit funds back into this wallet (one pass at a time) |
+| `stake join <shard-id>...` | Name the shards to serve; it does not post until wallet-RPC `stake` accepts a shard set |
+
+**Shards and the chain**
+
+| Command | Description |
+|---------|-------------|
+| `shard list all` | The network's archival shard coverage |
+| `shard list mine` | The shards this wallet holds |
+| `shard show <id>` | One shard's coverage |
+| `shard fetch <id> [--png <path>] [--size <n>]` | Fetch a shard; `--png` writes an image of it |
+| `chain` | Daemon and chain health (separate connection) |
 
 **Mining** (the daemon does the hashing; these control it — CU-3)
 
@@ -249,32 +254,35 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 | `mine stop` | Stop mining on the daemon |
 | `mine status` | Mining state, thread count, and hash rate |
 
-`start_mining [threads]` / `stop_mining` / `mining_status` are accepted as
-aliases. Requires an open wallet, the unrestricted RPC listener, and a
-daemon on the same network as the CLI. The default daemon is loopback
-(the recommended posture); a remote `--daemon-address` is allowed and
-`mine start` reminds you of the risk. A still-syncing daemon refuses
-`mine start` until it is caught up.
+The retired spellings `start_mining`, `stop_mining` and `mining_status`
+do not run; each names its `mine` replacement. Requires an open wallet,
+the unrestricted RPC listener, and a daemon on the same network as the
+CLI. The default daemon is loopback (the recommended posture); a remote
+`--daemon-address` is allowed and `mine start` reminds you of the risk.
+A still-syncing daemon refuses `mine start` until it is caught up.
 
 **Proofs and message signing**
 
 | Command | Description |
 |---------|-------------|
-| `get_tx_proof <txid> <address> [message]` | Prove a payment (open wallet required) |
-| `check_tx_proof <txid> <address> <proof> [message]` | Verify a tx proof (no wallet needed) |
-| `get_reserve_proof [amount] [message]` | Prove unspent reserve (FULL wallet) |
-| `check_reserve_proof <address> <proof> [message]` | Verify a reserve proof (no wallet needed) |
-| `sign <message>` | Sign a message as this wallet's address |
-| `verify <address> <signature> <message>` | Check a message signature (no wallet needed) |
+| `prove payment <txid> <address> [message...]` | Prove a payment (open wallet required) |
+| `check payment <txid> <address> <proof> [message...]` | Verify a payment proof (no wallet needed) |
+| `prove reserve [amount] [message...]` | Prove unspent reserve (FULL wallet) |
+| `check reserve <address> <proof> [message...]` | Verify a reserve proof (no wallet needed) |
+| `sign <message...>` | Sign a message as this wallet's address |
+| `verify <address> <signature> <message...>` | Check a message signature (no wallet needed) |
 
 **Meta**
 
 | Command | Description |
 |---------|-------------|
-| `wallet` | Wallet summary (height, balance, address); `engine_info` is a hidden alias (CU-2) |
 | `version` | CLI and wallet-RPC versions |
 | `help [command]` | Show all commands, or one command's usage |
 | `exit` / `quit` | Exit shekyl-cli |
+
+The wallet2-era and pre-shell spellings (`transfer`, `transfers`,
+`show_transfer`, `stake_in`, `drain`, `unstake`, `get_tx_proof`,
+`staking_info`, and the rest) do not run; each names its replacement.
 
 Offline cold signing (`describe_transfer` / `sign_transfer` /
 `submit_transfer`) answers RESERVED: A4 descoped cold *signing* from V3.0
@@ -363,43 +371,7 @@ shekyl-wallet-rpc --wallet-dir ~/wallets \
                   --rpc-login user:password
 ```
 
-## 4. `shekyl-gen-trusted-multisig` — Multisig Wallet Generator
-
-Creates a complete set of N multisig wallets with a given M-of-N threshold in
-one step. Intended for trusted setups where all keys are generated on a single
-machine (e.g. organizational cold storage).
-
-### Usage
-
-```
-shekyl-gen-trusted-multisig --filename-base=<name> --scheme=M/N [options]
-```
-
-### Options
-
-| Option | Description |
-|--------|-------------|
-| `--filename-base <name>` | Base name for wallet files (produces `<name>-1`, `<name>-2`, etc.) |
-| `--scheme <M/N>` | Multisig threshold scheme (e.g. `2/3`) |
-| `--threshold <M>` | Alternatively, specify M and N separately |
-| `--participants <N>` | Number of participants (used with `--threshold`) |
-| `--testnet` | Generate testnet wallets |
-| `--stagenet` | Generate stagenet wallets |
-| `--create-address-file` | Write `.address.txt` files alongside wallets |
-
-### Example
-
-```bash
-# Generate a 2-of-3 multisig wallet set
-shekyl-gen-trusted-multisig --filename-base cold-storage --scheme 2/3
-```
-
-Output: `cold-storage-1`, `cold-storage-2`, `cold-storage-3` wallet files, and
-the shared multisig address printed to stdout.
-
----
-
-## 5. `shekyl-gen-ssl-cert` — TLS Certificate Generator
+## 4. `shekyl-gen-ssl-cert` — TLS Certificate Generator
 
 Generates an RSA TLS certificate and private key. No Shekyl RPC binary consumes them any more (the C++ `--rpc-ssl-*` surface is retired, §3); the output suits a TLS terminator you run in front of the daemon.
 Prints the SHA-256 fingerprint of the generated certificate.
@@ -432,7 +404,7 @@ shekyl-gen-ssl-cert \
 
 ---
 
-## 6. Blockchain Utilities
+## 5. Blockchain Utilities
 
 These tools operate directly on the LMDB blockchain database. The node must be
 stopped before running any tool that opens the database in read-write mode.
@@ -460,7 +432,7 @@ shekyl-blockchain-import --pop-blocks 100
 
 Key options: `--input-file`, `--data-dir`, `--batch-size`, `--resume` /
 `--no-resume`, `--block-stop`, `--count-blocks`, `--pop-blocks`,
-`--drop-hard-fork`, `--dangerous-unverified-import`.
+`--dangerous-unverified-import`.
 
 ### `shekyl-blockchain-export`
 
@@ -582,7 +554,7 @@ schema-agnostic compaction replace them.
 
 ---
 
-## 7. Debug Utilities
+## 6. Debug Utilities
 
 Built only when `BUILD_DEBUG_UTILITIES=ON` is set at CMake configure time.
 

@@ -25,7 +25,7 @@
 //! none inherits the framework's default. The [`Apply`] handler is the
 //! table (§1.1). **Store-terminal faults end the actor; everything else is
 //! a reply the driver owns.** A replay driver may treat a stale seed as
-//! run-ending; E3 re-forms on the same actor. A refusal is never `Over`.
+//! run-ending; the live daemon (DRS-X) re-forms on the same actor. A refusal is never `Over`.
 //!
 //! | outcome | here |
 //! | --- | --- |
@@ -60,12 +60,12 @@ use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
     recorded, validate, ArchivalDelta, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian,
-    Fault, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale, StructurallyValid, Verdict,
-    ViewRead, Weights,
+    Fault, HeaderView, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale,
+    StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
-use shekyl_types::archival::BondRecord;
+use shekyl_types::archival::{BondRecord, IndexedDraw, IssuedDigest};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch,
 };
@@ -98,6 +98,7 @@ impl RunEnd {
             | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
             | RunFault::InjectOffRegtest { .. }
+            | RunFault::IssueOffRegtest { .. }
             | RunFault::Over(_) => None,
         }
     }
@@ -169,6 +170,16 @@ pub enum RunFault {
     InjectOffRegtest {
         /// The credit refused.
         credit: ServeCredit,
+        /// The rules the connector runs under.
+        rules: ChainRules,
+    },
+    /// An [`IssueDraws`] under rules other than regtest: the door has one
+    /// producer, as [`Inject`]'s has, and is refused here for the same
+    /// reason.
+    #[error("issue of draws for epoch {epoch} under {rules:?}: the out-of-band draw issue is regtest-only")]
+    IssueOffRegtest {
+        /// The epoch the draws were for.
+        epoch: SettlementEpoch,
         /// The rules the connector runs under.
         rules: ChainRules,
     },
@@ -252,6 +263,23 @@ pub struct Injected {
     /// The height the store attributed the bit to: the tip when it was
     /// written.
     pub at: BlockHeight,
+}
+
+/// Write issued draws into `epoch`'s index, in their own store transaction,
+/// through the store's regtest door (`ChainStore::regtest_issue_draws`;
+/// `ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`): the stand-in for admission,
+/// which does not exist yet, so a scenario's slash pass has draws to
+/// settle. `digest` is the epoch's running digest with these draws folded
+/// in; the caller folds it, as admission will. Not journaled, like
+/// [`Inject`].
+#[derive(Clone, Debug)]
+pub struct IssueDraws {
+    /// The epoch the draws were issued in.
+    pub epoch: SettlementEpoch,
+    /// The draws, each with whether it was passed.
+    pub draws: Vec<IndexedDraw>,
+    /// The epoch's digest after them.
+    pub digest: IssuedDigest,
 }
 
 /// The redb-side logical state now (commit 2), for the digest sink.
@@ -338,7 +366,7 @@ pub struct BudgetAccruingOf {
 /// through the definitions the validator uses (`tx_volume_window`,
 /// `mtp_median_at`) — so the template is priced at the operands it will be
 /// judged by, never at a second copy of them. The `get_block_template`
-/// read path in the shape E3 will serve it; the slice-6 scenario driver is
+/// read path in the shape the live daemon (DRS-X) will serve it; the slice-6 scenario driver is
 /// its first consumer.
 #[derive(Clone, Copy, Debug)]
 pub struct TemplateFacts;
@@ -443,6 +471,23 @@ impl Writer {
         let result = self
             .store
             .regtest_inject_serve_credit(trust, credit.persona, credit.shard, credit.epoch)
+            .map_err(RunFault::Store);
+        self.latch(result)
+    }
+
+    /// The store's regtest draw issue, behind the same latch as
+    /// [`Self::inject`] and terminal on the same refusals.
+    fn issue_draws(
+        &mut self,
+        trust: shekyl_chain_rules::Trust,
+        issue: &IssueDraws,
+    ) -> Result<(), RunFault> {
+        if let Some(end) = self.over {
+            return Err(RunFault::Over(end));
+        }
+        let result = self
+            .store
+            .regtest_issue_draws(trust, issue.epoch, &issue.draws, issue.digest)
             .map_err(RunFault::Store);
         self.latch(result)
     }
@@ -612,6 +657,24 @@ impl Message<Inject> for Connector {
         }
         let at = self.writer.inject(self.rules.trust(), credit)?;
         Ok(Injected { at })
+    }
+}
+
+impl Message<IssueDraws> for Connector {
+    type Reply = Result<(), RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: IssueDraws,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if !matches!(self.rules, ChainRules::Regtest { .. }) {
+            return Err(RunFault::IssueOffRegtest {
+                epoch: msg.epoch,
+                rules: self.rules,
+            });
+        }
+        self.writer.issue_draws(self.rules.trust(), &msg)
     }
 }
 

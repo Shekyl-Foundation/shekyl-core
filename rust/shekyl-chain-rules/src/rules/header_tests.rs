@@ -4,12 +4,9 @@
 // BSD-3-Clause
 
 //! Negative fixtures for census 4.B (`CHAIN_RULES_SLICE_1.md` §7): version
-//! rows (B1, B2, B7), the curve-tree root (B5) and identity (B6). Each test
-//! names its row; each asserts a *refusal* where the row refuses, and — for
-//! the two rows whose statement is "does not reject" — that the mutated
-//! field trips **no** row, or the row that does trip is the one the census
-//! says. Pipeline coverage of the six landed rows lives in
-//! `validate_tests.rs`.
+//! rows (B1, B2), the curve-tree root (B5) and identity (B6). Each test
+//! names its row and asserts a *refusal* where the row refuses. Pipeline
+//! coverage of the landed rows lives in `validate_tests.rs`.
 
 use super::*;
 use crate::block::Candidate;
@@ -17,7 +14,7 @@ use crate::census::CenRow;
 use crate::fault::FormAttempt;
 use crate::harness::fixture::{candidate, candidate_on, recorded, root};
 use crate::harness::{
-    assert_refused, boundary_pair, formed, formed_on, infallible, judged, MockChain,
+    assert_refused, boundary_pair, defined, formed, formed_on, judged, MockChain,
 };
 use crate::harness::{Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
@@ -25,7 +22,7 @@ use crate::rules::{BlockContext, FormContext, FormRule};
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::{ChainValid, Locus, Verdict};
-use crate::view::{AtHeight, ChainView, Tip};
+use crate::view::{AtHeight, ChainView, HeaderRecord, HeaderView, Tip};
 use shekyl_types::{BlockHash, CurveTreeRoot};
 
 /// One bit off: the wrong-root fixtures, without indexing into a newtype.
@@ -79,7 +76,7 @@ fn check_alone<R: FormRule>(candidate: &Candidate, rule_set: &RuleSet) -> Verdic
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
     chain.with_view(|view| {
-        infallible(R::check(
+        defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
             &view,
         ))
@@ -101,62 +98,37 @@ fn cen_b1_major_version_must_be_the_admitted_one() {
 // --- CEN-B2 ---------------------------------------------------------------
 
 #[test]
-fn cen_b2_minor_version_is_unconstrained_under_genesis() {
-    // The census's effect: any vote passes at the shipped table.
-    for minor in [0, 1, 2, 0x7f, u8::MAX] {
-        judge(with_versions(1, minor))
-            .unwrap_or_else(|refused| panic!("minor_version {minor} was refused: {refused}"));
+fn cen_b2_minor_version_is_the_reserved_value_and_no_other() {
+    // The byte is reserved at zero. Every other value is refused: the one
+    // next to it, and the rest of the `u8`, since a producer choosing among
+    // 255 admitted values is the channel the rule closes.
+    assert_eq!(HEADER_MINOR_VERSION, 0);
+    boundary_pair(
+        HEADER_MINOR_VERSION,
+        HEADER_MINOR_VERSION + 1,
+        CenRow::B2,
+        Locus::Block,
+        |minor| check_alone::<B2>(&with_versions(1, minor), &RuleSet::GENESIS),
+    );
+    for minor in 1..=u8::MAX {
+        assert_refused(judge(with_versions(1, minor)), CenRow::B2, Locus::Block);
     }
+    judge(with_versions(1, HEADER_MINOR_VERSION)).expect("the reserved value is admitted");
 }
 
 #[test]
-fn cen_b2_ports_the_predicate_not_the_effect() {
-    // `hardfork.cpp:41–50`: `0` votes for `1`; everything else votes for
-    // itself. The comparison is `vote >= admitted`, and under `GENESIS`
-    // (`admitted == 1`) no `u8` can lose it — which is why the row reads
-    // "unconstrained". Under a rule set admitting `2` the same comparison
-    // refuses votes `0` and `1` exactly as `do_check` would; no such set is
-    // issued, so the fixture uses the test-only constructor.
-    assert_eq!(B2::normalised_vote(0), 1);
-    assert_eq!(B2::normalised_vote(1), 1);
-    assert_eq!(B2::normalised_vote(7), 7);
-
+fn cen_b2_does_not_follow_the_major_version() {
+    // Monero read this byte as a vote that had to reach the version in
+    // force. Under a rule set admitting `2` the reserved value is still
+    // zero, and `2` is refused: nothing about B2 reads the rule set.
     let admits_two = RuleSet::admitting_for_tests(2);
-    // The rule alone, so B1 (which also refuses `major != 2`) is out of the way.
-    boundary_pair(2, 1, CenRow::B2, Locus::Block, |minor| {
-        check_alone::<B2>(&with_versions(2, minor), &admits_two)
-    });
+    judge_under(with_versions(2, HEADER_MINOR_VERSION), &admits_two)
+        .expect("the reserved value under a later major version");
     assert_refused(
-        check_alone::<B2>(&with_versions(2, 0), &admits_two),
+        judge_under(with_versions(2, 2), &admits_two),
         CenRow::B2,
         Locus::Block,
     );
-    // And through the pipeline: `major == 2` satisfies B1, so B2's refusal
-    // is the verdict — the wiring, not only the predicate.
-    assert_refused(
-        judge_under(with_versions(2, 1), &admits_two),
-        CenRow::B2,
-        Locus::Block,
-    );
-    judge_under(with_versions(2, 2), &admits_two).expect("vote 2 under admitted 2 passes");
-}
-
-// --- CEN-B7 ---------------------------------------------------------------
-
-#[test]
-fn cen_b7_never_refuses_a_future_version_is_b1s_refusal() {
-    // B7 called on its own passes the header that trips the C++'s warning
-    // branch — the pipeline would stop at B1 first, so this is the only way
-    // to observe B7 on such a header, and a B7 that started refusing future
-    // versions fails here.
-    for major in [2, 7, u8::MAX] {
-        check_alone::<B7>(&with_versions(major, 0), &RuleSet::GENESIS)
-            .unwrap_or_else(|refused| panic!("B7 refused major_version {major}: {refused}"));
-    }
-    // Through the pipeline the same header is refused — by B1, never by B7
-    // (`assert_refused` bites on the wrong row).
-    assert_refused(judge(with_versions(2, 0)), CenRow::B1, Locus::Block);
-    assert_refused(judge(with_versions(u8::MAX, 0)), CenRow::B1, Locus::Block);
 }
 
 // --- CEN-B5 ---------------------------------------------------------------
@@ -223,8 +195,19 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
     // against one that has no state at the connecting height the arm is a
     // refusal, never a fall-through.
     struct NoRoots;
-    impl<'id> ChainView<'id> for NoRoots {
+    impl<'id> HeaderView<'id> for NoRoots {
         type Fault = core::convert::Infallible;
+        fn tip(&self) -> Result<Option<Tip>, Self::Fault> {
+            Ok(None)
+        }
+        fn header_at(
+            &self,
+            _: shekyl_types::BlockHeight,
+        ) -> Result<AtHeight<HeaderRecord>, Self::Fault> {
+            Ok(AtHeight::AboveTip)
+        }
+    }
+    impl<'id> ChainView<'id> for NoRoots {
         fn has_key_image(&self, _: &shekyl_types::KeyImage) -> Result<bool, Self::Fault> {
             Ok(false)
         }
@@ -256,9 +239,6 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         ) -> Result<AtHeight<CurveTreeRoot>, Self::Fault> {
             Ok(AtHeight::AboveTip)
         }
-        fn tip(&self) -> Result<Option<Tip>, Self::Fault> {
-            Ok(None)
-        }
         fn tree_frontier(&self) -> Result<crate::TreeFrontier, Self::Fault> {
             Ok(crate::TreeFrontier::EMPTY)
         }
@@ -281,7 +261,7 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         crate::archival_reads!(empty);
     }
     let genesis = formed(candidate(Vec::new()));
-    let verdict = infallible(B5::check(
+    let verdict = defined(B5::check(
         &BlockContext::for_tests(&genesis, None, None),
         &NoRoots,
     ));
@@ -302,7 +282,7 @@ fn cen_b6_identity_is_block_hash_and_records_the_row() {
 
 #[test]
 fn a_refusal_leaves_no_coverage_behind_it() {
-    // B1 refuses before B2/B7 run; the verdict is the refusal, and there is
+    // B1 refuses before B2 runs; the verdict is the refusal, and there is
     // no partial coverage to read — `validate` returns before the mint.
     assert_refused(judge(with_versions(2, 0)), CenRow::B1, Locus::Block);
 }

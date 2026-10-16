@@ -18,15 +18,35 @@
 //! # Public surface
 //!
 //! - [`challenge`] — `challenge_leaf_index`, `challenge_fire_height`, domain labels.
-//! - [`challenge_assignment`] — exact-min derived assignment urn
-//!   ([`ChallengeUrn`], [`assign_epoch`]); pure, no wire surface.
+//! - [`drawable_pair`] — one drawable `(P, s)` pair. The public urn that
+//!   scheduled these pairs is deleted; the secret draw replaces it.
 //! - [`path`] — [`SegmentPathOpening`], [`verify_segment_path`] (requires the
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
-//! - [`attestation`] — settlement fold over challenge outcome counts (`settle_epoch`, absolute-2).
+//! - [`attestation`] — the kept per-record discriminant ([`AttestationKind`]).
+//! - [`secret_draw`] — the secret draw: selection, the `0x0C` commitment,
+//!   the challenge nonce, the serve-credit batch commitment, and the
+//!   count rule (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4, §5.2, §7.3).
+//! - [`bundle`] — the serve-credit bundle: the pass bitmap, the kept and
+//!   prunable parts, the reference a block carries, the bundle commitment,
+//!   the prunable hash, the header root, and the section budget
+//!   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7). STAGED: read by the pure
+//!   verifier in `shekyl-chain-rules`; no block path yet.
+//! - [`drawable_epoch`] — one epoch's drawable pairs and each persona's
+//!   receipt key, as one value (§9.6). STAGED with [`bundle`]. The name is
+//!   [`DrawableEpoch`], not a snapshot: `shekyl-chain-rules` already calls
+//!   its emission gather `EpochSnapshot`.
+//! - [`settlement_select`] — settlement's fold: three counted draws by beacon, the pair's
+//!   row, and the issued-draw digest term.
 //! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
+//! - [`attestation_admission`] — the block-level admission body
+//!   ([`AttestationSet`]: parse, root, countersignatures) the daemon FFI
+//!   and the Rust validator (CEN-B4) both run.
 //! - [`pass_anchor`] — SF-D8 window and countersignature transcript.
+//! - [`shard_view_hash`] — `SV-D1`'s view hash of a `W`-byte shard: the
+//!   streaming [`ShardViewHasher`] over each in-domain transaction's prunable
+//!   region and `pqc_auths`. Not a verification digest; never a skeleton row.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
 //! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`);
@@ -36,6 +56,7 @@
 
 pub mod admission;
 pub mod attestation;
+pub mod attestation_admission;
 pub mod attestation_wire;
 pub mod bond_connect;
 pub mod bond_ct_balance;
@@ -43,14 +64,16 @@ pub mod bond_duration;
 pub mod bond_floor;
 pub mod bond_post;
 pub mod bond_wire;
+pub mod bundle;
 pub mod challenge;
-pub mod challenge_assignment;
 pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
 pub mod constants;
 pub mod debit_auth;
 pub mod distinct;
+pub mod drawable_epoch;
+pub mod drawable_pair;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
@@ -63,10 +86,12 @@ pub mod pass_anchor;
 pub mod path;
 pub mod release_cooldown;
 pub mod reward_arithmetic;
+pub mod secret_draw;
 pub mod segment_freeze;
 pub mod serve_eligibility;
-pub mod settlement_row;
+pub mod settlement_select;
 pub mod shard_coverage;
+pub mod shard_view_hash;
 pub mod wire;
 
 pub use admission::codes as admission_codes;
@@ -75,14 +100,15 @@ pub use admission::{
     credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
     ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
 };
-pub use attestation::{
-    settle_epoch, AttestationKind, EpochSettlement, SettleError, SERVE_THRESHOLD_PASSES,
+pub use attestation::AttestationKind;
+pub use attestation_admission::{
+    AttestationRootError, AttestationSet, AttestationSetError, CountersignatureRefusal,
 };
 pub use attestation_wire::{
     attestation_root, empty_attestation_root, pass_records_from_headers_and_witness,
-    verify_pass_countersignature, verify_pass_transcript, AttestationHeader,
-    AttestationHeaderError, BlockAttestationWitness, PassCountersignatureError, PassRecord,
-    PassWitness, WitnessError, WitnessPairingError, ATTESTATION_HEADER_LEN,
+    verify_pass_countersignature, verify_pass_transcript, verify_receipt_transcript,
+    AttestationHeader, AttestationHeaderError, BlockAttestationWitness, PassCountersignatureError,
+    PassRecord, PassWitness, WitnessError, WitnessPairingError, ATTESTATION_HEADER_LEN,
     ATTESTATION_ROOT_CUSTOMIZATION, MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
     WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
@@ -112,14 +138,18 @@ pub use bond_wire::{
     WireError as BondWireError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
     VIN_TYPE_ARCHIVAL_BOND_POST,
 };
+pub use bundle::{
+    bundle_charge, bundle_commitment, bundle_prunable_hash, bundle_root, section_budget,
+    section_d_max, BundleBody, BundleKept, BundleRecord, BundleRef, BundleWireError, PassBitmap,
+    TooManyReferences, BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_KEPT_FIXED_LEN,
+    BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN,
+    BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_SEED_LEN,
+    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN,
+};
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
     CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
     SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
-};
-pub use challenge_assignment::{
-    assign_epoch, AssignmentError, ChallengeUrn, DrawablePair, FeedError,
-    CHALLENGE_ASSIGNMENT_CUSTOMIZATION,
 };
 pub use claimed_epochs::{
     claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,
@@ -149,25 +179,26 @@ pub use constants::{
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
 };
+pub use drawable_epoch::{DrawableEpoch, DrawableEpochError};
+pub use drawable_pair::DrawablePair;
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
     claimant_reward_share, emission_vin_verify, emission_vin_verify_auth,
-    emission_vin_verify_backing, emission_vin_verify_claims, epoch_is_before_join, AuthVerified,
-    BackingVerified, ClaimantBondRecord, ClaimantShare, ClaimantShareError, ClaimsVerified,
-    EmissionEpochSource, EmissionVerified, EmissionVerifyContext, EmissionVerifyError,
+    emission_vin_verify_backing, emission_vin_verify_claims, emission_vin_verify_claims_under,
+    epoch_is_before_join, AuthVerified, BackingVerified, ClaimantBondRecord, ClaimantShare,
+    ClaimantShareError, ClaimsVerified, EmissionEpochSource, EmissionVerified,
+    EmissionVerifyContext, EmissionVerifyError,
 };
 pub use pass_anchor::{
-    pass_countersignature_message, pass_delivery_digest, pass_request_header_bytes,
-    PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader,
-    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    anchor_depth_covers_response_window, pass_countersignature_message, pass_delivery_digest,
+    pass_request_header_bytes, response_window_outrunning_anchor, PassAnchorWindow,
+    PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader, PASS_ANCHOR_DEPTH_BLOCKS,
+    PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
     PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
     PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
     PASS_REQUEST_HEADER_LEN,
 };
-pub use settlement_row::{
-    RowError, SettlementRow, OUTCOME_MISSED, OUTCOME_NON_OBSERVATION, OUTCOME_SERVED,
-    SETTLEMENT_ROW_LEN,
-};
+pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 // The emission error is re-exported under a disambiguated name: the bare
 // `WireError` at this root is wire.rs's (serve-credit) type, and bond_wire's is
 // deliberately not re-exported — a crate-root import must not silently resolve
@@ -180,8 +211,10 @@ pub use emission_wire::{
 };
 pub use error::VerifyError;
 pub use failure_window::{
-    failure_window_slashable, BaselineObservation, FailureWindowError, FAILURE_WINDOW_M,
-    FAILURE_WINDOW_N, FAILURE_WINDOW_SERVE_BUDGET,
+    failure_window_slashable, settlement_retention_floor, settlement_window_slashable,
+    BaselineObservation, FailureWindowError, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
+    FAILURE_WINDOW_N_GATHER_BOUND, FAILURE_WINDOW_SERVE_BUDGET, SETTLEMENT_RETENTION_EPOCHS,
+    SLASH_SETTLEMENT_TIP_LAG_EPOCHS, WINDOW_MIN_OBSERVATION_PER_MILLE,
 };
 pub use held_at_height::holds_shard_at;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
@@ -194,6 +227,12 @@ pub use reward_arithmetic::{
     work_milli_from_micro, BandedCurveParams, WORK_MICRO_PER_MILLI, WORK_MICRO_SCALE,
     WORK_MILLI_SCALE,
 };
+pub use secret_draw::{
+    challenge_nonce, draw_commit, draw_count, draw_horizon, draw_target, select_draw,
+    serve_credit_batch_commitment, DrawTarget, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION,
+    CHALLENGE_READS, DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION,
+    DRAW_HORIZON_FLOOR, SERVE_CREDIT_BATCH_CUSTOMIZATION,
+};
 pub use segment_freeze::{
     challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,
     LeafChunkBounds, SEGMENT_LEAF_COUNT,
@@ -201,6 +240,9 @@ pub use segment_freeze::{
 pub use serve_eligibility::serve_credit_epoch_ok;
 pub use shard_coverage::{
     join_scarcity_micro, order_shard_coverage, ShardCoverageIn, ShardCoverageOut,
+};
+pub use shard_view_hash::{
+    shard_view_hash, ArchivalTx, ShardViewHasher, SHARD_VIEW_HASH_CUSTOMIZATION,
 };
 pub use wire::{
     encode_path, hybrid_countersignature, split_countersignature, ArchivalServeCreditPruned,

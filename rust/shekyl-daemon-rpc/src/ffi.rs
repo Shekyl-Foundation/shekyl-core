@@ -305,6 +305,10 @@ pub const SHEKYL_RPC_FACTS_ERR_INTERNAL: i32 = -3;
 /// The store reported a height it cannot produce the block for — a
 /// data-integrity fault of this daemon, distinct from a read that threw.
 pub const SHEKYL_RPC_FACTS_ERR_INCONSISTENT: i32 = -4;
+/// The daemon was started offline (`--offline`): a state, not a fault,
+/// and nothing was written. Answered by the peer-list exports and
+/// `shekyl_rpc_p2p_state` (`shekyl-ffi`'s `FACTS_OFFLINE`; Rick, 2026-10-14).
+pub const SHEKYL_RPC_FACTS_OFFLINE: i32 = 1;
 
 /// Twin of `shekyl_rpc_identity_facts` (VC-2): what this daemon **is**, as
 /// opposed to what its chain tip looks like right now.
@@ -529,37 +533,6 @@ impl BlockHeaderFactsFfi {
     }
 }
 
-/// Twin of `shekyl_rpc_hardfork_entry`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HardforkEntryFfi {
-    pub version: u8,
-    pub reserved: [u8; 7],
-    pub height: u64,
-}
-
-/// Twin of `shekyl_rpc_hard_fork_facts` (RK-5b).
-///
-/// **Two versions, named apart.** `queried_version` is what the voting fields
-/// describe — the caller's, or the resolved next-fork version when the caller
-/// asked with none. `active_version` is the chain's current fork. The C++ this
-/// replaces reported the second under the name `version` while the voting
-/// fields described the first, and echoed nothing of the query.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HardForkFactsFfi {
-    pub earliest_height: u64,
-    pub window: u32,
-    pub votes: u32,
-    pub threshold: u32,
-    pub state: u32,
-    pub queried_version: u8,
-    pub active_version: u8,
-    pub voting: u8,
-    pub enabled: u8,
-    pub reserved: [u8; 4],
-}
-
 /// Twin of `shekyl_rpc_fee_estimate_facts` (RK-5b).
 ///
 /// `fees` is one slot per priced tier: `[economy, standard, priority]`.
@@ -574,18 +547,6 @@ pub struct FeeEstimateFactsFfi {
     pub fee_count: u8,
     pub reserved: [u8; 7],
 }
-
-const _: () = assert!(std::mem::size_of::<HardForkFactsFfi>() == 32);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, earliest_height) == 0);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, window) == 8);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, votes) == 12);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, threshold) == 16);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, state) == 20);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, queried_version) == 24);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, active_version) == 25);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, voting) == 26);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, enabled) == 27);
-const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, reserved) == 28);
 
 const _: () = assert!(std::mem::size_of::<FeeEstimateFactsFfi>() == 40);
 const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fees) == 0);
@@ -644,7 +605,10 @@ pub struct ConnectionFactsFfi {
     pub incoming: u8,
     pub localhost: u8,
     pub local_ip: u8,
-    pub reserved: [u8; 5],
+    /// 1 when `height`, `support_flags`, and `state` were read. 0 means
+    /// those three are unknown.
+    pub claims_known: u8,
+    pub reserved: [u8; 4],
 }
 
 /// Twin of `shekyl_rpc_sync_span_facts` (RK-5a). Pinned by layout.
@@ -669,15 +633,17 @@ pub struct SyncSpanFactsFfi {
     pub reserved: [u8; 7],
 }
 
-/// Twin of `shekyl_rpc_peer_facts` (RK-5a). Pinned by layout.
+/// Twin of `shekyl_rpc_peer_facts` (RK-5a), now `shekyl-ffi`'s
+/// `ShekylRpcPeerFacts`, exported from the Rust peer lists. Pinned by
+/// layout on both sides (24 bytes). No `last_seen`: the lists carry no
+/// clock (3.51).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PeerFactsFfi {
     /// Already resolved per address arm by the adapter — the ip string for
-    /// ipv4, `host_str()` for ipv6, the whole `str()` for anything else.
+    /// ipv4, the bare host for ipv6, the whole `host:port` for Tor.
     pub host: *const u8,
     pub host_len: usize,
-    pub last_seen: u64,
     /// The ipv4 address with its four octets in **network** order, as
     /// `ipv4_network_address::ip()` returns it; 0 for every other arm.
     pub ip: u32,
@@ -688,6 +654,76 @@ pub struct PeerFactsFfi {
     /// Filled unconditionally; applying `include_blocked` is this side's job.
     pub blocked: u8,
 }
+
+/// Twin of `shekyl_rpc_info_chain_facts` (RK-5c): `get_info`'s health,
+/// identity, chain and economics operands, read for every caller. Every
+/// member from the chain store is read under one chain lock and carries its
+/// own tip (RK-D20). Layout pinned both directions by
+/// `shekyl_rpc_info_chain_facts_rust_{fill,check}`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InfoChainFactsFfi {
+    /// Top block height + 1.
+    pub chain_height: u64,
+    pub top_hash: [u8; 32],
+    pub difficulty_lo: u64,
+    pub difficulty_hi: u64,
+    pub cumulative_difficulty_lo: u64,
+    pub cumulative_difficulty_hi: u64,
+    pub difficulty_target: u64,
+    /// Coinbases included.
+    pub total_transactions: u64,
+    pub block_weight_limit: u64,
+    pub block_weight_median: u64,
+    pub adjusted_time: u64,
+    pub already_generated_coins: u64,
+    pub total_burned: u64,
+    pub tx_volume_count_sum: u64,
+    pub tx_volume_blocks: u64,
+    /// 0: the core has no target.
+    pub core_target_height: u64,
+    pub synchronized: u8,
+    pub busy_syncing: u8,
+    pub offline: u8,
+    pub following_degraded: u8,
+    /// `SHEKYL_PROTOCOL_VERSION`, which only C++ defines.
+    pub protocol_version: u8,
+    pub reserved: [u8; 3],
+}
+
+/// Twin of `shekyl_rpc_info_status_facts` (RK-5c): read only for a caller
+/// who is shown Status. The store's size is not here; it has its own read.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InfoStatusFactsFfi {
+    pub start_time: u64,
+    pub free_space: u64,
+    pub alt_blocks_count: u64,
+}
+
+/// Twin of `shekyl_rpc_info_peers_facts` (RK-5c): read only for a caller who
+/// is shown Peers.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InfoPeersFactsFfi {
+    pub public_incoming_sockets: u64,
+    pub public_outgoing_sockets: u64,
+    pub tor_incoming_sockets: u64,
+    pub tor_outgoing_sockets: u64,
+}
+
+// RK-5c layout pins, with their `static_assert` counterparts in
+// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp`.
+const _: () = assert!(std::mem::size_of::<InfoChainFactsFfi>() == 160);
+const _: () = assert!(std::mem::align_of::<InfoChainFactsFfi>() == 8);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, top_hash) == 8);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, difficulty_lo) == 40);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, core_target_height) == 144);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, synchronized) == 152);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, protocol_version) == 156);
+const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, reserved) == 157);
+const _: () = assert!(std::mem::size_of::<InfoStatusFactsFfi>() == 24);
+const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 32);
 
 // RK-5a layout pins. `ConnectionFactsFfi`, `SyncSpanFactsFfi` and
 // `PeerFactsFfi` carry pointers, so there is no fill/check twin to catch a
@@ -717,7 +753,8 @@ const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 120);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 121);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 122);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 123);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, claims_known) == 123);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 124);
 
 const _: () = assert!(std::mem::size_of::<SyncSpanFactsFfi>() == 72);
 const _: () = assert!(std::mem::align_of::<SyncSpanFactsFfi>() == 8);
@@ -732,22 +769,18 @@ const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, speed_fraction) == 
 const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, filled) == 64);
 const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, reserved) == 65);
 
-const _: () = assert!(std::mem::size_of::<PeerFactsFfi>() == 32);
+// The twin is `shekyl-ffi`'s `ShekylRpcPeerFacts` and the C++
+// `shekyl_rpc_peer_facts` in `shekyl_ffi.h`, each pinned to 24 bytes.
+const _: () = assert!(std::mem::size_of::<PeerFactsFfi>() == 24);
 const _: () = assert!(std::mem::align_of::<PeerFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host) == 0);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host_len) == 8);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, last_seen) == 16);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, ip) == 24);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 28);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 30);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 31);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, ip) == 16);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 20);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 22);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 23);
 
 extern "C" {
-    pub fn shekyl_rpc_hard_fork_info(
-        h: *mut CoreRpcHandle,
-        requested_version: u8,
-        out: *mut HardForkFactsFfi,
-    ) -> i32;
     pub fn shekyl_rpc_fee_estimate(
         h: *mut CoreRpcHandle,
         grace_blocks: u64,
@@ -778,28 +811,55 @@ extern "C" {
     ) -> i32;
     pub fn shekyl_rpc_sync_spans_free(owner: *mut std::ffi::c_void);
     /// White then gray peerlist entries in one array, discriminated by
-    /// `white`; release the owner with `shekyl_rpc_peer_list_free`.
+    /// `white`, from the Rust peer lists (`shekyl-ffi`); release the owner
+    /// with `shekyl_rpc_peer_list_free`. No core handle.
     pub fn shekyl_rpc_peer_list(
-        h: *mut CoreRpcHandle,
         public_only: u8,
         out: *mut *const PeerFactsFfi,
         out_len: *mut usize,
         out_owner: *mut *mut std::ffi::c_void,
     ) -> i32;
     pub fn shekyl_rpc_peer_list_free(owner: *mut std::ffi::c_void);
-    /// The two compile-time p2p peerlist capacities. Takes no handle and
-    /// cannot fail.
-    pub fn shekyl_rpc_peerlist_limits(out_white: *mut u32, out_gray: *mut u32);
+    /// How many addresses the clearnet white and gray lists hold, from the
+    /// Rust peer lists (`shekyl-ffi`). No core handle.
+    pub fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray: *mut u64) -> i32;
+    /// Whether P2P runs: [`SHEKYL_RPC_FACTS_OK`], [`SHEKYL_RPC_FACTS_OFFLINE`],
+    /// or [`SHEKYL_RPC_FACTS_ERR_NOT_READY`] before the p2p layer has read
+    /// `--offline` (`shekyl-ffi`). No core handle.
+    pub fn shekyl_rpc_p2p_state() -> i32;
     pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
-    /// Fills a C++-owned view of the hard-fork schedule; release the owner
-    /// with `shekyl_rpc_hardforks_free`.
-    pub fn shekyl_rpc_hardforks(
+    /// `get_info`'s chain snapshot (RK-5c), read for every caller.
+    pub fn shekyl_rpc_info_chain(h: *mut CoreRpcHandle, out: *mut InfoChainFactsFfi) -> i32;
+    /// The pool's population as two counts of one pool state: the entries
+    /// this node has broadcast, and with `with_unbroadcast` non-zero the
+    /// entries it holds and has not yet broadcast. The second is host-only
+    /// data; when it is not asked for it is not counted and
+    /// `out_unbroadcast` is not written.
+    pub fn shekyl_rpc_info_pool_counts(
         h: *mut CoreRpcHandle,
-        out: *mut *const HardforkEntryFfi,
-        out_len: *mut usize,
-        out_owner: *mut *mut std::ffi::c_void,
+        with_unbroadcast: u8,
+        out_broadcast: *mut u64,
+        out_unbroadcast: *mut u64,
     ) -> i32;
-    pub fn shekyl_rpc_hardforks_free(owner: *mut std::ffi::c_void);
+    /// `get_info`'s Status facts and the build's version string, which is
+    /// written to `version_buf` without a terminator.
+    pub fn shekyl_rpc_info_status(
+        h: *mut CoreRpcHandle,
+        out: *mut InfoStatusFactsFfi,
+        version_buf: *mut u8,
+        version_cap: usize,
+        version_len: *mut usize,
+    ) -> i32;
+    /// `get_info`'s Peers facts.
+    pub fn shekyl_rpc_info_peers(h: *mut CoreRpcHandle, out: *mut InfoPeersFactsFfi) -> i32;
+    /// The path of the chain store's data file, written to `path_buf`
+    /// without a terminator. The size is read from it on this side.
+    pub fn shekyl_rpc_info_store_file(
+        h: *mut CoreRpcHandle,
+        path_buf: *mut u8,
+        path_cap: usize,
+        path_len: *mut usize,
+    ) -> i32;
     pub fn shekyl_rpc_block_hash_at(
         h: *mut CoreRpcHandle,
         height: u64,
@@ -887,6 +947,42 @@ extern "C" {
         fill_pow_hash: u8,
         out: *mut BlockHeaderFactsFfi,
     ) -> i32;
+}
+
+/// [`shekyl_seam_session_counts`] wrote the counts.
+pub const SHEKYL_SEAM_COUNT_OK: i32 = 0;
+/// No hub is bound in this process: there are no counts, which is not zeros.
+pub const SHEKYL_SEAM_COUNT_ERR_NO_HUB: i32 = -2;
+
+/// Twin of `shekyl-ffi`'s `ShekylSeamSessionCounts`: the board's handshaken
+/// sessions per direction, over one snapshot. The layout is asserted on
+/// both sides.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SeamSessionCountsFfi {
+    /// Handshaken sessions this node opened, on every connector.
+    pub outbound: u64,
+    /// Handshaken sessions opened to this node, on every connector.
+    pub inbound: u64,
+}
+
+const _: () = {
+    assert!(std::mem::offset_of!(SeamSessionCountsFfi, outbound) == 0);
+    assert!(std::mem::offset_of!(SeamSessionCountsFfi, inbound) == 8);
+    assert!(std::mem::size_of::<SeamSessionCountsFfi>() == 16);
+};
+
+extern "C" {
+    /// The seam board's session counts, from one snapshot, written through
+    /// `out`.
+    ///
+    /// **Rust on both sides.** The board is `shekyl-ffi`'s (it owns the
+    /// process hub), this crate does not depend on that one, and the two
+    /// share the daemon's link image, so the read crosses as a C symbol
+    /// without visiting C++. The codes and the struct are restated above
+    /// because the definitions cannot be imported; each side asserts the
+    /// layout and `shekyl-ffi`'s own test pins the codes.
+    pub fn shekyl_seam_session_counts(out: *mut SeamSessionCountsFfi) -> i32;
 }
 
 extern "C" {
@@ -1009,14 +1105,6 @@ mod unit_test_link_stubs {
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_free_string(_s: *mut std::os::raw::c_char) {}
     #[no_mangle]
-    pub extern "C" fn shekyl_rpc_hard_fork_info(
-        _h: *mut CoreRpcHandle,
-        _requested_version: u8,
-        _out: *mut HardForkFactsFfi,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
     pub extern "C" fn shekyl_rpc_fee_estimate(
         _h: *mut CoreRpcHandle,
         _grace_blocks: u64,
@@ -1032,6 +1120,48 @@ mod unit_test_link_stubs {
     pub extern "C" fn shekyl_rpc_net_stats(
         _h: *mut CoreRpcHandle,
         _out: *mut NetStatsFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_chain(
+        _h: *mut CoreRpcHandle,
+        _out: *mut InfoChainFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_pool_counts(
+        _h: *mut CoreRpcHandle,
+        _with_unbroadcast: u8,
+        _out_broadcast: *mut u64,
+        _out_unbroadcast: *mut u64,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_status(
+        _h: *mut CoreRpcHandle,
+        _out: *mut InfoStatusFactsFfi,
+        _version_buf: *mut u8,
+        _version_cap: usize,
+        _version_len: *mut usize,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_peers(
+        _h: *mut CoreRpcHandle,
+        _out: *mut InfoPeersFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_info_store_file(
+        _h: *mut CoreRpcHandle,
+        _path_buf: *mut u8,
+        _path_cap: usize,
+        _path_len: *mut usize,
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
     }
@@ -1061,7 +1191,6 @@ mod unit_test_link_stubs {
     pub extern "C" fn shekyl_rpc_sync_spans_free(_owner: *mut std::ffi::c_void) {}
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_peer_list(
-        _h: *mut CoreRpcHandle,
         _public_only: u8,
         _out: *mut *const PeerFactsFfi,
         _out_len: *mut usize,
@@ -1071,24 +1200,24 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_peer_list_free(_owner: *mut std::ffi::c_void) {}
-    // The two constant exports have no "no core here" answer to give, and no
-    // unit test may take an answer from them: they exist to carry C++
-    // configuration, so a stub returning zero would let a renderer's test
-    // silently agree with a value the daemon does not hold. Zero is written
-    // anyway — `print_pl_stats` divides by the limit and guards zero — but no
-    // unit test calls these paths, and the console e2e exercises the real
-    // ones.
+    /// "No hub here", never counts: a stub that wrote zeros would let a
+    /// handler's test read a process with no p2p layer as a node with no
+    /// peers, which is the answer the real export exists to refuse.
     #[no_mangle]
-    pub extern "C" fn shekyl_rpc_peerlist_limits(out_white: *mut u32, out_gray: *mut u32) {
-        // SAFETY: the caller passes two writable u32 slots or nulls.
-        unsafe {
-            if !out_white.is_null() {
-                out_white.write(0);
-            }
-            if !out_gray.is_null() {
-                out_gray.write(0);
-            }
-        }
+    pub extern "C" fn shekyl_seam_session_counts(_out: *mut SeamSessionCountsFfi) -> i32 {
+        SHEKYL_SEAM_COUNT_ERR_NO_HUB
+    }
+    /// "No lists here": a stub that wrote zeros would let a handler's test
+    /// read a process with no dialer as a node with empty lists.
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_peerlist_sizes(_out_white: *mut u64, _out_gray: *mut u64) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    /// "Not recorded yet": the unit tests run no p2p layer, so none has
+    /// read `--offline`.
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_p2p_state() -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NOT_READY
     }
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_create(_p: *mut std::ffi::c_void) -> *mut CoreRpcHandle {
@@ -1110,17 +1239,6 @@ mod unit_test_link_stubs {
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
     }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_hardforks(
-        _h: *mut CoreRpcHandle,
-        _out: *mut *const HardforkEntryFfi,
-        _out_len: *mut usize,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_hardforks_free(_owner: *mut std::ffi::c_void) {}
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_block_at(
         _h: *mut CoreRpcHandle,

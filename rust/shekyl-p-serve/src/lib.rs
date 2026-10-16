@@ -42,16 +42,17 @@
 //! successor it lacked. Citing `/shard/` in a design doc is not a bug;
 //! citing it as a format-round candidate still is.
 //!
-//! **The body is a different matter as of `RF-D4` (2026-08-20), and the two
-//! must not be confused.** The response *payload* now carries the ruled
-//! served frame — [`shekyl_curve_tree::served_frame::ServedFrameHeader`],
-//! `leaf_count ‖ padding_len ‖ segment_bytes ‖ padding_bytes` — which **is**
-//! genesis-frozen. The request half is the status line, the header set and
-//! the route; the framed half is everything after `\r\n\r\n`. This crate
-//! *emits* that frame, it does not define it: the definition lives in
-//! `shekyl-curve-tree` because any fetcher already depends on that crate to
-//! recompute `R_k`, and a format owned by the server would make every reader
-//! depend on the writer.
+//! **The body is a different matter, and the two must not be confused.**
+//! The request half is the status line, the header set and the route; the
+//! body is everything after `\r\n\r\n` up to the countersignature
+//! envelope, and this crate neither defines nor frames it. What a
+//! [`ShardProvider`] opens is what the loop streams and signs for: the
+//! `shekyl_wire::shard_frame` body over the shard's archival good
+//! (`SF-D8` amendment 2026-10-08, `ARCHIVAL_SHARD_FETCH.md`), whose
+//! definition lives in `shekyl-wire` because the requester checks it
+//! against the same crate's `txid_parts` rows. The `RF-D4` served frame
+//! this loop wrote ahead of the body (2026-08-20 — 2026-10-08) described
+//! the retired leaf-segment unit and is deleted, not adapted.
 //!
 //! # What this crate is, and is not
 //!
@@ -62,12 +63,12 @@
 //! `ADD_ONION` mapping `shekyl-p-host` wires in. This crate holds no key
 //! material — the signer is the host's object, and the serve loop sees
 //! only the signature it returns — and, since [`StoreShardProvider`] is
-//! built from a read-only `ServingReader`, it cannot write to the store
+//! built from a read-only `BodyStoreReader`, it cannot write to the store
 //! either.
 //!
 //! **Is not:** a pass-record builder, a key holder, the *definition* of a
-//! wire format (it emits `RF-D4`'s frame; `shekyl-curve-tree` owns it), a
-//! consensus surface, onion registration, or the W₂ rig. The rig extends
+//! wire format (the body is the provider's; `shekyl-wire` owns its frame),
+//! a consensus surface, onion registration, or the W₂ rig. The rig extends
 //! this loop with the concurrent-batch measurement shape (§9); the
 //! placeholder [`serve::MAX_INFLIGHT`] (SPIKE-PIN-2) is derived there on
 //! the provisioning-floor hardware (rule 76).
@@ -78,17 +79,24 @@
 //!   target (`shekyl_tor_control_wallet`'s `OnionPort::loopback`, on the host side);
 //! - two personas served from one wallet are byte-identical at the header
 //!   level ([`serve::RESPONSE_HEADER_NAMES`] is the complete set);
-//! - every **complete-head** non-servable outcome — wrong path, wrong
-//!   method, malformed route/id, missing / duplicate / malformed request
-//!   header, out-of-gate anchor, **unknown shard, unfrozen shard, store
-//!   failure, signer refusal** — renders one identical 404, so neither the
-//!   route table nor store health nor key residency is probeable by
-//!   **response bytes**;
+//! - every **complete-head** request that is not valid — wrong path,
+//!   wrong method, malformed route/id, missing / duplicate / malformed
+//!   request header, out-of-gate anchor — renders one bare 400, decided
+//!   before the shard store is consulted, so it does not vary with what is
+//!   held and names no check;
+//! - every valid request for a shard that is not held — **unknown shard,
+//!   unfrozen shard** — renders one bare 404, and nothing else does;
+//! - a fault of the persona's own — **an unreadable tip, a store failure,
+//!   no resident key** — renders one bare 503, which does not say which;
+//! - a held shard whose signer refuses after the body went out is a full
+//!   200 whose envelope is the refusal trailer, so the failure is stated
+//!   by the persona and never inferred from a response that stopped;
 //! - incomplete heads (oversized, mid-head EOF, read timeout) and
 //!   over-capacity arrivals are **closed** with no HTTP bytes — the same
 //!   class as ordinary circuit death, not a status-code oracle;
-//! - which response a complete head gets is settled **before any byte is
-//!   written**, so no miss can leak as a truncated `200`; the one residual
+//! - which of 400, 404, 503 and 200 a complete head gets is settled **before
+//!   any byte is written**, so no miss can leak as a truncated `200`; the
+//!   residual
 //!   ([`serve`], "the residual") is a body cut short by a stalled peer or a
 //!   store fault, and is named rather than assumed away;
 //! - no request logging at any level: the only observables are five
@@ -110,16 +118,21 @@
 pub mod countersign;
 pub mod provider;
 pub mod serve;
+pub mod serve_counters;
 
-#[cfg(any(test, feature = "test-signer"))]
-pub use countersign::TestKeySigner;
 pub use countersign::{
-    anchor_within_gate, sign_pass_transcript, PassKey, PassSigner, SignRefused,
-    SIGNATURE_ENVELOPE_LEN,
+    anchor_within_gate, sign_pass_transcript, sign_receipt_transcript, EnvelopeSignature,
+    EnvelopeWidth, PassEnvelope, PassKey, PassSigner, SignRefused, IDENTITY_ENVELOPE_LEN,
+    RECEIPT_ENVELOPE_LEN,
 };
+#[cfg(any(test, feature = "test-signer"))]
+pub use countersign::{TestKeySigner, TestReceiptKeySigner};
 pub use provider::{ProviderError, ShardBody, ShardProvider, StoreShardProvider};
+#[cfg(any(test, feature = "bench-internals"))]
+pub use serve::{prehead_in_memory, read_and_fold_in_memory, serve_one_in_memory, InMemoryServe};
 pub use serve::{
     PServeEndpoint, CONTENT_TYPE, MAX_INFLIGHT, MAX_REQUEST_BYTES, REQUEST_HEADER_NAME,
     RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
 };
+pub use serve_counters::ServeCounterReader;
 pub use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;

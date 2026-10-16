@@ -1,0 +1,203 @@
+---
+description: The input grammar (IG-1…IG-15) — every identifier a person types or a script depends on, in every shipped binary (command-line flags, config-file keys, shekyl-cli command words, keywords, units, REJECTED names). Apply when adding, renaming, or deleting any option, key, command word or keyword, when writing a refusal a user reads, and when reviewing a name table. The glossary tree and the name tables live in docs/design/INPUT_GRAMMAR.md.
+alwaysApply: true
+---
+
+# The input grammar (IG-1…IG-15)
+
+**Ruled by Rick, 2026-10-13, as Round 0 Part A of the input-grammar
+round.** One grammar, project-wide, designed first: every binary is built
+to it; no surface is the reference, and nothing is patched around an
+existing spelling. There is no backward compatibility before genesis: a
+renamed spelling leaves no trace and no migration table; our own scripts
+and configs are fixed in the same change. The glossary tree and the name
+tables are in [`INPUT_GRAMMAR.md`](../../docs/design/INPUT_GRAMMAR.md);
+this rule holds the rules only.
+
+## Scope
+
+Every identifier a person types or a script depends on: command-line
+flags of every shipped binary, config-file keys, command words of
+`shekyl-cli` (and of the daemon console until it moves into
+`shekyl-cli`), enumeration keywords, unit spellings, and REJECTED names.
+Out of scope: RPC method names (the RPC lane's wire contract) and log
+category names (`shekyl-logging`'s).
+
+## The rules
+
+**IG-1 Lexical.** An identifier is lowercase ASCII, `[a-z][a-z0-9]*`
+segments joined by single hyphens. Identifiers, keywords and units are
+never translated.
+
+**IG-2 One vocabulary, as a tree.** The glossary is a tree of terms. Each
+term is defined once, project-wide, and lists its parents; a term with no
+parent is a *subject*. A term reused under several parents keeps its one
+meaning. Every segment of every name is a term in the tree, including
+plain words (`file`, `dir`, `max`, `help`): the gate has no exemption
+list.
+
+**IG-3 Structure.** A name is a path through the tree: it starts at a
+subject and each segment is a child of the one before. A subject alone is
+a name. The qualifiers `max` and `min` may end any path. A path-valued
+option ends in `file` or `dir`. A term may both carry a value and have
+children. `dev` is a subject like any other (IG-8); its children may be
+other subjects. The gate checks that a name is well formed; whether it is
+an option is the table's. A command is a path whose last term is a
+*verb* (the command acts) or a *view* (a noun whose command prints it);
+verbs and views are terms of that kind under their parent, a subject that
+is itself a verb or a view is a command alone (`send`, `balance`), and
+each command has exactly one spelling. A view changes no state; a
+command that changes state ends in a verb. The gate walks every live and
+reserved name and every command in every binary's table (a REJECTED row is a
+refused spelling, exempt by kind; IG-10) and fails on: an undefined
+segment; an adjacent pair that is not a parent→child edge; a qualifier
+anywhere but last; a term defined twice. The edit that proves it can
+fail: add an option `socks-tor`.
+
+**IG-4 No negation.** No term is `no`, `non`, `not`, `disable`, `enable`,
+`ignore`, `skip` or `without`. A switch defaults to off. A capability
+that is on by default is a closed set (`<on|off>`, or named modes).
+
+**IG-5 One option per value; one name per option.** No two options set
+the same value; no aliases; no hidden duplicates; no short flags; no
+prefix abbreviation. A rename leaves no trace.
+
+**IG-6 Value kinds.** A kind is a syntax, and every option has exactly
+one: switch; one-of (a closed lowercase keyword set, default named);
+integer (decimal, no sign unless the row allows it, no separators);
+quantity (an integer and a unit — bytes `B KiB MiB GiB TiB`, IEC only,
+`KB`/`MB` refused; rates the same over `/s`; durations `ms s min h d`);
+endpoint (a literal IP and a port; no hostnames); peer-endpoint (an
+endpoint or `<v3>.onion:port`); address (a Shekyl address, checked
+against the network); origin (an explicit web origin, RFC 6454: scheme `http` or
+`https`, a host, an optional port, nothing after; `*` is refused); hash
+(64 hexadecimal characters, a 32-byte value: a transaction id, a block
+hash or a key image); amount (a
+decimal SKL amount with at most `DISPLAY_DECIMAL_POINT` fractional
+digits, `shekyl-units` the one source, parsed exactly to atomic units,
+never a float); name (a wallet's name: one path component, no
+separators); text (the rest of the line, verbatim); path
+(absolute only); secret (file only; never logged or echoed, shown in the
+startup line only as set; zeroized; held only in Rust); command (file only; an
+argument array run without a shell; placeholders are `{name}`, each
+name a glossary term under the row with one meaning everywhere, braces
+the only syntax, `%` literal, an unknown name refused); list
+and map of a scalar kind (the flag repeated; `none` is the empty list or map; a
+command-line list or map replaces the file's whole). A row narrows its
+kind with a constraint enforced by its constructor and may admit named
+keywords (`unlimited`, `auto`, `stdin`; paths are absolute, so a keyword
+never collides with a file). A row with no default is *unset* when not
+given, and the row states what unset means; there are no sentinel
+values. There are no floating-point values anywhere in the grammar.
+
+**IG-7 Surfaces.** Each row says where it may be given. Command-line
+only: `help`, `version`, `network`, `config-file`, `service` (each selects
+which file is read, so a key in that file could only restate or
+contradict it). File only: every secret and every command value.
+Everything else: both, CLI winning per key.
+
+**IG-8 Development levers.** A `dev-` option is hidden from help and
+generated docs, names the networks it is accepted on as data in its row
+(a `dev-` option given on any other network is refused at parse, rule
+71), and is announced at every start when set. It follows every other
+rule. No `dev-` option is ever accepted on mainnet: a lever mainnet
+genuinely needs is not a development lever and gets a public row.
+
+**IG-9 One table per binary, generated everything.** The table row: id,
+name, kind, constraint, keywords, default (a value, unset, or "derived
+from the network row"), surfaces, runtime (`yes` or `no`: whether
+`option set` accepts the row, IG-12), grant (`health`, `status`, `peers`
+or `config`, default `config`: the grant under which `option show`
+discloses the row; RPC_CHANNEL §6.4, RT-O24), visibility (`public` /
+`dev` / `rejected` / `reserved`), accepted networks (`dev` only), owning
+subsystem, help text. A row names `health` only if it passes
+RPC_CHANNEL §6.1's line for that grant: a client needs it to decide
+whether it can use the node now, and it says nothing lasting about the
+node. The peer, closed-peer and ban rows are `peers`; everything that
+describes the host or links the operator (`mine-address`, `tor-onion`,
+paths, SOCKS endpoints, notify commands) is `config`; a secret's value is
+shown under no grant. From the table: `--help`, completion, the
+documentation tables, and an annotated TOML example. A gate regenerates
+the docs and diffs them, and asserts the table is non-empty (rule 47).
+
+**IG-10 Unknown and refused names.** An unknown name is one general
+refusal that names the nearest live name, computed from the table (edit
+distance), never from a hand list. A REJECTED row (a feature deliberately
+refused) carries its reason and a pointer to the decision; it is never
+accepted, never in help, and its refusal states the reason. A REJECTED
+row is a contract entry in the sense of rule 23, not a code symbol: it is
+never deleted as dead. A RESERVED row (a name held for a ruled future
+option; rule 23's reserved slot) is the same kind of entry: never
+accepted, never in help, and its refusal names what the name is reserved
+for and where that is ruled.
+
+**IG-11 Diagnostics.** Every refusal is a typed value: a stable code
+(`config.value.range`, `config.file.permissions`, …), the option, the
+source (`cli`, `file:path:line`, `default`, `runtime`) and named parameters. One
+renderer turns it into the English message, which states what was wrong,
+where, and what to do (rule 82). Machine output and logs carry the code.
+A configuration refusal exits with status 2; a runtime failure with 1.
+
+**IG-12 Runtime changes share the constructor.** A value that can also
+change while running (rates, log level and categories, mining) is marked
+runtime in its row (IG-9) and is built by the same constructor on both
+surfaces, with the same refusals. `option set <name> <value>` changes it:
+it refuses a row not marked runtime with a typed code, requires the
+`node` grant, and never writes the file. `option show [<name>]` reports
+each value with its source (`default`, `file`, `cli`, `runtime`) and
+returns each row whose grant (IG-9) the caller holds; a row the caller
+may not see is absent, never emptied, and a secret's value is shown under
+no grant, only whether it is set. Every runtime row's default is writable
+as a value (`unlimited`, `none`), so `option set` returns a row to its
+default without a restart; what `option show` prints is valid input to
+`option set` and builds the same value; and no row is both runtime and a
+secret, which the gate asserts (RPC_CHANNEL §6.4, RT-O25, RT-O27). Mining
+changes while running through `mine start` and `mine stop` instead,
+which build `mine-address` and `mine-threads` through their
+constructors, so those rows are not marked runtime. The live value is
+owned by its subsystem. No binary ever writes its own config file.
+
+**IG-13 Inputs come from the table, and nowhere else.** No option value
+comes from the environment. Default paths come from the operating
+system's account and known-folder interfaces, never from `HOME`, `XDG_*`
+or `%APPDATA%`. Each binary's per-account root is the passwd entry's home
+plus `.shekyl` on Linux, FreeBSD and macOS, and
+`SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows,
+never Roaming AppData, which copies the wallet and its config to domain
+servers (rule 36); a run-as-user daemon's data and log defaults, the wallet
+directory and the wallet binaries' config files sit under it. On Windows
+the daemon's run mode selects its root, and every default path it derives
+(`config-file`, `data-dir`, `log-file`) sits under that root: run-as-user
+uses the per-account root and `service` uses
+`%ProgramData%\shekyl\`, which only the installer creates (owner and ACL:
+Administrators, SYSTEM and the service account); the daemon never creates
+the machine-wide root, and one that is missing, mis-owned or writable by
+others refuses with a typed code. On Linux, FreeBSD and macOS the daemon
+has one run mode (`service` is refused there): its config file is
+`/etc/shekyl/`, and its data and log defaults sit under the per-account
+root. The only environment reads permitted are presentation-only
+(terminal capabilities that change rendering, never a value). Every
+resolved default path appears in the startup line with its source. A
+service account whose passwd home is unset or `/nonexistent` has no
+default paths: the packaging sets the account's home or the unit passes
+`--data-dir` and `--log-file`.
+
+**IG-14 Required announcements are not log events.** The
+effective-configuration line, `dev-` lever warnings and posture warnings
+(clearnet-only, offline, a plaintext RPC listener bound beyond
+loopback) reach the log and standard error at every start
+whatever the log level. The effective-configuration line shows every
+value and its source; a secret is shown as set, never its value (IG-6).
+
+**IG-15 Home.** These rules are this file. The glossary tree and the name
+tables live in `docs/design/INPUT_GRAMMAR.md`. One Rust crate holds the
+table types, the value kinds and their parsers, the unit types, the
+diagnostic type and the renderer; every binary builds its table from it.
+
+## How a change is made
+
+A new or renamed option, key, command word or keyword starts as a row in
+the owning binary's table in `INPUT_GRAMMAR.md`, with every segment in
+the glossary tree, and is brought to the maintainer for ruling before it
+lands. A deleted feature a user could reasonably ask for again becomes a
+REJECTED row; an implementation switch or a fold leaves no trace.

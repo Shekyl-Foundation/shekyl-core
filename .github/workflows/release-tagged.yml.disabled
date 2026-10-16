@@ -21,8 +21,21 @@ env:
     ccache --set-config=compression=true
 
 jobs:
+  # No genesis on a pre-standard FN-DSA (ARCHIVAL_SERVE_CREDIT_SPEC.md §11).
+  # Any tag that is not a recognised pre-release is the genesis release
+  # (RELEASE_PROMOTION.md); on such a tag this fails while `fn-dsa` is locked
+  # below 1.0, and every build job below waits on it.
+  fn-dsa-genesis-gate:
+    name: fn-dsa genesis gate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Refuse a genesis release on a pre-1.0 fn-dsa
+        run: python3 scripts/ci/check_fn_dsa_genesis_gate.py --release-tag "$GITHUB_REF_NAME"
+
   build-linux:
     name: Linux x86_64
+    needs: fn-dsa-genesis-gate
     runs-on: ubuntu-22.04
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -134,6 +147,7 @@ jobs:
 
   build-windows:
     name: Windows x64
+    needs: fn-dsa-genesis-gate
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:22.04
@@ -225,6 +239,7 @@ jobs:
 
   build-cross:
     name: ${{ matrix.platform.name }}
+    needs: fn-dsa-genesis-gate
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:22.04
@@ -389,6 +404,7 @@ jobs:
 
   source-archive:
     name: Source archive
+    needs: fn-dsa-genesis-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

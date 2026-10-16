@@ -90,7 +90,7 @@ pub struct ProductionSubstrate {
 
 impl ProductionSubstrate {
     /// A substrate over `caches` (the replay driver's own store, or the
-    /// daemon's at E3), recording into `metrics` — the same `Arc` the
+    /// daemon's at the store flip, DRS-X), recording into `metrics` — the same `Arc` the
     /// pipeline is given (module docs). Callers that form in parallel clone
     /// the value: the store is shared, derivation is de-duplicated inside
     /// it, and each worker's `compute_hash` gets its own scratchpad.

@@ -496,6 +496,12 @@ impl EmitState {
                 sink.emit(event);
                 return;
             }
+            RefreshDiagnostic::PersonaSealUnreadable => {
+                // The orchestrator's, at most once per attempt; the
+                // producer never raises it, and it has no class to budget.
+                sink.emit(event);
+                return;
+            }
         };
 
         if per_class.counter < PER_BLOCK_CEILING {
@@ -883,13 +889,17 @@ impl RefreshEngine for LocalRefresh {
                 // pre-pass above, so a `DecodeError` here maps to the same
                 // `Malformed` disposition.
                 let leaves = curve_tree_decode::decode_block_leaves(&scannable).map_err(|e| {
-                    let curve_tree_decode::DecodeError::ExcessiveOutputs { .. } = e;
-                    emit_state.try_emit(
-                        diagnostics,
-                        RefreshDiagnostic::DaemonMalformed {
-                            kind: MalformedKind::ExcessiveOutputs,
-                        },
-                    );
+                    let kind = match e {
+                        curve_tree_decode::DecodeError::ExcessiveOutputs { .. } => {
+                            MalformedKind::ExcessiveOutputs
+                        }
+                        // The scanner refuses the same block as
+                        // `InvalidScannableBlock`; the decoder sees it first.
+                        curve_tree_decode::DecodeError::TransactionHashCountMismatch { .. } => {
+                            MalformedKind::InvalidBlockStructure
+                        }
+                    };
+                    emit_state.try_emit(diagnostics, RefreshDiagnostic::DaemonMalformed { kind });
                     LocalRefreshError::Malformed
                 })?;
                 block_leaves.push((h, leaves));

@@ -5,7 +5,7 @@
 
 //! Production CSPRNG for relay FFI seams — OS entropy, never SplitMix64.
 
-use shekyl_relay_privacy::rng::RelayRng;
+use shekyl_draw_rng::RelayRng;
 
 /// Production RNG: a CSPRNG reading OS entropy each draw, matching the C++
 /// `crypto::random_device` the inherited timers and scheduling used — never the

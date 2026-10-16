@@ -38,11 +38,11 @@ use crate::harness::assert_refused;
 use crate::harness::fixture::{candidate_on, chain_of, listed, recorded, root};
 use crate::rules::miner::closed_shards_before;
 use crate::view::RecordedBlock;
-use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
+use shekyl_archival_retention::{holds_shard_at, ARCHIVAL_BOND_FLOOR_ATOMIC};
 use shekyl_crypto_pq::multisig::SINGLE_KEY_CANONICAL_LEN;
 use shekyl_types::archival::BadInterval;
 use shekyl_types::archival::{HeldShard, SlashLogEntry, SlashedHolding};
-use shekyl_types::{ArchivalLength, SHARD_LENGTH};
+use shekyl_types::{ArchivalLength, BlockCount, SHARD_LENGTH};
 use shekyl_wire::transaction::{
     BondPost, BondPostKind as WireKind, Holdings as WireHoldings, Input,
 };
@@ -73,6 +73,9 @@ fn join(p: PCanonicalId, shards: &[u64]) -> Input {
         p,
         WireKind::JoinMarket {
             bond_spend_pk: vec![0xb5; SINGLE_KEY_CANONICAL_LEN],
+            receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+                [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+            ),
             endpoint: [0xe0; 32],
         },
         WireHoldings::ShardSetCompact(shards.to_vec()),
@@ -169,6 +172,9 @@ fn record_holding(shards: &[u64], add_epoch: u64) -> BondRecord {
     BondRecord {
         hybrid_pubkey: vec![0xb1; 4],
         bond_spend_pk: vec![0xb5; 4],
+        receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+            [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+        ),
         endpoint: [0xe0; 32],
         join_settlement_epoch: SettlementEpoch::from_raw(add_epoch),
         bonded_total: AtomicUnits::from_raw(FLOOR * shards.len() as u64),
@@ -277,6 +283,67 @@ fn a_complete_tree_slash_demotes_the_record_to_an_empty_compact_one() {
     assert_eq!(record.bonded_total, AtomicUnits::ZERO);
 }
 
+/// CEN-L16's falsifier: the as-of-height holdings question is answered by
+/// `holds_shard_at` over the record and the slash-log rows strictly above
+/// the asked height, and the store contributes only those rows (A2). The
+/// row the verdict logs here is what the fold reads back, so a slash that
+/// carried too little to reconstruct the tenure would fail below. Not held
+/// at tip: held at `h` iff a logged slash above `h` removed the shard and
+/// `h`'s epoch is after the tenure's add epoch.
+#[test]
+fn l16_the_slash_the_verdict_logs_is_what_the_held_at_height_fold_reads() {
+    let schedule = SettlementSchedule::GENESIS;
+    let shard = ShardId::from_raw(3);
+    let at_epoch = |e: u64| BlockHeight::from_raw(schedule.open_height(e));
+    let mut record = record_holding(&[3], 2);
+    let before = record.clone();
+    let slashed_in = at_epoch(6);
+    let slash = apply_slash(
+        persona(P1),
+        &mut record,
+        shard,
+        SettlementEpoch::from_raw(6),
+    )
+    .expect("held");
+    let logged = [slash.entry];
+
+    // Held at tip before the slash: from the epoch after the add epoch on.
+    assert!(holds_shard_at(schedule, &before, shard, at_epoch(4), &[]));
+    assert!(!holds_shard_at(schedule, &before, shard, at_epoch(2), &[]));
+
+    // After it the record alone says not held; the logged row restores the
+    // tenure below the slash, bounded by the add epoch it journaled.
+    assert!(!holds_shard_at(schedule, &record, shard, at_epoch(4), &[]));
+    assert!(holds_shard_at(
+        schedule,
+        &record,
+        shard,
+        at_epoch(4),
+        &logged
+    ));
+    assert!(!holds_shard_at(
+        schedule,
+        &record,
+        shard,
+        at_epoch(2),
+        &logged
+    ));
+    // At or above the slash height A2 returns no row, and the answer is no.
+    assert!(!holds_shard_at(schedule, &record, shard, slashed_in, &[]));
+    // Another shard's slash says nothing about this one.
+    let other = SlashLogEntry {
+        shard: ShardId::from_raw(5),
+        ..slash.entry
+    };
+    assert!(!holds_shard_at(
+        schedule,
+        &record,
+        shard,
+        at_epoch(4),
+        &[other]
+    ));
+}
+
 // ---- shard close heights: exemption 1 (the search) and 3 (the cut) ------
 
 /// One chain, both close tests. h1 reaches `W` (shard 0 closes), h3 reaches
@@ -380,6 +447,117 @@ fn shard_close_is_the_fold_height_below_the_universe_and_open_at_it() {
         assert_eq!(
             shard_close(&view, ShardId::from_raw(open), &universe).expect("open has no search"),
             ShardClose::Open
+        );
+    });
+}
+
+/// Exemption 1. SO-D8 §8.0 input 4's fixture, run on the predicate CEN-J15
+/// bounds a held shard by. On `chain_closing_two_shards` shard 0 closes
+/// at `c = 1`; with `reorg_cap = 2` it is not closed-and-final for
+/// `at < 3` — `at = c` included, the close being the newest block — and
+/// is from `at = 3` on. Shard 2 is open through every height and never
+/// is. Monotone in `at` by the same walk. The predicate reads the fold
+/// alone, so the chain here carries nothing but the fold, and a cap the
+/// close height cannot carry is not final anywhere.
+#[test]
+fn closed_and_final_is_false_through_the_cap_and_true_from_it() {
+    let chain = chain_closing_two_shards();
+    let cap = BlockCount::from_raw(2);
+    chain.with_view(|view| {
+        let judged = |shard: u64, at: u64| {
+            closed_and_final(
+                &view,
+                ShardId::from_raw(shard),
+                BlockHeight::from_raw(at),
+                cap,
+            )
+            .expect("every height here is recorded")
+        };
+        // Shard 0 closed at 1: open at 0, closed-not-final at 1 and 2,
+        // final at 3 and 4.
+        assert_eq!(
+            (0..5).map(|at| judged(0, at)).collect::<Vec<bool>>(),
+            [false, false, false, true, true]
+        );
+        // Shard 1 closed at 3: final at none of the recorded heights.
+        assert_eq!(
+            (0..5).map(|at| judged(1, at)).collect::<Vec<bool>>(),
+            [false; 5]
+        );
+        // Shard 2 never closes.
+        assert_eq!(
+            (0..5).map(|at| judged(2, at)).collect::<Vec<bool>>(),
+            [false; 5]
+        );
+        // Cap zero is "closed": shard 1 is final the block it closes.
+        assert!(closed_and_final(
+            &view,
+            ShardId::from_raw(1),
+            BlockHeight::from_raw(3),
+            BlockCount::from_raw(0),
+        )
+        .expect("recorded"));
+        // A cap the close height cannot carry: not final at any height.
+        assert!(!closed_and_final(
+            &view,
+            ShardId::from_raw(0),
+            BlockHeight::from_raw(4),
+            BlockCount::from_raw(u64::MAX),
+        )
+        .expect("recorded"));
+    });
+}
+
+/// The gather's universe is the per-shard predicate taken over every shard
+/// at once (`SO-D11f`): for a block connecting at `at + 1`, whose parent
+/// is `at`, [`ClosedUniverse::final_before`] counts exactly the shards
+/// [`closed_and_final`] accepts at `at` — at every height, for the caps
+/// that put the boundary before, on and after each close, and a chain not
+/// yet a cap deep counts none. The two were written apart; this holds them
+/// to one arithmetic.
+#[test]
+fn the_final_universe_counts_the_shards_the_predicate_accepts() {
+    use shekyl_archival_retention::ShardClose;
+    let chain = chain_closing_two_shards();
+    chain.with_view(|view| {
+        for cap in [0u64, 1, 2, 3, 7] {
+            let cap = BlockCount::from_raw(cap);
+            for at in 0..5u64 {
+                let accepted = (0..3u64)
+                    .filter(|shard| {
+                        closed_and_final(
+                            &view,
+                            ShardId::from_raw(*shard),
+                            BlockHeight::from_raw(at),
+                            cap,
+                        )
+                        .expect("recorded")
+                    })
+                    .count();
+                let universe =
+                    ClosedUniverse::final_before(&view, BlockHeight::from_raw(at + 1), cap)
+                        .expect("recorded");
+                assert_eq!(
+                    universe.count().get(),
+                    u64::try_from(accepted).expect("fits"),
+                    "cap {cap:?}, parent {at}"
+                );
+            }
+        }
+        // Shards close in order, so the accepted set is a prefix and the
+        // count names it; cap 2 at parent 3 is shard 0 alone.
+        let universe =
+            ClosedUniverse::final_before(&view, BlockHeight::from_raw(4), BlockCount::from_raw(2))
+                .expect("recorded");
+        assert_eq!(universe.count().get(), 1);
+        assert!(matches!(
+            shard_close(&view, ShardId::from_raw(0), &universe).expect("recorded"),
+            ShardClose::ClosedAt(h) if h == BlockHeight::from_raw(1)
+        ));
+        assert_eq!(
+            shard_close(&view, ShardId::from_raw(1), &universe).expect("recorded"),
+            ShardClose::Open,
+            "closed at 3 and not yet final: outside the universe"
         );
     });
 }

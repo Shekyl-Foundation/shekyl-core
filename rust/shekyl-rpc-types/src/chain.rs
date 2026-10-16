@@ -38,12 +38,69 @@ use serde::{Deserialize, Serialize};
 
 use crate::consensus_digest::DaemonNetwork;
 use crate::hash::HashHex;
+use crate::nullable::Nullable;
 
 /// `CORE_RPC_VERSION_MAJOR` — moved here from
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.41: `inject_archival_serve_credit` (regtest
+/// `CORE_RPC_VERSION_MINOR`. 3.54: `get_info` stops repeating the daemon's
+/// network (RK-Q6). `nettype` and the booleans `mainnet`, `testnet` and
+/// `stagenet` are gone from it; `get_version.nettype` is the one place a
+/// daemon names its network. `get_version` gains nothing.
+/// 3.53: `get_info`'s two amounts of coin,
+/// `already_generated_coins` and `total_burned`, are decimal strings of
+/// atomic units (RK-Q2): the wallet RPC's encoding, since a JSON number
+/// loses integers above 2^53 in a JavaScript reader. Both stay required.
+/// Other daemon methods still write amounts as numbers until their own
+/// migration. `get_version` gains nothing.
+/// 3.52: `get_info` stops repeating values under
+/// second names (RK-Q1). `difficulty`, `difficulty_top64`,
+/// `cumulative_difficulty`, `cumulative_difficulty_top64`, `block_size_limit`
+/// and `block_size_median` are gone; `wide_difficulty`,
+/// `wide_cumulative_difficulty`, `block_weight_limit` and
+/// `block_weight_median` stay, the last two now always present. Block
+/// headers keep their triple. `get_version` gains nothing.
+/// 3.51: `get_info` refuses when the chain store
+/// holds more burned than generated, with an error that names the invariant
+/// and its operands (RK-Q9). It answered that state with `burn_pct: 0`.
+/// No member of any reply moves. `get_version` gains nothing.
+/// 3.50: `get_info`'s `tx_pool_size` is the pool
+/// entries this node has broadcast, for every caller; the entries it holds
+/// and has not yet broadcast are `tx_pool_unbroadcast_count`, a host-only
+/// part (RK-Q10). `tx_pool_size` was the broadcast set for a restricted
+/// caller and every entry for any other. `get_version` gains nothing.
+/// 3.49: `get_info`'s two connection counts are
+/// handshaken sessions on every connector, per direction, from one snapshot
+/// of the seam board (RK-Q3), so `has_peers` is true exactly when they are
+/// not both zero. They were clearnet-only, and the incoming one was a
+/// total from one store minus an outbound count from another. A shown
+/// Status with an empty `version` is refused. `get_version` gains nothing.
+/// 3.48: a `get_info` reply to a caller who is not
+/// shown Status or Peers omits those parts (RK-Q8). It carried them with
+/// stand-in values: zero counts, an empty `version`, `free_space` of
+/// `u64::MAX`, and `database_size` rounded up to 5 GiB. `get_version` gains
+/// nothing. 3.47: `get_info` gains `has_peers`, a boolean
+/// in Health that every caller is told (RK-D14): at least one handshaken
+/// session on any connector. `get_info` refuses when the p2p hub is not up,
+/// where it answered zero counts. `get_version` gains nothing. 3.46: `target_height` is the core's target, and
+/// `null` when the core reports none, on `get_info`, `get_version` and
+/// `sync_info` together (RK-D15, RK-Q7). `get_info` stops writing `0` for a
+/// synchronized node; `get_version` stops omitting the member and
+/// `sync_info` stops writing `0` when there is no target; and
+/// `get_version.current_height` is always present. 3.45: `get_info` stops carrying `emission_era`
+/// (RK-D21): there never was an emission era, and the field is deleted, not
+/// ported. `get_version` gains nothing. 3.44: `get_version` drops `hard_forks` and the
+/// `hard_fork_info` method is deleted — the block version is the constant 1,
+/// so there is no schedule to report and no activation to query.
+/// `get_version` loses that member and gains nothing else. 3.43:
+/// `request_archival_shard` is served natively over the W-shard view
+/// (`archival.rs`; `SHARD_VIEW_FETCH.md` `SV-D3`): the response gains
+/// `archival_len` and `close_height`, and an open shard and an absent
+/// skeleton answer with their own codes (-24, -25) rather than sharing the
+/// miss's -22. `get_version` gains nothing. 3.42: `get_info` reports
+/// `already_generated_coins`, the gross coins emitted through the tip.
+/// `get_version` gains nothing. 3.41: `inject_archival_serve_credit` (regtest
 /// only) returns its receipt — `height`, the tip's block **index** the row
 /// was keyed at, read under the lock with the write; the chain-vector
 /// capture replays the injection as a corpus event at exactly that height
@@ -66,8 +123,8 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.36: `get_info` drops `tx_prune_height` — the
 /// C++ tx-data prune whose watermark it reported is deleted (LMDB v15; the
 /// uniform discard is S-PRUNE, which will report its own frontier when it
-/// exists). 3.35: `pruning_seed` leaves `get_peer_list`,
-/// `get_connections` and `sync_info.peers`, and `next_needed_pruning_seed`
+/// exists). 3.35: the stripe seed leaves `get_peer_list`,
+/// `get_connections` and `sync_info.peers`, and the next-needed stripe
 /// leaves `sync_info`; the `prune_blockchain` method is deleted (REJECTED in
 /// the registry, `PDM-Q7`) — the stripe engine is gone, so every value was
 /// 0 and the field was a gossiped self-asserted attribute (`PWD-I1`'s shape).
@@ -100,12 +157,32 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `= 26` is textually identical whoever writes it. 3.33 is the
 /// `get_output_histogram` deletion on this branch; 3.34 the
 /// `get_curve_tree_path` removal, chained after it on merge; 3.35 the
-/// `pruning_seed` deletion; 3.36 the `tx_prune_height` deletion; 3.37 the
+/// stripe-seed deletion; 3.36 the `tx_prune_height` deletion; 3.37 the
 /// coinbase-nonce bound; 3.38 the per-connector socket counts and the
 /// permanent-ban flag; 3.39 `get_transactions`' `archival_len`; 3.40
 /// `get_version` and `sync_info` stop encoding synchronization as
-/// `target_height = 0`; 3.41 the injector's `height` receipt.
-pub const CORE_RPC_VERSION_MINOR: u32 = 41;
+/// `target_height = 0`; 3.41 the injector's `height` receipt; 3.42
+/// `get_info.already_generated_coins`; 3.43 `request_archival_shard`
+/// served natively over the W-shard view (`archival.rs`): the response
+/// gains `archival_len` and `close_height`, and the open-shard and
+/// skeleton-absent refusals get their own codes (`SHARD_VIEW_FETCH.md`
+/// `SV-D3`, `SV-D5`, `SV-D9`); 3.44 `get_version` loses `hard_forks` and
+/// `hard_fork_info` is deleted. Both branches had written 3.43; the
+/// deletion is chained after the shard view, the same way 3.34 was
+/// chained after 3.33. 3.45 the `get_info.emission_era` deletion, written
+/// as 3.43 and chained twice, after each of those. 3.46 the nullable
+/// target on `get_info`, `get_version` and `sync_info`. 3.47
+/// `get_info.has_peers`. 3.48 a restricted `get_info` omits Status and
+/// Peers. 3.49 its connection counts come from the seam board. 3.50 its pool
+/// count is split by broadcast state. 3.51 it refuses on a broken supply
+/// invariant. 3.52 its duplicate wire names retire. 3.53 its
+/// amounts are decimal strings. 3.54 it stops repeating the network. 3.55
+/// `get_peer_list` entries lose `last_seen`: the Rust peer lists carry no
+/// clock, and the listing is read from them. 3.56 a daemon started offline
+/// reports that state: `get_info`'s Peers part is `"p2p": "offline"` with
+/// no count (and `"p2p": "running"` with its counts), and `get_peer_list`,
+/// `get_connections` and `sync_info` answer `offline` alone.
+pub const CORE_RPC_VERSION_MINOR: u32 = 56;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -131,6 +208,10 @@ impl RpcStatus {
     pub const OK: &'static str = "OK";
     /// `"BUSY"` — the core is not ready to answer.
     pub const BUSY: &'static str = "BUSY";
+    /// `"offline"` — the daemon was started offline (`--offline`), so
+    /// a method about peers or connections has nothing to report: a state,
+    /// never an empty list (Rick, 2026-10-14; 3.56).
+    pub const OFFLINE: &'static str = "offline";
 
     /// The success status.
     #[must_use]
@@ -142,6 +223,18 @@ impl RpcStatus {
     #[must_use]
     pub fn is_ok(&self) -> bool {
         self.0 == Self::OK
+    }
+
+    /// The status of a reply from a daemon started offline.
+    #[must_use]
+    pub fn offline() -> Self {
+        Self(Self::OFFLINE.to_owned())
+    }
+
+    /// Whether the daemon answered that it is offline.
+    #[must_use]
+    pub fn is_offline(&self) -> bool {
+        self.0 == Self::OFFLINE
     }
 }
 
@@ -174,19 +267,18 @@ pub const CORE_RPC_ERROR_CODE_INTERNAL_ERROR: i64 = -5;
 /// `CHECK_CORE_READY()` set `status = BUSY` and returned success, leaving the
 /// reply's `block_header` default-constructed — so a client that read the
 /// header without checking the status got a block at height 0 with a zero
-/// hash. That is not hypothetical: `shekyl-rpc-client`'s
-/// `get_hardfork_version` reads `block_header.major_version` straight
-/// through, and against an unsynchronised C++ daemon it silently returned
-/// version 0. Refusing is the ruling this slice already applied twice
+/// hash, and one that read `block_header.major_version` straight through
+/// got version 0. Refusing is the ruling this slice already applied twice
 /// (`pow_hash_or_refuse`, and `5b0c32f51`'s "loud, never the degrade arm"):
 /// a method that declines to answer must not report success.
 pub const CORE_RPC_ERROR_CODE_CORE_BUSY: i64 = -9;
 
-/// JSON-RPC error code for an operator shard-fetch that did not produce a
-/// body (`CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE`). Typed miss — not
-/// `WRONG_PARAM`. The requested `shard_id` was well-formed; this node
-/// does not currently hold the archive (pruned, or the scheduler returned
-/// MISS).
+/// JSON-RPC error code for a `request_archival_shard` whose fetch produced
+/// no body (`CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE`). Typed miss — not
+/// `WRONG_PARAM`. The requested `shard_id` names a closed shard; every
+/// holder drawn for this need missed, refused, or stalled
+/// (`SHARD_VIEW_FETCH.md` `SV-D5`). Its two siblings — the shard is still
+/// open, this daemon holds no skeleton — are in [`crate::archival`].
 pub const CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE: i64 = -22;
 
 /// The REST error envelope a natively-served endpoint answers with when it
@@ -362,15 +454,6 @@ pub struct GetBlockHeaderByHeightResponse {
     pub block_header: BlockHeader,
 }
 
-/// One row of [`GetVersionResponse::hard_forks`]: the version that activates
-/// at `height`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HardForkEntry {
-    pub hf_version: u8,
-    pub height: u64,
-}
-
 /// Result of the `get_version` JSON-RPC method (no params).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -380,28 +463,21 @@ pub struct GetVersionResponse {
     pub version: u32,
     /// Whether the daemon is a release build (`SHEKYL_VERSION_IS_RELEASE`).
     pub release: bool,
-    /// Current chain height. Omitted on the wire when `0`
-    /// (`KV_SERIALIZE_OPT(current_height, 0)`).
-    #[serde(default, skip_serializing_if = "is_zero")]
+    /// Current chain height. Always present: `0` is a value (`RK-D23`).
     pub current_height: u64,
-    /// The core's target height. `0` — and omitted — only when the core
-    /// reported none. A synchronized node with a target reports that target.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub target_height: u64,
-    /// The hard-fork schedule. Omitted on the wire when empty
-    /// (`KV_SERIALIZE_OPT(hard_forks, {})`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hard_forks: Vec<HardForkEntry>,
+    /// The core's target height, `null` when the core reports none. A
+    /// synchronized node with a target reports that target; whether the
+    /// node is synchronized is not read from this member.
+    pub target_height: Nullable<u64>,
 
     // The three identity-tuple fields (VC-2). Each is MANDATORY and strict:
     // no `default`, no `Option`, no catch-all variant (VC-D14). `get_version`
     // is the call a client makes *before* it trusts anything, so on a remote
     // arm these are attacker-controlled bytes and an omitted field silently
     // becoming a zero value would turn "these disagree" into "these agree" —
-    // the one outcome the identity check exists to prevent. The three
-    // `KV_SERIALIZE_OPT` fields above keep their defaults because the C++
-    // side genuinely omits them and the oracle vectors depend on it; the rule
-    // is per-field on the tuple, not a sweep of the struct.
+    // the one outcome the identity check exists to prevent. No member of
+    // this reply defaults: the two heights above did, mirroring epee's
+    // omit-at-zero, until 3.46.
     /// Digest of the daemon's consensus-constant authorities
     /// ([`crate::CONSENSUS_CONSTANTS_DIGEST`]) — the **rules** axis.
     ///
@@ -510,10 +586,16 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_649);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 41);
+        // 3.44 drops `hard_forks`. 3.43 was already the native shard view;
+        // both branches had written 43, so the deletion took the next minor.
+        // 3.53 writes `get_info`'s amounts as decimal strings.
+        // 3.54 retires the network's four names from `get_info`. 3.55 drops
+        // `last_seen` from `get_peer_list`: the Rust lists carry no clock.
+        // 3.56 reports offline as a state, never a zero.
+        assert_eq!(CORE_RPC_VERSION, 196_664);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 56);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 41);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 56);
     }
 
     #[test]

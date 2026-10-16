@@ -94,6 +94,9 @@ pub struct StreamEvent {
     status: StreamStatus,
     circ_id: CircId,
     target: String,
+    /// `SOCKS_USERNAME` when the event carries it. Forensic, like `target`:
+    /// [`Debug`] omits it.
+    socks_username: Option<String>,
 }
 
 impl StreamEvent {
@@ -122,6 +125,15 @@ impl StreamEvent {
     pub fn target(&self) -> &str {
         &self.target
     }
+
+    /// The SOCKS username the stream presented, when Tor reported one.
+    ///
+    /// A forensic surface: the archival fetch measurement files a stream
+    /// under it, and nothing logs it.
+    #[must_use]
+    pub fn socks_username(&self) -> Option<&str> {
+        self.socks_username.as_deref()
+    }
 }
 
 impl std::fmt::Debug for StreamEvent {
@@ -138,8 +150,10 @@ impl std::fmt::Debug for StreamEvent {
 /// Parse a `650 STREAM <StreamID> <StreamStatus> <CircID> <Target> …` event.
 ///
 /// Returns `None` if the reply is not a `650` async event, is not a `STREAM`
-/// event, or is missing the leading fixed fields. Trailing optional args
-/// (`SOURCE_ADDR=`, `PURPOSE=`, …) are ignored.
+/// event, or is missing the leading fixed fields. Trailing optional args are
+/// ignored except `SOCKS_USERNAME`, which [`StreamEvent::socks_username`]
+/// returns. The value is taken unescaped up to the closing quote: a hex
+/// username needs nothing more.
 #[must_use]
 pub fn parse_stream_event(reply: &ControlReply) -> Option<StreamEvent> {
     if reply.status() != ASYNC_EVENT_STATUS {
@@ -159,6 +173,19 @@ pub fn parse_stream_event(reply: &ControlReply) -> Option<StreamEvent> {
         status,
         circ_id,
         target,
+        socks_username: quoted_field(line, "SOCKS_USERNAME"),
+    })
+}
+
+/// `KEY="value"` among the whitespace-separated fields of a control line.
+///
+/// The value runs to the closing quote and is not unescaped. A field whose
+/// value contains a space is not this form.
+fn quoted_field(line: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=\"");
+    line.split_ascii_whitespace().find_map(|field| {
+        let value = field.strip_prefix(&prefix)?;
+        value.strip_suffix('"').map(str::to_owned)
     })
 }
 
@@ -207,6 +234,19 @@ mod tests {
         .expect("event");
         assert_eq!(ev.circ_id(), CircId::new(55));
         assert_eq!(ev.target(), "127.0.0.1:80");
+        assert_eq!(ev.socks_username(), None);
+    }
+
+    #[test]
+    fn keeps_a_quoted_socks_username_and_debug_omits_it() {
+        let ev = parse_stream_event(&frame_one(
+            b"650 STREAM 7 SUCCEEDED 12 abc.onion:80 SOCKS_USERNAME=\"aabb\" SOCKS_PASSWORD=\"p\"\r\n",
+        ))
+        .expect("event");
+        assert_eq!(ev.socks_username(), Some("aabb"));
+        let rendered = format!("{ev:?}");
+        assert!(!rendered.contains("aabb"));
+        assert!(!rendered.contains("abc.onion"));
     }
 
     #[test]

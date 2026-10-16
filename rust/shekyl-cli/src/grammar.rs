@@ -152,9 +152,7 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         ShardListAll => bare(id, args, ResolvedCommand::ShardListAll),
         ShardListMine => bare(id, args, ResolvedCommand::ShardListMine),
         ShardShow => one_id(id, args, |shard_id| ResolvedCommand::ShardShow { shard_id }),
-        ShardFetch => one_id(id, args, |shard_id| ResolvedCommand::ShardFetch {
-            shard_id,
-        }),
+        ShardFetch => parse_shard_fetch(args),
         MineStart => parse_mine_start(args),
         MineStop => bare(id, args, ResolvedCommand::MineStop),
         MineStatus => bare(id, args, ResolvedCommand::MineStatus),
@@ -252,6 +250,48 @@ fn parse_address(args: &[&str]) -> ResolvedCommand {
         return diag("address: use --full or --out <path>, not both");
     }
     ResolvedCommand::Address { full, out }
+}
+
+fn parse_shard_fetch(args: &[&str]) -> ResolvedCommand {
+    let id = CommandId::ShardFetch;
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let shard_id = match split.positional.as_slice() {
+        [raw] => match raw.parse::<u64>() {
+            Ok(shard_id) => shard_id,
+            Err(_) => return diag(format!("{}: {raw:?} is not a shard id", usage(id))),
+        },
+        _ => return diag(usage(id)),
+    };
+    let png = split.value("--png").map(str::to_owned);
+    // The edge length is judged here, before the command runs: a size the
+    // renderer would refuse must not cost the daemon a fetch first.
+    let size = match split.value("--size") {
+        None => None,
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(size) => {
+                if let Err(e) = shekyl_shard_visual::check_render_size(size) {
+                    return diag(format!("shard fetch: --size {e}"));
+                }
+                Some(size)
+            }
+            Err(_) => {
+                return diag(format!(
+                    "shard fetch: --size expects a pixel edge length, got {raw:?}"
+                ))
+            }
+        },
+    };
+    if size.is_some() && png.is_none() {
+        return diag("shard fetch: --size needs --png <path>; nothing is drawn without it");
+    }
+    ResolvedCommand::ShardFetch {
+        shard_id,
+        png,
+        size,
+    }
 }
 
 fn parse_fee(args: &[&str]) -> ResolvedCommand {
@@ -708,6 +748,62 @@ mod tests {
         assert!(matches!(
             parse("shard list mine"),
             ResolvedCommand::ShardListMine
+        ));
+    }
+
+    #[test]
+    fn shard_fetch_takes_an_id_and_draws_only_when_asked() {
+        assert!(matches!(
+            parse("shard fetch 7"),
+            ResolvedCommand::ShardFetch {
+                shard_id: 7,
+                png: None,
+                size: None,
+            }
+        ));
+        match parse("shard fetch 7 --png out.png --size 256") {
+            ResolvedCommand::ShardFetch {
+                shard_id,
+                png,
+                size,
+            } => {
+                assert_eq!(shard_id, 7);
+                assert_eq!(png.as_deref(), Some("out.png"));
+                assert_eq!(size, Some(256));
+            }
+            other => panic!("{other:?}"),
+        }
+        // A size without a file to draw into is a contradiction, not a
+        // default.
+        match parse("shard fetch 7 --size 256") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("--png"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // A size the renderer would refuse is refused here, before the
+        // daemon is asked to fetch anything.
+        for raw in ["0", "4097"] {
+            match parse(&format!("shard fetch 7 --png out.png --size {raw}")) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("invalid render size"), "{message}");
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        match parse("shard fetch seven") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("not a shard id"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            parse("shard fetch 7 --png out.png --size big"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("shard fetch"),
+            ResolvedCommand::Diagnostic { .. }
         ));
     }
 

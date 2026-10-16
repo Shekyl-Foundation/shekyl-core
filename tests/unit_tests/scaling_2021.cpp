@@ -167,54 +167,33 @@ private:
   uint64_t m_height;
 };
 
-#define PREFIX_WINDOW(hf_version,window) \
+#define PREFIX_WINDOW(window) \
   std::unique_ptr<cryptonote::Blockchain> bc; \
   cryptonote::tx_memory_pool txpool(*bc); \
   bc.reset(new cryptonote::Blockchain(txpool)); \
-  struct get_test_options { \
-    const std::pair<uint8_t, uint64_t> hard_forks[3]; \
-    const cryptonote::test_options test_options = { \
-      hard_forks, \
-      window, \
-    }; \
-    get_test_options(): hard_forks{std::make_pair(1, (uint64_t)0), std::make_pair((uint8_t)hf_version, (uint64_t)1), std::make_pair((uint8_t)0, (uint64_t)0)} {} \
-  } opts; \
+  const cryptonote::test_options test_options = {window}; \
   cryptonote::Blockchain *blockchain = bc.get(); \
-  bool r = blockchain->init(new TestDB(), cryptonote::FAKECHAIN, true, &opts.test_options, 0); \
+  bool r = blockchain->init(new TestDB(), cryptonote::FAKECHAIN, true, &test_options, 0); \
   ASSERT_TRUE(r)
 
-#define PREFIX(hf_version) PREFIX_WINDOW(hf_version, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
+#define PREFIX() PREFIX_WINDOW(TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
 
-#define PREFIX_WINDOW_DBPTR(hf_version,window,dbptr) \
+#define PREFIX_WINDOW_DBPTR(window,dbptr) \
   std::unique_ptr<cryptonote::Blockchain> bc; \
   cryptonote::tx_memory_pool txpool(*bc); \
   bc.reset(new cryptonote::Blockchain(txpool)); \
-  struct get_test_options_dbptr { \
-    const std::pair<uint8_t, uint64_t> hard_forks[3]; \
-    const cryptonote::test_options test_options = { \
-      hard_forks, \
-      window, \
-    }; \
-    get_test_options_dbptr(): hard_forks{std::make_pair(1, (uint64_t)0), std::make_pair((uint8_t)hf_version, (uint64_t)1), std::make_pair((uint8_t)0, (uint64_t)0)} {} \
-  } opts; \
+  const cryptonote::test_options test_options = {window}; \
   cryptonote::Blockchain *blockchain = bc.get(); \
-  bool r = blockchain->init(dbptr, cryptonote::FAKECHAIN, true, &opts.test_options, 0); \
+  bool r = blockchain->init(dbptr, cryptonote::FAKECHAIN, true, &test_options, 0); \
   ASSERT_TRUE(r)
 
-#define PREFIX_WINDOW_DB(hf_version,window,dbtype) \
+#define PREFIX_WINDOW_DB(window,dbtype) \
   std::unique_ptr<cryptonote::Blockchain> bc; \
   cryptonote::tx_memory_pool txpool(*bc); \
   bc.reset(new cryptonote::Blockchain(txpool)); \
-  struct get_test_options_db { \
-    const std::pair<uint8_t, uint64_t> hard_forks[3]; \
-    const cryptonote::test_options test_options = { \
-      hard_forks, \
-      window, \
-    }; \
-    get_test_options_db(): hard_forks{std::make_pair(1, (uint64_t)0), std::make_pair((uint8_t)hf_version, (uint64_t)1), std::make_pair((uint8_t)0, (uint64_t)0)} {} \
-  } opts; \
+  const cryptonote::test_options test_options = {window}; \
   cryptonote::Blockchain *blockchain = bc.get(); \
-  bool r = blockchain->init(new dbtype(), cryptonote::FAKECHAIN, true, &opts.test_options, 0); \
+  bool r = blockchain->init(new dbtype(), cryptonote::FAKECHAIN, true, &test_options, 0); \
   ASSERT_TRUE(r)
 
 // `fee_2021_scaling.relay_fee` and the whole of `tests/unit_tests/fee.cpp`
@@ -232,7 +211,7 @@ private:
 // already absorbed the 5% everywhere else.
 TEST(fee_2021_scaling, wallet_fee_estimate)
 {
-  PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
+  PREFIX_WINDOW(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
   std::vector<uint64_t> fees;
 
   // FL round §5.2 shape (FL-R17 signed): three tiers, Fh main arm
@@ -288,7 +267,7 @@ TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
   // and the relay floor different operands — re-introducing the grace
   // lookahead on Mlw, a second C derivation, a rounding step on one side —
   // breaks this, which is the intent.
-  PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
+  PREFIX_WINDOW(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
   std::vector<uint64_t> fees;
   bc->get_dynamic_base_fee_estimate_2021_scaling(10, fees);
   ASSERT_EQ(fees.size(), 3);
@@ -332,7 +311,7 @@ TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
 // fixture is checked for a median above the floor before anything is asserted.
 TEST(fee_2021_scaling, grace_blocks_do_not_move_the_served_ladder)
 {
-  PREFIX_WINDOW_DB(HF_VERSION_2021_SCALING, CRYPTONOTE_REWARD_BLOCKS_WINDOW, HighLongTermMedianTestDB);
+  PREFIX_WINDOW_DB(CRYPTONOTE_REWARD_BLOCKS_WINDOW, HighLongTermMedianTestDB);
 
   uint64_t long_term_effective_median = 0;
   ASSERT_TRUE(bc->update_next_cumulative_weight_limit(&long_term_effective_median));
@@ -369,7 +348,7 @@ TEST(fee_2021_scaling, warm_ring_equals_cold_reconstruction)
   const uint64_t start = 800; // > SHEKYL_TX_VOLUME_WINDOW + G, so every window is full
   const uint64_t G = shekyl_relay_floor_lookback();
   VaryingChainTestDB* db = new VaryingChainTestDB(start);
-  PREFIX_WINDOW_DBPTR(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE, db);
+  PREFIX_WINDOW_DBPTR(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE, db);
 
   for (uint64_t i = 1; i <= G + 1; ++i)
   {
@@ -409,7 +388,7 @@ TEST(fee_2021_scaling, ring_rebuilds_when_the_tip_moves_backwards)
 {
   const uint64_t G = shekyl_relay_floor_lookback();
   VaryingChainTestDB* db = new VaryingChainTestDB(806);
-  PREFIX_WINDOW_DBPTR(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE, db);
+  PREFIX_WINDOW_DBPTR(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE, db);
   const auto at_806 = bc->relay_floor_ring();
   ASSERT_EQ(at_806.back().first, 806u);
 

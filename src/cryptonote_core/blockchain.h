@@ -65,7 +65,6 @@
 #include "cryptonote_basic/verification_context.h"
 #include "crypto/hash.h"
 #include "checkpoints/checkpoints.h"
-#include "cryptonote_basic/hardfork.h"
 #include "blockchain_db/blockchain_db.h"
 
 namespace tools { class Notify; }
@@ -132,18 +131,6 @@ namespace cryptonote
      * @return true on success, false if any initialization steps fail
      */
     bool init(BlockchainDB* db, const network_type nettype = MAINNET, bool offline = false, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0);
-
-    /**
-     * @brief Initialize the Blockchain state
-     *
-     * @param db a pointer to the backing store to use for the blockchain
-     * @param hf a structure containing hardfork information
-     * @param nettype network type
-     * @param offline true if running offline, else false
-     *
-     * @return true on success, false if any initialization steps fail
-     */
-    bool init(BlockchainDB* db, HardFork*& hf, const network_type nettype = MAINNET, bool offline = false);
 
     /**
      * @brief Uninitializes the blockchain state
@@ -386,7 +373,7 @@ namespace cryptonote
     /**
      * @brief gets data required to create a block template and start mining on it
      *
-     * @param major_version current hardfork version
+     * @param major_version the block major version, CURRENT_BLOCK_MAJOR_VERSION
      * @param height current blockchain height
      * @param prev_id hash of the top block
      * @param seed_hash seed hash used for RandomX initialization
@@ -546,18 +533,6 @@ namespace cryptonote
     void get_output_key_mask_unlocked(const uint64_t& amount, const uint64_t& index, crypto::public_key& key, ct::key& mask, bool& unlocked) const;
 
     /**
-     * @brief gets per block distribution of outputs of a given amount
-     *
-     * @param amount the amount to get a ditribution for
-     * @param from_height the height before which we do not care about the data
-     * @param to_height the height after which we do not care about the data
-     * @param return-by-reference start_height the height of the first rct output
-     * @param return-by-reference distribution the start offset of the first rct output in this block (same as previous if none)
-     * @param return-by-reference base how many outputs of that amount are before the stated distribution
-     */
-    bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, uint64_t &start_height, std::vector<uint64_t> &distribution, uint64_t &base) const;
-
-    /**
      * @brief gets the global indices for outputs from a given transaction
      *
      * This function gets the global indices for all outputs belonging
@@ -678,13 +653,11 @@ namespace cryptonote
      *
      * @param tx the transaction to check the outputs of
      * @param tvc returned info about tx verification
-     * @param hf_version hard fork version
      *
      * @return false if any outputs do not conform, otherwise true
      */
     static bool check_tx_outputs(const transaction& tx,
-      tx_verification_context &tvc,
-      std::uint8_t hf_version);
+      tx_verification_context &tvc);
 
     /**
      * @brief gets the block weight limit based on recent blocks
@@ -774,8 +747,10 @@ namespace cryptonote
      * it has seen. Process-lifetime sticky, re-armed on recurrence; never
      * cleared (alt blocks drop at restart, so a restarted node re-degrades
      * only if peers re-send the heavier chain — self-correcting, not a
-     * clear-on-restart bug). Surfaced on get_info; migrates into RK-5c's
-     * node-state hub when that lands.
+     * clear-on-restart bug). Surfaced on `get_info` as the Health part's
+     * `following_degraded`: read by `shekyl_rpc_info_chain` (`info_chain`,
+     * src/rpc/rpc_facts_ffi.cpp) under the chain lock, with the rest of
+     * the one chain snapshot that reply is built from (RK-5c, RK-D20).
      */
     bool is_following_degraded() const { return m_following_degraded.load(std::memory_order_relaxed); }
 
@@ -852,82 +827,7 @@ namespace cryptonote
     void set_show_time_stats(bool stats) { m_show_time_stats = stats; }
 
     /**
-     * @brief gets the hardfork voting state object
-     *
-     * @return the HardFork object
-     */
-    HardFork::State get_hard_fork_state() const;
-
-    /**
-     * @brief gets the current hardfork version in use/voted for
-     *
-     * @return the version
-     */
-    uint8_t get_current_hard_fork_version() const { return m_hardfork->get_current_version(); }
-
-    /**
-     * @brief returns the newest hardfork version known to the blockchain
-     *
-     * @return the version
-     */
-    uint8_t get_ideal_hard_fork_version() const { return m_hardfork->get_ideal_version(); }
-
-    /**
-     * @brief returns the next hardfork version
-     *
-     * @return the version
-     */
-    uint8_t get_next_hard_fork_version() const { return m_hardfork->get_next_version(); }
-
-    /**
-     * @brief returns the newest hardfork version voted to be enabled
-     * as of a certain height
-     *
-     * @param height the height for which to check version info
-     *
-     * @return the version
-     */
-    uint8_t get_ideal_hard_fork_version(uint64_t height) const { return m_hardfork->get_ideal_version(height); }
-
-    /**
-     * @brief returns the actual hardfork version for a given block height
-     *
-     * @param height the height for which to check version info
-     *
-     * @return the version
-     */
-    uint8_t get_hard_fork_version(uint64_t height) const { return m_hardfork->get(height); }
-
-    /**
-     * @brief returns the earliest block a given version may activate
-     *
-     * @return the height
-     */
-    uint64_t get_earliest_ideal_height_for_version(uint8_t version) const { return m_hardfork->get_earliest_ideal_height_for_version(version); }
-
-    /**
-     * @brief returns info for all known hard forks
-     *
-     * @return the hardforks
-     */
-    const std::vector<hardfork_t>& get_hardforks() const { return m_hardfork->get_hardforks(); }
-
-    /**
-     * @brief get information about hardfork voting for a version
-     *
-     * @param version the version in question
-     * @param window the size of the voting window
-     * @param votes the number of votes to enable <version>
-     * @param threshold the number of votes required to enable <version>
-     * @param earliest_height the earliest height at which <version> is allowed
-     * @param voting which version this node is voting for/using
-     *
-     * @return whether the version queried is enabled 
-     */
-    bool get_hard_fork_voting_info(uint8_t version, uint32_t &window, uint32_t &votes, uint32_t &threshold, uint64_t &earliest_height, uint8_t &voting) const;
-
-    /**
-     * @brief get difficulty target based on chain and hardfork version
+     * @brief get difficulty target
      *
      * @return difficulty target
      */
@@ -1240,7 +1140,6 @@ namespace cryptonote
 
     checkpoints m_checkpoints;
 
-    HardFork *m_hardfork;
 
     network_type m_nettype;
     bool m_offline;
@@ -1409,11 +1308,10 @@ namespace cryptonote
      *
      * @param b the block containing the miner transaction
      * @param height the height at which the block will be added
-     * @param hf_version the consensus rules to apply
      *
      * @return false if anything is found wrong with the miner transaction, otherwise true
      */
-    bool prevalidate_miner_transaction(const block& b, uint64_t height, uint8_t hf_version);
+    bool prevalidate_miner_transaction(const block& b, uint64_t height);
 
     /**
      * @brief reads the D2 escalation operand n = frozen_segment_count at parent-block state
@@ -1453,7 +1351,6 @@ namespace cryptonote
      * @param fee the total fees collected in the block
      * @param base_reward return-by-reference the new block's generated coins
      * @param already_generated_coins the amount of currency generated prior to this block
-     * @param version hard fork version for that transaction
      * @param frozen_segment_count D2 escalation operand n, read at parent state via parent_frozen_segment_count
      * @param total_burned the destroyed-fee fold at PARENT state (the same read the accrual uses):
      *        circulating_supply = already_generated_coins − total_burned is derived in Rust (FL-R16c),
@@ -1461,7 +1358,7 @@ namespace cryptonote
      *
      * @return false if anything is found wrong with the miner transaction, otherwise true
      */
-    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count, uint64_t total_burned);
+    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint64_t frozen_segment_count, uint64_t total_burned);
 
     /**
      * @brief reverts the blockchain to its previous state following a failed switch
@@ -1507,11 +1404,10 @@ namespace cryptonote
      * unlock_time is either a block index or a unix time.
      *
      * @param unlock_time the unlock parameter (height or time)
-     * @param hf_version the consensus rules version to use
      *
      * @return true if spendable, otherwise false
      */
-    bool is_tx_spendtime_unlocked(uint64_t unlock_time, uint8_t hf_version) const;
+    bool is_tx_spendtime_unlocked(uint64_t unlock_time) const;
 
     /**
      * @brief stores an invalid block in a separate container

@@ -77,7 +77,7 @@ silently.
 
 ## 2. The structural finding this round exists to fix
 
-**Nothing in Rust owns a CONNECTION.**
+**UPDATE 2026-10-06:** `Connection` in `shekyl-seam` is that noun for step a. The ownership cut (step b) and the remaining sync walks (step c) are open. *Records-was: nothing in Rust owns a CONNECTION.*
 
 | Crate | Owns | Does not own |
 | --- | --- | --- |
@@ -85,8 +85,10 @@ silently.
 | `shekyl-peer-policy` | **stateless verdicts** — `DropVerdict`, `BlockIngest`, `HostInboundCap` | the peer the verdict is about |
 
 Every one of those verdicts is a function C++ calls **with values C++ walked
-itself**. The connection lives in `net_node.inl`'s `foreach_connection` lambda
-and in epee's context object.
+itself**. *Records-was: the connection lives in `net_node.inl`'s
+`foreach_connection` lambda and in epee's context object.* The session
+record is `Connection`. The sync walks that still read the handler's
+context are steps b and c.
 
 **That is why the per-host cap became an address comparison inside a loop:
 there was no object to hang a category on.** PWD-I8 is a missing **noun**, and
@@ -227,15 +229,25 @@ membership harness against the C++.*
 
 ### 4.2 The register
 
+**UPDATE 2026-10-07 (Rick).** Order from here: #991 (LV-3 step b) →
+slice 1 (peerlist) → slice 3, rescoped to discovery and the dialer →
+RD. Dialing moves to Rust. No further fixes to the C++ dial path.
+Slice 4 keeps the inbound handshake state machine and PWD-B1/B2. The
+boundary: slice 3 owns the outbound dial, the outbound handshake
+invoke as a timing-engine owner, and the outcome. Slice 4 owns the
+phases after a session exists and the per-peer state B1/B2 name.
+*Records-was: slice 3 was discovery policy without the dialer, and RD
+followed the timing engine directly.*
+
 | # | Slice | Inherits | Flips | Greens when it lands |
 | --- | --- | --- | --- | --- |
-| **1** | **Peerlist** — `net_peerlist.{h,cpp}`, **874 lines** at `fdf17b729` (*was 878; PR #821 removed the seed field*). Moves into Rust: the gray list and the white list, the one door between them, expiry, and the store. **The brief is the contract** ([`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md), **REVISED 2026-09-23**). *Records-was "differentially testable against the C++"* | **The field is already gone.** *Records-was three received-seed sites at `net_peerlist.h:367` and `:414`, plus an unsanitized load. `:367` keeps the previous white `last_seen`; `:414` is `return true` at the end of `append_with_peer_gray`. The field is already absent. Leftover spellings of `pruning_seed` in code are deleted by the implementation PR the brief describes, not by this document.* | I2's remaining acceptance rules; the white-list writer invariant | The field is already absent, so the slice opens with no predecessor on this axis. The implementation PR deletes every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. *Records-was a pending gate, then a comment at `net_peerlist.cpp:84` treated as an allowed hit.* Greens when `m_peers_white` and `peerlist_manager` are gone from `src/p2p`, `rg -n pruning_seed src rust tests` returns nothing, and `White`'s only constructor is the one `handshake_confirmed` calls for an outstanding gray draw or a Foundation-fleet address. A harness that must match C++ membership is not the gate |
+| **1** | **LANDED 2026-10-13 (increments 1–2 in #1021, increment 3 in PR-3 #1056): the C++ peerlist is deleted.** **Peerlist** — `net_peerlist.{h,cpp}`, **874 lines** at `fdf17b729` (*was 878; PR #821 removed the seed field*). Moves into Rust: the gray list and the white list, the one door between them, expiry, and the store. **The brief is the contract** ([`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md), **REVISED 2026-09-23**). *Records-was "differentially testable against the C++"* | **The field is already gone.** *Records-was three received-seed sites at `net_peerlist.h:367` and `:414`, plus an unsanitized load. `:367` keeps the previous white `last_seen`; `:414` is `return true` at the end of `append_with_peer_gray`. The field is already absent. Leftover spellings of `pruning_seed` in code are deleted by the implementation PR the brief describes, not by this document.* | I2's remaining acceptance rules; the white-list writer invariant | The field is already absent, so the slice opens with no predecessor on this axis. The implementation PR deletes every remaining `pruning_seed` in `src/`, `rust/`, and `tests/`. *Records-was a pending gate, then a comment at `net_peerlist.cpp:84` treated as an allowed hit.* Greens when `m_peers_white` and `peerlist_manager` are gone from `src/p2p`, `rg -n pruning_seed src rust tests` returns nothing, and `White`'s only constructor is the one `apply(DialOutcome)` calls for `SessionAccepted` or `Confirmed` of an outstanding gray draw (*records-was:* or `HarvestDone` of a Foundation-fleet address, withdrawn 2026-10-11; the variant is DELETED, no crate symbol). A harness that must match C++ membership is not the gate. **UPDATE 2026-10-10/11:** increments 1 and 2 landed as #1021 (`5d68a72302`); increment 3, with the address-validity check ruled 2026-10-11 (brief §2), lands with slice 3 in PR-3 (D5, ruled 2026-10-11) |
 | **2** | **Socket admission — folded into the transport layer, 2026-09-25.** The ceiling, enforced at accept. The count it needs lives in the transport layer ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D1, D3, D8), so the accept path is not edited twice. *Records-was "Admission policy — the ceiling, and nothing else after §2.9.4".* | the transport layer's socket count, and a **measured `--in-peers`** (§7.3) rather than `UINT32_MAX` | **I7** (mechanism deleted), **I8** (closed) | `rg -n 'has_too_many_connections' src/` returns nothing; `is_host_limit` is a counter comparison; `census_inbound` no longer walks the Levin registry |
-| **3** | **Discovery policy** — seed handling, the dial-candidate selection, `m_used_stripe_peers`' removal. **Promotion pace (2026-09-25):** when slice 1 reports white below its refill line (above the diversity floor), this slice dials gray at a bounded derived rate with jittered spacing. The inherited 60 s housekeeping timer is not the pace | slices 1–2, and the candidate filter's `else if` already gone (§7.2) | B9's mechanism half; PWC-E9's re-derivation | `rg -n 'm_used_stripe_peers\|next_needed_pruning_stripe' src/p2p/` returns nothing |
-| **4** | **Handshake state machine** — the phases, and PWD-B1/B2's per-peer state, which have no landed mechanism and so land here first rather than migrating | slices 1–3 | **B1, B2**; B7's remainder and PWC-E5 | PWD-B1's four unguarded invoke handlers are guarded |
+| **3** | **LANDED 2026-10-13 in PR-3 (#1056): `shekyl-dialer` is the only dialer and the C++ dial path is deleted; the three-node run precedes un-drafting.** **Discovery and the dialer (rescoped 2026-10-07).** Seed handling, the dial-candidate selection, and the Rust dialer. **Promotion pace (2026-09-25, arms named 2026-10-08):** when slice 1 reports white below its refill line (above the diversity floor), this slice dials gray on the fill's jittered wake. A free slot is a kept session (`SessionAccepted`). Outbound already at target is one confirm-and-close (`Confirmed`). The inherited 60 s housekeeping timer is not the pace. The brief is [`P2P_3_SLICE_3_DIALER_BRIEF.md`](P2P_3_SLICE_3_DIALER_BRIEF.md). *Records-was: discovery policy without the dialer, including `m_used_stripe_peers`' removal as the named green.* **UPDATE 2026-10-11 (Rick):** no subnet grouping — the C++ `/24` pass leaves with the dial path and nothing replaces it; the PWD-B9 keys proposed as D1 and D2 are withdrawn, not ruled (reopen on PM-2a's clearnet many-address run). D5 is ruled: slice 1 increment 3 lands with this slice as one cutover PR, PR-3. Address validity moves to Rust (slice 1 brief §2). PR-3 is gated only on the dialer brief's review closing | slice 1. Slice 2 is already the transport layer | B9's mechanism half, which is the uniform draw and no grouping (2026-10-11); PWC-E9's re-derivation; the `idle_worker` dial defect | the C++ dial functions named in the brief are gone. `rg` commands are in the brief |
+| **4** | **Inbound handshake state machine** — the phases after a session exists, and PWD-B1/B2's per-peer state. **UPDATE 2026-10-07:** the outbound handshake invoke is slice 3's, a timing-engine owner. This slice does not dial. | slices 1–3 | **B1, B2**; B7's remainder and PWC-E5 | PWD-B1's four unguarded invoke handlers are guarded |
 | **TE** | **Timing engine, two pieces (D6, updated 2026-09-25).** **Core, before the transport layer:** owner trait, time-ordered wake set, wake delivery, injected clock, lateness. The transport layer's connection deadlines are owners of that core from its first line. Rule 26's pre-flight is recorded before the crate is written. **Bridge, after the transport cutover:** invoke timeouts, interim idle cadences, the relay `Driver`'s sleep moved off asio, then the `io_context` deleted. *Records-was: the whole engine after the transport layer.* | the core has no predecessor; the bridge inherits the transport cutover | D1 violation 2 | C++ has no event loop; step 7 of the transport-layer design has measured timer lateness on the interim and after |
-| **RD** | **Relay dispatch — after the timing engine.** LV-3 step d, brought forward. `shekyl-relay`'s `Driver` effects write to transport connections by id. Relay messages are built in `shekyl-levin`. The 2002/2008 byte gate is D6 | the timing engine | the C++ relay path | Rust emits a relay message a C++ node accepts, or the payloads match the C++ serializer byte for byte; conformance grades are unchanged |
-| **5** | **LV-3 — the connection type, ownership transfer, and the registry (steps a–c).** Relay dispatch is the **RD** row, brought forward 2026-09-25. *Records-was "sockets and relay dispatch" as one slice.* The connection registry stays here. **The connection object lives here.** **UPDATE 2026-09-28:** step c's registry race is pulled forward to immediately after the transport cutover. It does not wait on steps a and b, slices 1–4, the timing-engine bridge, or relay dispatch. The rest of this slice still inherits those. | slices 1–4, **TE**, and **RD** | the failure-window row; LV-3's own `IMPLEMENTATION_INDEX` cell | the C++ connection registry has no remaining policy caller |
+| **RD** | **Relay dispatch — after slice 1 and the rescoped slice 3 (2026-10-07).** *Records-was: after the timing engine.* LV-3 step d, brought forward. `shekyl-relay`'s `Driver` effects write to transport connections by id. Relay messages are built in `shekyl-levin`. The 2002/2008 byte gate is D6. **UPDATE 2026-10-08 (Ruling B, `DAEMON_RELAY_PRIVACY.md` §97).** RD inherits the re-measurement obligation: every `CppPath` row of the §97 register that touches relay timing (the `hop` scheduling term, the realised flush distribution, the realised carrier cadence, §96 item 2's operational p90) is measured again on the Rust path, and this row does not close until each has a `RustPath` measurement recorded in §97. A reading taken while `levin_notify.cpp` still transports is `CppPath` and does not count. Do not start RD before PR-3 | slice 3's dialer, and the timing engine | the C++ relay path | Rust emits a relay message a C++ node accepts, or the payloads match the C++ serializer byte for byte; conformance grades are unchanged; **and** every relay-timing `CppPath` row in `DAEMON_RELAY_PRIVACY.md` §97 has a `RustPath` measurement |
+| **5** | **LV-3 — the connection type, ownership transfer, and the registry (steps a–c).** Relay dispatch is the **RD** row, brought forward 2026-09-25. *Records-was "sockets and relay dispatch" as one slice.* The connection registry stays here. **The connection object lives here.** **UPDATE 2026-09-28:** step c's registry race is pulled forward to immediately after the transport cutover. It does not wait on steps a and b, slices 1–4, the timing-engine bridge, or relay dispatch. **UPDATE 2026-10-08 (PR #1001).** Steps b and c are closed and inherit none of slices 1–4, the timing engine, or relay dispatch. Step b landed in #991 before slice 1. Step c closed after the transport cutover. Step a and the registry remainder inherit slices 1–4, **TE**, and **RD**. Discovery does not wait on that remainder. | Steps b and c: none. Step a and the registry remainder: slices 1–4, **TE**, and **RD** | the failure-window row; LV-3's own `IMPLEMENTATION_INDEX` cell | the C++ connection registry has no remaining policy caller |
 | *(open)* | **The fate of `cryptonote_protocol_handler`** — 3,213 lines, and **not yet a slice**. **UPDATE 2026-09-28:** misbehaviour scoring (`add_host_fail`, `net_node.inl:413`) is this row's work until the slice exists. Scores that decay when read, a map that drops a zero, and values derived for that job. The RPC score map (`core_rpc_server.cpp:180`) has the same shape. It is not part of the transport cutover. | — | — | named so its absence is visible, per §0's defect |
 
 **E1/E2 are deliberately not rows.** E1 tier-1's diagnostic half lands in
@@ -344,16 +356,27 @@ single type carrying a `bool verified` flag.
 **UPDATE 2026-09-23 (steering) — the brief revised the day it was ratified.**
 [`P2P_3_SLICE_1_PEERLIST_BRIEF.md`](P2P_3_SLICE_1_PEERLIST_BRIEF.md) is the
 contract. The lists are gray and white. Incoming addresses and `--add-peer`
-are gray only. White is written when a uniform gray draw is dialed and the
-handshake confirms, and in one other case: a confirmed handshake with the
-hardcoded Foundation seed fleet (`src/p2p/net_node.inl:738`). A white address
+are gray only. White is written by `apply` of `SessionAccepted` or `Confirmed` on a
+uniform gray draw, and in one other case (*records-was, withdrawn
+2026-10-11*): `HarvestDone` for the
+hardcoded Foundation seed fleet (`get_ip_seed_nodes`,
+`src/p2p/net_node.inl:771`, the array at `:781`). A white address
 with no contact this node opened for `EXPIRATION_PERIOD` (24 hours) returns
 to gray. The C++ stamps `last_seen` and never expires on it; Rust keeps that
 one clock as `last_observed` and does not sort by it. Draws are uniform, and
 the list sent to another peer is a random sample of white only. The FFI
 sentence above — name the kind on both sides of a `u16` — is **records-was
-the seam**. Slice 1 deletes the C++ peerlist. `handshake_confirmed` refuses
-an address that was not the gray draw and is not in that fleet.
+the seam**. Slice 1 deletes the C++ peerlist. `apply` writes nothing for
+`SessionAccepted` or `Confirmed` of an address that was not the gray
+draw, and writes white for `HarvestDone` only when the address is in
+that fleet (*records-was, withdrawn 2026-10-11*). `Confirmed` closes the
+session. It is the same door.
+**UPDATE 2026-10-11 (Rick): the fleet case above is withdrawn.** Seeds
+are ordinary peers: the compiled addresses enter gray at each start as
+operator-named addresses do and reach white only
+through a drawn dial's `SessionAccepted` or `Confirmed`; the harvest is
+absorbed into `Confirmed`. `HarvestDone` is DELETED: no crate symbol
+(slice 1 brief §3, dialer brief arm 2; the exception audit, §8 below).
 
 ---
 
@@ -803,8 +826,8 @@ sites of its own — the two carry-forward guards below, **and a persisted-peerl
 load path that never sanitizes** (`sanitize` appears nowhere in
 `net_peerlist.cpp`), so a stored peerlist carries its seeds straight into the
 gray list. The guards are at
-[`net_peerlist.h:367`](../../src/p2p/net_peerlist.h#L367) and
-[`:414`](../../src/p2p/net_peerlist.h#L414) — the carry-forward guards *"against
+`net_peerlist.h:367` (at `f317d979c4`; the C++ peerlist is deleted, 2026-10-13) and
+`:414` — the carry-forward guards *"against
 older nodes not passing pruning info around."* **Q7's emitter-half does not
 clear them**, because they read what arrives rather than what we send. They are
 **not** part of this amendment (they are slice 1's inheritance, §4.2), but the
@@ -826,3 +849,58 @@ has its specified landing site after all. Check:
 `rg -n 'net_node|src/p2p' docs/design/DAEMON_REDB_STORE.md` returning a scope
 row. **At `f9e000f76` it returns nothing**, which is the evidence this
 amendment rests on.
+
+---
+
+## 8. The exception audit — RULED 2026-10-11 (Rick)
+
+**The test.** A special case is acceptable only if no remote party can
+trigger it or benefit from it. One that only the local operator controls
+is configuration. Any other special case is attack surface.
+
+**The verdicts.** Not pass/fail. Each case is one of:
+
+- **absorbed** — the standard rule already handles it once its input is
+  modelled correctly; the row says how, and the special-case wording or
+  code is removed;
+- **deleted**;
+- **irreducible** — for Rick, with the reason the standard rule cannot
+  express it.
+
+The target is an empty irreducible column. Where a case is a flag that
+switches a rule off, the row asks whether it is instead data the rule
+reads (rule 71, data not control flow) and says which.
+
+**Standing rule.** A brief or PR that adds a special case names who can
+trigger it and who benefits. If a remote party can do either, it does not
+land without Rick's ruling and a wargame.
+
+### 8.1 Every special case in the P2P briefs and `shekyl-peerlist`, at `8848e773`
+
+| # | Case | Where | Trigger | Beneficiary | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| 1 | The Foundation fleet's `HarvestDone` writes white from any seat | slice 1 brief §3; `Peerlist::fleet`, `peerlist.rs:45-56`; the fleet arm of `apply`, `:298-305` | **Remote**: a seed host completing a handshake | **Remote**: six hosts hold a white seat on every node and are over-represented in every disclosure sample | **Deleted** (seeds are ordinary peers, slice 1 §3). `Peerlist::fleet` and the fleet arm are gone in this PR; the `HarvestDone` variant is row 7 and is gone too |
+| 2 | The `--add-peer` eviction "privilege": the named address is the one a full gray list keeps | slice 1 brief §2 (*records-was* text); `Source::Operator` doc, `outcome.rs:26-30` | Local operator | Local | **Absorbed.** `insert_gray` keeps the address just seated and evicts a uniformly random *other* drawable seat for every source (`partition.rs:131-142`, `:480-491`, re-pinned after the white-clock edit; row 1 stays at the `8848e773` pin); a failed dial drops any drawn address (`drop_outstanding`, `:225-231`). An unreachable named address is drawn, fails, leaves gray, and is re-supplied only by the operator's next start. The sentence is rewritten as the uniform insert rule; no code change |
+| 3 | Operator-named addresses admitted whatever the range; network-learned ones refused unless global | slice 1 brief §2, address validity | Local operator | Local | **Absorbed.** One predicate whose input is `(address, Source)`: `Source` is data the rule reads, not a second path. The rule is against what peers say |
+| 4 | `--allow-local-ip` | slice 1 brief §2, §7 | Local operator | Local | **Absorbed as data (rule 71).** The rule is "refuse a network-learned address in the refused set, and disclose none in it"; the flag chooses the set (the §2 table, or empty). Not keyed on nettype. The same datum governs what the file holds (§7) |
+| 5a | Priority nodes: a reserved outbound slot outside the uniform draw, a guaranteed stem candidate, redialled forever when unreachable | dialer brief arm 1 (*records-was*); `m_priority_peers`, `net_node.inl:558`, `:2132`, `:2906` | Local operator | Local in intent; in effect a named remote host holds a permanent outbound seat and a stem position on this node | **Deleted** (Rick, 2026-10-11: they "bypass all the identity protections we have built in and provide no actual value"). `--add-priority-node` becomes a retired flag refused by name in PR-3; `--add-peer` already jumpstarts. The live flag is still described in `docs/EXECUTABLES.md` and `docs/proxies.md`; PR-3 clears those with the flag. `docs/USER_GUIDE.md` already has no row. The dialer brief's deletion `rg` is the gate, and it does not cover the historical Q12 run record |
+| 5b | Exclusive nodes: an exclusive list skips the draw and every later arm | dialer brief arm 1 | Local operator | Local | **Absorbed as a network declaration, like `--allow-local-ip` (rule 71: data).** The node's candidate set is the named addresses and the ordinary rules run over it; not a dialer arm, not an exception. Its help text names the cost: a single exclusive peer is the first hop of every transaction this node originates. Users on `dev`: `scripts/bench/drs_bench.py:328`, `scripts/bench/ba_t5_session2_run.sh:99` |
+| 6 | `is_self_dial` on a seed, beside the own-address filter | dialer brief, candidate filter row 1 | Local (our own address is a seed) | Local | **Absorbed.** The C++ seed path bypassed the peerlist, so it carried its own copy of "a dial to ourselves is not a peer". With seeds in gray (slice 1 §3) the one own-address rule covers them |
+| 7 | The fill's harvest arm: dial a seed, take its list, close, no white | dialer brief, the fill (R1, 2026-10-12); the `Harvest` aim; `DialOutcome::HarvestDone` | Local: list state — no kept session (a), the floors (b), white below the refill line with gray drawable (c), gray empty (d); *records-was* the seed list, then gray below the floor, then a yield condition, then white below the floor | Local | **Absorbed into `Confirmed`** (Rick, 2026-10-11; the fill re-ruled as R1, 2026-10-12). A handshake reply carries the peer's sample, so a confirm-and-close dial learns addresses as a harvest did; the harvest's only difference, no white write, existed for the seed special case (row 1), now withdrawn. Under R1 a node with no outbound session keeps its first success, keeps draw from a pool at or above the floor, and draws no floor admits are confirm-and-close while white is below the refill line and gray is drawable. It terminates because every confirm moves an address out of gray; no peer's answer ends it. The restart wargame (48 confirm dials before any session under the previous reading) is in the dialer brief. `HarvestDone` is DELETED (no crate symbol). The `Harvest` aim is not coded; PR-3 does not add it |
+| 8 | `Source::Operator` and `Source::Reload` are not counted by D-S1's per-session cap | `outcome.rs:26-32`; slice 1 brief §5c | Local | Local | **Absorbed as data.** The cap's key is a session id (`Source::Session { id, .. }`); a source with no session has no key to count against. Not an exemption from the rule, an input the rule has no row for |
+| 9 | D4: a ban demotes white to gray at the next read, clearnet only | slice 1 brief §5b; `BanQuery` | This node's own scoring of the banned host; the reconnect throttle never feeds a ban (D-S1), so a path attacker's forged resets cannot | None remote: the banned host loses its seat | **Absorbed.** A predicate the white read consults (`BanQuery`), not a list mutation. "Clearnet only" is the predicate's domain: only a clearnet address can be banned (`P2P_TRANSPORT_LAYER.md` D7), which is data of the address type |
+| 10 | One foreign-connector entry refuses the whole received list (D7); the 25th address in 24 h refuses the whole list (D-S1, F2) | slice 1 brief §2, §5c | Remote (the sender) | None: the sender loses its list | **Absorbed.** The admit rule applied to a list atomically, so a sender cannot smuggle part of a bad list through; not an exception to it |
+| 11 | D3's sample exception: leave current outbound sessions out of the disclosure sample | slice 1 brief §5a | — | Would have been a remote observer (the absence observer) | **Deleted** — not adopted, 2026-10-09, on the §5a measurement |
+| 12 | A local origin rides the hidden stem slot; stem width 1 is refused with a hidden connector | `DAEMON_RELAY_PRIVACY.md` §98; `shekyl-relay` | Local configuration (a connector declaring `address_hidden_from_peer`) | Local | **Absorbed as data.** The local source's candidate set is "address-hiding sessions", read from the connector's declaration; the rule is the same pin-over-`stems`-candidates every source gets, with a different candidate set. The width-1 refusal is a rejected configuration, not a branch |
+| 13 | `--out-peers 0` is legal; a positive cap below the hidden floor (12) is refused | dialer brief, the composition | Local operator | Local | **Absorbed.** Configuration validation at the setter; the fill reads the cap as data |
+
+**Irreducible: none.** Every row is configuration the local operator
+controls, data the standard rule reads, or deleted.
+
+### 8.2 What this audit does not cover
+
+The transport layer's admission ceiling and its rate-limit table
+(`P2P_TRANSPORT_LAYER.md`) and the relay's timing rules were read for
+seed- or operator-specific carve-outs and carry none; they are not
+re-audited row by row here. A new special case anywhere in the P2P lane
+enters this table before it lands, under the standing rule above.

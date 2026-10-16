@@ -41,14 +41,12 @@ async fn test_rpc() {
         // (un-vendor slice 1): block *fetch* (`get_block`/`get_block_by_number`,
         // returning the parsed oxide `Block`) is retired — the canonical block parse
         // lives in `shekyl-wire`, fetched from raw bytes. `get_block_hash` /
-        // `get_hardfork_version` / `get_height` remain and are smoked here.
+        // `get_height` remain and are smoked here.
         let chain = rpc.get_height().await.unwrap();
         let prior = usize::try_from(chain.tip().expect("non-empty chain").to_raw())
             .expect("block height fits usize");
         // There should be a block just prior; its hash route resolves.
         rpc.get_block_hash(prior).await.unwrap();
-        // The hardfork version route resolves to a genesis-or-later version.
-        assert!(rpc.get_hardfork_version().await.unwrap() >= 1);
     }
 
     // Test generate_blocks, cross-checking the returned hashes against `get_block_hash`.

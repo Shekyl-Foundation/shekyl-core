@@ -80,10 +80,14 @@ use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 use super::chain_reads::ReadFault;
 use super::prune::Horizons;
 
-use shekyl_chain_rules::{Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant};
+use shekyl_chain_rules::{
+    Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant, SettlementCheck,
+};
 use shekyl_units::AtomicUnits;
 
-use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
+use super::error::{
+    CellFault, EngineError, SettlementFault, StoreCannot, StoreError, StoreInvariant,
+};
 use super::header;
 use super::keyed::{Handles, InsertTable, RemoveTable, ReplaceTable, UpsertTable};
 use super::shared::Shared;
@@ -255,7 +259,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// | `CumulativeDifficultyNotMonotone { at }` | `WorkNotIncreasing { height: at }` (SI-10) |
     /// | `CumulativeDifficultyOverflow` | `FoldOverflow { cell: "block_info.cumulative_difficulty" }` (SI-8) |
     /// | `BondRecordInvariant { which, .. }` | `CellCorrupt { key: "archival_bond", .. }` with `which` as the reason (SI-7) |
+    /// | `BondHybridKeyMalformed { .. }` | `CellCorrupt { key: "archival_bond", .. }` the hybrid key is not canonical (SI-7) |
     /// | `AccrualOverflow { .. }` | `FoldOverflow { cell: "archival_budget_accruing" }` (SI-8) |
+    /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25) |
     ///
     /// (The arms between are documented inline on the match.)
     ///
@@ -330,7 +336,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             // halt the writer against the wrong table.
             Corrupt::HoleBelowTip { at: _, record } => StoreInvariant::CellCorrupt {
                 key: match record {
-                    PerHeightRecord::Block => "block_info",
+                    // The header record is a projection of the same row
+                    // (DRS-E5 `E5-13`): a hole under `header_at` is a
+                    // hole in `block_info`.
+                    PerHeightRecord::Block | PerHeightRecord::Header => "block_info",
                     PerHeightRecord::CurveTreeRoot => "curve_tree_roots",
                     PerHeightRecord::LeafCount => "curve_tree_leaf_counts",
                     PerHeightRecord::Outputs => "blocks",
@@ -418,12 +427,42 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                     },
                 }),
             },
+            // CEN-B4 read a bond record whose hybrid key is not the
+            // canonical grammar. The record is bytes; the key type lives
+            // above `shekyl-types`, so the cell can hold a key admission
+            // would not have written. That is SI-7 on `archival_bond`, the
+            // same cell as a fold invariant, and a different reason: the
+            // key does not decode.
+            Corrupt::BondHybridKeyMalformed { persona: _ } => StoreInvariant::CellCorrupt {
+                key: "archival_bond",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "bond_record",
+                    reason: "the hybrid public key is not canonical",
+                }),
+            },
             // The open epoch's accruing budget plus this block's inflow does
             // not fit (CEN-L8's overflow clause). The validator computes the
             // post-image (`ARW-Q1`), so the SI-8 fold on
             // `archival_budget_accruing` is observed from the rule side.
             Corrupt::AccrualOverflow { epoch: _ } => StoreInvariant::FoldOverflow {
                 cell: "archival_budget_accruing",
+            },
+            // Settlement's checks that have an operand
+            // (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5, checks 1 and 3) and
+            // the beacon guard. The validator derives the rows (`ARW-Q1`),
+            // so it is the one that observes the index not folding to its
+            // digest, its own fold overcounting, or a beacon block that is
+            // not strictly below the connecting height. The block is not
+            // invalid; this node cannot settle the epoch.
+            Corrupt::SettlementIntegrity { epoch, check } => StoreInvariant::SettlementNotSound {
+                epoch,
+                observed: match check {
+                    SettlementCheck::IssuedIndexDigest => SettlementFault::IndexDrift,
+                    SettlementCheck::PassesExceedCounted { persona, shard } => {
+                        SettlementFault::PassesExceedCounted { persona, shard }
+                    }
+                    SettlementCheck::BeaconNotRecorded => SettlementFault::BeaconNotRecorded,
+                },
             },
         };
         self.poison.arm(row)

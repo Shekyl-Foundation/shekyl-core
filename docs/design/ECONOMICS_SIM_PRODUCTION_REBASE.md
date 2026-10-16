@@ -199,12 +199,12 @@ tables has one cause. Each item names what would show it wrong.
 | --- | --- | --- |
 | **ESR-1** | The ordinary user's fee comes from `shekyl_economics::corrected_fee_ladder` — the Standard rung, the production default — at the block's own `R`, `C` and median. The flat `0.1 SKL` stays as a **named control arm**. | The control arm reproduces every §12.14 A1-T and A1-L cell **exactly**. If it does not, nothing after it is readable. |
 | **ESR-2** | The stuffer pays the Economy rung from `relay_fee_floor`; the `FEE_PER_BYTE_ATOMIC` mirror is deleted. The A3 claim cost follows. | A4's cost per shard is no longer depth-flat near `1 SKL`: it tracks `R`. `a_shard_costs_about_one_skl_and_depth_barely_moves_it` must go red before it is rewritten. |
-| **ESR-3** | Emission-split epoch read from `shekyl_chain_rules::EMISSION_SPLIT_EPOCH`. | A fold sampled at an exact year-boundary height moves by one decay step; a mid-year sample does not. |
+| **ESR-3** | Emission-split epoch closed over inside `shekyl_economics::emission_share` (`EMISSION_SPLIT_EPOCH`). | A fold sampled at an exact year-boundary height moves by one decay step; a mid-year sample does not. |
 | **ESR-4** | Transaction volume through `TxVolume::window` over `TX_VOLUME_WINDOW`, as the validator reads it. | A step schedule's burn and release ramp over 720 blocks instead of jumping. |
 | **ESR-5** | Net circulating supply (`CirculatingSupply::derive`) in the gate-7 path and the recorder; the fixture is regenerated. | Each regenerated column is justified from the production formula, not from the run that produced it. |
 | **ESR-6** | The weight penalty (`paid_block_reward`) and a block-weight median enter the fold. The pure median fold is **exposed from `shekyl-chain-rules`**, not restated — see §3. What a block carries is the producer's fill rule, lifted from `fill_block_template` to `shekyl_block_template::Fill` and called. | With traffic above the penalty-free zone the median rises and the floor falls as `1/M²` — **amended by §5.6 before the run**: on an all-Standard chain, only once one more transaction's fee covers its penalty. |
 | **ESR-7** | A miner stuffer: transactions the miner includes in its own blocks. Two arms: the fee floor **unenforced** (the current system — zero fee, bounded only by the penalty) and **enforced** (a declared divergence, §4). | `--stage2` prints a stuffer row at zero fee beside the fee-path one. |
-| **ESR-8** | Restated constants become imports, or are declared in §4. ~~The dead stake schedule is deleted in its own commit (rule 15).~~ **Withdrawn 2026-10-03 (Rick):** staking is being built now, and the sim is the instrument for designing it. A staking surface the daemon does not read yet is not dead. The stake schedule, the stake ratio and `ActivityMetric.total_staked` stay. | Appendix A's restated-constant rows are each closed by an import, a deletion, or a §4 entry. Staking surfaces are excepted from deletion. |
+| **ESR-8** | Restated constants become imports, or are declared in §4. ~~The dead stake schedule is deleted in its own commit (rule 15).~~ **Withdrawn 2026-10-03 (Rick):** staking is being built now, and the sim is the instrument for designing it. A staking surface the daemon does not read yet is not dead. The stake schedule, the stake ratio and `ActivityMetric.total_staked` stay. | Appendix A's restated-constant rows are each closed by an import, a deletion, or a §4 entry. Staking surfaces are excepted from deletion. **Re-censused 2026-10-11 (Appendix A2):** 26 rows closed, 11 restated and 10 dead-referent rows open. |
 | **ESR-9** | The documents that quote the old tables: §12.13–§12.14 rows become records-was with the new rows beside them. | No current-tense sentence quotes a flat-fee figure. |
 
 The constant-fee closed form for the fee horizon (`onset.rs`, and the two
@@ -235,7 +235,10 @@ of the production report, the largest by a relative 1.9 × 10⁻⁵, and no
 cell of A1-T or A1-L. The falsifier above ("a mid-year sample does not
 move") was wrong in the small — every sample shifts by one block of the
 within-year interpolation — and right in what it guarded: nothing a reader
-would quote changes.
+would quote changes. **UPDATE 2026-10-09:** those folds call
+`shekyl_economics::emission_share`, which closes over
+`EMISSION_SPLIT_EPOCH`. The chain-rules re-export is gone. Height 0 is
+share 0, the same answer the daemon gives.
 
 **What the control arm is, from here on.** Up to ESR-2 the control
 reproduced the §12.13–§12.14 report exactly, plus 13 added lines; its
@@ -326,6 +329,17 @@ registered the prediction (`da1a6b082`) and §5.9 records it.
 §5.11 records the first run. ESR-7's falsifier holds: the report prints the
 unenforced miner's zero-fee row beside the relay stuffer's.
 
+**Where the fixture tests run (2026-10-10).** The two `--stage2` narration
+tests are `#[ignore]`d for cost, and until this date no CI lane ran them: on
+PR #1009 both fixtures drifted at `783053554` and were regenerated two
+commits later, found by a fresh-clone run and not by CI. The nightly
+`economics-sim-ignored` job (`.github/workflows/nightly.yml`) now runs them,
+with the full-scale challenge-coverage reproduction and the secret draw's
+evidence set. Nightly runs after merge, so it is not the pre-push gate: a
+change to any lever a fold calls still runs
+`cargo test --locked --release -p shekyl-economics-sim -- --ignored matches_the_committed_fixture`
+from a fresh clone before it is pushed.
+
 ## 3. The median is a production change inside a sim PR
 
 `shekyl_chain_rules::rules::block_weight::effective_median_at` needs a
@@ -366,9 +380,12 @@ horizon, and every arm reads that fold. The burden trajectory and the
 clearance arms read the scenario's own years; the onset table, the
 envelope and the admission map read the whole horizon. `burden_trajectory`
 and `a1_year_aggs` remain the one-scenario fold a caller asks for directly.
-The recorder (`record.rs`) does not step the
-cursor: its `tx_volume` column is the schedule's demand, the input the
-wallet-engine differential feeds back in.
+The recorder (`record.rs`) steps the cursor too, since ESR-8: its chain
+is the folds'. A row is the block the cursor priced. The burn, the
+release multiplier and both splits are that block's CEN-F20 window;
+`tx_volume` is the count the block listed and is not a volume operand.
+The differential replays the window (`volume_tx_count_sum`,
+`volume_window_blocks`).
 
 ## 4. Declared divergences
 
@@ -384,7 +401,6 @@ defect.
 | Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Nothing in the chain charges it; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table |
 | The admission rate at a shard count (`AdmissionAtShards`) | Arms that sample the chain by shard count alone have no height, and the rate depends on emission, not on traffic. The pairing is fixed as the baseline scenario's: the rate at the year the baseline reaches that count, and its last year's rate beyond | Stated in the stuffer table's footer |
 | Admission rate sampled at the year's last block | A stuffer picks its moment, and on the production arm the floor falls through the year | Attacker-favouring; stated at the field |
-| The recorder's volume operand stays per-block | `record.rs` writes test vectors for the engine-core differential, which recomputes from a recorded per-block volume. That is the vectors' contract, not a model of the chain; the three model folds read the validator's window (ESR-4) | Stated at the recorder |
 | A scenario that starts mid-chain starts with an empty volume window and empty median windows | A fold's heights are its own; `genesis_height_offset` scenarios carry no history before their first block, so their medians start at the zone as a genesis chain's do | Stated in `volume_window.rs` and `median_window.rs` |
 | A block's weight is its bodies' | The coinbase's few hundred bytes are neither priced nor recorded in the median. The fill rule itself prices bodies only, as the C++ does; the template then prices the whole block | Stated at `BlockSpace` |
 | Waiting transactions pay the fee of the block they are offered to | They were built at an earlier block's fee. Every transaction is the same shape, so a refusal of one is a refusal of all, and the pool's order (fee, then age) is age | Stated at `BlockSpace` |
@@ -399,6 +415,15 @@ defect.
 | The fee-floor instrument's floor at `SCALE` resolution (Appendix A R29) | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
 | The fee-ladder instrument's nearest-pow2 rule (R26) | An alternative the instrument measures against the owner's ceiling snap; it has no owner because it was not chosen | `fee_ladder.rs`; the ceiling arm calls `quantize_pow2_ceil` |
 | The ArticMine transliteration's KAT inputs (R30) | The 300 000 in the inherited-ladder tests is an input of the C++ `scaling_2021` vectors, fixed with them; importing the zone would move a KAT with the config | `fee_ladder.rs` tests |
+| The secret draw's reveal lag and dropout (ESR-11) | Who reveals a block's seed, and when, is behaviour production cannot know. ESR-13 runs ESR-11's epoch at `Timing::esr11()` on production's `draw_count`, `draw_horizon` and `select_draw`; ESR-11's own loop was deleted at `f58531716` (§5.22). ESR-11's analytic functions are called: the `(m, n)` re-check, the retry mixture and the clearing figures, the evidence set's shape, and the count rule's callers `count_at` / `capped_at` | `secret_draw.rs`, `secret_draw_production.rs`; `--secret-draw` |
+| The secret draw on production's count and selection: producer dropout, filing lag, inclusion latency, loss to a reorg, and each block's seed and hash (ESR-13) | The count, the horizon and the selection are production's and are called. What decides whether a block's bundle is admitted is the behaviour of producers and of the chain, which has no owner to call; the seed and the block hash are the generator's bytes because no block is built. `M` is challenger policy, not consensus | `secret_draw_production.rs`; §5.17 fixes the model before the run |
+| The public urn and its even-spread schedule (`challenge_coverage.rs`, R21) | records-was — instrument that justified the secret draw; no production owner by design. `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn. The module is deleted in the PR that retires §7.1 and §8 of the challenge design | `challenge_coverage.rs`; its full-scale reproduction stays in the nightly lane with this reason beside it |
+| The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs`, R22) | Production's rule is a predicate over one window, not a probability. The closed forms are the analysis of that predicate and are cross-checked against the predicate-backed kernel by test | Stated at each form |
+| The ArticMine transliteration (`fee_ladder.rs`, D7) | The inherited ladder is reproduced as the thing the Shekyl ladder is measured against. It has no production owner because production does not run it | `fee_ladder.rs`; its KAT inputs are the row above |
+| Maturity operands (`MATURITY_D = 324_000`, 40 000 projected pairs; D13) | Assumptions about a network that does not exist yet, not values of the chain | Named as assumptions where they are defined |
+| Gate-7's locked supply counts one shard per `blocks_per_shard` blocks (`engine.rs`, D1) | The partition is by archival bytes (`shard_of`), and the engine fold carries no byte fold to read it from. The default cadence is one shard per `SETTLEMENT_EPOCH_BLOCKS`; the sim's own stage-2 baseline closes 229,864 shards in ten years, one per eleven blocks, so the default understates the locked supply by a factor near 900. **Not a neutral choice:** a gate-7 figure is a floor on the lock, not an estimate of it | Stated at `ArchivalLockModel::blocks_per_shard`. Moving gate-7 onto the byte fold moves its committed figures and is its own step, with its predictions written first |
+| The A3 and A4 base paths score through the plateau curve (`population.rs`, `stranding.rs`, D3) | Credited work is linear in production; the curve is kept there for counterfactuals only. The two base paths predate that and still read `curve_milli` | `distribution.rs` and OQ-4 name themselves counterfactual; `redistribution.rs` is linear. Re-basing A3 and A4 moves both narration fixtures and is its own step, with its predictions written first |
+| The FL-R18 rejection race and its thin-margin count (`fee_ladder.rs`, D6) | records-was — the instrument that measured the race under the admission rule of its round: a 2 % acceptance buffer and no lookback. FL-R23 set the slack to zero and admits against the minimum floor over a lookback; production names no margin for the served rung, so the 1.020 threshold has nothing to import. `fee_floor.rs` is the instrument for the rule as it stands and calls `RELAY_ADMISSION_SLACK_BP` and `RELAY_FLOOR_LOOKBACK`. Its feedback map keeps the volume window as a float running sum of fractional demand, converted on each block; the window production reads sums whole transactions (FL-R24). That sum is part of what the instrument records, and is not changed | Stated at `FeedbackResult::race_refused`; `FEE_LADDER_ROUND.md` quotes its counts as that round's |
 | Demand does not respond to the fee or to congestion | A schedule is a number of transactions per block, the same whatever they cost or however long they wait: no elasticity, no rung escalation, no resubmission after expiry. What the chain fails to carry expires; it is not deterred | Stated at the head of this document beside the result it governs |
 
 ## 5. Predictions, written before any run (2026-10-02)
@@ -956,6 +981,874 @@ and the correction is the miner's leg of a small penalty. The
 whole-transaction floor still appears where the flat fee makes the penalty
 the cheaper packing.
 
+### 5.13 The secret draw: the question and the model (ESR-11)
+
+**The question (maintainer's Slice C Round 0 brief, 2026-10-07, §7).** The
+serve-credit design replaces the public urn with a secret per-block draw:
+the producer of block `h` commits to a seed, draws pairs with replacement
+from the epoch's drawable set, and reveals the seed with that block's pass
+records within `W₂`. A draw is issued only when its seed is revealed. At
+0 %, 10 % and 30 % producer dropout (blocks whose seed is never revealed)
+the sim reports:
+
+1. the share of pairs short of 3 issued draws at `h_close(E) + W₂`;
+2. the draws per block the count rule produces;
+3. `(m, n)` re-checked at the resulting observation rate;
+4. the witness's fetch volume per won block;
+5. what a NonObservation epoch costs an honest archiver in unpaid service.
+
+**The model.** One settlement epoch, `SETTLEMENT_EPOCH_BLOCKS` blocks, `D`
+pairs, `W₂ = CHALLENGE_RESPONSE_BLOCKS`, all read from the production
+crate. `--secret-draw` runs it on ESR-13's loop at `Timing::esr11()`
+(§5.17, §5.22).
+
+- **Dropout.** Each block is independently unrevealed with probability
+  `d ∈ {0, 0.10, 0.30}`. An unrevealed block issues nothing.
+- **Reveal lag.** A revealed block's seed lands `ℓ` blocks after it, `ℓ`
+  uniform on `0..=W₂`, and its draws are visible from the next block on:
+  a seed revealed in a block reaches later blocks only.
+- **Selection and count.** Production's: `select_draw` for every draw,
+  `draw_count` at `draw_horizon` with its 32-bit carry, through the sim's
+  `count_at` / `capped_at`. The shortfall the rule is given is the visible
+  shortfall less the draws of blocks whose seed is not yet revealed
+  (`SCS-P9`). *Rejected:* counting every draw of the last `W₂` blocks,
+  revealed or not, which subtracts draws the visible counts already hold
+  and under-asks while reveals land (measured at `6681692ed9`).
+- **Not modelled.** The read itself (every revealed draw is issued whether
+  or not it passed), carry-over of the previous epoch's last `W₂` blocks,
+  producers that reveal selectively, and any correlation between dropout
+  and time.
+
+**Scale and seeds.** `D = 324,000` (maturity, row D13's larger figure) and
+`D = 4,096` (the genesis set). Eight seeds per cell. Every figure is
+printed as mean, minimum and maximum over seeds.
+
+**The bar.** The brief's ruling 6 (PROVISIONAL): at most 3 % of pairs short
+of 3 issued at 10 % dropout. Graded at `D = 324,000` on the **maximum**
+over seeds, with the number of seeds over 3 % printed beside it. The other
+cells have no bar.
+
+**`(m, n)`, how it is re-checked.** The settlement rule selects 3 of a
+pair's issued draws and settles Served at 2 or 3 passes, so a missed
+observation is "fewer than 2 of 3 independent reads passed":
+`q = 3x²(1−x) + x³` with `x` the per-read failure probability the
+feasibility module uses (`default_sources()`, `p_attempt = 0.30`, one
+attempt). The check prints `q`, the false-slash bound at the production
+`(m, n)` over the bond's life per pair (`false_slash_bound`) and for an
+archiver at the maximum holdings (`max_holder_exposure`, the axis the
+module's budget is set on), and the observation rate `o = 1 − short`. `o`
+does not enter the false-slash bound, which is priced at a ceiling of one
+observation per epoch. It stretches the time a non-serving pair takes to
+reach `m` misses, by `1/o`, and that stretch is printed.
+
+**Fetch volume and unpaid service.** Fetch volume per won block is the
+block's draw count times `SHARD_LENGTH`, the partition's shard length; a
+closed shard is at most one transaction longer. Unpaid service is the
+share of pair-epochs that settle NonObservation, and the issued reads
+those pairs answered. It is not converted to currency: the per-pair
+reward depends on the emission scenario, and this arm reads none.
+
+### 5.14 The secret draw — what the run says (at `91ff50f41`)
+
+`cargo run --release -p shekyl-economics-sim -- --secret-draw`: six cells
+at eight seeds each. Maturity, `D = 324,000`:
+
+| Dropout | Short of 3: mean (min – max) | Seeds over 3 % | Draws per pair, drawn / issued | Draws per block, mean / max | Blocks at the cap, per epoch |
+| --- | --- | --- | --- | --- | --- |
+| 0 % | 0.46 % (0.43 – 0.47) | 0 | 3.61 / 3.61 | 117.1 / 172 | 0 |
+| 10 % | 1.07 % (1.00 – 1.13) | 0 | 3.91 / 3.53 | 126.8 / 208 | 0 |
+| 30 % | 3.70 % (3.48 – 3.82) | 8 | 4.78 / 3.37 | 154.8 / 292 | 234 |
+
+The genesis set (`D = 4,096`) reads the same shares to within sampling:
+0.45 / 1.08 / 3.69 %.
+
+**The bar holds.** At 10 % dropout the largest short share over eight seeds
+is 1.13 %, against 3 %. No seed is over the bar. The cap does not bind at
+0 % or 10 %; at 30 % it binds in about 234 blocks an epoch.
+
+**`(m, n)`.** With the 3 counted draws settled at 2 of 3, an honest pair
+at the feasibility module's per-read failure of 0.30 misses an observed
+epoch with probability `q = 0.216`. At the production `(11, 13)` the
+false-slash bound over the bond's life is `2.85 × 10⁻⁴` **per pair**. The
+module's provisional `10⁻³` budget is **per archiver**, and its verdict
+compares the exposure of an archiver at the maximum holdings
+(`max_holder_exposure`, 4,096 shards): that is `0.689`, which **exceeds**
+the budget. The two are different measures and the run prints both.
+Neither moves with the observation rate, so the secret draw's dropout
+does not enter them.
+
+`0.689` is not the probability that such an archiver is slashed. It is
+`1 − (1 − p)^4096`, which treats the 4,096 pairs as failing independently.
+One persona serves all its shards from one host and one onion service, so
+their read failures are strongly correlated. Correlation changes the
+shape of the risk more than its size: the chance of at least one false
+slash can be lower than the figure, and when false slashes come they come
+many at once.
+
+The window does not clear the per-archiver budget under this rule at this
+read failure. That is not new with the secret draw: the module's own
+report (`--stage2`) already reads the shipped pin as exceeding it, at
+`4.13 × 10⁻²` per pair under the rule it models. Two-of-three over three
+counted draws lowers the per-pair figure by two orders of magnitude and
+does not bring an archiver at the maximum holdings inside the budget. The
+`(m, n)` re-pin stays open
+([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §3).
+
+The observation rate is 0.995 / 0.989 / 0.963 at 0 / 10 / 30 % dropout,
+so a pair that never serves reaches 11 misses in 11.05 / 11.12 / 11.42
+epochs against 11.
+
+**Fetch volume per won block.** At the mean count and `SHARD_LENGTH`
+(3,000,000 B): 351 / 380 / 465 MB. A producer that wins a block owes about
+117 to 155 whole-shard reads inside `W₂`. A producer with a tenth of the
+hashrate wins about 50 blocks per `W₂` window, which is about 17.6 GB of
+reads per window, or roughly 290 KB/s sustained, at 0 % dropout. That is
+the witness's cost, it scales with hashrate share, and nothing in the tree
+has measured a producer's reader at that rate.
+
+**Unpaid service.** The share of pair-epochs that settle NonObservation is
+the short share above: 0.46 % / 1.07 % / 3.70 %. Those pairs answered
+0.008 / 0.019 / 0.063 issued reads per pair on average, and served the
+epoch's organic reads besides. Separately, an observed epoch settles
+Missed for an honest pair at `q = 0.216` under the 0.30 read failure,
+which is a much larger unpaid share than NonObservation and is the 2-of-3
+rule's, not the draw's. Neither is converted to currency (§5.13).
+
+**What this run does not say.** The reads are not modelled, so nothing
+here measures whether a producer can complete 117 reads per won block.
+Dropout is independent per block; a producer that is offline for a
+stretch, or one that withholds selectively, is not in the model. The
+previous epoch's last `W₂` blocks are not carried in. For the count rule
+that is the rule itself: the serve-credit specification stops the
+in-flight term at the epoch's open (its count rule), so an epoch's counts
+do not depend on the one before. What the run leaves out at the
+boundary is the producer's work: reads owed for the previous epoch's
+draws overlap the first `W₂` blocks of the next.
+
+The ESR-11 loop's run (2026-10-07), with its predictions and their
+grading, is at `6681692ed9`; the model and predictions it ran were fixed
+at `ecc39c040e`.
+
+### 5.15 The failure window against retry correlation
+
+§5.14's window check credits one attempt per read, the feasibility
+module's calibration (`default_sources()`: `p_attempt = 0.30`,
+`attempts = 1`). The module credits one because, on the worst day the W₂
+size ladder measured, misses were mostly circuit failures that cluster
+inside a window, so a retry there is not an independent draw
+(`mn_feasibility.rs`, `MissSources::attempts`).
+
+Under the secret draw the producer spreads its reads across `W₂`, 500
+blocks, about 16.7 hours. A retry can come hours after the failed try, on
+a fresh circuit. Whether tries that far apart fail together is not
+measured. This section does not assume an answer. It prints the window at
+each answer.
+
+**Model.** The witness reads a draw up to three times, hours apart. Each
+is a whole read by the fetch caller's rule; its stall retries inside one
+window are the ones the calibration declines to credit, and they are not
+credited here. A share `ρ` of single-try failures is common to
+every try of that read, and the rest are independent, so the read fails
+with probability `p · (ρ + (1 − ρ) · p²)`. At `ρ = 1` that is `p`, the
+calibration. At `ρ = 0` it is `p³`. The settlement rule and `(m, n)` are
+unchanged. This was added after §5.14 was read and was not pre-registered;
+it has no bar of its own.
+
+| `ρ` | Read failure | Missed observation `q` | False slash, per pair | Per archiver at 4,096 shards | Against `10⁻³` |
+| --- | --- | --- | --- | --- | --- |
+| 1.00 | 0.3000 | 0.21600 | `2.85 × 10⁻⁴` | `6.89 × 10⁻¹` | exceeds |
+| 0.50 | 0.1635 | 0.07146 | `2.01 × 10⁻⁹` | `8.23 × 10⁻⁶` | clears |
+| 0.25 | 0.0953 | 0.02549 | `2.61 × 10⁻¹⁴` | `1.07 × 10⁻¹⁰` | clears |
+| 0.10 | 0.0543 | 0.00853 | `1.58 × 10⁻¹⁹` | `6.47 × 10⁻¹⁶` | clears |
+| 0.05 | 0.0406 | 0.00482 | `3.02 × 10⁻²²` | `1.24 × 10⁻¹⁸` | clears |
+| 0.00 | 0.0270 | 0.00215 | `4.14 × 10⁻²⁶` | `1.70 × 10⁻²²` | clears |
+
+**The production `(11, 13)` clears the per-archiver budget when a draw
+goes unread after all three tries with probability at most `0.2076`.**
+That boundary assumes no model: the window reads only the probability
+that a draw goes unread, and a measurement reports it directly.
+
+`ρ` is a parameter of the mixture, not something a run observes. What a
+run observes besides the read failure `x` is the first-try failure `p`
+and the conditional rate `c = x / p`: of reads whose first try failed,
+the share whose two later tries also failed. In the model
+`c = ρ + (1 − ρ)·p²`, so independent tries still give `c = p²` (0.09 at
+0.30), not zero. At the retained `p = 0.30` the boundary is `c ≤ 0.692`,
+which is `ρ ≤ 0.661`. A measured `c` is compared with 0.692, or converted
+by `ρ = (c − p²) / (1 − p²)` and compared with 0.661; comparing `c` with
+0.661 would refuse cases that clear.
+
+The per-try failure stays at the retained 0.30; the measured single-try
+miss is 0.041 on a typical window and 0.20 on the worst day observed, so
+the table is conservative in `p`. At a lower measured `p` the boundary on
+`x` does not move and the boundary on `c` rises.
+
+**What this does not say.** `ρ` is unmeasured, so the window's verdict is
+unchanged: it exceeds the budget at the calibration. The two-point mixture
+is the simplest model that has the calibration and independence as its
+ends; a failure that persists for some hours and then clears sits between
+them and depends on how the tries are spaced, which the model does not
+represent. A persona that is down for the whole of `W₂` fails all three
+tries at any `ρ`, and that is a miss the window is meant to count.
+
+### 5.16 ESR-12 — settlement timing, posed (2026-10-08). Not run
+
+Posed by the maintainer with the settlement writer's rulings
+([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §14.5).
+Nothing here is modelled yet; this is the question and what a run has to
+report. The model, the bar and the predictions are written before the code,
+as for ESR-11.
+
+**The question.** Does settling epoch `E` at `h_close(E) + W₂ + 1`, where
+it is settled today at `(E+2)·SEB − 1`, change anything that matters?
+
+Settlement needs every reveal for `E` to be in, and that is true at
+`h_close(E) + W₂`. The full-epoch delay is inherited from the beacon's
+resolution window of one epoch.
+
+**To measure, under both timings:**
+
+- the time from serving to a claimable reward. Under the timing as built
+  (`SO-D11`, 2026-10-09) an epoch's `Σwork` is written by its slash pass,
+  so epoch `E` is claimable from `(E+2)·SEB`: one epoch after its close,
+  where it was claimable the block after. That is the baseline figure the
+  earlier timing would be compared against;
+- the time to slash for a pair that does not serve;
+- the exposure of an honest archiver to a slash during an outage that
+  straddles the epoch boundary;
+- the interaction with `MAX_CLAIM_AGE_W`, with the grace coupling
+  (`SLASH_GRACE_EPOCHS · SEB ≥ W₂`), and with the wallet's claim arithmetic.
+
+**What it can change.** It does not block the settlement writer, which is
+built on the current timing. If the run shows a material gain, the result
+comes back as a re-pin: slash timing and the grace coupling re-derived. It
+does not come back as a move of the pass.
+
+### 5.17 ESR-13, the secret draw on production's count and selection, designed and predicted before it is built (2026-10-12)
+
+**Why a second arm.** ESR-11 (§5.13) ran when the draw had no production
+owner. It carries its own count rule in `f64` and its own weighted pick.
+Both now have owners in `shekyl-archival-retention`: `draw_count` (integers,
+a 32-bit fractional carry), `draw_horizon`, and `select_draw` (rejection
+sampling, 16 : 1, capped at 256 attempts). ESR-13 runs the same one-epoch
+experiment on those functions, and adds what decides whether a block's
+draws are issued at all once the reveal and the pass records travel as one
+object. ESR-11 is not changed: its mode, its functions and its tests stay
+as they are, and its cells are printed beside this arm's as the `f64`
+reference.
+
+**The mechanism modelled.** Block `h` has `count(h)` draws from the epoch's
+drawable set. Its producer files one **bundle**: the reveal and every pass
+record. The draws of `h` are issued only if the bundle is admitted in a
+block `h_incl` with `h < h_incl ≤ h + W₂`. A block whose bundle is never
+admitted issues nothing. There is no partial state: a bundle is admitted
+whole or not at all, so a lost bundle leaves no draw issued and therefore
+no miss.
+
+**The model, fixed here.** One settlement epoch of `SETTLEMENT_EPOCH_BLOCKS`
+blocks, `D` pairs, `W₂ = CHALLENGE_RESPONSE_BLOCKS`, read from the
+production crate. Heights are epoch-relative.
+
+- **Count.** `count(h)` and the carry are `draw_count(D, u, H, SEB, carry)`
+  with `H = draw_horizon(h, SEB, W₂)` and
+  `u = max(0, visible shortfall − in flight)`. The carry starts at zero.
+- **Visible at `h`.** A pair's visible count at `h` is the number of its
+  draws in bundles admitted in blocks below `h`. It is visibly short when
+  that is under 3. The visible shortfall is `Σ max(0, 3 − visible)`.
+- **In flight at `h`.** The total draw count of the blocks in
+  `[max(h − W₂, 0), h − 1]` with no bundle admitted below `h`. This is
+  ESR-11's reading A, which the specification states. A block whose bundle
+  will never be admitted counts as in flight until it leaves the range,
+  because nothing public distinguishes it earlier.
+- **Selection.** Each block draws a 32-byte seed and a 32-byte block hash
+  from the run's generator. Draw `j` is
+  `select_draw(seed, hash, j, D, short)`, where `short(i)` is "pair `i` is
+  visibly short at `h`". Every draw of a block reads the same visible
+  state. The selection is not approximated.
+- **Dropout.** A producer never files, with probability
+  `d ∈ {0, 0.10, 0.30}`, independently per block.
+- **Filing lag.** A producer that files does so `ℓ` blocks after `h`.
+  Honest: `ℓ` uniform on `0..=(W₂ − M)`. Lazy: `ℓ = W₂ − M`, the last block
+  its policy allows. `M` is the challenger's margin (PROVISIONAL at 30).
+- **Inclusion latency.** A filed bundle is included `λ` blocks later, `λ`
+  uniform on `λ_lo..=λ_hi`, default `1..=3`.
+  `h_incl = h + max(ℓ + λ, 1)`: a bundle is never included in its own
+  block, which matters only when `λ_lo = 0`.
+- **Late.** A bundle with `h_incl > h + W₂` is not admitted.
+- **Loss to a reorg.** A bundle whose `h_incl` is one of the last `R`
+  blocks of its window (`h_incl > h + W₂ − R`, default `R = 3`) is lost
+  with probability `p_reorg ∈ {0, 0.01, 0.1}`. A lost bundle is treated as
+  never admitted: it is not visible for the blocks before the reorg.
+- **Generator.** One generator per run, seeds 1 to 8 as in ESR-11. Each
+  block takes its seed, its hash, a dropout roll, a lag roll, a latency
+  roll and a loss roll, in that order, whether or not each is used, so two
+  cells that differ in one parameter read the same rolls.
+
+**Cells.** At `D = 324,000` and at `D = 4,096`, eight seeds each:
+
+1. *ESR-11's timing* (`M = 0`, `λ = 0`, `p_reorg = 0`, honest lag) at each
+   dropout. `h_incl − h` is then uniform on `0..=W₂` with 0 moved to 1,
+   which is ESR-11's reveal lag for all but one block in 501. Beside
+   ESR-11's own cell this isolates the integer count and the rejection
+   sampling from everything else. 3 cells.
+2. *The grid*: dropout `{0, 10, 30} %` × `M ∈ {0, 30}` ×
+   `p_reorg ∈ {0, 0.01, 0.1}`, honest lag, `λ` on `1..=3`. 18 cells.
+3. *Lazy producers*, at 10 % dropout: `M ∈ {0, 3, 30}` ×
+   `p_reorg ∈ {0, 0.01, 0.1}`. `M = 3` is not in the brief; it is the
+   smallest margin at which a lazy bundle is always in time, and it is the
+   only lazy cell where the reorg term can act. 9 cells.
+
+Each cell prints the share of pairs short of 3 issued (mean, minimum and
+maximum over seeds), draws per pair drawn and issued, draws per block mean
+and maximum, the observation rate, where its blocks' bundles went
+(admitted, never filed, late, lost), the mean and largest attempts per
+draw, and the draws that reached the 256th attempt. Cells with a
+counterpart print ESR-11's `f64` cell at the same `D` and dropout beside
+them.
+
+**The integer rule against the `f64` rule, on one trajectory.** Two runs
+with different selections differ by sampling, which hides a difference in
+the count rule. So each run also feeds every block's
+`(D, shortfall, in flight, h)` to ESR-11's `block_target` with its own
+`f64` carry, and reports the blocks where the two counts differ and the
+difference in total draws.
+
+**The bar.** The same provisional 3 %, graded on the maximum over seeds,
+at `D = 324,000`, 10 % dropout, `M = 30`, `p_reorg = 0`, honest lag.
+
+**If the run is too slow.** `select_draw` costs one cSHAKE per attempt and
+about 16 attempts per draw once few pairs are short. The plan is the full
+set above. If a full-size cell does not run in minutes, the results section
+states the measured time and every reduction made. No reduction changes
+the selection.
+
+**Predictions.**
+
+(a) *The bar cell.* Mean short share between 0.95 % and 1.25 %, that is
+within 0.15 points of ESR-11's 1.10 %. Maximum over seeds at most 1.40 %,
+against ESR-11's 1.18 %. No seed over 3 %. Reason: the count rule is
+ESR-11's to within `2⁻³²` of a draw per block, the selection has ESR-11's
+weights unless a draw reaches the 256th attempt, and the mean delay to
+visibility falls only from 250 blocks to about 237.
+
+(a′) *ESR-11's timing.* Mean short share within 0.08 points of ESR-11's
+0.46 % and 1.10 % at 0 % and 10 % dropout, and within 0.15 points of its
+3.83 % at 30 %. Reason: nothing differs but the two production functions,
+and ESR-11's own seeds spread by about that much.
+
+(b) *The `(m, n)` figures do not move.* The missed-observation probability
+under 2-of-3 (`q = 0.216` at a read failure of 0.30), the false-slash
+bound per pair (`2.85 × 10⁻⁴`), the exposure of an archiver at the maximum
+holdings (`0.689`, exceeding the `10⁻³` budget), all six rows of the retry
+table, the boundary `x ≤ 0.2076` and the mixture's `ρ ≤ 0.661` are
+identical to §5.14 and §5.15 in every cell. Reason: each is a function of
+the read failure and the window, and no cell changes either. What does
+move is the observation rate `1 − short` and with it the epochs a
+non-serving pair takes to reach 11 misses. In the bar cell I expect an
+observation rate between 0.9875 and 0.9905 and 11.10 to 11.14 epochs.
+
+(c) *`M`, `p_reorg`, lazy producers.*
+
+- *`M`.* At `M = 0` a filed bundle is late when `ℓ + λ > 500`: 6 of the
+  1,503 `(ℓ, λ)` pairs, 0.40 %. At `M = 30` none is. I expect the short
+  share at `M = 0` to exceed the one at `M = 30` by between 0 and 0.15
+  points at each dropout with `p_reorg = 0`. That is small beside the seed
+  spread, and at 0 % dropout the sign may not resolve. Reason: 0.4 % more
+  blocks issue nothing, and ESR-11 moved 0.64 points for 10 % more.
+- *`p_reorg` at `M = 30`.* No effect at all: every figure is identical
+  across the three values, to the last digit. Reason: `h_incl ≤ h + 473`,
+  and the reorg term acts only above `h + 497`.
+- *`p_reorg` at `M = 0`.* 9 of 1,503 filed bundles (0.60 %) land in the
+  last three blocks, so 0.006 % and 0.06 % are lost at 0.01 and 0.1. I
+  expect the short share to move by less than 0.05 points from the
+  `p_reorg = 0` cell at each dropout, which is inside the seed spread.
+- *Lazy, `M = 0`.* Every bundle is late (`ℓ + λ ≥ 501`). Nothing is
+  issued, 100 % of pairs are short, at any `p_reorg`. The count sits at
+  the cap of 291.6 draws per block for more than half the epoch; I expect
+  a mean of 240 to 280 draws per block.
+- *Lazy, `M = 30`.* Every filed bundle is admitted, 471 to 473 blocks
+  after its block, and `p_reorg` has no effect. The count rule learns of
+  each block's draws almost a whole window late, so more top-up draws go
+  to pairs that are already covered. I expect a short share between 1.3 %
+  and 2.5 % at 10 % dropout: above the bar cell, under the bar.
+- *Lazy, `M = 3`.* Every filed bundle lands in the last three blocks. At
+  `p_reorg = 0` I expect a short share within 0.15 points of lazy
+  `M = 30`. At 0.01, between 0.02 and 0.20 points above that. At 0.1 a
+  fifth of blocks issue nothing (dropout and loss together, 19 %), and I
+  expect between 2.5 % and 4.5 %. I do not predict which side of 3 % it
+  falls.
+
+(d) *The integer rule against the `f64` rule.* On one trajectory the two
+total draw counts differ by at most 1 draw per epoch, and the two rules
+give a different count in fewer than one block per epoch on average.
+Reason: the integer target is the `f64` target floored to `2⁻³²`, so the
+running totals are never more than `2.4 × 10⁻⁶` apart by the end of an
+epoch, and a block's count differs only when a running total is that close
+to an integer. Between the two arms, in ESR-11's timing, mean draws per
+block within 1 % of ESR-11's 117.1 / 127.1 / 155.9 at 0 / 10 / 30 %
+dropout; in the bar cell within 2 % of 127.1.
+
+(e) *The selection's cost.* Between 3.5 and 7 attempts per draw on average
+in the bar cell: one while every pair is short, about 12 once 1 to 3 % are.
+Across the whole set at most a few draws reach the 256th attempt; I expect
+none or one. Reason: a draw gets there with probability `(15/16)²⁵⁵`,
+about `7 × 10⁻⁸`, when no pair is short, and less when some are.
+
+**Not modelled.** As in ESR-11: the read itself, the previous epoch's last
+`W₂` blocks, producers that withhold selectively, and any correlation of
+dropout with time. Also not modelled here: a bundle that is visible for
+some blocks and then reorganised away (it is treated as never admitted), a
+reorg that removes the block `h` itself, resubmission of a lost bundle
+inside its window, and any link between a producer's lag and its dropout.
+`p_reorg` and `R` are parameters; nothing here measures either.
+
+**Divergence.** The count, the horizon and the selection are production's.
+Dropout, lag, latency, reorg loss and the per-block seed and hash have no
+owner to call; §4 carries the row.
+
+### 5.18 ESR-13 — what the run said (2026-10-12, at `6b5e3169f4`)
+
+`cargo run --release -p shekyl-economics-sim -- --secret-draw-production`.
+The whole set of §5.17 ran at full size: 30 cells at `D = 324,000` and 30
+at `D = 4,096`, eight seeds each, and ESR-11's six reference cells beside
+them. **Nothing was reduced.** No cell was shrunk, no seed dropped, and
+the selection is `select_draw` on every draw.
+
+**Time.** 112 s of wall time for the whole set, measured twice (111.7 s
+and 112.5 s; the two JSON outputs are byte-identical). A full-size cell
+takes 3.2 to 4.0 s with its eight seeds on one thread each, on a 16-core
+machine that was carrying other work at a load average of 6 to 8. The set
+made 353.8 million draws in 711.1 million `select_draw` attempts.
+
+Maturity, `D = 324,000`. Cells that came out identical across `p_reorg`
+are printed once.
+
+| Arm | Dropout | `M` | `p_reorg` | Short of 3: mean (min – max) | Seeds over 3 % | Draws per pair, drawn / issued | Draws per block, mean / max | Blocks at the cap, per epoch | Observation rate | Bundles admitted / never filed / late / lost | Attempts per draw, mean / most |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ESR-11, `f64` | 0 % | – | – | 0.46 % (0.45 – 0.48) | 0 | 3.61 / 3.61 | 117.1 / 172 | 0 | 0.9954 | – | – |
+| ESR-11, `f64` | 10 % | – | – | 1.10 % (1.03 – 1.18) | 0 | 3.92 / 3.53 | 127.1 / 208 | 0 | 0.9890 | – | – |
+| ESR-11, `f64` | 30 % | – | – | 3.83 % (3.65 – 3.95) | 8 | 4.81 / 3.36 | 155.9 / 292 | 242 | 0.9617 | – | – |
+| ESR-11's timing | 0 % | 0 | 0 | 0.46 % (0.43 – 0.47) | 0 | 3.61 / 3.61 | 117.1 / 172 | 0 | 0.9954 | 100.00 / 0.00 / 0.00 / 0.00 % | 2.60 / 173 |
+| ESR-11's timing | 10 % | 0 | 0 | 1.07 % (1.00 – 1.13) | 0 | 3.91 / 3.53 | 126.8 / 208 | 0 | 0.9893 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.36 / 150 |
+| ESR-11's timing | 30 % | 0 | 0 | 3.70 % (3.48 – 3.82) | 8 | 4.78 / 3.37 | 154.8 / 292 | 234 | 0.9630 | 70.42 / 29.58 / 0.00 / 0.00 % | 1.99 / 148 |
+| Bundle, honest lag | 0 % | 0 | 0 | 0.48 % (0.45 – 0.50) | 0 | 3.63 / 3.61 | 117.5 / 172 | 0 | 0.9952 | 99.59 / 0.00 / 0.41 / 0.00 % | 2.59 / 150 |
+| Bundle, honest lag | 0 % | 0 | 0.01 | 0.48 % (0.45 – 0.50) | 0 | 3.63 / 3.61 | 117.5 / 172 | 0 | 0.9952 | 99.58 / 0.00 / 0.41 / 0.01 % | 2.59 / 150 |
+| Bundle, honest lag | 0 % | 0 | 0.1 | 0.48 % (0.45 – 0.50) | 0 | 3.63 / 3.61 | 117.5 / 172 | 0 | 0.9952 | 99.53 / 0.00 / 0.41 / 0.06 % | 2.59 / 150 |
+| Bundle, honest lag | 0 % | 30 | 0, 0.01, 0.1 (identical) | 0.43 % (0.40 – 0.44) | 0 | 3.61 / 3.61 | 117.0 / 172 | 0 | 0.9957 | 100.00 / 0.00 / 0.00 / 0.00 % | 2.62 / 190 |
+| Bundle, honest lag | 10 % | 0 | 0 | 1.10 % (1.03 – 1.16) | 0 | 3.93 / 3.53 | 127.2 / 211 | 0 | 0.9890 | 89.80 / 9.83 / 0.36 / 0.00 % | 2.35 / 150 |
+| Bundle, honest lag | 10 % | 0 | 0.01 | 1.10 % (1.03 – 1.16) | 0 | 3.93 / 3.53 | 127.2 / 211 | 0 | 0.9890 | 89.80 / 9.83 / 0.36 / 0.00 % | 2.35 / 150 |
+| Bundle, honest lag | 10 % | 0 | 0.1 | 1.10 % (1.04 – 1.16) | 0 | 3.93 / 3.53 | 127.2 / 211 | 0 | 0.9890 | 89.75 / 9.83 / 0.36 / 0.05 % | 2.35 / 150 |
+| Bundle, honest lag | 10 % | 30 | 0, 0.01, 0.1 (identical) | 1.02 % (0.98 – 1.09) | 0 | 3.91 / 3.53 | 126.6 / 208 | 0 | 0.9898 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.38 / 159 |
+| Bundle, honest lag | 30 % | 0 | 0 | 3.76 % (3.54 – 3.90) | 8 | 4.80 / 3.37 | 155.4 / 292 | 246 | 0.9624 | 70.14 / 29.58 / 0.28 / 0.00 % | 1.99 / 148 |
+| Bundle, honest lag | 30 % | 0 | 0.01 | 3.76 % (3.54 – 3.91) | 8 | 4.80 / 3.37 | 155.4 / 292 | 246 | 0.9624 | 70.14 / 29.58 / 0.28 / 0.00 % | 1.99 / 148 |
+| Bundle, honest lag | 30 % | 0 | 0.1 | 3.77 % (3.55 – 3.91) | 8 | 4.80 / 3.36 | 155.4 / 292 | 249 | 0.9623 | 70.10 / 29.58 / 0.28 / 0.05 % | 1.99 / 103 |
+| Bundle, honest lag | 30 % | 30 | 0, 0.01, 0.1 (identical) | 3.62 % (3.45 – 3.78) | 8 | 4.78 / 3.36 | 154.7 / 292 | 228 | 0.9638 | 70.42 / 29.58 / 0.00 / 0.00 % | 2.00 / 134 |
+| Bundle, lazy | 10 % | 0 | 0, 0.01, 0.1 (identical) | 100.00 % (100.00 – 100.00) | 8 | 8.06 / 0.00 | 261.2 / 292 | 6218 | 0.0000 | 0.00 / 9.83 / 90.16 / 0.00 % | 1.00 / 1 |
+| Bundle, lazy | 10 % | 3 | 0 | 2.34 % (2.27 – 2.40) | 0 | 4.00 / 3.61 | 129.6 / 216 | 0 | 0.9766 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.03 / 100 |
+| Bundle, lazy | 10 % | 3 | 0.01 | 2.44 % (2.38 – 2.53) | 0 | 4.03 / 3.60 | 130.7 / 221 | 0 | 0.9756 | 89.27 / 9.83 / 0.00 / 0.90 % | 2.01 / 112 |
+| Bundle, lazy | 10 % | 3 | 0.1 | 3.48 % (3.40 – 3.54) | 8 | 4.36 / 3.54 | 141.2 / 271 | 0 | 0.9652 | 81.25 / 9.83 / 0.00 / 8.92 % | 1.91 / 107 |
+| Bundle, lazy | 10 % | 30 | 0, 0.01, 0.1 (identical) | 2.17 % (2.11 – 2.24) | 0 | 3.99 / 3.60 | 129.4 / 216 | 0 | 0.9783 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.06 / 111 |
+
+The genesis set, `D = 4,096`:
+
+| Arm | Dropout | `M` | `p_reorg` | Short of 3: mean (min – max) | Seeds over 3 % | Draws per pair, drawn / issued | Draws per block, mean / max | Blocks at the cap, per epoch | Observation rate | Bundles admitted / never filed / late / lost | Attempts per draw, mean / most |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ESR-11, `f64` | 0 % | – | – | 0.49 % (0.44 – 0.61) | 0 | 3.61 / 3.61 | 1.5 / 3 | 0 | 0.9951 | – | – |
+| ESR-11, `f64` | 10 % | – | – | 1.18 % (0.93 – 1.39) | 0 | 3.91 / 3.52 | 1.6 / 3 | 0 | 0.9882 | – | – |
+| ESR-11, `f64` | 30 % | – | – | 3.75 % (3.49 – 4.13) | 8 | 4.80 / 3.37 | 2.0 / 4 | 256 | 0.9625 | – | – |
+| ESR-11's timing | 0 % | 0 | 0 | 0.45 % (0.29 – 0.54) | 0 | 3.61 / 3.61 | 1.5 / 3 | 0 | 0.9955 | 100.00 / 0.00 / 0.00 / 0.00 % | 2.61 / 102 |
+| ESR-11's timing | 10 % | 0 | 0 | 1.08 % (0.85 – 1.27) | 0 | 3.91 / 3.53 | 1.6 / 3 | 0 | 0.9892 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.35 / 126 |
+| ESR-11's timing | 30 % | 0 | 0 | 3.69 % (3.37 – 4.08) | 8 | 4.78 / 3.37 | 2.0 / 4 | 243 | 0.9631 | 70.42 / 29.58 / 0.00 / 0.00 % | 1.97 / 57 |
+| Bundle, honest lag | 0 % | 0 | 0 | 0.43 % (0.32 – 0.54) | 0 | 3.62 / 3.61 | 1.5 / 3 | 0 | 0.9957 | 99.59 / 0.00 / 0.41 / 0.00 % | 2.58 / 105 |
+| Bundle, honest lag | 0 % | 0 | 0.01 | 0.44 % (0.32 – 0.54) | 0 | 3.62 / 3.61 | 1.5 / 3 | 0 | 0.9956 | 99.58 / 0.00 / 0.41 / 0.01 % | 2.58 / 105 |
+| Bundle, honest lag | 0 % | 0 | 0.1 | 0.48 % (0.27 – 0.63) | 0 | 3.62 / 3.61 | 1.5 / 3 | 0 | 0.9952 | 99.53 / 0.00 / 0.41 / 0.06 % | 2.59 / 126 |
+| Bundle, honest lag | 0 % | 30 | 0, 0.01, 0.1 (identical) | 0.43 % (0.24 – 0.54) | 0 | 3.61 / 3.61 | 1.5 / 3 | 0 | 0.9957 | 100.00 / 0.00 / 0.00 / 0.00 % | 2.61 / 126 |
+| Bundle, honest lag | 10 % | 0 | 0 | 1.00 % (0.83 – 1.17) | 0 | 3.92 / 3.53 | 1.6 / 3 | 0 | 0.9900 | 89.80 / 9.83 / 0.36 / 0.00 % | 2.34 / 95 |
+| Bundle, honest lag | 10 % | 0 | 0.01 | 1.00 % (0.83 – 1.17) | 0 | 3.92 / 3.53 | 1.6 / 3 | 0 | 0.9900 | 89.80 / 9.83 / 0.36 / 0.00 % | 2.34 / 95 |
+| Bundle, honest lag | 10 % | 0 | 0.1 | 1.09 % (0.88 – 1.20) | 0 | 3.93 / 3.53 | 1.6 / 3 | 0 | 0.9891 | 89.75 / 9.83 / 0.36 / 0.05 % | 2.34 / 100 |
+| Bundle, honest lag | 10 % | 30 | 0, 0.01, 0.1 (identical) | 0.94 % (0.73 – 1.17) | 0 | 3.90 / 3.52 | 1.6 / 3 | 0 | 0.9906 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.38 / 102 |
+| Bundle, honest lag | 30 % | 0 | 0 | 3.78 % (3.47 – 4.00) | 8 | 4.80 / 3.37 | 2.0 / 4 | 253 | 0.9622 | 70.14 / 29.58 / 0.28 / 0.00 % | 1.97 / 91 |
+| Bundle, honest lag | 30 % | 0 | 0.01 | 3.78 % (3.47 – 4.00) | 8 | 4.80 / 3.37 | 2.0 / 4 | 253 | 0.9622 | 70.14 / 29.58 / 0.28 / 0.00 % | 1.97 / 91 |
+| Bundle, honest lag | 30 % | 0 | 0.1 | 3.79 % (3.32 – 4.20) | 8 | 4.80 / 3.37 | 2.0 / 4 | 254 | 0.9621 | 70.10 / 29.58 / 0.28 / 0.05 % | 1.97 / 67 |
+| Bundle, honest lag | 30 % | 30 | 0, 0.01, 0.1 (identical) | 3.53 % (3.03 – 3.98) | 8 | 4.77 / 3.36 | 2.0 / 4 | 223 | 0.9647 | 70.42 / 29.58 / 0.00 / 0.00 % | 1.99 / 83 |
+| Bundle, lazy | 10 % | 0 | 0, 0.01, 0.1 (identical) | 100.00 % (100.00 – 100.00) | 8 | 8.06 / 0.00 | 3.3 / 4 | 6218 | 0.0000 | 0.00 / 9.83 / 90.16 / 0.00 % | 1.00 / 1 |
+| Bundle, lazy | 10 % | 3 | 0 | 2.25 % (1.86 – 2.59) | 0 | 3.99 / 3.60 | 1.6 / 3 | 0 | 0.9775 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.02 / 91 |
+| Bundle, lazy | 10 % | 3 | 0.01 | 2.43 % (2.32 – 2.59) | 0 | 4.03 / 3.60 | 1.7 / 3 | 0 | 0.9757 | 89.27 / 9.83 / 0.00 / 0.90 % | 2.00 / 83 |
+| Bundle, lazy | 10 % | 3 | 0.1 | 3.50 % (3.27 – 3.71) | 8 | 4.35 / 3.54 | 1.8 / 4 | 0 | 0.9650 | 81.25 / 9.83 / 0.00 / 8.92 % | 1.90 / 63 |
+| Bundle, lazy | 10 % | 30 | 0, 0.01, 0.1 (identical) | 2.18 % (1.95 – 2.47) | 0 | 3.99 / 3.60 | 1.6 / 3 | 0 | 0.9782 | 90.16 / 9.83 / 0.00 / 0.00 % | 2.05 / 70 |
+
+**The bar holds.** At 10 % dropout, `M = 30`, `p_reorg = 0`, honest lag,
+the largest short share over eight seeds is 1.09 %, against 3 %. No seed
+is over.
+
+**Against the predictions.**
+
+- *(a) The bar cell: held.* Mean 1.02 % (predicted 0.95 to 1.25 %),
+  maximum 1.09 % (predicted at most 1.40 %), no seed over 3 %.
+- *(a′) ESR-11's timing: held.* 0.46 % against ESR-11's 0.46 %, 1.07 %
+  against 1.10 %, 3.70 % against 3.83 %: differences of 0.01, 0.04 and
+  0.13 points, inside the predicted 0.08, 0.08 and 0.15. The 30 % cell is
+  close to its limit, and most of that is not the two functions. This
+  arm's eight seeds realise a dropout of 29.58 % (and 9.83 % at the
+  nominal 10 %); ESR-11's eight realise about 30.1 % and 10.1 %, read from
+  its issued share. Half a point of dropout is worth about 0.07 points of
+  short share near 30 %.
+- *(b) The `(m, n)` figures do not move: held.* Every cell prints
+  `q = 0.2160`, `2.85 × 10⁻⁴` per pair, `0.689` per archiver at the
+  maximum holdings (exceeding `10⁻³`), the six retry rows of §5.15 digit
+  for digit, the boundary `x ≤ 0.2076` and `ρ ≤ 0.6614`. They are ESR-11's
+  own lines: the mode takes them from ESR-11's renderer run on no cells.
+  In the bar cell the observation rate is 0.9898 (predicted 0.9875 to
+  0.9905) and a non-serving pair reaches 11 misses in 11.11 epochs
+  (predicted 11.10 to 11.14).
+- *(c) `M`: held.* 0.41 % of blocks are late at `M = 0` and 0 % dropout
+  (predicted 0.40 % of filed bundles). The short share at `M = 0` exceeds
+  the one at `M = 30` by 0.05, 0.07 and 0.14 points at 0, 10 and 30 %
+  dropout (predicted between 0 and 0.15). The sign resolved at every
+  dropout, including 0 %.
+- *(c) `p_reorg` at `M = 30`: held.* The three cells are identical in
+  every field of every seed's run, at both pair counts and for the lazy
+  producer as well. (Corrected 2026-10-12: this is a consequence of the
+  model's parameters, not a property of the mechanism. See §5.19.)
+- *(c) `p_reorg` at `M = 0`: held.* 0.004 to 0.005 % and 0.05 to 0.06 %
+  of blocks are lost at 0.01 and 0.1 (predicted 0.006 % and 0.06 % of
+  filed bundles). The short share moves by at most 0.01 points (predicted
+  under 0.05).
+- *(c) Lazy, `M = 0`: held.* Every filed bundle is late, nothing is
+  issued, 100 % of pairs are short. 261.2 draws per block on average
+  (predicted 240 to 280), with the count at the cap in 6,218 of 10,000
+  blocks.
+- *(c) Lazy, `M = 30`: held.* 2.17 % short (2.11 – 2.24), predicted 1.3
+  to 2.5 %: about twice the bar cell, under the bar. `p_reorg` has no
+  effect. (Corrected 2026-10-12: at `R = 3` and a latency of `1..=3`; see
+  §5.19.)
+- *(c) Lazy, `M = 3`, `p_reorg = 0`: missed, narrowly.* 2.34 %, which is
+  0.16 points above lazy `M = 30`; I predicted within 0.15. Twenty-seven
+  more blocks of delay cost more than I allowed.
+- *(c) Lazy, `M = 3`, `p_reorg = 0.01`: held as written.* 2.44 %, 0.1
+  points above the `p_reorg = 0` cell (predicted 0.02 to 0.20 above
+  "that", meaning that cell). Against lazy `M = 30` it is 0.27 above.
+- *(c) Lazy, `M = 3`, `p_reorg = 0.1`: held.* 3.48 % (3.40 – 3.54),
+  predicted 2.5 to 4.5 %. I did not predict the side of 3 %: it is over,
+  on all eight seeds.
+- *(d) The integer rule against the `f64` rule: held.* On one trajectory
+  the two rules gave the same count in every block of every run: no block
+  differs and no epoch's total differs, over 480 epochs. Between the arms,
+  in ESR-11's timing, mean draws per block are 117.09 / 126.76 / 154.84
+  against ESR-11's 117.09 / 127.11 / 155.92: 0.0 %, 0.3 % and 0.7 % lower
+  (predicted within 1 %). The bar cell is 126.64, 0.4 % under 127.11
+  (predicted within 2 %).
+- *(e) The selection's cost: missed on the mean, held on the cap.* 2.38
+  attempts per draw in the bar cell; I predicted 3.5 to 7. No draw in the
+  set reached the 256th attempt; the most any draw took is 190. I weighted
+  the late epoch too heavily. Most draws are made while most pairs are
+  still visibly short, where one or two attempts select; the blocks where
+  a draw needs twelve are the ones that make only the base rate.
+
+**The integer rule and the `f64` rule are the same rule.** That is the
+finding on the difference: there is none to measure at this scale. The
+integer target is the `f64` target floored to `2⁻³²`, and over an epoch
+that never moved a count. What separates this arm's ESR-11-timing cells
+from ESR-11's own is sampling: the realised dropout above, and a
+selection that draws different pairs from the same weights. The
+rejection sampling reproduces the 16 : 1 weights; the cap that would
+bend them was never reached.
+
+**What the bundle adds to the picture.**
+
+- *The margin is worth having, and its size is not critical.* With
+  `M = 30` no honest bundle is late and none is exposed to a reorg in the
+  last three blocks. (Corrected 2026-10-12: "none is exposed" holds for a
+  reorg of depth `R = 3` and a latency of at most 3 blocks, which are this
+  model's parameters. A deeper reorg or a longer latency reaches a bundle
+  filed with `M = 30`. See §5.19.) With `M = 0`, 0.4 % are late, and the short share
+  rises by 0.05 to 0.14 points. That is small against the bar.
+- *The reorg term is second-order for an honest producer and first-order
+  for a lazy one.* Honest lag with `M = 0` exposes 0.6 % of bundles, and
+  even `p_reorg = 0.1` moves nothing visible. A lazy producer at the
+  minimal margin exposes every bundle, and `p_reorg = 0.1` takes the short
+  share from 2.34 % to 3.48 %, over the bar.
+- *Lateness of the information costs more than 10 % dropout does.* Going
+  from 0 % to 10 % dropout adds 0.59 points of short share. A
+  lazy producer at `M = 30` loses nothing, and still doubles the short
+  share (1.02 % to 2.17 %), because the count rule sees each block's
+  draws a whole window late and spends top-up draws on pairs already
+  covered. It spends 2 % more draws per block doing so (129.4 against
+  126.6).
+- *A producer that files at the very end of the window, with no margin,
+  issues nothing.* That is the model's inclusion latency of at least one
+  block, not a property of the chain: the bundle must be in a block by
+  `h + W₂`, so it must be filed before then.
+
+**What this run does not say.** As in §5.14, the reads are not modelled,
+dropout is independent per block, and the previous epoch's last `W₂`
+blocks are not carried in. Further:
+
+- `p_reorg`, `R`, the inclusion latency and the lag distribution are
+  parameters. None is measured. The lazy cells are every producer lazy at
+  once, which is a bound, not a population.
+- A lost bundle is treated as never admitted. A bundle that is visible
+  for some blocks and then reorganised away would change the counts those
+  blocks' draws were made against; the model has no such state. Nor does
+  it model a reorg that removes block `h` itself, or a producer that
+  files a lost bundle again inside its window, which would lower every
+  loss figure here.
+- The eight seeds read the same rolls in every cell, by design: cells
+  compare with each other more tightly than with ESR-11 or with the
+  nominal dropout. Every cell at 10 % nominal dropout ran at 9.83 %.
+  (Corrected 2026-10-12, in the standard terms: the cells are run with
+  **common random numbers**. The same eight seeds drive dropout, lag,
+  latency and the loss roll in every cell. That is a variance-reduction
+  choice, and it makes the differences between cells sharp. Its price is
+  that the cells are not independent samples, and all of them share one
+  realised dropout: 9.83 % at the nominal 10 %, 29.58 % at the nominal
+  30 %.)
+- (Added 2026-10-12.) The section budget is not modelled; see §5.19.
+- The seed and the block hash are the generator's bytes. Nothing here
+  exercises the commitment, the nonce, or a verifier recomputing a draw.
+- The attempts per draw are the producer's and the verifier's hashing
+  cost per draw (1.9 to 2.6 cSHAKE calls on average, and 1 when every
+  pair is short). The run does not
+  time a verifier, and a block's verification cost is the count times
+  that, not measured here.
+- The `(m, n)` verdict is unchanged because nothing in this run can
+  change it: the window still exceeds the per-archiver budget at the
+  calibration (§5.14, §5.15).
+
+**Existing outputs.** ESR-11's reference rows above are its §5.14
+figures, reproduced by calling its `cell`: 0.46 / 1.10 / 3.83 % short,
+117.1 / 127.1 / 155.9 draws per block, 242 blocks at the cap at 30 %.
+
+### 5.19 ESR-13 — addendum after review (2026-10-12, at `e3f2b15966`)
+
+The review of the pull request found three defects in the mode. None is in
+the model of §5.17, and §5.17 and the tables of §5.18 are left as written.
+
+**The cap column's predicate was approximate. No recorded figure changed.**
+The run counted a block as at the cap when its `(count, carry)` equalled
+the one an unbounded shortfall gives. That also holds when an uncapped
+target lands exactly on the cap (`SEB·u = 8·D·H`), where nothing was held
+down. Production now answers the question: `draw_target` in
+`shekyl-archival-retention` is the computation `draw_count` already made,
+factored out, and it returns `capped` as `D·H + SEB·u > 9·D·H`, strictly.
+`draw_count` calls it; its signature, outputs and vectors are unchanged.
+The sim asks it and holds no copy of the cap term.
+
+The evidence set was run again at `e3f2b15966`. Every field of every one
+of the 480 runs is identical to the recorded run's, the cap count
+included: 325,089 capped blocks over the set under both predicates. The
+"Blocks at the cap, per epoch" column of §5.18 stands as printed, and now
+means "blocks where the cap bound". No block of the set landed exactly on
+the cap.
+
+**The cap column's unit (maintainer's review, 2026-10-12).** Three
+places carried the count in three units, and only one said which.
+
+| Where | Unit |
+| --- | --- |
+| §5.14's and §5.18's tables, "Blocks at the cap, per epoch" | blocks in one epoch: the mean over the cell's eight seeds |
+| The binary's column, and `blocks_at_cap` on a cell in the JSON | blocks summed over the cell's eight seeds: eight times the tables' figure |
+| `blocks_at_cap` on a run in the JSON | blocks in that one epoch |
+
+So the binary prints 1,870 where §5.18 prints 234, and 49,744 where it
+prints 6,218. The tables' unit is the one this document uses, and they
+stand. The binary's column was labelled `capped`, with the unit only in
+the legend; it is now `cap sum`, and the legend gives the division by
+eight. The 325,089 above is the cell figure summed over all 60 cells,
+that is over 480 epochs: 677 an epoch on average, and 298,464 of it is
+the six lazy `M = 0` cells.
+
+**Why `p_reorg` does nothing at `M = 30`, and what the reorg term is not
+(maintainer's review, 2026-10-12).** §5.18 reports that the three
+`p_reorg` cells at `M = 30` are identical. That is arithmetic on this
+model's parameters. The reorg zone is the last `R = 3` blocks of the
+window, `h + 498` to `h + 500`. An honest producer with `M = 30` files by
+`h + 470`, and the inclusion latency is `1..=3`, so its bundle is in a
+block by `h + 473`. The latest inclusion cannot reach the zone. It is not
+a property of the mechanism: a reorg deeper than 27 blocks, or a latency
+longer than 27, reaches a bundle filed with `M = 30`, and the margin's
+size is what stands between them.
+
+The model also loses each exposed bundle independently, with probability
+`p_reorg`. A reorg does not behave that way. It removes a run of
+consecutive blocks, and every bundle included in that run is lost
+together. Loss is correlated across the blocks whose bundles shared the
+run, and many producers' draws go at once. This run does not model that,
+and its loss figures say nothing about it: the share of pairs left short
+by one deep reorg is not the share left short by the same number of
+bundles lost one at a time.
+
+**Not modelled: the section budget (maintainer's review, 2026-10-12).** A
+block has room for `c · (⌊9·D/SEB⌋ + 1)` draws' worth of bundles, and a
+bundle is charged `max(count, 1)`. In the model a filed bundle is
+included after its latency whatever else is waiting: inclusion is never
+refused for lack of room. So nothing here examines a backlog near the
+budget, which is where lazy producers filing together, or a burst after
+an outage, would be felt.
+
+**Common random numbers.** §5.18's sentence on the seeds is restated
+there in the standard terms.
+
+**Each row's timing.** §5.18's tables do not carry the inclusion latency
+or the reorg depth, and the mode's own table printed the defaults in its
+header, which ESR-11's-timing rows do not use. For the rows of §5.18:
+
+| Rows | Inclusion latency | `R` |
+| --- | --- | --- |
+| ESR-11, `f64` | none: the seed lands at its lag | none |
+| ESR-11's timing | `0..=0` | 3, never acting (`p_reorg = 0`) |
+| Bundle, honest lag and Bundle, lazy, every `M` and `p_reorg` | `1..=3` | 3 |
+
+The mode's table now prints both on every row, beside `M` and `p_reorg`,
+and its header states only what holds for every row.
+
+**Sections.** The table's sections were found by removing adjacent
+duplicates from the cells' pair counts, which is right only while the
+cells arrive grouped. They did in the recorded run, so its output had each
+section once. The sections are now an ordered set.
+
+**Time.** The second run took 350 s of wall time against 112 s, on the
+same machine at a load average near 30. The two times measure the
+machine, not the change.
+
+### 5.20 ESR-14, the sim's integer seams, predicted before the run (2026-10-13)
+
+**Why.** The sim is used two ways (the maintainer, 2026-10-12). In
+*design* it models what is not built yet, and that is all sim code.
+In *verification* it is a harness around Shekyl code, and what it
+computes about the chain must be what the chain computes: production's
+integer arithmetic, the same on every platform. DQ-2G
+([`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md))
+is the rule: floats live in the scenario and report layers; anything
+that mirrors a chain computation runs in production's integers; a float
+crosses into integers once, at a named input boundary. Production is
+clean: `shekyl-economics`, `shekyl-chain-rules` and
+`shekyl-archival-retention` have no float outside tests. The violations
+are the sim's, found in the review of ESR-8 (#1052). Each is listed with
+what the fix is and what would show it wrong. Nothing in production
+changes.
+
+| # | Where | What it does today | The fix | Prediction |
+| --- | --- | --- | --- | --- |
+| 1 | `fee_floor.rs`, `floor_feedback_scenario` | Keeps the volume window as an `f64` running sum of fractional demand and converts it to a milli-sum on each block | Demand is rounded to whole transactions once, at the scenario boundary, and pushed into the fold's `VolumeWindow`, which is read as production's `TxVolume` | Every `--fee-floor` feedback row's operand moves by at most one transaction's rounding per block. The `converged` verdict is unchanged in every row; the amplitude and grace columns are reported as they move. The same pattern in `fee_ladder.rs` is the FL-R18 instrument's and is declared, not changed (§4) |
+| 2 | `stage2.rs`, `a3_stranding_report`, the A2 envelope block and `shard_reward_operands` | Divides an atomic budget by `epochs_per_year()`, an `f64` 26.28, and truncates | `budget × SETTLEMENT_EPOCH_BLOCKS / BLOCKS_PER_YEAR` in `u128`. `shard_reward_operands` crosses to SKL once, after. `epochs_per_year()` keeps only report and fiat readers, and says so | Each per-epoch operand moves by at most one atomic unit. Both narration fixtures are byte-identical; nothing is printed at atomic precision |
+| 3 | `engine.rs`, `budget.rs`, `stage2.rs`: `initial_emitted_fraction` | An `f64` fraction times the asymptote, truncated | A `u32` in parts per million, `asymptote × ppm / 1 000 000` in `u128`: the declared input boundary, in integers | Byte-identical. The asymptote is `2³²·10⁹`, exact in `f64`, and at the three fractions in use (0, 0.95, 1) the `f64` product already equals the integer one; shown by arithmetic before the change |
+| 4 | `scripts/ci/check_sim_integer_seams.py`, in the bundled grep gates | Nothing | A gate that fails on a float-to-integer cast in the fold files (`chain_cursor.rs`, `engine.rs`, `budget.rs`, `stage2.rs`, `record.rs`, `burden.rs`) outside their test modules, with a self-test. Exceptions, if any, are listed by function with a reason | Red on one committed violation, green on its revert; both commits stay in the branch. After the fixes above the exception list is empty |
+| 5 | The narration fixture tests | The reason strings say what runs them | One sentence: the fixtures are generated and checked on Linux x86-64, because the scenario layer calls `powf`, `exp` and `ln`, whose last bit can differ between C runtimes | Text only |
+| 6 | `burden.rs`, `HonestOutputs` | Accumulates the curve tree's leaf count as an `f64` and truncates on read. The count sets the tree depth, which sets every transaction's weight and fee | A `u64`, and `OUTPUTS_PER_TX_NORMAL` an integer 2 | Byte-identical: integer sums are exact in `f64` far past any fold's size, so the truncated value was already the integer |
+| 7 | `secret_draw.rs` (ESR-11) | Its own `f64` count rule and carry, and its own weighted sampler, kept as ESR-13's "`f64` reference" | Deleted. ESR-11 calls `draw_count`, `draw_horizon` and `select_draw`, as #1052 had it before the merge with ESR-13 withdrew it. ESR-13 stops computing and printing the `f64` comparison and the reference rows; its two tests whose subject was that comparison go with it, named in the commit | `--secret-draw-production` is byte-identical except the removed columns and rows: ESR-13's random stream is not touched. `--secret-draw` moves within seed noise, since its draws come from a different stream; the bar holds under both readings and no verdict column moves |
+
+If any verdict moves, the run stops and reports before a fixture is
+regenerated. Not in scope: ESR-10, the staking sim, and production code.
+
+**Not decided here.** With both on production's rule, ESR-11's epoch
+loop and ESR-13's "ESR-11 timing" arm model the same epoch. Whether
+ESR-11's loop is then deleted, with §5.14 as its record, is a question
+for the maintainer; this step does not answer it.
+
+### 5.21 ESR-14 — what the run said (2026-10-13, at `5cc8930dec`)
+
+Each item of §5.20 against its prediction. The baselines were captured
+from the tree at `05e922c4c4`, before the first code change, on one
+binary; the comparisons are byte-for-byte on each arm's JSON and table.
+
+| # | Prediction | Result |
+| --- | --- | --- |
+| 1 | `converged` unchanged in every feedback row | **Falsified in part.** *Exact arm*, production's reading since FL-R24: 4 of 600 not converged before and after, worst amplitude 88 → 87 bp; no verdict moved. *Integer arm*, the truncating `sum/720` the chain no longer runs: 92 → 116 not converged (36 cells to not-converged, 12 the other way), worst amplitude 194 → 281 bp. The slew and lookback sections are byte-identical; they already used integer windows. Reading: whole-transaction demand feeds the integer arm's one-tick toggles more coarsely. A dated note sits under the FL-E1 record in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §11.7; its 2026-09-10 figures are not edited. The change stands as specified; the maintainer reads the finding |
+| 2 | ≤ 1 atomic unit per operand; fixtures byte-identical | Held. Both narration fixtures, the default, gate-7 and budget arms are byte-identical |
+| 3 | Byte-identical | Held |
+| 4 | Red on one violation, green on its revert | Held. The bundled grep gates failed on `bbe94ddef6` with the gate's own line after its selftest passed ([run](https://github.com/Shekyl-Foundation/shekyl-core/actions/runs/38407093967/job/115329439231)); `5cc8930dec` reverts it. That head was red on rustfmt too, for the probe's attribute layout. The exception list is empty |
+| 5 | Text | Done |
+| 6 | Byte-identical | Held |
+| 7 | ESR-13 byte-identical bar the removed columns and rows; ESR-11 within seed noise, bar holds, no verdict column moves | Held. ESR-13's JSON is identical to the baseline's once the two removed fields per cell and per run and the reference rows are dropped from it; its table differs by those rows and columns only. ESR-11's figures are below |
+
+**ESR-11 on production's rule and selection, at maturity `D = 324,000`,
+eight seeds.** The sim's rule and sampler → `draw_count` with its 32-bit
+carry and `select_draw`:
+
+| Reading | Dropout | Short of 3, max over seeds | Seeds over 3 % |
+| --- | --- | --- | --- |
+| A | 0 % | 0.48 % → 0.48 % | 0 → 0 |
+| A | 10 % (the bar) | 1.18 % → 1.13 % | 0 → 0 |
+| A | 30 % | 3.95 % → 4.15 % | 8 → 8 |
+| B | 0 % | 1.44 % → 1.42 % | 0 → 0 |
+| B | 10 % (the bar) | 2.67 % → 2.65 % | 0 → 0 |
+| B | 30 % | 6.46 % → 6.58 % | 8 → 8 |
+
+The genesis set (`D = 4,096`) moves the same way. The bar holds under
+both readings. The cap column moved more (B, 30 %: 177 → 284 blocks
+over eight seeds), because its definition changed with the rule: it was
+the sim's `wanted > cap` and is `draw_target`'s own flag, as in ESR-13.
+It is a report column.
+
+**Time.** The ESR-11 run takes 361 s where it took one second, since
+every draw is a `select_draw`; the ESR-13 run took 615 s against 408 s
+for its baseline, both on a machine carrying a concurrent workspace
+clippy. The nightly lane's job has three hours.
+
+**Not decided here**, as §5.20 said: ESR-11's epoch loop and ESR-13's
+"ESR-11 timing" arm now model one epoch on one rule. Which stays is the
+maintainer's.
+
+### 5.22 ESR-11's loop deleted (2026-10-15)
+
+**Why.** Since ESR-14 both `secret_draw.rs` (ESR-11) and
+`secret_draw_production.rs` (ESR-13) called production's `draw_count`,
+`draw_horizon` and `select_draw`, and ESR-13's `Timing::esr11()`, a
+uniform lag over `0..=W₂` with no latency and no loss, is ESR-11's
+experiment on ESR-13's loop. Two loops running one experiment drift
+apart the next time one is changed. ESR-11's loop is deleted; its
+analytic functions and the shared `count_at` / `capped_at` stay.
+
+**The comparison, made before the deletion** at `7f0e77afef` from the
+runs captured for §5.21: ESR-11's loop under reading A against ESR-13 at
+ESR-11's timing, short of 3 as mean (min–max) and seeds over the bar.
+
+| D | Dropout | ESR-11's loop | ESR-13 at ESR-11's timing |
+| --- | --- | --- | --- |
+| 4 096 | 0 % | 0.49 % (0.34–0.63), 0 | 0.45 % (0.29–0.54), 0 |
+| 4 096 | 10 % | 1.10 % (0.93–1.20), 0 | 1.08 % (0.85–1.27), 0 |
+| 4 096 | 30 % | 3.81 % (3.52–4.08), 8 | 3.69 % (3.37–4.08), 8 |
+| 324 000 | 0 % | 0.45 % (0.44–0.48), 0 | 0.46 % (0.43–0.47), 0 |
+| 324 000 | 10 % | 1.09 % (1.04–1.13), 0 | 1.07 % (1.00–1.13), 0 |
+| 324 000 | 30 % | 3.87 % (3.59–4.15), 8 | 3.70 % (3.48–3.82), 8 |
+
+Issued draws per pair and the largest block agree to three figures in
+every cell; the verdict is the same in every cell.
+
+**The 30 % gap has a cause, and it is not the reveal timing.** ESR-13 is
+lower at 30 % for both `D`, and lower at 10 % for both. The two loops
+consume their generator differently per block (ESR-11: a 32-byte seed,
+the dropout roll, a lag roll when revealed; ESR-13: a seed and a hash,
+then dropout, lag, latency and loss rolls), so the same eight seeds
+realise different dropout, and each loop's realisation is shared across
+`D`. Replicating the generators: at 30 % ESR-11's seeds leave a mean of
+3 025 blocks unrevealed per epoch (30.25 %) and ESR-13's 2 958 (29.58 %);
+at 10 %, 995 against 984. A lighter realised dropout in ESR-13, the same
+for both `D`, is the pattern in the table. The one timing difference,
+that ESR-13 lands a lag-0 reveal in the next block where ESR-11 counted
+it in its own, touches 1 block in 501 by one block, and does not show.
+ESR-13's form is production's: a seed revealed in a block can reach
+later blocks only. §5.14 now reports this loop's run; the deleted loop's
+figures are at `6681692ed9`.
+
+**What moved.** `--secret-draw` runs ESR-13's loop at ESR-11's timing on
+the evidence set's six `(D, dropout)` cells, through ESR-13's renderer.
+The nightly lane's test is
+`secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders`
+in place of `secret_draw::tests::the_evidence_set_runs_and_the_table_renders`.
+ESR-11's loop tests go with their subject: `a_run_is_a_function_of_its_seed`
+(ESR-13 has its own); `every_draw_of_a_revealed_block_is_issued_and_none_of_an_unrevealed_one`
+(ESR-13: `with_the_margin_and_no_reorg_every_filed_block_s_draws_are_issued`,
+`a_lost_bundle_issues_nothing_and_leaves_no_draw_to_miss`,
+`a_lazy_producer_with_no_margin_is_always_late`);
+`issued_counts_account_for_every_issued_draw` (ESR-13:
+`with_the_margin_and_no_reorg_every_filed_block_s_draws_are_issued`);
+`no_block_draws_more_than_the_cap_allows` (ESR-13:
+`the_count_is_production_s_on_a_hand_checked_sequence`);
+`zero_pairs_is_refused` and `more_dropout_leaves_more_pairs_short`, whose
+subjects ESR-13 did not test, are added to ESR-13 at ESR-11's timing.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
@@ -1243,6 +2136,191 @@ Status column: **V** = definition and use both read; **I** = inferred.
 
 ---
 
+## Appendix A2 — re-census of Appendix A for ESR-8 (at `258b4d851`)
+
+Read-only pass, 2026-10-11, over items 1–5, R1–R31 and D1–D13 of
+Appendix A. Appendix A stays as the record of what was found at
+`bb021f254`; its line numbers are that tree's. This table says what each
+row is now. Sim paths are relative to `rust/shekyl-economics-sim/src/`.
+The X, A, S and P sections were not re-censused.
+
+ESR-1 to ESR-7 closed most of the list as they re-based the folds, and
+PR #1009 closed the epoch rows (R9, D8) when the split epoch became one
+constant that no caller passes.
+
+| Status | Rows |
+| --- | --- |
+| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R10, R11, R13, R15, R16, R17, R18, R19, R23, D5, N1, N2, N3; text: D9, D10, D11, D12, N4 |
+| Closed by deletion | R2, R31, D8 |
+| Closed by a §4 declaration | 1, 2, 3, R29; **in ESR-8:** R21, R22, D1, D3, D6, D7, D13; R26 (the nearest arm; the ceiling arm imports); R30 (the KAT zone; the bond imports) |
+| Staking-excepted (ruled 2026-10-03) | D4 |
+| **Open** | none |
+
+Item 5 was a roll-up of R24–R26 and D6 and is open through D6 alone.
+
+### The eleven restated rows open at the re-census
+
+The first two columns are the tree at `258b4d851`. The last says what
+ESR-8 did.
+
+| # | What remained | Closes by | In ESR-8 |
+| --- | --- | --- | --- |
+| R3 | Two test literals, `let coin: u64 = 1_000_000_000` (`fee_ladder.rs:3004`, `:3098`). Every non-test `COIN` derives from `shekyl_units::ATOMIC_UNITS_PER_SKL` | `crate::burden::COIN` | Closed: both tests read `crate::burden::COIN` |
+| R10 | No fold restated the three differences Appendix A listed: the penalty, the net supply and the height-0 share are production's. What remains is that each fold composes the reward chain from production's parts (`split_block_emission`, `compute_burn_split_at`) and none calls `price_emission`, which owns the order they run in | A decision (below) | Closed: the cursor calls `price_emission` and the folds read its `PaidEmission`; the stuffer's payout calls it too. See the note under the direction |
+| R13 | `0.25` as the flat staker share in the fee-horizon report (`fee_horizon.rs:151`) and its test (`:203`). The literal moved here from `onset.rs` with the closed form | `escalation::floor_share()` | Closed: the share and its label come from `floor_share()` |
+| R15 | Report strings that spell a constant: "0.75" (`stage2.rs:622`, `:1241`; `scenarios.rs:430`, with "75 coins" and "7_500 coins" at `:437`, `:444`), "4096 shards" (`stage2.rs:1508`) | Interpolate `ARCHIVAL_BOND_FLOOR_ATOMIC` and `MAX_HOLDINGS_SHARDS` | Closed: every string interpolates the constant. Both narration fixtures match byte for byte |
+| R16 | One table header, "split-loss@4096" (`admission.rs:155`); the value beside it already reads the constant | Interpolate `MAX_HOLDINGS_SHARDS` | Closed |
+| R17 | `BandedCurveParams::from_plateau_value(8_000)` (`population.rs:43`) | `shekyl_archival_retention::reward_arithmetic::ARCHIVAL_PROVISIONAL_CURVE` | Closed: `reward_curve()` returns the constant |
+| R18 | `AGE_WEIGHT_MILLI = 1_000` (`population.rs:56`); production's is 2 000. Declared inert in its own comment, not in §4 | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI`, or a §4 row saying why the sim's differs | Closed by import (1 000 → 2 000). No figure moved, which is the inertness its comment claimed |
+| R19 | `N_HARD_BOUND = 25` (`mn_feasibility.rs:55`) | A new `pub` export: the bound exists in production only as a const-assert over a private constant (`failure_window.rs`) | Closed: `FAILURE_WINDOW_N_GATHER_BOUND`, a named `pub` constant the assert now reads |
+| R21 | The exact-min urn and its even-spread schedule (`challenge_coverage.rs`). **Its production owner no longer exists**: `ChallengeUrn` and `assign_epoch` were deleted when the secret draw replaced the public urn | A decision (below) | Closed by the §4 row the direction worded |
+| R22 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs:136`). Cross-checked against the predicate-backed kernel by test; no production counterpart to import | A §4 row | Closed by its §4 row |
+| R23 | `1.0 + SLASH_GRACE_EPOCHS` (`cartel.rs:249`) | A new `pub` export of `SLASH_SETTLEMENT_TIP_LAG_EPOCHS`, private today | Closed: the constant is `pub` and `cartel.rs` reads it |
+
+### The dead-referent rows
+
+| # | What remained | Closes by | In ESR-8 |
+| --- | --- | --- | --- |
+| D1 | One shard per `SETTLEMENT_EPOCH_BLOCKS` blocks (`engine.rs:83`), called a model parameter where it is defined | `shekyl_types::archival::shard_of`, or a §4 row | §4 row. The row says the default understates the lock by a factor near 900; moving gate-7 onto the byte fold is a separate step (`FOLLOWUPS.md`) |
+| D3 | The A3 and A4 base paths still score through the plateau curve; credited work is linear in production | A §4 row, or the linear owner | §4 row. Re-basing A3 and A4 on linear work is a separate step (`FOLLOWUPS.md`) |
+| D5 | Proof-response widths as literals (`proxy.rs:92`) | `shekyl_fcmp::tree` constants, which needs a new dependency | Closed by import: `RESPONSE_BYTES` is built from `shekyl_fcmp::tree`'s widths and `CHALLENGED_LEAF_LEN`, and a const-assert holds it at 6 784 |
+| D6 | The retired 2 % relay buffer, as `* 98` and `< 1020` (`fee_ladder.rs:1717`, `:2329`, `:2505`), in a file that also asserts the slack is 0 | `relay_floor_admits` | §4 row, records-was. Production has no margin constant to import; the comment that called the 2 % buffer admission's is corrected |
+| D7 | The ArticMine transliteration (`fee_ladder.rs:198-210`). §4 declares its KAT inputs, not the transliteration | A §4 row | §4 row |
+| D9–D12 | Stale citations, "8 scenarios" where there are nine, "~35 days" for an epoch, a dated representative run | Text | Text fixed: line numbers into C++ replaced by the function named; the scenario count is read from the run; the always-empty `stuffing_profitable` field is deleted; "one epoch" is "25,000 blocks"; the 2026-07-30 figure is labelled a test input |
+| D13 | Maturity operands as literals (`MATURITY_D = 324_000`, 40 000 projected pairs) | A §4 row naming them as assumptions | §4 row |
+
+### Found by this pass, in neither Appendix A nor §4
+
+| # | What was found | Closes by |
+| --- | --- | --- |
+| N1 | **The secret draw's count rule is restated.** §4's ESR-11 row says "no production function exists to call". It does now: `shekyl_archival_retention::{draw_horizon, draw_count, select_draw}`. The sim keeps its own `horizon()`, `block_target()` and three constants (`MIN_HORIZON_BLOCKS`, `CATCH_UP_BY_PERMILLE`, `CAP_MULTIPLE`); only `COUNTED_DRAWS` is pinned to its owner. Whether the sim's f64 `block_target` equals production's fixed-point `draw_count` was read, not run | **Closed by ESR-13** (PR #1050, merged while this PR was open): `secret_draw_production.rs` calls all three, and `secret_draw.rs` was kept as it ran, as the `f64` reference, under its §4 row. See below. **Superseded 2026-10-13 by ESR-14** (§5.20 item 7, §5.21): `secret_draw.rs` calls the three too, and the `f64` rule and sampler are gone |
+| N2 | **The recorder priced a block the chain does not build.** It paid `effective_emission` on the schedule's whole demand, fifty transactions a block. At the control arm's fee that is 630 to 765 kB against a 300 kB penalty-free zone: over the block-weight limit while the median sits at the zone, so the missing penalty was the smaller half of it. The loop's own comment declared the omission; §4 declared its volume operand only | **Fixed in ESR-8:** the recorder steps the cursor. The burn and the multiplier are that window too: the per-block recomputation §4 had declared is withdrawn. The vectors were regenerated and every column that moved is accounted for below |
+| N3 | `stage2.rs` split the fee burn at the flat `staker_pool_share` where the engine and budget folds use `compute_burn_split_at` at `n = 0`. The two are equal at the shipped parameters and nothing failed if they stopped being equal | **Closed:** the stage-2 ledger advances by production's destroyed amount at the fold's closed-shard count, and `the_shipped_split_is_flat_at_every_count` fails when the shipped asymptote leaves the floor |
+| N4 | `Cargo.toml` justified the `shekyl-chain-rules` dependency by `EMISSION_SPLIT_EPOCH`, which that crate no longer provides. The dependency is still used, for the medians, the volume span and the reference-block age | **Closed:** the comment says what it is used for |
+
+A fifth observation, not a row: the bound R19 imports is the C++
+gather's. `failure_window.rs` holds a second, tighter condition for the
+Rust gather (`WINDOW_MIN_OBSERVATION_PER_MILLE`), which at the shipped
+values admits no `n` above 13. `mn_feasibility.rs` sweeps `n` to 25
+under the name "hard bound". The sweep is unchanged here; which bound
+the report should name is a question for the lane that owns the window.
+
+### Direction on the three decisions (received 2026-10-12)
+
+Relayed review direction, matching what this pass recommended. It is
+recorded as direction, not as a signed ruling.
+
+1. **R21.** `challenge_coverage.rs` stays, with a §4 row: "records-was —
+   instrument that justified the secret draw; no production owner by
+   design". The nightly lane keeps
+   `full_scale_maturity_reproduces_doc_figures`, with that reason beside
+   it. The module is deleted in the PR that retires the challenge
+   design's §7.1 and §8.
+2. **R10.** The folds call `price_emission`. Where its signature does
+   not fit a fold, that is a finding about `price_emission` and the fix
+   is there, not a third copy in the sim. Built; see below.
+3. **The secret draw (N1).** Equivalence first: the sim's rule and
+   production's run on the same inputs, agreement or the delta recorded,
+   and only then the calls switched. Overtaken by ESR-13; see below.
+
+### N1: closed by ESR-13, and what this PR withdrew
+
+> **Superseded 2026-10-13 by ESR-14** (§5.20 item 7, §5.21). What follows
+> is the tree at ESR-8's merge. ESR-14 made the withdrawn move again,
+> with the rule's callers shared between the two modules: `secret_draw.rs`
+> calls `draw_count`, `draw_horizon` and `select_draw`, and ESR-13 no
+> longer prints an `f64` reference.
+
+ESR-13 (§5.17 to §5.19, PR #1050) landed on `dev` while this PR was
+open. It runs the secret draw on production's `draw_count`,
+`draw_horizon` and `select_draw` in a module of its own, and keeps
+`secret_draw.rs` unchanged as the `f64` reference it prints beside its
+own cells and calls in its tests. That closes N1.
+
+This PR had made the same move inside `secret_draw.rs`: it deleted the
+`f64` rule and called the owners there. That change is withdrawn at the
+merge with `dev`. ESR-13 needs the module as it ran, and one arm on the
+owners is enough. `secret_draw.rs` and `challenge_coverage.rs` are
+`dev`'s, byte for byte.
+
+One result from the withdrawn work stands as corroboration, and its code
+is in this branch's history at `2395057f41`. An epoch ran under either
+count rule on one random stream, over 120 epochs: set sizes 1, 7, 500,
+4 096 and 16 384; dropout 0, 10, 50 and 100 %; both in-flight readings;
+three seeds. Drawn, issued, the issued histogram, the largest block and
+the unpaid reads were equal in every epoch. ESR-13 measures the same
+agreement on its own runs (§5.18).
+
+### R10 as built, and what it found about `price_emission`
+
+`price_emission` fits the folds with no change. The cursor calls it once
+the fill has decided what the block lists, at the bodies' weight, and
+asserts on every block that the fill's reward and the composition's paid
+reward are one number. The folds and the stuffer advance and price from
+that paid reward. The fill's copy is read only by the assert.
+
+One misfit was on the sim's side. `price_emission` splits at the shipped
+share, decay and year: they are free constants in `shekyl-economics`, not
+fields of `EconomicParams`, and the wallet's calibration stamp digests
+them beside the parameter set for the same reason. `SimParams` carried
+`staker_emission_share` and `staker_emission_decay` as if a run could
+vary them; no scenario did, and both fields are removed. The decay lever
+in `onset.rs` is a counterfactual on a year's totals and still calls the
+share kernel with its own decay. `SimParams::blocks_per_year` stays as
+the fold's bookkeeping year and its doc says the share does not follow
+it.
+
+Three composing sites remain by design: the budget fold's arm (b), which
+is the declared unmodulated counterfactual; the stuffer's tests, whose
+written-out arithmetic is the independent side of a comparison; and
+`the_shipped_split_is_flat_at_every_count`.
+
+### N2: the recorder's regenerated vectors
+
+`docs/test_vectors/economics/baseline_steady_state.json`, eleven rows.
+The metadata and the neutral milestones are unchanged. Every row moved,
+and each move follows from one fact: the fill lists 20 to 24 of the 50
+transactions offered, because ordinary transactions at the control fee
+fill the 300 kB zone at 24 in an empty tree and at 20 in a deep one, and
+the fee does not cover the penalty past it.
+
+| Column | Before → after (year 1, last block) | Why |
+| --- | --- | --- |
+| `tx_volume` | 50 → 21 | It is the listed count now, not the demand |
+| `release_multiplier_milli` | 1000 → 800 | `calc_release_multiplier` at 21 against a baseline of 50 is at `release_min` |
+| `already_generated_coins` | 2.608e17 → 2.100e17 | The chain released at 0.8 of the curve for a year |
+| `base_block_reward` | 9.618e11 → 9.739e11 | The curve at less emitted |
+| `circulating_supply`, `total_staked` | follow `already_generated_coins` | Net supply, and a fixed stake ratio of it |
+| `burn_pct_bp` | 303 → 158 | `calc_burn_pct_from_activity` at the lower volume and the lower supply |
+| `staker_emission` | 1.298e11 → 1.052e11 | The share of a reward paid at 0.8 |
+| `staker_fee_pool`, `actually_destroyed` | 3.80e7 → 8.32e6, 1.14e8 → 2.49e7 | 21 fees in place of 50, at the lower burn |
+
+The first row (height 1) keeps its burn at zero and moves only through
+block 0, which an empty window prices at `release_min`.
+
+At that regen `shekyl-engine-core`'s differential passed on the new
+vectors without a code change: it recomputed `base_block_reward` and
+the burn from each row's own operands, which were then the listed count.
+
+A consequence for a reader of the control arm, not a defect: on the
+flat fee the baseline never fills past the zone, so it never reaches its
+own volume baseline and its release multiplier sits at the floor for
+the whole run. The scenario folds have shown this since ESR-6; the
+recorder now shows it too.
+
+The same ESR-8 then closed the operand split that regen left in place.
+The block was priced at the window, and the row recomputed
+`burn_pct_bp` and `release_multiplier_milli` at the listed count as a
+one-block volume; §4's row for that split is withdrawn. The row now
+stores the window (`volume_tx_count_sum`, `volume_window_blocks`) and
+both columns are taken from it. `tx_volume` remains the listed count.
+The differential replays `TxVolume::window` of that pair and does not
+read `tx_volume`. On the regenerated baseline every sampled window mean
+is the listed count — 24 over the one block before height 1, then 21
+and 20 over the full 720-block window at the year ends — so
+`burn_pct_bp` and `release_multiplier_milli` do not move. The operand
+is the window anyway.
+
 ## Appendix B — census of `shekyl-staking-sim` (as reported, at `bb021f254`)
 
 Read-only pass, 2026-10-02. Row labels are local to these tables (§8).
@@ -1295,7 +2373,7 @@ The first three rows are structural: every registered run inherits them from `ba
 | R13 | `sim/failure_confirmation.rs:36` | `BLOCK_WEIGHT_LIMIT_BYTES = 300_000` | Block budget | `FULL_REWARD_ZONE` `econ/params.rs:17`. That is the reward zone, not the limit (`econ/emission.rs:265`). | V |
 | R14 | `sim/failure_confirmation.rs:668-672` | 1 baseline challenge per pair per epoch | Challenge volume | `CHALLENGES_PER_PAIR_PER_EPOCH = 3`, `prod/constants.rs:30` | V |
 | R15 | `sim/failure_confirmation.rs:1087-1088` (m=2, n=5), sweep `:748-749`, `:1127-1136` | Sliding window m-of-n | Slash window | `FAILURE_WINDOW_M/N = 11/13`, `prod/failure_window.rs:334-337`. Imported only in tests (`sim/failure_confirmation.rs:1193`). The policy function `:526-551` is equivalence-tested against production (`:1254`). | V |
-| R16 | `sim/fingerprint.rs:145-149` | `serve_credit_bit = deep && held && inflight==0` | Serve credit | `settle_epoch` and `SERVE_THRESHOLD_PASSES = 2`, `prod/attestation.rs:71,192` | V |
+| R16 | `sim/fingerprint.rs:145-149` | `serve_credit_bit = deep && held && inflight==0` | Serve credit | `settle_epoch` and `SERVE_THRESHOLD_PASSES = 2`, `prod/attestation.rs:71,192`. **UPDATE 2026-10-08 (`SO-D10e`):** `settle_epoch` is deleted; the fold is `settle_pair` (`prod/settlement_select.rs`) and `SERVE_THRESHOLD_PASSES = 2` is in `rust/shekyl-types/src/archival/settlement.rs` | V |
 | R17 | `sim/timing_cluster.rs:33`, `:171` | `JOIN_LAG_BLOCKS = SEB`; `verify_f4_slow_emitter(25, 1)` | Join lag; W−1 | `good_through` `prod/consensus_state.rs:85-102`; `MAX_CLAIM_AGE_W = 26` | V |
 | R18 | `sim/budget_throttle.rs:107-111` | `emis_frac` 1.0 / 0.012 | Emission share of the purse | Hand-copied from `shekyl-economics-sim` output; computable from `econ/emission_share.rs:33`, `econ/burn.rs:124` | V (literal) / I (source) |
 | R19 | `sim/failure_confirmation.rs:24-27`; `sim/clustering.rs:122-134,156-157,205-206`; `sim/cover.rs:336-337,912-915`; `sim/budget_throttle.rs:115` | L16 constants, baseline constants and endowments, 80/20 operators, `N_P` 17/79/154, knee 80/86 | Intra-sim copies of `baseline()` values and of registered-run outputs | Owner is `sim/scenarios.rs:2051-2197` and the doc tables. `sim/clustering.rs:114-117` claims "single-sourced" but retypes. | V |

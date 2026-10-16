@@ -154,6 +154,17 @@ pub enum OwnerClass {
 const CLASS_COUNT: usize = 7;
 
 impl OwnerClass {
+    /// Every class, in index order: what a periodic lateness report walks.
+    pub const ALL: [Self; CLASS_COUNT] = [
+        Self::Relay,
+        Self::Transport,
+        Self::TimedSync,
+        Self::Peerlist,
+        Self::Discovery,
+        Self::Housekeeping,
+        Self::Interim,
+    ];
+
     const fn index(self) -> usize {
         match self {
             Self::Relay => 0,

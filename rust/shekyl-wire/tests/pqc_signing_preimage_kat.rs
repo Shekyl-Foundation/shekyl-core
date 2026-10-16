@@ -52,7 +52,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::SigningPayloadHash;
-use shekyl_wire::{Ct, PqcSigningPreimage, Transaction};
+use shekyl_wire::{Ct, PqcSigningPreimage, RetiredKeylessJoinMarket, Transaction};
 
 const FIXTURE: &str = "tests/fixtures/pqc_signing_preimage_v1.json";
 
@@ -151,6 +151,35 @@ impl SubjectBytes {
             }
         }
     }
+}
+
+/// The two fixture bodies that are **keyless JoinMarket bond posts**
+/// (`post_kind` 0), captured from the C++ daemon. Retired from this test's
+/// Rust-side derivation 2026-10-12 (ruling on PR #1046; `FN_DSA_HYBRID.md`
+/// `FND-19`): the receipt key is mandatory, the keyless byte is refused at
+/// parse, and a C++ capture can never contain a key-carrying JoinMarket —
+/// its serializer has no such kind. The fixture file is untouched, because
+/// the C++ leg still parses these bytes; here each is held to exactly one
+/// thing, that it is refused for being the retired form, and to whatever
+/// the test checks without parsing. The JoinMarket's preimage and digest
+/// are witnessed on Rust-built posts instead (`shekyl-chain-rules`,
+/// `i18_the_identity_signature_covers_the_join_markets_receipt_key`; the
+/// ingest's `a_join_markets_receipt_key_is_the_records_and_a_release_leaves_it`).
+const RETIRED_KEYLESS_BOND_POSTS: [&str; 2] = [
+    "bond-post-to_key-bond_post",
+    "emission-bond-post-to_key-bond_post",
+];
+
+/// `bytes` is refused by the parser for carrying the retired keyless
+/// JoinMarket byte, and for nothing else — matched on the typed cause
+/// `BondPost::read` returns, not on the sentence it displays.
+fn refused_as_the_retired_keyless_join_market(name: &str, bytes: &[u8]) {
+    let err = Transaction::from_bytes(bytes).expect_err("a keyless JoinMarket no longer parses");
+    assert!(
+        err.get_ref()
+            .is_some_and(RetiredKeylessJoinMarket::downcast_is),
+        "{name}: refused for another reason: {err}"
+    );
 }
 
 /// The eight subjects, in the fixture's order.
@@ -301,10 +330,11 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
         );
     }
     let mut input_counts = Vec::new();
+    let mut retired_seen = 0;
     for entry in transactions {
         let name = entry["name"].as_str().expect("name");
-        let tx = Transaction::from_bytes(&hex_bytes(entry["tx_hex"].as_str().expect("tx_hex")))
-            .unwrap_or_else(|e| panic!("{name}: the pinned bytes parse: {e}"));
+        let tx_bytes = hex_bytes(entry["tx_hex"].as_str().expect("tx_hex"));
+        let retired = RETIRED_KEYLESS_BOND_POSTS.contains(&name);
         let payloads: Vec<Vec<u8>> = entry["payloads_hex"]
             .as_array()
             .expect("payloads_hex")
@@ -326,6 +356,16 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
                 "{name} input {i}: the fixture's own hash is of its own payload"
             );
         }
+        if retired {
+            // The fixture's own consistency above still holds for these
+            // bytes; the derivation below needs a parse this crate no
+            // longer gives a keyless JoinMarket.
+            refused_as_the_retired_keyless_join_market(name, &tx_bytes);
+            retired_seen += 1;
+            continue;
+        }
+        let tx = Transaction::from_bytes(&tx_bytes)
+            .unwrap_or_else(|e| panic!("{name}: the pinned bytes parse: {e}"));
         // The derivation of record, against the specification's output:
         // the payload bytes input by input, then the hashes the production
         // callers take.
@@ -365,11 +405,19 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
         input_counts.iter().any(|(_, inputs, _)| *inputs >= 6),
         "a many-input spend"
     );
+    // *Was:* "a bond post" among the derived shapes. The fixture's two bond
+    // posts are keyless JoinMarkets and are retired above; both are still
+    // in the fixture and both were seen refused as that form.
+    assert_eq!(
+        retired_seen,
+        RETIRED_KEYLESS_BOND_POSTS.len(),
+        "each retired bond post is in the fixture and is refused as the retired form"
+    );
     assert!(
-        input_counts
+        !input_counts
             .iter()
             .any(|(name, _, _)| name.contains("bond_post")),
-        "a bond post"
+        "no bond post is derived here any more"
     );
     assert!(
         input_counts

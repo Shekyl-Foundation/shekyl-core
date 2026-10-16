@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Eight-scenario economics simulation harness for DESIGN_CONCEPTS parameter validation"
+description = "Economics simulation harness: scenario folds and instruments over the production economics crates"
 
 [dependencies]
 shekyl-economics = { path = "../shekyl-economics" }
@@ -16,11 +16,10 @@ shekyl-units = { path = "../shekyl-units" }
 # Gate-7 derived-lock model: compile-time tie to the pinned consensus
 # constants (`ARCHIVAL_BOND_FLOOR_ATOMIC`, `SETTLEMENT_EPOCH_BLOCKS`)
 # instead of re-asserting their values locally.
-# (ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
-# The emission-split epoch the validator judges a block at
-# (`EMISSION_SPLIT_EPOCH`), read rather than restated
-# (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-3).
+# The validator's medians, its volume span and the reference-block age,
+# read rather than restated (`ECONOMICS_SIM_PRODUCTION_REBASE.md` ESR-3,
+# ESR-4, ESR-6).
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # The producer's fill rule (`Fill`): how many transactions a block takes at
 # the effective median, the comparison `fill_block_template` makes, called
@@ -29,6 +28,9 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 # A4 W9 stuffer: price real transaction weights through the SAME single-sourced
 # predictor the wallet fee path uses (DQ-2G dep-don't-mirror, D-1 hoist).
 shekyl-tx-weight = { path = "../shekyl-tx-weight" }
+# The curve tree's chunk widths, which size a serve-challenge response
+# (`proxy.rs`). Already in the build through `shekyl-tx-weight`.
+shekyl-fcmp = { path = "../shekyl-fcmp" }
 # A4 tree-depth-from-n: `outputs_per_node` — the production curve-tree capacity
 # function — so the stuffer's FCMP proof cost rides real chain depth, not a
 # mirrored width product (DQ-2G).
