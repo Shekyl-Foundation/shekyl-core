@@ -528,23 +528,22 @@ foreground:
 ./bin/shekyld
 ```
 
-To list all available options, run `./bin/shekyld --help`. Options can be
-specified either on the command line or in a configuration file passed by the
-`--config-file` argument.  To specify an option in the configuration file, add
-a line with the syntax `argumentname=value`, where `argumentname` is the name
-of the argument without the leading dashes, for example, `log-level=1`.
+To list all available options, run `./bin/shekyld --help`; the same table
+is in [docs/EXECUTABLES.md](docs/EXECUTABLES.md). Options can be given on
+the command line or in a configuration file: TOML, each key an option's
+name without the leading dashes (`log-level = "info"`), read from
+`/etc/shekyl/shekyld-<network>.toml` by default or from the file
+`--config-file` names. The network is always given on the command line,
+because it chooses the file. An annotated example of every file option is
+in [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 To run in the background, use your platform's service manager (systemd,
 launchd, or Task Scheduler). The shipped systemd unit is
 `contrib/packaging/linux/shekyld.service`, which runs in its own
-`shekyl.slice` beside it (the `.deb` installs both); the configuration
-examples are under `utils/conf/`. Adapt paths and the service user to
-your deployment. The `--detach` / `--pidfile` / `--*-service` flags were
-removed in V3.1 — `shekyld` always runs in the foreground and is
-supervised externally.
-
-If you're on Mac, you may need to add the `--max-concurrency 1` option to
-shekyl-cli, and possibly shekyld, if you get crashes refreshing.
+`shekyl.slice` beside it (the `.deb` installs both). Adapt paths and the
+service user to your deployment; nothing reads the daemon's stdin unless
+`--console` is given, so a unit needs no flag for that. `shekyld` always
+runs in the foreground and is supervised externally.
 
 ## Internationalization
 
@@ -552,56 +551,42 @@ See [README.i18n.md](docs/README.i18n.md).
 
 ## Using Tor
 
-> There is a new, still experimental, [integration with Tor](docs/ANONYMITY_NETWORKS.md). The
-> feature allows connecting over IPv4 and Tor simultaneously - IPv4 is used for
-> relaying blocks and relaying transactions received by peers whereas Tor is
-> used solely for relaying transactions received over local RPC. This provides
-> privacy and better protection against surrounding node (sybil) attacks.
-
-While Shekyl is not primarily designed as a Tor-integrated stack, it can be used wrapped with torsocks by
-setting the following configuration parameters and environment variables:
-
-* `--p2p-bind-ip 127.0.0.1` on the command line or `p2p-bind-ip=127.0.0.1` in
-  the config file to disable listening for connections on external interfaces.
-* `--no-igd` on the command line or `no-igd=1` in the config file to disable IGD
-  (UPnP port forwarding negotiation), which is pointless with Tor.
-* `TORSOCKS_ALLOW_INBOUND=1` to tell torsocks to allow shekyld to bind to interfaces
-   to accept connections from the wallet. On some Linux systems, torsocks
-   allows binding to localhost by default, so setting this variable is only
-   necessary to allow binding to local LAN/VPN interfaces to allow wallets to
-   connect from remote hosts. On other systems, it may be needed for local wallets
-   as well.
-* Rely on systemd/launchd/Task Scheduler to supervise `shekyld` under
-  torsocks — `--detach` was removed in V3.1 and `shekyld` always runs in
-  the foreground. The shipped unit is `contrib/packaging/linux/shekyld.service`.
-* If you use the wallet with a Tor daemon via the loopback IP (eg, 127.0.0.1:9050),
-  then use `--untrusted-daemon` unless it is your own hidden service.
-
-Example command line to start shekyld through Tor:
+The daemon has a Tor connector of its own; nothing is wrapped in torsocks.
+It is on by default: `tor = managed` runs the bundled Tor (`tor-file`
+names the binary), and the node is reachable over Tor and clearnet both.
+To use a Tor you run instead, name its SOCKS endpoint and, to be reachable
+over Tor, your onion service and the local endpoint it forwards to:
 
 ```bash
-torsocks shekyld --p2p-bind-ip 127.0.0.1 --no-igd
+shekyld --tor operator --tor-socks 127.0.0.1:9050 \
+    --tor-onion <your-onion>.onion:11021 --tor-onion-listen 127.0.0.1:11021
 ```
+
+`--tor off` is clearnet only; `--clearnet off` is Tor only. The same rows
+go in the configuration file. The wallet reaches a daemon's RPC over an
+onion service you run in front of its loopback RPC, through `--proxy`
+(see [docs/proxies.md](docs/proxies.md)); use `--untrusted-daemon` unless
+it is your own.
 
 ### Using Tor on Tails
 
-TAILS ships with a very restrictive set of firewall rules. Therefore, you need
-to add a rule to allow this connection too, in addition to telling torsocks to
-allow inbound connections. Full example:
+TAILS ships with a very restrictive set of firewall rules, so the wallet's
+connection to the daemon's loopback RPC needs a rule of its own:
 
 ```bash
 sudo iptables -I OUTPUT 2 -p tcp -d 127.0.0.1 -m tcp --dport 11029 -j ACCEPT
-torsocks ./shekyld --p2p-bind-ip 127.0.0.1 --no-igd --rpc-bind-ip 127.0.0.1 \
+shekyld --tor operator --tor-socks 127.0.0.1:9050 \
     --data-dir /home/amnesia/Persistent/your/directory/to/the/blockchain
 ```
 
 ## Pruning
 
-Shekyl supports blockchain pruning via the `--prune-blockchain` flag. A pruned
-node can only serve part of the historical chain data to peers but is otherwise
-fully functional. Start the initial sync with `--prune-blockchain` for the
-smallest footprint, or prune an existing chain using the same flag or the
-pruning tool. Chain sizes will be established after mainnet launch.
+There is no pruning option. What a node keeps of the chain is decided by
+the chain store's retention rules, the same for every node
+([docs/design/DRS_E1_SPRUNE.md](docs/design/DRS_E1_SPRUNE.md)), not by a
+flag; a node that kept less than the rules say could not serve its peers
+or verify its own history. Chain sizes will be established after mainnet
+launch.
 
 ## Debugging
 

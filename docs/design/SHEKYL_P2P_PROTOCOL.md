@@ -1075,12 +1075,12 @@ port is now derived — announced only where a peer could reach us on it, meanin
 supports the back-ping that verifies the claim *and* we accept inbound connections at
 all. **No dedicated advertisement flag remains**, so an admission ruling has no toggle
 to interact with; it inherits a derived value rather than a configured one. Operator
-influence is not gone and should not be described as gone -- `--in-peers` feeds
-`max_in_connection_count`, so an operator still controls the outcome, but by changing the
-node's reachability rather than by asserting an answer that contradicts it.
+influence is not gone and should not be described as gone -- `clearnet-listen` decides
+whether the node accepts inbound at all, so an operator still controls the outcome, but by
+changing the node's reachability rather than by asserting an answer that contradicts it.
 
 Two consequences P2P-3 should carry rather than re-derive. An operator who wants not to
-be advertised refuses inbound (`--in-peers 0`) and the derivation follows; one who wants
+be advertised refuses inbound (`clearnet-listen none`) and the derivation follows; one who wants
 no p2p participation does not run a daemon — the posture the flag nominally served has
 no separate mechanism and needs none. `m_external_port` survives as the single
 operator-supplied value in the announcement, kept because a manual static NAT forward is
