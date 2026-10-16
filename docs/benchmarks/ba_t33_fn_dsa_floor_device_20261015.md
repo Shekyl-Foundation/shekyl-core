@@ -131,8 +131,9 @@ storage. So every measurement runs on an 8 MiB thread, and the budget under
 test is what is left after burning stack down to it: a probe finds how deep
 a frame can go, and then, from 4 KiB in 4 KiB steps, a child burns stack
 until only the budget is left and runs the operation there. The first
-budget that completes is the figure, an upper bound within one step, give
-or take a 1 KiB burn frame.
+budget that completes is the figure, good to about one step either way:
+the budgets come in 4 KiB steps, and the probe's last printed depth leaves
+some room below it that is not counted.
 
 The figure is the stack the call itself consumes below its caller. Each
 operation's inputs are made before the measuring thread starts and owned by

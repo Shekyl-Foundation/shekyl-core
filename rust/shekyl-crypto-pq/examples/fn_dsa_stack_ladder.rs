@@ -28,8 +28,10 @@
 //! below it and runs the operation there. A child that overflows aborts, so
 //! each budget is its own process; the first budget whose child exits 0 is
 //! the figure. Depths are read from the addresses of locals, which safe
-//! code may take and compare but never dereference. The figure is an upper
-//! bound on the need within one step, give or take one burn frame.
+//! code may take and compare but never dereference. A figure is good to
+//! about one step either way: the budgets come in steps, and the probe's
+//! last printed depth leaves some room below it that is not counted, so
+//! the stack actually left at a budget is a little more than the budget.
 //!
 //! The figure is the stack the call itself consumes below its caller. An
 //! operation's inputs (a key, a signature) are made before the measuring
