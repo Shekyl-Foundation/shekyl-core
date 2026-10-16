@@ -70,10 +70,11 @@ use zeroize::Zeroizing;
 
 use crate::connector::{
     AltBlocksHeld, Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector, ConnectorArgs,
-    Digest, HashAt, OfferAlt, Offered, PlannedBlock, Reorganize, Rewind, Rewound, RootAt, RunFault,
-    SwitchPlan, Switched, TableRows, TemplateFacts,
+    Digest, HashAt, HeaderAt, OfferAlt, Offered, PlannedBlock, Reorganize, Rewind, Rewound, RootAt,
+    RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
 };
 use crate::schedule::ChainRules;
+use crate::target::TargetLedger;
 use crate::test_support::{cleanup, open_store, open_store_under, tmp};
 
 /// The seconds between the driver's blocks — the DAA target, so a
@@ -271,6 +272,9 @@ pub struct Scenario<P> {
     params: EconomicParams,
     rules: ChainRules,
     next_tx_secret: u64,
+    /// The headers the next target claim reads, extended as each block
+    /// connects — the pipeline's ledger, filled the same way (`target`).
+    targets: TargetLedger,
 }
 
 /// The rules every scenario runs under: regtest at fixed difficulty one,
@@ -342,6 +346,7 @@ where
             params: EconomicParams::default(),
             rules,
             next_tx_secret: 1,
+            targets: TargetLedger::new(),
         }
     }
 
@@ -403,12 +408,33 @@ where
                 .expect("the seed height is below the tip"),
         };
 
+        // The target the honest producer claims: the validator's derivation
+        // over the headers below `height`, the store answering what the
+        // ledger lacks (`target` module docs).
+        let rule_set = self.rules.in_force(height);
+        for at in self.targets.missing_for(height) {
+            let record = self
+                .connector
+                .ask(HeaderAt { height: at })
+                .await
+                .map_err(handler_error)
+                .map_err(StepOutcome::Connector)?
+                .expect("the window is below the tip");
+            self.targets.record(at, record);
+        }
+        let target = self
+            .targets
+            .claim(height, &rule_set)
+            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"))
+            .map_err(StepOutcome::Refused)?;
+
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
         let formed = form(
             candidate,
-            &self.rules.in_force(height),
+            &rule_set,
             &self.substrate,
             seed,
+            target,
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault");
@@ -423,6 +449,13 @@ where
         if let Some((_, refused)) = applied.refused {
             return Err(StepOutcome::Refused(refused));
         }
+        // Connected: its header joins the window the next claim reads. A
+        // refused block never does, so a test that mines again after a
+        // refusal claims against the chain, not the refused block.
+        self.targets
+            .extend(height, &template.block, target)
+            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
+        self.targets.forget_below_window_of(height);
         let (_, hash) = applied.connected[0];
         let judged_by = CenRow::ALL
             .iter()
@@ -605,6 +638,7 @@ where
 
     /// Pop the chain back to `to`.
     pub async fn rewind_to(&mut self, to: BlockHeight) -> Result<Rewound, RunFault> {
+        self.targets.rewind_to(to);
         self.connector
             .ask(Rewind { to })
             .await

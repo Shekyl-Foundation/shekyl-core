@@ -168,6 +168,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::H16,
             CenRow::H17,
             CenRow::H18,
+            // H19 (2026-10-15): the layout half in `tx_form`, the verification
+            // half the block fold that records it (`rules::range_proof`).
+            CenRow::H19,
             CenRow::H20,
             CenRow::H21,
             CenRow::H22,

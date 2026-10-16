@@ -72,6 +72,7 @@ use shekyl_chain_rules::Candidate;
 use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
 
+mod h19_cost;
 mod retired_keyless_join;
 pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
 

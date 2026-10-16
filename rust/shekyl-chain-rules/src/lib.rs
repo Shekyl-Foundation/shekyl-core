@@ -80,7 +80,7 @@
 //! # Consumers
 //!
 //! * **Block connect** (S-CHAIN-W): [`form`] outside the write transaction
-//!   — the ingest driver supplies the [`Substrate`] and its seed and
+//!   — the ingest driver supplies the [`Substrate`] and its seed, target and
 //!   rule-set claims — then [`validate`] inside it, over the store's
 //!   projected `ChainView<'id>`; the `ChainValid<'id, V>` it mints is the
 //!   only thing `connect` accepts, branded with both the batch `'id` and
@@ -91,7 +91,11 @@
 //! * **Pool admission** (DRS-E5): the *same* [`tx_form`] / [`tx_against`]
 //!   over a `PoolView` the pool defines by decorating a `ChainView` with its
 //!   unconfirmed set. There is no second validator
-//!   (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §9.1).
+//!   (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §9.1). The one block-scoped row
+//!   a transaction must also pass is CEN-H19's range proof, which
+//!   [`validate`] folds over the block; the pool verifies it as a batch of
+//!   one through the same body (`shekyl_bulletproofs::verify_batch`), as the
+//!   submit engine does.
 //! * **Replay** (DRS-E2): every C++-accepted block through [`validate`]. A
 //!   disagreement is routed through `shekyl_chain_store::conformance::grade`
 //!   keyed by [`Row::as_str`] — where a Rust refusal of a canonical block on
@@ -187,10 +191,11 @@ pub use rules::block_weight::{
     Weights,
 };
 pub use rules::body::ArchivalKey;
-pub use rules::difficulty::Target;
+pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
 };
+pub use rules::range_proof::{BatchOutcome, ListedProofs};
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;

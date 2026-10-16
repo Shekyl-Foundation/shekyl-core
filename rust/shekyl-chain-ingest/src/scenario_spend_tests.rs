@@ -40,12 +40,15 @@ const AT: u64 = FIRST_SPEND_HEIGHT + 1;
 /// The rows a block of real spends is judged under beyond the coinbase-only
 /// set (`scenario_tests::JUDGES_EVERY_BLOCK`): the listed form's H4, the
 /// per-slot sequence `tx_against` runs on a spend (I7, I10–I13, I15, I17,
-/// I18), the chain-arm G1 before the slot loop and L1 after it. I13 and
-/// I15 are the rows the flip of `CHAIN_RULES_SLICE_6.md` §5 row 6 turned
-/// on (2026-10-08): a real spend's declared depth admitted at its
-/// reference, and its membership proof verified there.
-const JUDGES_A_SPENDING_BLOCK: [CenRow; 11] = [
+/// I18), the chain-arm G1 before the slot loop, and after it the block's
+/// range-proof batch (H19's verification half) and L1. I13 and I15 are the
+/// rows the flip of `CHAIN_RULES_SLICE_6.md` §5 row 6 turned on
+/// (2026-10-08): a real spend's declared depth admitted at its reference,
+/// and its membership proof verified there. H19 records once the batch over
+/// both spends' proofs has decided.
+const JUDGES_A_SPENDING_BLOCK: [CenRow; 12] = [
     CenRow::H4,
+    CenRow::H19,
     CenRow::G1,
     CenRow::I7,
     CenRow::I10,
@@ -192,6 +195,69 @@ async fn i7_refuses_a_respend_at_the_slot_behind_a_fresh_spend() {
         scenario.mine_listing(vec![fresh, respend]).await,
         CenRow::I7,
         SECOND_SLOT_FIRST_INPUT,
+    );
+    scenario.close().await;
+}
+
+/// CEN-H19's verification half on the production stack (slice 6 Q9's
+/// fixture): a driven block listing two wallet-built spends, the second's
+/// range proof one bit off what its prover made, is refused on H19 at that
+/// transaction; the same two spends unflipped connect, with H19 recorded —
+/// the positive control. The flip is made before the wallet signs
+/// (`Spender::spend_coinbase_breaking_range_proof`), so every other row
+/// passes the body: flipped after, it is CEN-I18's refusal in the slot loop
+/// and never reaches the batch.
+#[tokio::test]
+async fn h19_refuses_a_flipped_range_proof_and_the_unflipped_block_connects() {
+    let (mut scenario, mined, a, b) = matured("spend-h19-flip").await;
+    let flipped = Spender::over(&mined).spend_coinbase_breaking_range_proof(
+        scenario.wallet(),
+        h(1),
+        h(AT),
+        Family::Main.fee(),
+    );
+    refused_at(
+        scenario.mine_listing(vec![a.clone(), flipped]).await,
+        CenRow::H19,
+        Locus::Tx {
+            slot: TxSlot::Listed(1),
+        },
+    );
+    let two = scenario
+        .mine_listing(vec![a, b])
+        .await
+        .unwrap_or_else(|outcome| panic!("the unflipped spends connect: {outcome}"));
+    assert!(
+        two.judged_by.contains(&CenRow::H19),
+        "the batch decided the unflipped block"
+    );
+    scenario.close().await;
+}
+
+/// The locus: one bad proof among good ones, in the middle of three listed
+/// spends, and the refusal names that transaction — the batch fails, and
+/// each proof re-verified alone under its own derived seed finds it.
+#[tokio::test]
+async fn h19_names_the_bad_proof_among_good_ones() {
+    let mut scenario = Scenario::open("spend-h19-locus");
+    let mined = scenario.mine(AT + 1).await;
+    let at = AT + 1;
+    let listed = {
+        let spender = Spender::over(&mined);
+        let wallet = scenario.wallet();
+        let fee = Family::Main.fee();
+        vec![
+            spender.spend_coinbase(wallet, h(0), h(at), fee),
+            spender.spend_coinbase_breaking_range_proof(wallet, h(1), h(at), fee),
+            spender.spend_coinbase(wallet, h(2), h(at), fee),
+        ]
+    };
+    refused_at(
+        scenario.mine_listing(listed).await,
+        CenRow::H19,
+        Locus::Tx {
+            slot: TxSlot::Listed(1),
+        },
     );
     scenario.close().await;
 }

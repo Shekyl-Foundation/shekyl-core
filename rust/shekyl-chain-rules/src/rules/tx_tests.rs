@@ -14,11 +14,10 @@ use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
     candidate_on, coinbase, coinbase_extra, listed, point, pqc_extra, serve_credit_only, G, TWO_G,
 };
-use crate::harness::{assert_refused, credited_to_this_falsifier, formed_on, judged, MockChain};
+use crate::harness::{assert_refused, credited_to_this_falsifier, judge_on, MockChain};
 use crate::rule_set::RuleSet;
 use crate::rules::TxKind;
-use crate::trust::Trust;
-use crate::validate::{tx_form, validate};
+use crate::validate::tx_form;
 use crate::verdict::{Locus, TxSlot};
 use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
@@ -38,25 +37,19 @@ pub(crate) fn refused_lone(tx: &Transaction, row: CenRow) {
     );
 }
 
-/// The same transaction listed first in a block is refused by `validate` on
-/// the same row at `Listed(0)` — one function, two sites.
+/// The same transaction listed first in a block is refused on the same row
+/// at `Listed(0)` — one function, two sites. Through both stages: `form`
+/// runs `tx_form` at every slot, so a block-level refusal of a stateless
+/// row arrives from `form`.
 pub(crate) fn refused_listed(tx: &Transaction, row: CenRow) {
     let chain = MockChain::default();
-    chain.with_view(|view| {
-        let formed = formed_on(&chain, candidate_on(&chain, vec![tx.clone()]));
-        assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
-            row,
-            Locus::Tx {
-                slot: TxSlot::Listed(0),
-            },
-        );
-    });
+    assert_refused(
+        judge_on(&chain, candidate_on(&chain, vec![tx.clone()])),
+        row,
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
+    );
 }
 
 // ---- the class ----------------------------------------------------------
@@ -833,11 +826,12 @@ fn h19_the_canonical_layout_is_one_proof_sized_to_the_outputs() {
 }
 
 /// Through `tx_form`: a spend whose proof is sized for two outputs but
-/// carries one is refused under H19 — a refusal on a row the registry still
-/// holds `pending` (its verification half is slice 6's), so the row is not
-/// in any passing coverage.
+/// carries one is refused under H19, and a canonical layout passes without
+/// recording the row — `tx_form` judges the layout alone; the row is
+/// recorded by `validate`'s fold once the block's batch has decided
+/// (`rules::range_proof`).
 #[test]
-fn h19_a_non_canonical_layout_is_refused_and_the_row_is_not_yet_recorded() {
+fn h19_a_non_canonical_layout_is_refused_and_the_layout_alone_does_not_record() {
     use crate::harness::fixture::bp_plus_layout_for;
     let mut tx = listed(KI);
     if let Ct::Fcmp {
