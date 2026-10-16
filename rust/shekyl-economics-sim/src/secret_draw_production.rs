@@ -61,7 +61,7 @@ use shekyl_archival_retention::{
     select_draw, CHALLENGE_RESPONSE_BLOCKS, DRAW_ATTEMPTS, SETTLEMENT_EPOCH_BLOCKS,
 };
 
-use crate::challenge_coverage::SplitMix64;
+use crate::rng::SplitMix64;
 use crate::secret_draw::{
     self, capped_at, count_at, BAR_DROPOUT_PERMILLE, COUNTED_DRAWS, EVIDENCE_DROPOUT_PERMILLE,
     EVIDENCE_PAIRS, SEEDS, SHORT_BAR_PERMILLE,

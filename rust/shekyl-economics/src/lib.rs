@@ -53,7 +53,6 @@ pub use escalation::{
 };
 pub use fee::{
     checked_corrected_fee_ladder, checked_relay_fee_floor, corrected_fee_ladder, fee_correction,
-    fee_correction_quantized, hysteresis_fold, hysteresis_settled, hysteresis_step,
     quantize_pow2_ceil, relay_fee_floor, relay_floor_admits, round_money_up_2, FeeCorrection,
     FeeLadder, EMISSION_CLAIM_FEE_FLOOR, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,
     RELAY_FLOOR_WINDOW,

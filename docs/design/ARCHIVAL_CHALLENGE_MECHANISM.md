@@ -55,7 +55,9 @@ scheme specified, mitigation moved to the Tor layer (full vanguards +
 Bandguards re-derive + fetch rate-limiting); guard-holding active
 confirmation recorded as accepted residual; the circuit-construction
 oracle named as the real exposure. TJ-H no longer gates the round.
-**Revised 2026-08-10: fork 1 RULED — exact-min urn**, tail accepted with
+**Revised 2026-08-10: fork 1 RULED — exact-min urn** (superseded by the
+secret per-block draw, [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)
+R1; the urn's code was deleted 2026-10-10), tail accepted with
 the arithmetic on the record (both curves at 10⁻⁷ and below against the
 outer window); band and adaptive band not built; prunability merits
 answered at source; the capped-regime figure (72 % unobservable)
@@ -762,8 +764,8 @@ the round kept trying to add forensics underneath it.
    the numbers below: min issued = 2 in every run); it binds only in
    budget-short regimes, where it is the correct behaviour.
    **Wave-tail numbers (2026-08-10; scratchpad sim, 3 seeds at genesis;
-   the executable derivation lands in `shekyl-economics-sim` with the
-   ruling per the derive-don't-hardcode pattern):**
+   the executable derivation was `challenge_coverage.rs` in
+   `shekyl-economics-sim`, last at `4de99d1e1b`):**
    - **Exact-min exposure has a closed form and it is scale-invariant:**
      exposure(τ) = k_avg·τ/D = **3τ/SEB** (λ_target = 3) — 0.75 % of
      draws at ≤ 25 blocks notice, 3.0 % at ≤ 100, 6.0 % at ≤ 200;
@@ -802,7 +804,8 @@ the round kept trying to add forensics underneath it.
      anonymity only where the exposure lives; m* becomes the knob that
      trades the two curves above against each other.
    **RULED (2026-08-10): exact-min urn. The tail is accepted, with the
-   arithmetic on the record.** Both curves live at 10⁻⁷ and below:
+   arithmetic on the record.** Superseded by the secret per-block draw
+   ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) R1). Both curves live at 10⁻⁷ and below:
    - *Exposure buys the adversary nothing.* For guard discovery, zero —
      shard pulls are open and unauthenticated, so the circuit-
      construction oracle is available 24/7 on demand; knowing when a
