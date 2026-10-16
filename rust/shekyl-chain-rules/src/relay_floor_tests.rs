@@ -28,20 +28,21 @@ fn h(n: u64) -> BlockHeight {
 
 /// The planted root after the block at `height`; the fixture keys roots
 /// by a byte, and these chains are a dozen blocks long.
-fn root_after(height: u64) -> shekyl_types::CurveTreeRoot {
-    root(u8::try_from(height + 1).expect("a dozen-block fixture"))
+fn root_after(height: BlockHeight) -> shekyl_types::CurveTreeRoot {
+    root(u8::try_from(height.to_raw() + 1).expect("a dozen-block fixture"))
 }
 
 /// A recorded block at `height` carrying an accumulator and a listed
 /// prefix sum: `coins` per block cumulatively, `txs` per block
 /// cumulatively, a distinct identity per height.
-fn block(height: u64, coins_per_block: u64, txs_per_block: u64) -> RecordedBlock {
+fn block(height: BlockHeight, coins_per_block: u64, txs_per_block: u64) -> RecordedBlock {
+    let n = height.to_raw() + 1;
     RecordedBlock {
-        coins_generated: AtomicUnits::from_raw((height + 1) * coins_per_block),
-        cumulative_tx_count: (height + 1) * txs_per_block,
+        coins_generated: AtomicUnits::from_raw(n * coins_per_block),
+        cumulative_tx_count: n * txs_per_block,
         ..recorded_with_work(
-            1_000 + height,
-            CumulativeDifficulty::from_raw(u128::from(height + 1)),
+            1_000 + height.to_raw(),
+            CumulativeDifficulty::from_raw(u128::from(n)),
         )
     }
 }
@@ -50,7 +51,7 @@ fn block(height: u64, coins_per_block: u64, txs_per_block: u64) -> RecordedBlock
 /// accumulator step per block.
 fn chain(len: u64, txs: u64) -> MockChain {
     let mut chain = MockChain::default();
-    for height in 0..len {
+    for height in (0..len).map(h) {
         chain = chain.push(block(height, 1_000_000_000, txs), root_after(height));
     }
     chain
@@ -58,29 +59,22 @@ fn chain(len: u64, txs: u64) -> MockChain {
 
 /// The owner fed from the operands read one by one — the independent
 /// composition the window is held to.
-fn owner_at(chain: &MockChain, height: u64, median: u64) -> u64 {
+fn owner_at(chain: &MockChain, height: BlockHeight, median: u64) -> u64 {
     let params = economics();
+    let parent = height.to_raw().checked_sub(1).map(h);
     chain.with_view(|view| {
-        let parent_coins = if height == 0 {
-            0
-        } else {
-            match view.block_at(h(height - 1)).expect("infallible") {
-                AtHeight::Recorded(b) => b.coins_generated.to_raw(),
-                AtHeight::AboveTip => panic!("parent recorded"),
-            }
-        };
-        let burned = if height == 0 {
-            0
-        } else {
-            match view.burned_through(h(height - 1)).expect("infallible") {
-                AtHeight::Recorded(b) => b.to_raw(),
-                AtHeight::AboveTip => panic!("parent recorded"),
-            }
-        };
-        let tx_volume = crate::tx_volume_window(&view, h(height)).expect("window reads");
+        let parent_coins = parent.map_or(0, |p| match view.block_at(p).expect("infallible") {
+            AtHeight::Recorded(b) => b.coins_generated.to_raw(),
+            AtHeight::AboveTip => panic!("parent recorded"),
+        });
+        let burned = parent.map_or(0, |p| match view.burned_through(p).expect("infallible") {
+            AtHeight::Recorded(b) => b.to_raw(),
+            AtHeight::AboveTip => panic!("parent recorded"),
+        });
+        let tx_volume = crate::tx_volume_window(&view, height).expect("window reads");
         relay_floor_from(
             FeeOperands {
-                height,
+                height: height.to_raw(),
                 parent_coins_generated: parent_coins,
                 supply: CirculatingSupply::derive(
                     AtomicUnits::from_raw(parent_coins),
@@ -110,11 +104,11 @@ fn the_window_is_the_owner_at_each_heights_operands() {
     };
     assert_eq!(window.len(), RELAY_FLOOR_WINDOW);
     for (i, floor) in window.iter().enumerate() {
-        let height = connecting - RELAY_FLOOR_LOOKBACK as u64 + i as u64;
+        let height = h(connecting - RELAY_FLOOR_LOOKBACK as u64 + i as u64);
         assert_eq!(
             *floor,
             owner_at(&chain, height, FULL_REWARD_ZONE),
-            "floor at height {height}"
+            "floor at height {height:?}"
         );
     }
     // The floors are not all equal: the accumulator and the window move
@@ -146,7 +140,7 @@ fn a_short_chain_has_a_short_window_and_genesis_prices_on_nothing() {
         empty.with_view(|view| relay_floor_window(&view, h(0))),
         Ok(AtHeight::Recorded(vec![owner_at(
             &empty,
-            0,
+            h(0),
             FULL_REWARD_ZONE
         )]))
     );
@@ -172,20 +166,24 @@ fn a_short_chain_has_a_short_window_and_genesis_prices_on_nothing() {
 fn a_recorded_height_reads_its_stored_median() {
     let plain = chain(8, 40);
     let planted = chain(8, 40).with_median_at(h(6), LongTermWeight::from_raw(2 * FULL_REWARD_ZONE));
-    let at = |chain: &MockChain, height: u64| {
+    let at = |chain: &MockChain, height: BlockHeight| {
         chain
-            .with_view(|view| relay_floor_at(&view, h(height)))
+            .with_view(|view| relay_floor_at(&view, height))
             .expect("the view answers")
     };
-    assert_ne!(at(&plain, 6), at(&planted, 6), "the row is the operand");
-    assert_eq!(
-        at(&planted, 6),
-        AtHeight::Recorded(owner_at(&planted, 6, 2 * FULL_REWARD_ZONE))
+    assert_ne!(
+        at(&plain, h(6)),
+        at(&planted, h(6)),
+        "the row is the operand"
     );
-    assert_eq!(at(&plain, 7), at(&planted, 7));
     assert_eq!(
-        at(&plain, 8),
-        at(&planted, 8),
+        at(&planted, h(6)),
+        AtHeight::Recorded(owner_at(&planted, h(6), 2 * FULL_REWARD_ZONE))
+    );
+    assert_eq!(at(&plain, h(7)), at(&planted, h(7)));
+    assert_eq!(
+        at(&plain, h(8)),
+        at(&planted, h(8)),
         "the connecting height derives"
     );
 }
@@ -201,25 +199,25 @@ fn a_burn_above_the_parent_does_not_reach_a_recorded_heights_floor() {
     let late = chain(8, 200)
         .with_total_burned(AtomicUnits::from_raw(300_000_000))
         .with_burn_at(h(7), AtomicUnits::from_raw(300_000_000));
-    let at = |chain: &MockChain, height: u64| {
+    let at = |chain: &MockChain, height: BlockHeight| {
         chain
-            .with_view(|view| fee_operands_at(&view, h(height)))
+            .with_view(|view| fee_operands_at(&view, height))
             .expect("the view answers")
     };
-    let AtHeight::Recorded(base_6) = at(&base, 6) else {
+    let AtHeight::Recorded(base_6) = at(&base, h(6)) else {
         panic!()
     };
-    let AtHeight::Recorded(late_6) = at(&late, 6) else {
+    let AtHeight::Recorded(late_6) = at(&late, h(6)) else {
         panic!()
     };
     assert!(
         late_6.supply > base_6.supply,
         "nothing had burned through height 5 on the late chain"
     );
-    let AtHeight::Recorded(base_8) = at(&base, 8) else {
+    let AtHeight::Recorded(base_8) = at(&base, h(8)) else {
         panic!()
     };
-    let AtHeight::Recorded(late_8) = at(&late, 8) else {
+    let AtHeight::Recorded(late_8) = at(&late, h(8)) else {
         panic!()
     };
     assert_eq!(
@@ -251,31 +249,32 @@ fn the_window_on_a_forked_view_yields_the_forks_floors() {
     let fork_at = 6u64;
     let mut quiet = MockChain::default();
     let mut busy = MockChain::default();
-    for height in 0..fork_at {
+    for height in (0..fork_at).map(h) {
         quiet = quiet.push(block(height, 1_000_000_000, 40), root_after(height));
         busy = busy.push(block(height, 1_000_000_000, 40), root_after(height));
     }
-    for height in fork_at..12 {
+    for past in 1..=(12 - fork_at) {
+        let height = h(fork_at + past - 1);
         // The forks differ in what they list: one keeps 40 a block, the
         // other 400 — a different window, a different `M_r`, `b` and `C`.
         quiet = quiet.push(
             RecordedBlock {
-                cumulative_tx_count: fork_at * 40 + (height - fork_at + 1) * 40,
+                cumulative_tx_count: fork_at * 40 + past * 40,
                 ..block(height, 1_000_000_000, 40)
             },
             root_after(height),
         );
         busy = busy.push(
             RecordedBlock {
-                cumulative_tx_count: fork_at * 40 + (height - fork_at + 1) * 400,
+                cumulative_tx_count: fork_at * 40 + past * 400,
                 ..block(height, 1_000_000_000, 40)
             },
             root_after(height),
         );
     }
-    let floors = |chain: &MockChain, connecting: u64| -> Vec<u64> {
+    let floors = |chain: &MockChain, connecting: BlockHeight| -> Vec<u64> {
         match chain
-            .with_view(|view| relay_floor_window(&view, h(connecting)))
+            .with_view(|view| relay_floor_window(&view, connecting))
             .expect("the view answers")
         {
             AtHeight::Recorded(w) => w,
@@ -283,13 +282,13 @@ fn the_window_on_a_forked_view_yields_the_forks_floors() {
         }
     };
     // Below the fork the window is shared.
-    assert_eq!(floors(&quiet, fork_at), floors(&busy, fork_at));
+    assert_eq!(floors(&quiet, h(fork_at)), floors(&busy, h(fork_at)));
     // Past it each fork prices its own history.
-    let quiet_tip = floors(&quiet, 12);
-    let busy_tip = floors(&busy, 12);
+    let quiet_tip = floors(&quiet, h(12));
+    let busy_tip = floors(&busy, h(12));
     assert_ne!(quiet_tip, busy_tip);
     for (i, floor) in busy_tip.iter().enumerate() {
-        let height = 12 - RELAY_FLOOR_LOOKBACK as u64 + i as u64;
+        let height = h(12 - RELAY_FLOOR_LOOKBACK as u64 + i as u64);
         assert_eq!(*floor, owner_at(&busy, height, FULL_REWARD_ZONE));
         assert_eq!(quiet_tip[i], owner_at(&quiet, height, FULL_REWARD_ZONE));
     }

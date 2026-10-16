@@ -286,7 +286,8 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + std::fmt::Debug + 'static,
 {
-    let (report, path, _) = replay_keeping_store(dir, manifest, substrate, policy).await;
+    let (report, path, _) =
+        replay_keeping_store(dir, manifest, substrate, policy, &policy_tag(policy)).await;
     cleanup(&path);
     report
 }
@@ -294,11 +295,14 @@ where
 /// [`replay_under`] without the cleanup: the replayed store stays at the
 /// returned path, under the returned rules, for a test that reads the
 /// chain the run connected (`relay_floor.rs`). The caller removes it.
+/// `tag` names the store's path: tests run concurrently in one process,
+/// so two replays of one shape must not share a path.
 pub(crate) async fn replay_keeping_store<S>(
     dir: &Path,
     manifest: &Manifest,
     substrate: Arc<S>,
     policy: ApplyPolicy,
+    tag: &str,
 ) -> (Result<RunReport, String>, PathBuf, ChainRules)
 where
     S: Substrate + Send + Sync + 'static,
@@ -327,11 +331,7 @@ where
         ),
         schedule,
     };
-    let path = tmp(&format!(
-        "vectors-{}-{}",
-        manifest.shape,
-        policy_tag(policy)
-    ));
+    let path = tmp(&format!("vectors-{}-{tag}", manifest.shape));
     // The store runs the pair the chain was mined under, read off the same
     // rule set `connect` judges by — not the production epoch the other
     // tests' stores pin, which `connect` would refuse at block 0.

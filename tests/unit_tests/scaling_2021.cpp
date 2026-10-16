@@ -213,7 +213,7 @@ TEST(fee_2021_scaling, wallet_fee_estimate)
   // FL round §5.2 shape (FL-R17 signed): three tiers, Fh main arm
   // UNCONDITIONAL. C = SCALE is the neutral correction.
   //
-  // Values moved with FL-R20/FL-R21: round_money_up_2 is off the served path,
+  // Values moved with FL-R20/FL-R21: no rounding step on the served path,
   // so each rung is the arithmetic's own answer rather than that answer
   // rounded up to two significant digits, and standard is 4x economy exactly.
 

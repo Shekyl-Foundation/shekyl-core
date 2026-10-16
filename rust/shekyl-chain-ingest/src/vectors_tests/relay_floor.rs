@@ -47,8 +47,14 @@ async fn the_window_off_the_store_is_the_owner_over_its_rows() {
     let substrate = mock_with_the_real_clock();
     let mut compared = 0usize;
     for (dir, manifest) in captured_chains() {
-        let (report, path, rules) =
-            replay_keeping_store(&dir, &manifest, Arc::clone(&substrate), ApplyPolicy::Full).await;
+        let (report, path, rules) = replay_keeping_store(
+            &dir,
+            &manifest,
+            Arc::clone(&substrate),
+            ApplyPolicy::Full,
+            "relay-floor",
+        )
+        .await;
         report
             .unwrap_or_else(|e| panic!("{}: the captured chain must replay: {e}", manifest.shape));
         let store = open_store_under(&path, &rules.in_force(h(0)), ApplyPolicy::Full);
@@ -58,21 +64,20 @@ async fn the_window_off_the_store_is_the_owner_over_its_rows() {
             .expect("tip")
             .recorded
             .unwrap_or_else(|| panic!("{}: nothing connected", manifest.shape))
-            .height
-            .to_raw();
+            .height;
 
         // The rows, read once, independently of the view: per height the
         // accumulator, the listed prefix sum, the stored median, the two
         // weights and the block's own burn.
-        let mut infos = Vec::with_capacity(usize::try_from(tip + 1).expect("short"));
+        let mut infos = Vec::with_capacity(usize::try_from(tip.to_raw() + 1).expect("short"));
         let mut burned_through = Vec::with_capacity(infos.capacity());
         let mut fold = 0u64;
-        for height in 0..=tip {
-            let AtHeight::Recorded(info) = snap.block_info(h(height)).expect("row") else {
-                panic!("{}: block_info[{height}] below the tip", manifest.shape);
+        for height in (0..=tip.to_raw()).map(h) {
+            let AtHeight::Recorded(info) = snap.block_info(height).expect("row") else {
+                panic!("{}: block_info[{height:?}] below the tip", manifest.shape);
             };
-            let AtHeight::Recorded(burn) = snap.block_burn(h(height)).expect("row") else {
-                panic!("{}: block_burn[{height}] below the tip", manifest.shape);
+            let AtHeight::Recorded(burn) = snap.block_burn(height).expect("row") else {
+                panic!("{}: block_burn[{height:?}] below the tip", manifest.shape);
             };
             fold = fold.checked_add(burn.to_raw()).expect("fits");
             infos.push(info);
@@ -92,18 +97,18 @@ async fn the_window_off_the_store_is_the_owner_over_its_rows() {
             })
             .collect();
 
-        let owner_at = |height: u64| -> u64 {
-            let at = |height: u64| usize::try_from(height).expect("short");
-            let (parent_coins, burned) = match height.checked_sub(1) {
+        let at = |height: BlockHeight| usize::try_from(height.to_raw()).expect("short");
+        let owner_at = |height: BlockHeight| -> u64 {
+            let (parent_coins, burned) = match height.to_raw().checked_sub(1).map(h) {
                 None => (0, 0),
                 Some(parent) => (
                     infos[at(parent)].coins_generated.to_raw(),
                     burned_through[at(parent)],
                 ),
             };
-            let span = tx_volume_span(h(height));
+            let span = tx_volume_span(height);
             let sum_at = |at_height: Option<BlockHeight>| {
-                at_height.map_or(0, |b| infos[at(b.to_raw())].cumulative_tx_count)
+                at_height.map_or(0, |b| infos[at(b)].cumulative_tx_count)
             };
             let tx_volume = span
                 .volume(sum_at(span.upper), sum_at(span.lower))
@@ -117,7 +122,7 @@ async fn the_window_off_the_store_is_the_owner_over_its_rows() {
             };
             relay_floor_from(
                 FeeOperands {
-                    height,
+                    height: height.to_raw(),
                     parent_coins_generated: parent_coins,
                     supply: CirculatingSupply::derive(
                         AtomicUnits::from_raw(parent_coins),
@@ -132,27 +137,32 @@ async fn the_window_off_the_store_is_the_owner_over_its_rows() {
             .expect("priced")
         };
 
-        for connecting in 0..=tip + 1 {
+        for connecting in (0..=tip.to_raw() + 1).map(h) {
             let window: Result<AtHeight<Vec<u64>>, StoreError> = store.write(|batch| {
                 let view = batch.chain_view();
-                relay_floor_window(&view, h(connecting)).map_err(|e| match e {
+                relay_floor_window(&view, connecting).map_err(|e| match e {
                     shekyl_chain_rules::ViewRead::View(f) => f,
                     shekyl_chain_rules::ViewRead::Corrupt(c) => {
-                        panic!("{}: corrupt at {connecting}: {c:?}", manifest.shape)
+                        panic!("{}: corrupt at {connecting:?}: {c:?}", manifest.shape)
                     }
                 })
             });
             let AtHeight::Recorded(window) = window.expect("the view answers") else {
                 panic!(
-                    "{}: {connecting} is at most the connecting height",
+                    "{}: {connecting:?} is at most the connecting height",
                     manifest.shape
                 );
             };
-            let oldest = connecting.saturating_sub(RELAY_FLOOR_LOOKBACK as u64);
-            let expected: Vec<u64> = (oldest..=connecting).map(owner_at).collect();
+            let oldest = connecting
+                .to_raw()
+                .saturating_sub(RELAY_FLOOR_LOOKBACK as u64);
+            let expected: Vec<u64> = (oldest..=connecting.to_raw())
+                .map(h)
+                .map(owner_at)
+                .collect();
             assert_eq!(
                 window, expected,
-                "{}: the window at {connecting} is not the owner over the rows",
+                "{}: the window at {connecting:?} is not the owner over the rows",
                 manifest.shape
             );
             compared += window.len();

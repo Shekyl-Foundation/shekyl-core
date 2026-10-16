@@ -371,7 +371,7 @@ mod tests {
         // These MIRROR that file's rows, so they move when it moves — which
         // is the only thing that makes a mirrored constant a cross-check
         // rather than a second copy free to drift. They moved with FL-R21
-        // (no `round_money_up_2` on the served path, `standard` = 4F exactly).
+        // (no rounding step on the served path, `standard` = 4F exactly).
         ValidatedFeeEstimates::try_new(snapshot(333, 1332, 66_666))
             .expect("10 SKL / 300k-zone Fh=66666 is 200× economy and must pass");
         ValidatedFeeEstimates::try_new(snapshot(13, 52, 13_333))
