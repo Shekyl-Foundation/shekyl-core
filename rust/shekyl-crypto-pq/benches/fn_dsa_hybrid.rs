@@ -18,12 +18,15 @@
 //! outside the timed region.
 //!
 //! `fn_dsa_hybrid_persona_slot_derivation` is one persona slot's whole key
-//! derivation, of which the receipt key's generation is part (`FND-12`).
+//! derivation, and `fn_dsa_hybrid_persona_receipt_keygen` the receipt key's
+//! generation inside it, from that slot's own seeds (`FND-12`).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
-use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
+use shekyl_crypto_pq::archival_p::{
+    derive_archival_p_keys, derive_p_receipt_ed_seed, derive_p_receipt_fn_dsa_seed,
+};
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSecretKey, FnDsaHybridSignature, FnDsaHybridSigner,
     HybridEd25519FnDsa,
@@ -119,21 +122,55 @@ fn bench_keygen(c: &mut Criterion) {
     });
 }
 
+/// The persona whose slot the next two arms derive: mainnet, BIP-39, slot 0.
+const PERSONA_MASTER: [u8; MASTER_SEED_BYTES] = [0x33; MASTER_SEED_BYTES];
+const PERSONA_NETWORK: DerivationNetwork = DerivationNetwork::Mainnet;
+const PERSONA_FORMAT: SeedFormat = SeedFormat::Bip39;
+const PERSONA_SLOT: u32 = 0;
+
 /// One persona slot's whole key derivation, the unit engine assembly pays
-/// per held slot (`FND-12`). Beside `fn_dsa_hybrid_keygen_from_seeds` it
-/// gives the receipt key's share of a slot: the rest is the ML-KEM-768 and
-/// two ML-DSA-65 key generations and the HKDF expands.
+/// per held slot (`FND-12`, `FND-25`). Inside it: the HKDF expands; the
+/// Ed25519 spend and view scalar multiplications and the X25519 conversion;
+/// the ML-KEM-768 key generation; the SLH-DSA-192s message-signing key
+/// generation; two Ed25519 + ML-DSA-65 key generations (identity and bond
+/// spend); and the receipt key's Ed25519 + FN-DSA-1024 key generation.
 fn bench_persona_slot(c: &mut Criterion) {
-    const MASTER: [u8; MASTER_SEED_BYTES] = [0x33; MASTER_SEED_BYTES];
     c.bench_function("fn_dsa_hybrid_persona_slot_derivation", |b| {
         b.iter(|| {
             derive_archival_p_keys(
-                black_box(&MASTER),
-                DerivationNetwork::Mainnet,
-                SeedFormat::Bip39,
-                black_box(0),
+                black_box(&PERSONA_MASTER),
+                PERSONA_NETWORK,
+                PERSONA_FORMAT,
+                black_box(PERSONA_SLOT),
             )
             .expect("persona derivation")
+        })
+    });
+}
+
+/// The receipt key's generation inside that same slot: the scheme's seeded
+/// key generation from the two seeds `derive_archival_p_keys` derives for
+/// this persona. FN-DSA key generation draws candidates until one is
+/// usable, so its time depends on the seed; the share of a slot is read
+/// from this arm and the persona arm, which are the same inputs, and not
+/// from `fn_dsa_hybrid_keygen_from_seeds`, which is not.
+fn bench_persona_receipt_keygen(c: &mut Criterion) {
+    let ed25519 = derive_p_receipt_ed_seed(
+        &PERSONA_MASTER,
+        PERSONA_NETWORK,
+        PERSONA_FORMAT,
+        PERSONA_SLOT,
+    );
+    let fn_dsa = derive_p_receipt_fn_dsa_seed(
+        &PERSONA_MASTER,
+        PERSONA_NETWORK,
+        PERSONA_FORMAT,
+        PERSONA_SLOT,
+    );
+    c.bench_function("fn_dsa_hybrid_persona_receipt_keygen", |b| {
+        b.iter(|| {
+            HybridEd25519FnDsa::keypair_from_seeds(black_box(&ed25519), black_box(&fn_dsa))
+                .expect("seeded keygen")
         })
     });
 }
@@ -145,6 +182,7 @@ criterion_group!(
     bench_hold_key,
     bench_verify,
     bench_keygen,
-    bench_persona_slot
+    bench_persona_slot,
+    bench_persona_receipt_keygen
 );
 criterion_main!(benches);
