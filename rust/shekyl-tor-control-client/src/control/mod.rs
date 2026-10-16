@@ -30,12 +30,17 @@
 //! [`encoding`] holds the byte↔text conversions the wire needs — uppercase hex
 //! and base64 — once, so a codec correction cannot land on one call site and
 //! miss its counterpart.
+//! [`events`] parses one asynchronous `650` line, and [`event_lex`] is the
+//! quoted-field lexer it reads with. [`upload_rounds`] is the supervisor's
+//! policy over parsed `HS_DESC` events (`TSR-Q5`). Nothing in production sends
+//! `SETEVENTS` yet; the policy stays because the later increments are its caller.
 
 pub mod actor;
 pub mod auth;
 pub mod bootstrap;
 pub mod consensus;
 pub mod encoding;
+mod event_lex;
 pub mod events;
 pub mod framing;
 pub(crate) mod launch;
@@ -44,6 +49,7 @@ pub mod onion;
 pub mod ready;
 pub mod safecookie;
 pub mod stream;
+pub mod upload_rounds;
 pub mod vanguards;
 
 pub use actor::{
@@ -55,8 +61,8 @@ pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, Ser
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
 pub use events::{
     parse_event, Bootstrap, BootstrapProblem, ClientStatus, ClockSkew, GeneralStatus, HsDescAction,
-    HsDescEvent, Liveness, LogEvent, LogSeverity, Recommendation, RoundMark, Severity, TorEvent,
-    UploadRounds, VersionReason, SUPERVISOR_EVENTS,
+    HsDescEvent, Liveness, LogEvent, LogSeverity, Recommendation, Severity, TorEvent,
+    VersionReason, SUPERVISOR_EVENTS,
 };
 pub use framing::{
     ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer, ASYNC_EVENT_STATUS,
@@ -70,4 +76,5 @@ pub use onion::{
 pub use ready::{ask_timed, wait_until_ready, AskError, WaitReadyError};
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};
+pub use upload_rounds::{RoundMark, UploadRounds};
 pub use vanguards::{HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS};

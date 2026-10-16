@@ -2253,10 +2253,9 @@ mod live_tests {
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps, network)"]
     async fn the_pinned_tors_supervisor_events_parse_and_a_round_triggers() {
-        use super::super::events::{
-            parse_event, ClientStatus, HsDescAction, RoundMark, TorEvent, UploadRounds,
-        };
+        use super::super::events::{parse_event, ClientStatus, HsDescAction, TorEvent};
         use super::super::onion::{parse_service_id, AddOnion, OnionKey, OnionPort};
+        use super::super::upload_rounds::{RoundMark, UploadRounds};
         use std::net::{Ipv4Addr, SocketAddr};
 
         /// Bootstrap and the first round together; the capture saw both in under a minute.
