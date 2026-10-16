@@ -309,9 +309,10 @@ int main(int argc, char* argv[])
 
   const bool opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
   const bool opt_stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-  // The daemon's own flag: a regtest chain lives under <data-dir>/fake, its
-  // nettype is FAKECHAIN, and Blockchain::init wants the regtest
-  // test_options the daemon hands it (cryptonote_core.cpp, core::init).
+  // The daemon's own flag: a regtest chain's nettype is FAKECHAIN, and
+  // Blockchain::init wants the regtest test_options the daemon hands it
+  // (cryptonote_core.cpp, core::init). The store lives in the data
+  // directory itself on every network (DAEMON_CONFIG_CUTOVER.md §2.6).
   const bool opt_regtest = command_line::get_arg(vm, cryptonote::arg_regtest_on);
   if (opt_regtest && (opt_testnet || opt_stagenet))
   {
@@ -319,10 +320,7 @@ int main(int argc, char* argv[])
     return 1;
   }
   const network_type net_type = opt_regtest ? FAKECHAIN : opt_testnet ? TESTNET : opt_stagenet ? STAGENET : MAINNET;
-  boost::filesystem::path data_dir(command_line::get_arg(vm, cryptonote::arg_data_dir));
-  if (opt_regtest)
-    data_dir /= "fake";
-  const std::string opt_data_dir = data_dir.string();
+  const std::string opt_data_dir = command_line::get_arg(vm, cryptonote::arg_data_dir);
   const uint64_t block_start = command_line::get_arg(vm, arg_block_start);
   // Absent means "the tip"; an explicit value means that value, zero
   // included (genesis alone), and is refused above the tip rather than
@@ -350,7 +348,7 @@ int main(int argc, char* argv[])
     return 1;
   }
   const cryptonote::test_options regtest_test_options = {0};
-  if (!core_storage->init(db, net_type, /*offline=*/true, opt_regtest ? &regtest_test_options : nullptr))
+  if (!core_storage->init(db, net_type, opt_regtest ? &regtest_test_options : nullptr))
   {
     LOG_ERROR("Failed to initialize source blockchain storage");
     return 1;
