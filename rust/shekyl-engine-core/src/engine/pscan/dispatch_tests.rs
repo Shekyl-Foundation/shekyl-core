@@ -1274,3 +1274,97 @@ async fn gf7_emits_bond_post_dispatched_per_submit() {
          the submit call site emits"
     );
 }
+
+/// **The bond-post delay outlives the proof it delays** (FOLLOWUPS row "The
+/// bond-post delay does not decorrelate the funding transfer from the bond").
+///
+/// The post is signed at the stake request, `anchor_t0`, with its reference
+/// at most `anchor_t0 − REF_ANCHOR_AGE` (`bond_orchestrator.rs:455-461`), and
+/// first sent `bond_post_offset_blocks` later. With an offset of 300 the
+/// reference is already past `FCMP_REFERENCE_BLOCK_MAX_AGE` at the first
+/// send, the daemon answers `StaleRoot`, which is retryable, and the driver
+/// resends the same dead bytes until the alarm horizon.
+///
+/// Ignored because it asserts the defect, not the intended behaviour: it
+/// documents what the bond lane's Round 0 has to change. That round inverts
+/// or replaces it.
+#[tokio::test]
+#[ignore = "documents a bond-lane defect (FOLLOWUPS: the bond-post delay does not decorrelate the funding transfer from the bond); passes while the defect stands"]
+async fn a_bond_post_sent_past_its_proof_lifetime_is_resent_unchanged_to_the_horizon() {
+    use crate::engine::error::RetryableRejectCause;
+    let stale = || -> Verdict {
+        Err(BroadcastSubmitError::Submit(
+            SubmitterError::RejectedRetryable {
+                cause: RetryableRejectCause::StaleRoot,
+            },
+        ))
+    };
+    let anchor: u64 = 10_000;
+    let offset: u64 = 300;
+    let store = std::sync::Arc::new(MemStore::default());
+    let mut block = PendingPostBlock::empty();
+    let g = block.generation();
+    assert_eq!(
+        block.seal_post(post(1, anchor, offset, &[7]), g),
+        shekyl_engine_state::pending_post_block::SealAdmission::Admit
+    );
+    *store.block.lock().expect("mem store") = Some(block);
+    let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(
+        std::iter::repeat_with(stale).take(64).collect(),
+    ));
+    let mut driver = DispatchDriver::new(
+        store.clone(),
+        broadcast.clone(),
+        DispatchConfig {
+            alarm_horizon_blocks: BlockCount::from_raw(DISPATCH_ALARM_HORIZON_BLOCKS),
+            dispersal_bound: Duration::ZERO,
+        },
+        test_lock(),
+    );
+
+    // Not due one block early.
+    tick(&mut driver, anchor + offset - 1).await;
+    assert!(broadcast.sent().is_empty());
+
+    // The first send, at the due tip. The reference the bytes carry is at
+    // most anchor − REF_ANCHOR_AGE, so its age here is at least offset + 6.
+    let first_send_tip = anchor + offset;
+    tick(&mut driver, first_send_tip).await;
+    assert_eq!(broadcast.sent().len(), 1);
+    let reference_at_most = anchor - shekyl_curve_tree::REF_ANCHOR_AGE.to_raw();
+    let max_age = shekyl_curve_tree::REF_ANCHOR_AGE.to_raw()
+        + shekyl_curve_tree::PROOF_VALIDITY_HORIZON.to_raw();
+    assert_eq!(max_age, 100, "FCMP_REFERENCE_BLOCK_MAX_AGE");
+    let age_at_first_send = first_send_tip - reference_at_most;
+    assert!(
+        age_at_first_send > max_age,
+        "dead on arrival: reference age {age_at_first_send} > MAX_AGE {max_age} at the first send"
+    );
+
+    // StaleRoot is retryable: the same bytes go out on every due tick until
+    // the horizon (at + 900), then stop with the record held.
+    let horizon_end = first_send_tip + DISPATCH_ALARM_HORIZON_BLOCKS;
+    for tip in (first_send_tip + 100..horizon_end).step_by(100) {
+        tick(&mut driver, tip).await;
+    }
+    let before_horizon = broadcast.sent().len();
+    tick(&mut driver, horizon_end).await;
+    tick(&mut driver, horizon_end + 1).await;
+    let sent = broadcast.sent();
+    assert_eq!(sent.len(), before_horizon, "resends stop at the horizon");
+    assert_eq!(
+        before_horizon, 9,
+        "one first send and eight resends at 100-block ticks"
+    );
+    assert!(
+        sent.windows(2).all(|w| w[0].1 == w[1].1),
+        "every resend is byte-identical, so every one is refused the same way"
+    );
+    match sealed_state(&store, &persona(1)) {
+        Some(PendingPostState::Dispatched { at, attempts }) => {
+            assert_eq!(at.to_raw(), first_send_tip);
+            assert_eq!(attempts, 9);
+        }
+        other => panic!("expected the record held as Dispatched, got {other:?}"),
+    }
+}
