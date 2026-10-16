@@ -483,6 +483,10 @@ const AT: u64 = crate::test_support::FIRST_SPEND_HEIGHT + 1;
 #[path = "switch_differential_tests.rs"]
 mod switch_differential_tests;
 
+/// A promotion `form` refuses, and the header ledger after a switch.
+#[path = "switch_promotion_tests.rs"]
+mod switch_promotion_tests;
+
 #[tokio::test]
 async fn a_recorded_block_offered_as_an_alternative_is_already_held() {
     // Relayed twice: a block on x's own chain below the tip arrives as if
@@ -770,7 +774,9 @@ async fn a_seed_claim_that_differs_from_the_recorded_one_recomputes() {
 /// wrong **root** never reaches the comparison: the root is the
 /// verifier's input, so the proof fails against it and `form` refuses the
 /// spend on CEN-I15 — the claim cannot widen what the chain accepts. The
-/// honest plan then lands.
+/// honest plan then lands. That refusal is observed through `form`
+/// directly. It is not [`crate::RefusePromotion`]: a false claim must not
+/// delete a chain the honest claim accepts.
 #[tokio::test]
 async fn a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect() {
     let mut x = Scenario::open("switch-stale-claim-x");

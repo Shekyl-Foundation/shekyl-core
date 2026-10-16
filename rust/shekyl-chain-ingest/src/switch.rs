@@ -33,6 +33,14 @@
 //!    transaction — the store is the pre-switch chain — and the failing alt
 //!    suffix is removed in a write of its own.
 //!
+//!    Proofs run in `form`, off the actor, under the plan's claims. A
+//!    promoted block that fails there never becomes a [`Reorganize`]:
+//!    [`RefusePromotion`] carries the verdict back, the plan is held to
+//!    the store, and the failing suffix is removed with no pop. A refusal
+//!    under claims the plan did not derive is the driver's, observed
+//!    before this message, and the alt stays — the same class as a stale
+//!    reference.
+//!
 //! The listed bodies of an alt block are not the alt row's (`AltValid`'s
 //! `into_candidate`: the bodies are the pool's to hold until promotion), so
 //! the caller supplies them with the formed blocks; the pool is that caller
@@ -249,7 +257,8 @@ enum Planned {
 }
 
 /// The formed blocks a [`SwitchPlan`] named, back to the actor (module
-/// docs, message 2).
+/// docs, message 2). A promoted block `form` refused is
+/// [`RefusePromotion`], not a reorganization.
 #[derive(Debug)]
 pub struct Reorganize {
     /// The plan's tip; the switch refuses if the store's tip moved.
@@ -261,6 +270,22 @@ pub struct Reorganize {
     pub demoted: Vec<StructurallyValid>,
     /// The alt entries, formed, ascending.
     pub promoted: Vec<StructurallyValid>,
+}
+
+/// A promoted block's `form` refused under the plan's own claims (module
+/// docs). The proofs ran off the actor; the closure does not open, so the
+/// main chain is not popped. The failing alt suffix is removed, as a
+/// promotion verdict's is (K5).
+#[derive(Debug)]
+pub struct RefusePromotion {
+    /// The plan's tip; nothing is removed if the store's tip moved.
+    pub tip: Tip,
+    /// The plan's alternative tip.
+    pub alt_tip: BlockHash,
+    /// The promoted block `form` refused.
+    pub hash: BlockHash,
+    /// The verdict.
+    pub refused: InvalidBlock,
 }
 
 /// A switch that landed.
@@ -389,6 +414,18 @@ impl Message<Reorganize> for Connector {
         let (rules, trust) = (self.rules, self.trust);
         self.writer
             .with_store(|store| switch(store, rules, trust, msg))
+    }
+}
+
+impl Message<RefusePromotion> for Connector {
+    type Reply = Result<Switched, RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: RefusePromotion,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.writer.with_store(|store| refuse_promotion(store, msg))
     }
 }
 
@@ -596,6 +633,59 @@ fn within_cap(rules: ChainRules, chain: &AltChain, tip: Tip) -> Result<(), PopBe
 }
 
 /// The switch's body, under the run's `trust`.
+/// The plan's tip is still the store's, and `alt_tip` still builds an
+/// alternative chain. A moved tip is stale; an unlinked tip is a plan
+/// mismatch. Nothing is written.
+fn alternative_chain(
+    snap: &ReadSnapshot<'_>,
+    planned: Tip,
+    alt_tip: &BlockHash,
+) -> Result<AltChain, RunFault> {
+    let tip = snap.tip()?.recorded;
+    if tip != Some(planned) {
+        return Err(RunFault::StalePlan { planned, tip });
+    }
+    match AltChain::build(snap, alt_tip) {
+        Ok(chain) => Ok(chain),
+        Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked { .. }))) => {
+            Err(RunFault::PlanMismatch {
+                reason: PlanMismatchReason::AlternativeTipUnheld,
+            })
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// [`RefusePromotion`]'s body. The closure does not open: a proof that
+/// failed under the plan's claims is the block's verdict, and the main
+/// chain stays where it is.
+fn refuse_promotion(store: &ChainStore, msg: RefusePromotion) -> Result<Switched, RunFault> {
+    let snap = store.begin_read()?;
+    let chain = alternative_chain(&snap, msg.tip, &msg.alt_tip)?;
+    let entries = chain.entries();
+    if entries.is_empty() {
+        return Err(RunFault::PlanMismatch {
+            reason: PlanMismatchReason::AlternativeTipRecorded,
+        });
+    }
+    let Some(index) = entries.iter().position(|entry| entry.id == msg.hash) else {
+        return Err(RunFault::PlanMismatch {
+            reason: PlanMismatchReason::RefusedBlockUnheld,
+        });
+    };
+    let at = entries[index].block.height();
+    let removed: Vec<BlockHash> = entries[index..].iter().map(|entry| entry.id).collect();
+    drop(snap);
+    remove_alt_suffix(store, &removed)?;
+    Ok(Switched::Refused {
+        at,
+        hash: msg.hash,
+        refused: msg.refused,
+        removed,
+    })
+}
+
+/// The switch's body, under the run's `trust`.
 fn switch(
     store: &ChainStore,
     rules: ChainRules,
@@ -604,23 +694,8 @@ fn switch(
 ) -> Result<Switched, RunFault> {
     let snap = store.begin_read()?;
     // The plan is held to the store before anything is judged.
-    let tip = snap.tip()?.recorded;
-    if tip != Some(msg.tip) {
-        return Err(RunFault::StalePlan {
-            planned: msg.tip,
-            tip,
-        });
-    }
+    let chain = alternative_chain(&snap, msg.tip, &msg.alt_tip)?;
     let tip = msg.tip;
-    let chain = match AltChain::build(&snap, &msg.alt_tip) {
-        Ok(chain) => chain,
-        Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked { .. }))) => {
-            return Err(RunFault::PlanMismatch {
-                reason: PlanMismatchReason::AlternativeTipUnheld,
-            })
-        }
-        Err(e) => return Err(e.into()),
-    };
     if let Err(beyond) = within_cap(rules, &chain, tip) {
         return Ok(Switched::BeyondCap(beyond));
     }

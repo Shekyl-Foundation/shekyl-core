@@ -70,8 +70,8 @@ use zeroize::Zeroizing;
 
 use crate::connector::{
     AltBlocksHeld, Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector, ConnectorArgs,
-    Digest, HashAt, HeaderAt, OfferAlt, Offered, PlannedBlock, Reorganize, Rewind, Rewound, RootAt,
-    RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
+    Digest, HashAt, HeaderAt, OfferAlt, Offered, PlannedBlock, RefusePromotion, Reorganize, Rewind,
+    Rewound, RootAt, RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
 };
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
@@ -144,6 +144,18 @@ impl Substrate for FreeHash {
     }
 }
 
+/// One block `form` refused while a switch was forming, in the
+/// demoted-then-promoted order the plan named.
+struct FormRefusal {
+    /// Its place in that order. Below the demoted length, the block is one
+    /// this node connected; at or above it, the block is a promotion.
+    index: usize,
+    /// The block's identity.
+    hash: BlockHash,
+    /// The verdict.
+    refused: InvalidBlock,
+}
+
 /// Where a timed switch spent its time ([`Scenario::reorganize_timed`]).
 #[derive(Clone, Copy, Debug)]
 pub struct ReorgTiming {
@@ -195,6 +207,23 @@ impl Mined {
             self.template.transactions.clone(),
         )
     }
+}
+
+/// A block this driver formed and did not connect ([`Scenario::assemble_unconnected`]).
+/// Its header is in the driver's target ledger; the store has never held it.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub struct Unconnected {
+    /// The connecting height the facts named.
+    pub height: BlockHeight,
+    /// The block's identity.
+    pub hash: BlockHash,
+    /// The block and its listed bodies.
+    pub candidate: Candidate,
+    /// The seed the producer claimed (CEN-D3).
+    pub seed: BlockHash,
+    /// The target the producer claimed (CEN-D4).
+    pub target: Target,
 }
 
 impl shekyl_harness_spender::MinedBlock for Mined {
@@ -396,41 +425,9 @@ where
         // priced is judged by F14b/F18, the burn by F17, and both are
         // recorded from the verdict (the ledger that carried the burn left
         // with wave B).
-
-        // D3: the seed the honest producer claims — the identity at the
-        // seed height, or the null hash below the first epoch.
-        let seed = match seed_height(height) {
-            None => BlockHash::NULL,
-            Some(at) => self
-                .connector
-                .ask(HashAt { height: at })
-                .await
-                .map_err(handler_error)
-                .map_err(StepOutcome::Connector)?
-                .expect("the seed height is below the tip"),
-        };
-
-        // The target the honest producer claims: the validator's derivation
-        // over the headers below `height`, the store answering what the
-        // ledger lacks (`target` module docs).
         let rule_set = self.rules.in_force(height);
-        for at in self.targets.missing_for(height) {
-            let record = self
-                .connector
-                .ask(HeaderAt { height: at })
-                .await
-                .map_err(handler_error)
-                .map_err(StepOutcome::Connector)?
-                .expect("the window is below the tip");
-            self.targets.record(at, record);
-        }
-        let target = self
-            .targets
-            .claim(height, &rule_set)
-            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"))
-            .map_err(StepOutcome::Refused)?;
-
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
+        let (seed, target) = self.claimed_seed_and_target(height).await?;
         // The third claim, off the same ledger (its window covers CEN-I11's).
         let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
             Ok(references) => references,
@@ -534,10 +531,79 @@ where
             .map_err(handler_error)
     }
 
+    /// Build the next block on `facts` without connecting it.
+    ///
+    /// Formed under [`ReferenceClaims::EMPTY`]: signatures and the
+    /// range-proof batch run, the membership proofs do not. The header
+    /// joins this driver's target ledger, so the next claim reads a block
+    /// the store has never held. Nothing is applied, and the ledger is not
+    /// trimmed — the header is not in the store, and a later connected
+    /// claim is what bounds the window.
+    #[cfg(test)]
+    pub async fn assemble_unconnected(
+        &mut self,
+        facts: &ChainFacts,
+        listed: &[Transaction],
+    ) -> Result<Unconnected, StepOutcome> {
+        let now = self.substrate.tick();
+        let height = facts.connecting;
+        let (seed, target) = self.claimed_seed_and_target(height).await?;
+        let template = self
+            .template(facts, now, listed)
+            .map_err(StepOutcome::Template)?;
+        let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
+        let formed = form(
+            candidate.clone(),
+            &self.rules.in_force(height),
+            &self.substrate,
+            seed,
+            target,
+            &ReferenceClaims::EMPTY,
+            FormAttempt::FIRST,
+        )
+        .expect("the driver's substrate does not fault")
+        .map_err(StepOutcome::Refused)?;
+        self.targets
+            .extend(height, &template.block, target)
+            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
+        Ok(Unconnected {
+            height,
+            hash: formed.hash(),
+            candidate,
+            seed,
+            target,
+        })
+    }
+
+    /// Offer `block` the way [`Self::offer`] offers a connected one: formed
+    /// again here under empty reference claims, then [`OfferAlt`].
+    #[cfg(test)]
+    pub async fn offer_unconnected(&self, block: &Unconnected) -> Result<Offered, RunFault> {
+        let formed = form(
+            block.candidate.clone(),
+            &self.rules.in_force(block.height),
+            &self.substrate,
+            block.seed,
+            block.target,
+            &ReferenceClaims::EMPTY,
+            FormAttempt::FIRST,
+        )
+        .expect("the driver's substrate does not fault")
+        .expect("a block assembled under empty claims forms");
+        self.connector
+            .ask(OfferAlt(formed))
+            .await
+            .map_err(handler_error)
+    }
+
     /// Carry out `plan` (DRS-E5 §2.3 step 1, then [`Reorganize`]): form the
     /// demoted blocks unless the verdict is the checkpoint's, and the alt
     /// entries from their rows' blocks and witnesses with the listed bodies
-    /// `bodies` holds by block hash — the pool's role from PR-b on.
+    /// `bodies` holds by block hash — the pool's role from PR-b on. A
+    /// promoted block `form` refuses under the plan's claims is
+    /// [`RefusePromotion`]: the failing suffix is removed and nothing is
+    /// popped. A demoted block this node connected forms without claims; a
+    /// refusal there is an invariant, not a verdict.
     pub async fn reorganize(
         &self,
         plan: &SwitchPlan,
@@ -578,7 +644,36 @@ where
             let references = plan.references_for(&p.at, &candidate);
             (candidate, p.at.clone(), references)
         }));
-        let mut formed_all = self.form_parallel(work);
+        let mut formed_all = match self.form_parallel(work) {
+            Ok(formed) => formed,
+            Err(refusal) => {
+                let formed = started.elapsed();
+                if refusal.index < demoted_len {
+                    let (hash, refused) = (refusal.hash, refusal.refused);
+                    panic!(
+                        "a demoted block this node connected forms without reference claims: {refused} ({hash:?})"
+                    );
+                }
+                let started = std::time::Instant::now();
+                let switched = self
+                    .connector
+                    .ask(RefusePromotion {
+                        tip: plan.tip,
+                        alt_tip: plan.alt_tip,
+                        hash: refusal.hash,
+                        refused: refusal.refused,
+                    })
+                    .await
+                    .map_err(handler_error)?;
+                return Ok((
+                    switched,
+                    ReorgTiming {
+                        form: formed,
+                        switch: started.elapsed(),
+                    },
+                ));
+            }
+        };
         let promoted = formed_all.split_off(demoted_len);
         let demoted = formed_all;
         let formed = started.elapsed();
@@ -609,11 +704,12 @@ where
     /// Through [`Recalled`](crate::substrate::Recalled): every block a plan
     /// names was hashed when this node first judged it, and the plan
     /// carries that record, so a switch calls RandomX only where a seed
-    /// claim differs from the recorded one (ruling 3, 2026-10-15).
+    /// claim differs from the recorded one (ruling 3, 2026-10-15). The
+    /// first refusal, in plan order, is the result; every thread is joined.
     fn form_parallel(
         &self,
         work: Vec<(Candidate, PlannedBlock, ReferenceClaims)>,
-    ) -> Vec<StructurallyValid> {
+    ) -> Result<Vec<StructurallyValid>, FormRefusal> {
         let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         let chunk = work.len().div_ceil(threads).max(1);
         let recalled = crate::substrate::Recalled::new(
@@ -623,41 +719,71 @@ where
         );
         let substrate = &recalled;
         let rules = self.rules;
-        let mut chunks: Vec<Vec<(Candidate, PlannedBlock, ReferenceClaims)>> = Vec::new();
+        let mut chunks = Vec::new();
         let mut rest = work;
+        let mut start = 0;
         while !rest.is_empty() {
-            let tail = rest.split_off(chunk.min(rest.len()));
-            chunks.push(rest);
+            let n = chunk.min(rest.len());
+            let tail = rest.split_off(n);
+            chunks.push((start, rest));
+            start += n;
             rest = tail;
         }
         std::thread::scope(|scope| {
             let handles: Vec<_> = chunks
                 .into_iter()
-                .map(|chunk| {
+                .map(|(start, chunk)| {
                     scope.spawn(move || {
-                        chunk
-                            .into_iter()
-                            .map(|(candidate, at, references)| {
-                                form(
-                                    candidate,
-                                    &rules.in_force(at.height),
-                                    substrate,
-                                    at.seed,
-                                    at.target,
-                                    &references,
-                                    FormAttempt::FIRST,
-                                )
-                                .expect("the driver's substrate does not fault")
-                                .expect("a block its plan names forms")
-                            })
-                            .collect::<Vec<_>>()
+                        let mut formed = Vec::with_capacity(chunk.len());
+                        for (local, (candidate, at, references)) in chunk.into_iter().enumerate() {
+                            let hash = at.hash;
+                            match form(
+                                candidate,
+                                &rules.in_force(at.height),
+                                substrate,
+                                at.seed,
+                                at.target,
+                                &references,
+                                FormAttempt::FIRST,
+                            ) {
+                                Ok(Ok(valid)) => formed.push(valid),
+                                Ok(Err(refused)) => {
+                                    return Err(FormRefusal {
+                                        index: start + local,
+                                        hash,
+                                        refused,
+                                    });
+                                }
+                                Err(fault) => {
+                                    panic!("the driver's substrate does not fault: {fault:?}")
+                                }
+                            }
+                        }
+                        Ok(formed)
                     })
                 })
                 .collect();
-            handles
-                .into_iter()
-                .flat_map(|h| h.join().expect("a forming thread"))
-                .collect()
+            let mut formed = Vec::new();
+            let mut refusal: Option<FormRefusal> = None;
+            for handle in handles {
+                match handle.join().expect("a forming thread") {
+                    Ok(blocks) => {
+                        if refusal.is_none() {
+                            formed.extend(blocks);
+                        }
+                    }
+                    Err(found) => {
+                        refusal = Some(match refusal {
+                            Some(kept) if kept.index <= found.index => kept,
+                            _ => found,
+                        });
+                    }
+                }
+            }
+            match refusal {
+                Some(refusal) => Err(refusal),
+                None => Ok(formed),
+            }
         })
     }
 
@@ -741,6 +867,45 @@ where
         RunFault,
     > {
         self.connector.ask(TableRows).await.map_err(handler_error)
+    }
+
+    /// The seed and target an honest producer claims for `height`.
+    ///
+    /// The seed is the identity at the seed height, or the null hash below
+    /// the first epoch (CEN-D3). The target is the validator's derivation
+    /// over the headers below `height`, the store answering what the ledger
+    /// lacks (`target` module docs).
+    async fn claimed_seed_and_target(
+        &mut self,
+        height: BlockHeight,
+    ) -> Result<(BlockHash, Target), StepOutcome> {
+        let seed = match seed_height(height) {
+            None => BlockHash::NULL,
+            Some(at) => self
+                .connector
+                .ask(HashAt { height: at })
+                .await
+                .map_err(handler_error)
+                .map_err(StepOutcome::Connector)?
+                .expect("the seed height is below the tip"),
+        };
+        let rule_set = self.rules.in_force(height);
+        for at in self.targets.missing_for(height) {
+            let record = self
+                .connector
+                .ask(HeaderAt { height: at })
+                .await
+                .map_err(handler_error)
+                .map_err(StepOutcome::Connector)?
+                .expect("the window is below the tip");
+            self.targets.record(at, record);
+        }
+        let target = self
+            .targets
+            .claim(height, &rule_set)
+            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"))
+            .map_err(StepOutcome::Refused)?;
+        Ok((seed, target))
     }
 
     /// The template for `facts`, listing `listed`, at clock `now`.

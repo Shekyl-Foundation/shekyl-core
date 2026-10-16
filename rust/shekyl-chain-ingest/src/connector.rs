@@ -85,7 +85,7 @@ pub use run_fault::{PlanMismatchReason, RunEnd, RunFault};
 pub use switch::AnchorForTests;
 pub use switch::{
     AltBlocksHeld, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
-    PopBeyondReorgCap, Reorganize, SwitchDone, SwitchPlan, Switched, TableRows,
+    PopBeyondReorgCap, RefusePromotion, Reorganize, SwitchDone, SwitchPlan, Switched, TableRows,
 };
 
 /// What an [`Apply`] did: the blocks that landed, and the refusal that

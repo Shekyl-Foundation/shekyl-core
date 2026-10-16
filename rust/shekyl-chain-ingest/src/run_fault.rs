@@ -67,6 +67,8 @@ pub enum PlanMismatchReason {
     PromotedRow,
     /// The formed demotions are not the recorded chain above the fork.
     DemotedChain,
+    /// The block `form` refused is not an entry of the alternative chain.
+    RefusedBlockUnheld,
 }
 
 impl std::fmt::Display for PlanMismatchReason {
@@ -78,6 +80,7 @@ impl std::fmt::Display for PlanMismatchReason {
             Self::PromotedLength => "the promoted blocks are not the alternative chain's entries",
             Self::PromotedRow => "a promoted block is not its alt row (identity or witness)",
             Self::DemotedChain => "the demoted blocks are not the recorded chain above the fork point (identity or witness)",
+            Self::RefusedBlockUnheld => "the block form refused is not an entry of the alternative chain",
         })
     }
 }

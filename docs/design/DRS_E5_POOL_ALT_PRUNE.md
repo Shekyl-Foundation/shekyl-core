@@ -957,7 +957,10 @@ verdict (reported to the brief as the one discrepancy: Part 1 named the
 snapshot as the demoted target's source and Part 2 named no reference
 source for demoted blocks). An alt row's header root is a claim until
 promotion runs CEN-B5 on it, which happens before any successor's claim
-over it is compared.
+over it is compared. A promoted block that `form` refuses under those
+claims is not a reorganization: `RefusePromotion` removes the failing
+suffix and does not pop. A refusal under claims the plan did not derive
+is the driver's, observed before that message, and the alternative stays.
 
 **SI-5 recomputes the tree's right edge (ruled 2026-10-15).** After the
 pops — the switch's and `Rewind`'s — the store rebuilds each layer's last
