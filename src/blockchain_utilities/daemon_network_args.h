@@ -39,9 +39,11 @@
 #include <string>
 
 #include <boost/filesystem/path.hpp>
+#include <boost/program_options/variables_map.hpp>
 
 #include "common/command_line.h"
 #include "common/util.h"
+#include "cryptonote_config.h"
 
 namespace cryptonote
 {
@@ -63,7 +65,9 @@ namespace cryptonote
   // The default is the daemon's layout (`shekyl-daemon-config` `paths`): the
   // root for mainnet, and the network's own subdirectory for every other
   // network, regtest included, so a regtest utility never opens the
-  // mainnet store.
+  // mainnet store. The three flags are the default's inputs. Register them
+  // with add_data_dir_args: adding this descriptor alone leaves a flag
+  // out of the variables map, and reading the directory then throws.
   inline const command_line::arg_descriptor<std::string, false, true, 3> arg_data_dir = {
     "data-dir"
   , "Specify data directory"
@@ -79,4 +83,62 @@ namespace cryptonote
       return val;
     }
   };
+
+  // The directory and the three flags it reads. A tool that opens a store
+  // registers this set, so the directory's default can see every network.
+  inline void add_data_dir_args(boost::program_options::options_description& description)
+  {
+    command_line::add_arg(description, arg_testnet_on);
+    command_line::add_arg(description, arg_stagenet_on);
+    command_line::add_arg(description, arg_regtest_on);
+    command_line::add_arg(description, arg_data_dir);
+  }
+
+  // The network those flags name. `type` and `name` use the directory
+  // default's order (testnet, then stagenet, then regtest), so the store
+  // and the network are the same chain. `one_network` is false when two
+  // flags are set; the caller refuses that before reading the directory.
+  struct UtilityNetwork
+  {
+    bool testnet;
+    bool stagenet;
+    bool regtest;
+
+    bool one_network() const
+    {
+      return static_cast<int>(testnet) + static_cast<int>(stagenet) + static_cast<int>(regtest) <= 1;
+    }
+
+    network_type type() const
+    {
+      if (testnet)
+        return TESTNET;
+      if (stagenet)
+        return STAGENET;
+      if (regtest)
+        return FAKECHAIN;
+      return MAINNET;
+    }
+
+    const char* name() const
+    {
+      if (testnet)
+        return "testnet";
+      if (stagenet)
+        return "stagenet";
+      if (regtest)
+        return "regtest";
+      return "mainnet";
+    }
+  };
+
+  inline const char utility_network_exclusive[] =
+    "Can't specify more than one of --testnet, --stagenet and --regtest";
+
+  inline UtilityNetwork utility_network(const boost::program_options::variables_map& vm)
+  {
+    return {command_line::get_arg(vm, arg_testnet_on),
+            command_line::get_arg(vm, arg_stagenet_on),
+            command_line::get_arg(vm, arg_regtest_on)};
+  }
 }

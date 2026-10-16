@@ -63,10 +63,8 @@ int main(int argc, char* argv[])
   const command_line::arg_descriptor<uint64_t> arg_block_stop = {"block-stop", "Stop at block number", block_stop};
 
 
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_data_dir);
+  cryptonote::add_data_dir_args(desc_cmd_sett);
   command_line::add_arg(desc_cmd_sett, arg_output_file);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_testnet_on);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_stagenet_on);
   command_line::add_arg(desc_cmd_sett, arg_log_level);
   command_line::add_arg(desc_cmd_sett, arg_block_start);
   command_line::add_arg(desc_cmd_sett, arg_block_stop);
@@ -103,11 +101,10 @@ int main(int argc, char* argv[])
 
   LOG_PRINT_L0("Starting...");
 
-  bool opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
-  bool opt_stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-  if (opt_testnet && opt_stagenet)
+  const cryptonote::UtilityNetwork network = cryptonote::utility_network(vm);
+  if (!network.one_network())
   {
-    std::cerr << "Can't specify more than one of --testnet and --stagenet" << std::endl;
+    std::cerr << cryptonote::utility_network_exclusive << std::endl;
     return 1;
   }
 
@@ -159,7 +156,7 @@ int main(int argc, char* argv[])
     LOG_PRINT_L0("Error opening database: " << e.what());
     return 1;
   }
-  r = core_storage->init(db, opt_testnet ? cryptonote::TESTNET : opt_stagenet ? cryptonote::STAGENET : cryptonote::MAINNET);
+  r = core_storage->init(db, network.type());
 
   CHECK_AND_ASSERT_MES(r, 1, "Failed to initialize source blockchain storage");
   LOG_PRINT_L0("Source blockchain storage initialized OK");

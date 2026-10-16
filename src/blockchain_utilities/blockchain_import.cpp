@@ -57,10 +57,6 @@ namespace
 bool opt_batch   = true;
 bool opt_verify  = true; // use add_new_block, which does verification before calling add_block
 bool opt_resume  = true;
-bool opt_testnet = false;
-bool opt_stagenet = false;
-bool opt_regtest = false;
-
 // number of blocks per batch transaction
 // adjustable through command-line argument according to available RAM
 uint64_t db_batch_size = 20000;
@@ -648,10 +644,7 @@ int main(int argc, char* argv[])
   command_line::add_arg(desc_cmd_sett, arg_block_stop);
   // The utility's own network and data directory (DAEMON_CONFIG_CUTOVER.md
   // §9). The daemon's option set is not registered here.
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_data_dir);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_testnet_on);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_stagenet_on);
-  command_line::add_arg(desc_cmd_sett, cryptonote::arg_regtest_on);
+  cryptonote::add_data_dir_args(desc_cmd_sett);
 
   command_line::add_arg(desc_cmd_only, arg_count_blocks);
   command_line::add_arg(desc_cmd_only, arg_pop_blocks);
@@ -714,14 +707,10 @@ int main(int argc, char* argv[])
     }
   }
 
-  opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
-  opt_stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-  opt_regtest = command_line::get_arg(vm, cryptonote::arg_regtest_on);
-  const int networks_named =
-    static_cast<int>(opt_testnet) + static_cast<int>(opt_stagenet) + static_cast<int>(opt_regtest);
-  if (networks_named > 1)
+  const cryptonote::UtilityNetwork network = cryptonote::utility_network(vm);
+  if (!network.one_network())
   {
-    std::cerr << "Error: Can't specify more than one of --testnet, --stagenet and --regtest" << ENDL;
+    std::cerr << "Error: " << cryptonote::utility_network_exclusive << ENDL;
     return 1;
   }
   m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
@@ -762,7 +751,7 @@ int main(int argc, char* argv[])
     MINFO("batch:   " << std::boolalpha << opt_batch << std::noboolalpha);
   }
   MINFO("resume:  " << std::boolalpha << opt_resume  << std::noboolalpha);
-  MINFO("nettype: " << (opt_regtest ? "regtest" : opt_testnet ? "testnet" : opt_stagenet ? "stagenet" : "mainnet"));
+  MINFO("nettype: " << network.name());
 
   MINFO("bootstrap file path: " << import_file_path);
   MINFO("database path:       " << m_config_folder);
@@ -791,7 +780,7 @@ int main(int argc, char* argv[])
   // Both connectors off: the utility serves no peer. The directory is made
   // absolute because a path row is absolute only.
   const std::string data_dir_absolute = std::filesystem::absolute(m_config_folder).string();
-  const char *network_word = opt_regtest ? "regtest" : opt_testnet ? "testnet" : opt_stagenet ? "stagenet" : "mainnet";
+  const char *network_word = network.name();
   const char *snapshot_argv[] = {
     "blockchain_import", "--network", network_word, "--data-dir", data_dir_absolute.c_str(),
     "--clearnet", "off", "--tor", "off"};
