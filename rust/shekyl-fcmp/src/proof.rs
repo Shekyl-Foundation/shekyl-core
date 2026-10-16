@@ -49,6 +49,11 @@ use shekyl_fcmp_proofs::{
 /// `shekyl-fcmp`).
 pub use shekyl_crypto_pq::key_image::KeyImage;
 
+use crate::batch_weights::{BatchKind, BatchWeights};
+pub use crate::batch_weights::{
+    FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION, FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION,
+};
+
 /// Errors during FCMP++ proof construction.
 #[derive(Debug, Error)]
 pub enum ProveError {
@@ -876,6 +881,12 @@ impl ProveInputLeafChunk {
     }
 }
 
+/// Each PQC key point in its compressed encoding, as the seed reads it.
+fn compressed(points: &[<Ed25519 as Ciphersuite>::G]) -> Vec<[u8; 32]> {
+    use ciphersuite::group::GroupEncoding;
+    points.iter().map(GroupEncoding::to_bytes).collect()
+}
+
 /// Verify an FCMP++ proof against public inputs.
 ///
 /// Uses batch verification for efficiency. Checks:
@@ -955,6 +966,20 @@ pub fn verify(
     let pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G> =
         pqc_keys.iter().map(PqcKeyScalar::key_point).collect();
 
+    // The batch weights, derived from every value this verify reads before
+    // any statement is queued (ruling R3; `batch_weights`).
+    let pqc_key_bytes = compressed(&pqc_key_points);
+    let mut weights = BatchWeights {
+        proof,
+        layers: tree_depth,
+        tree_root,
+        signable_tx_hash: &signable_tx_hash,
+        kind: BatchKind::Full { key_images },
+        pqc_key_points: &pqc_key_bytes,
+        pseudo_outs,
+    }
+    .rng();
+
     // Both collections are length-validated to `num_inputs` above; zip them into the
     // single ordered per-input bundle the verifier takes, so alignment is structural.
     let per_input: Vec<InputVerification> = ki_points
@@ -979,7 +1004,7 @@ pub fn verify(
 
     fcmp_pp
         .verify(
-            &mut OsRng,
+            &mut weights,
             &mut ed_verifier,
             &mut c1_verifier,
             &mut c2_verifier,
@@ -1073,6 +1098,20 @@ pub fn verify_membership_only(
     let pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G> =
         pqc_keys.iter().map(PqcKeyScalar::key_point).collect();
 
+    // The batch weights, derived from every value this verify reads before
+    // any statement is queued (ruling R3; `batch_weights`).
+    let pqc_key_bytes = compressed(&pqc_key_points);
+    let mut weights = BatchWeights {
+        proof,
+        layers: tree_depth,
+        tree_root,
+        signable_tx_hash: &signable_tx_hash,
+        kind: BatchKind::MembershipOnly,
+        pqc_key_points: &pqc_key_bytes,
+        pseudo_outs,
+    }
+    .rng();
+
     let mut rest = proof.data.as_slice();
     let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layers, &mut rest).map_err(|e| {
         tracing::debug!(
@@ -1091,7 +1130,7 @@ pub fn verify_membership_only(
 
     fcmp_mo
         .verify(
-            &mut OsRng,
+            &mut weights,
             &mut ed_verifier,
             &mut c1_verifier,
             &mut c2_verifier,
@@ -1482,6 +1521,27 @@ mod tests {
             tampered.is_err() || matches!(tampered, Ok(false)),
             "tampered key image must not verify"
         );
+
+        // A flipped proof byte must fail under the derived weights: every
+        // byte both moves the seed and changes the statement the weights
+        // are applied to (ruling R3).
+        for at in [0, result.proof.data.len() / 2, result.proof.data.len() - 1] {
+            let mut flipped = result.proof.clone();
+            flipped.data[at] ^= 1;
+            let r = verify(
+                &flipped,
+                &key_images,
+                &result.pseudo_outs,
+                &[pqc.key],
+                &tree_root,
+                tree_depth,
+                signable_tx_hash,
+            );
+            assert!(
+                r.is_err() || matches!(r, Ok(false)),
+                "a proof with byte {at} flipped must not verify, got {r:?}"
+            );
+        }
 
         // Wrong tree root must fail
         let mut bad_root = tree_root;

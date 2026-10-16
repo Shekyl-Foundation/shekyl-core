@@ -163,7 +163,18 @@ fn run<'id, V: ChainView<'id>>(
 where
     V::Fault: core::fmt::Debug,
 {
-    let formed = match form(candidate, &RuleSet::GENESIS, env, seed, FormAttempt::FIRST) {
+    let target = match super::connect_fixtures::expected_target(view, &RuleSet::GENESIS) {
+        Ok(target) => target,
+        Err(fault) => panic!("the view answers: {fault:?}"),
+    };
+    let formed = match form(
+        candidate,
+        &RuleSet::GENESIS,
+        env,
+        seed,
+        target,
+        FormAttempt::FIRST,
+    ) {
         Ok(Ok(formed)) => formed,
         Ok(Err(refused)) => {
             return Outcome::FormRefused {

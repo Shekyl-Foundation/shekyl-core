@@ -19,9 +19,11 @@
 use core::convert::Infallible;
 
 use shekyl_chain_rules::harness::fixture;
+use shekyl_chain_rules::target_claim;
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, ChainValid, ChainView, Corrupt, Fault, FormAttempt,
-    HeaderView, PaidEmission, RuleSet, StructurallyValid, Substrate, Trust, ViewRead, Weights,
+    HeaderView, PaidEmission, RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead,
+    Weights,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
@@ -160,6 +162,23 @@ fn expected_seed<'id, V: HeaderView<'id>>(view: &V) -> Result<BlockHash, V::Faul
     })
 }
 
+/// The target CEN-D4 derives on `view` for the next block under `rules`:
+/// what an honest driver claims to `form`, through the validator's one
+/// derivation (`target_claim`). The view's own fault is the only error; a
+/// corrupt header chain or a zero difficulty is a fixture bug.
+pub(super) fn expected_target<'id, V: HeaderView<'id>>(
+    view: &V,
+    rules: &RuleSet,
+) -> Result<Target, V::Fault> {
+    let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
+    match target_claim(view, connecting, rules) {
+        Ok(Ok(target)) => Ok(target),
+        Ok(Err(refused)) => panic!("the fixture chain derives no target: {refused}"),
+        Err(Fault::View(fault)) => Err(fault),
+        Err(_) => panic!("the fixture chain's headers are not a chain"),
+    }
+}
+
 /// `candidate` with its coinbase paying what CEN-F18 owes it on `view` —
 /// the harness's one pricer, at the height the view says the candidate
 /// connects at. The view's own fault is the only error: a corrupt parent
@@ -209,6 +228,7 @@ pub(super) fn formed_under<'id, V: HeaderView<'id>>(
             rules,
             &FixtureSubstrate,
             seed,
+            expected_target(view, rules)?,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,

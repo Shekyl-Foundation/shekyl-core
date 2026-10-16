@@ -62,17 +62,33 @@ fn substrate() -> Arc<MockSubstrate> {
 }
 
 /// Form one candidate at `height` under GENESIS with the mock substrate,
-/// claiming `seed`.
+/// claiming `seed` and the target the production ledger derives over the
+/// candidate's parents (`parents`, oldest first, from height 0).
 fn formed(
     height: u64,
     candidate: Candidate,
     seed: BlockHash,
+    parents: &[&shekyl_wire::Block],
 ) -> (shekyl_types::BlockHeight, Verdict<StructurallyValid>) {
+    let mut ledger = crate::target::TargetLedger::new();
+    for (at, parent) in parents.iter().enumerate() {
+        let at = h(u64::try_from(at).expect("small"));
+        let target = ledger
+            .claim(at, &RuleSet::GENESIS)
+            .expect("consistent")
+            .expect("a target");
+        ledger.extend(at, parent, target).expect("consistent");
+    }
+    let target = ledger
+        .claim(h(height), &RuleSet::GENESIS)
+        .expect("consistent")
+        .expect("a target");
     let verdict = form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         seed,
+        target,
         FormAttempt::FIRST,
     )
     .expect("mock substrate forms");
@@ -116,7 +132,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
             store: open_store(&path),
             rules: GENESIS_RULES,
         });
-        let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+        let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
         let applied = first
             .actor
             .ask(Apply(vec![(h0, f0)]))
@@ -142,7 +158,12 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     });
     let connector = joined.actor.clone();
 
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let err = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -154,7 +175,12 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
 
     // Over: the same message again is refused with the recorded end, and
     // so is a rewind — the latch is the writer's, not each handler's.
-    let (h1b, f1b) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1b, f1b) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let again = connector
         .ask(Apply(vec![(h1b, f1b)]))
         .await
@@ -206,7 +232,12 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     assert!(!connector.is_alive());
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(!connector.is_alive(), "nothing revived the actor");
-    let (h1c, f1c) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1c, f1c) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     assert!(matches!(
         connector
             .ask(Apply(vec![(h1c, f1c)]))
@@ -362,10 +393,15 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
         store: open_store(&path),
         rules: GENESIS_RULES,
     });
-    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
     let wrong = BlockHash::from_bytes([0xee; 32]);
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), wrong);
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        wrong,
+        &[&chain[0].0],
+    );
     let err = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -388,7 +424,12 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     assert!(again.is_ok(), "reads are unaffected");
     // The writer stays up: a later Apply with the store's seed connects.
     // Replay treats StaleSeed as run-ending; DRS-X re-forms on this actor.
-    let (h1b, f1b) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1b, f1b) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let applied = connector
         .ask(Apply(vec![(h1b, f1b)]))
         .await
@@ -413,9 +454,14 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
         store: open_store(&path),
         rules: GENESIS_RULES,
     });
-    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
-    let (_, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (_, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let err = connector
         .ask(Apply(vec![(h(5), f1)]))
         .await
@@ -432,7 +478,12 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
     }
     // Nothing connected under the claim, and the writer stays up: the same
     // block under its real height connects.
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let applied = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -454,7 +505,7 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
         store: open_store(&path),
         rules: GENESIS_RULES,
     });
-    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL);
+    let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
     let refused = InvalidBlock::new(CenRow::A1, Locus::Block);
     let applied = connector
@@ -464,7 +515,12 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     assert_eq!(applied.refused, Some((h(1), refused)));
     assert!(applied.connected.is_empty());
     connector.ask(Digest).await.expect("writer is up");
-    let (h1, f1) = formed(1, candidate(&chain[1].0, &chain[1].1), chain[0].0.hash());
+    let (h1, f1) = formed(
+        1,
+        candidate(&chain[1].0, &chain[1].1),
+        chain[0].0.hash(),
+        &[&chain[0].0],
+    );
     let applied = connector
         .ask(Apply(vec![(h1, f1)]))
         .await
@@ -554,25 +610,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     assert_eq!(report.connected.len(), n_us + 1);
 
     // Plant: block_info[50].cumulative_difficulty below block 49's.
-    {
-        let db = redb::Database::open(&path).expect("open raw");
-        let txn = db.begin_write().expect("write");
-        {
-            let mut infos = txn.open_table(BLOCK_INFO).expect("t");
-            let mut row: BlockInfo = infos
-                .get(50u64)
-                .expect("g")
-                .expect("row")
-                .value()
-                .decode()
-                .expect("decodes");
-            row.cumulative_difficulty = CumulativeDifficulty::from_raw(1);
-            infos
-                .insert(50u64, row.encoded().as_encoded())
-                .expect("plant");
-        }
-        txn.commit().expect("commit");
-    }
+    plant_work(&path, h(50), 1);
 
     // The next block, through the pipeline, from a store that already holds
     // the chain (the seed claim asks the store for block 0).
@@ -605,6 +643,199 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
         Some(h(n)),
         "block N + 1 did not land"
     );
+    cleanup(&path);
+}
+
+/// Rewrite `block_info[height].cumulative_difficulty` in the store at
+/// `path`, the way the SI-10 test plants its decrease.
+fn plant_work(path: &std::path::Path, height: shekyl_types::BlockHeight, work: u128) {
+    let db = redb::Database::open(path).expect("open raw");
+    let txn = db.begin_write().expect("write");
+    {
+        let mut infos = txn.open_table(BLOCK_INFO).expect("t");
+        let mut row: BlockInfo = infos
+            .get(height.to_raw())
+            .expect("g")
+            .expect("row")
+            .value()
+            .decode()
+            .expect("decodes");
+        row.cumulative_difficulty = CumulativeDifficulty::from_raw(work);
+        infos
+            .insert(height.to_raw(), row.encoded().as_encoded())
+            .expect("plant");
+    }
+    txn.commit().expect("commit");
+}
+
+/// A store whose tip records work that the next target cannot be added to
+/// (`u128::MAX`): the sequencer's ledger observes the overflow while
+/// recording the next block's claim. It does not panic and does not form
+/// the block. With nothing in flight, the writer re-derives at its own next
+/// height, observes the same overflow and halts through `refuse_corrupt`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
+    let path = tmp("pipeline-overflow");
+    let chain = bare_chain(4);
+    let trace = Arc::new(trace_of(&chain, false));
+    let first = corpus_of(&chain[..3]);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::clone(&trace),
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the first three blocks replay");
+    plant_work(&path, h(2), u128::MAX);
+
+    let rest = corpus_from(h(3), &chain[3..]);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let err = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect_err("the writer observes the overflow");
+    match err {
+        PipelineFault::Connector(RunFault::Store(StoreError::InvariantViolated(
+            StoreInvariant::FoldOverflow { cell },
+        ))) => assert_eq!(cell, "block_info.cumulative_difficulty"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        tip_of(&path).map(|t| t.0),
+        Some(h(2)),
+        "block 3 did not land"
+    );
+    cleanup(&path);
+}
+
+/// CEN-D6 on the claim itself, with another block behind it. `N + 1`
+/// blocks six target solvetimes apart, each recording one unit of work,
+/// make LWMA-1 derive zero for the next block (the rules crate's
+/// `cen_d6_a_slow_window_of_minimal_work_derives_zero_and_refuses_the_block`
+/// window). The sequencer emits that refusal as block `N + 1`'s verdict
+/// without forming it. It reads nothing more, so block `N + 2` — whose
+/// claim would need the unformed block's header — never asks the store for
+/// it, and the refusal reaches the writer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_zero_derived_target_is_refused_and_the_next_extend_does_not_strand_it() {
+    let path = tmp("pipeline-d6-claim");
+    let n = shekyl_difficulty::N;
+    let n_us = usize::try_from(n).expect("N is small");
+    let spacing = 6 * shekyl_difficulty::T_SECONDS;
+    // Ends before the mock clock, so CEN-C1 admits every block.
+    let start = MockSubstrate::CLOCK.to_raw() - (n + 4) * spacing;
+    let mut growing = crate::test_support::Growing::new();
+    for _ in 0..n + 3 {
+        growing.extend_with(Vec::new(), |root, height, previous, txs, reward| {
+            let mut block = block_with_nonce(root, height, previous, txs, reward, 7);
+            block.header.timestamp = start + height * spacing;
+            block
+        });
+    }
+    let chain = growing.finish();
+    let trace = Arc::new(trace_of(&chain, false));
+    let first = corpus_of(&chain[..=n_us]);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::clone(&trace),
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the first N + 1 blocks replay");
+    // One unit of work per block: a conforming window (SI-10 holds), slow.
+    for height in 0..=n {
+        plant_work(&path, h(height), u128::from(height) + 1);
+    }
+
+    let rest = corpus_from(h(n + 1), &chain[n_us + 1..]);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("a refusal is a verdict, not a fault");
+    let (at, refused) = report.refused.expect("block N + 1 is refused");
+    assert_eq!(at, h(n + 1));
+    assert_eq!(refused.rule, CenRow::D6);
+    assert_eq!(refused.locus, Locus::Block);
+    assert_eq!(
+        tip_of(&path).map(|t| t.0),
+        Some(h(n)),
+        "nothing past N landed"
+    );
+    cleanup(&path);
+}
+
+/// `ObserveTarget` judges only the height the store connects at next. A
+/// height above it is a driver defect (`HeightClaim`) and halts nothing:
+/// the writer cannot see that window, and an unseen height is not a hole.
+/// At its own next height over a consistent store it replies `Ok`, and the
+/// writer stays up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_writer_observes_a_target_only_at_its_own_next_height() {
+    let path = tmp("connector-observe-target");
+    let chain = bare_chain(3);
+    let trace = Arc::new(trace_of(&chain, false));
+    let corpus = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&corpus)).expect("open");
+    run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("three blocks replay");
+    let joined = JoinedConnector::spawn(ConnectorArgs {
+        store: open_store(&path),
+        rules: GENESIS_RULES,
+    });
+    let ahead = joined
+        .actor
+        .ask(crate::connector::ObserveTarget { height: h(5) })
+        .await
+        .expect_err("a height past the store's next is refused");
+    assert!(
+        matches!(
+            ahead,
+            SendError::HandlerError(RunFault::HeightClaim { claimed, connecting })
+                if claimed == h(5) && connecting == h(3)
+        ),
+        "{ahead:?}"
+    );
+    joined
+        .actor
+        .ask(crate::connector::ObserveTarget { height: h(3) })
+        .await
+        .expect("a consistent window at the store's next height");
+    joined.actor.ask(Digest).await.expect("the writer is up");
+    joined.stop_and_join().await;
     cleanup(&path);
 }
 

@@ -17,6 +17,7 @@ use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, ViewRead};
 use crate::rule_set::RuleSet;
+use crate::rules::difficulty::{target_claim, Target};
 use crate::substrate::Substrate;
 use crate::validate::form;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
@@ -89,20 +90,39 @@ pub fn expected_seed(chain: &MockChain) -> BlockHash {
     }
 }
 
+/// The target CEN-D4 derives for a candidate on `chain`'s tip under
+/// `rule_set`: what an honest driver claims to `form`, through the one
+/// derivation (`target_claim`). Panics on a D6 refusal — a fixture chain
+/// whose difficulty derives zero is a fixture error.
+#[must_use]
+#[track_caller]
+pub fn expected_target(chain: &MockChain, rule_set: &RuleSet) -> Target {
+    let connecting = BlockHeight::from_raw(chain.tip().map_or(0, |tip| tip.height.to_raw() + 1));
+    chain.with_view(|view| match target_claim(&view, connecting, rule_set) {
+        Ok(Ok(target)) => target,
+        Ok(Err(refused)) => panic!("the fixture chain derives no target: {refused}"),
+        Err(Fault::View(never)) => match never {},
+        Err(fault) => panic!("the fixture chain's headers are not a chain: {fault}"),
+    })
+}
+
 /// Run the stateless stage under `rule_set` with the default substrate,
-/// claiming `seed`. Panics if the substrate faults or a stateless rule
-/// refuses — a fixture that wants to exercise either calls [`form`] itself.
+/// claiming `seed` and `target`. Panics if the substrate faults or a
+/// stateless rule refuses — a fixture that wants to exercise either calls
+/// [`form`] itself, or [`judge_on`] for the first refusal of either stage.
 #[track_caller]
 pub fn formed_under(
     candidate: Candidate,
     rule_set: &RuleSet,
     seed: BlockHash,
+    target: Target,
 ) -> StructurallyValid {
     match form(
         candidate,
         rule_set,
         &MockSubstrate::default(),
         seed,
+        target,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -116,7 +136,72 @@ pub fn formed_under(
 /// candidate.
 #[track_caller]
 pub fn formed_on(chain: &MockChain, candidate: Candidate) -> StructurallyValid {
-    formed_under(candidate, &RuleSet::GENESIS, expected_seed(chain))
+    formed_under(
+        candidate,
+        &RuleSet::GENESIS,
+        expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
+    )
+}
+
+/// Both stages on `chain` under the genesis rule set, honest claims, the
+/// default substrate: `form`'s refusal if it refuses, else `validate`'s
+/// verdict. The shape a negative fixture takes when the row it names may
+/// be judged in either stage — since the stateless transaction rows and
+/// CEN-H19's batch moved into `form`, a refusal a test once read off
+/// `validate` may arrive from `form` instead, and the test's subject is
+/// the row, not the stage.
+#[track_caller]
+pub fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
+    let formed = match form(
+        candidate,
+        &RuleSet::GENESIS,
+        &MockSubstrate::default(),
+        expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
+        FormAttempt::FIRST,
+    ) {
+        Ok(Ok(formed)) => formed,
+        Ok(Err(refused)) => return Err(refused),
+        Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
+    };
+    chain.with_view(|view| {
+        judged(crate::validate::validate(
+            formed,
+            &view,
+            &RuleSet::GENESIS,
+            &crate::trust::Trust::UNANCHORED,
+        ))
+        .map(|_valid| ())
+    })
+}
+
+/// The token a test of **one view-bound rule alone** reads: the claims an
+/// honest driver makes on `chain` (seed, target), the block's identity and
+/// the default substrate's clock and longhash — and no stateless judgement.
+/// `form` now judges the transactions and CEN-H19's batch; a test whose
+/// subject is one `BlockRule` over a candidate built to trip only that rule
+/// must not depend on every other row admitting it. Never a verdict: the
+/// coverage is empty, so nothing minted from it could pass the mint gate.
+pub fn token_for_one_rule(chain: &MockChain, candidate: Candidate) -> StructurallyValid {
+    let hash = candidate.block.hash();
+    let substrate = MockSubstrate::default();
+    let seed = expected_seed(chain);
+    let pow = match substrate.longhash(&candidate.block.pow_blob(), &seed) {
+        Ok(pow) => pow,
+        Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
+    };
+    StructurallyValid::new(
+        candidate,
+        RuleSet::GENESIS,
+        crate::coverage::RuleCoverage::EMPTY,
+        substrate.clock,
+        hash,
+        seed,
+        expected_target(chain, &RuleSet::GENESIS),
+        pow,
+        FormAttempt::FIRST,
+    )
 }
 
 /// [`formed_on`] an empty chain — a genesis candidate.

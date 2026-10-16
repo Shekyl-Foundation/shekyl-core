@@ -489,7 +489,7 @@ census_rows! {
         H16 implemented(crate::rules::tx::H16),
         H17 implemented(crate::rules::tx::H17),
         H18 implemented(crate::rules::tx::H18),
-        H19 pending,
+        H19 implemented(crate::rules::tx::H19),
         H20 implemented(crate::rules::tx::H20),
         H21 implemented(crate::rules::tx::H21),
         H22 implemented(crate::rules::tx::H22),

@@ -553,7 +553,13 @@ fn measure(
         .map(|c| CompressedPoint::from(CompressedEdwardsY(*c)))
         .collect();
     let started = Instant::now();
-    assert!(bp.verify(rng, &bp_commitments), "BP+ verifies");
+    assert!(
+        shekyl_bulletproofs::verify_batch(&[shekyl_bulletproofs::BatchEntry {
+            proof: &bp,
+            commitments: &bp_commitments,
+        }]),
+        "BP+ verifies"
+    );
     let verify_bp = started.elapsed();
 
     // ── The wire bytes: the assembled, signed transaction ────────────────

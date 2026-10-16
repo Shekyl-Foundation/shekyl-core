@@ -91,9 +91,18 @@ Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect
   so "DRS-X swaps the source" is only true if the event model carries pop
   (RD-Q13). E2 plugs in the corpus reader (Extend-only); the mutation family
   is Extend-only too; the reorg family and DRS-X's p2p feed emit `Rewind`.
-- **Form** is stateless by design (slice 2 Q1) and dominated by RandomX, so it
-  parallelises across N workers, each holding an `Arc<PreparedCache>` for the
-  current seed epoch and calling the production surface
+- **Form** is stateless by design (slice 2 Q1) — the header rows, the
+  longhash, CEN-D1, every transaction's `tx_form` and CEN-H19's batch since
+  #1081's review — and dominated by RandomX, so it parallelises across N
+  workers. The sequencer hands each block two claims as it spawns the
+  worker: the **seed** (the block id at the seed height, `seed.rs`'s
+  ledger) and the **target** (CEN-D4's derivation over the `N + 1` headers
+  below the block, `target.rs`'s ledger: each formed block's header joins
+  it with the work its claimed target adds, and the store answers a height
+  the window lacks, at the start of a run or after a rewind). `form` judges
+  CEN-D1 against that target before any body work; `validate` re-derives
+  it and a mismatch is `Stale::Target`. Each worker holds an
+  `Arc<PreparedCache>` for the current seed epoch and calls the production surface
   `compute_hash(&PreparedCache, &[u8])` — a bounded window of speculative
   formation, re-sequenced before validate. **Not** over `VmStatePool`: that
   pool and `compute_hash_with_pool` are compiled only under
@@ -131,6 +140,7 @@ Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect
   | `Fault::Corrupt` | RD-Q4 | `refuse_corrupt`, batch poisoned, **halt**, terminal (RD-Q11) |
   | `Fault::Stale(Stale::Seed { retry: Again, .. })` | RD-Q5 | in replay a **driver defect**: recorded and surfaced on first occurrence (the reply carries the validator's `Retry`). The writer stays up so a later caller can re-`form`; this increment's driver treats the error as run-ending. The live-mode bound is the `Retry` in the fault, exercised by injection |
   | `Fault::Stale(Stale::Seed { retry: Exhausted, .. })` | RD-Q5 | **terminal run error**, surfaced |
+  | `Fault::Stale(Stale::Target { .. })` | the target ledger and the store's headers derive different targets | in replay a **driver defect** (`RunFault::StaleTarget`): recorded and surfaced on first occurrence with the claim, the expectation and the `Retry`; the writer stays up. A CEN-D6 refusal on the claim's own derivation is the block's verdict, emitted without forming it |
   | `Fault::Stale(Stale::RuleSet { .. })` | `form` and `validate` were handed different sets | in replay a **driver defect** (the schedule must hand both stages one `&RuleSet`, §3.7): recorded and surfaced, **not retried** — there is no honest re-`form` for it; in the live daemon the same arm marks a schedule boundary crossed mid-formation and the block is re-formed under the in-force set once |
 
   Checkpoints at digest heights make long replays resumable.

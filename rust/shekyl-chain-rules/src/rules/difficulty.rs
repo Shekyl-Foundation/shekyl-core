@@ -22,7 +22,8 @@
 //! D4 is not a predicate on the candidate: nothing about a candidate fails
 //! "what is the next difficulty". It is a **definition** in B6's shape
 //! (slice 1 Q5): derived once per validation at [`D4::target`], recorded
-//! there, and carried on the verdict — D1 compares against it, and the
+//! there, and carried on the verdict. `form` judged CEN-D1 against the
+//! caller's claim of this target; a mismatch here is `Stale::Target`. The
 //! store persists the cumulative work it implies (Q5) so `connect` derives
 //! `cumulative_difficulty` instead of being handed it.
 //!
@@ -131,6 +132,50 @@ impl fmt::Display for Target {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
+}
+
+/// The target CEN-D4 derives for a block connecting at `connecting`, over
+/// `view`'s headers below it: what a caller claims to
+/// [`form`](crate::form). The one derivation — `validate` and `alt_against`
+/// verify the claim by running it again over their view — so the claim and
+/// the check cannot spell the difficulty algorithm differently (the
+/// [`seed_height`](crate::seed_height) precedent).
+///
+/// `Ok(Err(refused))` is CEN-D6: the algorithm derived zero, which
+/// `validate` refuses on the same headers; a caller has no target to claim
+/// and that refusal is the block's verdict.
+///
+/// # Errors
+///
+/// The view's fault, or [`Fault::Corrupt`] on a hole below the parent or a
+/// non-monotone cumulative difficulty.
+pub fn target_claim<'id, H: HeaderView<'id>>(
+    view: &H,
+    connecting: BlockHeight,
+    rule_set: &RuleSet,
+) -> Result<Verdict<Target>, Fault<H::Fault>> {
+    // The derivation records D4/D6/D7 as it runs; a claim records nothing.
+    let mut unrecorded = RuleCoverage::EMPTY;
+    D4::target(view, connecting, rule_set, &mut unrecorded)
+}
+
+/// The work through a block connecting at `connecting` under `target`: the
+/// parent's cumulative difficulty on `view` plus the target — D4's own
+/// step (`validate` records it on the verdict). A caller that keeps a
+/// header chain ahead of connect (the ingest driver's target ledger)
+/// extends it with this, so its next [`target_claim`] reads the work the
+/// validator will record, not a second spelling of the sum.
+///
+/// # Errors
+///
+/// The view's fault; [`Fault::Corrupt`] on a hole at the parent or an
+/// overflow (SI-10's belt).
+pub fn cumulative_difficulty_after<'id, H: HeaderView<'id>>(
+    view: &H,
+    connecting: BlockHeight,
+    target: Target,
+) -> Result<CumulativeDifficulty, Fault<H::Fault>> {
+    D4::cumulative_after(view, connecting, target)
 }
 
 /// CEN-D6: a zero next-block difficulty rejects the block. Held by the
